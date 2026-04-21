@@ -1,0 +1,135 @@
+#lang tesl
+module BasicTypes exposing [double, negate, isEmpty, greetAge, clamp]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Tesl's built-in types: Int, String, Bool.
+# Arithmetic: +  -  *  /  %   (spaces required around operators)
+# Comparisons: ==  !=  <  >  <=  >=
+# Booleans: True, False
+# List literals: [1, 2, 3]  []   (brackets, comma-separated)
+# Conditionals: MUST be multi-line (if on its own line, then/else each on their own line)
+# Local bindings: let name = expr
+#
+# Remember: always write x when passing an Int to arithmetic or comparison.
+# You do NOT need * for String arguments in interpolation.
+#
+# COMMON GOTCHA: single-line if is NOT supported:
+#   WRONG: if n > 0 then "pos" else "neg"
+#   RIGHT: if n > 0 then\n  "pos"\nelse\n  "neg"
+
+import Tesl.Prelude exposing [Bool, Int, List, String]
+import Tesl.List exposing [List.isEmpty]
+
+#> double 0
+#= 0
+#> double 5
+#= 10
+fn double(n: Int) -> Int =
+  n * 2 # n gives the bare integer; 2 is a literal
+
+#> negate 3
+#= -3
+#> negate 0
+#= 0
+fn negate(n: Int) -> Int =
+  0 - n # subtract n from zero
+
+fn isEmpty(xs: List a) -> Bool =
+  List.isEmpty xs # qualified function call: Module.function arg
+
+# "clamp lo hi n" returns n clamped to the range [lo, hi].
+#> clamp 0 10 5
+#= 5
+#> clamp 0 10 -3
+#= 0
+#> clamp 0 10 99
+#= 10
+fn clamp(lo: Int, hi: Int, n: Int) -> Int =
+  if n < lo then
+    lo # if n is below lo, return lo
+  else
+    if n > hi then
+      hi # if n is above hi, return hi
+    else
+      n # otherwise return n unchanged
+
+fn greetAge(name: String, age: Int) -> String =
+  let greeting = "Hello, ${name}!" # let binds an intermediate value
+  if age >= 18 then
+    "${greeting} You are an adult."
+  else
+    "${greeting} You are a minor."
+
+test "double" {
+  expect double 0 == 0
+  expect double 5 == 10
+  expect double -2 == -4
+}
+
+test "negate" {
+  expect negate 5 == -5
+  expect negate 0 == 0
+  expect negate -3 == 3
+}
+
+test "clamp" {
+  expect clamp 0 10 5 == 5 # in range: returns n itself
+  expect clamp 0 10 -3 == 0 # below lo: returns lo
+  expect clamp 0 10 99 == 10 # above hi: returns hi
+  expect clamp 0 10 0 == 0 # at exact boundary lo
+  expect clamp 0 10 10 == 10 # at exact boundary hi
+}
+
+test "greetAge" {
+  expect greetAge "Alice" 20 == "Hello, Alice! You are an adult."
+  expect greetAge "Bob" 17 == "Hello, Bob! You are a minor."
+}
+
+test "clamp is bounded" with 200 runs {
+  property "result is always in range" (lo: Int, hi: Int where lo <= hi, n: Int) { clamp lo hi n >= lo && clamp lo hi n <= hi }
+}
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Every "fn" parameter is a named value carrying a hidden subject identity.
+# The subject identity is what makes proofs work later — even if you pass a value
+# deep into helper functions, its identity stays with it.
+#
+# "let" bindings also create named values with their own hidden subjects.
+# This is why the "let greeting = ..." line in greetAge works correctly — the
+# result of string interpolation gets its own subject for proof tracking.
+#
+# Operators require spaces: write " + " not "+". The compiler uses spaces to
+# distinguish operators from adjacent identifiers. This is an intentional
+# opinionated style choice.
+#
+# "if/then/else" in Tesl is an expression, not a statement. Both branches
+# must have the same type, and there must always be an "else" branch.
+#
+# "List.isEmpty" is a qualified call. The module name "List" is the prefix.
+# Tesl does not support receiver syntax like "xs.isEmpty()" — that would
+# look like record field access, which has different semantics.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# GDP named values carry three things:
+#   1. a hidden subject (a fresh runtime symbol, never visible to user code)
+#   2. a raw payload (the actual number, string, etc.)
+#   3. an attached proof set (a list of satisfied predicates)
+#
+# "fn" parameters start with an empty proof set. The subject is fresh per call.
+# Two calls to "double 5" produce two named values both with raw payload 5 but
+# with DIFFERENT hidden subjects. They are distinct proof-theoretically.
+#
+# "n" is the raw access operator. It strips the named-value wrapper and returns
+# only the raw payload. After "n" the result is a plain Racket number, so it can
+# be passed to Racket arithmetic. The subject and proofs are gone after raw access.
+#
+# "let x = expr" creates a new named value binding. The compiler assigns a fresh
+# hidden subject to x at the point of binding. If you later do "let x = ..."
+# again in the same scope chain, the compiler rejects it: variable shadowing is
+# illegal because it would create proof-theoretic ambiguity.

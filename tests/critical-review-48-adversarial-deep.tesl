@@ -1,0 +1,558 @@
+#lang tesl
+module CriticalReview48AdversarialDeep exposing [
+  Fix1Server,
+  Fix2MultiArgServer,
+  Fix4RoutingCaptureServer,
+]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Fact]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Tesl.ApiTest exposing [statusOk]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [
+  String.startsWith,
+  String.requireNonEmpty,
+  IsNonEmpty,
+]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  ATTACK VECTOR 1 — raw-value wrapping in non-checker contexts
+#
+#  The Fix 1 change skips (raw-value ...) inside check/auth bodies.
+#  We MUST verify that handler / fn bodies STILL get raw-value so the
+#  returned value is a plain scalar, not a named-value struct.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact Validated (n: Int)
+fact InBounds (n: Int)
+
+check checkValidated(n: Int) -> n: Int ::: Validated n =
+  if n > 0 then
+    ok n ::: Validated n
+  else
+    fail 400 "not validated"
+
+check checkInBounds(n: Int) -> n: Int ::: InBounds n =
+  if n >= 1 && n <= 1000 then
+    ok n ::: InBounds n
+  else
+    fail 400 "out of bounds"
+
+check checkBoth(n: Int) -> n: Int ::: Validated n && InBounds n =
+  check (checkValidated && checkInBounds) n
+
+record Fix1NumResponse { result: Int }
+codec Fix1NumResponse {
+  toJson { result -> "result" with_codec intCodec }
+  fromJson_forbidden
+}
+
+record ValueBody { value: Int }
+codec ValueBody {
+  toJson_forbidden
+  fromJson [ { value <- "value" with_codec intCodec } ]
+}
+
+# A1: handler calls single check, uses result in arithmetic
+handler fix1SingleCheck(req: ValueBody) -> Fix1NumResponse =
+  let v = check checkValidated req.value
+  Fix1NumResponse { result: v * 10 + 1 }
+
+# A2: handler calls conjunction check, uses result in arithmetic
+handler fix1ConjCheck(req: ValueBody) -> Fix1NumResponse =
+  let v = check checkBoth req.value
+  Fix1NumResponse { result: v + 999 }
+
+# A3: handler calls inline conjunction, uses result
+handler fix1InlineConj(req: ValueBody) -> Fix1NumResponse =
+  let v = check (checkValidated && checkInBounds) req.value
+  Fix1NumResponse { result: v * 2 }
+
+# A4: fn (not handler) calls check — raw-value must unwrap there too
+fn fix1FnCheck(n: Int) -> Int =
+  let v = check checkValidated n
+  v + 100
+
+handler fix1FnProxy(req: ValueBody) -> Fix1NumResponse =
+  Fix1NumResponse { result: fix1FnCheck req.value }
+
+api Fix1Api {
+  post "/single" body req: ValueBody -> Fix1NumResponse
+  post "/conj" body req: ValueBody -> Fix1NumResponse
+  post "/inline" body req: ValueBody -> Fix1NumResponse
+  post "/fn" body req: ValueBody -> Fix1NumResponse
+}
+
+server Fix1Server for Fix1Api {
+  fix1SingleCheck = fix1SingleCheck
+  fix1ConjCheck = fix1ConjCheck
+  fix1InlineConj = fix1InlineConj
+  fix1FnProxy = fix1FnProxy
+}
+
+# ── api-tests for Fix 1 ─────────────────────────────────────────────────────
+
+api-test "A1: single check raw-value arithmetic" for Fix1Server {
+  let resp = post "/single" body { "value": 5 }
+  expect statusOk resp.status
+  expect resp.body.result == 51
+}
+
+api-test "A1: single check rejects zero" for Fix1Server {
+  let resp = post "/single" body { "value": 0 }
+  expect resp.status == 400
+}
+
+api-test "A2: conj check raw-value arithmetic" for Fix1Server {
+  let resp = post "/conj" body { "value": 1 }
+  expect statusOk resp.status
+  expect resp.body.result == 1000
+}
+
+api-test "A2: conj check boundary 1000" for Fix1Server {
+  let resp = post "/conj" body { "value": 1000 }
+  expect statusOk resp.status
+  expect resp.body.result == 1999
+}
+
+api-test "A2: conj check rejects 0" for Fix1Server {
+  let resp = post "/conj" body { "value": 0 }
+  expect resp.status == 400
+}
+
+api-test "A2: conj check rejects 1001" for Fix1Server {
+  let resp = post "/conj" body { "value": 1001 }
+  expect resp.status == 400
+}
+
+api-test "A3: inline conj raw-value arithmetic" for Fix1Server {
+  let resp = post "/inline" body { "value": 50 }
+  expect statusOk resp.status
+  expect resp.body.result == 100
+}
+
+api-test "A4: fn body raw-value unwrap" for Fix1Server {
+  let resp = post "/fn" body { "value": 7 }
+  expect statusOk resp.status
+  expect resp.body.result == 107
+}
+
+# A4 negative: check failure inside fn propagates through handler error boundary → 500
+api-test "A4: fn body check failure is 500" for Fix1Server {
+  let resp = post "/fn" body { "value": 0 }
+  expect resp.status == 500
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  ATTACK VECTOR 2 — auth emit with proof arg substitution
+#
+#  The new emit_auth_resolved_proof substitutes the return-binding name
+#  with the ok-value name in proof templates.  We test:
+#  - binding != ok-value (substitution needed)
+#  - binding == ok-value (no substitution)
+#  - conjunction with delegation via let-proof
+#  - double delegation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact Authenticated (user: String)
+fact IsAdmin (user: String)
+fact HasValidSession (user: String)
+
+record AuthInfoResponse { userId: String }
+codec AuthInfoResponse {
+  toJson { userId -> "userId" with_codec stringCodec }
+  fromJson_forbidden
+}
+
+# B1: return binding "user" vs ok-value "userId" — substitution needed
+auth simpleSubstAuth(request: HttpRequest) -> user: String ::: Authenticated user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "no user"
+    Something userId ->
+      ok userId ::: Authenticated user
+
+# B2: identity — binding == ok-value, no substitution
+auth identityAuth(request: HttpRequest) -> user: String ::: Authenticated user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "no user"
+    Something user ->
+      ok user ::: Authenticated user
+
+# B3: conjunction, binding != ok-value — both halves need substitution
+auth conjSubstAuth(request: HttpRequest)
+  -> user: String ::: Authenticated user && HasValidSession user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "no user"
+    Something userId ->
+      case Dict.lookup "session" request.cookies of
+        Nothing -> fail 401 "no session"
+        Something _ ->
+          ok userId ::: Authenticated user && HasValidSession user
+
+# B4: delegated check + conjunction — proof var half + literal half
+check checkIsAdmin(userId: String) -> userId: String ::: IsAdmin userId =
+  if String.startsWith userId "admin" then
+    ok userId ::: IsAdmin userId
+  else
+    fail 403 "not admin"
+
+auth delegatedConjAuth(request: HttpRequest)
+  -> user: String ::: IsAdmin user && Authenticated user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "no user"
+    Something userId ->
+      let (admin ::: p) = check checkIsAdmin userId
+      ok admin ::: p && Authenticated user
+
+# B5: double delegation — stdlib check + manual conjunction
+auth doubleDelegatedAuth(request: HttpRequest)
+  -> user: String ::: Authenticated user && HasValidSession user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "no user"
+    Something userId ->
+      let validId = check String.requireNonEmpty userId
+      ok validId ::: Authenticated user && HasValidSession user
+
+handler whoamiSimple(user: String ::: Authenticated user) -> AuthInfoResponse =
+  AuthInfoResponse { userId: user }
+
+handler whoamiIdentity(user: String ::: Authenticated user) -> AuthInfoResponse =
+  AuthInfoResponse { userId: user }
+
+handler whoamiConj(user: String ::: Authenticated user && HasValidSession user)
+  -> AuthInfoResponse =
+  AuthInfoResponse { userId: user }
+
+handler whoamiAdmin(user: String ::: IsAdmin user && Authenticated user)
+  -> AuthInfoResponse =
+  AuthInfoResponse { userId: user }
+
+handler whoamiDouble(user: String ::: Authenticated user && HasValidSession user)
+  -> AuthInfoResponse =
+  AuthInfoResponse { userId: user }
+
+api Fix2MultiArgApi {
+  get "/simple"
+    auth user: String ::: Authenticated user via simpleSubstAuth
+    -> AuthInfoResponse
+
+  get "/identity"
+    auth user: String ::: Authenticated user via identityAuth
+    -> AuthInfoResponse
+
+  get "/conj"
+    auth user: String ::: Authenticated user && HasValidSession user via conjSubstAuth
+    -> AuthInfoResponse
+
+  get "/delegated"
+    auth user: String ::: IsAdmin user && Authenticated user via delegatedConjAuth
+    -> AuthInfoResponse
+
+  get "/double"
+    auth user: String ::: Authenticated user && HasValidSession user via doubleDelegatedAuth
+    -> AuthInfoResponse
+}
+
+server Fix2MultiArgServer for Fix2MultiArgApi {
+  whoamiSimple = whoamiSimple
+  whoamiIdentity = whoamiIdentity
+  whoamiConj = whoamiConj
+  whoamiAdmin = whoamiAdmin
+  whoamiDouble = whoamiDouble
+}
+
+# ── api-tests for Fix 2 ─────────────────────────────────────────────────────
+
+api-test "B1: simple subst passes" for Fix2MultiArgServer {
+  let resp = get "/simple" cookie "user=alice"
+  expect statusOk resp.status
+  expect resp.body.userId == "alice"
+}
+
+api-test "B1: simple no cookie 401" for Fix2MultiArgServer {
+  let resp = get "/simple"
+  expect resp.status == 401
+}
+
+api-test "B2: identity (no subst) passes" for Fix2MultiArgServer {
+  let resp = get "/identity" cookie "user=bob"
+  expect statusOk resp.status
+  expect resp.body.userId == "bob"
+}
+
+api-test "B3: conj subst passes" for Fix2MultiArgServer {
+  let resp = get "/conj" cookie "user=carol; session=abc"
+  expect statusOk resp.status
+  expect resp.body.userId == "carol"
+}
+
+api-test "B3: conj missing session 401" for Fix2MultiArgServer {
+  let resp = get "/conj" cookie "user=carol"
+  expect resp.status == 401
+}
+
+api-test "B4: delegated admin passes" for Fix2MultiArgServer {
+  let resp = get "/delegated" cookie "user=admin_dave"
+  expect statusOk resp.status
+  expect resp.body.userId == "admin_dave"
+}
+
+api-test "B4: delegated non-admin 403" for Fix2MultiArgServer {
+  let resp = get "/delegated" cookie "user=dave"
+  expect resp.status == 403
+}
+
+api-test "B5: double delegated passes" for Fix2MultiArgServer {
+  let resp = get "/double" cookie "user=eve"
+  expect statusOk resp.status
+  expect resp.body.userId == "eve"
+}
+
+api-test "B5: double delegated empty string rejected" for Fix2MultiArgServer {
+  let resp = get "/double" cookie "user="
+  expect resp.status == 400
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  ATTACK VECTOR 3 — proof variable edge cases (in auth context)
+#
+#  The proof_checker tracks proof variables from let (x ::: p) = check f v.
+#  Auth functions allow ok-value != binding, so these are the right place
+#  to test proof var decomposition, nested chains, and mixed conjunctions.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact Verified (user: String)
+fact Active (user: String)
+
+check checkVerified(userId: String) -> userId: String ::: Verified userId =
+  if String.startsWith userId "v" then
+    ok userId ::: Verified userId
+  else
+    fail 403 "not verified"
+
+check checkActive(input: String) -> result: String ::: Active result =
+  let result = check String.requireNonEmpty input
+  ok result ::: Active result
+
+# C1: single proof var in auth — decompose + forward
+auth proofVarSingle(request: HttpRequest)
+  -> user: String ::: Verified user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "no user"
+    Something userId ->
+      let (checked ::: p) = check checkVerified userId
+      ok checked ::: p
+
+# C2: proof var + literal conjunction — p from check, Authenticated from auth
+auth proofVarMixed(request: HttpRequest)
+  -> user: String ::: Verified user && Authenticated user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "no user"
+    Something userId ->
+      let (checked ::: p) = check checkVerified userId
+      ok checked ::: p && Authenticated user
+
+# C3: stdlib check + double literal conjunction (tests emission with two manual proofs)
+auth proofVarNested(request: HttpRequest)
+  -> user: String ::: Verified user && Active user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "no user"
+    Something userId ->
+      let validId = check String.requireNonEmpty userId
+      let (checked ::: p) = check checkVerified validId
+      ok checked ::: p && Active user
+
+handler whoamiVerified(user: String ::: Verified user) -> AuthInfoResponse =
+  AuthInfoResponse { userId: user }
+
+handler whoamiMixed(user: String ::: Verified user && Authenticated user)
+  -> AuthInfoResponse =
+  AuthInfoResponse { userId: user }
+
+handler whoamiNested(user: String ::: Verified user && Active user)
+  -> AuthInfoResponse =
+  AuthInfoResponse { userId: user }
+
+api Fix3ProofVarApi {
+  get "/single-pv"
+    auth user: String ::: Verified user via proofVarSingle
+    -> AuthInfoResponse
+
+  get "/mixed-pv"
+    auth user: String ::: Verified user && Authenticated user via proofVarMixed
+    -> AuthInfoResponse
+
+  get "/nested-pv"
+    auth user: String ::: Verified user && Active user via proofVarNested
+    -> AuthInfoResponse
+}
+
+server Fix3ProofVarServer for Fix3ProofVarApi {
+  whoamiVerified = whoamiVerified
+  whoamiMixed = whoamiMixed
+  whoamiNested = whoamiNested
+}
+
+api-test "C1: single proof var auth" for Fix3ProofVarServer {
+  let resp = get "/single-pv" cookie "user=v_alice"
+  expect statusOk resp.status
+  expect resp.body.userId == "v_alice"
+}
+
+api-test "C1: single proof var auth rejected" for Fix3ProofVarServer {
+  let resp = get "/single-pv" cookie "user=alice"
+  expect resp.status == 403
+}
+
+api-test "C2: mixed proof var + literal" for Fix3ProofVarServer {
+  let resp = get "/mixed-pv" cookie "user=v_bob"
+  expect statusOk resp.status
+  expect resp.body.userId == "v_bob"
+}
+
+api-test "C2: mixed proof var rejected" for Fix3ProofVarServer {
+  let resp = get "/mixed-pv" cookie "user=bob"
+  expect resp.status == 403
+}
+
+api-test "C3: nested proof var chain" for Fix3ProofVarServer {
+  let resp = get "/nested-pv" cookie "user=v_charlie"
+  expect statusOk resp.status
+  expect resp.body.userId == "v_charlie"
+}
+
+api-test "C3: nested empty fails" for Fix3ProofVarServer {
+  let resp = get "/nested-pv" cookie "user="
+  expect resp.status == 400
+}
+
+api-test "C3: nested unverified fails" for Fix3ProofVarServer {
+  let resp = get "/nested-pv" cookie "user=charlie"
+  expect resp.status == 403
+}
+
+# Also test pure check delegation via conjunction combinator
+check checkBothFacts(n: Int) -> n: Int ::: Validated n && InBounds n =
+  check (checkValidated && checkInBounds) n
+
+fn useBothFacts(n: Int) -> Int =
+  let v = check checkBothFacts n
+  v + 1
+
+test "C4: conjunction combinator delegation" {
+  expect useBothFacts 50 == 51
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  ATTACK VECTOR 4 — routing with capture segments + different auth
+#
+#  The routing fix checks path segments BEFORE running auth.  With captures,
+#  we verify that different capture-bearing routes with different auth coexist.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact ItemAuth (user: String)
+fact UserAuth (user: String)
+
+auth itemCookieAuth(request: HttpRequest) -> user: String ::: ItemAuth user =
+  case Dict.lookup "item-token" request.cookies of
+    Nothing -> fail 401 "no item token"
+    Something userId -> ok userId ::: ItemAuth user
+
+auth userCookieAuth(request: HttpRequest) -> user: String ::: UserAuth user =
+  case Dict.lookup "user-token" request.cookies of
+    Nothing -> fail 401 "no user token"
+    Something userId -> ok userId ::: UserAuth user
+
+capture itemIdCapture: String using stringCodec
+capture userIdCapture: String using stringCodec
+
+record ItemResponse { itemId: String, fetchedBy: String }
+codec ItemResponse {
+  toJson {
+    itemId -> "itemId" with_codec stringCodec
+    fetchedBy -> "fetchedBy" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+record UserResponse { uid: String, fetchedBy: String }
+codec UserResponse {
+  toJson {
+    uid -> "uid" with_codec stringCodec
+    fetchedBy -> "fetchedBy" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+handler getItem(user: String ::: ItemAuth user, itemId: String) -> ItemResponse =
+  ItemResponse { itemId: itemId, fetchedBy: user }
+
+handler getUser(user: String ::: UserAuth user, uid: String) -> UserResponse =
+  UserResponse { uid: uid, fetchedBy: user }
+
+api Fix4CaptureApi {
+  get "/items/:itemId"
+    auth user: String ::: ItemAuth user via itemCookieAuth
+    capture itemId: String via itemIdCapture
+    -> ItemResponse
+
+  get "/users/:uid"
+    auth user: String ::: UserAuth user via userCookieAuth
+    capture uid: String via userIdCapture
+    -> UserResponse
+}
+
+server Fix4RoutingCaptureServer for Fix4CaptureApi {
+  getItem = getItem
+  getUser = getUser
+}
+
+# ── api-tests for Fix 4 ─────────────────────────────────────────────────────
+
+api-test "D1: items route with item-token" for Fix4RoutingCaptureServer {
+  let resp = get "/items/42" cookie "item-token=alice"
+  expect statusOk resp.status
+  expect resp.body.itemId == "42"
+  expect resp.body.fetchedBy == "alice"
+}
+
+api-test "D2: users route with user-token" for Fix4RoutingCaptureServer {
+  let resp = get "/users/bob" cookie "user-token=charlie"
+  expect statusOk resp.status
+  expect resp.body.uid == "bob"
+  expect resp.body.fetchedBy == "charlie"
+}
+
+api-test "D3: items route wrong cookie 401" for Fix4RoutingCaptureServer {
+  let resp = get "/items/42" cookie "user-token=alice"
+  expect resp.status == 401
+}
+
+api-test "D4: users route wrong cookie 401" for Fix4RoutingCaptureServer {
+  let resp = get "/users/bob" cookie "item-token=alice"
+  expect resp.status == 401
+}
+
+api-test "D5: items no cookie 401" for Fix4RoutingCaptureServer {
+  let resp = get "/items/99"
+  expect resp.status == 401
+}
+
+api-test "D6: users no cookie 401" for Fix4RoutingCaptureServer {
+  let resp = get "/users/zz"
+  expect resp.status == 401
+}
+
+api-test "D8: both cookies items route" for Fix4RoutingCaptureServer {
+  let resp = get "/items/77" cookie "item-token=alice; user-token=bob"
+  expect statusOk resp.status
+  expect resp.body.fetchedBy == "alice"
+}
+
+api-test "D9: both cookies users route" for Fix4RoutingCaptureServer {
+  let resp = get "/users/xx" cookie "item-token=alice; user-token=bob"
+  expect statusOk resp.status
+  expect resp.body.fetchedBy == "bob"
+}

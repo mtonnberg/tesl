@@ -1,0 +1,179 @@
+#lang tesl
+module NestedPatterns exposing [
+  Shape(..),
+  Color(..),
+  Expr(..),
+  describeShape,
+  evalExpr,
+  countSomethings,
+  describeResult,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Nested constructor patterns let you match the structure of a value
+# AND the structure of a field in the same arm — without an extra case
+# expression inside the body.
+#
+# Two syntaxes are supported:
+#
+# 1. POSITIONAL (one field, wrap with parens):
+#      Wrap (Something n) -> n
+#      Node (Leaf v) right -> v + evalRight right
+#
+# 2. LABELED (named fields, wrap with braces):
+#      Wrap { inner = Something { value = n } } -> n
+#
+# Rules:
+#   1. Sub-patterns can be any valid pattern: constructor, variable, wildcard.
+#   2. Nesting depth is unlimited (though very deep nesting harms readability).
+#   3. Exhaustiveness still applies at every level.
+#   4. Mix nested and flat arms freely in the same case.
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.fromInt]
+import Tesl.List exposing [List.foldl]
+
+# ═══════════════════════════════════════════
+# PART 1: Basic nested patterns — Maybe inside an ADT
+# ═══════════════════════════════════════════
+
+type Shape
+  = Circle radius: Int
+  | ColoredCircle color: String radius: Int
+  | Wrapped inner: Maybe Int
+
+# Positional syntax: Wrapped (Something n) — matches Wrapped containing Some Int.
+fn describeShape(s: Shape) -> String =
+  case s of
+    Circle r -> "circle r=${String.fromInt r}"
+    ColoredCircle c r -> "${c} circle r=${String.fromInt r}"
+    Wrapped (Something n) -> "wrapped value: ${String.fromInt n}"
+    Wrapped Nothing -> "empty wrapper"
+
+# ═══════════════════════════════════════════
+# PART 2: Deeply nested patterns
+# ═══════════════════════════════════════════
+# Each level of nesting matches one more layer of structure.
+# Here we match a simple expression tree recursively.
+
+type Expr
+  = Lit value: Int
+  | Neg inner: Expr
+  | Add left: Expr right: Expr
+
+# Matches Neg (Lit n) — negated literal — as a special case.
+fn evalExpr(e: Expr) -> Int =
+  case e of
+    Lit value -> value
+    Neg (Lit n) -> 0 - n # direct negated literal
+    Neg inner -> 0 - evalExpr inner # general negation
+    Add left right -> evalExpr left + evalExpr right
+
+# ═══════════════════════════════════════════
+# PART 3: Labeled syntax for multi-field ADTs
+# ═══════════════════════════════════════════
+
+type Color = RGB r: Int g: Int b: Int
+
+# Labeled nested pattern: matches inside the RGB constructor.
+fn describeColorBrightness(c: Color) -> String =
+  case c of
+    RGB { r = 255, g = 255, b = 255 } -> "white"
+    RGB { r = 0, g = 0, b = 0 } -> "black"
+    RGB r g _ -> "r=${String.fromInt r} g=${String.fromInt g}"
+
+# ═══════════════════════════════════════════
+# PART 4: Mixing nested and flat arms
+# ═══════════════════════════════════════════
+# Flat arms for the common case, nested arms for specific sub-patterns.
+
+# Count how many elements in a list of Maybe Int are Something.
+# This illustrates the idiomatic alternative: a helper + List.map.
+# For single-level matching, a flat case is cleaner.
+fn countSomethings(xs: List (Maybe Int)) -> Int =
+  List.foldl (fn(acc: Int, x: Maybe Int) ->
+    case x of
+      Something _ -> acc + 1
+      Nothing -> acc
+  ) 0 xs
+
+# ═══════════════════════════════════════════
+# PART 5: Alternative — inner case expression
+# ═══════════════════════════════════════════
+# Nested patterns are syntactic sugar. The exact same semantics can be
+# expressed with an inner case expression. Use whichever is clearer.
+
+type InnerResult = Success value: Int | Failure message: String
+
+fn describeResult(m: Maybe InnerResult) -> String =
+  case m of
+    Nothing -> "no result"
+    Something inner ->
+      case inner of
+        Success value -> "success: ${String.fromInt value}"
+        Failure message -> "failure: ${message}"
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Nested constructor patterns are desugared by the compiler into a
+# sequence of ADT discriminant checks followed by field extractions.
+#
+# For `Wrapped (Something n) -> body`:
+#   1. Guard: (adt-value? v) && variant == 'Wrapped
+#   2. Extract the 'inner field
+#   3. Guard: (adt-value? inner_raw) && variant == 'Something
+#   4. Extract inner_raw.'value and bind it to n
+#   5. Execute body with n in scope
+#
+# LABELED syntax `Ctor { field = Pattern }` is useful when the ADT has
+# multiple fields and you only want to destructure one of them.  The
+# label makes it clear which field the nested pattern applies to.
+# Unlabeled (positional) fields use the N-th field in declaration order.
+#
+# EXHAUSTIVENESS: the compiler checks ALL top-level constructors.
+# Nested patterns for the SAME constructor are fine (e.g., three arms for
+# `Wrapped`: `Something n`, `Nothing`, and a catch-all `_`).  What is
+# NOT fine is omitting a top-level constructor entirely.
+#
+# WHY USE NESTED PATTERNS?
+#   - They reduce nesting depth (no inner case blocks).
+#   - They communicate intent directly: the arm matches BOTH levels at once.
+#   - The guard short-circuits: if the outer pattern fails, the inner check
+#     is never evaluated, so there's no risk of null-pointer-equivalent errors.
+#
+# WHEN NOT TO USE NESTED PATTERNS:
+#   - When the nested case logic is complex enough to deserve its own let-binding.
+#   - When the inner value has multiple consumers in the body.
+#   - When where-guards on the inner value are needed: add an inner case instead.
+
+test "describeShape" {
+  expect describeShape (Circle 5) == "circle r=5"
+  expect describeShape (ColoredCircle "red" 3) == "red circle r=3"
+  expect describeShape (Wrapped (Something 42)) == "wrapped value: 42"
+  expect describeShape (Wrapped Nothing) == "empty wrapper"
+}
+
+test "evalExpr" {
+  expect evalExpr (Lit 7) == 7
+  expect evalExpr (Neg (Lit 3)) == -3
+  expect evalExpr (Neg (Add (Lit 1) (Lit 2))) == -3
+  expect evalExpr (Add (Lit 1) (Lit 2)) == 3
+  expect evalExpr (Add (Neg (Lit 5)) (Lit 10)) == 5
+}
+
+test "describeResult" {
+  expect describeResult Nothing == "no result"
+  expect describeResult (Something (Success 42)) == "success: 42"
+  expect describeResult (Something (Failure "oops")) == "failure: oops"
+}
+
+test "countSomethings" {
+  let xs = [Something 1, Nothing, Something 2, Nothing, Something 3]
+  expect countSomethings xs == 3
+  expect countSomethings [Nothing, Nothing] == 0
+  expect countSomethings [] == 0
+}

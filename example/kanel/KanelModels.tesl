@@ -1,0 +1,364 @@
+#lang tesl
+# ─── Kanel — Shared models, entities, ADTs, and capabilities ───────────────
+#
+# Foundation module: entity types, ADT definitions, input records, codecs,
+# and shared capabilities.  No handlers defined here.
+
+module KanelModels exposing [
+  kanelDbRead,
+  kanelDbWrite,
+  kanelQueue,
+  kanelPubSub,
+  OrgRole(..),
+  IssueStatus(..),
+  InvoiceStatus(..),
+  KanelUser,
+  Org,
+  OrgMembership,
+  Project,
+  ProjectMembership,
+  Issue,
+  IssueComment,
+  TimeEntry,
+  Invoice,
+  NotifyPayload,
+  NewOrgRequest,
+  NewProjectRequest,
+  NewIssueRequest,
+  UpdateIssueRequest,
+  UpdateStatusRequest,
+  NewCommentRequest,
+  NewTimeEntryRequest,
+  NewInvoiceRequest,
+  ValidOrgId,
+  checkOrgId,
+  ValidProjectId,
+  checkProjectId,
+  ValidIssueId,
+  checkIssueId,
+  ValidInvoiceId,
+  checkInvoiceId,
+  ValidUserId,
+  checkUserId,
+  checkTargetUserId,
+]
+
+import Tesl.Prelude exposing [Int, Bool, String, Fact]
+import Tesl.String exposing [String.length]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Queue exposing [queueWrite, pubsub]
+import Tesl.Time exposing [PosixMillis]
+
+# ── Capabilities ────────────────────────────────────────────────────────────
+
+capability kanelDbRead implies dbRead
+capability kanelDbWrite implies dbWrite
+capability kanelQueue implies queueWrite
+capability kanelPubSub implies pubsub
+
+# ── Roles and status ADTs ───────────────────────────────────────────────────
+
+type OrgRole
+  = RoleAdmin
+  | RoleMember
+  | RoleViewer
+
+type IssueStatus
+  = Backlog
+  | Todo
+  | InProgress
+  | InReview
+  | Done
+  | Cancelled
+
+type InvoiceStatus
+  = Draft
+  | Approved
+  | Sent
+  | Paid
+  | Overdue
+
+# ── Core entities ───────────────────────────────────────────────────────────
+
+entity KanelUser table "kanel_users" primaryKey id {
+  id: String
+  email: String @db(text)
+  passwordHash: String @db(text)
+  displayName: String @db(text)
+  createdAt: PosixMillis
+}
+
+entity Org table "kanel_orgs" primaryKey id {
+  id: String
+  name: String @db(text)
+  slug: String @db(text)
+  createdAt: PosixMillis
+}
+
+entity OrgMembership table "kanel_org_memberships" primaryKey id {
+  id: String
+  orgId: String @db(text)
+  userId: String @db(text)
+  role: OrgRole
+  joinedAt: PosixMillis
+}
+
+entity Project table "kanel_projects" primaryKey id {
+  id: String
+  orgId: String @db(text)
+  name: String @db(text)
+  description: String @db(text)
+  archived: Bool
+  createdAt: PosixMillis
+}
+
+entity ProjectMembership table "kanel_project_memberships" primaryKey id {
+  id: String
+  projectId: String @db(text)
+  userId: String @db(text)
+  joinedAt: PosixMillis
+}
+
+entity Issue table "kanel_issues" primaryKey id {
+  id: String
+  projectId: String @db(text)
+  orgId: String @db(text)
+  title: String @db(text)
+  description: String @db(text)
+  status: IssueStatus
+  assigneeId: Maybe String @db(text)
+  reporterId: String @db(text)
+  estimate: Int
+  dueAt: Maybe PosixMillis
+  createdAt: PosixMillis
+  updatedAt: PosixMillis
+}
+
+entity IssueComment table "kanel_issue_comments" primaryKey id {
+  id: String
+  issueId: String @db(text)
+  authorId: String @db(text)
+  body: String @db(text)
+  createdAt: PosixMillis
+}
+
+entity TimeEntry table "kanel_time_entries" primaryKey id {
+  id: String
+  issueId: String @db(text)
+  userId: String @db(text)
+  orgId: String @db(text)
+  minutes: Int
+  description: String @db(text)
+  invoiceId: String @db(text)
+  loggedAt: PosixMillis
+}
+
+entity Invoice table "kanel_invoices" primaryKey id {
+  id: String
+  orgId: String @db(text)
+  status: InvoiceStatus
+  totalMinutes: Int
+  notes: String @db(text)
+  createdAt: PosixMillis
+  approvedAt: PosixMillis
+}
+
+# ── Notification queue payload ───────────────────────────────────────────────
+
+record NotifyPayload {
+  recipientUserId: String
+  recipientEmail: String
+  subject: String
+  body: String
+}
+
+# ── Input record types ───────────────────────────────────────────────────────
+
+record NewOrgRequest {
+  name: String
+  slug: String
+}
+
+record NewProjectRequest {
+  name: String
+  description: String
+}
+
+record NewIssueRequest {
+  title: String
+  description: String
+  estimate: Int
+}
+
+record UpdateIssueRequest {
+  title: String
+  description: String
+  estimate: Int
+  assigneeId: String
+}
+
+record UpdateStatusRequest {
+  newStatus: IssueStatus
+}
+
+record NewCommentRequest {
+  body: String
+}
+
+record NewTimeEntryRequest {
+  minutes: Int
+  description: String
+}
+
+record NewInvoiceRequest {
+  notes: String
+}
+
+# ── URL parameter validation — Facts on route parameters ─────────────────────
+#
+# These are used both by URL captures in KanelBackend.tesl and by handler
+# parameter annotations across all domain modules.
+
+fact ValidOrgId (id: String)
+
+check checkOrgId(orgId: String) -> orgId: String ::: ValidOrgId orgId =
+  if String.length orgId < 3 then
+    fail 400 "invalid org id"
+  else
+    ok orgId ::: ValidOrgId orgId
+
+fact ValidProjectId (id: String)
+
+check checkProjectId(projectId: String) -> projectId: String ::: ValidProjectId projectId =
+  if String.length projectId < 3 then
+    fail 400 "invalid project id"
+  else
+    ok projectId ::: ValidProjectId projectId
+
+fact ValidIssueId (id: String)
+
+check checkIssueId(issueId: String) -> issueId: String ::: ValidIssueId issueId =
+  if String.length issueId < 3 then
+    fail 400 "invalid issue id"
+  else
+    ok issueId ::: ValidIssueId issueId
+
+fact ValidInvoiceId (id: String)
+
+check checkInvoiceId(invoiceId: String) -> invoiceId: String ::: ValidInvoiceId invoiceId =
+  if String.length invoiceId < 3 then
+    fail 400 "invalid invoice id"
+  else
+    ok invoiceId ::: ValidInvoiceId invoiceId
+
+fact ValidUserId (id: String)
+
+check checkUserId(userId: String) -> userId: String ::: ValidUserId userId =
+  if String.length userId < 3 then
+    fail 400 "invalid user id"
+  else
+    ok userId ::: ValidUserId userId
+
+check checkTargetUserId(targetUserId: String) -> targetUserId: String ::: ValidUserId targetUserId =
+  if String.length targetUserId < 3 then
+    fail 400 "invalid user id"
+  else
+    ok targetUserId ::: ValidUserId targetUserId
+
+# ── ADT codecs ────────────────────────────────────────────────────────────────
+
+codec OrgRole {
+  adtJson
+}
+
+codec IssueStatus {
+  adtJson
+}
+
+codec InvoiceStatus {
+  adtJson
+}
+
+# ── Record codecs ──────────────────────────────────────────────────────────────
+
+codec NewOrgRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      name <- "name" with_codec stringCodec
+      slug <- "slug" with_codec stringCodec
+    }
+  ]
+}
+
+codec NewProjectRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      name <- "name" with_codec stringCodec
+      description <- "description" with_codec stringCodec
+    }
+  ]
+}
+
+codec NewIssueRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      title <- "title" with_codec stringCodec
+      description <- "description" with_codec stringCodec
+      estimate <- "estimate" with_codec intCodec
+    }
+  ]
+}
+
+codec UpdateIssueRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      title <- "title" with_codec stringCodec
+      description <- "description" with_codec stringCodec
+      estimate <- "estimate" with_codec intCodec
+      assigneeId <- "assigneeId" with_codec stringCodec
+    }
+  ]
+}
+
+codec UpdateStatusRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      newStatus <- "newStatus" with_codec IssueStatus
+    }
+  ]
+}
+
+codec NewCommentRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      body <- "body" with_codec stringCodec
+    }
+  ]
+}
+
+codec NewTimeEntryRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      minutes <- "minutes" with_codec intCodec
+      description <- "description" with_codec stringCodec
+    }
+  ]
+}
+
+codec NewInvoiceRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      notes <- "notes" with_codec stringCodec
+    }
+  ]
+}

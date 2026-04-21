@@ -1,0 +1,64 @@
+#lang tesl
+module Sandbox exposing [shouldWork, dummy_add, ValidPort, IsPositive]
+import Tesl.Prelude exposing [forgetFact, attachFact, detachFact, Int, Fact]
+import Tesl.Maybe exposing [Maybe(..)]
+import Sandbox2 exposing [doSomething, doSomething2, ARecord, FiveCases(..)]
+import Sandbox3
+
+# A comment
+fn shouldWork(x: Int, y: Int) -> Int =
+  case validPort y of
+    Something proof -> doSomething (y ::: proof) # <- this should work
+    Nothing -> x
+
+fn shouldWork2(x: Int, y: Int ::: ValidPort x) -> Int =
+  let (y_withoutProof ::: xProof) = y
+#  doSomething <| attachFact x xProof # works
+  doSomething <| x ::: xProof # should work
+
+fn shouldWork3(x: Int ::: ValidPort y, y: Int ::: ValidPort x) -> Int =
+  let xProof = detachFact <| y
+  doSomething (attachFact (forgetFact x) xProof)
+
+fn shouldWork4(x: Int ::: ValidPort x, y: Int ::: IsPositive x) -> Int =
+  let xProof1 = x |> detachFact
+  let (_ ::: xProof2) = y
+  doSomething2 (attachFact (forgetFact x) (xProof1 && xProof2))
+
+fn shouldWork41(x: Int ::: ValidPort x && IsPositive y, y: Int ::: IsPositive x) -> Int =
+  let (x_withoutProof ::: xProof1 && _) = x
+  let (_ ::: xProof2) = y
+  doSomething2 <| x_withoutProof ::: xProof1 && xProof2
+
+# a comment for shouldWork5
+fn shouldWork5(x: ARecord) -> Int =
+  2
+fn shouldWork7(x: Sandbox3.ARecord2) -> Int =
+  x.foo3
+fn shouldWork8(x: Sandbox2.ARecord2) -> Int =
+  x.foo2
+
+fn shouldWork9(x: Int, y: Int) -> Int =
+  x
+
+fn shouldWork91(x: Int) -> Int =
+  shouldWork9 2 x
+
+fact ValidPort (port: Int)
+
+establish validPort (port: Int) -> Maybe (Fact (ValidPort port)) =
+  if 1 <= port && port <= 65535 then
+    Something (ValidPort port)
+  else
+    Nothing
+
+fact IsPositive (n: Int)
+
+check checkPositive(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "Value must be over 0"
+
+fn dummy_add(x: Int, y: Int) -> Int =
+  x + y

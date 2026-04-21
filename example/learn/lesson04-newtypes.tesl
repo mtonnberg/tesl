@@ -1,0 +1,144 @@
+#lang tesl
+module Newtypes exposing [
+  UserId,
+  ProjectId,
+  Email,
+  makeUserId,
+  makeProjectId,
+  userId,
+  projectId,
+  emailAddress,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# "type Name = BaseType" creates a NOMINAL NEWTYPE.
+# This is NOT a transparent alias. UserId and ProjectId are different types
+# even if both wrap String.
+#
+# Construct:  UserId("some-string")
+# Unwrap:     id.value                 (the ".value" field accessor)
+#
+# You cannot pass a UserId where a ProjectId is expected — they are distinct types.
+# This prevents accidental confusion of domain identifiers.
+
+import Tesl.Prelude exposing [String]
+
+# Each "type X = Y" line creates a distinct nominal type.
+type UserId = String # wraps String; NOT the same as String at the type level
+type ProjectId = String # also wraps String; NOT the same as UserId
+type Email = String # a third distinct nominal type
+
+# To make a UserId from a raw String, call the constructor: UserId(raw).
+fn makeUserId(raw: String) -> UserId =
+  UserId raw # UserId (...) constructs a newtype value wrapping raw
+
+# To make a ProjectId from a raw String.
+fn makeProjectId(raw: String) -> ProjectId =
+  ProjectId raw # ProjectId (...) wraps the string
+
+# Extract the wrapped String from a UserId.
+fn userId(id: UserId) -> String =
+  id.value # ".value" unwraps the newtype
+
+# Extract the wrapped String from a ProjectId.
+fn projectId(id: ProjectId) -> String =
+  id.value # same ".value" accessor works on any newtype
+
+# Extract the wrapped String from an Email.
+fn emailAddress(email: Email) -> String =
+  email.value
+
+# These two functions accept DIFFERENT types even though both parameters
+# wrap the same underlying String structure.
+# If you tried to call "projectId(myUserId)" you would get a type error —
+# the runtime checks the type tag "UserId" vs "ProjectId".
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Nominal typing means the TYPE NAME is the identity, not the structure underneath.
+# Even though UserId, ProjectId, and Email all hold a String inside, they are
+# three completely separate types. You cannot accidentally pass one where another
+# is expected.
+#
+# This is useful for domain safety:
+#   - A "userId" and a "projectId" might both look like "abc123" as strings.
+#   - Without newtypes you could accidentally pass one to a function expecting the other.
+#   - With newtypes, the type system (and runtime) catches the mistake immediately.
+#
+# The ".value" accessor works on ALL newtypes. It's the canonical way to extract
+# the underlying base type value. Think of it as "unwrap" or "getInner".
+#
+# Construction: TypeName(rawValue). You always call the type name as a function.
+# The argument is the raw base-type value (use raw to strip proof wrapper if needed).
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# The "define-newtype" macro creates a Racket struct of type "newtype-value".
+# This struct holds two fields: a type-name tag (the symbol 'UserId, 'ProjectId, etc.)
+# and the wrapped raw value.
+#
+# The runtime type predicate for UserId checks:
+#   1. Is this a newtype-value struct? (rules out plain strings)
+#   2. Is the type-name tag the symbol 'UserId? (rules out ProjectId, Email, etc.)
+#
+# Step 2 is what makes newtypes nominal: two newtypes over the same base type
+# are distinct because they carry different type-name tags.
+#
+# At JSON/HTTP boundaries, newtypes are decoded and encoded transparently.
+# A UserId is serialized as a plain JSON string. When reading from JSON,
+# the system constructs UserId(rawString) automatically. So API consumers
+# only see plain strings; only internal Tesl code sees the typed distinction.
+#
+# GDP-wise: a newtype value is itself a named value. Its subject is fresh at
+# construction. If you do:
+#   let a = UserId("x")
+#   let b = UserId("x")
+# both a and b have raw content "x" inside UserId, but they have DIFFERENT
+# hidden subjects. Proofs about a are not proofs about b.
+
+test "makeUserId round-trips" {
+  let uid = makeUserId "user-123"
+  expect userId uid == "user-123"
+}
+
+test "makeProjectId round-trips" {
+  let pid = makeProjectId "proj-456"
+  expect projectId pid == "proj-456"
+}
+
+# ─────────────────────────────────────────────
+# REAL-WORLD EXAMPLE — PosixMillis from Tesl.Time
+# ─────────────────────────────────────────────
+# Tesl.Time exports "PosixMillis" — a newtype wrapping Int that represents
+# POSIX milliseconds (ms since the Unix epoch, UTC).
+#
+# Entity fields declared as PosixMillis automatically map to BIGINT in
+# PostgreSQL — no @db annotation needed. This is because the SQL layer
+# checks the newtype-registry for the base type (Integer → bigint).
+#
+# Example:
+#   import Tesl.Time exposing [PosixMillis, nowMillis]
+#
+#   entity Post table "posts" primaryKey id {
+#     id:          String
+#     publishedAt: PosixMillis    # BIGINT in DB — auto-mapped
+#   }
+#
+#   handler createPost(...) requires [dbWrite, time] =
+#     insert Post { id: newId, publishedAt: nowMillis }
+#
+# The general rule: any user-defined newtype wrapping a built-in type
+# (String, Integer, Bool, etc.) will automatically inherit the
+# correct @db mapping. You can define your own domain timestamp type:
+#
+#   type EventTimestamp = Int
+#   entity Event table "events" primaryKey id {
+#     id:        String
+#     createdAt: EventTimestamp   # BIGINT — inherits from Int
+#   }
+#
+# See lesson26-time-and-posix.tesl for a complete example.

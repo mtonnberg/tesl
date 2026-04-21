@@ -1,0 +1,144 @@
+#lang tesl
+module Lesson31 exposing [EmailWorkers, DeadEmailWorkers, ConcurrencyServer]
+
+# Lesson 31 — Worker Concurrency with startWorkers N
+#
+# By default, `startWorkers WorkerName with capabilities [...]` starts
+# a single worker thread.  For high-throughput workloads you can run N
+# parallel workers:
+#
+#   startWorkers N WorkerName with capabilities [...]
+#
+# Each worker thread independently dequeues and processes one job at a
+# time using `SELECT ... FOR UPDATE SKIP LOCKED`.  With N workers, up to
+# N jobs run concurrently.  Workers never block each other.
+#
+# When to increase N:
+#   - Your jobs are I/O-bound (HTTP calls, DB writes, emails): N = 4–8
+#   - Your queue depth consistently grows faster than it drains: increase N
+#   - CPU-bound jobs: N ≈ number of CPU cores
+#
+# Dead workers are always single-threaded (startDeadWorkers has no N
+# parameter) because dead-letter compensation should be idempotent and
+# sequential to avoid duplicate actions.
+#
+# This lesson creates a simple email-notification queue and starts
+# 4 parallel workers to process it.
+
+import Tesl.Prelude exposing [String, Unit]
+import Tesl.Queue exposing [FromQueue, FromDeadQueue, queueRead, queueWrite]
+
+# ── Capabilities ──────────────────────────────────────────────────────────────
+
+capability emailCap implies queueRead
+capability enqueueEmail implies queueWrite
+capability deadEmailCap implies queueRead
+capability fullService implies emailCap, enqueueEmail
+
+# ── Job payload ───────────────────────────────────────────────────────────────
+
+# The job record is the typed contract between enqueue site and worker.
+record EmailJob {
+  recipientId: String
+  subject: String
+  body: String
+}
+
+# ── Queue declaration ─────────────────────────────────────────────────────────
+
+queue EmailQueue {
+  database EmailDatabase
+  jobs [EmailJob]
+  retry {
+    maxAttempts: 3
+    backoff: exponential
+    initialDelay: 10
+  }
+}
+
+# ── Database ──────────────────────────────────────────────────────────────────
+
+database EmailDatabase {
+  backend postgres
+  schema "lesson31"
+  entities []
+  postgres {
+    database env("LESSON31_DB")
+    user env("TESL_POSTGRES_USER")
+    password env("TESL_POSTGRES_PASSWORD")
+    host env("TESL_POSTGRES_HOST")
+    port envInt("TESL_POSTGRES_PORT", 5432)
+    socket env("TESL_POSTGRES_SOCKET")
+  }
+}
+
+# ── Workers ───────────────────────────────────────────────────────────────────
+
+# The actual worker that processes each EmailJob.
+# In a real system this would call an email provider (SendGrid, SES, etc.).
+worker processEmail(job: EmailJob ::: FromQueue (Id == jobId) job)
+  requires [emailCap] =
+  telemetry "email.sent" { recipient = job.recipientId, subject = job.subject }
+  job
+
+workers EmailWorkers for EmailQueue {
+  EmailJob = processEmail
+}
+
+# Dead-letter worker: fires when an EmailJob has been retried maxAttempts
+# times without success.
+#
+# IMPORTANT: `startDeadWorkers` has no N parameter — dead workers are
+# always single-threaded.  Compensation logic (sending alerts, marking
+# a user as unreachable, etc.) should be idempotent and sequential.
+deadWorker handleDeadEmail(job: EmailJob ::: FromDeadQueue (Id == jobId) job)
+  requires [deadEmailCap] =
+  telemetry "email.dead" { recipient = job.recipientId, subject = job.subject }
+  job
+
+deadWorkers DeadEmailWorkers for EmailQueue {
+  EmailJob = handleDeadEmail
+}
+
+# ── Example handler that enqueues an email ────────────────────────────────────
+
+handler sendWelcomeEmail()
+  -> String
+  requires [enqueueEmail] =
+  enqueue EmailJob { recipientId: "user-123", subject: "Welcome!", body: "Thanks for signing up." }
+  "queued"
+
+# ── API ───────────────────────────────────────────────────────────────────────
+
+api ConcurrencyApi {
+  post "/send-welcome"
+    -> String
+}
+
+server ConcurrencyServer for ConcurrencyApi {
+  sendWelcomeEmail = sendWelcomeEmail
+}
+
+# ── Main — starts 4 parallel email workers ────────────────────────────────────
+#
+# Syntax: startWorkers N WorkersName with capabilities [...]
+#
+#   startWorkers 1 EmailWorkers with capabilities [emailCap]    # 1 worker (default)
+#   startWorkers 4 EmailWorkers with capabilities [emailCap]    # 4 concurrent workers
+#
+# Here we use 4 workers.  With I/O-bound work (HTTP calls to an email
+# provider), 4 concurrent workers let you pipeline 4 email deliveries at
+# once, increasing throughput without adding complexity.
+
+main with capabilities [fullService, emailCap, deadEmailCap, enqueueEmail] {
+  let port = 8090
+  with database EmailDatabase {
+    with capabilities [fullService] {
+      # 4 parallel email workers — each independently dequeues and delivers
+      startWorkers 4 EmailWorkers with capabilities [emailCap]
+      # Dead-letter workers are always single-threaded (no N parameter)
+      startDeadWorkers DeadEmailWorkers with capabilities [deadEmailCap]
+      serve ConcurrencyServer on port with capabilities [enqueueEmail]
+    }
+  }
+}

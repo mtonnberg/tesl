@@ -1,0 +1,242 @@
+#lang tesl
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Proof predicates can carry integer and string literal values as part of
+# their identity. This lets you encode precise constraints directly:
+#
+#   fact HasMin (lo: Int) (n: Int)          # lo is a literal bound
+#   fact Named  (name: String) (port: Int)  # name is a literal tag
+#
+#   check checkMin10(n: Int) -> n: Int ::: HasMin 10 n = ...
+#
+#   fn needAbove10(n: Int ::: HasMin 10 n) -> Int = n
+#   fn needAbove20(n: Int ::: HasMin 20 n) -> Int = n
+#
+# The compiler tracks 10 and 20 as distinct subjects, so passing a value
+# proven to be ≥ 10 to needAbove20 is a compile-time error.
+#
+# ──────────────────────────────────────────────
+# ForAll WORKS with literal-parametrized predicates
+# ──────────────────────────────────────────────
+# Literal arguments are preserved in the ForAll proof key, so
+# ForAll (HasMin 10) and ForAll (HasMin 20) are distinct and the
+# compiler enforces that a HasMin-10 list cannot satisfy a HasMin-20
+# requirement (and vice versa).
+#
+#   fact HasMin (lo: Int) (n: Int)
+#   check checkMin10(n: Int) -> n: Int ::: HasMin 10 n = ...
+#
+#   fn needAbove10(xs: List Int ::: ForAll (HasMin 10) xs) -> Int = ...
+#   fn filterAbove10(raw: List Int) -> List Int ? ForAll (HasMin 10) =
+#     List.filterCheck checkMin10 raw
+#
+#   fn test(raw: List Int) -> Int =
+#     let pos = filterAbove10 raw   # ForAll (HasMin 10) pos
+#     needAbove10 pos               # ✓ proof matches
+#
+# See Part 4 for a full example including ForAll filtering and consumption.
+
+module Lesson53LiteralParametrizedPredicates exposing [
+  needAbove10,
+  needAbove20,
+  needBothBounds,
+  needHttp,
+  testAllBounds,
+  testStringTag,
+  filterInRange1to100,
+]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List, Fact]
+import Tesl.List exposing [List.filterCheck, List.length, List.foldr]
+
+# ════════════════════════════════════════════════════════════════════════════════
+# PART 1: Predicates with integer literal parameters
+# ════════════════════════════════════════════════════════════════════════════════
+
+# Declare predicates whose parameters are literal values you want to embed.
+# `lo` and `hi` will be filled in with integer literals like 10, 20, 100.
+fact HasMin (lo: Int) (n: Int)
+fact HasMax (hi: Int) (n: Int)
+
+# Check functions that stamp an integer literal into the proof:
+check checkMin10(n: Int) -> n: Int ::: HasMin 10 n =
+  if n >= 10 then
+    ok n ::: HasMin 10 n
+  else
+    fail 400 "value must be at least 10"
+
+check checkMin20(n: Int) -> n: Int ::: HasMin 20 n =
+  if n >= 20 then
+    ok n ::: HasMin 20 n
+  else
+    fail 400 "value must be at least 20"
+
+check checkMax100(n: Int) -> n: Int ::: HasMax 100 n =
+  if n <= 100 then
+    ok n ::: HasMax 100 n
+  else
+    fail 400 "value must be at most 100"
+
+# Consumers — the literal is part of the required proof identity:
+fn needAbove10(n: Int ::: HasMin 10 n) -> Int = n
+fn needAbove20(n: Int ::: HasMin 20 n) -> Int = n
+fn needBothBounds(n: Int ::: HasMin 10 n && HasMax 100 n) -> Int = n
+
+# The compiler keeps HasMin 10 and HasMin 20 distinct.
+# Passing a "min 10" value to needAbove20 is a compile-time error:
+#
+#   fn bad(raw: Int) -> Int =
+#     let v = check checkMin10 raw
+#     needAbove20 v     # ← error: HasMin 10 raw ≠ HasMin 20 raw
+
+fn testAllBounds(raw: Int) -> Int =
+  let a = check checkMin10 raw
+  let b = check checkMax100 a
+  needBothBounds b
+
+# ════════════════════════════════════════════════════════════════════════════════
+# PART 2: Predicates with string literal parameters
+# ════════════════════════════════════════════════════════════════════════════════
+
+# String literals work the same way — they become part of the proof identity.
+fact Named (name: String) (port: Int)
+
+# Stamps "http" permanently into the proof:
+establish proveHttp(port: Int) -> Fact (Named "http" port) =
+  Named "http" port
+
+# Stamps "https" permanently into the proof:
+establish proveHttps(port: Int) -> Fact (Named "https" port) =
+  Named "https" port
+
+fn needHttp(port: Int ::: Named "http" port) -> Int = port
+fn needHttps(port: Int ::: Named "https" port) -> Int = port
+
+# "http" and "https" are different proofs — cross-use is a compile-time error:
+#
+#   fn bad(raw: Int) -> Int =
+#     let pf = proveHttps raw
+#     needHttp <| raw ::: pf   # ← error: Named "https" ≠ Named "http"
+
+fn testStringTag(raw: Int) -> Int =
+  let pf = proveHttp raw
+  needHttp <| raw ::: pf
+
+# ════════════════════════════════════════════════════════════════════════════════
+# PART 3: Mixed literal and variable subjects
+# ════════════════════════════════════════════════════════════════════════════════
+
+# Predicates can mix literals and runtime variables.
+# The literal is always a stable subject; the variable tracks the checked value.
+fact Clamped (lo: Int) (hi: Int) (n: Int)
+
+check checkClamped(lo: Int, hi: Int, n: Int) -> n: Int ::: Clamped lo hi n =
+  if lo <= n && n <= hi then
+    ok n ::: Clamped lo hi n
+  else
+    fail 400 "out of range"
+
+fn needClamped1to100(n: Int ::: Clamped 1 100 n) -> Int = n
+
+# Binding lo/hi to let-names gives the compiler stable subjects for matching.
+# `let lo = 1` makes lo → subject "1" so it equates with the literal 1 above.
+fn testClampedLet(raw: Int) -> Int =
+  let lo = 1
+  let hi = 100
+  let v = check checkClamped lo hi raw
+  needClamped1to100 v
+
+# ════════════════════════════════════════════════════════════════════════════════
+# PART 4: ForAll with literal-parametrized predicates — fully supported
+# ════════════════════════════════════════════════════════════════════════════════
+#
+# ForAll (HasMin 10) and ForAll (HasMin 20) are fully distinct ForAll proofs.
+# The compiler enforces them at both the producer (filterCheck return type)
+# and the consumer (parameter annotation) sides.
+#
+# This means you can write precise ForAll annotations that carry literal bounds:
+fn needOneAbove10(x: Int ::: HasMin 10 x) -> Int = x
+
+fn needForAllAbove10(xs: List Int ::: ForAll (HasMin 10) xs) -> Int =
+  List.foldr (fn (acc: Int, x: Int ::: HasMin 10 x) -> acc + needOneAbove10 x) 0 xs
+
+fn filterAbove10(raw: List Int) -> List Int ? ForAll (HasMin 10) =
+  List.filterCheck checkMin10 raw
+
+# Same for a different literal:
+
+fn needForAllAbove20(xs: List Int ::: ForAll (HasMin 20) xs) -> Int =
+  List.length xs
+
+fn filterAbove20(raw: List Int) -> List Int ? ForAll (HasMin 20) =
+  List.filterCheck checkMin20 raw
+
+# filterInRange1to100: keep only n satisfying HasMin 10 then HasMax 100.
+fn filterInRange1to100(raw: List Int) -> Int =
+  let lo = filterAbove10 raw
+  let filtered = List.filterCheck checkMax100 lo
+  List.length filtered
+
+# ════════════════════════════════════════════════════════════════════════════════
+# TESTS
+# ════════════════════════════════════════════════════════════════════════════════
+
+test "Part 1: integer literal predicates" {
+  # Correct bound — passes
+  expect testAllBounds 10 == 10
+  expect testAllBounds 50 == 50
+  expect testAllBounds 100 == 100
+
+  # Too low or too high — fails at runtime
+  expectFail testAllBounds 9
+  expectFail testAllBounds 101
+
+  # needAbove10 accepts HasMin 10 values
+  let raw10 = 10
+  let v10 = check checkMin10 raw10
+  expect needAbove10 v10 == 10
+
+  # needAbove20 accepts HasMin 20 values
+  let raw20 = 20
+  let v20 = check checkMin20 raw20
+  expect needAbove20 v20 == 20
+
+  # checkMin20 rejects values below 20
+  let raw15 = 15
+  expectFail check checkMin20 raw15
+}
+
+test "Part 2: string literal predicates" {
+  let port80 = 80
+  expect testStringTag port80 == 80
+
+  let port443 = 443
+  let pf = proveHttps port443
+  let result = needHttps <| port443 ::: pf
+  expect result == 443
+}
+
+test "Part 3: mixed literal and variable subjects" {
+  expect testClampedLet 50 == 50
+  expect testClampedLet 1 == 1
+  expect testClampedLet 100 == 100
+  expectFail testClampedLet 0
+  expectFail testClampedLet 101
+}
+
+test "Part 4: ForAll with literal-parametrized predicates" {
+  # filterInRange1to100 keeps n where 10 <= n <= 100
+  expect filterInRange1to100 [10, 20, 5, 30] == 3
+  expect filterInRange1to100 [1, 2, 13] == 1
+  expect filterInRange1to100 [5, 8, 9] == 0
+  expect filterInRange1to100 [10, 100, 110] == 2
+
+  # ForAll (HasMin 10) — test directly (sums elements >= 10: 10+15+20=45)
+  let xs10 = filterAbove10 [5, 10, 15, 20, 3]
+  expect needForAllAbove10 xs10 == 45
+
+  # ForAll (HasMin 20) — test directly
+  let xs20 = filterAbove20 [15, 25, 30, 5]
+  expect needForAllAbove20 xs20 == 2
+}

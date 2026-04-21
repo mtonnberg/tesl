@@ -1,0 +1,153 @@
+#lang tesl
+module ProofComposition exposing [
+  InRange,
+  NonEmpty,
+  checkInRange,
+  checkNonEmpty,
+  processRangedNonEmpty,
+  demonstrate,
+  decomposeBoth,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# You can combine multiple proof facts on ONE value using "&&":
+#   x: Int::: InRange x && Positive x    (x must satisfy BOTH InRange and Positive)
+#
+# To decompose:
+#   let (bare::: rangeProof && posProof) = x
+#
+# To require multiple independent proofs (one per parameter), just annotate each param:
+#   fn f(n: Int::: InRange n, label: String::: NonEmpty label) -> ...
+#   n and label are different values — each has its own required proof.
+#
+# The "&&" inside ONE annotation means: this single value must carry all these facts.
+
+import Tesl.Prelude exposing [Int, Fact, String]
+import Tesl.String exposing [String.length]
+
+fact InRange (n: Int)
+
+check checkInRange(n: Int) -> n: Int ::: InRange n =
+  if n >= 1 && n <= 100 then
+    ok n ::: InRange n
+  else
+    fail 400 "out of range"
+
+fact NonEmpty (s: String)
+
+check checkNonEmpty(s: String) -> s: String ::: NonEmpty s =
+  if String.length s > 0 then
+    ok s ::: NonEmpty s
+  else
+    fail 400 "must not be empty"
+
+# Two SEPARATE proofs: one on n (InRange), one on label (NonEmpty).
+# These are different parameters with different subjects.
+fn processRangedNonEmpty(n: Int ::: InRange n, label: String ::: NonEmpty label) -> String =
+  "${n}: ${label}" # both proofs satisfied before we get here
+
+# One value with COMBINED proofs using "&&".
+# "InRange n && Positive n" means: n must carry BOTH InRange AND Positive.
+# The caller must have validated n through BOTH checkInRange AND some Positive check.
+fn demonstrate(n: Int ::: InRange n) -> Int =
+  n # simplified: just InRange here
+
+# Decompose a combined proof into its parts.
+# let (bare::: rangeProof && posProof) = n  decomposes the && conjunction.
+# rangeProof: detached InRange fact about n's hidden subject
+# posProof:   detached Positive fact about n's hidden subject (if present)
+fn decomposeBoth(n: Int ::: InRange n) -> Int =
+  let (bare ::: rangeProof) = n # extract the establish and the proof-free value
+  # bare:      same subject as n, no establish attached
+  # rangeProof: InRange fact about n's subject, detached
+  bare # return the bare integer
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# There are two different uses of multiple proofs:
+#
+# 1. MULTIPLE PARAMS, one proof each:
+#    fn f(n: Int::: InRange n, label: String::: NonEmpty label)
+#    Here n and label are SEPARATE values with SEPARATE subjects.
+#    InRange is about n. NonEmpty is about label. They're unrelated.
+#
+# 2. ONE PARAM, multiple proofs via &&:
+#    fn f(n: Int::: InRange n && Positive n)
+#    Here n is ONE value with ONE subject, but it must carry BOTH facts.
+#    You'd produce this by validating through two separate check functions:
+#      let n1 = check checkInRange rawN      -- attaches InRange
+#      let n2 = checkPositive(rawN)        -- attaches Positive
+#      -- but n1 and n2 have DIFFERENT subjects!
+#    In practice, for combining proofs on the same subject, you need
+#    to use detach/attach operations or a combined check function.
+#
+# The decomposition "let (bare::: p && q) = val" is positional:
+# the FIRST pattern item corresponds to the LEFT side of &&, and so on.
+# Use "_" to discard parts you don't need.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# "&&" in proof annotations is logical conjunction over proof facts.
+# At the runtime proof-checking layer:
+#   - "P && Q" is satisfied if both P and Q are satisfied independently
+#   - checking P && Q decomposes into: check P, then check Q
+#
+# The functions introAnd, andLeft, andRight operate on combined proof values:
+#   introAnd(p, q): creates a combined proof from two detached proofs
+#   andLeft(combined): projects the left proof from a combined proof
+#   andRight(combined): projects the right proof from a combined proof
+#
+# The let decomposition "let (x::: p && q) = val" lowers to:
+#   x = forgetFact(val)
+#   fullProof = detachFact(val)
+#   p = andLeft(fullProof)
+#   q = andRight(fullProof)
+#
+# For three-way: "let (x::: p && q && r) = val"
+# The && is left-associative: "(P && Q) && R"
+# p corresponds to andLeft(andLeft(fullProof))
+# q corresponds to andRight(andLeft(fullProof))
+# r corresponds to andRight(fullProof)
+
+test "checkInRange valid" {
+  let n1 = 1
+  let r1 = check checkInRange n1
+  let n2 = 50
+  let r2 = check checkInRange n2
+  let n3 = 100
+  let r3 = check checkInRange n3
+  expect 1 == 1
+}
+
+test "checkInRange rejects" {
+  let zero = 0
+  let oneOhOne = 101
+  expectFail check checkInRange zero
+  expectFail check checkInRange oneOhOne
+}
+
+test "checkNonEmpty valid" {
+  let s1 = "a"
+  let r1 = check checkNonEmpty s1
+  let s2 = "hello"
+  let r2 = check checkNonEmpty s2
+  expect 1 == 1
+}
+
+test "checkNonEmpty rejects" {
+  let empty = ""
+  expectFail check checkNonEmpty empty
+}
+
+test "processRangedNonEmpty" {
+  let rawN = 5
+  let n = check checkInRange rawN
+  let rawLabel = "item"
+  let label = check checkNonEmpty rawLabel
+  let r1 = processRangedNonEmpty n label
+  expect r1 == "5: item"
+}

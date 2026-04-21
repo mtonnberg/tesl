@@ -1,0 +1,169 @@
+#lang tesl
+module ConjunctionRegression48 exposing [
+  P1,
+  P2,
+  P3,
+  check1,
+  check2,
+  check3,
+  wrapSingle,
+  wrapDouble,
+  wrapTriple,
+  needsP1,
+  needsP1P2,
+  needsP1P2P3,
+  letBoundWrap,
+  letBoundWrapDouble,
+  chainedWrap,
+]
+
+import Tesl.Prelude exposing [Bool(..), Int, Fact]
+
+fact P1 (n: Int)
+fact P2 (n: Int)
+fact P3 (n: Int)
+
+check check1(n: Int) -> n: Int ::: P1 n =
+  if n > 0 then
+    ok n ::: P1 n
+  else
+    fail 400 "fail1"
+
+check check2(n: Int) -> n: Int ::: P2 n =
+  if n < 100 then
+    ok n ::: P2 n
+  else
+    fail 400 "fail2"
+
+check check3(n: Int) -> n: Int ::: P3 n =
+  if n != 42 then
+    ok n ::: P3 n
+  else
+    fail 400 "fail3"
+
+fn needsP1(n: Int ::: P1 n) -> Int = n + 1
+fn needsP1P2(n: Int ::: P1 n && P2 n) -> Int = n + 2
+fn needsP1P2P3(n: Int ::: P1 n && P2 n && P3 n) -> Int = n + 3
+
+# ── A: bare single-check delegation inside check ──
+check wrapSingle(n: Int) -> n: Int ::: P1 n =
+  check check1 n
+
+# ── B: bare double conjunction inside check ──
+check wrapDouble(n: Int) -> n: Int ::: P1 n && P2 n =
+  check (check1 && check2) n
+
+# ── C: bare triple conjunction inside check ──
+check wrapTriple(n: Int) -> n: Int ::: P1 n && P2 n && P3 n =
+  check (check1 && check2 && check3) n
+
+# ── D: let-bound single-check inside check ──
+check letBoundWrap(n: Int) -> n: Int ::: P1 n =
+  let validated = check check1 n
+  validated
+
+# ── E: let-bound conjunction inside check ──
+check letBoundWrapDouble(n: Int) -> n: Int ::: P1 n && P2 n =
+  let validated = check (check1 && check2) n
+  validated
+
+# ── F: chained wrapping — check wrapping a check that wraps checks ──
+check chainedWrap(n: Int) -> n: Int ::: P1 n && P2 n =
+  check wrapDouble n
+
+# ═══════════════════════════════════════════════════════════════════════════
+
+test "A1: bare single-check delegation passes" {
+  let n = 5
+  let v = check wrapSingle n
+  expect needsP1 v == 6
+}
+
+test "A2: bare single-check delegation rejects" {
+  expectFail check wrapSingle 0
+}
+
+test "B1: bare double conjunction passes" {
+  let n = 50
+  let v = check wrapDouble n
+  expect needsP1P2 v == 52
+}
+
+test "B2: bare double conjunction rejects first" {
+  expectFail check wrapDouble 0
+}
+
+test "B3: bare double conjunction rejects second" {
+  expectFail check wrapDouble 100
+}
+
+test "B4: bare double conjunction at boundary 1" {
+  let n = 1
+  let v = check wrapDouble n
+  expect needsP1P2 v == 3
+}
+
+test "B5: bare double conjunction at boundary 99" {
+  let n = 99
+  let v = check wrapDouble n
+  expect needsP1P2 v == 101
+}
+
+test "C1: bare triple conjunction passes" {
+  let n = 50
+  let v = check wrapTriple n
+  expect needsP1P2P3 v == 53
+}
+
+test "C2: triple rejects P1 violation" {
+  expectFail check wrapTriple 0
+}
+
+test "C3: triple rejects P2 violation" {
+  expectFail check wrapTriple 100
+}
+
+test "C4: triple rejects P3 violation" {
+  expectFail check wrapTriple 42
+}
+
+test "C5: triple at boundary 1 (passes all three)" {
+  let n = 1
+  let v = check wrapTriple n
+  expect needsP1P2P3 v == 4
+}
+
+test "D1: let-bound single check passes" {
+  let n = 5
+  let v = check letBoundWrap n
+  expect needsP1 v == 6
+}
+
+test "D2: let-bound single check rejects" {
+  expectFail check letBoundWrap 0
+}
+
+test "E1: let-bound conjunction passes" {
+  let n = 50
+  let v = check letBoundWrapDouble n
+  expect needsP1P2 v == 52
+}
+
+test "E2: let-bound conjunction rejects first" {
+  expectFail check letBoundWrapDouble 0
+}
+
+test "E3: let-bound conjunction rejects second" {
+  expectFail check letBoundWrapDouble 100
+}
+
+test "F1: chained wrap passes" {
+  let n = 50
+  let v = check chainedWrap n
+  expect needsP1P2 v == 52
+}
+
+test "F2: chained wrap rejects" {
+  expectFail check chainedWrap 0
+  expectFail check chainedWrap 100
+}

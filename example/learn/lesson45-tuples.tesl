@@ -1,0 +1,269 @@
+#lang tesl
+module Lesson45 exposing [
+  makePoint,
+  pointX,
+  pointY,
+  makeRGB,
+  rgbRed,
+  rgbGreen,
+  rgbBlue,
+  swap,
+  addPoints,
+  describePoint,
+  describeRGB,
+  taggedLengths,
+  pairFirsts,
+  classifyPair,
+]
+
+# ---------------------------------------------
+# QUICK START - just use it, no theory needed
+# ---------------------------------------------
+# Tuples are fixed-size collections of values that may have DIFFERENT types.
+# Tesl has two built-in tuple types:
+#
+#   Tuple2 a b        - holds two values of types a and b
+#   Tuple3 a b c      - holds three values of types a, b, and c
+#
+# Creating a tuple:
+#   let p = Tuple2 3 4
+#   let rgb = Tuple3 255 128 0
+#
+# Extracting components by name:
+#   Tuple2.first  p     # ? 3
+#   Tuple2.second p     # ? 4
+#   Tuple3.first  rgb   # ? 255
+#   Tuple3.second rgb   # ? 128
+#   Tuple3.third  rgb   # ? 0
+#
+# Pattern matching via case:
+#   case p of
+#     Tuple2 x y -> x + y
+#
+# List.zip pairs two lists element-by-element into a List (Tuple2 a b):
+#   List.zip [1, 2, 3] ["a", "b", "c"]
+#   # ? [Tuple2 1 "a", Tuple2 2 "b", Tuple2 3 "c"]
+#
+# Tuples are ideal when you need to return multiple values from a function
+# or group related data without defining a full record type.
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.Tuple exposing [
+  Tuple2(..),
+  Tuple3(..),
+  Tuple2.first,
+  Tuple2.second,
+  Tuple3.first,
+  Tuple3.second,
+  Tuple3.third,
+]
+import Tesl.List exposing [List.zip, List.map]
+import Tesl.String exposing [String.length]
+
+# --- 2-tuple basics -----------------------------------------------------------
+
+# A 2D point stored as a Tuple2.
+# Note: Tesl type aliases cannot be parameterized, so we use Tuple2 Int Int directly.
+
+fn makePoint(x: Int, y: Int) -> Tuple2 Int Int = Tuple2 x y
+
+fn pointX(p: Tuple2 Int Int) -> Int = Tuple2.first p
+fn pointY(p: Tuple2 Int Int) -> Int = Tuple2.second p
+
+# Swap the two elements of a tuple.
+fn swap(t: Tuple2 Int Int) -> Tuple2 Int Int =
+  Tuple2 (Tuple2.second t) (Tuple2.first t)
+
+# Add two points component-wise.
+fn addPoints(p: Tuple2 Int Int, q: Tuple2 Int Int) -> Tuple2 Int Int =
+  Tuple2 (pointX p + pointX q) (pointY p + pointY q)
+
+# Describe a point using accessor functions.
+fn describePoint(p: Tuple2 Int Int) -> String =
+  let x = Tuple2.first p
+  let y = Tuple2.second p
+  "(${x}, ${y})"
+
+# --- 3-tuple basics -----------------------------------------------------------
+
+# An RGB colour stored as a Tuple3.
+
+fn makeRGB(r: Int, g: Int, b: Int) -> Tuple3 Int Int Int = Tuple3 r g b
+
+fn rgbRed(c: Tuple3 Int Int Int) -> Int = Tuple3.first c
+fn rgbGreen(c: Tuple3 Int Int Int) -> Int = Tuple3.second c
+fn rgbBlue(c: Tuple3 Int Int Int) -> Int = Tuple3.third c
+
+# Describe an RGB colour using accessor functions.
+fn describeRGB(c: Tuple3 Int Int Int) -> String =
+  let r = rgbRed c
+  let g = rgbGreen c
+  let b = rgbBlue c
+  "rgb(${r}, ${g}, ${b})"
+
+# --- Tuples with List.zip -----------------------------------------------------
+
+# Zip two lists and return each pair's combined string length.
+# List.zip produces a List (Tuple2 a b) from two equal-length lists.
+fn taggedLengths(labels: List String, values: List String) -> List Int =
+  let pairs = List.zip labels values
+  List.map (fn(p: Tuple2 String String) -> String.length (Tuple2.first p) + String.length (Tuple2.second p)) pairs
+
+# Extract the first component from each pair in a zipped list.
+fn pairFirsts(xs: List Int, ys: List Int) -> List Int =
+  let pairs = List.zip xs ys
+  List.map (fn(p: Tuple2 Int Int) -> Tuple2.first p) pairs
+
+# --- Pattern matching on tuple values ----------------------------------------
+
+# Classify a pair of integers as equal, ascending, or descending.
+fn classifyPair(t: Tuple2 Int Int) -> String =
+  let x = Tuple2.first t
+  let y = Tuple2.second t
+  if x == y then
+    "equal"
+  else
+    if x < y then
+      "ascending"
+    else
+      "descending"
+
+# ---------------------------------------------
+# UNDERSTANDING - why it works this way
+# ---------------------------------------------
+# TUPLES VS RECORDS
+#
+# Records give names to every field:
+#   type Point = { x: Int, y: Int }
+# Tuples do not - components are accessed by position (first, second, third).
+# Use records when the meaning of each field matters and you expect to add
+# more fields over time.  Use tuples for lightweight, ad-hoc groupings where
+# position is unambiguous (e.g., a key-value pair, a coordinate, a zip result).
+#
+# FIXED ARITY
+#
+# Tesl provides Tuple2 and Tuple3.  There is no Tuple1 (just use the value
+# directly) and no Tuple4+ (use a record instead).  Fixed arity means the
+# compiler always knows the exact type of every component.
+#
+# PATTERN MATCHING
+#
+# The case expression on a Tuple2 always has exactly one branch:
+#   case t of
+#     Tuple2 x y -> ...
+# There is no other constructor, so the pattern is exhaustive by default.
+# Likewise, case on a Tuple3 has a single branch with three binders.
+#
+# ACCESSOR FUNCTIONS VS CASE
+#
+# Tuple2.first and Tuple2.second are equivalent to writing a case expression.
+# Prefer accessors when you only need one component; prefer case when you
+# need both - it avoids traversing the tuple twice.
+#
+# List.zip AND SHORT LISTS
+#
+# List.zip stops at the shorter list.  If the lists have different lengths,
+# trailing elements from the longer list are silently dropped.  Always ensure
+# your lists have the same length before zipping if you expect no data loss.
+
+# ---------------------------------------------
+# THEORY - the full model
+# ---------------------------------------------
+# Tuples are product types: Tuple2 a b ? a ? b.
+# They are isomorphic to two-field anonymous records.
+#
+# In the Tesl type system, Tuple2 and Tuple3 are parameterised type
+# constructors.  HM unification treats them like any other algebraic type:
+#
+#   Tuple2 :: ? a b. a ? b ? Tuple2 a b
+#   Tuple3 :: ? a b c. a ? b ? c ? Tuple3 a b c
+#
+# Tuple2.first  :: ? a b. Tuple2 a b ? a
+# Tuple2.second :: ? a b. Tuple2 a b ? b
+# Tuple3.first  :: ? a b c. Tuple3 a b c ? a
+# Tuple3.second :: ? a b c. Tuple3 a b c ? b
+# Tuple3.third  :: ? a b c. Tuple3 a b c ? c
+#
+# List.zip :: ? a b. List a ? List b ? List (Tuple2 a b)
+#
+# Because tuples are algebraic data types with a single constructor, the
+# compiler can verify pattern exhaustiveness at compile time: every case
+# expression on a Tuple2 must have a Tuple2 branch - nothing more, nothing less.
+
+test "makePoint / pointX / pointY" {
+  let p = makePoint 3 4
+  expect pointX p == 3
+  expect pointY p == 4
+}
+
+test "swap reverses a 2-tuple" {
+  let t = Tuple2 10 20
+  let s = swap t
+  expect Tuple2.first s == 20
+  expect Tuple2.second s == 10
+}
+
+test "addPoints adds component-wise" {
+  let p = makePoint 1 2
+  let q = makePoint 3 4
+  let r = addPoints p q
+  expect pointX r == 4
+  expect pointY r == 6
+}
+
+test "describePoint formats correctly" {
+  let p = makePoint 7 9
+  expect describePoint p == "(7, 9)"
+}
+
+test "makeRGB / accessors" {
+  let c = makeRGB 255 128 0
+  expect rgbRed c == 255
+  expect rgbGreen c == 128
+  expect rgbBlue c == 0
+}
+
+test "describeRGB formats correctly" {
+  let c = makeRGB 0 128 255
+  expect describeRGB c == "rgb(0, 128, 255)"
+}
+
+test "taggedLengths sums label and value lengths" {
+  let labels = ["key", "id"]
+  let values = ["hello", "42"]
+  expect taggedLengths labels values == [8, 4]
+}
+
+test "pairFirsts extracts first components" {
+  let xs = [1, 2, 3]
+  let ys = [10, 20, 30]
+  expect pairFirsts xs ys == [1, 2, 3]
+}
+
+test "classifyPair: equal" {
+  let t = Tuple2 5 5
+  expect classifyPair t == "equal"
+}
+
+test "classifyPair: ascending" {
+  let t = Tuple2 3 7
+  expect classifyPair t == "ascending"
+}
+
+test "classifyPair: descending" {
+  let t = Tuple2 9 2
+  expect classifyPair t == "descending"
+}
+
+test "Tuple2.first and Tuple2.second on literal tuples" {
+  let t = Tuple2 42 99
+  expect Tuple2.first t == 42
+  expect Tuple2.second t == 99
+}
+
+test "Tuple3 accessors" {
+  let t = Tuple3 1 2 3
+  expect Tuple3.first t == 1
+  expect Tuple3.second t == 2
+  expect Tuple3.third t == 3
+}

@@ -1,0 +1,126 @@
+#lang tesl
+module Sandbox2Test exposing []
+import Tesl.Prelude exposing [Int, Fact, String]
+import Sandbox exposing [IsPositive]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.length, String.startsWith]
+
+#> double 5
+#= 10
+#> double 0
+#= 0
+#> double -3
+#= -6
+#> property "double is 2n" (n: Int) { double n == n * 2 }
+fn double(n: Int) -> Int =
+  n + n
+
+#> add 3 7
+#= 10
+#> add 0 0
+#= 0
+#> property "commutative" (x: Int, y: Int) { add x y == add y x }
+fn add(x: Int, y: Int) -> Int =
+  x + y
+
+fact IsLargerThan (n: Int, limit: Int)
+
+check isLargerThan(x: Int, y: Int) -> x: Int ::: IsLargerThan x y =
+  if x > y then
+    ok x ::: IsLargerThan x y
+  else
+    fail 400 "x must be larger than y"
+
+# --- Unit tests ---
+
+test "double basics" {
+  expect double 0 == 0
+  expect double 5 == 10
+  expect double -3 == -6
+  expect double 1 != 0
+}
+
+test "add basics" {
+  expect add 3 7 == 10
+  expect add 0 0 == 0
+  expect add -1 1 == 0
+}
+
+test "String.length" {
+  expect String.length "hello" == 5
+  expect String.length "" == 0
+  expect String.length "a" == 1
+}
+
+test "String.startsWith" {
+  expect String.startsWith "hello" "hel"
+  expect String.startsWith "hello" ""
+}
+
+test "comparisons" {
+  expect 5 > 3
+  expect 3 < 5
+  expect 5 >= 5
+  expect 5 <= 5
+  expect 5 != 3
+}
+
+# --- Property-based tests ---
+
+test "property: double is 2*n" with 50 runs {
+  property "double n == n * 2" (n: Int) { double n == n * 2 }
+}
+
+test "property: add is commutative" with 50 runs {
+  property "add x y == add y x" (x: Int, y: Int) { add x y == add y x }
+}
+
+test "property: string length is non-negative" with 30 runs {
+  property "length >= 0" (s: String) { String.length s >= 0 }
+}
+
+test "property: with where clause" with 100 runs {
+  property "positive n always > 0" (n: Int where n > 0 && n < 10000) { n > 0 }
+}
+
+record AnIntRecord {
+  someProp: Int
+}
+
+record AnIntRecordWithProof {
+  someProp: Int ::: IsPositive someProp
+  someProp2: Int ::: IsPositive someProp2
+}
+
+record AnIntRecordWithCombinedProof {
+  some2Prop: Int ::: IsPositive some2Prop
+  some2Prop2: Int ::: IsPositive some2Prop2
+} ::: IsLargerThan some2Prop some2Prop2 via isLargerThan
+
+test "property: record.  add is commutative" with 100 runs {
+  property " add is commutative" (n: AnIntRecord, m: AnIntRecord) { add n.someProp m.someProp == add m.someProp n.someProp }
+}
+
+test "property: record.  where statements" with 100 runs {
+  property " add is commutative" (n: AnIntRecord where n.someProp > 0 && n.someProp < 10000) { n.someProp > 0 }
+}
+
+test "property: record with proofs.  add is commutative" with 100 runs {
+  property " add is commutative" (n: AnIntRecordWithProof, m: AnIntRecordWithProof) { add n.someProp m.someProp == add m.someProp n.someProp }
+}
+
+test "property: record with proofs.  where statements" with 100 runs {
+  property " add is commutative" (n: AnIntRecordWithProof where n.someProp < 10000) { n.someProp > 0 }
+}
+
+test "property: record with combined proofs" with 100 runs {
+  property " x should be larger than y" (n: AnIntRecordWithCombinedProof) { n.some2Prop > n.some2Prop2 }
+}
+
+# Custom generator receives the run index (0..N-1) to produce different values each iteration
+fn genSmallPositive(seed: Int) -> Int =
+  1 + seed % 100
+
+test "property: via custom generator" with 20 runs {
+  property "custom gen" (n: Int via genSmallPositive) { n > 0 && n <= 100 }
+}

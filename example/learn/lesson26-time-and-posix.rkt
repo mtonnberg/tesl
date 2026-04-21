@@ -1,0 +1,161 @@
+#lang racket
+
+(require
+  tesl/dsl/capability
+  tesl/dsl/types
+  tesl/dsl/check
+  tesl/dsl/otel
+  tesl/dsl/sql
+  tesl/dsl/web
+  tesl/dsl/test-support
+  tesl/tesl/private/runtime
+  tesl/tesl/queue
+  tesl/tesl/sse
+  (only-in tesl/tesl/prelude Bool Int String List)
+  (only-in tesl/tesl/db dbRead dbWrite)
+  (only-in tesl/tesl/time time nowMillis PosixMillis formatTime durationMs diffMs addMs subtractMs [Time.secondsToPosix tesl_import_Time_secondsToPosix])
+  (only-in tesl/tesl/string [String.fromInt tesl_import_String_fromInt] [String.startsWith tesl_import_String_startsWith])
+  (only-in tesl/tesl/random random)
+  (only-in tesl/tesl/http HttpRequest)
+  (only-in tesl/tesl/id generatePrefixedId)
+  (only-in tesl/tesl/dict [Dict.lookup tesl_import_Dict_lookup])
+)
+
+
+(provide TimedDatabase TimedServer currentTimestamp ageDescription formatPublishedAt createdRecently currentTimestamp-signature ageDescription-signature formatPublishedAt-signature createdRecently-signature)
+
+(define Authenticated 'Authenticated)
+
+(define-capability timedRead (implies dbRead))
+
+(define-capability timedWrite (implies dbWrite time random))
+
+(define-capability timedService (implies timedRead timedWrite))
+
+(define-entity Event
+  #:source (make-hash)
+  #:table events
+  #:primary-key id
+  [Id id : String]
+  [Name name : String #:db-type text]
+  [CreatedAt createdAt : PosixMillis]
+  [ExpiresAt expiresAt : PosixMillis]
+)
+
+(define-record CreateEventRequest
+  [name : String]
+  [durationMs : Integer]
+)
+
+(define (tesl-codec-encode-CreateEventRequest _v)
+  (error "toJson is forbidden for type CreateEventRequest: this type cannot be JSON-encoded"))
+(define (tesl-codec-decode-CreateEventRequest-0 _j)
+  (define _f_name (tesl-codec-decode-field _j "name" tesl-json-string-codec))
+  (define _f_durationMs (tesl-codec-decode-field _j "durationMs" tesl-json-int-codec))
+  (record-value 'CreateEventRequest (hash 'name _f_name 'durationMs _f_durationMs)))
+(register-type-codec! 'CreateEventRequest tesl-codec-encode-CreateEventRequest (list tesl-codec-decode-CreateEventRequest-0))
+
+(define-database TimedDatabase
+  #:backend postgres
+  #:database (tesl-env-raw "TIMED_DB_NAME")
+  #:user (tesl-env-raw "TIMED_DB_USER")
+  #:password (tesl-env-raw "TIMED_DB_PASSWORD")
+  #:server (tesl-env-raw "TIMED_DB_HOST")
+  #:port (tesl-env-int-raw "TIMED_DB_PORT" 5432)
+  #:socket (tesl-env-raw "TIMED_DB_SOCKET")
+  #:schema timed_app
+  #:entities Event)
+
+(define-auther
+  (cookieAuth [request : HttpRequest])
+  #:capabilities [timedRead]
+  #:returns [user : String ::: (Authenticated user)]
+  (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (reject "not logged in" #:http-code 401)] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([uid (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (accept (Authenticated uid) #:value *uid))])))
+
+(define/pow
+  (currentTimestamp)
+  #:capabilities [time]
+  #:returns String
+  (formatTime (raw-value (nowMillis)) "UTC" "%Y-%m-%dT%H:%M:%S.%3NZ"))
+
+(define/pow
+  (ageDescription [createdMs : PosixMillis] [nowMs : PosixMillis])
+  #:returns String
+  (let ([elapsedMs (diffMs *createdMs *nowMs)]) (let ([elapsedS (quotient (raw-value elapsedMs) 1000)]) (let ([elapsedM (quotient (raw-value elapsedS) 60)]) (let ([elapsedH (quotient (raw-value elapsedM) 60)]) (if (> (raw-value elapsedH) 0) (raw-value (format "~ah ago" (tesl-display-val (tesl_import_String_fromInt (raw-value elapsedH))))) (if (> (raw-value elapsedM) 0) (raw-value (format "~am ago" (tesl-display-val (tesl_import_String_fromInt (raw-value elapsedM))))) (raw-value "just now"))))))))
+
+(define/pow
+  (formatPublishedAt [posixMs : PosixMillis] [timezone : String])
+  #:returns String
+  (formatTime *posixMs *timezone "%Y-%m-%d %H:%M:%S"))
+
+(define/pow
+  (createdRecently [createdMs : PosixMillis] [nowMs : PosixMillis] [withinMs : Integer])
+  #:returns Boolean
+  (< (diffMs *createdMs *nowMs) *withinMs))
+
+(define-handler
+  (createEvent [user : String ::: (Authenticated user)] [req : CreateEventRequest])
+  #:capabilities [timedWrite]
+  #:returns (Exists [eventId : String] (? Event _entity ::: (FromDb (Id == eventId) _entity)))
+  (let ([eventId (generatePrefixedId "evt")]) (let ([nowTs (raw-value (nowMillis))]) (let ([expiresAt (addMs (raw-value nowTs) (raw-value req.durationMs))]) (pack ([eventId]) (insert-one! Event (hash 'id eventId 'name (raw-value req.name) 'createdAt nowTs 'expiresAt expiresAt)))))))
+
+(define-handler
+  (listActiveEvents [user : String ::: (Authenticated user)])
+  #:capabilities [timedRead]
+  #:returns (List Event)
+  (select-many (from Event)))
+
+(define TimedServer-sse-routes '())
+(define-api TimedApi
+  [createEvent :
+    (Auth [user : String ::: (Authenticated user)] #:via cookieAuth)
+    :> "events"
+    :> (ReqBody JSON [req : CreateEventRequest])
+    :> (Post JSON (Exists [eventId : String] (? Event _entity ::: (FromDb (Id == eventId) _entity))))
+    ]
+  [listActiveEvents :
+    (Auth [user : String ::: (Authenticated user)] #:via cookieAuth)
+    :> "events"
+    :> (Get JSON (List Event))
+    ]
+)
+
+(define-server TimedServer
+  #:api TimedApi
+  [createEvent createEvent]
+  [listActiveEvents listActiveEvents]
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "ageDescription"
+  (define base (raw-value (tesl_import_Time_secondsToPosix 1000)))
+  (define fiveMinLater (addMs (raw-value base) (* (* 5 60) 1000)))
+  (check-equal? (raw-value (ageDescription base fiveMinLater)) "5m ago")
+  (define twoHrLater (addMs (raw-value base) (* (* (* 2 60) 60) 1000)))
+  (check-equal? (raw-value (ageDescription base twoHrLater)) "2h ago")
+  (define almostNow (addMs (raw-value base) 500))
+  (check-equal? (raw-value (ageDescription base almostNow)) "just now")
+  )
+
+  (test-case "createdRecently"
+  (define nowTs (raw-value (tesl_import_Time_secondsToPosix 1000)))
+  (define recent (subtractMs (raw-value nowTs) 500))
+  (define old (subtractMs (raw-value nowTs) 2000))
+  (check-equal? (raw-value (createdRecently recent nowTs 1000)) #t)
+  (check-equal? (raw-value (createdRecently old nowTs 1000)) #f)
+  )
+
+  (test-case "formatPublishedAt basics"
+  (define formatted (formatPublishedAt (raw-value (tesl_import_Time_secondsToPosix 0)) "UTC"))
+  (check-equal? (raw-value (tesl_import_String_startsWith (raw-value formatted) "1970-01-01")) #t)
+  )
+
+  (test-case "diffMs and addMs"
+  (define t1 (raw-value (tesl_import_Time_secondsToPosix 1000)))
+  (define t2 (addMs (raw-value t1) 1500))
+  (check-equal? (raw-value (diffMs (raw-value t1) (raw-value t2))) 1500)
+  (check-equal? (raw-value (diffMs (raw-value t1) (addMs (raw-value t1) 500))) 500)
+  )
+
+)

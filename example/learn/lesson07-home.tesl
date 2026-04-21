@@ -1,0 +1,109 @@
+#lang tesl
+module Lesson07Home exposing [InBounds, checkInBounds, Sanitized, sanitize]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Fact predicates like "InBounds" and "Sanitized" must be:
+#   1. Listed in "exposing [InBounds, Sanitized, ...]" in the home module (this file)
+#   2. Listed in "import HomeModule exposing [InBounds, Sanitized, ...]" in consumers
+#
+# The home module is the one that DECLARES the predicates via check/proof/auth fns.
+# This file is the home for InBounds and Sanitized.
+# See 07b-proof-predicates-consumer.tesl for how to use them from another module.
+
+import Tesl.Prelude exposing [Int, String]
+import Tesl.String exposing [String.length]
+
+# This module OWNS the InBounds predicate.
+# "InBounds" must appear in exposing [] to be importable.
+# If you omit "InBounds" from exposing, consumers cannot name it in annotations.
+
+fact InBounds (n: Int)
+
+check checkInBounds(n: Int) -> n: Int ::: InBounds n =
+  if n >= 0 && n <= 1000 then
+    ok n ::: InBounds n # attach InBounds establish stamp
+  else
+    fail 400 "out of bounds"
+
+# This module OWNS the Sanitized predicate.
+# A string is "Sanitized" here if it's at most 256 characters long.
+# Different modules could define their own Sanitized with different rules —
+# they'd be different predicates because they live in different modules.
+
+fact Sanitized (s: String)
+
+check sanitize(s: String) -> s: String ::: Sanitized s =
+  if String.length s <= 256 then
+    ok s ::: Sanitized s # short enough — attach Sanitized proof
+  else
+    fail 400 "string too long"
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Fact predicates are first-class names in Tesl's module system.
+# "InBounds" in "exposing [InBounds, ...]" works exactly like exporting a function.
+# Other modules import it with "import Lesson07Home exposing [InBounds, ...]".
+#
+# This is greppable: if you search the codebase for 'InBounds' in an exposing list,
+# you find exactly one result: this file. That one result is the canonical declaration
+# point, just like a class or function definition.
+#
+# Every module that uses InBounds in a type annotation must explicitly import it.
+# Using a predicate without importing it is a compile error:
+#   "unknown proof predicate: InBounds"
+# This forces consumers to acknowledge their dependency on Lesson07Home.
+#
+# If Lesson07Home changes the meaning of InBounds (e.g., changes the valid range),
+# all consumers that import InBounds will need to recompile — the explicit import
+# makes the dependency graph visible and auditable.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Fact predicates compile to plain Racket bindings:
+#   (define InBounds 'InBounds)
+#   (define Sanitized 'Sanitized)
+# These are regular module exports. The import requirement is enforced by the
+# Tesl reference checker, which runs after parsing but before Racket lowering.
+#
+# At runtime, proof facts are Racket lists (quoted s-expressions):
+#   '(InBounds n)    — a fact about value n
+#   '(Sanitized s)   — a fact about value s
+# The proof checker compares these structurally against the required predicate
+# instantiated with the actual argument's hidden subject.
+#
+# Module-ownership of predicates prevents "predicate aliasing" attacks:
+# Module A cannot re-declare InBounds with a weaker validation and then
+# pass values that satisfy A's InBounds to a function requiring Lesson07Home's InBounds.
+# The compiler tracks which module owns each predicate and ensures cross-module
+# predicate usage refers to the canonical home module's declaration.
+
+test "checkInBounds valid" {
+  let n1 = 0
+  let r1 = check checkInBounds n1
+  let n2 = 500
+  let r2 = check checkInBounds n2
+  let n3 = 1000
+  let r3 = check checkInBounds n3
+  expect 1 == 1
+}
+
+test "checkInBounds rejects out-of-range" {
+  expectFail check checkInBounds -1
+  expectFail check checkInBounds 1001
+}
+
+test "sanitize valid" {
+  let s1 = ""
+  let r1 = check sanitize s1
+  let s2 = "hello"
+  let r2 = check sanitize s2
+  expect 1 == 1
+}
+
+test "sanitize rejects too-long" {
+  expectFail check sanitize "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

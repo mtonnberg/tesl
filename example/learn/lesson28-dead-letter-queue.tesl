@@ -1,0 +1,118 @@
+#lang tesl
+module Lesson28 exposing [NotifWorkers, DeadNotifWorkers]
+
+# Lesson 28 — Dead-Letter Workers
+#
+# When a worker job fails maxAttempts times in a row, it becomes "dead".
+# Dead jobs accumulate and are never retried by the normal worker loop.
+#
+# Tesl handles dead jobs via dedicated dead-letter workers declared with
+# the `deadWorker` keyword.  These run in a separate poll loop started
+# by `startDeadWorkers` in main.
+#
+# Typical dead-letter actions:
+#   - Publish a compensating event so the frontend can show an error
+#   - Send an alert to an admin channel
+#   - Log the permanent failure for later inspection
+#
+# The job value passed to a dead-letter worker carries a `FromDeadQueue`
+# proof (analogous to `FromQueue` for normal workers) — the compiler
+# enforces that dead-letter handlers can only be invoked via the trusted
+# dead-queue dequeue boundary, not by arbitrary user code.
+
+import Tesl.Prelude exposing [String]
+import Tesl.Queue exposing [FromQueue, FromDeadQueue, queueRead, pubsub]
+
+# ── Capabilities ──────────────────────────────────────────────────────────────
+
+capability notifCap implies queueRead
+capability deadCap implies queueRead, pubsub
+
+# ── Job record ────────────────────────────────────────────────────────────────
+
+record SendNotif {
+  userId: String
+  message: String
+}
+
+# ── Queue ─────────────────────────────────────────────────────────────────────
+
+queue NotifQueue {
+  database FakeDb
+  jobs [SendNotif]
+  retry {
+    maxAttempts: 3
+    backoff: exponential
+    initialDelay: 30
+  }
+}
+
+# ── Normal worker ─────────────────────────────────────────────────────────────
+
+# This worker intentionally fails so the job exhausts its retries and
+# becomes dead — triggering the dead-letter worker below.
+worker notifWorker(job: SendNotif ::: FromQueue (Id == jobId) job)
+  requires [notifCap] =
+  fail 500 "notification service unavailable"
+
+workers NotifWorkers for NotifQueue {
+  SendNotif = notifWorker
+}
+
+# ── Dead-letter worker ────────────────────────────────────────────────────────
+
+# Declared with `deadWorker` instead of `worker`.
+# Receives the job with a `FromDeadQueue` proof.
+#
+# Returning the job value marks it ACKNOWLEDGED (row deleted).
+# Calling `fail` restores it to `dead` for the next dead-worker pass.
+deadWorker handleDeadNotif(job: SendNotif ::: FromDeadQueue (Id == jobId) job)
+  requires [deadCap] =
+  telemetry "notif.dead" { userId = job.userId }
+  # Returning the job acknowledges and deletes it.
+  job
+
+deadWorkers DeadNotifWorkers for NotifQueue {
+  SendNotif = handleDeadNotif
+}
+
+# ── How to start in main ──────────────────────────────────────────────────────
+#
+# main {
+#   with database NotifDb {
+#     with capabilities [appService] {
+#       startWorkers     NotifWorkers     with capabilities [notifCap]
+#       startDeadWorkers DeadNotifWorkers with capabilities [deadCap]
+#       serve            AppServer        on port with capabilities [appService]
+#     }
+#   }
+# }
+
+# ── Runtime behaviour ─────────────────────────────────────────────────────────
+#
+# Normal worker loop (startWorkers):
+#   1. Waits on semaphore (posted by LISTEN thread or 5s fallback poller).
+#   2. Issues FOR UPDATE SKIP LOCKED on tesl_jobs WHERE status = 'pending'.
+#   3. Runs the worker function.
+#      - Success → DELETE the row.
+#      - fail / exception → UPDATE status = 'failed', increment attempts.
+#        If attempts >= maxAttempts → UPDATE status = 'dead'.
+#
+# Dead-letter loop (startDeadWorkers):
+#   1. Polls every 10 seconds (no NOTIFY — dead jobs are infrequent).
+#   2. Issues FOR UPDATE SKIP LOCKED on tesl_jobs WHERE status = 'dead'.
+#   3. Runs the dead-letter worker function.
+#      - Success (job returned) → DELETE the row.
+#      - fail / exception      → UPDATE status = 'dead' (retry next poll).
+#
+# ── The FromDeadQueue proof ───────────────────────────────────────────────────
+#
+# `FromDeadQueue (Id == jobId) job` is a GDP proof predicate that works
+# exactly like `FromQueue` for normal workers.
+#
+# It is constructed exclusively by the dead-queue dequeue boundary (the
+# compiler-generated trusted macro), never by user code.  This prevents
+# dead-letter handlers from being called with arbitrary fabricated values.
+#
+# A function with parameter `job: SendNotif::: FromDeadQueue (Id == jobId) job`
+# can only receive a value that genuinely came from a dead-queue dequeue.

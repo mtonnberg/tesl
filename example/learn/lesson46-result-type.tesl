@@ -1,0 +1,257 @@
+#lang tesl
+module ResultTypeLesson exposing [
+  divide,
+  parseInt,
+  validateAge,
+  processAge,
+  fetchUser,
+  runPipeline,
+  UserError(..),
+  safeDivideOrDefault,
+  okOrDefault,
+  isErr,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# `Result ok err` is the standard type for operations that can succeed or fail
+# with a meaningful error value.
+#
+#   Ok value   — the operation succeeded; `value` is of type `ok`
+#   Err error  — the operation failed;    `error` is of type `err`
+#
+# Common patterns:
+#
+#   fn divide(a: Int, b: Int) -> Result Int String =
+#     if b == 0 then Err "division by zero" else Ok (a / b)
+#
+#   case divide 10 2 of
+#     Ok n  -> n + 1
+#     Err e -> 0
+#
+# WHY Result over Maybe?
+#   Maybe hides why it failed (Nothing gives no information).
+#   Result carries a descriptive error — the calling code knows what went wrong
+#   and can present or log it without guessing.
+#
+# WHY Result over Either?
+#   They are semantically equivalent.  By convention, use:
+#     Result ok err  — when the failure is a recoverable application error
+#     Either a b     — when both Left and Right are "normal" values (not errors)
+#
+# COMPOSING results — avoid deep nesting with helper functions:
+#   case r of
+#     Ok n  -> case nextStep n of ...  # nesting gets ugly fast
+#
+#   Use a pipeline of functions that each return Result,
+#   passing the Ok value forward and short-circuiting on the first Err.
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Result exposing [Result(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.toInt, String.isEmpty]
+import Tesl.Int exposing [Int.toString, Int.nonZero, Int.divide]
+
+# ─── 1. Basic Ok / Err construction ──────────────────────────────────────────
+
+# The simplest use: a function that can fail.
+# Return type is `Result Int String`:  Ok carries an Int, Err carries a String.
+fn divide(a: Int, b: Int) -> Result Int String =
+  if b == 0 then
+    Err "division by zero"
+  else
+    let safeb = check Int.nonZero b
+    Ok (Int.divide a safeb)
+
+# Pattern-match to extract the value:
+fn safeDivideOrDefault(a: Int, b: Int, fallback: Int) -> Int =
+  case divide a b of
+    Ok n -> n
+    Err _ -> fallback
+
+# Helper: extract the Ok value or a default — useful in tests
+fn okOrDefault(r: Result Int String, default: Int) -> Int =
+  case r of
+    Ok n -> n
+    Err _ -> default
+
+# Helper: is the result an error?
+fn isErr(r: Result Int String) -> Bool =
+  case r of
+    Ok _ -> False
+    Err _ -> True
+
+# ─── 2. Parsing — converting unvalidated input ────────────────────────────────
+
+# Parse a raw string into an Int, returning a descriptive error on failure.
+fn parseInt(raw: String) -> Result Int String =
+  if String.isEmpty raw then
+    Err "input is empty"
+  else
+    case String.toInt raw of
+      Nothing -> Err "not a valid integer"
+      Something n -> Ok n
+
+# ─── 3. Domain validation ─────────────────────────────────────────────────────
+
+# Validate that an age is in a sensible range.
+fn validateAge(n: Int) -> Result Int String =
+  if n < 0 then
+    Err "age cannot be negative"
+  else
+    if n > 150 then
+      Err "age seems unrealistically large"
+    else
+      Ok n
+
+# Chain two results: parse the string, then validate the parsed value.
+# Both must succeed for the overall result to be Ok.
+fn processAge(raw: String) -> Result Int String =
+  case parseInt raw of
+    Err e -> Err e
+    Ok n -> validateAge n
+
+# ─── 4. Returning rich error types ────────────────────────────────────────────
+
+# Errors don't have to be strings — use a type for structured errors.
+type UserError =
+  | NotFound id: String
+  | Forbidden user: String
+  | InvalidInput message: String
+
+fn fetchUser(userId: String, requestingUser: String) -> Result String UserError =
+  if String.isEmpty userId then
+    Err (InvalidInput "userId cannot be empty")
+  else
+    if userId == "admin" && requestingUser != "admin" then
+      Err (Forbidden requestingUser)
+    else
+      if userId == "ghost" then
+        Err (NotFound userId)
+      else
+        Ok userId
+
+fn describeError(err: UserError) -> String =
+  case err of
+    NotFound id -> "no user with id ${id}"
+    Forbidden user -> "user ${user} is not allowed to do this"
+    InvalidInput msg -> "bad input: ${msg}"
+
+# ─── 5. Pipeline / chain style ────────────────────────────────────────────────
+
+# Chain operations manually.  Each step either propagates the error or
+# passes the Ok value to the next step.
+fn runPipeline(rawAge: String, rawId: String) -> Result String String =
+  case processAge rawAge of
+    Err e -> Err e
+    Ok age ->
+      if age < 18 then
+        Err "must be 18 or older"
+      else
+        if String.isEmpty rawId then
+          Err "id is required"
+        else
+          Ok "user ${rawId} (age ${Int.toString age}) is valid"
+
+# ─── Tests ────────────────────────────────────────────────────────────────────
+
+# Helpers for the tests below
+fn okIntOrDefault(r: Result Int String, d: Int) -> Int =
+  case r of
+    Ok n -> n
+    Err _ -> d
+
+fn errMsgOrEmpty(r: Result Int String) -> String =
+  case r of
+    Ok _ -> ""
+    Err e -> e
+
+fn isOkResult(r: Result Int String) -> Bool =
+  case r of
+    Ok _ -> True
+    Err _ -> False
+
+fn isErrUserResult(r: Result String UserError) -> Bool =
+  case r of
+    Ok _ -> False
+    Err _ -> True
+
+fn isErrStrResult(r: Result String String) -> Bool =
+  case r of
+    Ok _ -> False
+    Err _ -> True
+
+test "Ok carries the success value" {
+  expect okIntOrDefault (divide 10 2) 0 == 5
+}
+
+test "Err carries the failure description" {
+  expect errMsgOrEmpty (divide 10 0) == "division by zero"
+}
+
+test "divide 10 by 2 is Ok" {
+  expect isOkResult (divide 10 2) == True
+}
+
+test "divide by zero is Err" {
+  expect isErr (divide 10 0) == True
+}
+
+test "parseInt succeeds on a valid number" {
+  expect okIntOrDefault (parseInt "42") 0 == 42
+}
+
+test "parseInt fails on empty string" {
+  expect errMsgOrEmpty (parseInt "") == "input is empty"
+}
+
+test "parseInt fails on non-numeric input" {
+  expect isErr (parseInt "hello") == True
+}
+
+test "validateAge rejects negatives" {
+  expect isErr (validateAge -1) == True
+}
+
+test "validateAge rejects unrealistic values" {
+  expect isErr (validateAge 200) == True
+}
+
+test "validateAge accepts a normal value" {
+  expect okIntOrDefault (validateAge 30) 0 == 30
+}
+
+test "processAge chains parse then validate" {
+  expect okIntOrDefault (processAge "25") 0 == 25
+  expect isErr (processAge "abc") == True
+  expect isErr (processAge "-5") == True
+}
+
+test "fetchUser ok returns the userId" {
+  let r = fetchUser "bob" "alice"
+  expect isErrUserResult r == False
+}
+
+test "fetchUser empty userId is Err" {
+  let r = fetchUser "" "alice"
+  expect isErrUserResult r == True
+}
+
+test "fetchUser ghost is Err (not found)" {
+  let r = fetchUser "ghost" "alice"
+  expect isErrUserResult r == True
+}
+
+test "safeDivideOrDefault uses fallback on error" {
+  expect safeDivideOrDefault 10 0 99 == 99
+  expect safeDivideOrDefault 10 2 99 == 5
+}
+
+test "runPipeline end-to-end success" {
+  expect isErrStrResult (runPipeline "25" "alice") == False
+}
+
+test "runPipeline fails on underage" {
+  expect isErrStrResult (runPipeline "15" "alice") == True
+}

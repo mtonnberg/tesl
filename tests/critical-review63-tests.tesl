@@ -1,0 +1,705 @@
+#lang tesl
+module CriticalReview63Tests exposing []
+
+# Critical Review 63 — Regression and adversarial tests
+#
+# Focus areas:
+# R63_PP  — Proof propagation through function parameter boundaries (THE BIG BUG)
+# R63_FA  — ForAll with explicit vs implicit subject in parameter position
+# R63_DC  — detachFact runtime behavior with multi-proof values
+# R63_NP  — Nested patterns and deep ADT case expressions
+# R63_FP  — Float operations and proof chains
+# R63_MP  — Multi-param proofs through boundaries
+# R63_RC  — Record field proof propagation across modules
+# R63_OP  — Operator precedence edge cases
+# R63_SC  — Sequential filterCheck ForAll accumulation
+# R63_CH  — Complex check chaining with 5+ steps
+# R63_LT  — let proof decomposition patterns (x ::: p1 && p2)
+
+import Tesl.Prelude exposing [
+  Int,
+  String,
+  Bool(..),
+  List,
+  Fact,
+  attachFact,
+  detachFact,
+  forgetFact,
+  introAnd,
+  andLeft,
+  andRight,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [
+  List.filterCheck,
+  List.allCheck,
+  List.length,
+  List.map,
+  List.sort,
+  List.emptyForAll,
+  IsSorted,
+]
+import Tesl.String exposing [
+  String.trim,
+  String.length,
+  String.startsWith,
+  String.toUpper,
+  IsTrimmed,
+  IsUpperCase,
+]
+import Tesl.Int exposing [
+  Int.divide,
+  Int.nonZero,
+  Int.nonNegative,
+  IsNonZero,
+  IsNonNegative,
+]
+import Tesl.Float exposing [
+  Float,
+  Float.div,
+  Float.requireNonZero,
+  FloatNonZero,
+]
+import Tesl.Dict exposing [
+  Dict,
+  Dict.requireKey,
+  Dict.get,
+  Dict.fromList,
+  Dict.lookup,
+  HasKey,
+]
+import Tesl.Tuple exposing [Tuple2]
+
+# ─── Shared proof declarations ──────────────────────────────────────────────
+
+fact A (n: Int)
+fact B (n: Int)
+fact C (n: Int)
+fact D (n: Int)
+fact E (n: Int)
+fact IsPositive (n: Int)
+fact IsSmall (n: Int)
+fact IsAdmin (userId: String)
+fact InRange (lo: Int) (hi: Int) (n: Int)
+
+# ─── Check and establish functions ──────────────────────────────────────────
+
+check checkPos(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+check checkSmall(n: Int) -> n: Int ::: IsSmall n =
+  if n < 100 then
+    ok n ::: IsSmall n
+  else
+    fail 400 "too big"
+
+check checkRange(lo: Int, hi: Int, n: Int) -> n: Int ::: InRange lo hi n =
+  if lo <= n && n <= hi then
+    ok n ::: InRange lo hi n
+  else
+    fail 400 "out of range"
+
+check checkAdmin(userId: String) -> userId: String ::: IsAdmin userId =
+  if String.startsWith userId "admin" then
+    ok userId ::: IsAdmin userId
+  else
+    fail 403 "not admin"
+
+establish proveA(n: Int) -> Fact (A n) = A n
+establish proveB(n: Int) -> Fact (B n) = B n
+establish proveC(n: Int) -> Fact (C n) = C n
+establish proveD(n: Int) -> Fact (D n) = D n
+establish proveE(n: Int) -> Fact (E n) = E n
+
+fn needsPos(n: Int ::: IsPositive n) -> Int = n
+fn needsSmall(n: Int ::: IsSmall n) -> Int = n
+fn needsPosSmall(n: Int ::: IsPositive n && IsSmall n) -> Int = n
+fn needsA(n: Int ::: A n) -> Int = n
+fn needsB(n: Int ::: B n) -> Int = n
+fn needsC(n: Int ::: C n) -> Int = n
+fn needsAll5(n: Int ::: A n && B n && C n && D n && E n) -> Int = n
+fn needsInRange(lo: Int, hi: Int, n: Int ::: InRange lo hi n) -> Int = n
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R63_PP — Proof propagation through function parameter boundaries (BIG BUG FIX)
+# These tests verify that proof-total stdlib functions work correctly when
+# called with proof-annotated function parameters (not just direct let bindings).
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn divideHelper(a: Int, b: Int ::: IsNonZero b) -> Int =
+  Int.divide a b
+
+fn testDivideViaHelper(a: Int, b: Int) -> Int =
+  let divisor = check Int.nonZero b
+  divideHelper a divisor
+
+test "R63_PP01 Int.divide works through function parameter boundary" {
+  let r = testDivideViaHelper 10 5
+  expect r == 2
+}
+
+test "R63_PP02 Int.divide via helper fails correctly for zero" {
+  expectFail (testDivideViaHelper 10 0)
+}
+
+fn divideChain(a: Int, b: Int, c: Int) -> Int =
+  let nzB = check Int.nonZero b
+  let nzC = check Int.nonZero c
+  let r1 = Int.divide a nzB
+  Int.divide r1 nzC
+
+test "R63_PP03 chained Int.divide with two proof-annotated params" {
+  let r = divideChain 100 5 2
+  expect r == 10
+}
+
+fn getDictValue(key: String, d: Dict String Int ::: HasKey key d) -> Int =
+  Dict.get key d
+
+fn testDictViaHelper(key: String, d: Dict String Int) -> Int =
+  let checked = check Dict.requireKey key d
+  getDictValue key checked
+
+test "R63_PP04 Dict.get works through function parameter boundary" {
+  let d = Dict.fromList [Tuple2 "a" 42, Tuple2 "b" 99]
+  let r = testDictViaHelper "a" d
+  expect r == 42
+}
+
+test "R63_PP05 Dict.get via helper fails for missing key" {
+  let d = Dict.fromList [Tuple2 "b" 99]
+  expectFail (testDictViaHelper "a" d)
+}
+
+fn nonNegHelper(n: Int ::: IsNonNegative n) -> Int = n
+
+fn testNonNegViaHelper(n: Int) -> Int =
+  let nn = check Int.nonNegative n
+  nonNegHelper nn
+
+test "R63_PP06 IsNonNegative proof through function parameter boundary" {
+  let r = testNonNegViaHelper 5
+  expect r == 5
+}
+
+test "R63_PP07 IsNonNegative proof fails for negative" {
+  expectFail (testNonNegViaHelper (-1))
+}
+
+fn floatDivHelper(a: Float, b: Float ::: FloatNonZero b) -> Float =
+  Float.div a b
+
+fn testFloatDivViaHelper(a: Float, b: Float) -> Float =
+  let nz = check Float.requireNonZero b
+  floatDivHelper a nz
+
+test "R63_PP08 Float.div works through function parameter boundary" {
+  let r = testFloatDivViaHelper 10.0 4.0
+  expect r == 2.5
+}
+
+test "R63_PP09 Float.div via helper fails for zero" {
+  expectFail (testFloatDivViaHelper 10.0 0.0)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R63_FA — ForAll with explicit subject requirement in parameter position
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn processPositiveList(xs: List Int ::: ForAll (IsPositive) xs) -> Int =
+  List.length xs
+
+fn getPositives(xs: List Int) -> List Int ::: ForAll (IsPositive) =
+  List.filterCheck checkPos xs
+
+fn testForAllParamToReturn(xs: List Int) -> Int =
+  let positives = getPositives xs
+  processPositiveList positives
+
+test "R63_FA01 ForAll with ? return can be consumed by explicit-subject parameter" {
+  let r = testForAllParamToReturn [1, 2, 3, -1, 0]
+  expect r == 3
+}
+
+fn getPositivesQuestion(xs: List Int) -> List Int ? ForAll (IsPositive) =
+  List.filterCheck checkPos xs
+
+fn testQuestionReturnToParam(xs: List Int) -> Int =
+  let positives = getPositivesQuestion xs
+  processPositiveList positives
+
+test "R63_FA02 ForAll ? return flows to explicit-subject parameter" {
+  let r = testQuestionReturnToParam [5, 10, -3, 0, 7]
+  expect r == 3
+}
+
+fn testAllCheckToParam(xs: List Int) -> Int =
+  let r = List.allCheck checkPos xs
+  case r of
+    Nothing -> 0
+    Something vs -> processPositiveList vs
+
+test "R63_FA03 allCheck result flows to explicit-subject ForAll parameter" {
+  let r = testAllCheckToParam [1, 2, 3]
+  expect r == 3
+}
+
+test "R63_FA04 allCheck returns Nothing when any element fails" {
+  let r = testAllCheckToParam [1, -1, 2]
+  expect r == 0
+}
+
+fn testEmptyForAll() -> Int =
+  let empty = List.emptyForAll checkPos
+  processPositiveList empty
+
+test "R63_FA05 List.emptyForAll produces valid ForAll list" {
+  let r = testEmptyForAll ()
+  expect r == 0
+}
+
+fn narrowToSmallPositive(xs: List Int ::: ForAll (IsPositive) xs) -> List Int ::: ForAll (IsPositive && IsSmall) =
+  List.filterCheck checkSmall xs
+
+fn countPositiveSmall(xs: List Int ::: ForAll (IsPositive && IsSmall) xs) -> Int =
+  List.length xs
+
+test "R63_FA06 narrowToSmall pattern: filterCheck on ForAll param produces conjunction" {
+  let positives = List.filterCheck checkPos [1, 50, 200, -1, 99, 0]
+  let small = narrowToSmallPositive positives
+  let count = countPositiveSmall small
+  expect count == 3
+}
+
+fn sequentialFilterAccumulates(xs: List Int) -> List Int ::: ForAll (IsPositive && IsSmall) =
+  let p1 = List.filterCheck checkPos xs
+  List.filterCheck checkSmall p1
+
+test "R63_FA07 sequential filterCheck accumulates ForAll predicates" {
+  let r = sequentialFilterAccumulates [1, 50, 200, -1, 99, 0]
+  let count = countPositiveSmall r
+  expect count == 3
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R63_DC — detachFact runtime behavior
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn testDetachSingle(x: Int) -> Int =
+  let pa = proveA x
+  let xA = attachFact x pa
+  let detached = detachFact xA
+  let restored = attachFact x detached
+  needsA restored
+
+fn testDetachMulti(x: Int) -> Int =
+  let pa = proveA x
+  let pb = proveB x
+  let pab = introAnd pa pb
+  let xAB = attachFact x pab
+  # detachFact on a multi-proof value returns the combined (A && B) conjunction
+  let detached = detachFact xAB
+  # andLeft extracts A from the conjunction
+  let la = andLeft detached
+  let xA = attachFact x la
+  needsA xA
+
+fn testDetachMultiBothProofs(x: Int) -> Int =
+  let pa = proveA x
+  let pb = proveB x
+  let pab = introAnd pa pb
+  let xAB = attachFact x pab
+  let detached = detachFact xAB
+  let la = andLeft detached
+  let rb = andRight detached
+  let xA = attachFact x la
+  let xB = attachFact x rb
+  needsA xA + needsB xB
+
+test "R63_DC01 detachFact works on single-proof value" {
+  let r = testDetachSingle 5
+  expect r == 5
+}
+
+test "R63_DC02 detachFact on multi-proof value succeeds: returns combined (A && B) proof" {
+  let r = testDetachMulti 5
+  expect r == 5
+}
+
+test "R63_DC03 detachFact on multi-proof: andLeft and andRight both work on result" {
+  let r = testDetachMultiBothProofs 5
+  expect r == 10
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R63_SC — Sequential filterCheck ForAll accumulation
+# ═══════════════════════════════════════════════════════════════════════════
+
+fact HasPrefix (s: String)
+fact IsLong (s: String)
+
+check checkHasPrefix(s: String) -> s: String ::: HasPrefix s =
+  if String.startsWith s "admin" then
+    ok s ::: HasPrefix s
+  else
+    fail 400 "no prefix"
+
+check checkIsLong(s: String) -> s: String ::: IsLong s =
+  if String.length s > 5 then
+    ok s ::: IsLong s
+  else
+    fail 400 "too short"
+
+fn processLongPrefixed(xs: List String ::: ForAll (HasPrefix && IsLong) xs) -> Int =
+  List.length xs
+
+fn filterBothCombined(xs: List String) -> Int =
+  let both = List.filterCheck (checkHasPrefix && checkIsLong) xs
+  processLongPrefixed both
+
+fn filterBothSequential(xs: List String) -> Int =
+  let prefixed = List.filterCheck checkHasPrefix xs
+  let long = List.filterCheck checkIsLong prefixed
+  processLongPrefixed long
+
+test "R63_SC01 combined && check produces correct ForAll conjunction" {
+  let xs = ["admin1234567", "admin", "user123456", "adminXXXXXX"]
+  let r = filterBothCombined xs
+  expect r == 2
+}
+
+test "R63_SC02 sequential filterCheck accumulates correctly" {
+  let xs = ["admin1234567", "admin", "user123456", "adminXXXXXX"]
+  let r = filterBothSequential xs
+  expect r == 2
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R63_CH — Complex 5-step check chains
+# ═══════════════════════════════════════════════════════════════════════════
+
+check checkA(n: Int) -> n: Int ::: A n =
+  if n > 0 then
+    ok n ::: A n
+  else
+    fail 400 "bad"
+
+check checkB(n: Int ::: A n) -> n: Int ::: A n && B n =
+  if n > 1 then
+    ok n ::: A n && B n
+  else
+    fail 400 "bad"
+
+check checkC(n: Int ::: A n && B n) -> n: Int ::: A n && B n && C n =
+  if n > 2 then
+    ok n ::: A n && B n && C n
+  else
+    fail 400 "bad"
+
+check checkD(n: Int ::: A n && B n && C n) -> n: Int ::: A n && B n && C n && D n =
+  if n > 3 then
+    ok n ::: A n && B n && C n && D n
+  else
+    fail 400 "bad"
+
+check checkE(n: Int ::: A n && B n && C n && D n) -> n: Int ::: A n && B n && C n && D n && E n =
+  if n > 4 then
+    ok n ::: A n && B n && C n && D n && E n
+  else
+    fail 400 "bad"
+
+fn chain5Step(x: Int) -> Int =
+  let a = check checkA x
+  let ab = check checkB a
+  let abc = check checkC ab
+  let abcd = check checkD abc
+  let abcde = check checkE abcd
+  needsAll5 abcde
+
+test "R63_CH01 5-step proof chain accumulates and satisfies conjunction" {
+  let r = chain5Step 10
+  expect r == 10
+}
+
+test "R63_CH02 5-step chain fails at step 1" {
+  expectFail (chain5Step 0)
+}
+
+test "R63_CH03 5-step chain fails at step 3" {
+  expectFail (chain5Step 2)
+}
+
+test "R63_CH04 5-step chain fails at step 5" {
+  expectFail (chain5Step 4)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R63_LT — let proof decomposition patterns
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn testLetDecompAB(x: Int) -> Int =
+  let pa = proveA x
+  let pb = proveB x
+  let pab = introAnd pa pb
+  let xAB = attachFact x pab
+  let (y ::: qa && qb) = xAB
+  needsA (attachFact y qa) + needsB (attachFact y qb)
+
+test "R63_LT01 let proof decomposition: (y ::: qa && qb) = xAB" {
+  let r = testLetDecompAB 5
+  expect r == 10
+}
+
+fn testLetDecomp3Way(x: Int) -> Int =
+  let pa = proveA x
+  let pb = proveB x
+  let pc = proveC x
+  let pab = introAnd pa pb
+  let pabc = introAnd pab pc
+  let xABC = attachFact x pabc
+  let (y ::: _ && _ && qc) = xABC
+  needsC (attachFact y qc)
+
+test "R63_LT02 3-way proof decomposition with _ discards" {
+  let r = testLetDecomp3Way 5
+  expect r == 5
+}
+
+fn testLetProofFromCheck(raw: Int) -> Int =
+  let (_ ::: p) = check checkPos raw
+  let proven = raw ::: p
+  needsPos proven
+
+test "R63_LT03 let (_ ::: p) = check f(x) pattern works" {
+  let r = testLetProofFromCheck 5
+  expect r == 5
+}
+
+test "R63_LT04 let (_ ::: p) pattern fails when check fails" {
+  expectFail (testLetProofFromCheck 0)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R63_NP — Nested patterns and deep ADT case expressions
+# ═══════════════════════════════════════════════════════════════════════════
+
+type Inner
+  = InnerA val: Int
+  | InnerB msg: String
+
+type Outer
+  = OuterWrap inner: Inner
+  | OuterEmpty
+
+fn extractNested(o: Outer) -> Int =
+  case o of
+    OuterEmpty -> -1
+    OuterWrap (InnerA v) -> v
+    OuterWrap (InnerB _) -> 0
+
+test "R63_NP01 nested constructor pattern: OuterWrap (InnerA v)" {
+  let r = extractNested (OuterWrap (InnerA 42))
+  expect r == 42
+}
+
+test "R63_NP02 nested constructor pattern: OuterWrap (InnerB _)" {
+  let r = extractNested (OuterWrap (InnerB "hello"))
+  expect r == 0
+}
+
+test "R63_NP03 nested constructor pattern: OuterEmpty" {
+  let r = extractNested OuterEmpty
+  expect r == (-1)
+}
+
+type Tree
+  = Leaf
+  | Node left: Tree value: Int right: Tree
+
+fn sumTree(t: Tree) -> Int =
+  case t of
+    Leaf -> 0
+    Node l v r -> sumTree l + v + sumTree r
+
+fn treeHeight(t: Tree) -> Int =
+  case t of
+    Leaf -> 0
+    Node l _ r ->
+      let lh = treeHeight l
+      let rh = treeHeight r
+      if lh > rh then
+        lh + 1
+      else
+        rh + 1
+
+fn buildBalancedTree() -> Tree =
+  Node
+    (Node Leaf 1 Leaf)
+    2
+    (Node (Node Leaf 3 Leaf) 4 Leaf)
+
+test "R63_NP04 recursive tree sum = 1+2+3+4 = 10" {
+  let t = buildBalancedTree ()
+  expect (sumTree t) == 10
+}
+
+test "R63_NP05 recursive tree height = 3" {
+  let t = buildBalancedTree ()
+  expect (treeHeight t) == 3
+}
+
+fact AllPositive (t: Tree)
+
+check checkAllPositive(t: Tree) -> t: Tree ::: AllPositive t =
+  case t of
+    Leaf ->
+      ok t ::: AllPositive t
+    Node l v r ->
+      if v <= 0 then
+        fail 400 "non-positive node"
+      else
+        let l2 = check checkAllPositive l
+        let r2 = check checkAllPositive r
+        ok t ::: AllPositive t
+
+fn processAllPositiveTree(t: Tree ::: AllPositive t) -> Int = sumTree t
+
+fn testTreeProof(t: Tree) -> Int =
+  let validated = check checkAllPositive t
+  processAllPositiveTree validated
+
+test "R63_NP06 recursive tree proof: all-positive tree succeeds" {
+  let t = buildBalancedTree ()
+  let r = testTreeProof t
+  expect r == 10
+}
+
+test "R63_NP07 recursive tree proof: negative node fails" {
+  let badTree = Node Leaf (-1) Leaf
+  expectFail (testTreeProof badTree)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R63_MP — Multi-param proofs through boundaries
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn rangeHelper(lo: Int, hi: Int, n: Int ::: InRange lo hi n) -> Int = n
+
+fn testMultiParamViaHelper(lo: Int, hi: Int, n: Int) -> Int =
+  let validated = check checkRange lo hi n
+  rangeHelper lo hi validated
+
+test "R63_MP01 multi-param proof InRange through function boundary" {
+  let r = testMultiParamViaHelper 0 100 50
+  expect r == 50
+}
+
+test "R63_MP02 multi-param proof fails for out-of-range" {
+  expectFail (testMultiParamViaHelper 0 100 200)
+}
+
+test "R63_MP03 multi-param proof with negative bounds" {
+  let r = testMultiParamViaHelper (-50) 50 (-10)
+  expect r == (-10)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R63_OP — Operator precedence edge cases
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn testArithPrec(a: Int, b: Int, c: Int) -> Int =
+  a + b * c
+
+fn testComparePrec(a: Int, b: Int, c: Int) -> Bool =
+  a + b > c
+
+fn testBoolPrec(a: Int, b: Int, c: Int) -> Bool =
+  a > 0 && b > 0 || c > 0
+
+test "R63_OP01 * binds tighter than +" {
+  expect (testArithPrec 2 3 4) == 14
+}
+
+test "R63_OP02 arithmetic before comparison" {
+  expect (testComparePrec 2 3 4) == True
+}
+
+test "R63_OP03 && binds tighter than ||" {
+  expect (testBoolPrec 1 1 0) == True
+}
+
+test "R63_OP04 && binds tighter than || negative case" {
+  expect (testBoolPrec (-1) 1 0) == False
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R63_RC — Record field proof propagation
+# ═══════════════════════════════════════════════════════════════════════════
+
+record SafePost {
+  title: String ::: IsTrimmed title
+  count: Int
+}
+
+fn requiresTrimmed(s: String ::: IsTrimmed s) -> String = s
+
+fn makeSafePost(raw: String, count: Int) -> SafePost =
+  let trimmed = String.trim raw
+  SafePost { title: trimmed, count: count }
+
+fn readTitle(p: SafePost) -> String =
+  requiresTrimmed p.title
+
+test "R63_RC01 record field proof propagates on read" {
+  let p = makeSafePost "  Hello  " 5
+  let title = readTitle p
+  expect title == "Hello"
+}
+
+test "R63_RC02 record update on non-proof field preserves proof fields" {
+  let p = makeSafePost "Hello" 1
+  let p2 = { p | count = 99 }
+  let t = readTitle p2
+  expect t == "Hello"
+}
+
+fn updateCountPreservesProof(p: SafePost, newCount: Int) -> SafePost =
+  { p | count = newCount }
+
+test "R63_RC03 proof field accessible after helper function update" {
+  let p = makeSafePost "World" 0
+  let p2 = updateCountPreservesProof p 42
+  let t = readTitle p2
+  expect t == "World"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R63_FP — Float operations
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn safeDivFloat(a: Float, b: Float) -> Float =
+  let nz = check Float.requireNonZero b
+  Float.div a nz
+
+fn divChainFloat(a: Float, b: Float, c: Float) -> Float =
+  let nzB = check Float.requireNonZero b
+  let nzC = check Float.requireNonZero c
+  let r1 = Float.div a nzB
+  Float.div r1 nzC
+
+test "R63_FP01 Float.div direct" {
+  let r = safeDivFloat 10.0 4.0
+  expect r == 2.5
+}
+
+test "R63_FP02 Float.div by zero fails" {
+  expectFail (safeDivFloat 10.0 0.0)
+}
+
+test "R63_FP03 Float.div chained" {
+  let r = divChainFloat 100.0 5.0 4.0
+  expect r == 5.0
+}

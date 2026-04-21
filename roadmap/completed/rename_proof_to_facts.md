@@ -1,0 +1,3 @@
+With the goal of reduce hurdles to engage with Tesl and make adoption easier we should avoid the word "Proof". It feels math-y and cumbersome. Use Fact instead of Proof type and and "establish" instead of "proof" keyword to declare a function that produces a Fact. detachProof/attachProof should be detachFact and attachFact. Same with forgetProof, should be forgetFact. Same with any other functions named Proof/proof-something that has to do with the GDP-proofs. This is no change to the actual type theory - just a renaming of the syntax.
+
+Do an analysis of  proposal above, review it, plan and execute.

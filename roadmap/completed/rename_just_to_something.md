@@ -1,0 +1,1 @@
+To make it easier for newcomers to functional programming the two cases of Maybe should be "Nothing" (as today) and "Something" (instead of Something). That is easier to understand and the naming is internally consistent.

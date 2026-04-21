@@ -1,0 +1,18 @@
+#lang tesl
+module OrdTypesTest exposing []
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+
+type Score = Int
+type Rank = Score # transitive: Rank -> Score -> Int
+
+# All of these should compile fine
+fn intOrd(a: Int, b: Int) -> Bool = a < b
+fn scoreOrd(a: Score, b: Score) -> Bool = a <= b
+fn rankOrd(a: Rank, b: Rank) -> Bool = a > b
+
+# Ordering on a non-orderable nominal type should fail
+type Label = String
+
+# NEGATIVE TEST: expected compile error (ordering not supported for String-based nominal types)
+# fn labelOrd(a: Label, b: Label) -> Bool = a < b

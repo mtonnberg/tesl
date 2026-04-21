@@ -1,0 +1,66 @@
+#lang tesl
+module Telemetry exposing [processRequest, processRequestWithSpan]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Put "telemetry "span.name" { key = value, ... }" in any function body to emit
+# an OpenTelemetry span. Call "initTelemetry" in main to set up the exporter.
+# No capability declaration needed — telemetry is ambient by design.
+#
+#   fn myFn(userId: String) -> String requires [apiTime] =
+#     telemetry "request.process" { user.id = userId }
+#     "processed"
+#
+#   main {
+#     initTelemetry service "my-service" endpoint "in-memory" console True
+#     ...
+#   }
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
+import Tesl.Time exposing [nowMillis, time, Time.posixToSeconds]
+import Tesl.Telemetry exposing [initTelemetry]
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Telemetry is the one side effect that does NOT require a capability declaration.
+# It is ambient by design: every function can emit spans without declaring it.
+# Spans automatically track the function call duration.
+# Key=value pairs in the braces become span attributes in the OpenTelemetry sense.
+#
+# "endpoint" can be a real OTLP HTTP endpoint URL, or "in-memory" for local testing.
+# "console True" additionally prints spans to stdout during development.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Telemetry is the deliberate exception to the capability rule.
+# All other side effects (DB, HTTP, time) must be declared with capabilities.
+# Telemetry is considered platform infrastructure rather than a user-visible effect,
+# so it is intentionally ambient — you never need to thread a telemetry capability
+# through every function in the call stack.
+#
+# This matches industry practice: observability is always-on at the platform level.
+# Making it require a capability would add friction with no safety benefit,
+# since emitting a span cannot corrupt application state or expose sensitive data
+# in ways that a capability would meaningfully prevent.
+
+capability apiTime implies time
+
+fn processRequest(userId: String, action: String) -> String requires [apiTime] =
+  telemetry "request.process" { user.id = userId, action.name = action }
+  "processed ${action} for user ${userId} at ${Time.posixToSeconds(nowMillis())}"
+
+fn processRequestWithSpan(userId: String, requestCount: Int) -> String requires [apiTime] =
+  let result = "handled ${requestCount} requests"
+  telemetry "batch.process" { user.id = userId, count = requestCount, timestamp = Time.posixToSeconds(nowMillis()) }
+  result
+
+main {
+  # initTelemetry sets up the OpenTelemetry exporter.
+  # "endpoint" is the OTLP endpoint URL, or "in-memory" for local testing.
+  # "console True" also prints spans to stdout.
+  initTelemetry service "my-service" endpoint "in-memory" console True
+  # now any telemetry calls in function bodies will emit spans
+}

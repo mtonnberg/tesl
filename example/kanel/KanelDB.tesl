@@ -1,0 +1,259 @@
+#lang tesl
+# ─── Kanel — Database access layer ────────────────────────────────────────
+#
+# All database-touching code lives here.  Every function requires the proof(s)
+# that justify the access — removing a check in a handler will cause a compile
+# error when the handler tries to call into this layer.
+#
+# DESIGN NOTE (see NOTES.md §DB-1):
+#   Ideally the domain proofs (ValidTitle, NotDone, PositiveMinutes, etc.)
+#   would also be required here, creating a fully proof-gated DB layer.
+#   This requires a shared KanelPredicates module to avoid circular imports
+#   (KanelDB ← KanelIssues ← KanelDB).  For now, authorization proofs
+#   (OrgMember, OrgAdmin, ProjMember) are enforced here; domain validation
+#   proofs are enforced in the handler-layer functions.
+#
+# Organization:
+#   - Read functions require OrgMember (membership = read access)
+#   - Write functions require OrgAdmin (admin = write access) or ProjMember
+#   - Every DB function has at least one proof requirement
+
+module KanelDB exposing [
+  dbGetOrg,
+  dbListOrgs,
+  dbInsertOrg,
+  dbGetOrgMembership,
+  dbListOrgMembers,
+  dbInsertOrgMembership,
+  dbUpdateMemberRole,
+  dbDeleteMembership,
+  dbGetUser,
+  dbGetUserByEmail,
+  dbInsertUser,
+  dbGetProject,
+  dbListProjects,
+  dbInsertProject,
+  dbArchiveProject,
+  dbGetIssue,
+  dbListIssues,
+  dbInsertIssue,
+  dbUpdateIssueFields,
+  dbUpdateIssueStatus,
+  dbInsertComment,
+  dbListComments,
+  dbInsertTimeEntry,
+  dbListTimeEntries,
+  dbListUnbilledEntries,
+  dbMarkEntriesBilled,
+  dbGetInvoice,
+  dbListInvoices,
+  dbInsertInvoice,
+  dbUpdateInvoiceStatus,
+]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
+import Tesl.List exposing [List.foldl, List.append]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Time exposing [nowMillis, time, Time.secondsToPosix]
+import Tesl.DB exposing [DeleteResult]
+import KanelModels exposing [
+  kanelDbRead,
+  kanelDbWrite,
+  KanelUser,
+  Org,
+  OrgMembership,
+  Project,
+  Issue,
+  IssueComment,
+  TimeEntry,
+  Invoice,
+  OrgRole(..),
+  IssueStatus(..),
+  InvoiceStatus(..),
+]
+import KanelAuth exposing [OrgMember, OrgAdmin, ProjMember]
+# Circular imports are fine in Tesl (SCCs handled by compiler).
+# Import domain predicates so DB functions require full proof chains.
+import KanelOrg exposing [ValidOrgName, ValidSlug, ValidEmail, ValidDisplayName]
+import KanelIssues exposing [
+  ValidTitle,
+  ValidDescription,
+  PositiveEstimate,
+  PositiveMinutes,
+  NotDone,
+  ValidCommentBody,
+]
+import KanelBilling exposing [InvoiceDraft]
+
+# ── Org queries ──────────────────────────────────────────────────────────────
+
+fn dbGetOrg(orgId: String, userId: String ::: OrgMember userId orgId) -> Maybe Org
+  requires [kanelDbRead] =
+  selectOne o from Org where o.id == orgId
+
+fn dbFetchOrgByMembership(acc: List Org, m: OrgMembership) -> List Org
+  requires [kanelDbRead] =
+  let found = selectOne o from Org where o.id == m.orgId
+  case found of
+    Nothing -> acc
+    Something o -> List.append acc [o]
+
+fn dbListOrgs(userId: String) -> List Org
+  requires [kanelDbRead] =
+  let memberships = select m from OrgMembership where m.userId == userId
+  List.foldl dbFetchOrgByMembership [] memberships
+
+fn dbInsertOrg(orgId: String, name: String ::: ValidOrgName name, slug: String ::: ValidSlug slug) -> Org ? FromDb (Id == orgId)
+  requires [kanelDbWrite, time] =
+  insert Org { id: orgId, name: name, slug: slug, createdAt: nowMillis() }
+
+# ── Membership queries ───────────────────────────────────────────────────────
+
+fn dbGetOrgMembership(userId: String, orgId: String) -> Maybe OrgMembership
+  requires [kanelDbRead] =
+  selectOne m from OrgMembership where m.userId == userId && m.orgId == orgId
+
+fn dbListOrgMembers(orgId: String, userId: String ::: OrgMember userId orgId) -> List OrgMembership
+  requires [kanelDbRead] =
+  select m from OrgMembership where m.orgId == orgId
+
+fn dbInsertOrgMembership(memberId: String, orgId: String, adminId: String ::: OrgAdmin adminId orgId, targetUserId: String, role: OrgRole) -> OrgMembership ? FromDb (Id == memberId)
+  requires [kanelDbWrite, time] =
+  insert OrgMembership { id: memberId, orgId: orgId, userId: targetUserId, role: role, joinedAt: nowMillis() }
+
+fn dbUpdateMemberRole(targetUserId: String, orgId: String, adminId: String ::: OrgAdmin adminId orgId, newRole: OrgRole) -> OrgMembership
+  requires [kanelDbWrite] =
+  update m in OrgMembership
+    where m.userId == targetUserId && m.orgId == orgId
+    set m.role = newRole
+    returning one
+
+fn dbDeleteMembership(targetUserId: String, orgId: String, adminId: String ::: OrgAdmin adminId orgId) -> DeleteResult
+  requires [kanelDbWrite] =
+  deleteAndReturnResult m from OrgMembership where m.userId == targetUserId && m.orgId == orgId
+
+# ── User queries ─────────────────────────────────────────────────────────────
+
+fn dbGetUser(userId: String) -> Maybe KanelUser
+  requires [kanelDbRead] =
+  selectOne u from KanelUser where u.id == userId
+
+fn dbGetUserByEmail(email: String) -> Maybe KanelUser
+  requires [kanelDbRead] =
+  selectOne u from KanelUser where u.email == email
+
+fn dbInsertUser(userId: String, email: String ::: ValidEmail email, displayName: String ::: ValidDisplayName displayName, passwordHash: String) -> KanelUser ? FromDb (Id == userId)
+  requires [kanelDbWrite, time] =
+  insert KanelUser { id: userId, email: email, passwordHash: passwordHash, displayName: displayName, createdAt: nowMillis() }
+
+# ── Project queries ──────────────────────────────────────────────────────────
+
+fn dbGetProject(projectId: String, userId: String ::: ProjMember userId projectId) -> Maybe Project
+  requires [kanelDbRead] =
+  selectOne p from Project where p.id == projectId
+
+fn dbListProjects(orgId: String, userId: String ::: OrgMember userId orgId) -> List Project
+  requires [kanelDbRead] =
+  select p from Project where p.orgId == orgId && p.archived == False
+
+fn dbInsertProject(projectId: String, orgId: String, adminId: String ::: OrgAdmin adminId orgId, name: String ::: ValidTitle name, description: String ::: ValidDescription description) -> Project ? FromDb (Id == projectId)
+  requires [kanelDbWrite, time] =
+  insert Project { id: projectId, orgId: orgId, name: name, description: description, archived: False, createdAt: nowMillis() }
+
+fn dbArchiveProject(projectId: String, orgId: String, adminId: String ::: OrgAdmin adminId orgId) -> Project
+  requires [kanelDbWrite] =
+  update p in Project
+    where p.id == projectId
+    set p.archived = True
+    returning one
+
+# ── Issue queries ────────────────────────────────────────────────────────────
+
+fn dbGetIssue(issueId: String, orgId: String, userId: String ::: OrgMember userId orgId) -> Maybe Issue
+  requires [kanelDbRead] =
+  selectOne i from Issue where i.id == issueId && i.orgId == orgId
+
+fn dbListIssues(projectId: String, userId: String ::: ProjMember userId projectId) -> List Issue
+  requires [kanelDbRead] =
+  select i from Issue where i.projectId == projectId
+
+fn dbInsertIssue(issueId: String, projectId: String, orgId: String, userId: String ::: ProjMember userId projectId, title: String ::: ValidTitle title, description: String ::: ValidDescription description, estimate: Int ::: PositiveEstimate estimate) -> Issue ? FromDb (Id == issueId)
+  requires [kanelDbWrite, time] =
+  insert Issue {
+    id: issueId, projectId: projectId, orgId: orgId,
+    title: title, description: description,
+    status: Backlog, assigneeId: Nothing, reporterId: userId,
+    estimate: estimate, dueAt: Nothing,
+    createdAt: nowMillis(), updatedAt: nowMillis()
+  }
+
+fn dbUpdateIssueFields(issueId: String ::: NotDone issueId, orgId: String, userId: String ::: OrgMember userId orgId, title: String ::: ValidTitle title, description: String ::: ValidDescription description, estimate: Int ::: PositiveEstimate estimate, assigneeId: String) -> Issue
+  requires [kanelDbWrite, time] =
+  update i in Issue
+    where i.id == issueId
+    set i.title = title
+    set i.description = description
+    set i.estimate = estimate
+    set i.assigneeId = assigneeId
+    set i.updatedAt = nowMillis()
+    returning one
+
+fn dbUpdateIssueStatus(issueId: String, newStatus: IssueStatus, orgId: String, userId: String ::: OrgMember userId orgId) -> Issue
+  requires [kanelDbWrite, time] =
+  update i in Issue
+    where i.id == issueId
+    set i.status = newStatus
+    set i.updatedAt = nowMillis()
+    returning one
+
+# ── Comment queries ──────────────────────────────────────────────────────────
+
+fn dbInsertComment(commentId: String, issueId: String ::: NotDone issueId, orgId: String, authorId: String ::: OrgMember authorId orgId, body: String ::: ValidCommentBody body) -> IssueComment ? FromDb (Id == commentId)
+  requires [kanelDbWrite, time] =
+  insert IssueComment { id: commentId, issueId: issueId, authorId: authorId, body: body, createdAt: nowMillis() }
+
+fn dbListComments(issueId: String, orgId: String, userId: String ::: OrgMember userId orgId) -> List IssueComment
+  requires [kanelDbRead] =
+  select c from IssueComment where c.issueId == issueId
+
+# ── Time entry queries ───────────────────────────────────────────────────────
+
+fn dbInsertTimeEntry(entryId: String, issueId: String ::: NotDone issueId, orgId: String, userId: String ::: OrgMember userId orgId, minutes: Int ::: PositiveMinutes minutes, description: String) -> TimeEntry ? FromDb (Id == entryId)
+  requires [kanelDbWrite, time] =
+  insert TimeEntry { id: entryId, issueId: issueId, userId: userId, orgId: orgId, minutes: minutes, description: description, invoiceId: "", loggedAt: nowMillis() }
+
+fn dbListTimeEntries(issueId: String, orgId: String, userId: String ::: OrgMember userId orgId) -> List TimeEntry
+  requires [kanelDbRead] =
+  select te from TimeEntry where te.issueId == issueId
+
+fn dbListUnbilledEntries(orgId: String, adminId: String ::: OrgAdmin adminId orgId) -> List TimeEntry
+  requires [kanelDbRead] =
+  select te from TimeEntry where te.orgId == orgId && te.invoiceId == ""
+
+fn dbMarkEntriesBilled(orgId: String, adminId: String ::: OrgAdmin adminId orgId, invoiceId: String) -> Unit
+  requires [kanelDbWrite] =
+  update te in TimeEntry
+    where te.orgId == orgId && te.invoiceId == ""
+    set te.invoiceId = invoiceId
+
+# ── Invoice queries ──────────────────────────────────────────────────────────
+
+fn dbGetInvoice(invoiceId: String, orgId: String, adminId: String ::: OrgAdmin adminId orgId) -> Maybe Invoice
+  requires [kanelDbRead] =
+  selectOne inv from Invoice where inv.id == invoiceId && inv.orgId == orgId
+
+fn dbListInvoices(orgId: String, adminId: String ::: OrgAdmin adminId orgId) -> List Invoice
+  requires [kanelDbRead] =
+  select inv from Invoice where inv.orgId == orgId
+
+fn dbInsertInvoice(invoiceId: String, orgId: String, adminId: String ::: OrgAdmin adminId orgId, totalMinutes: Int, notes: String) -> Invoice ? FromDb (Id == invoiceId)
+  requires [kanelDbWrite, time] =
+  insert Invoice { id: invoiceId, orgId: orgId, status: Draft, totalMinutes: totalMinutes, notes: notes, createdAt: nowMillis(), approvedAt: Time.secondsToPosix 0 }
+
+fn dbUpdateInvoiceStatus(invoiceId: String ::: InvoiceDraft invoiceId, orgId: String, adminId: String ::: OrgAdmin adminId orgId, newStatus: InvoiceStatus) -> Invoice
+  requires [kanelDbWrite, time] =
+  update inv in Invoice
+    where inv.id == invoiceId && inv.orgId == orgId
+    set inv.status = newStatus
+    set inv.approvedAt = nowMillis()
+    returning one

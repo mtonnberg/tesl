@@ -1,0 +1,44 @@
+#lang tesl
+module Sandbox2 exposing [
+  doSomething,
+  doSomething2,
+  ARecord,
+  ARecord2,
+  FiveCases(..),
+]
+import Tesl.Prelude exposing [forgetFact, Int, Fact, String]
+import Sandbox exposing [dummy_add, ValidPort, IsPositive]
+
+record ARecord {
+  title: String
+}
+
+record ARecord2 {
+  title: String
+  foo2: Int
+}
+
+type FiveCases
+  = CaseOne
+  | CaseTwo
+  | CaseThree
+  | CaseFour
+  | CaseFive
+
+fn doSomething(x: Int ::: ValidPort x) -> Int =
+  dummy_add (forgetFact x) (forgetFact x)
+
+fn doSomething2(x: Int ::: ValidPort x && IsPositive x) -> Int =
+  x
+
+fn mutualRecursion1(x: Int) -> Int =
+  if x == 0 then
+    1
+  else
+    mutualRecursion2 (x - 1)
+
+fn mutualRecursion2(x: Int) -> Int =
+  if x == 0 then
+    1
+  else
+    mutualRecursion1 (x - 1)

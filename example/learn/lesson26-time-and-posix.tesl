@@ -1,0 +1,335 @@
+#lang tesl
+module TimeAndPosix exposing [
+  TimedDatabase,
+  TimedServer,
+  currentTimestamp,
+  ageDescription,
+  formatPublishedAt,
+  createdRecently,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# All timestamps in Tesl use PosixMillis — a nominal newtype wrapping Int
+# that represents milliseconds since the Unix epoch (UTC).
+# There is one canonical time unit. Human-readable formatting is always explicit.
+#
+# The key functions from Tesl.Time:
+#
+#   nowMillis                     → PosixMillis  (current time; requires [time])
+#   formatTime(ms, tz, fmt)         → String       (ms: PosixMillis)
+#   durationMs(pastMs)              → Int          (ms elapsed; pastMs: PosixMillis; requires [time])
+#   addMs(ts, delta)                → PosixMillis  (ts: PosixMillis, delta: Int)
+#   subtractMs(ts, delta)           → PosixMillis  (ts: PosixMillis, delta: Int)
+#   diffMs(a, b)                    → Int          (b − a; both: PosixMillis)
+#   Time.posixToSeconds(ms)         → Int          (ms: PosixMillis)
+#   Time.secondsToPosix(s)          → PosixMillis  (s: Int)
+#
+# In the database, declare timestamp fields as PosixMillis (no @db annotation needed):
+#
+#   entity Post table "posts" primaryKey id {
+#     id:          String
+#     content:     String @db(text)
+#     publishedAt: PosixMillis      # BIGINT — auto-mapped, no @db needed
+#   }
+#
+# On insert, set the timestamp:
+#
+#   insert Post {
+#     id:          newId,
+#     content:     body.content,
+#     publishedAt: nowMillis
+#   }
+#
+# Format for display when returning to a client:
+#
+#   formatTime(post.publishedAt, "UTC", "%Y-%m-%dT%H:%M:%S.%3NZ")
+#   → "2026-03-16T14:32:07.456Z"
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Time exposing [
+  time,
+  nowMillis,
+  PosixMillis,
+  formatTime,
+  durationMs,
+  diffMs,
+  addMs,
+  subtractMs,
+  Time.secondsToPosix,
+]
+import Tesl.String exposing [String.fromInt, String.startsWith]
+import Tesl.Random exposing [random]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Id exposing [generatePrefixedId]
+import Tesl.Dict exposing [Dict.lookup]
+
+# ─── Capabilities ─────────────────────────────────────────────────────────────
+capability timedRead implies dbRead
+capability timedWrite implies dbWrite, time, random
+capability timedService implies timedRead, timedWrite
+
+# ─── Entities using PosixMillis for timestamps ────────────────────────────────
+#
+# The canonical pattern for timestamps in Tesl:
+#   - Declare the field as PosixMillis (no @db annotation needed)
+#   - PosixMillis maps to BIGINT automatically in PostgreSQL
+#   - Use nowMillis on insert — returns a PosixMillis value
+#   - Format on display with formatTime()
+#   - NEVER store pre-formatted strings as timestamps — always store PosixMillis
+
+entity Event table "events" primaryKey id {
+  id: String
+  name: String @db(text)
+  createdAt: PosixMillis # BIGINT — auto-mapped, no @db needed
+  expiresAt: PosixMillis # BIGINT — auto-mapped, no @db needed
+}
+
+record CreateEventRequest {
+  name: String
+  durationMs: Int # how long until the event expires (ms)
+}
+
+codec CreateEventRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      name <- "name" with_codec stringCodec
+      durationMs <- "durationMs" with_codec intCodec
+    }
+  ]
+}
+
+# ─── Database ─────────────────────────────────────────────────────────────────
+database TimedDatabase {
+  backend postgres
+  schema "timed_app"
+  entities [Event]
+  postgres {
+    database env("TIMED_DB_NAME")
+    user env("TIMED_DB_USER")
+    password env("TIMED_DB_PASSWORD")
+    host env("TIMED_DB_HOST")
+    port envInt("TIMED_DB_PORT", 5432)
+    socket env("TIMED_DB_SOCKET")
+  }
+}
+
+fact Authenticated (user: String)
+
+# ─── Auth ─────────────────────────────────────────────────────────────────────
+auth cookieAuth(request: HttpRequest) -> user: String ::: Authenticated user
+  requires [timedRead] =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "not logged in"
+    Something uid -> ok uid ::: Authenticated user
+
+# ─── Pure time helpers (no DB, no capability needed) ──────────────────────────
+
+# Return the current time as an ISO-8601 UTC string.
+fn currentTimestamp() -> String requires [time] =
+  formatTime (nowMillis()) "UTC" "%Y-%m-%dT%H:%M:%S.%3NZ"
+
+# Given a PosixMillis timestamp, return a human-readable "age" string.
+# This function is pure — it uses the provided `nowMs` argument instead of
+# calling nowMillis, making it deterministic and testable.
+fn ageDescription(createdMs: PosixMillis, nowMs: PosixMillis) -> String =
+  let elapsedMs = diffMs createdMs nowMs
+  let elapsedS = elapsedMs / 1000
+  let elapsedM = elapsedS / 60
+  let elapsedH = elapsedM / 60
+  if elapsedH > 0 then
+    "${String.fromInt elapsedH}h ago"
+  else
+    if elapsedM > 0 then
+      "${String.fromInt elapsedM}m ago"
+    else
+      "just now"
+
+# Format a stored PosixMillis timestamp for display in a given timezone.
+fn formatPublishedAt(posixMs: PosixMillis, timezone: String) -> String =
+  formatTime posixMs timezone "%Y-%m-%d %H:%M:%S"
+
+# Check if a PosixMillis timestamp is within the last N milliseconds.
+fn createdRecently(createdMs: PosixMillis, nowMs: PosixMillis, withinMs: Int) -> Bool =
+  diffMs createdMs nowMs < withinMs
+
+# ─── Handlers ─────────────────────────────────────────────────────────────────
+
+handler createEvent(
+    user: String ::: Authenticated user,
+    req: CreateEventRequest)
+  -> exists eventId: String => Event ? FromDb (Id == eventId)
+  requires [timedWrite] =
+  let eventId = generatePrefixedId "evt"
+  let nowTs = nowMillis() # PosixMillis — renamed to avoid shadowing now
+  let expiresAt = addMs nowTs req.durationMs
+  exists eventId =>
+    insert Event {
+      id: eventId,
+      name: req.name,
+      createdAt: nowTs,
+      expiresAt: expiresAt
+    }
+
+handler listActiveEvents(user: String ::: Authenticated user)
+  -> List Event
+  requires [timedRead] =
+  # We select all events — filtering by expiry could be done here
+  # or in SQL via a computed column.  For simplicity, return all.
+  select e from Event
+
+# ─── API ──────────────────────────────────────────────────────────────────────
+api TimedApi {
+  post "/events"
+    auth user: String ::: Authenticated user via cookieAuth
+    body req: CreateEventRequest
+    -> exists eventId: String => Event ? FromDb (Id == eventId)
+
+  get "/events"
+    auth user: String ::: Authenticated user via cookieAuth
+    -> List Event
+}
+
+server TimedServer for TimedApi {
+  createEvent = createEvent
+  listActiveEvents = listActiveEvents
+}
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# WHY PosixMillis AND BIGINT (not TIMESTAMPTZ)?
+#
+# PosixMillis is a nominal newtype wrapping Int. It gives timestamps
+# a distinct type so you cannot accidentally pass a plain count or
+# duration where a timestamp is expected.
+#
+# BIGINT (via PosixMillis's auto-mapping) beats TIMESTAMPTZ because:
+#   - No timezone surprises — the integer is always milliseconds since the
+#     Unix epoch (UTC). TIMESTAMPTZ normalises to UTC too, but the round-trip
+#     through Racket's date type adds friction.
+#   - Simple arithmetic — diffMs, addMs, createdRecently all work with plain
+#     integer subtraction. No date arithmetic library needed.
+#   - Sorting and comparison work naturally on integers.
+#   - 8 bytes either way — BIGINT and TIMESTAMPTZ are both 8-byte columns in
+#     PostgreSQL, so there is no storage or performance difference.
+#   - Portable — BIGINT/epoch is the same on every database.
+#
+# When should you use TIMESTAMPTZ instead?
+#   Only when you need server-side PostgreSQL date functions like date_trunc,
+#   age(), or AT TIME ZONE. You can always convert:
+#     to_timestamp(created_at / 1000.0)     -- PosixMillis → TIMESTAMPTZ
+#     extract(epoch from ts) * 1000         -- TIMESTAMPTZ → PosixMillis
+#
+# FUNCTION PARAMETERS use PosixMillis for timestamps, Int for deltas/durations.
+#   All timestamps are PosixMillis — passing a plain integer where PosixMillis
+#   is expected is a compile error. Use Time.secondsToPosix(s) to construct
+#   a PosixMillis from a literal in tests:
+#     let t = Time.secondsToPosix 1000     # PosixMillis(1000 * 1000 = 1000000 ms)
+#     let later = addMs(t, 5 * 60 * 1000)  # 5 minutes after t
+#   Duration/delta parameters (addMs delta, createdRecently withinMs) stay as Int.
+#
+# RETURN VALUES from nowMillis and addMs() are PosixMillis so that
+# entity inserts get the correct type with no manual wrapping:
+#   createdAt: nowMillis   -- PosixMillis → stored as BIGINT automatically
+#
+# WHY THE `time` CAPABILITY?
+#
+# `nowMillis` and `now` require the `time` capability.
+# This makes functions that read the current clock visible in their
+# signatures — a function with `requires [time]` is stateful with
+# respect to the clock. Functions without `time` are pure with respect
+# to time, making them easier to test (you can pass an explicit `nowMs`
+# argument and get deterministic results).
+#
+# Recommendation: write pure time logic (duration calculations, formatting,
+# comparisons) as plain `fn` functions that take timestamps as arguments.
+# Only insert `time` into capabilities when you need `nowMillis`.
+#
+# WHY formatTime?
+#
+# `formatTime(ms, timezone, fmt)` is the single bridge from the internal
+# integer representation to human-readable strings. Always call it at the
+# API boundary — never store formatted strings in the database.
+#
+# Format codes follow strftime conventions:
+#   %Y   year (4 digits)
+#   %m   month (01-12)
+#   %d   day (01-31)
+#   %H   hour 24h (00-23)
+#   %M   minute (00-59)
+#   %S   second (00-59)
+#   %3N  milliseconds (000-999)
+#   %z   UTC offset (+0000)
+#   %Z   timezone abbreviation (UTC)
+#   %%   literal percent
+#
+# Common format strings:
+#   ISO-8601 UTC:      "%Y-%m-%dT%H:%M:%S.%3NZ"
+#   Date only:         "%Y-%m-%d"
+#   Human-readable:    "%d %b %Y %H:%M"
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# POSIX milliseconds are stored as Racket's exact integers (bignum-capable).
+# The underlying platform's current-inexact-milliseconds returns a floating-point
+# number; Tesl's nowMillis truncates it to an exact integer.
+#
+# PostgreSQL's BIGINT column can store values up to 2^63 - 1, which is
+# approximately 292 million years from the Unix epoch. Milliseconds since
+# epoch will fit comfortably.
+#
+# formatTime uses Racket's built-in `seconds->date` with a TZ environment
+# variable trick for non-UTC timezones. This is best-effort: it relies on
+# the host OS having the timezone data. For production deployments with
+# precise timezone handling, a proper timezone library is recommended.
+# UTC is always correct.
+#
+# The `time` capability is declared in Tesl.Time as:
+#   (define-capability time)
+# nowMillis and now call (require-capabilities! (list time)) at the
+# start of their bodies, so the runtime checks that the capability is
+# active. Calls without the capability raise an error at runtime.
+
+test "ageDescription" {
+  # Use Time.secondsToPosix to construct typed PosixMillis values from literals.
+  # Time.secondsToPosix(s) = PosixMillis(s * 1000).
+  let base = Time.secondsToPosix 1000 # PosixMillis (1000000 ms)
+  # 5 minutes later
+  let fiveMinLater = addMs base (5 * 60 * 1000)
+  expect ageDescription base fiveMinLater == "5m ago"
+  # 2 hours later
+  let twoHrLater = addMs base (2 * 60 * 60 * 1000)
+  expect ageDescription base twoHrLater == "2h ago"
+  # just now (500 ms later)
+  let almostNow = addMs base 500
+  expect ageDescription base almostNow == "just now"
+}
+
+test "createdRecently" {
+  let nowTs: PosixMillis = Time.secondsToPosix 1000 # PosixMillis (1000000 ms)
+  let recent = subtractMs nowTs 500 # 500 ms before nowTs
+  let old = subtractMs nowTs 2000 # 2000 ms before nowTs
+  expect createdRecently recent nowTs 1000 == True
+  expect createdRecently old nowTs 1000 == False
+}
+
+test "formatPublishedAt basics" {
+  # Unix epoch = Time.secondsToPosix 0 = PosixMillis(0)
+  let formatted: String = formatPublishedAt (Time.secondsToPosix 0) "UTC"
+  expect String.startsWith formatted "1970-01-01" == True
+}
+
+test "diffMs and addMs" {
+  # Construct typed PosixMillis timestamps — plain Int literals are NOT PosixMillis.
+  let t1 = Time.secondsToPosix 1000 # PosixMillis (1000000 ms)
+  let t2 = addMs t1 1500 # PosixMillis (1001500 ms)
+  expect diffMs t1 t2 == 1500
+  # addMs returns PosixMillis; verify by round-tripping through diffMs (returns plain Int)
+  expect diffMs t1 (addMs t1 500) == 500
+}

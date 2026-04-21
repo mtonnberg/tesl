@@ -1,0 +1,174 @@
+#lang tesl
+module ForAllSetLesson exposing [run, doublePositive, mapAndCount]
+
+# ─────────────────────────────────────────────
+# ForAll on sets — same semantics as List ForAll
+# ─────────────────────────────────────────────
+# `Set T::: ForAll P` is a compile-time annotation on Set-returning functions.
+# It says: "every element of this set satisfies proof predicate P".
+#
+# TWO ways to produce a ForAll-annotated set:
+#
+#   1. `Set.filterCheck(checkFn, s)`
+#      → keeps only elements that pass checkFn
+#      → result: Set T::: ForAll (P_of_checkFn)
+#
+#   2. `Set.allCheck(checkFn, s)` — validates ALL elements at once
+#      → returns Maybe: Nothing if any fail, Something set if all pass
+#      → result: Maybe (Set T::: ForAll (P_of_checkFn))
+#
+# ZERO runtime overhead — the ForAll annotation is stripped at compile time.
+# At runtime, the value is a plain Racket set.
+
+# ─────────────────────────────────────────────
+# List.map AND ForAll proofs
+# ─────────────────────────────────────────────
+# When you map over a `List T ::: ForAll P`, each element carries the proof P.
+# To apply a proof-requiring function to each element, wrap it in an inline lambda
+# that carries the proof annotation on its parameter.
+#
+# The ONLY supported form:
+#
+#   Inline lambda with `fn(x: T ::: P x) -> ...` syntax:
+#     fn mapAll(xs: List Int ::: ForAll (IsPositive) xs) -> List Int =
+#       List.map (fn(n: Int ::: IsPositive n) -> n * 2) xs
+#
+# You CANNOT pass a named function that requires a proof directly to List.map:
+#
+#   fn requiresProof(n: Int ::: IsPositive n) -> Int = n * 2
+#   fn mapAll(xs: List Int ::: ForAll (IsPositive) xs) -> List Int =
+#     List.map requiresProof xs   -- REJECTED: requiresProof needs proof annotation
+#
+# The lambda wrapper is required because List.map is a plain higher-order function
+# that does not inspect ForAll proofs. The inline lambda's `fn(n: Int ::: IsPositive n)`
+# annotation tells the compiler to thread the per-element proof from the ForAll guarantee.
+#
+# The result is a plain `List Int` — the output type doesn't carry ForAll
+# because the mapping function produces a new value not covered by the old proof.
+# Use List.filterCheck on the result if you need a new ForAll annotation.
+
+import Tesl.Prelude exposing [Int, List]
+import Tesl.List exposing [List.map, List.filterCheck, List.length]
+import Tesl.Set exposing [
+  Set,
+  Set.fromList,
+  Set.size,
+  Set.filterCheck,
+  Set.allCheck,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+
+fact IsPositive (n: Int)
+
+check isPositive(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+fact IsLargerThan20 (n: Int)
+
+check isLargerThan20(n: Int) -> n: Int ::: IsLargerThan20 n =
+  if n > 20 then
+    ok n ::: IsLargerThan20 n
+  else
+    fail 400 "not above 20"
+
+fact LessThan200 (n: Int)
+
+check isLessThan200(n: Int) -> n: Int ::: LessThan200 n =
+  if n < 200 then
+    ok n ::: LessThan200 n
+  else
+    fail 400 "not below 200"
+
+# ─── List.map with a proof-requiring function ─────────────────────────────────
+# A named function that requires IsPositive on its input.
+# It cannot be passed directly as a List.map callback — wrap it in a proof-
+# annotated inline lambda so the compiler can thread the proof through.
+
+fn doubleOne(n: Int ::: IsPositive n) -> Int = n * 2
+
+# The inline lambda `fn(n: Int ::: IsPositive n) -> ...` tells List.map
+# that each element must carry IsPositive — which is guaranteed by ForAll.
+fn doublePositive(xs: List Int ::: ForAll (IsPositive) xs) -> List Int =
+  List.map (fn(n: Int ::: IsPositive n) -> doubleOne n) xs
+
+# Same pattern — inline logic, no separate helper.
+fn mapDoubledInline(xs: List Int ::: ForAll (IsPositive) xs) -> List Int =
+  List.map (fn(n: Int ::: IsPositive n) -> n * 2) xs
+
+# Map then re-attach proof: if you need ForAll on the result, run filterCheck.
+fn mapAndReprove(xs: List Int ::: ForAll (IsPositive) xs) -> List Int ? ForAll (IsPositive) =
+  let doubled = doublePositive xs
+  List.filterCheck isPositive doubled
+
+fn mapAndCount(xs: List Int ::: ForAll (IsPositive) xs) -> Int =
+  let doubled = doublePositive xs
+  List.length doubled
+
+# ─── EXAMPLE 1: Set.filterCheck → ForAll (IsPositive) ────────────────────────
+# Like List.filterCheck but for sets. Returns a Set with only the passing elements.
+
+fn filterPositiveSet(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
+  Set.filterCheck isPositive s
+
+fn filterPositiveSetCombined(s: Set Int) -> Set Int ? ForAll (IsPositive && IsLargerThan20 && LessThan200) requires [] =
+  Set.filterCheck (isPositive && isLargerThan20 && isLessThan200) s
+
+# ─── EXAMPLE 2: Set.allCheck → Maybe (Set T::: ForAll P) ────────────────────
+# Validates every element at once.
+# Returns Nothing if any element fails; Something set if all pass.
+
+fn verifyAllPositive(s: Set Int) -> Maybe (s: Set Int ::: ForAll (IsPositive) s) requires [] =
+  Set.allCheck isPositive s
+
+fn verifyAllCombined(s: Set Int) -> Maybe (s: Set Int ::: ForAll (IsPositive && IsLargerThan20 && LessThan200) s) requires [] =
+  Set.allCheck (isPositive && isLargerThan20 && isLessThan200) s
+
+# ─── EXAMPLE 3: Consuming a ForAll-annotated set ─────────────────────────────
+# A function that requires every element to be positive:
+
+fn countPositive(s: Set Int ::: ForAll (IsPositive) s) -> Int requires [] =
+  Set.size s
+
+# ─── EXAMPLE 4: end-to-end — filter then consume ─────────────────────────────
+
+fn run() -> Int requires [] =
+  let filtered: Set Int ::: ForAll IsPositive filtered = Set.filterCheck isPositive (Set.fromList [1, 2, 3, -1, -2])
+  countPositive filtered
+
+# ─── Tests ────────────────────────────────────────────────────────────────────
+
+test "List.map with proof-requiring named function (via lambda wrapper)" {
+  let src: List Int ::: ForAll IsPositive src = List.filterCheck isPositive [1, 2, 3, -1]
+  let doubled = doublePositive src
+  expect List.length doubled == 3
+}
+
+test "List.map with inline proof-annotated lambda" {
+  let src: List Int ::: ForAll IsPositive src = List.filterCheck isPositive [5, 10, 15]
+  let doubled = mapDoubledInline src
+  expect List.length doubled == 3
+}
+
+test "mapAndReprove re-attaches proof after map" {
+  let src: List Int ::: ForAll IsPositive src = List.filterCheck isPositive [1, 2, 3]
+  let result = mapAndReprove src
+  expect List.length result == 3
+}
+
+test "mapAndCount counts correctly" {
+  let src: List Int ::: ForAll IsPositive src = List.filterCheck isPositive [10, 20, 30]
+  expect mapAndCount src == 3
+}
+
+test "Set.filterCheck produces ForAll annotated set" {
+  let s = Set.fromList [1, 2, -1, 3, -2]
+  let pos = filterPositiveSet s
+  expect Set.size pos == 3
+}
+
+test "run end-to-end" {
+  expect run () == 3
+}

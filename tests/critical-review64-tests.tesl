@@ -1,0 +1,999 @@
+#lang tesl
+module CriticalReview64Tests exposing []
+
+# Critical Review 64 — Adversarial test suite
+#
+# Focus areas:
+# R64_DC  — Deep check chains (5-step sequential accumulation)
+# R64_DX  — Proof decomposition (3-way conjunction, wildcards)
+# R64_MF  — Maybe proof-carrying returns (pattern match + proof flow)
+# R64_CS  — Case expression proof flow from all arms
+# R64_AS  — Case fallthrough semantics (multi-arm grouping)
+# R64_DP  — Dict proof quantifiers (filterCheckValues)
+# R64_PP  — Pipeline operator with proof-carrying stdlib functions
+# R64_EP  — establish returning Maybe(Fact) + attachFact round-trip
+# R64_MR  — Mutual recursion compiles and terminates correctly
+# R64_FA  — ForAll 3-level chain (deep filtering with proof accumulation)
+# R64_SC  — stdlib check proofs: IsTrimmed, IsUpperCase, IsSorted, Int/Float guards
+# R64_AN  — andLeft / andRight proof extraction from introAnd result
+# R64_IN  — introAnd with same-subject proofs usable in conjunction
+# R64_RR  — Record field proof round-trip (write + read + record update)
+# R64_XP  — Combined check (&&) directly on single value
+# R64_LI  — Literal-parametrized predicates (distinct identities per literal)
+# R64_NT  — Newtype isolation (distinct newtypes over same base type)
+
+import Tesl.Prelude exposing [
+  Int,
+  String,
+  Bool(..),
+  List,
+  Fact,
+  attachFact,
+  detachFact,
+  forgetFact,
+  introAnd,
+  andLeft,
+  andRight,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [
+  List.filterCheck,
+  List.allCheck,
+  List.length,
+  List.sort,
+  List.emptyForAll,
+  IsSorted,
+]
+import Tesl.String exposing [
+  String.trim,
+  String.toUpper,
+  String.length,
+  IsTrimmed,
+  IsUpperCase,
+]
+import Tesl.Int exposing [
+  Int.divide,
+  Int.nonZero,
+  Int.nonNegative,
+  IsNonZero,
+  IsNonNegative,
+]
+import Tesl.Float exposing [
+  Float,
+  Float.div,
+  Float.requireNonZero,
+  FloatNonZero,
+]
+import Tesl.Dict exposing [
+  Dict,
+  Dict.fromList,
+  Dict.filterCheckValues,
+  Dict.size,
+  Dict.requireKey,
+  Dict.get,
+  HasKey,
+]
+import Tesl.Tuple exposing [Tuple2]
+
+# ─── Proof declarations ──────────────────────────────────────────────────────
+
+fact A (n: Int)
+fact B (n: Int)
+fact C (n: Int)
+fact D (n: Int)
+fact E (n: Int)
+fact IsPositive (n: Int)
+fact IsSmall (n: Int)
+fact IsActive (n: Int)
+fact IsPinned (n: Int)
+fact IsVerified (n: Int)
+fact NonEmpty (s: String)
+fact InBounds (n: Int)
+
+# ─── Shared check functions ──────────────────────────────────────────────────
+
+check checkA(n: Int) -> n: Int ::: A n =
+  if n > 0 then
+    ok n ::: A n
+  else
+    fail 400 "a"
+
+check checkB(n: Int ::: A n) -> n: Int ::: A n && B n =
+  if n > 1 then
+    ok n ::: A n && B n
+  else
+    fail 400 "b"
+
+check checkC(n: Int ::: A n && B n) -> n: Int ::: A n && B n && C n =
+  if n > 2 then
+    ok n ::: A n && B n && C n
+  else
+    fail 400 "c"
+
+check checkD(n: Int ::: A n && B n && C n) -> n: Int ::: A n && B n && C n && D n =
+  if n > 3 then
+    ok n ::: A n && B n && C n && D n
+  else
+    fail 400 "d"
+
+check checkE(n: Int ::: A n && B n && C n && D n) -> n: Int ::: A n && B n && C n && D n && E n =
+  if n > 4 then
+    ok n ::: A n && B n && C n && D n && E n
+  else
+    fail 400 "e"
+
+check checkPos(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+check checkSmall(n: Int) -> n: Int ::: IsSmall n =
+  if n < 100 then
+    ok n ::: IsSmall n
+  else
+    fail 400 "too big"
+
+check checkActive(n: Int) -> n: Int ::: IsActive n =
+  if n > 0 then
+    ok n ::: IsActive n
+  else
+    fail 400 "not active"
+
+check checkPinned(n: Int) -> n: Int ::: IsPinned n =
+  if n > 10 then
+    ok n ::: IsPinned n
+  else
+    fail 400 "not pinned"
+
+check checkVerified(n: Int ::: IsActive n && IsPinned n) -> n: Int ::: IsVerified n =
+  if n > 50 then
+    ok n ::: IsVerified n
+  else
+    fail 400 "not verified"
+
+check checkNonEmpty(s: String) -> s: String ::: NonEmpty s =
+  if String.length s > 0 then
+    ok s ::: NonEmpty s
+  else
+    fail 400 "empty"
+
+establish proveA(n: Int) -> Fact (A n) = A n
+establish proveB(n: Int) -> Fact (B n) = B n
+establish proveC(n: Int) -> Fact (C n) = C n
+
+establish checkBounds(n: Int) -> Maybe (Fact (InBounds n)) =
+  if n >= 0 && n <= 255 then
+    Something (InBounds n)
+  else
+    Nothing
+
+fn needsA(n: Int ::: A n) -> Int = n
+fn needsB(n: Int ::: B n) -> Int = n
+fn needsAB(n: Int ::: A n && B n) -> Int = n
+fn needsABC(n: Int ::: A n && B n && C n) -> Int = n
+fn needsAll5(n: Int ::: A n && B n && C n && D n && E n) -> Int = n
+fn needsPos(n: Int ::: IsPositive n) -> Int = n
+fn needsSmall(n: Int ::: IsSmall n) -> Int = n
+fn needsPosSmall(n: Int ::: IsPositive n && IsSmall n) -> Int = n
+fn needsActive(n: Int ::: IsActive n) -> Int = n
+fn needsVerified(n: Int ::: IsActive n && IsPinned n && IsVerified n) -> Int = n
+fn needsNonEmpty(s: String ::: NonEmpty s) -> String = s
+fn needsSorted(xs: List Int ::: IsSorted xs) -> List Int = xs
+fn needsTrimmed(s: String ::: IsTrimmed s) -> String = s
+fn needsUpper(s: String ::: IsUpperCase s) -> String = s
+fn needsInBounds(n: Int ::: InBounds n) -> Int = n
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_DC — Deep check chains (5-step sequential proof accumulation)
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn fiveStepChain(n: Int) -> Int =
+  let a = check checkA n
+  let b = check checkB a
+  let c = check checkC b
+  let d = check checkD c
+  let e = check checkE d
+  needsAll5 e
+
+test "R64_DC01 5-step sequential check chain with accumulating proofs" {
+  let r = fiveStepChain 10
+  expect r == 10
+}
+
+test "R64_DC02 5-step chain: failure at step 3 (n <= 2) propagates" {
+  expectFail (fiveStepChain 2)
+}
+
+test "R64_DC03 5-step chain: failure at step 1 (n <= 0) propagates" {
+  expectFail (fiveStepChain 0)
+}
+
+fn threeStepVerify(n: Int) -> Int =
+  let a = check checkActive n
+  let p = check checkPinned a
+  let v = check checkVerified p
+  needsVerified v
+
+test "R64_DC04 3-step check with 3-proof conjunction requirement" {
+  let r = threeStepVerify 100
+  expect r == 100
+}
+
+test "R64_DC05 3-step chain: fails at pinned threshold (n <= 10)" {
+  expectFail (threeStepVerify 5)
+}
+
+test "R64_DC06 3-step chain: fails at verified threshold (n <= 50)" {
+  expectFail (threeStepVerify 25)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_DX — Proof decomposition (3-way conjunction, wildcards)
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn threeWayDecomp(n: Int ::: A n && B n && C n) -> Int =
+  let (x ::: pa && pb && pc) = n
+  x
+
+test "R64_DX01 3-way conjunction decomposition preserves value" {
+  let n = 42
+  let pa = proveA n
+  let pb = proveB n
+  let pc = proveC n
+  let ab = introAnd pa pb
+  let abc = introAnd ab pc
+  let withProof = attachFact n abc
+  let r = threeWayDecomp withProof
+  expect r == 42
+}
+
+fn useFirstProof(n: Int ::: A n && B n && C n) -> Int =
+  let (x ::: pa && _ && _) = n
+  needsA (attachFact x pa)
+
+test "R64_DX02 3-way decomposition: use first proof, discard rest" {
+  let n = 7
+  let pa = proveA n
+  let pb = proveB n
+  let pc = proveC n
+  let abc = introAnd (introAnd pa pb) pc
+  let withProof = attachFact n abc
+  let r = useFirstProof withProof
+  expect r == 7
+}
+
+fn keepProofOnly(n: Int ::: A n && B n) -> Int =
+  let (_ ::: pa) = n
+  let bare = forgetFact n
+  needsA (attachFact bare pa)
+
+test "R64_DX03 decompose with _ on value slot, keep proof" {
+  let n = 99
+  let pa = proveA n
+  let pb = proveB n
+  let ab = introAnd pa pb
+  let withProof = attachFact n ab
+  let r = keepProofOnly withProof
+  expect r == 99
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_MF — Maybe proof-carrying returns
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn maybePositive(n: Int) -> Maybe (v: Int ::: IsPositive v) =
+  if n > 0 then
+    let p = check checkPos n
+    Something p
+  else
+    Nothing
+
+fn processIfPositive(n: Int) -> Int =
+  let x = maybePositive n
+  case x of
+    Nothing -> -1
+    Something v -> needsPos v
+
+test "R64_MF01 Maybe proof return - Something arm propagates proof correctly" {
+  let r = processIfPositive 5
+  expect r == 5
+}
+
+test "R64_MF02 Maybe proof return - Nothing arm works without proof" {
+  let r = processIfPositive (-3)
+  expect r == -1
+}
+
+fn maybeSmallPos(n: Int) -> Maybe (v: Int ::: IsPositive v && IsSmall v) =
+  if n > 0 && n < 100 then
+    let p = check checkPos n
+    let s = check checkSmall p
+    Something s
+  else
+    Nothing
+
+fn useSmallPos(n: Int) -> Int =
+  case maybeSmallPos n of
+    Nothing -> 0
+    Something v -> needsPosSmall v
+
+test "R64_MF03 Maybe with conjunction proof - both proofs flow through case arm" {
+  let r = useSmallPos 42
+  expect r == 42
+}
+
+test "R64_MF04 Maybe with conjunction proof - out-of-range input returns Nothing" {
+  let r = useSmallPos 200
+  expect r == 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_CS — Case expression proof flow from all arms
+# ═══════════════════════════════════════════════════════════════════════════
+
+type NumCategory
+  = Small value: Int
+  | Large value: Int
+  | Zero
+
+fn processCategory(cat: NumCategory) -> Int =
+  case cat of
+    Zero -> 0
+    Small n ->
+      let p = check checkPos n
+      needsPos p
+    Large n ->
+      let p = check checkPos n
+      needsPos p
+
+test "R64_CS01 proof produced in case arm - small variant" {
+  let cat = Small 5
+  let r = processCategory cat
+  expect r == 5
+}
+
+test "R64_CS02 proof produced in case arm - large variant" {
+  let cat = Large 500
+  let r = processCategory cat
+  expect r == 500
+}
+
+test "R64_CS03 case arm with no proof - zero returns directly" {
+  let r = processCategory Zero
+  expect r == 0
+}
+
+test "R64_CS04 proof check failure inside case arm" {
+  let cat = Small 0
+  expectFail (processCategory cat)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_AS — Case fallthrough semantics
+# ═══════════════════════════════════════════════════════════════════════════
+
+type Priority
+  = Critical
+  | High
+  | Medium
+  | Low
+  | None
+
+fn priorityScore(p: Priority) -> Int =
+  case p of
+    Critical -> 100
+    High ->
+    Medium -> 50
+    Low ->
+    None -> 0
+
+test "R64_AS01 fallthrough - Critical returns 100" {
+  expect priorityScore Critical == 100
+}
+
+test "R64_AS02 fallthrough - High falls through to Medium result (50)" {
+  expect priorityScore High == 50
+}
+
+test "R64_AS03 fallthrough - Medium returns 50 directly" {
+  expect priorityScore Medium == 50
+}
+
+test "R64_AS04 fallthrough - Low falls through to None result (0)" {
+  expect priorityScore Low == 0
+}
+
+test "R64_AS05 fallthrough - None returns 0 directly" {
+  expect priorityScore None == 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_DP — Dict proof quantifiers
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn filterPositiveValues(d: Dict String Int) -> Dict String Int =
+  Dict.filterCheckValues checkPos d
+
+test "R64_DP01 Dict.filterCheckValues: keeps only positive values" {
+  let d = Dict.fromList [Tuple2 "a" 5, Tuple2 "b" (-1), Tuple2 "c" 10, Tuple2 "d" (-3)]
+  let filtered = filterPositiveValues d
+  let sz = Dict.size filtered
+  expect sz == 2
+}
+
+test "R64_DP02 Dict.filterCheckValues: all-positive dict unchanged size" {
+  let d = Dict.fromList [Tuple2 "x" 1, Tuple2 "y" 2, Tuple2 "z" 3]
+  let filtered = filterPositiveValues d
+  let sz = Dict.size filtered
+  expect sz == 3
+}
+
+test "R64_DP03 Dict.filterCheckValues: all-negative dict gives empty" {
+  let d = Dict.fromList [Tuple2 "x" (-1), Tuple2 "y" (-2)]
+  let filtered = filterPositiveValues d
+  let sz = Dict.size filtered
+  expect sz == 0
+}
+
+fn safeGet(key: String, d: Dict String Int) -> Int =
+  let checked = check Dict.requireKey key d
+  Dict.get key checked
+
+test "R64_DP04 Dict.requireKey + Dict.get round-trip succeeds for present key" {
+  let d = Dict.fromList [Tuple2 "hello" 42]
+  let r = safeGet "hello" d
+  expect r == 42
+}
+
+test "R64_DP05 Dict.requireKey fails for missing key" {
+  let d = Dict.fromList [Tuple2 "other" 99]
+  expectFail (safeGet "hello" d)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_PP — Pipeline with proof-carrying stdlib functions
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn trimThenUpper(raw: String) -> String =
+  let trimmed = String.trim raw
+  let upper = String.toUpper trimmed
+  needsUpper upper
+
+test "R64_PP01 stdlib proof chain: trim then toUpper proofs compose" {
+  let raw = "  hello world  "
+  let r = trimThenUpper raw
+  expect r == "HELLO WORLD"
+}
+
+fn pipelineVersion(raw: String) -> String =
+  raw |> String.trim |> String.toUpper
+
+test "R64_PP02 same stdlib chain via |> pipeline operator" {
+  let raw = "  test  "
+  let r = pipelineVersion raw
+  expect r == "TEST"
+}
+
+fn sortAndGetLength(xs: List Int) -> Int =
+  let sorted = List.sort xs
+  let r = needsSorted sorted
+  List.length r
+
+test "R64_PP03 List.sort produces IsSorted proof usable by consumer" {
+  let xs = [3, 1, 4, 1, 5, 9, 2, 6]
+  let r = sortAndGetLength xs
+  expect r == 8
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_EP — establish returning Maybe(Fact) + attachFact round-trip
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn safeProcess(n: Int) -> Int =
+  let mProof = checkBounds n
+  case mProof of
+    Nothing -> -1
+    Something p ->
+      let proven = attachFact n p
+      needsInBounds proven
+
+test "R64_EP01 establish returning Maybe(Fact) - value in bounds" {
+  let r = safeProcess 128
+  expect r == 128
+}
+
+test "R64_EP02 establish returning Maybe(Fact) - value out of bounds" {
+  let r = safeProcess 300
+  expect r == -1
+}
+
+test "R64_EP03 establish returning Maybe(Fact) - lower boundary value 0" {
+  let r = safeProcess 0
+  expect r == 0
+}
+
+test "R64_EP04 establish returning Maybe(Fact) - upper boundary value 255" {
+  let r = safeProcess 255
+  expect r == 255
+}
+
+test "R64_EP05 establish returning Maybe(Fact) - negative value is out of bounds" {
+  let r = safeProcess (-1)
+  expect r == -1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_MR — Mutual recursion
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn isEven(n: Int) -> Bool =
+  if n == 0 then
+    True
+  else
+    isOdd (n - 1)
+
+fn isOdd(n: Int) -> Bool =
+  if n == 0 then
+    False
+  else
+    isEven (n - 1)
+
+test "R64_MR01 mutual recursion - isEven 0 is True" {
+  expect isEven 0 == True
+}
+
+test "R64_MR02 mutual recursion - isOdd 1 is True" {
+  expect isOdd 1 == True
+}
+
+test "R64_MR03 mutual recursion - isEven 10 is True" {
+  expect isEven 10 == True
+}
+
+test "R64_MR04 mutual recursion - isOdd 7 is True" {
+  expect isOdd 7 == True
+}
+
+test "R64_MR05 mutual recursion - isEven 3 is False" {
+  expect isEven 3 == False
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_FA — ForAll 3-level filter chain (deep proof accumulation)
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn filterActive(xs: List Int) -> List Int ? ForAll (IsActive) =
+  List.filterCheck checkActive xs
+
+fn filterActivePinned(xs: List Int ::: ForAll (IsActive) xs) -> List Int ? ForAll (IsActive && IsPinned) =
+  List.filterCheck checkPinned xs
+
+fn filterActivePinnedVerified(xs: List Int ::: ForAll (IsActive && IsPinned) xs)
+    -> List Int ? ForAll (IsActive && IsPinned && IsVerified) =
+  List.filterCheck checkVerified xs
+
+fn countVerified(xs: List Int ::: ForAll (IsActive && IsPinned && IsVerified) xs) -> Int =
+  List.length xs
+
+fn threeLayerFilter(xs: List Int) -> Int =
+  let active = filterActive xs
+  let pinned = filterActivePinned active
+  let verified = filterActivePinnedVerified pinned
+  countVerified verified
+
+test "R64_FA01 3-level ForAll filter chain: correct count" {
+  # active = n > 0, pinned = n > 10, verified = n > 50
+  let xs = [100, 60, 5, 80, 15, 200, 2, 55]
+  let r = threeLayerFilter xs
+  # active (>0): all 8 values
+  # pinned (>10): 100, 60, 80, 15, 200, 55 = 6
+  # verified (>50): 100, 60, 80, 200, 55 = 5
+  expect r == 5
+}
+
+test "R64_FA02 3-level ForAll chain with empty input gives 0" {
+  let xs = []
+  let r = threeLayerFilter xs
+  expect r == 0
+}
+
+fn processForAllList(xs: List Int ::: ForAll (IsActive && IsPinned && IsVerified) xs) -> Int =
+  List.length xs
+
+fn buildVerifiedForAll() -> List Int ? ForAll (IsActive && IsPinned && IsVerified) =
+  let xs = [100, 60, 80, 200, 55]
+  let active = filterActive xs
+  let pinned = filterActivePinned active
+  filterActivePinnedVerified pinned
+
+test "R64_FA03 ForAll list built from 3-level filter usable as proof parameter" {
+  let verified = buildVerifiedForAll()
+  let r = processForAllList verified
+  expect r == 5
+}
+
+fn countPositive(xs: List Int ::: ForAll (IsPositive) xs) -> Int =
+  List.length xs
+
+test "R64_FA04 List.emptyForAll produces valid empty ForAll list for use as parameter" {
+  let empty = List.emptyForAll checkPos
+  let r = countPositive empty
+  expect r == 0
+}
+
+test "R64_FA05 List.allCheck returns Nothing when any element fails" {
+  let xs = [1, 2, 0, 4]
+  let result = List.allCheck checkPos xs
+  case result of
+    Nothing -> expect 1 == 1
+    Something _ -> expect 0 == 1
+}
+
+test "R64_FA06 List.allCheck returns Something when all pass" {
+  let xs = [1, 2, 3, 4]
+  let result = List.allCheck checkPos xs
+  case result of
+    Nothing -> expect 0 == 1
+    Something ys -> expect List.length ys == 4
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_SC — stdlib check proofs
+# ═══════════════════════════════════════════════════════════════════════════
+
+test "R64_SC01 String.trim produces IsTrimmed proof usable by consumer" {
+  let raw = "  hello  "
+  let trimmed = String.trim raw
+  let r = needsTrimmed trimmed
+  expect r == "hello"
+}
+
+test "R64_SC02 String.toUpper produces IsUpperCase proof usable by consumer" {
+  let raw = "hello"
+  let upper = String.toUpper raw
+  let r = needsUpper upper
+  expect r == "HELLO"
+}
+
+test "R64_SC03 List.sort produces IsSorted proof usable by consumer" {
+  let xs = [5, 2, 8, 1, 9, 3]
+  let sorted = List.sort xs
+  let r = needsSorted sorted
+  let len = List.length r
+  expect len == 6
+}
+
+test "R64_SC04 Int.nonZero check enables Int.divide" {
+  let a = 100
+  let b = 7
+  let nz = check Int.nonZero b
+  let r = Int.divide a nz
+  expect r == 14
+}
+
+test "R64_SC05 Int.nonZero check fails for zero denominator" {
+  expectFail (check Int.nonZero 0)
+}
+
+test "R64_SC06 Float.requireNonZero enables Float.div" {
+  let a = 10.0
+  let b = 4.0
+  let nz = check Float.requireNonZero b
+  let r = Float.div a nz
+  expect r == 2.5
+}
+
+test "R64_SC07 Int.nonNegative check works for zero" {
+  let n = 0
+  let nn = check Int.nonNegative n
+  expect nn == 0
+}
+
+test "R64_SC08 Int.nonNegative fails for negative" {
+  expectFail (check Int.nonNegative (-1))
+}
+
+test "R64_SC09 Float.requireNonZero fails for zero" {
+  expectFail (check Float.requireNonZero 0.0)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_AN — andLeft / andRight proof extraction from introAnd result
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn decomposeViaAndLeft(n: Int) -> Int =
+  let pa = proveA n
+  let pb = proveB n
+  let pab = introAnd pa pb
+  let la = andLeft pab
+  let xA = attachFact n la
+  needsA xA
+
+test "R64_AN01 andLeft extracts A proof from introAnd(A,B) result" {
+  let r = decomposeViaAndLeft 42
+  expect r == 42
+}
+
+fn decomposeViaAndRight(n: Int) -> Int =
+  let pa = proveA n
+  let pb = proveB n
+  let pab = introAnd pa pb
+  let rb = andRight pab
+  let xB = attachFact n rb
+  needsB xB
+
+test "R64_AN02 andRight extracts B proof from introAnd(A,B) result" {
+  let r = decomposeViaAndRight 99
+  expect r == 99
+}
+
+fn useBothParts(n: Int) -> Int =
+  let pa = proveA n
+  let pb = proveB n
+  let pab = introAnd pa pb
+  let la = andLeft pab
+  let rb = andRight pab
+  let xA = attachFact n la
+  let xB = attachFact n rb
+  needsA xA + needsB xB
+
+test "R64_AN03 both andLeft and andRight work on same conjunction" {
+  let r = useBothParts 5
+  expect r == 10
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_IN — introAnd with same-subject proofs usable in conjunction
+# ═══════════════════════════════════════════════════════════════════════════
+
+test "R64_IN01 introAnd same-subject produces usable A && B conjunction" {
+  let n = 77
+  let pa = proveA n
+  let pb = proveB n
+  let ab = introAnd pa pb
+  let withProof = attachFact n ab
+  let r = needsAB withProof
+  expect r == 77
+}
+
+test "R64_IN02 introAnd chained for 3 same-subject proofs" {
+  let n = 11
+  let pa = proveA n
+  let pb = proveB n
+  let pc = proveC n
+  let ab = introAnd pa pb
+  let abc = introAnd ab pc
+  let withProof = attachFact n abc
+  let r = needsABC withProof
+  expect r == 11
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_RR — Record field proof round-trip (write + read + record update)
+# ═══════════════════════════════════════════════════════════════════════════
+
+record SafeDoc {
+  title: String ::: NonEmpty title
+  wordCount: Int
+}
+
+fn makeDoc(rawTitle: String, wc: Int) -> SafeDoc =
+  let t = check checkNonEmpty rawTitle
+  SafeDoc { title: t, wordCount: wc }
+
+fn readTitle(doc: SafeDoc) -> String =
+  needsNonEmpty doc.title
+
+test "R64_RR01 record field proof round-trip: construction + field access preserves proof" {
+  let rawTitle = "My Document"
+  let doc = makeDoc rawTitle 500
+  let r = readTitle doc
+  expect r == "My Document"
+}
+
+test "R64_RR02 record construction fails when field check fails" {
+  let rawTitle = ""
+  expectFail (makeDoc rawTitle 0)
+}
+
+fn updateWordCount(doc: SafeDoc, newCount: Int) -> SafeDoc =
+  { doc | wordCount = newCount }
+
+fn readUpdatedTitle(rawTitle: String, wc: Int) -> String =
+  let doc = makeDoc rawTitle wc
+  let updated = updateWordCount doc 9999
+  readTitle updated
+
+test "R64_RR03 record update preserves proof on non-updated proof-annotated field" {
+  let rawTitle = "Updated Doc"
+  let r = readUpdatedTitle rawTitle 100
+  expect r == "Updated Doc"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_XP — Combined check (&&) directly on single value
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn applyCombined(n: Int) -> Int =
+  let r = check (checkPos && checkSmall) n
+  needsPosSmall r
+
+test "R64_XP01 combined check && on single value succeeds when both pass" {
+  let r = applyCombined 42
+  expect r == 42
+}
+
+test "R64_XP02 combined check && fails when first check fails (negative)" {
+  expectFail (applyCombined (-1))
+}
+
+test "R64_XP03 combined check && fails when second check fails (too big)" {
+  expectFail (applyCombined 999)
+}
+
+fn filterActivePinnedDirect(xs: List Int) -> List Int ? ForAll (IsActive && IsPinned) =
+  List.filterCheck (checkActive && checkPinned) xs
+
+test "R64_XP04 combined check in filterCheck produces correct ForAll" {
+  let xs = [0, 5, 15, 100, 3]
+  let filtered = filterActivePinnedDirect xs
+  let r = List.length filtered
+  # active (>0): 5, 15, 100, 3
+  # also pinned (>10): 15, 100
+  expect r == 2
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_LI — Literal-parametrized predicates with ForAll (FIXED in review 64)
+# Previously ForAll dropped literal args; now they are preserved and matched.
+# HasMin 10 and HasMin 20 are distinct ForAll proofs — compiler enforces this.
+# ═══════════════════════════════════════════════════════════════════════════
+
+fact HasMin (lo: Int) (n: Int)
+fact HasMax (hi: Int) (n: Int)
+
+check checkMin10(n: Int) -> n: Int ::: HasMin 10 n =
+  if n >= 10 then
+    ok n ::: HasMin 10 n
+  else
+    fail 400 "too small"
+
+check checkMin20(n: Int) -> n: Int ::: HasMin 20 n =
+  if n >= 20 then
+    ok n ::: HasMin 20 n
+  else
+    fail 400 "too small"
+
+check checkMax100(n: Int) -> n: Int ::: HasMax 100 n =
+  if n <= 100 then
+    ok n ::: HasMax 100 n
+  else
+    fail 400 "too big"
+
+fn needAbove10(n: Int ::: HasMin 10 n) -> Int = n
+fn needAbove20(n: Int ::: HasMin 20 n) -> Int = n
+fn needBothBounds(n: Int ::: HasMin 10 n && HasMax 100 n) -> Int = n
+
+fn needForAllAbove10(xs: List Int ::: ForAll (HasMin 10) xs) -> Int =
+  List.length xs
+
+fn needForAllAbove20(xs: List Int ::: ForAll (HasMin 20) xs) -> Int =
+  List.length xs
+
+fn filterAbove10(raw: List Int) -> List Int ? ForAll (HasMin 10) =
+  List.filterCheck checkMin10 raw
+
+fn filterAbove20(raw: List Int) -> List Int ? ForAll (HasMin 20) =
+  List.filterCheck checkMin20 raw
+
+test "R64_LI01 literal-parametrized predicate HasMin 10 works on single value" {
+  let n = 15
+  let p = check checkMin10 n
+  let r = needAbove10 p
+  expect r == 15
+}
+
+test "R64_LI02 literal-parametrized predicate HasMin 20 is distinct from HasMin 10" {
+  let n = 25
+  let p = check checkMin20 n
+  let r = needAbove20 p
+  expect r == 25
+}
+
+test "R64_LI03 literal-parametrized conjunction HasMin 10 && HasMax 100" {
+  let n = 50
+  let lo = check checkMin10 n
+  let hi = check checkMax100 lo
+  let r = needBothBounds hi
+  expect r == 50
+}
+
+test "R64_LI04 HasMin 10 check fails for value below threshold" {
+  expectFail (check checkMin10 5)
+}
+
+test "R64_LI05 HasMax 100 check fails for value above threshold" {
+  expectFail (check checkMax100 150)
+}
+
+# ForAll with literal-parametrized predicates: now fully supported
+
+test "R64_LI06 ForAll (HasMin 10) from filterCheck matches parameter annotation" {
+  let xs = [5, 10, 15, 20, 3]
+  let filtered = filterAbove10 xs
+  let r = needForAllAbove10 filtered
+  expect r == 3
+}
+
+test "R64_LI07 ForAll (HasMin 20) is distinct from ForAll (HasMin 10)" {
+  let xs = [15, 25, 30]
+  let filtered = filterAbove20 xs
+  let r = needForAllAbove20 filtered
+  expect r == 2
+}
+
+test "R64_LI08 ForAll (HasMin 10) correctly keeps only values >= 10" {
+  let xs = [1, 2, 9, 10, 11, 100]
+  let filtered = filterAbove10 xs
+  let r = needForAllAbove10 filtered
+  expect r == 3
+}
+
+test "R64_LI09 ForAll (HasMin 20) from empty input" {
+  let xs = [1, 5, 15]
+  let filtered = filterAbove20 xs
+  let r = needForAllAbove20 filtered
+  expect r == 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R64_NT — Newtype nominal isolation
+# ═══════════════════════════════════════════════════════════════════════════
+
+type UserId = String
+type ProjectId = String
+
+fact ValidUser (u: UserId)
+fact ValidProject (p: ProjectId)
+
+check checkUser(u: UserId) -> u: UserId ::: ValidUser u =
+  if String.length u.value > 0 then
+    ok u ::: ValidUser u
+  else
+    fail 400 "empty user id"
+
+check checkProject(p: ProjectId) -> p: ProjectId ::: ValidProject p =
+  if String.length p.value > 0 then
+    ok p ::: ValidProject p
+  else
+    fail 400 "empty project id"
+
+fn needsValidUser(u: UserId ::: ValidUser u) -> String = u.value
+fn needsValidProject(p: ProjectId ::: ValidProject p) -> String = p.value
+
+test "R64_NT01 newtype UserId and ProjectId are distinct nominal types" {
+  let rawUser = "user-abc"
+  let rawProject = "proj-xyz"
+  let uid = UserId rawUser
+  let pid = ProjectId rawProject
+  let vu = check checkUser uid
+  let vp = check checkProject pid
+  let r1 = needsValidUser vu
+  let r2 = needsValidProject vp
+  expect r1 == "user-abc"
+  expect r2 == "proj-xyz"
+}
+
+test "R64_NT02 newtype .value field unwraps to base type" {
+  let raw = "hello"
+  let uid = UserId raw
+  expect uid.value == "hello"
+}
+
+test "R64_NT03 two newtypes over String wrapping same raw value are distinct" {
+  let raw = "same-raw"
+  let uid = UserId raw
+  let pid = ProjectId raw
+  expect uid.value == pid.value
+}

@@ -1,0 +1,19 @@
+#lang tesl
+module Sandbox3 exposing [doSomething3, doSomething2, ARecord, ARecord2]
+import Tesl.Prelude exposing [Int, Fact, String]
+import Sandbox exposing [dummy_add, ValidPort, IsPositive]
+
+record ARecord {
+  title: String
+}
+
+record ARecord2 {
+  title: String
+  foo3: Int
+}
+
+fn doSomething3(x: Int ::: ValidPort x) -> Int =
+  dummy_add x x
+
+fn doSomething2(x: Int ::: ValidPort x && IsPositive x) -> Int =
+  x

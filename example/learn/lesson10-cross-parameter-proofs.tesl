@@ -1,0 +1,130 @@
+#lang tesl
+module CrossParam exposing [ValidRange, checkValidRange, clampToRange, safePair]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# A proof annotation on one parameter can mention ANOTHER parameter's name.
+# This is a "cross-parameter proof" — it expresses a relationship between values.
+#
+# Example:
+#   fn clampToRange(lo: Int::: ValidRange lo hi, hi: Int, value: Int) -> Int =
+#   The proof on "lo" says: "lo and hi together satisfy ValidRange".
+#   The caller MUST prove this relationship before calling the function.
+#
+# Producing cross-parameter proofs:
+#   check checkValidRange(lo: Int, hi: Int) -> lo: Int::: ValidRange lo hi =
+#   The return type references BOTH lo and hi even though only lo is returned.
+#   This encodes "lo was checked relative to hi" as a proof fact.
+
+import Tesl.Prelude exposing [Int]
+
+# ValidRange lo hi: the proposition that lo < hi.
+# When this proof is on lo, it means lo was validated as a valid lower bound for hi.
+fact ValidRange (lo: Int, hi: Int)
+
+check checkValidRange(lo: Int, hi: Int) -> lo: Int ::: ValidRange lo hi =
+  if lo < hi then
+    ok lo ::: ValidRange lo hi # attach proof: lo is a valid lower bound for hi
+  else
+    fail 400 "lo must be less than hi"
+
+# lo is annotated with "ValidRange lo hi" — a cross-parameter proof.
+# This means: whoever calls clampToRange must provide a lo value that was already
+# proven to be a valid lower bound for the hi value passed alongside it.
+# This prevents calling clamp with a range where lo >= hi.
+fn clampToRange(lo: Int ::: ValidRange lo hi, hi: Int, value: Int) -> Int =
+  if value < lo then
+    lo # clamp to lower bound
+  else
+    if value > hi then
+      hi # clamp to upper bound
+    else
+      value # already in range
+
+# A function that validates both bounds and then clamps.
+fn safePair(rawLo: Int, rawHi: Int, value: Int) -> Int =
+  let lo = check checkValidRange rawLo rawHi # lo now carries ValidRange lo hi proof
+  clampToRange lo rawHi value # safe: lo has the required cross-param proof
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Cross-parameter proofs express RELATIONSHIPS between values, not just facts about
+# individual values. "ValidRange lo hi" is not just about lo — it's about the
+# PAIR (lo, hi).
+#
+# Without cross-parameter proofs, you'd need to validate the relationship inside
+# clampToRange itself:
+#   if lo >= hi then fail 400 "bad range"
+#   ...
+# This means every call site carries runtime risk of the range being invalid.
+# And it can't be checked at compile time.
+#
+# With cross-parameter proofs, the compiler can verify at call sites:
+#   "does lo carry a ValidRange proof that mentions hi?"
+# If not, it's a compile error.
+#
+# "lo: Int::: ValidRange lo hi" in checkValidRange's return type is special:
+# the return type NAMES lo (the returned value) and the proof mentions BOTH lo and hi.
+# hi is the OTHER parameter — the compiler knows hi's hidden subject at the call site
+# and can check that the proof's hi-reference matches the actual hi argument.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Cross-parameter proofs are multi-subject GDP facts.
+# The runtime representation of "ValidRange lo hi" is:
+#   '(ValidRange <subject-of-lo> <subject-of-hi>)
+# where <subject-of-lo> and <subject-of-hi> are the hidden runtime symbols
+# for the respective bindings.
+#
+# At a call site like "clampToRange(myLo, myHi, myValue)":
+#   1. The compiler maps formal parameter names to actual argument subjects:
+#      lo → subject(myLo), hi → subject(myHi), value → subject(myValue)
+#   2. The required proof for lo is instantiated: ValidRange subject(myLo) subject(myHi)
+#   3. The compiler checks: does myLo carry the proof ValidRange subject(myLo) subject(myHi)?
+#   4. This checks that the proof was produced with exactly these two values together.
+#
+# Partial application is restricted:
+#   clampToRange(myLo)    -- cannot partially apply, because hi appears in lo's proof annotation
+#   If hi is not yet bound, the proof template cannot be instantiated.
+# The compiler detects this and rejects partial application that would leave
+# cross-parameter proof dependencies unresolved.
+#
+# The static checker performs this instantiation structurally.
+# When a proof fact is '(ValidRange A B) and the required fact (after instantiation)
+# is '(ValidRange X Y), the check passes if A==X and B==Y under the subject mapping.
+
+test "checkValidRange valid" {
+  let lo1 = 1
+  let hi1 = 10
+  let r1 = check checkValidRange lo1 hi1
+  let lo2 = -5
+  let hi2 = 5
+  let r2 = check checkValidRange lo2 hi2
+  let lo3 = 0
+  let hi3 = 1
+  let r3 = check checkValidRange lo3 hi3
+  expect r1 == 1
+  expect r2 == -5
+  expect r3 == 0
+}
+
+test "checkValidRange rejects equal/inverted" {
+  expectFail check checkValidRange 5 5
+  expectFail check checkValidRange 10 1
+}
+
+test "safePair clamps correctly" {
+  let r1 = safePair 0 10 5
+  expect r1 == 5
+  let r2 = safePair 0 10 -3
+  expect r2 == 0
+  let r3 = safePair 0 10 99
+  expect r3 == 10
+  let r4 = safePair 3 7 3
+  expect r4 == 3
+  let r5 = safePair 3 7 7
+  expect r5 == 7
+}

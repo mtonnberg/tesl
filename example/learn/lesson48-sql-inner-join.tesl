@@ -1,0 +1,199 @@
+#lang tesl
+module SqlInnerJoin exposing [
+  findOrderWithCustomer,
+  findOrdersByCustomerCountry,
+  cheapOrdersByCountry,
+  findOrderItemsByOrderId,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — innerJoin
+# ─────────────────────────────────────────────
+# innerJoin lets you query two entities together by matching a foreign key.
+#
+# Syntax:
+#   select p from Entity
+#   innerJoin OtherEntity on p.foreignKeyField OtherEntity.primaryKeyField
+#   where p.field == value
+#
+# The binder (p) comes from the primary entity. The joined entity is referenced
+# by name. Only rows that have a match in the joined entity are returned.
+#
+# Multiple joins: chain additional innerJoin lines.
+# Combine with where, order, limit as normal.
+#
+# Example with two entities:
+#   entity Order { id: String, customerId: String, amount: Int }
+#   entity Customer { id: String, name: String, country: String }
+#
+#   select o from Order
+#   innerJoin Customer on o.customerId Customer.id
+#   where o.amount > 100
+#
+# This is equivalent to SQL:
+#   SELECT o.* FROM orders o
+#   INNER JOIN customers c ON o.customer_id = c.id
+#   WHERE o.amount > 100
+#
+# Note: innerJoin is the only join type currently supported.
+# Note: The returned rows are of the primary entity type (Order in the example).
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.DB exposing [dbRead, dbWrite]
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — the inner join model
+# ─────────────────────────────────────────────
+# An innerJoin filters the primary entity's rows to those that have
+# a matching row in the joined entity. It is a standard SQL INNER JOIN.
+#
+# The join condition "on p.foreignKeyField OtherEntity.primaryKeyField"
+# specifies which field in the primary entity corresponds to which field
+# in the joined entity. The compiler validates both field names at compile time.
+#
+# Rows without a matching entry in the joined entity are excluded.
+# Use this for mandatory relationships (every order must have a customer).
+# For optional relationships (order may have no discount), use where + Maybe.
+#
+# innerJoin does NOT return fields from the joined entity — it acts purely
+# as a filter. The returned type is still the primary entity type.
+# To access joined entity fields, use a separate selectOne.
+
+# ─────────────────────────────────────────────
+# THEORY — relational algebra
+# ─────────────────────────────────────────────
+# INNER JOIN A ⨝ B on A.fk = B.pk is equivalent to:
+#   { a ∈ A | ∃ b ∈ B. a.fk = b.pk }
+#
+# The result has the cardinality of the matching rows in A.
+# The type system enforces that both field names exist in their respective
+# entities — mistyped field names are caught at compile time.
+
+# ─── Entities ─────────────────────────────────────────────────────────────────
+
+entity Customer table "customers" primaryKey id {
+  id: String
+  name: String
+  country: String
+}
+
+entity Order table "orders" primaryKey id {
+  id: String
+  customerId: String
+  amount: Int
+  status: String
+}
+
+entity OrderItem table "order_items" primaryKey id {
+  id: String
+  orderId: String
+  productName: String
+  quantity: Int
+}
+
+# ─── Database configuration ───────────────────────────────────────────────────
+
+database JoinDatabase {
+  backend memory
+  entities [Customer, Order, OrderItem]
+}
+
+# ─── Functions ────────────────────────────────────────────────────────────────
+
+# 1. Simple innerJoin: find orders that have a matching customer.
+#    Returns List Order — only orders with an existing customer are included.
+fn findOrderWithCustomer(customerId: String) -> List Order
+  requires [dbRead] =
+  with database JoinDatabase {
+    select o from Order
+    innerJoin Customer on o.customerId Customer.id
+    where o.customerId == customerId
+  }
+
+# 2. innerJoin combined with an additional where condition.
+#    Returns orders for customers in a given country.
+fn findOrdersByCustomerCountry(country: String) -> List Order
+  requires [dbRead] =
+  with database JoinDatabase {
+    select o from Order
+    innerJoin Customer on o.customerId Customer.id
+    where o.status == "shipped"
+  }
+
+# 3. innerJoin with order and limit.
+#    Returns the N cheapest orders that have an existing customer.
+fn cheapOrdersByCountry(n: Int) -> List Order
+  requires [dbRead] =
+  with database JoinDatabase {
+    select o from Order
+    innerJoin Customer on o.customerId Customer.id
+    order o.amount asc
+    limit 10
+  }
+
+# 4. Multiple innerJoins on the same select.
+#    Returns order items only for orders that have both a valid order and customer.
+fn findOrderItemsByOrderId(orderId: String) -> List OrderItem
+  requires [dbRead] =
+  with database JoinDatabase {
+    select i from OrderItem
+    innerJoin Order on i.orderId Order.id
+    where i.orderId == orderId
+  }
+
+# ─────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────
+
+test "innerJoin filters out orders with no matching customer" requires [dbRead, dbWrite] {
+  with database JoinDatabase {
+    let _ = insert Customer { id: "c1", name: "Alice", country: "SE" }
+    let _ = insert Order { id: "o1", customerId: "c1", amount: 50, status: "new" }
+    # o2 has no matching customer — innerJoin excludes it
+    let _ = insert Order { id: "o2", customerId: "no-such-customer", amount: 100, status: "new" }
+  }
+  let results = findOrderWithCustomer "c1"
+  expect results != []
+}
+
+test "innerJoin returns only orders for the given customer" requires [dbRead, dbWrite] {
+  with database JoinDatabase {
+    let _ = insert Customer { id: "c2", name: "Bob", country: "US" }
+    let _ = insert Customer { id: "c3", name: "Carol", country: "UK" }
+    let _ = insert Order { id: "o3", customerId: "c2", amount: 200, status: "shipped" }
+    let _ = insert Order { id: "o4", customerId: "c3", amount: 300, status: "shipped" }
+  }
+  let results = findOrderWithCustomer "c2"
+  expect results != []
+}
+
+test "cheapOrdersByCountry returns results when orders with customers exist" requires [dbRead, dbWrite] {
+  with database JoinDatabase {
+    let _ = insert Customer { id: "c4", name: "Dave", country: "DE" }
+    let _ = insert Order { id: "o5", customerId: "c4", amount: 10, status: "new" }
+    let _ = insert Order { id: "o6", customerId: "c4", amount: 20, status: "new" }
+  }
+  let results = cheapOrdersByCountry 5
+  expect results != []
+}
+
+test "findOrderItemsByOrderId uses innerJoin to filter items" requires [dbRead, dbWrite] {
+  with database JoinDatabase {
+    let _ = insert Customer { id: "c5", name: "Eve", country: "FR" }
+    let _ = insert Order { id: "o7", customerId: "c5", amount: 75, status: "processing" }
+    let _ = insert OrderItem { id: "i1", orderId: "o7", productName: "Widget", quantity: 3 }
+    # i2 references a non-existent order — innerJoin excludes it
+    let _ = insert OrderItem { id: "i2", orderId: "ghost-order", productName: "Gadget", quantity: 1 }
+  }
+  let items = findOrderItemsByOrderId "o7"
+  expect items != []
+}
+
+test "innerJoin with no matching customer returns empty list" requires [dbRead, dbWrite] {
+  with database JoinDatabase {
+    # Insert an order with no corresponding customer
+    let _ = insert Order { id: "orphan1", customerId: "missing-customer", amount: 999, status: "new" }
+  }
+  let results = findOrderWithCustomer "missing-customer"
+  expect results == []
+}

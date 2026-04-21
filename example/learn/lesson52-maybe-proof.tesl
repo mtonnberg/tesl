@@ -1,0 +1,331 @@
+#lang tesl
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# `Maybe (v: T ::: P v)` lets a function return a proof-carrying value
+# OR nothing, and the proof propagates automatically through case:
+#
+#   fn findMin(t: PositiveTree) -> Maybe (Int ? IsPositive) = ...
+#
+#   let m = findMin t
+#   case m of
+#     Nothing -> ...
+#     Something v -> needPositive v  # v carries IsPositive v statically
+#
+# This lesson uses a binary tree whose node values must be positive integers.
+# Two key ideas demonstrated:
+#
+#   1. `check` is the only trust boundary — validates raw integers at the edge.
+#   2. `fn` traversals like `findMin` declare the proof in their return type:
+#      the compiler tracks it statically without re-checking.
+#
+# ── STATIC vs RUNTIME proof ─────────────────────────────────────────────────
+# `Maybe (T ? P)` on a `fn` is a compile-time guarantee.
+# The compiler tracks `v` in `Something v` as proof-carrying.
+# Runtime proof threading requires `check` — see `insertRaw` below, which
+# uses `let (_ ::: p) = check checkPositive raw` to validate at the edge
+# and carry the proof into the tree without any re-checking inside `fn`s.
+
+module Lesson52MaybeProof exposing [PositiveTreeServer]
+
+import Tesl.Prelude exposing [Bool(..), Int, Fact, String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Either exposing [Either(..)]
+
+# ─── Domain ──────────────────────────────────────────────────────────────────
+
+fact IsPositive (n: Int)
+
+# A binary tree whose node values carry an IsPositive proof.
+# Any function that builds a Node must supply a proven-positive value.
+# Reading node.value automatically gives back IsPositive for that value.
+type PositiveTree
+  = Leaf
+  | Node (left: PositiveTree) (value: Int ::: IsPositive value) (right: PositiveTree)
+
+# ─── Trust boundary ──────────────────────────────────────────────────────────
+
+check checkPositive(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "value must be positive"
+
+fn needPositive(n: Int ::: IsPositive n) -> Int = n
+
+# ─── Tree operations ─────────────────────────────────────────────────────────
+
+# Insert a value that already carries IsPositive.
+fn insertTree(t: PositiveTree, v: Int ::: IsPositive v) -> PositiveTree =
+  case t of
+    Leaf ->
+      Node { left: Leaf, value: v, right: Leaf }
+    Node l cur r ->
+      if v < cur then
+        Node { left: insertTree l v, value: cur, right: r }
+      else if v > cur then
+        Node { left: l, value: cur, right: insertTree r v }
+      else
+        t
+
+fn treeSize(t: PositiveTree) -> Int =
+  case t of
+    Leaf -> 0
+    Node l _ r -> 1 + treeSize l + treeSize r
+
+fn treeSum(t: PositiveTree) -> Int =
+  case t of
+    Leaf -> 0
+    Node l v r -> v + treeSum l + treeSum r
+
+# ─── PATTERN: Maybe (T ? P) on fn ───────────────────────────────────────────
+#
+# When a fn traverses a proof-bearing tree and returns a Maybe, use the
+# named-pack form `Maybe (T ? P)`. This is the correct syntax because the
+# returned value is NOT an input parameter — it comes from the tree's interior.
+#
+# Rule: `fn f -> Maybe (v: T ::: P v)` is rejected when `v` is not an input.
+#       Use `Maybe (T ? P)` instead. The `?` pack names the returned entity
+#       from the caller's `let` binder and automatically attaches the proof.
+#
+# Because `value` in the PositiveTree.Node carries `IsPositive`, extracting
+# `cur` from `Node Leaf cur _` gives a value that already has the proof.
+# The `?` return form threads this proof to the caller automatically.
+
+fn findMin(t: PositiveTree) -> Either String (Int ? IsPositive) =
+  case t of
+    Leaf -> Left "Not found"
+    Node Leaf cur _ -> Right cur
+    Node l _ _ -> findMin l
+
+type CustomEither l r
+    = CustomLeft left: l
+    | CustomRight right: r
+
+fn findMinAlt(t: PositiveTree) -> CustomEither String (Int ? IsPositive) =
+  case t of
+    Leaf -> CustomLeft "Not found"
+    Node Leaf cur _ -> CustomRight cur
+    Node l _ _ -> findMinAlt l
+
+fn findMax(t: PositiveTree) -> Maybe (Int ? IsPositive) =
+  case t of
+    Leaf -> Nothing
+    Node _ cur Leaf -> Something cur
+    Node _ _ r -> findMax r
+
+fn doubleMin(t: PositiveTree) -> Int =
+  let m = findMin t
+  case m of
+    Left _ -> 0
+    Right v ->
+      # v carries IsPositive proof from the ADT field — pass directly
+      needPositive v + needPositive v
+
+fn sumMinMax(t: PositiveTree) -> Int =
+  let mn = findMin t
+  let mx = findMax t
+  case mn of
+    Left _ -> 0
+    Right lo ->
+      case mx of
+        Nothing -> 0
+        Something hi ->
+          needPositive lo + needPositive hi
+
+# ─── let (_ ::: p) pattern ───────────────────────────────────────────────────
+#
+# Validate a raw value at the edge and re-attach the proof to the original name:
+#
+#   let (_ ::: p) = check checkPositive raw
+#   let proven = raw ::: p   # raw now carries IsPositive raw
+#
+# This keeps `raw` as the binding name downstream while the proof is correctly
+# minted at the single trust boundary (`checkPositive`).
+
+fn insertRaw(t: PositiveTree, raw: Int) -> PositiveTree =
+  let (_ ::: p) = check checkPositive raw
+  let proven = raw ::: p
+  insertTree t proven
+
+# ─── API ─────────────────────────────────────────────────────────────────────
+
+capability ptreeService
+
+api PositiveTreeApi {
+  get "/tree/size"
+    -> Int
+
+  get "/tree/min"
+    -> Int
+
+  get "/tree/min-alt"
+    -> Int
+
+  get "/tree/max"
+    -> Int
+
+  get "/tree/sum"
+    -> Int
+
+  post "/tree/insert"
+    body req: InsertRequest
+    -> Int
+}
+
+record InsertRequest { value: Int }
+
+codec InsertRequest {
+  toJson_forbidden
+  fromJson [{ value <- "value" with_codec intCodec }]
+}
+
+fn exampleTree() -> PositiveTree =
+  let t0 = Leaf
+  let t1 = insertRaw t0 3
+  let t2 = insertRaw t1 1
+  let t3 = insertRaw t2 5
+  insertRaw t3 2
+
+handler getSize() -> Int requires [] = treeSize (exampleTree())
+
+handler getMin() -> Int requires [] =
+  let m = findMin (exampleTree())
+  case m of
+    Left _ -> 0
+    Right v -> needPositive v
+
+handler getMinAlt() -> Int requires [] =
+  let m = findMinAlt (exampleTree())
+  case m of
+    CustomLeft _ -> 0
+    CustomRight v -> needPositive v
+
+handler getMax() -> Int requires [] =
+  let m = findMax (exampleTree())
+  case m of
+    Nothing -> 0
+    Something v -> needPositive v
+
+handler getSum() -> Int requires [] = treeSum (exampleTree())
+
+handler insertValue(req: InsertRequest) -> Int requires [] =
+  let t = insertRaw (exampleTree()) req.value
+  treeSize t
+
+server PositiveTreeServer for PositiveTreeApi {
+  getSize = getSize
+  getMin = getMin
+  getMinAlt = getMinAlt
+  getMax = getMax
+  getSum = getSum
+  insertValue = insertValue
+}
+
+# ─── Tests ───────────────────────────────────────────────────────────────────
+
+test "insertRaw: builds a non-empty tree" {
+  let t0 = Leaf
+  let t1 = insertRaw t0 5
+  expect treeSize t1 == 1
+}
+
+test "insertRaw: inserting multiple values" {
+  let t0 = Leaf
+  let t1 = insertRaw t0 3
+  let t2 = insertRaw t1 1
+  let t3 = insertRaw t2 5
+  expect treeSize t3 == 3
+}
+
+test "insertRaw: rejects non-positive value" {
+  let t0 = Leaf
+  expectFail insertRaw t0 0
+}
+
+test "insertRaw: rejects negative value" {
+  let t0 = Leaf
+  expectFail insertRaw t0 -1
+}
+
+test "findMin: empty tree returns Left" {
+  let t = Leaf
+  let m = findMin t
+  case m of
+    Left _ -> expect True
+    Right _ -> expect False
+}
+
+test "findMin: single-node tree" {
+  let t = insertRaw Leaf 7
+  let m = findMin t
+  case m of
+    Left _ -> expect False
+    Right v ->
+      expect v == 7
+}
+
+test "findMin: returns smallest value with IsPositive proof" {
+  let t = insertRaw (insertRaw (insertRaw Leaf 3) 1) 5
+  let m = findMin t
+  let mAlt = findMinAlt t
+  case m of
+    Left _ -> expect False
+    Right v ->
+      case mAlt of
+        CustomLeft _ -> expect False
+        CustomRight vAlt ->
+          # v carries IsPositive v — can pass directly to needPositive
+          let n = needPositive v
+          let nAlt = needPositive vAlt
+          expect n == nAlt
+}
+
+test "findMax: returns largest value with IsPositive proof" {
+  let t = insertRaw (insertRaw (insertRaw Leaf 3) 1) 5
+  let m = findMax t
+  case m of
+    Nothing -> expect False
+    Something v ->
+      let n = needPositive v
+      expect n == 5
+}
+
+test "doubleMin: uses Maybe arm value" {
+  let t = exampleTree()
+  expect doubleMin t == 2
+}
+
+test "sumMinMax: combines min and max" {
+  let t = exampleTree()
+  expect sumMinMax t == 6
+}
+
+test "treeSize: counts all nodes" {
+  let t = exampleTree()
+  expect treeSize t == 4
+}
+
+test "treeSum: sums all values" {
+  let t = exampleTree()
+  expect treeSum t == 11
+}
+
+test "proof isolation: two independent trees" {
+  let ta = insertRaw Leaf 10
+  let tb = insertRaw Leaf 20
+  let ma = findMin ta
+  let mb = findMin tb
+  case ma of
+    Left _ -> expect False
+    Right a ->
+      case mb of
+        Left _ -> expect False
+        Right b ->
+          expect a == 10
+          expect b == 20
+          # Both carry IsPositive independently — no proof confusion
+          let na = needPositive a
+          let nb = needPositive b
+          expect na + nb == 30
+}

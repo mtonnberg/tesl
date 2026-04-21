@@ -1,0 +1,308 @@
+#lang tesl
+module ProofDecomposition exposing [
+  ValidScore,
+  checkScore,
+  ValidTag,
+  checkTag,
+  extractRaw,
+  showScore,
+  reattachAndUse,
+  justTheProof,
+  stripAndDescribe,
+  decomposeThenCall,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# "let (x ::: p) = y" is the proof-decompose syntax.
+# It splits a proof-carrying value into two separate bindings:
+#   x — the same value as y, but without any proof attached
+#   p — the detached proof fact (still references y's hidden subject)
+#
+# This is equivalent to calling forgetFact(y) and detachFact(y) in one step.
+#
+# When you need to discard one half, use "_" as a placeholder:
+#   let (raw ::: _) = y          — value named "raw", proof discarded
+#   let (_ ::: p)   = y          — value discarded, proof named "p"
+#
+# To put the proof back:
+#   raw ::: p                    — inline re-attach syntax
+# This creates a new proof-carrying value from the bare value and a detached proof.
+#
+# Conjunction proofs ("&&"):
+#   let (v ::: p && q) = y      — decompose a value carrying two facts
+#   p holds the left  fact (e.g. InRange v)
+#   q holds the right fact (e.g. Positive v)
+#   Use "_" to discard: let (v ::: p && _) = y
+
+import Tesl.Prelude exposing [Int, String, Fact]
+import Tesl.String exposing [String.length]
+
+# ═══════════════════════════════════════════
+# PROOF-PRODUCING CHECKS
+# ═══════════════════════════════════════════
+
+fact ValidScore (n: Int)
+
+# checkScore validates that n is in [0, 100] and attaches ValidScore.
+check checkScore(n: Int) -> n: Int ::: ValidScore n =
+  if n >= 0 && n <= 100 then
+    ok n ::: ValidScore n
+  else
+    fail 400 "score must be between 0 and 100"
+
+fact ValidTag (s: String)
+
+# checkTag validates that s is a non-empty string of at most 20 characters.
+check checkTag(s: String) -> s: String ::: ValidTag s =
+  if String.length s >= 1 && String.length s <= 20 then
+    ok s ::: ValidTag s
+  else
+    fail 400 "tag must be 1-20 characters"
+
+# requiresValidScore only accepts a score that already carries ValidScore.
+fn requiresValidScore(score: Int ::: ValidScore score) -> String =
+  "score: ${score}"
+
+# requiresValidTag only accepts a tag that already carries ValidTag.
+fn requiresValidTag(tag: String ::: ValidTag tag) -> String =
+  "tag: ${tag}"
+
+# ═══════════════════════════════════════════
+# PART 1: Basic decomposition
+# ═══════════════════════════════════════════
+# "let (raw ::: _) = score" gives you the plain Int without proof.
+# Useful when you need the raw value for arithmetic or formatting,
+# but don't need to pass it anywhere that requires ValidScore.
+
+fn extractRaw(score: Int ::: ValidScore score) -> Int =
+  let (raw ::: _) = score # raw: same hidden subject, no proof; _ discards the proof
+  raw
+
+fn showScore(score: Int ::: ValidScore score) -> String =
+  let (raw ::: _) = score
+  "score is ${raw}"
+
+# ═══════════════════════════════════════════
+# PART 2: Extracting and re-using the proof
+# ═══════════════════════════════════════════
+# "let (raw ::: p) = score" gives you both the bare value AND the detached proof.
+# You can then pass "raw ::: p" to any function requiring ValidScore.
+# The inline "::: " syntax re-attaches the proof to the bare value on the fly.
+
+fn reattachAndUse(score: Int ::: ValidScore score) -> String =
+  let (raw ::: p) = score # p: detached ValidScore fact about score's subject
+  requiresValidScore (raw ::: p) # re-attach p to raw, satisfying ValidScore
+
+# ═══════════════════════════════════════════
+# PART 3: Extracting only the proof
+# ═══════════════════════════════════════════
+# "let (_ ::: p) = score" gives you just the proof.
+# The "_" means the bare value is not bound to any name.
+# This is useful when you want to inspect or forward the proof
+# without keeping the value binding.
+
+fn justTheProof(score: Int ::: ValidScore score) -> String =
+  let (_ ::: _p) = score # _p: detached ValidScore fact; bare value discarded
+  "proof extracted"
+
+# ═══════════════════════════════════════════
+# PART 4: Combining decomposition with description
+# ═══════════════════════════════════════════
+# A realistic pattern: decompose to get the raw value, format a string,
+# then also call something that needs the proof.
+
+fn stripAndDescribe(score: Int ::: ValidScore score) -> String =
+  let (raw ::: p) = score
+  let formatted = "raw value: ${raw}"
+  let withProof = requiresValidScore (raw ::: p)
+  "${formatted} (${withProof})"
+
+# ═══════════════════════════════════════════
+# PART 5: Decompose, operate, and call
+# ═══════════════════════════════════════════
+# A common scenario: you receive a proof-carrying value, need to inspect
+# the raw number (e.g. for logging), but also need to pass it on.
+# Decompose gives you both in one step.
+
+fn decomposeThenCall(score: Int ::: ValidScore score, tag: String ::: ValidTag tag) -> String =
+  let (rawScore ::: scoreProof) = score
+  let (rawTag ::: tagProof) = tag
+  let (_ ::: scoreProof2 && tagProof2) = rawScore ::: scoreProof && tagProof
+  let scoreStr = requiresValidScore (rawScore ::: scoreProof2)
+  let tagStr = requiresValidTag (rawTag ::: tagProof2)
+  "${tagStr} = ${scoreStr}"
+
+# fn bUG_this_should_not_compile_but_do_decomposeThenCall(score: Int ::: ValidScore score, tag: String ::: ValidTag tag) -> String =
+#   let (rawScore ::: scoreProof) = score
+#   let (rawTag   ::: tagProof)   = tag
+#   let (_ ::: scoreProof2 && tagProof2) = rawScore ::: scoreProof && tagProof
+#   let x = rawScore ::: tagProof2
+#   let scoreStr_should_not_compile_1 = requiresValidScore x # this is the wrong proof!
+#   let scoreStr_should_not_compile_2 = requiresValidScore (rawScore ::: tagProof2) # this is the wrong proof!
+#   let tagStr   = requiresValidTag   (rawTag   ::: tagProof2)
+#   "${tagStr} = ${scoreStr_should_not_compile_2}"
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# A proof-carrying named value is like a sealed envelope:
+#   - The envelope has a hidden identity (the "subject" — a compiler symbol)
+#   - Inside: the raw value (e.g., the integer 42)
+#   - On the outside: proof stamps (e.g., "ValidScore: yes")
+#
+# "let (x ::: p) = y" opens the envelope:
+#   x — same envelope identity, same contents, stamps removed
+#   p — the stamps, still referencing the ORIGINAL envelope's identity
+#
+# Because x preserves the original envelope identity, "x ::: p" restores
+# the original state. The compiler can verify that p's internal subject
+# matches x's subject — no forgery is possible.
+#
+# Contrast with forgetFact / detachFact:
+#   forgetFact(v)    — same as "let (x ::: _) = v" — discard proof, keep value
+#   detachFact(v)    — same as "let (_ ::: p) = v" — discard binding, keep proof
+#   let (x ::: p) = v — both at once
+#
+# The decompose syntax is just ergonomic sugar for the two separate calls.
+# Use it whenever you need both halves of the split.
+#
+# Using "_" in either position is a standard pattern:
+#   let (x ::: _) = v  — you only need the value, proof is no longer relevant
+#   let (_ ::: p) = v  — you only need the proof, e.g., to forward it elsewhere
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# The proof-decompose binding is compiled as:
+#   x = (forget-fact v)
+#   p = (detach-fact v)
+#
+# forget-fact: strips the proof carrier from a named value.
+#   Returns the same named-value struct with an empty proof set.
+#   The hidden subject symbol is PRESERVED — x and v share the same subject.
+#
+# detach-fact: extracts the proof carrier as a first-class Fact value.
+#   The Fact internally holds a reference to v's hidden subject.
+#
+# attach-fact (used by the inline "::: " re-attach syntax):
+#   Takes a named value and a Fact and returns a new named value
+#   where the Fact's subject is appended to the value's proof set.
+#   The Fact still records the ORIGINAL subject — not the new named value's subject.
+#
+# Why re-attachment is sound:
+#   When you write "raw ::: p", the runtime checks that p's internal subject
+#   matches raw's subject. Because "let (raw ::: p) = score" preserves the
+#   subject across both halves, the re-attached value has the correct proof.
+#   A Fact created from a different named value would have a different subject
+#   and would be rejected at the call site.
+#
+# Conjunction decomposition "let (v ::: p && q) = val":
+#   v = forget-fact(val)
+#   fullProof = detach-fact(val)
+#   p = and-left(fullProof)
+#   q = and-right(fullProof)
+#
+# The conjunction is left-associative: "(P && Q) && R"
+# For three facts, "let (v ::: p && q && r) = val":
+#   p = and-left(and-left(fullProof))
+#   q = and-right(and-left(fullProof))
+#   r = and-right(fullProof)
+#
+# GDP connection:
+#   In Haskell GDP (Foner 2018), a Named n a is a value of type a tagged with
+#   phantom name n. Tesl's hidden subjects serve the same role: the subject symbol
+#   is the phantom type. Detaching a proof corresponds to extracting the predicate
+#   Evidence from the Named wrapper; reattaching corresponds to re-wrapping.
+#   Tesl tracks this entirely at runtime (rather than compile-time phantom types),
+#   making the pattern accessible without rank-2 polymorphism.
+
+test "extractRaw returns bare Int" {
+  let n42 = 42
+  let s = check checkScore n42
+  expect extractRaw s == 42
+  let n0 = 0
+  let s0 = check checkScore n0
+  expect extractRaw s0 == 0
+  let n100 = 100
+  let s100 = check checkScore n100
+  expect extractRaw s100 == 100
+}
+
+test "showScore formats string" {
+  let n75 = 75
+  let s = check checkScore n75
+  expect showScore s == "score is 75"
+  let n0 = 0
+  let s0 = check checkScore n0
+  expect showScore s0 == "score is 0"
+}
+
+test "reattachAndUse passes proof through" {
+  let n30 = 30
+  let s = check checkScore n30
+  expect reattachAndUse s == "score: 30"
+  let n99 = 99
+  let s99 = check checkScore n99
+  expect reattachAndUse s99 == "score: 99"
+}
+
+test "justTheProof extracts proof without value" {
+  let n50 = 50
+  let s = check checkScore n50
+  expect justTheProof s == "proof extracted"
+}
+
+test "stripAndDescribe combines both halves" {
+  let n7 = 7
+  let s = check checkScore n7
+  expect stripAndDescribe s == "raw value: 7 (score: 7)"
+}
+
+test "decomposeThenCall uses both decomposed values" {
+  let n88 = 88
+  let s = check checkScore n88
+  let tagStr = "player"
+  let t = check checkTag tagStr
+  expect decomposeThenCall s t == "tag: player = score: 88"
+}
+
+test "checkScore validates range" {
+  let n0 = 0
+  let n50 = 50
+  let n100 = 100
+  let no_p = (check checkScore n0)
+  let n50_p = (check checkScore n50)
+  let n100_p = (check checkScore n100)
+  expect showScore no_p == "score is 0"
+  expect showScore n50_p == "score is 50"
+  expect showScore n100_p == "score is 100"
+}
+
+test "checkScore rejects out-of-range" {
+  let nNeg1 = -1
+  let n101 = 101
+  let nNeg100 = -100
+  expectFail check checkScore nNeg1
+  expectFail check checkScore n101
+  expectFail check checkScore nNeg100
+}
+
+test "checkTag validates non-empty short strings" {
+  let n1 = 1
+  let score = check checkScore n1
+  let tagA = "a"
+  let tagHello = "hello"
+  let t1 = check checkTag tagA
+  let t2 = check checkTag tagHello
+  expect decomposeThenCall score t1 == "tag: a = score: 1"
+  expect decomposeThenCall score t2 == "tag: hello = score: 1"
+}
+
+test "checkTag rejects invalid strings" {
+  let empty = ""
+  let tooLong = "this-tag-is-way-too-long-to-be-valid"
+  expectFail check checkTag empty
+  expectFail check checkTag tooLong
+}

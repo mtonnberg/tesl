@@ -1,0 +1,248 @@
+#lang tesl
+# =====================================================================
+# Critical Review 59 — positive regression tests
+# =====================================================================
+#
+# Validates behaviors and catches regressions from review 59:
+# - Proof flow through Maybe constructors at compile-time is accepted
+#   but FAILS at runtime (known static/dynamic inconsistency for Maybe)
+# - Proof decomposition with let (v ::: p) + andLeft FAILS at runtime
+# - detachFact without template fails when multiple proofs are attached
+# - Deep chain of checks (5+) accumulate proofs correctly
+# - Mutual recursion compiles and runs
+# - Capability propagation from callees is enforced
+# - Nested record with proof fields compiles
+# - introAnd + andLeft works when proofs created via establish functions
+# - establish functions correctly reject: fail, check calls
+# - ForAll on non-List type is rejected
+# - ForAll proof mismatch on parameters is detected
+
+module CriticalReview59Tests exposing []
+
+import Tesl.Prelude exposing [
+  Bool(..),
+  Int,
+  Fact,
+  forgetFact,
+  detachFact,
+  introAnd,
+  andLeft,
+  andRight,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+
+# ─── Proof vocabulary ────────────────────────────────────────────────────────
+
+fact A (n: Int)
+fact B (n: Int)
+fact C (n: Int)
+fact D (n: Int)
+fact E (n: Int)
+fact IsPositive (n: Int)
+fact IsSmall (n: Int)
+
+# ─── Check functions ────────────────────────────────────────────────────────
+
+check checkA(n: Int) -> n: Int ::: A n =
+  if n > 0 then
+    ok n ::: A n
+  else
+    fail 400 "fail A"
+
+check checkB(n: Int ::: A n) -> n: Int ::: B n =
+  if n < 1000 then
+    ok n ::: B n
+  else
+    fail 400 "fail B"
+
+check checkC(n: Int ::: A n && B n) -> n: Int ::: C n =
+  if n != 42 then
+    ok n ::: C n
+  else
+    fail 400 "fail C"
+
+check checkD(n: Int ::: A n && B n && C n) -> n: Int ::: D n =
+  if n != 99 then
+    ok n ::: D n
+  else
+    fail 400 "fail D"
+
+check checkE(n: Int ::: A n && B n && C n && D n) -> n: Int ::: E n =
+  if n != 500 then
+    ok n ::: E n
+  else
+    fail 400 "fail E"
+
+check checkPos(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+check checkSmall(n: Int) -> n: Int ::: IsSmall n =
+  if n < 100 then
+    ok n ::: IsSmall n
+  else
+    fail 400 "too large"
+
+establish proveA(n: Int) -> Fact (A n) =
+  A n
+
+establish proveB(n: Int) -> Fact (B n) =
+  B n
+
+# ─── Functions that require proofs ──────────────────────────────────────────
+
+fn needsA(n: Int ::: A n) -> Int = n
+fn needsB(n: Int ::: B n) -> Int = n
+fn needsAB(n: Int ::: A n && B n) -> Int = n
+fn needsAll(n: Int ::: A n && B n && C n && D n && E n) -> Int = n
+fn needsPositive(n: Int ::: IsPositive n) -> Int = n
+
+# ─── R59_DC — Deep chain of 5 checks with full accumulation ─────────────────
+
+fn doChain5(raw: Int) -> Int =
+  let a = check checkA raw
+  let b = check checkB a
+  let c = check checkC b
+  let d = check checkD c
+  let e = check checkE d
+  needsAll e
+
+test "R59_DC01 five-check deep chain works with valid input" {
+  let r1 = 5
+  let result = doChain5 r1
+  expect result == 5
+}
+
+test "R59_DC02 five-check deep chain rejects first check failure" {
+  let r1 = 0
+  expectFail (fn () -> doChain5 r1)
+}
+
+test "R59_DC03 five-check deep chain rejects mid-chain failure" {
+  let r1 = 42
+  expectFail (fn () -> doChain5 r1)
+}
+
+# ─── R59_IA — introAnd + andLeft with establish functions ────────────────────
+
+fn introAndLeft(raw: Int) -> Int =
+  let pa = proveA raw
+  let pb = proveB raw
+  let combined = introAnd pa pb
+  let left = andLeft combined
+  let base = forgetFact raw
+  let withA = base ::: left
+  needsA withA
+
+test "R59_IA01 introAnd andLeft with establish proofs works" {
+  let r1 = 5
+  let result = introAndLeft r1
+  expect result == 5
+}
+
+fn introAndRight(raw: Int) -> Int =
+  let pa = proveA raw
+  let pb = proveB raw
+  let combined = introAnd pa pb
+  let right = andRight combined
+  let base = forgetFact raw
+  let withB = base ::: right
+  needsB withB
+
+test "R59_IA02 introAnd andRight with establish proofs works" {
+  let r1 = 5
+  let result = introAndRight r1
+  expect result == 5
+}
+
+# ─── R59_DT — detachFact with single proof ─────────────────────────────────
+
+fn singleDetach(raw: Int) -> Int =
+  let a = check checkA raw
+  let pa = detachFact a
+  let v = forgetFact a
+  let withA = v ::: pa
+  needsA withA
+
+test "R59_DT01 detachFact with single proof and reattach" {
+  let r1 = 5
+  let result = singleDetach r1
+  expect result == 5
+}
+
+# ─── R59_MP — detachFact fails with multiple proofs (expected) ───────────────
+
+fn multiProofDetach(raw: Int) -> Int =
+  let a = check checkA raw
+  let b = check checkB a
+  let _p = detachFact b
+  0
+
+test "R59_MP01 detachFact fails at runtime with multiple proofs" {
+  let r1 = 5
+  expectFail (fn () -> multiProofDetach r1)
+}
+
+# ─── R59_MR — Mutual recursion ──────────────────────────────────────────────
+
+fn isEven(n: Int) -> Bool =
+  if n == 0 then
+    True
+  else
+    isOdd (n - 1)
+
+fn isOdd(n: Int) -> Bool =
+  if n == 0 then
+    False
+  else
+    isEven (n - 1)
+
+test "R59_MR01 mutual recursion isEven/isOdd" {
+  expect isEven 4 == True
+  expect isEven 3 == False
+  expect isOdd 3 == True
+  expect isOdd 4 == False
+  expect isEven 0 == True
+  expect isOdd 0 == False
+}
+
+# ─── R59_MP2 — Maybe proof wrapping is correctly rejected at compile time ─────
+# (FIXED in review 59): The static checker now correctly rejects proof flow
+# through Something/Nothing constructors, consistent with user-defined ADTs.
+# `Something pos; case m of Something v -> needsA v` is rejected at compile
+# time because wrapping in Maybe loses the proof (same as user-defined ADTs).
+# No runtime test possible: static rejection.
+
+# ─── R59_PD — Proof decomposition let (v ::: p) = b (now working) ────────────
+# (FIXED in review 59): The runtime now correctly orders accumulated proofs
+# oldest-first, so andLeft returns the first/oldest proof as expected.
+
+fn proofDecompChain(raw: Int) -> Int =
+  let a = check checkA raw
+  let b = check checkB a
+  let (v ::: p) = b
+  let pA = andLeft p
+  let withA = v ::: pA
+  needsA withA
+
+test "R59_PD01 proof decomp with andLeft now works correctly (fix 1.1)" {
+  let r1 = 5
+  let result = proofDecompChain r1
+  expect result == 5
+}
+
+test "R59_PD02 andRight also works on accumulated proofs" {
+  let r1 = 5
+  let a = check checkA r1
+  let b = check checkB a
+  let (v ::: p) = b
+  let pB = andRight p
+  let withB = v ::: pB
+  let result = needsB withB
+  expect result == 5
+}
+
+# ─── R59_FA — ForAll proof mismatch rejects at compile-time ─────────────────
+# (These are compile-time checks, verified by the OCaml antagonistic tests)

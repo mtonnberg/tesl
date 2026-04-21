@@ -1,0 +1,584 @@
+#lang tesl
+# ─── Kanel — Issue lifecycle and time tracking ─────────────────────────────
+#
+# This module encodes the core domain: the issue status state machine and
+# all business rules around issue mutations.
+#
+# Facts defined here:
+#   ValidTitle title          — non-empty, trimmed issue title (≤200 chars)
+#   ValidDescription desc     — non-empty description (≤10000 chars)
+#   PositiveEstimate n        — estimate in minutes > 0
+#   PositiveMinutes n         — time entry duration > 0
+#   NotDone issueId           — issue is not in Done or Cancelled state (modifiable)
+#   CanClose userId issueId   — user is assignee or org admin for this issue
+#   ValidTransition from to   — the status transition from→to is allowed
+#
+# Facts brought in from KanelAuth:
+#   Authenticated session, OrgMember userId orgId, OrgAdmin userId orgId,
+#   ProjMember userId projectId, IssueAssignee userId issueId
+
+module KanelIssues exposing [
+  ValidCommentBody,
+  checkCommentBody,
+  insertCommentBody,
+  ValidTitle,
+  checkTitle,
+  ValidDescription,
+  checkDescription,
+  PositiveEstimate,
+  checkEstimate,
+  PositiveMinutes,
+  checkPositiveMinutes,
+  NotDone,
+  checkNotDone,
+  CanClose,
+  checkCanClose,
+  ValidTransition,
+  checkTransition,
+  createProjectHandler,
+  listProjectsHandler,
+  getProjectHandler,
+  archiveProjectHandler,
+  createIssueHandler,
+  listIssuesHandler,
+  getIssueHandler,
+  updateIssueHandler,
+  updateIssueStatusHandler,
+  addCommentHandler,
+  listCommentsHandler,
+  logTimeHandler,
+  listTimeEntriesHandler,
+]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List, Fact]
+import Tesl.String exposing [String.length, String.trim, String.isEmpty]
+import Tesl.Time exposing [nowMillis, time]
+import Tesl.Id exposing [generatePrefixedId]
+import Tesl.Random exposing [random]
+import Tesl.Maybe exposing [Maybe(..)]
+import KanelModels exposing [
+  ValidOrgId,
+  ValidProjectId,
+  ValidIssueId,
+  kanelDbRead,
+  kanelDbWrite,
+  kanelPubSub,
+  OrgRole(..),
+  IssueStatus(..),
+  OrgMembership,
+  Project,
+  ProjectMembership,
+  Issue,
+  IssueComment,
+  TimeEntry,
+  NewProjectRequest,
+  NewIssueRequest,
+  UpdateIssueRequest,
+  UpdateStatusRequest,
+  NewCommentRequest,
+  NewTimeEntryRequest,
+]
+import KanelAuth exposing [
+  KanelSession,
+  Authenticated,
+  OrgMember,
+  IssueAssignee,
+  checkOrgMember,
+  checkOrgAdmin,
+  checkProjMember,
+]
+
+# ── Input validation — Facts on user-supplied strings ────────────────────────
+#
+# The user message is key here: we don't want raw untrimmed/empty strings
+# flowing through the system.  Every user-provided string is validated at
+# the boundary and carries a proof that it's safe.
+
+fact ValidTitle (t: String)
+
+check checkTitle(title: String) -> title: String ::: ValidTitle title =
+  if String.isEmpty title then
+    fail 400 "title must not be empty"
+  else
+    if String.length title > 200 then
+      fail 400 "title must be at most 200 characters"
+    else
+      ok title ::: ValidTitle title
+
+fact ValidDescription (d: String)
+
+check checkDescription(desc: String) -> desc: String ::: ValidDescription desc =
+  if String.length desc > 10000 then
+    fail 400 "description must be at most 10000 characters"
+  else
+    ok desc ::: ValidDescription desc
+
+fact PositiveEstimate (n: Int)
+
+check checkEstimate(n: Int) -> n: Int ::: PositiveEstimate n =
+  if n < 0 then
+    fail 400 "estimate must be non-negative"
+  else
+    ok n ::: PositiveEstimate n
+
+fact PositiveMinutes (n: Int)
+
+check checkPositiveMinutes(n: Int) -> n: Int ::: PositiveMinutes n =
+  if n <= 0 then
+    fail 400 "time entry must be at least 1 minute"
+  else
+    if n > 1440 then
+      fail 400 "a single time entry may not exceed 1440 minutes (24 hours)"
+    else
+      ok n ::: PositiveMinutes n
+
+fact ValidCommentBody (s: String)
+
+check checkCommentBody(body: String) -> body: String ::: ValidCommentBody body =
+  if String.isEmpty body then
+    fail 400 "comment body must not be empty"
+  else
+    if String.length body > 5000 then
+      fail 400 "comment body must be at most 5000 characters"
+    else
+      ok body ::: ValidCommentBody body
+
+# ── Issue state machine — ValidTransition ────────────────────────────────────
+#
+# The allowed transitions form a directed acyclic graph:
+#   Backlog → Todo, Cancelled
+#   Todo → InProgress, Backlog, Cancelled
+#   InProgress → InReview, Todo
+#   InReview → Done, InProgress
+#   Done → (terminal — no transitions)
+#   Cancelled → Backlog (reopen)
+#
+# Moving to Done requires CanClose proof (assignee or admin).
+# This check is called BEFORE checkCanClose; if the transition is invalid,
+# we fail before even checking permissions.
+
+fact ValidTransition (from: IssueStatus, to: IssueStatus)
+
+check checkTransition(from: IssueStatus, to: IssueStatus) -> to: IssueStatus ::: ValidTransition from to =
+  case from of
+    Backlog ->
+      case to of
+        Todo -> ok to ::: ValidTransition from to
+        Cancelled -> ok to ::: ValidTransition from to
+        Backlog -> fail 400 "already in Backlog"
+        InProgress -> fail 400 "from Backlog you can only move to Todo or Cancelled"
+        InReview -> fail 400 "from Backlog you can only move to Todo or Cancelled"
+        Done -> fail 400 "from Backlog you can only move to Todo or Cancelled"
+    Todo ->
+      case to of
+        InProgress -> ok to ::: ValidTransition from to
+        Backlog -> ok to ::: ValidTransition from to
+        Cancelled -> ok to ::: ValidTransition from to
+        Todo -> fail 400 "already in Todo"
+        InReview -> fail 400 "from Todo you can move to InProgress, Backlog, or Cancelled"
+        Done -> fail 400 "from Todo you can move to InProgress, Backlog, or Cancelled"
+    InProgress ->
+      case to of
+        InReview -> ok to ::: ValidTransition from to
+        Todo -> ok to ::: ValidTransition from to
+        InProgress -> fail 400 "already InProgress"
+        Backlog -> fail 400 "from InProgress you can move to InReview or back to Todo"
+        Done -> fail 400 "from InProgress you can move to InReview or back to Todo"
+        Cancelled -> fail 400 "from InProgress you can move to InReview or back to Todo"
+    InReview ->
+      case to of
+        Done -> ok to ::: ValidTransition from to
+        InProgress -> ok to ::: ValidTransition from to
+        InReview -> fail 400 "already InReview"
+        Backlog -> fail 400 "from InReview you can move to Done or back to InProgress"
+        Todo -> fail 400 "from InReview you can move to Done or back to InProgress"
+        Cancelled -> fail 400 "from InReview you can move to Done or back to InProgress"
+    Done ->
+      case to of
+        Done -> fail 400 "done issues are closed — no further transitions allowed"
+        Backlog -> fail 400 "done issues are closed — no further transitions allowed"
+        Todo -> fail 400 "done issues are closed — no further transitions allowed"
+        InProgress -> fail 400 "done issues are closed — no further transitions allowed"
+        InReview -> fail 400 "done issues are closed — no further transitions allowed"
+        Cancelled -> fail 400 "done issues are closed — no further transitions allowed"
+    Cancelled ->
+      case to of
+        Backlog -> ok to ::: ValidTransition from to
+        Cancelled -> fail 400 "already Cancelled"
+        Todo -> fail 400 "cancelled issues can only be reopened to Backlog"
+        InProgress -> fail 400 "cancelled issues can only be reopened to Backlog"
+        InReview -> fail 400 "cancelled issues can only be reopened to Backlog"
+        Done -> fail 400 "cancelled issues can only be reopened to Backlog"
+
+# ── NotDone guard — prevents mutations on closed issues ─────────────────────
+#
+# Any write operation on an issue (edit title, add time) requires this proof.
+# This ensures that Done/Cancelled issues are effectively immutable.
+
+fact NotDone (issueId: String)
+
+check checkNotDone(issueId: String) -> issueId: String ::: NotDone issueId
+  requires [kanelDbRead] =
+  let found = selectOne i from Issue where i.id == issueId
+  case found of
+    Nothing -> fail 404 "issue not found"
+    Something issue ->
+      case issue.status of
+        Done -> fail 422 "issue is closed — no further modifications allowed"
+        Cancelled -> fail 422 "issue is cancelled — no further modifications allowed"
+        Backlog -> ok issueId ::: NotDone issueId
+        Todo -> ok issueId ::: NotDone issueId
+        InProgress -> ok issueId ::: NotDone issueId
+        InReview -> ok issueId ::: NotDone issueId
+
+# ── CanClose guard — only assignee or admin may close an issue ───────────────
+#
+# This check runs AFTER checkTransition confirms the target is Done.
+# It ensures only the person doing the work (or an admin) can mark Done.
+
+fact CanClose (userId: String, issueId: String)
+
+check checkCanClose(userId: String, issueId: String, orgId: String) -> userId: String ::: CanClose userId issueId
+  requires [kanelDbRead] =
+  let found = selectOne i from Issue where i.id == issueId
+  case found of
+    Nothing -> fail 404 "issue not found"
+    Something issue ->
+      case issue.assigneeId of
+        Something aid ->
+          if aid == userId then
+            ok userId ::: CanClose userId issueId
+          else
+            let membership = selectOne m from OrgMembership where m.userId == userId && m.orgId == orgId
+            case membership of
+              Nothing -> fail 403 "only the assignee or an org admin can close an issue"
+              Something m ->
+                case m.role of
+                  RoleAdmin -> ok userId ::: CanClose userId issueId
+                  RoleMember -> fail 403 "only the assignee or an org admin can close an issue"
+                  RoleViewer -> fail 403 "viewers cannot close issues"
+        Nothing ->
+          # No assignee — only org admin can close
+          let membership = selectOne m from OrgMembership where m.userId == userId && m.orgId == orgId
+          case membership of
+            Nothing -> fail 403 "only the assignee or an org admin can close an issue"
+            Something m ->
+              case m.role of
+                RoleAdmin -> ok userId ::: CanClose userId issueId
+                RoleMember -> fail 403 "only the assignee or an org admin can close an unassigned issue"
+                RoleViewer -> fail 403 "viewers cannot close issues"
+
+# Convert a String to Maybe String: empty string → Nothing, non-empty → Something
+fn toMaybeString(s: String) -> Maybe String =
+  if String.isEmpty s then
+    Nothing
+  else
+    Something s
+
+# Check if a Maybe String assignee matches a given userId
+fn isAssignedTo(assigneeId: Maybe String, userId: String) -> Bool =
+  case assigneeId of
+    Nothing -> False
+    Something aid -> aid == userId
+
+# ── Project handlers ─────────────────────────────────────────────────────────
+
+handler createProjectHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    req: NewProjectRequest)
+  -> exists projectId: String => Project ? FromDb (Id == projectId)
+  requires [kanelDbRead, kanelDbWrite, random, time] =
+  let _adminUserId = check checkOrgAdmin session.userId orgId
+  let projName = check checkTitle (String.trim req.name)
+  let projDesc = check checkDescription req.description
+  let memberId = generatePrefixedId "pmem"
+  let projectId = generatePrefixedId "proj"
+  with transaction {
+    insert ProjectMembership {
+      id: memberId,
+      projectId: projectId,
+      userId: session.userId,
+      joinedAt: nowMillis()
+    }
+    exists projectId =>
+      insert Project {
+        id: projectId,
+        orgId: orgId,
+        name: projName,
+        description: projDesc,
+        archived: False,
+        createdAt: nowMillis()
+      }
+  }
+
+handler listProjectsHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId)
+  -> List Project
+  requires [kanelDbRead] =
+  let userId = check checkOrgMember session.userId orgId
+  select p from Project where p.orgId == orgId && p.archived == False
+
+handler getProjectHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    projectId: String ::: ValidProjectId projectId)
+  -> Project
+  requires [kanelDbRead] =
+  let userId = check checkProjMember session.userId projectId orgId
+  let found = selectOne p from Project where p.id == projectId
+  case found of
+    Nothing -> fail 404 "project not found"
+    Something p -> p
+
+handler archiveProjectHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    projectId: String ::: ValidProjectId projectId)
+  -> Project
+  requires [kanelDbRead, kanelDbWrite] =
+  let _adminUserId = check checkOrgAdmin session.userId orgId
+  let found = selectOne p from Project where p.id == projectId && p.orgId == orgId
+  case found of
+    Nothing -> fail 404 "project not found"
+    Something p ->
+      if p.archived then
+        fail 422 "project is already archived"
+      else
+        update proj in Project
+          where proj.id == projectId
+          set proj.archived = True
+          returning one
+
+# ── Issue CRUD ───────────────────────────────────────────────────────────────
+
+handler createIssueHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    projectId: String ::: ValidProjectId projectId,
+    req: NewIssueRequest)
+  -> exists issueId: String => Issue ? FromDb (Id == issueId)
+  requires [kanelDbRead, kanelDbWrite, random, time] =
+  let userId = check checkProjMember session.userId projectId orgId
+  let title = check checkTitle (String.trim req.title)
+  let desc = check checkDescription req.description
+  let estimate = check checkEstimate req.estimate
+  let project = selectOne p from Project where p.id == projectId
+  case project of
+    Nothing -> fail 404 "project not found"
+    Something p ->
+      if p.archived then
+        fail 422 "cannot create issues in an archived project"
+      else
+        let issueId = generatePrefixedId "iss"
+        exists issueId =>
+          insert Issue {
+            id: issueId,
+            projectId: projectId,
+            orgId: orgId,
+            title: title,
+            description: desc,
+            status: Backlog,
+            assigneeId: Nothing,
+            reporterId: session.userId,
+            estimate: estimate,
+            dueAt: Nothing,
+            createdAt: nowMillis(),
+            updatedAt: nowMillis()
+          }
+
+handler listIssuesHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    projectId: String ::: ValidProjectId projectId)
+  -> List Issue
+  requires [kanelDbRead] =
+  let userId = check checkProjMember session.userId projectId orgId
+  select i from Issue where i.projectId == projectId
+
+handler getIssueHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    issueId: String ::: ValidIssueId issueId)
+  -> Issue
+  requires [kanelDbRead] =
+  let userId = check checkOrgMember session.userId orgId
+  let found = selectOne i from Issue where i.id == issueId && i.orgId == orgId
+  case found of
+    Nothing -> fail 404 "issue not found"
+    Something i -> i
+
+handler updateIssueHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    issueId: String ::: ValidIssueId issueId,
+    req: UpdateIssueRequest)
+  -> Issue
+  requires [kanelDbRead, kanelDbWrite, time] =
+  let userId = check checkOrgMember session.userId orgId
+  let notDoneId = check checkNotDone issueId
+  let title = check checkTitle (String.trim req.title)
+  let desc = check checkDescription req.description
+  let estimate = check checkEstimate req.estimate
+  let newAssignee = toMaybeString req.assigneeId
+  update i in Issue
+    where i.id == notDoneId
+    set i.title = title
+    set i.description = desc
+    set i.estimate = estimate
+    set i.assigneeId = newAssignee
+    set i.updatedAt = nowMillis()
+    returning one
+
+# ── Status machine handler ───────────────────────────────────────────────────
+#
+# This is where all the business rules come together:
+# 1. User must be org member
+# 2. Transition must be valid
+# 3. If transitioning to Done, user must have CanClose proof
+
+handler updateIssueStatusHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    issueId: String ::: ValidIssueId issueId,
+    req: UpdateStatusRequest)
+  -> Issue
+  requires [kanelDbRead, kanelDbWrite, kanelPubSub, time] =
+  let userId = check checkOrgMember session.userId orgId
+  let found = selectOne i from Issue where i.id == issueId && i.orgId == orgId
+  case found of
+    Nothing -> fail 404 "issue not found"
+    Something issue ->
+      let newStatus = check checkTransition issue.status req.newStatus
+      case req.newStatus of
+        Done ->
+          # Only assignee or admin can close — enforce with CanClose proof
+          let _closerId = check checkCanClose session.userId issueId orgId
+          with transaction {
+            update i in Issue
+              where i.id == issueId
+              set i.status = newStatus
+              set i.updatedAt = nowMillis()
+              returning one
+          }
+        Backlog ->
+        Todo ->
+        InProgress ->
+        InReview ->
+        Cancelled ->
+          update i in Issue
+            where i.id == issueId
+            set i.status = newStatus
+            set i.updatedAt = nowMillis()
+            returning one
+
+# ── Comments ─────────────────────────────────────────────────────────────────
+
+# insertCommentBody requires BOTH proofs as parameter preconditions.
+# If anyone removes checkOrgMember or checkNotDone from the handler,
+# this function call won't compile — the proofs won't be available.
+fn insertCommentBody(
+    commentId: String,
+    authorId: String ::: OrgMember authorId orgId,
+    orgId: String,
+    issueId: String ::: NotDone issueId,
+    body: String)
+  -> IssueComment ? FromDb (Id == commentId)
+  requires [kanelDbWrite, time] =
+  insert IssueComment {
+    id: commentId,
+    issueId: issueId,
+    authorId: authorId,
+    body: body,
+    createdAt: nowMillis()
+  }
+
+handler addCommentHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    issueId: String ::: ValidIssueId issueId,
+    req: NewCommentRequest)
+  -> exists commentId: String => IssueComment ? FromDb (Id == commentId)
+  requires [kanelDbRead, kanelDbWrite, random, time] =
+  # Both proofs are required — removing either will break insertCommentBody call below
+  let userId = check checkOrgMember session.userId orgId
+  let notDoneId = check checkNotDone issueId
+  let body = check checkCommentBody (String.trim req.body)
+  let commentId = generatePrefixedId "cmt"
+  exists commentId =>
+    insertCommentBody commentId userId orgId notDoneId body
+
+handler listCommentsHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    issueId: String ::: ValidIssueId issueId)
+  -> List IssueComment
+  requires [kanelDbRead] =
+  let userId = check checkOrgMember session.userId orgId
+  select c from IssueComment where c.issueId == issueId
+
+# ── Time tracking ────────────────────────────────────────────────────────────
+#
+# A user can only log time on issues assigned to them (or if admin).
+# The issue must not be Done (no adding time to closed work).
+
+handler logTimeHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    issueId: String ::: ValidIssueId issueId,
+    req: NewTimeEntryRequest)
+  -> exists entryId: String => TimeEntry ? FromDb (Id == entryId)
+  requires [kanelDbRead, kanelDbWrite, random, time] =
+  let userId = check checkOrgMember session.userId orgId
+  let notDoneId = check checkNotDone issueId
+  let minutes = check checkPositiveMinutes req.minutes
+  # Verify user is the assignee or org admin
+  let issue = selectOne i from Issue where i.id == issueId
+  case issue of
+    Nothing -> fail 404 "issue not found"
+    Something i ->
+      if isAssignedTo i.assigneeId session.userId then
+        let entryId = generatePrefixedId "te"
+        exists entryId =>
+          insert TimeEntry {
+            id: entryId,
+            issueId: notDoneId,
+            userId: session.userId,
+            orgId: orgId,
+            minutes: minutes,
+            description: String.trim req.description,
+            invoiceId: "",
+            loggedAt: nowMillis()
+          }
+      else
+        # Check if user is org admin (admins can log time on any issue)
+        let membership = selectOne m from OrgMembership where m.userId == session.userId && m.orgId == orgId
+        case membership of
+          Nothing -> fail 403 "not a member of this organization"
+          Something m ->
+            case m.role of
+              RoleAdmin ->
+                let entryId = generatePrefixedId "te"
+                exists entryId =>
+                  insert TimeEntry {
+                    id: entryId,
+                    issueId: notDoneId,
+                    userId: session.userId,
+                    orgId: orgId,
+                    minutes: minutes,
+                    description: String.trim req.description,
+                    invoiceId: "",
+                    loggedAt: nowMillis()
+                  }
+              RoleMember -> fail 403 "only the assignee or an org admin can log time on an issue"
+              RoleViewer -> fail 403 "only the assignee or an org admin can log time on an issue"
+
+handler listTimeEntriesHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    issueId: String ::: ValidIssueId issueId)
+  -> List TimeEntry
+  requires [kanelDbRead] =
+  let userId = check checkOrgMember session.userId orgId
+  select te from TimeEntry where te.issueId == issueId

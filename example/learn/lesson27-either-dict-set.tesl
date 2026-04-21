@@ -1,0 +1,439 @@
+#lang tesl
+module EitherDictSet exposing [
+  parseAge,
+  lookupUser,
+  rolePermissions,
+  uniqueRoles,
+  countByStatus,
+  getVerifiedScores,
+  getByValidKeys,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Three more standard modules for common data structures:
+#
+#   Tesl.Either — a value that is either a Left(a) or a Right(b)
+#   Tesl.Dict   — a finite map from keys to values (immutable)
+#   Tesl.Set    — an unordered collection of unique values (immutable)
+#
+# EITHER: the idiomatic "error or success" type.
+#   Right is the success side.
+#   Left is the error side.
+#   Use it when a function can fail but the failure has a meaningful value
+#   (rather than just a status code).
+#
+#   Either.map         — transform Right, pass Left through unchanged
+#   Either.andThen     — chain operations on the Right side (monadic bind)
+#   Either.withDefault — extract Right value or fall back to a default
+#   Either.toMaybe     — Right → Something, Left → Nothing
+#   Either.fromMaybe   — Something → Right, Nothing → Left(sentinel)
+#
+# DICT: a key-value map.
+#   Dict.empty, Dict.singleton  — create
+#   Dict.insert, Dict.remove    — update (returns new dict; immutable)
+#   Dict.lookup                 — Maybe value
+#   Dict.requireKey             — check function proving a key is present
+#   Dict.get                    — proof-total lookup after Dict.requireKey
+#   Dict.member                 — Bool
+#   Dict.map, Dict.filter       — transform
+#   Dict.filterCheckValues      — filter keeping values that pass a check fn
+#                                 → proves Dict k v ::: ForAllValues P
+#   Dict.filterCheckKeys        — filter keeping entries whose key passes a check fn
+#                                 → proves Dict k v ::: ForAllKeys P
+#   Dict.union, Dict.intersection, Dict.difference — set-like operations
+#   Dict.fromList, Dict.toList  — convert to/from list of [key, value] pairs
+#
+# SET: a unique-element collection.
+#   Set.empty, Set.singleton    — create
+#   Set.insert, Set.remove      — update (returns new set; immutable)
+#   Set.member                  — Bool
+#   Set.union, Set.intersection, Set.difference, Set.isSubset
+#   Set.map, Set.filter         — transform
+#   Set.fromList, Set.toList
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Either exposing [
+  Either(..),
+  Either.isLeft,
+  Either.map,
+  Either.andThen,
+]
+import Tesl.Dict exposing [
+  Dict,
+  Dict.empty,
+  Dict.singleton,
+  Dict.insert,
+  Dict.remove,
+  Dict.lookup,
+  Dict.requireKey,
+  Dict.get,
+  Dict.member,
+  Dict.size,
+  Dict.union,
+  Dict.fromList,
+  Dict.filterCheckValues,
+  Dict.filterCheckKeys,
+]
+import Tesl.Set exposing [
+  Set,
+  Set.empty,
+  Set.insert,
+  Set.member,
+  Set.size,
+  Set.isEmpty,
+  Set.toList,
+  Set.fromList,
+  Set.union,
+  Set.intersection,
+  Set.difference,
+]
+import Tesl.String exposing [String.toInt, String.isEmpty]
+import Tesl.List exposing [List.foldl]
+import Tesl.Tuple exposing [Tuple2]
+
+# ─── Either examples ──────────────────────────────────────────────────────────
+
+# Parse a raw string into an age, returning descriptive errors.
+# Either is a proper ADT — pattern-match with case:
+#   Left  carries the error String
+#   Right carries the success Int
+fn parseAge(raw: String) -> Either String Int =
+  if String.isEmpty raw then
+    Left "age cannot be empty"
+  else
+    case String.toInt raw of
+      Nothing -> Left "age must be a number"
+      Something n ->
+        if n < 0 then
+          Left "age cannot be negative"
+        else
+          if n > 150 then
+            Left "age seems unrealistic"
+          else
+            Right n
+
+# Chain operations using Either.andThen.
+# Either.andThen applies a function to the Right value; Left passes through.
+fn validateAdult(age: Int) -> Either String Int =
+  if age >= 18 then
+    Right age
+  else
+    Left "must be 18 or older"
+
+fn parseAdultAge(raw: String) -> Either String Int =
+  Either.andThen validateAdult (parseAge raw)
+
+# Map the success side using a named helper.
+fn toAgeCategory(age: Int) -> String =
+  if age < 18 then
+    "minor"
+  else
+    if age < 65 then
+      "adult"
+    else
+      "senior"
+
+fn ageCategory(raw: String) -> Either String String =
+  Either.map toAgeCategory (parseAge raw)
+
+# ─── Dict examples ────────────────────────────────────────────────────────────
+
+# A simple user database as an immutable Dict.
+fn buildUserDb() -> Dict String String =
+  Dict.fromList [Tuple2 "usr-1" "alice", Tuple2 "usr-2" "bob", Tuple2 "usr-3" "carol"]
+
+fn lookupUser(userId: String) -> Maybe String =
+  Dict.lookup userId (buildUserDb())
+
+# Role-to-permissions mapping.
+fn rolePermissions(role: String) -> List String =
+  let perms = Dict.fromList [Tuple2 "admin" "read,write,delete,manage", Tuple2 "member" "read,write", Tuple2 "guest" "read"]
+  case Dict.lookup role perms of
+    Nothing -> []
+    Something p -> [p]
+
+# Helper for countByStatus: read the current count for one status key.
+# Dict.lookup is the Maybe-returning unchecked path; Dict.get is the proof-total
+# path once a key has been validated with Dict.requireKey.
+fn currentCount(acc: Dict String Int, status: String) -> Int =
+  case Dict.lookup status acc of
+    Something value -> value
+    Nothing -> 0
+
+# Helper for countByStatus: increment the count for one status key.
+fn incrementCount(acc: Dict String Int, status: String) -> Dict String Int =
+  Dict.insert status ((currentCount acc status) + 1) acc
+
+# Count items by status.
+fn countByStatus(statuses: List String) -> Dict String Int =
+  List.foldl incrementCount Dict.empty statuses
+
+# ─── Dict proof quantifiers — ForAllValues and ForAllKeys ─────────────────────
+# Just as List T ::: ForAll P means every element satisfies P, Tesl supports:
+#   Dict K V ::: ForAllValues P — every value in the dict satisfies P
+#   Dict K V ::: ForAllKeys P   — every key in the dict satisfies P
+#
+# Use Dict.filterCheckValues / Dict.filterCheckKeys to build proof-carrying dicts.
+# Entries that fail the check are silently dropped (same as List.filterCheck).
+
+fact IsPositiveScore (n: Int)
+fact IsNonEmpty (s: String)
+
+check checkPositiveScore(n: Int) -> n: Int ::: IsPositiveScore n =
+  if n > 0 then
+    ok n ::: IsPositiveScore n
+  else
+    fail 400 "score must be positive"
+
+check checkNonEmpty(s: String) -> s: String ::: IsNonEmpty s =
+  if String.isEmpty s then
+    fail 400 "key must be non-empty"
+  else
+    ok s ::: IsNonEmpty s
+
+# Return a Dict where every value is a positive score.
+# Dict.filterCheckValues applies checkPositiveScore to each value:
+#   - entries that pass keep their (checked) value
+#   - entries that fail are dropped
+fn getVerifiedScores(raw: Dict String Int)
+    -> Dict String Int ::: ForAllValues IsPositiveScore =
+  Dict.filterCheckValues checkPositiveScore raw
+
+# Return a Dict where every key is non-empty.
+# Dict.filterCheckKeys applies checkNonEmpty to each key.
+fn getByValidKeys(raw: Dict String Int)
+    -> Dict String Int ::: ForAllKeys IsNonEmpty =
+  Dict.filterCheckKeys checkNonEmpty raw
+
+# ─── Set examples ─────────────────────────────────────────────────────────────
+
+# Helper: insert one role into a set.
+fn addRole(acc: Set String, role: String) -> Set String =
+  Set.insert role acc
+
+# Deduplicate roles across multiple users.
+fn uniqueRoles(userRoles: List String) -> Set String =
+  List.foldl addRole Set.empty userRoles
+
+# Compute the set of permissions a user has from their roles.
+fn permissionsForRoles(roles: Set String) -> Set String =
+  let allPerms = Set.fromList (Set.toList roles) # simplified; real impl would expand
+  allPerms
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# EITHER vs MAYBE
+#
+# Use Maybe when a value is either present or absent and the absence
+# has no additional information.
+#   selectOne user from Users where user.id == id  → Maybe User
+#   String.indexOf(s, "needle")  → Maybe Int
+#
+# Use Either when absence/failure carries a meaningful value — typically
+# an error message, error code, or error ADT.
+#   parseAge("abc")  → Left "age must be a number"
+#   parseAge("25")   → Right 25
+#
+# Either is a proper ADT — use case expressions to pattern-match:
+#   case parseAge raw of
+#     Left err  -> fail 400 err    # err is a String (the left value)
+#     Right age -> ok age          # age is an Int (the right value)
+#
+# Field access on a matched Either value:
+#   case result of
+#     Left  err -> err.value       # .value accesses the Left payload
+#     Right val -> val.value       # .value accesses the Right payload
+#
+# Either.andThen is the monadic bind. It lets you chain operations
+# without deeply nested case expressions:
+#   let a = parseAge(rawAge)
+#   let b = Either.andThen(validateAdult, a)
+#   let c = Either.andThen(enrollUser, b)
+# Each step passes the Left through unchanged if any step fails.
+#
+# DICT: immutable, persistent, equal?-based
+#
+# Tesl's Dict is Racket's immutable hash table. Every Dict.insert /
+# Dict.remove returns a NEW dict — the original is unchanged.
+# This is safe to share across handlers and threads without copying.
+# Key types can be strings, integers, or any value comparable with equal?.
+#
+# Dict.union is left-biased: when both dicts have the same key, the
+# value from the FIRST argument (d1) wins.
+#
+# SET: for uniqueness and membership testing
+#
+# Set is backed by an equal?-based Racket immutable set.
+# Set.insert deduplicates automatically.
+# Set.member is O(1) — prefer it over List.contains for large collections.
+# Typical use cases:
+#   - Deduplicating tags, roles, permissions
+#   - Computing overlaps (intersection) or differences between groups
+#   - Fast membership testing in authorization logic
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# EITHER IMPLEMENTATION
+#
+# Either is implemented via two Racket structs: either-left and either-right.
+# These are opaque from Tesl's perspective — you interact via the function API.
+# Either.toMaybe / Either.fromMaybe bridge to Maybe for interop.
+# Either.partition splits a List (Either a b) into [lefts, rights].
+#
+# GDP NOTE: Either does not currently carry GDP proofs. If you need to prove
+# something about a successfully validated value (e.g. "this age is valid"),
+# use a `check` function with a proof annotation instead:
+#   check checkAge(raw: String) → age: Int::: ValidAge age
+# Either is for cases where the error value itself is important.
+#
+# DICT AND SET IMMUTABILITY
+#
+# Both Dict and Set are fully persistent data structures (backed by Racket's
+# functional hash and set implementations). Operations like insert/remove/union
+# are O(log n) and return a new data structure without modifying the original.
+# This makes them safe to use in concurrent handler code.
+#
+# CURRENT LIMITATION: Dict and Set are opaque Racket values from Tesl's
+# perspective. You cannot declare an entity field of type Dict or Set.
+# For database storage, serialize to JSON (for Dict) or a comma-joined
+# String (for simple Set) at the persistence boundary.
+
+test "either parseAge success" {
+  expect parseAge "25" == Right 25
+  expect parseAge "0" == Right 0
+}
+
+fn isLeft(e: Either String Int) -> Bool =
+  Either.isLeft e
+
+fn isLeftStr(e: Either String String) -> Bool =
+  Either.isLeft e
+
+test "either parseAge errors" {
+  expect isLeft (parseAge "") == True
+  expect isLeft (parseAge "abc") == True
+  expect isLeft (parseAge "-1") == True
+  expect isLeft (parseAge "200") == True
+}
+
+test "either andThen chain" {
+  expect parseAdultAge "25" == Right 25
+  expect isLeft (parseAdultAge "16") == True
+  expect isLeft (parseAdultAge "abc") == True
+}
+
+test "either map" {
+  expect ageCategory "17" == Right "minor"
+  expect ageCategory "30" == Right "adult"
+  expect ageCategory "70" == Right "senior"
+  expect isLeftStr (ageCategory "abc") == True
+}
+
+test "dict basics" {
+  let d: Dict String Int = Dict.fromList [Tuple2 "a" 1, Tuple2 "b" 2, Tuple2 "c" 3]
+  let keyB = "b"
+  let checkedB = check Dict.requireKey keyB d
+  expect Dict.size d == 3
+  expect Dict.lookup "a" d == Something 1
+  expect Dict.lookup "z" d == Nothing
+  expect Dict.get keyB checkedB == 2
+  expect Dict.member "a" d == True
+  expect Dict.member "z" d == False
+}
+
+test "dict insert and remove" {
+  let d = Dict.singleton "x" 42
+  let d2 = Dict.insert "y" 99 d
+  let d3 = Dict.remove "x" d2
+  expect Dict.size d2 == 2
+  expect Dict.size d3 == 1
+  expect Dict.member "x" d3 == False
+}
+
+test "dict union" {
+  let d1 = Dict.fromList [Tuple2 "a" 1, Tuple2 "b" 2]
+  let d2 = Dict.fromList [Tuple2 "b" 99, Tuple2 "c" 3]
+  let u = Dict.union d1 d2
+  let keyA = "a"
+  let keyB = "b"
+  let keyC = "c"
+  let checkedA = check Dict.requireKey keyA u
+  let checkedB = check Dict.requireKey keyB u
+  let checkedC = check Dict.requireKey keyC u
+  expect Dict.get keyA checkedA == 1
+  expect Dict.get keyB checkedB == 2 # d1 wins on conflict
+  expect Dict.get keyC checkedC == 3
+}
+
+test "countByStatus" {
+  let counts = countByStatus ["active", "inactive", "active", "pending"]
+  let active = "active"
+  let inactive = "inactive"
+  let pending = "pending"
+  let checkedActive = check Dict.requireKey active counts
+  let checkedInactive = check Dict.requireKey inactive counts
+  let checkedPending = check Dict.requireKey pending counts
+  expect Dict.get active checkedActive == 2
+  expect Dict.get inactive checkedInactive == 1
+  expect Dict.get pending checkedPending == 1
+}
+
+test "ForAllValues — getVerifiedScores keeps only positive values" {
+  let raw = Dict.fromList [Tuple2 "alice" 95, Tuple2 "bob" 0, Tuple2 "carol" (-5), Tuple2 "dave" 80]
+  let scores = getVerifiedScores raw
+  # bob (0) and carol (-5) are dropped; alice and dave remain
+  expect Dict.size scores == 2
+  expect Dict.member "alice" scores == True
+  expect Dict.member "bob" scores == False
+  expect Dict.member "carol" scores == False
+  expect Dict.member "dave" scores == True
+}
+
+test "ForAllValues — empty input gives empty output" {
+  let raw = Dict.fromList []
+  let scores = getVerifiedScores raw
+  expect Dict.size scores == 0
+}
+
+test "ForAllKeys — getByValidKeys drops empty-string keys" {
+  let raw = Dict.fromList [Tuple2 "" 1, Tuple2 "x" 2, Tuple2 "y" 3]
+  let good = getByValidKeys raw
+  # empty-string key is dropped
+  expect Dict.size good == 2
+  expect Dict.member "x" good == True
+  expect Dict.member "y" good == True
+}
+
+test "set basics" {
+  let s = Set.fromList [1, 2, 3, 2, 1]
+  expect Set.size s == 3
+  expect Set.member 1 s == True
+  expect Set.member 9 s == False
+  expect Set.isEmpty s == False
+  expect Set.isEmpty Set.empty == True
+}
+
+test "set operations" {
+  let s1 = Set.fromList [1, 2, 3]
+  let s2 = Set.fromList [2, 3, 4]
+  expect Set.size (Set.union s1 s2) == 4
+  expect Set.size (Set.intersection s1 s2) == 2
+  expect Set.size (Set.difference s1 s2) == 1
+  expect Set.member 1 (Set.difference s1 s2) == True
+}
+
+test "uniqueRoles" {
+  let roles = uniqueRoles ["admin", "member", "admin", "guest", "member"]
+  expect Set.size roles == 3
+  expect Set.member "admin" roles == True
+}
+
+test "lookupUser" {
+  expect lookupUser "usr-1" == Something "alice"
+  expect lookupUser "usr-99" == Nothing
+}

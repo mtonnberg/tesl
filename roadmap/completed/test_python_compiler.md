@@ -1,0 +1,1 @@
+The python compiler lacks tests. Please add a large and thourough test suite.

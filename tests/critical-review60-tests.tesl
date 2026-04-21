@@ -1,0 +1,532 @@
+#lang tesl
+# =====================================================================
+# Critical Review 60 — positive regression tests
+# =====================================================================
+#
+# Validates behaviors and catches regressions from review 60:
+# - Triple+ check accumulation at both compile-time and runtime
+# - Record with proof-annotated fields: construction + field access
+# - ForAll list with lambda wrapper that requires proof
+# - Multi-param proofs with correct literal args
+# - Proof-annotated record field prevents unproven construction
+# - establish as unconditional trusted boundary (can forge any proof)
+# - ok with let-bound transformed value works
+# - Lambda with proof-annotated param works in direct call
+# - introAnd + andLeft/andRight across 4-chain establish
+# - forgetFact strips proof (no runtime access to proof)
+# - detachFact fails at runtime with 4 accumulated proofs
+
+module CriticalReview60Tests exposing []
+
+import Tesl.Prelude exposing [
+  Bool(..),
+  Int,
+  String,
+  List,
+  Fact,
+  forgetFact,
+  detachFact,
+  introAnd,
+  andLeft,
+  andRight,
+]
+import Tesl.String exposing [String.length]
+import Tesl.List exposing [List.filterCheck, List.map, List.length]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Tuple exposing [Tuple2(..), Tuple2.first]
+
+# ─── Proof vocabulary ─────────────────────────────────────────────────────────
+
+fact A (n: Int)
+fact B (n: Int)
+fact C (n: Int)
+fact D (n: Int)
+fact TitleSafe (s: String)
+fact IsPositive (n: Int)
+fact InRange (lo: Int) (hi: Int) (n: Int)
+
+# ─── Check functions ──────────────────────────────────────────────────────────
+
+check checkA(n: Int) -> n: Int ::: A n =
+  if n > 0 then
+    ok n ::: A n
+  else
+    fail 400 "fail A"
+
+check checkB(n: Int ::: A n) -> n: Int ::: B n =
+  if n < 1000 then
+    ok n ::: B n
+  else
+    fail 400 "fail B"
+
+check checkC(n: Int ::: A n && B n) -> n: Int ::: C n =
+  if n != 42 then
+    ok n ::: C n
+  else
+    fail 400 "fail C"
+
+check checkD(n: Int ::: A n && B n && C n) -> n: Int ::: D n =
+  if n != 99 then
+    ok n ::: D n
+  else
+    fail 400 "fail D"
+
+check checkPos(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+check checkTitle(s: String) -> s: String ::: TitleSafe s =
+  if String.length s > 0 then
+    ok s ::: TitleSafe s
+  else
+    fail 400 "empty title"
+
+check checkInRange(lo: Int, hi: Int, n: Int) -> n: Int ::: InRange lo hi n =
+  if n >= lo && n <= hi then
+    ok n ::: InRange lo hi n
+  else
+    fail 400 "out of range"
+
+# ─── Establish functions ──────────────────────────────────────────────────────
+
+establish proveA(n: Int) -> Fact (A n) = A n
+establish proveB(n: Int) -> Fact (B n) = B n
+
+# ─── Functions that require proofs ───────────────────────────────────────────
+
+fn needsA(n: Int ::: A n) -> Int = n
+fn needsB(n: Int ::: B n) -> Int = n
+fn needsAB(n: Int ::: A n && B n) -> Int = n
+fn needsABC(n: Int ::: A n && B n && C n) -> Int = n
+fn needsAll4(n: Int ::: A n && B n && C n && D n) -> Int = n
+fn needsPos(n: Int ::: IsPositive n) -> Int = n
+fn needsTitle(s: String ::: TitleSafe s) -> String = s
+fn needsInRange(lo: Int, hi: Int, n: Int ::: InRange lo hi n) -> Int = n
+
+# ─── R60_CH — Triple and quadruple check chain accumulation ───────────────────
+
+fn chain3(raw: Int) -> Int =
+  let a = check checkA raw
+  let b = check checkB a
+  let c = check checkC b
+  needsABC c
+
+fn chain4(raw: Int) -> Int =
+  let a = check checkA raw
+  let b = check checkB a
+  let c = check checkC b
+  let d = check checkD c
+  needsAll4 d
+
+test "R60_CH01 three-check chain accumulation" {
+  let r = chain3 5
+  expect r == 5
+}
+
+test "R60_CH02 four-check chain accumulation" {
+  let r = chain4 5
+  expect r == 5
+}
+
+test "R60_CH03 four-check chain rejects invalid first step" {
+  expectFail (fn () -> chain4 0)
+}
+
+test "R60_CH04 four-check chain rejects middle step (n=42 fails C)" {
+  expectFail (fn () -> chain4 42)
+}
+
+# ─── R60_RF — Record with proof-annotated fields ──────────────────────────────
+
+record SafeItem {
+  title: String ::: TitleSafe title
+  count: Int ::: IsPositive count
+}
+
+fn makeItem(rawTitle: String, rawCount: Int) -> SafeItem =
+  let t = check checkTitle rawTitle
+  let c = check checkPos rawCount
+  SafeItem { title: t, count: c }
+
+fn useItemTitle(item: SafeItem) -> String =
+  needsTitle item.title
+
+fn useItemCount(item: SafeItem) -> Int =
+  needsPos item.count
+
+test "R60_RF01 proof-annotated field construction and title access" {
+  let item = makeItem "hello" 5
+  let t = useItemTitle item
+  expect t == "hello"
+}
+
+test "R60_RF02 proof-annotated field construction and count access" {
+  let item = makeItem "hello" 5
+  let c = useItemCount item
+  expect c == 5
+}
+
+test "R60_RF03 proof-annotated field construction rejects bad title" {
+  expectFail (fn () -> makeItem "" 5)
+}
+
+test "R60_RF04 proof-annotated field construction rejects bad count" {
+  expectFail (fn () -> makeItem "ok" 0)
+}
+
+# ─── R60_FA — ForAll list with lambda wrapper ─────────────────────────────────
+
+fn doublePos(n: Int ::: IsPositive n) -> Int = n * 2
+
+# Must use lambda wrapper, not pass named fn directly
+fn doubleAllPositive(xs: List Int ::: ForAll (IsPositive) xs) -> List Int =
+  List.map (fn(n: Int ::: IsPositive n) -> doublePos n) xs
+
+test "R60_FA01 ForAll list with lambda wrapper" {
+  let raw = [1, 2, 3, 4]
+  let pos = List.filterCheck checkPos raw
+  let doubled = doubleAllPositive pos
+  expect List.length doubled == 4
+}
+
+test "R60_FA02 ForAll filterCheck excludes invalid elements" {
+  let raw = [1, -2, 3, -4, 5]
+  let pos = List.filterCheck checkPos raw
+  let doubled = doubleAllPositive pos
+  expect List.length doubled == 3
+}
+
+# ─── R60_MP — Multi-param proofs with correct literal args ──────────────────
+
+fn inBounds(raw: Int) -> Int =
+  let checked = check checkInRange 0 100 raw
+  needsInRange 0 100 checked
+
+test "R60_MP01 multi-param proof with correct literal args" {
+  let r = inBounds 50
+  expect r == 50
+}
+
+test "R60_MP02 multi-param proof rejects out-of-range value" {
+  expectFail (fn () -> inBounds 150)
+}
+
+# ─── R60_ES — establish as unconditional trusted boundary ────────────────────
+# establish can forge a proof for ANY value with a proof declared in the same
+# modul; it is a trusted boundary.
+# This is by design (analogous to unsafeCoerce in Haskell).
+
+establish forgeA(n: Int) -> Fact (A n) = A n
+
+fn passThroughUnconditional(n: Int) -> Int =
+  let proof = forgeA n
+  let raw = forgetFact n
+  let faked = raw ::: proof
+  needsA faked
+
+test "R60_ES01 establish forges proof unconditionally (negative value)" {
+  let r = passThroughUnconditional (-5)
+  expect r == -5
+}
+
+test "R60_ES02 establish forges proof unconditionally (zero)" {
+  let r = passThroughUnconditional 0
+  expect r == 0
+}
+
+# ─── R60_OK — ok with let-bound transformed value ─────────────────────────────
+
+check checkAndAppend(s: String) -> result: String ::: TitleSafe result =
+  let result = s ++ "!"
+  if String.length result > 0 then
+    ok result ::: TitleSafe result
+  else
+    fail 400 "empty after append"
+
+test "R60_OK01 ok with let-bound transformed value" {
+  let r = check checkAndAppend "hello"
+  let result = needsTitle r
+  expect result == "hello!"
+}
+
+# ─── R60_LM — Lambda with proof-annotated param ───────────────────────────────
+
+fn callLambdaWithProof(raw: Int) -> Int =
+  let pos = check checkPos raw
+  let f = fn(n: Int ::: IsPositive n) -> n + 1
+  f pos
+
+test "R60_LM01 lambda with proof-annotated param is callable" {
+  let r = callLambdaWithProof 5
+  expect r == 6
+}
+
+# ─── R60_IA — introAnd + andLeft/andRight with 4 establish calls ──────────────
+
+fn combine4Proofs(n: Int) -> Int =
+  let pa = proveA n
+  let pb = proveB n
+  let pab = introAnd pa pb
+  let la = andLeft pab
+  let rb = andRight pab
+  let base = forgetFact n
+  let withA = base ::: la
+  let withB = forgetFact n ::: rb
+  needsA withA + needsB withB
+
+test "R60_IA01 introAnd from two establish calls, andLeft gives A" {
+  let r = combine4Proofs 5
+  expect r == 10
+}
+
+# ─── R60_DT — detachFact with 4 accumulated proofs should not fail at runtime ──────────
+
+fn detachFrom4Chain(raw: Int) -> Int =
+  let a = check checkA raw
+  let b = check checkB a
+  let c = check checkC b
+  let d = check checkD c
+  let _p = detachFact d
+  0
+
+test "R60_DT01 detachFact with 4 accumulated proofs should not fail at runtime" {
+  expect (detachFrom4Chain 5) == 0
+}
+
+# ─── R60_TU — Tuple accessor does NOT propagate proof (by design) ────────────
+
+# Proof is lost through tuple accessor — user must re-prove if needed
+fn tupleProofLoss(raw: Int) -> Int =
+  let pos = check checkPos raw
+  let t = Tuple2 pos "hello"
+  let extracted = Tuple2.first t
+  # extracted has no proof — we must re-prove
+  let reproved = check checkPos extracted
+  needsPos reproved
+
+test "R60_TU01 tuple accessor loses proof requiring re-check" {
+  let r = tupleProofLoss 5
+  expect r == 5
+}
+
+# ─── R60_UC — Unannotated record field loses proof (by design) ────────────────
+
+record PlainPair {
+  n: Int
+  s: String
+}
+
+fn plainFieldLoss(raw: Int) -> Int =
+  let pos = check checkPos raw
+  let pair = PlainPair { n: pos, s: "x" }
+  # pair.n has no proof — must re-prove
+  let reproved = check checkPos pair.n
+  needsPos reproved
+
+test "R60_UC01 unannotated field loses proof requiring re-check" {
+  let r = plainFieldLoss 5
+  expect r == 5
+}
+
+# ─── R60_RU — Record update preserves proof on proof-annotated fields (FIXED) ──
+# Previously a bug: { record | field: v } stripped the proof from proof-annotated
+# fields at runtime. Now fixed in emit_racket.ml — both update code paths check
+# field_has_proof and preserve the named-value wrapper for annotated fields.
+
+fn updateTitle(item: SafeItem, newTitle: String) -> SafeItem =
+  let t = check checkTitle newTitle
+  { item | title: t }
+
+fn updateCount(item: SafeItem, newCount: Int) -> SafeItem =
+  let c = check checkPos newCount
+  { item | count: c }
+
+fn updateBoth(item: SafeItem, newTitle: String, newCount: Int) -> SafeItem =
+  let t = check checkTitle newTitle
+  let c = check checkPos newCount
+  { item | title: t, count: c }
+
+test "R60_RU01 record update preserves proof on annotated title field" {
+  let item = makeItem "hello" 5
+  let newTitle = "world"
+  let updated = updateTitle item newTitle
+  let t = useItemTitle updated
+  expect t == "world"
+}
+
+test "R60_RU02 updated item count proof is preserved after title update" {
+  let item = makeItem "hello" 5
+  let newTitle = "world"
+  let updated = updateTitle item newTitle
+  let c = useItemCount updated
+  expect c == 5
+}
+
+test "R60_RU03 record update preserves proof on annotated count field" {
+  let item = makeItem "hello" 5
+  let newCount = 42
+  let updated = updateCount item newCount
+  let c = useItemCount updated
+  expect c == 42
+}
+
+test "R60_RU04 updated item title proof preserved after count update" {
+  let item = makeItem "hello" 5
+  let newCount = 42
+  let updated = updateCount item newCount
+  let t = useItemTitle updated
+  expect t == "hello"
+}
+
+test "R60_RU05 updating both annotated fields preserves both proofs" {
+  let item = makeItem "hello" 5
+  let newTitle = "world"
+  let newCount = 99
+  let updated = updateBoth item newTitle newCount
+  let t = useItemTitle updated
+  let c = useItemCount updated
+  expect t == "world"
+  expect c == 99
+}
+
+test "R60_RU06 updated record rejects bad title at update time" {
+  let item = makeItem "hello" 5
+  let bad = ""
+  expectFail (fn () -> updateTitle item bad)
+}
+
+test "R60_RU07 updated record rejects bad count at update time" {
+  let item = makeItem "hello" 5
+  let bad = 0
+  expectFail (fn () -> updateCount item bad)
+}
+
+# ─── R60_DT2 — detachFact returns conjunction for multiple accumulated proofs ──
+# Previously: detachFact on a value with N>1 accumulated proofs raised a runtime
+# error. Now: it returns the conjunction of all proofs (same as detachAllFact).
+
+fn detachConjunction(raw: Int) -> Int =
+  let a = check checkA raw
+  let b = check checkB a
+  let c = check checkC b
+  let d = check checkD c
+  let combined = detachFact d
+  let base = forgetFact d
+  let withAll = base ::: combined
+  needsAll4 withAll
+
+test "R60_DT2_01 detachFact on 4-chain returns conjunction" {
+  let r = detachConjunction 5
+  expect r == 5
+}
+
+fn detachTwoProofs(raw: Int) -> Int =
+  let a = check checkA raw
+  let b = check checkB a
+  let combined = detachFact b
+  let base = forgetFact b
+  let withAB = base ::: combined
+  needsAB withAB
+
+test "R60_DT2_02 detachFact on 2-chain returns A&&B conjunction" {
+  let r = detachTwoProofs 5
+  expect r == 5
+}
+
+test "R60_DT2_03 detachFact on single proof still works" {
+  let raw = 5
+  let a = check checkA raw
+  let p = detachFact a
+  let base = forgetFact a
+  let withA = base ::: p
+  let r = needsA withA
+  expect r == 5
+}
+
+# ─── R60_CK — ok with constructor application (FIXED) ────────────────────────
+# Previously: ok could only return the exact declared binding name.
+# Now: constructor applications are allowed, emitter wraps in a let-binding.
+
+type MkUserId = String
+
+fact ValidUserId (u: MkUserId)
+
+check checkAndWrapUserId(raw: String) -> u: MkUserId ::: ValidUserId u =
+  if String.length raw >= 3 then
+    ok MkUserId raw ::: ValidUserId u
+  else
+    fail 400 "user id too short"
+
+fn needsValidId(u: MkUserId ::: ValidUserId u) -> MkUserId = u
+
+test "R60_CK01 ok with constructor application compiles and runs" {
+  let uid = check checkAndWrapUserId "abc"
+  let result = needsValidId uid
+  expect result.value == "abc"
+}
+
+test "R60_CK02 ok with constructor application rejects short id" {
+  expectFail (fn () -> check checkAndWrapUserId "ab")
+}
+
+# ─── R60_EX — Exhaustiveness checking ────────────────────────────────────────
+# Compile-time exhaustiveness checks now catch missing case arms.
+# These tests verify the positive (exhaustive) cases compile and run.
+
+type Color
+  = Red
+  | Green
+  | Blue
+
+fn colorName(c: Color) -> String =
+  case c of
+    Red -> "red"
+    Green -> "green"
+    Blue -> "blue"
+
+test "R60_EX01 exhaustive 3-constructor ADT case works" {
+  expect colorName Red == "red"
+  expect colorName Green == "green"
+  expect colorName Blue == "blue"
+}
+
+type Suit
+  = Hearts
+  | Diamonds
+  | Clubs
+  | Spades
+
+fn suitColor(s: Suit) -> String =
+  case s of
+    Hearts -> "red"
+    Diamonds -> "red"
+    Clubs -> "black"
+    Spades -> "black"
+
+test "R60_EX02 exhaustive 4-constructor ADT case works" {
+  expect suitColor Hearts == "red"
+  expect suitColor Spades == "black"
+}
+
+fn suitColorWildcard(s: Suit) -> String =
+  case s of
+    Hearts -> "red"
+    Diamonds -> "red"
+    _ -> "black"
+
+test "R60_EX03 wildcard covers remaining constructors" {
+  expect suitColorWildcard Hearts == "red"
+  expect suitColorWildcard Clubs == "black"
+}
+
+fn maybeWithFallback(m: Maybe Int) -> Int =
+  case m of
+    Nothing -> 0
+    Something v -> v
+
+test "R60_EX04 exhaustive Maybe case works" {
+  expect maybeWithFallback Nothing == 0
+  expect maybeWithFallback (Something 42) == 42
+}

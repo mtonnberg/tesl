@@ -1,0 +1,398 @@
+#lang tesl
+module ListFunctionsLesson exposing [
+  doubleAll,
+  keepPositive,
+  total,
+  flattenTags,
+  hasAdmin,
+  findFirst,
+  groupByPrefix,
+  zipPairs,
+  buildRange,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Tesl's `Tesl.List` module covers all common list operations.
+# Every function is pure and returns a new list (no mutation).
+#
+# TRANSFORM
+#   List.map         (a->b) -> List a -> List b      — apply a function to every element
+#   List.filter      (a->Bool) -> List a -> List a   — keep elements passing a predicate
+#   List.concatMap   (a->List b) -> List a -> List b — map then flatten (aka flatMap)
+#   List.filterMap   (a->Maybe b) -> List a -> List b — map, keeping Somethings only
+#   List.reverse     List a -> List a                — reverse element order
+#   List.unique      List a -> List a                — remove duplicates (keeps first)
+#   List.zip         List a -> List b -> List (Tuple2 a b)
+#
+# QUERY
+#   List.length      List a -> Int
+#   List.isEmpty     List a -> Bool
+#   List.head        List a -> Maybe a               — first element, or Nothing
+#   List.tail        List a -> Maybe (List a)        — all but first, or Nothing
+#   List.any         (a->Bool) -> List a -> Bool     — true if at least one passes
+#   List.all         (a->Bool) -> List a -> Bool     — true if every element passes
+#   List.find        (a->Bool) -> List a -> Maybe a  — first passing element
+#   List.member      a -> List a -> Bool             — membership check
+#   List.sum         List Int -> Int
+#   List.maximum     List a -> Maybe a
+#   List.minimum     List a -> Maybe a
+#
+# BUILD
+#   List.range       Int -> Int -> List Int          — [start..end-1]
+#   List.repeat      a -> Int -> List a              — repeat element n times
+#   List.append      List a -> List a -> List a      — concatenate two lists
+#   List.concat      List (List a) -> List a         — flatten one level
+#
+# FOLD
+#   List.foldl       (b->a->b) -> b -> List a -> b  — left fold (strict, tail-recursive)
+#   List.foldr       (a->b->b) -> b -> List a -> b  — right fold
+#
+# SLICE
+#   List.take        Int -> List a -> List a         — first N elements
+#   List.drop        Int -> List a -> List a         — skip first N elements
+#
+# SORT
+#   List.sort        List a -> List a ? IsSorted     — natural order (proof-bearing)
+#   List.sortBy      (a->b) -> List a -> List a      — sort by key function
+#
+# LAMBDA SYNTAX
+#   Use  fn(x: T) -> expr   for inline anonymous functions.
+#   Named functions can be passed directly when the type matches.
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [
+  String.startsWith,
+  String.length,
+  String.isEmpty,
+  String.toInt,
+]
+import Tesl.Int exposing [Int.nonNegative, IsNonNegative]
+import Tesl.List exposing [
+  List.map,
+  List.filter,
+  List.concatMap,
+  List.filterMap,
+  List.foldl,
+  List.append,
+  List.concat,
+  List.reverse,
+  List.unique,
+  List.zip,
+  List.range,
+  List.repeat,
+  List.length,
+  List.isEmpty,
+  List.head,
+  List.any,
+  List.all,
+  List.find,
+  List.member,
+  List.sum,
+  List.maximum,
+  List.minimum,
+  List.take,
+  List.drop,
+  List.sort,
+  List.sortBy,
+  IsSorted,
+]
+import Tesl.Tuple exposing [Tuple2]
+
+# ─── 1. List.map — transform every element ────────────────────────────────────
+# fn(x: T) -> expr  is the anonymous function syntax in Tesl.
+
+fn doubleAll(ns: List Int) -> List Int =
+  List.map (fn(n: Int) -> n * 2) ns
+
+fn toUpperLength(words: List String) -> List Int =
+  List.map String.length words
+
+# ─── 2. List.filter — keep matching elements ─────────────────────────────────
+
+fn keepPositive(ns: List Int) -> List Int =
+  List.filter (fn(n: Int) -> n > 0) ns
+
+fn shortWords(words: List String) -> List String =
+  List.filter (fn(w: String) -> String.length w <= 4) words
+
+# ─── 3. List.concatMap — map then flatten ─────────────────────────────────────
+# Perfect for one-to-many transformations: each element produces zero or more results.
+
+# Expand each number into two neighbouring numbers: n → [n-1, n+1]
+fn neighbours(ns: List Int) -> List Int =
+  List.concatMap (fn(n: Int) -> [n - 1, n + 1]) ns
+
+# Drop empty strings from a list.
+fn flattenTags(tagGroups: List String) -> List String =
+  List.concatMap (fn(s: String) ->
+    if String.isEmpty s then
+      []
+    else
+      [s]
+  ) tagGroups
+
+# ─── 4. List.filterMap — map and drop Nothings in one pass ────────────────────
+# Like concatMap but produces 0 or 1 result per element via Maybe.
+
+# Parse all strings, silently skipping non-numbers.
+fn parseInts(strs: List String) -> List Int =
+  List.filterMap (fn(s: String) ->
+    case String.toInt s of
+      Something n -> Something n
+      Nothing -> Nothing
+  ) strs
+
+# ─── 5. List.foldl / foldr — accumulate ──────────────────────────────────────
+
+fn total(ns: List Int) -> Int =
+  List.foldl (fn(acc: Int, n: Int) -> acc + n) 0 ns
+
+fn joinWords(words: List String) -> String =
+  List.foldl (fn(acc: String, w: String) ->
+    if String.isEmpty acc then
+      w
+    else
+      "${acc} ${w}"
+  ) "" words
+
+# ─── 6. List.any / all / find — search ────────────────────────────────────────
+
+fn hasAdmin(roles: List String) -> Bool =
+  List.member "admin" roles
+
+fn allPositive(ns: List Int) -> Bool =
+  List.all (fn(n: Int) -> n > 0) ns
+
+fn anyNegative(ns: List Int) -> Bool =
+  List.any (fn(n: Int) -> n < 0) ns
+
+fn findFirst(ns: List Int, threshold: Int) -> Maybe Int =
+  List.find (fn(n: Int) -> n > threshold) ns
+
+# ─── 7. List.unique — deduplicate ─────────────────────────────────────────────
+
+fn dedup(ns: List Int) -> List Int =
+  List.unique ns
+
+# ─── 8. List.zip — pair two lists ─────────────────────────────────────────────
+# Pairs elements by position. Stops at the shorter list.
+
+fn zipPairs(names: List String, scores: List Int) -> List (Tuple2 String Int) =
+  List.zip names scores
+
+# ─── 9. List.range / repeat / take / drop ─────────────────────────────────────
+
+fn buildRange(start: Int, count: Int) -> List Int =
+  let safeCount = check Int.nonNegative count
+  List.take safeCount (List.range start (start + count))
+
+fn fillWith(value: Int, n: Int) -> List Int =
+  let safeN = check Int.nonNegative n
+  List.repeat value safeN
+
+fn firstThree(ns: List Int) -> List Int =
+  let raw3 = 3
+  let n3 = check Int.nonNegative raw3
+  List.take n3 ns
+
+fn skipFirst(ns: List Int, n: Int) -> List Int =
+  let safeN = check Int.nonNegative n
+  List.drop safeN ns
+
+# ─── 10. List.sort / sortBy ───────────────────────────────────────────────────
+
+fn sortInts(ns: List Int) -> List Int ? IsSorted =
+  List.sort ns
+
+fn sortByLength(words: List String) -> List String =
+  List.sortBy String.length words
+
+# ─── 11. List.maximum / minimum / sum ─────────────────────────────────────────
+
+fn highestScore(scores: List Int) -> Maybe Int =
+  List.maximum scores
+
+fn lowestPrice(prices: List Int) -> Maybe Int =
+  List.minimum prices
+
+# ─── 12. List.reverse / concat / append ──────────────────────────────────────
+
+fn reversed(ns: List Int) -> List Int =
+  List.reverse ns
+
+fn merged(a: List Int, b: List Int) -> List Int =
+  List.append a b
+
+fn flatten(xss: List (List Int)) -> List Int =
+  List.concat xss
+
+# ─── 13. Composing — real-world pipeline ──────────────────────────────────────
+# Parse raw strings into ints, keep only positives, sort them, take the top 3.
+
+fn groupByPrefix(words: List String, prefix: String) -> List String =
+  List.filter (fn(w: String) -> String.startsWith w prefix) words
+
+fn topPositive(strs: List String) -> List Int =
+  let pos = keepPositive (parseInts strs)
+  firstThree (List.reverse (List.sort pos))
+
+# ─── Tests ────────────────────────────────────────────────────────────────────
+
+test "List.map doubles all elements" {
+  expect doubleAll [1, 2, 3] == [2, 4, 6]
+}
+
+test "List.map works on empty list" {
+  expect doubleAll [] == []
+}
+
+test "List.map with named function (String.length)" {
+  expect toUpperLength ["hi", "hello"] == [2, 5]
+}
+
+test "List.filter keeps only positives" {
+  expect keepPositive [-2, 0, 1, 3, -1] == [1, 3]
+}
+
+test "List.filter short words" {
+  expect shortWords ["hi", "hello", "fig"] == ["hi", "fig"]
+}
+
+test "List.concatMap expands each element" {
+  expect neighbours [10, 20] == [9, 11, 19, 21]
+}
+
+test "List.concatMap on empty list" {
+  expect neighbours [] == []
+}
+
+test "List.concatMap drops empty-result elements" {
+  expect flattenTags ["rust", "", "go", ""] == ["rust", "go"]
+}
+
+test "List.filterMap skips Nothings" {
+  expect parseInts ["1", "x", "3", ""] == [1, 3]
+}
+
+test "List.filterMap on all non-numbers" {
+  expect parseInts ["a", "b"] == []
+}
+
+test "List.foldl sums a list" {
+  expect total [1, 2, 3, 4] == 10
+  expect total [] == 0
+}
+
+test "List.foldl join words" {
+  expect joinWords ["hello", "world"] == "hello world"
+  expect joinWords [] == ""
+}
+
+test "List.member returns True when present" {
+  expect hasAdmin ["editor", "admin", "viewer"] == True
+}
+
+test "List.member returns False when absent" {
+  expect hasAdmin ["editor", "viewer"] == False
+}
+
+test "List.any finds a negative" {
+  expect anyNegative [1, -1, 2] == True
+  expect anyNegative [1, 2, 3] == False
+}
+
+test "List.all checks every element" {
+  expect allPositive [1, 2, 3] == True
+  expect allPositive [1, -1, 3] == False
+}
+
+test "List.find returns first match" {
+  expect findFirst [1, 5, 10, 20] 8 == Something 10
+}
+
+test "List.find returns Nothing when no match" {
+  expect findFirst [1, 2, 3] 100 == Nothing
+}
+
+test "List.unique removes duplicates" {
+  expect List.length (dedup [1, 2, 1, 3, 2]) == 3
+}
+
+test "List.zip pairs elements" {
+  expect List.length (zipPairs ["alice", "bob"] [90, 80]) == 2
+}
+
+test "List.zip stops at shorter list" {
+  expect List.length (List.zip [1, 2, 3] ["a", "b"]) == 2
+}
+
+test "List.range builds integers" {
+  expect buildRange 1 5 == [1, 2, 3, 4, 5]
+}
+
+test "List.repeat fills a list" {
+  expect fillWith 0 4 == [0, 0, 0, 0]
+}
+
+test "List.take limits list length" {
+  expect firstThree [10, 20, 30, 40] == [10, 20, 30]
+  expect firstThree [1, 2] == [1, 2]
+}
+
+test "List.drop skips elements" {
+  expect skipFirst [1, 2, 3, 4] 2 == [3, 4]
+  expect skipFirst [1, 2] 5 == []
+}
+
+test "List.sort ascending" {
+  expect sortInts [3, 1, 2] == [1, 2, 3]
+}
+
+test "List.sortBy key function" {
+  expect List.head (sortByLength ["banana", "fig", "apple"]) == Something "fig"
+}
+
+test "List.maximum and minimum" {
+  expect highestScore [3, 7, 2] == Something 7
+  expect lowestPrice [5, 1, 9] == Something 1
+  expect highestScore [] == Nothing
+}
+
+test "List.sum" {
+  expect List.sum [1, 2, 3, 4, 5] == 15
+  expect List.sum [] == 0
+}
+
+test "List.reverse" {
+  expect reversed [1, 2, 3] == [3, 2, 1]
+  expect reversed [] == []
+}
+
+test "List.append merges lists" {
+  expect merged [1, 2] [3, 4] == [1, 2, 3, 4]
+}
+
+test "List.concat flattens one level" {
+  expect flatten [[1, 2], [3], [4, 5]] == [1, 2, 3, 4, 5]
+}
+
+test "List.isEmpty" {
+  expect List.isEmpty [] == True
+  expect List.isEmpty [1] == False
+}
+
+test "List.head and tail" {
+  expect List.head [10, 20, 30] == Something 10
+  expect List.head [] == Nothing
+}
+
+test "groupByPrefix filters by start" {
+  expect List.length (groupByPrefix ["apple", "apricot", "banana", "avocado"] "a") == 3
+}
+
+test "topPositive pipeline end-to-end" {
+  expect topPositive ["3", "x", "1", "9", "-2", "5"] == [9, 5, 3]
+}

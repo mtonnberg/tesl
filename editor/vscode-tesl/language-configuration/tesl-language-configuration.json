@@ -1,0 +1,33 @@
+{
+  "comments": {
+    "lineComment": "#"
+  },
+  "brackets": [
+    ["{", "}"],
+    ["[", "]"],
+    ["(", ")"]
+  ],
+  "autoClosingPairs": [
+    { "open": "{", "close": "}" },
+    { "open": "[", "close": "]" },
+    { "open": "(", "close": ")" },
+    { "open": "\"", "close": "\"", "notIn": ["string"] }
+  ],
+  "surroundingPairs": [
+    ["{", "}"],
+    ["[", "]"],
+    ["(", ")"],
+    ["\"", "\""]
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": "^\\s*(fn|proof|check|auth|handler|if|else|case|exists|main|record|entity|database|api|server|test|with)\\b.*[={]?\\s*$|^\\s*(api-test|load-test)\\b",
+    "decreaseIndentPattern": "^\\s*(else|\\}|\\])\\s*$"
+  },
+  "folding": {
+    "markers": {
+      "start": "^\\s*(fn|proof|check|auth|handler|record|entity|database|api|server|main|test)\\b|^\\s*(api-test|load-test)\\b",
+      "end": "^(?=\\s*(fn|proof|check|auth|handler|record|entity|database|api|server|main|test|api-test|load-test|$))"
+    }
+  },
+  "wordPattern": "[a-zA-Z_][a-zA-Z0-9_.]*"
+}

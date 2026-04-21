@@ -1,0 +1,323 @@
+#lang tesl
+module RecordsWithProofs exposing [
+  SafeTitle,
+  TitleLength,
+  checkSafeTitle,
+  checkLength,
+  SafeMessage,
+  createMessage,
+  IsPositive,
+  checkPositiveInt,
+  PriceExceedsQuantity,
+  checkPriceExceedsQuantity,
+  OrderLine,
+  makeOrderLine,
+  processOrder,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Record fields can carry proof annotations:
+#   record MyRecord {
+#     title: String::: SafeTitle title
+#   }
+#
+# The::: annotation says "this field holds a value carrying proof SafeTitle".
+# To construct a proof-annotated record, pass already-proven values:
+#   SafeMessage { title: validatedTitle }
+# where validatedTitle already carries the SafeTitle proof (from a check fn).
+#
+# For HTTP/JSON input, declare a codec with "via" on each field:
+#   codec MyRecord {
+#     toJson_forbidden
+#     fromJson [
+#       { title <- "title" with_codec stringCodec via checkSafeTitle }
+#     ]
+#   }
+#
+# Record-level proofs (cross-field invariants, after the closing brace):
+#   record R { ... } ::: CrossFieldFact field1 field2
+# This is a compile-time-only annotation (zero runtime cost).
+# Constructing R requires a ghost witness: TypeName { ... } ::: proofVar
+# where proofVar was obtained by calling the cross-field check function.
+
+import Tesl.Prelude exposing [Int, String, Fact, detachFact]
+import Tesl.String exposing [String.length]
+import Tesl.Json exposing [stringCodec, intCodec]
+
+fact SafeTitle (t: String)
+
+# SafeTitle: a String that is non-empty and at most 120 characters.
+check checkSafeTitle(s: String) -> s: String ::: SafeTitle s =
+  if String.length s > 0 && String.length s <= 120 then
+    ok s ::: SafeTitle s
+  else
+    fail 400 "title must be 1-120 characters"
+
+fact TitleLength (t: String)
+
+# TitleLength: a String at most 500 characters long.
+check checkLength(s: String) -> s: String ::: TitleLength s =
+  if String.length s <= 500 then
+    ok s ::: TitleLength s
+  else
+    fail 400 "too long"
+
+# SafeMessage: a record with two proof-annotated fields.
+# The::: annotation documents the proof each field carries.
+# No "via" here — field proofs come from check functions or codec decoding.
+record SafeMessage {
+  title: String ::: SafeTitle title
+  body: String ::: TitleLength body
+}
+
+# To decode SafeMessage from HTTP JSON input, declare a codec with "via":
+# The codec's "via" validates each field when decoding from the HTTP request body.
+codec SafeMessage {
+  toJson_forbidden
+  fromJson [
+    {
+      title <- "title" with_codec stringCodec via checkSafeTitle
+      body <- "body" with_codec stringCodec via checkLength
+    }
+  ]
+}
+
+# To construct a SafeMessage in application code, pass already-proven values.
+# Both title and body must already carry their respective proofs.
+fn createMessage(title: String ::: SafeTitle title, body: String ::: TitleLength body) -> SafeMessage =
+  SafeMessage { title: title, body: body } # both fields have required proofs — construction succeeds
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# There are two paths for creating a proof-annotated record:
+#
+# PATH 1 — From HTTP/JSON input (the codec path):
+#   The codec's fromJson block specifies "with_codec X via checkFn" for each field.
+#   When decoding JSON, the "via" checker validates the raw value and attaches the proof.
+#   This is the ONLY place where untrusted external input is validated.
+#
+# PATH 2 — From application code (the check-function path):
+#   Call a check function to validate a value: let ok v::: Fact _ = checkFn(raw)
+#   The returned value carries the proof. Pass it to the record constructor.
+#   The constructor accepts the proof-carrying value and stores it on the field.
+#
+# There is no "via" on the record field itself anymore.
+# The::: annotation is a TYPE DECLARATION — it says what proof the field should hold,
+# but does not specify HOW to produce that proof. That is the codec's or the caller's job.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Fact annotations on record fields serve two purposes:
+#   1. Document the contract: "this field always holds a SafeTitle value"
+#   2. Enable compile-time proof tracking: functions that access the field
+#      can use the attached proof in their own return types
+#
+# The codec's fromJson "via" provides proof for the HTTP boundary.
+# Check functions provide proof for the application boundary.
+# Both paths converge at the record constructor with proven field values.
+
+test "checkSafeTitle valid" {
+  let s1 = "hello"
+  let x = check checkSafeTitle s1
+  expect x == "hello"
+  let s2 = "a"
+  let y = check checkSafeTitle s2
+  expect y == "a"
+}
+
+test "checkSafeTitle rejects" {
+  expectFail check checkSafeTitle ""
+}
+
+test "checkLength valid" {
+  let s1 = ""
+  let y = check checkLength s1
+  expect y == ""
+  let s2 = "hello"
+  let x = check checkLength s2
+  expect x == "hello"
+}
+
+test "createMessage valid" {
+  let rawTitle = "My Title"
+  let t = check checkSafeTitle rawTitle
+  let rawBody = "Some body text"
+  let b = check checkLength rawBody
+  let msg = createMessage t b
+  expect msg.title == "My Title"
+  expect msg.body == "Some body text"
+}
+
+# ═══════════════════════════════════════════
+# RECORD-LEVEL PROOFS (cross-field invariants)
+# ═══════════════════════════════════════════
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# The::: after the closing } is a COMPILE-TIME annotation only (zero runtime cost).
+# It documents the cross-field invariant the record satisfies.
+#
+# Constructing a record with a record-level proof requires a ghost witness:
+#   { price: price, quantity: quantity } ::: proofVar
+# where proofVar carries the required cross-field proof.
+# Without it, the compiler rejects the construction.
+#
+# For HTTP input, put the cross-field check in the codec using `} via checker`:
+#
+#   codec OrderLine {
+#     fromJson [
+#       { price <- ... via checkPositiveInt
+#         quantity <- ... via checkPositiveInt
+#       } via checkPriceExceedsQuantity     ← runs after all fields pass
+#     ]
+#   }
+#
+# The cross-field checker receives the decoded RAW field values in declaration order.
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Field-level proofs validate each field independently via codec "via" per field.
+# The codec-level `} via checker` runs the cross-field check after all field checks
+# pass — it receives the raw decoded values and returns a check result.
+# For application code, call the cross-field check function explicitly and pass the
+# resulting proof as a ghost witness to the record constructor.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Layered validation (codec path):
+#   1. Each field decoded and individually validated (via checker per field).
+#   2. After all fields pass, the codec's `} via` checker is called with the raw values.
+#   3. Only if both checks pass is the record-value created.
+# Application code path (GDP ghost witness pattern):
+#   1. Obtain each field's proof by calling its check function.
+#   2. Obtain the cross-field proof by calling the cross-field check function.
+#   3. Pass the cross-field proof as a ghost witness: `{ ... } ::: proofVar`.
+#   4. The constructor is total — it cannot fail once the proofs are in hand.
+# Record `:::` annotation: zero-cost, purely compile-time claim about the invariant.
+
+fact IsPositive (n: Int)
+
+check checkPositiveInt(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "must be positive"
+
+fact PriceExceedsQuantity (price: Int, quantity: Int)
+
+# The cross-field checker receives decoded raw values in declaration order.
+# For OrderLine{price, quantity}, it receives (price_int, quantity_int).
+check checkPriceExceedsQuantity(price: Int, quantity: Int) -> price: Int ::: PriceExceedsQuantity price quantity =
+  if price > quantity then
+    ok price ::: PriceExceedsQuantity price quantity
+  else
+    fail 422 "price must exceed quantity"
+
+# ::: on the record closing brace is compile-time only — no runtime enforcement.
+record OrderLine {
+  price: Int ::: IsPositive price
+  quantity: Int ::: IsPositive quantity
+} ::: PriceExceedsQuantity price quantity
+
+# Codec for HTTP decoding: "via" per field validates each field; `} via` validates
+# the cross-field invariant after all fields pass.
+codec OrderLine {
+  toJson_forbidden
+  fromJson [
+    {
+      price <- "price" with_codec intCodec via checkPositiveInt
+      quantity <- "quantity" with_codec intCodec via checkPositiveInt
+    } via checkPriceExceedsQuantity
+  ]
+}
+
+# makeOrderLine is a TOTAL function (never fails): the caller must obtain the
+# cross-field proof BEFORE calling it. `recordProof` is a ghost witness — not stored
+# in the record, only present to enforce that checkPriceExceedsQuantity was called.
+# price retains its IsPositive proof; the cross-field proof is explicit and separate.
+# This is the core GDP pattern: push all fallibility to proof acquisition.
+fn makeOrderLine(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity, recordProof: Fact (PriceExceedsQuantity price quantity)) -> OrderLine =
+  OrderLine { price: price, quantity: quantity } ::: recordProof
+
+fn shouldWork_ConfusingForTheCallerButNorRealError(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity, recordProof: Fact (PriceExceedsQuantity price quantity)) -> OrderLine =
+  let p = check checkPositiveInt 10
+  let q = check checkPositiveInt 3
+  let pq = check checkPriceExceedsQuantity p q
+  let proodd = (detachFact pq)
+  OrderLine { price: p, quantity: q } ::: proodd
+# ═══════════════════════════════════════════
+# RECORD PROOFS IN AN API CONTEXT
+# ═══════════════════════════════════════════
+
+# processOrder accepts any OrderLine — the codec ensures cross-field invariants
+# are enforced at the HTTP boundary before the value reaches application code.
+fn processOrder(order: OrderLine) -> String =
+  "order: price=${order.price}, qty=${order.quantity}"
+
+test "valid OrderLine" {
+  let rawP = 10
+  let p = check checkPositiveInt rawP
+  let rawQ = 3
+  let q = check checkPositiveInt rawQ
+  let pq = check checkPriceExceedsQuantity p q # cross-field proof: price > quantity
+  let order = makeOrderLine p q (detachFact pq) # total: detachFact extracts Fact P
+  let orderAlt = OrderLine { price: p, quantity: q } ::: (detachFact pq) # direct construction
+  expect order.price == 10
+  expect order.quantity == 3
+}
+
+test "checkPriceExceedsQuantity rejects price <= quantity" {
+  # The check function rejects invalid cross-field relationships.
+  # Failure here means makeOrderLine cannot be called — it has no establish to accept.
+  let rawP = 3
+  let p = check checkPositiveInt rawP
+  let rawQ = 10
+  let q = check checkPositiveInt rawQ
+  expectFail check checkPriceExceedsQuantity p q
+}
+
+# ═══════════════════════════════════════════
+# WHAT THE COMPILER ENFORCES ON GHOST WITNESSES
+# ═══════════════════════════════════════════
+#
+# The compiler does not merely require that some* proof is supplied.
+# It validates two things:
+#
+#   1. CORRECT PREDICATE — the witness must carry PriceExceedsQuantity,
+#      not just any proof.
+#
+#   2. CORRECT SUBJECTS — the proof must have been obtained for the EXACT
+#      values that appear in the record literal.
+#
+# A proof `PriceExceedsQuantity p q` is only valid for those specific
+# bindings of p and q.  Substituting any other value — even one that also
+# satisfies the predicate independently — is rejected at compile time.
+#
+# Examples that are COMPILE ERRORS:
+#
+#   # Wrong predicate: (detachFact p) carries IsPositive, not PriceExceedsQuantity
+#   { price: p, quantity: q } ::: (detachFact p)
+#   → ghost witness for `OrderLine` carries the wrong proof predicate
+#       expected a proof of `PriceExceedsQuantity`
+#       got: `(IsPositive n)`
+#
+#   # Wrong field value: record uses p_intruder but proof pq was obtained for p, q
+#   { price: p_intruder, quantity: q } ::: (detachFact pq)
+#   → ghost witness for `OrderLine` carries the wrong proof
+#       required: `(PriceExceedsQuantity p_intruder q)`
+#       got:      `(PriceExceedsQuantity p q)`
+#
+#   # Wrong proof subjects: proof piq was obtained for (p_intruder, q), not (p, q)
+#   { price: p, quantity: q } ::: (detachFact piq)
+#   → ghost witness for `OrderLine` carries the wrong proof
+#       required: `(PriceExceedsQuantity p q)`
+#       got:      `(PriceExceedsQuantity p_intruder q)`
+#
+# This is the core GDP guarantee: proofs are not transferable between values.

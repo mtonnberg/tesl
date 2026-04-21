@@ -1,0 +1,280 @@
+#lang tesl
+module Adts exposing [
+  Color(..),
+  Weekday(..),
+  Direction(..),
+  colorName,
+  isWeekend,
+  opposite,
+  safeDivide,
+  Shape(..),
+  MyMaybe(..),
+  ApiResponse(..),
+  area,
+  describe,
+  myFromDefault,
+  statusCode,
+  responseBody,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# ADTs (Algebraic Data Types) let you define a type as one of several variants.
+# Define them with "type Name = Variant1 | Variant2 | ...".
+# Match them with "case expr of  Variant1 -> ...  Variant2 -> ...".
+# EVERY constructor must appear in the case — the compiler rejects non-exhaustive matching.
+#
+# "Maybe" is built in to Tesl.Prelude:
+#   Nothing      — absence of a value
+#   Something x       — presence of value x
+#
+# ADT constructors with fields:
+#   type Shape = Circle Int | Rect Int Int
+#   Circle 5         — constructs a Circle with radius 5
+#   case s of Circle r -> ...   Rect w h -> ...
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Int exposing [Int.nonZero, Int.divide]
+
+# Simple nullary ADT: each constructor is a standalone value, no fields.
+type Color
+  = Red # nullary constructor
+  | Green # nullary constructor
+  | Blue # nullary constructor
+
+# A larger nullary ADT — useful for exhaustive matching of named constants.
+type Weekday
+  = Mon
+  | Tue
+  | Wed
+  | Thu
+  | Fri
+  | Sat
+  | Sun
+
+type Direction
+  = North
+  | South
+  | East
+  | West
+
+# case expression: must handle ALL constructors of Color.
+fn colorName(c: Color) -> String =
+  case c of
+    Red -> "red" # each branch must be indented consistently
+    Green -> "green"
+    Blue -> "blue"
+
+fn isWeekend(d: Weekday) -> Bool =
+  case d of
+    Sat -> True # the two weekend days
+    Sun -> True
+    Mon -> False
+    Tue -> False
+    Wed -> False
+    Thu -> False
+    Fri -> False
+
+fn opposite(d: Direction) -> Direction =
+  case d of
+    North -> South # constructors on the right are expressions
+    South -> North
+    East -> West
+    West -> East
+
+# Returns Nothing on division by zero; Something(result) otherwise.
+# Uses Int.nonZero to establish a compile-time proof the divisor is safe.
+fn safeDivide(a: Int, b: Int) -> Maybe Int =
+  if b == 0 then
+    Nothing
+  else
+    let safe = check Int.nonZero b
+    Something (Int.divide a safe)
+
+test "colorName" {
+  expect colorName Red == "red"
+  expect colorName Green == "green"
+  expect colorName Blue == "blue"
+}
+
+test "isWeekend" {
+  expect isWeekend Sat # True — weekend
+  expect isWeekend Sun # True — weekend
+  expect isWeekend Mon == False
+  expect isWeekend Fri == False
+}
+
+test "opposite" {
+  expect opposite North == South
+  expect opposite South == North
+  expect opposite East == West
+  expect opposite West == East
+}
+
+test "safeDivide" {
+  expect safeDivide 10 2 == Something 5
+  expect safeDivide 7 0 == Nothing # zero denominator → Nothing
+  expect safeDivide 0 5 == Something 0
+}
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# ADTs are sum types: a value of type Color is exactly ONE of Red, Green, or Blue.
+# The "case" expression is an eliminator for sum types. It must cover all constructors
+# because the compiler needs proof that every possible input is handled.
+#
+# Exhaustiveness is checked at compile time. If you remove the "Blue -> ..." branch
+# from colorName, the compiler will report: "non-exhaustive case: missing constructor Blue".
+#
+# "Maybe" is an ADT like any other:
+#   type Maybe a = Nothing | Something a
+# "Nothing" is the nullary constructor. "Something x" constructs with a field.
+# When you match "case m of  Nothing -> ...  Something v -> ...", the binder "v" in
+# "Something v" is a fresh local binding for the wrapped value.
+#
+# "exposing [Color(..), Weekday(..), Direction(..)]" exports the ADT name AND all
+# its constructors. Without "(..)" you'd export only the type name, not Red/Green/Blue,
+# and callers couldn't construct or match Color values.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# ADTs lower to Racket tagged structs. Each constructor becomes a struct type.
+# "Red" becomes a zero-field struct; "Something 5" becomes a one-field struct.
+# The case expression lowers to Racket's "match" with structural patterns.
+#
+# The exhaustiveness check runs during Tesl compilation (not at Racket runtime).
+# The compiler tracks which constructors belong to each ADT and verifies every
+# constructor appears at least once in the case branches.
+#
+# GDP-wise, case binders (like the "v" in "Something v") introduce new named-value
+# bindings with fresh hidden subjects. If you later use "v" in a proof context,
+# the subject is the one assigned when the case branch was entered, not the subject
+# of the original "m" value.
+#
+# Constructors in "exposing [Color(..)]" — the "(..)" form is special syntax
+# meaning "this type plus all its constructors". Without "(..)", the type is
+# exported but constructors are not, making it an "opaque" type from the outside.
+
+# ═══════════════════════════════════════════
+# ADTs WITH FIELDS
+# ═══════════════════════════════════════════
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Constructor fields bind by their label name in case branches.
+# Use _ to discard a field you don't need.
+#   case shape of
+#     Circle radius  -> ... use radius ...
+#     Rectangle width height -> ...
+#     Point -> ...
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# The constructor name is the "tag"; the fields are the payload.
+# case branches unpack the payload by binding each field to a name.
+# A _ pattern discards one field without binding a name.
+# The compiler checks that every field in the constructor is either bound or discarded.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Tagged-union representation: each fielded constructor lowers to a Racket struct
+# with hash-stored fields keyed by label name.
+# GDP introduces fresh hidden subjects for each bound field in a case branch —
+# the bound name (e.g. radius) is a new GDP-named value whose subject is separate
+# from the outer value being matched. This allows per-field proof reasoning.
+
+# A Shape has three constructors, two of which carry fields.
+# Fields can have explicit labels (label:Type) or be positional (just Type).
+type Shape
+  = Circle radius: Int # one labelled field
+  | Rectangle width: Int height: Int # two labelled fields
+  | Point # nullary (no fields)
+
+fn area(s: Shape) -> Int =
+  case s of
+    Circle radius -> radius * radius # bind the radius field
+    Rectangle width height -> width * height
+    Point -> 0
+
+fn describe(s: Shape) -> String =
+  case s of
+    Circle radius -> "circle with radius ${radius}"
+    Rectangle width height -> "rectangle ${width}×${height}"
+    Point -> "a point"
+
+# Re-implementing Option/Maybe from scratch to show the pattern.
+# (The real Maybe is in Tesl.Prelude — this is for illustration.)
+type MyMaybe
+  = MyNothing
+  | MyJust value: Int # one field: the wrapped Int
+
+fn myFromDefault(m: MyMaybe, default: Int) -> Int =
+  case m of
+    MyNothing -> default
+    MyJust value -> value # "value" is bound to the inner Int
+
+# A richer type combining nullary and fielded constructors.
+type ApiResponse
+  = Success body: String
+  | NotFound
+  | Unauthorized
+  | ServerError message: String
+
+fn statusCode(r: ApiResponse) -> Int =
+  case r of
+    Success _ -> 200
+    NotFound -> 404
+    Unauthorized -> 401
+    ServerError _ -> 500
+
+fn case_fallbacks_1(r: ApiResponse) -> String =
+  case r of
+    Success _ ->
+    NotFound ->
+    Unauthorized -> "This will be the result for all three of Success, NotFound and Unauthorized"
+    ServerError _ -> "Result for ServerError"
+
+fn case_fallbacks_2(r: ApiResponse) -> String =
+  case r of
+    Success _ ->
+    Unauthorized -> "This will be the result for Success and Unauthorized"
+    NotFound ->
+    ServerError _ -> "Result for NotGound and ServerError"
+
+fn case_fallbacks_3(r: ApiResponse) -> String =
+  case r of
+    NotFound ->
+    Unauthorized -> "This will be the result for NotFound and Unauthorized"
+    Success x ->
+    ServerError x -> x # This works since the payload for Success and ServerError is the same type
+
+fn responseBody(r: ApiResponse) -> String =
+  case r of
+    Success body -> body
+    NotFound -> "not found"
+    Unauthorized -> "unauthorized"
+    ServerError message -> "error: ${message}"
+
+test "Shape area" {
+  expect area (Circle 5) == 25
+  expect area (Rectangle 3 4) == 12
+  expect area Point == 0
+}
+
+test "MyMaybe" {
+  expect myFromDefault MyNothing 99 == 99
+  expect myFromDefault (MyJust 7) 99 == 7
+}
+
+test "statusCode" {
+  expect statusCode (Success "ok") == 200
+  expect statusCode NotFound == 404
+  expect statusCode Unauthorized == 401
+  expect statusCode (ServerError "oops") == 500
+}

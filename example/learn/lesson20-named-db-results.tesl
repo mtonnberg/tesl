@@ -1,0 +1,197 @@
+#lang tesl
+module NamedDbResults exposing [
+  Task,
+  fetchTask,
+  seedAndFetch,
+  processTask,
+  fetchAndProcess,
+  seedAndProcess,
+  existentialFetch,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Use "-> Type ? FromDb (Id == id)" for every function that fetches an entity.
+# Use "fn f(t: Type::: FromDb (Id == id) t, id: String)" when you need to require
+# a named entity that was properly fetched from the DB.
+#
+# The "?" infix operator is the named-pack operator. It says: "the returned value
+# will be GDP-named by whatever `let` variable the caller binds it to."
+#
+#   fn fetchTask(id: String) -> Task ? FromDb (Id == id)
+#     requires [dbRead] = ...
+#
+#   fn useTask(id: String) -> String requires [dbRead] =
+#     let task = fetchTask id   # task carries FromDb (Id == id) task
+#     task.title
+#
+# The "?" means the caller names the entity — you do not pick the name.
+# Every `let` binding of a "?" result becomes the GDP subject for that entity.
+
+import Tesl.Prelude exposing [String]
+import Tesl.DB exposing [dbRead, dbWrite]
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Without "?", "-> Task::: FromDb (Id == id)" attaches a proof but does NOT name
+# the entity. Callers cannot reason about WHICH entity they received — just that
+# SOME entity came from the DB with that key. The id subject is tracked but the
+# entity subject is anonymous.
+#
+# With "?", "-> Task ? FromDb (Id == id)" says:
+#   "The caller will name this value. The name goes into the proof."
+# When the caller writes "let task = fetchTask id", the proof becomes:
+#   FromDb (Id == id) task
+# Both the key (id) AND the entity identity (task) are captured in the proof.
+#
+# The entity-append rule: every leaf predicate in the "?" group gets the entity
+# subject appended as its last argument automatically. So:
+#   -> Task ? FromDb (Id == id)   emits:  (? Task _entity::: (FromDb (Id == id) _entity))
+#   -> Int ? Positive && Small    emits:  (? Int _entity::: ((Positive _entity) && (Small _entity)))
+#
+# This closes the retargeting gap: you cannot attach one entity's proof to a
+# different entity, because the entity subjects would not match.
+#   let a = fetchTask("x")     # FromDb (Id == "x") a
+#   let b = fetchTask("y")     # FromDb (Id == "y") b
+#   # a and b have different entity subjects — proofs cannot be swapped
+#
+# Multiple renames preserve the subject:
+#   let a = fetchTask("x")     # FromDb (Id == "x") a
+#   let b = a                  # b carries the same subject as a
+#   # b can be used wherever a's proof is required
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# The 2-arg fact structure: FromDb (Id == pkSubject) entitySubject
+#
+# "pkSubject" is the GDP subject bound to the primary-key parameter.
+# "entitySubject" is the GDP subject of the entity itself (assigned by "?").
+#
+# At runtime, the fact is stored as:
+#   '(FromDb (Id == pk-sym) entity-sym)
+# where pk-sym and entity-sym are distinct Racket symbols in the named-value's
+# bindings map. pk-sym maps to the actual primary-key string; entity-sym is the
+# identity of the entity.
+#
+# Why this closes the retargeting gap:
+#   attach-proof / detach-proof operations preserve the entity subject.
+#   If you try to use entity A's proof with entity B, the entity subject in the
+#   proof (A's subject) does not match B's subject — the GDP check fails.
+#   There is no way to transfer an entity's identity to a different entity.
+#
+# Connection to Haskell GDP:
+#   Haskell GDP uses "?" (the Named type) and "~~" (the naming operator) to give
+#   values distinct named identities. Tesl's "?" return annotation is the same
+#   idea: the `let` binding acts as "~~", giving the returned value its GDP name.
+#   The 2-arg FromDb fact mirrors Haskell GDP's primary-key witnesses.
+
+# ─── Entity definition ────────────────────────────────────────────────────────
+
+entity Task table "tasks" primaryKey id {
+  id: String
+  title: String
+  status: String
+}
+
+# ─── Fetch with named-pack ────────────────────────────────────────────────────
+
+# "-> Task ? FromDb (Id == id)" is the named-pack return type.
+# The "?" means: whatever variable the caller binds this to becomes the entity subject.
+# The proof carries both the key (id) and the entity identity.
+fn fetchTask(id: String) -> Task ? FromDb (Id == id)
+  requires [dbRead] =
+  let r = selectOne t from Task where t.id == id
+  case r of
+    Nothing -> fail 404 "task not found"
+    Something t -> t
+
+# "insert" also returns a named-pack: the inserted row carries FromDb proof.
+fn seedAndFetch(id: String) -> Task ? FromDb (Id == id)
+  requires [dbRead, dbWrite] =
+  insert Task { id: id, title: "task: ${id}", status: "open" }
+  let r = selectOne t from Task where t.id == id
+  case r of
+    Nothing -> fail 500 "missing after insert"
+    Something t -> t
+
+# ─── Using a named entity ─────────────────────────────────────────────────────
+
+# "fn processTask(t: Task::: FromDb (Id == id) t, id: String)"
+# The "FromDb (Id == id) t" requirement says:
+#   - t must have been fetched from the DB (FromDb)
+#   - its primary key matches id (Id == id)
+#   - its entity subject is t (the 2-arg form)
+# The caller must supply both t (the named entity) and id (the key it was fetched with).
+fn processTask(t: Task ::: FromDb (Id == id) t, id: String) -> String =
+  "task: ${id} status=${t.status}"
+
+# Shows calling processTask with a named-pack result.
+# "let t = fetchTask id" binds the named-pack — t becomes the entity subject.
+# The proof t carries is: FromDb (Id == id) t
+# Passing (t, id) to processTask satisfies both the entity and key requirements.
+fn fetchAndProcess(id: String) -> String
+  requires [dbRead] =
+  let t = fetchTask id
+  processTask t id
+
+fn seedAndProcess(id: String) -> String
+  requires [dbRead, dbWrite] =
+  let t = seedAndFetch id
+  processTask t id
+
+# ─── Existential return ───────────────────────────────────────────────────────
+
+# "-> exists taskId: String => Task ? FromDb (Id == taskId)"
+# The "exists taskId" hides the actual ID from the caller's proof context.
+# The caller knows: "there exists some taskId such that the Task is in the DB
+# for that key" — but cannot directly use taskId in further proof reasoning.
+fn existentialFetch(prefix: String) -> exists taskId: String => Task ? FromDb (Id == taskId)
+  requires [dbRead, dbWrite] =
+  let taskId = "${prefix}-auto"
+  insert Task { id: taskId, title: "auto task", status: "new" }
+  let r = selectOne t from Task where t.id == taskId
+  case r of
+    Nothing -> fail 500 "missing after insert"
+    Something t ->
+      exists taskId =>
+        t
+
+# ─── Test block ───────────────────────────────────────────────────────────────
+
+# These tests seed data and verify that named-pack results carry the right proofs.
+# In production you would configure a real database; in tests, entities use an
+# in-memory store automatically when no database runtime is active.
+
+test "named db result preserves proof" requires [dbRead, dbWrite] {
+  let t = seedAndFetch "test-1"
+  # t:: Task::: FromDb (Id == "test-1") t
+  # Both the key subject and entity subject are captured in the proof.
+  expect t.title == "task: test-1"
+  expect t.status == "open"
+}
+
+test "proof annotation verifies entity came from db" requires [dbRead, dbWrite] {
+  # let t: Task::: FromDb (Id == id) t = ... verifies at runtime that t
+  # carries the FromDb proof with entity subject t.
+  # The `id` symbol acts as a wildcard (matches any primary-key gensym).
+  let queryId = "test-proof"
+  let t: Task ::: FromDb (Id == queryId) t = seedAndFetch queryId
+  expect t.title == "task: test-proof"
+}
+
+test "processTask receives named entity" requires [dbRead, dbWrite] {
+  # Proof threading requires a proper function body (define/pow context).
+  # Use fetchAndProcess which internally chains fetchTask + processTask,
+  # threading the same `id` binding so the FromDb proof aligns.
+  let _ = seedAndFetch "test-2"
+  let result = fetchAndProcess "test-2"
+  expect result == "task: test-2 status=open"
+}
+
+test "seedAndProcess chains fetch and process" requires [dbRead, dbWrite] {
+  let result = seedAndProcess "test-3"
+  expect result == "task: test-3 status=open"
+}

@@ -1,0 +1,178 @@
+#lang tesl
+# ─── Kanel — Billing: invoice time entries ─────────────────────────────────
+#
+# Business rules:
+#   - Invoices are created from un-billed time entries (invoiceId == "")
+#   - Only org admins can create or approve invoices
+#   - Approved invoices are immutable
+#   - Sent/Paid invoices are also immutable
+#
+# Facts defined here:
+#   InvoiceDraft invoiceId     — invoice is in Draft status (can be approved)
+#   InvoiceMutable invoiceId   — invoice can be modified (Draft only)
+
+module KanelBilling exposing [
+  addMinutes,
+  InvoiceDraft,
+  checkInvoiceDraft,
+  createInvoiceHandler,
+  getInvoiceHandler,
+  listInvoicesHandler,
+  approveInvoiceHandler,
+  markSentHandler,
+  markPaidHandler,
+]
+
+import Tesl.Prelude exposing [Int, String, List, Fact]
+import Tesl.Time exposing [nowMillis, time, Time.secondsToPosix]
+import Tesl.Id exposing [generatePrefixedId]
+import Tesl.Random exposing [random]
+import Tesl.Maybe exposing [Maybe(..)]
+import KanelModels exposing [
+  ValidOrgId,
+  ValidInvoiceId,
+  kanelDbRead,
+  kanelDbWrite,
+  InvoiceStatus(..),
+  TimeEntry,
+  Invoice,
+  NewInvoiceRequest,
+]
+import KanelAuth exposing [KanelSession, Authenticated, checkOrgAdmin]
+
+# ── Invoice state guard ──────────────────────────────────────────────────────
+
+fact InvoiceDraft (invoiceId: String)
+
+check checkInvoiceDraft(invoiceId: String) -> invoiceId: String ::: InvoiceDraft invoiceId
+  requires [kanelDbRead] =
+  let found = selectOne inv from Invoice where inv.id == invoiceId
+  case found of
+    Nothing -> fail 404 "invoice not found"
+    Something inv ->
+      case inv.status of
+        Draft -> ok invoiceId ::: InvoiceDraft invoiceId
+        Approved -> fail 422 "invoice is already approved and cannot be modified"
+        Sent -> fail 422 "invoice has already been sent"
+        Paid -> fail 422 "invoice has been paid"
+        Overdue -> fail 422 "invoice is overdue — contact support"
+
+# ── Helper function for summing time entries ─────────────────────────────────
+
+fn addMinutes(acc: Int, entry: TimeEntry) -> Int =
+  acc + entry.minutes
+
+# ── Invoice CRUD ─────────────────────────────────────────────────────────────
+
+handler createInvoiceHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    req: NewInvoiceRequest)
+  -> exists invoiceId: String => Invoice ? FromDb (Id == invoiceId)
+  requires [kanelDbRead, kanelDbWrite, random, time] =
+  let _adminUserId = check checkOrgAdmin session.userId orgId
+  # Use selectCount/selectSum for efficient aggregation without loading all rows
+  let entryCount = selectCount te from TimeEntry where te.orgId == orgId && te.invoiceId == ""
+  if entryCount == 0 then
+    fail 422 "no unbilled time entries found for this organization"
+  else
+    let totalMinutes = selectSum te.minutes from TimeEntry where te.orgId == orgId && te.invoiceId == ""
+    let invoiceId = generatePrefixedId "inv"
+    with transaction {
+      # Mark all these entries as belonging to the new invoice
+      update te in TimeEntry
+        where te.orgId == orgId && te.invoiceId == ""
+        set te.invoiceId = invoiceId
+      exists invoiceId =>
+        insert Invoice {
+          id: invoiceId,
+          orgId: orgId,
+          status: Draft,
+          totalMinutes: totalMinutes,
+          notes: req.notes,
+          createdAt: nowMillis(),
+          approvedAt: Time.secondsToPosix 0
+        }
+    }
+
+handler getInvoiceHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    invoiceId: String ::: ValidInvoiceId invoiceId)
+  -> Invoice
+  requires [kanelDbRead] =
+  let _adminUserId = check checkOrgAdmin session.userId orgId
+  let found = selectOne inv from Invoice where inv.id == invoiceId && inv.orgId == orgId
+  case found of
+    Nothing -> fail 404 "invoice not found"
+    Something inv -> inv
+
+handler listInvoicesHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId)
+  -> List Invoice
+  requires [kanelDbRead] =
+  let _adminUserId = check checkOrgAdmin session.userId orgId
+  select inv from Invoice where inv.orgId == orgId
+
+handler approveInvoiceHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    invoiceId: String ::: ValidInvoiceId invoiceId)
+  -> Invoice
+  requires [kanelDbRead, kanelDbWrite, time] =
+  let _adminUserId = check checkOrgAdmin session.userId orgId
+  let draftInvoice = check checkInvoiceDraft invoiceId
+  update inv in Invoice
+    where inv.id == draftInvoice && inv.orgId == orgId
+    set inv.status = Approved
+    set inv.approvedAt = nowMillis()
+    returning one
+
+handler markSentHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    invoiceId: String ::: ValidInvoiceId invoiceId)
+  -> Invoice
+  requires [kanelDbRead, kanelDbWrite] =
+  let _adminUserId = check checkOrgAdmin session.userId orgId
+  let found = selectOne inv from Invoice where inv.id == invoiceId && inv.orgId == orgId
+  case found of
+    Nothing -> fail 404 "invoice not found"
+    Something inv ->
+      case inv.status of
+        Approved ->
+          update i in Invoice
+            where i.id == invoiceId
+            set i.status = Sent
+            returning one
+        Draft -> fail 422 "invoice must be approved before sending"
+        Sent -> fail 422 "invoice already sent"
+        Paid -> fail 422 "invoice already paid"
+        Overdue -> fail 422 "invoice is overdue"
+
+handler markPaidHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    invoiceId: String ::: ValidInvoiceId invoiceId)
+  -> Invoice
+  requires [kanelDbRead, kanelDbWrite] =
+  let _adminUserId = check checkOrgAdmin session.userId orgId
+  let found = selectOne inv from Invoice where inv.id == invoiceId && inv.orgId == orgId
+  case found of
+    Nothing -> fail 404 "invoice not found"
+    Something inv ->
+      case inv.status of
+        Sent ->
+          update i in Invoice
+            where i.id == invoiceId
+            set i.status = Paid
+            returning one
+        Approved -> fail 422 "invoice must be sent before marking paid"
+        Draft -> fail 422 "invoice must be approved and sent before marking paid"
+        Paid -> fail 422 "invoice already paid"
+        Overdue ->
+          update i in Invoice
+            where i.id == invoiceId
+            set i.status = Paid
+            returning one

@@ -1,0 +1,59 @@
+#lang tesl
+module QueueApiExample exposing [EmailQueue, UserEvents, EmailWorkers]
+import Tesl.Prelude exposing [Bool(..), List, String, Fact]
+import Tesl.DB        exposing [dbRead, dbWrite]
+import Tesl.Queue     exposing [deadJobs, requeue, DeadJob, FromDeadQueue, queueRead, queueWrite, pubsub]
+import Tesl.Telemetry exposing [initTelemetry]
+
+capability emailWrite implies queueWrite
+capability appService implies dbRead, dbWrite, emailWrite, pubsub
+
+record SendEmail {
+  to: String
+  subject: String
+  body: String
+}
+
+type UserEvent
+  = ProfileUpdated bio: String
+  | AccountDeleted
+
+queue EmailQueue {
+  database MainDatabase
+  jobs     [SendEmail]
+  retry {
+    maxAttempts: 3
+    backoff: exponential
+    initialDelay: 60
+  }
+}
+
+channel UserEvents(userId: String) {
+  database MainDatabase
+  payload UserEvent
+}
+
+worker sendEmailWorker(job: SendEmail ::: FromQueue (Id == jobId) job)
+  requires [queueRead] =
+  job
+
+workers EmailWorkers for EmailQueue {
+  SendEmail = sendEmailWorker
+}
+
+# Inspect all dead jobs in the email queue.
+# Dead jobs have exhausted maxAttempts and are waiting for manual intervention.
+fn listDeadEmails(q: EmailQueue) -> List DeadJob
+  requires [queueRead] =
+  deadJobs q
+
+# Replay a single dead job — reset it to pending so workers retry it.
+# The FromDeadQueue proof ensures only jobs retrieved from the dead-letter
+# queue can be passed here (not arbitrary values).
+fn replayEmail(job: DeadJob ::: FromDeadQueue (Id == jobId) job) -> Bool
+  requires [queueWrite] =
+  requeue job
+
+main {
+  initTelemetry service "queue-api" endpoint "in-memory" console False
+}

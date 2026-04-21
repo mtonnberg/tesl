@@ -1,0 +1,139 @@
+#lang tesl
+module PartialApp exposing [add, double, triple, increment, decrement, pipeline]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# PARTIAL APPLICATION: call a function with fewer args than it takes.
+# The result is a closure waiting for the remaining args.
+#   add(1)         -- returns a function (Int -> Int) that adds 1
+#   add(1)(4)      -- applies that closure to 4, returns 5
+#
+# PIPELINES: pass a value through a chain of functions left-to-right.
+#   n |> double |> double   -- double(double(n))
+#   Think of "|>" as "then": n, then double, then double again.
+#
+# LOW-PRECEDENCE APPLICATION: apply right-to-left with "<|".
+#   f <| g <| x   -- f(g(x)), like Haskell's "$"
+#   Useful for avoiding deeply nested parentheses.
+
+import Tesl.Prelude exposing [Int]
+
+fn add(x: Int, y: Int) -> Int =
+  x + y # add two integers
+
+fn double(n: Int) -> Int =
+  n * 2 # multiply by 2
+
+fn triple(n: Int) -> Int =
+  n * 3 # multiply by 3
+
+# Partial application: add(1) returns a closure.
+# The closure captures x=1 and waits for y.
+fn increment(n: Int) -> Int =
+  let addOne = add 1 # partial application: addOne is (Int -> Int)
+  addOne n # apply the closure to n
+
+fn decrement(n: Int) -> Int =
+  let subOne = add -1 # partial application: subOne adds -1
+  subOne n
+
+# Pipeline operator |> passes values left-to-right.
+# "n |> double |> double" reads: take n, then double it, then double it again.
+fn pipeline(n: Int) -> Int =
+  n |> double |> double # = double (double n)
+
+# Low-precedence application <|: apply right-to-left.
+# "double <| n" = double(n) but avoids parentheses in chains.
+# "triple <| double <| n" = triple(double(n))
+fn pipeline2(n: Int) -> Int =
+  triple <| double <| n # = triple (double n)
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Partial application and pipelines are ergonomic features for chaining operations
+# without deeply nested parentheses.
+#
+# "add 1" with only one of two arguments returns a closure:
+#   fn increment(n: Int) -> Int = let addOne = add 1; addOne n
+# is equivalent to:
+#   fn increment(n: Int) -> Int = add 1 n
+# Both work. The closure form is useful when you want to name the partially applied
+# function for clarity or pass it as a higher-order argument.
+#
+# Pipeline "|>" is left-associative with lower precedence than function application.
+# So "x |> f |> g" parses as "(x |> f) |> g" = g(f(x)).
+# It reads like a data processing pipeline: data flows left to right through transforms.
+#
+# Application "<|" is right-associative with the LOWEST precedence of all operators.
+# "f <| g <| x" = "f(g(x))" — data flows right to left.
+# The rule "lower precedence than:::" means "f <| x::: proof" parses as
+# "f <| (x::: proof)" — the proof attachment happens before the application.
+# This is important for passing proof-carrying values to functions cleanly.
+#
+# Partial application restrictions: you CANNOT partially apply a function when
+# remaining parameters have cross-parameter proof requirements.
+# For example if parameter b's proof references parameter a, you cannot do f(a)
+# without providing b, because the proof constraint on b cannot be evaluated
+# without knowing both subjects. The compiler detects this and rejects the partial app.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Partial application generates a Racket closure (lambda) that captures the
+# provided arguments. The closure has the same calling convention as the original
+# function for the remaining arguments.
+#
+# "|>" lowers to (define-syntax-rule (x |> f) (f x)).
+# "<|" lowers to (define-syntax-rule (f <| x) (f x)).
+# Both are just function application — no special runtime machinery.
+#
+# The precedence hierarchy (from lowest to highest):
+#   <|   (right-assoc, lowest)
+#   |>   (left-assoc)
+#   :::  (proof attachment)
+#   ==, !=, <, >, <=, >=  (comparisons)
+#   +, -   (additive)
+#   *, /, %  (multiplicative)
+#   function application  (highest, left-assoc)
+#
+# GDP considerations: partial application preserves the GDP machinery for the
+# remaining parameters. The captured arguments become part of the closure's
+# static proof context. When the closure is applied to remaining arguments,
+# the full GDP proof checking runs as if the complete call were made at that point.
+
+test "add" {
+  expect add 3 7 == 10
+  expect add 0 0 == 0
+  expect add -5 5 == 0
+}
+
+test "double and triple" {
+  expect double 5 == 10
+  expect double 0 == 0
+  expect triple 3 == 9
+}
+
+test "increment and decrement" {
+  expect increment 4 == 5
+  expect increment 0 == 1
+  expect decrement 5 == 4
+  expect decrement 0 == -1
+}
+
+test "pipeline" {
+  expect pipeline 3 == 12 # double (double 3) = double 6 = 12
+  expect pipeline 1 == 4 # double (double 1) = double 2 = 4
+  expect pipeline 0 == 0
+}
+
+test "pipeline2" {
+  expect pipeline2 2 == 12 # triple (double 2) = triple 4 = 12
+  expect pipeline2 1 == 6 # triple (double 1) = triple 2 = 6
+}
+
+test "partial application" with 50 runs {
+  property "increment n == n + 1" (n: Int) { increment n == n + 1 }
+  property "decrement n == n - 1" (n: Int) { decrement n == n - 1 }
+}

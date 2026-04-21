@@ -1,0 +1,228 @@
+#lang tesl
+module MutationTesting exposing [
+  ValidAge,
+  checkAge,
+  ValidScore,
+  checkScore,
+  ValidDiscount,
+  checkDiscount,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Mutation testing asks: "If I introduce a plausible logic error into a
+# check/auth/establish function, do my tests catch it?"
+#
+# Run it:
+#   tesl --mutate file.tesl
+#
+# What it does:
+#   1. Finds every binary operator in check/auth/establish bodies:
+#        >  <  >=  <=  ==  !=  &&  ||  +  -
+#   2. Creates one "mutant" per operator by replacing it with a wrong version:
+#        >= becomes >   (off-by-one: boundary now exclusive)
+#        <= becomes <   (off-by-one: boundary now exclusive)
+#        && becomes ||  (logic inversion: passes if EITHER condition holds)
+#        == becomes !=  (inverted equality)
+#        ... and so on
+#   3. Runs your test block against each mutant.
+#   4. Reports KILLED (tests caught it) or SURVIVED (tests missed it).
+#
+# A mutation score of 100% means every plausible logic fault is caught.
+# A SURVIVED mutant is a test gap — a real bug at that spot would go undetected.
+#
+# Mutation testing only targets check/auth/establish functions — the GDP
+# security boundary. fn bodies are NOT mutated: the compiler and type system
+# already guard them, and their correctness is exercised indirectly through
+# the check/auth/establish tests that call them.
+
+import Tesl.Prelude exposing [Int]
+
+# ─── Example 1: age validation ────────────────────────────────────────────────
+#
+# Valid ages are 18–120 inclusive. The body has three mutation sites:
+#   site 1: >=  (lower bound operator)
+#   site 2: <=  (upper bound operator)
+#   site 3: &&  (logical combination)
+
+fact ValidAge (n: Int)
+
+check checkAge(n: Int) -> n: Int ::: ValidAge n =
+  if n >= 18 && n <= 120 then
+    ok n ::: ValidAge n
+  else
+    fail 422 "age must be between 18 and 120"
+
+# ─── Weak tests: several mutants survive ──────────────────────────────────────
+#
+# Testing only "obvious" values misses the boundaries.
+# Running `tesl --mutate` with the test below would show:
+#
+#   checkAge  line N  >= → >    SURVIVED   ← 18 never tested, so >= vs > is invisible
+#   checkAge  line N  <= → <    SURVIVED   ← 120 never tested
+#   checkAge  line N  && → ||   SURVIVED   ← no input tests both conditions simultaneously
+#
+# test "weak: typical values — MISSES boundary mutants" {
+#   expect checkAge 25 == 25       # clearly inside: all mutations pass it too
+#   expectFail checkAge 5          # clearly outside: all mutations reject it too
+#   expectFail checkAge 150        # clearly outside: all mutations reject it too
+# }
+
+# ─── Strong tests: all mutants killed ─────────────────────────────────────────
+#
+# The rule: for each comparison boundary, test the exact boundary value AND
+# the value just outside it. This forces every operator mutation to disagree
+# with at least one of your assertions.
+#
+# How each assertion kills a specific mutant:
+#
+#   expect checkAge 18 == 18
+#     kills  >= → >   because  18 > 18  is false  (mutant rejects 18; test expects accept)
+#
+#   expectFail checkAge 17
+#     kills  >= → <=  because  17 <= 18 is true   (mutant accepts 17; test expects reject)
+#     kills  && → ||  because  17 >= 18 || 17 <= 120 = false || true = true
+#                              (mutant accepts 17; test expects reject)
+#
+#   expect checkAge 120 == 120
+#     kills  <= → <   because  120 < 120 is false (mutant rejects 120; test expects accept)
+#
+#   expectFail checkAge 121
+#     kills  <= → >=  because  121 >= 120 is true (mutant accepts 121; test expects reject)
+#     kills  && → ||  because  121 >= 18 || 121 <= 120 = true || false = true
+#                              (mutant accepts 121; test expects reject)
+
+test "checkAge: boundary values kill all mutants" {
+  expect check checkAge 18 == 18 # exact lower boundary: must accept
+  expect check checkAge 65 == 65 # mid-range: sanity check
+  expect check checkAge 120 == 120 # exact upper boundary: must accept
+  expectFail check checkAge 17 # just below lower boundary: must reject
+  expectFail check checkAge 121 # just above upper boundary: must reject
+}
+
+# ─── Example 2: score in [0, 100] ─────────────────────────────────────────────
+#
+# Scores use the same pattern. Same three mutation sites, same fix.
+
+fact ValidScore (n: Int)
+
+check checkScore(n: Int) -> n: Int ::: ValidScore n =
+  if n >= 0 && n <= 100 then
+    ok n ::: ValidScore n
+  else
+    fail 422 "score must be between 0 and 100"
+
+test "checkScore: boundary values kill all mutants" {
+  expect check checkScore 0 == 0 # exact lower boundary
+  expect check checkScore 50 == 50 # mid-range
+  expect check checkScore 100 == 100 # exact upper boundary
+  let scoreNeg1 = -1
+  let score101 = 101
+  expectFail check checkScore scoreNeg1 # just below lower boundary
+  expectFail check checkScore score101 # just above upper boundary
+}
+
+# ─── Example 3: discount — single equality check ──────────────────────────────
+#
+# Some functions use == or !=. The mutation is == → !=.
+# Catch it by testing both the matching value (must accept) and a
+# non-matching value (must reject).
+
+fact ValidDiscount (code: Int)
+
+check checkDiscount(code: Int) -> code: Int ::: ValidDiscount code =
+  if code == 42 then
+    ok code ::: ValidDiscount code
+  else
+    fail 422 "invalid discount code"
+
+# How == → != is killed:
+#   expect checkDiscount 42 == 42
+#     kills == → !=  because  42 != 42  is false (mutant rejects 42; test expects accept)
+#
+#   expectFail checkDiscount 7
+#     (this alone is not enough — the mutant rejects 7 too, since 7 != 42 is true)
+#     The `expect checkDiscount 42` above is what kills it.
+
+test "checkDiscount: equality check — kills == → != mutant" {
+  expect check checkDiscount 42 == 42 # must accept the valid code
+  expectFail check checkDiscount 7 # must reject any other code
+  expectFail check checkDiscount 0 # edge: zero is not the code
+}
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Mutation testing is specifically useful for GDP boundary functions because:
+#
+# 1. The TYPE SYSTEM cannot catch logic errors in the predicate body.
+#    "check checkAge" will compile fine whether you write >= or >.
+#    Only tests can catch the difference.
+#
+# 2. The VALUE of a proof is only as good as the check that produced it.
+#    If checkAge silently accepts age=17 due to a >= → > mutation,
+#    every downstream handler that trusts "ValidAge n" is also broken.
+#    Mutation testing probes this exact failure mode.
+#
+# 3. The BOUNDARY VALUE principle:
+#    For a range [lo, hi], you need FOUR test inputs to kill all operator mutations:
+#      - lo    (kills lower-bound exclusive mutations)
+#      - lo-1  (kills lower-bound flip mutations and && → || )
+#      - hi    (kills upper-bound exclusive mutations)
+#      - hi+1  (kills upper-bound flip mutations and && → ||)
+#    Mid-range values only verify the "happy path" and kill nothing.
+#
+# 4. The && → || mutation:
+#    This is the most insidious mutation. It turns "BOTH conditions must hold"
+#    into "EITHER condition is enough". A value that violates BOTH conditions
+#    (e.g. age = -5) catches it trivially. But you also need a value that
+#    violates ONLY ONE condition (e.g. age = 17) to catch the || form:
+#      17 >= 18  is false   (violates lower bound)
+#      17 <= 120 is true    (satisfies upper bound)
+#    With &&: false && true = false → reject  (correct)
+#    With ||: false || true = true  → accept  (wrong — caught by expectFail 17)
+#
+# 5. fn functions are NOT mutation targets.
+#    A helper fn called from inside a check body is tested INDIRECTLY:
+#    if the helper has a bug, the check that calls it will produce wrong
+#    results and your test will fail. You do not need separate mutation
+#    tests for helper functions.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# `tesl --mutate file.tesl` performs AST-level mutation on the compiled module:
+#
+#   1. Parse and type-check the file (identical to --check).
+#   2. For each check/auth/establish function, collect all BinOp nodes in the
+#      function body using pre-order traversal (assigns a 0-based index to each).
+#   3. For each (function, operator_index, replacement_operator) triple:
+#        a. Clone the module AST.
+#        b. Replace the single operator at operator_index in that function.
+#        c. Compile the mutant to a temporary Racket file.
+#        d. Run: raco test --quiet <temp.rkt>
+#        e. Exit code 0 → SURVIVED; exit code != 0 → KILLED.
+#   4. Print the per-mutant result and final score.
+#
+# Exit code:
+#   0 = 100% score (all mutants killed, or no mutants generated)
+#   1 = one or more mutants survived, or no test block exists
+#
+# Why AST-level (not source-level) mutation?
+#   The compiler already parses the source and builds a typed AST.
+#   Mutating the AST directly is cheaper (no re-parse), precise (operates
+#   on the same nodes the compiler reasons about), and avoids issues with
+#   source formatting or multi-line expressions.
+#
+# Why only check/auth/establish?
+#   These are the TRUST BOUNDARIES of the GDP model. A mutation here
+#   can silently compromise the proof system. fn functions are computational
+#   helpers that are tested indirectly via the boundary functions they serve.
+#   Future flag `--mutate-all` may extend scope to fn bodies.
+#
+# What is NOT mutated:
+#   - Literal values (42, "admin", True)
+#   - fn function bodies
+#   - handler, api, server, database blocks
+#   - Import statements, type definitions, fact declarations

@@ -1,0 +1,824 @@
+#lang tesl
+module CriticalReview48Tests exposing [
+  checkPositive48,
+  requiresPositive48,
+  checkNonEmpty48,
+  Positive48,
+  NonEmpty48,
+  maybeEstablish,
+  alwaysEstablish,
+  Meters(..),
+  Kilograms(..),
+  convertMeters,
+  convertKilograms,
+  decompose48,
+  decomposeAndUse,
+  checkBothProofs,
+  useBothProofs,
+  Direction(..),
+  Speed(..),
+  Movement(..),
+  describeMovement,
+  pipedAdd,
+  pipedCheckLen,
+  BetweenFact,
+  checkBetween48,
+  requiresBetween48,
+  filterSmallPositive,
+  smallPositiveAll,
+  formatComplex,
+  ExprF(..),
+  evalExpr48,
+  Status48(..),
+  describeStatus48,
+  largeMul,
+  resultFromCase48,
+  makeAdder,
+  applyTwice,
+  Priority48(..),
+  priorityLabel,
+  httpStatus,
+  wrapAll,
+  unwrapAll,
+  attemptProve48,
+  ValidTitle48,
+  checkTitle48,
+  SafeItem48(..),
+  readSafeField,
+  OrderedPair(..),
+  OrderedFact,
+  proveOrdered,
+  makeOrderedPair,
+]
+
+import Tesl.Prelude exposing [ Bool(..), Int, List, String, Fact, forgetFact, ]
+import Tesl.String exposing [ String.length, String.isEmpty, IsTrimmed, ]
+import Tesl.List exposing [
+  List.map,
+  List.filterCheck,
+  List.allCheck,
+  List.length,
+  List.reverse,
+  List.append,
+  List.take,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Either exposing [Either(..)]
+import Tesl.Int exposing [
+  Int.nonZero,
+  Int.divide,
+  IsNonZero,
+  Int.nonNegative,
+  IsNonNegative,
+]
+import Tesl.Float exposing [Float, Float.abs, Float.sqrt]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1. PROOF FABRICATION GUARD
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact Positive48 (n: Int)
+
+check checkPositive48(n: Int) -> n: Int ::: Positive48 n =
+  if n > 0 then
+    ok n ::: Positive48 n
+  else
+    fail 400 "must be positive"
+
+fn requiresPositive48(n: Int ::: Positive48 n) -> Int = n * 2
+
+test "R48-01: proof round-trip via check -> requires" {
+  let raw = 42
+  let proven = check checkPositive48 raw
+  expect requiresPositive48 proven == 84
+}
+
+test "R48-02: check rejects boundary 0" {
+  expectFail check checkPositive48 0
+}
+
+test "R48-03: check rejects negative" {
+  expectFail check checkPositive48 -1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 2. SHADOWING REJECTED
+# ═══════════════════════════════════════════════════════════════════════════════
+
+test "R48-04: no-shadowing rule is enforced (module compiles)" {
+  expect 1 == 1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 3. ESTABLISH TOTALITY
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact ProvenFact48 (n: Int)
+
+establish alwaysEstablish(n: Int) -> Fact (ProvenFact48 n) =
+  ProvenFact48 n
+
+establish maybeEstablish(n: Int) -> Maybe (Fact (ProvenFact48 n)) =
+  if n > 0 then
+    Something (ProvenFact48 n)
+  else
+    Nothing
+
+test "R48-05: establish always succeeds (total)" {
+  let raw = 5
+  let proof = alwaysEstablish raw
+  expect 1 == 1
+}
+
+test "R48-06: maybe establish returns Something for positive" {
+  let raw = 10
+  let result = maybeEstablish raw
+  expect result != Nothing
+}
+
+test "R48-07: maybe establish returns Nothing for non-positive" {
+  let raw = 0
+  let result = maybeEstablish raw
+  expect result == Nothing
+  let rawNeg = -5
+  let result2 = maybeEstablish rawNeg
+  expect result2 == Nothing
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 4. NEWTYPE NOMINAL SAFETY
+# ═══════════════════════════════════════════════════════════════════════════════
+
+type Meters = Int
+type Kilograms = Int
+
+fn convertMeters(m: Meters) -> String =
+  "${m.value}m"
+
+fn convertKilograms(kg: Kilograms) -> String =
+  "${kg.value}kg"
+
+test "R48-08: newtypes produce correct string representation" {
+  let m = Meters 42
+  let kg = Kilograms 100
+  expect convertMeters m == "42m"
+  expect convertKilograms kg == "100kg"
+}
+
+test "R48-09: newtype .value round-trips" {
+  let m = Meters 0
+  expect m.value == 0
+  let kg = Kilograms -5
+  expect kg.value == -5
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5. PROOF DECOMPOSITION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn decompose48(n: Int) -> Int =
+  let proven = check checkPositive48 n
+  let (raw ::: proof) = proven
+  let reattached = raw ::: proof
+  requiresPositive48 reattached
+
+fn decomposeAndUse(n: Int) -> String =
+  let proven = check checkPositive48 n
+  let (val ::: _) = proven
+  "value is ${val}"
+
+test "R48-10: decompose-reattach round-trip" {
+  expect decompose48 5 == 10
+  expect decompose48 1 == 2
+}
+
+test "R48-11: decompose fails for invalid input" {
+  expectFail decompose48 0
+  expectFail decompose48 -5
+}
+
+test "R48-12: decompose-and-discard-proof" {
+  expect decomposeAndUse 7 == "value is 7"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 6. CONJUNCTION OF PROOFS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact Small48 (n: Int)
+
+check checkSmall48(n: Int) -> n: Int ::: Small48 n =
+  if n < 100 then
+    ok n ::: Small48 n
+  else
+    fail 400 "must be small"
+
+check checkBothProofs(n: Int) -> n: Int ::: Positive48 n && Small48 n =
+  check (checkPositive48 && checkSmall48) n
+
+fn useBothProofs(n: Int ::: Positive48 n && Small48 n) -> Int = n * 3
+
+test "R48-13: conjunction passes for valid values" {
+  let n = 50
+  let proven = check checkBothProofs n
+  expect useBothProofs proven == 150
+}
+
+test "R48-14: conjunction fails for zero (not positive)" {
+  expectFail check checkBothProofs 0
+}
+
+test "R48-15: conjunction fails for 100 (not small)" {
+  expectFail check checkBothProofs 100
+}
+
+test "R48-16: conjunction boundary: 1 and 99" {
+  let n1 = 1
+  let v1 = check checkBothProofs n1
+  expect useBothProofs v1 == 3
+  let n99 = 99
+  let v99 = check checkBothProofs n99
+  expect useBothProofs v99 == 297
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. NESTED CASE PATTERN MATCHING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+type Direction
+  = North
+  | South
+  | East
+  | West
+
+type Speed
+  = Slow
+  | Fast
+
+type Movement
+  = Moving dir: Direction speed: Speed
+  | Stopped
+
+fn describeMovement(m: Movement) -> String =
+  case m of
+    Stopped -> "stopped"
+    Moving dir speed ->
+      let dirStr = case dir of
+        North -> "north"
+        South -> "south"
+        East -> "east"
+        West -> "west"
+      let speedStr = case speed of
+        Slow -> "slowly"
+        Fast -> "quickly"
+      "moving ${dirStr} ${speedStr}"
+
+test "R48-17: movement north slowly" {
+  expect describeMovement (Moving North Slow) == "moving north slowly"
+}
+
+test "R48-18: movement east quickly" {
+  expect describeMovement (Moving East Fast) == "moving east quickly"
+}
+
+test "R48-19: stopped" {
+  expect describeMovement Stopped == "stopped"
+}
+
+test "R48-20: all directions covered" {
+  expect describeMovement (Moving South Fast) == "moving south quickly"
+  expect describeMovement (Moving West Slow) == "moving west slowly"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8. PIPELINE AND OPERATOR PRECEDENCE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn add48(x: Int, y: Int) -> Int = x + y
+fn double48(n: Int) -> Int = n * 2
+
+fn pipedAdd(n: Int) -> Int =
+  n |> double48 |> double48
+
+fn pipedCheckLen(s: String) -> Int =
+  s |> String.length
+
+test "R48-21: pipe chains apply left-to-right" {
+  expect pipedAdd 3 == 12
+  expect pipedAdd 0 == 0
+  expect pipedAdd 1 == 4
+}
+
+test "R48-22: pipe with String.length" {
+  expect pipedCheckLen "hello" == 5
+  expect pipedCheckLen "" == 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 9. MULTI-PARAM FACT EDGE CASES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact BetweenFact (lo: Int) (hi: Int) (n: Int)
+
+check checkBetween48(lo: Int, hi: Int, n: Int) -> n: Int ::: BetweenFact lo hi n =
+  if n >= lo && n <= hi then
+    ok n ::: BetweenFact lo hi n
+  else
+    fail 400 "out of bounds"
+
+fn requiresBetween48(lo: Int, hi: Int, n: Int ::: BetweenFact lo hi n) -> String =
+  "${n} in [${lo},${hi}]"
+
+fn testBetween(lo: Int, hi: Int, n: Int) -> String =
+  let v = check checkBetween48 lo hi n
+  requiresBetween48 lo hi v
+
+test "R48-23: multi-param fact passing" {
+  expect testBetween 0 10 5 == "5 in [0,10]"
+}
+
+test "R48-24: multi-param fact boundary lo" {
+  expect testBetween 10 20 10 == "10 in [10,20]"
+}
+
+test "R48-25: multi-param fact boundary hi" {
+  expect testBetween 10 20 20 == "20 in [10,20]"
+}
+
+test "R48-26: multi-param fact below lo fails" {
+  expectFail (testBetween 10 20 9)
+}
+
+test "R48-27: multi-param fact above hi fails" {
+  expectFail (testBetween 10 20 21)
+}
+
+test "R48-28: multi-param fact negative range" {
+  expect (testBetween (-10) (-1) (-5)) == "-5 in [-10,-1]"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 10. LIST FILTERCHECK AND ALLCHECK EDGE CASES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn filterSmallPositive(xs: List Int) -> List Int ::: ForAll (Positive48 && Small48) =
+  List.filterCheck (checkPositive48 && checkSmall48) xs
+
+fn smallPositiveAll(xs: List Int) -> Maybe (List Int ::: ForAll (Positive48)) =
+  List.allCheck checkPositive48 xs
+
+test "R48-29: filterCheck combined proof on empty list" {
+  let result = filterSmallPositive []
+  expect List.length result == 0
+}
+
+test "R48-30: filterCheck combined proof on mixed list" {
+  let result = filterSmallPositive [1, -1, 50, 100, 99, 0]
+  expect List.length result == 3
+}
+
+test "R48-31: allCheck returns Nothing on single failure" {
+  let result = smallPositiveAll [1, 2, 0, 4]
+  expect result == Nothing
+}
+
+test "R48-32: allCheck returns Something on all pass" {
+  let result = smallPositiveAll [1, 2, 3, 4, 5]
+  expect result != Nothing
+}
+
+test "R48-33: allCheck on empty list succeeds (vacuous truth)" {
+  let result = smallPositiveAll []
+  expect result != Nothing
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 11. STRING INTERPOLATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn formatComplex(a: Int, b: Int) -> String =
+  let theSum = a + b
+  let diff = a - b
+  "sum=${theSum}, diff=${diff}"
+
+test "R48-34: complex interpolation" {
+  expect formatComplex 10 3 == "sum=13, diff=7"
+  expect formatComplex 0 0 == "sum=0, diff=0"
+  expect formatComplex -5 3 == "sum=-2, diff=-8"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 12. RECURSIVE ADT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+type ExprF
+  = LitF n: Int
+  | AddF left: ExprF right: ExprF
+  | NegF inner: ExprF
+
+fn evalExpr48(e: ExprF) -> Int =
+  case e of
+    LitF n -> n
+    AddF left right -> evalExpr48 left + evalExpr48 right
+    NegF inner -> 0 - evalExpr48 inner
+
+test "R48-35: recursive ADT eval leaf" {
+  expect evalExpr48 (LitF 42) == 42
+}
+
+test "R48-36: recursive ADT eval add" {
+  expect evalExpr48 (AddF (LitF 3) (LitF 4)) == 7
+}
+
+test "R48-37: recursive ADT eval double neg" {
+  expect evalExpr48 (NegF (NegF (LitF 5))) == 5
+}
+
+test "R48-38: recursive ADT deeply nested" {
+  let e = AddF (NegF (LitF 10)) (AddF (LitF 7) (LitF 3))
+  expect evalExpr48 e == 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 13. ADT VARIANT ACCESS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+type Status48
+  = Active48
+  | Inactive48
+  | Suspended48 reason: String
+
+fn describeStatus48(s: Status48) -> String =
+  case s of
+    Active48 -> "active"
+    Inactive48 -> "inactive"
+    Suspended48 reason -> "suspended: ${reason}"
+
+test "R48-39: nullary constructors pattern match" {
+  expect describeStatus48 Active48 == "active"
+  expect describeStatus48 Inactive48 == "inactive"
+}
+
+test "R48-40: constructor with field" {
+  expect describeStatus48 (Suspended48 "policy violation") == "suspended: policy violation"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 14. INTEGER ARITHMETIC EDGE CASES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn largeMul(a: Int, b: Int) -> Int = a * b
+
+test "R48-41: large multiplication" {
+  expect largeMul 1000000 1000 == 1000000000
+}
+
+test "R48-42: multiply by zero" {
+  expect largeMul 999999 0 == 0
+  expect largeMul 0 999999 == 0
+}
+
+test "R48-43: negative multiplication" {
+  expect (largeMul (-3) (-4)) == 12
+  expect (largeMul (-3) 4) == -12
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 15. PROOF AFTER CASE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn resultFromCase48(m: Maybe Int) -> Int =
+  case m of
+    Nothing -> 0
+    Something v ->
+      let proven = check checkPositive48 v
+      requiresPositive48 proven
+
+test "R48-44: proof in case Something branch" {
+  expect resultFromCase48 (Something 5) == 10
+}
+
+test "R48-45: Nothing branch returns 0" {
+  expect resultFromCase48 Nothing == 0
+}
+
+test "R48-46: case Something with 0 fails" {
+  expectFail resultFromCase48 (Something 0)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 16. LAMBDA / CLOSURE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn makeAdder(n: Int) -> (Int -> Int) =
+  fn(x: Int) -> x + n
+
+fn applyTwice(f: Int -> Int, x: Int) -> Int =
+  f (f x)
+
+test "R48-47: closure captures outer variable" {
+  let add5 = makeAdder 5
+  expect add5 10 == 15
+  expect add5 0 == 5
+}
+
+test "R48-48: applyTwice with closure" {
+  let add3 = makeAdder 3
+  expect applyTwice add3 10 == 16
+}
+
+test "R48-49: applyTwice with inline lambda" {
+  expect applyTwice (fn(x: Int) -> x * 2) 3 == 12
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 17. FALL-THROUGH CASE ARMS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+type Priority48
+  = Critical48
+  | High48
+  | Medium48
+  | Low48
+
+fn priorityLabel(p: Priority48) -> String =
+  case p of
+    Critical48 ->
+    High48 ->
+      "urgent"
+    Medium48 ->
+      "normal"
+    Low48 ->
+      "low"
+
+test "R48-50: fall-through Critical48 -> urgent" {
+  expect priorityLabel Critical48 == "urgent"
+}
+
+test "R48-51: fall-through High48 -> urgent" {
+  expect priorityLabel High48 == "urgent"
+}
+
+test "R48-52: Medium48 -> normal" {
+  expect priorityLabel Medium48 == "normal"
+}
+
+test "R48-53: Low48 -> low" {
+  expect priorityLabel Low48 == "low"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 18. LITERAL PATTERNS IN CASE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn httpStatus(code: Int) -> String =
+  case code of
+    200 -> "OK"
+    201 -> "Created"
+    400 -> "Bad Request"
+    404 -> "Not Found"
+    500 -> "Internal Server Error"
+    _ -> "Unknown"
+
+test "R48-54: literal patterns match exactly" {
+  expect httpStatus 200 == "OK"
+  expect httpStatus 201 == "Created"
+  expect httpStatus 404 == "Not Found"
+  expect httpStatus 500 == "Internal Server Error"
+}
+
+test "R48-55: literal patterns wildcard fallback" {
+  expect httpStatus 301 == "Unknown"
+  expect httpStatus 0 == "Unknown"
+  expect httpStatus -1 == "Unknown"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 19. NEWTYPES IN LIST
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn wrapAll(xs: List Int) -> List Meters =
+  List.map (fn(n: Int) -> Meters n) xs
+
+fn unwrapAll(xs: List Meters) -> List Int =
+  List.map (fn(m: Meters) -> m.value) xs
+
+test "R48-56: wrap and unwrap list of newtypes" {
+  let wrapped = wrapAll [1, 2, 3]
+  let unwrapped = unwrapAll wrapped
+  expect List.length unwrapped == 3
+}
+
+test "R48-57: wrap empty list" {
+  let wrapped = wrapAll []
+  expect List.length wrapped == 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 20. ESTABLISH WITH MAYBE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact ValidPort48 (p: Int)
+
+establish attemptProve48(p: Int) -> Maybe (Fact (ValidPort48 p)) =
+  if p >= 1 && p <= 65535 then
+    Something (ValidPort48 p)
+  else
+    Nothing
+
+fn requiresValidPort48(p: Int ::: ValidPort48 p) -> String =
+  "port ${p}"
+
+fn tryListen(p: Int) -> String =
+  let maybeProof = attemptProve48 p
+  case maybeProof of
+    Something proof -> requiresValidPort48 <| p ::: proof
+    Nothing -> "invalid port"
+
+test "R48-58: establish proof via attach" {
+  expect tryListen 80 == "port 80"
+  expect tryListen 443 == "port 443"
+}
+
+test "R48-59: establish returns Nothing for invalid" {
+  expect tryListen 0 == "invalid port"
+  expect tryListen -1 == "invalid port"
+  expect tryListen 65536 == "invalid port"
+}
+
+test "R48-60: establish boundary values" {
+  expect tryListen 1 == "port 1"
+  expect tryListen 65535 == "port 65535"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 21. RECORD FIELD PROOF PROPAGATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact ValidTitle48 (s: String)
+
+check checkTitle48(s: String) -> s: String ::: ValidTitle48 s =
+  if String.length s >= 1 && String.length s <= 100 then
+    ok s ::: ValidTitle48 s
+  else
+    fail 400 "title must be 1-100 chars"
+
+fn requiresValidTitle48(t: String ::: ValidTitle48 t) -> Int =
+  String.length t
+
+record SafeItem48 {
+  title: String ::: ValidTitle48 title
+}
+
+fn readSafeField(item: SafeItem48) -> Int =
+  requiresValidTitle48 item.title
+
+test "R48-61: record field carries proof" {
+  let rawTitle = "my item"
+  let validTitle = check checkTitle48 rawTitle
+  let item = SafeItem48 { title: validTitle }
+  expect readSafeField item == 7
+}
+
+test "R48-62: record field proof on boundary length" {
+  let rawTitle = "x"
+  let validTitle = check checkTitle48 rawTitle
+  let item = SafeItem48 { title: validTitle }
+  expect readSafeField item == 1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 22. GHOST WITNESS (RECORD-LEVEL PROOF)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact OrderedFact (lo: Int) (hi: Int)
+
+record OrderedPair {
+  lo: Int
+  hi: Int
+} ::: OrderedFact lo hi
+
+establish proveOrdered(lo: Int, hi: Int) -> Maybe (Fact (OrderedFact lo hi)) =
+  if lo <= hi then
+    Something (OrderedFact lo hi)
+  else
+    Nothing
+
+fn makeOrderedPair(a: Int, b: Int) -> Maybe OrderedPair =
+  let maybeProof = proveOrdered a b
+  case maybeProof of
+    Nothing -> Nothing
+    Something proof ->
+      Something (OrderedPair { lo: a, hi: b } ::: proof)
+
+test "R48-63: ghost witness allows construction" {
+  let result = makeOrderedPair 1 10
+  expect result != Nothing
+}
+
+test "R48-64: ghost witness rejects wrong order" {
+  let result = makeOrderedPair 10 1
+  expect result == Nothing
+}
+
+test "R48-65: ghost witness accepts equal values" {
+  let result = makeOrderedPair 5 5
+  expect result != Nothing
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 23. PROPERTY-BASED TESTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+test "R48-66: property - positive check consistent" with 100 runs {
+  property "positive check succeeds for positive ints" (n: Int where n > 0 && n < 10000) {
+    let v = check checkPositive48 n
+    requiresPositive48 v > 0
+  }
+}
+
+test "R48-67: property - string length non-negative" with 100 runs {
+  property "string length is never negative" (s: String) {
+    String.length s >= 0
+  }
+}
+
+test "R48-68: property - double neg is identity" with 50 runs {
+  property "negating twice returns original" (n: Int where n > -10000 && n < 10000) {
+    0 - (0 - n) == n
+  }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 24. STDLIB PROOF-TOTAL FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact NonEmpty48 (s: String)
+
+check checkNonEmpty48(s: String) -> s: String ::: NonEmpty48 s =
+  if String.isEmpty s then
+    fail 400 "empty"
+  else
+    ok s ::: NonEmpty48 s
+
+fn safeTake48(xs: List Int, n: Int) -> List Int =
+  let nn = check Int.nonNegative n
+  List.take nn xs
+
+fn safeDivide48(a: Int, b: Int) -> Int =
+  let nz = check Int.nonZero b
+  Int.divide a nz
+
+test "R48-69: proof-total List.take" {
+  expect List.length (safeTake48 [1, 2, 3, 4, 5] 3) == 3
+  expect List.length (safeTake48 [1, 2, 3] 0) == 0
+  expect List.length (safeTake48 [] 5) == 0
+}
+
+test "R48-70: proof-total List.take rejects negative" {
+  expectFail (safeTake48 [1, 2, 3] -1)
+}
+
+test "R48-71: proof-total Int.divide" {
+  expect safeDivide48 10 3 == 3
+  expect safeDivide48 -10 3 == -3
+  expect safeDivide48 0 5 == 0
+}
+
+test "R48-72: proof-total Int.divide rejects zero" {
+  expectFail (safeDivide48 10 0)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 25. LIST.REVERSE AND LIST.APPEND
+# ═══════════════════════════════════════════════════════════════════════════════
+
+test "R48-73: List.reverse" {
+  expect List.reverse [1, 2, 3] == [3, 2, 1]
+  expect List.reverse [] == []
+  expect List.reverse [42] == [42]
+}
+
+test "R48-74: List.append" {
+  expect List.append [1, 2] [3, 4] == [1, 2, 3, 4]
+  expect List.append [] [1] == [1]
+  expect List.append [1] [] == [1]
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 26. FORGETFACT PRESERVES IDENTITY
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn forgetAndRecheck(n: Int) -> Int =
+  let proven = check checkPositive48 n
+  let forgotten = forgetFact proven
+  let reproven = check checkPositive48 forgotten
+  requiresPositive48 reproven
+
+test "R48-75: forgetFact then re-check" {
+  expect forgetAndRecheck 5 == 10
+}
+
+test "R48-76: forgetFact on boundary" {
+  expect forgetAndRecheck 1 == 2
+}

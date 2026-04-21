@@ -1,0 +1,26 @@
+#lang tesl
+# ─── Kanel — Background notification worker functions ──────────────────────
+#
+# Defines the worker and dead-letter worker functions for email notifications.
+# The queue and workers/deadWorkers declarations live in KanelBackend.tesl
+# because they must reference the queue by name, and the queue is declared there.
+
+module KanelNotify exposing [notifyWorker, deadNotifyWorker, notifyWorkerCap]
+
+import Tesl.Telemetry exposing [telemetry]
+import Tesl.Queue exposing [queueRead, FromQueue, FromDeadQueue]
+import KanelModels exposing [NotifyPayload]
+
+capability notifyWorkerCap implies queueRead
+
+worker notifyWorker(job: NotifyPayload ::: FromQueue (Id == jobId) job)
+  requires [notifyWorkerCap] =
+  telemetry "kanel.email.sent" { recipient = job.recipientEmail, subject = job.subject }
+  # NOTE: In production, integrate with SendGrid / SES / Postmark here.
+  # The FromQueue proof guarantees this arrived via the trusted queue boundary.
+  job
+
+deadWorker deadNotifyWorker(job: NotifyPayload ::: FromDeadQueue (Id == jobId) job)
+  requires [notifyWorkerCap] =
+  telemetry "kanel.email.failed" { recipient = job.recipientEmail, subject = job.subject }
+  job

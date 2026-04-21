@@ -1,0 +1,97 @@
+#lang tesl
+module Lesson40 exposing [double, isAdult, greet, absVal, classify]
+import Tesl.Prelude exposing [Int, Bool, String]
+
+# lesson40: Implicit Value Unwrapping
+#
+# In Tesl, function parameters carry GDP metadata so the compiler can
+# track which checks have been performed on each value.  Internally,
+# parameters are "named values" - a raw value bundled with proof evidence.
+#
+# The compiler automatically unwraps named values to their raw
+# representation when a raw value is required: arithmetic, comparisons,
+# string interpolation, constructor arguments, and stdlib arguments.
+#
+# There is NO surface syntax for manual unwrapping.  The compiler infers
+# the correct form at each use site.
+
+fn double(n: Int) -> Int =
+  n + n
+
+fn add(x: Int, y: Int) -> Int =
+  x + y
+
+fn multiply(x: Int, y: Int) -> Int =
+  x * y
+
+fn isAdult(age: Int) -> Bool =
+  age >= 18
+
+fn isEqual(x: Int, y: Int) -> Bool =
+  x == y
+
+fn greet(name: String) -> String =
+  "Hello, ${name}!"
+
+fn describe(x: Int) -> String =
+  "The value is ${x}"
+
+fn absVal(n: Int) -> Int =
+  if n >= 0 then
+    n
+  else
+    -n
+
+fn negate(b: Bool) -> Bool =
+  not b
+
+fn classify(flag: Bool, a: Int, b: Int) -> Int =
+  if flag then
+    a
+  else
+    b
+
+test "double uses implicit unwrapping" {
+  expect double 5 == 10
+}
+
+test "add uses implicit unwrapping" {
+  expect add 3 4 == 7
+}
+
+test "multiply uses implicit unwrapping" {
+  expect multiply 6 7 == 42
+}
+
+test "isAdult comparison" {
+  expect isAdult 18 == True
+  expect isAdult 17 == False
+}
+
+test "isEqual comparison" {
+  expect isEqual 3 3 == True
+  expect isEqual 3 4 == False
+}
+
+test "greet string interpolation" {
+  expect greet "Alice" == "Hello, Alice!"
+}
+
+test "describe string interpolation" {
+  expect describe 42 == "The value is 42"
+}
+
+test "absVal unary negation" {
+  expect absVal 5 == 5
+  expect absVal -3 == 3
+}
+
+test "negate bool" {
+  expect negate False == True
+  expect negate True == False
+}
+
+test "classify if-condition" {
+  expect classify True 10 20 == 10
+  expect classify False 10 20 == 20
+}

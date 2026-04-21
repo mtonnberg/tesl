@@ -1,0 +1,180 @@
+#lang tesl
+module TestBlocks exposing [factorial, fibonacci, clamp]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Test blocks run when you pass --test to the Tesl compiler.
+# They do NOT run in production — only during testing.
+#
+# Syntax:
+#   test "description" { ... }                    -- basic test block
+#   test "description" with N runs { ... }        -- N randomized runs for properties
+#
+# Inside a test block:
+#   expect expr == value                          -- check equality
+#   expect expr != value                          -- check inequality
+#   expect expr                                   -- check that expr is truthy
+#   expectFail someCheck(badValue)                -- check that it fails (check/proof)
+#   let name = expr                               -- local binding inside test
+#   property "name" (params...) { expr }          -- property-based test
+#
+# Doctests (above a function):
+#   #> expression                                 -- input expression
+#   #= expected                                   -- expected result
+#
+# Properties with random generation:
+#   property "name" (x: Int, y: Int) { ... }     -- random Int, Int
+#   property "name" (n: Int where n > 0) { ... } -- filtered random (where clause)
+#   property "name" (n: Int via genFn) { ... }   -- custom generator function
+
+import Tesl.Prelude exposing [Int]
+
+# Doctests: #> expr on its own line, #= expected on next line.
+# These are compiled as test cases when running --test.
+#> factorial 0
+#= 1
+#> factorial 1
+#= 1
+#> factorial 5
+#= 120
+fn factorial(n: Int) -> Int =
+  if n <= 0 then
+    1 # base case: 0! = 1
+  else
+    n * factorial (n - 1) # recursive case: n! = n * (n-1)!
+
+#> fibonacci 0
+#= 0
+#> fibonacci 1
+#= 1
+#> fibonacci 10
+#= 55
+fn fibonacci(n: Int) -> Int =
+  if n <= 1 then
+    n # fib 0=0, fib 1=1
+  else
+    (fibonacci (n - 1)) + (fibonacci (n - 2))
+
+fn clamp(lo: Int, hi: Int, n: Int) -> Int =
+  if n < lo then
+    lo
+  else
+    if n > hi then
+      hi
+    else
+      n
+
+# ─── Unit tests ───────────────────────────────────────────────────────────────
+#
+# "expect" with comparison operator checks equality/ordering.
+# "expect" with no operator checks truthiness (result must be True).
+# "expectFail" expects the expression to fail (raise an HTTP error).
+
+test "factorial" {
+  expect factorial 0 == 1 # 0! = 1 by convention
+  expect factorial 1 == 1
+  expect factorial 2 == 2
+  expect factorial 5 == 120
+  expect factorial 10 == 3628800
+}
+
+test "fibonacci" {
+  expect fibonacci 0 == 0
+  expect fibonacci 1 == 1
+  expect fibonacci 2 == 1
+  expect fibonacci 5 == 5
+  expect fibonacci 10 == 55
+}
+
+test "clamp: in range returns n" {
+  expect clamp 0 10 5 == 5
+  expect clamp 0 10 0 == 0 # at exact boundary
+  expect clamp 0 10 10 == 10 # at exact boundary
+}
+
+test "clamp: below lo returns lo" {
+  expect clamp 0 10 -5 == 0
+  expect clamp 5 15 3 == 5
+}
+
+test "clamp: above hi returns hi" {
+  expect clamp 0 10 20 == 10
+  expect clamp 5 15 99 == 15
+}
+
+test "clamp: mixed" {
+  let lo = 3
+  let hi = 7
+  expect clamp lo hi 3 == 3 # let bindings work inside test blocks
+  expect clamp lo hi 7 == 7
+  expect clamp lo hi 5 == 5
+  expect clamp lo hi 0 == 3
+  expect clamp lo hi 9 == 7
+}
+
+# ─── Property-based tests ─────────────────────────────────────────────────────
+#
+# "property" runs the body expression many times with random inputs.
+# The body must evaluate to True for the property to pass.
+# "where" filters generated values (only keeps those satisfying the condition).
+# "with N runs" sets how many random trials to attempt.
+
+test "clamp properties" with 200 runs {
+  property "result is always in range" (lo: Int, hi: Int where lo <= hi, n: Int) { clamp lo hi n >= lo && clamp lo hi n <= hi }
+  property "idempotent: clamping twice is same as once" (lo: Int, hi: Int where lo <= hi, n: Int) { clamp lo hi (clamp lo hi n) == clamp lo hi n }
+  property "clamp lo lo n == lo for any n" (lo: Int, n: Int) { clamp lo lo n == lo }
+}
+
+test "factorial growth" with 20 runs {
+  property "factorial(n) > 0 for n >= 0" (n: Int where n >= 0 && n < 10) { factorial n > 0 }
+}
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Test blocks are FIRST-CLASS TOP-LEVEL DECLARATIONS in Tesl.
+# They live alongside functions, records, and other forms.
+# This means your tests and your code are in the same file — no separate test files needed
+# unless you prefer the separation (you can still put tests in separate files).
+#
+# "expect expr == value" is NOT the same as "assert expr == value" in some languages.
+# "expect" is a compile-time-known assertion that lowers to rackunit's "check-equal?".
+# It gives structured output on failure: what was expected, what was received, where.
+#
+# "expectFail" is useful for testing validation functions (check/proof):
+#   expectFail isValidPort(-1)    -- passes if isValidPort throws/fails for -1
+#   expectFail isValidPort 8080  -- would FAIL (isValidPort succeeds for 8080)
+#
+# Property-based testing with "property" generates random values and runs your
+# predicate. The "where" clause filters: it generates random values but only runs
+# the property on those satisfying the condition. If too few pass the filter,
+# the test framework may warn about low sample counts.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Test blocks compile to Racket's "module+ test" submodule syntax.
+# When you run "raco test file.rkt", Racket runs the test submodule.
+# Each "expect" compiles to a rackunit "check-equal?" or similar assertion.
+# Each "expectFail" compiles to "check-exn" (catches an exception).
+#
+# Property tests use a simple random generator seeded from the system clock.
+# For Int, it generates values in a bounded range. For String, random strings.
+# For custom records, it recursively generates random field values.
+# The "where" guard is evaluated as a filter predicate — if it returns False,
+# that trial is skipped and a new random value is generated.
+#
+# The "with N runs" clause sets the trial count for the ENTIRE test block.
+# All properties in that block share the N-run budget.
+# Default if omitted: 100 runs.
+#
+# Doctest extraction: the compiler sees "#> expr" and "#= expected" comments
+# immediately above a function declaration and converts them to test cases:
+#   (check-equal? expr expected "doctest at line N")
+# This is done during the parse phase, not as a separate post-processing step.
+#
+# Custom generators "via genFn": genFn receives the current run index (0..N-1)
+# as an Int and must return a value of the expected type.
+# This lets you write deterministic generators that produce different values
+# on each trial (e.g., the value at position i in a predefined list).

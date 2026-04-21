@@ -1,0 +1,76 @@
+#lang tesl
+module HelloWorld exposing [greet, add]
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Every Tesl file starts with:
+#   1. "#lang tesl"            — tells Racket this is a Tesl source file
+#   2. "module Name exposing"   — names the module and lists what it exports
+#   3. "import ..."             — brings in names from other modules
+#
+# Then you write functions with "fn".
+# "fn greet(name: String) -> String = ..."
+#   - greet: the function name
+#   - name: parameter name, type String
+#   - -> String: return type
+#   - = "..."   : the body (single expression, no braces needed)
+#
+# Interpolated strings use ${varName} syntax.
+# Integer parameters need "*" to get the raw number: x + y.
+
+import Tesl.Prelude exposing [Int, String]
+
+fn greet(name: String) -> String = # String in, String out
+  "Hello, ${name}!" # ${name} splices the value into the string
+
+fn add(x: Int, y: Int) -> Int = # two Ints in, one Int out
+  x + y # x and y strip the establish wrapper to get bare integers
+
+test "greet" {
+  expect greet "World" == "Hello, World!"
+  expect greet "Tesl" == "Hello, Tesl!"
+}
+
+test "add" {
+  expect add 1 2 == 3
+  expect add 0 0 == 0
+  expect add 10 -3 == 7
+}
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# "exposing [greet, add]" means ONLY these two names are visible to importers.
+# Everything else in this file is private, even if named.
+# This is deliberate — Tesl has no implicit leaking of definitions.
+#
+# The "x" notation is required for integer arithmetic because in Tesl every
+# parameter is a "named value" — a carrier that holds both the raw payload and
+# any proof facts attached to it. Arithmetic operators need the plain integer,
+# not the carrier. So "x" says "give me the raw integer out of x".
+#
+# For String parameters you do NOT write "name" — strings are passed through
+# as-is in interpolation. You only use "*" for Ints (and other numeric types)
+# when you need to perform arithmetic or comparisons on them.
+#
+# "import Tesl.Prelude exposing [Int, String]" uses the explicit import form.
+# Tesl never auto-imports anything. If you need "Bool", "List", etc., you must
+# list them in your import's exposing clause.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# "fn" lowers to Racket's "define/pow". The "pow" stands for "proof of worth" —
+# each parameter is wrapped in a GDP named-value carrier that stores:
+#   - a hidden fresh subject identity (an internal symbol, never surface-visible)
+#   - the raw payload (the actual integer, string, etc.)
+#   - an attached proof set (initially empty for plain "fn" parameters)
+#
+# This is why "x" is needed: the "+", "-", "*", "/" operators in Tesl call
+# Racket's numeric operations which expect plain numbers, not named-value carriers.
+# The "*" prefix is the "raw access" operator — it projects only the payload.
+#
+# The module system enforces separate compilation. Two modules that both define
+# a name "User" have completely separate declarations. Import resolution is
+# always qualified by the originating module in the internal representation,
+# so there is never accidental name merging.

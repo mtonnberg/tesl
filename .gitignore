@@ -1,0 +1,14 @@
+.tesl-postgres/
+.thesl-postgres/
+node_modules/
+elm-stuff/
+compiled/
+__pycache__/
+.pytest_cache/
+*.pyc
+.claude
+.direnv/
+_build/
+.claude/
+.agents/
+_build/

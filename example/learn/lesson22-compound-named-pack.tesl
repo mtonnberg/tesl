@@ -1,0 +1,215 @@
+#lang tesl
+module CompoundNamedPack exposing [
+  IsPositive,
+  checkIsPositive,
+  IsSmall,
+  checkIsSmall,
+  IsAdmin,
+  checkIsAdmin,
+  makePositive,
+  makePositiveAndSmall,
+  makeWithAdminCargo,
+  makeWithProofOnReturnLine,
+  validateAndReturn,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# The "?" operator splits into two groups separated by ":::":
+#   Type ? EntityProofs::: OtherProofs
+#
+# EntityProofs: every leaf predicate gets the entity name appended (_entity internally,
+#               renamed to your let-variable at the callsite)
+# OtherProofs:  independent proofs — NOT about the entity, carried as proof cargo
+#
+# Quick examples:
+#   -> Int ? Positive                            # entity is positive
+#   -> Int ? Positive && Small                   # entity is both
+#   -> Int ? Positive::: Admin user             # entity is positive, user is admin (cargo)
+#   -> Int ? Positive && Small::: Admin user    # all three
+#
+# Packing in function bodies: just return the value with proofs attached via ":::"
+
+import Tesl.Prelude exposing [Int, String, Fact]
+
+# ─── Check functions ──────────────────────────────────────────────────────────
+
+fact IsPositive (n: Int)
+
+check checkIsPositive(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "must be positive"
+
+fact IsSmall (n: Int)
+
+check checkIsSmall(n: Int) -> n: Int ::: IsSmall n =
+  if n < 100 then
+    ok n ::: IsSmall n
+  else
+    fail 400 "must be less than 100"
+
+fact IsSmall2 (n: Int)
+
+check checkIsSmall_2(x: Int, n: Int) -> n: Int ::: IsSmall2 n =
+  if n < 100 then
+    ok n ::: IsSmall2 n
+  else
+    fail 400 "must be less than 100"
+
+fact IsSmall3 (x: Int)
+
+check checkIsSmall_3(x: Int, n: Int) -> n: Int ::: IsSmall3 x =
+  if n < 100 then
+    ok n ::: IsSmall3 x
+  else
+    fail 400 "must be less than 100"
+
+fact IsSmall4 (x: Int)
+
+check checkIsSmall_4(x: Int, n: Int) -> x: Int ::: IsSmall4 x =
+  if n < 100 then
+    ok x ::: IsSmall4 x
+  else
+    fail 400 "must be less than 100"
+
+fact IsAdmin (user: String)
+
+check checkIsAdmin(user: String) -> user: String ::: IsAdmin user =
+  if user == "admin" then
+    ok user ::: IsAdmin user
+  else
+    fail 401 "admin only"
+
+# ─── Pattern 1: simple ? — single entity proof ───────────────────────────────
+
+# checkIsPositive gives back n with IsPositive proof (same GDP identity as input)
+fn makePositive(n: Int ::: IsPositive n) -> Int ? IsPositive =
+  n # already has IsPositive n establish — implicit pack at return
+
+# checkIsPositive gives back n with IsPositive proof (same GDP identity as input)
+fn shouldWork_makePositive(n: Int ::: IsPositive n) -> n: Int ::: IsPositive n =
+  n # already has IsPositive n — proof passthrough, no new proof fabricated
+
+# ─── Pattern 2: compound entity proofs ───────────────────────────────────────
+
+# Both Positive and Small get _entity appended at callsite
+fn makePositiveAndSmall(n: Int ::: IsPositive n && IsSmall n) -> Int ? IsPositive && IsSmall =
+  n # carries both proofs
+
+# ─── Pattern 3: entity proof + independent proof cargo ───────────────────────
+
+# Admin user is NOT about the entity — it lives in ":::" group, unchanged
+fn makeWithAdminCargo(n: Int ::: IsPositive n, user: String ::: IsAdmin user)
+  -> Int ? IsPositive ::: IsAdmin user =
+  n ::: detachFact user # attach Admin user_subject as cargo
+
+# ─── Pattern 4: proof function + cargo on the SAME return line ───────────────
+
+establish provePositive (n: Int) -> Fact (IsPositive n) =
+  IsPositive n
+
+establish shouldWarn_1 (n: Int) -> Fact (IsPositive n) =
+  IsPositive n
+
+fn makeWithProofOnReturnLine(n: Int, user: String ::: IsAdmin user)
+  -> Int ? IsPositive ::: IsAdmin user =
+  let p = provePositive n # entity establish (about n's subject)
+  n ::: p && detachFact user # attach both on one line — entity establish && cargo
+
+# ─── KEY INSIGHT: check functions already do "return same value with proof" ──
+
+# check isSafeTitle returns the SAME title (same GDP subject) with TitleSafe proof
+# This is the idiomatic way to validate-and-return — no ? needed at the check site
+
+# When DO you use ? ?
+# Use ? when the caller needs to name the returned value for further proof reasoning.
+# And the value is created inside the function. If you return an unchanged value that is named in the input, use::: instead
+# check already gives the caller a named value — the ? is for cases where you need
+# the proof to reference the returned value's own identity.
+fn validateAndReturn(n: Int) -> Int ? IsPositive =
+  let x = n - 3
+  let validated = check checkIsPositive x # validated IS n (same subject) with IsPositive
+  validated # ? packs it: caller's let-name becomes the entity name
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# The ":::" split: "?" group = entity-indexed proofs; ":::" group = proof cargo about other values.
+#
+# Packing is implicit: returning a value with proofs already attached automatically
+# satisfies the "?" return type. The runtime wraps the value in a named-pack carrier
+# so the caller's let-binding name becomes the GDP subject.
+#
+# "check" functions preserve GDP identity (binding return spec returns the same value):
+#   check checkIsPositive(n: Int) -> n: Int::: IsPositive n
+# The return spec "n: Int::: IsPositive n" says: return the SAME n (same GDP subject)
+# with IsPositive attached. The caller's let-binding IS that same identity.
+#
+# Use ":::" in the body to combine multiple proofs before returning:
+#   n::: detachFact user        — value with one cargo proof
+#   n::: p && detachFact user   — value with entity proof AND cargo proof
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# The entity-append rule at the Racket level:
+#   -> Int ? IsPositive
+#   emits: (? Int _entity::: (IsPositive _entity))
+#
+# "_entity" is a placeholder renamed to the callsite binder:
+#   let result = makePositive n
+#   # result:: Int result::: (IsPositive result)
+#
+# Why independent proofs in ":::" are NOT entity-indexed:
+#   -> Int ? IsPositive::: IsAdmin user
+#   emits: (? Int _entity::: ((IsPositive _entity) && (IsAdmin user)))
+# "IsAdmin user" references the user subject, not _entity. The ":::" group is
+# passed through unchanged — no _entity substitution happens there.
+#
+# The runtime cost difference vs returning proofs separately:
+# Named-pack bundles the entity subject assignment with proof delivery in one step.
+# The caller receives both the value AND its proofs atomically at the let-binding site.
+# Returning proofs separately (Fact (IsPositive n)) requires two let-bindings and
+# an explicit attachFact call at the callsite — more ceremony, same safety.
+
+# ─── Test block ───────────────────────────────────────────────────────────────
+
+test "simple named pack" {
+  let n = 5
+  let p = check checkIsPositive n
+  let result = makePositive p
+  expect result == 5
+}
+
+test "compound entity proofs" {
+  # let p: Int::: IsPositive p  = checkIsPositive 5
+  # let s: Int::: IsSmall s  = checkIsSmall p
+  # let ps = p::: (detachFact p) && (detachFact s)
+  let ps: Int ::: IsPositive ps && IsSmall ps = check (checkIsPositive && checkIsSmall) 5
+  let result = makePositiveAndSmall ps
+  expect result == 5
+}
+
+test "entity establish with cargo" {
+  let n = 5
+  let p = check checkIsPositive n
+  let adminStr = "admin"
+  let admin: String ::: IsAdmin admin = check checkIsAdmin adminStr
+  let result: Int ::: IsPositive result && IsAdmin admin = makeWithAdminCargo p admin
+  expect result == 5
+}
+
+test "establish on return line" {
+  let userId = "admin"
+  let userId_with_Proof: String ::: IsAdmin userId_with_Proof = check checkIsAdmin userId
+  let result: Int ::: IsPositive result && IsAdmin userId_with_Proof = makeWithProofOnReturnLine 42 userId_with_Proof
+  expect result == 42
+}
+
+test "validate and return" {
+  let result = validateAndReturn 5
+  expect result == 2
+}

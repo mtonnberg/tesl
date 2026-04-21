@@ -1,0 +1,381 @@
+#lang tesl
+# ─── Kanel — Organization and membership management ────────────────────────
+#
+# All handlers here deal with creating/reading/updating orgs and their members.
+#
+# Facts used from KanelAuth: Authenticated, OrgMember, OrgAdmin
+# Facts defined here:
+#   ValidOrgName orgName    — non-empty, trimmed org display name
+#   ValidSlug slug          — slug is non-empty, lowercase, no spaces
+#   ValidEmail email        — email is syntactically valid (non-empty, contains @)
+#   ValidDisplayName name   — display name is non-empty and trimmed
+
+module KanelOrg exposing [
+  RegisterRequest,
+  LoginRequest,
+  InviteMemberRequest,
+  ChangeMemberRoleRequest,
+  ValidOrgName,
+  checkOrgName,
+  ValidSlug,
+  checkSlug,
+  ValidEmail,
+  checkEmail,
+  ValidDisplayName,
+  checkDisplayName,
+  registerHandler,
+  loginHandler,
+  createOrgHandler,
+  getOrgHandler,
+  listOrgMembersHandler,
+  inviteMemberHandler,
+  changeMemberRoleHandler,
+  removeMemberHandler,
+  listMyOrgsHandler,
+]
+
+import Tesl.Prelude exposing [String, List, Fact]
+import Tesl.String exposing [
+  String.length,
+  String.trim,
+  String.isEmpty,
+  String.toLower,
+  String.contains,
+]
+import Tesl.Time exposing [nowMillis, time]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Id exposing [generatePrefixedId]
+import Tesl.Random exposing [random]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.length, List.foldl, List.append]
+import KanelModels exposing [
+  ValidOrgId,
+  ValidUserId,
+  kanelDbRead,
+  kanelDbWrite,
+  KanelUser,
+  Org,
+  OrgMembership,
+  OrgRole(..),
+  NewOrgRequest,
+]
+import KanelAuth exposing [
+  KanelSession,
+  Authenticated,
+  checkOrgMember,
+  checkOrgAdmin,
+]
+
+# ── Input validation check functions ────────────────────────────────────────
+#
+# These encode simple but important domain facts at the type level.
+# Any handler that accepts user-supplied strings must validate through these.
+
+fact ValidOrgName (name: String)
+
+check checkOrgName(name: String) -> trimmed: String ::: ValidOrgName trimmed =
+  let trimmed = String.trim name
+  if String.isEmpty trimmed then
+    fail 400 "organization name must not be empty"
+  else
+    if String.length trimmed < 2 then
+      fail 400 "organization name must be at least 2 characters"
+    else
+      if String.length trimmed > 80 then
+        fail 400 "organization name must be at most 80 characters"
+      else
+        ok trimmed ::: ValidOrgName trimmed
+
+fact ValidSlug (slug: String)
+
+check checkSlug(slug: String) -> slug: String ::: ValidSlug slug =
+  if String.isEmpty slug then
+    fail 400 "slug must not be empty"
+  else
+    if String.length slug < 2 then
+      fail 400 "slug must be at least 2 characters"
+    else
+      if String.length slug > 40 then
+        fail 400 "slug must be at most 40 characters"
+      else
+        ok slug ::: ValidSlug slug
+
+fact ValidEmail (email: String)
+
+check checkEmail(email: String) -> email: String ::: ValidEmail email =
+  if String.isEmpty email then
+    fail 400 "email must not be empty"
+  else
+    if String.contains email "@" then
+      ok email ::: ValidEmail email
+    else
+      fail 400 "email must contain @"
+
+fact ValidDisplayName (name: String)
+
+check checkDisplayName(name: String) -> name: String ::: ValidDisplayName name =
+  if String.isEmpty name then
+    fail 400 "display name must not be empty"
+  else
+    if String.length name > 100 then
+      fail 400 "display name must be at most 100 characters"
+    else
+      ok name ::: ValidDisplayName name
+
+# ── User registration ────────────────────────────────────────────────────────
+
+record RegisterRequest {
+  email: String
+  password: String
+  displayName: String
+}
+
+codec RegisterRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      email <- "email" with_codec stringCodec
+      password <- "password" with_codec stringCodec
+      displayName <- "displayName" with_codec stringCodec
+    }
+  ]
+}
+
+record LoginRequest {
+  email: String
+  password: String
+}
+
+codec LoginRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      email <- "email" with_codec stringCodec
+      password <- "password" with_codec stringCodec
+    }
+  ]
+}
+
+handler registerHandler(req: RegisterRequest)
+  -> exists userId: String => KanelUser ? FromDb (Id == userId)
+  requires [kanelDbRead, kanelDbWrite, random, time] =
+  let email = check checkEmail (String.trim req.email)
+  let name = check checkDisplayName (String.trim req.displayName)
+  if String.length req.password < 8 then
+    fail 400 "password must be at least 8 characters"
+  else
+    let existing = selectOne u from KanelUser where u.email == email
+    case existing of
+      Something _ -> fail 409 "email already registered"
+      Nothing ->
+        let userId = generatePrefixedId "usr"
+        exists userId =>
+          insert KanelUser {
+            id: userId,
+            email: email,
+            passwordHash: req.password,
+            displayName: name,
+            createdAt: nowMillis()
+          }
+
+handler loginHandler(req: LoginRequest) -> String
+  requires [kanelDbRead] =
+  let email = check checkEmail req.email
+  let found = selectOne u from KanelUser where u.email == email
+  case found of
+    Nothing -> fail 401 "invalid email or password"
+    Something user ->
+      if user.passwordHash == req.password then
+        user.id
+      else
+        fail 401 "invalid email or password"
+
+# ── Organization creation ────────────────────────────────────────────────────
+#
+# Creating an org automatically makes the creator an admin (the only member).
+# Proves: the creator has OrgAdmin proof after creation.
+
+handler createOrgHandler(
+    session: KanelSession ::: Authenticated session,
+    req: NewOrgRequest)
+  -> exists orgId: String => Org ? FromDb (Id == orgId)
+  requires [kanelDbRead, kanelDbWrite, random, time] =
+  let orgName = check checkOrgName (String.trim req.name)
+  let slug = check checkSlug (String.toLower (String.trim req.slug))
+  # Check slug uniqueness
+  let existing = selectOne o from Org where o.slug == slug
+  case existing of
+    Something _ -> fail 409 "slug already taken"
+    Nothing ->
+      let orgId = generatePrefixedId "org"
+      let memberId = generatePrefixedId "mem"
+      with transaction {
+        # Insert membership first (orgId already bound above — no FK constraint in Tesl schema).
+        # The existential pack must be the LAST expression in the block since it is the return value.
+        insert OrgMembership {
+          id: memberId,
+          orgId: orgId,
+          userId: session.userId,
+          role: RoleAdmin,
+          joinedAt: nowMillis()
+        }
+        exists orgId =>
+          insert Org {
+            id: orgId,
+            name: orgName,
+            slug: slug,
+            createdAt: nowMillis()
+          }
+      }
+
+handler getOrgHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId)
+  -> Org
+  requires [kanelDbRead] =
+  let _member = check checkOrgMember session.userId orgId
+  let found = selectOne o from Org where o.id == orgId
+  case found of
+    Nothing -> fail 404 "organization not found"
+    Something org -> org
+
+# Helper: given an accumulator and one membership, fetch the org and append it.
+# Used by List.foldl to build the org list without SQL JOIN (Tesl has no JOIN/IN).
+fn fetchOrgByMembership(acc: List Org, m: OrgMembership) -> List Org
+  requires [kanelDbRead] =
+  let found = selectOne o from Org where o.id == m.orgId
+  case found of
+    Nothing -> acc
+    Something o -> List.append acc [o]
+
+handler listMyOrgsHandler(session: KanelSession ::: Authenticated session)
+  -> List Org
+  requires [kanelDbRead] =
+  let memberships = select m from OrgMembership where m.userId == session.userId
+  List.foldl fetchOrgByMembership [] memberships
+
+# ── Member management ────────────────────────────────────────────────────────
+
+record InviteMemberRequest {
+  email: String
+  role: OrgRole
+}
+
+codec InviteMemberRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      email <- "email" with_codec stringCodec
+      role <- "role" with_codec OrgRole
+    }
+  ]
+}
+
+record ChangeMemberRoleRequest {
+  role: OrgRole
+}
+
+codec ChangeMemberRoleRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      role <- "role" with_codec OrgRole
+    }
+  ]
+}
+
+handler listOrgMembersHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId)
+  -> List OrgMembership
+  requires [kanelDbRead] =
+  let _member = check checkOrgMember session.userId orgId
+  select m from OrgMembership where m.orgId == orgId
+
+handler inviteMemberHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    req: InviteMemberRequest)
+  -> exists memberId: String => OrgMembership ? FromDb (Id == memberId)
+  requires [kanelDbRead, kanelDbWrite, random, time] =
+  let _adminUserId = check checkOrgAdmin session.userId orgId
+  let email = check checkEmail (String.trim req.email)
+  # Find the user by email
+  let found = selectOne u from KanelUser where u.email == email
+  case found of
+    Nothing -> fail 404 "user not found — they must register first"
+    Something targetUser ->
+      # Prevent duplicate membership
+      let existing = selectOne m from OrgMembership where m.userId == targetUser.id && m.orgId == orgId
+      case existing of
+        Something _ -> fail 409 "user is already a member"
+        Nothing ->
+          let memberId = generatePrefixedId "mem"
+          exists memberId =>
+            insert OrgMembership {
+              id: memberId,
+              orgId: orgId,
+              userId: targetUser.id,
+              role: req.role,
+              joinedAt: nowMillis()
+            }
+
+handler changeMemberRoleHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    targetUserId: String ::: ValidUserId targetUserId,
+    req: ChangeMemberRoleRequest)
+  -> OrgMembership
+  requires [kanelDbRead, kanelDbWrite] =
+  let _adminUserId = check checkOrgAdmin session.userId orgId
+  # Prevent an admin from demoting themselves if they're the last admin
+  let allAdmins = select m from OrgMembership where m.orgId == orgId && m.role == RoleAdmin
+  let targetMembership = selectOne m from OrgMembership where m.userId == targetUserId && m.orgId == orgId
+  case targetMembership of
+    Nothing -> fail 404 "user is not a member of this organization"
+    Something membership ->
+      case membership.role of
+        RoleAdmin ->
+          if List.length allAdmins <= 1 then
+            fail 400 "cannot demote the last admin — promote another member first"
+          else
+            update m in OrgMembership
+              where m.userId == targetUserId && m.orgId == orgId
+              set m.role = req.role
+              returning one
+        RoleMember ->
+          update m in OrgMembership
+            where m.userId == targetUserId && m.orgId == orgId
+            set m.role = req.role
+            returning one
+        RoleViewer ->
+          update m in OrgMembership
+            where m.userId == targetUserId && m.orgId == orgId
+            set m.role = req.role
+            returning one
+
+handler removeMemberHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    targetUserId: String ::: ValidUserId targetUserId)
+  -> String
+  requires [kanelDbRead, kanelDbWrite] =
+  let _adminUserId = check checkOrgAdmin session.userId orgId
+  let targetMembership = selectOne m from OrgMembership where m.userId == targetUserId && m.orgId == orgId
+  case targetMembership of
+    Nothing -> fail 404 "user is not a member of this organization"
+    Something membership ->
+      case membership.role of
+        RoleAdmin ->
+          let adminCount = selectCount m from OrgMembership where m.orgId == orgId && m.role == RoleAdmin
+          if adminCount <= 1 then
+            fail 400 "cannot remove the last admin"
+          else
+            delete m from OrgMembership where m.userId == targetUserId && m.orgId == orgId
+            "removed"
+        RoleMember ->
+          delete m from OrgMembership where m.userId == targetUserId && m.orgId == orgId
+          "removed"
+        RoleViewer ->
+          delete m from OrgMembership where m.userId == targetUserId && m.orgId == orgId
+          "removed"

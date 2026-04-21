@@ -1,0 +1,55 @@
+{
+  "name": "vscode-tesl",
+  "displayName": "Tesl Language",
+  "description": "Syntax highlighting and diagnostics for the Tesl (.tesl) language",
+  "version": "0.4.0",
+  "publisher": "tesl",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:tesl"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "tesl",
+        "aliases": [
+          "Tesl",
+          "tesl"
+        ],
+        "extensions": [
+          ".tesl"
+        ],
+        "configuration": "./language-configuration/tesl-language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "tesl",
+        "scopeName": "source.tesl",
+        "path": "./syntaxes/tesl.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Tesl",
+      "properties": {
+        "tesl.lspScript": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to tesl-lsp.rkt. Leave empty to auto-detect from the workspace folder."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0"
+  }
+}

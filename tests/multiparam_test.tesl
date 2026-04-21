@@ -1,0 +1,23 @@
+#lang tesl
+module MultiParamTest exposing [ checkInBounds, requiresInBounds ]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Fact]
+
+fact InBounds (lo: Int) (hi: Int) (n: Int)
+
+check checkInBounds(lo: Int, hi: Int, n: Int) -> n: Int ::: InBounds lo hi n =
+  if n >= lo && n <= hi then
+    ok n ::: InBounds lo hi n
+  else
+    fail 400 "out of bounds"
+
+fn requiresInBounds(lo: Int, hi: Int, n: Int ::: InBounds lo hi n) -> String =
+  "${n} is in [${lo}, ${hi}]"
+
+test "full round-trip: check then require" {
+  let lo = 1
+  let hi = 10
+  let n = 5
+  let x = check checkInBounds lo hi n
+  expect requiresInBounds lo hi x == "5 is in [1, 10]"
+}

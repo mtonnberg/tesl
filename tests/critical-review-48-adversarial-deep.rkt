@@ -1,0 +1,888 @@
+#lang racket
+
+(require
+  tesl/dsl/capability
+  tesl/dsl/types
+  tesl/dsl/check
+  tesl/dsl/otel
+  tesl/dsl/sql
+  tesl/dsl/web
+  tesl/dsl/test-support
+  tesl/tesl/private/runtime
+  tesl/tesl/queue
+  tesl/tesl/sse
+  (only-in tesl/tesl/prelude Bool Int String Fact)
+  (only-in tesl/tesl/http HttpRequest)
+  (only-in tesl/tesl/api-test statusOk)
+  (only-in tesl/tesl/dict [Dict.lookup tesl_import_Dict_lookup])
+  (only-in tesl/tesl/maybe Maybe Something Nothing)
+  (only-in tesl/tesl/string [String.startsWith tesl_import_String_startsWith] [String.requireNonEmpty tesl_import_String_requireNonEmpty] IsNonEmpty)
+)
+
+
+(provide Fix1Server Fix2MultiArgServer Fix4RoutingCaptureServer)
+
+(define Active 'Active)
+(define Authenticated 'Authenticated)
+(define HasValidSession 'HasValidSession)
+(define InBounds 'InBounds)
+(define IsAdmin 'IsAdmin)
+(define ItemAuth 'ItemAuth)
+(define UserAuth 'UserAuth)
+(define Validated 'Validated)
+(define Verified 'Verified)
+
+(define-checker
+  (checkValidated [n : Integer])
+  #:returns [n : Integer ::: (Validated n)]
+  (if (> *n 0) (accept (Validated n) #:value *n) (reject "not validated" #:http-code 400)))
+
+(define-checker
+  (checkInBounds [n : Integer])
+  #:returns [n : Integer ::: (InBounds n)]
+  (if (and (>= *n 1) (<= *n 1000)) (accept (InBounds n) #:value *n) (reject "out of bounds" #:http-code 400)))
+
+(define-checker
+  (checkBoth [n : Integer])
+  #:returns [n : Integer ::: ((Validated n) && (InBounds n))]
+  ((check-and checkValidated checkInBounds) n))
+
+(define-record Fix1NumResponse
+  [result : Integer]
+)
+
+(define (tesl-codec-encode-Fix1NumResponse _v)
+  (define _raw
+    (let loop ([v _v])
+      (cond [(named-value? v) (loop (named-value-value v))]
+            [(check-ok? v) (loop (check-ok-value v))]
+            [else v])))
+  (define _fields (record-value-fields _raw))
+  (hash 'result (tesl-codec-encode-field (raw-value (hash-ref _fields 'result)) tesl-json-int-codec)
+  ))
+(register-type-codec! 'Fix1NumResponse tesl-codec-encode-Fix1NumResponse (list ))
+
+(define-record ValueBody
+  [value : Integer]
+)
+
+(define (tesl-codec-encode-ValueBody _v)
+  (error "toJson is forbidden for type ValueBody: this type cannot be JSON-encoded"))
+(define (tesl-codec-decode-ValueBody-0 _j)
+  (define _f_value (tesl-codec-decode-field _j "value" tesl-json-int-codec))
+  (record-value 'ValueBody (hash 'value _f_value)))
+(register-type-codec! 'ValueBody tesl-codec-encode-ValueBody (list tesl-codec-decode-ValueBody-0))
+
+(define-handler
+  (fix1SingleCheck [req : ValueBody])
+  #:returns Fix1NumResponse
+  (let/check ([tesl_checked_0 (checkValidated (raw-value req.value))]) (let ([v tesl_checked_0]) (Fix1NumResponse #:result (+ (* (raw-value v) 10) 1)))))
+
+(define-handler
+  (fix1ConjCheck [req : ValueBody])
+  #:returns Fix1NumResponse
+  (let/check ([tesl_checked_1 (checkBoth (raw-value req.value))]) (let ([v tesl_checked_1]) (Fix1NumResponse #:result (+ (raw-value v) 999)))))
+
+(define-handler
+  (fix1InlineConj [req : ValueBody])
+  #:returns Fix1NumResponse
+  (let/check ([tesl_checked_2 ((check-and checkValidated checkInBounds) (raw-value req.value))]) (let ([v tesl_checked_2]) (Fix1NumResponse #:result (* (raw-value v) 2)))))
+
+(define/pow
+  (fix1FnCheck [n : Integer])
+  #:returns Integer
+  (let/check ([tesl_checked_3 (checkValidated n)]) (let ([v tesl_checked_3]) (+ (raw-value v) 100))))
+
+(define-handler
+  (fix1FnProxy [req : ValueBody])
+  #:returns Fix1NumResponse
+  (Fix1NumResponse #:result (fix1FnCheck (raw-value req.value))))
+
+(define Fix1Server-sse-routes '())
+(define-api Fix1Api
+  [fix1SingleCheck :
+    "single"
+    :> (ReqBody JSON [req : ValueBody])
+    :> (Post JSON Fix1NumResponse)
+    ]
+  [fix1ConjCheck :
+    "conj"
+    :> (ReqBody JSON [req : ValueBody])
+    :> (Post JSON Fix1NumResponse)
+    ]
+  [fix1InlineConj :
+    "inline"
+    :> (ReqBody JSON [req : ValueBody])
+    :> (Post JSON Fix1NumResponse)
+    ]
+  [fix1FnProxy :
+    "fn"
+    :> (ReqBody JSON [req : ValueBody])
+    :> (Post JSON Fix1NumResponse)
+    ]
+)
+
+(define-server Fix1Server
+  #:api Fix1Api
+  [fix1SingleCheck fix1SingleCheck]
+  [fix1ConjCheck fix1ConjCheck]
+  [fix1InlineConj fix1InlineConj]
+  [fix1FnProxy fix1FnProxy]
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "A1: single check raw-value arithmetic"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix1Server 'post (list "single") #:headers (hash) #:body (hash (string->symbol "value") 5) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'result)) 51)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "A1: single check rejects zero"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix1Server 'post (list "single") #:headers (hash) #:body (hash (string->symbol "value") 0) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 400)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "A2: conj check raw-value arithmetic"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix1Server 'post (list "conj") #:headers (hash) #:body (hash (string->symbol "value") 1) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'result)) 1000)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "A2: conj check boundary 1000"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix1Server 'post (list "conj") #:headers (hash) #:body (hash (string->symbol "value") 1000) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'result)) 1999)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "A2: conj check rejects 0"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix1Server 'post (list "conj") #:headers (hash) #:body (hash (string->symbol "value") 0) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 400)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "A2: conj check rejects 1001"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix1Server 'post (list "conj") #:headers (hash) #:body (hash (string->symbol "value") 1001) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 400)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "A3: inline conj raw-value arithmetic"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix1Server 'post (list "inline") #:headers (hash) #:body (hash (string->symbol "value") 50) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'result)) 100)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "A4: fn body raw-value unwrap"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix1Server 'post (list "fn") #:headers (hash) #:body (hash (string->symbol "value") 7) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'result)) 107)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "A4: fn body check failure is 500"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix1Server 'post (list "fn") #:headers (hash) #:body (hash (string->symbol "value") 0) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 500)
+          ))
+      ))
+  )
+)
+
+(define-record AuthInfoResponse
+  [userId : String]
+)
+
+(define (tesl-codec-encode-AuthInfoResponse _v)
+  (define _raw
+    (let loop ([v _v])
+      (cond [(named-value? v) (loop (named-value-value v))]
+            [(check-ok? v) (loop (check-ok-value v))]
+            [else v])))
+  (define _fields (record-value-fields _raw))
+  (hash 'userId (tesl-codec-encode-field (raw-value (hash-ref _fields 'userId)) tesl-json-string-codec)
+  ))
+(register-type-codec! 'AuthInfoResponse tesl-codec-encode-AuthInfoResponse (list ))
+
+(define-auther
+  (simpleSubstAuth [request : HttpRequest])
+  #:returns [user : String ::: (Authenticated user)]
+  (let ([tesl_case_4 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_4) 'value)]) (accept (Authenticated userId) #:value *userId))])))
+
+(define-auther
+  (identityAuth [request : HttpRequest])
+  #:returns [user : String ::: (Authenticated user)]
+  (let ([tesl_case_5 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Something)) (let ([user (hash-ref (adt-value-fields *tesl_case_5) 'value)]) (accept (Authenticated user) #:value *user))])))
+
+(define-auther
+  (conjSubstAuth [request : HttpRequest])
+  #:returns [user : String ::: ((Authenticated user) && (HasValidSession user))]
+  (let ([tesl_case_6 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_6) 'value)]) (let ([tesl_case_7 (raw-value (tesl_import_Dict_lookup "session" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Nothing)) (reject "no session" #:http-code 401)] [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Something)) (accept ((Authenticated userId) && (HasValidSession userId)) #:value *userId)])))])))
+
+(define-checker
+  (checkIsAdmin [userId : String])
+  #:returns [userId : String ::: (IsAdmin userId)]
+  (if (tesl_import_String_startsWith *userId "admin") (accept (IsAdmin userId) #:value *userId) (reject "not admin" #:http-code 403)))
+
+(define-auther
+  (delegatedConjAuth [request : HttpRequest])
+  #:returns [user : String ::: ((IsAdmin user) && (Authenticated user))]
+  (let ([tesl_case_8 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_8) 'value)]) (let ([tesl_proof_binding_9 (checkIsAdmin userId)]) (let ([admin (forget-proof tesl_proof_binding_9)] [p (detach-all-proof tesl_proof_binding_9)]) (accept (p && (Authenticated admin)) #:value *admin))))])))
+
+(define-auther
+  (doubleDelegatedAuth [request : HttpRequest])
+  #:returns [user : String ::: ((Authenticated user) && (HasValidSession user))]
+  (let ([tesl_case_10 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_10) 'value)]) (let/check ([tesl_checked_11 (tesl_import_String_requireNonEmpty userId)]) (let ([validId tesl_checked_11]) (accept ((Authenticated validId) && (HasValidSession validId)) #:value *validId))))])))
+
+(define-handler
+  (whoamiSimple [user : String ::: (Authenticated user)])
+  #:returns AuthInfoResponse
+  (AuthInfoResponse #:userId *user))
+
+(define-handler
+  (whoamiIdentity [user : String ::: (Authenticated user)])
+  #:returns AuthInfoResponse
+  (AuthInfoResponse #:userId *user))
+
+(define-handler
+  (whoamiConj [user : String ::: ((Authenticated user) && (HasValidSession user))])
+  #:returns AuthInfoResponse
+  (AuthInfoResponse #:userId *user))
+
+(define-handler
+  (whoamiAdmin [user : String ::: ((IsAdmin user) && (Authenticated user))])
+  #:returns AuthInfoResponse
+  (AuthInfoResponse #:userId *user))
+
+(define-handler
+  (whoamiDouble [user : String ::: ((Authenticated user) && (HasValidSession user))])
+  #:returns AuthInfoResponse
+  (AuthInfoResponse #:userId *user))
+
+(define Fix2MultiArgServer-sse-routes '())
+(define-api Fix2MultiArgApi
+  [whoamiSimple :
+    (Auth [user : String ::: (Authenticated user)] #:via simpleSubstAuth)
+    :> "simple"
+    :> (Get JSON AuthInfoResponse)
+    ]
+  [whoamiIdentity :
+    (Auth [user : String ::: (Authenticated user)] #:via identityAuth)
+    :> "identity"
+    :> (Get JSON AuthInfoResponse)
+    ]
+  [whoamiConj :
+    (Auth [user : String ::: ((Authenticated user) && (HasValidSession user))] #:via conjSubstAuth)
+    :> "conj"
+    :> (Get JSON AuthInfoResponse)
+    ]
+  [whoamiAdmin :
+    (Auth [user : String ::: ((IsAdmin user) && (Authenticated user))] #:via delegatedConjAuth)
+    :> "delegated"
+    :> (Get JSON AuthInfoResponse)
+    ]
+  [whoamiDouble :
+    (Auth [user : String ::: ((Authenticated user) && (HasValidSession user))] #:via doubleDelegatedAuth)
+    :> "double"
+    :> (Get JSON AuthInfoResponse)
+    ]
+)
+
+(define-server Fix2MultiArgServer
+  #:api Fix2MultiArgApi
+  [whoamiSimple whoamiSimple]
+  [whoamiIdentity whoamiIdentity]
+  [whoamiConj whoamiConj]
+  [whoamiAdmin whoamiAdmin]
+  [whoamiDouble whoamiDouble]
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "B1: simple subst passes"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix2MultiArgServer 'get (list "simple") #:cookie "user=alice" #:headers (hash) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)) "alice")
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "B1: simple no cookie 401"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix2MultiArgServer 'get (list "simple") #:headers (hash) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 401)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "B2: identity (no subst) passes"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix2MultiArgServer 'get (list "identity") #:cookie "user=bob" #:headers (hash) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)) "bob")
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "B3: conj subst passes"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix2MultiArgServer 'get (list "conj") #:cookie "user=carol; session=abc" #:headers (hash) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)) "carol")
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "B3: conj missing session 401"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix2MultiArgServer 'get (list "conj") #:cookie "user=carol" #:headers (hash) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 401)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "B4: delegated admin passes"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix2MultiArgServer 'get (list "delegated") #:cookie "user=admin_dave" #:headers (hash) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)) "admin_dave")
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "B4: delegated non-admin 403"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix2MultiArgServer 'get (list "delegated") #:cookie "user=dave" #:headers (hash) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 403)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "B5: double delegated passes"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix2MultiArgServer 'get (list "double") #:cookie "user=eve" #:headers (hash) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)) "eve")
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "B5: double delegated empty string rejected"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix2MultiArgServer 'get (list "double") #:cookie "user=" #:headers (hash) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 400)
+          ))
+      ))
+  )
+)
+
+(define-checker
+  (checkVerified [userId : String])
+  #:returns [userId : String ::: (Verified userId)]
+  (if (tesl_import_String_startsWith *userId "v") (accept (Verified userId) #:value *userId) (reject "not verified" #:http-code 403)))
+
+(define-checker
+  (checkActive [input : String])
+  #:returns [result : String ::: (Active result)]
+  (let/check ([tesl_checked_12 (tesl_import_String_requireNonEmpty input)]) (let ([result tesl_checked_12]) (accept (Active result) #:value *result))))
+
+(define-auther
+  (proofVarSingle [request : HttpRequest])
+  #:returns [user : String ::: (Verified user)]
+  (let ([tesl_case_13 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_13) (eq? (adt-value-variant *tesl_case_13) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_13) (eq? (adt-value-variant *tesl_case_13) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_13) 'value)]) (let ([tesl_proof_binding_14 (checkVerified userId)]) (let ([checked (forget-proof tesl_proof_binding_14)] [p (detach-all-proof tesl_proof_binding_14)]) (accept p #:value *checked))))])))
+
+(define-auther
+  (proofVarMixed [request : HttpRequest])
+  #:returns [user : String ::: ((Verified user) && (Authenticated user))]
+  (let ([tesl_case_15 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_15) (eq? (adt-value-variant *tesl_case_15) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_15) (eq? (adt-value-variant *tesl_case_15) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_15) 'value)]) (let ([tesl_proof_binding_16 (checkVerified userId)]) (let ([checked (forget-proof tesl_proof_binding_16)] [p (detach-all-proof tesl_proof_binding_16)]) (accept (p && (Authenticated checked)) #:value *checked))))])))
+
+(define-auther
+  (proofVarNested [request : HttpRequest])
+  #:returns [user : String ::: ((Verified user) && (Active user))]
+  (let ([tesl_case_17 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_17) (eq? (adt-value-variant *tesl_case_17) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_17) (eq? (adt-value-variant *tesl_case_17) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_17) 'value)]) (let/check ([tesl_checked_18 (tesl_import_String_requireNonEmpty userId)]) (let ([validId tesl_checked_18]) (let ([tesl_proof_binding_19 (checkVerified validId)]) (let ([checked (forget-proof tesl_proof_binding_19)] [p (detach-all-proof tesl_proof_binding_19)]) (accept (p && (Active checked)) #:value *checked))))))])))
+
+(define-handler
+  (whoamiVerified [user : String ::: (Verified user)])
+  #:returns AuthInfoResponse
+  (AuthInfoResponse #:userId *user))
+
+(define-handler
+  (whoamiMixed [user : String ::: ((Verified user) && (Authenticated user))])
+  #:returns AuthInfoResponse
+  (AuthInfoResponse #:userId *user))
+
+(define-handler
+  (whoamiNested [user : String ::: ((Verified user) && (Active user))])
+  #:returns AuthInfoResponse
+  (AuthInfoResponse #:userId *user))
+
+(define Fix3ProofVarServer-sse-routes '())
+(define-api Fix3ProofVarApi
+  [whoamiVerified :
+    (Auth [user : String ::: (Verified user)] #:via proofVarSingle)
+    :> "single-pv"
+    :> (Get JSON AuthInfoResponse)
+    ]
+  [whoamiMixed :
+    (Auth [user : String ::: ((Verified user) && (Authenticated user))] #:via proofVarMixed)
+    :> "mixed-pv"
+    :> (Get JSON AuthInfoResponse)
+    ]
+  [whoamiNested :
+    (Auth [user : String ::: ((Verified user) && (Active user))] #:via proofVarNested)
+    :> "nested-pv"
+    :> (Get JSON AuthInfoResponse)
+    ]
+)
+
+(define-server Fix3ProofVarServer
+  #:api Fix3ProofVarApi
+  [whoamiVerified whoamiVerified]
+  [whoamiMixed whoamiMixed]
+  [whoamiNested whoamiNested]
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "C1: single proof var auth"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix3ProofVarServer 'get (list "single-pv") #:cookie "user=v_alice" #:headers (hash) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)) "v_alice")
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "C1: single proof var auth rejected"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix3ProofVarServer 'get (list "single-pv") #:cookie "user=alice" #:headers (hash) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 403)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "C2: mixed proof var + literal"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix3ProofVarServer 'get (list "mixed-pv") #:cookie "user=v_bob" #:headers (hash) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)) "v_bob")
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "C2: mixed proof var rejected"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix3ProofVarServer 'get (list "mixed-pv") #:cookie "user=bob" #:headers (hash) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 403)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "C3: nested proof var chain"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix3ProofVarServer 'get (list "nested-pv") #:cookie "user=v_charlie" #:headers (hash) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'userId)) "v_charlie")
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "C3: nested empty fails"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix3ProofVarServer 'get (list "nested-pv") #:cookie "user=" #:headers (hash) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 400)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "C3: nested unverified fails"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix3ProofVarServer 'get (list "nested-pv") #:cookie "user=charlie" #:headers (hash) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 403)
+          ))
+      ))
+  )
+)
+
+(define-checker
+  (checkBothFacts [n : Integer])
+  #:returns [n : Integer ::: ((Validated n) && (InBounds n))]
+  ((check-and checkValidated checkInBounds) n))
+
+(define/pow
+  (useBothFacts [n : Integer])
+  #:returns Integer
+  (let/check ([tesl_checked_20 (checkBothFacts n)]) (let ([v tesl_checked_20]) (+ (raw-value v) 1))))
+
+(define-auther
+  (itemCookieAuth [request : HttpRequest])
+  #:returns [user : String ::: (ItemAuth user)]
+  (let ([tesl_case_21 (raw-value (tesl_import_Dict_lookup "item-token" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_21) (eq? (adt-value-variant *tesl_case_21) 'Nothing)) (reject "no item token" #:http-code 401)] [(and (adt-value? *tesl_case_21) (eq? (adt-value-variant *tesl_case_21) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_21) 'value)]) (accept (ItemAuth userId) #:value *userId))])))
+
+(define-auther
+  (userCookieAuth [request : HttpRequest])
+  #:returns [user : String ::: (UserAuth user)]
+  (let ([tesl_case_22 (raw-value (tesl_import_Dict_lookup "user-token" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_22) (eq? (adt-value-variant *tesl_case_22) 'Nothing)) (reject "no user token" #:http-code 401)] [(and (adt-value? *tesl_case_22) (eq? (adt-value-variant *tesl_case_22) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_22) 'value)]) (accept (UserAuth userId) #:value *userId))])))
+
+(define-capture itemIdCapture
+  [itemIdCapture : String]
+  #:parser string-segment)
+
+(define-capture userIdCapture
+  [userIdCapture : String]
+  #:parser string-segment)
+
+(define-record ItemResponse
+  [itemId : String]
+  [fetchedBy : String]
+)
+
+(define (tesl-codec-encode-ItemResponse _v)
+  (define _raw
+    (let loop ([v _v])
+      (cond [(named-value? v) (loop (named-value-value v))]
+            [(check-ok? v) (loop (check-ok-value v))]
+            [else v])))
+  (define _fields (record-value-fields _raw))
+  (hash 'itemId (tesl-codec-encode-field (raw-value (hash-ref _fields 'itemId)) tesl-json-string-codec)
+        'fetchedBy (tesl-codec-encode-field (raw-value (hash-ref _fields 'fetchedBy)) tesl-json-string-codec)
+  ))
+(register-type-codec! 'ItemResponse tesl-codec-encode-ItemResponse (list ))
+
+(define-record UserResponse
+  [uid : String]
+  [fetchedBy : String]
+)
+
+(define (tesl-codec-encode-UserResponse _v)
+  (define _raw
+    (let loop ([v _v])
+      (cond [(named-value? v) (loop (named-value-value v))]
+            [(check-ok? v) (loop (check-ok-value v))]
+            [else v])))
+  (define _fields (record-value-fields _raw))
+  (hash 'uid (tesl-codec-encode-field (raw-value (hash-ref _fields 'uid)) tesl-json-string-codec)
+        'fetchedBy (tesl-codec-encode-field (raw-value (hash-ref _fields 'fetchedBy)) tesl-json-string-codec)
+  ))
+(register-type-codec! 'UserResponse tesl-codec-encode-UserResponse (list ))
+
+(define-handler
+  (getItem [user : String ::: (ItemAuth user)] [itemId : String])
+  #:returns ItemResponse
+  (ItemResponse #:itemId *itemId #:fetchedBy *user))
+
+(define-handler
+  (getUser [user : String ::: (UserAuth user)] [uid : String])
+  #:returns UserResponse
+  (UserResponse #:uid *uid #:fetchedBy *user))
+
+(define Fix4RoutingCaptureServer-sse-routes '())
+(define-api Fix4CaptureApi
+  [getItem :
+    (Auth [user : String ::: (ItemAuth user)] #:via itemCookieAuth)
+    :> "items"
+    :> (Capture itemIdCapture [itemId : String])
+    :> (Get JSON ItemResponse)
+    ]
+  [getUser :
+    (Auth [user : String ::: (UserAuth user)] #:via userCookieAuth)
+    :> "users"
+    :> (Capture userIdCapture [uid : String])
+    :> (Get JSON UserResponse)
+    ]
+)
+
+(define-server Fix4RoutingCaptureServer
+  #:api Fix4CaptureApi
+  [getItem getItem]
+  [getUser getUser]
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "D1: items route with item-token"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix4RoutingCaptureServer 'get (list "items" "42") #:cookie "item-token=alice" #:headers (hash) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'itemId)) "42")
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'fetchedBy)) "alice")
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "D2: users route with user-token"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix4RoutingCaptureServer 'get (list "users" "bob") #:cookie "user-token=charlie" #:headers (hash) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'uid)) "bob")
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'fetchedBy)) "charlie")
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "D3: items route wrong cookie 401"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix4RoutingCaptureServer 'get (list "items" "42") #:cookie "user-token=alice" #:headers (hash) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 401)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "D4: users route wrong cookie 401"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix4RoutingCaptureServer 'get (list "users" "bob") #:cookie "item-token=alice" #:headers (hash) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 401)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "D5: items no cookie 401"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix4RoutingCaptureServer 'get (list "items" "99") #:headers (hash) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 401)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "D6: users no cookie 401"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix4RoutingCaptureServer 'get (list "users" "zz") #:headers (hash) #:capabilities '()))
+            (check-equal? (raw-value (api-test-field-access-ref resp 'status)) 401)
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "D8: both cookies items route"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix4RoutingCaptureServer 'get (list "items" "77") #:cookie "item-token=alice; user-token=bob" #:headers (hash) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'fetchedBy)) "alice")
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "D9: both cookies users route"
+    (call-with-fresh-memory-db '()
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (define resp (dispatch-api-test-request Fix4RoutingCaptureServer 'get (list "users" "xx") #:cookie "item-token=alice; user-token=bob" #:headers (hash) #:capabilities '()))
+            (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
+            (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref resp 'body) 'fetchedBy)) "bob")
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "C4: conjunction combinator delegation"
+  (check-equal? (raw-value (useBothFacts 50)) 51)
+  )
+
+)

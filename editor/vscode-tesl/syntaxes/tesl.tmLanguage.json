@@ -1,0 +1,148 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Tesl",
+  "scopeName": "source.tesl",
+  "patterns": [
+    { "include": "#lang-line" },
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#number" },
+    { "include": "#proof-annotation" },
+    { "include": "#pipe-operators" },
+    { "include": "#operators" },
+    { "include": "#declaration-keywords" },
+    { "include": "#control-keywords" },
+    { "include": "#test-keywords" },
+    { "include": "#load-test-metrics" },
+    { "include": "#load-test-units" },
+    { "include": "#body-keywords" },
+    { "include": "#builtin-functions" },
+    { "include": "#constants" },
+    { "include": "#http-methods" },
+    { "include": "#function-call-paren" },
+    { "include": "#raw-access" },
+    { "include": "#type-name" },
+    { "include": "#module-qualified" },
+    { "include": "#identifier" }
+  ],
+  "repository": {
+    "lang-line": {
+      "match": "^#lang\\s+tesl",
+      "name": "keyword.control.directive.tesl"
+    },
+    "comment": {
+      "match": "#.*$",
+      "name": "comment.line.number-sign.tesl"
+    },
+    "string": {
+      "name": "string.quoted.double.tesl",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.tesl",
+          "match": "\\\\."
+        },
+        {
+          "name": "meta.embedded.line.tesl",
+          "begin": "\\$\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "punctuation.definition.interpolation.begin.tesl" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.interpolation.end.tesl" } },
+          "patterns": [
+            { "include": "#identifier" },
+            { "include": "#operators" },
+            { "include": "#string" },
+            { "include": "#number" }
+          ]
+        }
+      ]
+    },
+    "number": {
+      "match": "\\b\\d+\\b",
+      "name": "constant.numeric.integer.tesl"
+    },
+    "proof-annotation": {
+      "match": ":::",
+      "name": "keyword.operator.proof-annotation.tesl"
+    },
+    "pipe-operators": {
+      "match": "<\\||\\|>",
+      "name": "keyword.operator.pipe.tesl"
+    },
+    "operators": {
+      "match": "&&|\\|\\||==|!=|<=|>=|->|=>|<>|<|>|\\+|-|\\*|/|%",
+      "name": "keyword.operator.tesl"
+    },
+    "declaration-keywords": {
+      "match": "\\b(module|exposing|import|fn|establish|check|auth|handler|worker|workers|record|entity|database|type|fact|codec|capability|capture|api|server|main|implies|requires|queue|channel|test|seed|property)\\b|\\b(api-test|load-test|dead-worker|dead-workers)\\b",
+      "name": "keyword.declaration.tesl"
+    },
+    "control-keywords": {
+      "match": "\\b(if|then|else|case|of|let|exists|ok|fail|where|with|transaction|and)\\b",
+      "name": "keyword.control.tesl"
+    },
+    "test-keywords": {
+      "match": "\\b(expect|expectFail|expectHasProof|runs|via|assert|rate|duration|baseline|regressionVsBaseline)\\b",
+      "name": "keyword.other.test.tesl"
+    },
+    "body-keywords": {
+      "match": "\\b(using|for|on|table|primaryKey|backend|postgres|schema|entities|select|selectOne|selectCount|selectSum|selectMax|selectMin|from|insert|insertMany|update|updateAndReturnOne|set|returning|one|in|delete|deleteAndReturnResult|upsert|onConflict|doUpdate|order|limit|offset|groupBy|like|ilike|innerJoin|serve|telemetry|initTelemetry|service|endpoint|console|body|response|get|post|put|enqueue|publish|subscribe|websocket|startWorkers|startWebSocket|auth|capture|jobs|retry|maxAttempts|backoff|exponential|fixed|initialDelay|payload|database|static|cookie|headers|with_codec|toJson|fromJson|via)\\b",
+      "name": "keyword.other.tesl"
+    },
+    "builtin-functions": {
+      "match": "\\b(attachFact|detachFact|forgetFact|introAnd|introOrLeft|introOrRight|andLeft|andRight|env|envInt|now|nowMillis|generateId|generatePrefixedId|stringCodec|intCodec|boolCodec|posixMillisCodec)\\b",
+      "name": "support.function.builtin.tesl"
+    },
+    "constants": {
+      "match": "\\b(True|False|true|false|Nothing|asc|desc)\\b",
+      "name": "constant.language.tesl"
+    },
+    "load-test-metrics": {
+      "match": "\\b(p50|p95|p99|p99\\.9|errorRate|throughput)\\b",
+      "name": "support.constant.metric.tesl"
+    },
+    "load-test-units": {
+      "match": "\\b(\\d+)(ms|rps|s)\\b",
+      "captures": {
+        "1": { "name": "constant.numeric.tesl" },
+        "2": { "name": "keyword.other.unit.tesl" }
+      }
+    },
+    "http-methods": {
+      "match": "^\\s*(get|post|put|delete|websocket)(?=\\s)",
+      "captures": {
+        "1": { "name": "keyword.other.http-method.tesl" }
+      }
+    },
+    "function-call-paren": {
+      "match": "\\b([a-z_][a-zA-Z0-9_]*)\\s*\\(",
+      "captures": {
+        "1": { "name": "entity.name.function.tesl" }
+      }
+    },
+    "raw-access": {
+      "match": "\\*([a-zA-Z_][a-zA-Z0-9_]*)",
+      "name": "variable.other.raw-access.tesl",
+      "captures": {
+        "0": { "name": "variable.other.raw-access.tesl" }
+      }
+    },
+    "type-name": {
+      "match": "\\b([A-Z][a-zA-Z0-9_]*)\\b",
+      "name": "entity.name.type.tesl"
+    },
+    "module-qualified": {
+      "match": "\\b([A-Z][a-zA-Z0-9_]*)(\\.)([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+      "captures": {
+        "1": { "name": "entity.name.type.tesl" },
+        "2": { "name": "punctuation.accessor.tesl" },
+        "3": { "name": "entity.name.function.tesl" }
+      }
+    },
+    "identifier": {
+      "match": "\\b[a-z_][a-zA-Z0-9_]*\\b",
+      "name": "variable.other.tesl"
+    }
+  }
+}

@@ -1,0 +1,421 @@
+#lang tesl
+module StdLibStringsListsInts exposing [
+  exampleStringOps,
+  exampleListOps,
+  exampleIntOps,
+  countWords,
+  joinWords,
+  sortedTags,
+  safeDivide,
+  buildPath,
+  formatRecord,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Tesl ships a rich standard library. The three most-used modules are:
+#
+#   Tesl.String   — String manipulation (trim, split, join, search, …)
+#   Tesl.List     — List operations (map, filter, fold, sort, …)
+#   Tesl.Int      — Integer utilities (abs, min, max, pow, safe division, …)
+#
+# Import exactly what you need:
+#
+#   import Tesl.String exposing [String.trim, String.split, String.join]
+#   import Tesl.List   exposing [List.map, List.filter, List.sort]
+#   import Tesl.Int    exposing [Int.abs, Int.nonZero, Int.divide]
+#
+# Key design rule: functions are total where possible. When a function can
+# fail (e.g. parsing an Int from a String), it returns Maybe Int. When a
+# function is always safe (e.g. String.length), it returns a plain value.
+#
+# Several functions return GDP proof-bearing values:
+#   String.trim    →  result::: IsTrimmed result
+#   String.toUpper →  result::: IsUpperCase result
+#   String.toLower →  result::: IsLowerCase result
+#   List.sort      →  result::: IsSorted result
+#
+# This lets downstream functions express preconditions like
+#   fn formatTitle(s: String::: IsTrimmed s) → ...
+# without re-doing the trim.
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [
+  String.length,
+  String.isEmpty,
+  String.trim,
+  String.toUpper,
+  String.toLower,
+  String.startsWith,
+  String.endsWith,
+  String.contains,
+  String.split,
+  String.join,
+  String.replace,
+  String.toInt,
+  String.padLeft,
+  String.padRight,
+  String.indexOf,
+  IsTrimmed,
+  IsUpperCase,
+  IsLowerCase,
+]
+import Tesl.List exposing [
+  List.length,
+  List.isEmpty,
+  List.head,
+  List.map,
+  List.filter,
+  List.foldl,
+  List.foldr,
+  List.append,
+  List.sort,
+  List.take,
+  List.drop,
+  List.repeat,
+  List.sum,
+  List.any,
+  List.unique,
+  List.range,
+  IsSorted,
+]
+import Tesl.Int exposing [
+  Int.abs,
+  Int.min,
+  Int.max,
+  Int.clamp,
+  Int.isEven,
+  Int.isOdd,
+  Int.pow,
+  Int.toString,
+  Int.sign,
+  Int.nonZero,
+  Int.nonNegative,
+  Int.divide,
+  IsNonZero,
+]
+
+# ─── String examples ──────────────────────────────────────────────────────────
+
+# String.trim returns a proof-bearing result (IsTrimmed).
+# Use "-> String ? IsTrimmed" to declare that the function propagates
+# the proof.  The `?` form uses the entity-append rule: IsTrimmed becomes
+# (IsTrimmed _entity) where _entity is the returned value's hidden subject.
+fn normalizeName(raw: String) -> String ? IsTrimmed =
+  String.trim raw
+
+# Chain operations: trim, then normalise case, then check length.
+fn validateTag(raw: String) -> Maybe String =
+  let trimmed = String.trim raw # trimmed carries IsTrimmed proof
+  let lower = String.toLower trimmed # lower carries IsLowerCase proof
+  let len = String.length lower # plain Int (length is never negative)
+  if len > 0 && len <= 30 then
+    Something lower
+  else
+    Nothing
+
+# Helper predicates used with higher-order list functions.
+fn isNonEmpty(s: String) -> Bool =
+  String.isEmpty s == False
+
+# Split a comma-separated string and count non-empty words.
+fn countWords(csv: String) -> Int =
+  let parts = String.split csv ","
+  let trimmed = List.map String.trim parts
+  List.length (List.filter isNonEmpty trimmed)
+
+fn joinWords(words: List String) -> String =
+  String.join words " "
+
+fn exampleStringOps() -> Bool =
+  let trimmed = String.trim "  hello  " # "hello" ::: IsTrimmed
+  let upper = String.toUpper "hello" # "HELLO" ::: IsUpperCase
+  let lower = String.toLower "HELLO" # "hello" ::: IsLowerCase
+  let parts = String.split "a,b,c" "," # ["a","b","c"]
+  let joined = String.join ["a", "b", "c"] "-" # "a-b-c"
+  let padded = String.padLeft "42" 5 "0" # "00042"
+  let replaced = String.replace "hello world" "world" "Tesl"
+  let starts = String.startsWith "hello" "hel" # True
+  let ends = String.endsWith "hello" "llo" # True
+  let contains = String.contains "hello world" "world" # True
+  let idx = String.indexOf "hello" "ll" # Something 2
+  starts && ends && contains
+
+# ─── String concatenation with ++ ────────────────────────────────────────────
+# The ++ operator concatenates two strings. It has the same precedence as +.
+# Both operands must be String — using it with Int or other types is a type error.
+#
+# Three equivalent ways to concatenate strings:
+#   "hello" ++ " " ++ "world"          # ++ operator (clean, functional style)
+#   String.concat "hello" " world"     # explicit function call
+#   "hello ${ " " }world"              # string interpolation (best for templates)
+
+# Build a URL path from parts
+fn buildPath(base: String, resource: String, id: String) -> String =
+  base ++ "/" ++ resource ++ "/" ++ id
+
+# Format a key=value pair for a report
+fn formatRecord(key: String, value: String) -> String =
+  key ++ ": " ++ value
+
+# ─── List examples ────────────────────────────────────────────────────────────
+
+# List.sort returns a proof-bearing result (IsSorted).
+# Use "-> List String ? IsSorted" to propagate the sort proof.
+fn sortedTags(tags: List String) -> List String ? IsSorted =
+  List.sort tags
+
+# Helper functions used with List higher-order functions.
+fn double(n: Int) -> Int =
+  n + n
+
+fn isPositive(n: Int) -> Bool =
+  n > 0
+
+fn addInts(acc: Int, x: Int) -> Int =
+  acc + x
+
+fn prependInt(x: Int, acc: List Int) -> List Int =
+  List.append [x] acc
+
+# List.map transforms each element.
+fn doubleAll(ns: List Int) -> List Int =
+  List.map double ns
+
+# List.filter keeps elements satisfying a predicate.
+fn positiveOnly(ns: List Int) -> List Int =
+  List.filter isPositive ns
+
+# List.foldl accumulates from the left (strict).
+fn sumList(ns: List Int) -> Int =
+  List.foldl addInts 0 ns
+
+# List.foldr accumulates from the right (rebuilds list in original order).
+fn reverseList(ns: List Int) -> List Int =
+  List.foldr prependInt [] ns
+
+fn exampleListOps() -> Bool =
+  let sorted = List.sort ["c", "a", "b"] # ["a","b","c"] ::: IsSorted
+  let mapped = List.map double [1, 2, 3] # [2,4,6]
+  let filtered = List.filter isPositive [-1, 0, 1, 2]
+  let head = List.head [10, 20, 30] # Something 10
+  let summed = List.sum [1, 2, 3, 4] # 10
+  let unique = List.unique [1, 2, 1, 3, 2] # 3 elements
+  let range = List.range 1 5 # [1,2,3,4]
+  let hasPos = List.any isPositive [-1, 1] # True
+  let rawCount = 2
+  let count = check Int.nonNegative rawCount
+  let taken = List.take count [10, 20, 30]
+  let dropped = List.drop count [10, 20, 30, 40]
+  let repeated = List.repeat "tesl" count
+  List.length filtered == 2 && summed == 10 && List.length taken == 2 && List.length dropped == 2 && List.length repeated == 2
+
+# ─── Int examples ─────────────────────────────────────────────────────────────
+
+# Int.nonZero / Int.nonNegative are check functions — use them with
+# "let x = check Int.nonZero(n)" and "let x = check Int.nonNegative(n)".
+# If the value is invalid they return a 400 error; otherwise they attach proofs
+# that proof-total stdlib APIs such as Int.divide, List.take, List.drop, and
+# List.repeat require.
+fn safeDivide(numerator: Int, rawDenom: Int) -> Maybe Int =
+  let denom = check Int.nonZero rawDenom
+  Something (Int.divide numerator denom)
+
+fn exampleIntOps() -> Bool =
+  let absVal = Int.abs (-42) # 42 (plain Int)
+  let minVal = Int.min 3 7 # 3
+  let maxVal = Int.max 3 7 # 7
+  let clamped = Int.clamp 15 0 10 # 10
+  let powered = Int.pow 2 8 # 256
+  let str = Int.toString 42 # "42"
+  let sign = Int.sign (-5) # -1
+  let isEven = Int.isEven 4 # True
+  let isOdd = Int.isOdd 3 # True
+  isEven && isOdd && powered == 256
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Standard library functions follow three patterns:
+#
+# 1. PLAIN RETURN — always safe, returns a bare value.
+#    String.length, List.length, Int.abs, Int.pow, …
+#    Use these freely in arithmetic and comparisons.
+#
+# 2. PROOF RETURN — transforms a value and attaches a GDP proof.
+#    String.trim → IsTrimmed, String.toUpper → IsUpperCase,
+#    List.sort → IsSorted.
+#
+#    Inline use in comparisons and arithmetic WORKS directly:
+#      if String.trim(s) == "" then ...          # works
+#      String.length(String.trim(s)) > 0         # chained calls work
+#      List.isEmpty(List.sort(xs))               # result usable inline
+#
+#    The proof is preserved when you propagate it via return type annotation:
+#      fn normalize(s: String) -> String ? IsTrimmed =
+#        String.trim(s)   # caller gets named-value::: IsTrimmed
+#
+#    Without the annotation, the proof is stripped and a plain value is returned:
+#      fn normalize(s: String) -> String =
+#        String.trim(s)   # caller gets plain String (proof stripped)
+#
+#    Return type annotation syntax for proof propagation:
+#    WRONG: -> String::: IsTrimmed result  — `result` is unbound here
+#    WRONG: -> String::: IsTrimmed         — no subject to attach to
+#    RIGHT: -> String ? IsTrimmed           — entity-append fills in the subject
+#
+# 3. MAYBE RETURN — the operation can fail.
+#    String.toInt → Maybe Int, List.head → Maybe A,
+#    String.indexOf → Maybe Int.
+#    Pattern-match on Something / Nothing.
+#
+# 4. CHECK FUNCTION — validates and returns a proof.
+#    Int.nonZero → n::: IsNonZero n (or fail 400)
+#    String.requireNonEmpty → s::: IsNonEmpty s (or fail 400)
+#    Use with `let x = check funcName(raw)`.
+#    These integrate with Tesl's proof system: the caller can propagate
+#    the proof to downstream functions.
+#
+# The GDP proofs from stdlib functions are useful for expressing preconditions:
+#   fn processTitle(s: String::: IsTrimmed s) → ...
+# Any caller that passes a String.trim result automatically satisfies this.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Standard library functions in Tesl are written in Racket and registered
+# in the compiler's module metadata. They are imported via the standard
+# `import Tesl.String exposing [...]` mechanism.
+#
+# Fact-returning functions use `ensure-named` + `attach` from the GDP
+# runtime to attach fact lists to named values. For example, String.trim
+# creates a named-value with subject S and attaches the fact (IsTrimmed S).
+# When the returned value is passed to a function expecting String::: IsTrimmed x,
+# the runtime checks that the named-value's fact list contains (IsTrimmed S)
+# where S is the named-value's subject.
+#
+# The `raw_default=True` mechanism in the compiler unwraps named-values
+# automatically when used in arithmetic/comparison, ONLY for variable
+# references. Inline function calls are not auto-unwrapped. This is a
+# known compiler limitation documented in future-roadmap/proof-returning-stdlib.md.
+#
+# Int.nonZero and String.requireNonEmpty are special: they return check-ok/check-fail
+# rather than plain values, so they work with the `let x = check f(n)` pattern.
+# Under the hood, `let x = check f(n)` compiles to:
+#   (let/check ([tmp (f n)])
+#     (let ([x (attach-proof (ensure-named 'x (raw-value tmp)) (detach-proof tmp))])
+#       ...))
+# The check-ok from Int.nonZero carries the IsNonZero proof, which is
+# transferred to the fresh named-value x.
+
+test "string basic" {
+  expect String.length "hello" == 5
+  expect String.length "" == 0
+  expect String.isEmpty "" == True
+  expect String.isEmpty "x" == False
+}
+
+test "string trim returns proof" {
+  let t = String.trim "  hello  "
+  expect String.isEmpty t == False # proof-bearing value works in functions
+}
+
+test "string predicates" {
+  expect String.startsWith "hello" "hel" == True
+  expect String.startsWith "hello" "world" == False
+  expect String.endsWith "hello" "llo" == True
+  expect String.endsWith "hello" "hel" == False
+  expect String.contains "hello world" "world" == True
+  expect String.contains "hello world" "xyz" == False
+}
+
+test "string split and join" {
+  let parts = String.split "a,b,c" ","
+  expect List.length parts == 3
+  expect String.join ["a", "b", "c"] "," == "a,b,c"
+  expect String.join ["x"] "-" == "x"
+}
+
+test "string pad and replace" {
+  expect String.padLeft "42" 5 "0" == "00042"
+  expect String.padRight "hi" 5 " " == "hi   "
+  expect String.replace "hello world" "world" "there" == "hello there"
+}
+
+test "string toInt" {
+  expect String.toInt "42" == Something 42
+  expect String.toInt "abc" == Nothing
+  expect String.toInt "-7" == Something -7
+}
+
+test "list basics" {
+  expect List.length [1, 2, 3] == 3
+  expect List.length [] == 0
+  expect List.isEmpty [] == True
+  expect List.isEmpty [1] == False
+  expect List.head [10, 20] == Something 10
+  expect List.head [] == Nothing
+}
+
+test "list map filter sum" {
+  expect List.map double [1, 2, 3] == [2, 4, 6]
+  expect List.filter isPositive [-1, 0, 1, 2] == [1, 2]
+  expect List.sum [1, 2, 3, 4] == 10
+  expect List.sum [] == 0
+}
+
+test "list sort" {
+  let sorted = List.sort [3, 1, 4, 1, 5]
+  expect List.head sorted == Something 1 # first element is smallest after sort
+  expect List.length sorted == 5
+}
+
+test "list range and unique" {
+  expect List.range 1 5 == [1, 2, 3, 4]
+  expect List.length (List.unique [1, 2, 1, 3, 2]) == 3
+}
+
+test "int basics" {
+  expect Int.abs -5 == 5
+  expect Int.abs 5 == 5
+  expect Int.min 3 7 == 3
+  expect Int.max 3 7 == 7
+  expect Int.clamp 15 0 10 == 10
+  expect Int.clamp -5 0 10 == 0
+  expect Int.clamp 5 0 10 == 5
+}
+
+test "int pow and predicates" {
+  expect Int.pow 2 10 == 1024
+  expect Int.pow 3 0 == 1
+  expect Int.isEven 4 == True
+  expect Int.isEven 3 == False
+  expect Int.isOdd 3 == True
+  expect Int.sign 5 == 1
+  expect Int.sign (-5) == -1
+  expect Int.sign 0 == 0
+}
+
+test "safe division" {
+  expect safeDivide 10 2 == Something 5
+  expectFail safeDivide 10 0 # check Int.nonZero fails on 0
+  expect safeDivide 7 3 == Something 2 # integer division truncates toward zero
+}
+
+test "count words" {
+  expect countWords "hello,world,foo" == 3
+  expect countWords "a, b ,  c  " == 3 # trim handles whitespace
+  expect countWords "" == 0
+}
+
+test "++ string concatenation" {
+  expect buildPath "https://api.example.com" "users" "42" == "https://api.example.com/users/42"
+  expect formatRecord "name" "Alice" == "name: Alice"
+  # ++ is left-associative and chains naturally
+  expect "a" ++ "b" ++ "c" == "abc"
+  # Works with empty strings too
+  expect "" ++ "hello" == "hello"
+  expect "hello" ++ "" == "hello"
+}

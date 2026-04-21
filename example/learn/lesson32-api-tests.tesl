@@ -1,0 +1,105 @@
+#lang tesl
+module Lesson32ApiTests exposing [Lesson32Server]
+
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.ApiTest exposing [ statusOk, isNull ]
+
+# ── Goal ─────────────────────────────────────────────────────────────────────
+# Learn the new `api-test` block by writing the same kinds of tests you would
+# otherwise need Racket for: request bodies, seeded state, and JSON response
+# assertions.
+
+record EchoRequest {
+  message: String
+}
+
+codec EchoRequest {
+  toJson {
+    message -> "message" with_codec stringCodec
+  }
+  fromJson [
+    {
+      message <- "message" with_codec stringCodec
+    }
+  ]
+}
+
+entity Note table "notes" primaryKey id {
+  id: String
+  title: String
+}
+
+database Lesson32Database {
+  backend postgres
+  schema "lesson32"
+  entities [Note]
+  postgres {
+    database "lesson32"
+    user "lesson32"
+    password "lesson32"
+    host "localhost"
+    port 5432
+    socket ""
+  }
+}
+
+handler echo(req: EchoRequest) -> EchoRequest =
+  req
+
+handler getSeededNote() -> Note
+  requires [dbRead] =
+  let found = selectOne n from Note where n.id == "note-1"
+  case found of
+    Nothing ->
+      fail 404 "note not found"
+    Something n ->
+      n
+
+api Lesson32Api {
+  post "/echo"
+    body req: EchoRequest
+    -> EchoRequest
+
+  get "/seeded-note"
+    -> Note
+}
+
+server Lesson32Server for Lesson32Api {
+  echo = echo
+  getSeededNote = getSeededNote
+}
+
+api-test "raw JSON body and dynamic response fields" for Lesson32Server {
+  let echoResp = post "/echo" body { "message": "hello from api-test" }
+  expect statusOk echoResp.status
+  expect echoResp.body.message == "hello from api-test"
+  expect isNull echoResp.body.missing
+}
+
+api-test "seed prepares fresh in-memory state" for Lesson32Server requires [dbRead, dbWrite] {
+  seed {
+    insert Note { id: "note-1", title: "Seeded from setup" }
+  }
+
+  let seeded = get "/seeded-note"
+  expect statusOk seeded.status
+  expect seeded.body.title == "Seeded from setup"
+}
+
+api-test "state is isolated between blocks" for Lesson32Server requires [dbRead] {
+  let seeded = get "/seeded-note"
+  expect seeded.status == 404
+}
+
+# ── UNDERSTANDING ────────────────────────────────────────────────────────────
+# `api-test` compiles to ordinary RackUnit tests under the hood, but the source
+# stays in Tesl.
+#
+# Request bodies and response bodies are raw JSON values. That is why
+# `echoResp.body.message` is allowed, while a missing field yields `JsonNull`
+# instead of crashing.
+#
+# `seed { }` runs before the request flow. It is for direct DB setup only:
+# `insert` and `let` are good fits; assertions and HTTP requests are not.

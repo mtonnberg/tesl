@@ -1,0 +1,608 @@
+#lang tesl
+module CriticalReview61Tests exposing []
+
+# Critical Review 61 — Positive regression tests
+#
+# These tests verify FIXED behaviors (BUG-01, BUG-02, BUG-03, LIMIT-06).
+#
+# R61_CH  – deep check-chain accumulation (6 and 7 checks)
+# R61_FA  – ForAll in various scenarios (Set, Dict, MaybeForAll, fn-chain)
+# R61_SF  – Stdlib proof-returning functions (String.trim, String.toUpper, List.sort)
+# R61_RC  – Records with 3 proof-annotated fields
+# R61_IM  – introAnd with 5 proofs + andLeft/andRight decomposition
+# R61_EM  – establish with Maybe conditional proof (conditional establish)
+# R61_MR  – Mutual recursion with check functions
+# R61_DI  – Int.divide proof requirement
+# R61_FG  – forgetFact strips proof (cannot re-use after forget)
+# R61_NA  – Nested ADT pattern matching exhaustiveness
+# R61_LM  – Lambda with proof annotation in filterCheck
+# R61_PP  – Proof parameter ordering (conjunction commutative at call site)
+# R61_CO  – BUG-03: ok conjunction now order-insensitive (any order accepted)
+# R61_CP  – BUG-02: 3-level+ capability chains now work correctly
+
+import Tesl.Prelude exposing [
+  Int,
+  String,
+  Bool(..),
+  List,
+  Fact,
+  attachFact,
+  detachFact,
+  forgetFact,
+  introAnd,
+  andLeft,
+  andRight,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [
+  List.filterCheck,
+  List.allCheck,
+  List.length,
+  List.sort,
+  List.map,
+  List.emptyForAll,
+  IsSorted,
+]
+import Tesl.Set exposing [
+  Set,
+  Set.filterCheck,
+  Set.fromList,
+  Set.size,
+  Set.insert,
+  Set.empty,
+]
+import Tesl.Dict exposing [
+  Dict,
+  Dict.filterCheckValues,
+  Dict.fromList,
+  Dict.size,
+]
+import Tesl.Tuple exposing [Tuple2]
+import Tesl.String exposing [
+  String.trim,
+  String.toUpper,
+  String.length,
+  IsTrimmed,
+  IsUpperCase,
+]
+import Tesl.Int exposing [Int.divide, Int.nonZero, IsNonZero]
+
+# ─── Shared proof declarations ───────────────────────────────────────────────
+
+fact A (n: Int)
+fact B (n: Int)
+fact C (n: Int)
+fact D (n: Int)
+fact E (n: Int)
+fact F (n: Int)
+fact G (n: Int)
+
+fact TitleSafe (s: String)
+fact LengthOk (n: Int)
+fact IsPositive (n: Int)
+fact IsSmall (n: Int)
+fact IsEven (n: Int)
+fact IsOdd (n: Int)
+
+# ─── Check functions ─────────────────────────────────────────────────────────
+
+check checkA(n: Int) -> n: Int ::: A n =
+  if n > 0 then
+    ok n ::: A n
+  else
+    fail 400 "bad"
+
+check checkB(n: Int ::: A n) -> n: Int ::: A n && B n =
+  if n > 1 then
+    ok n ::: A n && B n
+  else
+    fail 400 "bad"
+
+check checkC(n: Int ::: A n && B n) -> n: Int ::: A n && B n && C n =
+  if n > 2 then
+    ok n ::: A n && B n && C n
+  else
+    fail 400 "bad"
+
+check checkD(n: Int ::: A n && B n && C n) -> n: Int ::: A n && B n && C n && D n =
+  if n > 3 then
+    ok n ::: A n && B n && C n && D n
+  else
+    fail 400 "bad"
+
+check checkE(n: Int ::: A n && B n && C n && D n) -> n: Int ::: A n && B n && C n && D n && E n =
+  if n > 4 then
+    ok n ::: A n && B n && C n && D n && E n
+  else
+    fail 400 "bad"
+
+check checkF(n: Int ::: A n && B n && C n && D n && E n) -> n: Int ::: A n && B n && C n && D n && E n && F n =
+  if n > 5 then
+    ok n ::: A n && B n && C n && D n && E n && F n
+  else
+    fail 400 "bad"
+
+check checkG(n: Int ::: A n && B n && C n && D n && E n && F n) -> n: Int ::: A n && B n && C n && D n && E n && F n && G n =
+  if n > 6 then
+    ok n ::: A n && B n && C n && D n && E n && F n && G n
+  else
+    fail 400 "bad"
+
+check checkPos(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+check checkSmall(n: Int) -> n: Int ::: IsSmall n =
+  if n < 100 then
+    ok n ::: IsSmall n
+  else
+    fail 400 "too big"
+
+check checkTitle(s: String) -> s: String ::: TitleSafe s =
+  if String.length s < 100 then
+    ok s ::: TitleSafe s
+  else
+    fail 400 "too long"
+
+check checkLengthOk(n: Int) -> n: Int ::: LengthOk n =
+  if n > 0 && n < 100 then
+    ok n ::: LengthOk n
+  else
+    fail 400 "bad length"
+
+# ─── Establish functions ──────────────────────────────────────────────────────
+
+establish proveA(n: Int) -> Fact (A n) = A n
+establish proveB(n: Int) -> Fact (B n) = B n
+establish proveC(n: Int) -> Fact (C n) = C n
+establish proveD(n: Int) -> Fact (D n) = D n
+establish proveE(n: Int) -> Fact (E n) = E n
+establish provePos(n: Int) -> Fact (IsPositive n) = IsPositive n
+
+# ─── Consuming functions ──────────────────────────────────────────────────────
+
+fn needsA(n: Int ::: A n) -> Int = n
+fn needsB(n: Int ::: B n) -> Int = n
+fn needsAll6(n: Int ::: A n && B n && C n && D n && E n && F n) -> Int = n
+fn needsAll7(n: Int ::: A n && B n && C n && D n && E n && F n && G n) -> Int = n
+fn needsPositive(n: Int ::: IsPositive n) -> Int = n
+fn needsSmall(n: Int ::: IsPositive n && IsSmall n) -> Int = n
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R61_CH — Deep check-chain accumulation (6 and 7 checks)
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn build6Chain(x: Int) -> Int =
+  let a = check checkA x
+  let b = check checkB a
+  let c = check checkC b
+  let d = check checkD c
+  let e = check checkE d
+  let f = check checkF e
+  needsAll6 f
+
+fn build7Chain(x: Int) -> Int =
+  let a = check checkA x
+  let b = check checkB a
+  let c = check checkC b
+  let d = check checkD c
+  let e = check checkE d
+  let f = check checkF e
+  let g = check checkG f
+  needsAll7 g
+
+test "R61_CH01 6-check accumulation chain works end-to-end" {
+  let r = build6Chain 10
+  expect r == 10
+}
+
+test "R61_CH02 7-check accumulation chain works end-to-end" {
+  let r = build7Chain 10
+  expect r == 10
+}
+
+test "R61_CH03 6-check chain fails at step 1 if first check fails" {
+  expectFail (build6Chain 0)
+}
+
+test "R61_CH04 6-check chain fails at step 3 if middle check fails" {
+  expectFail (build6Chain 2)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R61_FA — ForAll in various scenarios
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn filterPositiveSet(xs: Set Int) -> Set Int ::: ForAll (IsPositive) =
+  Set.filterCheck checkPos xs
+
+fn filterPositiveValues(xs: Dict String Int) -> Dict String Int ::: ForAllValues (IsPositive) =
+  Dict.filterCheckValues checkPos xs
+
+fn allSmall(xs: List Int) -> Maybe (List Int ::: ForAll (IsPositive && IsSmall)) =
+  List.allCheck (checkPos && checkSmall) xs
+
+fn getPositives(xs: List Int) -> List Int ? ForAll (IsPositive) =
+  List.filterCheck checkPos xs
+
+fn narrowToSmall(xs: List Int ::: ForAll (IsPositive) xs) -> List Int ? ForAll (IsPositive && IsSmall) =
+  List.filterCheck checkSmall xs
+
+fn forAllPipeline(xs: List Int) -> List Int ? ForAll (IsPositive && IsSmall) =
+  let positives = getPositives xs
+  narrowToSmall positives
+
+fn countSmall(xs: List Int ::: ForAll (IsPositive && IsSmall) xs) -> Int =
+  List.length xs
+
+test "R61_FA01 Set.filterCheck produces ForAll (IsPositive) — succeeds" {
+  let s = Set.filterCheck checkPos (Set.fromList [1, 2, 3, -1, 0])
+  expect Set.size s == 3
+}
+
+test "R61_FA02 Dict.filterCheckValues produces ForAllValues (IsPositive)" {
+  let d = Dict.filterCheckValues checkPos (Dict.fromList [Tuple2 "a" 1, Tuple2 "b" -1, Tuple2 "c" 2])
+  expect Dict.size d == 2
+}
+
+test "R61_FA03 List.allCheck with conjunction returns Something if all pass" {
+  let r = allSmall [1, 2, 3]
+  case r of
+    Nothing -> expectFail (1 + 1)
+    Something xs -> expect (List.length xs) == 3
+}
+
+test "R61_FA04 List.allCheck with conjunction returns Nothing if any fail" {
+  let r = allSmall [1, 2, 200]
+  case r of
+    Nothing -> expect 1 == 1
+    Something _ -> expectFail (1 + 1)
+}
+
+test "R61_FA05 ForAll propagates through fn call chain (positives -> narrowToSmall)" {
+  let result = forAllPipeline [1, 2, 50, 200, -1]
+  expect (List.length result) == 3
+}
+
+test "R61_FA06 List.emptyForAll produces empty ForAll list" {
+  let empty = List.emptyForAll checkPos
+  expect (List.length empty) == 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R61_SF — Stdlib proof-returning functions
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn requiresTrimmed(s: String ::: IsTrimmed s) -> String = s
+fn requiresUpperCase(s: String ::: IsUpperCase s) -> String = s
+fn requiresSorted(xs: List Int ::: IsSorted xs) -> List Int = xs
+
+fn trimAndUse(raw: String) -> String =
+  let t = String.trim raw
+  requiresTrimmed t
+
+fn upperAndUse(raw: String) -> String =
+  let u = String.toUpper raw
+  requiresUpperCase u
+
+fn sortAndUse(xs: List Int) -> List Int =
+  let s = List.sort xs
+  requiresSorted s
+
+test "R61_SF01 String.trim returns IsTrimmed proof" {
+  let r = trimAndUse "  hello  "
+  expect r == "hello"
+}
+
+test "R61_SF02 String.toUpper returns IsUpperCase proof" {
+  let r = upperAndUse "hello"
+  expect r == "HELLO"
+}
+
+test "R61_SF03 List.sort returns IsSorted proof" {
+  let r = sortAndUse [3, 1, 2]
+  expect (List.length r) == 3
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R61_RC — Records with 3 proof-annotated fields
+# ═══════════════════════════════════════════════════════════════════════════
+
+record SafeTriple {
+  title: String ::: TitleSafe title
+  count: Int ::: LengthOk count
+  score: Int ::: IsPositive score
+}
+
+fn buildSafeTriple(t: String, c: Int, s: Int) -> SafeTriple =
+  let safeTitle = check checkTitle t
+  let safeCount = check checkLengthOk c
+  let safeScore = check checkPos s
+  SafeTriple { title: safeTitle, count: safeCount, score: safeScore }
+
+test "R61_RC01 record with 3 proof-annotated fields: construction succeeds" {
+  let item = buildSafeTriple "hello" 5 3
+  expect item.score == 3
+}
+
+test "R61_RC02 record with 3 proof-annotated fields: construction fails if count out of range" {
+  expectFail (buildSafeTriple "hello" (-1) 3)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R61_IM — introAnd with 5 proofs + andLeft/andRight decomposition
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn combine5Proofs(x: Int) -> Int =
+  let pa = proveA x
+  let pb = proveB x
+  let pc = proveC x
+  let pd = proveD x
+  let pe = proveE x
+  let pab = introAnd pa pb
+  let pabc = introAnd pab pc
+  let pabcd = introAnd pabc pd
+  let pabcde = introAnd pabcd pe
+  let x2 = attachFact x pabcde
+  let la = andLeft pabcde
+  let x3 = forgetFact x2 ::: la
+  needsA x3
+
+fn andLeftRightRoundTrip(x: Int) -> Int =
+  let pa = proveA x
+  let pb = proveB x
+  let pab = introAnd pa pb
+  let la = andLeft pab
+  let rb = andRight pab
+  let x2 = forgetFact x ::: la
+  let x3 = forgetFact x ::: rb
+  needsA x2 + needsB x3
+
+test "R61_IM01 introAnd with 5 proofs + andLeft extracts first proof" {
+  let r = combine5Proofs 5
+  expect r == 5
+}
+
+test "R61_IM02 andLeft and andRight round-trip" {
+  let r = andLeftRightRoundTrip 5
+  expect r == 10
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R61_EM — establish with Maybe conditional proof
+# ═══════════════════════════════════════════════════════════════════════════
+
+fact InRange (lo: Int) (hi: Int) (n: Int)
+
+establish proveInRange(lo: Int, hi: Int, n: Int) -> Maybe (Fact (InRange lo hi n)) =
+  if lo <= n && n <= hi then
+    Something (InRange lo hi n)
+  else
+    Nothing
+
+fn requiresInRange(lo: Int, hi: Int, n: Int ::: InRange lo hi n) -> Int = n
+
+fn tryUseRange(lo: Int, hi: Int, x: Int) -> Int =
+  let proof = proveInRange lo hi x
+  case proof of
+    Nothing -> -1
+    Something p ->
+      let x2 = attachFact x p
+      requiresInRange lo hi x2
+
+test "R61_EM01 establish Maybe returns Something when proof holds" {
+  let r = tryUseRange 1 10 5
+  expect r == 5
+}
+
+test "R61_EM02 establish Maybe returns Nothing when proof doesn't hold" {
+  let r = tryUseRange 1 10 20
+  expect r == -1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R61_MR — Mutual recursion with check functions
+# ═══════════════════════════════════════════════════════════════════════════
+
+check checkEven(n: Int) -> n: Int ::: IsEven n =
+  if n < 0 then
+    fail 400 "negative"
+  else if n == 0 then
+    ok n ::: IsEven n
+  else
+    let _odd = check checkOdd (n - 1)
+    ok n ::: IsEven n
+
+check checkOdd(n: Int) -> n: Int ::: IsOdd n =
+  if n <= 0 then
+    fail 400 "not odd"
+  else if n == 1 then
+    ok n ::: IsOdd n
+  else
+    let _even = check checkEven (n - 1)
+    ok n ::: IsOdd n
+
+fn requiresEven(n: Int ::: IsEven n) -> Int = n
+fn requiresOdd(n: Int ::: IsOdd n) -> Int = n
+
+fn testMutualRec(e: Int, o: Int) -> Int =
+  let even = check checkEven e
+  let odd = check checkOdd o
+  requiresEven even + requiresOdd odd
+
+test "R61_MR01 mutual recursion with check: even 4 + odd 3 = 7" {
+  let r = testMutualRec 4 3
+  expect r == 7
+}
+
+test "R61_MR02 mutual recursion: odd number fails checkEven" {
+  expectFail (check checkOdd 2)
+}
+
+test "R61_MR03 mutual recursion: even number fails checkOdd" {
+  expectFail (check checkOdd 4)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R61_DI — Int.divide proof requirement
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn safeDivide(a: Int, b: Int) -> Int =
+  let nonZeroB = check Int.nonZero b
+  Int.divide a nonZeroB
+
+test "R61_DI01 Int.divide with IsNonZero proof succeeds" {
+  let r = safeDivide 10 2
+  expect r == 5
+}
+
+test "R61_DI02 Int.nonZero fails for zero denominator" {
+  expectFail (safeDivide 10 0)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R61_FG — forgetFact strips proof; value cannot be re-used for proof-requiring call
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn forgetAndRe(x: Int) -> Int =
+  let proven = check checkPos x
+  let raw = forgetFact proven
+  let reproven = check checkPos raw
+  needsPositive reproven
+
+test "R61_FG01 forgetFact followed by re-check works" {
+  let r = forgetAndRe 5
+  expect r == 5
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R61_NA — Nested ADT pattern matching exhaustiveness
+# ═══════════════════════════════════════════════════════════════════════════
+
+type Shape
+  = Circle r: Int
+  | Rectangle w: Int h: Int
+  | Triangle base: Int height: Int
+
+type Container
+  = Empty
+  | Filled item: Shape count: Int
+
+fn describeShape(s: Shape) -> String =
+  case s of
+    Circle r -> "circle"
+    Rectangle w h -> "rect"
+    Triangle base height -> "triangle"
+
+fn describeContainer(c: Container) -> String =
+  case c of
+    Empty -> "empty"
+    Filled item count ->
+      case item of
+        Circle r -> "circle"
+        Rectangle w h -> "rect"
+        Triangle base height -> "triangle"
+
+test "R61_NA01 nested ADT exhaustiveness: all constructors covered" {
+  let c = Filled (Circle 5) 3
+  let desc = describeContainer c
+  expect desc == "circle"
+}
+
+test "R61_NA02 nested ADT: Rectangle" {
+  let r = describeContainer (Filled (Rectangle 4 3) 1)
+  expect r == "rect"
+}
+
+test "R61_NA03 nested ADT: Triangle" {
+  let r = describeContainer (Filled (Triangle 3 4) 2)
+  expect r == "triangle"
+}
+
+test "R61_NA04 nested ADT: Empty container" {
+  let r = describeContainer Empty
+  expect r == "empty"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R61_PP — Proof at call site is commutative (A && B accepts carries B && A)
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn requiresBThenA(n: Int ::: B n && A n) -> Int = n
+
+fn testConjunctionOrder(x: Int) -> Int =
+  let a = check checkA x
+  let b = check checkB a
+  requiresBThenA b
+
+test "R61_PP01 call-site proof: B && A required, A && B carried — works (commutative)" {
+  let r = testConjunctionOrder 5
+  expect r == 5
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R61_LM — Lambda with proof annotation in List.map on ForAll list
+# NOTE: filterCheck requires a *check function* reference, not a plain lambda.
+#       Lambdas with proof-annotated parameters work in List.map, not filterCheck.
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn doubleIfPositive(n: Int ::: IsPositive n) -> Int = n * 2
+
+fn mapPositives(xs: List Int ::: ForAll (IsPositive) xs) -> List Int =
+  List.map (fn(n: Int ::: IsPositive n) -> doubleIfPositive n) xs
+
+test "R61_LM01 lambda with proof-annotated param works in List.map on ForAll list" {
+  let positives = List.filterCheck checkPos [1, 2, 3]
+  let doubled = mapPositives positives
+  expect (List.length doubled) == 3
+}
+
+test "R61_LM02 direct filterCheck (no lambda) produces ForAll list" {
+  let r = List.filterCheck checkPos [1, -1, 2, -2, 3]
+  expect (List.length r) == 3
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R61_CO — BUG-03 fixed: ok conjunction order is now normalised
+# The ok proof can now list conjuncts in any order; all are accepted.
+# ═══════════════════════════════════════════════════════════════════════════
+
+fact X (n: Int)
+fact Y (n: Int)
+fact Z (n: Int)
+
+check checkXY(n: Int) -> n: Int ::: X n && Y n =
+  if n > 0 then
+    ok n ::: Y n && X n
+  else
+    fail 400 "bad"
+
+check checkXYZ(n: Int) -> n: Int ::: X n && Y n && Z n =
+  if n > 0 then
+    ok n ::: Z n && X n && Y n
+  else
+    fail 400 "bad"
+
+fn requiresXY(n: Int ::: X n && Y n) -> Int = n
+fn requiresXYZ(n: Int ::: X n && Y n && Z n) -> Int = n
+
+test "R61_CO01 ok conjunction order normalised: Y && X accepted for X && Y return" {
+  let n = 5
+  let v = check checkXY n
+  expect (requiresXY v) == 5
+}
+
+test "R61_CO02 ok conjunction order normalised: Z && X && Y accepted for X && Y && Z" {
+  let n = 5
+  let v = check checkXYZ n
+  expect (requiresXYZ v) == 5
+}
+
+test "R61_CO03 reversed-order check can be used in call-site with original order" {
+  let n = 5
+  let v = check checkXY n
+  let w = check checkXYZ n
+  expect (requiresXY v + requiresXYZ w) == 10
+}

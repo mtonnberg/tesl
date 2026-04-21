@@ -1,0 +1,370 @@
+#lang tesl
+# =====================================================================
+# Critical Review 53 — positive regression tests
+# =====================================================================
+#
+# Paired with `compiler/test/test_review53_antagonistic.ml` which
+# contains the negative (should-not-compile) cases. This file holds the
+# positive side: programs that must both compile AND produce correct
+# answers at runtime.
+#
+# Test ID prefix conventions:
+#   R53_A  = Adversarial proof-system positive controls
+#   R53_C  = Check function multi-step composition
+#   R53_D  = Proof decomposition and reattachment
+#   R53_M  = Multi-param facts and complex subjects
+#   R53_N  = Newtype identity positive cases
+#   R53_S  = Standard library proof-total functions (positive)
+#   R53_G  = Guard + case exhaustiveness (positive)
+#   R53_T  = Three-step and four-step proof chains
+#   R53_E  = establish function positive cases
+#   R53_F  = forgetFact / recheck cycles
+#   R53_Q  = Qualified-only import runtime correctness
+
+module CriticalReview53 exposing []
+
+import Tesl.Prelude exposing [
+  Int,
+  Bool(..),
+  String,
+  List,
+  Fact,
+  forgetFact,
+  introAnd,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.length, List.filterCheck, List.take, List.drop]
+import Tesl.Int exposing [ Int.nonZero, Int.nonNegative, Int.divide, ]
+import Tesl.String exposing [String.length]
+
+# ─── Proof vocabulary ────────────────────────────────────────────────────────
+
+fact IsPositive (n: Int)
+fact IsSmall (n: Int)
+fact IsEven (n: Int)
+fact IsNonEmpty (s: String)
+fact InBounds (lo: Int) (hi: Int) (n: Int)
+fact BothPos (a: Int) (b: Int)
+
+check checkPositive(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+check checkSmall(n: Int) -> n: Int ::: IsSmall n =
+  if n < 1000 then
+    ok n ::: IsSmall n
+  else
+    fail 400 "too large"
+
+check checkEven(n: Int) -> n: Int ::: IsEven n =
+  if n % 2 == 0 then
+    ok n ::: IsEven n
+  else
+    fail 400 "not even"
+
+check checkNonEmpty(s: String) -> s: String ::: IsNonEmpty s =
+  if String.length s > 0 then
+    ok s ::: IsNonEmpty s
+  else
+    fail 400 "empty string"
+
+check checkInBounds(lo: Int, hi: Int, n: Int) -> n: Int ::: InBounds lo hi n =
+  if lo <= n && n <= hi then
+    ok n ::: InBounds lo hi n
+  else
+    fail 400 "out of bounds"
+
+# ─── Consumer functions ───────────────────────────────────────────────────────
+
+fn needPos(n: Int ::: IsPositive n) -> Int = n
+fn needSmall(n: Int ::: IsSmall n) -> Int = n
+fn needEven(n: Int ::: IsEven n) -> Int = n
+fn needNonEmpty(s: String ::: IsNonEmpty s) -> String = s
+fn needInBounds(lo: Int, hi: Int, n: Int ::: InBounds lo hi n) -> Int = n
+fn needPosAndSmall(n: Int ::: IsPositive n && IsSmall n) -> Int = n
+fn needAll3(n: Int ::: IsPositive n && IsSmall n && IsEven n) -> Int = n
+
+# ─── R53_A — Adversarial: multi-step proof chains ────────────────────────────
+
+fn a01_two_step_chain(raw: Int) -> Int =
+  let a = check checkPositive raw
+  let b = check checkSmall a
+  needPosAndSmall b
+
+fn a02_three_step_chain(raw: Int) -> Int =
+  let a = check checkPositive raw
+  let b = check checkSmall a
+  let c = check checkEven b
+  needAll3 c
+
+fn a03_four_predicates(raw: Int) -> Int =
+  let a = check checkPositive raw
+  let b = check checkSmall a
+  let c = check checkEven b
+  # Use the three-fact value — just need pos+small+even
+  needAll3 c
+
+fn a04_commuted_conjunction(raw: Int) -> Int =
+  let a = check checkPositive raw
+  let b = check checkSmall a
+  let c = check checkEven b
+  # needAll3 expects IsPositive && IsSmall && IsEven — verify commutativity
+  let needReorder = fn(n: Int ::: IsEven n && IsSmall n && IsPositive n) -> n
+  needReorder c
+
+# ─── R53_C — Check function calls with forgetFact cycles ─────────────────────
+
+fn c01_forget_and_recheck(raw: Int) -> Int =
+  let checked = check checkPositive raw
+  let bare = forgetFact checked
+  let rechecked = check checkPositive bare
+  needPos rechecked
+
+fn c02_two_forget_cycles(raw: Int) -> Int =
+  let a = check checkPositive raw
+  let b = forgetFact a
+  let c = check checkPositive b
+  let d = check checkSmall c
+  needPosAndSmall d
+
+# ─── R53_D — Decompose and reattach ──────────────────────────────────────────
+
+fn d01_single_decompose(raw: Int) -> Int =
+  let p = check checkPositive raw
+  let (v ::: proof) = p
+  let reat = v ::: proof
+  needPos reat
+
+fn d02_pair_decompose(raw: Int) -> Int =
+  let a = check checkPositive raw
+  let b = check checkSmall a
+  let (v ::: p1 && p2) = b
+  let reat = v ::: p1 && p2
+  needPosAndSmall reat
+
+fn d03_triple_decompose_with_discard(raw: Int) -> Int =
+  let a = check checkPositive raw
+  let b = check checkSmall a
+  let c = check checkEven b
+  let (v ::: _ && _ && pe) = c
+  needEven <| v ::: pe
+
+fn d04_and_composition(raw: Int) -> Int =
+  let a = check checkPositive raw
+  let b = check checkSmall a
+  let (v ::: p1 && p2) = b
+  let combined = introAnd p1 p2
+  let reat = v ::: combined
+  needPosAndSmall reat
+
+# ─── R53_M — Multi-param facts ───────────────────────────────────────────────
+
+fn m01_basic_multi_param(lo: Int, hi: Int, raw: Int) -> Int =
+  let validated = check checkInBounds lo hi raw
+  needInBounds lo hi validated
+
+fn m02_multi_param_decompose(lo: Int, hi: Int, raw: Int) -> Int =
+  let ranged = check checkInBounds lo hi raw
+  let (v ::: p) = ranged
+  let reat = v ::: p
+  needInBounds lo hi reat
+
+# ─── R53_S — Standard library proof-total arithmetic ─────────────────────────
+
+fn s01_safe_divide(a: Int, b: Int) -> Int =
+  let divisor = check Int.nonZero b
+  Int.divide a divisor
+
+fn s02_safe_take(xs: List Int, n: Int) -> List Int =
+  let count = check Int.nonNegative n
+  List.take count xs
+
+fn s03_safe_drop(xs: List Int, n: Int) -> List Int =
+  let count = check Int.nonNegative n
+  List.drop count xs
+
+fn s04_nonneg_chain(n: Int) -> Int =
+  let pos = check checkPositive n
+  let nn = check Int.nonNegative pos
+  # nn carries both IsPositive and IsNonNegative
+  nn
+
+# ─── R53_G — Guard + case: exhaustive positive cases ─────────────────────────
+
+fn g01_guard_with_catchall(m: Maybe Int) -> Int =
+  case m of
+    Nothing -> 0
+    Something n where n > 0 -> n
+    Something _ -> 0
+
+fn g02_three_arm_adt(s: String) -> Int =
+  case s of
+    "a" -> 1
+    "b" -> 2
+    _ -> 0
+
+fn g03_bool_exhaustive() -> String =
+  case True of
+    True -> "yes"
+    False -> "no"
+
+# ─── R53_F — filterCheck positive controls ───────────────────────────────────
+
+fn f01_filtercheck_with_real_check(xs: List Int) -> List Int =
+  List.filterCheck checkPositive xs
+
+fn f02_filtercheck_chain(raw: List Int) -> Int =
+  let positives = List.filterCheck checkPositive raw
+  List.length positives
+
+fn f03_filtercheck_then_consume(xs: List Int) -> Int =
+  let pxs = List.filterCheck checkPositive xs
+  let needPosAll = fn(ns: List Int ::: ForAll IsPositive ns) -> List.length ns
+  needPosAll pxs
+
+# ─── R53_E — establish function positive cases ───────────────────────────────
+
+establish provePositive(n: Int) -> Fact (IsPositive n) =
+  IsPositive n
+
+fn e01_establish_and_use(n: Int) -> Int =
+  let proof = provePositive n
+  let valued = n ::: proof
+  needPos valued
+
+# ─── R53_T — Type system: newtype positive cases ─────────────────────────────
+
+type UserId = String
+type ProjectId = String
+
+fn t01_newtype_accepted(uid: UserId) -> String = uid.value
+
+fn t02_newtype_constructor(raw: String) -> UserId = UserId raw
+
+# ─── R53_N — Nested case with proofs ─────────────────────────────────────────
+
+fn n01_nested_maybe_case(m: Maybe (Maybe Int)) -> Int =
+  case m of
+    Nothing -> 0
+    Something inner ->
+      case inner of
+        Nothing -> -1
+        Something n -> n
+
+fn n02_three_level_case(m: Maybe Int) -> String =
+  case m of
+    Nothing -> "nothing"
+    Something n ->
+      if n > 0 then
+        "positive"
+      else
+        if n < 0 then
+          "negative"
+        else
+          "zero"
+
+# ─── Test blocks ─────────────────────────────────────────────────────────────
+
+test "R53_A: multi-step proof chains compile and run" {
+  expect a01_two_step_chain 5 == 5
+  expect a02_three_step_chain 6 == 6
+  expectFail a01_two_step_chain (-1)
+  expectFail a02_three_step_chain 3
+}
+
+test "R53_C: forgetFact and recheck cycles" {
+  expect c01_forget_and_recheck 7 == 7
+  expect c02_two_forget_cycles 4 == 4
+  expectFail c01_forget_and_recheck 0
+}
+
+test "R53_D: decompose and reattach" {
+  expect d01_single_decompose 3 == 3
+  expect d02_pair_decompose 5 == 5
+  expect d03_triple_decompose_with_discard 4 == 4
+  expect d04_and_composition 7 == 7
+}
+
+test "R53_M: multi-param fact check and consumer" {
+  expect m01_basic_multi_param 1 10 5 == 5
+  expect m02_multi_param_decompose 0 100 42 == 42
+  expectFail m01_basic_multi_param 1 10 11
+}
+
+test "R53_S: proof-total standard library functions" {
+  expect s01_safe_divide 10 2 == 5
+  expect s01_safe_divide 7 3 == 2
+  expect s02_safe_take [1, 2, 3, 4, 5] 3 == [1, 2, 3]
+  expect s03_safe_drop [1, 2, 3, 4, 5] 2 == [3, 4, 5]
+  expectFail s01_safe_divide 5 0
+}
+
+test "R53_G: guard + case exhaustiveness positive" {
+  expect g01_guard_with_catchall Nothing == 0
+  expect g01_guard_with_catchall (Something 5) == 5
+  expect g01_guard_with_catchall (Something (-3)) == 0
+  expect g02_three_arm_adt "a" == 1
+  expect g02_three_arm_adt "b" == 2
+  expect g02_three_arm_adt "x" == 0
+}
+
+test "R53_F: filterCheck with real check function" {
+  expect f02_filtercheck_chain [1, 2, -3, 4, -5] == 3
+  expect f03_filtercheck_then_consume [-1, -2, -3] == 0
+  expect f03_filtercheck_then_consume [1, 2, 3] == 3
+}
+
+test "R53_E: establish function positive" {
+  expect e01_establish_and_use 42 == 42
+  expect e01_establish_and_use (-5) == -5
+}
+
+test "R53_T: newtype constructor and value accessor" {
+  expect t02_newtype_constructor "uid_123" == UserId "uid_123"
+  expect (t01_newtype_accepted (UserId "hello")) == "hello"
+}
+
+test "R53_N: nested case expressions" {
+  expect n01_nested_maybe_case Nothing == 0
+  expect n01_nested_maybe_case (Something Nothing) == -1
+  expect n01_nested_maybe_case (Something (Something 42)) == 42
+  expect n02_three_level_case Nothing == "nothing"
+  expect n02_three_level_case (Something 5) == "positive"
+  expect n02_three_level_case (Something (-2)) == "negative"
+  expect n02_three_level_case (Something 0) == "zero"
+}
+
+test "R53_compound: four-fact conjunction" with 20 runs {
+  property "pos+small+even chain" (n: Int where n > 0 && n < 1000 && n % 2 == 0) {
+    a03_four_predicates n == n
+  }
+}
+
+# ─── R53_MA — Maybe (T ::: P) RetMaybeAttached positive cases ────────────────
+
+check ma01_maybe_positive(n: Int) -> Maybe (v: Int ::: IsPositive v) =
+  if n > 0 then
+    Something n
+  else
+    Nothing
+
+fn ma02_use_maybe_positive(raw: Int) -> Int =
+  let m = check ma01_maybe_positive raw
+  case m of
+    Nothing -> 0
+    Something v -> v + 1
+
+fn ma03_nothing_branch(raw: Int) -> Int =
+  let m = check ma01_maybe_positive raw
+  case m of
+    Nothing -> -1
+    Something v -> v
+
+test "R53_MA: Maybe (T ::: P) basic positive cases" {
+  expect ma02_use_maybe_positive 5 == 6
+  expect ma02_use_maybe_positive (-1) == 0
+  expect ma03_nothing_branch 10 == 10
+  expect ma03_nothing_branch (-3) == -1
+}

@@ -1,0 +1,234 @@
+#lang tesl
+module ExistentialWitnesses exposing [
+  generateToken,
+  IsTokenId,
+  Authenticated,
+  IsCreatedSession,
+  checkSessionCreated,
+  SessionServer,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# "exists name: Type => Fact name" in a return type means:
+#   "this function returns something that satisfies Fact for some fresh internal name."
+# In the body, "exists name => ..." packages the name as a hidden witness.
+# Callers receive the proof but not direct access to the name.
+#
+#   fn generateToken() -> exists tokenId: String => String::: IsTokenId tokenId =
+#     let tokenId = generatePrefixedId "tok"
+#     exists tokenId => tokenId
+
+import Tesl.Prelude exposing [Int, Fact, String]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.String exposing [String.length]
+import Tesl.Time exposing [nowMillis, time, Time.posixToSeconds]
+import Tesl.Random exposing [random]
+import Tesl.Id exposing [generatePrefixedId]
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Existential return types express: "I create something and I can prove it satisfies X,
+# but I don't expose the internal ID directly."
+#
+# This is the right pattern for create-resource endpoints — the caller gets proof
+# the resource exists in the DB, but the ID is an implementation detail
+# (or is in the response body as data, not as a proof-visible name).
+#
+# The key constraint: the caller CANNOT use the hidden witness name in further
+# proof reasoning. It receives the proof, but cannot extract the name and pass
+# it where a universally-quantified name would be required.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Existentials are Σ-types. "exists name: Type => Body" is Σ(name: Type). Body.
+# The witness "name" is hidden from the caller's proof context — it cannot be used
+# in further proof reasoning — but the body proof is still valid and checkable.
+# This prevents "Skolem escape": you cannot extract the witness and use it where
+# a universally-quantified name would be required.
+#
+# In GDP terms: the caller knows "there exists SOME tokenId such that the returned
+# String is a valid token id for THAT tokenId." The specific tokenId is not
+# accessible — only the fact that it exists and the proof holds for it.
+
+# ─── Types and validation ─────────────────────────────────────────────────────
+
+type TokenId = String
+
+fact IsTokenId (s: String)
+
+check checkTokenId(s: String) -> s: String ::: IsTokenId s =
+  if String.length s > 8 then
+    ok s ::: IsTokenId s
+  else
+    fail 400 "invalid token id"
+
+type Token = String
+
+capability sessionCapability implies time, random
+
+# ─── Simple existential example ───────────────────────────────────────────────
+
+# Simple example: a function returning an existential witness.
+# The return type says: "there exists some tokenId such that the returned String
+# is a valid token id for that tokenId."
+# The caller receives the String with the IsTokenId proof, but cannot use tokenId
+# in further proof reasoning (it's hidden).
+fn generateToken() -> exists tokenId: String => tokenId: String ::: IsTokenId tokenId
+  requires [sessionCapability] =
+  let tokenId = generatePrefixedId "tok"
+  exists tokenId =>
+    tokenId
+
+fn shouldWork_OnlyMeansAnyStringWithAProofThatSomethingIsATokenId() -> exists tokenId: String => String ::: IsTokenId tokenId
+  requires [sessionCapability] =
+  let tokenId = generatePrefixedId "tok"
+  exists tokenId =>
+    "anyrandomString"
+
+# ─── Realistic example: create-session handler ────────────────────────────────
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# The structural proof form mirrors the SQL layer's `FromDb (Id == todoId)`:
+#
+#   IsCreatedSession (Id == sessionId) user
+#
+# The sub-expression "(Id == sessionId)" structurally encodes "the id field IS sessionId".
+# A check function validates this before constructing the proof.
+# This closes the gap between the existential witness and the returned record's id field.
+#
+# Without "(Id == sessionId)", the proof only says "a session was created" —
+# it does not say WHICH session was returned. With it, callers know the returned
+# Session's id field IS the hidden sessionId witness.
+
+record Session {
+  id: String
+  userId: String
+  createdAt: Int
+}
+
+codec Session {
+  toJson {
+    id -> "id" with_codec stringCodec
+    userId -> "userId" with_codec stringCodec
+    createdAt -> "createdAt" with_codec intCodec
+  }
+  fromJson_forbidden
+}
+
+fact Authenticated (userId: String)
+
+auth cookieAuth(request: HttpRequest) -> String ? Authenticated =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "not logged in"
+    Something userId -> ok userId ::: Authenticated userId
+
+fact IsCreatedSession (sessionId: String, user: String)
+
+# check (not proof) validates the structural binding before constructing the fact.
+# This is the trusted boundary: session.id MUST equal sessionId for the proof to hold.
+# In this example it would be better to just have Session as a witness and have a proof on that
+# But to showcase the witness feature this is used here
+check checkSessionCreated(session: Session, sessionId: String, user: String ::: Authenticated user)
+  -> session: Session ::: IsCreatedSession (Id == sessionId) user =
+  if session.id == sessionId then
+    ok session ::: IsCreatedSession (Id == sessionId) user
+  else
+    fail 500 "session id does not match the witness"
+
+handler createSession(user: String ::: Authenticated user)
+  -> exists sessionId: String =>
+        session: Session ::: IsCreatedSession (Id == sessionId) user
+  requires [sessionCapability] =
+  let sessionId = generatePrefixedId "session"
+  let session = Session { id: sessionId, userId: user, createdAt: Time.posixToSeconds(nowMillis()) }
+  # check validates session.id == sessionId and attaches the structural proof
+  let verifiedSession = check checkSessionCreated session sessionId user
+  exists sessionId =>
+    verifiedSession
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# `FromDb (Id == todoId)` from the SQL layer structurally encodes the id binding.
+# `IsCreatedSession (Id == sessionId) user` mirrors this for non-DB resources.
+#
+# Without "(Id == sessionId)":
+#   - The proof says "some session was created for user"
+#   - Nothing connects the witness sessionId to the Session's id field
+#   - A buggy proof function could set witness="abc" while session.id="xyz"
+#
+# With "(Id == sessionId)":
+#   - The GDP proof fact structurally encodes the equality
+#   - The check function enforces session.id == sessionId at the trusted boundary
+#   - The returned Session's id field IS the hidden sessionId witness — guaranteed
+#
+# The pattern: produce the structural proof via `check` (not `proof`), which:
+#   1. Validates session.id == sessionId (fail 500 if not — should never happen)
+#   2. Only then constructs IsCreatedSession (Id == sessionId) user
+#   3. The handler packs sessionId (== session.id) as the existential witness
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# GDP proof facts are structured data. `(IsCreatedSession (Id == sessionId) user)`
+# contains `(Id == sessionId)` as a sub-expression — structurally encoding the
+# primary-key equality just as `FromDb (Id == X)` does.
+#
+# At proof-satisfaction checking time, the GDP runtime instantiates
+# `IsCreatedSession (Id == sessionId) user` with the actual subjects of
+# sessionId and user. If the session carries the matching proof fact, it passes.
+#
+# Using `check` instead of `proof` for construction:
+# - `proof` is an unconditional trust boundary (you assert without validation)
+# - `check` validates at runtime and fails with HTTP status if the invariant breaks
+# - For "session.id must equal sessionId", `check` is the right choice because
+#   the validation is trivially checkable (it's a string equality) and should
+#   always hold in a correct implementation — the fail 500 is a defensive guard.
+
+# ─── API and server ───────────────────────────────────────────────────────────
+
+api SessionApi {
+  post "/sessions"
+    auth user: String ::: Authenticated user via cookieAuth
+    -> exists sessionId: String =>
+        session: Session ::: IsCreatedSession (Id == sessionId) user
+}
+
+server SessionServer for SessionApi {
+  createSession = createSession
+}
+
+# ═══════════════════════════════════════════
+# WHY NOT JUST RETURN Session?
+# ═══════════════════════════════════════════
+
+# Option A: handler returns plain Session
+#   -> Session
+# Problem: no proof the session was actually created/persisted. Anyone could
+# construct a Session struct and return it. No GDP guarantee.
+
+# Option B: handler returns Session::: IsCreatedSession sessionId
+#   -> Session::: IsCreatedSession sessionId
+# Problem: sessionId must be in scope at the call site — but the caller
+# does not know the session ID before calling the function. Unsound.
+
+# Option C (correct): handler returns exists sessionId => Session::: IsCreatedSession sessionId
+#   -> exists sessionId: String => Session::: IsCreatedSession sessionId
+# sessionId is existentially hidden. The caller gets:
+#   "I don't know which sessionId was used, but I know the Session satisfies
+#    IsCreatedSession for SOME sessionId."
+# This is precisely the GDP way to express "this value was properly created."
+
+# Option D (complete): IsCreatedSession (Id == sessionId) user
+#   -> exists sessionId: String => Session::: IsCreatedSession (Id == sessionId) user
+# The "(Id == sessionId)" sub-expression structurally encodes "session.id == sessionId".
+# This mirrors FromDb (Id == todoId) from the SQL layer.
+# A check function validates the binding; the existential witness IS session.id.

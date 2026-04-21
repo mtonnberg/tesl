@@ -1,0 +1,374 @@
+#lang tesl
+# =====================================================================
+# Critical Review 54 — positive regression tests
+# =====================================================================
+#
+# Tests must both compile AND produce correct answers at runtime.
+# Each test exercises a proof-system feature at the positive boundary.
+#
+# Paired with: compiler/test/test_review54_antagonistic.ml
+
+module CriticalReview54 exposing []
+
+import Tesl.Prelude exposing [
+  Int,
+  Bool(..),
+  String,
+  List,
+  Fact,
+  forgetFact,
+  introAnd,
+  andLeft,
+  andRight,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.length, List.filterCheck]
+import Tesl.Int exposing [Int.nonZero, Int.divide]
+import Tesl.String exposing [
+  String.length,
+  String.trim,
+  String.startsWith,
+  IsTrimmed,
+]
+
+# ─── Proof vocabulary ────────────────────────────────────────────────────────
+
+fact IsPositive (n: Int)
+fact IsSmall (n: Int)
+fact IsEven (n: Int)
+fact ValidRange (lo: Int) (hi: Int) (n: Int)
+fact HasPrefix (prefix: String) (s: String)
+
+check checkPos(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+check checkSmall(n: Int) -> n: Int ::: IsSmall n =
+  if n < 1000 then
+    ok n ::: IsSmall n
+  else
+    fail 400 "too large"
+
+check checkEven(n: Int) -> n: Int ::: IsEven n =
+  if n % 2 == 0 then
+    ok n ::: IsEven n
+  else
+    fail 400 "not even"
+
+check checkRange(lo: Int, hi: Int, n: Int) -> n: Int ::: ValidRange lo hi n =
+  if lo <= n && n <= hi then
+    ok n ::: ValidRange lo hi n
+  else
+    fail 400 "out of range"
+
+check checkHasPrefix(prefix: String, s: String) -> s: String ::: HasPrefix prefix s =
+  if String.startsWith s prefix then
+    ok s ::: HasPrefix prefix s
+  else
+    fail 400 "missing prefix"
+
+fn needPos(n: Int ::: IsPositive n) -> Int = n
+fn needSmall(n: Int ::: IsSmall n) -> Int = n
+fn needBoth(n: Int ::: IsPositive n && IsSmall n) -> Int = n
+fn needAll3(n: Int ::: IsPositive n && IsSmall n && IsEven n) -> Int = n
+fn needRange(lo: Int, hi: Int, n: Int ::: ValidRange lo hi n) -> Int = n
+fn needHasPrefix(prefix: String, s: String ::: HasPrefix prefix s) -> String = s
+
+# ─── R54_A — 3+ step proof chains work correctly ────────────────────────────
+
+fn a01_three_step_chain(raw: Int) -> Int =
+  let a = check checkPos raw
+  let b = check checkSmall a
+  let c = check checkEven b
+  needAll3 c
+
+fn a02_cross_step_decompose_selective(raw: Int) -> Int =
+  let a = check checkPos raw
+  let b = check checkSmall a
+  let c = check checkEven b
+  let (v ::: pp && _ps && pe) = c
+  let reat = v ::: pp && pe
+  needPos reat
+
+fn a03_multi_param_round_trip(lo: Int, hi: Int, raw: Int) -> Int =
+  let validated = check checkRange lo hi raw
+  needRange lo hi validated
+
+fn a04_string_multi_param(prefix: String, raw: String) -> String =
+  let validated = check checkHasPrefix prefix raw
+  needHasPrefix prefix validated
+
+test "R54_A: proof chain compilation and runtime correctness" {
+  expect a01_three_step_chain 6 == 6
+  expect a01_three_step_chain 4 == 4
+  expectFail a01_three_step_chain (-1)
+  expectFail a01_three_step_chain 1001
+  expectFail a01_three_step_chain 5
+
+  expect a02_cross_step_decompose_selective 6 == 6
+  expectFail a02_cross_step_decompose_selective (-1)
+
+  expect a03_multi_param_round_trip 1 10 5 == 5
+  expectFail a03_multi_param_round_trip 1 10 11
+
+  expect a04_string_multi_param "hello" "hello world" == "hello world"
+  expectFail a04_string_multi_param "hello" "goodbye"
+}
+
+# ─── R54_E — establish and Maybe proof patterns ───────────────────────────────
+
+establish provePos(n: Int) -> Fact (IsPositive n) =
+  IsPositive n
+
+establish tryValidRangeOneTo100(n: Int) -> Maybe (Fact (IsPositive n)) =
+  if 1 <= n && n <= 100 then
+    Something (IsPositive n)
+  else
+    Nothing
+
+fn e01_establish_direct_use(raw: Int) -> Int =
+  let pf = provePos raw
+  needPos <| raw ::: pf
+
+fn e02_establish_maybe_case(raw: Int) -> Int =
+  let mProof = tryValidRangeOneTo100 raw
+  case mProof of
+    Nothing -> -1
+    Something pf -> needPos <| raw ::: pf
+
+test "R54_E: establish and Maybe proof" {
+  expect e01_establish_direct_use 42 == 42
+  expect e01_establish_direct_use (-5) == -5
+
+  expect e02_establish_maybe_case 50 == 50
+  expect e02_establish_maybe_case 0 == -1
+  expect e02_establish_maybe_case 101 == -1
+}
+
+# ─── R54_F — forgetFact + reattach same subject ───────────────────────────────
+
+fn f01_forget_recheck_same_value(raw: Int) -> Int =
+  let pos = check checkPos raw
+  let bare = forgetFact pos
+  let pos2 = check checkPos bare
+  needPos pos2
+
+fn f02_forget_establish_reattach(raw: Int) -> Int =
+  let pos = check checkPos raw
+  let bare = forgetFact pos
+  let pf = provePos raw
+  needPos <| bare ::: pf
+
+test "R54_F: forgetFact preservation" {
+  expect f01_forget_recheck_same_value 7 == 7
+  expectFail f01_forget_recheck_same_value (-1)
+
+  expect f02_forget_establish_reattach 3 == 3
+}
+
+# ─── R54_D — Decompose/attach proof flows ───────────────────────────────────
+
+fn d01_triple_decompose_selective(raw: Int) -> Int =
+  let a = check checkPos raw
+  let b = check checkSmall a
+  let c = check checkEven b
+  let (v ::: pp && _ps && _pe) = c
+  needPos <| v ::: pp
+
+fn d02_introand_same_subject(raw: Int) -> Int =
+  let pos = check checkPos raw
+  let sm = check checkSmall pos
+  let (v ::: pp) = pos
+  let (_v2 ::: ps) = sm
+  let combined = introAnd pp ps
+  let reat = v ::: combined
+  needBoth reat
+
+fn d03_andleft_andright_conservative(raw: Int) -> Int =
+  let a = check checkPos raw
+  let b = check checkSmall a
+  let (v ::: pp && ps) = b
+  let leftPf = andLeft pp
+  let rightPf = andRight ps
+  let both = introAnd leftPf rightPf
+  let reat = v ::: both
+  needBoth reat
+
+test "R54_D: detach/attach proof flows" {
+  expect d01_triple_decompose_selective 6 == 6
+  expectFail d01_triple_decompose_selective (-1)
+
+  expect d02_introand_same_subject 5 == 5
+  expectFail d02_introand_same_subject (-1)
+
+  expect d03_andleft_andright_conservative 3 == 3
+  expectFail d03_andleft_andright_conservative (-1)
+  expectFail d03_andleft_andright_conservative 1001
+}
+
+# ─── R54_G — Guard exhaustiveness edge cases ─────────────────────────────────
+
+type TrafficLight
+  = Red
+  | Yellow
+  | Green
+
+fn g01_partial_guard_with_catchall(light: TrafficLight, n: Int) -> Int =
+  case light of
+    Red where n > 0 -> 1
+    Red -> 0
+    Yellow -> 2
+    Green -> 3
+
+fn g02_all_unguarded_exhaustive(light: TrafficLight) -> String =
+  case light of
+    Red -> "stop"
+    Yellow -> "slow"
+    Green -> "go"
+
+fn g03_mixed_guards_with_default(m: Maybe Int, threshold: Int) -> Int =
+  case m of
+    Nothing -> 0
+    Something n where n > threshold -> n
+    Something n -> threshold
+
+test "R54_G: guard cases" {
+  expect g01_partial_guard_with_catchall Red 5 == 1
+  expect g01_partial_guard_with_catchall Red (-1) == 0
+  expect g01_partial_guard_with_catchall Yellow 0 == 2
+  expect g01_partial_guard_with_catchall Green 0 == 3
+
+  expect g02_all_unguarded_exhaustive Red == "stop"
+  expect g02_all_unguarded_exhaustive Yellow == "slow"
+  expect g02_all_unguarded_exhaustive Green == "go"
+
+  expect g03_mixed_guards_with_default Nothing 5 == 0
+  expect g03_mixed_guards_with_default (Something 10) 5 == 10
+  expect g03_mixed_guards_with_default (Something 3) 5 == 5
+}
+
+# ─── R54_L — Lambda proof parameters ─────────────────────────────────────────
+
+fn l01_lambda_with_proof_param(raw: Int) -> Int =
+  let pos = check checkPos raw
+  let f = fn(x: Int ::: IsPositive x) -> needPos x
+  f pos
+
+fn l02_lambda_captures_proof(raw: Int) -> Int -> Int =
+  let pos = check checkPos raw
+  fn(y: Int) -> pos + y
+
+fn l03_lambda_partial_apply(f: Int -> Int, n: Int) -> Int =
+  f n
+
+test "R54_L: lambda with proof params" {
+  expect l01_lambda_with_proof_param 42 == 42
+  expectFail l01_lambda_with_proof_param (-1)
+
+  let g = l02_lambda_captures_proof 5
+  expect l03_lambda_partial_apply g 3 == 8
+}
+
+# ─── R54_N — Nested type access and proof propagation ────────────────────────
+
+record InnerRec { content: String ::: IsNonEmpty content }
+record OuterRec { inner: InnerRec }
+
+fact IsNonEmpty (s: String)
+
+check checkNonEmpty(s: String) -> s: String ::: IsNonEmpty s =
+  if String.length s > 0 then
+    ok s ::: IsNonEmpty s
+  else
+    fail 400 "empty"
+
+fn needNonEmpty(s: String ::: IsNonEmpty s) -> String = s
+
+fn n01_nested_record_field_proof(o: OuterRec) -> String =
+  needNonEmpty o.inner.content
+
+fn n02_three_level_case(m: Maybe (Maybe Int)) -> Int =
+  case m of
+    Nothing -> 0
+    Something inner ->
+      case inner of
+        Nothing -> -1
+        Something n -> n
+
+test "R54_N: nested type access" {
+  let rawContent = "hello"
+  let safeContent = check checkNonEmpty rawContent
+  let inner = InnerRec { content: safeContent }
+  let outer = OuterRec { inner: inner }
+  expect n01_nested_record_field_proof outer == "hello"
+
+  let rawEmpty = ""
+  expectFail check checkNonEmpty rawEmpty
+
+  expect n02_three_level_case Nothing == 0
+  expect n02_three_level_case (Something Nothing) == -1
+  expect n02_three_level_case (Something (Something 42)) == 42
+}
+
+# ─── R54_P — Stdlib proof-total functions ────────────────────────────────────
+
+fn p01_safe_divide(a: Int, b: Int) -> Int =
+  let d = check Int.nonZero b
+  Int.divide a d
+
+fn p02_stdlib_isTrimmed_propagation(raw: String) -> String ? IsTrimmed =
+  String.trim raw
+
+fn p03_filter_check_creates_forall(xs: List Int) -> Int =
+  let positives = List.filterCheck checkPos xs
+  let consumer = fn(ns: List Int ::: ForAll IsPositive ns) -> List.length ns
+  consumer positives
+
+test "R54_P: stdlib proof-total functions" {
+  expect p01_safe_divide 10 2 == 5
+  expect p01_safe_divide 7 3 == 2
+  expectFail p01_safe_divide 5 0
+
+  expect p03_filter_check_creates_forall [1, 2, -3, 4, -5] == 3
+  expect p03_filter_check_creates_forall [-1, -2, -3] == 0
+}
+
+# ─── R54_C — Case with proof and pattern matching ────────────────────────────
+
+fn c01_proof_flows_through_some_arm(m: Maybe Int) -> Int =
+  let result = case m of
+    Nothing -> 0
+    Something n -> n
+  result
+
+fn c02_proof_after_three_way_case(n: Int) -> String =
+  if n > 0 then
+    "positive"
+  else
+    if n < 0 then
+      "negative"
+    else
+      "zero"
+
+fn c03_literal_pattern_with_catchall(code: Int) -> String =
+  case code of
+    200 -> "ok"
+    404 -> "not found"
+    500 -> "server error"
+    _ -> "other"
+
+test "R54_C: case and pattern matching" {
+  expect c01_proof_flows_through_some_arm Nothing == 0
+  expect c01_proof_flows_through_some_arm (Something 42) == 42
+
+  expect c02_proof_after_three_way_case 5 == "positive"
+  expect c02_proof_after_three_way_case (-3) == "negative"
+  expect c02_proof_after_three_way_case 0 == "zero"
+
+  expect c03_literal_pattern_with_catchall 200 == "ok"
+  expect c03_literal_pattern_with_catchall 404 == "not found"
+  expect c03_literal_pattern_with_catchall 500 == "server error"
+  expect c03_literal_pattern_with_catchall 301 == "other"
+}

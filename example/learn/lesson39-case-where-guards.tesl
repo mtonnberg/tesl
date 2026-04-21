@@ -1,0 +1,282 @@
+#lang tesl
+module CaseWhereGuards exposing [
+  Shape(..),
+  Priority(..),
+  Labeled(..),
+  areaCategory,
+  describeShape,
+  classifyByPriority,
+  processLabeled,
+  scoreGrade,
+  rateLabeled,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# A "where guard" adds a boolean condition to a case arm.
+# If the guard is False, the arm is skipped and the NEXT arm is tried.
+#
+# Syntax:
+#   case x of
+#     Pattern where condition -> body
+#     Pattern -> fallback_body
+#
+# Rules:
+#   1. The guard can reference any names bound by the pattern.
+#   2. Use "&&" to combine multiple conditions in one guard.
+#   3. If the guard is False, the next arm is tried in order.
+#   4. The final arm (no guard) acts as the catch-all for that constructor.
+#   5. Guards are optional — not all arms need one.
+#
+# Example (from lesson 37):
+#   case x of
+#     FooLeft v1 v2 where v2 == "hej" && v1 > 2 -> 5
+#     FooLeft v1 _ -> v1
+#     FooRight b where b == "hej" -> 5
+#     FooRight _ -> 2
+
+import Tesl.Prelude exposing [Int, String]
+
+# ═══════════════════════════════════════════
+# PART 1: Single-field guards
+# ═══════════════════════════════════════════
+# Multiple arms for the same constructor, each with a different guard.
+# Arms are checked in order; the first matching guard wins.
+
+type Shape
+  = Circle radius: Int
+  | Rectangle width: Int height: Int
+  | Triangle base: Int height: Int
+
+# Circle arms use guards to categorise by size.
+# Rectangle has a special case for squares (width == height).
+# Triangle has no guards — just a catch-all.
+fn areaCategory(s: Shape) -> String =
+  case s of
+    Circle r where r > 50 -> "huge circle"
+    Circle r where r > 20 -> "large circle"
+    Circle r where r > 5 -> "medium circle"
+    Circle _ -> "small circle"
+    Rectangle w h where w == h -> "square"
+    Rectangle w h where w > 30 && h > 30 -> "large rectangle"
+    Rectangle _ _ -> "small rectangle"
+    Triangle _ _ -> "triangle"
+
+# A richer description that also references multiple fields in one guard.
+fn describeShape(s: Shape) -> String =
+  case s of
+    Circle r where r == 0 -> "degenerate circle (point)"
+    Circle r where r > 100 -> "enormous circle (r=${r})"
+    Circle r -> "circle with radius ${r}"
+    Rectangle w h where w == h -> "square with side ${w}"
+    Rectangle w h -> "rectangle ${w}x${h}"
+    Triangle b h where b == h -> "isosceles triangle"
+    Triangle _ _ -> "triangle"
+
+# ═══════════════════════════════════════════
+# PART 2: Guards with string comparisons
+# ═══════════════════════════════════════════
+# Guards can compare string fields using "==".
+# String comparisons must dereference the bound name with "*".
+
+type Priority
+  = Task label: String urgency: Int
+  | Deadline label: String days: Int
+
+fn classifyByPriority(p: Priority) -> String =
+  case p of
+    Task label urgency where label == "critical" && urgency > 8 -> "drop-everything"
+    Task label urgency where urgency > 8 -> "urgent"
+    Task label urgency where urgency > 4 -> "normal"
+    Task _ _ -> "low"
+    Deadline label days where days == 0 -> "due today"
+    Deadline label days where days < 0 -> "overdue"
+    Deadline label days where days <= 3 -> "soon"
+    Deadline _ _ -> "future"
+
+# ═══════════════════════════════════════════
+# PART 3: Guards on parameterized ADTs
+# ═══════════════════════════════════════════
+# Guards work identically on parameterized ADTs.
+# The type parameter is inferred from usage; guards inspect the bound value.
+
+type Labeled a
+  = Label tag: String value: a
+  | Empty
+
+fn processLabeled(x: Labeled Int) -> String =
+  case x of
+    Label tag value where tag == "vip" && value > 50 -> "VIP high-value: ${value}"
+    Label tag value where tag == "vip" -> "VIP: ${value}"
+    Label _ value where value > 50 -> "high-value: ${value}"
+    Label _ value where value > 0 -> "positive: ${value}"
+    Label _ _ -> "zero or negative"
+    Empty -> "empty"
+
+# ═══════════════════════════════════════════
+# PART 4: Mixed guarded and unguarded arms
+# ═══════════════════════════════════════════
+# Not every arm needs a guard.  Guards and plain arms can be freely mixed.
+# The first arm that matches (pattern AND guard) wins.
+
+fn scoreGrade(n: Int) -> String =
+  if n < 0 then
+    "invalid"
+  else if n > 100 then
+    "invalid"
+  else if n >= 90 then
+    "A"
+  else if n >= 80 then
+    "B"
+  else if n >= 70 then
+    "C"
+  else if n >= 60 then
+    "D"
+  else
+    "F"
+
+# rateLabeled uses a Labeled String with guards on both tag and value length.
+fn rateLabeled(x: Labeled String) -> String =
+  case x of
+    Label tag value where tag == "premium" && value == "gold" -> "premium gold"
+    Label tag value where tag == "premium" -> "premium: ${value}"
+    Label _ value where value == "" -> "empty value"
+    Label _ value -> "standard: ${value}"
+    Empty -> "nothing"
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Case expressions without guards are exhaustive-match only: every pattern
+# must be covered. Adding "where" makes an arm conditional — if the condition
+# is False, the arm is treated as if it were NOT present for this input.
+#
+# The compiler still requires overall exhaustiveness: there must be at least
+# one arm for each constructor that can match without a guard (or a set of
+# guarded arms that together cover all possible values — but the compiler
+# does not verify complete guard coverage, so an unguarded fallback arm is
+# always safest).
+#
+# Fallthrough order:
+#   Arms are tried top to bottom for the current constructor.
+#   The FIRST arm whose pattern matches AND whose guard is True is selected.
+#   If no arm matches (pattern mismatch or all guards False), the next
+#   constructor arm is tried in order.
+#
+# Guards reference bound names from the pattern. Always dereference with "*"
+# when using named values in arithmetic or comparison (e.g. "r > 10").
+#
+# "&&" in a guard is short-circuit boolean AND — evaluated left to right.
+# If the left condition is False, the right is not evaluated and the arm fails.
+#
+# Why guards instead of nested if?
+#   Guards keep all arms at the same indentation level, making it easy to
+#   scan all cases in sequence. A nested "if" inside a case arm forces you
+#   to reason about multiple levels of nesting.
+#   Guards also document the discriminating condition at the pattern level,
+#   not buried inside the body.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Case-where guards lower to Racket cond expressions with inline boolean tests.
+# The generated Racket code evaluates the constructor tag first, then evaluates
+# the guard expression. If the guard returns #f, the next cond clause is tried.
+#
+# In the compiler AST (ast.ml), each case arm is:
+#   { pattern : pattern; guard : expr option; body : expr }
+# A guard of "None" means unconditional; "Some expr" means conditional.
+#
+# The well-formedness rule: the compiler verifies that the set of case arms
+# is SYNTACTICALLY exhaustive (every constructor appears at least once),
+# but it does NOT verify that the guards cover all value ranges.
+# A case with only guarded arms for a constructor can produce a runtime error
+# if all guards fail — this is the programmer's responsibility.
+#
+# Guards and proofs:
+#   A guard can test any boolean condition, including proof-carrying predicates
+#   produced by "establish". For example, an arm could call an establish function
+#   inside the guard. This is uncommon but valid.
+#
+# Relation to Haskell's guards:
+#   Haskell function definitions use guards with "|" syntax:
+#     f x | x > 10 = "big"
+#          | x > 5  = "medium"
+#          | otherwise = "small"
+#   Tesl case-where guards are the analogous feature for case expressions.
+#   They serve the same purpose: refining a matched pattern with a predicate.
+#   Unlike Haskell, Tesl guards are attached to case arms rather than function
+#   clauses, keeping them co-located with the pattern they refine.
+
+test "areaCategory circles" {
+  expect areaCategory (Circle 60) == "huge circle"
+  expect areaCategory (Circle 25) == "large circle"
+  expect areaCategory (Circle 10) == "medium circle"
+  expect areaCategory (Circle 3) == "small circle"
+  expect areaCategory (Circle 0) == "small circle"
+}
+
+test "areaCategory rectangles" {
+  expect areaCategory (Rectangle 5 5) == "square"
+  expect areaCategory (Rectangle 40 40) == "square"
+  expect areaCategory (Rectangle 35 32) == "large rectangle"
+  expect areaCategory (Rectangle 10 20) == "small rectangle"
+}
+
+test "areaCategory triangles" {
+  expect areaCategory (Triangle 3 4) == "triangle"
+  expect areaCategory (Triangle 5 5) == "triangle"
+}
+
+test "describeShape" {
+  expect describeShape (Circle 0) == "degenerate circle (point)"
+  expect describeShape (Circle 200) == "enormous circle (r=200)"
+  expect describeShape (Circle 5) == "circle with radius 5"
+  expect describeShape (Rectangle 7 7) == "square with side 7"
+  expect describeShape (Rectangle 4 9) == "rectangle 4x9"
+  expect describeShape (Triangle 6 6) == "isosceles triangle"
+  expect describeShape (Triangle 3 4) == "triangle"
+}
+
+test "classifyByPriority tasks" {
+  expect classifyByPriority (Task "critical" 9) == "drop-everything"
+  expect classifyByPriority (Task "critical" 5) == "normal"
+  expect classifyByPriority (Task "blocker" 9) == "urgent"
+  expect classifyByPriority (Task "feature" 6) == "normal"
+  expect classifyByPriority (Task "chore" 2) == "low"
+}
+
+test "classifyByPriority deadlines" {
+  expect classifyByPriority (Deadline "report" 0) == "due today"
+  expect classifyByPriority (Deadline "invoice" -2) == "overdue"
+  expect classifyByPriority (Deadline "meeting" 2) == "soon"
+  expect classifyByPriority (Deadline "review" 10) == "future"
+}
+
+test "processLabeled integers" {
+  expect processLabeled (Label "vip" 99) == "VIP high-value: 99"
+  expect processLabeled (Label "vip" 10) == "VIP: 10"
+  expect processLabeled (Label "other" 75) == "high-value: 75"
+  expect processLabeled (Label "other" 3) == "positive: 3"
+  expect processLabeled (Label "other" 0) == "zero or negative"
+  expect processLabeled Empty == "empty"
+}
+
+test "rateLabeled strings" {
+  expect rateLabeled (Label "premium" "gold") == "premium gold"
+  expect rateLabeled (Label "premium" "silver") == "premium: silver"
+  expect rateLabeled (Label "basic" "") == "empty value"
+  expect rateLabeled (Label "basic" "hello") == "standard: hello"
+  expect rateLabeled Empty == "nothing"
+}
+
+test "scoreGrade" {
+  expect scoreGrade 95 == "A"
+  expect scoreGrade 85 == "B"
+  expect scoreGrade 75 == "C"
+  expect scoreGrade 65 == "D"
+  expect scoreGrade 55 == "F"
+  expect scoreGrade (-1) == "invalid"
+  expect scoreGrade 101 == "invalid"
+}

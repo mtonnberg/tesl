@@ -1,0 +1,154 @@
+#lang tesl
+module IntroProofs exposing [
+  ValidPort,
+  isValidPort,
+  Positive,
+  isPositive,
+  listenOnPort,
+  requiresPositive,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# A PROOF is a stamp that says "this value was validated and satisfies condition X".
+# Once you have a stamp, you can pass the value anywhere that requires condition X.
+#
+# The "check" keyword defines a validation function that either:
+#   - succeeds: returns the value with a proof stamp attached
+#   - fails:    returns an HTTP error (status code + message)
+#
+# Syntax for "check":
+#   check name(param: Type) -> param: Type::: ProofPredicate param =
+#     if CONDITION then ok param::: ProofPredicate param
+#     else fail STATUS "message"
+#
+# Syntax for requiring a proof:
+#   fn doSomething(x: Int::: ValidPort x) -> ...
+#   The "x::: ValidPort x" annotation means: x must already carry ValidPort.
+
+import Tesl.Prelude exposing [Int, String]
+
+# "check" defines a validation function.
+# The return type "port: Int::: ValidPort port" means:
+#   - we return the same "port" parameter
+#   - with the proof fact "ValidPort port" attached to it
+fact ValidPort (port: Int)
+
+check isValidPort(port: Int) -> port: Int ::: ValidPort port =
+  if 1 <= port && port <= 65535 then # valid port range
+    ok port ::: ValidPort port # success: attach the ValidPort establish stamp
+  else
+    fail 400 "port must be between 1 and 65535" # failure: HTTP 400 error
+
+# Another check function for positivity.
+fact Positive (n: Int)
+
+check isPositive(n: Int) -> n: Int ::: Positive n =
+  if n > 0 then
+    ok n ::: Positive n # attach Positive proof
+  else
+    fail 400 "must be positive"
+
+# This function REQUIRES a ValidPort proof on its input.
+# "port: Int::: ValidPort port" in the parameter means:
+#   - port must be an Int
+#   - AND it must already carry the ValidPort proof stamp
+# This makes it IMPOSSIBLE to call listenOnPort with an unvalidated integer.
+fn listenOnPort(port: Int ::: ValidPort port) -> String =
+  "listening on port ${port}" # safe to use port here — it's been proven valid
+
+fn requiresPositive(n: Int ::: Positive n) -> Int =
+  n * 2 # safe — n is proven positive before we get here
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Mental model: think of "ok port::: ValidPort port" as issuing a SECURITY BADGE.
+# - Before check: port is just a raw integer (could be -1, 99999, anything)
+# - After check succeeds: port now carries a badge that says "I'm a ValidPort"
+# - listenOnPort accepts only badged ports — no badge, no entry
+#
+# Why is this better than Optional<> chains or manual if-checks?
+# - You validate ONCE at the boundary. The proof travels with the value forever.
+# - No repeated null-checks or range-checks inside business logic.
+# - The COMPILER enforces that listenOnPort cannot be called without validation.
+#   Forgetting to validate is a compile error, not a runtime bug.
+#
+# The "check" keyword is different from "fn" in two ways:
+#   1. It can return a failure with an HTTP status code.
+#   2. Its return type includes a proof annotation — it introduces a new proof fact.
+#
+# Usage pattern:
+#   let validatedPort = check isValidPort rawPort -- may fail with HTTP 400
+#   listenOnPort(validatedPort)                 -- always safe: proof is attached
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Tesl is inspired by GDP: "Ghosts of Departed Proofs" (Foner, 2018).
+# The core idea: instead of checking preconditions repeatedly inside functions,
+# CHECK ONCE at a trusted boundary and carry the evidence (the "ghost") everywhere.
+#
+# In GDP terminology:
+# - "ValidPort" is a proof PREDICATE — a named proposition about a value.
+# - "ok port::: ValidPort port" is the INTRODUCTION RULE for ValidPort.
+#   It says: "I am establishing that port satisfies ValidPort."
+# - "fn listenOnPort(port: Int::: ValidPort port)" is the ELIMINATION RULE.
+#   It says: "I can only be called if you already have evidence for ValidPort."
+#
+# The "check" function lowers to Racket's "define-checker". Inside, it calls:
+#   - accept(value, proof) on success — this attaches the proof to the named value
+#   - reject(status, message) on failure — this raises an HTTP error
+#
+# The "::: ValidPort port" in the return spec tells the compiler:
+#   "after this check succeeds, the returned named value carries ValidPort"
+# The compiler tracks this in its static proof environment, so at call sites
+# it can verify that proof requirements are satisfied before the call is allowed.
+#
+# See 05-intro-to-proofs.md for a longer conceptual explanation with analogies.
+
+test "isValidPort accepts valid ports" {
+  let port1 = 1
+  let x1 = check isValidPort port1
+  let port2 = 80
+  let x2 = check isValidPort port2
+  let port3 = 65535
+  let x3 = check isValidPort port3
+  let port4 = 8080
+  let x4 = check isValidPort port4
+  expect 1 == 1
+}
+
+test "isValidPort result carries ValidPort proof" {
+  let port1 = 80
+  let p1 = check isValidPort port1
+  let port2 = 8080
+  let p2 = check isValidPort port2
+  expect listenOnPort p1 == "listening on port 80"
+  expect listenOnPort p2 == "listening on port 8080"
+}
+
+test "isValidPort rejects invalid ports" {
+  let port0 = 0
+  let port65536 = 65536
+  let portNeg1 = -1
+  expectFail check isValidPort port0
+  expectFail check isValidPort port65536
+  expectFail check isValidPort portNeg1
+}
+
+test "isPositive accepts positives" {
+  let n1 = 1
+  let x1 = check isPositive n1
+  let n2 = 100
+  let x2 = check isPositive n2
+  expect 1 == 1
+}
+
+test "isPositive rejects non-positives" {
+  let zero = 0
+  let negFive = -5
+  expectFail check isPositive zero
+  expectFail check isPositive negFive
+}

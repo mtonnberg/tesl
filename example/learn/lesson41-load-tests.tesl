@@ -1,0 +1,141 @@
+#lang tesl
+module Lesson41LoadTests exposing [Lesson41Server]
+
+import Tesl.Prelude exposing [Int, String, List]
+import Tesl.Json exposing [stringCodec]
+import Tesl.DB exposing [dbRead, dbWrite]
+
+# ── Goal ─────────────────────────────────────────────────────────────────────
+# Learn the `load-test` block — Tesl's built-in load/performance testing.
+# Load tests reuse the same seed and request syntax as `api-test`, but
+# instead of asserting on response content they assert on latency percentiles,
+# throughput, and error rates.
+#
+# load-test blocks use an open workload model: requests arrive at a fixed rate
+# regardless of how long previous requests take. This prevents coordinated
+# omission — the tester never slows down just because the server is slow.
+
+# ── A simple server to load-test ────────────────────────────────────────────
+
+record Greeting {
+  name: String
+  message: String
+}
+
+codec Greeting {
+  toJson {
+    name -> "name" with_codec stringCodec
+    message -> "message" with_codec stringCodec
+  }
+  fromJson [
+    {
+      name <- "name" with_codec stringCodec
+      message <- "message" with_codec stringCodec
+    }
+  ]
+}
+
+entity Book table "books" primaryKey id {
+  id: String
+  title: String
+  pages: Int
+}
+
+database Lesson41Database {
+  backend postgres
+  schema "lesson41"
+  entities [Book]
+  postgres {
+    database "lesson41"
+    user "lesson41"
+    password "lesson41"
+    host "localhost"
+    port 5432
+    socket ""
+  }
+}
+
+handler greet(g: Greeting) -> Greeting =
+  Greeting { name: g.name, message: "Hello, ${g.name}!" }
+
+handler listBooks() -> List Book
+  requires [dbRead] =
+  select b from Book
+
+api Lesson41Api {
+  post "/greet"
+    body g: Greeting
+    -> Greeting
+
+  get "/books"
+    -> List Book
+}
+
+server Lesson41Server for Lesson41Api {
+  greet = greet
+  listBooks = listBooks
+}
+
+# ── Load test 1: basic throughput ────────────────────────────────────────────
+# The simplest form: a target rate, a duration, a single request, and
+# assertions on the result histogram.
+#
+# `rate 50rps` — send 50 requests per second (open model).
+# `duration 2s` — measure for 2 seconds after warm-up.
+# Assertions check percentile latencies and error rate.
+
+load-test "greet throughput" for Lesson41Server
+  rate 50rps
+  duration 2s {
+
+  post "/greet" body { "name": "bench", "message": "" }
+
+  assert p99 < 500ms
+  assert errorRate < 0.05
+}
+
+# ── Load test 2: with seed data ──────────────────────────────────────────────
+# Seed blocks work identically to api-test: insert entities into the
+# in-memory database before the load run starts. Every request sees the
+# same seeded state (it is not reset between requests).
+
+load-test "list books with seeded data" for Lesson41Server
+  rate 30rps
+  duration 2s
+  requires [dbRead, dbWrite] {
+  seed {
+    insert Book { id: "book-1", title: "The Art of Tesl", pages: 320 }
+    insert Book { id: "book-2", title: "Proofs in Practice", pages: 210 }
+  }
+
+  get "/books"
+
+  assert p95 < 500ms
+  assert errorRate < 0.05
+}
+
+# ── UNDERSTANDING ────────────────────────────────────────────────────────────
+# Load tests compile to Racket code that runs inside `module+ test`, just
+# like api-test blocks. They execute during `tesl test` or `raco test`.
+#
+# Key concepts:
+#
+# • rate Nrps     — target arrival rate (requests per second).
+# • duration Ns   — how long to record measurements after warm-up.
+# • assert p50/p95/p99/p99.9 < Nms  — latency percentile assertions.
+# • assert errorRate < N             — fraction of failed requests.
+# • assert throughput > Nrps         — actual achieved throughput.
+# • baseline "label"  (optional)     — compare against a stored baseline.
+# • assert regressionVsBaseline p95 < 1.2  — reject if p95 regresses >20%.
+#
+# Warm-up runs automatically until p99 stabilises (coefficient of variation
+# < 5% for 3 consecutive 2-second windows), or 30 seconds, whichever is
+# first. Only the measurement phase counts toward assertions.
+#
+# Latency is measured from *scheduled* send time, not actual send time.
+# This means queue buildup appears in the numbers instead of being hidden
+# (coordinated-omission awareness).
+#
+# Because load tests run in-process, absolute latency numbers include
+# harness overhead. Use them for regression detection (same binary across
+# branches), not as production capacity estimates.

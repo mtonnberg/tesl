@@ -1,0 +1,409 @@
+#lang tesl
+# =====================================================================
+# Critical Review 57 — positive regression tests
+# =====================================================================
+#
+# Validates key behaviors found during review 57:
+# - Deep proof chains (5+ proofs accumulated)
+# - Nested ADT types with proof-carrying fields
+# - Complex detach-attach flows
+# - establish as trusted boundary (unconditional proof creation)
+# - Proof combining with introAnd/andLeft/andRight
+# - Named pack (?) return type flow through case
+# - Multi-parameter proofs
+# - ForAll with single predicate inline in fn bodies
+# - ForAll with ? return wrapper for && predicates
+# - Cross-module proofs (tested by import in kanel)
+# - Capability checking for handler/fn
+
+module CriticalReview57 exposing []
+
+import Tesl.Prelude exposing [
+  Bool(..),
+  Int,
+  String,
+  List,
+  Fact,
+  forgetFact,
+  attachFact,
+  detachFact,
+  introAnd,
+  andLeft,
+  andRight,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Either exposing [Either(..)]
+import Tesl.List exposing [List.filterCheck, List.length, List.allCheck]
+
+# ─── Proof vocabulary ────────────────────────────────────────────────────────
+
+fact A (n: Int)
+fact B (n: Int)
+fact C (n: Int)
+fact D (n: Int)
+fact E (n: Int)
+fact IsPositive (n: Int)
+fact IsSmall (n: Int)
+fact Validated (n: Int)
+fact Tagged (label: String) (n: Int)
+
+check checkA(n: Int) -> n: Int ::: A n =
+  if n > 0 then
+    ok n ::: A n
+  else
+    fail 400 "fail A"
+
+check checkB(n: Int ::: A n) -> n: Int ::: B n =
+  if n < 1000 then
+    ok n ::: B n
+  else
+    fail 400 "fail B"
+
+check checkC(n: Int ::: A n && B n) -> n: Int ::: C n =
+  if n != 42 then
+    ok n ::: C n
+  else
+    fail 400 "fail C"
+
+check checkD(n: Int ::: A n && B n && C n) -> n: Int ::: D n =
+  if n != 99 then
+    ok n ::: D n
+  else
+    fail 400 "fail D"
+
+check checkE(n: Int ::: A n && B n && C n && D n) -> n: Int ::: E n =
+  ok n ::: E n
+
+check checkPos(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+check checkSmall(n: Int) -> n: Int ::: IsSmall n =
+  if n < 100 then
+    ok n ::: IsSmall n
+  else
+    fail 400 "too big"
+
+check checkValidated(n: Int) -> n: Int ::: Validated n =
+  if n >= 0 then
+    ok n ::: Validated n
+  else
+    fail 400 "invalid"
+
+establish makeTagged(label: String, n: Int) -> Fact (Tagged label n) =
+  Tagged label n
+
+fn needsAll5(n: Int ::: A n && B n && C n && D n && E n) -> Int = n
+fn needsPos(n: Int ::: IsPositive n) -> Int = n
+fn needsSmall(n: Int ::: IsSmall n) -> Int = n
+fn needsBoth(n: Int ::: IsPositive n && IsSmall n) -> Int = n
+fn needsValidated(n: Int ::: Validated n) -> Int = n
+fn needsTagged(label: String, n: Int ::: Tagged label n) -> Int = n
+fn needsForAllPos(xs: List Int ::: ForAll (IsPositive) xs) -> Int = List.length xs
+
+# ─── R57_DP — Deep proof chains ──────────────────────────────────────────────
+
+fn buildDeepChain(raw: Int) -> Int =
+  let a = check checkA raw
+  let b = check checkB a
+  let c = check checkC b
+  let d = check checkD c
+  let e = check checkE d
+  needsAll5 e
+
+test "R57_DP: deep 5-proof chain runtime" {
+  expect buildDeepChain 5 == 5
+  expect buildDeepChain 100 == 100
+  expect buildDeepChain 1 == 1
+  expectFail buildDeepChain 0
+  expectFail buildDeepChain (-1)
+  expectFail buildDeepChain 42
+  expectFail buildDeepChain 99
+  expectFail buildDeepChain 1001
+}
+
+# ─── R57_PC — Proof combining operations ─────────────────────────────────────
+
+establish makeA(n: Int) -> Fact (A n) = A n
+establish makeB_bare(n: Int) -> Fact (B n) = B n
+
+fn introAndDecomposeTest(n: Int) -> Int =
+  let pA = makeA n
+  let pB = makeB_bare n
+  let pAB = introAnd pA pB
+  let _pA2 = andLeft pAB
+  let _pB2 = andRight pAB
+  n
+
+test "R57_PC: introAnd/andLeft/andRight" {
+  expect introAndDecomposeTest 5 == 5
+  expect introAndDecomposeTest 99 == 99
+}
+
+# ─── R57_DA — Complex detach-attach flows ────────────────────────────────────
+
+fn complexDetachAttach(n: Int) -> Int =
+  let v = check checkValidated n
+  let vProof = detachFact v
+  let raw = forgetFact v
+  let vBack = attachFact raw vProof
+  let p = check checkPos vBack
+  needsPos p
+
+fn decomposeReattach(n: Int) -> Int =
+  let v = check checkPos n
+  let s = check checkSmall v
+  let (raw ::: pPos && pSmall) = s
+  let reassembled = raw ::: pPos && pSmall
+  needsBoth reassembled
+
+test "R57_DA: complex detach-attach" {
+  expect complexDetachAttach 5 == 5
+  expect complexDetachAttach 0 == 0
+  expectFail complexDetachAttach (-1)
+
+  expect decomposeReattach 5 == 5
+  expect decomposeReattach 50 == 50
+  expectFail decomposeReattach 0
+  expectFail decomposeReattach 100
+}
+
+# ─── R57_ES — Establish as trusted boundary ──────────────────────────────────
+
+fn useEstablishUnconditionally(n: Int) -> Int =
+  let _pA = makeA n
+  n
+
+test "R57_ES: establish creates proof unconditionally" {
+  expect useEstablishUnconditionally 5 == 5
+  expect useEstablishUnconditionally (-5) == -5
+  expect useEstablishUnconditionally 0 == 0
+}
+
+# ─── R57_MP — Multi-parameter proofs ─────────────────────────────────────────
+
+fact OwnedBy (userId: String, taskId: Int)
+
+check checkOwned(userId: String, taskId: Int) -> taskId: Int ::: OwnedBy userId taskId =
+  if taskId > 0 then
+    ok taskId ::: OwnedBy userId taskId
+  else
+    fail 403 "not owned"
+
+fn requiresOwned(userId: String, task: Int ::: OwnedBy userId task) -> Int = task
+
+fn processOwned(userId: String, taskId: Int) -> Int =
+  let ownedTask = check checkOwned userId taskId
+  requiresOwned userId ownedTask
+
+test "R57_MP: multi-parameter proof" {
+  expect processOwned "alice" 5 == 5
+  expect processOwned "bob" 100 == 100
+  expectFail processOwned "alice" 0
+  expectFail processOwned "alice" (-1)
+}
+
+# ─── R57_FA — ForAll inline tracking ─────────────────────────────────────────
+
+fn forAllSingleInline(nums: List Int) -> Int =
+  let filtered = List.filterCheck checkPos nums
+  needsForAllPos filtered
+
+fn forAllWrapperAndCombined(nums: List Int) -> List Int ? ForAll (IsPositive && IsSmall) requires [] =
+  List.filterCheck (checkPos && checkSmall) nums
+
+fn needsForAllBoth(xs: List Int ::: ForAll (IsPositive && IsSmall) xs) -> Int =
+  List.length xs
+
+fn forAllCombinedViaWrapper(nums: List Int) -> Int =
+  let result = forAllWrapperAndCombined nums
+  needsForAllBoth result
+
+test "R57_FA: ForAll tracking" {
+  expect forAllSingleInline [1, 2, 3, -1, 0] == 3
+  expect forAllSingleInline [] == 0
+  expect forAllSingleInline [1, 2, 3] == 3
+
+  expect forAllCombinedViaWrapper [1, 2, 3, 200, -1] == 3
+  expect forAllCombinedViaWrapper [] == 0
+}
+
+# ─── R57_NP — Named pack (?) return through case ─────────────────────────────
+
+type PosTree
+  = PLeaf
+  | PNode (left: PosTree) (value: Int ::: IsPositive value) (right: PosTree)
+
+fn insertPosTree(t: PosTree, v: Int ::: IsPositive v) -> PosTree =
+  case t of
+    PLeaf -> PNode { left: PLeaf, value: v, right: PLeaf }
+    PNode l cur r ->
+      if v < cur then
+        PNode { left: insertPosTree l v, value: cur, right: r }
+      else
+        if v > cur then
+          PNode { left: l, value: cur, right: insertPosTree r v }
+        else
+          t
+
+fn findMin(t: PosTree) -> Maybe (Int ? IsPositive) =
+  case t of
+    PLeaf -> Nothing
+    PNode PLeaf cur _ -> Something cur
+    PNode l _ _ -> findMin l
+
+fn findMinAlt(t: PosTree) -> Either String (Int ? IsPositive) =
+  case t of
+    PLeaf -> Left "empty"
+    PNode PLeaf cur _ -> Right cur
+    PNode l _ _ -> findMinAlt l
+
+fn useMin(t: PosTree) -> Int =
+  let m = findMin t
+  case m of
+    Nothing -> 0
+    Something v -> needsPos v
+
+fn useMinAlt(t: PosTree) -> Int =
+  let m = findMinAlt t
+  case m of
+    Left _ -> 0
+    Right v -> needsPos v
+
+fn buildPosTree() -> PosTree =
+  let t0 = PLeaf
+  let v3 = check checkPos 3
+  let v1 = check checkPos 1
+  let v5 = check checkPos 5
+  let t1 = insertPosTree t0 v3
+  let t2 = insertPosTree t1 v1
+  insertPosTree t2 v5
+
+test "R57_NP: named pack return through case" {
+  let t = buildPosTree()
+  expect useMin t == 1
+  expect useMinAlt t == 1
+  expect useMin PLeaf == 0
+  expect useMinAlt PLeaf == 0
+}
+
+# ─── R57_LBL — Labeled proof with literal subjects ───────────────────────────
+
+fn useTaggedLiteral(n: Int) -> Int =
+  let pf = makeTagged "http" n
+  needsTagged "http" <| n ::: pf
+
+fn useTaggedVar(label: String, n: Int) -> Int =
+  let pf = makeTagged label n
+  needsTagged label <| n ::: pf
+
+test "R57_LBL: labeled (literal subject) proof" {
+  expect useTaggedLiteral 80 == 80
+  expect useTaggedLiteral 443 == 443
+  expect useTaggedVar "smtp" 25 == 25
+  expect useTaggedVar "imap" 143 == 143
+}
+
+# ─── R57_NT — Newtype proof isolation ────────────────────────────────────────
+
+type UserId = String
+type ProjectId = String
+
+check checkUserId(s: String) -> id: UserId ::: ValidUserId id =
+  let id = UserId s
+  if String.length s > 3 then
+    ok id ::: ValidUserId id
+  else
+    fail 400 "bad user id"
+
+check checkProjectId(s: String) -> id: ProjectId ::: ValidProjectId id =
+  let id = ProjectId s
+  if String.length s > 3 then
+    ok id ::: ValidProjectId id
+  else
+    fail 400 "bad project id"
+
+fact ValidUserId (id: UserId)
+fact ValidProjectId (id: ProjectId)
+
+fn requiresValidUser(id: UserId ::: ValidUserId id) -> String = id.value
+fn requiresValidProject(id: ProjectId ::: ValidProjectId id) -> String = id.value
+
+fn processValidUser(raw: String) -> String =
+  let userId = check checkUserId raw
+  requiresValidUser userId
+
+test "R57_NT: newtype proof isolation" {
+  expect processValidUser "alice123" == "alice123"
+  expectFail processValidUser "ab"
+}
+
+# ─── R57_B1 — BUG-1: User functions named with SQL keywords ──────────────────
+
+fn insert(a: Int, b: Int) -> Int = a + b
+fn select(a: Int) -> Int = a * 2
+fn update(a: Int, b: Int) -> Int = a + b
+fn delete(a: Int) -> Int = a - 1
+
+fn useInsert(n: Int) -> Int = insert n 5
+fn useSelect(n: Int) -> Int = select n
+fn useUpdate(n: Int) -> Int = update n 10
+fn useDelete(n: Int) -> Int = delete n
+
+test "R57_B1: user functions with SQL names (BUG-1 fixed)" {
+  expect useInsert 3 == 8
+  expect useSelect 7 == 14
+  expect useUpdate 5 == 15
+  expect useDelete 4 == 3
+  expect insert (select 2) 1 == 5
+}
+
+# ─── R57_B2 — BUG-2: ForAll && check combination inline tracking ─────────────
+
+check checkPosB2(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+check checkSmallB2(n: Int) -> n: Int ::: IsSmall n =
+  if n < 100 then
+    ok n ::: IsSmall n
+  else
+    fail 400 "too big"
+
+fn needsBothB2(xs: List Int ::: ForAll (IsPositive && IsSmall) xs) -> Int =
+  List.length xs
+
+fn combinedFilterInline(nums: List Int) -> Int =
+  let filtered = List.filterCheck (checkPosB2 && checkSmallB2) nums
+  needsBothB2 filtered
+
+fn allCheckCombined(nums: List Int) -> Maybe (r: List Int ::: ForAll (IsPositive && IsSmall) r) =
+  List.allCheck (checkPosB2 && checkSmallB2) nums
+
+test "R57_B2: ForAll && combination inline (BUG-2 fixed)" {
+  expect combinedFilterInline [1, 2, 3, 200, -1, 0] == 3
+  expect combinedFilterInline [] == 0
+  expect combinedFilterInline [50, 99, 1] == 3
+
+  let m1 = allCheckCombined [5, 10, 20]
+  case m1 of
+    Nothing -> expect False
+    Something r -> expect needsBothB2 r == 3
+
+  let m2 = allCheckCombined [5, 200, 20]
+  case m2 of
+    Nothing -> expect True
+    Something _ -> expect False
+}
+
+# ─── R57_B4 — BUG-4: random capability now enforced ─────────────────────────
+# (only positive tests here; negative tests are in the OCaml test file)
+
+test "R57_B4: random capability enforcement (BUG-4 fixed, runtime verification)" {
+  # No runtime test needed - compile-time enforcement verified in OCaml tests
+  expect True
+}

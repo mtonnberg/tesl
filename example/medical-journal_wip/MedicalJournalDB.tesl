@@ -1,0 +1,160 @@
+#lang tesl
+# ─── Medical Journal — Database access layer ──────────────────────────────
+#
+# All database-touching code lives here.  Every write function requires GDP
+# proofs that justify the access — removing a validation check in a handler
+# will cause a compile error when it tries to call into this layer.
+#
+# Read functions require Authenticated session (via handler signatures).
+# Write functions require domain-specific proofs for data integrity.
+
+module MedicalJournalDB exposing [
+  dbInsertPatient, dbGetPatient, dbListPatients, dbUpdatePatientStatus,
+  dbInsertJournalEntry, dbListJournalEntries,
+  dbInsertPrescription, dbListPrescriptions,
+  dbInsertEvent, dbGetTimeline
+]
+
+import Tesl.Prelude exposing [Int, String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Time exposing [time, nowMillis]
+import MedicalJournalModels exposing [
+  mjDbRead, mjDbWrite,
+  Patient, JournalEntry, Prescription, DomainEvent,
+  EntryType, Severity, PrescriptionStatus(..), PatientStatus(..)
+]
+import MedicalJournalAuth exposing [IsPhysician]
+import MedicalJournalValidation exposing [
+  ValidPatientName, ValidDateOfBirth,
+  PatientExists, PatientIsActive,
+  ValidJournalTitle, ValidJournalContent,
+  ValidMedication, ValidDosage, ValidFrequency, ValidDuration
+]
+
+# ── Patient operations ───────────────────────────────────────────────────────
+
+fn dbInsertPatient(
+    patientId: String,
+    mrn: String,
+    firstName: String ::: ValidPatientName firstName,
+    lastName: String ::: ValidPatientName lastName,
+    dateOfBirth: String ::: ValidDateOfBirth dateOfBirth,
+    bloodType: String,
+    allergies: String,
+    providerId: String)
+  -> Patient
+  requires [mjDbWrite, time] =
+  insert Patient {
+    id: patientId,
+    medicalRecordNumber: mrn,
+    firstName: firstName,
+    lastName: lastName,
+    dateOfBirth: dateOfBirth,
+    bloodType: bloodType,
+    allergies: allergies,
+    status: ActivePatient,
+    primaryProviderId: providerId,
+    createdAt: nowMillis(),
+    updatedAt: nowMillis()
+  }
+
+fn dbGetPatient(patientId: String) -> Maybe Patient
+  requires [mjDbRead] =
+  selectOne p from Patient where p.id == patientId
+
+fn dbListPatients() -> List Patient
+  requires [mjDbRead] =
+  select p from Patient
+
+fn dbUpdatePatientStatus(
+    patientId: String ::: PatientExists patientId,
+    newStatus: PatientStatus)
+  -> Patient
+  requires [mjDbWrite, time] =
+  update p in Patient
+    where p.id == patientId
+    set p.status = newStatus
+    set p.updatedAt = nowMillis()
+    returning one
+
+# ── Journal entry operations ─────────────────────────────────────────────────
+
+fn dbInsertJournalEntry(
+    entryId: String,
+    patientId: String ::: PatientIsActive patientId,
+    entryType: EntryType,
+    title: String ::: ValidJournalTitle title,
+    content: String ::: ValidJournalContent content,
+    severity: Severity,
+    authorId: String)
+  -> JournalEntry
+  requires [mjDbWrite, time] =
+  insert JournalEntry {
+    id: entryId,
+    patientId: patientId,
+    entryType: entryType,
+    title: title,
+    content: content,
+    severity: severity,
+    authorId: authorId,
+    createdAt: nowMillis()
+  }
+
+fn dbListJournalEntries(patientId: String) -> List JournalEntry
+  requires [mjDbRead] =
+  select e from JournalEntry where e.patientId == patientId
+
+# ── Prescription operations ──────────────────────────────────────────────────
+
+fn dbInsertPrescription(
+    rxId: String,
+    patientId: String ::: PatientIsActive patientId,
+    journalEntryId: String,
+    medication: String ::: ValidMedication medication,
+    dosage: String ::: ValidDosage dosage,
+    frequency: String ::: ValidFrequency frequency,
+    durationDays: Int ::: ValidDuration durationDays,
+    prescribedBy: String ::: IsPhysician prescribedBy)
+  -> Prescription
+  requires [mjDbWrite, time] =
+  insert Prescription {
+    id: rxId,
+    patientId: patientId,
+    journalEntryId: journalEntryId,
+    medication: medication,
+    dosage: dosage,
+    frequency: frequency,
+    durationDays: durationDays,
+    status: Active,
+    prescribedBy: prescribedBy,
+    createdAt: nowMillis()
+  }
+
+fn dbListPrescriptions(patientId: String) -> List Prescription
+  requires [mjDbRead] =
+  select rx from Prescription where rx.patientId == patientId
+
+# ── Event store ──────────────────────────────────────────────────────────────
+
+fn dbInsertEvent(
+    eventId: String,
+    aggregateType: String,
+    aggregateId: String,
+    eventType: String,
+    summary: String,
+    actorId: String)
+  -> DomainEvent
+  requires [mjDbWrite, time] =
+  insert DomainEvent {
+    id: eventId,
+    aggregateType: aggregateType,
+    aggregateId: aggregateId,
+    eventType: eventType,
+    summary: summary,
+    actorId: actorId,
+    createdAt: nowMillis()
+  }
+
+fn dbGetTimeline(patientId: String) -> List DomainEvent
+  requires [mjDbRead] =
+  select e from DomainEvent where e.aggregateId == patientId

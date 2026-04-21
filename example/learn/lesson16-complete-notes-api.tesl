@@ -1,0 +1,217 @@
+#lang tesl
+module NotesApi exposing [NotesServer]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# This is a complete, minimal notes CRUD API combining all concepts from the tutorial:
+#   - Newtypes (NoteId)
+#   - Fact-annotated records with "via" (NewNote, SafeContent)
+#   - Auth producing a proof (userAuth)
+#   - Handlers requiring both auth proof and validated body
+#   - API declaration and server binding
+#   - A full GDP trust chain from HTTP edge to handler body
+#
+# This is the pattern to copy when building real Tesl APIs.
+# Key pattern: proof-annotated records + codecs for HTTP validation.
+
+import Tesl.Prelude exposing [String]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.String exposing [String.length]
+import Tesl.Time exposing [nowMillis, time, PosixMillis, Time.secondsToPosix]
+import Tesl.Json exposing [stringCodec, posixMillisCodec]
+
+# ─── Capabilities ─────────────────────────────────────────────────────────────
+
+capability noteDbRead implies dbRead # read notes from storage
+capability noteDbWrite implies dbWrite # write notes to storage
+capability noteAuth # read auth cookies
+
+# ─── Newtypes ─────────────────────────────────────────────────────────────────
+
+# NoteId: a nominal newtype wrapping String.
+# Prevents accidentally passing a plain String where a NoteId is required.
+type NoteId = String
+
+# ─── Validation ───────────────────────────────────────────────────────────────
+
+fact SafeContent (s: String)
+
+# SafeContent: note content must be 1–2000 characters.
+check checkSafeContent(s: String) -> s: String ::: SafeContent s =
+  if String.length s >= 1 && String.length s <= 2000 then
+    ok s ::: SafeContent s
+  else
+    fail 400 "note content must be 1-2000 characters"
+
+fact SafeTitle (s: String)
+
+# SafeTitle: title must be 1–200 characters.
+check checkSafeTitle(s: String) -> s: String ::: SafeTitle s =
+  if String.length s >= 1 && String.length s <= 200 then
+    ok s ::: SafeTitle s
+  else
+    fail 400 "title must be 1-200 characters"
+
+# ─── Data types ───────────────────────────────────────────────────────────────
+
+# NewNote: the HTTP request body for creating a note.
+# Fields are proof-annotated; the codec's fromJson "via" validates them at the HTTP boundary.
+record NewNote {
+  title: String ::: SafeTitle title
+  content: String ::: SafeContent content
+}
+
+codec NewNote {
+  toJson_forbidden
+  fromJson [
+    {
+      title <- "title" with_codec stringCodec via checkSafeTitle
+      content <- "content" with_codec stringCodec via checkSafeContent
+    }
+  ]
+}
+
+# Note: the full note record returned from the API.
+record Note {
+  id: NoteId
+  title: String
+  content: String
+  authorId: String
+  createdAt: PosixMillis
+}
+
+codec Note {
+  toJson {
+    id -> "id" with_codec stringCodec
+    title -> "title" with_codec stringCodec
+    content -> "content" with_codec stringCodec
+    authorId -> "authorId" with_codec stringCodec
+    createdAt -> "createdAt" with_codec posixMillisCodec
+  }
+  fromJson_forbidden
+}
+
+# ─── Authentication ───────────────────────────────────────────────────────────
+
+fact Authenticated (userId: String)
+
+# userAuth: extract and verify user identity from the "user" cookie.
+# This is the start of the proof chain: raw HttpRequest → Authenticated user.
+auth userAuth(request: HttpRequest) -> String ? Authenticated
+  requires [noteAuth] =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "authentication required" # absent cookie → 401 Unauthorized
+    Something userId ->
+      if String.length userId > 0 then
+        ok userId ::: Authenticated userId # valid non-empty user ID → attach Authenticated
+      else
+        fail 401 "invalid user session" # empty string → not a real user ID
+
+# ─── URL captures ─────────────────────────────────────────────────────────────
+
+# noteIdCapture: parse the ":noteId" URL segment as a plain String.
+capture noteIdCapture: noteId: String using stringCodec
+
+# ─── Handlers ─────────────────────────────────────────────────────────────────
+
+# createNote: authenticated user submits a NewNote body → returns a Note.
+# The proof chain:
+#   HTTP request → userAuth stamps user as Authenticated
+#               → NewNote decoder runs checkSafeTitle and checkSafeContent
+#               → handler receives user (Authenticated) + body (validated NewNote)
+handler createNote(user: String ::: Authenticated user, body: NewNote) -> Note
+  requires [noteDbWrite, time] =
+  # Inside here: user is authenticated, body.title has SafeTitle, body.content has SafeContent.
+  # All proven before we even start executing.
+  let noteId = NoteId "note-1" # in real app: generate unique ID
+  Note { id: noteId, title: body.title, content: body.content, authorId: user, createdAt: nowMillis() }
+
+# getNote: authenticated user + note ID → returns Maybe Note.
+handler getNote(user: String ::: Authenticated user, noteId: String) -> Maybe Note
+  requires [noteDbRead] =
+  # noteId is the parsed URL capture, plain String (no extra establish from capture here).
+  # user is authenticated.
+  Something (Note { id: NoteId "note-1", title: "example note", content: "hello world", authorId: user, createdAt: Time.secondsToPosix 0 })
+  # In real app: query DB by noteId, check authorId == user for access control, return result.
+
+# ─── API declaration ───────────────────────────────────────────────────────────
+
+api NotesApi {
+  post "/notes"
+    auth user: String ::: Authenticated user via userAuth
+    body body: NewNote
+    -> Note
+
+  get "/notes/:noteId"
+    auth user: String ::: Authenticated user via userAuth
+    capture noteId: String via noteIdCapture
+    -> Maybe Note
+}
+
+# ─── Server ────────────────────────────────────────────────────────────────────
+
+server NotesServer for NotesApi {
+  createNote = createNote
+  getNote = getNote
+}
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# This file is a complete working example of the full Tesl API pattern.
+# Let's trace the proof chain for a POST /notes request:
+#
+# 1. HTTP request arrives at the router.
+# 2. Router sees "POST /notes" matches the "post '/notes'" endpoint.
+# 3. The "auth user: ... via userAuth" line triggers: call userAuth(request).
+#    - If the "user" cookie is absent → 401 returned to client.
+#    - If the "user" cookie is present → user is a String::: Authenticated user.
+# 4. The "body body: NewNote" line triggers: decode JSON body using the NewNote codec.
+#    - "title" field → codec "via checkSafeTitle" → if fails → 400 returned to client.
+#    - "content" field → codec "via checkSafeContent" → if fails → 400 returned to client.
+#    - If both pass → body is a NewNote with proof-stamped fields.
+# 5. Call createNote(user, body) with the validated arguments.
+# 6. Inside createNote: user is Authenticated, body.title has SafeTitle, body.content has SafeContent.
+#    All of these are compile-time requirements satisfied by the proof chain above.
+# 7. createNote returns a Note record; serialized to JSON and sent back.
+#
+# Every step is either:
+#   - Guaranteed by a proof (compile-time enforced)
+#   - Validated at the boundary (runtime check, HTTP error on failure)
+# Nothing inside the handler body needs defensive validation.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# This file demonstrates the GDP trust boundary pattern at its clearest:
+#
+# OUTSIDE the boundary:
+#   - Raw HTTP requests with arbitrary data
+#   - Unknown user identity (could be anyone)
+#   - Unvalidated strings (could be any length, any content)
+#
+# AT the boundary:
+#   - auth functions: establish identity, produce Authenticated proofs
+#   - codec fromJson "via" checkers: validate HTTP body fields, produce domain proofs
+#   - captures: parse URL segments, optionally validate with check functions
+#
+# INSIDE the boundary (handler body):
+#   - User identity is proven: any code requiring Authenticated can proceed
+#   - Data is validated: any code requiring SafeTitle/SafeContent can proceed
+#   - No repeated validation: proofs travel with values through the entire handler
+#
+# The compiler's job is to ensure the connection:
+#   "Every parameter annotation in the handler signature corresponds to
+#    a proof that is actually established at the boundary."
+# If an annotation doesn't have a corresponding auth/capture/body validator,
+# the compiler rejects the server declaration as incomplete.
+#
+# This is GDP's core proposition applied to web APIs:
+# "Check early, carry proof" — but scaled to the HTTP trust boundary.
+# The boundary is the request processing layer.
+# The proofs are the auth tokens, validation stamps, and parse guarantees.
+# Once inside a handler, you are operating in a fully proven context.

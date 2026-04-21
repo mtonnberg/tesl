@@ -1,0 +1,145 @@
+#lang tesl
+module ProofKinds exposing [
+  InRange,
+  checkInRange,
+  Trusted,
+  makeProofTrusted,
+  IsAdmin,
+  adminAuth,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# There are three "proof-producing" function kinds:
+#
+#   check — validates at runtime, returns HTTP error on failure
+#           Use for: validating user input, HTTP request bodies, query params
+#
+#   establish — unconditional trust boundary, YOU ensure the value is valid
+#           Use for:
+#             - values known valid by construction (e.g., from DB, config)
+#             - or to handle more complex/intricate fact-logic
+#             - or when the failure of producing a Fact is not
+#               a failure of the input but rather a fundamental part of the domain
+#
+#   auth  — like check, but works on HttpRequest (reads cookies/headers)
+#           Use for: authentication and session extraction at HTTP boundary
+#
+# All three attach proof stamps to values.
+# Only these three kinds are allowed to attach new proof facts.
+# A plain "fn" can use existing proofs but cannot create new ones.
+
+import Tesl.Prelude exposing [Int, Fact, String]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+
+# ─── CHECK: validates at runtime, fails gracefully with HTTP status ───────────
+#
+# Use "check" when the validity depends on runtime data (user input, DB values).
+# On failure, it returns an HTTP error — the request handler catches this.
+
+fact InRange (n: Int)
+
+check checkInRange(n: Int) -> n: Int ::: InRange n =
+  if n >= 0 && n <= 100 then
+    ok n ::: InRange n # success: n is in [0, 100], attach proof
+  else
+    fail 422 "must be between 0 and 100" # HTTP 422 Unprocessable Entity
+
+# ─── ESTABLISH: unconditional trust boundary ─────────────────────────────────
+#
+# Use "establish" for values you KNOW are valid because of how they were constructed.
+# No runtime condition — you are asserting trust unconditionally.
+# This is appropriate for: values from trusted config, values proven by construction.
+# Can also be used to infer a proof from another, for instance:
+#   - To make it possible to go from "x: Int ::: IsMoreThanTwenty x" to "x: Int ::: IsPositive x"
+# Can also be used when failure to produce a proof is not a user input error but
+# a fundamental domain concern — return Maybe (Fact P) in that case:
+#   - Maybe you can handle both negative and positive numbers but the rest of the code differs
+#
+# The syntax returns "Fact (PredicateName args)" or "Maybe (Fact (PredicateName args))".
+# The body returns the proof constructor directly — NO "ok" expression.
+# "establish" functions cannot use "fail" — they are total.
+
+fact Trusted (n: Int)
+
+establish makeProofTrusted (n: Int) -> Fact (Trusted n) =
+  Trusted n # return proof constructor directly (no ok/fail)
+
+# Conditional establish example — returns Maybe (Fact P) for fallible proof acquisition:
+# establish validateSmall (n: Int) -> Maybe (Fact (Small n)) =
+#   if n < 100 then Something (Small n) else Nothing
+
+# ─── AUTH: authentication from HttpRequest ────────────────────────────────────
+#
+# Use "auth" to extract authentication information from the HTTP request.
+# It reads cookies, headers, or session tokens.
+# On authentication failure, return fail 401 (Unauthorized).
+# On success, return the authenticated subject with a proof attached.
+#
+# Note: auth calls Dict.lookup "user" request.cookies — this matches against Maybe String.
+# "Nothing" means the cookie was absent; "Something value" means it was present.
+
+fact IsAdmin (n: String)
+
+auth adminAuth(request: HttpRequest) -> String ? IsAdmin =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "admin only" # no user cookie → unauthenticated
+    Something userId -> # cookie present
+      if userId == "admin" then
+        ok userId ::: IsAdmin userId # it's the admin user → attach IsAdmin proof
+      else
+        fail 401 "admin only" # any other user → reject
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# The three kinds reflect different TRUST SOURCES:
+#
+#   check: "I don't trust this input yet. Let me inspect it and decide."
+#          Typical source: HTTP request body, URL params, query strings.
+#          Failure mode: return HTTP error to client.
+#
+#   establish: "I trust this input because I know where it came from."
+#          Typical source: hardcoded constants, DB primary keys, config values.
+#          There is NO runtime condition check — you are asserting directly.
+#          The body returns the proof constructor directly (e.g. `Trusted n`).
+#          WARNING: use establish sparingly. If the assertion is wrong, there is no
+#          compile-time protection. Prefer check when feasible.
+#
+#   auth: "I need to prove who is making this request."
+#          Typical source: cookies, JWT tokens, session IDs in HTTP headers.
+#          Failure mode: return HTTP 401 Unauthorized to client.
+#
+# The "ok userId::: IsAdmin user" in adminAuth:
+# - "userId" is the local binding from the "Something userId" case branch (the raw cookie value)
+# - "user" is the NAMED RETURN VALUE declared in "-> user: String::: IsAdmin user"
+# - The proof fact "IsAdmin user" is attached to the returned value using the return binding name.
+# The handler parameter receives this as "user: String::: IsAdmin user".
+#
+# In practice, auth functions usually return the authenticated user record
+# (e.g., an AdminUser struct) rather than just the raw string.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Lowering:
+#   check  → define-checker  (uses accept/reject, wraps body in error-handling)
+#   proof  → define-trusted  (unconditional proof introduction, no error-handling wrapper)
+#   auth   → define-auther   (like define-checker but operates on HttpRequest input)
+#
+# The "proof" kind lowers to define-trusted because it bypasses the validation
+# monad. The programmer is explicitly asserting: "I guarantee this fact is True."
+# The runtime does NOT re-verify the predicate. This is the "trust boundary":
+# the programmer's code IS the verification.
+#
+# This is why proof introduction is reserved for these three kinds.
+# A plain "fn" cannot produce a new proof because fn bodies are not
+# trust boundaries — they are just computations on already-validated data.
+# If fn could introduce proofs, the entire point of the system would be lost:
+# any function could assert any fact about any value, defeating the validation model.
+#
+# The "establish" body returns proof constructors directly (e.g., "Trusted n").
+# This is compiled to "(trusted-proof (Trusted n))" at the Racket level.
+# The establish body returns the proof constructor directly.

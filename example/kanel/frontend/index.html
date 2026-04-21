@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kanel — Issue Tracker</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f4f5f7;
+      color: #172b4d;
+      min-height: 100vh;
+    }
+
+    #app { min-height: 100vh; }
+
+    /* ── Auth pages ──────────────────────────────────────────────────────── */
+    .auth-page {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .auth-card {
+      background: white;
+      border-radius: 8px;
+      padding: 40px;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.1);
+    }
+    .auth-card h1 { font-size: 26px; font-weight: 700; margin-bottom: 6px; }
+    .auth-card p  { color: #5e6c84; font-size: 14px; margin-bottom: 28px; }
+
+    /* ── App shell ───────────────────────────────────────────────────────── */
+    .app-header {
+      background: #0052cc;
+      color: white;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 16px;
+      box-shadow: 0 2px 4px rgba(0,0,0,.2);
+    }
+    .app-header .logo { font-weight: 700; font-size: 18px; letter-spacing: -.3px; }
+    .app-header nav { display: flex; gap: 8px; flex: 1; }
+    .nav-btn {
+      background: transparent;
+      border: none;
+      color: rgba(255,255,255,.85);
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background .15s;
+    }
+    .nav-btn:hover, .nav-btn.active { background: rgba(255,255,255,.15); color: white; }
+    .user-info { font-size: 13px; opacity: .8; margin-left: auto; }
+
+    /* ── Error banner ────────────────────────────────────────────────────── */
+    .error-banner {
+      background: #ffebe6;
+      border-left: 4px solid #de350b;
+      color: #de350b;
+      padding: 10px 16px;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .error-banner button {
+      margin-left: auto;
+      background: transparent;
+      border: none;
+      color: #de350b;
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+      padding: 0;
+    }
+
+    /* ── Dashboard ───────────────────────────────────────────────────────── */
+    .dashboard { display: flex; height: calc(100vh - 48px); }
+
+    .sidebar {
+      width: 240px;
+      background: white;
+      border-right: 1px solid #dfe1e6;
+      overflow-y: auto;
+      padding: 16px 0;
+    }
+    .sidebar-section { padding: 8px 16px 4px; font-size: 11px; font-weight: 700;
+                       text-transform: uppercase; letter-spacing: .8px; color: #5e6c84; }
+    .sidebar-item {
+      padding: 8px 16px;
+      cursor: pointer;
+      font-size: 14px;
+      border-radius: 0;
+      transition: background .12s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .sidebar-item:hover   { background: #f4f5f7; }
+    .sidebar-item.active  { background: #deebff; color: #0052cc; font-weight: 600; }
+    .sidebar-item.project { padding-left: 24px; }
+
+    .main-content { flex: 1; overflow-y: auto; padding: 24px; }
+
+    /* ── Board ───────────────────────────────────────────────────────────── */
+    .board-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    .board-header h2 { font-size: 20px; font-weight: 700; }
+    .board-header .back-btn {
+      background: white;
+      border: 1px solid #dfe1e6;
+      color: #172b4d;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .board-columns {
+      display: flex;
+      gap: 12px;
+      overflow-x: auto;
+      padding-bottom: 16px;
+      align-items: flex-start;
+    }
+    .column {
+      background: #f4f5f7;
+      border-radius: 8px;
+      width: 220px;
+      min-width: 220px;
+      padding: 12px;
+    }
+    .column-header {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: #5e6c84;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .column-header .count {
+      background: #dfe1e6;
+      border-radius: 10px;
+      padding: 1px 7px;
+      font-size: 11px;
+    }
+    .column-issues { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
+
+    .issue-card {
+      background: white;
+      border-radius: 6px;
+      padding: 10px 12px;
+      cursor: pointer;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08);
+      transition: box-shadow .15s, transform .1s;
+      border: 1px solid #dfe1e6;
+    }
+    .issue-card:hover { box-shadow: 0 3px 8px rgba(0,0,0,.12); transform: translateY(-1px); }
+    .issue-title { font-size: 13px; font-weight: 500; line-height: 1.4; margin-bottom: 8px; }
+    .issue-meta  { display: flex; justify-content: space-between; align-items: center; }
+    .estimate    { font-size: 11px; color: #5e6c84;
+                   background: #f4f5f7; padding: 2px 6px; border-radius: 3px; }
+    .issue-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+    .move-btn {
+      font-size: 11px;
+      padding: 3px 8px;
+      background: #deebff;
+      color: #0052cc;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      transition: background .12s;
+    }
+    .move-btn:hover { background: #b3d4ff; }
+
+    /* ── New issue form ───────────────────────────────────────────────────── */
+    .new-issue-form {
+      background: white;
+      border: 1px solid #dfe1e6;
+      border-radius: 8px;
+      padding: 20px;
+      margin-top: 20px;
+      max-width: 480px;
+    }
+    .new-issue-form h3 { font-size: 15px; font-weight: 700; margin-bottom: 14px; }
+
+    /* ── Issue detail ────────────────────────────────────────────────────── */
+    .issue-page { padding: 24px; max-width: 760px; }
+    .issue-header { margin: 16px 0; }
+    .issue-header h1 { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
+    .status-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 3px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      background: #deebff;
+      color: #0052cc;
+    }
+    .issue-description { color: #5e6c84; font-size: 14px; line-height: 1.6; margin: 16px 0; }
+    .issue-stats {
+      display: flex;
+      gap: 20px;
+      font-size: 13px;
+      color: #5e6c84;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #dfe1e6;
+    }
+
+    .section-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; }
+
+    /* ── Forms ───────────────────────────────────────────────────────────── */
+    .form { display: flex; flex-direction: column; gap: 12px; }
+    .form-row { display: flex; gap: 8px; }
+
+    input[type="text"],
+    input[type="email"],
+    input[type="password"],
+    input[type="number"],
+    textarea {
+      width: 100%;
+      padding: 8px 12px;
+      border: 2px solid #dfe1e6;
+      border-radius: 4px;
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+      background: white;
+    }
+    input:focus, textarea:focus {
+      border-color: #4c9aff;
+      box-shadow: 0 0 0 2px rgba(76,154,255,.2);
+    }
+    textarea { resize: vertical; min-height: 80px; }
+
+    button.primary {
+      background: #0052cc;
+      color: white;
+      border: none;
+      padding: 8px 18px;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    button.primary:hover { background: #0747a6; }
+    button.secondary {
+      background: white;
+      color: #172b4d;
+      border: 2px solid #dfe1e6;
+      padding: 7px 18px;
+      border-radius: 4px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    button.secondary:hover { background: #f4f5f7; }
+
+    .hint { font-size: 13px; color: #5e6c84; }
+    .separator { border: none; border-top: 1px solid #dfe1e6; margin: 20px 0; }
+
+    /* ── Comment/time card ───────────────────────────────────────────────── */
+    .action-card {
+      background: white;
+      border: 1px solid #dfe1e6;
+      border-radius: 6px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .action-card h3 { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- Compiled Elm app -->
+  <script src="main.js"></script>
+
+  <script>
+    // ── Read session cookie ───────────────────────────────────────────────
+    function getCookie(name) {
+      var value = '; ' + document.cookie;
+      var parts = value.split('; ' + name + '=');
+      if (parts.length === 2) return parts.pop().split(';').shift();
+      return null;
+    }
+
+    var storedUserId      = getCookie('kanel_user_id')      || '';
+    var storedDisplayName = getCookie('kanel_display_name') || '';
+    var storedEmail       = getCookie('kanel_email')        || '';
+
+    // ── Init Elm ──────────────────────────────────────────────────────────
+    var app = Elm.Main.init({
+      node: document.getElementById('app'),
+      flags: {
+        userId:      storedUserId,
+        displayName: storedDisplayName,
+        email:       storedEmail
+      }
+    });
+
+    // ── Cookie helper (called by Elm after login) ─────────────────────────
+    // Elm sends: { userId, displayName, email }
+    if (app.ports && app.ports.setSession) {
+      app.ports.setSession.subscribe(function(session) {
+        document.cookie = 'kanel_user_id='      + session.userId      + '; path=/; SameSite=Lax';
+        document.cookie = 'kanel_display_name=' + session.displayName + '; path=/; SameSite=Lax';
+        document.cookie = 'kanel_email='        + session.email       + '; path=/; SameSite=Lax';
+      });
+    }
+
+    // ── Clear session on logout ───────────────────────────────────────────
+    if (app.ports && app.ports.clearSession) {
+      app.ports.clearSession.subscribe(function() {
+        document.cookie = 'kanel_user_id=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+        document.cookie = 'kanel_display_name=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+        document.cookie = 'kanel_email=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+      });
+    }
+  </script>
+</body>
+</html>

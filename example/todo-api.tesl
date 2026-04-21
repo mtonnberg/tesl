@@ -1,0 +1,288 @@
+#lang tesl
+module TodoApi exposing [
+  TodoDatabase,
+  TodoServer,
+  resolveExamplePort,
+  seedExampleData,
+]
+import Tesl.Prelude exposing [Bool(..), Int, List, Fact, String, Unit]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Time exposing [nowMillis, PosixMillis, time]
+import Tesl.Env exposing [env, envInt]
+import Tesl.String exposing [String.length, String.startsWith, String.contains]
+import Tesl.Int exposing [Int.parse]
+import Tesl.List exposing [List.isEmpty, List.filterCheck]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Telemetry exposing [telemetry, initTelemetry]
+import Tesl.Cli exposing [cli.args, lookupPortArgument]
+import Tesl.Id exposing [generatePrefixedId]
+import Tesl.Random exposing [random]
+capability todoDbRead implies dbRead
+capability todoDbWrite implies dbWrite
+capability todoReadHttpCookie
+capability todoWebService implies todoDbRead, todoDbWrite, todoReadHttpCookie, time, random
+
+type UserId = String
+
+record User {
+  id: UserId
+  role: String
+}
+
+type Status
+  = Open
+  | Done
+
+type Status2
+  = Opened Int
+  | Finished String
+
+fn dostuff(x: Status2) -> Int =
+  case x of
+    Opened s -> s
+    Finished _ -> 3
+
+entity Todo table "todos" primaryKey id {
+  id: String
+  title: String
+  ownerId: UserId @db(text)
+  status: Status
+  createdAt: PosixMillis
+}
+
+database TodoDatabase {
+  backend postgres
+  schema "todo_api"
+  entities [Todo]
+  postgres {
+    database env("TESL_POSTGRES_DATABASE")
+    user env("TESL_POSTGRES_USER")
+    password env("TESL_POSTGRES_PASSWORD")
+    host env("TESL_POSTGRES_HOST")
+    port envInt("TESL_POSTGRES_PORT", 5432)
+    socket env("TESL_POSTGRES_SOCKET")
+  }
+}
+
+defaultExamplePort = 8086
+
+fn generateTodoId() -> String
+  requires [random] =
+  generatePrefixedId "todo"
+
+fact ValidPort (port: Int)
+
+check isValidPort(port: Int) -> port: Int ::: ValidPort port =
+  if 1 <= port && port <= 65535 then
+    ok port ::: ValidPort port
+  else
+    fail 400 "Port must be between 1 and 65535"
+
+establish validPort (port: Int) -> Maybe (Fact (ValidPort port)) =
+  if 1 <= port && port <= 65535 then
+    Something (ValidPort port)
+  else
+    Nothing
+
+fn parsePortString(rawPort: String, source: String) -> Int ? ValidPort =
+  case Int.parse rawPort of
+    Something parsedPort -> isValidPort parsedPort
+    Nothing -> fail 400 "invalid ${source} port value ${rawPort}; expected an integer between 1 and 65535"
+
+fn resolveExamplePort(args: List String, teslPort: Maybe String, portEnv: Maybe String) -> Int =
+  case lookupPortArgument args of
+    Something cliPort -> parsePortString cliPort "command-line"
+    Nothing ->
+      case teslPort of
+        Something port -> parsePortString port "TESL_TODO_API_PORT"
+        Nothing ->
+          case portEnv of
+            Something port -> parsePortString port "PORT"
+            Nothing -> defaultExamplePort
+
+fact Authenticated (req: User)
+
+auth cookieAuth(request: HttpRequest) -> requestUser: User ::: Authenticated requestUser
+  requires [todoReadHttpCookie] =
+  case Dict.lookup "user" request.cookies of
+    Something userId -> ok (User { id: userId, role: "user" }) ::: Authenticated requestUser
+    Nothing -> fail 401 "Missing or invalid user cookie"
+
+fact TitleSafe (title: String)
+
+check isSafeTitle(title: String) -> title: String ::: TitleSafe title =
+  if 4 <= String.length title && String.length title <= 120 then
+    ok title ::: TitleSafe title
+  else
+    fail 400 "Title must be between 3 and 120 characters"
+
+fact LengthLessThan30 (title: String)
+
+check lengthLessThan30(title: String) -> title: String ::: LengthLessThan30 title =
+  if String.length title < 30 then
+    ok title ::: LengthLessThan30 title
+  else
+    fail 400 "Title must be be less than 30 characters"
+
+fact ContainsAnA (title: String)
+
+check containsAnA(title: String) -> title: String ::: ContainsAnA title =
+  if String.contains title "a" then
+    ok title ::: ContainsAnA title
+  else
+    fail 400 "Title must contain an a."
+
+record NewTodo {
+  title: String ::: TitleSafe title && LengthLessThan30 title && ContainsAnA title
+}
+
+codec NewTodo {
+  toJson_forbidden
+  fromJson [
+    {
+      title <- "title" with_codec stringCodec via (isSafeTitle && lengthLessThan30 && containsAnA)
+    }
+  ]
+}
+
+fact TodoId (todoId: String)
+
+check isTodoId(todoId: String) -> todoId: String ::: TodoId todoId =
+  if String.startsWith todoId "todo-" && String.length todoId > 5 then
+    ok todoId ::: TodoId todoId
+  else
+    fail 400 "Malformed todo id"
+
+capture todoIdCapture: String ::: TodoId todoId using stringCodec via isTodoId
+
+fact IsOpen (todo: Todo)
+
+check checkOpen(todo: Todo) -> todo: Todo ::: IsOpen todo =
+  case todo.status of
+    Open -> ok todo ::: IsOpen todo
+    Done -> fail 422 "todo is already completed"
+
+fn seedExampleData() -> Int
+  requires [todoDbRead, todoDbWrite, time] =
+  if List.isEmpty (select todo from Todo) then
+    insert Todo { id: "todo-1", title: "Review the SQL layer", ownerId: "mikael", status: Open, createdAt: nowMillis() }
+    insert Todo { id: "todo-2", title: "Sketch more DSL examples", ownerId: "anna", status: Open, createdAt: nowMillis() }
+    2
+  else
+    0
+
+  # post "/list-test"
+  #   auth requestUser: User::: Authenticated requestUser via cookieAuth
+  #   body newTodos: List String
+handler listTest(requestUser: User ::: Authenticated requestUser, newTodos: List String ::: ForAll TodoId newTodos)
+  -> String
+  requires [todoDbRead, todoDbWrite, time, random] =
+  "hej"
+
+handler createTodo(requestUser: User ::: Authenticated requestUser, newTodo: NewTodo)
+  -> exists todoId: String =>
+        Todo ? FromDb (Id == todoId)
+  requires [todoDbRead, todoDbWrite, time, random] =
+  let todoId = generateTodoId()
+  exists todoId =>
+    insert Todo {
+      id: todoId,
+      title: newTodo.title,
+      ownerId: requestUser.id,
+      status: Open,
+      createdAt: nowMillis()
+    }
+
+handler listMyTodos(requestUser: User ::: Authenticated requestUser)
+  -> List Todo ? ForAll (FromDb (OwnerId == requestUser.id))
+  requires [todoDbRead] =
+  telemetry "todo.list" { user.id = requestUser.id }
+  select todo from Todo where todo.ownerId == requestUser.id
+
+# ForAll proof expansion: the select gives ForAll (FromDb (OwnerId == requestUser.id)).
+# filterCheck(checkOpen, ...) expands it to ForAll (FromDb (OwnerId == requestUser.id) && IsOpen).
+handler listOpenTodos(requestUser: User ::: Authenticated requestUser)
+  -> List Todo ? ForAll (FromDb (OwnerId == requestUser.id) && IsOpen)
+  requires [todoDbRead] =
+  let myTodos = select todo from Todo where todo.ownerId == requestUser.id
+  List.filterCheck checkOpen myTodos
+
+handler getTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId)
+  -> Todo ? FromDb (Id == todoId)
+  requires [todoDbRead] =
+  let existing = selectOne todo from Todo where todo.id == todoId
+  case existing of
+    Nothing ->
+      fail 404 "Todo not found"
+    Something todo where todo.ownerId != requestUser.id ->
+      fail 403 "Todo not owned by request user"
+    Something todo ->
+      todo
+
+handler completeTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId)
+  -> Todo ? FromDb (Id == todoId)
+  requires [todoDbRead, todoDbWrite] =
+  let existing = selectOne todo from Todo where todo.id == todoId
+  case existing of
+    Nothing ->
+      fail 404 "Todo not found"
+    Something todo where todo.ownerId != requestUser.id ->
+      fail 403 "Todo not owned by request user"
+    Something _ ->
+      update todo in Todo
+        where todo.id == todoId
+        set todo.status = Done
+        returning one
+
+api TodoApi {
+  post "/list-test"
+    auth requestUser: User ::: Authenticated requestUser via cookieAuth
+    body newTodos: List String ::: ForAll TodoId newTodos
+    -> String
+  post "/todos"
+    auth requestUser: User ::: Authenticated requestUser via cookieAuth
+    body newTodo: NewTodo
+    -> exists todoId: String =>
+          Todo ? FromDb (Id == todoId)
+
+  get "/todos/mine"
+    auth requestUser: User ::: Authenticated requestUser via cookieAuth
+    -> List Todo ? ForAll (FromDb (OwnerId == requestUser.id))
+
+  get "/todos/mine/open"
+    auth requestUser: User ::: Authenticated requestUser via cookieAuth
+    -> List Todo ? ForAll (FromDb (OwnerId == requestUser.id) && IsOpen)
+
+  get "/todos/:todoId"
+    auth requestUser: User ::: Authenticated requestUser via cookieAuth
+    capture todoId: String ::: TodoId todoId via todoIdCapture
+    -> Todo ? FromDb (Id == todoId)
+
+  put "/todos/:todoId/complete"
+    auth requestUser: User ::: Authenticated requestUser via cookieAuth
+    capture todoId: String ::: TodoId todoId via todoIdCapture
+    -> Todo ? FromDb (Id == todoId)
+}
+
+server TodoServer for TodoApi {
+  listTest = listTest
+  createTodo = createTodo
+  listMyTodos = listMyTodos
+  listOpenTodos = listOpenTodos
+  getTodo = getTodo
+  completeTodo = completeTodo
+}
+
+main with capabilities [todoWebService] {
+  initTelemetry service "todo-api" endpoint "in-memory" console True
+  let port = resolveExamplePort cli.args (env "TESL_TODO_API_PORT") (env "PORT")
+  with database TodoDatabase {
+    with capabilities [todoWebService] {
+      seedExampleData()
+    }
+    serve TodoServer on port with capabilities [todoWebService]
+  }
+}

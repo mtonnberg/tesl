@@ -1,0 +1,1 @@
+Update the compile-examples.sh file to use the tesl cli tool instead of running the python compiler directly

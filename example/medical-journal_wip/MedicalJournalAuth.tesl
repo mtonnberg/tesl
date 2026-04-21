@@ -1,0 +1,50 @@
+#lang tesl
+module MedicalJournalAuth exposing [
+  MjSession, Authenticated, IsPhysician,
+  cookieAuth, checkIsPhysician
+]
+
+import Tesl.Prelude exposing [String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.DB exposing [dbRead]
+import MedicalJournalModels exposing [
+  mjDbRead, Provider, ProviderRole(..)
+]
+
+# ── Session ──────────────────────────────────────────────────────────────────
+
+record MjSession {
+  providerId: String
+  displayName: String
+  role: ProviderRole
+}
+
+fact Authenticated (session: MjSession)
+
+auth cookieAuth(request: HttpRequest) -> session: MjSession ::: Authenticated session
+  requires [mjDbRead] =
+  case Dict.lookup "mj_provider_id" request.cookies of
+    Nothing ->
+      fail 401 "not authenticated"
+    Something providerId ->
+      let found = selectOne p from Provider where p.id == providerId
+      case found of
+        Nothing ->
+          fail 401 "session invalid — provider not found"
+        Something provider ->
+          ok { providerId: provider.id, displayName: provider.displayName, role: provider.role } ::: Authenticated session
+
+# ── Authorization proofs ─────────────────────────────────────────────────────
+
+fact IsPhysician (providerId: String)
+
+check checkIsPhysician(providerId: String, role: ProviderRole) -> providerId: String ::: IsPhysician providerId =
+  case role of
+    Physician ->
+      ok providerId ::: IsPhysician providerId
+    Specialist ->
+      ok providerId ::: IsPhysician providerId
+    _ ->
+      fail 403 "only physicians and specialists can perform this action"

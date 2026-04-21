@@ -1,0 +1,3 @@
+(executable
+ (name main)
+ (libraries tesl_compiler_lib unix))

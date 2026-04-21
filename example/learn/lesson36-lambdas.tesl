@@ -1,0 +1,265 @@
+#lang tesl
+module Lambdas exposing [
+  applyTwice,
+  applyToList,
+  makeAdder,
+  makeMultiplier,
+  makeGreeter,
+  pipeline,
+  processList,
+  countMatching,
+  transformAndFilter,
+  buildMessages,
+  validateAll,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Lambda syntax:  fn(param1: Type1, param2: Type2) -> body
+#
+# Lambdas are anonymous functions created inline.
+# Use them wherever a named function would add noise:
+#   List.map (fn(x: Int) -> x * 2) numbers
+#
+# They are closures: they capture variables from the enclosing scope.
+# They can be stored in let-bindings, passed as arguments, returned.
+#
+# Tesl functions are curried: multi-parameter named functions and lambdas
+# are called one argument at a time (partial application is free).
+# A lambda with two params can be partially applied the same way:
+#   let addFive = fn(x: Int, y: Int) -> x + y; addFive 5
+# gives you a closure expecting one more Int.
+
+import Tesl.Prelude exposing [Int, String, Bool(..), List]
+import Tesl.List exposing [
+  List.map,
+  List.filter,
+  List.foldl,
+  List.length,
+  List.all,
+]
+import Tesl.String exposing [String.isEmpty, String.length]
+
+# ═══════════════════════════════════════════
+# BASIC LAMBDAS
+# ═══════════════════════════════════════════
+
+# A lambda can be passed directly to a higher-order function.
+fn applyTwice(f: Int -> Int, n: Int) -> Int =
+  f (f n)
+
+# The inline lambda adds 10 twice.
+fn applyToList(xs: List Int) -> List Int =
+  List.map (fn(x: Int) -> x + 10) xs
+
+test "applyTwice" {
+  expect applyTwice (fn(x: Int) -> x + 1) 5 == 7
+  expect applyTwice (fn(x: Int) -> x * 2) 3 == 12
+}
+
+test "applyToList" {
+  expect applyToList [1, 2, 3] == [11, 12, 13]
+  expect applyToList [] == []
+}
+
+# ═══════════════════════════════════════════
+# CLOSURES — CAPTURING OUTER VARIABLES
+# ═══════════════════════════════════════════
+# A lambda captures variables from its definition scope.
+# The captured values are fixed at the time the lambda is created.
+
+# Returns a function that adds n to any Int.
+fn makeAdder(n: Int) -> Int -> Int =
+  fn(x: Int) -> x + n
+
+# Returns a function that multiplies by factor.
+fn makeMultiplier(factor: Int) -> Int -> Int =
+  fn(x: Int) -> x * factor
+
+# Returns a function that builds a personalised greeting.
+fn makeGreeter(prefix: String) -> String -> String =
+  fn(name: String) -> "${prefix}, ${name}!"
+
+test "makeAdder" {
+  let addFive = makeAdder 5
+  expect addFive 3 == 8
+  expect addFive 0 == 5
+  expect addFive -5 == 0
+}
+
+test "makeMultiplier" {
+  let triple = makeMultiplier 3
+  expect triple 4 == 12
+  expect triple 0 == 0
+}
+
+test "makeGreeter" {
+  let hello = makeGreeter "Hello"
+  let hi = makeGreeter "Hi"
+  expect hello "Alice" == "Hello, Alice!"
+  expect hi "Bob" == "Hi, Bob!"
+}
+
+# ═══════════════════════════════════════════
+# LAMBDAS IN PIPELINES
+# ═══════════════════════════════════════════
+# Use |> to pass a value through a sequence of lambdas or functions.
+# Read it as "then": n, then double, then add 1, then multiply by 3.
+
+fn double(n: Int) -> Int = n * 2
+fn addOne(n: Int) -> Int = n + 1
+
+fn pipeline(n: Int) -> Int =
+  n
+  |> double # named function in pipeline
+  |> addOne # named function in pipeline
+  |> (fn(x: Int) -> x * 3) # inline lambda in pipeline
+
+test "pipeline" {
+  # (n*2 + 1) * 3
+  expect pipeline 5 == 33 # (10+1)*3 = 33
+  expect pipeline 0 == 3 # (0+1)*3  = 3
+  expect pipeline 1 == 9 # (2+1)*3  = 9
+}
+
+# ═══════════════════════════════════════════
+# COMPOSING HIGHER-ORDER OPERATIONS
+# ═══════════════════════════════════════════
+# Lambdas shine when you need a custom predicate or transform inline
+# without polluting the module namespace with a one-off named function.
+
+# Negate all elements, then keep only positives (effectively keeps negatives).
+fn processList(xs: List Int) -> List Int =
+  xs
+  |> List.map (fn(x: Int) -> 0 - x) # negate every element
+  |> List.filter (fn(x: Int) -> x > 0) # keep positives (orig negatives)
+
+test "processList" {
+  expect processList [-3, -1, 0, 1, 3] == [3, 1]
+  expect processList [] == []
+  expect processList [1, 2, 3] == [] # all positive → all negate → all negative
+}
+
+# Count elements that satisfy an inline predicate.
+fn countMatching(xs: List Int, threshold: Int) -> Int =
+  List.length (List.filter (fn(x: Int) -> x > threshold) xs)
+
+test "countMatching" {
+  expect countMatching [1, 5, 3, 8, 2] 4 == 2 # 5 and 8 exceed 4
+  expect countMatching [1, 2, 3] 10 == 0
+  expect countMatching [] 0 == 0
+}
+
+# Filter and transform in sequence using two inline lambdas.
+fn transformAndFilter(xs: List Int) -> List Int =
+  let doubled = List.map (fn(x: Int) -> x * 2) xs
+  List.filter (fn(x: Int) -> x > 10) doubled
+
+test "transformAndFilter" {
+  expect transformAndFilter [3, 5, 7, 1, 9] == [14, 18] # doubled: 6,10,14,2,18 → keep >10
+  expect transformAndFilter [] == []
+}
+
+# ═══════════════════════════════════════════
+# LAMBDAS WITH MULTIPLE PARAMETERS
+# ═══════════════════════════════════════════
+# A lambda can have multiple parameters of different types.
+# List.foldl expects f: (acc, elem) → acc — a perfect fit for a 2-param lambda.
+
+# Build one message per number using a prefix captured from outer scope.
+fn buildMessages(numbers: List Int, prefix: String) -> List String =
+  List.map (fn(n: Int) -> "${prefix}: ${n}") numbers
+
+test "buildMessages" {
+  expect buildMessages [1, 2, 3] "item" == ["item: 1", "item: 2", "item: 3"]
+  expect buildMessages [] "x" == []
+}
+
+# Sum only elements exceeding a threshold, using foldl with a helper function.
+fn addIfAbove(min: Int, acc: Int, x: Int) -> Int =
+  if x > min then
+    acc + x
+  else
+    acc
+
+fn sumAbove(xs: List Int, min: Int) -> Int =
+  List.foldl (fn(acc: Int, x: Int) -> addIfAbove min acc x) 0 xs
+
+test "sumAbove" {
+  expect sumAbove [1, 5, 3, 8, 2] 4 == 13 # 5 + 8
+  expect sumAbove [] 0 == 0
+  expect sumAbove [1, 2, 3] 10 == 0
+}
+
+# ═══════════════════════════════════════════
+# LAMBDAS AS VALIDATORS
+# ═══════════════════════════════════════════
+# Collect validation results using a fold over a list of predicates.
+
+fn isNonEmpty(s: String) -> Bool =
+  String.isEmpty s == False
+
+fn isShortEnough(s: String) -> Bool =
+  String.length s <= 50
+
+# Check that all strings in a list are non-empty and short enough.
+fn validateAll(xs: List String) -> Bool =
+  List.all (fn(s: String) -> isNonEmpty s && isShortEnough s) xs
+
+test "validateAll" {
+  expect validateAll ["hello", "world"] == True
+  expect validateAll ["hello", "", "world"] == False # empty string fails
+  expect validateAll [] == True # vacuously valid
+}
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Lambdas in Tesl are first-class values.  They can be:
+#   • passed as arguments  (List.map (fn(...) -> ...) xs)
+#   • stored in let bindings  (let f = fn(x: Int) -> ...)
+#   • returned from functions  (fn makeAdder(n) -> fn(x) -> x + n)
+#
+# The type of a lambda with one parameter is a function type T -> U.
+# The type of a two-parameter lambda is T -> (U -> V) (curried).
+#
+# Unlike named functions, lambdas have no name in the GDP proof system,
+# so the compiler cannot track proofs across lambda boundaries.
+# If you need proof-carrying computations inside a lambda, extract
+# the lambda body into a named function with a full proof annotation.
+#
+# Closures: the captured variable is a GDP named value.  When the lambda
+# is called, the captured binding is in scope but the lambda parameter
+# introduces a fresh named value.  This means proofs proven about captured
+# variables are available inside the lambda body.
+#
+# Restriction: you cannot attach a `::: Proof` annotation to a lambda
+# return in inline position.  Use a named function if you need to return
+# a proof-carrying value from a higher-order function.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Tesl lambdas lower to Racket closures via define/pow, which integrates
+# them into the GDP machinery for named values.  The generated Racket form is:
+#
+#   (let () (define/pow (tesl-lambda-N [x : T]) #:returns Unit body) tesl-lambda-N)
+#
+# The "Unit" return annotation is a placeholder — return types are inferred
+# from the body.  When a lambda is passed directly to a stdlib function
+# such as List.map or List.foldl, Racket's dynamic typing means the closure
+# works without a static type ascription on the Racket side.
+#
+# In the HM type system, lambda introduction is the lambda rule:
+#   Γ, x:T ⊢ e : U
+#   ────────────────
+#   Γ ⊢ fn(x: T) -> e : T -> U
+#
+# Multi-parameter lambdas are syntactic sugar for nested lambdas (currying):
+#   fn(x: T, y: U) -> body  ≡  fn(x: T) -> fn(y: U) -> body
+#
+# GDP and lambdas: the lambda parameter introduces a fresh hidden subject
+# α for the GDP proof context.  Any ::: annotation on the parameter is
+# checked when the lambda is applied.  Without ::: the parameter is a
+# plain value with no associated proof.

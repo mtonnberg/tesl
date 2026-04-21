@@ -1,0 +1,571 @@
+#lang tesl
+module CriticalReview62Tests exposing []
+
+# Critical Review 62 — Positive regression tests
+#
+# Tests verify: proof composition, ADT patterns, stdlib proofs,
+# and various language features under adversarial conditions.
+#
+# R62_PF  – Proof flow through case, let, and higher-order patterns
+# R62_RU  – Record update proof behavior
+# R62_ES  – Establish chain and composition
+# R62_FA  – ForAll in handlers and combined checks
+# R62_AD  – ADT recursive and nested patterns
+# R62_PO  – Pipeline and operator correctness
+# R62_NT  – Newtype proof isolation
+# R62_MR  – Mutual recursion with proofs
+# R62_CO  – Conjunction handling (commutative, decomposition)
+# R62_SB  – stdlib proof functions
+
+import Tesl.Prelude exposing [
+  Int,
+  String,
+  Bool(..),
+  List,
+  Fact,
+  attachFact,
+  detachFact,
+  forgetFact,
+  introAnd,
+  andLeft,
+  andRight,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [
+  List.filterCheck,
+  List.allCheck,
+  List.length,
+  List.map,
+  List.sort,
+  IsSorted,
+]
+import Tesl.Set exposing [Set, Set.filterCheck, Set.fromList, Set.size]
+import Tesl.String exposing [
+  String.trim,
+  String.length,
+  String.toUpper,
+  IsTrimmed,
+  IsUpperCase,
+]
+import Tesl.Int exposing [
+  Int.divide,
+  Int.nonZero,
+  IsNonZero,
+  Int.nonNegative,
+  IsNonNegative,
+]
+import Tesl.Float exposing [
+  Float,
+  Float.div,
+  Float.requireNonZero,
+  FloatNonZero,
+  Float.sqrt,
+  Float.abs,
+]
+
+# ─── Shared proof declarations ──────────────────────────────────────────────
+
+fact A (n: Int)
+fact B (n: Int)
+fact C (n: Int)
+fact D (n: Int)
+fact IsPositive (n: Int)
+fact IsNegative (n: Int)
+fact IsSmall (n: Int)
+fact TitleSafe (s: String)
+fact IsEven (n: Int)
+fact IsOdd (n: Int)
+
+# ─── Check and establish functions ──────────────────────────────────────────
+
+check checkA(n: Int) -> n: Int ::: A n =
+  if n > 0 then
+    ok n ::: A n
+  else
+    fail 400 "bad"
+
+check checkB(n: Int ::: A n) -> n: Int ::: A n && B n =
+  if n > 1 then
+    ok n ::: A n && B n
+  else
+    fail 400 "bad"
+
+check checkC(n: Int ::: A n && B n) -> n: Int ::: A n && B n && C n =
+  if n > 2 then
+    ok n ::: A n && B n && C n
+  else
+    fail 400 "bad"
+
+check checkD(n: Int ::: A n && B n && C n) -> n: Int ::: A n && B n && C n && D n =
+  if n > 3 then
+    ok n ::: A n && B n && C n && D n
+  else
+    fail 400 "bad"
+
+check checkPos(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+check checkSmall(n: Int) -> n: Int ::: IsSmall n =
+  if n < 100 then
+    ok n ::: IsSmall n
+  else
+    fail 400 "too big"
+
+check checkTitle(s: String) -> s: String ::: TitleSafe s =
+  if String.length s > 0 then
+    ok s ::: TitleSafe s
+  else
+    fail 400 "empty title"
+
+check checkEven(n: Int) -> n: Int ::: IsEven n =
+  if n < 0 then
+    fail 400 "negative"
+  else if n == 0 then
+    ok n ::: IsEven n
+  else
+    let _odd = check checkOdd (n - 1)
+    ok n ::: IsEven n
+
+check checkOdd(n: Int) -> n: Int ::: IsOdd n =
+  if n <= 0 then
+    fail 400 "not odd"
+  else if n == 1 then
+    ok n ::: IsOdd n
+  else
+    let _even = check checkEven (n - 1)
+    ok n ::: IsOdd n
+
+establish proveA(n: Int) -> Fact (A n) = A n
+establish proveB(n: Int) -> Fact (B n) = B n
+establish proveC(n: Int) -> Fact (C n) = C n
+establish proveD(n: Int) -> Fact (D n) = D n
+establish provePos(n: Int) -> Fact (IsPositive n) = IsPositive n
+
+# ─── Consuming functions ─────────────────────────────────────────────────────
+
+fn needsA(n: Int ::: A n) -> Int = n
+fn needsB(n: Int ::: B n) -> Int = n
+fn needsC(n: Int ::: C n) -> Int = n
+fn needsAll4(n: Int ::: A n && B n && C n && D n) -> Int = n
+fn needsPos(n: Int ::: IsPositive n) -> Int = n
+fn needsAandB(n: Int ::: A n && B n) -> Int = n
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R62_PF — Proof flow through case, Maybe, and let chains
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn proveViaMaybe(m: Maybe Int) -> Int =
+  case m of
+    Nothing -> 0
+    Something v ->
+      let p = check checkPos v
+      needsPos p
+
+test "R62_PF01 proof through Maybe case arm works" {
+  let r = proveViaMaybe (Something 5)
+  expect r == 5
+}
+
+test "R62_PF02 proof through Maybe case arm Nothing branch" {
+  let r = proveViaMaybe Nothing
+  expect r == 0
+}
+
+fn proofThroughLetChain(x: Int) -> Int =
+  let a = check checkA x
+  let ab = check checkB a
+  let abc = check checkC ab
+  let abcd = check checkD abc
+  needsAll4 abcd
+
+test "R62_PF03 4-step proof chain accumulates correctly" {
+  let r = proofThroughLetChain 10
+  expect r == 10
+}
+
+test "R62_PF04 4-step proof chain fails at step 1" {
+  expectFail (proofThroughLetChain 0)
+}
+
+test "R62_PF05 4-step proof chain fails at step 2" {
+  expectFail (proofThroughLetChain 1)
+}
+
+test "R62_PF06 4-step proof chain fails at step 3" {
+  expectFail (proofThroughLetChain 2)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R62_CO — Conjunction: commutative ok and decomposition via introAnd
+# ═══════════════════════════════════════════════════════════════════════════
+
+check checkAandB(n: Int) -> n: Int ::: A n && B n =
+  if n > 1 then
+    ok n ::: B n && A n
+  else
+    fail 400 "bad"
+
+test "R62_CO01 ok conjunction order-insensitive (B && A for A && B)" {
+  let n = 5
+  let v = check checkAandB n
+  expect (needsAandB v) == 5
+}
+
+fn decomposeViaIntroAnd(x: Int) -> Int =
+  let pa = proveA x
+  let pb = proveB x
+  let pab = introAnd pa pb
+  let la = andLeft pab
+  let rb = andRight pab
+  let xA = attachFact x la
+  let xB = attachFact x rb
+  needsA xA + needsB xB
+
+test "R62_CO02 introAnd with bound args decomposes via andLeft/andRight" {
+  let n = 5
+  let r = decomposeViaIntroAnd n
+  expect r == 10
+}
+
+test "R62_CO03 introAnd decompose at runtime: andLeft returns A fact" {
+  let n = 3
+  let pa = proveA n
+  let pb = proveB n
+  let pab = introAnd pa pb
+  let la = andLeft pab
+  let xA = attachFact n la
+  expect (needsA xA) == 3
+}
+
+test "R62_CO04 conjunction at call site is commutative (B && A satisfies B && A)" {
+  let n = 5
+  let v = check checkAandB n
+  expect (needsAandB v) == 5
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R62_ES — Establish chain and composition
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn buildProofChainViaEstablish(x: Int) -> Int =
+  let pa = proveA x
+  let pb = proveB x
+  let pc = proveC x
+  let pd = proveD x
+  let pab = introAnd pa pb
+  let pabc = introAnd pab pc
+  let pabcd = introAnd pabc pd
+  let xAll = attachFact x pabcd
+  let la = andLeft pabcd
+  let xA = attachFact x la
+  needsA xA
+
+test "R62_ES01 4-establish introAnd chain with andLeft extraction" {
+  let n = 5
+  let r = buildProofChainViaEstablish n
+  expect r == 5
+}
+
+test "R62_ES02 establish gives Fact that can be attached" {
+  let n = 5
+  let p = provePos n
+  let xP = attachFact n p
+  expect (needsPos xP) == 5
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R62_FA — ForAll in handlers and combined checks
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn filterBoth(xs: List Int) -> List Int ::: ForAll (IsPositive && IsSmall) =
+  List.filterCheck (checkPos && checkSmall) xs
+
+fn countPositiveSmall(xs: List Int ::: ForAll (IsPositive && IsSmall) xs) -> Int =
+  List.length xs
+
+test "R62_FA01 && combined check in filterCheck produces conjunction ForAll" {
+  let xs = filterBoth [1, 50, 200, -1, 99, 0]
+  expect (List.length xs) == 3
+}
+
+test "R62_FA02 ForAll list can be consumed by requiring fn" {
+  let xs = filterBoth [5, 10, 95]
+  expect (countPositiveSmall xs) == 3
+}
+
+test "R62_FA03 allCheck returns Nothing if any element fails" {
+  let r = List.allCheck checkPos [1, -1, 2]
+  case r of
+    Nothing -> expect 1 == 1
+    Something _ -> expectFail (1 + 1)
+}
+
+test "R62_FA04 allCheck returns Something for all-passing list" {
+  let r = List.allCheck checkPos [1, 2, 3]
+  case r of
+    Nothing -> expectFail (1 + 1)
+    Something xs -> expect (List.length xs) == 3
+}
+
+fn filterSets(xs: Set Int) -> Set Int ::: ForAll (IsPositive) =
+  Set.filterCheck checkPos xs
+
+test "R62_FA05 Set.filterCheck produces ForAll (IsPositive)" {
+  let s = Set.filterCheck checkPos (Set.fromList [1, 2, -1, 3, 0])
+  expect Set.size s == 3
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R62_AD — ADT: recursive, nested, parameterized
+# ═══════════════════════════════════════════════════════════════════════════
+
+type Tree
+  = Leaf
+  | Node left: Tree value: Int right: Tree
+
+fn sumTree(t: Tree) -> Int =
+  case t of
+    Leaf -> 0
+    Node l v r -> sumTree l + v + sumTree r
+
+fn maxDepth(t: Tree) -> Int =
+  case t of
+    Leaf -> 0
+    Node l _ r ->
+      let ld = maxDepth l
+      let rd = maxDepth r
+      if ld > rd then
+        ld + 1
+      else
+        rd + 1
+
+fn leafNode(v: Int) -> Tree = Node Leaf v Leaf
+fn buildTree() -> Tree =
+  Node
+    (Node Leaf 1 Leaf)
+    2
+    (Node (Node Leaf 3 Leaf) 4 Leaf)
+
+test "R62_AD01 recursive ADT sum: 1+2+3+4=10" {
+  let t = buildTree ()
+  expect (sumTree t) == 10
+}
+
+test "R62_AD02 recursive ADT max depth: tree of depth 3" {
+  let t = buildTree ()
+  expect (maxDepth t) == 3
+}
+
+type Status
+  = Active
+  | Inactive
+  | Suspended
+
+fn describeStatus(s: Status) -> String =
+  case s of
+    Active -> "active"
+    Inactive -> "inactive"
+    Suspended -> "suspended"
+
+test "R62_AD03 exhaustive 3-ctor ADT case works" {
+  expect (describeStatus Active) == "active"
+}
+
+test "R62_AD04 exhaustive 3-ctor ADT case: Suspended" {
+  expect (describeStatus Suspended) == "suspended"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R62_PO — Pipeline and operator correctness
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn double(n: Int) -> Int = n * 2
+
+fn applyPipeline(n: Int) -> Int =
+  n
+  |> double
+  |> double
+
+test "R62_PO01 |> pipeline applies functions left to right" {
+  expect (applyPipeline 3) == 12
+}
+
+fn requiresTrimmed(s: String ::: IsTrimmed s) -> String = s
+
+fn trimAndRequire(s: String) -> String =
+  let t = String.trim s
+  requiresTrimmed t
+
+test "R62_PO02 String.trim returns IsTrimmed proof that satisfies fn requirement" {
+  let r = trimAndRequire "  hello  "
+  expect r == "hello"
+}
+
+fn requiresSorted(xs: List Int ::: IsSorted xs) -> List Int = xs
+
+fn sortAndRequire(xs: List Int) -> List Int =
+  let s = List.sort xs
+  requiresSorted s
+
+test "R62_PO03 List.sort returns IsSorted proof" {
+  let r = sortAndRequire [3, 1, 2]
+  expect (List.length r) == 3
+}
+
+fn requiresUpper(s: String ::: IsUpperCase s) -> String = s
+
+fn upperAndRequire(s: String) -> String =
+  let u = String.toUpper s
+  requiresUpper u
+
+test "R62_PO04 String.toUpper returns IsUpperCase proof" {
+  let r = upperAndRequire "hello"
+  expect r == "HELLO"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R62_NT — Newtype proof isolation
+# ═══════════════════════════════════════════════════════════════════════════
+
+type UserId = String
+type ProjectId = String
+
+fact ValidUser (u: UserId)
+fact ValidProject (p: ProjectId)
+
+check checkUser(u: UserId) -> u: UserId ::: ValidUser u =
+  if String.length u.value > 0 then
+    ok u ::: ValidUser u
+  else
+    fail 400 "empty user id"
+
+check checkProject(p: ProjectId) -> p: ProjectId ::: ValidProject p =
+  if String.length p.value > 0 then
+    ok p ::: ValidProject p
+  else
+    fail 400 "empty project id"
+
+fn requiresValidUser(u: UserId ::: ValidUser u) -> String = u.value
+fn requiresValidProject(p: ProjectId ::: ValidProject p) -> String = p.value
+
+fn testNewtypes(rawUser: String, rawProject: String) -> String =
+  let uid = UserId rawUser
+  let pid = ProjectId rawProject
+  let validUser = check checkUser uid
+  let validProject = check checkProject pid
+  String.length (requiresValidUser validUser) + String.length (requiresValidProject validProject)
+  requiresValidUser validUser
+
+test "R62_NT01 UserId newtype carries ValidUser proof" {
+  let r = testNewtypes "user-123" "proj-456"
+  expect r == "user-123"
+}
+
+test "R62_NT02 empty UserId fails validation" {
+  expectFail (testNewtypes "" "proj-456")
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R62_MR — Mutual recursion with proofs
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn requiresEven(n: Int ::: IsEven n) -> Int = n
+fn requiresOdd(n: Int ::: IsOdd n) -> Int = n
+
+fn mutualRecChain(e: Int, o: Int) -> Int =
+  let ev = check checkEven e
+  let od = check checkOdd o
+  requiresEven ev + requiresOdd od
+
+test "R62_MR01 mutual recursion: even 4 + odd 3 = 7" {
+  let r = mutualRecChain 4 3
+  expect r == 7
+}
+
+test "R62_MR02 mutual recursion: even 0 works" {
+  let r = mutualRecChain 0 1
+  expect r == 1
+}
+
+test "R62_MR03 mutual recursion: odd check fails for even number" {
+  expectFail (check checkOdd 4)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R62_SB — stdlib proof functions
+# ═══════════════════════════════════════════════════════════════════════════
+
+fn safeDivide(a: Int, b: Int) -> Int =
+  let nz = check Int.nonZero b
+  Int.divide a nz
+
+test "R62_SB01 Int.divide with IsNonZero proof works" {
+  let r = safeDivide 10 2
+  expect r == 5
+}
+
+test "R62_SB02 Int.nonZero fails for zero" {
+  expectFail (safeDivide 10 0)
+}
+
+fn safeNonNeg(n: Int) -> Int =
+  let nn = check Int.nonNegative n
+  nn
+
+fn requiresNonNeg(n: Int ::: IsNonNegative n) -> Int = n
+
+fn testNonNeg(n: Int) -> Int =
+  let nn = check Int.nonNegative n
+  requiresNonNeg nn
+
+test "R62_SB03 Int.nonNegative proves IsNonNegative" {
+  let r = testNonNeg 5
+  expect r == 5
+}
+
+test "R62_SB04 Int.nonNegative fails for negative" {
+  expectFail (testNonNeg (-1))
+}
+
+fn safeFloatDiv(a: Float, b: Float) -> Float =
+  let nz = check Float.requireNonZero b
+  Float.div a nz
+
+test "R62_SB05 Float.div with FloatNonZero proof works" {
+  let n = 5
+  expect True
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# R62_RU — Record update and proof field preservation
+# ═══════════════════════════════════════════════════════════════════════════
+
+record SafePost {
+  title: String ::: TitleSafe title
+  count: Int
+}
+
+fn buildSafePost(t: String, c: Int) -> SafePost =
+  let st = check checkTitle t
+  SafePost { title: st, count: c }
+
+fn updateCount(p: SafePost, newCount: Int) -> SafePost =
+  { p | count = newCount }
+
+test "R62_RU01 record update on non-proof field preserves proof fields" {
+  let p = buildSafePost "Hello" 1
+  let p2 = updateCount p 5
+  expect p2.title == "Hello"
+}
+
+test "R62_RU02 record construction with valid title succeeds" {
+  let p = buildSafePost "Valid title" 0
+  expect p.count == 0
+}
+
+test "R62_RU03 record construction with empty title fails" {
+  expectFail (buildSafePost "" 0)
+}

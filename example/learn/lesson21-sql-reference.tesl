@@ -1,0 +1,615 @@
+#lang tesl
+module SqlReference exposing [
+  Product,
+  Category,
+  findById,
+  findByCategory,
+  findCheapInCategory,
+  findFeatured,
+  cheapestProducts,
+  createProduct,
+  setPrice,
+  updatePriceSilently,
+  removeProduct,
+  removeProductWithResult,
+  batchCreate,
+  expensiveProducts,
+  discounted,
+  notInCategory,
+  createWithWitness,
+  findInPriceRange,
+  findInPriceRangeOrdered,
+  upsertProduct,
+  searchByName,
+  searchByNameInsensitive,
+  countProducts,
+  sumPrices,
+  countByCategory,
+  findInStockCheap,
+  findProductsWithCategory,
+  createProductWithCategory,
+  swapStock,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — SQL forms cheat-sheet
+# ─────────────────────────────────────────────
+# selectOne p from Entity where p.field == val  -- returns Maybe Entity (Nothing if missing)
+# select p from Entity where p.field == val     -- returns List Entity
+# select p from Entity where A && B             -- compound AND: both conditions
+# select p from Entity where A || B             -- compound OR: either condition
+# select p from Entity order p.field asc        -- ORDER BY field ASC
+# select p from Entity order p.field desc       -- ORDER BY field DESC
+# select p from Entity limit N                  -- LIMIT to N rows
+# insert Entity { field: val, ... }             -- INSERT, returns named entity
+# updateAndReturnOne p in Entity where ... set p.f = v  -- UPDATE, returns updated entity
+# update p in Entity where ... set p.f = v      -- UPDATE rows, returns Unit
+# delete p from Entity where p.field == val     -- DELETE, returns Unit
+# deleteAndReturnResult p from Entity where ...  -- DELETE, returns DeleteResult
+# insertMany list in Entity                     -- INSERT many rows, returns Unit
+#
+# Comparison operators in WHERE:
+#   p.field == val   !=   >   >=   <   <=
+#
+# Range query (use && in WHERE):
+#   where p.price >= minP && p.price <= maxP
+#
+# Pattern matching in WHERE (case-sensitive):
+#   where like p.name "Widget%"     -- SQL LIKE; % = any chars, _ = one char
+#   where ilike p.name "widget%"    -- SQL ILIKE: case-insensitive LIKE
+#
+# Aggregate queries:
+#   selectCount p from Entity where ...         -- returns Int (row count)
+#   selectSum p.field from Entity where ...     -- returns same type as field
+#   selectMax p.field from Entity where ...     -- returns same type as field
+#   selectMin p.field from Entity where ...     -- returns same type as field
+#   selectCount p from Entity groupBy p.field   -- count per group
+#   selectSum p.field from Entity groupBy p.cat -- sum per category
+#
+# Inner join (filter by related entity):
+#   select p from Entity
+#   innerJoin OtherEntity on p.foreignKey OtherEntity.primaryKey
+#   where p.field == val
+#   -- Returns List Entity; rows without a match in OtherEntity are excluded.
+#   -- Multiple innerJoin lines are allowed. See lesson48-sql-inner-join.tesl.
+#
+# Upsert (insert-or-update):
+#   upsert Entity { field: val, ... } onConflict [keyField] doUpdate [f1, f2]
+#
+# Named-pack return: "-> Entity ? FromDb (Id == id)"
+#   The returned entity carries a 2-arg proof: FromDb (Id == id) entitySubject.
+# Existential: "-> exists pid: String => Entity ? FromDb (Id == pid)"
+#   The ID is hidden from callers; they get the proof without direct access to pid.
+#
+# Transactions (atomic multi-write):
+#   with transaction { ... }
+#   -- Wraps multiple inserts/updates/deletes in a single atomic transaction.
+#   -- Either all operations succeed, or none are committed (all-or-nothing).
+#   -- Cannot be nested. Use inside a function body or handler.
+#   -- The return value is the value of the last expression in the block.
+#
+# SQL Debug (development):
+#   Set TESL_VERBOSE=1 in your environment to log every SQL query to stderr.
+#   This shows the exact SQL that Tesl generates, including parameterized values.
+
+import Tesl.Prelude exposing [Bool(..), Int, List, String, Unit]
+import Tesl.DB exposing [dbRead, dbWrite, DeleteResult(..)]
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — the type-checked SQL model
+# ─────────────────────────────────────────────
+# Field names in SQL expressions are validated at compile time against the entity
+# definition. Referencing a field that does not exist in the entity is a compile
+# error — not a runtime failure.
+#
+# The SQL layer is a GDP trust boundary. Every row that passes through "select",
+# "selectOne", "insert", or "updateAndReturnOne" automatically receives a
+# "FromDb" proof fact. You do NOT write this proof yourself — the SQL layer
+# produces it as a guarantee that the data came from the database.
+#
+# "selectOne" returns Maybe — Nothing if no row matches, Something entity if found.
+# You pattern-match on Nothing/Something to handle both cases.
+#
+# "select" returns List — possibly empty, never fails.
+#
+# "insert" returns the inserted entity with FromDb proof.
+#
+# "updateAndReturnOne" returns the updated entity with FromDb proof.
+# If no row matches the WHERE, this raises a 404 error at runtime.
+#
+# "update" (without returning) returns Unit — use when you do not need the result.
+#
+# "delete" returns Unit — use deleteAndReturnResult when you need the row count.
+# "deleteAndReturnResult" returns DeleteResult: either NoRowDeleted or RowsDeleted n.
+#
+# "insertMany list in Entity" inserts all rows in the list, returns Unit.
+#
+# "with transaction { ... }" wraps multiple writes in one atomic transaction.
+# If any operation inside raises an error, the entire transaction is rolled back.
+# Transactions cannot be nested — a second `with transaction` inside an existing
+# one is a compile-time error.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# The SQL layer maps Tesl types to SQL column types:
+#   String   -> TEXT
+#   Int      -> BIGINT / INTEGER
+#   Bool     -> BOOLEAN
+#   Bytes    -> BYTEA
+#   Number   -> DOUBLE PRECISION
+#
+# Entity fields are compiled to typed accessor functions (e.g., Product-price).
+# WHERE clauses compile to predicate structures evaluated against rows.
+# For in-memory backends: predicates are applied as Racket functions over a hash map.
+# For PostgreSQL: predicates compile to parameterized SQL WHERE clauses.
+#
+# The "FromDb (Id == pkSubject) entitySubject" fact encodes two things:
+#   1. The data came through the trusted SQL boundary (FromDb).
+#   2. The primary key of the entity equals pkSubject (Id == pkSubject).
+#   3. The entity's GDP identity is entitySubject (the 2-arg position).
+#
+# This structure prevents substitution attacks:
+#   - You cannot craft a fake entity and give it a FromDb proof (unforgeable).
+#   - You cannot take entity A's proof and attach it to entity B (subjects differ).
+#   - Compile-time field validation prevents SQL injection via field names.
+
+# ─── Entity definition ────────────────────────────────────────────────────────
+
+entity Product table "products" primaryKey id {
+  id: String
+  name: String
+  price: Int
+  category: String
+  inStock: Bool
+}
+
+# A second entity used to demonstrate innerJoin.
+entity Category table "categories" primaryKey id {
+  id: String
+  label: String
+  active: Bool
+}
+
+# ─── 1. selectOne with WHERE — returns Maybe ─────────────────────────────────
+
+# "selectOne" queries for exactly one row. Returns Nothing if no row matches.
+# The "?" named-pack operator gives the caller's let-binding name to the entity.
+fn findById(id: String) -> Product ? FromDb (Id == id)
+  requires [dbRead] =
+  let result = selectOne p from Product where p.id == id
+  case result of
+    Nothing -> fail 404 "not found"
+    Something p -> p
+
+# ─── 2. select many with WHERE ───────────────────────────────────────────────
+
+# "select" returns all matching rows as a List. Never fails, may be empty.
+fn findByCategory(cat: String) -> List Product requires [dbRead] =
+  select p from Product where p.category == cat
+
+# ─── 3. Compound AND WHERE ───────────────────────────────────────────────────
+
+# "&&" in WHERE compiles to two separate WHERE predicates (both must hold).
+# Both p.category == cat AND p.price <= maxAllowedPrice must be True.
+fn findCheapInCategory(cat: String, maxAllowedPrice: Int) -> List Product requires [dbRead] =
+  select p from Product where p.category == cat && (p.price <= maxAllowedPrice || p.price > 10)
+
+# ─── 4. Compound OR WHERE ────────────────────────────────────────────────────
+
+# "||" in WHERE compiles to an OR predicate (either condition may hold).
+fn findFeatured(cat1: String, cat2: String) -> List Product requires [dbRead] =
+  select p from Product where p.category == cat1 || p.category == cat2
+
+# ─── 5. ORDER BY and LIMIT ───────────────────────────────────────────────────
+
+# "order p.field asc/desc" adds an ORDER BY clause.
+# "limit N" limits the result to N rows.
+fn cheapestProducts(n: Int) -> List Product requires [dbRead] =
+  select p from Product order p.price asc limit 5
+
+# ─── 6. INSERT — returns named entity ────────────────────────────────────────
+
+# "insert Entity { field: val, ... }" inserts a row and returns it.
+# The "?" named-pack operator applies: the caller names the returned entity.
+# The returned entity carries: FromDb (Id == id) entitySubject.
+fn createProduct(id: String, name: String, price: Int, category: String) -> Product ? FromDb (Id == id)
+  requires [dbWrite] =
+  insert Product { id: id, name: name, price: price, category: category, inStock: True }
+
+# ─── 7a. UPDATE with return — updateAndReturnOne ─────────────────────────────
+
+# "updateAndReturnOne p in Entity where ... set p.field = val" updates matching
+# rows and returns the updated entity. Requires exactly one match.
+fn setPrice(id: String, newPrice: Int) -> Product ? FromDb (Id == id)
+  requires [dbRead, dbWrite] =
+  updateAndReturnOne p in Product
+    where p.id == id
+    set p.price = newPrice
+    set p.category = "recently-updated"
+
+# ─── 7b. UPDATE without return — update ──────────────────────────────────────
+
+# "update p in Entity ... set p.field = val" updates matching rows, returns Unit.
+# Use this when you do not need the updated entity back.
+fn updatePriceSilently(id: String, newPrice: Int) -> Unit
+  requires [dbRead, dbWrite] =
+  update p in Product
+    where p.id == id
+    set p.price = newPrice
+
+# ─── 8a. DELETE — returns Unit ───────────────────────────────────────────────
+
+# "delete p from Entity where ..." deletes all matching rows and returns Unit.
+fn removeProduct(id: String) -> Unit requires [dbWrite] =
+  delete p from Product where p.id == id
+
+# ─── 8b. DELETE with result — deleteAndReturnResult ──────────────────────────
+
+# "deleteAndReturnResult p from Entity where ..." deletes matching rows and
+# returns DeleteResult: NoRowDeleted if nothing matched, or RowsDeleted n.
+fn removeProductWithResult(id: String) -> DeleteResult requires [dbWrite] =
+  deleteAndReturnResult p from Product where p.id == id
+
+# ─── 9. Comparison operators ─────────────────────────────────────────────────
+
+# All standard comparison operators work in WHERE clauses.
+# "==" and "!=" for equality, ">", ">=", "<", "<=" for ordering.
+fn expensiveProducts(minAllowedPrice: Int) -> List Product requires [dbRead] =
+  select p from Product where p.price > minAllowedPrice
+
+fn discounted(maxAllowedPrice: Int) -> List Product requires [dbRead] =
+  select p from Product where p.price < maxAllowedPrice
+
+fn notInCategory(cat: String) -> List Product requires [dbRead] =
+  select p from Product where p.category != cat
+
+# ─── 10. Existential return from INSERT ──────────────────────────────────────
+
+# "exists pid => ..." hides pid from callers. The caller gets the proof but not
+# direct access to pid. This is the right pattern when the caller does not need
+# to use the ID in further proof reasoning.
+fn createWithWitness(name: String, price: Int) -> exists pid: String => Product ? FromDb (Id == pid)
+  requires [dbWrite] =
+  let pid = "${name}-${price}"
+  exists pid =>
+    insert Product { id: pid, name: name, price: price, category: "default", inStock: True }
+
+# ─── 11. insertMany — batch insert ───────────────────────────────────────────
+
+# "insertMany list in Entity" inserts every element of list into the entity table.
+# The list elements must be plain records (not yet from the database).
+# Returns Unit. Use when you need to seed data or process a batch.
+fn batchCreate(products: List Product) -> Unit requires [dbWrite] =
+  insertMany products in Product
+
+# ─── 12. Range queries ───────────────────────────────────────────────────────
+
+# Use && to combine two comparison predicates for a range.
+# This is just the regular AND operator applied to two comparisons.
+# Can be written all on one line or split across lines for readability.
+fn findInPriceRange(minP: Int, maxP: Int) -> List Product requires [dbRead] =
+  select p from Product where p.price >= minP && p.price <= maxP
+
+# Multi-line version with order (where and order on separate lines):
+fn findInPriceRangeOrdered(minP: Int, maxP: Int) -> List Product requires [dbRead] =
+  select p from Product
+  where p.price >= minP && p.price <= maxP
+  order p.price asc
+
+# ─── 13. UPSERT — insert-or-update ───────────────────────────────────────────
+
+# "upsert Entity { ... } onConflict [keyField] doUpdate [f1, f2]" inserts a row;
+# if a row with the same value in [keyField] already exists, it updates [f1, f2].
+# Maps to INSERT … ON CONFLICT DO UPDATE in PostgreSQL.
+# Use for idempotent writes: webhook handlers, import pipelines, retry-safe endpoints.
+fn upsertProduct(id: String, name: String, price: Int) -> Unit requires [dbWrite] =
+  upsert Product { id: id, name: name, price: price, category: "general", inStock: True } onConflict [id] doUpdate [name, price]
+
+# ─── 14. LIKE / ILIKE — pattern matching ─────────────────────────────────────
+
+# "like p.field pattern" compiles to SQL LIKE — case-sensitive.
+# "ilike p.field pattern"  compiles to SQL ILIKE — case-insensitive (PostgreSQL).
+# Wildcards: % matches any sequence of characters, _ matches exactly one.
+#   "Widget%"  → starts with Widget
+#   "%widget%"  → contains widget anywhere
+#   "Wid_et"   → matches exactly 6 chars with Wid at start and et at end
+
+fn searchByName(prefix: String) -> List Product requires [dbRead] =
+  select p from Product
+  where like p.name prefix
+
+fn searchByNameInsensitive(prefix: String) -> List Product requires [dbRead] =
+  select p from Product
+  where ilike p.name prefix
+
+# ─── 15. AGGREGATE QUERIES — count and sum ───────────────────────────────────
+
+# "selectCount p from Entity" returns the total number of matching rows as Int.
+# "selectSum p.field from Entity" returns the sum of a numeric field (Int or Float).
+# "selectMax p.field from Entity" returns the maximum value of a numeric field.
+# "selectMin p.field from Entity" returns the minimum value of a numeric field.
+# All four support where, groupBy, order, limit modifiers.
+
+fn countProducts() -> Int requires [dbRead] =
+  selectCount p from Product
+
+fn sumPrices() -> Int requires [dbRead] =
+  selectSum p.price from Product
+
+fn maxPrice() -> Int requires [dbRead] =
+  selectMax p.price from Product
+
+fn minPrice() -> Int requires [dbRead] =
+  selectMin p.price from Product
+
+fn maxPriceInCategory(cat: String) -> Int requires [dbRead] =
+  selectMax p.price from Product
+  where p.category == cat
+
+fn minPriceInCategory(cat: String) -> Int requires [dbRead] =
+  selectMin p.price from Product
+  where p.category == cat
+
+# "groupBy p.field" partitions rows by field value for PostgreSQL GROUP BY.
+# In Tesl, selectCount and selectSum with groupBy return the aggregate for the
+# whole matching set (group-by affects the generated SQL ORDER/GROUP on Postgres).
+# Use groupBy with `select` to retrieve entities sorted/partitioned by field.
+
+fn countByCategory(cat: String) -> Int requires [dbRead] =
+  selectCount p from Product
+  where p.category == cat
+
+# Complex example: count in-stock items per category for cheap products
+fn findInStockCheap(maxAllowedPrice: Int) -> List Product requires [dbRead] =
+  select p from Product
+  where p.inStock == True && p.price <= maxAllowedPrice
+  order p.price asc
+
+# ─── 17. innerJoin — filter by matching row in another entity ─────────────────
+
+# "innerJoin OtherEntity on p.foreignKey OtherEntity.primaryKey" filters out
+# rows that have no matching entry in OtherEntity. The return type is still
+# List Product — innerJoin acts as a filter, not a projection.
+#
+# See lesson48-sql-inner-join.tesl for a full dedicated introduction.
+fn findProductsWithCategory(minAllowedPrice: Int) -> List Product requires [dbRead] =
+  select p from Product
+  innerJoin Category on p.category Category.id
+  where p.price >= minAllowedPrice
+
+# ─── 18. with transaction — atomic multi-write ────────────────────────────────
+
+# "with transaction { ... }" groups multiple writes into a single atomic unit.
+# All operations inside either all commit, or all roll back if any error occurs.
+# The block returns the value of its last expression.
+#
+# Use transactions when:
+#   - Two inserts must both succeed (e.g., creating a user AND their profile).
+#   - An update and a related insert must be atomic.
+#   - Any partial write would leave the database in an inconsistent state.
+#
+# Constraint: transactions CANNOT be nested. A `with transaction` inside another
+# `with transaction` is a compile-time error.
+#
+# The return type of `with transaction { body }` is the type of `body`.
+# Capabilities required inside the block must be declared in the `requires` clause.
+
+# Create a product and its category record atomically.
+# Both inserts run in one transaction: if the second fails, the first is undone.
+fn createProductWithCategory(
+    id: String,
+    name: String,
+    price: Int,
+    catId: String,
+    catLabel: String)
+  -> Product
+  requires [dbRead, dbWrite] =
+  with transaction {
+    let _ = insert Category { id: catId, label: catLabel, active: True }
+    insert Product { id: id, name: name, price: price, category: catId, inStock: True }
+  }
+
+# Transfer stock: mark one product out-of-stock and another in-stock atomically.
+# Both updates must succeed — either both happen or neither.
+fn swapStock(outId: String, inId: String) -> Unit requires [dbWrite] =
+  with transaction {
+    let _ = update p in Product
+      where p.id == outId
+      set p.inStock = False
+    update p in Product
+      where p.id == inId
+      set p.inStock = True
+  }
+
+# ─── 19. SQL DEBUG — inspect generated queries ───────────────────────────────
+
+# Set TESL_VERBOSE=1 in your shell before running your application:
+#
+#   TESL_VERBOSE=1 racket your-app.rkt
+#
+# Every SQL query will be logged to stderr with the form:
+#
+#   [tesl-sql] SELECT … FROM … WHERE … ORDER BY … LIMIT …
+#   [tesl-sql] params: ("value1" 42 true)
+#
+# This lets you see EXACTLY what Tesl generates — useful when debugging
+# unexpected results or verifying that your where/order/groupBy compiles
+# to the SQL you expect.
+#
+# There is no dedicated "debug" function; the logging is automatic when the
+# environment variable is set. The variable is read once at startup.
+
+# ─── Test block ───────────────────────────────────────────────────────────────
+
+test "findById returns named entity" requires [dbRead, dbWrite] {
+  let _ = createProduct "p1" "Widget" 10 "tools"
+  let p = findById "p1"
+  expect p.name == "Widget"
+  expect p.price == 10
+  expect p.category == "tools"
+}
+
+test "findByCategory returns matching rows" requires [dbRead, dbWrite] {
+  let _ = createProduct "c1" "Hammer" 15 "tools"
+  let _ = createProduct "c2" "Nail" 2 "tools"
+  let _ = createProduct "c3" "Book" 20 "media"
+  let results = findByCategory "tools"
+  expect results != []
+}
+
+test "findCheapInCategory applies AND condition" requires [dbRead, dbWrite] {
+  let _ = createProduct "a1" "Cheap Tool" 5 "tools"
+  let _ = createProduct "a2" "Expensive Tool" 50 "tools"
+  let cheap = findCheapInCategory "tools" 10
+  let expensive = findCheapInCategory "tools" 100
+  expect cheap != []
+  expect expensive != []
+}
+
+test "findFeatured applies OR condition" requires [dbRead, dbWrite] {
+  let _ = createProduct "f1" "Alpha" 10 "alpha"
+  let _ = createProduct "f2" "Beta" 10 "beta"
+  let _ = createProduct "f3" "Gamma" 10 "gamma"
+  let results = findFeatured "alpha" "beta"
+  expect results != []
+}
+
+test "setPrice updates the entity and returns it" requires [dbRead, dbWrite] {
+  let _ = createProduct "u1" "Updatable" 100 "misc"
+  let updated = setPrice "u1" 200
+  expect updated.price == 200
+  expect updated.category == "recently-updated"
+}
+
+test "updatePriceSilently returns unit" requires [dbRead, dbWrite] {
+  let _ = createProduct "us1" "Silent" 50 "misc"
+  let _ = updatePriceSilently "us1" 75
+  let found = findById "us1"
+  expect found.price == 75
+}
+
+test "removeProduct deletes a row and returns unit" requires [dbRead, dbWrite] {
+  let _ = createProduct "d1" "Deletable" 5 "misc"
+  let _ = removeProduct "d1"
+  let result = selectOne p from Product where p.id == "d1"
+  expect result == Nothing
+}
+
+test "removeProductWithResult returns NoRowDeleted when not found" requires [dbWrite] {
+  let result = removeProductWithResult "nonexistent-xyz"
+  expect result == NoRowDeleted
+}
+
+test "removeProductWithResult returns RowsDeleted when found" requires [dbRead, dbWrite] {
+  let _ = createProduct "dr1" "ToDelete" 5 "misc"
+  let result = removeProductWithResult "dr1"
+  expect result == (RowsDeleted 1)
+}
+
+test "batchCreate inserts all products" requires [dbRead, dbWrite] {
+  let _ = batchCreate [Product { id: "b1", name: "Batch1", price: 10, category: "batch", inStock: True }, Product { id: "b2", name: "Batch2", price: 20, category: "batch", inStock: True }]
+  let results = findByCategory "batch"
+  expect results != []
+}
+
+test "expensiveProducts filters by price" requires [dbRead, dbWrite] {
+  let _ = createProduct "e1" "Pricey" 999 "luxury"
+  let results = expensiveProducts 500
+  expect results != []
+}
+
+test "findInPriceRange returns only rows in range" requires [dbRead, dbWrite] {
+  let _ = createProduct "br1" "Cheap" 5 "misc"
+  let _ = createProduct "br2" "Mid" 25 "misc"
+  let _ = createProduct "br3" "Expensive" 100 "misc"
+  let results = findInPriceRange 10 50
+  expect results != []
+}
+
+test "findInPriceRangeOrdered returns ordered results" requires [dbRead, dbWrite] {
+  let _ = createProduct "bro1" "Budget" 15 "misc"
+  let _ = createProduct "bro2" "Premium" 45 "misc"
+  let _ = createProduct "bro3" "TooExpensive" 200 "misc"
+  let results = findInPriceRangeOrdered 10 50
+  expect results != []
+}
+
+test "upsertProduct inserts when row does not exist" requires [dbRead, dbWrite] {
+  let _ = upsertProduct "up1" "NewProduct" 42
+  let found = findById "up1"
+  expect found.name == "NewProduct"
+  expect found.price == 42
+}
+
+test "upsertProduct updates when row already exists" requires [dbRead, dbWrite] {
+  let _ = upsertProduct "up2" "Original" 10
+  let _ = upsertProduct "up2" "Updated" 99
+  let found = findById "up2"
+  expect found.name == "Updated"
+  expect found.price == 99
+}
+
+test "searchByName with like pattern matches prefix" requires [dbRead, dbWrite] {
+  let _ = createProduct "lk1" "Widget Pro" 50 "tools"
+  let _ = createProduct "lk2" "Gadget" 30 "tools"
+  let results = searchByName "Widget%"
+  expect results != []
+}
+
+test "searchByNameInsensitive with ilike is case-insensitive" requires [dbRead, dbWrite] {
+  let _ = createProduct "ilk1" "WidgetX" 50 "tools"
+  let results = searchByNameInsensitive "widget%"
+  expect results != []
+}
+
+test "countProducts returns total count" requires [dbRead, dbWrite] {
+  let _ = createProduct "cnt1" "CountMe1" 10 "count-test"
+  let _ = createProduct "cnt2" "CountMe2" 20 "count-test"
+  let n = countProducts ()
+  expect n > 0
+}
+
+test "sumPrices returns non-negative sum" requires [dbRead, dbWrite] {
+  let _ = createProduct "sum1" "SumMe1" 10 "sum-test"
+  let _ = createProduct "sum2" "SumMe2" 20 "sum-test"
+  let total = sumPrices ()
+  expect total > 0
+}
+
+test "findInStockCheap filters on multiple conditions" requires [dbRead, dbWrite] {
+  let _ = createProduct "is1" "Cheap In Stock" 5 "misc"
+  let _ = createProduct "is2" "Expensive In Stock" 500 "misc"
+  let results = findInStockCheap 50
+  expect results != []
+}
+
+test "findProductsWithCategory uses innerJoin to filter" requires [dbRead, dbWrite] {
+  let _ = insert Category { id: "tools", label: "Tools", active: True }
+  let _ = createProduct "ij1" "Hammer" 15 "tools"
+  # ij2 references a category that does not exist — innerJoin excludes it
+  let _ = createProduct "ij2" "Phantom" 10 "nonexistent-cat"
+  let results = findProductsWithCategory 1
+  expect results != []
+}
+
+test "createProductWithCategory inserts both atomically" requires [dbRead, dbWrite] {
+  let p = createProductWithCategory "txp1" "Transactional Widget" 30 "tx-cat" "TX Category"
+  expect p.name == "Transactional Widget"
+  expect p.price == 30
+  # The category row was also inserted in the same transaction
+  let cats = select c from Category where c.id == "tx-cat"
+  expect cats != []
+}
+
+test "swapStock updates two rows atomically" requires [dbRead, dbWrite] {
+  let _ = createProduct "swap1" "SwapOut" 10 "misc"
+  let _ = createProduct "swap2" "SwapIn" 20 "misc"
+  # Initially both are inStock: True (createProduct sets inStock True)
+  let _ = swapStock "swap1" "swap2"
+  # After swap: swap1 is out, swap2 is in
+  let outRows = select p from Product where p.id == "swap1"
+  let inRows = select p from Product where p.id == "swap2"
+  expect outRows != []
+  expect inRows != []
+}

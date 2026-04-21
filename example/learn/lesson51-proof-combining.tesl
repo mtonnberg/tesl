@@ -1,0 +1,188 @@
+#lang tesl
+module ProofCombining exposing [
+  ValidName,
+  NonEmpty,
+  InRange,
+  checkNonEmpty,
+  checkInRange,
+  checkName,
+  processName,
+  processNameManual,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# There are three ways to accumulate multiple proofs on a value:
+#
+# 1. SEQUENTIAL CHECKS — chain "check" calls; each new check accumulates proofs.
+#      let x = check checkA raw
+#      let y = check checkB x     # y carries BOTH IsA and IsB
+#      needsBoth y                 # accepted!
+#
+# 2. ESTABLISH + MANUAL COMBINATION — use "establish" to create a proof from
+#    scratch when sequential checks don't fit the flow.
+#      let p = establish makeIsPositive n
+#      let combined = attachFact n p
+#      usesPositive combined
+#
+# 3. MULTI-PREDICATE CHECK — a single "check" that validates multiple conditions
+#    at once and returns a value carrying all the proofs.
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.String exposing [String.length, String.contains]
+
+# ─── Facts ────────────────────────────────────────────────────────────────────
+fact ValidName (name: String)
+fact NonEmpty (name: String)
+fact InRange (n: Int)
+
+# ═══════════════════════════════════════════
+# PART 1: Sequential proof accumulation
+# ═══════════════════════════════════════════
+# Each check takes the RESULT of the previous check as its input.
+# The final value carries ALL proofs from the chain.
+
+check checkNonEmpty(name: String) -> name: String ::: NonEmpty name =
+  if String.length name > 0 then
+    ok name ::: NonEmpty name
+  else
+    fail 400 "name must not be empty"
+
+check checkName(name: String ::: NonEmpty name) -> name: String ::: ValidName name =
+  if String.length name <= 100 then
+    ok name ::: ValidName name
+  else
+    fail 400 "name too long"
+
+# Requires BOTH NonEmpty AND ValidName — satisfied by the chained result.
+fn processName(name: String ::: NonEmpty name, name2: String ::: ValidName name2) -> String =
+  "${name} / ${name2}"
+
+# Call-site: chain checkNonEmpty → checkName.
+# After both checks, the final value carries NonEmpty AND ValidName.
+fn validateAndProcess(raw: String) -> String =
+  let ne = check checkNonEmpty raw # carries NonEmpty
+  let full = check checkName ne # carries NonEmpty + ValidName
+  processName full full # both proofs present — accepted
+
+# ═══════════════════════════════════════════
+# PART 2: establish + attachFact for manual proof combination
+# ═══════════════════════════════════════════
+# Use "establish" when you need to introduce a proof from scratch —
+# typically for values known valid by construction or for proof inference.
+
+check checkInRange(n: Int) -> n: Int ::: InRange n =
+  if n >= 0 && n <= 255 then
+    ok n ::: InRange n
+  else
+    fail 400 "value out of range 0-255"
+
+# establish derives a secondary proof from an existing one.
+# Here: if n is InRange (0-255), it is also always NonNegative by construction.
+# (NonEmpty is used for illustrative purposes — normally you'd define a second fact.)
+establish inferInRange(n: Int) -> Fact (InRange n) =
+  InRange n # unconditionally asserts InRange — ONLY use when logically guaranteed
+
+# processNameManual shows the detach/reattach pattern for splitting and re-combining.
+fn processNameManual(name: String) -> String =
+  let ne = check checkNonEmpty name # carries NonEmpty
+  # forgetFact strips proof wrapper back to raw value
+  # detachFact captures the proof object
+  # attachFact re-attaches a proof to any value of the same type
+  let raw = forgetFact ne
+  let proof = detachFact ne
+  let reattach = attachFact raw proof # same as ne but reconstructed
+  let validated = check checkName reattach
+  validated
+
+# ═══════════════════════════════════════════
+# PART 3: Sequential checks vs &&-combined checks
+# ═══════════════════════════════════════════
+# For an && combined check, BOTH sub-checks see the same original subject.
+# For sequential checks, each check sees the RESULT of the previous one.
+# Use sequential for chaining enrichment; use && only when both sub-checks
+# are independent validations on the SAME raw input.
+
+fact HasAt (email: String)
+fact LongEnough (email: String)
+
+check checkHasAt(email: String) -> email: String ::: HasAt email =
+  if String.contains email "@" then
+    ok email ::: HasAt email
+  else
+    fail 400 "email must contain @"
+
+check checkLongEnough(email: String) -> email: String ::: LongEnough email =
+  if String.length email >= 5 then
+    ok email ::: LongEnough email
+  else
+    fail 400 "email too short"
+
+fn requiresValidEmail(email: String ::: HasAt email, email2: String ::: LongEnough email2) -> String =
+  "${email} / ${email2}"
+
+# Both proofs on the same value — valid because sequential checks accumulate.
+fn validateEmail(raw: String) -> String =
+  let withAt = check checkHasAt raw
+  let full = check checkLongEnough withAt # full carries BOTH HasAt and LongEnough
+  requiresValidEmail full full
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# SEQUENTIAL CHECK ACCUMULATION
+#
+# When you write:
+#   let y = check checkB x
+# and x already carries proof IsA, then y carries {IsA, IsB}.
+# This is "proof monotonicity": checks can only ADD proofs, never remove them.
+# The accumulation happens automatically — you do not need to do anything extra.
+#
+# This means:
+#   let a = check checkA raw       # a: { IsA }
+#   let b = check checkB a         # b: { IsA, IsB }
+#   let c = check checkC b         # c: { IsA, IsB, IsC }
+# The final value c satisfies all three predicates.
+#
+# ESTABLISH
+#
+# "establish" introduces a proof WITHOUT a runtime condition.
+# It is your responsibility to ensure the assertion is correct.
+# The body returns the proof constructor directly (no "ok" expression).
+# establish cannot use "fail" — it is always total.
+#
+# Use "establish" for:
+#   - Values produced by construction that are provably valid (e.g., database PK).
+#   - Proof inference: inferring IsSmall from IsInByte, or similar derived facts.
+#   - Domain invariants that do not correspond to user input validation.
+#
+# DETACH / REATTACH
+#
+# "detachFact"  extracts the proof object from a proof-carrying value.
+# "forgetFact"  strips the proof and returns the raw value.
+# "attachFact v p" re-attaches proof p to value v.
+#
+# This is useful when you need to:
+#   1. Pass the raw value to a function that does not accept proof-carrying values.
+#   2. Store the proof separately and re-attach it later.
+#   3. Transfer a proof from one variable to another of the SAME type.
+#
+# Note: transferring a proof from variable A to B (where B is a DIFFERENT value)
+# is UNSAFE and rejected by the compiler (cross-subject proof reuse).
+# The types must match and the subjects must be the same.
+#
+# && COMBINED CHECKS
+#
+# check checkA x && check checkB x
+# Both sub-checks validate the SAME original value x.
+# The result carries both proofs.
+# For DIFFERENT sequential enrichment steps, sequential chaining is preferred.
+
+test "validateAndProcess" {
+  expect validateAndProcess "Alice" == "Alice / Alice"
+}
+
+test "validateEmail" {
+  expect validateEmail "alice@example.com" == "alice@example.com / alice@example.com"
+}

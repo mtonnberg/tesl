@@ -1,0 +1,239 @@
+#lang tesl
+module Records exposing [
+  Point,
+  Rectangle,
+  area,
+  perimeter,
+  translate,
+  scale,
+  origin,
+  setX,
+  moveOrigin,
+  resetOrigin,
+  flipDimensions,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Records are named groups of fields.
+# Define:    record Name { fieldA: TypeA  fieldB: TypeB }
+# Construct: Name { fieldA: value1, fieldB: value2 }
+# Access:    myRecord.fieldName
+# Update:    { myRecord | fieldName = newValue }
+#
+# Records are immutable. "Update" creates a new record — it does not mutate.
+# Two records with the same field values are equal.
+
+import Tesl.Prelude exposing [Int]
+
+# A simple 2D point.
+record Point {
+  x: Int # field name: field type
+  y: Int
+}
+
+# A rectangle defined by an origin point, a width, and a height.
+record Rectangle {
+  origin: Point # fields can be record types
+  width: Int
+  height: Int
+}
+
+# area = width * height
+fn area(r: Rectangle) -> Int =
+  (r.width) * (r.height) # field access with .fieldName; r.width strips establish wrapper
+
+# perimeter = 2 * (width + height)
+fn perimeter(r: Rectangle) -> Int =
+  2 * (r.width + r.height)
+
+# translate: return a new Point with x and y shifted by dx and dy.
+fn translate(p: Point, dx: Int, dy: Int) -> Point =
+  Point { x: p.x + dx, y: p.y + dy } # record literal: TypeName { field: value, ... }
+
+# scale: return a new Rectangle with width and height multiplied by factor.
+fn scale(r: Rectangle, factor: Int) -> Rectangle =
+  { r | width = r.width * factor, height = r.height * factor }
+  # { r | ... } is record update syntax: copy all fields of r, then override the listed ones
+
+# origin: return the Point at coordinates (0, 0).
+fn origin() -> Point =
+  Point { x: 0, y: 0 } # record literal with integer literals
+
+# ── Record update examples ──────────────────────────────────────────────────
+# { record | field = newValue }  — copies every field, overrides the named ones.
+
+# setX: change only the x coordinate of a Point.
+fn setX(p: Point, newX: Int) -> Point =
+  { p | x = newX }
+
+# moveOrigin: shift a Rectangle's origin without touching width or height.
+fn moveOrigin(r: Rectangle, dx: Int, dy: Int) -> Rectangle =
+  { r | origin = translate r.origin dx dy }
+
+# resetOrigin: place a Rectangle's origin back at (0, 0).
+fn resetOrigin(r: Rectangle) -> Rectangle =
+  { r | origin = Point { x: 0, y: 0 } }
+
+# flipDimensions: swap width and height (landscape ↔ portrait).
+fn flipDimensions(r: Rectangle) -> Rectangle =
+  { r | width = r.height, height = r.width }
+
+test "area" {
+  let rect: Rectangle = Rectangle { origin: Point { x: 0, y: 0 }, width: 4, height: 3 }
+  expect (area rect) == 12
+  let unit: Rectangle = Rectangle { origin: Point { x: 0, y: 0 }, width: 1, height: 1 }
+  expect (area unit) == 1
+}
+
+test "perimeter" {
+  let rect: Rectangle = Rectangle { origin: Point { x: 0, y: 0 }, width: 4, height: 3 }
+  expect (perimeter rect) == 14
+}
+
+test "translate" {
+  let p: Point = Point { x: 1, y: 2 }
+  let moved = translate p 3 4
+  expect moved.x == 4
+  expect moved.y == 6
+}
+
+test "scale" {
+  let rect: Rectangle = Rectangle { origin: Point { x: 0, y: 0 }, width: 3, height: 2 }
+  let big = scale rect 4
+  expect big.width == 12
+  expect big.height == 8
+  expect big.origin.x == 0 # non-updated fields are preserved
+}
+
+test "origin returns zero point" {
+  let o = origin()
+  expect o.x == 0
+  expect o.y == 0
+}
+
+# ── Record update tests ──────────────────────────────────────────────────────
+
+test "setX changes only x" {
+  let p: Point = Point { x: 3, y: 7 }
+  let p2 = setX p 99
+  expect p2.x == 99
+  expect p2.y == 7 # y is unchanged
+}
+
+test "single field update leaves others intact" {
+  let p: Point = Point { x: 10, y: 20 }
+  let p2 = { p | y = 50 }
+  expect p2.x == 10 # x preserved
+  expect p2.y == 50 # y updated
+}
+
+test "update is non-destructive — original unchanged" {
+  let p: Point = Point { x: 1, y: 2 }
+  let _p2 = { p | x = 99 }
+  expect p.x == 1 # original p is untouched
+  expect p.y == 2
+}
+
+test "multi-field update" {
+  let r: Rectangle = Rectangle { origin: Point { x: 0, y: 0 }, width: 10, height: 5 }
+  let r2 = { r | width = 20, height = 8 }
+  expect r2.width == 20
+  expect r2.height == 8
+  expect r2.origin.x == 0 # origin preserved
+}
+
+test "chained updates" {
+  let p: Point = Point { x: 0, y: 0 }
+  let p1 = { p | x = 5 }
+  let p2 = { p1 | y = 3 }
+  expect p2.x == 5
+  expect p2.y == 3
+}
+
+test "moveOrigin" {
+  let r: Rectangle = Rectangle { origin: Point { x: 2, y: 3 }, width: 10, height: 5 }
+  let r2 = moveOrigin r 10 20
+  expect r2.origin.x == 12
+  expect r2.origin.y == 23
+  expect r2.width == 10 # dimensions unchanged
+  expect r2.height == 5
+}
+
+test "resetOrigin" {
+  let r: Rectangle = Rectangle { origin: Point { x: 7, y: 9 }, width: 4, height: 4 }
+  let r2 = resetOrigin r
+  expect r2.origin.x == 0
+  expect r2.origin.y == 0
+  expect r2.width == 4 # dimensions unchanged
+}
+
+test "flipDimensions" {
+  let r: Rectangle = Rectangle { origin: Point { x: 0, y: 0 }, width: 16, height: 9 }
+  let r2 = flipDimensions r
+  expect r2.width == 9
+  expect r2.height == 16
+  let r3 = flipDimensions r2 # flip twice restores original
+  expect r3.width == 16
+  expect r3.height == 9
+}
+
+test "update then access nested field" {
+  let r: Rectangle = Rectangle { origin: Point { x: 0, y: 0 }, width: 5, height: 3 }
+  let r2 = { r | origin = Point { x: 10, y: 20 } }
+  expect r2.origin.x == 10
+  expect r2.origin.y == 20
+}
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Records are pure data containers, not objects with methods.
+# There is no mutability — every "update" returns a fresh record value.
+# This fits naturally with the proof model: if a record field carries a proof,
+# updating that field creates a new record where the old proof is gone and
+# the new field value starts fresh (requiring re-validation if needed).
+#
+# Field access with ".fieldName" is NOT method-call syntax. Tesl does not
+# support "receiver.method()" style. ".fieldName" is purely structural
+# navigation into a record's data.
+#
+# Record update syntax:
+#
+#   { record | field = newVal }                    # single field
+#   { record | field1 = v1, field2 = v2 }          # multiple fields
+#
+# Every field NOT listed is copied verbatim from the original record.
+# This is sometimes called a "spread update" or "functional record update".
+# The original record is never changed — updates always produce a new value.
+#
+# You can update a nested record field by computing the new inner value
+# and assigning it to the outer field:
+#
+#   { rect | origin = Point { x: newX, y: rect.origin.y } }
+#
+# There is no "deep update" shorthand like rect.origin.x = 5. Tesl keeps
+# the update syntax shallow and explicit so the type checker always knows
+# exactly which record is being constructed.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Records are lowered to Racket hash maps with a type tag for runtime type checking.
+# The "define-record" macro creates: a constructor, per-field accessors, and a
+# runtime type predicate.
+#
+# Record literals "Point { x: 3, y: 4 }" lower to calls to the Racket record constructor.
+# Record update "{ r | x = 5 }" is lowered to a hash-map copy that overwrites
+# the specified keys.
+#
+# GDP-wise: record fields are plain fields. They carry their values as named values,
+# so each field has its own hidden subject. If a record field carries a proof
+# (covered in lesson 12), that proof is attached to the field's named value.
+# The record itself is a named value whose subject is separate from any field's subject.
+#
+# Important: two records with identical field values are structurally equal, but
+# the record values themselves (as named values) have different subjects if they
+# were bound separately. The proof system tracks the record's hidden subject,
+# not the equality of its fields.

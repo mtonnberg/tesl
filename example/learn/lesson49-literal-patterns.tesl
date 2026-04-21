@@ -1,0 +1,155 @@
+#lang tesl
+module LiteralPatterns exposing [
+  describeInt,
+  httpStatusText,
+  parseCommand,
+  classifyChar,
+  discountForTier,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# String and integer literals can appear directly in case patterns.
+# This lets you dispatch on exact values without a chain of if/else.
+#
+# Syntax:
+#   case expr of
+#     42       -> "the answer"
+#     0        -> "zero"
+#     "admin"  -> "administrator"
+#     "guest"  -> "read-only"
+#     name     -> "user: ${name}"   # variable binding — catch-all
+#
+# Rules:
+#   1. Literals match only the exact value (integer equality, string equality).
+#   2. A variable binding after all literals acts as the catch-all arm.
+#   3. Literals and constructor arms can be mixed freely in one case.
+#   4. The case must still be exhaustive — include a variable or wildcard arm.
+
+import Tesl.Prelude exposing [Int, String]
+import Tesl.String exposing [String.fromInt]
+
+# ═══════════════════════════════════════════
+# PART 1: Integer literal patterns
+# ═══════════════════════════════════════════
+
+# Dispatch on exact integer values.  The final variable arm is the catch-all.
+fn describeInt(n: Int) -> String =
+  case n of
+    0 -> "zero"
+    1 -> "one"
+    2 -> "two"
+    other -> "many (${String.fromInt other})"
+
+# HTTP status code dispatch — clear and readable, no if/else chain.
+fn httpStatusText(code: Int) -> String =
+  case code of
+    200 -> "OK"
+    201 -> "Created"
+    204 -> "No Content"
+    400 -> "Bad Request"
+    401 -> "Unauthorized"
+    403 -> "Forbidden"
+    404 -> "Not Found"
+    500 -> "Internal Server Error"
+    _ -> "Unknown"
+
+# ═══════════════════════════════════════════
+# PART 2: String literal patterns
+# ═══════════════════════════════════════════
+
+# Dispatch on exact string values.
+fn parseCommand(cmd: String) -> String =
+  case cmd of
+    "help" -> "show help"
+    "version" -> "show version"
+    "exit" -> "exit application"
+    other -> "unknown command: ${other}"
+
+# Single-character strings work naturally with literal patterns.
+fn classifyChar(c: String) -> String =
+  case c of
+    "a" -> "vowel"
+    "e" -> "vowel"
+    "i" -> "vowel"
+    "o" -> "vowel"
+    "u" -> "vowel"
+    _ -> "consonant or other"
+
+# ═══════════════════════════════════════════
+# PART 3: Mixing constructors and literals
+# ═══════════════════════════════════════════
+# Literals and ADT constructors can appear in the same case expression.
+
+type Tier
+  = Free
+  | Silver
+  | Gold
+  | Enterprise
+
+fn discountForTier(tier: Tier, promoCode: String) -> Int =
+  case tier of
+    Enterprise -> 40
+    Gold -> 25
+    Silver -> 10
+    Free ->
+      case promoCode of
+        "WELCOME10" -> 10
+        "SUMMER20" -> 20
+        _ -> 0
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Integer literals match via `=` (exact numeric equality).
+# String literals match via `equal?` (structural equality, case-sensitive).
+#
+# Literal patterns are syntactic sugar: they compile to guards on the
+# scrutinee.  For an integer arm `42 -> body`, the compiler emits:
+#   [(= *scrutinee 42) body]
+# For a string arm `"admin" -> body`:
+#   [(equal? *scrutinee "admin") body]
+#
+# A literal arm does NOT bind any variable.  If you need the value
+# in the body, use a variable binding arm with a where guard instead:
+#   n where n == 0 -> "zero"
+# or simply use the literal arm and refer to a previously-bound variable.
+#
+# Exhaustiveness: the compiler requires every branch to be reachable.
+# Literal patterns do NOT count toward exhaustiveness for a general type
+# like Int or String — you MUST include a variable or wildcard catch-all arm.
+# If you omit it, the compiler rejects the case as non-exhaustive.
+
+test "describeInt" {
+  expect describeInt 0 == "zero"
+  expect describeInt 1 == "one"
+  expect describeInt 2 == "two"
+  expect describeInt 99 == "many (99)"
+}
+
+test "httpStatusText" {
+  expect httpStatusText 200 == "OK"
+  expect httpStatusText 404 == "Not Found"
+  expect httpStatusText 999 == "Unknown"
+}
+
+test "parseCommand" {
+  expect parseCommand "help" == "show help"
+  expect parseCommand "version" == "show version"
+  expect parseCommand "deploy" == "unknown command: deploy"
+}
+
+test "classifyChar" {
+  expect classifyChar "a" == "vowel"
+  expect classifyChar "b" == "consonant or other"
+  expect classifyChar "i" == "vowel"
+}
+
+test "discountForTier" {
+  expect discountForTier Enterprise "any" == 40
+  expect discountForTier Gold "any" == 25
+  expect discountForTier Free "WELCOME10" == 10
+  expect discountForTier Free "SUMMER20" == 20
+  expect discountForTier Free "INVALID" == 0
+}

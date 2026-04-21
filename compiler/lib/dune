@@ -1,0 +1,10 @@
+(library
+ (name tesl_compiler_lib)
+ (wrapped false)
+ (ocamlopt_flags (:standard -w -50))
+ (ocamlc_flags (:standard -w -50))
+ (modules formatter linter ast checker compile emit_racket emit_ts emit_elm ir lexer location mutate parser proof_checker token type_system validation)
+ (libraries str))
+
+(ocamllex
+ (modules lexer))

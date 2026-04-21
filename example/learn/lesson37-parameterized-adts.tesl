@@ -1,0 +1,290 @@
+#lang tesl
+module ParamAdts exposing [
+  Box(..),
+  Option(..),
+  Either(..),
+  Pair(..),
+  Tree(..),
+  wrap,
+  unwrap,
+  mapBox,
+  fromOption,
+  mapOption,
+  bindOption,
+  mapRight,
+  mapLeft,
+  fromRight,
+  safeDivide,
+  treeSize,
+  treeDepth,
+  treeInsert,
+  treeContains,
+]
+
+# ═══════════════════════════════════════════
+# PARAMETERIZED ADTS
+# ═══════════════════════════════════════════
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Parameterized ADTs let you write generic container types.
+# Declare type parameters as lowercase names after the type name:
+#
+#   type Box a = MkBox value:a
+#
+# The parameter 'a' becomes a placeholder for ANY type. When you use:
+#   Box Int     — a box containing an Int
+#   Box String  — a box containing a String
+# The compiler infers the right type from context.
+#
+# The standard library already provides Maybe and Result as parameterized
+# ADTs. This lesson shows you how to define your own.
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Int exposing [Int.nonZero, Int.divide]
+
+# ═══════════════════════════════════════════
+# PART 1: Simple single-parameter containers
+# ═══════════════════════════════════════════
+
+# A box wrapping a single value.
+# 'a' is the type parameter — replaced by a concrete type on use.
+type Box a
+  = MkBox value: a
+
+fn wrap(x: Int) -> Box Int =
+  MkBox(x)
+
+fn unwrap(b: Box Int) -> Int =
+  case b of
+    MkBox value -> value
+
+fn mapBox(b: Box Int, f: Int -> Int) -> Box Int =
+  case b of
+    MkBox value -> MkBox(f(value))
+
+test "Box" {
+  let b = wrap 42
+  expect unwrap b == 42
+  expect unwrap (mapBox b (fn(x: Int) -> x + 1)) == 43
+  expect unwrap (MkBox 0) == 0
+}
+
+# ═══════════════════════════════════════════
+# PART 2: Option — nullable without null
+# ═══════════════════════════════════════════
+# Option is your own version of Maybe.
+# Use it when a value might or might not exist.
+# The compiler forces you to handle both cases.
+
+type Option a
+  = Some value: a
+  | None
+
+fn fromOption(o: Option Int, default: Int) -> Int =
+  case o of
+    Some value -> value
+    None -> default
+
+fn mapOption(o: Option Int, f: Int -> Int) -> Option Int =
+  case o of
+    Some value -> Some(f(value))
+    None -> None
+
+fn bindOption(o: Option Int, f: Int -> Option Int) -> Option Int =
+  case o of
+    Some value -> f(value)
+    None -> None
+
+test "Option" {
+  expect fromOption (Some 7) 0 == 7
+  expect fromOption None 99 == 99
+  expect fromOption (mapOption (Some 5) (fn(x: Int) -> x * 2)) 0 == 10
+  expect fromOption (mapOption None (fn(x: Int) -> x * 2)) 0 == 0
+  expect fromOption (bindOption (Some 4) (fn(x: Int) -> Some(x + 1))) 0 == 5
+  expect fromOption (bindOption None (fn(x: Int) -> Some(x + 1))) 0 == 0
+}
+
+# ═══════════════════════════════════════════
+# PART 3: Either — two-case result
+# ═══════════════════════════════════════════
+# Either holds one of two types. Convention:
+#   Left  — usually the error case
+#   Right — usually the success case ("right" as in "correct")
+
+type Either a b
+  = Left value: a
+  | Right value: b
+
+fn mapRight(e: Either String Int, f: Int -> Int) -> Either String Int =
+  case e of
+    Left value -> Left(value) # propagate the error
+    Right value -> Right(f(value))
+
+fn mapLeft(e: Either String Int, f: String -> String) -> Either String Int =
+  case e of
+    Left value -> Left(f(value))
+    Right value -> Right(value)
+
+fn fromRight(e: Either String Int, default: Int) -> Int =
+  case e of
+    Left _ -> default
+    Right v -> v
+
+# Safely divide two integers using the proof system.
+# Returns Left on zero divisor, Right with the result otherwise.
+fn safeDivide(a: Int, b: Int) -> Either String Int =
+  if b == 0 then
+    Left("division by zero")
+  else
+    let safe = check Int.nonZero b
+    Right(Int.divide a safe)
+
+test "Either" {
+  expect fromRight (Right 42) 0 == 42
+  expect fromRight (Left "oops") 0 == 0
+
+  let doubled = mapRight (Right 5) (fn(x: Int) -> x * 2)
+  expect fromRight doubled 0 == 10
+
+  let unchanged = mapRight (Left "err") (fn(x: Int) -> x * 2)
+  expect fromRight unchanged 0 == 0
+
+  expect fromRight (safeDivide 10 2) (-1) == 5
+  expect fromRight (safeDivide 10 0) (-1) == (-1)
+}
+
+# ═══════════════════════════════════════════
+# PART 4: Pair — two values together
+# ═══════════════════════════════════════════
+
+type Pair a b
+  = MkPair first: a second: b
+
+# ═══════════════════════════════════════════
+# PART 5: Recursive parameterized ADTs
+# ═══════════════════════════════════════════
+# Parameterized ADTs can be recursive. A binary tree is a classic example:
+# a tree is either a Leaf (empty) or a Node with a value and two sub-trees.
+
+type Tree a
+  = Leaf
+  | Node left: (Tree Int) value: Int right: (Tree Int)
+
+fn treeSize(t: Tree Int) -> Int =
+  case t of
+    Leaf -> 0
+    Node left value right ->
+      1 + treeSize(left) + treeSize(right)
+
+fn treeDepth(t: Tree Int) -> Int =
+  case t of
+    Leaf -> 0
+    Node left value right ->
+      let ld = treeDepth(left)
+      let rd = treeDepth(right)
+      let maxD = if ld > rd then
+        ld
+      else
+        rd
+      1 + maxD
+
+fn treeContains(t: Tree Int, target: Int) -> Bool =
+  case t of
+    Leaf -> False
+    Node left value right ->
+      if value == target then
+        True
+      else if target < value then
+        treeContains left target
+      else
+        treeContains right target
+
+fn treeInsert(t: Tree Int, v: Int) -> Tree Int =
+  case t of
+    Leaf -> Node Leaf v Leaf
+    Node left value right ->
+      if v == value then
+        t
+      else if v < value then
+        Node (treeInsert left v) value right
+      else
+        Node left value (treeInsert right v)
+
+test "Tree" {
+  let empty = Leaf
+  let t1 = treeInsert empty 5
+  let t2 = treeInsert t1 3
+  let t3 = treeInsert t2 7
+  let t4 = treeInsert t3 1
+
+  expect treeSize Leaf == 0
+  expect treeSize t1 == 1
+  expect treeSize t3 == 3
+  expect treeSize t4 == 4
+
+  expect treeDepth Leaf == 0
+  expect treeDepth t1 == 1
+  expect treeDepth t3 == 2
+
+  expect treeContains t3 5
+  expect treeContains t3 3
+  expect treeContains t3 7
+  expect treeContains t4 1
+  expect treeContains t4 5 == True
+  expect treeContains t3 99 == False
+  expect treeContains Leaf 1 == False
+}
+
+type Foo a b
+  = FooLeft value1: a value2: b
+  | FooRight value: b
+
+fn showcaseFoo(x: Foo Int String) -> Int =
+  case x of
+    FooLeft v1 v2 where v2 == "hej" && v1 > 2 -> 5
+    FooLeft v1 _ -> v1
+    FooRight b where b == "hej" -> 5
+    FooRight _ -> 2
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Type parameters let you write code once and use it with many types.
+# Instead of writing BoxInt, BoxString, BoxBool separately, you write Box a
+# and the compiler fills in 'a' from context.
+#
+# This is Hindley-Milner parametric polymorphism: type variables are unified
+# during type inference so you never need to write explicit type arguments.
+#
+# At runtime, type parameters are erased — they exist only for compile-time
+# checking. A Box Int and a Box String produce the same Racket runtime code
+# because Racket is dynamically typed. The Tesl compiler enforces the types;
+# the Racket runtime trusts those checks.
+#
+# Pattern matching on parameterized ADTs works exactly like non-parameterized
+# ones. The type parameter controls what type you get when you bind a field,
+# not how matching works.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Parameterized ADTs are a fundamental feature of type theory:
+#   - They correspond to "type constructors" in Haskell, "generics" in Java/Rust
+#   - "Box a" is a type constructor: it takes a type and produces a type
+#   - "Box Int" applies that constructor to Int, yielding a concrete type
+#
+# In the Tesl compiler, type parameters are tracked as type variables (TVars)
+# in the Hindley-Milner type system. When you write:
+#   fn wrap(x: Int) -> Box Int = Box(x)
+# The checker sees Box Int as the expected return type, and Box(x) constructs
+# an ADT value with 'a' unified to Int.
+#
+# Recursive parameterized ADTs (like Tree) are sound because:
+#   - Each recursive reference names the SAME type parameter
+#   - The compiler tracks that Tree Int is not the same as Tree String
+#   - Pattern matching binds each field to the concrete type, not the parameter
+#
+# GDP-wise: parameterized ADTs participate in proofs like any other ADT.
+# You can annotate fields with proof requirements, and pattern match bindings
+# introduce fresh named-value subjects for proof reasoning.

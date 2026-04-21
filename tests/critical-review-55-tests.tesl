@@ -1,0 +1,316 @@
+#lang tesl
+# =====================================================================
+# Critical Review 55 — positive regression tests
+# =====================================================================
+#
+# Tests must both compile AND produce correct answers at runtime.
+# Key focus: integer/string literal proof args, lambda greedy parsing,
+# tuple proof loss, ForAll invariants, 5-step chains, ghost witness.
+#
+# Paired with: compiler/test/test_review55_antagonistic.ml
+
+module CriticalReview55 exposing []
+
+import Tesl.Prelude exposing [ Int, Bool(..), String, List, Fact, ]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [
+  List.length,
+  List.filterCheck,
+  List.map,
+  List.sort,
+  IsSorted,
+]
+import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
+import Tesl.String exposing [String.trim, String.length, IsTrimmed]
+
+# ─── Proof vocabulary ────────────────────────────────────────────────────────
+
+fact IsPositive (n: Int)
+fact IsSmall (n: Int)
+fact IsEven (n: Int)
+
+check checkPos(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+check checkSmall(n: Int) -> n: Int ::: IsSmall n =
+  if n < 1000 then
+    ok n ::: IsSmall n
+  else
+    fail 400 "too large"
+
+check checkEven(n: Int) -> n: Int ::: IsEven n =
+  if n % 2 == 0 then
+    ok n ::: IsEven n
+  else
+    fail 400 "not even"
+
+fn needPos(n: Int ::: IsPositive n) -> Int = n
+fn needSmall(n: Int ::: IsSmall n) -> Int = n
+fn needBoth(n: Int ::: IsPositive n && IsSmall n) -> Int = n
+fn needAll3(n: Int ::: IsPositive n && IsSmall n && IsEven n) -> Int = n
+
+# ─── R55_LA — Lambda parsing: parens required around lambda in application ───
+
+fn r55_la01_map_with_paren_lambda(xs: List Int) -> Int =
+  let doubled = List.map (fn(n: Int) -> n + n) xs
+  List.length doubled
+
+fn r55_la02_filter_with_paren_lambda(xs: List Int) -> List Int =
+  let positives = List.filterCheck checkPos xs
+  List.map (fn(n: Int) -> n + 1) positives
+
+test "R55_LA: parenthesized lambda in application position" {
+  expect r55_la01_map_with_paren_lambda [1, 2, 3] == 3
+  expect r55_la01_map_with_paren_lambda [] == 0
+
+  expect r55_la02_filter_with_paren_lambda [1, 2, -3] == [2, 3]
+  expect r55_la02_filter_with_paren_lambda [-1, -2] == []
+}
+
+# ─── R55_TU — Tuple proof loss: proof via original variable not accessor ─────
+
+fn r55_tu01_tuple_proof_via_var(raw: Int) -> Int =
+  let pos = check checkPos raw
+  let _pair = Tuple2 pos 0
+  needPos pos
+
+fn r55_tu02_tuple_first_raw(raw: Int) -> Int =
+  let pos = check checkPos raw
+  let pair = Tuple2 pos 5
+  Tuple2.first pair + Tuple2.second pair
+
+test "R55_TU: Tuple access and proof via variable" {
+  expect r55_tu01_tuple_proof_via_var 5 == 5
+  expectFail r55_tu01_tuple_proof_via_var (-1)
+
+  expect r55_tu02_tuple_first_raw 3 == 8
+}
+
+# ─── R55_FM — ForAll proof: correctly lost through map, preserved by filterCheck
+
+fn r55_fm01_forall_via_filtercheck(xs: List Int) -> Int =
+  let positives = List.filterCheck checkPos xs
+  let needPosAll = fn(ns: List Int ::: ForAll IsPositive ns) -> List.length ns
+  needPosAll positives
+
+fn r55_fm02_forall_lost_through_map_runtime(xs: List Int) -> Int =
+  let positives = List.filterCheck checkPos xs
+  let doubled = List.map (fn(n: Int) -> n + n) positives
+  List.length doubled
+
+test "R55_FM: ForAll proof correctness" {
+  expect r55_fm01_forall_via_filtercheck [1, 2, -3, 4] == 3
+  expect r55_fm01_forall_via_filtercheck [-1, -2] == 0
+
+  expect r55_fm02_forall_lost_through_map_runtime [1, 2, 3] == 3
+}
+
+# ─── R55_CH — Combined check && ──────────────────────────────────────────────
+
+fn r55_ch01_combined_check(raw: Int) -> Int =
+  let result = check (checkPos && checkSmall) raw
+  needBoth result
+
+fn r55_ch02_combined_in_filtercheck(xs: List Int) -> Int =
+  let result = List.filterCheck (checkPos && checkSmall) xs
+  List.length result
+
+test "R55_CH: combined check && operator" {
+  expect r55_ch01_combined_check 5 == 5
+  expect r55_ch01_combined_check 999 == 999
+  expectFail r55_ch01_combined_check (-1)
+  expectFail r55_ch01_combined_check 1001
+
+  expect r55_ch02_combined_in_filtercheck [1, 2, -3, 1500] == 2
+}
+
+# ─── R55_MP — 5-step proof chain ──────────────────────────────────────────────
+
+fact A (n: Int)
+fact B (n: Int)
+fact C (n: Int)
+fact D (n: Int)
+fact E (n: Int)
+
+check checkA(n: Int) -> n: Int ::: A n =
+  if n > 0 then
+    ok n ::: A n
+  else
+    fail 400 "bad"
+
+check checkB(n: Int) -> n: Int ::: B n =
+  if n < 1000 then
+    ok n ::: B n
+  else
+    fail 400 "bad"
+
+check checkC(n: Int) -> n: Int ::: C n =
+  if n % 2 == 0 then
+    ok n ::: C n
+  else
+    fail 400 "bad"
+
+check checkD(n: Int) -> n: Int ::: D n =
+  if n % 3 == 0 then
+    ok n ::: D n
+  else
+    fail 400 "bad"
+
+check checkE(n: Int) -> n: Int ::: E n =
+  if n % 5 == 0 then
+    ok n ::: E n
+  else
+    fail 400 "bad"
+
+fn needAll5(n: Int ::: A n && B n && C n && D n && E n) -> Int = n
+fn needAE(n: Int ::: A n && E n) -> Int = n
+
+fn r55_mp01_five_step(raw: Int) -> Int =
+  let a = check checkA raw
+  let b = check checkB a
+  let c = check checkC b
+  let d = check checkD c
+  let e = check checkE d
+  needAll5 e
+
+fn r55_mp02_five_conjunct_selective(raw: Int) -> Int =
+  let a = check checkA raw
+  let b = check checkB a
+  let c = check checkC b
+  let d = check checkD c
+  let e = check checkE d
+  let (v ::: pa && _ && _ && _ && pe) = e
+  needAE <| v ::: pa && pe
+
+test "R55_MP: 5-step proof chains" {
+  expect r55_mp01_five_step 30 == 30
+  expect r55_mp01_five_step 60 == 60
+  expectFail r55_mp01_five_step (-1)
+  expectFail r55_mp01_five_step 5
+  expectFail r55_mp01_five_step 7
+
+  expect r55_mp02_five_conjunct_selective 30 == 30
+}
+
+# ─── R55_GW — Ghost witness with correct detachFact ─────────────────────────
+
+fact IsValidRange (lo: Int) (hi: Int)
+
+establish proveRange(lo: Int, hi: Int) -> Fact (IsValidRange lo hi) =
+  IsValidRange lo hi
+
+record BoundedInt {
+  value: Int ::: IsPositive value
+} ::: IsValidRange lo hi via proveRange
+
+fn makeBoundedInt(lo: Int, hi: Int, value: Int ::: IsPositive value) -> BoundedInt =
+  let rangeProof = proveRange lo hi
+  BoundedInt { value: value } ::: (detachFact rangeProof)
+
+test "R55_GW: ghost witness correct usage" {
+  let lo = 1
+  let hi = 100
+  let rawVal = 50
+  let posVal = check checkPos rawVal
+  let bounded = makeBoundedInt lo hi posVal
+  expect bounded.value == 50
+}
+
+# ─── R55_LI — Named variable bounds workaround for integer fact args ─────────
+
+fact InRange (lo: Int) (hi: Int) (n: Int)
+
+check checkInRange(lo: Int, hi: Int, n: Int) -> n: Int ::: InRange lo hi n =
+  if lo <= n && n <= hi then
+    ok n ::: InRange lo hi n
+  else
+    fail 400 "out of range"
+
+fn needInRange(lo: Int, hi: Int, n: Int ::: InRange lo hi n) -> Int = n
+
+fn r55_li01_named_bounds(raw: Int) -> Int =
+  let lo = 1
+  let hi = 100
+  let v = check checkInRange lo hi raw
+  needInRange lo hi v
+
+test "R55_LI: named variable bounds for multi-param proofs" {
+  expect r55_li01_named_bounds 50 == 50
+  expect r55_li01_named_bounds 1 == 1
+  expect r55_li01_named_bounds 100 == 100
+  expectFail r55_li01_named_bounds 0
+  expectFail r55_li01_named_bounds 101
+}
+
+# ─── R55_SP — Stdlib proof propagation regression (r54 fixed) ────────────────
+
+fn r55_sp01_trim_produces_istrimmed(raw: String) -> String ? IsTrimmed =
+  String.trim raw
+
+fn r55_sp02_sort_produces_issorted(xs: List Int) -> List Int ? IsSorted =
+  List.sort xs
+
+fn r55_sp03_use_trimmed(raw: String) -> Int =
+  let trimmed = r55_sp01_trim_produces_istrimmed raw
+  let needTrimmed = fn(s: String ::: IsTrimmed s) -> String.length s
+  needTrimmed trimmed
+
+test "R55_SP: stdlib proof propagation" {
+  expect r55_sp03_use_trimmed "  hello  " == 5
+  expect r55_sp03_use_trimmed "hello" == 5
+}
+
+# ─── R55_DC — Duplicate constructor detection ─────────────────────────────────
+
+type TrafficLight
+  = TrafficRed
+  | TrafficYellow
+  | TrafficGreen
+
+fn r55_dc01_unique_ctors(t: TrafficLight) -> String =
+  case t of
+    TrafficRed -> "stop"
+    TrafficYellow -> "caution"
+    TrafficGreen -> "go"
+
+test "R55_DC: unique constructor names" {
+  expect r55_dc01_unique_ctors TrafficRed == "stop"
+  expect r55_dc01_unique_ctors TrafficYellow == "caution"
+  expect r55_dc01_unique_ctors TrafficGreen == "go"
+}
+
+# ─── R55_MC — Mixed case patterns ────────────────────────────────────────────
+
+fn r55_mc01_literal_and_ctor(m: Maybe Int) -> String =
+  case m of
+    Nothing -> "nothing"
+    Something 0 -> "zero"
+    Something 1 -> "one"
+    Something _ -> "other"
+
+type Status2
+  = Status2Active
+  | Status2Done
+  | Status2Cancelled
+
+fn r55_mc02_fallthrough_arms(s: Status2) -> String =
+  case s of
+    Status2Active ->
+    Status2Done ->
+      "completed"
+    Status2Cancelled ->
+      "cancelled"
+
+test "R55_MC: mixed patterns and fall-through" {
+  expect r55_mc01_literal_and_ctor Nothing == "nothing"
+  expect r55_mc01_literal_and_ctor (Something 0) == "zero"
+  expect r55_mc01_literal_and_ctor (Something 1) == "one"
+  expect r55_mc01_literal_and_ctor (Something 42) == "other"
+
+  expect r55_mc02_fallthrough_arms Status2Active == "completed"
+  expect r55_mc02_fallthrough_arms Status2Done == "completed"
+  expect r55_mc02_fallthrough_arms Status2Cancelled == "cancelled"
+}

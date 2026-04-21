@@ -1,0 +1,538 @@
+#lang tesl
+module ChatBackend exposing [ChatServer, NotificationWorkers]
+
+import Tesl.Prelude exposing [Bool(..), String, List, Fact, Unit]
+import Tesl.Json exposing [stringCodec]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Queue exposing [queueRead, queueWrite, pubsub, FromDeadQueue]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.String exposing [String.length]
+import Tesl.Time exposing [nowMillis, time, PosixMillis]
+import Tesl.Env exposing [env, envInt]
+import Tesl.Id exposing [generatePrefixedId]
+import Tesl.Random exposing [random]
+import Tesl.Telemetry exposing [telemetry, initTelemetry]
+import Tesl.ApiTest exposing [
+  statusOk,
+  statusClientError,
+  jsonInt,
+  jsonString,
+  jsonLength,
+  isNotNull,
+  includesWhere,
+  excludesWhere,
+  hasLength,
+  isNotEmpty,
+  arrayAt,
+  hasField,
+  fieldAt,
+  bodyField,
+  jsonContains,
+  subscribe,
+  collect,
+  JobResult(..),
+  processNextJob,
+  processNextDeadJob,
+  pendingJobCount,
+  expectJobOk,
+  expectJobFailed,
+]
+
+# ─── Capabilities ─────────────────────────────────────────────────────────────
+capability chatRead implies dbRead
+capability chatWrite implies dbWrite, time, random
+capability chatPubSub implies pubsub
+capability chatQueue implies queueWrite
+capability notifyCap implies queueRead
+capability deadLetterCap implies queueRead, chatPubSub
+capability chatService implies chatRead, chatWrite, chatPubSub, chatQueue
+
+# ─── Domain records ──────────────────────────────────────────────────────────
+record SessionUser {
+  id: String ::: NonEmpty id
+  username: String ::: NonEmpty username
+}
+
+record LoginRequest {
+  username: String ::: NonEmpty username
+}
+
+record CreateRoomRequest {
+  name: String ::: NonEmpty name
+}
+
+record PostMessageRequest {
+  content: String ::: NonEmpty content
+}
+
+# ─── Codecs ──────────────────────────────────────────────────────────────────
+
+codec SessionUser {
+  toJson {
+    id -> "id" with_codec stringCodec
+    username -> "username" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+codec LoginRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      username <- "username" with_codec stringCodec via checkNonEmptyString
+    }
+  ]
+}
+
+codec CreateRoomRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      name <- "name" with_codec stringCodec via checkNonEmptyString
+    }
+  ]
+}
+
+codec PostMessageRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      content <- "content" with_codec stringCodec via checkNonEmptyString
+    }
+  ]
+}
+
+# ─── Job records ─────────────────────────────────────────────────────────────
+record NotifyJob {
+  senderName: String
+  roomName: String
+  content: String
+}
+
+# ─── Pub/sub event ADT ───────────────────────────────────────────────────────
+type RoomEvent
+  = NewMessage msgId: String userId: String username: String content: String createdAt: PosixMillis
+  | UserJoined userId: String username: String
+  | NotifyFailed senderName: String roomName: String
+
+# ─── Database entities ───────────────────────────────────────────────────────
+entity ChatUser table "users" primaryKey id {
+  id: String
+  username: String @db(text)
+}
+
+entity Room table "rooms" primaryKey id {
+  id: String
+  name: String @db(text)
+  createdAt: PosixMillis # BIGINT in DB — auto-mapped by PosixMillis
+}
+
+entity Message table "messages" primaryKey id {
+  id: String
+  roomId: String @db(text)
+  userId: String @db(text)
+  username: String @db(text)
+  content: String @db(text)
+  createdAt: PosixMillis # BIGINT in DB — auto-mapped by PosixMillis
+}
+
+# ─── Database ────────────────────────────────────────────────────────────────
+database ChatDatabase {
+  backend postgres
+  schema "chat"
+  entities [ChatUser, Room, Message]
+  postgres {
+    database env("CHAT_DB_NAME")
+    user env("CHAT_DB_USER")
+    password env("CHAT_DB_PASSWORD")
+    host env("CHAT_DB_HOST")
+    port envInt("CHAT_DB_PORT", 5432)
+    socket env("CHAT_DB_SOCKET")
+  }
+}
+
+# ─── Queue ───────────────────────────────────────────────────────────────────
+queue NotificationQueue {
+  database ChatDatabase
+  jobs [NotifyJob]
+  retry {
+    maxAttempts: 3
+    backoff: exponential
+    initialDelay: 5
+  }
+}
+
+# ─── Channel ─────────────────────────────────────────────────────────────────
+channel RoomMessages(roomId: String) {
+  database ChatDatabase
+  payload RoomEvent
+}
+
+# ─── Auth ────────────────────────────────────────────────────────────────────
+fact Authenticated (session: SessionUser)
+
+auth cookieAuth(request: HttpRequest) -> session: SessionUser ::: Authenticated session
+  requires [chatRead] =
+  case Dict.lookup "chatUserId" request.cookies of
+    Nothing ->
+      fail 401 "not logged in: set chatUserId cookie"
+    Something uid ->
+      let existing = selectOne u from ChatUser where u.id == uid
+      case existing of
+        Nothing ->
+          fail 401 "user not found"
+        Something u ->
+          let checkedUid = check checkNonEmptyString uid
+          let checkedUsername = check checkNonEmptyString u.username
+          ok SessionUser { id: checkedUid, username: checkedUsername } ::: Authenticated session
+
+# ─── Captures ────────────────────────────────────────────────────────────────
+fact NonEmpty (t: String)
+
+# NonEmpty: a String at most 500 characters long.
+check checkNonEmptyString(s: String) -> s: String ::: NonEmpty s =
+  if String.length s > 0 then
+    ok s ::: NonEmpty s
+  else
+    fail 400 "cannot be empty string"
+
+fact ValidRoomId (id: String)
+
+check checkRoomId(id: String) -> id: String ::: ValidRoomId id =
+  if String.length id > 0 then
+    ok id ::: ValidRoomId id
+  else
+    fail 400 "invalid room id"
+
+capture roomIdCapture: String ::: ValidRoomId roomId using stringCodec via checkRoomId
+
+# ─── Handlers ────────────────────────────────────────────────────────────────
+
+handler login(req: LoginRequest) -> ChatUser
+  requires [chatRead] =
+  let existing = selectOne u from ChatUser where u.username == req.username
+  case existing of
+    Nothing ->
+      fail 401 "user not found"
+    Something u ->
+      u
+
+handler seedUser(req: LoginRequest)
+  -> exists userId: String => ChatUser ? FromDb (Id == userId)
+  requires [chatWrite] =
+  let userId = generatePrefixedId "usr"
+  exists userId =>
+    insert ChatUser { id: userId, username: req.username }
+
+handler listRooms(session: SessionUser ::: Authenticated session) -> List Room
+  requires [chatRead] =
+  telemetry "rooms.list" { user.id = session.id }
+  select r from Room
+
+handler createRoom(session: SessionUser ::: Authenticated session, req: CreateRoomRequest)
+  -> exists roomId: String => Room ? FromDb (Id == roomId)
+  requires [chatWrite] =
+  let roomId = generatePrefixedId "room"
+  exists roomId =>
+    insert Room { id: roomId, name: req.name, createdAt: nowMillis() }
+
+handler getMessages(session: SessionUser ::: Authenticated session,
+                    roomId: String ::: ValidRoomId roomId)
+  -> List Message ? ForAll (FromDb (RoomId == roomId))
+  requires [chatRead] =
+  telemetry "messages.get" { room.id = roomId, user.id = session.id }
+  select m from Message where m.roomId == roomId
+
+handler postMessage(session: SessionUser ::: Authenticated session,
+                    roomId: String ::: ValidRoomId roomId,
+                    req: PostMessageRequest)
+  -> exists msgId: String => Message ? FromDb (Id == msgId)
+  requires [chatWrite, chatPubSub, chatQueue] =
+    let msgId = generatePrefixedId "msg"
+    with transaction {
+      publish RoomMessages(roomId) NewMessage { msgId: msgId, userId: session.id, username: session.username, content: req.content, createdAt: nowMillis() }
+      enqueue NotifyJob { senderName: session.username, roomName: roomId, content: req.content }
+      exists msgId =>
+        insert Message {
+          id: msgId,
+          roomId: roomId,
+          userId: session.id,
+          username: session.username,
+          content: req.content,
+          createdAt: nowMillis()
+        }
+    }
+
+# ─── Workers ─────────────────────────────────────────────────────────────────
+#
+# Worker concurrency — syntax:
+#
+#   startWorkers WorkersName with capabilities [...]      # 1 worker thread (default)
+#   startWorkers N WorkersName with capabilities [...]    # N concurrent worker threads
+#
+# How it works:
+#   Tesl uses PostgreSQL's `SELECT ... FOR UPDATE SKIP LOCKED` to dequeue jobs safely.
+#   Each worker thread runs independently — they never block each other.
+#   N concurrent workers process up to N jobs in parallel, which is useful when:
+#     - Jobs do I/O (HTTP calls, DB writes) and you want to pipeline them
+#     - Your job queue grows faster than a single worker can drain it
+#
+# Guidance on choosing N:
+#   - CPU-bound work: N ≈ number of CPU cores
+#   - I/O-bound work (HTTP, DB): N can be higher, e.g. 4–8
+#   - Conservative starting point: 2–4, then increase based on monitoring
+#   - For dead workers (deadWorkers / startDeadWorkers): always 1 (single-threaded)
+#     Dead workers handle failure compensation — they should run serially to
+#     avoid duplicate compensating actions on the same job.
+#
+# This example starts 3 parallel notification workers.
+# Each worker handles one NotifyJob at a time; with 3 workers, up to 3 notifications
+# can be delivered concurrently.
+
+worker notifyWorker(job: NotifyJob ::: FromQueue (Id == jobId) job)
+  =
+  telemetry "notify.job" { sender = job.senderName, room = job.roomName }
+  if job.senderName == "anna" then
+    fail 500 "notifications blocked for anna"
+  else
+    job
+
+workers NotificationWorkers for NotificationQueue {
+  NotifyJob = notifyWorker
+}
+
+# Dead-letter worker: fires when a NotifyJob has exhausted all retry attempts.
+# Publishes a NotifyFailed event to the room so the frontend can display
+# "this notification could not be delivered".
+deadWorker handleDeadNotify(job: NotifyJob ::: FromDeadQueue (Id == jobId) job)
+  requires [deadLetterCap] =
+  # deadLetterCap implies chatPubSub implies pubsub, so publish is permitted.
+  # Omitting requires [deadLetterCap] would be a compile error (deadWorker capability check).
+  telemetry "notify.dead" { sender = job.senderName, room = job.roomName }
+  publish RoomMessages(job.roomName) NotifyFailed { senderName: job.senderName, roomName: job.roomName }
+  job
+
+deadWorkers DeadNotificationWorkers for NotificationQueue {
+  NotifyJob = handleDeadNotify
+}
+
+# ─── API ─────────────────────────────────────────────────────────────────────
+api ChatApi {
+  post "/users"
+    body req: LoginRequest
+    -> exists userId: String => ChatUser ? FromDb (Id == userId)
+
+  post "/login"
+    body req: LoginRequest
+    -> ChatUser
+
+  get "/rooms"
+    auth session: SessionUser ::: Authenticated session via cookieAuth
+    -> List Room
+
+  post "/rooms"
+    auth session: SessionUser ::: Authenticated session via cookieAuth
+    body req: CreateRoomRequest
+    -> exists roomId: String => Room ? FromDb (Id == roomId)
+
+  get "/rooms/:roomId/messages"
+    auth session: SessionUser ::: Authenticated session via cookieAuth
+    capture roomId: String ::: ValidRoomId roomId via roomIdCapture
+    -> List Message ? ForAll (FromDb (RoomId == roomId))
+
+  post "/rooms/:roomId/messages"
+    auth session: SessionUser ::: Authenticated session via cookieAuth
+    capture roomId: String ::: ValidRoomId roomId via roomIdCapture
+    body req: PostMessageRequest
+    -> exists msgId: String => Message ? FromDb (Id == msgId)
+
+  # SSE endpoint
+  # Clients use the browser's native EventSource API (standard HTTP, same port).
+  # No nginx WebSocket proxy or separate port needed.
+  sse "/events/rooms/:roomId"
+    auth session: SessionUser ::: Authenticated session via cookieAuth
+    capture roomId: String ::: ValidRoomId roomId via roomIdCapture
+    subscribe RoomMessages(roomId)
+}
+
+server ChatServer for ChatApi {
+  seedUser = seedUser
+  login = login
+  listRooms = listRooms
+  createRoom = createRoom
+  getMessages = getMessages
+  postMessage = postMessage
+}
+
+api-test "rooms require authentication" for ChatServer requires [chatRead] {
+  let rooms = get "/rooms"
+  expect statusClientError rooms.status
+}
+
+api-test "chat flow can reuse ids and fields from returned JSON" for ChatServer requires [chatRead, chatWrite, chatPubSub, chatQueue] {
+  let createdUser = post "/users" body { "username": "alice" }
+  expect statusOk createdUser.status
+  expect hasField "id" createdUser.body
+  expect createdUser.body.username == "alice"
+
+  let userId = jsonString createdUser.body.id
+
+  let createdRoom = post "/rooms"
+                    cookie "chatUserId={userId}"
+                    body { "name": "General" }
+  expect statusOk createdRoom.status
+  expect createdRoom.body.name == "General"
+
+  let roomIdJson = bodyField "id" createdRoom
+  let roomId = jsonString roomIdJson
+  let roomName = jsonString createdRoom.body.name
+
+  let posted = post "/rooms/{roomId}/messages"
+                cookie "chatUserId={userId}"
+                body { "content": "hello {roomName}" }
+  expect statusOk posted.status
+  let postedRoomId = bodyField "roomId" posted
+  expect jsonString postedRoomId == roomId
+  expect posted.body.userId == userId
+  expect posted.body.username == "alice"
+  expect posted.body.content == "hello General"
+
+  let rooms = get "/rooms" cookie "chatUserId={userId}"
+  expect statusOk rooms.status
+  expect isNotEmpty rooms.body
+  expect jsonLength rooms.body == 1
+  expect includesWhere { "id": roomId, "name": roomName } rooms.body
+  expect excludesWhere { "name": "Random" } rooms.body
+  let firstRoom = arrayAt 0 rooms.body
+  expect hasField "createdAt" firstRoom
+  let roomCreatedAt = fieldAt "createdAt" firstRoom
+  expect jsonInt roomCreatedAt >= 0
+
+  let messages = get "/rooms/{roomId}/messages" cookie "chatUserId={userId}"
+  expect statusOk messages.status
+  expect hasLength 1 messages.body
+  expect includesWhere { "content": "hello General", "userId": userId } messages.body
+  let firstMessage = arrayAt 0 messages.body
+  expect fieldAt "userId" firstMessage == userId
+  let firstContent = fieldAt "content" firstMessage
+  expect jsonContains "General" firstContent
+}
+
+api-test "seed can prepare authenticated chat state" for ChatServer requires [chatRead, chatWrite] {
+  seed {
+    insert ChatUser { id: "usr-seeded", username: "seeded-alice" }
+    insert Room { id: "room-seeded", name: "Seeded room", createdAt: 0 }
+    insert Message {
+      id: "msg-seeded",
+      roomId: "room-seeded",
+      userId: "usr-seeded",
+      username: "seeded-alice",
+      content: "hello from seed",
+      createdAt: 0
+    }
+  }
+
+  let userId = "usr-seeded"
+  let roomId = "room-seeded"
+
+  let rooms = get "/rooms" cookie "chatUserId={userId}"
+  expect statusOk rooms.status
+  expect hasLength 1 rooms.body
+  let firstRoom = arrayAt 0 rooms.body
+  expect fieldAt "name" firstRoom == "Seeded room"
+
+  let messages = get "/rooms/{roomId}/messages" cookie "chatUserId={userId}"
+  expect statusOk messages.status
+  expect hasLength 1 messages.body
+  let firstMessage = arrayAt 0 messages.body
+  expect fieldAt "username" firstMessage == "seeded-alice"
+  expect fieldAt "content" firstMessage == "hello from seed"
+}
+
+api-test "room streams buffer messages while queue jobs are processed separately" for ChatServer requires [chatRead, chatWrite, chatPubSub, chatQueue, notifyCap] {
+  seed {
+    insert ChatUser { id: "usr-alice", username: "alice" }
+    insert ChatUser { id: "usr-bob", username: "bob" }
+    insert Room { id: "room-live", name: "Live room", createdAt: 0 }
+  }
+
+  let roomId = "room-live"
+  let aliceId = "usr-alice"
+  let bobId = "usr-bob"
+
+  let stream = subscribe "/events/rooms/{roomId}" cookie "chatUserId={aliceId}"
+  let posted = post "/rooms/{roomId}/messages"
+                cookie "chatUserId={bobId}"
+                body { "content": "Hello from Bob" }
+  expect statusOk posted.status
+  expect pendingJobCount NotificationQueue == 1
+
+  let queued = processNextJob NotificationQueue
+  let job = expectJobOk queued
+  expect job.senderName == "bob"
+  expect job.roomName == roomId
+  expect job.content == "Hello from Bob"
+  expect pendingJobCount NotificationQueue == 0
+
+  let events = collect stream count 1 timeout 1500ms
+  expect isNotEmpty events
+  expect includesWhere { "tag": "NewMessage", "fields": { "content": "Hello from Bob", "username": "bob" } } events
+}
+
+api-test "failed notification jobs publish dead-letter events to room streams" for ChatServer requires [chatRead, chatWrite, chatPubSub, chatQueue, notifyCap, deadLetterCap] {
+  seed {
+    insert ChatUser { id: "usr-anna", username: "anna" }
+    insert Room { id: "room-failure", name: "Failure room", createdAt: 0 }
+  }
+
+  let roomId = "room-failure"
+  let annaId = "usr-anna"
+
+  let stream = subscribe "/events/rooms/{roomId}" cookie "chatUserId={annaId}"
+  let posted = post "/rooms/{roomId}/messages"
+                cookie "chatUserId={annaId}"
+                body { "content": "notify failure demo" }
+  expect statusOk posted.status
+  expect pendingJobCount NotificationQueue == 1
+
+  let firstAttempt = processNextJob NotificationQueue
+  let firstError = expectJobFailed firstAttempt
+  expect isNotNull firstError
+
+  let secondAttempt = processNextJob NotificationQueue
+  let secondError = expectJobFailed secondAttempt
+  expect isNotNull secondError
+
+  let thirdAttempt = processNextJob NotificationQueue
+  let thirdError = expectJobFailed thirdAttempt
+  expect isNotNull thirdError
+  expect pendingJobCount NotificationQueue == 0
+
+  let deadResult = processNextDeadJob NotificationQueue
+  let deadJob = expectJobOk deadResult
+  expect deadJob.senderName == "anna"
+  expect deadJob.roomName == roomId
+
+  let events = collect stream
+                  until { "tag": "NotifyFailed", "fields": { "senderName": "anna", "roomName": roomId } }
+                  timeout 1500ms
+  expect includesWhere { "tag": "NewMessage", "fields": { "content": "notify failure demo" } } events
+  expect includesWhere { "tag": "NotifyFailed", "fields": { "senderName": "anna", "roomName": roomId } } events
+}
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+main with capabilities [chatService, notifyCap, deadLetterCap] {
+  initTelemetry service "chat-backend" endpoint "in-memory" console True
+  let port = envInt "CHAT_PORT" 8080
+  with database ChatDatabase {
+    with capabilities [chatService] {
+      startWorkers 3 NotificationWorkers with capabilities [notifyCap]
+      startDeadWorkers DeadNotificationWorkers with capabilities [deadLetterCap]
+      # Serve the frontend static files (index.html, main.js) on the same port.
+      # No nginx needed — everything runs on one port.
+      serve ChatServer on port with capabilities [chatService] static "example/chat/frontend"
+    }
+  }
+}

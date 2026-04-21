@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tesl Chat</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: #f0f2f5; color: #1a1a1a; height: 100vh; display: flex; flex-direction: column; }
+
+    #app { display: flex; flex-direction: column; height: 100vh; }
+
+    /* Login */
+    .login-page { display: flex; align-items: center; justify-content: center; flex: 1; }
+    .login-card  { background: white; border-radius: 12px; padding: 40px; width: 360px;
+                   box-shadow: 0 4px 24px rgba(0,0,0,.12); }
+    .login-card h1 { font-size: 28px; margin-bottom: 8px; color: #1a1a1a; }
+    .login-card p  { color: #666; margin-bottom: 24px; font-size: 14px; }
+
+    /* Layout */
+    .chat-layout  { display: flex; flex: 1; overflow: hidden; }
+    .sidebar      { width: 260px; background: #1a1a2e; color: white; display: flex; flex-direction: column; }
+    .sidebar-hdr  { padding: 20px 16px; font-weight: 700; font-size: 18px;
+                    border-bottom: 1px solid rgba(255,255,255,.1);
+                    display: flex; align-items: center; justify-content: space-between; }
+    .room-list    { flex: 1; overflow-y: auto; padding: 8px 0; }
+    .room-item    { padding: 10px 16px; cursor: pointer; border-radius: 6px; margin: 2px 8px;
+                    font-size: 14px; display: flex; align-items: center; gap: 8px;
+                    transition: background .15s; }
+    .room-item:hover    { background: rgba(255,255,255,.08); }
+    .room-item.active   { background: #4f8ef7; }
+    .room-item::before  { content: '#'; opacity: .6; }
+    .new-room     { padding: 12px 16px; border-top: 1px solid rgba(255,255,255,.1); }
+
+    /* Chat area */
+    .chat-area    { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .chat-header  { padding: 16px 20px; background: white; border-bottom: 1px solid #e5e7eb;
+                    font-weight: 600; display: flex; align-items: center; justify-content: space-between; }
+    .ws-badge     { font-size: 12px; font-weight: 400; padding: 4px 10px; border-radius: 20px; }
+    .ws-badge.on  { background: #d1fae5; color: #065f46; }
+    .ws-badge.off { background: #fee2e2; color: #991b1b; }
+    .messages     { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+    .msg          { background: white; border-radius: 10px; padding: 12px 16px;
+                    box-shadow: 0 1px 4px rgba(0,0,0,.06); max-width: 680px; }
+    .msg-system   { background: #fffbeb; border: 1px solid #fde68a; color: #92400e;
+                    font-size: 13px; font-style: italic; text-align: center;
+                    box-shadow: none; padding: 8px 16px; }
+    .msg-header   { font-size: 13px; margin-bottom: 4px; }
+    .msg-user     { font-weight: 600; color: #4f8ef7; }
+    .msg-time     { color: #9ca3af; margin-left: 8px; }
+    .msg-body     { font-size: 15px; line-height: 1.5; }
+    .msg-input    { padding: 16px 20px; background: white; border-top: 1px solid #e5e7eb; display: flex; gap: 10px; }
+    .empty-state  { display: flex; align-items: center; justify-content: center; flex: 1; color: #9ca3af; font-size: 14px; }
+
+    /* Backend instance badge */
+    .instance-badge { font-size: 11px; font-weight: 400; padding: 3px 8px; border-radius: 12px;
+                      background: rgba(79,142,247,.25); color: #93c5fd; white-space: nowrap; }
+
+    /* Common inputs */
+    input[type=text] { width: 100%; padding: 10px 14px; border: 1px solid #d1d5db;
+                       border-radius: 8px; font-size: 15px; outline: none; transition: border .15s; }
+    input[type=text]:focus { border-color: #4f8ef7; }
+    button  { padding: 10px 20px; background: #4f8ef7; color: white; border: none;
+              border-radius: 8px; font-size: 15px; cursor: pointer; font-weight: 500; transition: background .15s; }
+    button:hover { background: #3b82f6; }
+    button.secondary { background: rgba(255,255,255,.15); }
+    button.secondary:hover { background: rgba(255,255,255,.25); }
+    .error { color: #ef4444; font-size: 14px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- Compiled Elm app -->
+  <script src="main.js"></script>
+
+  <script>
+    var app = Elm.Main.init({ node: document.getElementById('app') });
+
+    // ── SSE bridge ───────────────────────────────────────────────────────
+    // Replaces the old WebSocket bridge.
+    // The Elm app sends the full SSE URL (e.g. "http://localhost:3000/events/rooms/room-id").
+    // EventSource auto-reconnects on disconnect — no manual reconnect logic needed.
+    var sse = null;
+
+    app.ports.connectWs.subscribe(function(url) {
+      if (sse) { sse.close(); }
+      sse = new EventSource(url);
+      sse.onopen    = function()    { app.ports.wsStatus.send('connected'); };
+      sse.onerror   = function()    { app.ports.wsStatus.send('error'); };
+      sse.onmessage = function(evt) { app.ports.receiveWsMsg.send(evt.data); };
+      // EventSource reconnects automatically — no onclose handler needed.
+    });
+
+    // ── Cookie helper ─────────────────────────────────────────────────────
+    // Called after login to persist the session
+    app.ports.setCookie.subscribe(function(keyValue) {
+      // keyValue = "chatUserId=usr_abc123"
+      document.cookie = keyValue + '; path=/; SameSite=Lax';
+    });
+
+    // ── Instance detection ────────────────────────────────────────────────
+    // Makes a HEAD request to a REST endpoint and reads the X-Backend-Instance
+    // header that nginx adds (contains the upstream address, e.g. "127.0.0.1:3000").
+    // Falls back to showing the current origin when running without nginx.
+    app.ports.detectInstance.subscribe(function() {
+      fetch('/rooms', { method: 'HEAD', credentials: 'same-origin' })
+        .then(function(resp) {
+          var inst = resp.headers.get('X-Backend-Instance');
+          if (inst) {
+            // nginx returns "127.0.0.1:3000" — extract just the port
+            var port = inst.split(':').pop();
+            app.ports.instanceDetected.send('backend :' + port);
+          } else {
+            // No nginx (single-backend mode) — show the origin port
+            app.ports.instanceDetected.send('backend :' + location.port);
+          }
+        })
+        .catch(function() {
+          app.ports.instanceDetected.send('unknown');
+        });
+    });
+  </script>
+</body>
+</html>

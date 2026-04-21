@@ -1,0 +1,284 @@
+#lang tesl
+module MultiParamProofs exposing [
+  InBounds,
+  checkInBounds,
+  requiresInBounds,
+  describeInBounds,
+  InWindow,
+  checkInWindow,
+  pairDescription,
+  Approved,
+  checkBudget,
+  approvedDescription,
+  InRange,
+  InOrder,
+  checkSortedPair,
+  useSortedPair,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# A check function can take MULTIPLE parameters and return a proof that
+# attaches to ANY one of them — not necessarily the first.
+#
+# The RETURN TYPE BINDING NAME identifies which parameter's value is returned
+# and which subject the proof is attached to:
+#
+#   check checkInBounds(lo: Int, hi: Int, n: Int) -> n: Int ::: InBounds lo hi n =
+#                                                    ^
+#                                         "n" matches the THIRD parameter
+#
+# The returned value is the validated n (third argument).
+# lo and hi appear in the proof as cross-parameters (lesson10 style).
+#
+# At a call site:
+#   let lo   = 0
+#   let hi   = 100
+#   let safeN = checkInBounds lo hi rawValue
+#   requiresInBounds lo hi safeN              -- ✓ proof satisfied
+#
+# IMPORTANT: cross-parameter subjects must be named let-bindings.
+# Passing literals directly as cross-parameters prevents the compiler from
+# tracking the proof connection.  Always bind lo, hi (etc.) to named variables
+# before passing them to both the check call and the requiring call.
+#
+# If the binding name is the FIRST parameter instead:
+#   check checkBudget(amount: Int, budget: Int) -> amount: Int ::: Approved amount budget
+# then the returned value is the first argument (amount), and budget is the
+# cross-parameter.  Same rules apply at call sites.
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Fact]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Example 1: Proof attached to a MIDDLE parameter
+# ─────────────────────────────────────────────────────────────────────────────
+
+# InBounds lo hi n: n is in the closed interval [lo, hi].
+fact InBounds (lo: Int) (hi: Int) (n: Int)
+
+# Return binding "n" — the THIRD parameter.
+# lo and hi are cross-parameters referenced in the proof.
+check checkInBounds(lo: Int, hi: Int, n: Int) -> n: Int ::: InBounds lo hi n =
+  if n >= lo && n <= hi then
+    ok n ::: InBounds lo hi n
+  else
+    fail 400 "value out of bounds"
+
+fn requiresInBounds(lo: Int, hi: Int, n: Int ::: InBounds lo hi n) -> String =
+  "${n} is in [${lo}, ${hi}]"
+
+# describeInBounds wires checkInBounds → requiresInBounds internally.
+# lo and hi are named bindings in the function scope, satisfying cross-param tracking.
+fn describeInBounds(lo: Int, hi: Int, raw: Int) -> String =
+  let safeN = check checkInBounds lo hi raw # safeN carries InBounds lo hi safeN
+  requiresInBounds lo hi safeN
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Example 2: Proof attached to the FIRST parameter
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Approved amount budget: amount has been validated not to exceed budget.
+fact Approved (amount: Int) (budget: Int)
+
+# Return binding "amount" — the FIRST parameter.
+# budget is the cross-parameter.
+check checkBudget(amount: Int, budget: Int) -> amount: Int ::: Approved amount budget =
+  if amount <= budget then
+    ok amount ::: Approved amount budget
+  else
+    fail 400 "amount exceeds budget"
+
+fn requiresApproved(amount: Int ::: Approved amount budget, budget: Int) -> String =
+  "approved ${amount} of ${budget}"
+
+fn approvedDescription(rawAmount: Int, rawBudget: Int) -> String =
+  let budget = rawBudget
+  let amount = check checkBudget rawAmount budget # amount carries Approved amount budget
+  requiresApproved amount budget
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Example 3: Proof on a THIRD parameter with a different cross-param name
+# ─────────────────────────────────────────────────────────────────────────────
+
+# InWindow start span t: t falls in [start, start+span].
+fact InWindow (start: Int) (span: Int) (t: Int)
+
+# Return binding "t" — the THIRD parameter.
+check checkInWindow(start: Int, span: Int, t: Int) -> t: Int ::: InWindow start span t =
+  if t >= start && t <= start + span then
+    ok t ::: InWindow start span t
+  else
+    fail 400 "value outside window"
+
+fn requiresInWindow(start: Int, span: Int, t: Int ::: InWindow start span t) -> String =
+  "${t} is in window [${start}, ${start + span}]"
+
+fn pairDescription(start: Int, span: Int, raw1: Int, raw2: Int) -> String =
+  let t1 = check checkInWindow start span raw1 # t1 carries InWindow start span t1
+  let t2 = check checkInWindow start span raw2 # t2 carries InWindow start span t2
+  let s1 = requiresInWindow start span t1
+  let s2 = requiresInWindow start span t2
+  "${s1} and ${s2}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Example 4: Conjunction proof on the FIRST parameter
+# ─────────────────────────────────────────────────────────────────────────────
+
+# InRange x: 0 ≤ x ≤ 100.
+fact InRange (x: Int)
+
+# InOrder a b: a ≤ b.
+fact InOrder (a: Int) (b: Int)
+
+# Return binding "a" — the FIRST parameter — carrying TWO proofs.
+check checkSortedPair(a: Int, b: Int) -> a: Int ::: InRange a && InOrder a b =
+  if a >= 0 && a <= 100 && b >= 0 && b <= 100 && a <= b then
+    ok a ::: InRange a && InOrder a b
+  else
+    fail 400 "pair must be sorted and in [0,100]"
+
+fn useSortedPair(a: Int ::: InRange a && InOrder a b, b: Int) -> String =
+  "${a} ≤ ${b} (both in range)"
+
+# describeSortedPair wires checkSortedPair → useSortedPair internally,
+# so cross-param proof subjects are stable (function-scope parameters).
+fn describeSortedPair(rawA: Int, b: Int) -> String =
+  let a = check checkSortedPair rawA b
+  useSortedPair a b
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# THE BINDING NAME PICKS THE RETURNED VALUE
+#
+# In a check return type  "-> n: Int ::: P":
+#   • "n" is looked up in the parameter list to find its POSITION (index).
+#   • The actual argument at that position becomes the returned value.
+#   • The returned named value shares that argument's hidden subject.
+#   • The proof P is instantiated with all parameter subjects and attached.
+#
+# For checkInBounds(lo, hi, n):
+#   parameter list:  [(lo, 0), (hi, 1), (n, 2)]
+#   binding name "n" → index 2 → returned value = third argument
+#   proof "InBounds lo hi n" is instantiated:
+#     InBounds(subject(lo_arg), subject(hi_arg), subject(n_arg))
+#
+# If the binding name were "lo", the first argument would be returned and
+# the proof InBounds(subject(lo_arg), subject(hi_arg), subject(n_arg)) would
+# be attached to the lo-argument's subject instead.
+#
+# CROSS-PARAMETER SUBJECTS MUST BE NAMED VARIABLES
+#
+# The compiler tracks proof subjects through named let-bindings.
+# A literal like 100 does not have a stable named subject — it gets a
+# fresh hidden symbol each time it appears at a call site.
+#
+# WRONG (cross-params are untrackable literals):
+#   let safeN = checkInBounds 0 100 rawValue
+#   requiresInBounds 0 100 safeN         -- Error: 0 and 100 not trackable
+#
+# RIGHT (bind the cross-params to named variables first):
+#   let lo    = 0
+#   let hi    = 100
+#   let safeN = checkInBounds lo hi rawValue
+#   requiresInBounds lo hi safeN         -- OK: subjects of lo and hi are tracked
+#
+# The rule: any name that appears in a proof annotation (other than the
+# return binding name itself) must be a trackable variable at the call site.
+#
+# CONJUNCTION PROOFS (&&)
+#
+# "-> a: Int ::: InRange a && InOrder a b" produces a value carrying two
+# proof facts at once.  At a call site requiring both:
+#   fn f(a: Int ::: InRange a && InOrder a b, b: Int) -> ...
+# the compiler checks that a carries the conjunction proof.  A value carrying
+# only InRange a (without InOrder a b) would be rejected.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# The proof tracker ("check_call_site_proofs" in the compiler) resolves
+# which positional argument is returned by looking up the binding name:
+#
+#   find_idx params binding_name → position i
+#   returned_subject = subject_of_actual_args[i]
+#
+# This is the "find_idx" fix that resolved a bug where the tracker always
+# used the FIRST argument's subject regardless of the binding name.
+# (The TsLet case in test blocks and the ELet case in function bodies both
+# now use find_idx, making them consistent.)
+#
+# At the call site to requiresInBounds lo hi safeN:
+#   formal: n ::: InBounds lo hi n
+#   subject mapping:
+#     lo_formal → subject(lo_actual)
+#     hi_formal → subject(hi_actual)
+#     n_formal  → subject(safeN)
+#   required proof: InBounds(subject(lo_actual), subject(hi_actual), subject(safeN))
+#   safeN's proof set must contain exactly this tuple.
+#
+# Conjunction proofs are stored as a single Fact wrapping a pair:
+#   '(and-proof (InRange subject(a)) (InOrder subject(a) subject(b)))
+# The runtime attach/detach/and-left/and-right primitives manipulate this pair.
+
+test "checkInBounds: value in range (via wrapper)" {
+  # Direct `checkInBounds lo hi rawN` + `requiresInBounds lo hi n` round-trips
+  # cannot be tested in test blocks — test-block `let` bindings are plain values,
+  # not named-values, so cross-parameter gensyms won't match at runtime.
+  # Use the `describeInBounds` wrapper function instead.
+  expect describeInBounds 1 10 5 == "5 is in [1, 10]"
+}
+
+test "checkInBounds: boundary values (via wrapper)" {
+  expect describeInBounds 0 100 0 == "0 is in [0, 100]"
+  expect describeInBounds 0 100 100 == "100 is in [0, 100]"
+}
+
+test "checkInBounds: rejects out-of-range" {
+  expectFail check checkInBounds 0 10 -1
+  expectFail check checkInBounds 0 10 11
+}
+
+test "describeInBounds: full round-trip" {
+  expect describeInBounds 1 10 7 == "7 is in [1, 10]"
+  expectFail describeInBounds 1 5 6
+}
+
+test "checkBudget: first-param proof, under budget" {
+  expect approvedDescription 80 100 == "approved 80 of 100"
+  expect approvedDescription 100 100 == "approved 100 of 100"
+}
+
+test "checkBudget: rejects over budget" {
+  expectFail check checkBudget 101 100
+  expectFail check checkBudget 200 50
+}
+
+test "checkInWindow: timestamp in window" {
+  expect pairDescription 100 50 120 150 == "120 is in window [100, 150] and 150 is in window [100, 150]"
+}
+
+test "checkInWindow: rejects outside window" {
+  expectFail check checkInWindow 100 50 99
+  expectFail check checkInWindow 100 50 151
+}
+
+test "checkSortedPair: sorted in-range pair (via wrapper)" {
+  # Same limitation as checkInBounds: cross-parameter proofs cannot be tested
+  # directly in test blocks — use the describeSortedPair wrapper instead.
+  expect describeSortedPair 10 90 == "10 ≤ 90 (both in range)"
+}
+
+test "checkSortedPair: equal values are valid (via wrapper)" {
+  expect describeSortedPair 50 50 == "50 ≤ 50 (both in range)"
+}
+
+test "checkSortedPair: rejects unsorted" {
+  expectFail check checkSortedPair 90 10
+}
+
+test "checkSortedPair: rejects out-of-range" {
+  expectFail check checkSortedPair -1 50
+  expectFail check checkSortedPair 10 101
+}

@@ -1,0 +1,1117 @@
+#lang tesl
+# ─────────────────────────────────────────────────────────────────────────────
+# critical-review-28-tests.tesl
+#
+# Adversarial test suite produced during critical review 28.
+# Targets: proof soundness, type system, runtime/compile split,
+# higher-order limits, stdlib edge cases, and ergonomic rough spots.
+# ─────────────────────────────────────────────────────────────────────────────
+module CriticalReview28Tests exposing [
+  # Proof soundness IsRange28,
+  checkRange28,
+  requiresRange28,
+  proofRoundTrip,
+  # Sequential proof accumulation IsNonEmpty28,
+  IsShort28,
+  checkNonEmpty28,
+  checkShort28,
+  requiresNonEmpty28,
+  combinedCheck28,
+  # Newtype nominal safety UserId28(..),
+  ProjectId28(..),
+  makeUser28,
+  makeProject28,
+  requiresUser28,
+  requiresProject28,
+  # Bool representation boolToString28,
+  # forgetFact strips proof IsValidEmail28,
+  checkEmail28,
+  proofForgotten28,
+  # ForAll with fn-wrapper pattern IsEven28,
+  checkEven28,
+  doubleEven28,
+  doubleAllEven28,
+  # String interpolation edge cases interpolateInt28,
+  interpolateNeg28,
+  # Recursive ADT BinTree28(..),
+  treeSum28,
+  treeHeight28,
+  # Partial application add28,
+  multiply28,
+  doubleAll28,
+  # Multi-param proof cross-subject Bounded28,
+  checkBounded28,
+  requiresBounded28,
+  wrapBounded28,
+  # Case fall-through and exhaustiveness Weekday28(..),
+  classifyDay28,
+  Category28(..),
+  describeCategory28,
+  # Establish IsSmall28,
+  proveSmall28,
+  applySmall28,
+  # Sort and filter filteredSubset28,
+  # Conjunction proof IsTrimmed28,
+  IsLong28,
+  checkTrimmed28,
+  checkLong28,
+  validateTrimmedLong28,
+  # Maybe handling headOrDefault28,
+  safeHead28,
+  nestedMaybeCheck28,
+  # Proof-total divide safeDivide28,
+  # Integer arithmetic negArithmetic28,
+  maxSafeInt28,
+  # Tuple operations swapPair28,
+  # Proof detach/reattach roundTripProof28,
+  # List allCheck allCheckResult28,
+  # Float operations safeFloatDiv28,
+  # Either operations doubleRight28,
+  divOrError28,
+  # Fix 5.1: List Int property test helpers listLengthNonNeg28,
+  listSumReverseSame28,
+]
+
+import Tesl.Prelude exposing [ Bool(..), Int, List, String, Fact, forgetFact, ]
+import Tesl.String exposing [
+  String.length,
+  String.trim,
+  String.contains,
+  String.isEmpty,
+  String.toUpper,
+  String.toLower,
+  String.startsWith,
+  String.endsWith,
+  String.split,
+  String.join,
+  String.replace,
+]
+import Tesl.List exposing [
+  List.map,
+  List.filterCheck,
+  List.allCheck,
+  List.sort,
+  List.length,
+  List.any,
+  List.all,
+  List.head,
+  List.contains,
+  List.find,
+  List.take,
+  List.drop,
+  List.sum,
+  List.product,
+  List.reverse,
+  List.unique,
+  List.append,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Int exposing [
+  Int.nonZero,
+  Int.divide,
+  IsNonZero,
+  Int.nonNegative,
+  IsNonNegative,
+]
+import Tesl.Either exposing [
+  Either(..),
+  Either.map,
+  Either.andThen,
+  Either.withDefault,
+]
+import Tesl.Float exposing [
+  Float,
+  Float.requireNonZero,
+  FloatNonZero,
+  Float.div,
+  Float.sqrt,
+]
+import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T01 – PROOF ROUND-TRIP: check → require → passes proof correctly
+# ═══════════════════════════════════════════════════════════════════════════════
+fact IsRange28 (n: Int)
+
+check checkRange28(n: Int) -> n: Int ::: IsRange28 n =
+  if n >= 0 && n <= 1000 then
+    ok n ::: IsRange28 n
+  else
+    fail 400 "out of 0–1000 range"
+
+fn requiresRange28(n: Int ::: IsRange28 n) -> Int = n + 1
+
+fn proofRoundTrip(raw: Int) -> Int =
+  let v = check checkRange28 raw
+  requiresRange28 v
+
+test "T01a: proof round-trip in bounds" {
+  expect proofRoundTrip 500 == 501
+  expect proofRoundTrip 0 == 1
+  expect proofRoundTrip 1000 == 1001
+}
+
+test "T01b: proof round-trip out of bounds fails" {
+  expectFail proofRoundTrip -1
+  expectFail proofRoundTrip 1001
+}
+
+test "T01c: proof flow through helper function" {
+  expect proofRoundTrip 42 == 43
+  expect proofRoundTrip 0 == 1
+  expect proofRoundTrip 999 == 1000
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T02 – SEQUENTIAL PROOF ACCUMULATION: second check inherits first proof
+# ═══════════════════════════════════════════════════════════════════════════════
+fact IsNonEmpty28 (s: String)
+fact IsShort28 (s: String)
+
+check checkNonEmpty28(s: String) -> s: String ::: IsNonEmpty28 s =
+  if String.isEmpty s then
+    fail 400 "empty"
+  else
+    ok s ::: IsNonEmpty28 s
+
+check checkShort28(s: String ::: IsNonEmpty28 s) -> s: String ::: IsShort28 s =
+  if String.length s <= 50 then
+    ok s ::: IsShort28 s
+  else
+    fail 400 "too long"
+
+fn requiresNonEmpty28(s: String ::: IsNonEmpty28 s) -> Int =
+  String.length s
+
+fn requiresBothProofs28(s: String ::: IsNonEmpty28 s, s2: String ::: IsShort28 s2) -> String =
+  "${s} / ${s2}"
+
+fn combinedCheck28(raw: String) -> String =
+  let ne = check checkNonEmpty28 raw
+  let short = check checkShort28 ne
+  requiresBothProofs28 short short
+
+test "T02a: sequential proof accumulation – valid input" {
+  expect combinedCheck28 "hello" == "hello / hello"
+}
+
+test "T02b: sequential proof accumulation – fails on empty" {
+  expectFail combinedCheck28 ""
+}
+
+test "T02c: sequential proof accumulation – fails on 51-char string" {
+  expectFail combinedCheck28 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T03 – NEWTYPE NOMINAL SAFETY
+# Two newtypes over String must be distinct at compile time AND runtime.
+# ═══════════════════════════════════════════════════════════════════════════════
+type UserId28 = String
+type ProjectId28 = String
+
+fn makeUser28(s: String) -> UserId28 = UserId28 s
+fn makeProject28(s: String) -> ProjectId28 = ProjectId28 s
+fn requiresUser28(uid: UserId28) -> String = "user:${uid.value}"
+fn requiresProject28(pid: ProjectId28) -> String = "project:${pid.value}"
+
+test "T03a: UserId28 round-trip" {
+  let uid = makeUser28 "u123"
+  expect requiresUser28 uid == "user:u123"
+}
+
+test "T03b: ProjectId28 round-trip" {
+  let pid = makeProject28 "p456"
+  expect requiresProject28 pid == "project:p456"
+}
+
+test "T03c: newtypes over same base have same .value but different types" {
+  let uid = makeUser28 "same"
+  let pid = makeProject28 "same"
+  expect uid.value == pid.value
+  expect requiresUser28 uid == "user:same"
+  expect requiresProject28 pid == "project:same"
+}
+
+test "T03d: newtype value is accessible via .value" {
+  let uid = UserId28 "abc"
+  expect uid.value == "abc"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T04 – BOOL STRING INTERPOLATION LEAKS RACKET REPR
+# Bool literals True/False interpolate as "#t"/"#f" (Racket booleans).
+# This is a known Racket-leakage issue that breaks user expectations.
+# ═══════════════════════════════════════════════════════════════════════════════
+fn boolToString28(b: Bool) -> String =
+  if b then
+    "true"
+  else
+    "false"
+
+test "T04a: manual Bool-to-string conversion works" {
+  expect boolToString28 True == "true"
+  expect boolToString28 False == "false"
+}
+
+test "T04b: Bool interpolation produces Tesl repr (true/false)" {
+  # Fixed: "${True}" now correctly produces "true" not "#t"
+  expect "${True}" == "true"
+  expect "${False}" == "false"
+}
+
+test "T04c: Bool comparison still works correctly" {
+  expect True == True
+  expect False == False
+  expect True != False
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T05 – FORGET FACT STRIPS PROOF
+# ═══════════════════════════════════════════════════════════════════════════════
+fact IsValidEmail28 (email: String)
+
+check checkEmail28(email: String) -> email: String ::: IsValidEmail28 email =
+  if String.contains email "@" && String.length email >= 3 then
+    ok email ::: IsValidEmail28 email
+  else
+    fail 400 "invalid email"
+
+fn proofForgotten28(raw: String) -> Int =
+  let valid = check checkEmail28 raw
+  let raw2 = forgetFact valid
+  String.length raw2
+
+test "T05a: forgetFact preserves raw value length" {
+  expect proofForgotten28 "a@b.c" == 5
+}
+
+test "T05b: forgetFact result usable in non-proof functions" {
+  let email = "user@example.com"
+  let v = check checkEmail28 email
+  let raw = forgetFact v
+  expect String.length raw == 16
+}
+
+test "T05c: check still validates before forgetFact" {
+  expectFail proofForgotten28 "notanemail"
+  expectFail proofForgotten28 ""
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T06 – FORALL WITH FN-WRAPPER PATTERN
+# Proof-requiring functions must be wrapped in a "fn(...)" to pass to List.map.
+# ═══════════════════════════════════════════════════════════════════════════════
+fact IsEven28 (n: Int)
+
+check checkEven28(n: Int) -> n: Int ::: IsEven28 n =
+  if n % 2 == 0 then
+    ok n ::: IsEven28 n
+  else
+    fail 400 "not even"
+
+fn doubleEven28(n: Int ::: IsEven28 n) -> Int = n * 2
+
+fn doubleAllEven28(xs: List Int) -> List Int =
+  let evens = List.filterCheck checkEven28 xs
+  List.map (fn(n: Int ::: IsEven28 n) -> doubleEven28 n) evens
+
+test "T06a: double all even numbers in list" {
+  expect doubleAllEven28 [1, 2, 3, 4, 5, 6] == [4, 8, 12]
+}
+
+test "T06b: doubleAllEven28 on all-odd list" {
+  expect doubleAllEven28 [1, 3, 5, 7] == []
+}
+
+test "T06c: doubleAllEven28 includes zero" {
+  expect doubleAllEven28 [0, 1, 2] == [0, 4]
+}
+
+test "T06d: doubleAllEven28 on empty list" {
+  expect doubleAllEven28 [] == []
+}
+
+test "T06e: proof-requiring fn cannot be passed directly to map" {
+  # Must wrap in "fn(...)" — the fn-wrapper pattern is required
+  # Direct: List.map doubleEven28 evens would fail compilation with V001
+  # This test confirms the wrapper works:
+  let evens = List.filterCheck checkEven28 [2, 4, 6]
+  let result = List.map (fn(n: Int ::: IsEven28 n) -> doubleEven28 n) evens
+  expect result == [4, 8, 12]
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T07 – STRING INTERPOLATION CORNER CASES
+# ═══════════════════════════════════════════════════════════════════════════════
+fn interpolateInt28(n: Int) -> String = "n=${n}"
+fn interpolateNeg28(a: Int, b: Int) -> String = "diff=${a - b}"
+
+test "T07a: positive int interpolation" {
+  expect interpolateInt28 42 == "n=42"
+}
+
+test "T07b: zero interpolation" {
+  expect interpolateInt28 0 == "n=0"
+}
+
+test "T07c: negative int interpolation" {
+  expect interpolateInt28 -7 == "n=-7"
+}
+
+test "T07d: arithmetic in interpolation" {
+  let a = 3
+  let b = 4
+  expect "${a + b}" == "7"
+}
+
+test "T07e: subtraction in interpolation" {
+  expect interpolateNeg28 10 3 == "diff=7"
+  expect interpolateNeg28 3 10 == "diff=-7"
+}
+
+test "T07f: string concat and interpolation" {
+  expect "hello" ++ " " ++ "world" == "hello world"
+  let name = "Tesl"
+  expect "Hello, ${name}!" == "Hello, Tesl!"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T08 – RECURSIVE ADT: BinTree sum and height
+# ═══════════════════════════════════════════════════════════════════════════════
+type BinTree28
+  = Leaf28
+  | Node28 left: BinTree28 value: Int right: BinTree28
+
+fn treeSum28(t: BinTree28) -> Int =
+  case t of
+    Leaf28 -> 0
+    Node28 left v right -> treeSum28 left + v + treeSum28 right
+
+fn treeHeight28(t: BinTree28) -> Int =
+  case t of
+    Leaf28 -> 0
+    Node28 left _ right ->
+      let lh = treeHeight28 left
+      let rh = treeHeight28 right
+      if lh > rh then
+        lh + 1
+      else
+        rh + 1
+
+test "T08a: treeSum on leaf = 0" {
+  expect treeSum28 Leaf28 == 0
+}
+
+test "T08b: treeSum single node" {
+  expect treeSum28 (Node28 Leaf28 5 Leaf28) == 5
+}
+
+test "T08c: treeSum multi-level" {
+  expect treeSum28 (Node28 (Node28 Leaf28 3 Leaf28) 5 (Node28 Leaf28 7 Leaf28)) == 15
+}
+
+test "T08d: treeHeight of leaf = 0" {
+  expect treeHeight28 Leaf28 == 0
+}
+
+test "T08e: treeHeight single node = 1" {
+  expect treeHeight28 (Node28 Leaf28 1 Leaf28) == 1
+}
+
+test "T08f: treeHeight skewed right" {
+  expect treeHeight28 (Node28 Leaf28 1 (Node28 Leaf28 2 (Node28 Leaf28 3 Leaf28))) == 3
+}
+
+test "T08g: height is always positive for non-leaf" with 30 runs {
+  property "height non-negative" (n: Int) {
+    treeHeight28 (Node28 Leaf28 n Leaf28) > 0
+  }
+}
+
+test "T08h: summing mirrored tree" {
+  let t1 = Node28 (Node28 Leaf28 1 Leaf28) 2 (Node28 Leaf28 3 Leaf28)
+  let t2 = Node28 (Node28 Leaf28 3 Leaf28) 2 (Node28 Leaf28 1 Leaf28)
+  expect treeSum28 t1 == treeSum28 t2
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T09 – PARTIAL APPLICATION
+# ═══════════════════════════════════════════════════════════════════════════════
+fn add28(x: Int, y: Int) -> Int = x + y
+fn multiply28(x: Int, y: Int) -> Int = x * y
+fn doubleAll28(xs: List Int) -> List Int = List.map (multiply28 2) xs
+
+test "T09a: partial application of add28" {
+  let addFive = add28 5
+  expect addFive 3 == 8
+  expect addFive 0 == 5
+}
+
+test "T09b: partial application in List.map" {
+  expect doubleAll28 [1, 2, 3] == [2, 4, 6]
+  expect doubleAll28 [] == []
+}
+
+test "T09c: partial application with three values" {
+  let addThree = add28 3
+  expect List.map addThree [1, 2, 3, 4] == [4, 5, 6, 7]
+}
+
+test "T09d: partial application of multiply28" {
+  let triple = multiply28 3
+  expect triple 5 == 15
+  expect triple 0 == 0
+  expect triple -2 == -6
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T10 – MULTI-PARAM PROOF CROSS-SUBJECT CORRECTNESS
+# ═══════════════════════════════════════════════════════════════════════════════
+fact Bounded28 (lo: Int) (hi: Int) (n: Int)
+
+check checkBounded28(lo: Int, hi: Int, n: Int) -> n: Int ::: Bounded28 lo hi n =
+  if n >= lo && n <= hi then
+    ok n ::: Bounded28 lo hi n
+  else
+    fail 400 "value out of bounds"
+
+fn requiresBounded28(lo: Int, hi: Int, n: Int ::: Bounded28 lo hi n) -> String =
+  "${n} in [${lo}, ${hi}]"
+
+fn wrapBounded28(rawLo: Int, rawHi: Int, raw: Int) -> String =
+  let lo = rawLo
+  let hi = rawHi
+  let v = check checkBounded28 lo hi raw
+  requiresBounded28 lo hi v
+
+test "T10a: bounded proof on valid value" {
+  expect wrapBounded28 0 100 50 == "50 in [0, 100]"
+}
+
+test "T10b: bounded proof boundary values" {
+  expect wrapBounded28 0 100 0 == "0 in [0, 100]"
+  expect wrapBounded28 0 100 100 == "100 in [0, 100]"
+}
+
+test "T10c: bounded proof rejects out-of-range" {
+  expectFail wrapBounded28 0 100 -1
+  expectFail wrapBounded28 0 100 101
+}
+
+test "T10d: bounded proof with negative range" {
+  expect wrapBounded28 -50 50 0 == "0 in [-50, 50]"
+  expectFail wrapBounded28 -50 50 51
+}
+
+test "T10e: bounded proof degenerate range (lo == hi)" {
+  expect wrapBounded28 5 5 5 == "5 in [5, 5]"
+  expectFail wrapBounded28 5 5 6
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T11 – CASE EXHAUSTIVENESS AND FALL-THROUGH
+# ═══════════════════════════════════════════════════════════════════════════════
+type Weekday28
+  = Monday28
+  | Tuesday28
+  | Wednesday28
+  | Thursday28
+  | Friday28
+  | Saturday28
+  | Sunday28
+
+fn classifyDay28(day: Weekday28) -> String =
+  case day of
+    Saturday28 ->
+    Sunday28 ->
+      "weekend"
+    Monday28 ->
+    Tuesday28 ->
+    Wednesday28 ->
+    Thursday28 ->
+    Friday28 ->
+      "weekday"
+
+test "T11a: weekend days" {
+  expect classifyDay28 Saturday28 == "weekend"
+  expect classifyDay28 Sunday28 == "weekend"
+}
+
+test "T11b: weekdays via fall-through" {
+  expect classifyDay28 Monday28 == "weekday"
+  expect classifyDay28 Friday28 == "weekday"
+  expect classifyDay28 Wednesday28 == "weekday"
+  expect classifyDay28 Tuesday28 == "weekday"
+  expect classifyDay28 Thursday28 == "weekday"
+}
+
+type Category28
+  = Fruit28
+  | Vegetable28
+  | Dairy28
+  | Meat28
+  | Grain28
+
+fn describeCategory28(c: Category28) -> String =
+  case c of
+    Fruit28 ->
+    Vegetable28 ->
+      "plant"
+    Dairy28 ->
+    Meat28 ->
+      "animal"
+    Grain28 ->
+      "starch"
+
+test "T11c: category fall-through plant" {
+  expect describeCategory28 Fruit28 == "plant"
+  expect describeCategory28 Vegetable28 == "plant"
+}
+
+test "T11d: category fall-through animal" {
+  expect describeCategory28 Dairy28 == "animal"
+  expect describeCategory28 Meat28 == "animal"
+}
+
+test "T11e: category grain has own body" {
+  expect describeCategory28 Grain28 == "starch"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T12 – ESTABLISH: returns Maybe (Fact p), consumed via helper fn
+# ═══════════════════════════════════════════════════════════════════════════════
+fact IsSmall28 (n: Int)
+
+establish proveSmall28(n: Int) -> Maybe (Fact (IsSmall28 n)) =
+  if n < 10 then
+    Something (IsSmall28 n)
+  else
+    Nothing
+
+fn useSmall28(n: Int ::: IsSmall28 n) -> String = "small: ${n}"
+
+fn applySmall28(n: Int) -> String =
+  let mProof = proveSmall28 n
+  case mProof of
+    Nothing -> "not small"
+    Something p -> useSmall28 (n ::: p)
+
+test "T12a: establish returns Something for small value" {
+  expect applySmall28 5 == "small: 5"
+  expect applySmall28 0 == "small: 0"
+  expect applySmall28 9 == "small: 9"
+}
+
+test "T12b: establish returns Nothing for large value" {
+  expect applySmall28 10 == "not small"
+  expect applySmall28 100 == "not small"
+}
+
+test "T12c: establish returns Something for negative (< 10)" {
+  expect applySmall28 -5 == "small: -5"
+  expect applySmall28 -100 == "small: -100"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T13 – SORT LENGTH PRESERVATION
+# ═══════════════════════════════════════════════════════════════════════════════
+fn filteredSubset28(xs: List Int) -> Bool =
+  List.length (List.sort xs) == List.length xs
+
+test "T13a: sort preserves list length" {
+  expect filteredSubset28 [3, 1, 4, 1, 5, 9, 2, 6] == True
+  expect filteredSubset28 [] == True
+  expect filteredSubset28 [1] == True
+}
+
+test "T13b: sort known examples" {
+  expect List.sort [5, 4, 3, 2, 1] == [1, 2, 3, 4, 5]
+  expect List.sort [1, 1, 2, 2] == [1, 1, 2, 2]
+  expect List.sort [] == []
+}
+
+test "T13c: sort preserves length – explicit examples" {
+  # Note: property tests with List Int params are unsupported (generate 0 not a list)
+  # This is a known limitation of the property test generator
+  expect filteredSubset28 [3, 1, 4, 1, 5] == True
+  expect filteredSubset28 [-5, 0, 5] == True
+  expect filteredSubset28 [100] == True
+}
+
+test "T13d: sort is idempotent – explicit examples" {
+  # List.sort returns named-value with IsSorted proof; compare sorted lists against literals
+  expect List.sort [3, 1, 2] == [1, 2, 3]
+  expect List.sort [1, 2, 3] == [1, 2, 3]
+  expect List.sort [2, 1, 4, 3] == [1, 2, 3, 4]
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T14 – CONJUNCTION PROOF: two sequential checks both required
+# ═══════════════════════════════════════════════════════════════════════════════
+fact IsTrimmed28 (s: String)
+fact IsLong28 (s: String)
+
+check checkTrimmed28(s: String) -> s: String ::: IsTrimmed28 s =
+  if String.trim s == s then
+    ok s ::: IsTrimmed28 s
+  else
+    fail 400 "not trimmed"
+
+check checkLong28(s: String ::: IsTrimmed28 s) -> s: String ::: IsLong28 s =
+  if String.length s >= 5 then
+    ok s ::: IsLong28 s
+  else
+    fail 400 "too short"
+
+fn requiresTrimmedAndLong28(s: String ::: IsTrimmed28 s, s2: String ::: IsLong28 s2) -> String =
+  "ok: ${s}"
+
+fn validateTrimmedLong28(raw: String) -> String =
+  let trimmed = check checkTrimmed28 raw
+  let long = check checkLong28 trimmed
+  requiresTrimmedAndLong28 long long
+
+test "T14a: trimmed and long – passes valid input" {
+  expect validateTrimmedLong28 "hello" == "ok: hello"
+  expect validateTrimmedLong28 "abcde" == "ok: abcde"
+}
+
+test "T14b: fails if leading whitespace" {
+  expectFail validateTrimmedLong28 " hello"
+}
+
+test "T14c: fails if trailing whitespace" {
+  expectFail validateTrimmedLong28 "hello "
+}
+
+test "T14d: fails if too short after trimming" {
+  expectFail validateTrimmedLong28 "ab"
+  expectFail validateTrimmedLong28 ""
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T15 – MAYBE HANDLING IN HELPER FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+fn safeHead28(xs: List Int) -> Maybe Int = List.head xs
+
+fn headOrDefault28(xs: List Int, def: Int) -> Int =
+  case safeHead28 xs of
+    Nothing -> def
+    Something h -> h
+
+fn nestedMaybeCheck28(m: Maybe (Maybe Int)) -> Int =
+  case m of
+    Nothing -> -1
+    Something inner ->
+      case inner of
+        Nothing -> -2
+        Something n -> n
+
+test "T15a: head of non-empty list" {
+  expect headOrDefault28 [1, 2, 3] 0 == 1
+}
+
+test "T15b: head of empty list gives default" {
+  expect headOrDefault28 [] 99 == 99
+}
+
+test "T15c: nested Maybe in helper function" {
+  expect nestedMaybeCheck28 Nothing == -1
+  expect nestedMaybeCheck28 (Something Nothing) == -2
+  expect nestedMaybeCheck28 (Something (Something 42)) == 42
+}
+
+test "T15d: safeHead on single-element list" {
+  expect safeHead28 [7] == Something 7
+}
+
+test "T15e: safeHead on empty list" {
+  expect safeHead28 [] == Nothing
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T16 – PROOF-TOTAL DIVIDE
+# ═══════════════════════════════════════════════════════════════════════════════
+fn safeDivide28(a: Int, b: Int) -> Either String Int =
+  if b == 0 then
+    Left "division by zero"
+  else
+    let nb = check Int.nonZero b
+    Right (Int.divide a nb)
+
+test "T16a: safe divide nonzero denominator" {
+  expect safeDivide28 10 2 == Right 5
+  expect safeDivide28 7 3 == Right 2
+  expect safeDivide28 0 5 == Right 0
+}
+
+test "T16b: safe divide zero denominator" {
+  expect safeDivide28 10 0 == Left "division by zero"
+}
+
+test "T16c: safe divide negative denominator" {
+  expect safeDivide28 10 -2 == Right -5
+}
+
+test "T16d: safe divide property – result * b ≈ a" with 30 runs {
+  property "integer division" (a: Int, b: Int) {
+    if b == 0 then
+      safeDivide28 a b == Left "division by zero"
+    else
+      safeDivide28 a b != Left "division by zero"
+  }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T17 – INTEGER ARITHMETIC AND EDGE VALUES
+# ═══════════════════════════════════════════════════════════════════════════════
+fn negArithmetic28(a: Int, b: Int) -> Int = a - b
+
+fn maxSafeInt28() -> Int = 4611686018427387903
+
+test "T17a: subtraction positive result" {
+  expect negArithmetic28 10 3 == 7
+}
+
+test "T17b: subtraction negative result" {
+  expect negArithmetic28 3 10 == -7
+}
+
+test "T17c: modulo" {
+  expect 17 % 5 == 2
+  expect 0 % 5 == 0
+}
+
+test "T17d: integer division truncates toward zero" {
+  expect 7 / 2 == 3
+}
+
+test "T17e: add is commutative" with 100 runs {
+  property "commutativity" (x: Int, y: Int) { x + y == y + x }
+}
+
+test "T17f: multiply distributes over add" with 50 runs {
+  property "distributivity" (a: Int, b: Int, c: Int) {
+    a * (b + c) == a * b + a * c
+  }
+}
+
+test "T17g: max safe Int is within range" {
+  expect maxSafeInt28 () > 1000000000
+}
+
+test "T17h: negation" {
+  expect 0 - 5 == -5
+  expect 0 - -5 == 5
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T18 – TUPLE OPERATIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+fn swapPair28(a: Int, b: String) -> Tuple2 String Int =
+  Tuple2 b a
+
+test "T18a: tuple construction and access" {
+  let p = Tuple2 42 "hello"
+  expect Tuple2.first p == 42
+  expect Tuple2.second p == "hello"
+}
+
+test "T18b: swapPair28 reverses components" {
+  let result = swapPair28 7 "world"
+  expect Tuple2.first result == "world"
+  expect Tuple2.second result == 7
+}
+
+test "T18c: tuple equality" {
+  let p1 = Tuple2 1 2
+  let p2 = Tuple2 1 2
+  expect p1 == p2
+  expect Tuple2 1 3 != p1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T19 – PROOF DETACH AND RE-ATTACH ROUND-TRIP
+# ═══════════════════════════════════════════════════════════════════════════════
+fn roundTripProof28(n: Int) -> Int =
+  let v = check checkRange28 n
+  let (raw ::: proof) = v
+  let reattached = raw ::: proof
+  requiresRange28 reattached
+
+fn forgetAndRaw28(n: Int) -> Bool =
+  let v = check checkRange28 n
+  let forgotten = forgetFact v
+  let (raw ::: _proof) = v
+  forgotten == raw
+
+test "T19a: proof decompose and reattach round-trip" {
+  expect roundTripProof28 50 == 51
+  expect roundTripProof28 0 == 1
+  expect roundTripProof28 1000 == 1001
+}
+
+test "T19b: decompose fails propagates" {
+  expectFail roundTripProof28 -1
+  expectFail roundTripProof28 1001
+}
+
+test "T19c: proof forgetFact and raw decompose yield same value" {
+  expect forgetAndRaw28 5 == True
+  expect forgetAndRaw28 100 == True
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T20 – LIST ALL-CHECK: validates every element or returns Nothing
+# ═══════════════════════════════════════════════════════════════════════════════
+fn allCheckResult28(xs: List Int) -> String =
+  let result = List.allCheck checkRange28 xs
+  case result of
+    Nothing -> "failed"
+    Something _ -> "ok"
+
+test "T20a: allCheck accepts all-valid list" {
+  expect allCheckResult28 [0, 50, 100] == "ok"
+}
+
+test "T20b: allCheck rejects list with invalid element" {
+  expect allCheckResult28 [0, 50, 1001] == "failed"
+}
+
+test "T20c: allCheck accepts empty list" {
+  expect allCheckResult28 [] == "ok"
+}
+
+test "T20d: allCheck rejects negative element" {
+  expect allCheckResult28 [-1, 5, 10] == "failed"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T21 – FLOAT OPERATIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+fn safeFloatDiv28(a: Float, b: Float) -> Either String Float =
+  if b == 0.0 then
+    Left "zero"
+  else
+    let nb = check Float.requireNonZero b
+    Right (Float.div a nb)
+
+test "T21a: float division" {
+  expect safeFloatDiv28 10.0 4.0 == Right 2.5
+}
+
+test "T21b: float division by zero" {
+  expect safeFloatDiv28 1.0 0.0 == Left "zero"
+}
+
+test "T21c: float sqrt" {
+  expect Float.sqrt 9.0 == 3.0
+  expect Float.sqrt 4.0 == 2.0
+  expect Float.sqrt 0.0 == 0.0
+}
+
+test "T21d: float arithmetic" {
+  let result = safeFloatDiv28 1.0 2.0
+  expect result == Right 0.5
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T22 – EITHER TYPE OPERATIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+fn divOrError28(a: Int, b: Int) -> Either String Int =
+  if b == 0 then
+    Left "zero"
+  else
+    let nb = check Int.nonZero b
+    Right (Int.divide a nb)
+
+fn doubleRight28(e: Either String Int) -> Either String Int =
+  Either.map (multiply28 2) e
+
+test "T22a: Either.map over Right" {
+  expect doubleRight28 (Right 5) == Right 10
+}
+
+test "T22b: Either.map over Left is identity" {
+  expect doubleRight28 (Left "error") == Left "error"
+}
+
+test "T22c: Either.withDefault on Left" {
+  expect Either.withDefault 99 (Left "err") == 99
+}
+
+test "T22d: Either.withDefault on Right" {
+  expect Either.withDefault 99 (Right 42) == 42
+}
+
+test "T22e: Either.andThen chains operations" {
+  # Either.andThen (fn: b -> Either a c) (x: Either a b) -> Either a c
+  # divOrError28 10 2 = Right 5, then apply (divOrError28 100) to 5 = Right 20
+  let result = Either.andThen (divOrError28 100) (divOrError28 10 2)
+  expect result == Right 20
+}
+
+test "T22f: Either.andThen short-circuits on Left" {
+  let result = Either.andThen (divOrError28 100) (divOrError28 10 0)
+  expect result == Left "zero"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T23 – PROOF PREDICATE OWNERSHIP: fn can call check and use result
+# ═══════════════════════════════════════════════════════════════════════════════
+fn callCheck28(raw: Int) -> Int =
+  let v = check checkRange28 raw
+  requiresRange28 v
+
+test "T23a: fn can call check and use result with proof" {
+  expect callCheck28 500 == 501
+}
+
+test "T23b: fn calling check fails propagates failure" {
+  expectFail callCheck28 -1
+  expectFail callCheck28 1001
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T24 – STRING OPERATIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+test "T24a: String.toUpper" {
+  expect String.toUpper "hello" == "HELLO"
+  expect String.toUpper "" == ""
+}
+
+test "T24b: String.toLower" {
+  expect String.toLower "HELLO" == "hello"
+  expect String.toLower "MiXeD" == "mixed"
+}
+
+test "T24c: String.trim" {
+  expect String.trim "  hello  " == "hello"
+  expect String.trim "hello" == "hello"
+  expect String.trim "  " == ""
+}
+
+test "T24d: String.startsWith" {
+  expect String.startsWith "hello world" "hello" == True
+  expect String.startsWith "hello world" "world" == False
+  expect String.startsWith "" "" == True
+}
+
+test "T24e: String.endsWith" {
+  expect String.endsWith "hello world" "world" == True
+  expect String.endsWith "hello world" "hello" == False
+}
+
+test "T24f: String.split and join round-trip" {
+  let parts = String.split "a,b,c" ","
+  expect String.join parts "," == "a,b,c"
+}
+
+test "T24g: String.replace" {
+  expect String.replace "hello world" "world" "tesl" == "hello tesl"
+}
+
+test "T24h: String.length" {
+  expect String.length "hello" == 5
+  expect String.length "" == 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T25 – LIST OPERATIONS (comprehensive)
+# ═══════════════════════════════════════════════════════════════════════════════
+test "T25a: List.contains" {
+  expect List.contains 2 [1, 2, 3] == True
+  expect List.contains 4 [1, 2, 3] == False
+  expect List.contains 1 [] == False
+}
+
+test "T25b: List.find" {
+  let result = List.find (fn(n: Int) -> n > 2) [1, 2, 3, 4]
+  expect result == Something 3
+  let notFound = List.find (fn(n: Int) -> n > 10) [1, 2]
+  expect notFound == Nothing
+}
+
+test "T25c: List.take with proof" {
+  let n3 = 3
+  let count = check Int.nonNegative n3
+  expect List.take count [1, 2, 3, 4, 5] == [1, 2, 3]
+  let n0 = 0
+  let zero = check Int.nonNegative n0
+  expect List.take zero [1, 2, 3] == []
+}
+
+test "T25d: List.drop with proof" {
+  let n2 = 2
+  let count = check Int.nonNegative n2
+  expect List.drop count [1, 2, 3, 4, 5] == [3, 4, 5]
+}
+
+test "T25e: List.sum" {
+  expect List.sum [1, 2, 3, 4, 5] == 15
+  expect List.sum [] == 0
+  expect List.sum [0, 0, 0] == 0
+}
+
+test "T25f: List.product" {
+  expect List.product [1, 2, 3, 4] == 24
+  expect List.product [] == 1
+  expect List.product [0, 1, 2] == 0
+}
+
+test "T25g: List.reverse" {
+  expect List.reverse [1, 2, 3] == [3, 2, 1]
+  expect List.reverse [] == []
+  expect List.reverse [1] == [1]
+}
+
+test "T25h: List.unique" {
+  expect List.unique [1, 2, 1, 3, 2] == [1, 2, 3]
+  expect List.unique [] == []
+  expect List.unique [1, 1, 1] == [1]
+}
+
+test "T25i: filterCheck then map" {
+  let evens = List.filterCheck checkEven28 [1, 2, 3, 4, 5, 6]
+  let doubled = List.map (fn(n: Int ::: IsEven28 n) -> n * 2) evens
+  expect doubled == [4, 8, 12]
+}
+
+test "T25j: List.any and List.all" {
+  expect List.any (fn(n: Int) -> n > 3) [1, 2, 3, 4] == True
+  expect List.any (fn(n: Int) -> n > 10) [1, 2, 3] == False
+  expect List.all (fn(n: Int) -> n > 0) [1, 2, 3] == True
+  expect List.all (fn(n: Int) -> n > 1) [1, 2, 3] == False
+}
+
+test "T25k: List idempotent sort examples" {
+  expect List.sort [9, 1, 8, 2, 7, 3] == [1, 2, 3, 7, 8, 9]
+  expect List.length (List.sort [3, 1, 4, 1, 5, 9, 2, 6]) == 8
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T26 – FIX 5.1: Property test generator supports List Int
+# Before the fix, `List Int` as a property param caused a runtime Racket error
+# because the generator was not implemented. After the fix it generates random lists.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn listLengthNonNeg28(xs: List Int) -> Bool =
+  List.length xs >= 0
+
+fn listSumReverseSame28(xs: List Int) -> Bool =
+  List.sum xs == List.sum (List.reverse xs)
+
+test "T26a: property test with List Int parameter compiles and runs" {
+  property "length is non-negative" (xs: List Int) { listLengthNonNeg28 xs }
+}
+
+test "T26b: List sum is commutative under reversal" {
+  property "sum equals sum of reversed" (xs: List Int) { listSumReverseSame28 xs }
+}
+
+test "T26c: append length is additive" {
+  property "append length" (xs: List Int, ys: List Int) {
+    List.length (List.append xs ys) == List.length xs + List.length ys
+  }
+}

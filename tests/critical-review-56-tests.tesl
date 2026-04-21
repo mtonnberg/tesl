@@ -1,0 +1,210 @@
+#lang tesl
+# =====================================================================
+# Critical Review 56 — positive regression tests
+# =====================================================================
+#
+# Audits the fixes from reviews 54 and 55.
+# Tests runtime correctness of literal proof subjects, ghost witnesses,
+# field access passthrough, lambda filterCheck rejection, and related.
+#
+# Paired with: compiler/test/test_review56_antagonistic.ml
+
+module CriticalReview56 exposing []
+
+import Tesl.Prelude exposing [ Int, Bool(..), String, List, Fact, detachFact, ]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.length, List.filterCheck]
+
+# ─── Proof vocabulary ────────────────────────────────────────────────────────
+
+fact IsPositive (n: Int)
+fact IsSmall (n: Int)
+fact HasMin (lo: Int) (n: Int)
+fact HasMax (hi: Int) (n: Int)
+fact Named (name: String) (port: Int)
+fact Capped (max: Int) (n: Int)
+
+check checkPos(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+check checkSmall(n: Int) -> n: Int ::: IsSmall n =
+  if n < 1000 then
+    ok n ::: IsSmall n
+  else
+    fail 400 "too large"
+
+check checkMin10(n: Int) -> n: Int ::: HasMin 10 n =
+  if n >= 10 then
+    ok n ::: HasMin 10 n
+  else
+    fail 400 "too low"
+
+check checkMax100(n: Int) -> n: Int ::: HasMax 100 n =
+  if n <= 100 then
+    ok n ::: HasMax 100 n
+  else
+    fail 400 "too high"
+
+establish proveAlwaysCapped(n: Int) -> Fact (Capped 9999 n) =
+  Capped 9999 n
+
+establish proveHttp(port: Int) -> Fact (Named "http" port) =
+  Named "http" port
+
+fn needPos(n: Int ::: IsPositive n) -> Int = n
+fn needMin10(n: Int ::: HasMin 10 n) -> Int = n
+fn needMax100(n: Int ::: HasMax 100 n) -> Int = n
+fn needBothBounds(n: Int ::: HasMin 10 n && HasMax 100 n) -> Int = n
+fn needCapped(n: Int ::: Capped 9999 n) -> Int = n
+fn needHttp(port: Int ::: Named "http" port) -> Int = port
+
+# ─── R56_LI — Literal proof subject runtime correctness ──────────────────────
+
+fn li01_literal_min_correct(raw: Int) -> Int =
+  let v = check checkMin10 raw
+  needMin10 v
+
+fn li02_literal_max_correct(raw: Int) -> Int =
+  let v = check checkMax100 raw
+  needMax100 v
+
+fn li03_literal_both_bounds(raw: Int) -> Int =
+  let a = check checkMin10 raw
+  let b = check checkMax100 a
+  needBothBounds b
+
+fn li04_string_literal_proof(raw: Int) -> Int =
+  let pf = proveHttp raw
+  needHttp <| raw ::: pf
+
+fn li05_capped_literal(raw: Int) -> Int =
+  let pf = proveAlwaysCapped raw
+  needCapped <| raw ::: pf
+
+fn li06_mixed_lit_var_bounds(raw: Int) -> Int =
+  let a = check checkMin10 raw
+  let b = check checkMax100 a
+  needBothBounds b
+
+test "R56_LI: literal proof subject runtime correctness" {
+  expect li01_literal_min_correct 10 == 10
+  expect li01_literal_min_correct 50 == 50
+  expectFail li01_literal_min_correct 9
+
+  expect li02_literal_max_correct 100 == 100
+  expect li02_literal_max_correct 0 == 0
+  expectFail li02_literal_max_correct 101
+
+  expect li03_literal_both_bounds 50 == 50
+  expect li03_literal_both_bounds 10 == 10
+  expect li03_literal_both_bounds 100 == 100
+  expectFail li03_literal_both_bounds 9
+  expectFail li03_literal_both_bounds 101
+
+  expect li04_string_literal_proof 80 == 80
+  expect li04_string_literal_proof 443 == 443
+
+  expect li05_capped_literal 42 == 42
+  expect li05_capped_literal 0 == 0
+
+  expect li06_mixed_lit_var_bounds 50 == 50
+}
+
+# ─── R56_GW — Ghost witness runtime ──────────────────────────────────────────
+
+fact PriceExceedsQuantity (price: Int, quantity: Int)
+
+check checkPQ(price: Int, quantity: Int) -> price: Int ::: PriceExceedsQuantity price quantity =
+  if price > quantity then
+    ok price ::: PriceExceedsQuantity price quantity
+  else
+    fail 422 "price must exceed quantity"
+
+record OrderLine {
+  price: Int ::: IsPositive price
+  quantity: Int ::: IsPositive quantity
+} ::: PriceExceedsQuantity price quantity
+
+fn makeOrderLine(p: Int ::: IsPositive p,
+                 q: Int ::: IsPositive q,
+                 pq: Int ::: PriceExceedsQuantity p q) -> OrderLine =
+  OrderLine { price: p, quantity: q } ::: (detachFact pq)
+
+fn getPrice(ol: OrderLine) -> Int = ol.price
+
+test "R56_GW: ghost witness construction" {
+  let price100 = 100
+  let qty50 = 50
+  let p = check checkPos price100
+  let q = check checkPos qty50
+  let pq = check checkPQ price100 qty50
+  let ol = makeOrderLine p q pq
+  expect getPrice ol == 100
+  let badPrice = 50
+  let badQty = 100
+  expectFail check checkPQ badPrice badQty
+}
+
+# ─── R56_FP — Field proof passthrough ────────────────────────────────────────
+
+record ValidPayload {
+  serial: Int ::: IsPositive serial
+}
+
+fn extractSerial(payload: ValidPayload) -> serial: Int ::: IsPositive serial =
+  payload.serial
+
+record ValidItem {
+  value: Int ::: IsPositive value && IsSmall value
+}
+
+fn extractValue(item: ValidItem) -> value: Int ::: IsPositive value && IsSmall value =
+  item.value
+
+fn needBoth(n: Int ::: IsPositive n && IsSmall n) -> Int = n
+
+test "R56_FP: field proof passthrough runtime" {
+  let rawSerial = 42
+  let posSerial = check checkPos rawSerial
+  let payload = ValidPayload { serial: posSerial }
+  let extracted = extractSerial payload
+  expect needPos extracted == 42
+
+  let rawVal = 5
+  let pv = check checkPos rawVal
+  let sv = check checkSmall pv
+  let item = ValidItem { value: sv }
+  let v = extractValue item
+  expect needBoth v == 5
+}
+
+# ─── R56_FA — ForAll without literal args (baseline) ─────────────────────────
+
+fn fa01_forall_no_literals(xs: List Int) -> Int =
+  let positives = List.filterCheck checkPos xs
+  let consumer = fn(ns: List Int ::: ForAll IsPositive ns) -> List.length ns
+  consumer positives
+
+test "R56_FA: ForAll without literal args works" {
+  expect fa01_forall_no_literals [1, 2, -3, 4] == 3
+  expect fa01_forall_no_literals [-1, -2, -3] == 0
+  expect fa01_forall_no_literals [1, 2, 3] == 3
+}
+
+# ─── R56_CH — Combined check && with literal predicates ──────────────────────
+
+fn ch01_combined_literal_preds(raw: Int) -> Int =
+  let a = check checkMin10 raw
+  let b = check checkMax100 a
+  needBothBounds b
+
+test "R56_CH: combined literal predicate checks" {
+  expect ch01_combined_literal_preds 10 == 10
+  expect ch01_combined_literal_preds 55 == 55
+  expect ch01_combined_literal_preds 100 == 100
+  expectFail ch01_combined_literal_preds 9
+  expectFail ch01_combined_literal_preds 101
+}

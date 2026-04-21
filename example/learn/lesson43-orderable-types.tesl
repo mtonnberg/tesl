@@ -1,0 +1,270 @@
+#lang tesl
+module OrderableTypes exposing [
+  Score,
+  Rank,
+  Priority,
+  makeScore,
+  scoreToInt,
+  makeRank,
+  rankToInt,
+  makePriority,
+  priorityToInt,
+  clampScore,
+  higherRank,
+  moreUrgent,
+  sortedPair,
+  isAffordable,
+  createdBefore,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# The ordering operators (<, <=, >, >=) only work on types with a
+# meaningful total order.  The orderable built-in types are:
+#
+#   Int           whole numbers
+#   Float         64-bit floating-point
+#   PosixMillis   timestamps (milliseconds since the Unix epoch)
+#
+# Any nominal newtype ("type X = Y") is ALSO orderable when Y is orderable.
+# Orderability is inherited transitively through newtype chains:
+#
+#   type Score    = Int       # orderable — inherits from Int
+#   type Rank     = Score     # orderable — inherits from Score → Int
+#   type Priority = Int       # orderable — inherits from Int
+#
+# Types that are NOT orderable:
+#   type Label    = String    # String has no total order in Tesl — compile error
+#   type Active   = Bool      # Bool has no total order in Tesl — compile error
+#
+# Equality (== and !=) works on ALL types.
+# Ordering (<, <=, >, >=) is a stricter guarantee — only Int, Float, PosixMillis
+# and nominal types derived from them.
+#
+# SQL WHERE predicates use comparison operators freely regardless of this rule:
+#   select p from Product where p.price > minPrice    -- SQL predicate, not Tesl ordering
+#   select e from Event where e.createdAt <= cutoff   -- SQL predicate, not Tesl ordering
+# The compiler recognises SQL predicate syntax and does not apply the
+# orderable-type restriction inside WHERE clauses.
+
+import Tesl.Prelude exposing [Bool(..), Int, List]
+import Tesl.Float exposing [Float]
+import Tesl.Time exposing [PosixMillis, Time.secondsToPosix]
+
+# ─── Orderable nominal types ──────────────────────────────────────────────────
+
+# Score wraps Int — all ordering operators work on Score values.
+type Score = Int
+
+# Rank wraps Score — ordering works transitively (Rank → Score → Int).
+type Rank = Score
+
+# Priority wraps Int — a second independent orderable type.
+type Priority = Int
+
+# ─── Constructor / extractor helpers ─────────────────────────────────────────
+# These functions make it easy to create and unwrap the newtypes in tests.
+# In production code you'd often call these inline or use record construction.
+
+fn makeScore(n: Int) -> Score = Score n
+fn scoreToInt(s: Score) -> Int = s.value
+
+fn makeRank(s: Score) -> Rank = Rank s
+fn rankToInt(r: Rank) -> Int = r.value.value # Rank → Score → Int
+
+fn makePriority(n: Int) -> Priority = Priority n
+fn priorityToInt(p: Priority) -> Int = p.value
+
+# ─── Using ordering on orderable nominal types ────────────────────────────────
+
+# Clamp a Score between lo and hi.
+# Score supports <= and >= because it is derived from Int.
+fn clampScore(value: Score, lo: Score, hi: Score) -> Score =
+  if scoreToInt value <= scoreToInt lo then
+    lo
+  else
+    if scoreToInt value >= scoreToInt hi then
+      hi
+    else
+      value
+
+# Return the greater of two Rank values.
+# Rank supports > because it inherits from Score which inherits from Int.
+fn higherRank(a: Rank, b: Rank) -> Rank =
+  if rankToInt a > rankToInt b then
+    a
+  else
+    b
+
+# Return the higher-priority item (lower Int = higher urgency convention).
+# Priority supports < because it derives from Int.
+fn moreUrgent(a: Priority, b: Priority) -> Priority =
+  let aInt = a.value
+  let bInt = b.value
+  if aInt < bInt then
+    a
+  else
+    b
+
+# ─── Ordering on plain Int, Float, PosixMillis ───────────────────────────────
+
+# Return a sorted [lo, hi] pair of plain integers.
+fn sortedPair(a: Int, b: Int) -> List Int =
+  if a <= b then
+    [a, b]
+  else
+    [b, a]
+
+# Check whether a price is within a budget.  Float supports <= directly.
+fn isAffordable(price: Float, budget: Float) -> Bool =
+  price <= budget
+
+# Check whether t1 was created strictly before t2.
+# PosixMillis supports < directly.
+fn createdBefore(t1: PosixMillis, t2: PosixMillis) -> Bool =
+  t1.value < t2.value
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# EQUALITY VS ORDERING
+#
+# Every Tesl type supports equality: you can always ask "are these two values
+# the same?"  Ordering is a stronger claim: there must be a canonical, total,
+# unambiguous less-than relation on the type.
+#
+# String has no agreed ordering in Tesl — lexicographic order is locale-
+# dependent and surprising.  Tesl omits String ordering deliberately.
+# If you need to sort strings, use a comparison function that returns an Int.
+#
+# Bool has only two values; using < on Bool would require choosing an arbitrary
+# convention (is False < True or the other way?).  Tesl does not guess.
+#
+# NOMINAL NEWTYPES INHERIT ORDERABILITY
+#
+# "type Score = Int" creates a DISTINCT type called Score — Score values
+# cannot be mixed with plain Int without unwrapping.  But because Score is
+# declared over Int, the compiler knows the total order from Int carries over.
+# Score < Score is therefore valid.
+#
+# The inheritance is transitive: Rank → Score → Int means Rank is orderable.
+#
+# WHY NOT ALL NEWTYPES?
+#
+# Suppose you define  type CustomerId = String.
+# Ordering CustomerId values (id1 < id2) would compare opaque identifiers
+# with no domain meaning.  The compiler refuses this.  If you want
+# lexicographic comparison, use a library function on the unwrapped strings.
+#
+# SQL WHERE PREDICATES ARE DIFFERENT
+#
+# In SQL WHERE clauses, comparison operators build database filters:
+#   select p from Product where p.price > minPrice
+# The ">" is SQL predicate syntax, not a Tesl value comparison.
+# The compiler detects this pattern (the left operand traces to a SQL
+# select function) and skips the orderable-type restriction entirely.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# The orderable-type check is a validation pass that runs AFTER HM type
+# unification.  HM has already verified both sides of < share the same type T.
+# The pass then tests whether T is in the orderable set:
+#
+#   orderable(T) ≡
+#     T ∈ {Int, Float, PosixMillis}
+#     ∨ (T is a newtype/alias X with declared base B and orderable(B))
+#
+# The resolution follows declared base types, not runtime values.
+# Cycles are prevented by a "seen" set.
+#
+# SQL predicate detection: the compiler follows the LEFT spine of a
+# comparison expression through BAnd / BEq / BNeq / BGt / BGe / BLt / BLe
+# nodes.  If that spine ultimately reaches an EApp whose head function is
+# "select", "selectCount", "selectMany", "selectOne", or similar SQL built-ins,
+# the whole expression is classified as a SQL predicate and skipped.
+#
+# Generic type variables (TVar — e.g., `a` in a polymorphic function) are
+# treated as orderable so that generic code is not incorrectly blocked.
+# The HM system will reject concrete calls with non-orderable instantiations.
+
+test "clampScore: in range" {
+  let lo = makeScore 0
+  let hi = makeScore 100
+  let mid = makeScore 50
+  let s = clampScore mid lo hi
+  expect scoreToInt s == 50
+}
+
+test "clampScore: below lo is clamped up" {
+  let lo = makeScore 0
+  let hi = makeScore 100
+  let low = makeScore -10
+  let s = clampScore low lo hi
+  expect scoreToInt s == 0
+}
+
+test "clampScore: above hi is clamped down" {
+  let lo = makeScore 0
+  let hi = makeScore 100
+  let over = makeScore 200
+  let s = clampScore over lo hi
+  expect scoreToInt s == 100
+}
+
+test "clampScore: at boundary values" {
+  let lo = makeScore 5
+  let hi = makeScore 10
+  let atLo = makeScore 5
+  let atHi = makeScore 10
+  let sLo = clampScore atLo lo hi
+  let sHi = clampScore atHi lo hi
+  expect scoreToInt sLo == 5
+  expect scoreToInt sHi == 10
+}
+
+test "higherRank: returns the greater rank" {
+  let a = makeRank (makeScore 3)
+  let b = makeRank (makeScore 7)
+  let r1 = higherRank a b
+  let r2 = higherRank b a
+  expect rankToInt r1 == 7
+  expect rankToInt r2 == 7
+}
+
+test "higherRank: tie returns first" {
+  let a = makeRank (makeScore 5)
+  let b = makeRank (makeScore 5)
+  let r = higherRank a b
+  expect rankToInt r == 5
+}
+
+test "moreUrgent: lower priority number wins" {
+  let p1 = makePriority 1
+  let p2 = makePriority 5
+  let u1 = moreUrgent p1 p2
+  let u2 = moreUrgent p2 p1
+  expect priorityToInt u1 == 1
+  expect priorityToInt u2 == 1
+}
+
+test "sortedPair: plain Int ordering" {
+  expect sortedPair 3 7 == [3, 7]
+  expect sortedPair 7 3 == [3, 7]
+  expect sortedPair 5 5 == [5, 5]
+}
+
+test "isAffordable: Float ordering" {
+  expect isAffordable 9.99 10.0 == True
+  expect isAffordable 10.0 10.0 == True
+  expect isAffordable 10.01 10.0 == False
+}
+
+test "createdBefore: PosixMillis ordering" {
+  let earlier = Time.secondsToPosix 1000
+  let later = Time.secondsToPosix 2000
+  expect createdBefore earlier later == True
+  expect createdBefore later earlier == False
+  expect createdBefore earlier earlier == False
+}

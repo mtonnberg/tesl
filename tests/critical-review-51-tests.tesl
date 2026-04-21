@@ -1,0 +1,324 @@
+#lang tesl
+# =====================================================================
+# Critical Review 51 — positive regression tests
+# =====================================================================
+#
+# Positive Tesl tests that should compile and pass at runtime. Paired
+# with `compiler/test/test_review51_antagonistic.ml` which contains the
+# negative tests (things that must fail to compile).
+#
+# After the review-51 fix round these tests add NEW positive coverage
+# for the accepted-but-previously-broken behaviours:
+#
+#   - Parser: nested bare nullary (`Something Nothing ->`) now works.
+#   - Parser: `case expr > 0 of` with no parens now works.
+#   - Type system: record updates are type-checked through known fields.
+#   - Shadowing: aliasing a proof-free function remains legal.
+#
+# Test ID prefix conventions mirror review 50:
+#   R51_P  = Proof soundness
+#   R51_T  = Type / structural system
+#   R51_X  = Parser / syntax
+#   R51_F  = Formatter / linter / tooling (positive controls)
+#   R51_S  = Shadowing rules
+#   R51_C  = Constructor / case / pattern matching
+#   R51_N  = New positive coverage added after the fix round
+#
+module CriticalReview51 exposing []
+
+import Tesl.Prelude exposing [ Int, String, Bool(..), List, Fact, forgetFact, ]
+import Tesl.Maybe exposing [Maybe, Something, Nothing]
+
+# ---------------------------------------------------------------------
+# Proof vocabulary used across tests
+# ---------------------------------------------------------------------
+fact IsPositive (n: Int)
+fact IsEven (n: Int)
+fact InRange (lo: Int, hi: Int, n: Int)
+
+check isPositive(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+check isEven(n: Int) -> n: Int ::: IsEven n =
+  if n % 2 == 0 then
+    ok n ::: IsEven n
+  else
+    fail 400 "not even"
+
+check inRange(lo: Int, hi: Int, n: Int) -> n: Int ::: InRange lo hi n =
+  if lo <= n && n <= hi then
+    ok n ::: InRange lo hi n
+  else
+    fail 400 "out of range"
+
+fn needPositive(n: Int ::: IsPositive n) -> Int = n
+fn needEven(n: Int ::: IsEven n) -> Int = n
+fn needInRange(lo: Int, hi: Int, n: Int ::: InRange lo hi n) -> Int = n
+
+# =====================================================================
+# R51_P — Proof soundness (positive direction)
+# =====================================================================
+
+# R51_P01 — `check`-produced proof flows into a plain function call.
+fn p01_flow(raw: Int) -> Int =
+  let checked = check isPositive raw
+  needPositive checked
+
+# R51_P02 — `let (x ::: p) = y` then `let v = x ::: p` reproduces the value.
+fn p02_roundtrip(raw: Int) -> Int =
+  let checked = check isPositive raw
+  let (x ::: p) = checked
+  let restored = x ::: p
+  needPositive restored
+
+# R51_P03 — Multi-parameter proofs propagate through let.
+fn p03_multi_param(lo: Int, hi: Int, raw: Int) -> Int =
+  let ranged = check inRange lo hi raw
+  needInRange lo hi ranged
+
+# R51_P04 — Explicit attach sugar via a proof variable.
+establish isPositiveOpt(n: Int) -> Maybe (Fact (IsPositive n)) =
+  if n > 0 then
+    Something (IsPositive n)
+  else
+    Nothing
+
+fn p04_attach_sugar(x: Int) -> Int =
+  let mp = isPositiveOpt x
+  case mp of
+    Something p ->
+      needPositive <| x ::: p
+    Nothing ->
+      0
+
+# R51_P05 — `forgetFact` strips proof; re-validating works.
+fn p05_forget_then_recheck(raw: Int) -> Int =
+  let checked = check isPositive raw
+  let bare = forgetFact checked
+  let revalidated = check isPositive bare
+  needPositive revalidated
+
+# R51_P06 — Composite proof via && flows through a single call.
+fn p06_composite(raw: Int) -> Int =
+  let pos = check isPositive raw
+  let both = check isEven pos
+  let requireBoth = fn(n: Int ::: IsPositive n && IsEven n) -> n
+  requireBoth both
+
+# =====================================================================
+# R51_T — Type system (positive)
+# =====================================================================
+
+fn t01_tuple_as_list() -> Int =
+  let pair = [1, 2]
+  List.length pair
+
+type MyTree a
+  = MkLeaf
+  | MkNode left: (MyTree a) value: a right: (MyTree a)
+
+fn t02_tree_size(t: MyTree Int) -> Int =
+  case t of
+    MkLeaf -> 0
+    MkNode _ _ _ -> 1
+
+type UserId = String
+type ProjectId = String
+
+fn t03_unwrap(uid: UserId) -> String =
+  uid.value
+
+# =====================================================================
+# R51_C — Case / pattern matching (positive)
+# =====================================================================
+
+type Wrapped = MkWrap inner: Maybe Int
+
+fn c01_nested_paren(w: Wrapped) -> Int =
+  case w of
+    MkWrap (Something n) -> n
+    MkWrap (Nothing) -> 0
+
+fn c02_where_guard(m: Maybe Int) -> Int =
+  case m of
+    Nothing -> 0
+    Something n where n > 100 -> 100
+    Something n -> n
+
+# =====================================================================
+# R51_N — New positive regressions from the fix round
+# =====================================================================
+
+# R51_N01 — Nested bare nullary constructor pattern (R51_X01) — the
+#   workaround `Something (Nothing)` is no longer required.
+fn n01_bare_nullary(m: Maybe (Maybe Int)) -> Int =
+  case m of
+    Nothing -> 0
+    Something Nothing -> 1
+    Something (Something n) -> n
+
+# R51_N02 — `case` scrutinee accepts a full comparison expression
+#   (R51_X02). No parentheses required.
+fn n02_case_cmp(x: Int) -> Int =
+  case x > 0 of
+    True -> 1
+    False -> 0
+
+# R51_N03 — `case` scrutinee accepts a boolean conjunction.
+fn n03_case_conj(a: Int, b: Int) -> Int =
+  case a > 0 && b > 0 of
+    True -> 1
+    False -> 0
+
+# R51_N04 — `case` scrutinee accepts an arithmetic expression.
+fn n04_case_arith(a: Int, b: Int) -> Int =
+  case a + b of
+    0 -> 100
+    _ -> 0
+
+# R51_N05 — Record update on a known field still works.
+record Point { x: Int, y: Int }
+
+fn n05_record_update_known(p: Point, dx: Int) -> Point =
+  { p | x = p.x + dx }
+
+# R51_N06 — Aliasing a proof-FREE function through `let` is still legal
+#   (R51_P01 / R51_P02 fix is narrow — only proof-bearing aliases fail).
+fn simpleAdd(a: Int, b: Int) -> Int = a + b
+
+fn n06_proof_free_alias(x: Int, y: Int) -> Int =
+  let f = simpleAdd
+  f x y
+
+# R51_N07 — `forgetFact` + re-check closes the loop: a value that had
+#   IsPositive, was stripped of proof, then re-validated, still works.
+fn n07_forget_recheck_chain(n: Int) -> Int =
+  let p = check isPositive n
+  let p2 = forgetFact p
+  let p3 = check isPositive p2
+  needPositive p3
+
+# R51_N08 — Existential return WITH a check-established proof works
+#   (R51_E01 counter-example: the honest pack is accepted).
+fn n08_existential_with_check(raw: Int)
+  -> exists x: Int => Int ::: IsPositive x
+  requires [] =
+  let checked = check isPositive raw
+  exists checked =>
+    checked
+
+# R51_N09 — Multiple case arms with literal patterns still exhaustive
+#   via a catch-all.
+fn n09_int_case(code: Int) -> String =
+  case code of
+    200 -> "ok"
+    404 -> "not found"
+    _ -> "other"
+
+# =====================================================================
+# Tests — runtime assertions
+# =====================================================================
+
+test "R51_P01 check+needPositive round trip" {
+  expect p01_flow 5 == 5
+  expectFail p01_flow (0 - 5)
+}
+
+test "R51_P02 decompose-reattach preserves proof subject" {
+  expect p02_roundtrip 7 == 7
+  expectFail p02_roundtrip 0
+}
+
+test "R51_P03 multi-param proof flow" {
+  expect p03_multi_param 1 10 5 == 5
+  expectFail p03_multi_param 1 10 99
+}
+
+test "R51_P04 attach sugar" {
+  expect p04_attach_sugar 3 == 3
+  expect p04_attach_sugar 0 == 0
+}
+
+test "R51_P05 forget+recheck" {
+  expect p05_forget_then_recheck 8 == 8
+  expectFail p05_forget_then_recheck 0
+}
+
+test "R51_P06 composite && on single value" {
+  expect p06_composite 4 == 4
+  expectFail p06_composite 3
+  expectFail p06_composite (0 - 2)
+}
+
+test "R51_T01 two-element list has length 2" {
+  expect t01_tuple_as_list () == 2
+}
+
+test "R51_T02 parameterised tree" {
+  expect t02_tree_size MkLeaf == 0
+  expect t02_tree_size (MkNode MkLeaf 1 MkLeaf) == 1
+}
+
+test "R51_T03 newtype unwrap" {
+  let uid = UserId "u-1"
+  expect t03_unwrap uid == "u-1"
+}
+
+test "R51_C01 nested constructor with paren around nullary" {
+  expect c01_nested_paren (MkWrap (Something 9)) == 9
+  expect c01_nested_paren (MkWrap Nothing) == 0
+}
+
+test "R51_C02 where guard exercises the clamp branch" {
+  expect c02_where_guard Nothing == 0
+  expect c02_where_guard (Something 50) == 50
+  expect c02_where_guard (Something 1000) == 100
+}
+
+test "R51_N01 nested bare nullary pattern" {
+  expect n01_bare_nullary Nothing == 0
+  expect n01_bare_nullary (Something Nothing) == 1
+  expect n01_bare_nullary (Something (Something 42)) == 42
+}
+
+test "R51_N02 case expr scrutinee" {
+  expect n02_case_cmp 5 == 1
+  expect n02_case_cmp 0 == 0
+  expect n02_case_cmp (0 - 3) == 0
+}
+
+test "R51_N03 case with boolean conjunction" {
+  expect n03_case_conj 1 2 == 1
+  expect n03_case_conj 0 2 == 0
+  expect n03_case_conj 1 0 == 0
+}
+
+test "R51_N04 case with arithmetic scrutinee" {
+  expect n04_case_arith 0 0 == 100
+  expect n04_case_arith 1 1 == 0
+}
+
+test "R51_N05 record update still works on known field" {
+  let origin = Point { x: 0, y: 0 }
+  let moved = n05_record_update_known origin 10
+  expect moved.x == 10
+  expect moved.y == 0
+}
+
+test "R51_N06 proof-free fn alias via let" {
+  expect n06_proof_free_alias 5 7 == 12
+}
+
+test "R51_N07 forget+recheck chain" {
+  expect n07_forget_recheck_chain 9 == 9
+  expectFail n07_forget_recheck_chain 0
+}
+
+test "R51_N09 int case with literals and catch-all" {
+  expect n09_int_case 200 == "ok"
+  expect n09_int_case 404 == "not found"
+  expect n09_int_case 500 == "other"
+}

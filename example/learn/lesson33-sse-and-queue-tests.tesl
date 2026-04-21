@@ -1,0 +1,127 @@
+#lang tesl
+module Lesson33SseAndQueueTests exposing [Lesson33Server]
+
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Queue exposing [FromQueue, queueRead, queueWrite, pubsub]
+import Tesl.ApiTest exposing [
+  statusOk,
+  isNotEmpty,
+  includesWhere,
+  subscribe,
+  collect,
+  JobResult(..),
+  processNextJob,
+  pendingJobCount,
+  expectJobOk,
+]
+
+# ── Goal ─────────────────────────────────────────────────────────────────────
+# Learn how `api-test` can drive SSE streams and workers deterministically.
+# The test opens a stream, triggers an HTTP action that enqueues a job, runs the
+# worker synchronously, and then collects the published event.
+
+database Lesson33Database {
+  backend postgres
+  schema "lesson33"
+  entities []
+  postgres {
+    database "demo"
+    user "demo"
+    password "demo"
+    host "localhost"
+    port 5432
+    socket ""
+  }
+}
+
+record NotifyJob {
+  userId: String
+  message: String
+}
+
+record SendNoticeRequest {
+  userId: String
+  message: String
+}
+
+codec SendNoticeRequest {
+  toJson {
+    userId -> "userId" with_codec stringCodec
+    message -> "message" with_codec stringCodec
+  }
+  fromJson [
+    {
+      userId <- "userId" with_codec stringCodec
+      message <- "message" with_codec stringCodec
+    }
+  ]
+}
+
+type NoticeEvent
+  = NoticeSent message: String
+
+fn parseUserId(id: String) -> String =
+  id
+
+capture userIdCapture: String using stringCodec via parseUserId
+
+queue Lesson33Queue {
+  database Lesson33Database
+  jobs [NotifyJob]
+  retry {
+    maxAttempts: 2
+    backoff: linear
+    initialDelay: 1
+  }
+}
+
+channel Lesson33Events(userId: String) {
+  database Lesson33Database
+  payload NoticeEvent
+}
+
+worker handleNotice(job: NotifyJob ::: FromQueue (Id == jobId) job)
+  requires [queueRead, pubsub] =
+  publish Lesson33Events(job.userId) NoticeSent { message: job.message }
+  job
+
+workers Lesson33Workers for Lesson33Queue {
+  NotifyJob = handleNotice
+}
+
+handler sendNotice(req: SendNoticeRequest) -> String
+  requires [queueWrite] =
+  enqueue NotifyJob { userId: req.userId, message: req.message }
+  "queued"
+
+api Lesson33Api {
+  post "/send"
+    body req: SendNoticeRequest
+    -> String
+
+  sse "/events/:userId"
+    capture userId: String via userIdCapture
+    subscribe Lesson33Events(userId)
+}
+
+server Lesson33Server for Lesson33Api {
+  sendNotice = sendNotice
+}
+
+api-test "subscribe collect and process queue" for Lesson33Server requires [queueRead, queueWrite, pubsub] {
+  let stream = subscribe "/events/user-1"
+  let resp = post "/send" body { "userId": "user-1", "message": "Hello from lesson33" }
+  expect statusOk resp.status
+
+  expect pendingJobCount Lesson33Queue == 1
+
+  let result = processNextJob Lesson33Queue
+  let job = expectJobOk result
+  expect job.userId == "user-1"
+  expect pendingJobCount Lesson33Queue == 0
+
+  let events = collect stream count 1 timeout 1500ms
+  expect isNotEmpty events
+  expect includesWhere { "tag": "NoticeSent", "fields": { "message": "Hello from lesson33" } } events
+}

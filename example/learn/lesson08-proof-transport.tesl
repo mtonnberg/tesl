@@ -1,0 +1,129 @@
+#lang tesl
+module ProofTransport exposing [ValidAge, checkAge, birthday, showAge]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Sometimes you need to move a proof separately from a value.
+# Tesl provides three operations:
+#
+#   detachFact(v)           — extract the proof from v as a first-class value
+#   attachFact(v, p)        — attach a detached proof to another named value
+#   forgetFact(v)           — remove the proof from v (keeps the same subject/identity)
+#
+# Decompose shorthand:
+#   let (x::: p) = y        — same as x=forgetFact(y), p=detachFact(y) in one step
+#   let (x::: p && q) = y   — decompose when y carries a conjunction proof
+#
+# Use these when you need to restructure proof-carrying values, e.g.:
+#   - incrementing a validated number (creates a new value, must re-prove)
+#   - transferring a proof to a new binding for the same logical value
+#   - separating proof from value for storage or transport
+
+import Tesl.Prelude exposing [Int, forgetFact, Fact, String]
+
+fact ValidAge (n: Int)
+
+check checkAge(n: Int) -> n: Int ::: ValidAge n =
+  if n >= 0 && n <= 150 then
+    ok n ::: ValidAge n # a valid human age
+  else
+    fail 400 "invalid age"
+
+# birthday: increment age by 1.
+# Problem: the result (age + 1) is a NEW value — it doesn't inherit the ValidAge proof.
+# We must re-validate or be careful.
+# This example shows the simple safe approach: just return the raw incremented integer.
+# The caller can re-validate if needed.
+fn birthday(age: Int ::: ValidAge age) -> Int =
+  let withoutProof = forgetFact age # same hidden subject as age, but no establish attached
+  withoutProof + 1 # return a plain integer (re-validate externally if needed)
+  # Note: the result +1 is no longer guaranteed to be a ValidAge.
+  # If you need ValidAge on the result, call checkAge on the incremented value.
+
+# showAge: use the proof-decompose shorthand.
+# let (x::: p) = y  decomposes y into:
+#   x — same identity as y, but no proof (as if forgetFact was called)
+#   p — the detached proof (can be re-attached to x or another value)
+fn showAge(age: Int ::: ValidAge age) -> String =
+  let (rawAge ::: ageProof) = age # decompose: rawAge is proof-free, ageProof is detached
+  # rawAge: same subject as age, no ValidAge
+  # ageProof: detached ValidAge fact about age's subject
+  "age is ${rawAge}"
+  # Note: ageProof is unused here. In real code you'd re-attach it if needed.
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Think of a "named value" as a sealed envelope:
+#   - The envelope is the hidden subject (identity)
+#   - Inside: the raw value (e.g., the number 25)
+#   - On the outside: proof stamps ("ValidAge: yes")
+#
+# forgetFact(v): keep the envelope and its contents, but peel off the stamps.
+#   Same identity, same raw value, no proofs.
+#
+# detachFact(v): take the stamps off the envelope and hold them in your hand.
+#   The stamps still refer to the original envelope (subject).
+#
+# attachFact(v, p): press the detached stamps onto a different envelope.
+#   The stamps still say they're about the ORIGINAL envelope's subject,
+#   not the new one. So this is not forging — see theory section below.
+#
+# let (x::: p) = y: sugar for doing forgetFact and detachFact simultaneously.
+#   x = the envelope without stamps
+#   p = the stamps, still referencing y's subject
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# A detached proof is a first-class value that carries:
+#   1. The fact (e.g., "ValidAge" predicate applied to its subject)
+#   2. The hidden subject bindings (a reference to the original subject symbol)
+#
+# When you call attachFact(v, p), the proof p is physically placed on v's
+# named-value carrier. HOWEVER, the proof still internally references the ORIGINAL
+# hidden subject from when it was created — not v's subject.
+#
+# This means attachFact does NOT "retarget" the proof to v's subject.
+# At a call site that requires "ValidAge x" (where x is v's subject), the runtime
+# checks: "does v carry a ValidAge fact that matches v's subject?"
+# If the attached proof was created for a different subject, it won't match.
+#
+# This is the soundness guarantee: you cannot forge a proof for a different value
+# by detaching a real proof and attaching it to an unrelated value.
+#
+# Why is forgetFact safe?
+# forgetFact preserves the subject identity. The subject is still the same hidden symbol.
+# Dropping proofs is always safe: you're making a weaker claim about the same thing.
+# You go from "I know x is a ValidAge" to "I know x exists (subject preserved)".
+# You cannot forge new evidence by forgetting — you can only lose evidence.
+#
+# See 08-proof-transport.md for a deeper treatment with diagrams.
+
+test "checkAge valid" {
+  let n1 = 0
+  let r1 = check checkAge n1
+  let n2 = 25
+  let r2 = check checkAge n2
+  let n3 = 150
+  let r3 = check checkAge n3
+  expect 1 == 1
+}
+
+test "checkAge rejects" {
+  expectFail check checkAge -1
+  expectFail check checkAge 151
+}
+
+test "birthday increments" {
+  let n = 30
+  let age = check checkAge n
+  expect birthday age == 31
+}
+
+test "showAge produces string" {
+  let n = 25
+  let age = check checkAge n
+  expect showAge age == "age is 25"
+}

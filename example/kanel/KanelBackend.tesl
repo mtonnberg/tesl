@@ -1,0 +1,837 @@
+#lang tesl
+module KanelBackend exposing [KanelServer]
+
+# ─── Kanel — Main backend: database, queue, API, server, main ──────────────
+#
+# This wires together all domain modules.  Infrastructure (database, queue,
+# captures, API, server, main) lives here; business logic lives in the
+# domain modules.
+
+import Tesl.Prelude exposing [Bool(..), String, Unit]
+import Tesl.Env exposing [env, envInt]
+import Tesl.Time exposing [time]
+import Tesl.Id exposing [generatePrefixedId]
+import Tesl.Random exposing [random]
+import Tesl.Queue exposing [
+  queueRead,
+  queueWrite,
+  pubsub,
+  FromQueue,
+  FromDeadQueue,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.trim]
+import Tesl.ApiTest exposing [
+  statusOk,
+  statusClientError,
+  jsonInt,
+  jsonString,
+  jsonBool,
+  jsonLength,
+  isNull,
+  isNotNull,
+  includesWhere,
+  excludesWhere,
+  hasLength,
+  isNotEmpty,
+  arrayAt,
+  hasField,
+  fieldAt,
+  bodyField,
+  jsonContains,
+  subscribe,
+  collect,
+  JobResult(..),
+  processNextJob,
+  processNextDeadJob,
+  pendingJobCount,
+  expectJobOk,
+  expectJobFailed,
+]
+import KanelModels exposing [
+  kanelDbRead,
+  kanelDbWrite,
+  kanelQueue,
+  kanelPubSub,
+  KanelUser,
+  Org,
+  OrgMembership,
+  Project,
+  ProjectMembership,
+  Issue,
+  IssueComment,
+  TimeEntry,
+  Invoice,
+  OrgRole(..),
+  IssueStatus(..),
+  NewCommentRequest,
+  NewOrgRequest,
+  NewProjectRequest,
+  NewIssueRequest,
+  UpdateIssueRequest,
+  UpdateStatusRequest,
+  NewTimeEntryRequest,
+  NewInvoiceRequest,
+  ValidOrgId,
+  checkOrgId,
+  ValidProjectId,
+  checkProjectId,
+  ValidIssueId,
+  checkIssueId,
+  ValidInvoiceId,
+  checkInvoiceId,
+  ValidUserId,
+  checkUserId,
+  checkTargetUserId,
+]
+import KanelAuth exposing [
+  KanelSession,
+  Authenticated,
+  cookieAuth,
+  checkOrgMember,
+]
+import KanelOrg exposing [
+  RegisterRequest,
+  LoginRequest,
+  InviteMemberRequest,
+  ChangeMemberRoleRequest,
+  registerHandler,
+  loginHandler,
+  createOrgHandler,
+  getOrgHandler,
+  listOrgMembersHandler,
+  inviteMemberHandler,
+  changeMemberRoleHandler,
+  removeMemberHandler,
+  listMyOrgsHandler,
+]
+import KanelIssues exposing [
+  checkCommentBody,
+  insertCommentBody,
+  checkNotDone,
+  createProjectHandler,
+  listProjectsHandler,
+  getProjectHandler,
+  archiveProjectHandler,
+  createIssueHandler,
+  listIssuesHandler,
+  getIssueHandler,
+  updateIssueHandler,
+  updateIssueStatusHandler,
+  listCommentsHandler,
+  logTimeHandler,
+  listTimeEntriesHandler,
+]
+import KanelBilling exposing [
+  createInvoiceHandler,
+  getInvoiceHandler,
+  listInvoicesHandler,
+  approveInvoiceHandler,
+  markSentHandler,
+  markPaidHandler,
+]
+
+# ── Database ─────────────────────────────────────────────────────────────────
+
+database KanelDatabase {
+  backend postgres
+  schema "kanel"
+  entities [KanelUser, Org, OrgMembership, Project, ProjectMembership, Issue, IssueComment, TimeEntry, Invoice]
+  postgres {
+    database env("KANEL_DB")
+    user env("TESL_POSTGRES_USER")
+    password env("TESL_POSTGRES_PASSWORD")
+    host env("TESL_POSTGRES_HOST")
+    port envInt("TESL_POSTGRES_PORT", 5432)
+    socket env("TESL_POSTGRES_SOCKET")
+  }
+}
+
+# ── Notification queue ────────────────────────────────────────────────────────
+
+record KanelNotifyJob {
+  recipientUserId: String
+  recipientEmail: String
+  subject: String
+  body: String
+}
+
+queue KanelNotifyQueue {
+  database KanelDatabase
+  jobs [KanelNotifyJob]
+  retry {
+    maxAttempts: 3
+    backoff: exponential
+    initialDelay: 30
+  }
+}
+
+capability notifyWorkerCap implies queueRead
+
+type UserNotificationEvent
+  = NotificationDelivered recipientEmail: String subject: String
+  | NotificationFailed recipientEmail: String subject: String
+
+channel UserNotifications(userId: String) {
+  database KanelDatabase
+  payload UserNotificationEvent
+}
+
+worker notifyWorker(job: KanelNotifyJob ::: FromQueue (Id == jobId) job)
+  requires [notifyWorkerCap, kanelPubSub] =
+  if job.recipientEmail == "blocked@example.com" then
+    fail 500 "notifications blocked for recipient"
+  else
+    publish UserNotifications(job.recipientUserId) NotificationDelivered { recipientEmail: job.recipientEmail, subject: job.subject }
+    job
+
+deadWorker deadNotifyWorker(job: KanelNotifyJob ::: FromDeadQueue (Id == jobId) job)
+  requires [notifyWorkerCap, kanelPubSub] =
+  publish UserNotifications(job.recipientUserId) NotificationFailed { recipientEmail: job.recipientEmail, subject: job.subject }
+  job
+
+# ── URL capture declarations ─────────────────────────────────────────────────
+#
+# Each capture validates the URL parameter and stamps it with a proof.
+# Endpoints reference the capture declaration by name.
+
+capture orgCapture: String ::: ValidOrgId orgId using stringCodec via checkOrgId
+capture projectCapture: String ::: ValidProjectId projectId using stringCodec via checkProjectId
+capture issueCapture: String ::: ValidIssueId issueId using stringCodec via checkIssueId
+capture invoiceCapture: String ::: ValidInvoiceId invoiceId using stringCodec via checkInvoiceId
+capture userCapture: String ::: ValidUserId userId using stringCodec via checkUserId
+capture targetUserCapture: String ::: ValidUserId targetUserId using stringCodec via checkTargetUserId
+
+# ── API ───────────────────────────────────────────────────────────────────────
+
+api KanelApi {
+  # ── Auth ──────────────────────────────────────────────────────────────────
+  post "/auth/register"
+    body req: RegisterRequest
+    -> exists userId: String => KanelUser ? FromDb (Id == userId)
+
+  post "/auth/login"
+    body req: LoginRequest
+    -> String
+
+  sse "/events/users/:userId"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture userId: String ::: ValidUserId userId via userCapture
+    subscribe UserNotifications(userId)
+
+  # ── Organizations ─────────────────────────────────────────────────────────
+  post "/orgs"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    body req: NewOrgRequest
+    -> exists orgId: String => Org ? FromDb (Id == orgId)
+
+  get "/orgs"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    -> List Org
+
+  get "/orgs/:orgId"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    -> Org
+
+  # ── Members ───────────────────────────────────────────────────────────────
+  get "/orgs/:orgId/members"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    -> List OrgMembership
+
+  post "/orgs/:orgId/members"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    body req: InviteMemberRequest
+    -> exists memberId: String => OrgMembership ? FromDb (Id == memberId)
+
+  put "/orgs/:orgId/members/:targetUserId/role"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture targetUserId: String ::: ValidUserId targetUserId via targetUserCapture
+    body req: ChangeMemberRoleRequest
+    -> OrgMembership
+
+  delete "/orgs/:orgId/members/:targetUserId"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture targetUserId: String ::: ValidUserId targetUserId via targetUserCapture
+    -> String
+
+  # ── Projects ──────────────────────────────────────────────────────────────
+  post "/orgs/:orgId/projects"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    body req: NewProjectRequest
+    -> exists projectId: String => Project ? FromDb (Id == projectId)
+
+  get "/orgs/:orgId/projects"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    -> List Project
+
+  get "/orgs/:orgId/projects/:projectId"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture projectId: String ::: ValidProjectId projectId via projectCapture
+    -> Project
+
+  put "/orgs/:orgId/projects/:projectId/archive"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture projectId: String ::: ValidProjectId projectId via projectCapture
+    -> Project
+
+  # ── Issues ────────────────────────────────────────────────────────────────
+  post "/orgs/:orgId/projects/:projectId/issues"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture projectId: String ::: ValidProjectId projectId via projectCapture
+    body req: NewIssueRequest
+    -> exists issueId: String => Issue ? FromDb (Id == issueId)
+
+  get "/orgs/:orgId/projects/:projectId/issues"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture projectId: String ::: ValidProjectId projectId via projectCapture
+    -> List Issue
+
+  get "/orgs/:orgId/issues/:issueId"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture issueId: String ::: ValidIssueId issueId via issueCapture
+    -> Issue
+
+  put "/orgs/:orgId/issues/:issueId"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture issueId: String ::: ValidIssueId issueId via issueCapture
+    body req: UpdateIssueRequest
+    -> Issue
+
+  put "/orgs/:orgId/issues/:issueId/status"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture issueId: String ::: ValidIssueId issueId via issueCapture
+    body req: UpdateStatusRequest
+    -> Issue
+
+  # ── Comments ──────────────────────────────────────────────────────────────
+  post "/orgs/:orgId/issues/:issueId/comments"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture issueId: String ::: ValidIssueId issueId via issueCapture
+    body req: NewCommentRequest
+    -> exists commentId: String => IssueComment ? FromDb (Id == commentId)
+
+  get "/orgs/:orgId/issues/:issueId/comments"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture issueId: String ::: ValidIssueId issueId via issueCapture
+    -> List IssueComment
+
+  # ── Time tracking ─────────────────────────────────────────────────────────
+  post "/orgs/:orgId/issues/:issueId/time"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture issueId: String ::: ValidIssueId issueId via issueCapture
+    body req: NewTimeEntryRequest
+    -> exists entryId: String => TimeEntry ? FromDb (Id == entryId)
+
+  get "/orgs/:orgId/issues/:issueId/time"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture issueId: String ::: ValidIssueId issueId via issueCapture
+    -> List TimeEntry
+
+  # ── Invoices ──────────────────────────────────────────────────────────────
+  post "/orgs/:orgId/invoices"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    body req: NewInvoiceRequest
+    -> exists invoiceId: String => Invoice ? FromDb (Id == invoiceId)
+
+  get "/orgs/:orgId/invoices"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    -> List Invoice
+
+  get "/orgs/:orgId/invoices/:invoiceId"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture invoiceId: String ::: ValidInvoiceId invoiceId via invoiceCapture
+    -> Invoice
+
+  put "/orgs/:orgId/invoices/:invoiceId/approve"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture invoiceId: String ::: ValidInvoiceId invoiceId via invoiceCapture
+    -> Invoice
+
+  put "/orgs/:orgId/invoices/:invoiceId/send"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture invoiceId: String ::: ValidInvoiceId invoiceId via invoiceCapture
+    -> Invoice
+
+  put "/orgs/:orgId/invoices/:invoiceId/pay"
+    auth session: KanelSession ::: Authenticated session via cookieAuth
+    capture orgId: String ::: ValidOrgId orgId via orgCapture
+    capture invoiceId: String ::: ValidInvoiceId invoiceId via invoiceCapture
+    -> Invoice
+}
+
+handler addCommentAndNotifyHandler(
+    session: KanelSession ::: Authenticated session,
+    orgId: String ::: ValidOrgId orgId,
+    issueId: String ::: ValidIssueId issueId,
+    req: NewCommentRequest)
+  -> exists commentId: String => IssueComment ? FromDb (Id == commentId)
+  requires [kanelDbRead, kanelDbWrite, kanelQueue, random, time] =
+  let userId = check checkOrgMember session.userId orgId
+  let notDoneId = check checkNotDone issueId
+  let commentBody = check checkCommentBody (String.trim req.body)
+  let commentId = generatePrefixedId "cmt"
+  let issue = selectOne i from Issue where i.id == issueId && i.orgId == orgId
+  case issue of
+    Nothing -> fail 404 "issue not found"
+    Something currentIssue ->
+      let reporter = selectOne u from KanelUser where u.id == currentIssue.reporterId
+      case reporter of
+        Nothing -> fail 404 "issue reporter not found"
+        Something targetUser ->
+          with transaction {
+            enqueue KanelNotifyJob { recipientUserId: targetUser.id, recipientEmail: targetUser.email, subject: "New comment on issue {issueId}", body: "Comment from {session.displayName}: {commentBody}" }
+            exists commentId =>
+              insertCommentBody commentId userId orgId notDoneId commentBody
+          }
+
+server KanelServer for KanelApi {
+  registerHandler = registerHandler
+  loginHandler = loginHandler
+  createOrgHandler = createOrgHandler
+  listMyOrgsHandler = listMyOrgsHandler
+  getOrgHandler = getOrgHandler
+  listOrgMembersHandler = listOrgMembersHandler
+  inviteMemberHandler = inviteMemberHandler
+  changeMemberRoleHandler = changeMemberRoleHandler
+  removeMemberHandler = removeMemberHandler
+  createProjectHandler = createProjectHandler
+  listProjectsHandler = listProjectsHandler
+  getProjectHandler = getProjectHandler
+  archiveProjectHandler = archiveProjectHandler
+  createIssueHandler = createIssueHandler
+  listIssuesHandler = listIssuesHandler
+  getIssueHandler = getIssueHandler
+  updateIssueHandler = updateIssueHandler
+  updateIssueStatusHandler = updateIssueStatusHandler
+  addCommentHandler = addCommentAndNotifyHandler
+  listCommentsHandler = listCommentsHandler
+  logTimeHandler = logTimeHandler
+  listTimeEntriesHandler = listTimeEntriesHandler
+  createInvoiceHandler = createInvoiceHandler
+  listInvoicesHandler = listInvoicesHandler
+  getInvoiceHandler = getInvoiceHandler
+  approveInvoiceHandler = approveInvoiceHandler
+  markSentHandler = markSentHandler
+  markPaidHandler = markPaidHandler
+}
+
+api-test "organizations require authentication" for KanelServer requires [kanelDbRead] {
+  let orgs = get "/orgs"
+  expect statusClientError orgs.status
+}
+
+api-test "register response JSON can drive follow-up requests" for KanelServer requires [kanelDbRead, kanelDbWrite, random, time] {
+  let registered = post "/auth/register" body { "email": "alice@example.com", "password": "password123", "displayName": "Alice" }
+  expect statusOk registered.status
+  expect hasField "id" registered.body
+  expect jsonString registered.body.email == "alice@example.com"
+  expect jsonContains "Alice" registered.body.displayName
+  expect isNull registered.body.session
+
+  let registeredEmail = jsonString registered.body.email
+  let registeredDisplayName = jsonString registered.body.displayName
+
+  let duplicate = post "/auth/register"
+                    body { "email": "{registeredEmail}", "password": "password123", "displayName": "{registeredDisplayName}" }
+  expect duplicate.status == 409
+
+  let missingLogin = post "/auth/login" body { "email": "nobody@example.com", "password": "password123" }
+  expect statusClientError missingLogin.status
+}
+
+api-test "register login and project listing use JSON helpers" for KanelServer requires [kanelDbRead, kanelDbWrite, random, time] {
+  let registered = post "/auth/register" body { "email": "bob@example.com", "password": "password123", "displayName": "Bob" }
+  expect statusOk registered.status
+
+  let registeredUserId = jsonString registered.body.id
+  let login = post "/auth/login" body { "email": "bob@example.com", "password": "password123" }
+  expect statusOk login.status
+  expect login.body == registeredUserId
+
+  let sessionUserId = jsonString login.body
+  let createdOrg = post "/orgs"
+                    cookie "kanel_user_id={sessionUserId}"
+                    body { "name": "Acme Inc", "slug": "acme-inc" }
+  expect statusOk createdOrg.status
+  expect createdOrg.body.name == "Acme Inc"
+  expect hasField "slug" createdOrg.body
+  expect isNull createdOrg.body.owner
+
+  let orgId = jsonString createdOrg.body.id
+  let orgSlugJson = bodyField "slug" createdOrg
+  let orgSlug = jsonString orgSlugJson
+
+  let createdProject = post "/orgs/{orgId}/projects"
+                        cookie "kanel_user_id={sessionUserId}"
+                        body { "name": "Platform", "description": "Ship api-tests" }
+  expect statusOk createdProject.status
+  expect hasField "archived" createdProject.body
+  let projectId = jsonString createdProject.body.id
+
+  let orgs = get "/orgs" cookie "kanel_user_id={sessionUserId}"
+  expect statusOk orgs.status
+  expect isNotEmpty orgs.body
+  expect includesWhere { "id": orgId, "slug": orgSlug } orgs.body
+  expect excludesWhere { "slug": "missing-org" } orgs.body
+
+  let projects = get "/orgs/{orgId}/projects" cookie "kanel_user_id={sessionUserId}"
+  expect statusOk projects.status
+  expect hasLength 1 projects.body
+  expect jsonLength projects.body == 1
+  let firstProject = arrayAt 0 projects.body
+  expect fieldAt "id" firstProject == projectId
+  let archived = fieldAt "archived" firstProject
+  expect jsonBool archived == False
+  let createdAt = fieldAt "createdAt" firstProject
+  expect jsonInt createdAt >= 0
+
+  let fetched = get "/orgs/{orgId}" cookie "kanel_user_id={sessionUserId}"
+  expect statusOk fetched.status
+  let fetchedSlug = bodyField "slug" fetched
+  expect jsonString fetchedSlug == orgSlug
+}
+
+api-test "seed can prepare organization membership for authenticated reads" for KanelServer requires [kanelDbRead, kanelDbWrite] {
+  seed {
+    insert KanelUser {
+      id: "usr-seeded",
+      email: "seeded@example.com",
+      passwordHash: "password123",
+      displayName: "Seeded Alice",
+      createdAt: 0
+    }
+    insert Org {
+      id: "org-seeded",
+      name: "Seeded Org",
+      slug: "seeded-org",
+      createdAt: 0
+    }
+    insert OrgMembership {
+      id: "mem-seeded",
+      orgId: "org-seeded",
+      userId: "usr-seeded",
+      role: RoleAdmin,
+      joinedAt: 0
+    }
+  }
+
+  let userId = "usr-seeded"
+  let orgId = "org-seeded"
+
+  let orgs = get "/orgs" cookie "kanel_user_id={userId}"
+  expect statusOk orgs.status
+  expect hasLength 1 orgs.body
+  let firstOrg = arrayAt 0 orgs.body
+  expect fieldAt "slug" firstOrg == "seeded-org"
+
+  let fetched = get "/orgs/{orgId}" cookie "kanel_user_id={userId}"
+  expect statusOk fetched.status
+  expect fetched.body.name == "Seeded Org"
+  expect fetched.body.slug == "seeded-org"
+}
+
+api-test "comment notifications enqueue work and publish delivery events" for KanelServer requires [kanelDbRead, kanelDbWrite, kanelQueue, kanelPubSub, notifyWorkerCap, random, time] {
+  seed {
+    insert KanelUser {
+      id: "usr-reporter",
+      email: "reporter@example.com",
+      passwordHash: "password123",
+      displayName: "Reporter",
+      createdAt: 0
+    }
+    insert KanelUser {
+      id: "usr-commenter",
+      email: "commenter@example.com",
+      passwordHash: "password123",
+      displayName: "Commenter",
+      createdAt: 0
+    }
+    insert Org {
+      id: "org-notify",
+      name: "Notify Org",
+      slug: "notify-org",
+      createdAt: 0
+    }
+    insert OrgMembership {
+      id: "mem-reporter",
+      orgId: "org-notify",
+      userId: "usr-reporter",
+      role: RoleAdmin,
+      joinedAt: 0
+    }
+    insert OrgMembership {
+      id: "mem-commenter",
+      orgId: "org-notify",
+      userId: "usr-commenter",
+      role: RoleMember,
+      joinedAt: 0
+    }
+    insert Project {
+      id: "proj-notify",
+      orgId: "org-notify",
+      name: "Notify project",
+      description: "Exercise api tests",
+      archived: False,
+      createdAt: 0
+    }
+    insert Issue {
+      id: "iss-notify",
+      projectId: "proj-notify",
+      orgId: "org-notify",
+      title: "Ship api-tests",
+      description: "Expand coverage",
+      status: Backlog,
+      assigneeId: Nothing,
+      reporterId: "usr-reporter",
+      estimate: 60,
+      dueAt: Nothing,
+      createdAt: 0,
+      updatedAt: 0
+    }
+  }
+
+  let reporterId = "usr-reporter"
+  let commenterId = "usr-commenter"
+  let orgId = "org-notify"
+  let issueId = "iss-notify"
+
+  let stream = subscribe "/events/users/{reporterId}" cookie "kanel_user_id={reporterId}"
+  let comment = post "/orgs/{orgId}/issues/{issueId}/comments"
+                cookie "kanel_user_id={commenterId}"
+                body { "body": "Please review the latest changes" }
+  expect statusOk comment.status
+  expect pendingJobCount KanelNotifyQueue == 1
+
+  let queued = processNextJob KanelNotifyQueue
+  let job = expectJobOk queued
+  expect job.recipientUserId == reporterId
+  expect job.recipientEmail == "reporter@example.com"
+  expect hasField "body" job
+  expect pendingJobCount KanelNotifyQueue == 0
+
+  let events = collect stream count 1 timeout 1500ms
+  expect isNotEmpty events
+  expect includesWhere { "tag": "NotificationDelivered", "fields": { "recipientEmail": "reporter@example.com" } } events
+}
+
+api-test "blocked notification jobs reach dead-letter and publish failure events" for KanelServer requires [kanelDbRead, kanelDbWrite, kanelQueue, kanelPubSub, notifyWorkerCap, random, time] {
+  seed {
+    insert KanelUser {
+      id: "usr-blocked",
+      email: "blocked@example.com",
+      passwordHash: "password123",
+      displayName: "Blocked Reporter",
+      createdAt: 0
+    }
+    insert KanelUser {
+      id: "usr-commenter",
+      email: "commenter@example.com",
+      passwordHash: "password123",
+      displayName: "Commenter",
+      createdAt: 0
+    }
+    insert Org {
+      id: "org-failed-notify",
+      name: "Failed Notify Org",
+      slug: "failed-notify-org",
+      createdAt: 0
+    }
+    insert OrgMembership {
+      id: "mem-blocked",
+      orgId: "org-failed-notify",
+      userId: "usr-blocked",
+      role: RoleAdmin,
+      joinedAt: 0
+    }
+    insert OrgMembership {
+      id: "mem-commenter",
+      orgId: "org-failed-notify",
+      userId: "usr-commenter",
+      role: RoleMember,
+      joinedAt: 0
+    }
+    insert Project {
+      id: "proj-failed-notify",
+      orgId: "org-failed-notify",
+      name: "Failure project",
+      description: "Exercise dead-letter handling",
+      archived: False,
+      createdAt: 0
+    }
+    insert Issue {
+      id: "iss-failed-notify",
+      projectId: "proj-failed-notify",
+      orgId: "org-failed-notify",
+      title: "Queue failure",
+      description: "Expect dead-letter delivery",
+      status: Backlog,
+      assigneeId: Nothing,
+      reporterId: "usr-blocked",
+      estimate: 30,
+      dueAt: Nothing,
+      createdAt: 0,
+      updatedAt: 0
+    }
+  }
+
+  let reporterId = "usr-blocked"
+  let commenterId = "usr-commenter"
+  let orgId = "org-failed-notify"
+  let issueId = "iss-failed-notify"
+
+  let stream = subscribe "/events/users/{reporterId}" cookie "kanel_user_id={reporterId}"
+  let comment = post "/orgs/{orgId}/issues/{issueId}/comments"
+                cookie "kanel_user_id={commenterId}"
+                body { "body": "This should fail delivery" }
+  expect statusOk comment.status
+  expect pendingJobCount KanelNotifyQueue == 1
+
+  let firstAttempt = processNextJob KanelNotifyQueue
+  let firstError = expectJobFailed firstAttempt
+  expect isNotNull firstError
+
+  let secondAttempt = processNextJob KanelNotifyQueue
+  let secondError = expectJobFailed secondAttempt
+  expect isNotNull secondError
+
+  let thirdAttempt = processNextJob KanelNotifyQueue
+  let thirdError = expectJobFailed thirdAttempt
+  expect isNotNull thirdError
+  expect pendingJobCount KanelNotifyQueue == 0
+
+  let deadResult = processNextDeadJob KanelNotifyQueue
+  let deadJob = expectJobOk deadResult
+  expect deadJob.recipientUserId == reporterId
+  expect deadJob.recipientEmail == "blocked@example.com"
+
+  let events = collect stream
+                  until { "tag": "NotificationFailed", "fields": { "recipientEmail": "blocked@example.com" } }
+                  timeout 1500ms
+  expect includesWhere { "tag": "NotificationFailed", "fields": { "recipientEmail": "blocked@example.com" } } events
+}
+
+api-test "issue status can be updated through valid transitions" for KanelServer requires [kanelDbRead, kanelDbWrite, kanelPubSub, time] {
+  seed {
+    insert KanelUser {
+      id: "usr-status-test",
+      email: "statustest@example.com",
+      passwordHash: "password123",
+      displayName: "Status Tester",
+      createdAt: 0
+    }
+    insert Org {
+      id: "org-status-test",
+      name: "Status Test Org",
+      slug: "status-test-org",
+      createdAt: 0
+    }
+    insert OrgMembership {
+      id: "mem-status-test",
+      orgId: "org-status-test",
+      userId: "usr-status-test",
+      role: RoleAdmin,
+      joinedAt: 0
+    }
+    insert Project {
+      id: "proj-status-test",
+      orgId: "org-status-test",
+      name: "Status Test Project",
+      description: "For testing status transitions",
+      archived: False,
+      createdAt: 0
+    }
+    insert Issue {
+      id: "iss-status-test",
+      projectId: "proj-status-test",
+      orgId: "org-status-test",
+      title: "Transition test issue",
+      description: "Testing status machine",
+      status: Backlog,
+      assigneeId: Nothing,
+      reporterId: "usr-status-test",
+      estimate: 30,
+      dueAt: Nothing,
+      createdAt: 0,
+      updatedAt: 0
+    }
+  }
+
+  let userId = "usr-status-test"
+  let orgId = "org-status-test"
+  let issueId = "iss-status-test"
+
+  # Backlog → Todo
+  let toTodo = put "/orgs/{orgId}/issues/{issueId}/status"
+                cookie "kanel_user_id={userId}"
+                body { "newStatus": { "tag": "Todo" } }
+  expect statusOk toTodo.status
+  expect toTodo.body.status == { "tag": "Todo" }
+
+  # Todo → InProgress
+  let toInProgress = put "/orgs/{orgId}/issues/{issueId}/status"
+                      cookie "kanel_user_id={userId}"
+                      body { "newStatus": { "tag": "InProgress" } }
+  expect statusOk toInProgress.status
+
+  # InProgress → InReview
+  let toInReview = put "/orgs/{orgId}/issues/{issueId}/status"
+                    cookie "kanel_user_id={userId}"
+                    body { "newStatus": { "tag": "InReview" } }
+  expect statusOk toInReview.status
+  expect toInReview.body.status == { "tag": "InReview" }
+
+  # Invalid transition: InReview → Backlog (not allowed by state machine)
+  let badTransition = put "/orgs/{orgId}/issues/{issueId}/status"
+                      cookie "kanel_user_id={userId}"
+                      body { "newStatus": { "tag": "Backlog" } }
+  expect statusClientError badTransition.status
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+main with capabilities [kanelDbRead, kanelDbWrite, kanelQueue, kanelPubSub, random, time, notifyWorkerCap] {
+  let port = envInt "KANEL_PORT" 8080
+  with database KanelDatabase {
+    # The compiler verifies at compile time that serve/startWorkers only reference
+    # capabilities declared on main — adding a new handler that requires a new
+    # capability will produce a compile error if it is missing from this declaration.
+    with capabilities [kanelDbRead, kanelDbWrite, kanelQueue, kanelPubSub, random, time, notifyWorkerCap] {
+      startWorkers 2 KanelNotifyWorkers with capabilities [notifyWorkerCap, kanelPubSub]
+      startDeadWorkers KanelDeadNotifyWorkers with capabilities [notifyWorkerCap, kanelPubSub]
+      serve KanelServer on port with capabilities [kanelDbRead, kanelDbWrite, kanelQueue, kanelPubSub, random, time] static "example/kanel/frontend"
+    }
+  }
+}
+
+# ── Worker group declarations (must co-locate with queue declaration) ─────────
+
+workers KanelNotifyWorkers for KanelNotifyQueue {
+  KanelNotifyJob = notifyWorker
+}
+
+deadWorkers KanelDeadNotifyWorkers for KanelNotifyQueue {
+  KanelNotifyJob = deadNotifyWorker
+}

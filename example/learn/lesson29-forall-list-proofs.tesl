@@ -1,0 +1,319 @@
+#lang tesl
+module ForAllLesson exposing [NoteServer]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# `ForAll P` is a compile-time annotation on list-returning functions.
+# It says: "every element of this list satisfies proof predicate P".
+#
+#   fn listNotes(user: String::: Authenticated user)
+#     -> List Note ? ForAll (FromDb (AuthorId == user))
+#     requires [noteDbRead] =
+#     select note from Note where note.authorId == user
+#
+# THREE ways to produce a ForAll-annotated list:
+#
+#   1. `select ... from Entity where ...`
+#      → auto-produces List Entity::: ForAll (FromDb ...)
+#
+#   2. `List.filterCheck(checkFn, xs)`
+#      → keeps only elements that pass checkFn
+#      → result: List T::: ForAll (P_of_checkFn)
+#
+#   3. `List.allCheck(checkFn, xs)` — validates ALL elements at once
+#      → returns Maybe: Nothing if any fail, Something list if all pass
+#      → result: Maybe (List T::: ForAll (P_of_checkFn))
+#
+# PROOF EXPANSION — ForAll proofs combine, never replace:
+#
+#   fn narrowToSmall(xs: List Int::: ForAll (IsPositive))
+#     -> List Int ? ForAll (IsPositive && IsSmall)
+#     requires [] =
+#     List.filterCheck(checkIsSmall, xs)    # P1 && P2
+#
+# CHECK COMBINATION with `&&` — compose checks in one call:
+#
+#   fn filterBoth(xs: List Int)
+#     -> List Int ? ForAll (IsPositive && IsSmall)
+#     requires [] =
+#     List.filterCheck(checkIsPositive && checkIsSmall, xs)
+#
+# `checkA && checkB` runs checkA first; only if it passes does checkB run.
+# The combined check's proof is the && of both individual proofs.
+
+import Tesl.Prelude exposing [Int, List, String]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.List exposing [List.filterCheck, List.allCheck, List.length]
+import Tesl.String exposing [String.length]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Random exposing [random]
+import Tesl.Id exposing [generatePrefixedId]
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# `ForAll P` is a COMPILE-TIME annotation only.
+# At runtime, the list is a plain Racket list — there is no extra wrapper.
+# ForAll has ZERO runtime overhead — no boxing, no proof structs per element.
+#
+# The key insight: proofs EXPAND, they never disappear.
+#   xs::: ForAll P1                          (you have xs with P1 on every element)
+#   List.filterCheck(checkP2, xs)             (keep only those that also satisfy P2)
+#   → result::: ForAll (P1 && P2)            (every survivor satisfies BOTH proofs)
+#
+# `List.allCheck` validates every element, returning the whole list or nothing:
+#   List.allCheck(checkP, xs) → Maybe (List T::: ForAll P)
+#   Nothing if any element fails, Something list if all pass.
+#
+# Check combination `&&`:
+#   checkP1 && checkP2 is a combined check function.
+#   It runs checkP1 on the element; if it passes, runs checkP2 on the result.
+#   If either fails, the element is rejected.
+#   Use this to write compact single-call multi-proof filters.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# `ForAll P` extends GDP (Ghosts of Departed Proofs) to collections.
+# Rules:
+#   • select-many           → ForAll (FromDb ...)        [auto]
+#   • filterCheck(f, xs)    → ForAll (P_f)               [from plain list]
+#   • filterCheck(f, xs::: ForAll P1) → ForAll (P1 && P_f)   [expansion]
+#   • allCheck(f, xs)       → Maybe (ForAll P_f)
+#   • checkA && checkB      → combined check; proof is P_A && P_B
+#   • List.filter — does NOT produce ForAll (predicate is opaque)
+#
+# && is right-associative: checkA && checkB && checkC
+#   = checkA then checkB then checkC (checkA runs first)
+#
+# This is NOT dependent types — a finite set of structural rules in the compiler.
+
+# ─── Capabilities ─────────────────────────────────────────────────────────────
+
+capability noteDbRead implies dbRead
+capability noteDbWrite implies dbWrite
+capability noteReadCookie
+capability noteService implies noteDbRead, noteDbWrite, noteReadCookie, random
+
+# ─── Data types ───────────────────────────────────────────────────────────────
+
+type NoteId = String
+
+entity Note table "notes" primaryKey id {
+  id: NoteId @db(text)
+  title: String @db(text)
+  content: String @db(text)
+  authorId: String @db(text)
+  active: String @db(text)
+  pinned: String @db(text)
+}
+
+database NoteDatabase {
+  backend postgres
+  schema "notes_lesson29"
+  entities [Note]
+  postgres {
+    database env("NOTES_DB_NAME")
+    user env("NOTES_DB_USER")
+    password env("NOTES_DB_PASSWORD")
+    host env("NOTES_DB_HOST")
+    port 5432
+    socket env("NOTES_DB_SOCKET")
+  }
+}
+
+# ─── Validation / Check functions ─────────────────────────────────────────────
+
+fact ValidTitle (s: String)
+
+check checkTitle(s: String) -> s: String ::: ValidTitle s =
+  if String.length s >= 1 && String.length s <= 200 then
+    ok s ::: ValidTitle s
+  else
+    fail 400 "title must be 1-200 characters"
+
+record NewNote {
+  title: String ::: ValidTitle title
+  content: String
+}
+
+codec NewNote {
+  toJson_forbidden
+  fromJson [
+    {
+      title <- "title" with_codec stringCodec via checkTitle
+      content <- "content" with_codec stringCodec
+    }
+  ]
+}
+
+fact ValidNoteId (s: String)
+
+check checkNoteId(s: String) -> s: String ::: ValidNoteId s =
+  if String.length s > 5 then
+    ok s ::: ValidNoteId s
+  else
+    fail 400 "invalid note id"
+
+capture noteIdCapture: String ::: ValidNoteId noteId using stringCodec via checkNoteId
+
+# Check functions for ForAll filtering:
+
+fact IsActive (note: Note)
+
+check checkActive(note: Note) -> note: Note ::: IsActive note =
+  if note.active == "yes" then
+    ok note ::: IsActive note
+  else
+    fail 422 "note is not active"
+
+fact IsPinned (note: Note)
+
+check checkPinned(note: Note) -> note: Note ::: IsPinned note =
+  if note.pinned == "yes" then
+    ok note ::: IsPinned note
+  else
+    fail 422 "note is not pinned"
+
+fact Authenticated (userId: String)
+
+# ─── Authentication ───────────────────────────────────────────────────────────
+
+auth cookieAuth(request: HttpRequest) -> user: String ::: Authenticated user
+  requires [noteReadCookie] =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "not logged in"
+    Something userId -> ok userId ::: Authenticated user
+
+# ─── EXAMPLE 1: select → ForAll (FromDb ...) [automatic] ─────────────────────
+
+handler listNotes(user: String ::: Authenticated user)
+  -> List Note ? ForAll (FromDb (AuthorId == user))
+  requires [noteDbRead] =
+  select note from Note where note.authorId == user
+
+# ─── EXAMPLE 2: filterCheck → ForAll (IsActive) ──────────────────────────────
+
+handler listActiveNotes(user: String ::: Authenticated user)
+  -> List Note ? ForAll (IsActive)
+  requires [noteDbRead] =
+  let allNotes = select note from Note where note.authorId == user
+  List.filterCheck checkActive allNotes
+
+# ─── EXAMPLE 3: Fact EXPANSION — filterCheck on a ForAll P1 list ────────────
+# allNotes already has ForAll (FromDb ...).
+# After filterCheck(checkActive, ...), the result carries BOTH proofs.
+# Declare the expanded proof in the return type:
+
+handler listActivePinnedNotes(user: String ::: Authenticated user)
+  -> List Note ? ForAll (IsActive && IsPinned)
+  requires [noteDbRead] =
+  let allNotes = select note from Note where note.authorId == user
+  List.filterCheck (checkActive && checkPinned) allNotes
+
+# ─── EXAMPLE 4: Check COMBINATION with && ────────────────────────────────────
+# `checkActive && checkPinned` composes two checks:
+#   runs checkActive first; if it passes, runs checkPinned on the result.
+# The combined check's proof is IsActive && IsPinned.
+# This is equivalent to two separate filterCheck calls, but more concise.
+
+fn filterActivePinned(notes: List Note) -> List Note ? ForAll (IsActive && IsPinned)
+  requires [] =
+  List.filterCheck (checkActive && checkPinned) notes
+
+# ─── EXAMPLE 5: allCheck — validate ALL or Nothing ───────────────────────────
+# Unlike filterCheck which keeps passing elements, allCheck validates the WHOLE list.
+# If every element passes → Something list (with ForAll proof).
+# If any element fails  → Nothing.
+#
+# Use case: "accept a batch of notes only if ALL are active"
+
+fn verifyAllActive(notes: List Note)
+  -> Maybe (notes: List Note ::: ForAll (IsActive) notes)
+  requires [] =
+  List.allCheck checkActive notes
+
+# ─── EXAMPLE 6: allCheck with check combination ──────────────────────────────
+# Verify that every element satisfies MULTIPLE criteria at once.
+# Returns Nothing if any element fails any check.
+
+fn verifyAllActivePinned(notes: List Note)
+  -> Maybe (notes: List Note ::: ForAll (IsActive && IsPinned) notes)
+  requires [] =
+  List.allCheck (checkActive && checkPinned) notes
+
+# ─── EXAMPLE 7: ForAll in parameter type — caller provides the proof ──────────
+# Accepting `List Note::: ForAll (IsActive)` means the CALLER guarantees
+# every note is active. You can document this contract without re-checking.
+
+fn countActivePinned(notes: List Note ::: ForAll (IsActive && IsPinned) notes) -> Int
+  requires [] =
+  List.length notes
+
+# ─── EXAMPLE 8: Apply combined check to a single value ───────────────────────
+# `&&` composes check/proof functions beyond lists.
+# Call a combined check directly: `(checkA && checkB)(x)` or `(checkA && checkB) x`.
+# For `check` functions this is fail-fast validation: it behaves like nested checks,
+# returning the validated value with the combined proof attached and failing on the
+# first failing check. Use `establish` when the proof attempt should be recoverable.
+#
+# SYNTAX FORMS:
+#   (checkA && checkB)(x)          — call syntax (parens around callee)
+#   (checkA && checkB) x           — ML-style application
+#   checkA && checkB               — as a first-class value (pass to filterCheck, etc.)
+#
+# Works for:   check functions, proof functions, and mixed combinations.
+# Short-circuits left-to-right: checkA runs first; if it fails, checkB is skipped.
+
+fn applyCombined(note: Note) -> Note ? (IsActive && IsPinned) requires [] =
+  check (checkActive && checkPinned) note
+
+# ─── Create endpoint ──────────────────────────────────────────────────────────
+
+handler createNote(user: String ::: Authenticated user, body: NewNote)
+  -> exists noteId: String =>
+      Note ? FromDb (Id == noteId)
+  requires [noteDbRead, noteDbWrite, random] =
+  let noteId = generatePrefixedId "note"
+  exists noteId =>
+    insert Note {
+      id: noteId,
+      title: body.title,
+      content: body.content,
+      authorId: user,
+      active: "yes",
+      pinned: "no"
+    }
+
+# ─── API ──────────────────────────────────────────────────────────────────────
+
+api NoteApi {
+  get "/notes"
+    auth user: String ::: Authenticated user via cookieAuth
+    -> List Note ? ForAll (FromDb (AuthorId == user))
+
+  get "/notes/active"
+    auth user: String ::: Authenticated user via cookieAuth
+    -> List Note ? ForAll (IsActive)
+
+  get "/notes/active-pinned"
+    auth user: String ::: Authenticated user via cookieAuth
+    -> List Note ? ForAll (IsActive && IsPinned)
+
+  post "/notes"
+    auth user: String ::: Authenticated user via cookieAuth
+    body body: NewNote
+    -> exists noteId: String =>
+        Note ? FromDb (Id == noteId)
+}
+
+server NoteServer for NoteApi {
+  listNotes = listNotes
+  listActiveNotes = listActiveNotes
+  listActivePinnedNotes = listActivePinnedNotes
+  createNote = createNote
+}

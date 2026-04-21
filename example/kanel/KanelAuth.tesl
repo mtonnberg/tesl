@@ -1,0 +1,159 @@
+#lang tesl
+# ─── Kanel — Authentication and authorization check functions ──────────────
+#
+# This module defines the session type, cookie-based auth, and the GDP
+# check functions that gate every resource in the system.
+#
+# GDP proof vocabulary defined here:
+#   Authenticated session  — user has a valid session cookie
+#   OrgMember  userId orgId  — user is a member of the org
+#   OrgAdmin   userId orgId  — user is an admin of the org
+#   ProjMember userId projectId — user is a member of the project
+#   IssueAssignee userId issueId — user is assigned to the issue
+
+module KanelAuth exposing [
+  KanelSession,
+  Authenticated,
+  cookieAuth,
+  OrgMember,
+  OrgAdmin,
+  ProjMember,
+  IssueAssignee,
+  checkOrgMember,
+  checkOrgAdmin,
+  checkProjMember,
+  checkIssueAssignee,
+]
+
+import Tesl.Prelude exposing [String, Fact]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import KanelModels exposing [
+  kanelDbRead,
+  KanelUser,
+  OrgMembership,
+  ProjectMembership,
+  Issue,
+  OrgRole(..),
+]
+
+# ── Session record ───────────────────────────────────────────────────────────
+
+record KanelSession {
+  userId: String
+  displayName: String
+  email: String
+}
+
+# ── Cookie authentication ────────────────────────────────────────────────────
+#
+# Reads the `kanel_user_id` cookie and validates it against the DB.
+# Returns a KanelSession carrying the `Authenticated session` proof.
+
+fact Authenticated (session: KanelSession)
+
+auth cookieAuth(request: HttpRequest) -> session: KanelSession ::: Authenticated session
+  requires [kanelDbRead] =
+  case Dict.lookup "kanel_user_id" request.cookies of
+    Nothing ->
+      fail 401 "not logged in"
+    Something userId ->
+      let found = selectOne u from KanelUser where u.id == userId
+      case found of
+        Nothing ->
+          fail 401 "session invalid"
+        Something user ->
+          ok KanelSession { userId: user.id, displayName: user.displayName, email: user.email } ::: Authenticated session
+
+# ── Org membership check ─────────────────────────────────────────────────────
+#
+# Verifies userId is a member of orgId.  The `userId` returned carries the
+# OrgMember proof so downstream handlers can assert membership without
+# re-querying.
+
+fact OrgMember (userId: String, orgId: String)
+
+check checkOrgMember(userId: String, orgId: String) -> userId: String ::: OrgMember userId orgId
+  requires [kanelDbRead] =
+  let membership = selectOne m from OrgMembership where m.userId == userId && m.orgId == orgId
+  case membership of
+    Nothing ->
+      fail 403 "not a member of this organization"
+    Something _ ->
+      ok userId ::: OrgMember userId orgId
+
+# ── Org admin check ──────────────────────────────────────────────────────────
+#
+# Verifies userId is an ADMIN in orgId.  Implies OrgMember — but Tesl
+# doesn't yet express implication chains, so both proofs are independent.
+# NOTE: this requires a separate DB query from checkOrgMember.
+# LIMITATION: if you have OrgAdmin proof you cannot derive OrgMember without
+# calling checkOrgMember again.  See NOTES.md §2.
+
+fact OrgAdmin (userId: String, orgId: String)
+
+check checkOrgAdmin(userId: String, orgId: String) -> userId: String ::: OrgAdmin userId orgId
+  requires [kanelDbRead] =
+  let membership = selectOne m from OrgMembership where m.userId == userId && m.orgId == orgId
+  case membership of
+    Nothing ->
+      fail 403 "not a member of this organization"
+    Something m ->
+      case m.role of
+        RoleAdmin -> ok userId ::: OrgAdmin userId orgId
+        RoleMember -> fail 403 "admin role required"
+        RoleViewer -> fail 403 "admin role required"
+
+# ── Project membership check ─────────────────────────────────────────────────
+#
+# A user can access a project if they are an org admin OR in the project
+# memberships table.  Org admins have implicit access to all projects.
+
+fact ProjMember (userId: String, projId: String)
+
+check checkProjMember(userId: String, projectId: String, orgId: String) -> userId: String ::: ProjMember userId projectId
+  requires [kanelDbRead] =
+  # First check if they're an org admin (admins access all projects)
+  let orgMember = selectOne m from OrgMembership where m.userId == userId && m.orgId == orgId
+  case orgMember of
+    Nothing ->
+      fail 403 "not a member of this organization"
+    Something m ->
+      case m.role of
+        RoleAdmin ->
+          ok userId ::: ProjMember userId projectId
+        RoleMember ->
+          let projMember = selectOne pm from ProjectMembership where pm.userId == userId && pm.projectId == projectId
+          case projMember of
+            Nothing -> fail 403 "not a member of this project"
+            Something _ -> ok userId ::: ProjMember userId projectId
+        RoleViewer ->
+          # Viewers can read but not write — project listing returns 403 on write ops
+          let projMember = selectOne pm from ProjectMembership where pm.userId == userId && pm.projectId == projectId
+          case projMember of
+            Nothing -> fail 403 "not a member of this project"
+            Something _ -> ok userId ::: ProjMember userId projectId
+
+# ── Issue assignee check ─────────────────────────────────────────────────────
+#
+# Verifies a user is the assignee of an issue.
+# Required before logging time entries.
+
+fact IssueAssignee (userId: String, issueId: String)
+
+check checkIssueAssignee(userId: String, issueId: String) -> userId: String ::: IssueAssignee userId issueId
+  requires [kanelDbRead] =
+  let issue = selectOne i from Issue where i.id == issueId
+  case issue of
+    Nothing ->
+      fail 404 "issue not found"
+    Something i ->
+      case i.assigneeId of
+        Nothing ->
+          fail 403 "issue has no assignee — cannot verify assignment"
+        Something aid ->
+          if aid == userId then
+            ok userId ::: IssueAssignee userId issueId
+          else
+            fail 403 "not assigned to this issue"

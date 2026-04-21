@@ -1,0 +1,79 @@
+#lang tesl
+module AdminTaskApi exposing [AdminTaskServer]
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
+import Tesl.Json exposing [intCodec, stringCodec]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Telemetry exposing [telemetry, initTelemetry]
+
+capability readTaskCookie
+
+record AdminUser {
+  id: String
+  role: String
+}
+
+record AdminTask {
+  id: Int
+  title: String
+  ownerId: String
+}
+
+codec AdminTask {
+  toJson {
+    id -> "id" with_codec intCodec
+    title -> "title" with_codec stringCodec
+    ownerId -> "ownerId" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+defaultExamplePort = 8088
+
+fact Positive (taskId: Int)
+
+check isPositive(taskId: Int) -> taskId: Int ::: Positive taskId =
+  if taskId > 0 then
+    ok taskId ::: Positive taskId
+  else
+    fail 400 "Task id must be positive"
+
+fact Authenticated (req: AdminUser)
+
+auth cookieUserAuth(request: HttpRequest) -> requestUser: AdminUser ::: Authenticated requestUser
+  requires [readTaskCookie] =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "Missing user cookie"
+    Something userId ->
+      case Dict.lookup "role" request.cookies of
+        Something role -> ok AdminUser { id: userId, role: role } ::: Authenticated requestUser
+        Nothing -> ok AdminUser { id: userId, role: "user" } ::: Authenticated requestUser
+
+capture positiveTaskCapture: Int ::: Positive taskId using intCodec via isPositive
+
+handler getAdminTask(requestUser: AdminUser ::: Authenticated requestUser, taskId: Int ::: Positive taskId) -> AdminTask =
+  if requestUser.role == "admin" then
+    telemetry "task.fetch.admin" { user.id = requestUser.id, task.id = taskId }
+    if taskId == 2 then
+      { id: taskId, title: "Review audit log", ownerId: "anna" }
+    else
+      fail 404 "Task not found"
+  else
+    fail 403 "Admin role required"
+
+api AdminTaskApi {
+  get "/tasks/admin/:taskId"
+    auth requestUser: AdminUser ::: Authenticated requestUser via cookieUserAuth
+    capture taskId: Int ::: Positive taskId via positiveTaskCapture
+    -> AdminTask
+}
+
+server AdminTaskServer for AdminTaskApi {
+  getAdminTask = getAdminTask
+}
+
+main with capabilities [readTaskCookie] {
+  initTelemetry service "admin-task-api" endpoint "in-memory" console True
+  serve AdminTaskServer on defaultExamplePort with capabilities [readTaskCookie]
+}

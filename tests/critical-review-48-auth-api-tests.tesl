@@ -1,0 +1,415 @@
+#lang tesl
+module CriticalReview48AuthApiTests exposing [R48AuthServer, R48ConjAuthServer]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Fact]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Tesl.ApiTest exposing [statusOk]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [
+  String.startsWith,
+  String.requireNonEmpty,
+  IsNonEmpty,
+]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Proof predicates
+# ═══════════════════════════════════════════════════════════════════════════
+
+fact Authenticated (user: String)
+fact IsAdmin (user: String)
+fact HasValidSession (user: String)
+fact Positive (n: Int)
+fact Small (n: Int)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Check functions
+# ═══════════════════════════════════════════════════════════════════════════
+
+check checkPositive(n: Int) -> n: Int ::: Positive n =
+  if n > 0 then
+    ok n ::: Positive n
+  else
+    fail 400 "must be positive"
+
+check checkSmall(n: Int) -> n: Int ::: Small n =
+  if n < 100 then
+    ok n ::: Small n
+  else
+    fail 400 "must be < 100"
+
+check checkPosAndSmall(n: Int) -> n: Int ::: Positive n && Small n =
+  check (checkPositive && checkSmall) n
+
+check checkIsAdmin(userId: String) -> userId: String ::: IsAdmin userId =
+  if String.startsWith userId "admin" then
+    ok userId ::: IsAdmin userId
+  else
+    fail 403 "not admin"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Auth functions — each actually uses check calls
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Simple auth — single proof
+auth simpleAuth(request: HttpRequest) -> user: String ::: Authenticated user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "not authenticated"
+    Something userId -> ok userId ::: Authenticated user
+
+# Auth that delegates to stdlib check (String.requireNonEmpty)
+auth checkedAuth(request: HttpRequest) -> user: String ::: Authenticated user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "not authenticated"
+    Something userId ->
+      let validId = check String.requireNonEmpty userId
+      ok validId ::: Authenticated user
+
+# Auth that delegates to user-defined check
+auth adminAuth(request: HttpRequest) -> user: String ::: IsAdmin user && Authenticated user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "not authenticated"
+    Something userId ->
+      let (admin ::: p) = check checkIsAdmin userId
+      ok admin ::: p && Authenticated user
+
+# Auth returning conjunction proof (manual, no check delegation)
+auth conjunctionAuth(request: HttpRequest)
+  -> user: String ::: Authenticated user && HasValidSession user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "not authenticated"
+    Something userId ->
+      case Dict.lookup "session" request.cookies of
+        Nothing -> fail 401 "no session"
+        Something _ ->
+          ok userId ::: Authenticated user && HasValidSession user
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Records and codecs
+# ═══════════════════════════════════════════════════════════════════════════
+
+record ValueRequest {
+  value: Int
+}
+
+codec ValueRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      value <- "value" with_codec intCodec
+    }
+  ]
+}
+
+record ValueResponse {
+  result: Int
+  label: String
+}
+
+codec ValueResponse {
+  toJson {
+    result -> "result" with_codec intCodec
+    label -> "label" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+record ConjResponse {
+  tripled: Int
+}
+
+codec ConjResponse {
+  toJson {
+    tripled -> "tripled" with_codec intCodec
+  }
+  fromJson_forbidden
+}
+
+record AuthInfoResponse {
+  userId: String
+}
+
+codec AuthInfoResponse {
+  toJson {
+    userId -> "userId" with_codec stringCodec
+  }
+  fromJson_forbidden
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Handlers
+# ═══════════════════════════════════════════════════════════════════════════
+
+handler doublePositive(user: String ::: Authenticated user, req: ValueRequest)
+  -> ValueResponse =
+  let v = check checkPositive req.value
+  ValueResponse { result: v * 2, label: "doubled" }
+
+handler tripleConj(user: String ::: Authenticated user, req: ValueRequest)
+  -> ConjResponse =
+  let v = check checkPosAndSmall req.value
+  ConjResponse { tripled: v * 3 }
+
+handler inlineConj(user: String ::: Authenticated user, req: ValueRequest)
+  -> ConjResponse =
+  let v = check (checkPositive && checkSmall) req.value
+  ConjResponse { tripled: v * 3 }
+
+handler whoami(user: String ::: Authenticated user) -> AuthInfoResponse =
+  AuthInfoResponse { userId: user }
+
+handler whoamiAdmin(user: String ::: IsAdmin user && Authenticated user) -> AuthInfoResponse =
+  AuthInfoResponse { userId: user }
+
+handler conjAuthWhoami(user: String ::: Authenticated user && HasValidSession user)
+  -> AuthInfoResponse =
+  AuthInfoResponse { userId: user }
+
+# ═══════════════════════════════════════════════════════════════════════════
+# APIs and Servers
+# ═══════════════════════════════════════════════════════════════════════════
+
+api R48AuthApi {
+  post "/double"
+    auth user: String ::: Authenticated user via simpleAuth
+    body req: ValueRequest
+    -> ValueResponse
+
+  post "/triple-conj"
+    auth user: String ::: Authenticated user via simpleAuth
+    body req: ValueRequest
+    -> ConjResponse
+
+  post "/inline-conj"
+    auth user: String ::: Authenticated user via simpleAuth
+    body req: ValueRequest
+    -> ConjResponse
+
+  get "/whoami-checked"
+    auth user: String ::: Authenticated user via checkedAuth
+    -> AuthInfoResponse
+
+  get "/whoami-admin"
+    auth user: String ::: IsAdmin user && Authenticated user via adminAuth
+    -> AuthInfoResponse
+}
+
+server R48AuthServer for R48AuthApi {
+  doublePositive = doublePositive
+  tripleConj = tripleConj
+  inlineConj = inlineConj
+  whoami = whoami
+  whoamiAdmin = whoamiAdmin
+}
+
+api R48ConjAuthApi {
+  get "/conj-whoami"
+    auth user: String ::: Authenticated user && HasValidSession user via conjunctionAuth
+    -> AuthInfoResponse
+}
+
+server R48ConjAuthServer for R48ConjAuthApi {
+  conjAuthWhoami = conjAuthWhoami
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# api-test: simple auth + handler-side proofs
+# ═══════════════════════════════════════════════════════════════════════════
+
+api-test "unauth returns 401" for R48AuthServer {
+  let resp = post "/double" body { "value": 5 }
+  expect resp.status == 401
+}
+
+api-test "auth + single proof: positive doubled" for R48AuthServer {
+  let resp = post "/double" cookie "user=alice" body { "value": 5 }
+  expect statusOk resp.status
+  expect resp.body.result == 10
+}
+
+api-test "auth + single proof: zero rejected 400" for R48AuthServer {
+  let resp = post "/double" cookie "user=alice" body { "value": 0 }
+  expect resp.status == 400
+}
+
+api-test "auth + single proof: negative rejected 400" for R48AuthServer {
+  let resp = post "/double" cookie "user=alice" body { "value": -5 }
+  expect resp.status == 400
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# api-test: conjunction check wrapper in handler (Fix 1)
+# ═══════════════════════════════════════════════════════════════════════════
+
+api-test "conj wrapper: 50 tripled" for R48AuthServer {
+  let resp = post "/triple-conj" cookie "user=alice" body { "value": 50 }
+  expect statusOk resp.status
+  expect resp.body.tripled == 150
+}
+
+api-test "conj wrapper: boundary 1" for R48AuthServer {
+  let resp = post "/triple-conj" cookie "user=alice" body { "value": 1 }
+  expect statusOk resp.status
+  expect resp.body.tripled == 3
+}
+
+api-test "conj wrapper: boundary 99" for R48AuthServer {
+  let resp = post "/triple-conj" cookie "user=alice" body { "value": 99 }
+  expect statusOk resp.status
+  expect resp.body.tripled == 297
+}
+
+api-test "conj wrapper: rejects 0" for R48AuthServer {
+  let resp = post "/triple-conj" cookie "user=alice" body { "value": 0 }
+  expect resp.status == 400
+}
+
+api-test "conj wrapper: rejects 100" for R48AuthServer {
+  let resp = post "/triple-conj" cookie "user=alice" body { "value": 100 }
+  expect resp.status == 400
+}
+
+api-test "inline conj: 50 tripled" for R48AuthServer {
+  let resp = post "/inline-conj" cookie "user=bob" body { "value": 50 }
+  expect statusOk resp.status
+  expect resp.body.tripled == 150
+}
+
+api-test "inline conj: rejects 0" for R48AuthServer {
+  let resp = post "/inline-conj" cookie "user=bob" body { "value": 0 }
+  expect resp.status == 400
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# api-test: auth that uses check internally
+# ═══════════════════════════════════════════════════════════════════════════
+
+api-test "checkedAuth: valid user passes" for R48AuthServer {
+  let resp = get "/whoami-checked" cookie "user=alice"
+  expect statusOk resp.status
+  expect resp.body.userId == "alice"
+}
+
+api-test "checkedAuth: empty cookie rejected" for R48AuthServer {
+  let resp = get "/whoami-checked" cookie "user="
+  expect resp.status == 400
+}
+
+api-test "checkedAuth: no cookie 401" for R48AuthServer {
+  let resp = get "/whoami-checked"
+  expect resp.status == 401
+}
+
+api-test "adminAuth: admin user passes" for R48AuthServer {
+  let resp = get "/whoami-admin" cookie "user=admin_alice"
+  expect statusOk resp.status
+  expect resp.body.userId == "admin_alice"
+}
+
+api-test "adminAuth: non-admin rejected" for R48AuthServer {
+  let resp = get "/whoami-admin" cookie "user=alice"
+  expect resp.status == 403
+}
+
+api-test "adminAuth: no cookie 401" for R48AuthServer {
+  let resp = get "/whoami-admin"
+  expect resp.status == 401
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# api-test: conjunction proof in the auth return itself
+# ═══════════════════════════════════════════════════════════════════════════
+
+api-test "conjAuth: user+session passes" for R48ConjAuthServer {
+  let resp = get "/conj-whoami" cookie "user=alice; session=abc123"
+  expect statusOk resp.status
+  expect resp.body.userId == "alice"
+}
+
+api-test "conjAuth: missing session 401" for R48ConjAuthServer {
+  let resp = get "/conj-whoami" cookie "user=alice"
+  expect resp.status == 401
+}
+
+api-test "conjAuth: no cookie 401" for R48ConjAuthServer {
+  let resp = get "/conj-whoami"
+  expect resp.status == 401
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Conjunction proof IN the auth function itself
+# ═══════════════════════════════════════════════════════════════════════════
+
+auth conjManualAuth(request: HttpRequest)
+  -> user: String ::: Authenticated user && HasValidSession user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "no cookie"
+    Something userId ->
+      case Dict.lookup "session" request.cookies of
+        Nothing -> fail 401 "no session"
+        Something _ ->
+          ok userId ::: Authenticated user && HasValidSession user
+
+auth conjCheckAuth(request: HttpRequest)
+  -> user: String ::: Authenticated user && IsAdmin user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "no cookie"
+    Something userId ->
+      let admin = check checkIsAdmin userId
+      ok admin ::: Authenticated user && IsAdmin user
+
+handler conjManualWhoami(user: String ::: Authenticated user && HasValidSession user)
+  -> AuthInfoResponse =
+  AuthInfoResponse { userId: user }
+
+handler conjCheckWhoami(user: String ::: Authenticated user && IsAdmin user)
+  -> AuthInfoResponse =
+  AuthInfoResponse { userId: user }
+
+api R48ConjInAuthApi {
+  get "/conj-manual"
+    auth user: String ::: Authenticated user && HasValidSession user via conjManualAuth
+    -> AuthInfoResponse
+
+  get "/conj-check"
+    auth user: String ::: Authenticated user && IsAdmin user via conjCheckAuth
+    -> AuthInfoResponse
+}
+
+server R48ConjInAuthServer for R48ConjInAuthApi {
+  conjManualWhoami = conjManualWhoami
+  conjCheckWhoami = conjCheckWhoami
+}
+
+api-test "conjManual: user+session passes" for R48ConjInAuthServer {
+  let resp = get "/conj-manual" cookie "user=alice; session=abc"
+  expect statusOk resp.status
+  expect resp.body.userId == "alice"
+}
+
+api-test "conjManual: missing session 401" for R48ConjInAuthServer {
+  let resp = get "/conj-manual" cookie "user=alice"
+  expect resp.status == 401
+}
+
+api-test "conjManual: no cookie 401" for R48ConjInAuthServer {
+  let resp = get "/conj-manual"
+  expect resp.status == 401
+}
+
+api-test "conjCheck: admin passes" for R48ConjInAuthServer {
+  let resp = get "/conj-check" cookie "user=admin_bob"
+  expect statusOk resp.status
+  expect resp.body.userId == "admin_bob"
+}
+
+api-test "conjCheck: non-admin 403" for R48ConjInAuthServer {
+  let resp = get "/conj-check" cookie "user=bob"
+  expect resp.status == 403
+}
+
+api-test "conjCheck: no cookie 401" for R48ConjInAuthServer {
+  let resp = get "/conj-check"
+  expect resp.status == 401
+}

@@ -1,0 +1,90 @@
+#lang tesl
+module Lesson07Consumer exposing [processInput]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# To use proof predicates from another module:
+#   import ThatModule exposing [ThePredicateName, theCheckFn, ...]
+#
+# Both the predicate NAME and the check FUNCTION must be imported if you want to:
+#   - name the predicate in a type annotation ("n: Int::: InBounds n")
+#   - call the check function to validate values
+#
+# You cannot name InBounds in a type annotation unless it's explicitly imported.
+# This is a compile-time check — not a style suggestion.
+
+import Tesl.Prelude exposing [Int, String]
+import Lesson07Home exposing [InBounds, Sanitized, checkInBounds, sanitize]
+# ↑ InBounds and Sanitized must be here — they are proof predicates from Lesson07Home.
+# ↑ checkInBounds and sanitize are the check functions we'll call to validate.
+
+# This function requires both InBounds and Sanitized proofs on its arguments.
+# The caller must have already validated n with checkInBounds
+# and label with sanitize before calling processInput.
+fn processInput(n: Int ::: InBounds n, label: String ::: Sanitized label) -> String =
+  "processing ${n}: ${label}"
+  # Safe to use directly — we know n is in [0, 1000] and label is <= 256 chars.
+
+# Example: a function that validates and then calls processInput.
+# This shows the full pattern: validate at the top, use further down.
+fn processRawInput(rawN: Int, rawLabel: String) -> String =
+  let validN = check checkInBounds rawN # validates rawN, attaches InBounds proof
+  let validLabel = check sanitize rawLabel # validates rawLabel, attaches Sanitized proof
+  processInput validN validLabel # safe call: both proofs are present
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# The "import Lesson07Home exposing [InBounds, Sanitized, ...]" line does two things:
+#   1. Makes InBounds and Sanitized available as names in this module's type annotations.
+#   2. Documents this module's proof-dependency on Lesson07Home.
+#
+# If Lesson07Home is deleted or renamed, this import line will fail at compile time —
+# the dependency is explicit and greppable.
+#
+# "grep 'InBounds' in exposing[]" across the codebase yields exactly:
+#   - Lesson07Home.tesl (the declaration)
+#   - This file (a consumer)
+# No hidden transitive dependencies. Everything is in the import graph.
+#
+# The requirement that BOTH predicate name and check function be imported is intentional.
+# You could import only checkInBounds (to validate) without importing InBounds (to annotate).
+# In that case you can validate values but cannot write functions that require InBounds.
+# This gives you granular control over what each module can express.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# The reference checker enforces predicate import as follows:
+#   1. It collects all proof predicate names used in type annotations in this module.
+#   2. For each such name, it checks: was this name imported from some module?
+#   3. If not, it reports: "unknown proof predicate: InBounds — did you import it?"
+#
+# This check runs before Racket code generation. It is purely a name-resolution
+# check on the Tesl AST, using the module's import table.
+#
+# The static proof checker also uses the import table:
+# When checking a call to processInput, it looks up InBounds in the import table
+# to find the canonical proof predicate object (the Racket symbol 'InBounds from
+# Lesson07Home's namespace). It then checks whether the actual argument's proof set
+# contains a fact matching that canonical predicate.
+#
+# This means if two modules both define a predicate called InBounds, they are
+# distinct predicates. Fact from module A's InBounds cannot satisfy module B's InBounds
+# even though both have the same surface name. The canonical identity is
+# (module, predicate-name), not just the bare name.
+
+test "processRawInput valid inputs" {
+  let r1 = processRawInput 5 "hello"
+  expect r1 == "processing 5: hello"
+  let r2 = processRawInput 0 ""
+  expect r2 == "processing 0: "
+  let r3 = processRawInput 1000 "max"
+  expect r3 == "processing 1000: max"
+}
+
+test "processRawInput invalid n" {
+  expectFail processRawInput -1 "hello"
+  expectFail processRawInput 1001 "hello"
+}

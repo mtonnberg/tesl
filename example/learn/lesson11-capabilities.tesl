@@ -1,0 +1,117 @@
+#lang tesl
+module Capabilities exposing [
+  readEnvVar,
+  getCurrentTime,
+  logMessage,
+  readAndWrite,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Capabilities are named permissions for side effects.
+# Declare: capability myCapability
+# Require: fn f(x: Int) -> Int requires [myCapability] = ...
+#
+# If f calls g, and g requires [someCapability], then f MUST also declare
+# "requires [someCapability]" — or capabilities flow transitively.
+#
+# "implies" creates a capability hierarchy:
+#   capability bigCap implies smallCap
+# A function with [bigCap] automatically satisfies [smallCap] requirements.
+#
+# Built-in capabilities from Tesl.Prelude:
+#   time     — access the current time (nowMillis)
+#   dbRead   — read from a database
+#   dbWrite  — write to a database
+#   env      — read environment variables
+
+import Tesl.Prelude exposing [String]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Time exposing [nowMillis, time, PosixMillis]
+import Tesl.Env exposing [env]
+import Tesl.Maybe exposing [Maybe(..)]
+
+# Declare custom capabilities for this module.
+# fileRead: permission to read external files or environment.
+capability fileRead # standalone capability, no implications
+
+# auditWrite: permission to write audit logs; implies dbWrite (DB access for logs).
+capability auditWrite implies dbWrite # auditWrite subsumes dbWrite
+
+# appCapability: a coarse-grained capability for the whole application.
+# Any function with appCapability satisfies both auditWrite and fileRead requirements.
+capability appCapability implies auditWrite, fileRead
+
+# "env" is a built-in prelude function guarded by a capability.
+# This wrapper needs no explicit requires since env() is a prelude primitive
+# that the runtime handles — but in practice env-reading functions would declare fileRead.
+fn readEnvVar(key: String) -> Maybe String =
+  env key # env key reads an environment variable (returns Maybe String)
+
+# nowMillis requires [time] capability — declared here with "requires [time]".
+fn getCurrentTime() -> PosixMillis requires [time] =
+  nowMillis() # nowMillis returns current Unix time in milliseconds
+
+# This function declares [auditWrite, dbRead].
+# Since auditWrite implies dbWrite, it automatically has dbWrite access too.
+fn logMessage(message: String) -> String requires [auditWrite, dbRead] =
+  "logged: ${message}" # in a real app, this would write to the DB
+
+# This function uses appCapability, which implies auditWrite and fileRead.
+# Any function that requires [auditWrite] or [fileRead] can be called from here.
+fn readAndWrite(key: String) -> String requires [appCapability] =
+  let value = readEnvVar key # fileRead satisfied by appCapability implies fileRead
+  let valueStr = case value of
+    Nothing -> "(not set)"
+    Something v -> v
+  "read key: ${key}, value: ${valueStr}"
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Capabilities are a static EFFECT SYSTEM.
+# Without capabilities, side effects (file I/O, DB writes, network calls) are invisible.
+# A function that looks pure might actually write to a database.
+# Capabilities make this visible in the type signature.
+#
+# The transitivity rule: if f requires [cap] and you call f from g,
+# then g must also declare requires [cap]. This propagates capability
+# requirements up the call stack, making effects visible at every level.
+#
+# "implies" lets you define capability hierarchies:
+#   - Fine-grained: dbRead, dbWrite, time, env (specific operations)
+#   - Coarse-grained: todoWebService implies dbRead, dbWrite, time (service bundle)
+# The coarse-grained capability satisfies all the fine-grained ones it implies.
+# This reduces annotation noise in real applications: declare todoWebService once
+# and everything in that service's scope has the needed permissions.
+#
+# The serve/main/with-capabilities blocks are where capabilities are granted.
+# Only there can you say "I vouch that this scope has [dbWrite]".
+# Functions inside those blocks can use the capabilities.
+# Functions outside cannot, regardless of their declarations.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# The capability system is enforced statically by the Tesl compiler.
+# Specifically, for each function call "f(args)" in a function body:
+#   1. The compiler knows what capabilities the CALLEE f requires.
+#   2. It checks that the CALLER's "requires [...]" list covers all of f's requirements.
+#   3. If not, it's a compile error: "missing capability: X".
+#
+# "implies" is a transitive closure computation. If A implies B implies C,
+# then a function with [A] satisfies requirements for [B] and [C].
+# The compiler precomputes the transitive closure of the implies relation at compile time.
+#
+# The capability system does NOT prevent you from writing side-effectful code.
+# It makes side effects VISIBLE and AUDITABLE. If a handler has [dbWrite],
+# you know it can write to the database. If it only has [dbRead], you know it cannot.
+#
+# Telemetry is the ONE deliberate exception: "telemetry ..." calls are always
+# allowed without a capability declaration. This is an intentional design choice —
+# observability is considered part of the platform foundation, not a user-defined effect.
+#
+# At runtime, capabilities are checked when entering "with capabilities [...]" blocks.
+# The runtime verifies that the declared capabilities are actually available in the
+# current execution context (e.g., a database connection is open for dbRead/dbWrite).

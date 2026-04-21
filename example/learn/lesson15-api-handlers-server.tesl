@@ -1,0 +1,193 @@
+#lang tesl
+module TaskApi exposing [TaskServer]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# A Tesl HTTP API has four structural pieces:
+#
+#   1. record NewTask { ... }       — input/output data shapes
+#   2. check / auth                 — validators that run at the HTTP boundary
+#   3. capture ...                  — how to parse URL path parameters
+#   4. handler createTask(...) -> T — the business logic function
+#   5. api TaskApi { ... }          — TYPE-LEVEL declaration of endpoints
+#   6. server TaskServer for TaskApi { ... } — binds handlers to endpoints
+#
+# The "api" block is purely declarative — it says what the shape is.
+# The "server" block binds concrete handler functions to each endpoint.
+# These two are separate so you can swap implementations.
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Json exposing [stringCodec, intCodec, boolCodec]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict.lookup]
+
+# ─── Capabilities ─────────────────────────────────────────────────────────────
+
+capability taskDbRead implies dbRead # permission to read task data
+capability taskDbWrite implies dbWrite # permission to write task data
+
+# ─── Data types ───────────────────────────────────────────────────────────────
+
+# NewTask: the shape of a POST body when creating a task.
+record NewTask {
+  title: String
+  priority: Int
+}
+
+# Task: the shape returned from the API.
+record Task {
+  id: String
+  title: String
+  priority: Int
+  done: Bool
+}
+
+# ─── Codecs ───────────────────────────────────────────────────────────────────
+
+codec NewTask {
+  toJson_forbidden
+  fromJson [
+    {
+      title <- "title" with_codec stringCodec
+      priority <- "priority" with_codec intCodec
+    }
+  ]
+}
+
+codec Task {
+  toJson {
+    id -> "id" with_codec stringCodec
+    title -> "title" with_codec stringCodec
+    priority -> "priority" with_codec intCodec
+    done -> "done" with_codec boolCodec
+  }
+  fromJson_forbidden
+}
+
+# ─── Validation ───────────────────────────────────────────────────────────────
+
+fact ValidPriority (p: Int)
+
+# ValidPriority: priority must be 1 through 5.
+check validatePriority(p: Int) -> p: Int ::: ValidPriority p =
+  if p >= 1 && p <= 5 then
+    ok p ::: ValidPriority p
+  else
+    fail 400 "priority must be 1-5"
+
+# ─── Authentication ───────────────────────────────────────────────────────────
+
+fact Authenticated (user: String)
+
+# cookieAuth: extract the user identity from the "user" cookie.
+# Returns Nothing if the cookie is absent (unauthenticated).
+# Returns Something userId if the cookie is present.
+auth cookieAuth(request: HttpRequest) -> user: String ::: Authenticated user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "not authenticated" # no cookie → 401
+    Something userId -> ok userId ::: Authenticated user # cookie present → attach Authenticated proof
+
+# ─── URL captures ─────────────────────────────────────────────────────────────
+
+# taskIdCapture: parse the ":id" URL segment as a plain String.
+# "using stringCodec" means: use the string JSON codec as the URL segment parser.
+capture taskIdCapture: id: String using stringCodec
+
+# ─── Handlers ─────────────────────────────────────────────────────────────────
+
+# handler is like fn but for HTTP endpoints.
+# Parameters: authenticated user (proof required), request body.
+# Requires taskDbWrite capability (it would write to DB in a real app).
+handler createTask(user: String ::: Authenticated user, body: NewTask) -> Task
+  requires [taskDbWrite] =
+  # user: authenticated, body: decoded from JSON (title and priority fields validated at boundary)
+  Task { id: "task-1", title: body.title, priority: body.priority, done: False }
+  # In a real app: insert into DB, generate real ID, return the persisted record.
+
+# getTask: look up a task by ID.
+# Returns Maybe Task — Nothing if not found, Something task if found.
+handler getTask(user: String ::: Authenticated user, id: String) -> Maybe Task
+  requires [taskDbRead] =
+  # id: the parsed URL capture (plain String from taskIdCapture)
+  Something (Task { id: id, title: "example task", priority: 3, done: False })
+  # In a real app: query DB, return Nothing if not found.
+
+# ─── API declaration (type-level shape) ───────────────────────────────────────
+#
+# "api" declares the structure: HTTP methods, paths, auth requirements, inputs, outputs.
+# This is PURELY DECLARATIVE — it does not specify which function implements each endpoint.
+# Think of it as a typed interface.
+
+api TaskApi {
+  post "/tasks"
+    auth user: String ::: Authenticated user via cookieAuth
+    body body: NewTask
+    -> Task
+
+  get "/tasks/:id"
+    auth user: String ::: Authenticated user via cookieAuth
+    capture id: String via taskIdCapture
+    -> Maybe Task
+}
+
+# ─── Server (value-level binding) ─────────────────────────────────────────────
+#
+# "server" binds handler functions to endpoint names from the api declaration.
+# The names on the left are the endpoint names (from the api declaration).
+# The names on the right are the handler functions defined above.
+
+server TaskServer for TaskApi {
+  createTask = createTask
+  getTask = getTask
+}
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# The separation of "api" and "server" lets you:
+# - Have multiple server implementations of the same api (testing vs production)
+# - Check at compile time that every endpoint has a handler (the server binding is complete)
+# - Express the API contract without any implementation details
+#
+# "handler" is different from "fn" in several important ways:
+# - Its parameters may include proof annotations (Authenticated, ValidPriority, etc.)
+# - These proofs are satisfied BEFORE the handler body runs (at the HTTP boundary)
+# - If auth fails → 401 before the handler body executes
+# - If a capture check fails → error before the handler body executes
+# - If a body decoder fails → 400 before the handler body executes
+# - The handler body runs in a fully validated, fully proven context
+#
+# "capture id: String via taskIdCapture" in the api block means:
+# - ":id" in the URL path is parsed by taskIdCapture
+# - taskIdCapture is "using stringCodec" — just extracts the path segment as-is
+# - In admin-task-api.tesl, the capture also runs a check function (via isPositive)
+#   to validate and attach a proof to the captured Int value
+#
+# The "auth ... via cookieAuth" line in the api block means:
+# - Before running the handler, call cookieAuth(request)
+# - If it fails → 401
+# - If it succeeds → the result (user: String::: Authenticated user) is passed to the handler
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# "handler" lowers to Racket's "define-handler" macro.
+# define-handler generates a function that:
+#   1. Receives the raw HttpRequest
+#   2. Runs auth functions, extracting authenticated subjects with proofs
+#   3. Parses captures, running any associated check functions
+#   4. Decodes the request body, running field-level decoders (via checkers)
+#   5. Calls the handler body with all the validated, proof-carrying arguments
+#
+# This is the GDP trust boundary at the HTTP edge.
+# Everything INSIDE the handler body has been validated.
+# You know: the user is authenticated, all path params are valid, the body is valid.
+# All proven at compile time (via the proof annotations) and enforced at runtime
+# (via the auth/check/capture machinery).
+#
+# "api" lowers to "define-api" — a Racket data structure describing the routes.
+# "server" lowers to "define-server" — a Racket hash map from endpoint names to handlers.
+# The router combines these two to dispatch incoming HTTP requests.

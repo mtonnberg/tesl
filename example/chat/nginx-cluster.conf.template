@@ -1,0 +1,78 @@
+worker_processes  1;
+error_log         /dev/stderr warn;
+pid               CHAT_NGINX_PID;
+
+events {
+    worker_connections 64;
+}
+
+http {
+    access_log  off;
+
+    # Temp paths inside the run dir (avoids permission issues)
+    client_body_temp_path  CHAT_RUN_DIR/client_body_temp;
+    proxy_temp_path        CHAT_RUN_DIR/proxy_temp;
+    fastcgi_temp_path      CHAT_RUN_DIR/fastcgi_temp;
+    uwsgi_temp_path        CHAT_RUN_DIR/uwsgi_temp;
+    scgi_temp_path         CHAT_RUN_DIR/scgi_temp;
+
+    include      NGINX_MIME_TYPES;
+    default_type application/octet-stream;
+
+    # -- REST API upstream -- round-robin across all three backends
+    upstream chat_api {
+        server 127.0.0.1:3000;
+        server 127.0.0.1:3002;
+        server 127.0.0.1:3004;
+    }
+
+    # -- SSE upstream -- ip_hash ensures each client sticks to one backend
+    # Each backend has its own LISTEN thread; a given browser tab must always
+    # reach the same backend so the SSE connection persists.
+    # REST requests can float freely because every backend shares the same DB.
+    upstream chat_sse {
+        ip_hash;
+        server 127.0.0.1:3000;
+        server 127.0.0.1:3002;
+        server 127.0.0.1:3004;
+    }
+
+    server {
+        listen      8080;
+        server_name localhost;
+
+        root  CHAT_FRONTEND_DIR;
+        index index.html;
+
+        # SSE proxy -- sticky routing via ip_hash, no buffering
+        location /events/ {
+            proxy_pass         http://chat_sse;
+            proxy_http_version 1.1;
+            proxy_set_header   Host       $host;
+            proxy_set_header   Cookie     $http_cookie;
+            proxy_set_header   Connection '';
+
+            # Disable all buffering -- essential for SSE
+            proxy_buffering    off;
+            proxy_cache        off;
+            proxy_read_timeout 86400s;
+
+            # Tell downstream (and nginx itself) not to buffer
+            add_header X-Accel-Buffering no;
+            add_header X-Backend-Instance $upstream_addr always;
+        }
+
+        # REST API proxy -- load-balanced round-robin
+        location ~ ^/(rooms|users|login) {
+            proxy_pass       http://chat_api;
+            proxy_set_header Host       $host;
+            proxy_set_header Cookie     $http_cookie;
+            add_header X-Backend-Instance $upstream_addr always;
+        }
+
+        # Static files (Elm app)
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+    }
+}

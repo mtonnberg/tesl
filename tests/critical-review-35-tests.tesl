@@ -1,0 +1,996 @@
+#lang tesl
+# ─────────────────────────────────────────────────────────────────────────────
+# critical-review-35-tests.tesl
+#
+# Adversarial test suite for critical review 35.
+# Focus areas:
+#   1.  Proof system soundness — cross-subject confusion, re-targeting
+#   2.  Capability enforcement — transitive chains, missing declarations
+#   3.  ADT exhaustiveness — parameterized ADTs, nested patterns
+#   4.  Integer overflow behavior near fixnum boundary
+#   5.  Newtype safety — nominal distinctness under composition
+#   6.  ForAll proof chain integrity after multiple filterCheck passes
+#   7.  Establish as unsafe boundary — unconditional proof for wrong values
+#   8.  Proof decomposition and recombination edge cases
+#   9.  Case guard interaction with pattern binding
+#   10. Partial application with proof-bearing arguments
+#   11. Higher-order functions with proof-requiring callbacks
+#   12. String operations at boundaries (empty, unicode-like, escapes)
+#   13. Dict/Set proof roundtrips
+#   14. Maybe nesting — Maybe (Maybe a)
+#   15. Record field proof propagation across function boundaries
+#   16. List.foldl correctness for various accumulator patterns
+#   17. Lambda type inference in higher-order contexts
+#   18. Boolean expression short-circuit and equality
+#   19. Recursive ADT deep traversal
+#   20. Float edge cases — division, comparison
+#   21. Check composition failure ordering
+#   22. Proof conjunction and decomposition with &&
+#   23. Property-based tests for stdlib laws
+#   24. Multiple check calls in sequence — proof accumulation
+#   25. Newtype round-trip through function boundary
+# ─────────────────────────────────────────────────────────────────────────────
+module CriticalReview35Tests exposing [
+  # T01 — Cross-subject proof cannot be reused checkNonNeg35,
+  requireNonNeg35,
+  # T02 — Check composition failure ordering checkA35,
+  checkB35,
+  # T03 — ForAll survives through double filterCheck checkEv35,
+  checkSmall35,
+  # T04 — Establish is unconditional (unsafe boundary) alwaysTrue35,
+  requiresTrue35,
+  # T05 — Proof decomposition via let (x ::: p) = y checkPosDecomp35,
+  # T06 — Recursive ADT: list implemented as ADT MyList35(..),
+  myLength35,
+  myMap35,
+  myAppend35,
+  # T07 — Maybe nesting flattenMaybe35,
+  # T08 — Record field proof propagation SafeTitle35,
+  checkSafeTitle35,
+  ProvenRecord35,
+  readAndConsume35,
+  # T09 — Integer arithmetic laws near boundaries # T10 — Float division proof safeFloatDiv35,
+  # T11 — Boolean expression completeness xor35,
+  nand35,
+  # T12 — Newtype round-trip UserId35(..),
+  wrapAndUnwrap35,
+  # T13 — Case guard with complex predicate Prio35(..),
+  classifyPrio35,
+  # T14 — List.foldl correctness sumFold35,
+  productFold35,
+  concatFold35,
+  # T15 — Lambda captures and HOF applyN35,
+  # T16 — Partial application of 3-arg fn add335,
+  # T17 — Multiple sequential checks accumulate proofs checkPos35,
+  checkSmallInt35,
+  requiresBoth35,
+  sequentialChecks35,
+  # T18 — String escape and edge cases # T19 — Dict roundtrip # T20 — Set deduplication and ordering # T21 — Parameterized ADT with nested type params Pair35(..),
+  swapPair35,
+  mapPair35,
+  # T22 — Check that forgetFact truly removes proof # T23 — Empty and singleton edge cases # T24 — Property: addition is commutative and associative # T25 — Property: List.reverse . List.reverse = id,
+]
+
+import Tesl.Prelude exposing [ Bool(..), Int, String, List, Fact, forgetFact, ]
+import Tesl.String exposing [
+  String.length,
+  String.isEmpty,
+  String.trim,
+  String.contains,
+  String.replace,
+  String.split,
+  String.join,
+  String.startsWith,
+  String.endsWith,
+  String.toUpper,
+  String.toLower,
+  String.indexOf,
+  IsTrimmed,
+  IsUpperCase,
+]
+import Tesl.List exposing [
+  List.map,
+  List.filterCheck,
+  List.foldl,
+  List.length,
+  List.head,
+  List.reverse,
+  List.sum,
+  List.append,
+  List.sort,
+  List.contains,
+  List.take,
+  List.drop,
+  List.zip,
+  List.unique,
+  List.any,
+  List.all,
+  List.count,
+  List.allCheck,
+  IsSorted,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Either exposing [Either(..), Either.partition]
+import Tesl.Int exposing [
+  Int.nonZero,
+  Int.nonNegative,
+  Int.divide,
+  Int.abs,
+  Int.min,
+  Int.max,
+  Int.pow,
+  Int.gcd,
+  Int.isEven,
+  Int.isOdd,
+  Int.toString,
+  Int.sign,
+  IsNonZero,
+]
+import Tesl.Float exposing [
+  Float,
+  Float.requireNonZero,
+  Float.div,
+  Float.abs,
+  Float.isNaN,
+  Float.isInfinite,
+  Float.round,
+  Float.floor,
+  Float.ceil,
+  FloatNonZero,
+]
+import Tesl.Dict exposing [
+  Dict,
+  Dict.empty,
+  Dict.insert,
+  Dict.lookup,
+  Dict.member,
+  Dict.size,
+  Dict.isEmpty,
+  Dict.fromList,
+  Dict.requireKey,
+  Dict.get,
+  HasKey,
+]
+import Tesl.Set exposing [
+  Set.fromList,
+  Set.member,
+  Set.insert,
+  Set.size,
+  Set.union,
+  Set.intersection,
+  Set.difference,
+  Set.isEmpty,
+]
+import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T01 — Cross-subject proof must not be transferable
+# Verify: checking value A does not let you use the proof on value B.
+# The test passes if the *correct* proof chain works; we rely on the
+# compiler OCaml-side test to ensure the wrong chain fails.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact NonNeg35 (n: Int)
+
+check checkNonNeg35(n: Int) -> n: Int ::: NonNeg35 n =
+  if n >= 0 then
+    ok n ::: NonNeg35 n
+  else
+    fail 400 "must be non-negative"
+
+fn requireNonNeg35(n: Int ::: NonNeg35 n) -> Int = n + 1
+
+test "T01 — correct subject proof works" {
+  let a = 10
+  let checkedA = check checkNonNeg35 a
+  expect requireNonNeg35 checkedA == 11
+  let zero = 0
+  let checkedZero = check checkNonNeg35 zero
+  expect requireNonNeg35 checkedZero == 1
+}
+
+test "T01b — check rejects negative" {
+  expectFail check checkNonNeg35 -1
+  expectFail check checkNonNeg35 -999
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T02 — Check composition failure ordering: first failure wins
+# If checkA fails, checkB never runs. Verify with expectFail.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact IsA35 (s: String)
+fact IsB35 (s: String)
+
+check checkA35(s: String) -> s: String ::: IsA35 s =
+  if String.startsWith s "A" then
+    ok s ::: IsA35 s
+  else
+    fail 400 "must start with A"
+
+check checkB35(s: String) -> s: String ::: IsB35 s =
+  if String.endsWith s "B" then
+    ok s ::: IsB35 s
+  else
+    fail 400 "must end with B"
+
+test "T02 — composed check first failure" {
+  expectFail check (checkA35 && checkB35) "XB"
+  expectFail check (checkA35 && checkB35) "AX"
+  expectFail check (checkA35 && checkB35) "XX"
+  let s = "AB"
+  let result = check (checkA35 && checkB35) s
+  expect String.length result == 2
+}
+
+test "T02b — reversed composition" {
+  # In reversed order: checkB runs first
+  expectFail check (checkB35 && checkA35) "AX"
+  let s2 = "AB"
+  let result2 = check (checkB35 && checkA35) s2
+  expect String.length result2 == 2
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T03 — ForAll survives through double filterCheck (proof stacking)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact Ev35 (n: Int)
+fact Small35 (n: Int)
+
+check checkEv35(n: Int) -> n: Int ::: Ev35 n =
+  if n % 2 == 0 then
+    ok n ::: Ev35 n
+  else
+    fail 400 "not even"
+
+check checkSmall35(n: Int) -> n: Int ::: Small35 n =
+  if n < 20 then
+    ok n ::: Small35 n
+  else
+    fail 400 "too large"
+
+fn doubleFilter35(xs: List Int) -> List Int ::: ForAll (Small35) =
+  let evens = List.filterCheck checkEv35 xs
+  List.filterCheck checkSmall35 evens
+
+test "T03 — double filterCheck" {
+  let result = doubleFilter35 [1, 2, 3, 4, 22, 100, 6, 18]
+  expect List.length result == 4
+  let empty = doubleFilter35 [1, 3, 5, 7]
+  expect List.length empty == 0
+  let allPass = doubleFilter35 [2, 4, 6]
+  expect allPass == [2, 4, 6]
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T04 — Establish is the unsafe boundary: produces proof regardless
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact AlwaysTrue35 (n: Int)
+
+establish alwaysTrue35(n: Int) -> Fact (AlwaysTrue35 n) =
+  AlwaysTrue35 n
+
+fn requiresTrue35(n: Int ::: AlwaysTrue35 n) -> Int = n * 3
+
+fn useEstablish35(n: Int) -> Int =
+  let proof = alwaysTrue35 n
+  requiresTrue35 (n ::: proof)
+
+test "T04 — establish unconditional" {
+  expect useEstablish35 0 == 0
+  expect useEstablish35 -42 == -126
+  expect useEstablish35 100 == 300
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T05 — Proof decomposition via let (x ::: p) = y
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact Pos35 (n: Int)
+
+check checkPosDecomp35(n: Int) -> n: Int ::: Pos35 n =
+  if n > 0 then
+    ok n ::: Pos35 n
+  else
+    fail 400 "not positive"
+
+fn requiresPos35(n: Int ::: Pos35 n) -> Int = n + 100
+
+fn decomposeAndReattach35(n: Int ::: Pos35 n) -> Int =
+  let (val ::: p) = n
+  let reattached = val ::: p
+  requiresPos35 reattached
+
+test "T05 — proof decomposition and reattachment" {
+  let raw = 5
+  let checked = check checkPosDecomp35 raw
+  expect decomposeAndReattach35 checked == 105
+  let raw2 = 1
+  let checked2 = check checkPosDecomp35 raw2
+  expect decomposeAndReattach35 checked2 == 101
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T06 — Recursive ADT: implementing our own list
+# ═══════════════════════════════════════════════════════════════════════════════
+
+type MyList35 a
+  = Nil35
+  | Cons35 head: a tail: (MyList35 a)
+
+fn myLength35(xs: MyList35 Int) -> Int =
+  case xs of
+    Nil35 -> 0
+    Cons35 _ tail -> 1 + myLength35 tail
+
+fn myMap35(f: Int -> Int, xs: MyList35 Int) -> MyList35 Int =
+  case xs of
+    Nil35 -> Nil35
+    Cons35 head tail -> Cons35 (f head) (myMap35 f tail)
+
+fn myAppend35(xs: MyList35 Int, ys: MyList35 Int) -> MyList35 Int =
+  case xs of
+    Nil35 -> ys
+    Cons35 head tail -> Cons35 head (myAppend35 tail ys)
+
+test "T06 — recursive ADT list" {
+  let xs = Cons35 1 (Cons35 2 (Cons35 3 Nil35))
+  expect myLength35 xs == 3
+  expect myLength35 Nil35 == 0
+  let doubled = myMap35 (fn(x: Int) -> x * 2) xs
+  expect myLength35 doubled == 3
+  let ys = Cons35 4 (Cons35 5 Nil35)
+  let combined = myAppend35 xs ys
+  expect myLength35 combined == 5
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T07 — Maybe nesting: Maybe (Maybe Int)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn flattenMaybe35(m: Maybe (Maybe Int)) -> Maybe Int =
+  case m of
+    Nothing -> Nothing
+    Something inner ->
+      case inner of
+        Nothing -> Nothing
+        Something val -> Something val
+
+test "T07 — nested Maybe" {
+  expect flattenMaybe35 Nothing == Nothing
+  expect flattenMaybe35 (Something Nothing) == Nothing
+  expect flattenMaybe35 (Something (Something 42)) == Something 42
+  expect flattenMaybe35 (Something (Something 0)) == Something 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T08 — Record field proof propagation
+# A record with a proof-annotated field should propagate the proof on read.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact SafeTitle35 (s: String)
+
+check checkSafeTitle35(s: String) -> s: String ::: SafeTitle35 s =
+  if String.length s > 0 && String.length s <= 100 then
+    ok s ::: SafeTitle35 s
+  else
+    fail 400 "title must be 1-100 chars"
+
+record ProvenRecord35 {
+  title: String ::: SafeTitle35 title
+}
+
+fn requiresSafeTitle35(s: String ::: SafeTitle35 s) -> Int =
+  String.length s
+
+fn readAndConsume35(rec: ProvenRecord35) -> Int =
+  requiresSafeTitle35 rec.title
+
+test "T08 — record field proof propagation" {
+  let raw = "hello"
+  let safe = check checkSafeTitle35 raw
+  let rec = ProvenRecord35 { title: safe }
+  expect readAndConsume35 rec == 5
+}
+
+test "T08b — proof boundary check" {
+  expectFail check checkSafeTitle35 ""
+  let long = "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeaaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeef"
+  expectFail check checkSafeTitle35 long
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T09 — Integer arithmetic laws: boundary values
+# ═══════════════════════════════════════════════════════════════════════════════
+
+test "T09 — integer identity and absorption" {
+  expect 0 + 0 == 0
+  expect 0 * 12345 == 0
+  expect 1 * 1 == 1
+  expect -1 * -1 == 1
+  expect -1 * 0 == 0
+  let maxish = 4611686018427387903
+  expect maxish > 0
+  let minish = -4611686018427387903
+  expect minish < 0
+}
+
+test "T09b — Int stdlib" {
+  expect Int.abs 5 == 5
+  expect Int.abs -5 == 5
+  expect Int.abs 0 == 0
+  expect Int.min 3 7 == 3
+  expect Int.max 3 7 == 7
+  expect Int.min -1 1 == -1
+  expect Int.gcd 12 8 == 4
+  expect Int.gcd 7 13 == 1
+  expect Int.pow 2 10 == 1024
+  expect Int.pow 0 5 == 0
+  expect Int.pow 5 0 == 1
+  expect Int.isEven 4 == True
+  expect Int.isOdd 3 == True
+  expect Int.isEven 0 == True
+  expect Int.sign 5 == 1
+  expect Int.sign -5 == -1
+  expect Int.sign 0 == 0
+  expect Int.toString 42 == "42"
+  expect Int.toString -7 == "-7"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T10 — Float division proof-total
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn safeFloatDiv35(a: Float, b: Float) -> Maybe Float =
+  if b == 0.0 then
+    Nothing
+  else
+    let divisor = check Float.requireNonZero b
+    Something (Float.div a divisor)
+
+test "T10 — float proof-total division" {
+  expect safeFloatDiv35 10.0 2.0 == Something 5.0
+  expect safeFloatDiv35 0.0 1.0 == Something 0.0
+  expect safeFloatDiv35 10.0 0.0 == Nothing
+  expect safeFloatDiv35 -6.0 3.0 == Something -2.0
+}
+
+test "T10b — float stdlib" {
+  expect Float.round 3.7 == 4
+  expect Float.floor 3.7 == 3
+  expect Float.ceil 3.2 == 4
+  expect Float.abs -2.5 == 2.5
+  expect Float.abs 2.5 == 2.5
+  expect Float.isNaN 1.0 == False
+  expect Float.isInfinite 1.0 == False
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T11 — Boolean expression completeness
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn xor35(a: Bool, b: Bool) -> Bool =
+  (a || b) && !(a && b)
+
+fn nand35(a: Bool, b: Bool) -> Bool =
+  !(a && b)
+
+test "T11 — boolean logic" {
+  expect xor35 True False == True
+  expect xor35 False True == True
+  expect xor35 True True == False
+  expect xor35 False False == False
+  expect nand35 True True == False
+  expect nand35 True False == True
+  expect nand35 False True == True
+  expect nand35 False False == True
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T12 — Newtype round-trip through function boundary
+# ═══════════════════════════════════════════════════════════════════════════════
+
+type UserId35 = String
+
+fn wrapAndUnwrap35(s: String) -> String =
+  let uid = UserId35 s
+  uid.value
+
+test "T12 — newtype round-trip" {
+  expect wrapAndUnwrap35 "user-1" == "user-1"
+  expect wrapAndUnwrap35 "" == ""
+  expect wrapAndUnwrap35 "abc" == "abc"
+}
+
+test "T12b — newtype identity" {
+  let uid1 = UserId35 "a"
+  let uid2 = UserId35 "a"
+  expect uid1 == uid2
+  let uid3 = UserId35 "b"
+  expect uid1 != uid3
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T13 — Case guard with complex predicate
+# ═══════════════════════════════════════════════════════════════════════════════
+
+type Prio35
+  = Critical35
+  | High35
+  | Medium35
+  | Low35
+
+fn classifyPrio35(p: Prio35, urgent: Bool) -> String =
+  case p of
+    Critical35 -> "must do now"
+    High35 where urgent -> "escalated"
+    High35 -> "important"
+    Medium35 -> "normal"
+    Low35 -> "backlog"
+
+test "T13 — case guard with bool" {
+  expect classifyPrio35 Critical35 False == "must do now"
+  expect classifyPrio35 Critical35 True == "must do now"
+  expect classifyPrio35 High35 True == "escalated"
+  expect classifyPrio35 High35 False == "important"
+  expect classifyPrio35 Medium35 False == "normal"
+  expect classifyPrio35 Low35 True == "backlog"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T14 — List.foldl correctness
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn sumFold35(xs: List Int) -> Int =
+  List.foldl (fn(acc: Int, x: Int) -> acc + x) 0 xs
+
+fn productFold35(xs: List Int) -> Int =
+  List.foldl (fn(acc: Int, x: Int) -> acc * x) 1 xs
+
+fn concatFold35(xs: List String) -> String =
+  List.foldl (fn(acc: String, s: String) -> acc ++ s) "" xs
+
+test "T14 — List.foldl" {
+  expect sumFold35 [1, 2, 3, 4, 5] == 15
+  expect sumFold35 [] == 0
+  expect sumFold35 [-1, 1] == 0
+  expect productFold35 [1, 2, 3, 4] == 24
+  expect productFold35 [] == 1
+  expect productFold35 [5, 0, 3] == 0
+  expect concatFold35 ["a", "b", "c"] == "abc"
+  expect concatFold35 [] == ""
+  expect concatFold35 ["hello"] == "hello"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T15 — Lambda captures and higher-order function application
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn applyN35(f: Int -> Int, n: Int, x: Int) -> Int =
+  if n <= 0 then
+    x
+  else
+    applyN35 f (n - 1) (f x)
+
+test "T15 — applyN with lambda" {
+  expect applyN35 (fn(x: Int) -> x + 1) 5 0 == 5
+  expect applyN35 (fn(x: Int) -> x * 2) 3 1 == 8
+  expect applyN35 (fn(x: Int) -> x) 100 42 == 42
+  expect applyN35 (fn(x: Int) -> x + 10) 0 5 == 5
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T16 — Partial application of 3-arg function
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn add335(a: Int, b: Int, c: Int) -> Int = a + b + c
+
+test "T16 — partial application" {
+  let add1 = add335 1
+  let add1_2 = add1 2
+  expect add1_2 3 == 6
+  let add10_20 = add335 10 20
+  expect add10_20 30 == 60
+  let addAll = List.map (add335 0 0) [1, 2, 3]
+  expect addAll == [1, 2, 3]
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T17 — Multiple sequential checks accumulate proofs
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fact PosVal35 (n: Int)
+fact SmallInt35 (n: Int)
+
+check checkPos35(n: Int) -> n: Int ::: PosVal35 n =
+  if n > 0 then
+    ok n ::: PosVal35 n
+  else
+    fail 400 "not positive"
+
+check checkSmallInt35(n: Int) -> n: Int ::: SmallInt35 n =
+  if n < 1000 then
+    ok n ::: SmallInt35 n
+  else
+    fail 400 "too large"
+
+fn requiresBoth35(n: Int ::: PosVal35 n && SmallInt35 n) -> String =
+  "valid: ${n}"
+
+fn sequentialChecks35(n: Int) -> String =
+  let v1 = check checkPos35 n
+  let v2 = check checkSmallInt35 v1
+  requiresBoth35 v2
+
+test "T17 — sequential check accumulation" {
+  expect sequentialChecks35 42 == "valid: 42"
+  expect sequentialChecks35 1 == "valid: 1"
+  expect sequentialChecks35 999 == "valid: 999"
+  expectFail check checkPos35 0
+  expectFail check checkPos35 -1
+  let posRaw = 5
+  let posVal = check checkPos35 posRaw
+  expectFail (check checkSmallInt35 1000)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T18 — String operations edge cases
+# ═══════════════════════════════════════════════════════════════════════════════
+
+test "T18 — string edge cases" {
+  expect String.length "" == 0
+  expect String.isEmpty "" == True
+  expect String.trim "   " == ""
+  expect String.contains "abc" "" == True
+  expect String.contains "" "a" == False
+  expect String.startsWith "" "" == True
+  expect String.endsWith "" "" == True
+  expect String.replace "aaa" "a" "b" == "bbb"
+  expect String.split "a,b,c" "," == ["a", "b", "c"]
+  expect String.split "" "," == [""]
+  expect String.join ["a", "b", "c"] ", " == "a, b, c"
+  expect String.join ["a", "b"] "" == "ab"
+  expect String.indexOf "hello" "ll" == Something 2
+  expect String.indexOf "hello" "xyz" == Nothing
+}
+
+test "T18b — string stdlib proofs" {
+  let trimmed = String.trim "  hello  "
+  expect trimmed == "hello"
+  let upper = String.toUpper "hello"
+  expect upper == "HELLO"
+  let lower = String.toLower "HELLO"
+  expect lower == "hello"
+  expect String.toUpper "" == ""
+  expect String.toLower "" == ""
+}
+
+test "T18c — string interpolation with expressions" {
+  let n = 42
+  let s = "the answer is ${n}"
+  expect s == "the answer is 42"
+  let prefix = "pre"
+  let suffix = "suf"
+  let combined = "${prefix}-${suffix}"
+  expect combined == "pre-suf"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T19 — Dict operations roundtrip
+# ═══════════════════════════════════════════════════════════════════════════════
+
+test "T19 — Dict roundtrip" {
+  let d = Dict.insert "a" 1 (Dict.insert "b" 2 Dict.empty)
+  expect Dict.size d == 2
+  expect Dict.member "a" d == True
+  expect Dict.member "c" d == False
+  expect Dict.lookup "a" d == Something 1
+  expect Dict.lookup "c" d == Nothing
+  let d2 = Dict.insert "a" 99 d
+  expect Dict.lookup "a" d2 == Something 99
+  expect Dict.size d2 == 2
+}
+
+test "T19b — Dict.requireKey and Dict.get" {
+  let d = Dict.insert "key" 42 Dict.empty
+  let keyStr = "key"
+  let checked = check Dict.requireKey keyStr d
+  expect Dict.get keyStr checked == 42
+  let missingKey = "missing"
+  expectFail (Dict.requireKey missingKey d)
+}
+
+test "T19c — Dict isEmpty and fromList" {
+  expect Dict.isEmpty Dict.empty == True
+  let d = Dict.insert "x" 1 Dict.empty
+  expect Dict.isEmpty d == False
+  let d2 = Dict.fromList [Tuple2 "a" 1, Tuple2 "b" 2]
+  expect Dict.size d2 == 2
+  expect Dict.lookup "a" d2 == Something 1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T20 — Set deduplication and operations
+# ═══════════════════════════════════════════════════════════════════════════════
+
+test "T20 — Set operations" {
+  let s1 = Set.fromList [1, 2, 3, 2, 1]
+  expect Set.size s1 == 3
+  expect Set.member 1 s1 == True
+  expect Set.member 4 s1 == False
+  let s2 = Set.fromList [3, 4, 5]
+  let unionSet = Set.union s1 s2
+  expect Set.size unionSet == 5
+  let interSet = Set.intersection s1 s2
+  expect Set.size interSet == 1
+  expect Set.member 3 interSet == True
+  let diffSet = Set.difference s1 s2
+  expect Set.size diffSet == 2
+  expect Set.member 1 diffSet == True
+  expect Set.member 3 diffSet == False
+}
+
+test "T20b — Set edge cases" {
+  let empty = Set.fromList []
+  expect Set.isEmpty empty == True
+  expect Set.size empty == 0
+  let single = Set.insert 1 empty
+  expect Set.size single == 1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T21 — Parameterized ADT with nested type params
+# ═══════════════════════════════════════════════════════════════════════════════
+
+type Pair35 a b
+  = MkPair35 fst: a snd: b
+
+fn swapPair35(p: Pair35 Int String) -> Pair35 String Int =
+  case p of
+    MkPair35 fst snd -> MkPair35 snd fst
+
+fn mapPair35(f: Int -> Int, g: String -> String, p: Pair35 Int String) -> Pair35 Int String =
+  case p of
+    MkPair35 fst snd -> MkPair35 (f fst) (g snd)
+
+test "T21 — parameterized pair ADT" {
+  let p = MkPair35 42 "hello"
+  let swapped = swapPair35 p
+  expect swapped == MkPair35 "hello" 42
+  let mapped = mapPair35 (fn(x: Int) -> x * 2) (fn(s: String) -> s ++ "!") p
+  expect mapped == MkPair35 84 "hello!"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T22 — forgetFact truly removes proof; re-check needed
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn verifyForgetAndRecheck35(n: Int) -> Maybe Int =
+  if n > 0 then
+    let checked = check checkPosDecomp35 n
+    let forgotten = forgetFact checked
+    # forgotten should NOT carry proof anymore;
+    # must re-check to use in proof-requiring context
+    let rechecked = check checkPosDecomp35 forgotten
+    Something (requiresPos35 rechecked)
+  else
+    Nothing
+
+test "T22 — forgetFact and re-check" {
+  expect verifyForgetAndRecheck35 5 == Something 105
+  expect verifyForgetAndRecheck35 0 == Nothing
+  expect verifyForgetAndRecheck35 1 == Something 101
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T23 — Empty and singleton edge cases for List operations
+# ═══════════════════════════════════════════════════════════════════════════════
+
+test "T23 — list edge cases" {
+  expect List.head [] == Nothing
+  expect List.head [1] == Something 1
+  expect List.reverse [] == []
+  expect List.reverse [1] == [1]
+  expect List.sort [] == []
+  expect List.sort [1] == [1]
+  expect List.sum [] == 0
+  expect List.sum [42] == 42
+  expect List.contains 1 [1, 2, 3] == True
+  expect List.contains 4 [1, 2, 3] == False
+  expect List.contains 1 [] == False
+  expect List.unique [1, 1, 2, 2, 3] == [1, 2, 3]
+  expect List.unique [] == []
+  expect List.any (fn(x: Int) -> x > 0) [0, 0, 1] == True
+  expect List.any (fn(x: Int) -> x > 0) [0, 0, 0] == False
+  expect List.all (fn(x: Int) -> x > 0) [1, 2, 3] == True
+  expect List.all (fn(x: Int) -> x > 0) [1, 0, 3] == False
+  expect List.count (fn(x: Int) -> x > 0) [1, -1, 2, -2, 3] == 3
+}
+
+test "T23b — List.range and List.take/drop" {
+  let raw0 = 0
+  let raw3 = 3
+  let raw5 = 5
+  let n0 = check Int.nonNegative raw0
+  let n3 = check Int.nonNegative raw3
+  let n5 = check Int.nonNegative raw5
+  expect List.take n0 [1, 2, 3] == []
+  expect List.take n3 [1, 2, 3, 4, 5] == [1, 2, 3]
+  expect List.drop n0 [1, 2, 3] == [1, 2, 3]
+  expect List.drop n3 [1, 2, 3, 4, 5] == [4, 5]
+  expect List.take n5 [1, 2, 3] == [1, 2, 3]
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T24 — Property: addition is commutative and associative
+# ═══════════════════════════════════════════════════════════════════════════════
+
+test "T24 — arithmetic properties" with 50 runs {
+  property "addition commutative" (a: Int, b: Int where a > -10000 && a < 10000 && b > -10000 && b < 10000) {
+    a + b == b + a
+  }
+  property "multiplication commutative" (a: Int, b: Int where a > -1000 && a < 1000 && b > -1000 && b < 1000) {
+    a * b == b * a
+  }
+  property "addition associative" (a: Int, b: Int, c: Int where a > -1000 && a < 1000 && b > -1000 && b < 1000 && c > -1000 && c < 1000) {
+    (a + b) + c == a + (b + c)
+  }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T25 — Property: reverse . reverse = id, sort idempotent
+# ═══════════════════════════════════════════════════════════════════════════════
+
+test "T25 — list properties" with 50 runs {
+  property "reverse involution" (xs: List Int) {
+    List.reverse (List.reverse xs) == xs
+  }
+  property "sort idempotent" (xs: List Int) {
+    List.sort (List.sort xs) == List.sort xs
+  }
+  property "length non-negative" (xs: List Int) {
+    List.length xs >= 0
+  }
+  property "append length additive" (xs: List Int, ys: List Int) {
+    List.length (List.append xs ys) == List.length xs + List.length ys
+  }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T26 — Either.partition correctness
+# ═══════════════════════════════════════════════════════════════════════════════
+
+test "T26 — Either partition" {
+  let xs = [Left "e1", Right 1, Left "e2", Right 2]
+  let result = Either.partition xs
+  expect Tuple2.first result == ["e1", "e2"]
+  expect Tuple2.second result == [1, 2]
+  let allLeft = Either.partition [Left "a", Left "b"]
+  expect Tuple2.first allLeft == ["a", "b"]
+  expect Tuple2.second allLeft == []
+  let empty = Either.partition []
+  expect Tuple2.first empty == []
+  expect Tuple2.second empty == []
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T27 — Case fall-through with multiple constructors
+# ═══════════════════════════════════════════════════════════════════════════════
+
+type Season35
+  = Spring35
+  | Summer35
+  | Autumn35
+  | Winter35
+
+fn isWarm35(s: Season35) -> Bool =
+  case s of
+    Spring35 ->
+    Summer35 ->
+      True
+    Autumn35 ->
+    Winter35 ->
+      False
+
+test "T27 — fall-through" {
+  expect isWarm35 Spring35 == True
+  expect isWarm35 Summer35 == True
+  expect isWarm35 Autumn35 == False
+  expect isWarm35 Winter35 == False
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T28 — Int.divide proof roundtrip
+# ═══════════════════════════════════════════════════════════════════════════════
+
+test "T28 — Int.divide with proof" {
+  let rawDivisor = 3
+  let divisor = check Int.nonZero rawDivisor
+  expect Int.divide 12 divisor == 4
+  expect Int.divide 0 divisor == 0
+  expect Int.divide -12 divisor == -4
+  let rawDivisor2 = 1
+  let divisor2 = check Int.nonZero rawDivisor2
+  expect Int.divide 42 divisor2 == 42
+  expectFail (Int.nonZero 0)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T29 — List.allCheck all-or-nothing
+# ═══════════════════════════════════════════════════════════════════════════════
+
+test "T29 — allCheck" {
+  let allPos = List.allCheck checkPosDecomp35 [1, 2, 3]
+  expect allPos == Something [1, 2, 3]
+  let hasBad = List.allCheck checkPosDecomp35 [1, -1, 3]
+  expect hasBad == Nothing
+  let emptyList = List.allCheck checkPosDecomp35 []
+  expect emptyList == Something []
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T30 — Case with literal patterns and catch-all
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn httpStatus35(code: Int) -> String =
+  case code of
+    200 -> "OK"
+    201 -> "Created"
+    400 -> "Bad Request"
+    404 -> "Not Found"
+    500 -> "Internal Server Error"
+    _ -> "Unknown"
+
+fn commandRouter35(cmd: String) -> String =
+  case cmd of
+    "help" -> "showing help"
+    "quit" -> "goodbye"
+    "version" -> "1.0.0"
+    other -> "unknown: ${other}"
+
+test "T30 — literal patterns" {
+  expect httpStatus35 200 == "OK"
+  expect httpStatus35 404 == "Not Found"
+  expect httpStatus35 418 == "Unknown"
+  expect commandRouter35 "help" == "showing help"
+  expect commandRouter35 "quit" == "goodbye"
+  expect commandRouter35 "foo" == "unknown: foo"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T31 — List.zip behavior
+# ═══════════════════════════════════════════════════════════════════════════════
+
+test "T31 — List.zip" {
+  let zipped = List.zip [1, 2, 3] ["a", "b", "c"]
+  expect List.length zipped == 3
+  let emptyZip = List.zip [] []
+  expect List.length emptyZip == 0
+  let unevenZip = List.zip [1, 2] ["a", "b", "c"]
+  expect List.length unevenZip == 2
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T32 — Nested if/else chains
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fn classify35(n: Int) -> String =
+  if n < 0 then
+    "negative"
+  else
+    if n == 0 then
+      "zero"
+    else
+      if n < 10 then
+        "small"
+      else
+        "large"
+
+test "T32 — nested if/else" {
+  expect classify35 -5 == "negative"
+  expect classify35 0 == "zero"
+  expect classify35 5 == "small"
+  expect classify35 100 == "large"
+}

@@ -1,0 +1,283 @@
+#lang tesl
+# =====================================================================
+# Critical Review 52 — positive regression tests
+# =====================================================================
+#
+# Paired with `compiler/test/test_review52_antagonistic.ml` which
+# contains the negative (should-not-compile) cases. This file holds the
+# positive side: programs that must both compile AND produce the right
+# answers at runtime.
+#
+# Test ID prefix conventions (mirrors earlier reviews):
+#   R52_P  = Proof soundness (positive controls)
+#   R52_T  = Type / structural system
+#   R52_D  = Proof decomposition + reattach
+#   R52_M  = Multiparameter facts
+#   R52_F  = ForAll and list proofs
+#   R52_C  = Case / pattern / guard exhaustiveness
+#   R52_E  = Existential control
+#
+# Each section starts with the declarations the tests need, and the
+# `test "..."` blocks at the bottom exercise the corresponding `fn`s
+# through the full pipeline (parser → type-checker → proof-checker →
+# emitter → Racket runtime).
+
+module CriticalReview52 exposing []
+
+import Tesl.Prelude exposing [ Int, Bool(..), List, Fact, forgetFact, ]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [ List.length, List.filterCheck, List.allCheck, ]
+
+# ---------------------------------------------------------------------
+# Proof vocabulary
+# ---------------------------------------------------------------------
+fact IsPositive (n: Int)
+fact IsSmall (n: Int)
+fact IsEven (n: Int)
+fact InRange (lo: Int, hi: Int, n: Int)
+
+check isPositive(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "not positive"
+
+check isSmall(n: Int) -> n: Int ::: IsSmall n =
+  if n < 100 then
+    ok n ::: IsSmall n
+  else
+    fail 400 "not small"
+
+check isEven(n: Int) -> n: Int ::: IsEven n =
+  if n % 2 == 0 then
+    ok n ::: IsEven n
+  else
+    fail 400 "not even"
+
+check inRange(lo: Int, hi: Int, n: Int) -> n: Int ::: InRange lo hi n =
+  if lo <= n && n <= hi then
+    ok n ::: InRange lo hi n
+  else
+    fail 400 "out of range"
+
+fn needPos(n: Int ::: IsPositive n) -> Int = n
+fn needEven(n: Int ::: IsEven n) -> Int = n
+fn needSmall(n: Int ::: IsSmall n) -> Int = n
+fn needInRange(_lo: Int, _hi: Int, n: Int ::: InRange _lo _hi n) -> Int = n
+fn needThree(n: Int ::: IsPositive n && IsSmall n && IsEven n) -> Int = n
+
+# =====================================================================
+# R52_P — Proof soundness (positive direction)
+# =====================================================================
+
+# R52_P01 — Lambda with a proof-annotated parameter, invoked with an
+# argument whose proof was obtained via `check`. This is the legitimate
+# lambda usage that the R52_L soundness bug must NOT regress. (The bug is
+# that the SAME lambda can be invoked with an UNPROVEN argument today.)
+fn p01_lambda_with_checked_arg(raw: Int) -> Int =
+  let checked = check isPositive raw
+  let f = fn(n: Int ::: IsPositive n) -> n
+  f checked
+
+# R52_P02 — Proof flows through three chained checks.
+fn p02_triple_chain(raw: Int) -> Int =
+  let a = check isPositive raw
+  let b = check isSmall a
+  let c = check isEven b
+  needThree c
+
+# R52_P03 — Flat-conjunction commutativity: the same value satisfies
+# predicates in any declared order.
+fn p03_triple_commutes(raw: Int) -> Int =
+  let a = check isPositive raw
+  let b = check isSmall a
+  let c = check isEven b
+  let needReordered = fn(n: Int ::: IsEven n && IsPositive n && IsSmall n) -> n
+  needReordered c
+
+# R52_P04 — `forgetFact` + re-check cycle. A checked value loses its
+# proof and regains it cleanly via a second check.
+fn p04_forget_recheck(raw: Int) -> Int =
+  let a = check isPositive raw
+  let b = forgetFact a
+  let c = check isPositive b
+  needPos c
+
+# =====================================================================
+# R52_D — Decomposition + reattach
+# =====================================================================
+
+# R52_D01 — Single-proof decomposition: `let (v ::: p) = x` then reattach.
+fn d01_single_decompose(raw: Int) -> Int =
+  let p = check isPositive raw
+  let (v ::: proof) = p
+  let reat = v ::: proof
+  needPos reat
+
+# R52_D02 — Two-proof decomposition & compound reattach.
+fn d02_pair_decompose(raw: Int) -> Int =
+  let a = check isPositive raw
+  let b = check isSmall a
+  let (v ::: p1 && p2) = b
+  let reat = v ::: p1 && p2
+  let needBoth = fn(n: Int ::: IsPositive n && IsSmall n) -> n
+  needBoth reat
+
+# R52_D03 — Three-proof decomposition with a selective discard.
+fn d03_triple_discard(raw: Int) -> Int =
+  let a = check isPositive raw
+  let b = check isSmall a
+  let c = check isEven b
+  let (v ::: _ && _ && pe) = c
+  needEven <| v ::: pe
+
+# =====================================================================
+# R52_M — Multiparameter facts
+# =====================================================================
+
+# R52_M01 — 3-arg fact via check, then reattach and use.
+fn m01_multi_param(lo: Int, hi: Int, raw: Int) -> Int =
+  let ranged = check inRange lo hi raw
+  needInRange lo hi ranged
+
+# R52_M02 — Decompose + reattach preserves the 3-arg proof.
+fn m02_multi_decomp(lo: Int, hi: Int, raw: Int) -> Int =
+  let ranged = check inRange lo hi raw
+  let (v ::: p) = ranged
+  let reat = v ::: p
+  needInRange lo hi reat
+
+# =====================================================================
+# R52_F — ForAll / list proofs
+# =====================================================================
+
+# R52_F01 — filterCheck produces a ForAll list.
+fn f01_filter_check(xs: List Int) -> Int =
+  let checked = List.filterCheck isPositive xs
+  let needAllPos = fn(ys: List Int ::: ForAll IsPositive ys) -> List.length ys
+  needAllPos checked
+
+# R52_F02 — allCheck returns Nothing when any element fails.
+fn f02_all_check(xs: List Int) -> Int =
+  let result = List.allCheck isPositive xs
+  case result of
+    Something checked ->
+      List.length checked
+    Nothing ->
+      0 - 1
+
+# =====================================================================
+# R52_E — Existentials
+# =====================================================================
+
+# =====================================================================
+# R52_C — Case / pattern / guards
+# =====================================================================
+
+# R52_C01 — Case with guard AND catch-all is exhaustive.
+fn c01_guard_with_catchall(m: Maybe Int) -> Int =
+  case m of
+    Nothing ->
+      0
+    Something n where n > 0 ->
+      n
+    Something _ ->
+      0 - 1
+
+# R52_C03 — Case with arithmetic scrutinee.
+fn c03_case_arith(a: Int, b: Int) -> Int =
+  case a + b of
+    0 -> 100
+    _ -> a + b
+
+# R52_C04 — Nested bare-nullary constructor pattern.
+fn c04_nested_nullary(m: Maybe (Maybe Int)) -> Int =
+  case m of
+    Nothing -> 0
+    Something Nothing -> 1
+    Something (Something n) -> n
+
+# =====================================================================
+# Runtime assertions
+# =====================================================================
+
+test "R52_P01 lambda+check legitimately works" {
+  expect p01_lambda_with_checked_arg 5 == 5
+  expectFail p01_lambda_with_checked_arg 0
+  expectFail p01_lambda_with_checked_arg (0 - 9)
+}
+
+test "R52_P02 triple chain runs when all checks pass" {
+  expect p02_triple_chain 4 == 4
+  expectFail p02_triple_chain 3
+  expectFail p02_triple_chain (0 - 2)
+  expectFail p02_triple_chain 200
+}
+
+test "R52_P03 triple predicate commutativity" {
+  expect p03_triple_commutes 6 == 6
+  expectFail p03_triple_commutes 7
+}
+
+test "R52_P04 forget + recheck keeps the final value" {
+  expect p04_forget_recheck 11 == 11
+  expectFail p04_forget_recheck 0
+}
+
+test "R52_D01 single decompose+reattach is identity" {
+  expect d01_single_decompose 3 == 3
+  expectFail d01_single_decompose (0 - 1)
+}
+
+test "R52_D02 pair decomposition survives reattach" {
+  expect d02_pair_decompose 4 == 4
+  expectFail d02_pair_decompose 200
+}
+
+test "R52_D03 triple decomposition projects the even proof" {
+  expect d03_triple_discard 8 == 8
+  expectFail d03_triple_discard 7
+}
+
+test "R52_M01 in-range check + use" {
+  expect m01_multi_param 1 10 5 == 5
+  expectFail m01_multi_param 1 10 99
+  expectFail m01_multi_param 10 20 5
+}
+
+test "R52_M02 decompose + reattach of 3-arg fact" {
+  expect m02_multi_decomp 0 100 42 == 42
+  expectFail m02_multi_decomp 0 100 1000
+}
+
+test "R52_F01 filterCheck keeps only positives" {
+  expect f01_filter_check [1, 2, 3] == 3
+  expect f01_filter_check [(0 - 1), 2, (0 - 3)] == 1
+  # Note: filterCheck on an empty list yields an empty ForAll list,
+  # so calling needAllPos with a post-filter result is valid even if
+  # empty. This is the intended semantics for filterCheck.
+  expect f01_filter_check [] == 0
+}
+
+test "R52_F02 allCheck short-circuits on any failure" {
+  expect f02_all_check [1, 2, 3] == 3
+  expect f02_all_check [1, (0 - 2), 3] == (0 - 1)
+}
+
+test "R52_C01 guard + catch-all case" {
+  expect c01_guard_with_catchall Nothing == 0
+  expect c01_guard_with_catchall (Something 10) == 10
+  expect c01_guard_with_catchall (Something 0) == (0 - 1)
+  expect c01_guard_with_catchall (Something (0 - 5)) == (0 - 1)
+}
+
+test "R52_C03 case scrutinee arithmetic" {
+  expect c03_case_arith 2 3 == 5
+  expect c03_case_arith 10 (0 - 10) == 100
+}
+
+test "R52_C04 nested bare-nullary constructor pattern" {
+  expect c04_nested_nullary Nothing == 0
+  expect c04_nested_nullary (Something Nothing) == 1
+  expect c04_nested_nullary (Something (Something 42)) == 42
+}

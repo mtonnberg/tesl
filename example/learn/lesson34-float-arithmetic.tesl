@@ -1,0 +1,262 @@
+#lang tesl
+module FloatArithmetic exposing [
+  circleArea,
+  hypotenuse,
+  clampUnit,
+  degreesToRadians,
+  safeAverage,
+  normalize,
+  roundToInt,
+  parsePrice,
+  isValidReading,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Tesl supports 64-bit floating-point numbers with the Float type.
+#
+# Float LITERALS look like:   1.5   3.14159   -2.7   0.0
+# ARITHMETIC operators work on Float just like Int:
+#   x + y   x - y   x * y   x / y
+# The operators are polymorphic: if both sides are Float, the result
+# is Float. If both sides are Int, the result is Int.
+# MIXING Float and Int is a TYPE ERROR — use Float.toInt or Int.toFloat
+# to convert explicitly.
+#
+# SAFE DIVISION: plain  /  can divide by zero (returns +inf.0 in Racket).
+# For a proof-guarded division use:
+#   let d = check Float.requireNonZero(rawDivisor)   # establishes FloatNonZero proof
+#   Float.div numerator d                            # compiler-verified safe
+#
+# Import Float from Tesl.Float:
+#   import Tesl.Float exposing [Float, Float.sqrt, Float.round, ...]
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.foldl]
+import Tesl.Float exposing [
+  Float,
+  FloatNonZero,
+  Float.requireNonZero,
+  Float.add,
+  Float.sub,
+  Float.mul,
+  Float.div,
+  Float.abs,
+  Float.min,
+  Float.max,
+  Float.clamp,
+  Float.sqrt,
+  Float.pow,
+  Float.ceil,
+  Float.floor,
+  Float.round,
+  Float.toInt,
+  Float.toString,
+  Float.parse,
+  Float.isNaN,
+  Float.isInfinite,
+  Float.isPositive,
+  Float.isNegative,
+  Float.isZero,
+  Float.sin,
+  Float.cos,
+  Float.infinity,
+  Float.nan,
+]
+
+# ─── Basic arithmetic ─────────────────────────────────────────────────────────
+
+# Compute the area of a circle: π × r²
+fn circleArea(radius: Float) -> Float =
+  let pi = 3.14159265358979
+  pi * radius * radius
+
+# Hypotenuse of a right triangle: √(a² + b²)
+fn hypotenuse(a: Float, b: Float) -> Float =
+  Float.sqrt (a * a + b * b)
+
+# Clamp a Float to [0.0, 1.0] — useful for normalised values
+fn clampUnit(x: Float) -> Float =
+  Float.clamp x 0.0 1.0
+
+# Convert degrees to radians
+fn degreesToRadians(degrees: Float) -> Float =
+  let pi = 3.14159265358979
+  degrees * pi / 180.0
+
+# ─── Named function alternatives ──────────────────────────────────────────────
+# Float.add / Float.sub / Float.mul are named-function versions of the operators.
+# Useful when passing them to higher-order functions (e.g. List.foldl Float.add 0.0).
+
+fn sumFloats(xs: List Float) -> Float =
+  List.foldl Float.add 0.0 xs
+
+# Normalise a value from [lo, hi] to [0.0, 1.0]
+fn normalize(value: Float, lo: Float, hi: Float) -> Float =
+  let range = Float.sub hi lo
+  let safeRange = check Float.requireNonZero range
+  Float.div (Float.sub value lo) safeRange
+
+# ─── Safe division with Float.requireNonZero ──────────────────────────────────
+# The plain / operator is unrestricted — dividing by zero yields +inf.0.
+# Float.div requires the denominator to carry a FloatNonZero proof, which
+# you obtain by calling `check Float.requireNonZero(x)`.
+#
+# Pattern:
+#   let safeDivisor = check Float.requireNonZero(rawValue)
+#   let result      = Float.div numerator safeDivisor      # total: never crashes
+
+fn safeAverage(a: Float, b: Float, count: Float) -> Maybe Float =
+  if Float.isZero count then
+    Nothing
+  else
+    let checkedCount = check Float.requireNonZero count
+    Something (Float.div (a + b) checkedCount)
+
+# ─── Rounding and conversion ──────────────────────────────────────────────────
+
+# Round a Float to the nearest Int
+fn roundToInt(x: Float) -> Int =
+  Float.round x
+
+# Parse a string into a Float (returns Nothing on invalid input)
+fn parsePrice(s: String) -> Maybe Float =
+  Float.parse s
+
+# ─── Guard against special float values ──────────────────────────────────────
+# Float.isNaN and Float.isInfinite guard against values produced by
+# operations like division by zero or overflow.
+
+fn isValidReading(x: Float) -> Bool =
+  Float.isNaN x == False && Float.isInfinite x == False
+
+# ─── Tests ────────────────────────────────────────────────────────────────────
+
+test "circleArea" {
+  # π × 1² ≈ 3.14159  →  rounds to 3
+  expect Float.round (circleArea 1.0) == 3
+  # π × 2² ≈ 12.566   →  rounds to 13
+  expect Float.round (circleArea 2.0) == 13
+}
+
+test "hypotenuse - classic 3-4-5 triangle" {
+  expect Float.round (hypotenuse 3.0 4.0) == 5
+  expect Float.round (hypotenuse 5.0 12.0) == 13
+}
+
+test "clampUnit" {
+  expect clampUnit 0.5 == 0.5
+  expect Float.round (clampUnit 1.5 * 10.0) == 10 # 1.0 × 10 = 10
+  expect clampUnit 0.0 == 0.0
+}
+
+test "sumFloats using Float.add as higher-order function" {
+  expect Float.round (sumFloats [1.5, 2.5, 3.0]) == 7
+  expect Float.round (sumFloats []) == 0
+}
+
+test "safeAverage" {
+  expect safeAverage 2.0 4.0 2.0 != Nothing # (2+4)/2 = 3.0
+  expect safeAverage 2.0 4.0 0.0 == Nothing # count==0: Nothing
+}
+
+test "Float.sqrt" {
+  expect Float.round (Float.sqrt 4.0) == 2
+  expect Float.round (Float.sqrt 9.0) == 3
+  expect Float.round (Float.sqrt 2.0 * 100.0) == 141 # √2 ≈ 1.414
+}
+
+test "Float.pow" {
+  expect Float.round (Float.pow 2.0 10.0) == 1024
+  expect Float.round (Float.pow 3.0 3.0) == 27
+}
+
+test "rounding" {
+  expect Float.floor 2.9 == 2
+  expect Float.ceil 2.1 == 3
+  expect Float.toInt 3.9 == 3
+  expect Float.toInt (-3.9) == -3 # truncates toward zero
+}
+
+test "Float.parse" {
+  expect Float.parse "3.14" != Nothing
+  expect Float.parse "-1.5" != Nothing
+  expect Float.parse "not-a-number" == Nothing
+  expect Float.parse "" == Nothing
+}
+
+test "isValidReading" {
+  expect isValidReading 1.5 == True
+  expect isValidReading Float.nan == False
+  expect isValidReading Float.infinity == False
+  expect isValidReading (-1.0) == True # negative is valid
+}
+
+test "Float.isPositive / isNegative / isZero" {
+  expect Float.isPositive 3.14 == True
+  expect Float.isNegative (-1.0) == True
+  expect Float.isZero 0.0 == True
+  expect Float.isZero 0.001 == False
+}
+
+test "Float.abs / min / max" {
+  expect Float.round (Float.abs (-2.5)) == 2 # |-2.5| = 2.5, banker's rounding → 2
+  expect Float.round (Float.abs (-3.5)) == 4 # |-3.5| = 3.5, banker's rounding → 4
+  expect Float.round (Float.min 1.0 2.0) == 1
+  expect Float.round (Float.max 1.0 2.0) == 2
+}
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# CRITICAL: Float and Int are DISTINCT types. You cannot write:
+#
+#   fn f(x: Float) -> Float = x + 1    # TYPE ERROR: 1 is Int
+#
+# You must write:
+#
+#   fn f(x: Float) -> Float = x + 1.0  # OK: 1.0 is a Float literal
+#
+# To convert between types use:
+#   Float.toInt x     — truncates Float to Int (toward zero)
+#   Float.round x     — rounds Float to Int (nearest)
+#   Float.floor x     — rounds Float to Int (toward -∞)
+#   Float.ceil x      — rounds Float to Int (toward +∞)
+#   Int.toFloat n     — converts Int to Float
+#
+# OPERATOR OVERLOADING: +, -, *, / accept either (Int, Int) or (Float, Float).
+# Mixing the two is a compile-time type error.
+#
+# NAMED FUNCTION ALTERNATIVES:
+#   Float.add a b  ≡  a + b    (useful as arguments to higher-order fns)
+#   Float.sub a b  ≡  a - b
+#   Float.mul a b  ≡  a * b
+#   Float.div a b  — safe version: b must carry FloatNonZero proof
+#
+# WHY Float.requireNonZero?
+# The plain / operator follows Racket semantics: 1.0 / 0.0 = +inf.0.
+# For robust APIs you want a compile-time guarantee that division is safe.
+# Float.requireNonZero is a CHECK FUNCTION — it validates the value at
+# runtime and attaches a FloatNonZero proof to the result. Float.div
+# then requires that proof. This means callers MUST validate the divisor
+# before dividing — the compiler enforces this statically.
+
+# ─────────────────────────────────────────────
+# THEORY — the full GDP model
+# ─────────────────────────────────────────────
+# Float.requireNonZero has the logical signature:
+#
+#   check Float.requireNonZero(f: Float) -> f: Float ::: FloatNonZero f
+#
+# `let d = check Float.requireNonZero(rawD)` produces a value `d` that
+# carries the FloatNonZero proof. The proof is erased after type-checking —
+# no runtime wrapper, no allocation, no per-call overhead beyond the
+# zero-check itself.
+#
+# This mirrors the Int safe-division pattern from Tesl.Int:
+#   check Int.nonZero(n: Int)   -> n: Int   ::: IsNonZero n
+#   Int.divide numerator checkedDivisor     -> Int  (always total)
+#
+# Float.div numerator checkedDivisor        -> Float (always total)

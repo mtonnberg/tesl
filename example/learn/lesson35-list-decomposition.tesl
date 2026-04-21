@@ -1,0 +1,337 @@
+#lang tesl
+module ListDecomposition exposing [
+  safeHead,
+  safeTail,
+  firstOrDefault,
+  sumRecursive,
+  productRecursive,
+  myLength,
+  myReverse,
+  mapIncrement,
+  keepPositive,
+  pairHeads,
+  zipWith,
+  splitAt,
+  chunksOf,
+  describeList,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Tesl lists are opaque — you cannot pattern-match with "[h | t]" syntax.
+# Instead, decompose a list using:
+#   List.head xs        → Maybe T    (first element)
+#   List.tail xs        → Maybe (List T)  (all but first)
+#   List.isEmpty xs     → Bool
+#
+# The standard recursive shape:
+#   fn f(xs: List T) -> R =
+#     case List.isEmpty xs of
+#       True  -> base case
+#       False ->
+#         case List.head xs of
+#           Nothing  -> base case  # never fires when !isEmpty, but exhaustive match requires it
+#           Something h ->
+#             case List.tail xs of
+#               Nothing   -> base case
+#               Something rest -> ... h ... f rest ...
+#
+# In practice, prefer List.foldl / List.foldr / List.map / List.filter
+# for almost everything — they express intent more clearly than manual recursion.
+
+import Tesl.Prelude exposing [Int, String, Bool(..), List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [
+  List.head,
+  List.tail,
+  List.isEmpty,
+  List.length,
+  List.foldl,
+  List.map,
+  List.filter,
+  List.append,
+  List.take,
+  List.drop,
+  List.zip,
+]
+import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
+import Tesl.Int exposing [Int.nonNegative]
+
+# ═══════════════════════════════════════════
+# BASIC DECOMPOSITION
+# ═══════════════════════════════════════════
+
+# Return the first element or Nothing.
+fn safeHead(xs: List Int) -> Maybe Int =
+  List.head xs
+
+# Return all-but-first or Nothing when empty.
+fn safeTail(xs: List Int) -> Maybe (List Int) =
+  List.tail xs
+
+# Return first element, falling back to a default.
+fn firstOrDefault(xs: List Int, default: Int) -> Int =
+  case List.head xs of
+    Nothing -> default
+    Something h -> h
+
+test "safeHead" {
+  expect safeHead [10, 20, 30] == Something 10
+  expect safeHead [] == Nothing
+}
+
+test "safeTail" {
+  expect safeTail [10, 20, 30] == Something [20, 30]
+  expect safeTail [42] == Something []
+  expect safeTail [] == Nothing
+}
+
+test "firstOrDefault" {
+  expect firstOrDefault [5, 6, 7] 99 == 5
+  expect firstOrDefault [] 99 == 99
+}
+
+# ═══════════════════════════════════════════
+# RECURSIVE ACCUMULATION USING FOLDL
+# ═══════════════════════════════════════════
+# List.foldl is the idiomatic way to compute a single value from a list.
+# It is strict and processes elements left-to-right.
+#   List.foldl f init xs
+#   = f (f (f init x0) x1) x2 …
+
+fn addInt(acc: Int, x: Int) -> Int =
+  acc + x
+
+fn mulInt(acc: Int, x: Int) -> Int =
+  acc * x
+
+fn countInt(acc: Int, _x: Int) -> Int =
+  acc + 1
+
+# Sum all elements (equivalent to List.sum).
+fn sumRecursive(ns: List Int) -> Int =
+  List.foldl addInt 0 ns
+
+# Product of all elements.
+fn productRecursive(ns: List Int) -> Int =
+  List.foldl mulInt 1 ns
+
+# Length via fold (equivalent to List.length).
+fn myLength(xs: List Int) -> Int =
+  List.foldl countInt 0 xs
+
+test "sumRecursive" {
+  expect sumRecursive [1, 2, 3, 4] == 10
+  expect sumRecursive [] == 0
+  expect sumRecursive [5] == 5
+}
+
+test "productRecursive" {
+  expect productRecursive [2, 3, 4] == 24
+  expect productRecursive [] == 1
+}
+
+test "myLength" {
+  expect myLength [1, 2, 3] == 3
+  expect myLength [] == 0
+}
+
+# ═══════════════════════════════════════════
+# FOLDR — RIGHT-TO-LEFT ACCUMULATION
+# ═══════════════════════════════════════════
+# List.foldr rebuilds list structure naturally (processes right-to-left).
+#   List.foldr f init [x0, x1, x2]
+#   = f x0 (f x1 (f x2 init))
+# Use foldr when building a new list preserving original order.
+
+fn prependInt(x: Int, acc: List Int) -> List Int =
+  List.append [x] acc
+
+# Reverse by folding right (standard trick).
+fn myReverse(xs: List Int) -> List Int =
+  List.foldl (fn(acc: List Int, x: Int) -> List.append [x] acc) [] xs
+
+test "myReverse" {
+  expect myReverse [1, 2, 3] == [3, 2, 1]
+  expect myReverse [] == []
+  expect myReverse [42] == [42]
+}
+
+# ═══════════════════════════════════════════
+# MAP AND FILTER — ELEMENT-WISE TRANSFORMS
+# ═══════════════════════════════════════════
+# These are the primary tools for transforming lists.
+# Avoid explicit recursion when map/filter captures the intent.
+
+fn increment(x: Int) -> Int =
+  x + 1
+
+fn isPositive(x: Int) -> Bool =
+  x > 0
+
+# Add 1 to every element.
+fn mapIncrement(xs: List Int) -> List Int =
+  List.map increment xs
+
+# Keep only elements greater than zero.
+fn keepPositive(xs: List Int) -> List Int =
+  List.filter isPositive xs
+
+test "mapIncrement" {
+  expect mapIncrement [1, 2, 3] == [2, 3, 4]
+  expect mapIncrement [] == []
+  expect mapIncrement [-1, 0, 1] == [0, 1, 2]
+}
+
+test "keepPositive" {
+  expect keepPositive [-2, -1, 0, 1, 2] == [1, 2]
+  expect keepPositive [] == []
+  expect keepPositive [1, 2, 3] == [1, 2, 3]
+}
+
+# ═══════════════════════════════════════════
+# PAIRING AND ZIPPING
+# ═══════════════════════════════════════════
+
+fn addPair(acc: Int, x: Int) -> Int =
+  acc + x
+
+# Sum the first elements of two lists using head decomposition.
+fn pairHeads(xs: List Int, ys: List Int) -> Maybe Int =
+  case List.head xs of
+    Nothing -> Nothing
+    Something hx ->
+      case List.head ys of
+        Nothing -> Nothing
+        Something hy -> Something (hx + hy)
+
+test "pairHeads" {
+  expect pairHeads [10, 20] [1, 2] == Something 11
+  expect pairHeads [] [1, 2] == Nothing
+  expect pairHeads [10] [] == Nothing
+}
+
+# Zip two lists pairwise and sum corresponding elements.
+fn zipWith(xs: List Int, ys: List Int) -> List Int =
+  let pairs = List.zip xs ys
+  List.map (fn(p: Tuple2 Int Int) -> Tuple2.first p + Tuple2.second p) pairs
+
+# ═══════════════════════════════════════════
+# SPLITTING AND WINDOWING
+# ═══════════════════════════════════════════
+
+# Split a list at position n: returns the first n elements.
+# n must be non-negative; Int.nonNegative validates and attaches the proof
+# required by List.take.
+fn splitAt(xs: List Int, n: Int) -> List Int =
+  let safeN = check Int.nonNegative n
+  List.take safeN xs
+
+# Group a list into non-overlapping windows of size n.
+# Elements that do not fill a complete window are discarded.
+fn chunksOf(xs: List Int, n: Int) -> List (List Int) =
+  let safeN = check Int.nonNegative n
+  let len = List.length xs
+  if len == 0 then
+    []
+  else
+    let chunk = List.take safeN xs
+    let rest = List.drop safeN xs
+    if List.length chunk < safeN then
+      []
+    else if List.isEmpty rest then
+      [chunk]
+    else
+      List.append [chunk] (chunksOf rest n)
+
+test "splitAt" {
+  expect splitAt [1, 2, 3, 4, 5] 3 == [1, 2, 3]
+  expect splitAt [1, 2] 10 == [1, 2]
+  expect splitAt [] 3 == []
+}
+
+test "chunksOf" {
+  expect chunksOf [1, 2, 3, 4, 5, 6] 2 == [[1, 2], [3, 4], [5, 6]]
+  expect chunksOf [1, 2, 3] 2 == [[1, 2]]
+  expect chunksOf [] 3 == []
+}
+
+# ═══════════════════════════════════════════
+# COMBINING DECOMPOSITION WITH PATTERN MATCHING
+# ═══════════════════════════════════════════
+# You can use case on the result of List.head/List.tail to describe
+# lists more precisely with different behavior at different lengths.
+
+fn describeList(xs: List Int) -> String =
+  if List.isEmpty xs then
+    "empty"
+  else
+    case List.tail xs of
+      Nothing -> "one element" # defensive: non-empty xs always has a tail
+      Something rest ->
+        if List.isEmpty rest then
+          "one element" # tail is empty → xs had exactly one element
+        else
+          case List.tail rest of
+            Nothing -> "exactly two elements" # defensive
+            Something rest2 ->
+              if List.isEmpty rest2 then
+                "exactly two elements" # rest had one element → xs had two
+              else
+                "three or more elements"
+
+test "describeList" {
+  expect describeList [] == "empty"
+  expect describeList [1] == "one element"
+  expect describeList [1, 2] == "exactly two elements"
+  expect describeList [1, 2, 3] == "three or more elements"
+  expect describeList [1, 2, 3, 4, 5] == "three or more elements"
+}
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# Tesl lists are an opaque built-in type backed by Racket lists.
+# Unlike algebraic types such as Maybe or Shape, List has no named
+# constructors (Nil / Cons) exposed at the surface language.
+# This is deliberate: it lets the runtime represent lists as plain
+# Racket lists without any boxing overhead, while still providing a
+# rich typed API through List.* functions.
+#
+# The pair (List.isEmpty, List.head, List.tail) is structurally
+# equivalent to pattern matching on Nil / Cons:
+#   List.isEmpty xs = True    ↔  xs = Nil
+#   List.head xs = Something h ↔  xs = Cons h _
+#   List.tail xs = Something t ↔  xs = Cons _ t
+#
+# For production code, prefer the higher-order combinators:
+#   map / filter / foldl / foldr
+# They are total, clearer, and avoid common off-by-one mistakes.
+#
+# When you do need recursion, the List.isEmpty + List.head + List.tail
+# pattern is the correct idiom. Because List.head returns Maybe, the
+# compiler ensures you handle both the empty-list case (Nothing) and
+# the non-empty case (Something h) — non-exhaustive case on Maybe is
+# a compile error.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# Tesl's type system is Hindley-Milner (Algorithm W) with prenex
+# polymorphism. List T is a type constructor applied to a type variable.
+# The inference engine unifies all element expressions to a single type,
+# so mixed-type lists are caught at compile time.
+#
+# List.foldl and List.foldr correspond to structural recursion on lists
+# and are the denotational equivalents of:
+#   foldl f z [] = z
+#   foldl f z (x:xs) = foldl f (f z x) xs
+#
+#   foldr f z [] = z
+#   foldr f z (x:xs) = f x (foldr f z xs)
+#
+# GDP (Graded Dependent Props): list operations preserve or produce
+# proof annotations. List.filterCheck and List.allCheck return
+# "List T ::: ForAll P" witnesses. Plain map/filter/fold do not
+# introduce new proof annotations on the resulting list.

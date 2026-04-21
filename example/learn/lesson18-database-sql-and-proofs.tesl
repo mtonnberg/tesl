@@ -1,0 +1,235 @@
+#lang tesl
+module DatabaseAndProofs exposing [NoteDatabase, NoteServer]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# IMPORTANT: This file requires a running PostgreSQL database to execute.
+# The code is fully valid Tesl and will compile, but "main" needs env vars
+# (NOTES_DB_NAME, NOTES_DB_USER, NOTES_DB_PASSWORD, NOTES_DB_HOST, NOTES_DB_PORT,
+#  NOTES_DB_SOCKET) to be set in the environment.
+#
+# "entity" declares a DB table. "database" configures the connection.
+# "select"/"selectOne"/"insert"/"update" are SQL-like forms.
+# The SQL layer AUTOMATICALLY attaches "FromDb (Id == id)" proof to selected values —
+# you do not write this proof yourself.
+#
+#   let existing = selectOne note from Note where note.id == noteId
+#   case existing of
+#     Nothing -> fail 404 "not found"
+#     Something note -> note    # note carries FromDb proof here
+
+import Tesl.Prelude exposing [Bool(..), List, String, Unit]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.String exposing [String.length]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Time exposing [nowMillis, time, PosixMillis]
+import Tesl.Random exposing [random]
+import Tesl.Telemetry exposing [initTelemetry]
+import Tesl.Id exposing [generatePrefixedId]
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why it works this way
+# ─────────────────────────────────────────────
+# The SQL layer is a GDP trust boundary — it validates data coming from the DB
+# and attaches "FromDb" proofs automatically.
+# Handlers that receive "Note::: FromDb (Id == noteId)" KNOW the data came from the DB
+# and that its id field equals noteId. No re-validation is needed inside the handler.
+#
+# "selectOne" returns Maybe — Nothing if no row matches, Something note if found.
+# When you pattern-match Something note, the note carries the FromDb proof.
+# "insert ... returning one" produces a FromDb proof for the newly inserted row.
+# "update ... set ... returning one" produces a FromDb proof for the updated row.
+
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# "FromDb (Id == todoId)" is the SQL layer's proof vocabulary.
+# "selectOne" produces it when a row is found.
+# "insert ... returning one" produces it for newly inserted rows.
+# "update ... returning one" produces it for updated rows.
+# The proof name "FromDb" and the primary-key expression "Id == todoId" are part of
+# the built-in GDP vocabulary for database-backed entities.
+#
+# This means: if a handler returns Note::: FromDb (Id == noteId), the compiler
+# knows the value must have come through the SQL layer — it cannot be a hand-crafted
+# struct. The proof is unforgeable except by calling the SQL forms.
+
+# ─── Capabilities ─────────────────────────────────────────────────────────────
+
+capability noteDbRead implies dbRead
+capability noteDbWrite implies dbWrite
+capability noteTime implies time
+capability noteReadCookie
+capability noteService implies noteDbRead, noteDbWrite, noteTime, noteReadCookie, random
+
+# ─── Data types ───────────────────────────────────────────────────────────────
+
+type NoteId = String
+
+entity Note table "notes" primaryKey id {
+  id: NoteId @db(text)
+  title: String @db(text)
+  content: String @db(text)
+  authorId: String @db(text)
+  createdAt: PosixMillis
+}
+
+# ─── Database configuration ───────────────────────────────────────────────────
+
+database NoteDatabase {
+  backend postgres
+  schema "notes_app"
+  entities [Note]
+  postgres {
+    database env("NOTES_DB_NAME")
+    user env("NOTES_DB_USER")
+    password env("NOTES_DB_PASSWORD")
+    host env("NOTES_DB_HOST")
+    port envInt("NOTES_DB_PORT", 5432)
+    socket env("NOTES_DB_SOCKET")
+  }
+}
+
+# ─── Validation ───────────────────────────────────────────────────────────────
+
+fact ValidNoteTitle (t: String)
+
+check checkNoteTitle(s: String) -> s: String ::: ValidNoteTitle s =
+  if String.length s >= 1 && String.length s <= 200 then
+    ok s ::: ValidNoteTitle s
+  else
+    fail 400 "title must be 1-200 characters"
+
+record NewNote {
+  title: String ::: ValidNoteTitle title
+  content: String
+}
+
+codec NewNote {
+  toJson_forbidden
+  fromJson [
+    {
+      title <- "title" with_codec stringCodec via checkNoteTitle
+      content <- "content" with_codec stringCodec
+    }
+  ]
+}
+
+fact ValidNoteId (id: String)
+
+check checkNoteId(s: String) -> s: String ::: ValidNoteId s =
+  if String.length s > 5 then
+    ok s ::: ValidNoteId s
+  else
+    fail 400 "invalid note id"
+
+capture noteIdCapture: String ::: ValidNoteId noteId using stringCodec via checkNoteId
+
+# ─── Authentication ───────────────────────────────────────────────────────────
+fact Authenticated (user: String)
+
+auth cookieAuth(request: HttpRequest) -> user: String ::: Authenticated user
+  requires [noteReadCookie] =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "not logged in"
+    Something userId -> ok userId ::: Authenticated user
+
+# ─── Handlers ─────────────────────────────────────────────────────────────────
+
+# SELECT automatically attaches FromDb proof.
+# The return type "Note::: FromDb (Id == noteId)" says:
+#   "this Note came from the database and its id field equals noteId"
+# This proof is produced by the SQL layer — you do NOT write it yourself.
+handler getNote(user: String ::: Authenticated user, noteId: String ::: ValidNoteId noteId)
+  -> Note ? FromDb (Id == noteId)
+  requires [noteDbRead] =
+  let existing = selectOne note from Note where note.id == noteId
+  case existing of
+    Nothing -> fail 404 "note not found"
+    Something note where note.authorId != user -> fail 403 "not your note"
+    Something note -> note
+
+handler listNotes(user: String ::: Authenticated user)
+  -> List Note
+  requires [noteDbRead] =
+  telemetry "notes.list" { user.id = user }
+  select note from Note where note.authorId == user
+
+# INSERT also attaches FromDb proof to the returned value.
+# "exists noteId => ..." introduces noteId as an existential witness.
+# Callers get a Note proven to be in the DB, but cannot directly inspect noteId.
+handler createNote(user: String ::: Authenticated user, body: NewNote)
+  -> exists noteId: String =>
+      Note ? FromDb (Id == noteId)
+  requires [noteDbRead, noteDbWrite, noteTime, random] =
+  let noteId = generatePrefixedId "note"
+  exists noteId =>
+    insert Note {
+      id: noteId,
+      title: body.title,
+      content: body.content,
+      authorId: user,
+      createdAt: nowMillis()
+    }
+
+# UPDATE with "returning one" also carries FromDb proof.
+handler updateNoteTitle(user: String ::: Authenticated user, noteId: String ::: ValidNoteId noteId, body: NewNote)
+  -> Note ? FromDb (Id == noteId)
+  requires [noteDbRead, noteDbWrite] =
+  let existing = selectOne note from Note where note.id == noteId
+  case existing of
+    Nothing -> fail 404 "note not found"
+    Something note where note.authorId != user -> fail 403 "not your note"
+    Something _ ->
+      update note in Note
+        where note.id == noteId
+        set note.title = body.title
+        returning one
+
+# ─── API declaration ──────────────────────────────────────────────────────────
+
+api NoteApi {
+  get "/notes/:noteId"
+    auth user: String ::: Authenticated user via cookieAuth
+    capture noteId: String ::: ValidNoteId noteId via noteIdCapture
+    -> Note ? FromDb (Id == noteId)
+
+  get "/notes"
+    auth user: String ::: Authenticated user via cookieAuth
+    -> List Note
+
+  post "/notes"
+    auth user: String ::: Authenticated user via cookieAuth
+    body body: NewNote
+    -> exists noteId: String =>
+        Note ? FromDb (Id == noteId)
+
+  put "/notes/:noteId"
+    auth user: String ::: Authenticated user via cookieAuth
+    capture noteId: String ::: ValidNoteId noteId via noteIdCapture
+    body body: NewNote
+    -> Note ? FromDb (Id == noteId)
+}
+
+# ─── Server ───────────────────────────────────────────────────────────────────
+
+defaultNotePort = 8090
+
+server NoteServer for NoteApi {
+  getNote = getNote
+  listNotes = listNotes
+  createNote = createNote
+  updateNoteTitle = updateNoteTitle
+}
+
+main with capabilities [noteService] {
+  initTelemetry service "notes-api" endpoint "in-memory" console True
+  with database NoteDatabase {
+    with capabilities [noteService] {
+      serve NoteServer on defaultNotePort with capabilities [noteService]
+    }
+  }
+}
