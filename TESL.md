@@ -684,9 +684,14 @@ The seal metaphor: a **seal of approval** (validated data), **sealing a type** (
 ## Getting started
 
 ```bash
-# Inside the Tesl repo with Nix:
-nix-shell
-tesl run example/todo-api.tesl
+# Try without installing anything:
+nix run github:mtonnberg/tesl -- help
+
+# Permanent install:
+nix profile install github:mtonnberg/tesl
+tesl help
 ```
+
+See [`INSTALL.md`](INSTALL.md) for full installation options including home-manager, NixOS modules, and editor setup.
 
 The `example/learn/` folder contains 47 lessons from hello world through ADTs, proofs, database queries, queues, and real-time SSE — each as a small, runnable `.tesl` file with inline explanations.

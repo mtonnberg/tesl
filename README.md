@@ -23,10 +23,9 @@ That means, explicitly:
 - breaking changes are expected
 - backward compatibility is **not** a goal yet
 - the implementation is real and useful for exploration, but it is not finished
-- the current way to try Tesl is to clone this repository and write `.tesl` programs directly inside this repo checkout
 - Feedback and ideas are most appreciated
 
-There is not yet a polished standalone installation flow, package template, or “create new Tesl project” experience. Right now, this repository is both the implementation and the place where you try the language.
+Tesl can now be installed standalone via Nix flake (`nix profile install github:mtonnberg/tesl`) — see [`INSTALL.md`](INSTALL.md). You no longer need to clone this repository to use the language.
 
 ## What Tesl is trying to achieve
 
@@ -83,19 +82,13 @@ This path is for people changing the compiler, runtime, tests, docs, or editor t
 
 ### Development shell
 
-```bash path=null start=null
+```bash
+nix develop          # flakes
+# or legacy:
 nix-shell
 ```
 
-The shell includes Racket, PostgreSQL tooling, `curl`, and `jq`.
-
-### Bootstrap `#lang tesl`
-
-```bash path=null start=null
-nix-shell --run "bash scripts/bootstrap-tesl-lang.sh"
-```
-
-This links the current checkout as a `tesl` package for the active Racket installation. You need this before plain `#lang tesl` compilation through `raco make` works.
+The shell includes Racket, PostgreSQL tooling, `curl`, and `jq`. The Tesl Racket package is linked automatically on entry — no separate bootstrap step needed.
 
 ### Testing
 
@@ -129,34 +122,27 @@ Drop to Racket tests (`tests/*.rkt`) only for runtime substrate internals
 
 This path is for people who want to explore Tesl as a user.
 
-**Important:** right now, “trying Tesl” means cloning this repository and writing `.tesl` files inside it. That is the supported path today.
+### 1. Install
 
-### 1. Enter the dev shell
-
-```bash path=null start=null
-nix-shell
+```bash
+nix profile install github:mtonnberg/tesl
 ```
 
-### 2. Bootstrap the language into Racket
+Or try without installing: `nix run github:mtonnberg/tesl -- help`
 
-```bash path=null start=null
-nix-shell --run "bash scripts/bootstrap-tesl-lang.sh"
+See [`INSTALL.md`](INSTALL.md) for home-manager, NixOS, and editor setup.
+
+### 2. Validate a small Tesl example
+
+```bash
+tesl validate example/sandbox.tesl
 ```
 
-### 3. Validate a small Tesl example
+### 3. Run a `.tesl` program
 
-```bash path=null start=null
-nix-shell --run "tesl validate example/sandbox.tesl"
-```
-
-### 4. Run a `.tesl` program
-
-```bash path=null start=null
-nix-shell --run "tesl run example/todo-api.tesl"
-```
-
-```bash path=null start=null
-nix-shell --run "tesl run example/admin-task-api.tesl"
+```bash
+tesl run example/todo-api.tesl
+tesl run example/admin-task-api.tesl
 ```
 
 ### 5. Look at other `.tesl` examples in the repo
@@ -175,16 +161,16 @@ Current top-level `.tesl` examples include:
 
 #### Todo API with PostgreSQL
 
-Start a local PostgreSQL instance first:
+Start a local PostgreSQL instance first (from inside the dev shell):
 
-```bash path=null start=null
-nix-shell --run "bash scripts/postgres-start.sh"
+```bash
+bash scripts/postgres-start.sh
 ```
 
 Then run the API:
 
-```bash path=null start=null
-nix-shell --run "tesl run example/todo-api.tesl"
+```bash
+tesl run example/todo-api.tesl
 ```
 
 Starts on port `8086` and exposes:
@@ -194,18 +180,12 @@ Starts on port `8086` and exposes:
 - `GET /todos/:todoId`
 - `PUT /todos/:todoId/complete`
 
-Useful local PostgreSQL commands:
+Useful local PostgreSQL commands (from inside the dev shell):
 
-```bash path=null start=null
-nix-shell --run "bash scripts/postgres-init.sh"
-```
-
-```bash path=null start=null
-nix-shell --run "bash scripts/postgres-start.sh"
-```
-
-```bash path=null start=null
-nix-shell --run "bash scripts/postgres-stop.sh"
+```bash
+bash scripts/postgres-init.sh
+bash scripts/postgres-start.sh
+bash scripts/postgres-stop.sh
 ```
 
 Relevant PostgreSQL environment variables for the example are:

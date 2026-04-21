@@ -10,7 +10,7 @@ Tesl is alpha. That's worth being direct about.
 - **Backward compatibility is not a goal yet** — if a better design is found, the old syntax goes
 - **The runtime is Racket** — Tesl compiles to Racket, which runs on the Racket VM; Racket is a mature, capable platform but not what most teams are running today
 - **PostgreSQL only** — the SQL and queue layers are designed around PostgreSQL specifically
-- **No "create new project" command yet** — you work by cloning this repo and writing `.tesl` files inside it
+- **No "create new project" command yet** — write `.tesl` files anywhere and point `tesl check`/`tesl run` at them
 
 ---
 
@@ -39,16 +39,24 @@ Tesl is alpha. That's worth being direct about.
 ## How to try it today
 
 ```bash
-git clone <repo>
-cd tesl
-nix-shell
-tesl validate example/todo-api.tesl      # compile + lint — no execution
-tesl test example/chat/backend.tesl      # run api-test blocks
+# Install (Nix required):
+nix profile install github:mtonnberg/tesl
+
+# Or just run without installing:
+nix run github:mtonnberg/tesl -- help
 ```
 
-The `example/learn/` folder has 53 progressive lessons — from hello world through ADTs, proofs, typed SQL, queues, and SSE — each as a small runnable `.tesl` file with inline explanations.
+Write `.tesl` files anywhere — no repo clone needed:
 
-For a complete, realistic API with queues and real-time events, read `example/chat/backend.tesl`.
+```bash
+tesl check  my-api.tesl    # type-check
+tesl run    my-api.tesl    # compile + execute
+tesl fmt    my-api.tesl    # format in-place
+```
+
+See [`INSTALL.md`](../../INSTALL.md) for home-manager, NixOS, and editor setup.
+
+The `example/learn/` folder in the repo has 53 progressive lessons — from hello world through ADTs, proofs, typed SQL, queues, and SSE — each as a small runnable `.tesl` file with inline explanations.
 
 ---
 
