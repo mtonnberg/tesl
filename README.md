@@ -149,14 +149,14 @@ nix-shell --run "bash scripts/bootstrap-tesl-lang.sh"
 nix-shell --run "tesl validate example/sandbox.tesl"
 ```
 
-### 4. Compile a `.tesl` program through `#lang tesl`
+### 4. Run a `.tesl` program
 
 ```bash path=null start=null
-nix-shell --run "bash scripts/bootstrap-tesl-lang.sh && raco make example/todo-api.tesl"
+nix-shell --run "tesl run example/todo-api.tesl"
 ```
 
 ```bash path=null start=null
-nix-shell --run "bash scripts/bootstrap-tesl-lang.sh && raco make example/admin-task-api.tesl"
+nix-shell --run "tesl run example/admin-task-api.tesl"
 ```
 
 ### 5. Look at other `.tesl` examples in the repo
@@ -173,32 +173,6 @@ Current top-level `.tesl` examples include:
 
 ### 6. Run some example APIs
 
-The `.tesl` frontend is the intended surface. Some of the runnable examples below are still Racket-side runtime/lowering fixtures, but they are useful for seeing the system in action.
-
-#### Document API
-
-```bash path=null start=null
-nix-shell --run "racket example/document-api.rkt"
-```
-
-Starts on port `8085` and exposes:
-
-- `POST /docs`
-- `GET /tasks/:taskId`
-- `GET /tasks/admin/:taskId`
-
-#### Bookmark API
-
-```bash path=null start=null
-nix-shell --run "racket example/bookmark-api.rkt"
-```
-
-Starts on port `8087` and exposes:
-
-- `POST /bookmarks`
-- `GET /bookmarks/mine`
-- `GET /bookmarks/:bookmarkId`
-
 #### Todo API with PostgreSQL
 
 Start a local PostgreSQL instance first:
@@ -210,7 +184,7 @@ nix-shell --run "bash scripts/postgres-start.sh"
 Then run the API:
 
 ```bash path=null start=null
-nix-shell --run "racket example/todo-api.rkt"
+nix-shell --run "tesl run example/todo-api.tesl"
 ```
 
 Starts on port `8086` and exposes:
@@ -246,12 +220,6 @@ Relevant PostgreSQL environment variables for the example are:
 ### Example requests
 
 ```bash path=null start=null
-curl -sS -X POST http://127.0.0.1:8085/docs \
-  -H 'content-type: application/json' \
-  -d '{"title":"Quarterly roadmap","body":"Ship the DSL MVP"}' | jq
-
-curl -sS http://127.0.0.1:8087/bookmarks/mine | jq
-
 curl -sS -X POST http://127.0.0.1:8086/todos \
   -H 'content-type: application/json' \
   -d '{"title":"Write the first Tesl program"}' | jq

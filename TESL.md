@@ -649,7 +649,7 @@ No stack traces. No type variable soup. Just what went wrong and how to fix it.
 **Structured logging.** Set `TESL_VERBOSE=1` at runtime to activate structured log lines on stderr for every HTTP request/response, SQL query, queue operation, and pub/sub event:
 
 ```bash
-TESL_VERBOSE=1 racket your-compiled-app.rkt
+TESL_VERBOSE=1 tesl run your-app.tesl
 ```
 
 Example output:
