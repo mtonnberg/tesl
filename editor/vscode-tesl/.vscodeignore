@@ -1,0 +1,21 @@
+# Old build artefacts
+*.vsix
+
+# Dev / test files
+.vscode/**
+.vscode-test/**
+**/*.test.js
+
+# Source maps and TypeScript sources (none currently, future-proofing)
+**/*.map
+**/*.ts
+!**/*.d.ts
+
+# Git and editor config
+.gitignore
+.editorconfig
+.eslintrc*
+.prettierrc*
+
+# Racket bytecode that may have been compiled locally
+**/compiled/**

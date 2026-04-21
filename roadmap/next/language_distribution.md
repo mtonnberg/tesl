@@ -10,13 +10,13 @@ minutes. No Racket knowledge needed, no manual path wiring.
 
 - `shell.nix` provides a working dev shell with `tesl` CLI, Racket, OCaml, and Postgres.
 - The `tesl` CLI wrapper handles compile/check/lint/fmt/run/test/watch.
-- No `flake.nix` yet — users cannot `nix run` or `nix profile install`.
+- A `flake.nix` is added - users can `nix run` or `nix profile install`.
 - The VS Code extension is local-only (not published).
 - No pre-built binaries for non-Nix users.
 
 ---
 
-## Path A: Nix Flakes (Recommended first step)
+## Path A: Nix Flakes (Recommended first step) - Done
 
 **Why:** The project already uses `shell.nix`. Converting to a Flake is the
 lowest-effort path to making Tesl installable with one command.

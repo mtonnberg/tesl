@@ -1,64 +1,104 @@
 const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
 const path = require("path");
 const fs = require("fs");
+const { spawnSync } = require("child_process");
 const vscode = require("vscode");
 
 let client;
 
 /**
- * Find the tesl-lsp.rkt Racket LSP server script.
+ * Check whether a command exists on PATH.
+ * Uses `which` (Unix/macOS) or `where` (Windows).
+ */
+function commandOnPath(name) {
+  const cmd = process.platform === "win32" ? "where" : "which";
+  return spawnSync(cmd, [name], { encoding: "utf8" }).status === 0;
+}
+
+/**
+ * Resolve how to launch the Tesl LSP.
+ *
+ * Returns one of:
+ *   { kind: "binary", command: "tesl-lsp" }
+ *     — use the installed tesl-lsp wrapper directly (nix profile install)
+ *   { kind: "script", script: "/abs/path/tesl-lsp.rkt" }
+ *     — launch via `racket <script>` (repo / dev layout)
+ *   null — could not find either
  *
  * Priority:
- *   1. tesl.lspScript setting (explicit override)
- *   2. editor/tesl-lsp/tesl-lsp.rkt relative to the workspace root
- *   3. Same path relative to the extension directory (dev layout)
+ *   1. tesl.lspScript setting  (explicit path override → script mode)
+ *   2. tesl-lsp binary in PATH (installed via nix profile install)
+ *   3. editor/tesl-lsp/tesl-lsp.rkt relative to workspace root
+ *   4. tesl-lsp/tesl-lsp.rkt  relative to extension dir  (dev layout)
+ *   5. ../../editor/tesl-lsp/tesl-lsp.rkt                (repo layout)
  */
-function findLspScript(extensionDir) {
-  const cfg = vscode.workspace.getConfiguration("tesl");
-  const override = cfg.get("lspScript");
-  if (override && fs.existsSync(override)) return override;
+function resolveLsp(extensionDir) {
+  // 1. Explicit user override
+  const override = vscode.workspace.getConfiguration("tesl").get("lspScript");
+  if (override && fs.existsSync(override)) {
+    return { kind: "script", script: override };
+  }
+
+  // 2. Installed tesl-lsp binary
+  if (commandOnPath("tesl-lsp")) {
+    return { kind: "binary", command: "tesl-lsp" };
+  }
+
+  // 3–5. Racket script in repo / dev layouts
+  const candidates = [];
 
   const folders = vscode.workspace.workspaceFolders;
   if (folders && folders.length > 0) {
-    const wsRoot = folders[0].uri.fsPath;
-    const candidate = path.join(wsRoot, "editor", "tesl-lsp", "tesl-lsp.rkt");
-    if (fs.existsSync(candidate)) return candidate;
+    candidates.push(path.join(folders[0].uri.fsPath, "editor", "tesl-lsp", "tesl-lsp.rkt"));
   }
+  candidates.push(path.join(extensionDir, "..", "tesl-lsp", "tesl-lsp.rkt"));
+  candidates.push(path.join(extensionDir, "..", "..", "editor", "tesl-lsp", "tesl-lsp.rkt"));
 
-  const devCandidate = path.join(extensionDir, "..", "tesl-lsp", "tesl-lsp.rkt");
-  if (fs.existsSync(devCandidate)) return devCandidate;
-
-  const repoCandidate = path.join(extensionDir, "..", "..", "editor", "tesl-lsp", "tesl-lsp.rkt");
-  if (fs.existsSync(repoCandidate)) return repoCandidate;
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return { kind: "script", script: c };
+  }
 
   return null;
 }
 
 function activate(context) {
-  const lspScript = findLspScript(context.extensionPath);
+  const lsp = resolveLsp(context.extensionPath);
 
-  if (!lspScript) {
+  if (!lsp) {
     vscode.window.showWarningMessage(
-      "Tesl: could not find tesl-lsp.rkt. " +
-      "Open the Tesl repository as a workspace, or set tesl.lspScript in settings."
+      "Tesl: could not find tesl-lsp. " +
+      "Install Tesl (nix profile install github:mtonnberg/tesl) or set " +
+      "tesl.lspScript to the absolute path of tesl-lsp.rkt."
     );
     return;
   }
 
   const outputChannel = vscode.window.createOutputChannel("Tesl Language Server");
-  outputChannel.appendLine(`[tesl-lsp] script: ${lspScript}`);
 
-  const serverOptions = {
-    command: "racket",
-    args: [lspScript],
-    transport: TransportKind.stdio,
-    options: {
-      env: {
-        ...process.env,
-        TESL_REPO_ROOT: (vscode.workspace.workspaceFolders || [{}])[0]?.uri?.fsPath ?? "",
+  let serverOptions;
+  if (lsp.kind === "binary") {
+    outputChannel.appendLine(`[tesl-lsp] using binary: ${lsp.command}`);
+    serverOptions = {
+      command: lsp.command,
+      args: [],
+      transport: TransportKind.stdio,
+      options: { env: { ...process.env } },
+    };
+  } else {
+    outputChannel.appendLine(`[tesl-lsp] using script: ${lsp.script}`);
+    const wsPath = (vscode.workspace.workspaceFolders || [])[0]?.uri?.fsPath ?? "";
+    serverOptions = {
+      command: "racket",
+      args: [lsp.script],
+      transport: TransportKind.stdio,
+      options: {
+        env: {
+          ...process.env,
+          TESL_REPO_ROOT: wsPath,
+        },
       },
-    },
-  };
+    };
+  }
 
   const clientOptions = {
     documentSelector: [{ scheme: "file", language: "tesl" }],
