@@ -131,7 +131,7 @@ The `define-checker` macro (in `dsl/private/check-runtime.rkt`) does the actual 
 ## Running the compiler manually
 
 ```bash
-# Inside nix-shell (the `tesl` binary is built with `dune build` in compiler/):
+# Inside the dev shell (`nix develop` or legacy `nix-shell`):
 tesl example/todo-api.tesl          # compile to Racket (stdout)
 tesl --check example/todo-api.tesl  # type-check only
 tesl --lint  example/todo-api.tesl  # lint warnings
@@ -143,7 +143,8 @@ tesl --fmt   example/todo-api.tesl  # format in-place
 ## Running the test suite
 
 ```bash
-nix-shell --run "raco test tests/all.rkt 2>&1"
+nix develop --command raco test tests/all.rkt 2>&1
+# legacy: nix-shell --run "raco test tests/all.rkt 2>&1"
 ```
 
 The authoritative aggregate suite:

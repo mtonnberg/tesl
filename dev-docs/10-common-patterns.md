@@ -445,7 +445,8 @@ dune exec --root compiler -- bin/main.exe --lint my-file.tesl
 dune exec --root compiler -- bin/main.exe --deps example/todo-api.tesl
 
 # Run a single test file:
-nix-shell --run "raco test tests/sql-test.rkt 2>&1"
+nix develop --command raco test tests/sql-test.rkt 2>&1
+# legacy: nix-shell --run "raco test tests/sql-test.rkt 2>&1"
 
 # Load and inspect a compiled module:
 racket -e '
