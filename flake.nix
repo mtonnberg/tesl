@@ -197,14 +197,19 @@
               DEPS="$(_tesl_compile_deps "$FILE" 2>/dev/null)"
               
               # Compile all dependencies first to .rkt files in their directories
+              RET=0
               for DEP in $DEPS; do
                 if [ -n "$DEP" ] && [ "$DEP" != "$FILE" ]; then
                   DEP_RKT="''${DEP%.tesl}.rkt"
-                  if ! _tesl_compile_to_stdout "$DEP" > "$DEP_RKT" 2>/dev/null; then
-                    rm -f "$OUT_TMP"; exit 1
+                  if ! _tesl_compile_to_stdout "$DEP" > "$DEP_RKT" 2>&1; then
+                    echo "error: Failed to compile dependency: $DEP" >&2
+                    RET=1
                   fi
                 fi
               done
+              if [ "$RET" -ne 0 ]; then
+                rm -f "$OUT_TMP"; exit 1
+              fi
               
               if _tesl_compile_to_stdout "$FILE" > "$OUT_TMP"; then
                 mv "$OUT_TMP" "$OUT"
@@ -284,9 +289,9 @@
               for DEP in $DEPS; do
                 if [ -n "$DEP" ] && [ "$DEP" != "$FILE" ]; then
                   DEP_RKT="''${DEP%.tesl}.rkt"
-                  if ! _tesl_compile_to_stdout "$DEP" > "$DEP_RKT" 2>/dev/null; then
+                  if ! _tesl_compile_to_stdout "$DEP" > "$DEP_RKT" 2>&1; then
+                    echo "error: Failed to compile dependency: $DEP" >&2
                     RET=1
-                    break
                   fi
                 fi
               done
