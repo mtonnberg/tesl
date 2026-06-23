@@ -171,6 +171,12 @@
             _tesl_require_compiler
             "$TESL_OCAML_COMPILER" "$FILE"
           }
+          
+          _tesl_compile_deps() {
+            local FILE="$1"
+            _tesl_require_compiler
+            "$TESL_OCAML_COMPILER" --deps "$FILE"
+          }
 
           _tesl_check() {
             [ $# -gt 0 ] || { echo "Usage: tesl check <file.tesl> [more.tesl ...]" >&2; exit 1; }
@@ -186,6 +192,20 @@
               FILE="''${1:?Usage: tesl compile <file.tesl>}"
               OUT="''${FILE%.tesl}.rkt"
               OUT_TMP="$(mktemp --suffix=.rkt)"
+              
+              # Get all dependencies (transitive imports) of the file
+              DEPS="$(_tesl_compile_deps "$FILE" 2>/dev/null)"
+              
+              # Compile all dependencies first to .rkt files in their directories
+              for DEP in $DEPS; do
+                if [ -n "$DEP" ] && [ "$DEP" != "$FILE" ]; then
+                  DEP_RKT="''${DEP%.tesl}.rkt"
+                  if ! _tesl_compile_to_stdout "$DEP" > "$DEP_RKT" 2>/dev/null; then
+                    rm -f "$OUT_TMP"; exit 1
+                  fi
+                fi
+              done
+              
               if _tesl_compile_to_stdout "$FILE" > "$OUT_TMP"; then
                 mv "$OUT_TMP" "$OUT"
                 echo "compiled $FILE → $OUT"
@@ -254,21 +274,37 @@
             run)
               FILE="''${1:?Usage: tesl run <file.tesl> [args…]}"
               shift
-              OUT="$(mktemp --suffix=.rkt)"
+              OUT="''${FILE%.tesl}.rkt"
               RET=0
-              if _tesl_compile_to_stdout "$FILE" > "$OUT"; then
-                if [ "''${TESL_VERBOSE:-0}" = "1" ]; then
-                  racket "$OUT" "$@"; RET=$?
-                else
-                  STDERR_TMP="$(mktemp)"
-                  racket "$OUT" "$@" 2>"$STDERR_TMP"; RET=$?
-                  grep -Ev "^raco (setup|make|link|test):" "$STDERR_TMP" >&2 || true
-                  rm -f "$STDERR_TMP"
+              
+              # Get all dependencies (transitive imports) of the file
+              DEPS="$(_tesl_compile_deps "$FILE" 2>/dev/null)"
+              
+              # Compile all dependencies first to .rkt files in their directories
+              for DEP in $DEPS; do
+                if [ -n "$DEP" ] && [ "$DEP" != "$FILE" ]; then
+                  DEP_RKT="''${DEP%.tesl}.rkt"
+                  if ! _tesl_compile_to_stdout "$DEP" > "$DEP_RKT" 2>/dev/null; then
+                    RET=1
+                    break
+                  fi
                 fi
-              else
-                RET=$?
+              done
+              
+              if [ "$RET" -eq 0 ]; then
+                if _tesl_compile_to_stdout "$FILE" > "$OUT"; then
+                  if [ "''${TESL_VERBOSE:-0}" = "1" ]; then
+                    racket "$OUT" "$@"; RET=$?
+                  else
+                    STDERR_TMP="$(mktemp)"
+                    racket "$OUT" "$@" 2>"$STDERR_TMP"; RET=$?
+                    grep -Ev "^raco (setup|make|link|test):" "$STDERR_TMP" >&2 || true
+                    rm -f "$STDERR_TMP"
+                  fi
+                else
+                  RET=$?
+                fi
               fi
-              rm -f "$OUT"
               exit "$RET"
               ;;
             test)

@@ -3170,38 +3170,33 @@ let emit_requires ctx (m : module_form) =
       | Some p -> p
       | None ->
         (* Local module — resolve relative to source file's directory *)
-        let source_dir =
-          if m.source_file = "" || m.source_file = "<test>" then ""
+        if m.source_file = "" || m.source_file = "<test>" then
+          module_name_to_kebab imp.module_name ^ ".rkt"
+        else
+          (* Resolve the actual path of the imported .tesl file *)
+          let imported_path = resolve_local_import_path m.source_file imp.module_name in
+          if imported_path = "" then
+            module_name_to_kebab imp.module_name ^ ".rkt"
           else
-            let sf = m.source_file in
-            (* Get directory relative to root_path *)
-            let root = ctx.root_path in
-            let relative = if String.length sf > String.length root + 1 &&
-                              String.sub sf 0 (String.length root) = root
-                           then String.sub sf (String.length root + 1)
-                                  (String.length sf - String.length root - 1)
-                           else sf
-            in
-            (* Get directory part *)
-            (match String.rindex_opt relative '/' with
-             | Some i -> String.sub relative 0 (i + 1)
-             | None -> "")
-        in
-        (* Convert module name to kebab-case filename *)
-        let kebab = module_name_to_kebab imp.module_name in
-        source_dir ^ kebab ^ ".rkt"
+            (* Convert .tesl to .rkt and get basename *)
+            let kebab = module_name_to_kebab imp.module_name in
+            kebab ^ ".rkt"
     in
     (* Non-absolute paths are repo-relative; convert to Racket collection path *)
     let is_absolute = String.length modpath > 0 && modpath.[0] = '/' in
-    let require_path =
-      if is_absolute then modpath
-      else
+    let require_path, use_file_syntax =
+      if is_absolute then modpath, false
+      else if is_tesl_stdlib then
+        (* Tesl stdlib modules: use collection path *)
         let without_ext =
           if Filename.check_suffix modpath ".rkt"
           then Filename.chop_suffix modpath ".rkt"
           else modpath
         in
-        "tesl/" ^ without_ext
+        "tesl/" ^ without_ext, false
+      else
+        (* Local modules: use (file "basename.rkt") - both files in same directory *)
+        modpath, true
     in
     match imp.names with
     | ImportAll ->
@@ -3229,19 +3224,19 @@ let emit_requires ctx (m : module_form) =
         List.iter (fun n -> register_import imp.module_name n) used_names;
         if is_cyclic_local_import m imp then ()
         else if used_names = [] then begin
-          if is_absolute
+          if is_absolute || use_file_syntax
           then emit_line ctx (Printf.sprintf "  (file \"%s\")" require_path)
           else emit_line ctx (Printf.sprintf "  %s" require_path)
         end else begin
           let bindings = List.map (fun n -> (n, import_rename n)) used_names in
           let pairs_str = String.concat " " (List.map binding_pair_to_string bindings) in
-          if is_absolute
+          if is_absolute || use_file_syntax
           then emit_line ctx (Printf.sprintf "  (only-in (file \"%s\") %s)" require_path pairs_str)
           else emit_line ctx (Printf.sprintf "  (only-in %s %s)" require_path pairs_str)
         end
       end else begin
         if is_cyclic_local_import m imp then ()
-        else if is_absolute
+        else if is_absolute || use_file_syntax
              then emit_line ctx (Printf.sprintf "  (file \"%s\")" require_path)
              else emit_line ctx (Printf.sprintf "  %s" require_path)
       end

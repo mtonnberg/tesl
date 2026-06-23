@@ -69,76 +69,106 @@ let read_file filename =
   with Sys_error _ -> None
 
 let find_doc_root () =
-  let bin_dir = Filename.dirname (Sys.argv.(0)) in
-  
-  (* First, check if we're in an installed location (share/tesl/doc) *)
-  let rec check_parent dir count =
-    if count > 5 then None  (* Don't go too far up *)
-    else
-      let doc_dir = Filename.concat dir "share/tesl/doc" in
-      if Sys.file_exists doc_dir then
-        Some (Filename.concat dir "share/tesl/doc")
-      else
-        let parent = Filename.dirname dir in
-        if parent = dir then None
-        else check_parent parent (count + 1)
-  in
-  
-  match check_parent bin_dir 0 with
-  | Some doc_path -> Some doc_path
-  | None ->
-    (* Fall back to repo layout *)
-    let candidate =
-      Filename.concat bin_dir "../../../../.." |> Filename.concat "" |> fun p ->
-      try Unix.realpath p with _ -> p
-    in
-    if Sys.file_exists (Filename.concat candidate "dsl") then
-      Some (Filename.concat candidate "manual")
-    else
-      let rec find_root dir =
-        if Sys.file_exists (Filename.concat dir "dsl") then
-          Some (Filename.concat dir "manual")
+  (* First, check TESL_REPO_ROOT environment variable *)
+  match Sys.getenv_opt "TESL_REPO_ROOT" with
+  | Some repo_root when repo_root <> "" ->
+    let manual_path = Filename.concat repo_root "manual" in
+    if Sys.file_exists manual_path then Some manual_path else None
+  | _ ->
+    (* Then check TESL_ROOT *)
+    (match Sys.getenv_opt "TESL_ROOT" with
+     | Some root when root <> "" ->
+       let manual_path = Filename.concat root "manual" in
+       if Sys.file_exists manual_path then Some manual_path else None
+     | _ -> None)
+  |> function
+    | Some p -> Some p
+    | None ->
+      let bin_dir = Filename.dirname (Sys.argv.(0)) in
+      
+      (* Then check if we're in an installed location (share/tesl/doc) *)
+      let rec check_parent dir count =
+        if count > 5 then None  (* Don't go too far up *)
         else
-          let parent = Filename.dirname dir in
-          if parent = dir then None
-          else find_root parent
+          let doc_dir = Filename.concat dir "share/tesl/doc" in
+          if Sys.file_exists doc_dir then
+            Some (Filename.concat dir "share/tesl/doc")
+          else
+            let parent = Filename.dirname dir in
+            if parent = dir then None
+            else check_parent parent (count + 1)
       in
-      find_root (Filename.dirname bin_dir)
+      
+      match check_parent bin_dir 0 with
+      | Some doc_path -> Some doc_path
+      | None ->
+        (* Fall back to repo layout *)
+        let candidate =
+          Filename.concat bin_dir "../../../../.." |> Filename.concat "" |> fun p ->
+          try Unix.realpath p with _ -> p
+        in
+        if Sys.file_exists (Filename.concat candidate "dsl") then
+          Some (Filename.concat candidate "manual")
+        else
+          let rec find_root dir =
+            if Sys.file_exists (Filename.concat dir "dsl") then
+              Some (Filename.concat dir "manual")
+            else
+              let parent = Filename.dirname dir in
+              if parent = dir then None
+              else find_root parent
+          in
+          find_root (Filename.dirname bin_dir)
 
 let find_repo_root () =
-  match find_doc_root () with
-  | Some doc_path ->
-    (* If we found a doc directory, the repo root is the parent of share/tesl/doc *)
-    let rec get_repo_root path =
-      let parent = Filename.dirname path in
-      if Filename.basename parent = "share" then
-        Filename.dirname parent
-      else
-        get_repo_root parent
-    in
-    get_repo_root doc_path
-  | None ->
-    let bin_dir = Filename.dirname (Sys.argv.(0)) in
-    let candidate =
-      Filename.concat bin_dir "../../../../.." |> Filename.concat "" |> fun p ->
-      try Unix.realpath p with _ -> p
-    in
-    if Sys.file_exists (Filename.concat candidate "dsl") then candidate
-    else
-      let rec find_root dir =
-        if Sys.file_exists (Filename.concat dir "dsl") then dir
+  (* First, check environment variables *)
+  match Sys.getenv_opt "TESL_REPO_ROOT" with
+  | Some p when p <> "" -> p
+  | _ ->
+    match Sys.getenv_opt "TESL_ROOT" with
+    | Some p when p <> "" -> p
+    | _ ->
+      match find_doc_root () with
+      | Some doc_path ->
+        (* If we found a doc directory, the repo root is the parent of share/tesl/doc *)
+        let rec get_repo_root path =
+          let parent = Filename.dirname path in
+          if Filename.basename parent = "share" then
+            Filename.dirname parent
+          else
+            get_repo_root parent
+        in
+        get_repo_root doc_path
+      | None ->
+        let bin_dir = Filename.dirname (Sys.argv.(0)) in
+        let candidate =
+          Filename.concat bin_dir "../../../../.." |> Filename.concat "" |> fun p ->
+          try Unix.realpath p with _ -> p
+        in
+        if Sys.file_exists (Filename.concat candidate "dsl") then candidate
         else
-          let parent = Filename.dirname dir in
-          if parent = dir then Sys.getcwd ()
-          else find_root parent
-      in
-      find_root (Filename.dirname bin_dir)
+          let rec find_root dir =
+            if Sys.file_exists (Filename.concat dir "dsl") then dir
+            else
+              let parent = Filename.dirname dir in
+              if parent = dir then Sys.getcwd ()
+              else find_root parent
+          in
+          find_root (Filename.dirname bin_dir)
 
 let init_paths () =
   match find_doc_root () with
   | Some doc_path ->
-    root_path := Filename.dirname (Filename.dirname doc_path);  (* Remove /share/tesl/doc *)
-    manual_dir := doc_path
+    (* Check if this is an installed location (ends with /share/tesl/doc) *)
+    if Filename.check_suffix doc_path "/share/tesl/doc" then begin
+      root_path := Filename.dirname (Filename.dirname doc_path);  (* Remove /share/tesl/doc *)
+      manual_dir := doc_path
+    end else begin
+      (* This is a dev mode path - doc_path is the manual directory itself *)
+      let rp = Filename.dirname doc_path in
+      root_path := rp;
+      manual_dir := doc_path
+    end
   | None ->
     let rp = find_repo_root () in
     root_path := rp;
@@ -195,10 +225,12 @@ let get_manual_content section =
         Filename.concat !root_path (name ^ ".md");
         (* In root_path with .tesl *)
         Filename.concat !root_path (name ^ ".tesl");
-        (* In root_path/example/ with .tesl *)
-        Filename.concat !root_path ("example/" ^ name ^ ".tesl");
-        (* In root_path/example/ without extension *)
-        Filename.concat !root_path ("example/" ^ name);
+        (* In root_path/example/ with .tesl - use example_name without prefix *)
+        Filename.concat !root_path ("example/" ^ example_name ^ ".tesl");
+        (* In root_path/example/ without extension - use example_name without prefix *)
+        Filename.concat !root_path ("example/" ^ example_name);
+        (* In root_path/example/ with .md - use example_name without prefix *)
+        Filename.concat !root_path ("example/" ^ example_name ^ ".md");
       ] in
       
       match try_paths possible_paths with
@@ -497,29 +529,7 @@ let print_diagnostic (d : Compile.diagnostic) =
 
 let () =
   let args = Array.to_list Sys.argv |> List.tl in
-  let root_path =
-    match Sys.getenv_opt "TESL_REPO_ROOT" with
-    | Some p when p <> "" -> p
-    | _ ->
-    match Sys.getenv_opt "TESL_ROOT" with
-    | Some p when p <> "" -> p
-    | _ ->
-      let bin_dir = Filename.dirname (Sys.argv.(0)) in
-      let candidate =
-        Filename.concat bin_dir "../../../../.." |> Filename.concat "" |> fun p ->
-        try Unix.realpath p with _ -> p
-      in
-      if Sys.file_exists (Filename.concat candidate "dsl") then candidate
-      else
-        let rec find_root dir =
-          if Sys.file_exists (Filename.concat dir "dsl") then dir
-          else
-            let parent = Filename.dirname dir in
-            if parent = dir then Sys.getcwd ()
-            else find_root parent
-        in
-        find_root (Filename.dirname bin_dir)
-  in
+  let root_path = find_repo_root () in
 
   match args with
   (* Handle help commands first *)
