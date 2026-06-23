@@ -18,19 +18,37 @@
           pname   = "tesl-compiler";
           version = "0.1.0";
 
-          src = pkgs.lib.cleanSourceWith {
-            src    = ./compiler;
-            # Exclude pre-built artefacts so dune always does a clean build.
-            filter = path: _type:
-              !(pkgs.lib.hasInfix "/_build/" (toString path))
-              && !(pkgs.lib.hasInfix "/.git/"   (toString path));
-          };
+          src = ./.;
 
           nativeBuildInputs = with pkgs.ocamlPackages; [ ocaml dune_3 findlib ];
 
-          buildPhase   = "dune build bin/main.exe";
+          buildPhase   = "(cd compiler && dune build bin/main.exe)";
           installPhase = ''
-            install -Dm755 _build/default/bin/main.exe $out/bin/tesl-compiler
+            install -Dm755 compiler/_build/default/bin/main.exe $out/bin/tesl-compiler
+            
+            # Install documentation files
+            mkdir -p $out/share/tesl/doc
+            if [ -d "manual" ]; then
+              cp -r manual/* $out/share/tesl/doc/ || true
+            fi
+            if [ -f "LANGUAGE-SPEC.md" ]; then
+              cp LANGUAGE-SPEC.md $out/share/tesl/doc/ || true
+            fi
+            if [ -f "TESL.md" ]; then
+              cp TESL.md $out/share/tesl/doc/ || true
+            fi
+            if [ -f "INSTALL.md" ]; then
+              cp INSTALL.md $out/share/tesl/doc/ || true
+            fi
+            if [ -f "README.md" ]; then
+              cp README.md $out/share/tesl/doc/ || true
+            fi
+            if [ -d "dev-docs" ]; then
+              cp -r dev-docs/* $out/share/tesl/doc/dev-docs/ || true
+            fi
+            if [ -d "example" ]; then
+              cp -r example $out/share/tesl/doc/ 2>/dev/null || true
+            fi
           '';
 
           meta = {
@@ -361,7 +379,12 @@
                 && "$TESL_OCAML_COMPILER" --fmt-check "$@"
               ;;
             help|--help|-h)
-              cat <<'EOF'
+              if [ -n "$1" ]; then
+                # Pass help subcommands to the compiler
+                _tesl_require_compiler
+                "$TESL_OCAML_COMPILER" --help "$@"
+              else
+                cat <<'EOF'
 Tesl language CLI
 
 Usage:
@@ -377,6 +400,13 @@ Usage:
   tesl generate ir         <file.tesl>                   Emit API IR as JSON
   tesl generate ts         <file.tesl> [--out <file>]    Emit TypeScript + Zod client
   tesl generate elm        <file.tesl> [--out <file>]    Emit Elm HTTP client
+
+Documentation:
+  tesl help manual                                             Show full documentation index
+  tesl help manual <section>                                   Show specific documentation section
+  tesl help manual full                                        Show ALL documentation (for LLMs)
+  tesl help examples                                           List all examples
+  tesl help search <query>                                     Search documentation
 
 Editor / Language Server (LSP) flags:
   tesl check-json          <file.tesl>                   Type-check, diagnostics as IR-2 JSON
@@ -394,6 +424,7 @@ Verbose logging:
 Logs HTTP requests/responses, SQL queries, queue operations, and
 pub/sub events to stderr. Zero overhead when TESL_VERBOSE is unset.
 EOF
+              fi
               ;;
             *)
               echo "unknown command: $CMD  (try: tesl help)" >&2
@@ -406,7 +437,7 @@ EOF
         # For `nix run`, `nix profile install`, home-manager, etc.
         # All paths are baked into the Nix store; no live repo checkout needed.
         tesl-cli = pkgs.writeShellScriptBin "tesl" (runtimePreamble + cliBody);
-
+        
         # ── Dev tesl CLI ──────────────────────────────────────────────────────
         # Used inside devShells.default so developers run against their local
         # compiler/_build/  rather than the pinned store binary.

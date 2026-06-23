@@ -72,12 +72,12 @@
 (define/pow
   (shouldWork3 [x : Integer ::: (ValidPort y)] [y : Integer ::: (ValidPort x)])
   #:returns Integer
-  (let ([xProof (detach-proof y)]) (raw-value (doSomething (attach-proof (forget-proof x) xProof)))))
+  (let ([xProof (detach-all-proof y)]) (raw-value (doSomething (attach-proof (forget-proof x) xProof)))))
 
 (define/pow
   (shouldWork4 [x : Integer ::: (ValidPort x)] [y : Integer ::: (IsPositive x)])
   #:returns Integer
-  (let ([xProof1 (detach-proof x)]) (let ([tesl_proof_binding_2 y]) (let ([_ (forget-proof tesl_proof_binding_2)] [xProof2 (detach-all-proof tesl_proof_binding_2)]) (raw-value (doSomething2 (attach-proof (forget-proof x) (and (raw-value xProof1) (raw-value xProof2)))))))))
+  (let ([xProof1 (detach-all-proof x)]) (let ([tesl_proof_binding_2 y]) (let ([_ (forget-proof tesl_proof_binding_2)] [xProof2 (detach-all-proof tesl_proof_binding_2)]) (raw-value (doSomething2 (attach-proof (forget-proof x) (and (raw-value xProof1) (raw-value xProof2)))))))))
 
 (define/pow
   (shouldWork41 [x : Integer ::: ((ValidPort x) && (IsPositive y))] [y : Integer ::: (IsPositive x)])

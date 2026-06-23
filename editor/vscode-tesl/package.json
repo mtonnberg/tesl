@@ -1,9 +1,28 @@
 {
   "name": "vscode-tesl",
   "displayName": "Tesl Language",
-  "description": "Syntax highlighting and diagnostics for the Tesl (.tesl) language",
+  "description": "Syntax highlighting, live diagnostics, go-to-definition, hover types, and completions for the Tesl (.tesl) language",
   "version": "0.4.0",
-  "publisher": "tesl",
+  "publisher": "Tesl",
+  "namespace": "Tesl",
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mtonnberg/tesl"
+  },
+  "bugs": {
+    "url": "https://github.com/mtonnberg/tesl/issues"
+  },
+  "homepage": "https://github.com/mtonnberg/tesl",
+  "icon": "images/icon.png",
+  "keywords": [
+    "tesl",
+    "language",
+    "lsp",
+    "web api",
+    "gdp",
+    "type safety"
+  ],
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -41,10 +60,15 @@
         "tesl.lspScript": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to tesl-lsp.rkt. Leave empty to auto-detect from the workspace folder."
+          "description": "Absolute path to tesl-lsp.rkt (advanced override). Leave empty to use the tesl-lsp binary from PATH (installed via nix profile install github:mtonnberg/tesl) or to auto-detect from the workspace."
         }
       }
     }
+  },
+  "scripts": {
+    "package": "npx @vscode/vsce package",
+    "publish:vsce": "npx @vscode/vsce publish",
+    "publish:ovsx": "npx ovsx publish"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"

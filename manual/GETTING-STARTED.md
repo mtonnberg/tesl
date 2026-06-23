@@ -1,0 +1,479 @@
+# Getting Started with Tesl
+
+This guide will take you from zero to a working Tesl API project. It covers installation, project creation, core concepts, and running your first application.
+
+Use `tesl help manual getting-started` to access this from the CLI.
+
+---
+
+## Prerequisites
+
+Before you begin, ensure you have the following installed:
+
+- **Nix package manager** - Tesl uses Nix for development and deployment
+  - Installation: https://nixos.org/download.html
+  - On macOS: `brew install nix`
+  - On Linux: Follow the official installer
+
+- **PostgreSQL** (optional but recommended) - For database examples
+  - Tesl has built-in PostgreSQL support
+  - Any version from 13+ should work
+
+- **Git** - For cloning the repository (if developing from source)
+
+---
+
+## Installation
+
+### Quick Install (Recommended)
+
+The easiest way to install Tesl is via Nix:
+
+```bash
+nix profile install github:mtonnberg/tesl
+```
+
+This installs the `tesl` CLI globally.
+
+### Verify Installation
+
+```bash
+tesl --version
+# or
+tesl help
+```
+
+### Development Installation
+
+If you want to contribute or work from the source repository:
+
+```bash
+# Clone the repository
+git clone https://github.com/mtonnberg/tesl.git
+cd tesl
+
+# Enter the development shell
+nix develop
+# or: nix-shell
+
+# The tesl command is now available
+```
+
+---
+
+## Creating Your First Tesl Project
+
+### Option 1: Start from Scratch
+
+1. Create a project directory:
+   ```bash
+   mkdir my-tesl-api
+   cd my-tesl-api
+   ```
+
+2. Create a `nix-shell` setup (optional but recommended):
+   ```nix
+   # shell.nix
+   { pkgs ? import <nixpkgs> {} }:
+   
+   pkgs.mkShell {
+     packages = [
+       (import (fetchTarball "github:mtonnberg/tesl") {}).packages.x86_64-linux.tesl-cli
+       pkgs.postgresql
+     ];
+   }
+   ```
+
+3. Enter the shell:
+   ```bash
+   nix-shell
+   ```
+
+4. Create your first Tesl file:
+   ```bash
+   touch api.tesl
+   ```
+
+### Option 2: Use the Example as a Template
+
+Copy the todo-api example as a starting point:
+
+```bash
+# Clone the tesl repository if you haven't already
+git clone https://github.com/mtonnberg/tesl.git
+
+# Copy the example
+cp tesl/example/todo-api.tesl my-api.tesl
+
+# Validate it
+tesl check my-api.tesl
+```
+
+---
+
+## Your First Tesl API
+
+Let's create a simple API from scratch. This example will:
+- Define a validated type
+- Create database operations
+- Expose HTTP endpoints
+
+### Step 1: Define Types and Validation
+
+Create `api.tesl`:
+
+```tesl
+-- Import the standard library
+import Tesl.Prelude
+import Tesl.Http
+import Tesl.Db
+
+-- Define a predicate for valid email addresses
+predicate ValidEmail(email: String) where
+  String.contains email "@" and
+  String.contains email "."
+
+-- Create a check function that validates and attaches proof
+check isValidEmail(email: String) -> email: String ::: ValidEmail email =
+  if String.contains email "@" and String.contains email "." then
+    ok email ::: ValidEmail email
+  else
+    fail 400 "Invalid email format: must contain @ and ."
+
+-- Define a user entity
+entity User table "users" primaryKey id {
+  id: String
+  email: String ::: ValidEmail email
+  name: String
+  createdAt: PosixMillis
+}
+```
+
+### Step 2: Create Database Operations
+
+Add to `api.tesl`:
+
+```tesl
+-- Function to create a new user
+fn createUser(email: String ::: ValidEmail email, name: String) -> User ::: FromDb (Id == user.id)
+  requires [db, time] =
+  let user = {
+    id: generatePrefixedId("user"),
+    email: email,
+    name: name,
+    createdAt: nowMillis()
+  } in
+  insert User user
+
+-- Function to get a user by ID
+predicate ValidUserId(id: String) where String.startsWith id "user"
+
+check isValidUserId(id: String) -> id: String ::: ValidUserId id =
+  if String.startsWith id "user" then
+    ok id ::: ValidUserId id
+  else
+    fail 400 "Invalid user ID format"
+
+fn getUser(id: String ::: ValidUserId id) -> User ? FromDb (Id == user.id)
+  requires [db] =
+  let user = selectOne user from User where user.id == id in
+  case user of
+    Nothing -> fail 404 "User not found"
+    Some user -> ok user
+```
+
+### Step 3: Define HTTP API
+
+Add to `api.tesl`:
+
+```tesl
+-- Define the API
+api UserApi {
+  -- Create a new user
+  post "/users"
+    body req: { email: String, name: String }
+      via fromJsonWithValidation
+    -> User ? FromDb (Id == user.id)
+    handler createUser
+
+  -- Get a user by ID
+  get "/users/:id"
+    capture id: String ::: ValidUserId id via isValidUserId
+    -> User ? FromDb (Id == user.id)
+    handler getUser
+}
+
+-- Start the server
+server UserServer impl UserApi on 8080
+```
+
+### Step 4: Run It
+
+```bash
+# Check for errors
+tesl check api.tesl
+
+# Run the server
+tesl run api.tesl
+
+# In another terminal, test it:
+curl -X POST http://localhost:8080/users \
+  -H "Content-Type: application/json" \
+  -d '{"email": "test@example.com", "name": "Test User"}'
+
+# Get the user back
+curl http://localhost:8080/users/user-<id>
+```
+
+---
+
+## Project Structure
+
+As your project grows, organize it like this:
+
+```
+my-api/
+├── src/
+│   ├── types.tesl          # Type definitions and predicates
+│   ├── validation.tesl     # Validation functions (check/establish)
+│   ├── auth.tesl          # Authentication predicates and handlers
+│   ├── db/
+│   │   ├── schema.tesl    # Entity definitions
+│   │   └── queries.tesl   # Database operations
+│   ├── routes/
+│   │   ├── users.tesl     # User-related routes
+│   │   ├── todos.tesl     # Todo-related routes
+│   │   └── ...
+│   └── main.tesl          # API declaration and server
+├── tests/
+│   ├── users.test.tesl    # Tests for user routes
+│   ├── todos.test.tesl    # Tests for todo routes
+│   └── ...
+├── config/
+│   └── database.tesl      # Database configuration
+├── package.json           # Frontend dependencies (if applicable)
+└── flake.nix             # Nix flake for reproducible builds
+```
+
+### Module Organization
+
+- **One module per file** - Keep files focused
+- **Explicit imports** - Always specify what you import
+- **Layered architecture** - Validation → Types → Business logic → Routes
+
+---
+
+## Core Concepts Explained
+
+### GDP: Ghosts of Departed Proofs
+
+Tesl's type system is inspired by **GDP (Ghosts of Departed Proofs)**, a research language that demonstrated how to add dependent types and proofs to a functional language without requiring a complete rewrite of the type system.
+
+**Key insight:** Instead of tracking proofs separately from values, GDP stamps values with proof information that travels with them through the type system.
+
+In Tesl:
+- `value ::: Proof` means "value carrying proof that Proof holds"
+- The proof is automatically tracked by the compiler
+- Proofs flow through function calls automatically
+- Missing proofs are compile-time errors
+
+**Runtime behavior (current alpha):**
+- Proofs are carried as lightweight runtime structs (`named-value`)
+- This acts as a safety net while the static checker matures
+- **Future goal:** Proof structs will be completely elided (zero runtime overhead)
+
+### Proof Flow Example
+
+```tesl
+-- Step 1: Validate at the boundary
+check isValidEmail(email: String) -> email: String ::: ValidEmail email = ...
+
+-- Step 2: Use the validated value
+fn createUser(email: String ::: ValidEmail email) -> User = ...
+  -- email is guaranteed to be valid here
+  -- The proof ValidEmail email is automatically available
+
+-- Step 3: Proof is automatically carried through
+handler registerUser(email: String ::: ValidEmail email) -> User
+  requires [db] =
+  createUser email  -- No need to re-validate!
+```
+
+### Capability System
+
+Tesl makes effects explicit through a capability system. Functions declare what they can do:
+
+```tesl
+handler getTodo(id: String) -> Todo
+  requires [db] =  -- Can access the database
+  selectOne todo from Todo where todo.id == id
+
+handler sendEmail(user: User) -> Result
+  requires [db, smtp] =  -- Can access DB and SMTP
+  -- ...
+```
+
+Common capabilities:
+- `db` or `dbRead`, `dbWrite` - Database access
+- `time` - Access to current time
+- `random` - Random number generation
+- `queue` - Queue operations
+- `pubsub` - Pub/Sub operations
+- `smtp` - Email sending
+- `auth` - Authentication capabilities
+
+---
+
+## Development Workflow
+
+### 1. Write Code
+
+Create your `.tesl` files with types, validation, and handlers.
+
+### 2. Validate
+
+```bash
+# Check a single file
+tesl check api.tesl
+
+# Check multiple files
+tesl check api.tesl db.tesl routes.tesl
+```
+
+### 3. Format
+
+```bash
+# Format a file in place
+tesl fmt api.tesl
+
+# Check formatting without modifying
+tesl fmt-check api.tesl
+```
+
+### 4. Lint
+
+```bash
+# Run the linter
+tesl lint api.tesl
+```
+
+### 5. Run
+
+```bash
+# Run the server
+tesl run api.tesl
+
+# With verbose logging
+tesl run api.tesl
+# Set TESL_VERBOSE=1 for detailed logs
+```
+
+### 6. Test
+
+```bash
+# Run tests
+tesl test tests.tesl
+
+# Run mutation testing
+tesl mutate api.tesl
+```
+
+---
+
+## Editor Setup
+
+### VS Code
+
+1. Install the Tesl extension from the marketplace
+2. Open a Tesl project
+3. The LSP (Language Server Protocol) provides:
+   - Syntax highlighting
+   - Autocompletion
+   - Error diagnostics
+   - Hover documentation
+   - Go-to-definition
+   - Find references
+
+### Configuration
+
+Create `.vscode/settings.json`:
+
+```json
+{
+  "tesl.server.path": "tesl-lsp"
+}
+```
+
+### Manual LSP Setup
+
+If not using VS Code, you can run the LSP manually:
+
+```bash
+tesl-lsp
+```
+
+---
+
+## Troubleshooting
+
+### "Command not found: tesl"
+
+Make sure the Nix profile is in your PATH:
+
+```bash
+# For bash/zsh
+. ~/.nix-profile/etc/profile.d/nix.sh
+
+# Or add to your shell config
+echo 'export PATH="$HOME/.nix-profile/bin:$PATH"' >> ~/.bashrc
+```
+
+### "Tesl compiler not found"
+
+This means the compiler binary is missing. In development mode:
+
+```bash
+# Build the compiler
+cd compiler && dune build bin/main.exe
+```
+
+### PostgreSQL connection issues
+
+Make sure PostgreSQL is running and accessible:
+
+```bash
+# Start PostgreSQL (if using the dev shell, it starts automatically)
+psql -h localhost -p 55432 -U tesl
+
+# Create the databases used by examples
+createdb -h localhost -p 55432 -U tesl todo-api
+createdb -h localhost -p 55432 -U tesl admin-task-api
+createdb -h localhost -p 55432 -U tesl chat
+```
+
+### "Proof not found" errors
+
+Ensure you're:
+1. Using `check` functions (not regular functions) for validation
+2. Attaching proofs with `:::` syntax
+3. Letting proofs flow through function calls automatically
+
+---
+
+## Next Steps
+
+Now that you have a basic understanding, explore:
+
+1. **[Examples](examples.md)** - See complete working examples
+2. **[Best Practices](best-practices.md)** - Learn idiomatic patterns
+3. **[Language Specification](LANGUAGE-SPEC.md)** - Dive into the details
+4. **[TESL.md](../TESL.md)** - High-level language introduction
+
+---
+
+## See Also
+
+- [Manual Index](MANUAL.md) - Back to the main manual
+- [Overview](overview.md) - Conceptual introduction
+- [Language Specification](../LANGUAGE-SPEC.md) - Formal specification
+- [Best Practices](best-practices.md) - Recommended patterns

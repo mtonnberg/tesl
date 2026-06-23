@@ -38,7 +38,7 @@ http {
     }
 
     server {
-        listen      8080;
+        listen      8090;
         server_name localhost;
 
         root  CHAT_FRONTEND_DIR;

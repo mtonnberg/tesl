@@ -11,4 +11,4 @@ __pycache__/
 _build/
 .claude/
 .agents/
-_build/
+result/

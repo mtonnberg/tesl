@@ -99,6 +99,40 @@ test passes, the feature works end-to-end.
 **Compiling is not testing.** `tesl validate` confirms the program is well-formed.
 `tesl test` confirms it produces the right answers. Always do both.
 
+## Documentation and Help
+
+Tesl provides comprehensive documentation accessible via the CLI:
+
+```bash
+# Show all available commands
+tesl help
+
+# Show the complete manual index
+tesl help manual
+
+# Show specific documentation sections
+tesl help manual overview          # Introduction to Tesl
+tesl help manual language-spec     # Formal language specification
+tesl help manual examples         # Complete list of all examples
+tesl help manual best-practices   # Recommended patterns and conventions
+tesl help manual faq              # Frequently asked questions
+
+# Show ALL documentation concatenated (for LLMs with large context windows)
+tesl help manual full
+# or simply:
+tesl help full
+
+# Search across all documentation
+tesl help search validation
+```
+
+All documentation is also available in the `manual/` directory of the repository, including:
+- **MANUAL.md** - Main documentation index
+- **overview.md** - Introduction and core concepts
+- **examples.md** - Catalog of all example files
+- **best-practices.md** - Style guide and recommended patterns
+- **FAQ.md** - Common questions and troubleshooting
+
 ```bash
 # Validate a file (compile + lint + format check — no execution):
 tesl validate example/sandbox.tesl

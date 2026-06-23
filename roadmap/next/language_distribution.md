@@ -10,31 +10,34 @@ minutes. No Racket knowledge needed, no manual path wiring.
 
 - `shell.nix` provides a working dev shell with `tesl` CLI, Racket, OCaml, and Postgres.
 - The `tesl` CLI wrapper handles compile/check/lint/fmt/run/test/watch.
-- No `flake.nix` yet — users cannot `nix run` or `nix profile install`.
+- ✅ `flake.nix` exists — users can `nix run github:mtonnberg/tesl` and `nix profile install github:mtonnberg/tesl`.
 - The VS Code extension is local-only (not published).
 - No pre-built binaries for non-Nix users.
+- Cachix binary cache is not yet configured (optional optimization).
 
 ---
 
-## Path A: Nix Flakes (Recommended first step)
+## Path A: Nix Flakes (Recommended first step) — ✅ COMPLETE
 
 **Why:** The project already uses `shell.nix`. Converting to a Flake is the
 lowest-effort path to making Tesl installable with one command.
 
 ### Steps
 
-| Step | What | Effort |
-|------|------|--------|
-| A1 | Create `flake.nix` with `packages.tesl-cli`, `packages.tesl-lsp`, `devShells.default` | Medium |
-| A2 | Set up Cachix binary cache (free for open-source) to avoid Racket compile times | Low |
-| A3 | Verify `nix run github:user/tesl` works end-to-end | Low |
-| A4 | Add `nix profile install` and `home-manager` module instructions to README | Low |
+| Step | What | Effort | Status |
+|------|------|--------|--------|
+| A1 | Create `flake.nix` with `packages.tesl-cli`, `packages.tesl-lsp`, `devShells.default` | Medium | ✅ Done |
+| A2 | Set up Cachix binary cache (free for open-source) to avoid Racket compile times | Low | ⏳ Pending |
+| A3 | Verify `nix run github:user/tesl` works end-to-end | Low | ✅ Done |
+| A4 | Add `nix profile install` and `home-manager` module instructions to README | Low | ✅ Done |
 
-**Result:** `nix run github:user/tesl -- help` just works. Developers on
+**Result:** `nix run github:mtonnberg/tesl -- help` just works. Developers on
 NixOS/nix-darwin/WSL2+nix get the full toolchain instantly.
 
 **Risk:** Nix audience is small (~5% of developers). Sufficient for early
 adopters but not for mainstream reach.
+
+**Status:** Path A is complete and functional. The flake supports `nix run`, `nix profile install`, and dev shells via `nix develop`. The only remaining item (A2) is an optional optimization.
 
 ---
 

@@ -239,7 +239,11 @@ let
         "$TESL_OCAML_COMPILER" --check "$@" && "$TESL_OCAML_COMPILER" --lint "$@" && "$TESL_OCAML_COMPILER" --fmt-check "$@"
         ;;
       help|--help|-h)
-        cat <<'EOF'
+        if [ -n "$1" ]; then
+          _tesl_require_compiler
+          "$TESL_OCAML_COMPILER" --help "$@"
+        else
+          cat <<'EOF'
 Tesl language CLI
 
 Usage:
@@ -256,6 +260,13 @@ Usage:
   tesl generate ts         <file.tesl> [--out <file>]    Emit TypeScript + Zod client
   tesl generate elm        <file.tesl> [--out <file>]    Emit Elm HTTP client
 
+Documentation:
+  tesl help manual                                             Show full documentation index
+  tesl help manual <section>                                   Show specific documentation section
+  tesl help manual full                                        Show ALL documentation (for LLMs)
+  tesl help examples                                           List all examples
+  tesl help search <query>                                     Search documentation
+
 Editor / Language Server (LSP) flags:
   tesl check-json          <file.tesl>                   Type-check, diagnostics as IR-2 JSON
   tesl local-bindings-json <file.tesl>                   Inferred local binding types as JSON
@@ -264,7 +275,7 @@ Editor / Language Server (LSP) flags:
   tesl occurrences-json    <file.tesl> <line> <col>      Same-file symbol occurrences as JSON
   tesl type-at-json        <file.tesl> <line> <col>      Inferred type at cursor as JSON
   tesl field-at-json       <file.tesl> <line> <col>      Record field info at cursor as JSON
-  tesl completions-json    <file.tesl> <line> <col>      Context-aware completions as JSON
+  tesl completions-json    <file.tesl> [line] [col]      Context-aware completions as JSON
 
 Verbose logging (set before running the compiled app):
   TESL_VERBOSE=1 racket your-api.rkt
@@ -272,6 +283,7 @@ Verbose logging (set before running the compiled app):
 Logs HTTP requests/responses, SQL queries, queue operations, and
 pub/sub events to stderr. Zero overhead when TESL_VERBOSE is unset.
 EOF
+        fi
         ;;
       *)
         echo "unknown command: $CMD  (try: tesl help)" >&2
