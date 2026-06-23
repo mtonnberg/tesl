@@ -3289,7 +3289,7 @@ let emit_requires ctx (m : module_form) =
         ignore (require_path, all_bindings)
       end else begin
         let pairs_str = String.concat " " (List.map binding_pair_to_string all_bindings) in
-        if is_absolute
+        if is_absolute || use_file_syntax
         then emit_line ctx (Printf.sprintf "  (only-in (file \"%s\") %s)" require_path pairs_str)
         else emit_line ctx (Printf.sprintf "  (only-in %s %s)" require_path pairs_str)
       end

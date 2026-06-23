@@ -203,6 +203,7 @@
                   DEP_RKT="''${DEP%.tesl}.rkt"
                   if ! _tesl_compile_to_stdout "$DEP" > "$DEP_RKT" 2>&1; then
                     echo "error: Failed to compile dependency: $DEP" >&2
+                    rm -f "$DEP_RKT"
                     RET=1
                   fi
                 fi
@@ -291,6 +292,7 @@
                   DEP_RKT="''${DEP%.tesl}.rkt"
                   if ! _tesl_compile_to_stdout "$DEP" > "$DEP_RKT" 2>&1; then
                     echo "error: Failed to compile dependency: $DEP" >&2
+                    rm -f "$DEP_RKT"
                     RET=1
                   fi
                 fi
