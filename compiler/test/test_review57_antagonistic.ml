@@ -95,7 +95,8 @@ let base_header = {|#lang tesl
 module Test exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact, forgetFact, attachFact, detachFact, introAnd, andLeft, andRight]
 import Tesl.Maybe exposing [Maybe(..)]
-import Tesl.List exposing [List.filterCheck, List.length]
+import Tesl.List exposing [List.filterCheck, List.length, List.allCheck, List.map]
+import Tesl.String exposing [String.length]
 |}
 
 (* ══════════════════════════════════════════════════════════════════════════

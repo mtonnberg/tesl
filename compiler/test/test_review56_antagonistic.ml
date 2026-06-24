@@ -470,7 +470,7 @@ fn test(raw: List Int) -> Int =
 let r56_fa02_forall_literal_predicate_limitation () =
   should_pass_src (
     base_header ^ {|
-import Tesl.List exposing [List.filterCheck, List.length]
+import Tesl.List exposing [List.filterCheck, List.length, List.map]
 fact InRange (lo: Int) (hi: Int) (n: Int)
 check checkRange1to100(n: Int) -> n: Int ::: InRange 1 100 n =
   if 1 <= n && n <= 100 then

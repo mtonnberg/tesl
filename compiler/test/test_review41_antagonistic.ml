@@ -382,7 +382,8 @@ let r41_23_semantic_json_erases_check_return_refinement () =
 
 let r41_24_help_exits_nonzero () =
   let code, out = run_compiler ["--help"] in
-  check int "exit code" 1 code;
+  (* --help exits 0 (POSIX convention for successful help display) *)
+  check int "exit code" 0 code;
   assert_contains ~label:"usage" out "Usage:"
 
 let () =

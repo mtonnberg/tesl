@@ -12,7 +12,7 @@
   tesl/tesl/queue
   tesl/tesl/sse
   (only-in tesl/tesl/prelude Int String)
-  (only-in tesl/example/learn/lesson07-home InBounds Sanitized checkInBounds sanitize checkInBounds-signature sanitize-signature)
+  (only-in (file "lesson07-home.rkt") InBounds Sanitized checkInBounds sanitize checkInBounds-signature sanitize-signature)
 )
 
 

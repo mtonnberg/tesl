@@ -1597,6 +1597,200 @@ let check_api_endpoint_structure (decls : top_decl list) : validation_error list
     | _ -> []
   ) decls
 
+(* ── Queue / channel / workers / database / api-test structure checks ─────── *)
+
+let check_queue_structure (decls : top_decl list) : validation_error list =
+  List.concat_map (function
+    | DQueue q ->
+      let errs = ref [] in
+      let add hint msg = errs := make_error q.loc ~hint msg :: !errs in
+      if q.database = "" then
+        add "add `database MyDB` inside the queue block"
+          (Printf.sprintf "queue `%s` is missing a `database` clause" q.name);
+      if q.jobs = [] then
+        add "add `jobs [JobType]` listing the record types that can be enqueued"
+          (Printf.sprintf "queue `%s` has no job types; at least one `jobs [JobType]` entry is required" q.name);
+      List.rev !errs
+    | _ -> []
+  ) decls
+
+let check_channel_structure (decls : top_decl list) : validation_error list =
+  List.concat_map (function
+    | DChannel ch ->
+      let errs = ref [] in
+      if ch.database = "" then
+        errs := make_error ch.loc
+          ~hint:"add `database MyDB` inside the channel block"
+          (Printf.sprintf "channel `%s` is missing a `database` clause" ch.name)
+          :: !errs;
+      List.rev !errs
+    | _ -> []
+  ) decls
+
+let check_workers_structure ?(extra_funcs = []) (decls : top_decl list) : validation_error list =
+  let queues =
+    List.filter_map (function DQueue q -> Some q.name | _ -> None) decls
+  in
+  let worker_fns =
+    let local =
+      List.filter_map (function
+        | DFunc fd when fd.kind = WorkerKind || fd.kind = DeadWorkerKind -> Some fd.name
+        | _ -> None
+      ) decls
+    in
+    let imported =
+      List.filter_map (fun (name, info) ->
+        if info.fi_kind = WorkerKind || info.fi_kind = DeadWorkerKind then Some name else None
+      ) extra_funcs
+    in
+    local @ imported
+  in
+  List.concat_map (function
+    | DWorkers w ->
+      let errs = ref [] in
+      let add hint msg = errs := make_error w.loc ~hint msg :: !errs in
+      (* Undefined queue reference *)
+      if not (List.mem w.queue_name queues) then
+        add (Printf.sprintf "declare `queue %s { database MyDB jobs [JobType] }`" w.queue_name)
+          (Printf.sprintf "workers `%s` references unknown queue `%s`" w.name w.queue_name);
+      (* Empty bindings *)
+      if w.bindings = [] then
+        add "add `JobType = workerFnName` bindings"
+          (Printf.sprintf "workers `%s` has no job bindings; at least one `JobType = workerFn` entry is required" w.name);
+      (* Undefined or wrong-kind worker functions *)
+      List.iter (fun (job_type, fn_name) ->
+        if not (List.mem fn_name worker_fns) then
+          add (Printf.sprintf "declare `worker %s(...) -> ...`" fn_name)
+            (Printf.sprintf "workers `%s`: `%s` for job type `%s` is not declared as a `worker` function"
+               w.name fn_name job_type)
+      ) w.bindings;
+      List.rev !errs
+    | _ -> []
+  ) decls
+
+let load_imported_entity_names (m : module_form) : string list =
+  let is_tesl_module name =
+    String.length name >= 5 && String.sub name 0 5 = "Tesl."
+  in
+  List.concat_map (fun (imp : import_decl) ->
+    if is_tesl_module imp.module_name then []
+    else
+      let path = resolve_local_import_path m.source_file imp.module_name in
+      if not (Sys.file_exists path) then []
+      else
+        let source = In_channel.with_open_text path In_channel.input_all in
+        match Parser.parse_module path source with
+        | Err _ -> []
+        | Ok imported ->
+          let exported = List.filter_map (function
+            | ExportName n | ExportAdt n -> Some n
+          ) imported.exports in
+          let requested = match imp.names with
+            | ImportAll -> None
+            | ImportExposing names ->
+              let strip s =
+                let n = String.length s in
+                if n > 4 && String.sub s (n-4) 4 = "(..)" then String.sub s 0 (n-4) else s
+              in
+              Some (List.map strip names)
+          in
+          List.filter_map (function
+            | DEntity e when List.mem e.name exported ->
+              (match requested with
+               | None -> Some e.name
+               | Some req -> if List.mem e.name req then Some e.name else None)
+            | _ -> None
+          ) imported.decls
+  ) m.imports
+
+let check_database_entities (m : module_form) : validation_error list =
+  let decls = m.decls in
+  let local_entities =
+    List.filter_map (function DEntity e -> Some e.name | _ -> None) decls
+  in
+  let imported_entities = load_imported_entity_names m in
+  let known_entities = local_entities @ imported_entities in
+  List.concat_map (function
+    | DDatabase db ->
+      List.filter_map (fun ent_name ->
+        if not (List.mem ent_name known_entities) then
+          Some (make_error db.loc
+            ~hint:(Printf.sprintf
+              "declare or import `entity %s table \"...\" primaryKey id { ... }`" ent_name)
+            (Printf.sprintf "database `%s` references unknown entity `%s`" db.name ent_name))
+        else None
+      ) db.entities
+    | _ -> []
+  ) decls
+
+let load_imported_server_names (m : module_form) : string list =
+  let is_tesl_module name =
+    String.length name >= 5 && String.sub name 0 5 = "Tesl."
+  in
+  List.concat_map (fun (imp : import_decl) ->
+    if is_tesl_module imp.module_name then []
+    else
+      let path = resolve_local_import_path m.source_file imp.module_name in
+      if not (Sys.file_exists path) then []
+      else
+        let source = In_channel.with_open_text path In_channel.input_all in
+        match Parser.parse_module path source with
+        | Err _ -> []
+        | Ok imported ->
+          let exported = List.filter_map (function
+            | ExportName n | ExportAdt n -> Some n
+          ) imported.exports in
+          let requested = match imp.names with
+            | ImportAll -> None
+            | ImportExposing names -> Some (List.map (fun s ->
+                let n = String.length s in
+                if n > 4 && String.sub s (n-4) 4 = "(..)" then String.sub s 0 (n-4) else s
+              ) names)
+          in
+          List.filter_map (function
+            | DServer sv when List.mem sv.name exported ->
+              (match requested with
+               | None -> Some sv.name
+               | Some req -> if List.mem sv.name req then Some sv.name else None)
+            | _ -> None
+          ) imported.decls
+  ) m.imports
+
+let check_api_test_structure (m : module_form) : validation_error list =
+  let decls = m.decls in
+  let local_servers =
+    List.filter_map (function DServer sv -> Some sv.name | _ -> None) decls
+  in
+  let imported_servers = load_imported_server_names m in
+  let known_servers = local_servers @ imported_servers in
+  List.concat_map (function
+    | DApiTest at ->
+      let errs = ref [] in
+      if at.description = "" then
+        errs := make_error at.loc
+          ~hint:"add a descriptive string, e.g. `api-test \"user can log in\" for MyServer { ... }`"
+          (Printf.sprintf
+            "api-test for server `%s` has an empty description string" at.server_name)
+          :: !errs;
+      if not (List.mem at.server_name known_servers) then
+        errs := make_error at.loc
+          ~hint:(Printf.sprintf
+            "declare `server %s for ApiName { ... }` or import it" at.server_name)
+          (Printf.sprintf "api-test `%s` references unknown server `%s`" at.description at.server_name)
+          :: !errs;
+      List.rev !errs
+    | _ -> []
+  ) decls
+
+let check_test_descriptions (decls : top_decl list) : validation_error list =
+  List.filter_map (function
+    | DTest t when t.description = "" ->
+      Some (make_error t.loc
+        ~hint:"add a descriptive name: `test \"what this verifies\" { ... }`"
+        "test block has an empty description string")
+    | _ -> None
+  ) decls
+
 let check_server_handler_binding
     (handlers : (string * handler_decl_ref) list)
     (auth_preds : string list)
@@ -7752,6 +7946,12 @@ let check_module (m : module_form) : validation_error list =
   @ check_duplicate_decl_fields decls
   @ check_capability_cycles decls
   @ check_api_endpoint_structure decls
+  @ check_queue_structure decls
+  @ check_channel_structure decls
+  @ check_workers_structure ~extra_funcs:imported_funcs decls
+  @ check_database_entities m
+  @ check_api_test_structure m
+  @ check_test_descriptions decls
   @ check_server_completeness ~extra_funcs:imported_funcs decls
   @ check_sql_field_names ~extra_funcs:imported_funcs decls
   @ check_codec_target_types decls
