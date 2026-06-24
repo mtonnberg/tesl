@@ -1,6 +1,7 @@
 const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const { spawnSync } = require("child_process");
 const vscode = require("vscode");
 
@@ -39,9 +40,18 @@ function resolveLsp(extensionDir) {
     return { kind: "script", script: override };
   }
 
-  // 2. Installed tesl-lsp binary
-  if (commandOnPath("tesl-lsp")) {
-    return { kind: "binary", command: "tesl-lsp" };
+  // 2. Installed tesl-lsp binary — check PATH first, then common nix dirs
+  // (VSCodium launched from the desktop does not inherit the nix profile PATH)
+  const nixCandidates = [
+    path.join(os.homedir(), ".nix-profile", "bin", "tesl-lsp"),
+    "/nix/var/nix/profiles/default/bin/tesl-lsp",
+    "/run/current-system/sw/bin/tesl-lsp",
+  ];
+  const binaryCmd = commandOnPath("tesl-lsp")
+    ? "tesl-lsp"
+    : nixCandidates.find((p) => fs.existsSync(p));
+  if (binaryCmd) {
+    return { kind: "binary", command: binaryCmd };
   }
 
   // 3–5. Racket script in repo / dev layouts

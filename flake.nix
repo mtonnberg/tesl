@@ -513,11 +513,17 @@ EOF
           exec racket "${tesl-lsp-script}/share/tesl-lsp/tesl-lsp.rkt" "$@"
         '');
 
+        # ── Combined default: CLI + LSP in one profile install ─────────────────
+        tesl-full = pkgs.symlinkJoin {
+          name = "tesl";
+          paths = [ tesl-cli tesl-lsp ];
+        };
+
       in {
         # ── Packages ──────────────────────────────────────────────────────────
         packages = {
-          inherit tesl-compiler tesl-racket tesl-cli tesl-lsp;
-          default = tesl-cli;
+          inherit tesl-compiler tesl-racket tesl-cli tesl-lsp tesl-full;
+          default = tesl-full;
         };
 
         # ── Apps (for `nix run github:mtonnberg/tesl`) ────────────────────────

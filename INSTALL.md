@@ -140,13 +140,17 @@ tesl run hello.tesl
 
 ## Language Server (VS Code / VSCodium)
 
-The VS Code extension is not yet published to the Marketplace. Until it is, install it manually:
+The extension is published on [Open VSX](https://open-vsx.org). Search for **Tesl** in VSCodium's extension panel and install it.
 
-1. Clone the repo: `git clone https://github.com/mtonnberg/tesl`
-2. Open VS Code in `editor/vscode-tesl/`
-3. Run **Extensions: Install from VSIX…** or press `F5` to launch a development host
+The extension needs the `tesl-lsp` binary to be available. The default nix install already includes it:
 
-The extension expects `tesl-lsp` in PATH. With a profile install that is already present. You can also point the extension at the LSP script directly via the `tesl.lspScript` setting.
+```bash
+nix profile install github:mtonnberg/tesl
+```
+
+This installs both the `tesl` CLI and the `tesl-lsp` language server. The extension will find `tesl-lsp` automatically, even when VSCodium is launched from the desktop rather than a terminal.
+
+**Alternative — explicit path override:** if you need to point the extension at a specific LSP script, set `tesl.lspScript` in your VS Code settings to the absolute path of `tesl-lsp.rkt`.
 
 ---
 
