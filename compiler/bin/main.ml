@@ -68,6 +68,15 @@ let read_file filename =
     Some contents
   with Sys_error _ -> None
 
+(** Read a file from disk; fall back to the embedded content store when the
+    file is not present on disk (e.g. in an installed nix-flake binary with
+    no local repo checkout).  [embedded_key] is the path relative to the
+    repo root used as the key in [Embedded_docs]. *)
+let read_file_or_embedded disk_path embedded_key =
+  match read_file disk_path with
+  | Some _ as r -> r
+  | None -> Embedded_docs.lookup embedded_key
+
 let find_doc_root () =
   (* First, check TESL_REPO_ROOT environment variable *)
   match Sys.getenv_opt "TESL_REPO_ROOT" with
@@ -176,11 +185,47 @@ let init_paths () =
 
 (* ── Manual content ────────────────────────────────────────────────────────── *)
 
+(** Map a section name to the embedded-docs key used to look it up in
+    [Embedded_docs] when the file is not found on disk. *)
+let section_to_embedded_key name =
+  (* Strip "example/" or "examples/" prefix for example lookups *)
+  let remove_example_prefix s =
+    if String.starts_with ~prefix:"examples/" s then
+      String.sub s 9 (String.length s - 9)
+    else if String.starts_with ~prefix:"example/" s then
+      String.sub s 8 (String.length s - 8)
+    else s
+  in
+  match name with
+  | "" | "manual"                         -> "manual/MANUAL.md"
+  | "getting-started" | "get-started" | "start" -> "manual/GETTING-STARTED.md"
+  | "overview" | "tutorial"               -> "manual/overview.md"
+  | "language-spec"                        -> "LANGUAGE-SPEC.md"
+  | "examples"                             -> "manual/examples.md"
+  | "best-practices"                       -> "manual/best-practices.md"
+  | "dev"                                  -> "manual/dev-docs/README.md"
+  | "faq"                                  -> "manual/FAQ.md"
+  | other ->
+    let ex = remove_example_prefix other in
+    (* Try each candidate embedded key in priority order; use the first that exists *)
+    let candidates = [
+      "manual/" ^ other ^ ".md";
+      "manual/" ^ other;
+      "example/learn/" ^ ex ^ ".tesl";
+      "example/learn/" ^ ex ^ ".md";
+      "example/kanel/" ^ ex ^ ".tesl";
+      "example/" ^ ex ^ ".tesl";
+      "example/" ^ ex ^ ".md";
+      other ^ ".md";
+      other;
+    ] in
+    (match List.find_opt (fun k -> Embedded_docs.lookup k <> None) candidates with
+     | Some k -> k
+     | None -> "manual/" ^ other ^ ".md")
+
 let get_manual_content section =
   init_paths ();
-  (* Build the mapping with full paths *)
-  let get_path name = 
-    (* Handle special aliases first *)
+  let get_disk_path name =
     match name with
     | "" | "manual" -> Filename.concat !manual_dir "MANUAL.md"
     | "getting-started" | "get-started" | "start" -> Filename.concat !manual_dir "GETTING-STARTED.md"
@@ -190,67 +235,44 @@ let get_manual_content section =
     | "best-practices" -> Filename.concat !manual_dir "best-practices.md"
     | "dev" -> Filename.concat !manual_dir "dev-docs/README.md"
     | "faq" -> Filename.concat !manual_dir "FAQ.md"
-    | _ -> 
-      (* Handle paths with slashes - try multiple locations *)
+    | _ ->
       let try_path path = if Sys.file_exists path then Some path else None in
       let try_paths paths =
         List.fold_left (fun acc path -> match acc with Some _ -> acc | None -> try_path path) None paths
       in
-      
-      (* Try various possible locations in order *)
-      (* First, try in the installed doc/example directory *)
       let doc_example_path = Filename.concat !manual_dir "example" in
-      (* Helper function to remove "examples/" or "example/" prefix *)
-      let remove_example_prefix name =
-        if String.starts_with ~prefix:"examples/" name then
-          String.sub name 9 (String.length name - 9)
-        else if String.starts_with ~prefix:"example/" name then
-          String.sub name 8 (String.length name - 8)
-        else
-          name
+      let remove_example_prefix s =
+        if String.starts_with ~prefix:"examples/" s then String.sub s 9 (String.length s - 9)
+        else if String.starts_with ~prefix:"example/" s then String.sub s 8 (String.length s - 8)
+        else s
       in
       let example_name = remove_example_prefix name in
       let possible_paths = [
-        (* In manual_dir with .md *)
         Filename.concat !manual_dir (name ^ ".md");
-        (* In manual_dir without extension *)
         Filename.concat !manual_dir name;
-        (* In manual_dir/example/ with .tesl *)
         Filename.concat doc_example_path (example_name ^ ".tesl");
-        (* In manual_dir/example/ with .md *)
         Filename.concat doc_example_path (example_name ^ ".md");
-        (* In manual_dir/example/ without extension *)
         Filename.concat doc_example_path example_name;
-        (* In root_path with .md *)
         Filename.concat !root_path (name ^ ".md");
-        (* In root_path with .tesl *)
         Filename.concat !root_path (name ^ ".tesl");
-        (* In root_path/example/ with .tesl - use example_name without prefix *)
         Filename.concat !root_path ("example/" ^ example_name ^ ".tesl");
-        (* In root_path/example/ without extension - use example_name without prefix *)
         Filename.concat !root_path ("example/" ^ example_name);
-        (* In root_path/example/ with .md - use example_name without prefix *)
         Filename.concat !root_path ("example/" ^ example_name ^ ".md");
       ] in
-      
       match try_paths possible_paths with
       | Some p -> p
       | None -> Filename.concat !manual_dir (name ^ ".md")
   in
-  
-  (* Special case: empty section or "manual" should show MANUAL.md *)
-  if section = "" || section = "manual" then
-    read_file (Filename.concat !manual_dir "MANUAL.md")
-  else
-    let path = get_path section in
-    if Sys.file_exists path then
-      read_file path
-    else
-      None
+  let disk_path = get_disk_path section in
+  match read_file disk_path with
+  | Some _ as r -> r
+  | None -> Embedded_docs.lookup (section_to_embedded_key section)
 
 let get_examples_list () =
   init_paths ();
-  read_file (Filename.concat !manual_dir "examples.md")
+  read_file_or_embedded
+    (Filename.concat !manual_dir "examples.md")
+    "manual/examples.md"
 
 (* ── Full manual content for LLMs ─────────────────────────────────────────── *)
 
@@ -271,73 +293,102 @@ let rec collect_md_files dir acc =
 
 let get_full_manual () =
   init_paths ();
-  (* List of all documentation files to include in full manual *)
-  let doc_files = [
-    Filename.concat !manual_dir "MANUAL.md";
-    Filename.concat !manual_dir "GETTING-STARTED.md";
-    Filename.concat !manual_dir "overview.md";
-    Filename.concat !manual_dir "examples.md";
-    Filename.concat !manual_dir "best-practices.md";
-    Filename.concat !manual_dir "FAQ.md";
-    Filename.concat !manual_dir "LANGUAGE-SPEC.md";
-    Filename.concat !manual_dir "TESL.md";
-    Filename.concat !manual_dir "INSTALL.md";
-    Filename.concat !manual_dir "README.md";
+
+  (* Priority-ordered list of (disk-path, embedded-key) pairs for documentation *)
+  let doc_pairs = [
+    Filename.concat !manual_dir "MANUAL.md",         "manual/MANUAL.md";
+    Filename.concat !manual_dir "GETTING-STARTED.md","manual/GETTING-STARTED.md";
+    Filename.concat !manual_dir "overview.md",        "manual/overview.md";
+    Filename.concat !manual_dir "examples.md",        "manual/examples.md";
+    Filename.concat !manual_dir "best-practices.md",  "manual/best-practices.md";
+    Filename.concat !manual_dir "FAQ.md",             "manual/FAQ.md";
+    Filename.concat !manual_dir "LANGUAGE-SPEC.md",   "LANGUAGE-SPEC.md";
+    Filename.concat !manual_dir "TESL.md",            "TESL.md";
+    Filename.concat !manual_dir "INSTALL.md",         "INSTALL.md";
+    Filename.concat !manual_dir "README.md",          "README.md";
   ] in
-  
-  (* Also include dev-docs *)
-  let dev_docs = [
-    Filename.concat !manual_dir "dev-docs/README.md";
-    Filename.concat !manual_dir "dev-docs/01-overview.md";
-    Filename.concat !manual_dir "dev-docs/02-parser.md";
-    Filename.concat !manual_dir "dev-docs/03-module-system.md";
-    Filename.concat !manual_dir "dev-docs/04-body-compiler.md";
-    Filename.concat !manual_dir "dev-docs/05-adding-stdlib-function.md";
-    Filename.concat !manual_dir "dev-docs/06-gdp-runtime.md";
-    Filename.concat !manual_dir "dev-docs/07-sql-layer.md";
-    Filename.concat !manual_dir "dev-docs/08-queue-pubsub.md";
-    Filename.concat !manual_dir "dev-docs/09-adding-tests.md";
-    Filename.concat !manual_dir "dev-docs/10-common-patterns.md";
-    Filename.concat !manual_dir "dev-docs/11-frontend-ir.md";
+
+  let dev_doc_pairs = [
+    Filename.concat !manual_dir "dev-docs/README.md",                   "manual/dev-docs/README.md";
+    Filename.concat !manual_dir "dev-docs/01-overview.md",              "manual/dev-docs/01-overview.md";
+    Filename.concat !manual_dir "dev-docs/02-parser.md",                "manual/dev-docs/02-parser.md";
+    Filename.concat !manual_dir "dev-docs/03-module-system.md",         "manual/dev-docs/03-module-system.md";
+    Filename.concat !manual_dir "dev-docs/04-body-compiler.md",         "manual/dev-docs/04-body-compiler.md";
+    Filename.concat !manual_dir "dev-docs/05-adding-stdlib-function.md","manual/dev-docs/05-adding-stdlib-function.md";
+    Filename.concat !manual_dir "dev-docs/06-gdp-runtime.md",           "manual/dev-docs/06-gdp-runtime.md";
+    Filename.concat !manual_dir "dev-docs/07-sql-layer.md",             "manual/dev-docs/07-sql-layer.md";
+    Filename.concat !manual_dir "dev-docs/08-queue-pubsub.md",          "manual/dev-docs/08-queue-pubsub.md";
+    Filename.concat !manual_dir "dev-docs/09-adding-tests.md",          "manual/dev-docs/09-adding-tests.md";
+    Filename.concat !manual_dir "dev-docs/10-common-patterns.md",       "manual/dev-docs/10-common-patterns.md";
+    Filename.concat !manual_dir "dev-docs/11-frontend-ir.md",           "manual/dev-docs/11-frontend-ir.md";
   ] in
-  
-  (* Include example markdown files *)
-  let example_dir = Filename.concat !manual_dir "example" in
-  let example_md_files = 
+
+  (* Collect disk-based example .md files (only in dev/repo environments) *)
+  let disk_example_md_files =
+    let example_dir = Filename.concat !manual_dir "example" in
     if Sys.file_exists example_dir then
       collect_md_files example_dir []
     else
-      (* Also try the repo-level example directory *)
       let repo_example_dir = Filename.concat !root_path "example" in
-      if Sys.file_exists repo_example_dir then
-        collect_md_files repo_example_dir []
-      else
-        []
+      if Sys.file_exists repo_example_dir then collect_md_files repo_example_dir []
+      else []
   in
-  
-  let all_files = doc_files @ dev_docs @ example_md_files in
-  
-  let rec collect_content = function
-    | [] -> []
-    | file :: rest ->
-      match read_file file with
-      | Some content -> (file, content) :: collect_content rest
-      | None -> collect_content rest
+
+  (* Collect content: disk takes priority, fallback to embedded for each doc *)
+  let collect_pairs pairs =
+    List.filter_map (fun (disk_path, embedded_key) ->
+      match read_file_or_embedded disk_path embedded_key with
+      | Some content -> Some (embedded_key, content)
+      | None -> None
+    ) pairs
   in
-  
-  let file_contents = collect_content all_files in
-  
-  (* Format as: === [FILE_PATH] === CONTENTS *)
-  let buf = Buffer.create 102400 in
+
+  (* Collect all embedded lesson and example tesl files *)
+  let embedded_examples =
+    Embedded_docs.all_keys ()
+    |> List.filter (fun k ->
+         (String.starts_with ~prefix:"example/" k)
+         && (Filename.check_suffix k ".tesl" || Filename.check_suffix k ".md"))
+    |> List.sort String.compare
+    |> List.filter_map (fun k ->
+         (* Skip files already on disk via disk_example_md_files *)
+         match Embedded_docs.lookup k with
+         | Some content -> Some (k, content)
+         | None -> None)
+  in
+
+  let doc_contents     = collect_pairs doc_pairs in
+  let dev_doc_contents = collect_pairs dev_doc_pairs in
+  let disk_md_contents =
+    List.filter_map (fun f ->
+      match read_file f with
+      | Some content -> Some (f, content)
+      | None -> None
+    ) disk_example_md_files
+  in
+
+  let buf = Buffer.create 512000 in
   Buffer.add_string buf "TESL FULL MANUAL FOR LLMS\n";
   Buffer.add_string buf "=====================================\n";
   Buffer.add_string buf "(This is a concatenated, non-human-readable format for LLM context windows)\n\n";
-  
-  List.iter (fun (file, content) ->
-    Buffer.add_string buf ("\n=== [" ^ file ^ "] ===\n");
-    Buffer.add_string buf content;
-    Buffer.add_string buf "\n";
-  ) file_contents;
+
+  let emit_section label contents =
+    if contents <> [] then begin
+      Buffer.add_string buf ("\n\n" ^ String.make 72 '=' ^ "\n");
+      Buffer.add_string buf ("== " ^ label ^ "\n");
+      Buffer.add_string buf (String.make 72 '=' ^ "\n\n");
+      List.iter (fun (key, content) ->
+        Buffer.add_string buf ("\n--- [" ^ key ^ "] ---\n");
+        Buffer.add_string buf content;
+        Buffer.add_string buf "\n"
+      ) contents
+    end
+  in
+
+  emit_section "DOCUMENTATION" doc_contents;
+  emit_section "DEVELOPER DOCS" dev_doc_contents;
+  emit_section "EXAMPLES AND LESSONS" (disk_md_contents @ embedded_examples);
+
   Buffer.contents buf
 
 (* ── Search functionality ───────────────────────────────────────────────────── *)
@@ -355,36 +406,40 @@ let string_contains substring str =
 let search_docs query =
   init_paths ();
   let query_lower = String.lowercase_ascii query in
+  let search_content key content acc =
+    let lines = String.split_on_char '\n' content in
+    let matching_lines = List.filter (fun line ->
+      string_contains query_lower (String.lowercase_ascii line)
+    ) lines in
+    if matching_lines <> [] then (key, matching_lines) :: acc
+    else acc
+  in
   let search_file file acc =
     match read_file file with
     | None -> acc
-    | Some content ->
-      let lines = String.split_on_char '\n' content in
-      let matching_lines = List.filter (fun line -> 
-        let line_lower = String.lowercase_ascii line in
-        string_contains query_lower line_lower
-      ) lines in
-      if matching_lines <> [] then
-        (file, matching_lines) :: acc
-      else
-        acc
+    | Some content -> search_content file content acc
   in
   let rec search_dir dir acc =
     try
       let files = Array.to_list (Sys.readdir dir) in
       List.fold_left (fun acc filename ->
         let path = Filename.concat dir filename in
-        if Sys.is_directory path then
-          search_dir path acc
-        else if Filename.check_suffix filename ".md" then
-          search_file path acc
-        else
-          acc
+        if Sys.is_directory path then search_dir path acc
+        else if Filename.check_suffix filename ".md" then search_file path acc
+        else acc
       ) acc files
     with Sys_error _ -> acc
   in
-  let results = search_dir !root_path [] in
-  results
+  (* Search disk files first *)
+  let disk_results = search_dir !root_path [] in
+  let disk_keys = List.map fst disk_results in
+  (* Also search embedded content that wasn't found on disk *)
+  let embedded_results =
+    Embedded_docs.files
+    |> List.filter (fun (k, _) -> not (List.mem k disk_keys))
+    |> List.fold_left (fun acc (k, content) -> search_content k content acc) []
+  in
+  disk_results @ embedded_results
 
 let format_search_results results query =
   if results = [] then

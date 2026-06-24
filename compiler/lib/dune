@@ -3,8 +3,23 @@
  (wrapped false)
  (ocamlopt_flags (:standard -w -50))
  (ocamlc_flags (:standard -w -50))
- (modules formatter linter ast checker compile emit_racket emit_ts emit_elm ir lexer location mutate parser proof_checker token type_system validation)
+ (modules formatter linter ast checker compile emit_racket emit_ts emit_elm ir lexer location mutate parser proof_checker token type_system validation embedded_docs)
  (libraries str))
 
 (ocamllex
  (modules lexer))
+
+; Bake all manual and example files into the binary at build time.
+; (deps (universe)) tells dune the rule always needs re-running (the source
+; files it reads are outside the dune project root so cannot be listed as
+; explicit deps).  Dune still compares content hashes before recompiling
+; downstream modules, so OCaml compilation only triggers when docs actually
+; change.  (mode promote) writes the result back to the source tree so
+; `git diff` shows when the embedded snapshot has drifted.
+(rule
+ (target embedded_docs.ml)
+ (mode promote)
+ (deps (universe))
+ (action
+  (with-stdout-to %{target}
+   (run %{exe:../gen/gen_docs.exe}))))
