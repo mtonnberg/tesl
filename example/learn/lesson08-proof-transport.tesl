@@ -101,6 +101,63 @@ fn showAge(age: Int ::: ValidAge age) -> String =
 #
 # See 08-proof-transport.md for a deeper treatment with diagrams.
 
+# ─────────────────────────────────────────────
+# PROOF LOSS THROUGH TRANSFORMATIONS: CORRECT DESIGN
+# ─────────────────────────────────────────────
+# When arithmetic or other transformations produce a NEW value, the proof
+# is correctly dropped by the compiler.  This is NOT a problem to fix by
+# re-validating — it is a SIGNAL about your design.
+#
+# Proof loss tells you: "Is this operation always safe to use, or does
+# the caller need to handle the unproven case?"
+#
+# For birthday(age: Int ::: ValidAge age) -> Int:
+#   age = 150 → birthday = 151, which is OUTSIDE ValidAge range [0, 150].
+#   The proof is CORRECTLY dropped: not every birthday preserves ValidAge.
+#   The function returns a plain Int — callers must decide what to do.
+#
+# ANTI-PATTERN: scattering `check` calls everywhere
+#   fn caller(age: Int ::: ValidAge age) -> String =
+#     let next = birthday age
+#     let revalidated = check checkAge next   ← WRONG: scatters re-validation
+#     showAge revalidated
+#
+# `check` is an HTTP-boundary validator. Using it inside business logic means
+# validation is scattered rather than centralized — harder to maintain and
+# it introduces spurious HTTP-failure paths inside pure logic.
+#
+# CORRECT PATTERN: Proof owners provide domain-specific operations
+#
+# If an operation ALWAYS preserves a proof (no exceptions), the MODULE that
+# OWNS the proof should declare this as a mathematical fact using `establish`:
+#
+#   fact IsPositive (n: Int)
+#
+#   # Mathematical axiom: positive + 1 is always positive (no overflow assumed)
+#   establish addOnePreservesPositive(n: Int) -> Fact (IsPositive (n + 1)) =
+#     IsPositive (n + 1)
+#
+#   # Domain operation that encodes the invariant — callers get a proven result
+#   fn addOnePositive(x: Int ::: IsPositive x) -> Int ? IsPositive =
+#     let result = x + 1
+#     let pf = addOnePreservesPositive x
+#     result ::: pf
+#
+#   # Callers chain operations WITHOUT any re-validation:
+#   fn triple(x: Int ::: IsPositive x) -> Int ? IsPositive =
+#     addOnePositive (addOnePositive (addOnePositive x))
+#
+# For ValidAge the birthday case is intentionally NOT proof-preserving (age 150
+# cannot have a valid birthday).  The correct design here:
+#   1. birthday returns Int (no proof) — this is the right behaviour
+#   2. The CALLER decides whether to re-validate or handle the unproven case
+#   3. No scattered `check` calls — validation stays at the boundary
+#
+# Summary:
+#   proof loss through arithmetic = CORRECT and expected
+#   re-validating everywhere with check = ANTI-PATTERN
+#   proof-owner operations with establish = CORRECT DESIGN
+
 test "checkAge valid" {
   let n1 = 0
   let r1 = check checkAge n1

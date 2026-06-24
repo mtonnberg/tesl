@@ -1,0 +1,175 @@
+#lang tesl
+module DebuggingProofErrors exposing [
+  ValidScore,
+  checkScore,
+  requiresValidScore,
+  diagnoseCommonMistakes,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 54 — Debugging Proof Errors
+#
+# When the proof system rejects your code, the error messages tell you exactly
+# what went wrong.  This lesson catalogs the most common proof errors and
+# explains how to fix them.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [Int, String, Fact, detachFact, attachFact, forgetFact]
+
+fact ValidScore (n: Int)
+
+check checkScore(n: Int) -> n: Int ::: ValidScore n =
+  if n >= 0 && n <= 100 then
+    ok n ::: ValidScore n
+  else
+    fail 400 "score must be 0-100"
+
+fn requiresValidScore(n: Int ::: ValidScore n) -> String =
+  "score: ${n}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COMMON ERROR 1: "does not statically satisfy proof"
+#
+# This means you called a function that requires a proof, but the argument
+# does not carry that proof.
+#
+# EXAMPLE (WRONG — will not compile):
+#   fn bad(raw: Int) -> String = requiresValidScore raw
+#   Error: argument `raw` does not statically satisfy proof `ValidScore raw`
+#
+# FIX: validate first with check:
+#   fn good(raw: Int) -> String =
+#     let validated = check checkScore raw
+#     requiresValidScore validated
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+fn diagnoseCommonMistakes(raw: Int) -> String =
+  let validated = check checkScore raw
+  requiresValidScore validated   # OK: validated carries ValidScore
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COMMON ERROR 2: Proof lost after arithmetic
+#
+# When you perform arithmetic on a proof-carrying value, the RESULT is a plain
+# Int without proof.  This is CORRECT compiler behavior — the compiler cannot
+# know whether the transformed value still satisfies the predicate.
+#
+# EXAMPLE:
+#   fn bad(n: Int ::: ValidScore n) -> String =
+#     let doubled = n * 2
+#     requiresValidScore doubled   # ERROR: doubled has no ValidScore proof
+#
+# WHY: n = 60 → 60 * 2 = 120, which FAILS ValidScore (max 100).
+# The compiler is correct to require you to handle this.
+#
+# CORRECT DESIGN — proof owners provide invariant-preserving operations:
+#
+# If you know an operation ALWAYS preserves your proof (mathematically),
+# the module that owns the proof provides it using establish:
+#
+#   establish halvePreservesScore(n: Int) -> Fact (ValidScore (n / 2)) =
+#     ValidScore (n / 2)
+#     # Safe: if 0 <= n <= 100, then 0 <= n/2 <= 50 (within range)
+#
+#   fn halveScore(n: Int ::: ValidScore n) -> Int ? ValidScore =
+#     let result = n / 2
+#     let pf = halvePreservesScore n
+#     result ::: pf
+#
+# ANTI-PATTERN: scattered re-validation with check
+#   fn bad(n: Int ::: ValidScore n) -> String =
+#     let halved = n / 2
+#     let revalidated = check checkScore halved  # ANTI-PATTERN
+#     requiresValidScore revalidated
+#
+# `check` is an HTTP-boundary validator with failure semantics.
+# Using it inside business logic scatters validation and introduces
+# spurious HTTP-error paths inside pure computation.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COMMON ERROR 3: Proof subject mismatch
+#
+# Each proof is tied to a SUBJECT — the specific binding it was checked on.
+# You cannot use a proof from one value to satisfy a requirement for another.
+#
+# EXAMPLE (WRONG):
+#   fn bad(a: Int, b: Int) -> String =
+#     let validA = check checkScore a
+#     requiresValidScore b   # ERROR: b != a; validA's proof is for a, not b
+#
+# FIX: Validate the correct variable:
+#   fn good(a: Int, b: Int) -> String =
+#     let validA = check checkScore a
+#     let validB = check checkScore b
+#     requiresValidScore validB
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COMMON ERROR 4: Using detachFact / attachFact incorrectly
+#
+# detachFact extracts the proof token from a value.
+# attachFact re-applies it.
+# forgetFact strips the proof from the value.
+#
+# The pattern for passing a proof around:
+#   let pf = detachFact validated   # extract proof token
+#   let stripped = forgetFact validated   # strip proof from value
+#   ... do something with stripped (plain Int) ...
+#   let restored = attachFact stripped pf   # reattach proof
+#   requiresValidScore restored   # OK again
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── CORRECT DESIGN: proof-owner arithmetic operations ─────────────────────
+# The module that owns ValidScore provides operations that ENCODE the
+# mathematical invariants, so callers never need to re-validate.
+#
+# Halving a score is always valid: if 0 <= n <= 100, then 0 <= n/2 <= 50.
+establish halvePreservesScore(n: Int) -> Fact (ValidScore (n / 2)) =
+  ValidScore (n / 2)
+
+fn halveScore(n: Int ::: ValidScore n) -> Int ? ValidScore =
+  let result = n / 2
+  let pf = halvePreservesScore n
+  result ::: pf
+
+# Callers chain operations without any re-validation:
+fn halveAndShow(n: Int ::: ValidScore n) -> String =
+  let halved = halveScore n
+  requiresValidScore halved
+
+fn roundtripProof(raw: Int) -> String =
+  let validated = check checkScore raw
+  let pf = detachFact validated
+  let stripped = forgetFact validated
+  let restored = attachFact stripped pf
+  requiresValidScore restored
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+test "diagnoseCommonMistakes processes valid score" {
+  let result = diagnoseCommonMistakes 75
+  expect result == "score: 75"
+}
+
+test "diagnoseCommonMistakes rejects invalid score" {
+  expectFail (diagnoseCommonMistakes 150)
+}
+
+test "halveScore preserves proof without revalidation" {
+  let n = 80
+  let validated = check checkScore n
+  let result = halveAndShow validated
+  expect result == "score: 40"
+}
+
+test "roundtripProof works" {
+  let result = roundtripProof 50
+  expect result == "score: 50"
+}

@@ -945,7 +945,9 @@ let rec emit_expr ctx e =
   let sql_op_name = function
     | BEq -> "==." | BNeq -> "!=" ^ "." | BLt -> "<." | BLe -> "<=."
     | BGt -> ">." | BGe -> ">=."
-    | _ -> failwith "non-SQL operator in SQL clause"
+    | op -> failwith (Printf.sprintf
+        "emit_racket: operator %s used in SQL WHERE clause — only ==, !=, <, <=, >, >= are valid SQL predicates; the type-checker should have caught this"
+        (match op with BAdd -> "+" | BSub -> "-" | BMul -> "*" | BDiv -> "/" | BMod -> "%%" | BConcat -> "^" | BAnd -> "&&" | BOr -> "||" | _ -> "?"))
   in
   let rec emit_sql_clause entity = function
     | SqlPred { field; op; value } ->
@@ -1219,23 +1221,23 @@ let rec emit_expr ctx e =
   | EApp _ as app when (match extract_select_query app with Some _ -> true | None -> false) ->
     (match extract_select_query app with
      | Some (seed, clauses) -> emit_sql_select seed clauses
-     | None -> assert false)
+     | None -> failwith "emit_racket: extract_select_query guard passed but returned None — compiler invariant violation; please report this bug")
   | EApp _ as app when (match parse_insert_expr app with Some _ -> true | None -> false) ->
     (match parse_insert_expr app with
      | Some insert -> emit_sql_insert insert
-     | None -> assert false)
+     | None -> failwith "emit_racket: parse_insert_expr guard passed but returned None — compiler invariant violation; please report this bug")
   | EApp _ as app when (match parse_upsert_expr app with Some _ -> true | None -> false) ->
     (match parse_upsert_expr app with
      | Some upsert -> emit_sql_upsert upsert
-     | None -> assert false)
+     | None -> failwith "emit_racket: parse_upsert_expr guard passed but returned None — compiler invariant violation; please report this bug")
   | EApp _ as app when (match parse_insert_many_expr app with Some _ -> true | None -> false) ->
     (match parse_insert_many_expr app with
      | Some (list_var, entity) -> emit_sql_insert_many list_var entity
-     | None -> assert false)
+     | None -> failwith "emit_racket: parse_insert_many_expr guard passed but returned None — compiler invariant violation; please report this bug")
   | EApp _ as app when (match extract_delete_query app with Some _ -> true | None -> false) ->
     (match extract_delete_query app with
      | Some (seed, clauses) -> emit_sql_delete seed clauses
-     | None -> assert false)
+     | None -> failwith "emit_racket: extract_delete_query guard passed but returned None — compiler invariant violation; please report this bug")
   | EApp { fn = EVar { name = "#record-update#"; _ }; arg = ERecord { fields; type_hint = _; loc = _ }; _ } ->
     (* Record update: (tesl-record-update *base (hash 'f1 v1 ...)) *)
     (* Determine the record type from field names so we can preserve proof on
@@ -1604,11 +1606,11 @@ let rec emit_expr ctx e =
   | EBinop _ as sql_expr when (match extract_select_query sql_expr with Some _ -> true | None -> false) ->
     (match extract_select_query sql_expr with
      | Some (seed, clauses) -> emit_sql_select seed clauses
-     | None -> assert false)
+     | None -> failwith "emit_racket: extract_select_query (EBinop) guard passed but returned None — compiler invariant violation; please report this bug")
   | EBinop _ as sql_expr when (match extract_delete_query sql_expr with Some _ -> true | None -> false) ->
     (match extract_delete_query sql_expr with
      | Some (seed, clauses) -> emit_sql_delete seed clauses
-     | None -> assert false)
+     | None -> failwith "emit_racket: extract_delete_query (EBinop) guard passed but returned None — compiler invariant violation; please report this bug")
   | EBinop { op; left; right; _ } -> emit_binop ctx op left right
   | EUnop { op; arg; _ } ->
     (* Helper: emit a bare EVar param as *name (raw value), else emit normally.
@@ -1662,12 +1664,12 @@ let rec emit_expr ctx e =
   | ELet _ as seq when (match extract_update seq with Some _ -> true | None -> false) ->
     (match extract_update seq with
      | Some update -> emit_sql_update update
-     | None -> assert false)
+     | None -> failwith "emit_racket: extract_update guard passed but returned None — compiler invariant violation; please report this bug")
   | ELet _ as seq when (match extract_multiline_select_query seq with Some _ -> true | None -> false) ->
     (* Multi-line SQL: select on one line, modifier keywords (order/limit/etc.) on subsequent lines *)
     (match extract_multiline_select_query seq with
      | Some (seed, clauses) -> emit_sql_select seed clauses
-     | None -> assert false)
+     | None -> failwith "emit_racket: extract_multiline_select_query guard passed but returned None — compiler invariant violation; please report this bug")
   | ELet { name = "_"; value = ((ETelemetry _ | EEnqueue _ | EPublish _ | EStartWorkers _ | EWithDatabase _ | EWithCapabilities _ | EWithTransaction _ | EServe _) as stmt); body; _ } ->
     (* Runtime statements in sequence lower to begin blocks. *)
     emit ctx "(begin ";
@@ -4388,7 +4390,8 @@ let rec emit_api ctx ?(server_name="") ?(server_bindings=[]) (api : api_form) =
     let method_str = match ep.method_ with
       | GET -> "Get" | POST -> "Post" | PUT -> "Put"
       | DELETE -> "Delete" | PATCH -> "Patch"
-      | SSE -> failwith "SSE endpoints should not be emitted as HTTP routes"
+      | SSE -> failwith (Printf.sprintf
+          "emit_racket: SSE endpoint '%s' passed to HTTP route emitter — SSE endpoints must be handled by emit_sse_route and filtered out before emit_api iterates http_endpoints (compiler bug)" ep.name)
     in
     emit ctx "
     :> (";

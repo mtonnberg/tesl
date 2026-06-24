@@ -1,0 +1,103 @@
+#lang tesl
+module TestingAuthAndCapabilities exposing [
+  AuthServer,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 55 — Testing Auth and Capabilities
+#
+# Auth requirements and capabilities can be tested via api-test blocks.
+# This lesson shows how to write api-tests for authenticated endpoints and
+# how to verify that unauthenticated requests are correctly rejected.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.ApiTest exposing [statusOk, statusClientError]
+import Tesl.DB exposing [dbRead, dbWrite]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DOMAIN: A simple authenticated API
+# ─────────────────────────────────────────────────────────────────────────────
+
+fact Authenticated (user: String)
+
+auth sessionAuth(req: HttpRequest) -> user: String ::: Authenticated user =
+  case Dict.lookup "session" req.cookies of
+    Nothing -> fail 401 "not authenticated"
+    Something token -> ok token ::: Authenticated user
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API with both public and authenticated endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+api AuthApi {
+  # Public endpoint — no auth required
+  get "/health"
+    -> String
+
+  # Authenticated endpoint — requires session cookie
+  get "/profile"
+    auth user : String ::: Authenticated user via sessionAuth
+    -> String
+}
+
+handler health() -> String requires [] = "ok"
+
+handler profile(user: String ::: Authenticated user) -> String requires [] =
+  "profile of ${user}"
+
+server AuthServer for AuthApi {
+  health = health
+  profile = profile
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTING
+#
+# api-test blocks let you write HTTP-level tests against your server.
+# For authenticated endpoints, set the session cookie in the request.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Test 1: Public endpoint works without authentication
+api-test "health endpoint is accessible without auth" for AuthServer {
+  let resp = get "/health"
+  expect statusOk resp
+}
+
+# Test 2: Protected endpoint requires authentication
+api-test "profile endpoint returns 401 without cookie" for AuthServer {
+  let resp = get "/profile"
+  expect statusClientError resp
+}
+
+# Test 3: Protected endpoint works with valid session cookie
+api-test "profile endpoint works with session cookie" for AuthServer {
+  let resp = get "/profile" cookie { "session": "alice" }
+  expect statusOk resp
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UNDERSTANDING — what api-tests verify
+# ─────────────────────────────────────────────────────────────────────────────
+# api-test runs the full HTTP stack: routing, auth, handler, response.
+# For authenticated endpoints:
+#   - No cookie → auth function returns fail 401 → client error status
+#   - Valid cookie → auth function returns ok → handler runs → success
+#
+# The compiler wires the auth function to the endpoint automatically.
+# If you forget to test the unauthenticated case, the handler might run
+# with unverified inputs.  Always test both authenticated AND unauthenticated.
+#
+# MUTATION TESTING of auth functions:
+# Tesl's built-in mutation testing covers `auth` functions — it mutates the
+# conditions in the auth function body and runs your tests to verify each
+# mutant is killed.  A surviving mutant means your tests don't cover some
+# part of the auth logic.
+#
+# Run mutation testing:
+#   tesl test lesson55-testing-auth-and-capabilities.tesl
+# (Or use the --mutate flag on the source file directly)
+# ─────────────────────────────────────────────────────────────────────────────

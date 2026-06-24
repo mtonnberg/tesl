@@ -9,7 +9,7 @@
     6. Exists return/body validation
     7. Integration with top-level diagnostics *)
 
-open Validation
+open Validation_common
 
 let parse src = Parser.parse_module "<test>" src
 
@@ -20,7 +20,7 @@ let assert_no_errors src =
     let errs = Validation.check_module m in
     if errs <> [] then
       Alcotest.failf "expected no validation errors but got:\n%s"
-        (String.concat "\n" (List.map fmt_validation_error errs))
+        (String.concat "\n" (List.map Validation_common.fmt_validation_error errs))
 
 let contains needle haystack =
   let n = String.length needle in

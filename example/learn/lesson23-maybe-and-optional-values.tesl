@@ -1,0 +1,135 @@
+#lang tesl
+module MaybeAndOptionalValues exposing [
+  safeHead,
+  safeDivideInt,
+  findUser,
+  firstActiveUser,
+  combineOptionals,
+  getUserName,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Maybe represents an optional value: either Something(value) or Nothing.
+# Use it wherever an operation might not produce a result:
+#   - looking up in a collection → Something(found) or Nothing
+#   - parsing that might fail → Something(parsed) or Nothing
+#   - the first element of a list that might be empty
+#
+# Pattern match with `case` to handle both outcomes:
+#   case maybeValue of
+#     Something x -> use x
+#     Nothing -> handle absence
+
+import Tesl.Prelude exposing [Int, String, List, Bool(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.head, List.filter, List.length]
+import Tesl.Int exposing [Int.nonZero, Int.divide]
+import Tesl.String exposing [String.isEmpty]
+
+record User {
+  id: Int
+  name: String
+  active: Bool
+}
+
+# ── Core Maybe patterns ────────────────────────────────────────────────────
+
+# Safe list head: returns the first element or Nothing
+fn safeHead(xs: List Int) -> Maybe Int = List.head xs
+
+# Safe integer division: returns Nothing when divisor is zero
+fn safeDivideInt(a: Int, b: Int) -> Maybe Int =
+  if b == 0 then
+    Nothing
+  else
+    let checkedB = check Int.nonZero b
+    Something (Int.divide a checkedB)
+
+# Find a user by id (mock implementation)
+fn hasId(targetId: Int, u: User) -> Bool = u.id == targetId
+
+fn findUser(users: List User, userId: Int) -> Maybe User =
+  let matching = List.filter (hasId userId) users
+  List.head matching
+
+# First active user in a list
+fn isActive(u: User) -> Bool = u.active
+
+fn firstActiveUser(users: List User) -> Maybe User =
+  List.head (List.filter isActive users)
+
+# ── Combining Maybe values ─────────────────────────────────────────────────
+
+# Combine two optional integers: result is Nothing if either is Nothing
+fn addInts(a: Int, b: Int) -> Int = a + b
+
+fn combineOptionals(ma: Maybe Int, mb: Maybe Int) -> Maybe Int =
+  case ma of
+    Nothing -> Nothing
+    Something a ->
+      case mb of
+        Nothing -> Nothing
+        Something b -> Something (addInts a b)
+
+# ── Extracting from Maybe ──────────────────────────────────────────────────
+
+# Get a user's name, or a fallback string
+fn getUserName(mu: Maybe User) -> String =
+  case mu of
+    Something u -> u.name
+    Nothing -> "unknown"
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — the mental model
+# ─────────────────────────────────────────────
+# Maybe is how Tesl avoids null pointer exceptions.
+# In most languages, a function that "might" return a value returns null/nil
+# and the caller has to remember to check.
+#
+# In Tesl, the TYPE tells you whether checking is needed:
+#   User  →  always a user, no check needed
+#   Maybe User  →  might be absent, MUST case-match
+#
+# The compiler enforces exhaustive matching:
+#   case user of
+#     Something u -> use u
+#     Nothing -> handle absence  ← you cannot forget this arm
+#
+# This is the same idea as Option<T> in Rust or Optional<T> in Swift,
+# but the exhaustiveness is compile-time enforced.
+
+# ─────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────
+
+test "safeHead returns Nothing for empty list" {
+  let xs = []
+  expect safeHead xs == Nothing
+}
+
+test "safeDivideInt returns Nothing for zero divisor" {
+  expect safeDivideInt 10 0 == Nothing
+}
+
+test "safeDivideInt returns result for nonzero divisor" {
+  let result = safeDivideInt 10 2
+  expect result == Something 5
+}
+
+test "combineOptionals returns Nothing if first is Nothing" {
+  expect combineOptionals Nothing (Something 5) == Nothing
+}
+
+test "combineOptionals returns Nothing if second is Nothing" {
+  expect combineOptionals (Something 3) Nothing == Nothing
+}
+
+test "combineOptionals returns sum when both present" {
+  expect combineOptionals (Something 3) (Something 4) == Something 7
+}
+
+test "getUserName returns fallback for Nothing" {
+  expect getUserName Nothing == "unknown"
+}

@@ -1,0 +1,151 @@
+#lang tesl
+module ErrorHandlingPatterns exposing [
+  ValidEmail,
+  checkEmail,
+  ValidAge,
+  checkAge,
+  createUser,
+  processRequest,
+  parseAndValidate,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# In Tesl, validation errors are HTTP errors: `fail STATUS "message"`.
+# When a check fails, the request is rejected with the given status code.
+# There is no exception-based error propagation — failures are immediate.
+#
+# Key patterns:
+#   1. check → fail 400 "bad input"          for validation errors
+#   2. check → fail 404 "not found"          for missing resources
+#   3. check → fail 403 "forbidden"          for permission errors
+#   4. Multiple checks in sequence           chain with let bindings
+#   5. The `&&` operator combines checks     applies both in one call
+
+import Tesl.Prelude exposing [Int, String, Bool(..)]
+import Tesl.String exposing [String.length, String.contains]
+import Tesl.Int exposing [Int.parse]
+import Tesl.Maybe exposing [Maybe(..)]
+
+# ── Pattern 1: Basic input validation ─────────────────────────────────────
+
+fact ValidEmail (s: String)
+fact ValidAge (n: Int)
+
+check checkEmail(s: String) -> s: String ::: ValidEmail s =
+  if String.contains s "@" && String.length s > 3 then
+    ok s ::: ValidEmail s
+  else
+    fail 400 "invalid email address"
+
+check checkAge(n: Int) -> n: Int ::: ValidAge n =
+  if n >= 0 && n <= 150 then
+    ok n ::: ValidAge n
+  else
+    fail 400 "age must be between 0 and 150"
+
+# ── Pattern 2: Sequential validation chain ────────────────────────────────
+# Validate multiple fields one after another using let bindings.
+# If any check fails, the whole function returns the HTTP error immediately.
+
+record NewUserRequest {
+  email: String
+  age: Int
+}
+
+record UserRecord {
+  email: String ::: ValidEmail email
+  age: Int ::: ValidAge age
+}
+
+fn createUser(req: NewUserRequest) -> UserRecord =
+  let validEmail = check checkEmail req.email
+  let validAge = check checkAge req.age
+  UserRecord { email: validEmail age: validAge }
+
+# ── Pattern 3: Parsing before validating ──────────────────────────────────
+# Parse a string into an integer, then validate the integer.
+# Two failure modes: parsing fails (400) or validation fails (400).
+
+check parseAndValidate(ageStr: String) -> n: Int ::: ValidAge n =
+  case Int.parse ageStr of
+    Nothing -> fail 400 "age must be a number"
+    Something parsed ->
+      check checkAge parsed
+
+# ── Pattern 4: Combining checks with && ───────────────────────────────────
+# The && operator creates a combined check that applies BOTH.
+# Useful when two proofs are required together.
+
+fact NonEmpty (s: String)
+
+check checkNonEmpty(s: String) -> s: String ::: NonEmpty s =
+  if String.length s > 0 then
+    ok s ::: NonEmpty s
+  else
+    fail 400 "must not be empty"
+
+fn processRequest(req: NewUserRequest) -> String =
+  let email = check (checkEmail && checkNonEmpty) req.email
+  let age = check checkAge req.age
+  "processed ${email} age ${age}"
+
+# ─────────────────────────────────────────────
+# UNDERSTANDING — why this model is better
+# ─────────────────────────────────────────────
+# Traditional approach:
+#   function createUser(email, age) {
+#     if (!isValidEmail(email)) return { error: "bad email" };
+#     if (age < 0 || age > 150) return { error: "bad age" };
+#     return { email, age };  // caller must check for error
+#   }
+#
+# Tesl approach:
+#   fn createUser(req: NewUserRequest) -> UserRecord =
+#     let validEmail = check checkEmail req.email   // fails 400 if invalid
+#     let validAge = check checkAge req.age         // fails 400 if invalid
+#     { email: validEmail age: validAge }           // guaranteed valid here
+#
+# The difference:
+#   1. No error return types to check — failure exits immediately
+#   2. The return type UserRecord PROVES validation happened (the compiler
+#      knows email and age carry their proof annotations)
+#   3. Any function that requires ValidEmail CANNOT be called without the proof
+#      — the compiler enforces the validation happened
+
+# ─────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────
+
+test "valid email passes check" {
+  let email = "user@example.com"
+  let result = check checkEmail email
+  expect result == "user@example.com"
+}
+
+test "invalid email is rejected" {
+  let email = "notanemail"
+  expectFail (check checkEmail email)
+}
+
+test "valid age passes check" {
+  let age = 25
+  let result = check checkAge age
+  expect result == 25
+}
+
+test "negative age is rejected" {
+  let age = -1
+  expectFail (check checkAge age)
+}
+
+test "age above 150 is rejected" {
+  let age = 200
+  expectFail (check checkAge age)
+}
+
+test "parseAndValidate rejects non-numeric string" {
+  let s = "notanumber"
+  expectFail (check parseAndValidate s)
+}

@@ -116,7 +116,7 @@ let test_stdlib_adt_ctors_consistent_with_exports () =
              from stdlib_adt_ctors."
             ctor module_name type_name module_name ctor)
       ) ctors
-  ) Validation.stdlib_adt_ctors
+  ) Validation_names.stdlib_adt_ctors
 
 (* ── Test: every stdlib function in stdlib_env with a qualified name is in
          tesl_module_exports ──────────────────────────────────────────────── *)
@@ -156,7 +156,7 @@ let test_adt_constructors_subset_of_stdlib_adt_ctors () =
      Every type in adt_constructors that belongs to a known Tesl stdlib ADT module
      should appear in stdlib_adt_ctors so conflicts are caught at compile time. *)
   let adt_ctors_type_names =
-    Validation.stdlib_adt_ctors
+    Validation_names.stdlib_adt_ctors
     |> List.map (fun (_, (type_name, _)) -> type_name)
   in
   Hashtbl.iter (fun type_name _ctors ->
