@@ -3725,8 +3725,29 @@ let parse_api_form s =
           let return_spec = ref (RetPlain { ty = TName { name = "Unit"; loc = ep_loc0 }; loc = ep_loc0 }) in
           let subscribes = ref [] in
           let continue_ = ref true in
+          let return_seen = ref false in
+          let clause_after_return = ref false in
           while !continue_ do
             skip_layout s;
+            (* After `->` has been seen, any further endpoint clause keyword is a
+               structural error — flag it and skip the keyword token; the clause
+               arguments will be consumed by subsequent `| _ -> advance s` iterations. *)
+            if !return_seen then begin
+              match peek s with
+              | AUTH | CAPTURE | SUBSCRIBE ->
+                advance s; clause_after_return := true
+              | IDENT ("body" | "response") ->
+                advance s; clause_after_return := true
+              | ARROW ->
+                advance s; clause_after_return := true;
+                (* Consume the spurious return spec so its tokens don't confuse things *)
+                (match parse_return_spec_no_arrow s with _ -> ())
+              | IDENT ("get" | "post" | "put" | "delete" | "patch" | "sse") | SSE ->
+                continue_ := false
+              | NEWLINE -> advance s
+              | RBRACE | EOF -> continue_ := false
+              | _ -> advance s
+            end else
             (match peek s with
              | AUTH ->
                advance s;
@@ -3786,7 +3807,7 @@ let parse_api_form s =
                (match parse_return_spec_no_arrow s with
                 | Ok rs -> return_spec := rs
                 | Err _ -> ());
-               continue_ := false
+               return_seen := true
              | IDENT ("get" | "post" | "put" | "delete" | "patch" | "sse") | SSE ->
                continue_ := false
              | NEWLINE -> advance s
@@ -3803,6 +3824,8 @@ let parse_api_form s =
             response_encoder = !resp_enc;
             captures = !captures; return_spec = !return_spec;
             subscribes = !subscribes; loc = ep_loc;
+            has_explicit_return = !return_seen;
+            has_clause_after_return = !clause_after_return;
           } in
           endpoints := ep :: !endpoints
     end;

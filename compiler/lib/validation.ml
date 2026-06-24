@@ -1475,6 +1475,128 @@ let has_auth_proof_param auth_preds params =
     | None -> false
   ) params
 
+(** Extract `:param` names from an endpoint path string. *)
+let path_param_names (path : string) : string list =
+  String.split_on_char '/' path
+  |> List.filter_map (fun segment ->
+       if String.length segment > 1 && segment.[0] = ':' then
+         Some (String.sub segment 1 (String.length segment - 1))
+       else None)
+
+let check_api_endpoint_structure (decls : top_decl list) : validation_error list =
+  let method_str = function
+    | GET -> "get" | POST -> "post" | PUT -> "put"
+    | DELETE -> "delete" | PATCH -> "patch" | SSE -> "sse"
+  in
+  List.concat_map (function
+    | DApi af ->
+      let seen_method_paths : (string * loc) list ref = ref [] in
+      List.concat_map (fun (ep : api_endpoint) ->
+        let errors = ref [] in
+        let add_hint hint msg = errors := make_error ep.loc ~hint msg :: !errors in
+        let ep_id = Printf.sprintf "`%s \"%s\"`" (method_str ep.method_) ep.path in
+
+        (* Clause(s) appeared after `->` — they were silently ignored by the parser *)
+        if ep.has_clause_after_return then
+          add_hint
+            "move all `auth`, `body`, `capture`, `response`, and `subscribe` \
+             clauses to before the `->` return type"
+            (Printf.sprintf
+              "endpoint %s: endpoint clauses (auth/body/capture/response) \
+               must come before the `->` return type, not after"
+              ep_id);
+
+        (* Missing `->` return type (SSE endpoints are exempt: they stream events, no response type) *)
+        if not ep.has_explicit_return && ep.method_ <> SSE then
+          add_hint
+            "add `-> ReturnType` at the end of the endpoint, \
+             e.g. `-> String` or `-> MyResponseRecord`"
+            (Printf.sprintf
+              "endpoint %s: missing return type — every endpoint must have \
+               an explicit `-> TypeName`"
+              ep_id);
+
+        (* Empty path *)
+        if ep.path = "" then
+          add_hint "use a non-empty path string, e.g. `\"/health\"`"
+            (Printf.sprintf
+              "api `%s`: endpoint has an empty path; paths must not be empty"
+              af.name);
+
+        (* Path without leading slash *)
+        if ep.path <> "" && ep.path.[0] <> '/' then
+          add_hint
+            (Printf.sprintf "change `\"%s\"` to `\"/%s\"`" ep.path ep.path)
+            (Printf.sprintf
+              "endpoint %s: path must start with `/`" ep_id);
+
+        (* Auth binding must have a proof annotation *)
+        (match ep.auth with
+         | Some a when a.binding.proof_ann = None ->
+           let ty_name = match a.binding.type_expr with
+             | TName { name; _ } -> name | _ -> "T" in
+           add_hint
+             (Printf.sprintf
+               "add a proof annotation, e.g. `auth %s : %s ::: ProofPred %s via %s`"
+               a.binding.name ty_name a.binding.name a.via_fn)
+             (Printf.sprintf
+               "endpoint %s: auth binding `%s` must have a proof annotation \
+                (`::: ProofPred %s`); without it the handler cannot receive \
+                a verified identity"
+               ep_id a.binding.name a.binding.name)
+         | _ -> ());
+
+        (* Capture names must match path parameters *)
+        let path_params = path_param_names ep.path in
+        List.iter (fun (c : api_capture) ->
+          if not (List.mem c.binding.name path_params) then
+            add_hint
+              (Printf.sprintf
+                "path is `\"%s\"`; available path parameters: %s"
+                ep.path
+                (if path_params = [] then "(none)"
+                 else String.concat ", " (List.map (fun p -> ":"^p) path_params)))
+              (Printf.sprintf
+                "endpoint %s: capture clause for `%s` does not match any \
+                 path parameter (`:param`) in the path"
+                ep_id c.binding.name)
+        ) ep.captures;
+
+        (* Duplicate capture clauses for the same parameter *)
+        let seen_captures : (string * loc) list ref = ref [] in
+        List.iter (fun (c : api_capture) ->
+          match List.assoc_opt c.binding.name !seen_captures with
+          | Some first_loc ->
+            errors := make_error c.binding.loc
+              ~hint:(Printf.sprintf
+                "first `capture %s` is at line %d; remove the duplicate"
+                c.binding.name (first_loc.start.line + 1))
+              (Printf.sprintf
+                "endpoint %s: duplicate capture clause for `%s`"
+                ep_id c.binding.name)
+              :: !errors
+          | None -> seen_captures := (c.binding.name, c.binding.loc) :: !seen_captures
+        ) ep.captures;
+
+        (* Duplicate endpoints: same HTTP method + path within this api block *)
+        let mstr = String.uppercase_ascii (method_str ep.method_) in
+        let key = mstr ^ " " ^ ep.path in
+        (match List.assoc_opt key !seen_method_paths with
+         | Some first_loc ->
+           errors := make_error ep.loc
+             ~hint:(Printf.sprintf "first declaration is at line %d" (first_loc.start.line + 1))
+             (Printf.sprintf
+               "api `%s`: duplicate endpoint %s"
+               af.name ep_id)
+             :: !errors
+         | None ->
+           seen_method_paths := (key, ep.loc) :: !seen_method_paths);
+
+        List.rev !errors
+      ) af.endpoints
+    | _ -> []
+  ) decls
+
 let check_server_handler_binding
     (handlers : (string * handler_decl_ref) list)
     (auth_preds : string list)
@@ -7629,6 +7751,7 @@ let check_module (m : module_form) : validation_error list =
   @ check_duplicate_adt_constructors decls
   @ check_duplicate_decl_fields decls
   @ check_capability_cycles decls
+  @ check_api_endpoint_structure decls
   @ check_server_completeness ~extra_funcs:imported_funcs decls
   @ check_sql_field_names ~extra_funcs:imported_funcs decls
   @ check_codec_target_types decls

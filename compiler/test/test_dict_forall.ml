@@ -59,6 +59,7 @@ let auth_prelude =
   "#lang tesl\nmodule T exposing []\n" ^
   "import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit]\n" ^
   "import Tesl.Dict exposing [Dict, Dict.filterCheckValues, Dict.filterCheckKeys]\n" ^
+  "import Tesl.String exposing [String.length]\n" ^
   "fact IsAuthenticated (u: String)\n" ^
   "check checkIsAuthenticated(u: String) -> u: String ::: IsAuthenticated u =\n" ^
   "  if String.length u > 0 then\n" ^
@@ -70,6 +71,7 @@ let email_prelude =
   "#lang tesl\nmodule T exposing []\n" ^
   "import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit]\n" ^
   "import Tesl.Dict exposing [Dict, Dict.filterCheckValues, Dict.filterCheckKeys]\n" ^
+  "import Tesl.String exposing [String.length]\n" ^
   "fact IsValidEmail (e: String)\n" ^
   "check checkIsValidEmail(e: String) -> e: String ::: IsValidEmail e =\n" ^
   "  if String.length e > 3 then\n" ^

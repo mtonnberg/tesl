@@ -343,6 +343,8 @@ type api_endpoint = {
   return_spec    : return_spec;
   subscribes     : string list;
   loc            : loc;
+  has_explicit_return    : bool;  (** true iff `->` was written in source *)
+  has_clause_after_return : bool; (** true iff an endpoint clause appears after `->` *)
 }
 
 type api_form = {

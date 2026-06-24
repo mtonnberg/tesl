@@ -296,6 +296,7 @@ let test_list_isEmpty_idiom_works () =
   let src = prelude ^ {|
 import Tesl.List exposing [List.isEmpty, List.head, List.foldl]
 import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Int exposing [Int.toString]
 
 fn safeHead(xs: List Int) -> String =
   if List.isEmpty xs then

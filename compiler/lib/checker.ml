@@ -2833,6 +2833,14 @@ let check_type_names_in_scope (m : module_form) : type_error list =
         | TsLet { declared_type = Some te; _ } -> check_te te
         | _ -> []
       ) t.stmts
+    | DApi af ->
+      List.concat_map (fun (ep : api_endpoint) ->
+        (* Skip return-spec check when no explicit `->` was written (default Unit) *)
+        (if ep.has_explicit_return then check_rs ep.return_spec else [])
+        @ (match ep.auth with Some a -> check_te a.binding.type_expr | None -> [])
+        @ List.concat_map (fun (c : api_capture) -> check_te c.binding.type_expr) ep.captures
+        @ (match ep.body with Some b -> check_te b.type_expr | None -> [])
+      ) af.endpoints
     | _ -> []
   ) m.decls
 
