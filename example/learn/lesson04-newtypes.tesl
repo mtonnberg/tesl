@@ -1,5 +1,5 @@
 #lang tesl
-module Newtypes exposing [
+module Lesson04Newtypes exposing [
   UserId,
   ProjectId,
   Email,

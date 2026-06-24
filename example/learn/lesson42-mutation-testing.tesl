@@ -1,5 +1,5 @@
 #lang tesl
-module MutationTesting exposing [
+module Lesson42MutationTesting exposing [
   ValidAge,
   checkAge,
   ValidScore,

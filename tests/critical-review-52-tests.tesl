@@ -22,7 +22,7 @@
 # through the full pipeline (parser → type-checker → proof-checker →
 # emitter → Racket runtime).
 
-module CriticalReview52 exposing []
+module CriticalReview52Tests exposing []
 
 import Tesl.Prelude exposing [ Int, Bool(..), List, Fact, forgetFact, ]
 import Tesl.Maybe exposing [Maybe(..)]

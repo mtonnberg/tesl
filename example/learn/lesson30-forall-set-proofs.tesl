@@ -1,5 +1,5 @@
 #lang tesl
-module ForAllSetLesson exposing [run, doublePositive, mapAndCount]
+module Lesson30ForallSetProofs exposing [run, doublePositive, mapAndCount]
 
 # ─────────────────────────────────────────────
 # ForAll on sets — same semantics as List ForAll

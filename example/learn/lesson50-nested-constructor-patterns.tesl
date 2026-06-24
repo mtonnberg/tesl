@@ -1,5 +1,5 @@
 #lang tesl
-module NestedPatterns exposing [
+module Lesson50NestedConstructorPatterns exposing [
   Shape(..),
   Color(..),
   Expr(..),

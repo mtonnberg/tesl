@@ -751,6 +751,49 @@ let check_test_descriptions (decls : top_decl list) : validation_error list =
     | _ -> None
   ) decls
 
+let check_capture_codec_types (decls : top_decl list) : validation_error list =
+  (* Build newtype-to-base-type map: UserId -> String, etc. *)
+  let newtype_base : (string * string) list =
+    List.filter_map (function
+      | DType (TypeNewtype { name; base_type; _ }) ->
+        (match type_head_name base_type with
+         | Some base -> Some (name, base)
+         | None -> None)
+      | _ -> None
+    ) decls
+  in
+  List.filter_map (function
+    | DCapture cf ->
+      (* Check that the codec is compatible with the capture's binding type.
+         Newtypes are transparent: UserId (newtype of String) can use stringCodec. *)
+      (match type_head_name cf.binding.type_expr with
+       | None -> None  (* complex type — skip *)
+       | Some binding_type ->
+         (match List.assoc_opt cf.parser builtin_codec_type with
+          | None -> None  (* user-defined codec — can't validate statically *)
+          | Some expected_type when expected_type = binding_type -> None  (* direct match *)
+          | Some expected_type ->
+            (* Allow if binding_type is a newtype wrapping expected_type *)
+            let is_newtype_match =
+              match List.assoc_opt binding_type newtype_base with
+              | Some base -> base = expected_type
+              | None -> false
+            in
+            if is_newtype_match then None
+            else
+              Some (make_error cf.loc
+                ~hint:(Printf.sprintf
+                  "use `using %s` for `%s` captures, or change the binding type to `%s`"
+                  (match List.assoc_opt binding_type
+                      (List.map (fun (a,b) -> (b,a)) builtin_codec_type) with
+                   | Some c -> c | None -> binding_type)
+                  binding_type expected_type)
+                (Printf.sprintf
+                  "capture `%s`: binding type is `%s` but `%s` decodes to `%s`"
+                  cf.name binding_type cf.parser expected_type))))
+    | _ -> None
+  ) decls
+
 let check_server_handler_binding
     (handlers : (string * handler_decl_ref) list)
     (auth_preds : string list)
@@ -776,6 +819,37 @@ let check_server_handler_binding
       (Printf.sprintf "server '%s': '%s' is declared, but it is not a handler" sv.name handler_name)
       :: !errors
   | Some hdl ->
+    (* Return type compatibility check: handler return type must match endpoint declaration *)
+    (match endpoint_opt with
+     | None -> ()
+     | Some ep when ep.has_explicit_return ->
+       let handler_return = match hdl with
+         | LocalHandler fd -> return_value_type fd.return_spec
+         | ImportedHandler info -> return_value_type info.fi_return
+       in
+       let endpoint_return = return_value_type ep.return_spec in
+       let handler_loc = match hdl with
+         | LocalHandler fd -> fd.loc
+         | ImportedHandler info -> info.fi_loc
+       in
+       (match handler_return, endpoint_return with
+        | Some h_ty, Some e_ty ->
+          let h_name = type_head_name h_ty in
+          let e_name = type_head_name e_ty in
+          (match h_name, e_name with
+           | Some h, Some e when h <> e ->
+             errors := make_error handler_loc
+               ~hint:(Printf.sprintf
+                 "change handler `%s` return type from `%s` to `%s`, \
+                  or update the endpoint declaration to `-> %s`"
+                 handler_name h e h)
+               (Printf.sprintf
+                 "server '%s': handler '%s' returns `%s` but endpoint '%s' declares `-> %s`"
+                 sv.name handler_name h endpoint_name e)
+               :: !errors
+           | _ -> ())
+        | _ -> ())
+     | _ -> ());
     (* Auth-wiring alignment check — only meaningful when auth predicates are known *)
     if auth_preds <> [] then begin
       let handler_params = match hdl with

@@ -21,7 +21,7 @@
 #   R53_F  = forgetFact / recheck cycles
 #   R53_Q  = Qualified-only import runtime correctness
 
-module CriticalReview53 exposing []
+module CriticalReview53Tests exposing []
 
 import Tesl.Prelude exposing [
   Int,

@@ -1,5 +1,5 @@
 #lang tesl
-module TimeAndPosix exposing [
+module Lesson26TimeAndPosix exposing [
   TimedDatabase,
   TimedServer,
   currentTimestamp,

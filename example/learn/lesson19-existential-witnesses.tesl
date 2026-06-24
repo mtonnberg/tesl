@@ -1,5 +1,5 @@
 #lang tesl
-module ExistentialWitnesses exposing [
+module Lesson19ExistentialWitnesses exposing [
   generateToken,
   IsTokenId,
   Authenticated,

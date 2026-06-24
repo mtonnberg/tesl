@@ -1,5 +1,5 @@
 #lang tesl
-module CrossParam exposing [ValidRange, checkValidRange, clampToRange, safePair]
+module Lesson10CrossParameterProofs exposing [ValidRange, checkValidRange, clampToRange, safePair]
 
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed

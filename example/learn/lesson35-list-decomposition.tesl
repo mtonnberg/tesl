@@ -1,5 +1,5 @@
 #lang tesl
-module ListDecomposition exposing [
+module Lesson35ListDecomposition exposing [
   safeHead,
   safeTail,
   firstOrDefault,

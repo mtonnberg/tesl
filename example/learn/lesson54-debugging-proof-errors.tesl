@@ -1,5 +1,5 @@
 #lang tesl
-module DebuggingProofErrors exposing [
+module Lesson54DebuggingProofErrors exposing [
   ValidScore,
   checkScore,
   requiresValidScore,
@@ -14,7 +14,14 @@ module DebuggingProofErrors exposing [
 # explains how to fix them.
 # ─────────────────────────────────────────────────────────────────────────────
 
-import Tesl.Prelude exposing [Int, String, Fact, detachFact, attachFact, forgetFact]
+import Tesl.Prelude exposing [
+  Int,
+  String,
+  Fact,
+  detachFact,
+  attachFact,
+  forgetFact,
+]
 
 fact ValidScore (n: Int)
 
@@ -46,7 +53,7 @@ fn requiresValidScore(n: Int ::: ValidScore n) -> String =
 
 fn diagnoseCommonMistakes(raw: Int) -> String =
   let validated = check checkScore raw
-  requiresValidScore validated   # OK: validated carries ValidScore
+  requiresValidScore validated # OK: validated carries ValidScore
 
 # ─────────────────────────────────────────────────────────────────────────────
 # COMMON ERROR 2: Proof lost after arithmetic

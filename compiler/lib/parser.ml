@@ -1243,6 +1243,15 @@ and parse_pattern s =
       | UIDENT nested ->
         let lloc = current_loc s in
         advance s; [("value", PNullary { ctor = nested; loc = lloc })]
+      | MINUS ->
+        (* Negative integer literal: Something -1 *)
+        let lloc = current_loc s in
+        advance s;
+        (match peek s with
+         | INT n ->
+           let loc2 = span lloc (current_loc s) in
+           advance s; [("value", PLit { value = LInt (-n); loc = loc2 })]
+         | _ -> [])
       | _ -> []
     in
     let loc = span loc0 (current_loc s) in
@@ -1318,6 +1327,16 @@ and parse_pattern s =
           advance s;
           let pos = List.length !fields in
           fields := (Printf.sprintf "_pos%d" pos, PLit { value = LInt n; loc = lloc }) :: !fields
+        | MINUS ->
+          (* Nested negative integer literal pattern: Something -1 *)
+          let lloc = current_loc s in
+          advance s;
+          (match peek s with
+           | INT n ->
+             advance s;
+             let pos = List.length !fields in
+             fields := (Printf.sprintf "_pos%d" pos, PLit { value = LInt (-n); loc = lloc }) :: !fields
+           | _ -> continue_ := false)
         | STRING str ->
           (* Nested string literal pattern: Something "hello" *)
           let lloc = current_loc s in

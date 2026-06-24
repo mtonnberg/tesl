@@ -1,5 +1,5 @@
 #lang tesl
-module SqlReference exposing [
+module Lesson21SqlReference exposing [
   Product,
   Category,
   findById,

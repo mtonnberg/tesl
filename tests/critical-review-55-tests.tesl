@@ -9,7 +9,7 @@
 #
 # Paired with: compiler/test/test_review55_antagonistic.ml
 
-module CriticalReview55 exposing []
+module CriticalReview55Tests exposing []
 
 import Tesl.Prelude exposing [ Int, Bool(..), String, List, Fact, ]
 import Tesl.Maybe exposing [Maybe(..)]

@@ -1,5 +1,5 @@
 #lang tesl
-module BasicTypes exposing [double, negate, isEmpty, greetAge, clamp]
+module Lesson01BasicTypesAndFunctions exposing [double, negate, isEmpty, greetAge, clamp]
 
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed

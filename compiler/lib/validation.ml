@@ -37,6 +37,7 @@ let check_module (m : module_form) : validation_error list =
   @ check_duplicate_decl_fields decls
   @ check_capability_cycles decls
   @ check_entity_structure decls
+  @ check_capture_codec_types decls
   @ check_api_endpoint_structure decls
   @ check_queue_structure decls
   @ check_channel_structure decls

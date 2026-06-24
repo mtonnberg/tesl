@@ -1,5 +1,5 @@
 #lang tesl
-module Telemetry exposing [processRequest, processRequestWithSpan]
+module Lesson17Telemetry exposing [processRequest, processRequestWithSpan]
 
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed

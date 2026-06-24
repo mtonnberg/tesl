@@ -1,5 +1,5 @@
 #lang tesl
-module ProofDecomposition exposing [
+module Lesson38ProofDecomposition exposing [
   ValidScore,
   checkScore,
   ValidTag,

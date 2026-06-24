@@ -1,5 +1,5 @@
 #lang tesl
-module ProofCombining exposing [
+module Lesson51ProofCombining exposing [
   ValidName,
   NonEmpty,
   InRange,

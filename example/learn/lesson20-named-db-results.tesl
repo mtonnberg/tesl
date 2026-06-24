@@ -1,5 +1,5 @@
 #lang tesl
-module NamedDbResults exposing [
+module Lesson20NamedDbResults exposing [
   Task,
   fetchTask,
   seedAndFetch,

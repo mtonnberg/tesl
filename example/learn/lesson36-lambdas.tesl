@@ -1,5 +1,5 @@
 #lang tesl
-module Lambdas exposing [
+module Lesson36Lambdas exposing [
   applyTwice,
   applyToList,
   makeAdder,

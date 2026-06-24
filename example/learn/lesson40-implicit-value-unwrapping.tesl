@@ -1,5 +1,5 @@
 #lang tesl
-module Lesson40 exposing [double, isAdult, greet, absVal, classify]
+module Lesson40ImplicitValueUnwrapping exposing [double, isAdult, greet, absVal, classify]
 import Tesl.Prelude exposing [Int, Bool, String]
 
 # lesson40: Implicit Value Unwrapping

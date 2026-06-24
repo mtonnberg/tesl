@@ -1,5 +1,5 @@
 #lang tesl
-module Capabilities exposing [
+module Lesson11Capabilities exposing [
   readEnvVar,
   getCurrentTime,
   logMessage,

@@ -1,5 +1,5 @@
 #lang tesl
-module ProofKinds exposing [
+module Lesson06ProofCheckProofAuth exposing [
   InRange,
   checkInRange,
   Trusted,

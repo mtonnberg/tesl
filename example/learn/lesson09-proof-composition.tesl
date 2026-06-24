@@ -1,5 +1,5 @@
 #lang tesl
-module ProofComposition exposing [
+module Lesson09ProofComposition exposing [
   InRange,
   NonEmpty,
   checkInRange,

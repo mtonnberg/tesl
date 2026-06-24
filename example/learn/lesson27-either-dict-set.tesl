@@ -1,5 +1,5 @@
 #lang tesl
-module EitherDictSet exposing [
+module Lesson27EitherDictSet exposing [
   parseAge,
   lookupUser,
   rolePermissions,

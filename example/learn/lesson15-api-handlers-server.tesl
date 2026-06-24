@@ -1,5 +1,5 @@
 #lang tesl
-module TaskApi exposing [TaskServer]
+module Lesson15ApiHandlersServer exposing [TaskServer]
 
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed

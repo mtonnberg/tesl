@@ -1,5 +1,5 @@
 #lang tesl
-module Lesson28 exposing [NotifWorkers, DeadNotifWorkers]
+module Lesson28DeadLetterQueue exposing [NotifWorkers, DeadNotifWorkers]
 
 # Lesson 28 — Dead-Letter Workers
 #
@@ -43,11 +43,11 @@ database FakeDb {
   entities []
   postgres {
     database "notif_db"
-    user     "notif"
+    user "notif"
     password ""
-    host     "localhost"
-    port     5432
-    socket   ""
+    host "localhost"
+    port 5432
+    socket ""
   }
 }
 

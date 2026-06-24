@@ -1,5 +1,5 @@
 #lang tesl
-module ErrorHandlingPatterns exposing [
+module Lesson24ErrorHandlingPatterns exposing [
   ValidEmail,
   checkEmail,
   ValidAge,

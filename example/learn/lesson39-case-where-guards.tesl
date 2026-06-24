@@ -1,5 +1,5 @@
 #lang tesl
-module CaseWhereGuards exposing [
+module Lesson39CaseWhereGuards exposing [
   Shape(..),
   Priority(..),
   Labeled(..),

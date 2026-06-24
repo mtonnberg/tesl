@@ -1,5 +1,5 @@
 #lang tesl
-module DatabaseAndProofs exposing [NoteDatabase, NoteServer]
+module Lesson18DatabaseSqlAndProofs exposing [NoteDatabase, NoteServer]
 
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed

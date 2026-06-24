@@ -1,5 +1,5 @@
 #lang tesl
-module ParamAdts exposing [
+module Lesson37ParameterizedAdts exposing [
   Box(..),
   Option(..),
   Either(..),

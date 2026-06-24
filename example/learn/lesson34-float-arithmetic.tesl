@@ -1,5 +1,5 @@
 #lang tesl
-module FloatArithmetic exposing [
+module Lesson34FloatArithmetic exposing [
   circleArea,
   hypotenuse,
   clampUnit,

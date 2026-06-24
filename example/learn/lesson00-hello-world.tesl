@@ -1,5 +1,5 @@
 #lang tesl
-module HelloWorld exposing [greet, add]
+module Lesson00HelloWorld exposing [greet, add]
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

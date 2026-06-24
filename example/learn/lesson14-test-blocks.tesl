@@ -1,5 +1,5 @@
 #lang tesl
-module TestBlocks exposing [factorial, fibonacci, clamp]
+module Lesson14TestBlocks exposing [factorial, fibonacci, clamp]
 
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed

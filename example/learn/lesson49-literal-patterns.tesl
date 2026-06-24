@@ -1,5 +1,5 @@
 #lang tesl
-module LiteralPatterns exposing [
+module Lesson49LiteralPatterns exposing [
   describeInt,
   httpStatusText,
   parseCommand,

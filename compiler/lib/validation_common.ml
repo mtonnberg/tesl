@@ -194,6 +194,27 @@ type proof_env = (string * proof_expr list) list
 type subject_env = (string * string) list
 type ctor_info = (string * (type_expr list * type_expr)) list
 
+(** Maps codec function names to the primitive type they encode/decode.
+    Shared by codec field validation and capture codec validation. *)
+let builtin_codec_type : (string * string) list = [
+  "stringCodec",      "String";
+  "intCodec",         "Int";
+  "boolCodec",        "Bool";
+  "floatCodec",       "Float";
+  "posixMillisCodec", "PosixMillis";
+  "listCodec",        "List";
+  "dictCodec",        "Dict";
+  "setCodec",         "Set";
+]
+
+(** Extract the head type constructor name from a type expression.
+    Used by codec field and capture codec validation. *)
+let type_head_name (te : type_expr) : string option =
+  match te with
+  | TName { name; _ } -> Some name
+  | TApp { head = TName { name; _ }; _ } -> Some name
+  | _ -> None
+
 let rec return_value_type (spec : return_spec) : type_expr option =
   match spec with
   | RetPlain { ty; _ } -> Some ty

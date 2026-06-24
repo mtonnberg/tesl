@@ -1,5 +1,5 @@
 #lang tesl
-module CompoundNamedPack exposing [
+module Lesson22CompoundNamedPack exposing [
   IsPositive,
   checkIsPositive,
   IsSmall,

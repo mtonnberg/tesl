@@ -1,5 +1,5 @@
 #lang tesl
-module QueueApiExample exposing [EmailQueue, UserEvents, EmailWorkers]
+module QueueApi exposing [EmailQueue, UserEvents, EmailWorkers]
 import Tesl.Prelude exposing [Bool(..), List, String, Fact]
 import Tesl.DB        exposing [dbRead, dbWrite]
 import Tesl.Queue     exposing [deadJobs, requeue, DeadJob, FromDeadQueue, queueRead, queueWrite, pubsub]

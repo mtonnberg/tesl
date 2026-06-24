@@ -396,7 +396,7 @@ EXAMPLE_FILES=(
     "$(pwd)/example/sandbox3.tesl"
     "$(pwd)/example/admin-task-api.tesl"
     "$(pwd)/example/todo-api.tesl"
-    "$(pwd)/example/chat/backend.tesl"
+    "$(pwd)/example/chat/chat-backend.tesl"
     "${KANEL_FILES[@]}"
 )
 

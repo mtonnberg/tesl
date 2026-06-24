@@ -1,7 +1,6 @@
 open Ast
 open Location
 open Validation_common
-open Validation_sql_codec
 open Validation_structural
 open Validation_proof
 open Validation_names
@@ -1381,7 +1380,11 @@ let check_file_module_name_match (m : module_form) : validation_error list =
   else
     let basename = Filename.basename src in
     if not (Filename.check_suffix basename ".tesl") then []
-    else if contains_substring "/example/" src || contains_substring "/tests/" src then []
+    else if contains_substring "/example/" src || contains_substring "/tests/" src
+         (* Also match relative paths that don't start with a slash *)
+         || (let starts = String.length src >= 8 && String.sub src 0 8 = "example/" in starts)
+         || (let starts = String.length src >= 6 && String.sub src 0 6 = "tests/" in starts)
+         then []
     else
       let stem = Filename.chop_suffix basename ".tesl" in
       let kebab = module_name_to_kebab mname in

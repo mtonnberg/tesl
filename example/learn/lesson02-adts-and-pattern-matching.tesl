@@ -1,5 +1,5 @@
 #lang tesl
-module Adts exposing [
+module Lesson02AdtsAndPatternMatching exposing [
   Color(..),
   Weekday(..),
   Direction(..),

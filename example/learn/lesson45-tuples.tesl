@@ -1,5 +1,5 @@
 #lang tesl
-module Lesson45 exposing [
+module Lesson45Tuples exposing [
   makePoint,
   pointX,
   pointY,

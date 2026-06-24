@@ -1,5 +1,5 @@
 #lang tesl
-module IntroProofs exposing [
+module Lesson05IntroToProofs exposing [
   ValidPort,
   isValidPort,
   Positive,

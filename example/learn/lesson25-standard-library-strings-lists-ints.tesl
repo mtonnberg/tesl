@@ -1,5 +1,5 @@
 #lang tesl
-module StdLibStringsListsInts exposing [
+module Lesson25StandardLibraryStringsListsInts exposing [
   exampleStringOps,
   exampleListOps,
   exampleIntOps,

@@ -8,7 +8,7 @@
 #
 # Paired with: compiler/test/test_review54_antagonistic.ml
 
-module CriticalReview54 exposing []
+module CriticalReview54Tests exposing []
 
 import Tesl.Prelude exposing [
   Int,

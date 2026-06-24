@@ -1,5 +1,5 @@
 #lang tesl
-module NotesApi exposing [NotesServer]
+module Lesson16CompleteNotesApi exposing [NotesServer]
 
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed

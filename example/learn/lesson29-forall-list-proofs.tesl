@@ -1,5 +1,5 @@
 #lang tesl
-module ForAllLesson exposing [NoteServer]
+module Lesson29ForallListProofs exposing [NoteServer]
 
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed

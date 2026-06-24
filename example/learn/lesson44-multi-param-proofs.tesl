@@ -1,5 +1,5 @@
 #lang tesl
-module MultiParamProofs exposing [
+module Lesson44MultiParamProofs exposing [
   InBounds,
   checkInBounds,
   requiresInBounds,

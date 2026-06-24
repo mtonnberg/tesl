@@ -1,5 +1,5 @@
 #lang tesl
-module RecordsWithProofs exposing [
+module Lesson12RecordsWithProofs exposing [
   SafeTitle,
   TitleLength,
   checkSafeTitle,

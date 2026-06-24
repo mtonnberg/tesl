@@ -24,10 +24,11 @@
 #   R51_C  = Constructor / case / pattern matching
 #   R51_N  = New positive coverage added after the fix round
 #
-module CriticalReview51 exposing []
+module CriticalReview51Tests exposing []
 
 import Tesl.Prelude exposing [ Int, String, Bool(..), List, Fact, forgetFact, ]
 import Tesl.Maybe exposing [Maybe, Something, Nothing]
+import Tesl.List exposing [List.length]
 
 # ---------------------------------------------------------------------
 # Proof vocabulary used across tests

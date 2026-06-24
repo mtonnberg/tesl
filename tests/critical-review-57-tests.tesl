@@ -16,7 +16,7 @@
 # - Cross-module proofs (tested by import in kanel)
 # - Capability checking for handler/fn
 
-module CriticalReview57 exposing []
+module CriticalReview57Tests exposing []
 
 import Tesl.Prelude exposing [
   Bool(..),
@@ -34,6 +34,7 @@ import Tesl.Prelude exposing [
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Either exposing [Either(..)]
 import Tesl.List exposing [List.filterCheck, List.length, List.allCheck]
+import Tesl.String exposing [String.length]
 
 # ─── Proof vocabulary ────────────────────────────────────────────────────────
 

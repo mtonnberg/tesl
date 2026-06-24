@@ -1,5 +1,5 @@
 #lang tesl
-module OrderableTypes exposing [
+module Lesson43OrderableTypes exposing [
   Score,
   Rank,
   Priority,

@@ -295,27 +295,6 @@ let check_codec_proof_coverage ?(extra_funcs=[]) (decls : top_decl list) : valid
    the declared field type.  User-defined codec names (e.g. `Priority`) must
    match the field's head type name.  §11.7 of the language spec. *)
 
-let builtin_codec_type : (string * string) list = [
-  "stringCodec",      "String";
-  "intCodec",         "Int";
-  "boolCodec",        "Bool";
-  "floatCodec",       "Float";
-  "posixMillisCodec", "PosixMillis";
-  "listCodec",        "List";
-  "dictCodec",        "Dict";
-  "setCodec",         "Set";
-]
-
-(** Extract the head type name from a type_expr.
-    TName {name="Priority"} -> Some "Priority"
-    TApp {head=TName {name="Maybe"}; arg=...} -> Some "Maybe"
-    _ -> None *)
-let type_head_name (te : type_expr) : string option =
-  match te with
-  | TName { name; _ } -> Some name
-  | TApp { head = TName { name; _ }; _ } -> Some name
-  | _ -> None
-
 let check_codec_field_types (decls : top_decl list) : validation_error list =
   (* Build a map: record/entity name -> (field_name -> type_expr) *)
   let field_types_by_type : (string * (string * type_expr) list) list =
