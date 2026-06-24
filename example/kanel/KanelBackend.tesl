@@ -7,7 +7,7 @@ module KanelBackend exposing [KanelServer]
 # captures, API, server, main) lives here; business logic lives in the
 # domain modules.
 
-import Tesl.Prelude exposing [Bool(..), String, Unit]
+import Tesl.Prelude exposing [Bool(..), String, Unit, List]
 import Tesl.Env exposing [env, envInt]
 import Tesl.Time exposing [time]
 import Tesl.Id exposing [generatePrefixedId]

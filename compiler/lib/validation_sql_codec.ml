@@ -339,7 +339,16 @@ let check_codec_field_types (decls : top_decl list) : validation_error list =
   (* Shared helper: check one field_name + codec pair against declared field types *)
   let check_field_codec ~direction cf_name field_types field_name codec loc =
     match List.assoc_opt field_name field_types with
-    | None -> () (* unknown field — caught by other checks *)
+    | None ->
+      (* Field does not exist on the record — this is a real error, not caught elsewhere *)
+      if field_types <> [] then
+        errors := make_error loc
+          ~hint:(Printf.sprintf "valid fields on '%s': %s"
+            cf_name (String.concat ", " (List.map fst field_types)))
+          (Printf.sprintf "codec '%s': field '%s' does not exist on type '%s'; remove this %s entry or rename the field"
+            cf_name field_name cf_name
+            (if direction = `Encode then "toJson" else "fromJson"))
+          :: !errors
     | Some field_type ->
       let field_type_name = type_head_name field_type in
       let verb = if direction = `Encode then "encodes" else "decodes to" in

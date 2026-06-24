@@ -1112,11 +1112,17 @@ and parse_case s =
   let* _ = expect s OF in
   skip_newlines s;
   (* Arms must follow — either indented or at same level in braces *)
-  let* _ = expect s INDENT in
+  (match expect s INDENT with
+   | Err _ -> err s "case expression must have at least one arm; add an indented arm: `  Pattern -> expression`"
+   | Ok () -> Ok ()) |> (fun r -> match r with Err e -> Err e | Ok () ->
   let* arms = parse_case_arms s in
-  if peek s = DEDENT then advance s;
-  let loc = span loc0 (current_loc s) in
-  return (ECase { scrut; arms; loc })
+  if arms = [] then
+    err s "case expression must have at least one arm; add an indented arm: `  Pattern -> expression`"
+  else begin
+    if peek s = DEDENT then advance s;
+    let loc = span loc0 (current_loc s) in
+    return (ECase { scrut; arms; loc })
+  end)
 
 and parse_case_arms s =
   let arms = ref [] in
@@ -1334,6 +1340,15 @@ and parse_pattern s =
   | INT n ->
     let loc = span loc0 (current_loc s) in
     advance s; return (PLit { value = LInt n; loc })
+  | MINUS ->
+    (* Negative integer literal in pattern: -42 *)
+    advance s;
+    (match peek s with
+     | INT n ->
+       let loc = span loc0 (current_loc s) in
+       advance s; return (PLit { value = LInt (-n); loc })
+     | t ->
+       err s (Printf.sprintf "expected integer after `-` in pattern, got %s" (tok_to_string t)))
   | t ->
     err s (Printf.sprintf "expected pattern, got %s" (tok_to_string t))
 
