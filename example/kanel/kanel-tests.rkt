@@ -14,9 +14,9 @@
   (only-in tesl/tesl/prelude Bool Int String List Fact)
   (only-in tesl/tesl/string [String.length tesl_import_String_length])
   (only-in tesl/tesl/list [List.length tesl_import_List_length] [List.foldl tesl_import_List_foldl])
-  (only-in tesl/example/kanel/kanel-models OrgRole RoleAdmin RoleMember RoleViewer IssueStatus Backlog Todo InProgress InReview Done Cancelled InvoiceStatus Draft Approved Sent Paid Overdue)
-  (only-in tesl/example/kanel/kanel-org checkOrgName checkSlug checkEmail checkOrgName-signature checkSlug-signature checkEmail-signature)
-  (only-in tesl/example/kanel/kanel-issues checkTitle checkDescription checkEstimate checkPositiveMinutes checkCommentBody checkTransition checkTitle-signature checkDescription-signature checkEstimate-signature checkPositiveMinutes-signature checkCommentBody-signature checkTransition-signature)
+  (only-in tesl/github/tesl/example/kanel/kanel-models OrgRole RoleAdmin RoleMember RoleViewer IssueStatus Backlog Todo InProgress InReview Done Cancelled InvoiceStatus Draft Approved Sent Paid Overdue)
+  (only-in tesl/github/tesl/example/kanel/kanel-org checkOrgName checkSlug checkEmail checkOrgName-signature checkSlug-signature checkEmail-signature)
+  (only-in tesl/github/tesl/example/kanel/kanel-issues checkTitle checkDescription checkEstimate checkPositiveMinutes checkCommentBody checkTransition checkTitle-signature checkDescription-signature checkEstimate-signature checkPositiveMinutes-signature checkCommentBody-signature checkTransition-signature)
 )
 
 

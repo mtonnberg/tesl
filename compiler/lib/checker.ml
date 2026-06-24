@@ -2899,6 +2899,120 @@ let collect_proof_predicate_uses (m : module_form) : (string * Location.loc) lis
     | _ -> []
   ) m.decls
 
+(** Map from short module name prefix to canonical Tesl stdlib module name. *)
+let stdlib_module_of_prefix : (string * string) list = [
+  ("List",   "Tesl.List");
+  ("Dict",   "Tesl.Dict");
+  ("String", "Tesl.String");
+  ("Int",    "Tesl.Int");
+  ("Float",  "Tesl.Float");
+  ("Set",    "Tesl.Set");
+  ("Either", "Tesl.Either");
+  ("Tuple2", "Tesl.Tuple");
+  ("Tuple3", "Tesl.Tuple");
+  ("Time",   "Tesl.Time");
+  ("Random", "Tesl.Random");
+  ("Env",    "Tesl.Env");
+  ("Cli",    "Tesl.Cli");
+  ("Id",     "Tesl.Id");
+]
+
+(** Collect all qualified stdlib function uses from function/const bodies.
+    Returns (qualified_name, first_loc) pairs, deduplicated by name. *)
+let collect_stdlib_fn_uses (m : module_form) : (string * Location.loc) list =
+  let all_stdlib_fns =
+    List.concat_map snd Type_system.tesl_module_exports
+    |> List.filter (fun n -> String.contains n '.')
+  in
+  let seen : (string, Location.loc) Hashtbl.t = Hashtbl.create 16 in
+  let add qname loc =
+    if List.mem qname all_stdlib_fns && not (Hashtbl.mem seen qname) then
+      Hashtbl.replace seen qname loc
+  in
+  let rec walk = function
+    | EField { obj = EConstructor { name = modname; args = []; _ }; field; loc } ->
+      add (modname ^ "." ^ field) loc
+    | EField { obj = EVar { name = modname; _ }; field; loc } ->
+      add (modname ^ "." ^ field) loc
+    | EField { obj; _ } -> walk obj
+    | EApp { fn; arg; _ } -> walk fn; walk arg
+    | EBinop { left; right; _ } -> walk left; walk right
+    | EUnop { arg; _ } -> walk arg
+    | EIf { cond; then_; else_; _ } -> walk cond; walk then_; walk else_
+    | ECase { scrut; arms; _ } ->
+      walk scrut; List.iter (fun (arm : Ast.case_arm) -> walk arm.body) arms
+    | ELet { value; body; _ } | ELetProof { value; body; _ } ->
+      walk value; walk body
+    | EList { elems; _ } -> List.iter walk elems
+    | ERecord { fields; _ } -> List.iter (fun (_, v) -> walk v) fields
+    | EOk { value; _ } -> walk value
+    | EConstructor { args; _ } -> List.iter walk args
+    | ELambda { body; _ } -> walk body
+    | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+    | EWithTransaction { body; _ } -> walk body
+    | ETelemetry { fields; _ } -> List.iter (fun (_, v) -> walk v) fields
+    | EEnqueue { payload; _ } -> walk payload
+    | EPublish { key; payload; _ } ->
+      (match key with Some k -> walk k | None -> ());
+      (match payload with Some p -> walk p | None -> ())
+    | EServe { port; _ } -> walk port
+    | EFail { message; _ } -> walk message
+    | ELit _ | EVar _ | EStartWorkers _ -> ()
+  in
+  List.iter (function
+    | DFunc fd -> walk fd.body
+    | DConst c -> walk c.value
+    | _ -> ()
+  ) m.decls;
+  Hashtbl.fold (fun k v acc -> (k, v) :: acc) seen []
+
+(** Check that qualified stdlib functions used in code have a corresponding import.
+    Without the import the emitter cannot generate the Racket `require` binding,
+    causing a runtime error instead of a compile-time error.
+
+    Rules:
+    - `import Tesl.X` (ImportAll)            → every X.* function is available.
+    - `import Tesl.X exposing [X.func, ...]` → only the listed functions are available.
+    - No import for Tesl.X                   → no X.* function is available. *)
+let check_stdlib_fn_import_scope (m : module_form) : type_error list =
+  let strip_dotdot s =
+    let n = String.length s in
+    if n > 4 && String.sub s (n - 4) 4 = "(..)" then String.sub s 0 (n - 4) else s
+  in
+  let is_fn_available tesl_module qname =
+    List.exists (fun (imp : import_decl) ->
+      imp.module_name = tesl_module &&
+      (match imp.names with
+       | ImportAll -> true
+       | ImportExposing names ->
+         List.exists (fun n -> strip_dotdot n = qname) names)
+    ) m.imports
+  in
+  List.filter_map (fun (qname, loc) ->
+    let prefix = match String.index_opt qname '.' with
+      | Some i -> String.sub qname 0 i
+      | None -> qname
+    in
+    match List.assoc_opt prefix stdlib_module_of_prefix with
+    | None -> None
+    | Some tesl_module ->
+      if is_fn_available tesl_module qname then None
+      else
+        let has_any_import = List.exists
+          (fun (imp : import_decl) -> imp.module_name = tesl_module) m.imports
+        in
+        let hint =
+          if has_any_import then
+            Printf.sprintf
+              " (you have `import %s` but `%s` is not in the exposing list)"
+              tesl_module qname
+          else ""
+        in
+        Some { loc; message = Printf.sprintf
+          "function `%s` requires `import %s` (or `import %s exposing [%s]`)%s"
+          qname tesl_module tesl_module qname hint }
+  ) (collect_stdlib_fn_uses m)
+
 (** Check that stdlib proof predicates used in annotations are explicitly imported.
     A plain `import Tesl.X` (no exposing) does NOT make predicates like IsTrimmed available. *)
 let check_proof_predicate_scope (m : module_form) : type_error list =
@@ -3195,6 +3309,7 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
   let import_errors = import_errors @ check_local_import_names m in
   let import_errors = import_errors @ check_type_names_in_scope m in
   let import_errors = import_errors @ check_proof_predicate_scope m in
+  let import_errors = import_errors @ check_stdlib_fn_import_scope m in
   let initial_env = make_stdlib_env () in
   let ctx = make_ctx ~filename:m.source_file ~env:initial_env in
 

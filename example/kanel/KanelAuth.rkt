@@ -15,7 +15,7 @@
   (only-in tesl/tesl/http HttpRequest)
   (only-in tesl/tesl/dict [Dict.lookup tesl_import_Dict_lookup])
   (only-in tesl/tesl/maybe Maybe Something Nothing)
-  (only-in tesl/example/kanel/kanel-models kanelDbRead KanelUser OrgMembership ProjectMembership Issue OrgRole RoleAdmin RoleMember RoleViewer)
+  (only-in tesl/github/tesl/example/kanel/kanel-models kanelDbRead KanelUser OrgMembership ProjectMembership Issue OrgRole RoleAdmin RoleMember RoleViewer)
 )
 
 

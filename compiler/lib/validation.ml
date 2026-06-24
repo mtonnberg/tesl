@@ -4787,10 +4787,47 @@ let imported_ctor_request_type_names (imp : import_decl) : string list =
         None
     ) names
 
+(** Constructors exported by stdlib ADT types, keyed by the type name.
+    Used to detect conflicts when a local ADT reuses a stdlib constructor name. *)
+let stdlib_adt_ctors : (string * (string * string list)) list = [
+  (* (tesl_module, (type_name, [constructors...])) *)
+  ("Tesl.Maybe",   ("Maybe",        ["Maybe"; "Something"; "Nothing"]));
+  ("Tesl.Result",  ("Result",       ["Result"; "Ok"; "Err"]));
+  ("Tesl.Either",  ("Either",       ["Either"; "Left"; "Right"]));
+  ("Tesl.DB",      ("DeleteResult", ["DeleteResult"; "NoRowDeleted"; "RowsDeleted"]));
+  ("Tesl.ApiTest", ("JobResult",    ["JobResult"; "JobOk"; "JobFailed"]));
+]
+
 let imported_plain_exposed_ctor_entries (m : module_form) : (string * string * string * loc) list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
   in
+  let stdlib_entries =
+    List.concat_map (fun (imp : import_decl) ->
+      if not (is_tesl_module imp.module_name) then []
+      else
+        match imp.names with
+        | ImportAll -> []
+        | ImportExposing names ->
+          let has_dotdot s =
+            let n = String.length s in
+            n > 4 && String.sub s (n - 4) 4 = "(..)"
+          in
+          let strip_dotdot s =
+            let n = String.length s in
+            if n > 4 && String.sub s (n - 4) 4 = "(..)" then String.sub s 0 (n - 4) else s
+          in
+          (* Only expand constructors for names explicitly listed with (..) *)
+          let dotdot_types = names |> List.filter has_dotdot |> List.map strip_dotdot in
+          (match List.assoc_opt imp.module_name stdlib_adt_ctors with
+           | None -> []
+           | Some (type_name, ctors) ->
+             if List.mem type_name dotdot_types then
+               List.map (fun ctor -> (ctor, type_name, imp.module_name, imp.loc)) ctors
+             else [])
+    ) m.imports
+  in
+  stdlib_entries @
   List.concat_map (fun (imp : import_decl) ->
     if is_tesl_module imp.module_name then []
     else

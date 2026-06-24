@@ -17,8 +17,8 @@
   (only-in tesl/tesl/id generatePrefixedId)
   (only-in tesl/tesl/random random)
   (only-in tesl/tesl/maybe Maybe Something Nothing)
-  (only-in tesl/example/kanel/kanel-models ValidOrgId ValidProjectId ValidIssueId kanelDbRead kanelDbWrite kanelPubSub OrgRole RoleAdmin RoleMember RoleViewer IssueStatus Backlog Todo InProgress InReview Done Cancelled OrgMembership Project ProjectMembership Issue IssueComment TimeEntry NewProjectRequest NewIssueRequest UpdateIssueRequest UpdateStatusRequest NewCommentRequest NewTimeEntryRequest)
-  (only-in tesl/example/kanel/kanel-auth KanelSession Authenticated OrgMember IssueAssignee checkOrgMember checkOrgAdmin checkProjMember checkOrgMember-signature checkOrgAdmin-signature checkProjMember-signature)
+  (only-in tesl/github/tesl/example/kanel/kanel-models ValidOrgId ValidProjectId ValidIssueId kanelDbRead kanelDbWrite kanelPubSub OrgRole RoleAdmin RoleMember RoleViewer IssueStatus Backlog Todo InProgress InReview Done Cancelled OrgMembership Project ProjectMembership Issue IssueComment TimeEntry NewProjectRequest NewIssueRequest UpdateIssueRequest UpdateStatusRequest NewCommentRequest NewTimeEntryRequest)
+  (only-in tesl/github/tesl/example/kanel/kanel-auth KanelSession Authenticated OrgMember IssueAssignee checkOrgMember checkOrgAdmin checkProjMember checkOrgMember-signature checkOrgAdmin-signature checkProjMember-signature)
 )
 
 

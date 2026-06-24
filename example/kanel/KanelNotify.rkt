@@ -13,7 +13,7 @@
   tesl/tesl/sse
   (only-in tesl/tesl/telemetry telemetry)
   (only-in tesl/tesl/queue queueRead FromQueue FromDeadQueue)
-  (only-in tesl/example/kanel/kanel-models NotifyPayload)
+  (only-in tesl/github/tesl/example/kanel/kanel-models NotifyPayload)
 )
 
 

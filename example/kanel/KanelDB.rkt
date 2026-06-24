@@ -16,11 +16,11 @@
   (only-in tesl/tesl/maybe Maybe Something Nothing)
   (only-in tesl/tesl/time nowMillis time [Time.secondsToPosix tesl_import_Time_secondsToPosix])
   (only-in tesl/tesl/db DeleteResult NoRowDeleted RowsDeleted)
-  (only-in tesl/example/kanel/kanel-models kanelDbRead kanelDbWrite KanelUser Org OrgMembership Project Issue IssueComment TimeEntry Invoice OrgRole RoleAdmin RoleMember RoleViewer IssueStatus Backlog Todo InProgress InReview Done Cancelled InvoiceStatus Draft Approved Sent Paid Overdue)
-  (only-in tesl/example/kanel/kanel-auth OrgMember OrgAdmin ProjMember)
-  (only-in tesl/example/kanel/kanel-org ValidOrgName ValidSlug ValidEmail ValidDisplayName)
-  (only-in tesl/example/kanel/kanel-issues ValidTitle ValidDescription PositiveEstimate PositiveMinutes NotDone ValidCommentBody)
-  (only-in tesl/example/kanel/kanel-billing InvoiceDraft)
+  (only-in tesl/github/tesl/example/kanel/kanel-models kanelDbRead kanelDbWrite KanelUser Org OrgMembership Project Issue IssueComment TimeEntry Invoice OrgRole RoleAdmin RoleMember RoleViewer IssueStatus Backlog Todo InProgress InReview Done Cancelled InvoiceStatus Draft Approved Sent Paid Overdue)
+  (only-in tesl/github/tesl/example/kanel/kanel-auth OrgMember OrgAdmin ProjMember)
+  (only-in tesl/github/tesl/example/kanel/kanel-org ValidOrgName ValidSlug ValidEmail ValidDisplayName)
+  (only-in tesl/github/tesl/example/kanel/kanel-issues ValidTitle ValidDescription PositiveEstimate PositiveMinutes NotDone ValidCommentBody)
+  (only-in tesl/github/tesl/example/kanel/kanel-billing InvoiceDraft)
 )
 
 

@@ -598,14 +598,14 @@ let tesl_module_exports : (string * string list) list = [
       "Dict.map"; "Dict.mapWithKey"; "Dict.filter"; "Dict.filterWithKey";
       "Dict.filterCheckValues"; "Dict.filterCheckKeys";
       "Dict.foldl"; "Dict.foldr"; "Dict.union"; "Dict.unionWith";
-      "Dict.intersection"; "Dict.difference"; "Dict.update" ] );
+      "Dict.intersection"; "Dict.difference"; "Dict.update"; "Dict.delete" ] );
   ( "Tesl.Set",
     [ "Set";
       "Set.empty"; "Set.singleton"; "Set.insert"; "Set.remove"; "Set.member";
       "Set.size"; "Set.isEmpty"; "Set.toList"; "Set.fromList"; "Set.union";
       "Set.intersection"; "Set.difference"; "Set.isSubset"; "Set.map";
       "Set.filter"; "Set.foldl"; "Set.any"; "Set.all"; "Set.partition";
-      "Set.filterCheck"; "Set.allCheck"; "Set.mapCheck" ] );
+      "Set.filterCheck"; "Set.allCheck"; "Set.mapCheck"; "Set.delete" ] );
   ( "Tesl.Tuple",
     [ "Tuple2"; "Tuple3";
       "Tuple2.first"; "Tuple2.second";

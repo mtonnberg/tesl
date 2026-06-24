@@ -16,8 +16,8 @@
   (only-in tesl/tesl/id generatePrefixedId)
   (only-in tesl/tesl/random random)
   (only-in tesl/tesl/maybe Maybe Something Nothing)
-  (only-in tesl/example/kanel/kanel-models ValidOrgId ValidInvoiceId kanelDbRead kanelDbWrite InvoiceStatus Draft Approved Sent Paid Overdue TimeEntry Invoice NewInvoiceRequest)
-  (only-in tesl/example/kanel/kanel-auth KanelSession Authenticated checkOrgAdmin checkOrgAdmin-signature)
+  (only-in tesl/github/tesl/example/kanel/kanel-models ValidOrgId ValidInvoiceId kanelDbRead kanelDbWrite InvoiceStatus Draft Approved Sent Paid Overdue TimeEntry Invoice NewInvoiceRequest)
+  (only-in tesl/github/tesl/example/kanel/kanel-auth KanelSession Authenticated checkOrgAdmin checkOrgAdmin-signature)
 )
 
 
