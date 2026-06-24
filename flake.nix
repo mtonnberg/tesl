@@ -371,16 +371,24 @@
                   PREV_SNAP="$CURR_SNAP"
                   echo "[tesl watch] Compiling..."
                   STDERR_TMP="$(mktemp)"
-                  if _tesl_compile_to_stdout "$FILE" > "$OUT" 2>"$STDERR_TMP"; then
+                  OUT_TMP="$(mktemp --suffix=.rkt)"
+                  if _tesl_compile_to_stdout "$FILE" > "$OUT_TMP" 2>"$STDERR_TMP"; then
                     grep -Ev "^raco (setup|make|link|test):" "$STDERR_TMP" >&2 || true
                     rm -f "$STDERR_TMP"
+                    if ! cmp -s "$OUT_TMP" "$OUT"; then
+                      mv "$OUT_TMP" "$OUT"
+                    else
+                      rm -f "$OUT_TMP"
+                    fi
                     [ -n "$RACKET_PID" ] && { kill "$RACKET_PID" 2>/dev/null; wait "$RACKET_PID" 2>/dev/null; }
+                    echo "[tesl watch] Starting..." >&2
                     racket "$OUT" "$@" &
                     RACKET_PID=$!
                     echo "[tesl watch] Server running (pid $RACKET_PID)"
                   else
                     grep -Ev "^raco (setup|make|link|test):" "$STDERR_TMP" >&2 || true
                     rm -f "$STDERR_TMP"
+                    rm -f "$OUT_TMP"
                     echo "[tesl watch] Compile error — previous server kept running" >&2
                   fi
                 fi
