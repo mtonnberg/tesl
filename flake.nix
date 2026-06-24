@@ -95,11 +95,12 @@
             cp -r lang build/collections/tesl/lang
 
             export HOME=$(mktemp -d)
-            export PLTCOLLECTS="$(pwd)/build/collections"
+            export PLTCOLLECTS="${pkgs.racket}/share/racket/collects:$(pwd)/build/collections"
 
             # Pre-compile all .rkt files; non-fatal (see comment above).
             find build/collections -name "*.rkt" -print0 \
-              | xargs -0 -P"$(nproc)" raco make 2>&1 || true
+              | xargs -0 -P"$(nproc)" raco make 2>&1 \
+              || echo "warning: tesl-racket: raco pre-compilation failed — first run will be slower" >&2
           '';
 
           installPhase = ''
@@ -299,7 +300,15 @@
               done
               
               if [ "$RET" -eq 0 ]; then
-                if _tesl_compile_to_stdout "$FILE" > "$OUT"; then
+                OUT_TMP="$(mktemp --suffix=.rkt)"
+                if _tesl_compile_to_stdout "$FILE" > "$OUT_TMP"; then
+                  # Only update $OUT if content changed — preserves mtime for Racket's .zo cache
+                  if ! cmp -s "$OUT_TMP" "$OUT"; then
+                    mv "$OUT_TMP" "$OUT"
+                  else
+                    rm -f "$OUT_TMP"
+                  fi
+                  echo "[tesl] Starting..." >&2
                   if [ "''${TESL_VERBOSE:-0}" = "1" ]; then
                     racket "$OUT" "$@"; RET=$?
                   else
@@ -309,7 +318,7 @@
                     rm -f "$STDERR_TMP"
                   fi
                 else
-                  RET=$?
+                  RET=$?; rm -f "$OUT_TMP"
                 fi
               fi
               exit "$RET"
