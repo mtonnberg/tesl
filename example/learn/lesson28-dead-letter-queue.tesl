@@ -35,6 +35,22 @@ record SendNotif {
   message: String
 }
 
+# ── Database ──────────────────────────────────────────────────────────────────
+
+database FakeDb {
+  backend postgres
+  schema "notifications"
+  entities []
+  postgres {
+    database "notif_db"
+    user     "notif"
+    password ""
+    host     "localhost"
+    port     5432
+    socket   ""
+  }
+}
+
 # ── Queue ─────────────────────────────────────────────────────────────────────
 
 queue NotifQueue {

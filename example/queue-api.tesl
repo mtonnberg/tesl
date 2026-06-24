@@ -8,6 +8,20 @@ import Tesl.Telemetry exposing [initTelemetry]
 capability emailWrite implies queueWrite
 capability appService implies dbRead, dbWrite, emailWrite, pubsub
 
+database MainDatabase {
+  backend postgres
+  schema  "app"
+  entities []
+  postgres {
+    database "app_db"
+    user     "app"
+    password ""
+    host     "localhost"
+    port     5432
+    socket   ""
+  }
+}
+
 record SendEmail {
   to: String
   subject: String

@@ -2841,6 +2841,10 @@ let check_type_names_in_scope (m : module_form) : type_error list =
         @ List.concat_map (fun (c : api_capture) -> check_te c.binding.type_expr) ep.captures
         @ (match ep.body with Some b -> check_te b.type_expr | None -> [])
       ) af.endpoints
+    | DFact ff ->
+      List.concat_map (fun (b : binding) -> check_te b.type_expr) ff.params
+    | DCapture cf ->
+      check_te cf.binding.type_expr
     | _ -> []
   ) m.decls
 

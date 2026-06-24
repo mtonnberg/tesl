@@ -1599,14 +1599,41 @@ let check_api_endpoint_structure (decls : top_decl list) : validation_error list
 
 (* ── Queue / channel / workers / database / api-test structure checks ─────── *)
 
+let check_entity_structure (decls : top_decl list) : validation_error list =
+  List.concat_map (function
+    | DEntity e ->
+      let errs = ref [] in
+      let add hint msg = errs := make_error e.loc ~hint msg :: !errs in
+      if e.table = "" then
+        add "add a table name: `entity Foo table \"my_table\" ...`"
+          (Printf.sprintf "entity `%s` has an empty table name" e.name);
+      let field_names = List.map (fun (f : field_def) -> f.name) e.fields in
+      if e.primary_key <> "" && not (List.mem e.primary_key field_names) then
+        add (Printf.sprintf
+          "declare `%s` as a field of entity `%s`, e.g. `%s: Int`"
+          e.primary_key e.name e.primary_key)
+          (Printf.sprintf
+            "entity `%s` declares `%s` as its primary key but has no field named `%s`"
+            e.name e.primary_key e.primary_key);
+      List.rev !errs
+    | _ -> []
+  ) decls
+
 let check_queue_structure (decls : top_decl list) : validation_error list =
+  let known_dbs =
+    List.filter_map (function DDatabase db -> Some db.name | _ -> None) decls
+  in
   List.concat_map (function
     | DQueue q ->
       let errs = ref [] in
       let add hint msg = errs := make_error q.loc ~hint msg :: !errs in
       if q.database = "" then
         add "add `database MyDB` inside the queue block"
-          (Printf.sprintf "queue `%s` is missing a `database` clause" q.name);
+          (Printf.sprintf "queue `%s` is missing a `database` clause" q.name)
+      else if not (List.mem q.database known_dbs) then
+        add (Printf.sprintf "declare `database %s { ... }` in this module" q.database)
+          (Printf.sprintf
+            "queue `%s` references unknown database `%s`" q.name q.database);
       if q.jobs = [] then
         add "add `jobs [JobType]` listing the record types that can be enqueued"
           (Printf.sprintf "queue `%s` has no job types; at least one `jobs [JobType]` entry is required" q.name);
@@ -1615,6 +1642,9 @@ let check_queue_structure (decls : top_decl list) : validation_error list =
   ) decls
 
 let check_channel_structure (decls : top_decl list) : validation_error list =
+  let known_dbs =
+    List.filter_map (function DDatabase db -> Some db.name | _ -> None) decls
+  in
   List.concat_map (function
     | DChannel ch ->
       let errs = ref [] in
@@ -1622,6 +1652,12 @@ let check_channel_structure (decls : top_decl list) : validation_error list =
         errs := make_error ch.loc
           ~hint:"add `database MyDB` inside the channel block"
           (Printf.sprintf "channel `%s` is missing a `database` clause" ch.name)
+          :: !errs
+      else if not (List.mem ch.database known_dbs) then
+        errs := make_error ch.loc
+          ~hint:(Printf.sprintf "declare `database %s { ... }` in this module" ch.database)
+          (Printf.sprintf
+            "channel `%s` references unknown database `%s`" ch.name ch.database)
           :: !errs;
       List.rev !errs
     | _ -> []
@@ -7945,6 +7981,7 @@ let check_module (m : module_form) : validation_error list =
   @ check_duplicate_adt_constructors decls
   @ check_duplicate_decl_fields decls
   @ check_capability_cycles decls
+  @ check_entity_structure decls
   @ check_api_endpoint_structure decls
   @ check_queue_structure decls
   @ check_channel_structure decls

@@ -27,6 +27,17 @@
   [message : String]
 )
 
+(define-database FakeDb
+  #:backend postgres
+  #:database "notif_db"
+  #:user "notif"
+  #:password ""
+  #:server "localhost"
+  #:port 5432
+  #:socket ""
+  #:schema notifications
+  #:entities )
+
 (define-queue NotifQueue
   #:database FakeDb
   #:job-types (SendNotif)
