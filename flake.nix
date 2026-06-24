@@ -131,9 +131,8 @@
         };
 
         # ── Shared preamble injected at the top of all installed wrappers ─────
-        # Sets the Racket collection path and a user-writable JIT cache so the
-        # wrapper works with pre-compiled .zo files (fast path) and without
-        # them (first-run JIT compilation cached in ~/.cache/tesl).
+        # Sets the Racket collection path so the wrapper works with the
+        # pre-compiled .zo files baked into the tesl-racket Nix derivation.
         #
         # PLTCOLLECTS order matters: ${pkgs.racket}/share/racket/collects MUST
         # come first.  In Racket 9.x (nixpkgs) the compiler-lib package is
@@ -143,15 +142,14 @@
         # to fail.  Prepending the collects dir ensures the path-based lookup
         # wins before the broken package link is reached.
         #
-        # PLTCOMPILEDROOTS format: "writable-cache-dir:@"
-        #   @  = the standard compiled/ sub-directory beside each source file
+        # PLTCOMPILEDROOTS is intentionally NOT set.  On Racket 9.x (nixpkgs)
+        # setting PLTCOMPILEDROOTS to any non-empty value triggers a slow
+        # startup path (≥60 s on typical hardware).  The default compiled/
+        # directory lookup (equivalent to "@") finds the pre-compiled .zo files
+        # in the Nix store automatically and is fast (≈2 s).
         runtimePreamble = ''
           export TESL_OCAML_COMPILER="${tesl-compiler}/bin/tesl-compiler"
           export PLTCOLLECTS="${pkgs.racket}/share/racket/collects:${tesl-racket}/share/tesl-collections''${PLTCOLLECTS:+:$PLTCOLLECTS}"
-
-          _tesl_compiled_cache="''${XDG_CACHE_HOME:-$HOME/.cache}/tesl/rkt-compiled"
-          mkdir -p "$_tesl_compiled_cache"
-          export PLTCOMPILEDROOTS="$_tesl_compiled_cache:@"
 
           export PATH="${pkgs.racket}/bin:$PATH"
         '';
@@ -497,10 +495,6 @@ EOF
           export TESL_REPO_ROOT="${toString ./.}"
           export TESL_OCAML_COMPILER="$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe"
           export PLTCOLLECTS="${pkgs.racket}/share/racket/collects:${tesl-racket}/share/tesl-collections''${PLTCOLLECTS:+:$PLTCOLLECTS}"
-
-          _tesl_compiled_cache="''${XDG_CACHE_HOME:-$HOME/.cache}/tesl/rkt-compiled"
-          mkdir -p "$_tesl_compiled_cache"
-          export PLTCOMPILEDROOTS="$_tesl_compiled_cache:@"
 
           export PATH="${pkgs.racket}/bin:$PATH"
         '' + cliBody);
