@@ -436,6 +436,17 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
      emitted error stream is byte-identical.  The ?facts/facts_or_compute opt-in
      keeps standalone/test callers (no facts threaded) byte-identical too. *)
   let api_forms = (facts_or_compute ?facts ~extra_funcs decls).mf_api_forms in
+  (* Names of every top-level `capture` form (DCapture).  An API-block
+     `capture name: T via <fn>` clause must reference one of these by name —
+     `via` binds the path segment to a declared capture codec.  Referencing a
+     JSON codec (e.g. `stringCodec`) or any other identifier here type-checks
+     today but fails at `tesl run` because the emitted `(Capture <fn> ...)`
+     route names a binding that is not a `define-capture`. *)
+  let capture_form_names =
+    List.filter_map (function
+      | DCapture (cf : capture_form) -> Some cf.name
+      | _ -> None) decls
+  in
   let method_str = function
     | GET -> "get" | POST -> "post" | PUT -> "put"
     | DELETE -> "delete" | PATCH -> "patch" | SSE -> "sse"
@@ -512,6 +523,62 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
                  path parameter (`:param`) in the path"
                 ep_id c.binding.name)
         ) ep.captures;
+
+        (* The remaining two checks apply only to HTTP endpoints: SSE routes
+           are emitted by [emit_sse_route], which strips `:param` segments and
+           never emits a `(Capture …)` form, so a missing/codec capture on an
+           SSE route is harmless at runtime. *)
+        if ep.method_ <> SSE then begin
+
+        (* Every `:param` path segment must have a matching `capture` clause.
+           Without one the emitter invents an undefined capture name
+           (`<param>Capture`), so the endpoint type-checks but crashes at
+           `tesl run`.  This also catches the unsupported `using <codec>`
+           spelling, which the parser silently drops (leaving the path param
+           with no capture). *)
+        List.iter (fun param ->
+          if not (List.exists (fun (c : api_capture) -> c.binding.name = param)
+                    ep.captures)
+          then
+            add_hint
+              (Printf.sprintf
+                "add a capture clause before `->`, e.g. \
+                 `capture %s: String via %sCapture`, and declare a top-level \
+                 `capture %sCapture: %s: String using stringCodec`"
+                param param param param)
+              (Printf.sprintf
+                "endpoint %s: path parameter `:%s` has no `capture` clause; \
+                 every `:param` segment must be bound by a \
+                 `capture %s: <Type> via <captureForm>` clause"
+                ep_id param param)
+        ) path_params;
+
+        (* A capture's `via <fn>` must reference a declared top-level `capture`
+           form.  Referencing a JSON codec (e.g. `stringCodec`) or any other
+           identifier type-checks but fails at `tesl run` because the emitted
+           route names a binding that is not a `define-capture`. *)
+        List.iter (fun (c : api_capture) ->
+          if List.mem c.binding.name path_params
+             && not (List.mem c.via_fn capture_form_names)
+          then
+            add_hint
+              (Printf.sprintf
+                "`via %s` must name a top-level `capture` form; declare \
+                 `capture %s: %s: String using stringCodec` and write \
+                 `capture %s: String via %s`%s"
+                c.via_fn c.via_fn c.binding.name c.binding.name c.via_fn
+                (if capture_form_names = [] then ""
+                 else Printf.sprintf
+                   " (declared capture forms: %s)"
+                   (String.concat ", " capture_form_names)))
+              (Printf.sprintf
+                "endpoint %s: capture `%s` uses `via %s`, but `%s` is not a \
+                 declared `capture` form (it may be a codec or undefined); a \
+                 capture's `via` must reference a top-level `capture` declaration"
+                ep_id c.binding.name c.via_fn c.via_fn)
+        ) ep.captures
+
+        end;
 
         (* Duplicate capture clauses for the same parameter *)
         let seen_captures : (string * loc) list ref = ref [] in

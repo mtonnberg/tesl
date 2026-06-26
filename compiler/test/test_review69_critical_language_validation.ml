@@ -594,10 +594,11 @@ let test_AP01_full_api_server_stack_accepted () =
 module AP01 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Json exposing [stringCodec]
+capture idCapture: id: String using stringCodec
 api AP01Api {
   get "/health" -> String
   get "/items/:id"
-    capture id : String via stringCodec
+    capture id : String via idCapture
     -> Int
 }
 handler health() -> String requires [] = "ok"

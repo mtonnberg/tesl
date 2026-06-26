@@ -96,12 +96,15 @@ let test_server_bindings_ok () =
   assert_no_errors {|#lang tesl
 module Foo exposing [S]
 import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+capture idCapture: id: String using stringCodec
 handler createTask(x: String) -> String requires [] = x
 handler getTask(x: String) -> String requires [] = x
 api TaskApi {
   post "/tasks"
     -> String
   get "/tasks/:id"
+    capture id: String via idCapture
     -> String
 }
 server S for TaskApi {
@@ -127,11 +130,14 @@ let test_server_missing_endpoint_binding () =
   assert_validation_error {|#lang tesl
 module Foo exposing [S]
 import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+capture idCapture: id: String using stringCodec
 handler createTask(x: String) -> String requires [] = x
 api TaskApi {
   post "/tasks"
     -> String
   get "/tasks/:id"
+    capture id: String via idCapture
     -> String
 }
 server S for TaskApi {
