@@ -99,6 +99,7 @@ let module_path_table : (string, string) Hashtbl.t =
   add "Tesl.UUID"       "tesl/uuid.rkt";  (* canonical uppercase alias *)
   add "Tesl.Cache"     "tesl/cache.rkt";
   add "Tesl.Email"     "tesl/email.rkt";
+  add "Tesl.Agent"     "tesl/agent.rkt";
   h
 
 (** Mapping from qualified import names to renamed Racket identifiers.

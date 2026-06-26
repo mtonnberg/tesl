@@ -1,0 +1,58 @@
+#lang tesl
+module AgentTests exposing [
+  askMock,
+]
+
+import Tesl.Prelude exposing [Int, String, Bool, List, Unit]
+import Tesl.Agent exposing [
+  aiProvider,
+  Agent,
+  LlmProvider,
+  AgentReply,
+  mockProvider,
+  defineAgent,
+  ask,
+]
+
+# ────────────────────────────────────────────────────────────────────────────
+# Tesl.Agent — AI Tier-0 foundation slice.
+#
+# Proves the new Tesl.Agent stdlib module wires up end-to-end:
+#   - `aiProvider` capability (implies httpClient)
+#   - `mockProvider`  — deterministic scripted provider, NO network
+#   - `defineAgent`   — build an agent spec from a record literal
+#   - `ask`           — one-shot inference returning the assistant's text
+#
+# A real provider performs outbound HTTP, so `ask` requires `aiProvider`.
+# Declare a capability that implies it and list it in `requires [...]`.
+# ────────────────────────────────────────────────────────────────────────────
+
+capability supportBot implies aiProvider
+
+# Handler-style wrapper: builds a mock-backed agent and asks it one question.
+# Requires the aiProvider capability (via supportBot) because `ask` does.
+fn askMock(prompt: String) -> String requires [supportBot] =
+  let agent = defineAgent (mockProvider ["hello from mock"]) "You are a test bot." 100
+  ask agent prompt
+
+# ────────────────────────────────────────────────────────────────────────────
+# Tests — capability granted directly on the test block via `requires`.
+# ────────────────────────────────────────────────────────────────────────────
+
+test "ask returns the mock provider's scripted reply" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["hello from mock"]) "x" 100
+  let reply = ask agent "hi"
+  expect reply == "hello from mock"
+}
+
+test "ask through a wrapper handler returns the scripted reply" requires [supportBot] {
+  expect askMock "anything" == "hello from mock"
+}
+
+test "successive asks walk the mock script by call index" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["first", "second"]) "x" 50
+  let r1 = ask agent "a"
+  let r2 = ask agent "b"
+  expect r1 == "first"
+  expect r2 == "second"
+}

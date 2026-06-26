@@ -44,6 +44,9 @@ let t_delete_result = TCon "DeleteResult"
 let t_jwt_token  = TCon "JwtToken"
 let t_jwt_secret = TCon "JwtSecret"
 let t_http_response = TCon "HttpResponse"
+let t_agent       = TCon "Agent"
+let t_llm_provider = TCon "LlmProvider"
+let t_agent_reply = TCon "AgentReply"
 
 let t_list a        = TApp (TCon "List", a)
 let t_maybe a       = TApp (TCon "Maybe", a)
@@ -485,6 +488,18 @@ let stdlib_env : (string * scheme) list = [
   "HttpClient.put",       mono (t_fun [t_string; t_list (t_tuple2 t_string t_string); t_string] t_http_response);
   "HttpClient.delete",    mono (t_fun [t_string; t_list (t_tuple2 t_string t_string)] t_http_response);
 
+  (* ── Agent (AI Tier-0) ──────────────────────────────────────────────── *)
+  (* mockProvider: list of scripted reply strings → an opaque LlmProvider. *)
+  "mockProvider", mono (t_fun [t_list t_string] t_llm_provider);
+  (* defineAgent: provider, systemPrompt, maxTokens → an opaque Agent value.
+     Positional args (Tesl forbids bare record literals, and a named stdlib
+     config record would need field metadata the compiler doesn't track for
+     hand-written modules; positional is the robust Tier-0 surface). *)
+  "defineAgent",  mono (t_fun [t_llm_provider; t_string; t_int] t_agent);
+  (* ask: one-shot inference — Agent → prompt String → assistant text String.
+     Requires the aiProvider capability (enforced in validation_capabilities). *)
+  "ask",          mono (t_fun [t_agent; t_string] t_string);
+
   (* ── GDP / proof utilities ───────────────────────────────────────────── *)
   "forgetFact",   { vars = _r1_a; mono = t_fun [_a] _a };
   "detachFact",   { vars = _r1_a; mono = t_fun [_a] t_fact };
@@ -661,6 +676,9 @@ let tesl_module_exports : (string * string list) list = [
   ( "Tesl.HttpClient",
     [ "httpClient"; "HttpResponse"; "HttpResponse?";
       "HttpClient.get"; "HttpClient.post"; "HttpClient.put"; "HttpClient.delete" ] );
+  ( "Tesl.Agent",
+    [ "aiProvider"; "Agent"; "LlmProvider"; "AgentReply"; "AgentReply?";
+      "mockProvider"; "defineAgent"; "ask" ] );
   (* Tesl.Http, Tesl.DB, Tesl.Bool, Tesl.Uuid, Tesl.Crypto, Tesl.Map, Tesl.Logging,
      Tesl.Queue, Tesl.Channel, Tesl.Sse —
      internal modules; imports validated loosely (unknown names accepted)
@@ -683,7 +701,7 @@ let tesl_known_module_names : string list = [
   "Tesl.Uuid"; "Tesl.UUID"; "Tesl.Crypto"; "Tesl.Set"; "Tesl.Map"; "Tesl.Env";
   "Tesl.Telemetry"; "Tesl.Cli"; "Tesl.ApiTest"; "Tesl.Tuple"; "Tesl.Id";
   "Tesl.Queue"; "Tesl.Channel"; "Tesl.Sql"; "Tesl.Sse"; "Tesl.Logging";
-  "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email";
+  "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Agent";
 ]
 
 (** Returns [true] when [name] is a known Tesl.* stdlib module. *)

@@ -98,6 +98,7 @@ let stdlib_capabilities : (string * (string * string list) list) list = [
   "Tesl.UUID",       [("uuid", [])];
   "Tesl.JWT",        [("jwt", [])];
   "Tesl.HttpClient", [("httpClient", [])];
+  "Tesl.Agent",      [("aiProvider", ["httpClient"])];
 ]
 
 let load_imported_cap_map (m : module_form) : (string * string list) list =
