@@ -894,7 +894,12 @@ let collect_definition_env (m : Ast.module_form) =
     | Ast.DCapture c -> add_term_def env c.name (precise_name_loc c.loc c.name)
     | Ast.DApi a -> add_term_def env a.name (precise_name_loc a.loc a.name)
     | Ast.DServer s -> add_term_def env s.name (precise_name_loc s.loc s.name)
-    | Ast.DTest _ | Ast.DApiTest _ | Ast.DLoadTest _ | Ast.DFact _ -> env
+    | Ast.DTest _ | Ast.DApiTest _ | Ast.DLoadTest _ -> env
+    | Ast.DFact f ->
+      (* Facts / proof predicates are renameable TYPE-level names: register them
+         so proof-position predicate occurrences (e.g. `::: Authenticated x`)
+         resolve to the same symbol as the declaration. *)
+      add_type_def env f.name (precise_name_loc f.loc f.name)
     | Ast.DCache c -> add_term_def env c.name (precise_name_loc c.loc c.name)
     | Ast.DEmail e -> add_term_def env e.name (precise_name_loc e.loc e.name)
   ) empty_definition_env m.decls
@@ -954,32 +959,69 @@ let rec resolve_symbol_in_type_expr env line col (te : Ast.type_expr) =
   | Ast.TTuple { elems; _ } ->
     find_map_list (resolve_symbol_in_type_expr env line col) elems
 
-let resolve_symbol_in_binding env line col (b : Ast.binding) =
+(* [proof_name_locs] is defined later (it lives with the occurrence helpers);
+   forward-declare via a ref so resolve-side can share the same span recovery. *)
+let proof_name_locs_ref : (Ast.proof_expr -> (bool * string * Location.loc) list) ref =
+  ref (fun _ -> [])
+
+(* When the caret sits on a name inside a proof annotation, resolve the symbol so
+   prepare/rename/find-references can start there: predicate names resolve as the
+   fact/type symbol, argument names as ordinary term references. *)
+let resolve_symbol_in_proof ?(locals = []) env line col (p : Ast.proof_expr) =
+  find_map_list (fun (is_pred, name, name_loc) ->
+    if loc_contains_position name_loc line col then
+      (if is_pred then find_type_symbol env.type_defs name
+       else resolve_term_symbol locals env name)
+    else None
+  ) (!proof_name_locs_ref p)
+
+let resolve_symbol_in_proof_opt ?locals env line col = function
+  | Some p -> resolve_symbol_in_proof ?locals env line col p
+  | None -> None
+
+let resolve_symbol_in_binding ?(locals = []) env line col (b : Ast.binding) =
   let name_loc = binding_name_loc b in
   match resolve_symbol_in_type_expr env line col b.type_expr with
   | Some _ as result -> result
-  | None -> if loc_contains_position name_loc line col then Some (term_symbol b.name name_loc) else None
+  | None ->
+    match resolve_symbol_in_proof_opt ~locals env line col b.proof_ann with
+    | Some _ as result -> result
+    | None -> if loc_contains_position name_loc line col then Some (term_symbol b.name name_loc) else None
 
-let rec resolve_symbol_in_return_spec env line col (ret : Ast.return_spec) =
+let rec resolve_symbol_in_return_spec ?(locals = []) env line col (ret : Ast.return_spec) =
+  let in_proof = resolve_symbol_in_proof ~locals env line col in
+  let in_proof_opt = function Some p -> in_proof p | None -> None in
   match ret with
   | Ast.RetPlain { ty; _ } -> resolve_symbol_in_type_expr env line col ty
-  | Ast.RetAttached { binding; _ } -> resolve_symbol_in_binding env line col binding
-  | Ast.RetNamedPack { ty; _ } -> resolve_symbol_in_type_expr env line col ty
-  | Ast.RetForAll { elem_ty; _ }
-  | Ast.RetMaybeForAll { elem_ty; _ }
-  | Ast.RetSetForAll { elem_ty; _ }
-  | Ast.RetMaybeSetForAll { elem_ty; _ } -> resolve_symbol_in_type_expr env line col elem_ty
-  | Ast.RetForAllDictValues { key_ty; val_ty; _ }
-  | Ast.RetForAllDictKeys   { key_ty; val_ty; _ } ->
+  | Ast.RetAttached { binding; _ } -> resolve_symbol_in_binding ~locals env line col binding
+  | Ast.RetNamedPack { ty; entity_proof; other_proof; _ } ->
+    (match resolve_symbol_in_type_expr env line col ty with
+     | Some _ as r -> r
+     | None ->
+       match in_proof_opt entity_proof with
+       | Some _ as r -> r
+       | None -> in_proof_opt other_proof)
+  | Ast.RetForAll { elem_ty; proof; _ }
+  | Ast.RetMaybeForAll { elem_ty; proof; _ }
+  | Ast.RetSetForAll { elem_ty; proof; _ }
+  | Ast.RetMaybeSetForAll { elem_ty; proof; _ } ->
+    (match resolve_symbol_in_type_expr env line col elem_ty with
+     | Some _ as r -> r
+     | None -> in_proof proof)
+  | Ast.RetForAllDictValues { key_ty; val_ty; proof; _ }
+  | Ast.RetForAllDictKeys   { key_ty; val_ty; proof; _ } ->
     (match resolve_symbol_in_type_expr env line col key_ty with
      | Some _ as r -> r
-     | None -> resolve_symbol_in_type_expr env line col val_ty)
+     | None ->
+       match resolve_symbol_in_type_expr env line col val_ty with
+       | Some _ as r -> r
+       | None -> in_proof proof)
   | Ast.RetMaybeAttached { binding; _ } ->
-    resolve_symbol_in_binding env line col binding
+    resolve_symbol_in_binding ~locals env line col binding
   | Ast.RetExists { binding; body; _ } ->
-    (match resolve_symbol_in_binding env line col binding with
+    (match resolve_symbol_in_binding ~locals env line col binding with
      | Some _ as result -> result
-     | None -> resolve_symbol_in_return_spec env line col body)
+     | None -> resolve_symbol_in_return_spec ~locals env line col body)
 
 let resolve_symbol_in_pattern env line col (pat : Ast.pattern) =
   match pat with
@@ -1031,26 +1073,25 @@ let rec resolve_symbol_in_expr env locals line col (expr : Ast.expr) =
               | None -> resolve_symbol_in_expr env locals' line col arm.body)
            | None -> resolve_symbol_in_expr env locals' line col arm.body
        ) arms)
-  | Ast.ELet { name; declared_type; value; body; loc; declared_proof = _ } ->
+  | Ast.ELet { name; declared_type; value; body; loc; declared_proof } ->
     let name_loc = precise_name_loc loc name in
+    let after_type () =
+      match resolve_symbol_in_proof_opt ~locals env line col declared_proof with
+      | Some _ as result -> result
+      | None ->
+        match resolve_symbol_in_expr env locals line col value with
+        | Some _ as result -> result
+        | None ->
+          match resolve_symbol_in_expr env ({ bound_name = name; bound_loc = name_loc } :: locals) line col body with
+          | Some _ as result -> result
+          | None -> if loc_contains_position name_loc line col then Some (term_symbol name name_loc) else None
+    in
     (match declared_type with
      | Some ty ->
        (match resolve_symbol_in_type_expr env line col ty with
         | Some _ as result -> result
-        | None ->
-          match resolve_symbol_in_expr env locals line col value with
-          | Some _ as result -> result
-          | None ->
-            match resolve_symbol_in_expr env ({ bound_name = name; bound_loc = name_loc } :: locals) line col body with
-            | Some _ as result -> result
-            | None -> if loc_contains_position name_loc line col then Some (term_symbol name name_loc) else None)
-     | None ->
-       match resolve_symbol_in_expr env locals line col value with
-       | Some _ as result -> result
-       | None ->
-         match resolve_symbol_in_expr env ({ bound_name = name; bound_loc = name_loc } :: locals) line col body with
-         | Some _ as result -> result
-         | None -> if loc_contains_position name_loc line col then Some (term_symbol name name_loc) else None)
+        | None -> after_type ())
+     | None -> after_type ())
   | Ast.ELetProof { value_name; proof_name; value; body; loc; _ } ->
     let value_loc, proof_loc =
       match sequential_name_locs loc [value_name; proof_name] with
@@ -1066,7 +1107,10 @@ let rec resolve_symbol_in_expr env locals line col (expr : Ast.expr) =
   | Ast.ERecord { fields; _ } ->
     find_map_list (fun (_, value) -> resolve_symbol_in_expr env locals line col value) fields
   | Ast.EList { elems; _ } -> find_map_list (resolve_symbol_in_expr env locals line col) elems
-  | Ast.EOk { value; _ } -> resolve_symbol_in_expr env locals line col value
+  | Ast.EOk { value; proof; _ } ->
+    (match resolve_symbol_in_expr env locals line col value with
+     | Some _ as result -> result
+     | None -> resolve_symbol_in_proof ~locals env line col proof)
   | Ast.EFail { message; _ } -> resolve_symbol_in_expr env locals line col message
   | Ast.ETelemetry { fields; _ } ->
     find_map_list (fun (_, value) -> resolve_symbol_in_expr env locals line col value) fields
@@ -1203,14 +1247,15 @@ let resolve_symbol_in_top_decl env line col (decl : Ast.top_decl) =
   match decl with
   | Ast.DFunc fd ->
     let name_loc = precise_name_loc fd.loc fd.name in
-    let result = find_map_list (resolve_symbol_in_binding env line col) fd.params in
+    let param_locals = extend_locals_with_params [] fd.params in
+    let result = find_map_list (resolve_symbol_in_binding ~locals:param_locals env line col) fd.params in
     (match result with
      | Some _ as found -> found
      | None ->
-       match resolve_symbol_in_return_spec env line col fd.return_spec with
+       match resolve_symbol_in_return_spec ~locals:param_locals env line col fd.return_spec with
        | Some _ as found -> found
        | None ->
-         match resolve_symbol_in_expr env (extend_locals_with_params [] fd.params) line col fd.body with
+         match resolve_symbol_in_expr env param_locals line col fd.body with
          | Some _ as found -> found
          | None -> if loc_contains_position name_loc line col then Some (term_symbol fd.name name_loc) else None)
   | Ast.DType (Ast.TypeNewtype { name; base_type; loc })
@@ -1364,10 +1409,20 @@ let rec collect_occurrences_in_type_expr env target (te : Ast.type_expr) =
   | Ast.TFun { dom; cod; _ } -> collect_occurrences_in_type_expr env target dom @ collect_occurrences_in_type_expr env target cod
   | Ast.TTuple { elems; _ } -> List.concat_map (collect_occurrences_in_type_expr env target) elems
 
-let collect_occurrences_in_binding env target (b : Ast.binding) =
+(* Forward reference filled in below once [collect_occurrences_in_proof] is in
+   scope; [collect_occurrences_in_binding] is defined before the proof helper. *)
+let collect_occurrences_in_binding_proof_ref :
+  (definition_env -> named_loc list -> resolved_symbol -> Ast.proof_expr -> Location.loc list) ref =
+  ref (fun _ _ _ _ -> [])
+
+let collect_occurrences_in_binding ?(locals = []) env target (b : Ast.binding) =
   let name_loc = binding_name_loc b in
   let def_occ = if symbol_equal (term_symbol b.name name_loc) target then [name_loc] else [] in
-  def_occ @ collect_occurrences_in_type_expr env target b.type_expr
+  def_occ
+  @ collect_occurrences_in_type_expr env target b.type_expr
+  @ (match b.proof_ann with
+     | Some p -> !collect_occurrences_in_binding_proof_ref env locals target p
+     | None -> [])
 
 let collect_occurrence_pattern_defs target bindings =
   List.filter_map (fun { bound_name; bound_loc } ->
@@ -1386,6 +1441,57 @@ let collect_occurrences_in_pattern env target (pat : Ast.pattern) =
     in
     ctor_occ
   | Ast.PVar _ | Ast.PWild | Ast.PLit _ -> []
+
+(* ── Proof-position occurrences ──────────────────────────────────────────────
+   A proof annotation [::: Authenticated reqUser] mentions the predicate name
+   ([Authenticated]) followed by zero or more argument NAMES ([reqUser]) that
+   refer to value bindings in scope.  These are real references and must be
+   included by rename / find-references, otherwise renaming [reqUser] silently
+   leaves the proof referring to the old name.
+
+   [proof_expr] only carries a single [loc] per [PredApp] (the whole predicate
+   span) — individual names have no stored loc.  We recover each name's precise
+   span with [sequential_name_locs] over the predicate's source line. *)
+(* [is_pred] marks the predicate name (resolves as a fact/type symbol) versus an
+   argument name (resolves as an ordinary value reference). *)
+let proof_name_locs (p : Ast.proof_expr) : (bool * string * Location.loc) list =
+  let rec go (p : Ast.proof_expr) =
+    match p with
+    | Ast.PredApp { pred; args; loc } ->
+      (match sequential_name_locs loc (pred :: args) with
+       | pred_loc :: arg_locs ->
+         (true, pred, pred_loc)
+         :: List.map2 (fun a l -> (false, a, l)) args arg_locs
+       | [] -> [])
+    | Ast.PredAnd { left; right; _ } -> go left @ go right
+  in
+  go p
+
+let () = proof_name_locs_ref := proof_name_locs
+
+(* Collect occurrences of [target] mentioned inside a proof annotation.
+   - The predicate name resolves as a fact/proof-predicate name, classified as a
+     TYPE symbol (see [resolve_symbol_in_top_decl] / [DFact]); matches a
+     type-symbol rename target.
+   - Each argument name resolves as an ordinary term reference (local binding or
+     top-level term). *)
+let collect_occurrences_in_proof env locals target (p : Ast.proof_expr) =
+  List.filter_map (fun (is_pred, name, name_loc) ->
+    if is_pred then
+      match find_type_symbol env.type_defs name with
+      | Some symbol when symbol_equal symbol target -> Some name_loc
+      | _ -> None
+    else
+      match resolve_term_symbol locals env name with
+      | Some symbol when symbol_equal symbol target -> Some name_loc
+      | _ -> None
+  ) (proof_name_locs p)
+
+let collect_occurrences_in_proof_opt env locals target = function
+  | Some p -> collect_occurrences_in_proof env locals target p
+  | None -> []
+
+let () = collect_occurrences_in_binding_proof_ref := collect_occurrences_in_proof
 
 let rec collect_occurrences_in_expr env locals target (expr : Ast.expr) =
   let recurse = collect_occurrences_in_expr env locals target in
@@ -1418,12 +1524,13 @@ let rec collect_occurrences_in_expr env locals target (expr : Ast.expr) =
            | None -> [])
         @ collect_occurrences_in_expr env locals' target arm.body
       ) arms
-  | Ast.ELet { name; declared_type; value; body; loc; declared_proof = _ } ->
+  | Ast.ELet { name; declared_type; value; body; loc; declared_proof } ->
     let name_loc = precise_name_loc loc name in
     (if symbol_equal (term_symbol name name_loc) target then [name_loc] else [])
     @ (match declared_type with
        | Some ty -> collect_occurrences_in_type_expr env target ty
        | None -> [])
+    @ collect_occurrences_in_proof_opt env locals target declared_proof
     @ collect_occurrences_in_expr env locals target value
     @ collect_occurrences_in_expr env ({ bound_name = name; bound_loc = name_loc } :: locals) target body
   | Ast.ELetProof { value_name; proof_name; value; body; loc; _ } ->
@@ -1438,7 +1545,9 @@ let rec collect_occurrences_in_expr env locals target (expr : Ast.expr) =
     @ collect_occurrences_in_expr env ({ bound_name = proof_name; bound_loc = proof_loc } :: { bound_name = value_name; bound_loc = value_loc } :: locals) target body
   | Ast.ERecord { fields; _ } -> List.concat_map (fun (_, value) -> collect_occurrences_in_expr env locals target value) fields
   | Ast.EList { elems; _ } -> List.concat_map (collect_occurrences_in_expr env locals target) elems
-  | Ast.EOk { value; _ } -> collect_occurrences_in_expr env locals target value
+  | Ast.EOk { value; proof; _ } ->
+    collect_occurrences_in_expr env locals target value
+    @ collect_occurrences_in_proof env locals target proof
   | Ast.EFail { message; _ } -> collect_occurrences_in_expr env locals target message
   | Ast.ETelemetry { fields; _ } -> List.concat_map (fun (_, value) -> collect_occurrences_in_expr env locals target value) fields
   | Ast.EEnqueue { payload; _ } -> collect_occurrences_in_expr env locals target payload
@@ -1525,10 +1634,11 @@ let rec collect_occurrences_in_top_decl env target (decl : Ast.top_decl) =
   match decl with
   | Ast.DFunc fd ->
     let name_loc = precise_name_loc fd.loc fd.name in
+    let param_locals = extend_locals_with_params [] fd.params in
     (if symbol_equal (term_symbol fd.name name_loc) target then [name_loc] else [])
-    @ List.concat_map (collect_occurrences_in_binding env target) fd.params
-    @ collect_occurrences_in_return_spec env target fd.return_spec
-    @ collect_occurrences_in_expr env (extend_locals_with_params [] fd.params) target fd.body
+    @ List.concat_map (collect_occurrences_in_binding ~locals:param_locals env target) fd.params
+    @ collect_occurrences_in_return_spec ~locals:param_locals env target fd.return_spec
+    @ collect_occurrences_in_expr env param_locals target fd.body
   | Ast.DType (Ast.TypeNewtype { name; base_type; loc })
   | Ast.DType (Ast.TypeAlias { name; base_type; loc }) ->
     let name_loc = precise_name_loc loc name in
@@ -1626,21 +1736,27 @@ let rec collect_occurrences_in_top_decl env target (decl : Ast.top_decl) =
   | Ast.DCache c -> let name_loc = precise_name_loc c.loc c.name in if symbol_equal (term_symbol c.name name_loc) target then [name_loc] else []
   | Ast.DEmail e -> let name_loc = precise_name_loc e.loc e.name in if symbol_equal (term_symbol e.name name_loc) target then [name_loc] else []
 
-and collect_occurrences_in_return_spec env target ret =
+and collect_occurrences_in_return_spec ?(locals = []) env target ret =
+  let in_proof = collect_occurrences_in_proof env locals target in
+  let in_proof_opt = function Some p -> in_proof p | None -> [] in
   match ret with
   | Ast.RetPlain { ty; _ } -> collect_occurrences_in_type_expr env target ty
-  | Ast.RetAttached { binding; _ } -> collect_occurrences_in_binding env target binding
-  | Ast.RetNamedPack { ty; _ } -> collect_occurrences_in_type_expr env target ty
-  | Ast.RetForAll { elem_ty; _ }
-  | Ast.RetMaybeForAll { elem_ty; _ }
-  | Ast.RetSetForAll { elem_ty; _ }
-  | Ast.RetMaybeSetForAll { elem_ty; _ } -> collect_occurrences_in_type_expr env target elem_ty
-  | Ast.RetForAllDictValues { key_ty; val_ty; _ }
-  | Ast.RetForAllDictKeys   { key_ty; val_ty; _ } ->
+  | Ast.RetAttached { binding; _ } -> collect_occurrences_in_binding ~locals env target binding
+  | Ast.RetNamedPack { ty; entity_proof; other_proof; _ } ->
+    collect_occurrences_in_type_expr env target ty
+    @ in_proof_opt entity_proof @ in_proof_opt other_proof
+  | Ast.RetForAll { elem_ty; proof; _ }
+  | Ast.RetMaybeForAll { elem_ty; proof; _ }
+  | Ast.RetSetForAll { elem_ty; proof; _ }
+  | Ast.RetMaybeSetForAll { elem_ty; proof; _ } ->
+    collect_occurrences_in_type_expr env target elem_ty @ in_proof proof
+  | Ast.RetForAllDictValues { key_ty; val_ty; proof; _ }
+  | Ast.RetForAllDictKeys   { key_ty; val_ty; proof; _ } ->
     collect_occurrences_in_type_expr env target key_ty
     @ collect_occurrences_in_type_expr env target val_ty
-  | Ast.RetMaybeAttached { binding; _ } -> collect_occurrences_in_binding env target binding
-  | Ast.RetExists { binding; body; _ } -> collect_occurrences_in_binding env target binding @ collect_occurrences_in_return_spec env target body
+    @ in_proof proof
+  | Ast.RetMaybeAttached { binding; _ } -> collect_occurrences_in_binding ~locals env target binding
+  | Ast.RetExists { binding; body; _ } -> collect_occurrences_in_binding ~locals env target binding @ collect_occurrences_in_return_spec ~locals env target body
 
 let occurrences_source filename source line col =
   set_query_source_lines source;

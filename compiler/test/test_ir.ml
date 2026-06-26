@@ -1025,6 +1025,113 @@ let test_type_definition_null_when_no_type () =
   let json = Compile.type_definition_response_to_json loc in
   assert_contains ~name:"null type definition" json {|"type_definition":null|}
 
+(* ── Cluster B: rename/hover inside proofs + field-access hover ───────────── *)
+
+(* 0-based line/col layout (see comments inline):
+   0  #lang tesl
+   1  module Proofs exposing [authUser, getUser]
+   2  (blank)
+   3  import Tesl.Prelude exposing [String, Unit]
+   4  (blank)
+   5  record User {
+   6    id: String
+   7  }
+   8  (blank)
+   9  fact Authenticated (u: User)
+   10 (blank)
+   11 check authUser(u: User) -> u: User ::: Authenticated u =
+   12   ok u ::: Authenticated u
+   13 (blank)
+   14 fn getUser(reqUser: User ::: Authenticated reqUser) -> User =
+   15   telemetry "user.get" { user.id = reqUser.id }
+   16   reqUser *)
+let proof_query_src = {|#lang tesl
+module Proofs exposing [authUser, getUser]
+
+import Tesl.Prelude exposing [String, Unit]
+
+record User {
+  id: String
+}
+
+fact Authenticated (u: User)
+
+check authUser(u: User) -> u: User ::: Authenticated u =
+  ok u ::: Authenticated u
+
+fn getUser(reqUser: User ::: Authenticated reqUser) -> User =
+  telemetry "user.get" { user.id = reqUser.id }
+  reqUser
+|}
+
+let test_occurrences_include_proof_position () =
+  (* Cursor on the `reqUser` parameter binding (line 14, col 13). The proof
+     annotation `Authenticated reqUser` on the same line must be included. *)
+  let occs = Compile.occurrences_source "p.tesl" proof_query_src 14 13 in
+  let json = Compile.occurrences_response_to_json occs in
+  assert_contains ~name:"param binding is write" json
+    {|"line":14,"col":11,"end_line":14,"end_col":18,"kind":"write"|};
+  (* The proof-position occurrence (after :::) — this is the regression. *)
+  assert_contains ~name:"proof-position occurrence included" json
+    {|"line":14,"col":43,"end_line":14,"end_col":50,"kind":"read"|}
+
+let test_occurrences_caret_on_proof_arg () =
+  (* Cursor ON the proof argument `reqUser` after `:::` (line 14, col 45)
+     resolves to the same binding and finds the same occurrences. *)
+  let occs = Compile.occurrences_source "p.tesl" proof_query_src 14 45 in
+  let json = Compile.occurrences_response_to_json occs in
+  assert_contains ~name:"binding from proof caret" json
+    {|"line":14,"col":11,"end_line":14,"end_col":18,"kind":"write"|};
+  assert_contains ~name:"proof occurrence from proof caret" json
+    {|"line":14,"col":43,"end_line":14,"end_col":50|}
+
+let test_occurrences_proof_in_check_body () =
+  (* The `check authUser` parameter `u` is referenced in BOTH proof positions:
+     the return spec `u: User ::: Authenticated u` and `ok u ::: Authenticated u`. *)
+  let occs = Compile.occurrences_source "p.tesl" proof_query_src 11 15 in
+  let json = Compile.occurrences_response_to_json occs in
+  assert_contains ~name:"return-spec proof occurrence" json {|"line":11,"col":53|};
+  assert_contains ~name:"ok-proof occurrence" json {|"line":12,"col":25|}
+
+let test_occurrences_predicate_rename () =
+  (* Renaming the fact/predicate `Authenticated` (caret on the fact decl,
+     line 9, col 6) must include its proof-position usages. *)
+  let occs = Compile.occurrences_source "p.tesl" proof_query_src 9 6 in
+  let json = Compile.occurrences_response_to_json occs in
+  assert_contains ~name:"fact decl is write" json {|"line":9,"col":5|};
+  assert_contains ~name:"predicate use in return spec" json {|"line":11,"col":39|};
+  assert_contains ~name:"predicate use in ok" json {|"line":12,"col":11|};
+  assert_contains ~name:"predicate use in param proof" json {|"line":14,"col":29|}
+
+let test_occurrences_stdlib_type_is_empty () =
+  (* prepareRename rejection relies on stdlib types yielding NO occurrences.
+     Cursor on `String` in `id: String` (line 6, col 6). *)
+  let occs = Compile.occurrences_source "p.tesl" proof_query_src 6 7 in
+  Alcotest.(check int) "stdlib type has no occurrences" 0 (List.length occs)
+
+let test_occurrences_colon_operator_is_empty () =
+  (* Cursor on the `:::` operator (line 11, col 35) yields no occurrences. *)
+  let occs = Compile.occurrences_source "p.tesl" proof_query_src 11 35 in
+  Alcotest.(check int) "::: operator has no occurrences" 0 (List.length occs)
+
+let test_field_hover_in_telemetry () =
+  (* Regression: hovering on `reqUser.id` INSIDE a telemetry block previously
+     reported `Unit` (the enclosing telemetry expression). It must now report
+     the field's real type via both type-at and field-at. Line 15:
+       telemetry "user.get" { user.id = reqUser.id }
+     `reqUser.id`'s `id` token is the value's field. *)
+  (* `reqUser` starts at col 35 on line 15, so the value field `id` sits at
+     col 43-44 (after `reqUser.`). *)
+  let id_col = 44 in
+  let type_at = Compile.type_at_source "p.tesl" proof_query_src 15 id_col in
+  let tjson = Compile.type_at_response_to_json type_at in
+  assert_contains ~name:"telemetry field type is String, not Unit" tjson {|"type":"String"|};
+  let field_at = Compile.field_at_source "p.tesl" proof_query_src 15 id_col in
+  let fjson = Compile.field_at_response_to_json field_at in
+  assert_contains ~name:"telemetry field-at field" fjson {|"field":"id"|};
+  assert_contains ~name:"telemetry field-at type" fjson {|"field_type":"String"|};
+  assert_contains ~name:"telemetry field-at record" fjson {|"record_type":"User"|}
+
 (* ── AC1: agent-context snapshot ─────────────────────────────────────────── *)
 
 (* A clean module: exercises the happy path — ok:true, top-level symbols with
@@ -1189,6 +1296,13 @@ let () =
     "query-flags", [
       Alcotest.test_case "occurrences kind write/read" `Quick test_occurrences_kind_write_and_read;
       Alcotest.test_case "occurrences param binding is write" `Quick test_occurrences_param_binding_is_write;
+      Alcotest.test_case "occurrences include proof position" `Quick test_occurrences_include_proof_position;
+      Alcotest.test_case "occurrences caret on proof arg" `Quick test_occurrences_caret_on_proof_arg;
+      Alcotest.test_case "occurrences proof in check body" `Quick test_occurrences_proof_in_check_body;
+      Alcotest.test_case "occurrences predicate rename incl proofs" `Quick test_occurrences_predicate_rename;
+      Alcotest.test_case "occurrences stdlib type is empty" `Quick test_occurrences_stdlib_type_is_empty;
+      Alcotest.test_case "occurrences ::: operator is empty" `Quick test_occurrences_colon_operator_is_empty;
+      Alcotest.test_case "field hover in telemetry is field type not Unit" `Quick test_field_hover_in_telemetry;
       Alcotest.test_case "signature help first param" `Quick test_signature_help_first_param;
       Alcotest.test_case "signature help second param" `Quick test_signature_help_second_param;
       Alcotest.test_case "signature help null outside call" `Quick test_signature_help_outside_call_is_null;

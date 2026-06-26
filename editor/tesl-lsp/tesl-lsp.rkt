@@ -1300,6 +1300,41 @@
   (and (> (hash-count changes) 0)
        (hash 'changes changes)))
 
+;; ── prepareRename (textDocument/prepareRename) ───────────────────────────────
+;; Decide whether the symbol under the caret is renameable, and if so, return the
+;; precise identifier RANGE (so the editor's rename box pre-selects only the token
+;; — e.g. just `somerecord`, never the trailing `.id`).  Returning `'null` makes
+;; the client refuse to open the rename popup; this is how we reject stdlib types
+;; (String), keywords (handler, requires) and the `:::` operator — for all of
+;; those `--occurrences-json` yields no occurrences (they are not user symbols).
+(define (position-in-range? line col range)
+  (let* ([start (hash-ref range 'start (hash))]
+         [end   (hash-ref range 'end (hash))]
+         [sl (hash-ref start 'line 0)] [sc (hash-ref start 'character 0)]
+         [el (hash-ref end   'line 0)] [ec (hash-ref end   'character 0)])
+    (and (or (> line sl) (and (= line sl) (>= col sc)))
+         (or (< line el) (and (= line el) (<= col ec))))))
+
+(define (occurrences->prepare-rename occurrences line col)
+  ;; Find the occurrence range that contains the caret; that token is exactly
+  ;; what will be renamed. No occurrences (keyword / operator / stdlib type) ⇒
+  ;; reject the rename.
+  (let ([ranges (filter values
+                        (map (lambda (occ)
+                               (let ([loc (location->lsp occ)])
+                                 (and loc (hash-ref loc 'range #f))))
+                             occurrences))])
+    (cond
+      [(null? ranges) 'null]
+      [else
+       (let ([hit (findf (lambda (r) (position-in-range? line col r)) ranges)])
+         (cond
+           ;; Caret sits inside a known occurrence token: select that exact span.
+           [hit (hash 'range hit)]
+           ;; Renameable symbol, but caret not inside a recovered token span
+           ;; (defensive): allow rename, let the client choose the word range.
+           [else (hash 'range (car ranges))]))])))
+
 ;; ── Document symbols (textDocument/documentSymbol) ───────────────────────────
 ;; Built from the typed snapshot (--semantic-json). We return the flat
 ;; SymbolInformation[] form (uri + location), which every LSP client accepts and
@@ -1926,7 +1961,7 @@
                                    'declarationProvider #t
                                    'typeDefinitionProvider #t
                                    'referencesProvider #t
-                                   'renameProvider     #t
+                                   'renameProvider     (hash 'prepareProvider #t)
                                    'documentSymbolProvider #t
                                    'documentHighlightProvider #t
                                    'inlayHintProvider  (hash 'resolveProvider #t)
@@ -2229,6 +2264,30 @@
                                       (delete-file tmp)))))
                               (occurrences->lsp (run-occurrences compiler query-path line-num char-num) original-uri query-path))))])
              (write-message out (hash 'jsonrpc "2.0" 'id id 'result (or result '()))))
+           (loop)]
+
+          [(equal? method "textDocument/prepareRename")
+           (let* ([doc       (hash-ref params 'textDocument (hash))]
+                  [uri       (hash-ref doc 'uri "")]
+                  [pos       (hash-ref params 'position (hash))]
+                  [line-num  (hash-ref pos 'line 0)]
+                  [char-num  (hash-ref pos 'character 0)]
+                  [text      (hash-ref docs uri #f)]
+                  [source-path (uri->path uri)]
+                  [result
+                   (and text compiler
+                        (let* ([dir (or (path-only source-path) (current-directory))]
+                               [tmp (make-temporary-file "tesl-prepare-~a.tesl" #f dir)])
+                          (dynamic-wind
+                            void
+                            (lambda ()
+                              (with-output-to-file tmp #:exists 'truncate (lambda () (display text)))
+                              (occurrences->prepare-rename
+                               (run-occurrences compiler tmp line-num char-num)
+                               line-num char-num))
+                            (lambda ()
+                              (when (file-exists? tmp) (delete-file tmp))))))])
+             (write-message out (hash 'jsonrpc "2.0" 'id id 'result (or result 'null))))
            (loop)]
 
           [(equal? method "textDocument/rename")
@@ -2690,6 +2749,24 @@
     (check-equal? (hash-ref (hash-ref (first same-file-edits) 'range) 'start) (hash 'line 3 'character 2))
     (check-equal? (hash-ref (first other-file-edits) 'newText) "renamed")
     (check-false (occurrences->workspace-edit '() "renamed" original-uri tmp-path)))
+
+  ;; prepareRename: reject non-symbols (no occurrences ⇒ 'null) and otherwise
+  ;; return the precise token range the caret sits inside — never a wider span.
+  (let* ([rec-occ  (hash 'file "/tmp/p.tesl" 'line 7 'col 2  'end_line 7 'end_col 12)] ; "somerecord"
+         [read-occ (hash 'file "/tmp/p.tesl" 'line 9 'col 0  'end_line 9 'end_col 10)])
+    ;; No occurrences (keyword / ::: / stdlib type) → reject.
+    (check-equal? (occurrences->prepare-rename '() 7 4) 'null)
+    ;; Caret inside `somerecord` (col 4) → range is exactly the identifier, NOT
+    ;; including any trailing `.id` (the occurrence span ends at col 12).
+    (let ([res (occurrences->prepare-rename (list rec-occ read-occ) 7 4)])
+      (check-not-false res)
+      (check-equal? (hash-ref (hash-ref res 'range) 'start) (hash 'line 7 'character 2))
+      (check-equal? (hash-ref (hash-ref res 'range) 'end)   (hash 'line 7 'character 12)))
+    ;; Caret on the other occurrence resolves to that occurrence's span.
+    (let ([res (occurrences->prepare-rename (list rec-occ read-occ) 9 3)])
+      (check-not-false res)
+      (check-equal? (hash-ref (hash-ref res 'range) 'start) (hash 'line 9 'character 0))
+      (check-equal? (hash-ref (hash-ref res 'range) 'end)   (hash 'line 9 'character 10))))
 
   (let ([typed-entry (find-local-binding-entry "/tmp/local-lets.tesl" local-let-hover-src 5 "formatted" local-let-binding-types)]
         [inferred-entry (find-local-binding-entry "/tmp/local-lets.tesl" local-let-hover-src 8 "inferred" local-let-binding-types)]

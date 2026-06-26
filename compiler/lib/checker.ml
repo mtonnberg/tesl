@@ -2029,7 +2029,21 @@ let rec infer_expr ctx (e : expr) : ty =
     unify_at ctx (expr_loc message) msg_ty t_string;
     fresh ()  (* fail : any type (unreachable after this point) *)
 
-  | ETelemetry _ | EEnqueue _ | EPublish _ | EStartWorkers _ -> t_unit
+  | ETelemetry { fields; _ } ->
+    (* Telemetry itself is Unit, but the attribute VALUE expressions are real
+       expressions: infer them so their types and field accesses are recorded
+       for hover / type-at (otherwise hovering on `record.field` inside a
+       telemetry block reports the enclosing Unit). *)
+    List.iter (fun (_, v) -> ignore (infer_expr ctx v)) fields;
+    t_unit
+  | EEnqueue { payload; _ } ->
+    ignore (infer_expr ctx payload);
+    t_unit
+  | EPublish { key; payload; _ } ->
+    Option.iter (fun e -> ignore (infer_expr ctx e)) key;
+    Option.iter (fun e -> ignore (infer_expr ctx e)) payload;
+    t_unit
+  | EStartWorkers _ -> t_unit
   | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } ->
     infer_expr ctx body
   | EServe _ -> t_unit
