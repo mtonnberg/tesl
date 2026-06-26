@@ -13,6 +13,43 @@ Tesl is trying to push those concerns into the language itself:
 
 The goal is not to produce a clever research toy. The goal is to get to a point where a normal programmer asking _“what should I use for my next web API?”_ can answer _“Tesl”_ because the language makes the correct path the obvious path.
 
+## Quick start
+
+From nothing to a running, type-checked web API in three steps:
+
+```bash
+# 1. Install Nix with flakes enabled — https://nixos.org/download
+#    (skip if you already have Nix)
+
+# 2. Install Tesl
+nix profile install github:mtonnberg/tesl
+
+# 3. Scaffold a project and run it
+tesl init myapi            # asks a couple of quick questions (add --yes to take defaults)
+cd myapi
+tesl run app.tesl          # starts the project's database if needed, serves on http://localhost:8086
+```
+
+`tesl init` writes a working app (`app.tesl`), a project manifest (`tesl.toml`), a
+`.env`, and an `AGENTS.md`/`CLAUDE.md` for coding agents. With the default **managed**
+database, `tesl run` auto-starts a project-local PostgreSQL and loads `.env`, so the
+API is live with no extra setup. The scaffold is commented to introduce Tesl's
+headline feature — compile-time proofs — without overwhelming you.
+
+**Ship it as a Docker image** — one command, with or without a bundled database:
+
+```bash
+tesl build --with-postgres       # all-in-one image: app + embedded PostgreSQL
+docker run -p 8086:8086 myapi    # runs anywhere, no external database needed
+
+# or, for production against your own database:
+tesl build --app-only            # smaller image; configure via TESL_POSTGRES_* env at runtime
+```
+
+See [`dev-docs/deploy.md`](dev-docs/deploy.md) for the full deployment guide
+(image flavours, runtime config, GitHub Actions), [`INSTALL.md`](INSTALL.md) for editor setup, and
+[“try the language today”](#if-you-want-to-try-the-language-today) below for more.
+
 ## Alpha status
 
 Tesl is **alpha**.

@@ -1,0 +1,52 @@
+# Reference GitHub Actions workflow: build a Tesl web API as an OCI image and
+# publish it to the GitHub Container Registry (GHCR).
+#
+# Copy this file to your project's  .github/workflows/deploy.yml  and set
+# APP_NAME to your project's [project].name from tesl.toml. The runner needs
+# Docker (ubuntu-latest has it) and Nix (installed below).
+#
+# See dev-docs/deploy.md for the full deployment guide.
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  APP_NAME: myapi                       # <-- your tesl.toml [project].name
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: experimental-features = nix-command flakes
+
+      - name: Install Tesl
+        run: nix profile install github:mtonnberg/tesl
+
+      - name: Build the image
+        # --app-only → production image that connects to your own database via env.
+        # Use --with-postgres for a self-contained all-in-one image instead.
+        run: tesl build --app-only --tag "$APP_NAME:ci"
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Tag and push
+        run: |
+          TAG="${GITHUB_SHA::12}"
+          docker tag "$APP_NAME:ci" "$IMAGE:$TAG"
+          docker tag "$APP_NAME:ci" "$IMAGE:latest"
+          docker push "$IMAGE:$TAG"
+          docker push "$IMAGE:latest"

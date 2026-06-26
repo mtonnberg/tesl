@@ -195,6 +195,25 @@ _tesl_db_autostart_if_managed() {
   _tesl_db start >&2 || true
 }
 
+# `tesl run` convenience: load ./.env (KEY="value" lines) into the environment
+# for vars that are not already set, so a freshly-scaffolded managed project
+# connects without a manual `source .env`. Already-set env wins; comments and
+# malformed lines are skipped. Opt out with TESL_NO_DOTENV=1.
+_tesl_load_dotenv() {
+  [ "${TESL_NO_DOTENV:-0}" = "1" ] && return 0
+  [ -f ./.env ] || return 0
+  local line key val
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|\#*) continue ;; esac
+    key=${line%%=*}
+    case "$key" in *[!A-Za-z0-9_]*|'') continue ;; esac
+    printenv "$key" >/dev/null 2>&1 && continue   # already set: do not override
+    val=${line#*=}
+    val=${val#\"}; val=${val%\"}                  # strip one layer of double quotes
+    export "$key=$val"
+  done < ./.env
+}
+
 # Generate AGENTS.md (and a CLAUDE.md copy) for a scaffolded project.
 _tesl_init_agents_md() {
   local out="$1" name="$2" template="$3" pgmode="$4"
@@ -581,6 +600,8 @@ case "$CMD" in
   run)
     FILE="${1:?Usage: tesl run <file.tesl> [args…]}"
     shift
+    # Convenience: load ./.env so the app sees TESL_POSTGRES_*/PORT without manual sourcing.
+    _tesl_load_dotenv
     # Managed-mode projects: auto-start the project-local Postgres if needed.
     _tesl_db_autostart_if_managed
     OUT="${FILE%.tesl}.rkt"
