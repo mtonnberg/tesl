@@ -3,23 +3,37 @@
 
 ;; headless-inspect.rkt — headless (non-interactive) breakpoint inspector for Tesl.
 ;;
-;; AC2: run a compiled Tesl program to a single breakpoint, capture the runtime
-;; state with STOP-THE-WORLD active, and emit it as one JSON object on stdout —
-;; with NO DAP client and NO interactive protocol.  This is the engine behind the
-;; `tesl debug-inspect <file.tesl> --break-at LINE[:COL] [--mode program|test]`
-;; subcommand: main.ml compiles the .tesl with `--debug` (so the thsl-src!
-;; checkpoints survive expansion) and shells `racket` on this driver with the
-;; compiled .rkt + the ORIGINAL source path + the breakpoint line.
+;; AC2: run a compiled Tesl program to a breakpoint, capture the runtime state
+;; with STOP-THE-WORLD active, and emit it as one JSON object on stdout — with NO
+;; DAP client and NO interactive protocol.  This is the engine behind the
+;; `tesl debug-inspect <file.tesl> --break-at SPEC... [--when EXPR] [--hit SPEC]
+;;  [--mode program|test]` subcommand: main.ml compiles the .tesl with `--debug`
+;; (so the thsl-src! checkpoints survive expansion) and shells `racket` on this
+;; driver with the compiled .rkt + the ORIGINAL source path + the breakpoint set.
 ;;
-;; Direct invocation (the documented wrapper form):
+;; BREAKPOINTS THE AGENT SETS (full control):
+;;   • MULTIPLE breakpoints — register all; stop at whichever fires FIRST and
+;;     report WHICH one in the JSON ("breakpoint" field).
+;;   • CONDITIONAL breakpoints — each breakpoint may carry a boolean `condition`
+;;     (e.g. "n == 100") evaluated over the paused frame's locals, and/or a
+;;     `hit-condition` (e.g. "%3" / ">=5") gating on the per-line hit count.
+;;   We REUSE checkpoint.rkt's make-bp-record + eval-bp-condition / eval-hit-condition
+;;   verbatim (the same safe evaluator the DAP uses); a bad condition FAILS OPEN
+;;   (treated as #t) so a typo never silently drops a breakpoint.
+;;
+;; Direct invocation (the documented wrapper forms):
+;;   ;; legacy single positional line (back-compat):
 ;;   racket dsl/debug/headless-inspect.rkt <compiled.rkt> <srcfile.tesl> <line> [mode]
-;; where mode ∈ {program, test} (default program).
+;;   ;; structured multi/conditional form (what main.ml uses):
+;;   racket dsl/debug/headless-inspect.rkt <compiled.rkt> <srcfile.tesl> <mode> <bp-json>
+;; where mode ∈ {program, test} (default program) and <bp-json> is a JSON array of
+;; breakpoint objects: [{"line":N, "condition":STR?, "hit":STR?}, ...].
 ;;
 ;; DESIGN — mirrors dsl/debug/dap-server.rkt's launch+breakpoint+stop flow:
 ;;   • set TESL_DEBUG=1 so the debuggee's thsl-src! macros expand to real
 ;;     checkpoints (they are expansion-time gated — see checkpoint.rkt);
-;;   • register ONE breakpoint at the requested source line in the SAME
-;;     `breakpoints` table that checkpoint.rkt's thsl-src!/runtime consults;
+;;   • register the requested breakpoints (line + optional condition / hit) in the
+;;     SAME `breakpoints` table that checkpoint.rkt's thsl-src!/runtime consults;
 ;;   • load + run the debuggee IN-PROCESS in a thread (same namespace, so the
 ;;     global domain-registry the program populates is the one we read here);
 ;;   • the checkpoint runtime, on the first matching line, calls
@@ -66,11 +80,71 @@
          locals->json
          domain->json
          sql->json
+         (struct-out bp-spec)
+         parse-bp-spec
+         bp-specs->json
          build-result-json
          run-headless-inspect)
 
 ;; ── Version (bumped on JSON-shape changes) ──────────────────────────────────
-(define headless-version 1)
+;; v2: added the top-level "breakpoint" field (which breakpoint stopped) and
+;; support for multiple + conditional + hit-count breakpoints.
+(define headless-version 2)
+
+;; ── Breakpoint specs ──────────────────────────────────────────────────────────
+;; The agent's requested breakpoints, before they are registered as
+;; checkpoint.rkt bp-records.  `line` is a 1-based integer; `condition` and `hit`
+;; are source strings or #f.  Kept as a small struct so the driver can both
+;; register them (via make-bp-record) and report them ("breakpoint" field).
+(struct bp-spec (line condition hit) #:transparent)
+
+;; Parse ONE textual breakpoint spec into a bp-spec, or #f if it carries no usable
+;; line number.  Accepted forms (whitespace-insensitive):
+;;   "LINE"                     bare, unconditional         e.g. "42"
+;;   "LINE:COL"                 COL accepted and ignored    e.g. "42:7"
+;;   "LINE: <expr>"             conditional                 e.g. "42: n == 100"
+;;   "LINE: <hit-spec>"         hit-count                   e.g. "42: %3" / "42: >=5"
+;; The text AFTER the first colon is classified: a pure DAP hit-condition pattern
+;; ((==|>=|<=|>|<|%)?N — see checkpoint.rkt's eval-hit-condition) is treated as a
+;; `hit` spec; otherwise it is a boolean `condition` expression.  A leading bare
+;; integer with NO operator is a COLUMN (legacy LINE:COL), not a hit count, so it
+;; is dropped.  Defaults [when-cond] / [hit-cond] fill in a missing slot.
+(define (classify-after-colon rest)
+  (define s (string-trim rest))
+  (cond
+    [(string=? s "") (values #f #f)]
+    ;; bare integer → legacy COLUMN, ignored (no condition, no hit)
+    [(regexp-match? #px"^[0-9]+$" s) (values #f #f)]
+    ;; explicit hit-condition operator form: (==|>=|<=|>|<|%) N
+    [(regexp-match? #px"^(==|>=|<=|>|<|%)\\s*[0-9]+$" s) (values #f s)]
+    ;; otherwise a boolean condition expression
+    [else (values s #f)]))
+
+(define (parse-bp-spec text [when-cond #f] [hit-cond #f])
+  (define t (string-trim text))
+  (cond
+    [(string=? t "") #f]
+    [else
+     (define ci (let ([m (regexp-match-positions #rx":" t)]) (and m (caar m))))
+     (define line-part (if ci (substring t 0 ci) t))
+     (define rest      (if ci (substring t (add1 ci)) ""))
+     (define line (string->number (string-trim line-part)))
+     (cond
+       [(not (exact-positive-integer? line)) #f]
+       [else
+        (define-values (c h) (classify-after-colon rest))
+        (bp-spec line
+                 (or c when-cond)
+                 (or h hit-cond))])]))
+
+;; Render the bp-specs as JSON (for the "requested" list, optional).
+(define (bp-spec->json bp)
+  (define base (hasheq 'line (bp-spec-line bp)))
+  (let* ([b (if (bp-spec-condition bp) (hash-set base 'condition (bp-spec-condition bp)) base)]
+         [b (if (bp-spec-hit bp)       (hash-set b 'hit (bp-spec-hit bp))             b)])
+    b))
+
+(define (bp-specs->json bps) (map bp-spec->json bps))
 
 ;; ── Type inference (same logic as dap-server's infer-type-string) ───────────
 ;; A human-readable type string from a Tesl runtime value, GDP-unwrapped.
@@ -237,23 +311,47 @@
 ;; ── Result assembly ──────────────────────────────────────────────────────────
 ;; Build the top-level JSON object from a (possibly #f) stopped event.  Shared by
 ;; the live runner and the smoke test so the exact shape is exercised directly.
-;;   evt        — the checkpoint `stopped` hasheq (or #f if the bp never fired)
+;;   evt        — the checkpoint `stopped` hasheq (or #f if no bp ever fired)
 ;;   src        — original .tesl source path (for source.file)
-;;   line       — requested breakpoint line
-;;   reason     — string reason when not stopped (e.g. "program-finished")
+;;   bps        — the requested bp-spec list (used for source.line fallback when
+;;                not stopped, and to identify WHICH breakpoint fired)
+;;   reason     — string reason when not stopped (e.g. "breakpoint-not-hit")
 ;;   sql-cap    — the SQL capture record, or #f
-(define (build-result-json evt src line reason sql-cap)
+;;
+;; When stopped, a top-level "breakpoint" object identifies the breakpoint that
+;; fired: {line, condition?, hit?}.  The line comes from the stop event; the
+;; condition/hit are looked up from the matching requested spec (so the agent sees
+;; exactly which of its breakpoints stopped, and under what condition).
+(define (matching-bp-spec bps line)
+  (for/or ([b (in-list bps)]) (and (= (bp-spec-line b) line) b)))
+
+(define (build-result-json evt src bps reason sql-cap)
+  ;; Back-compat: accept a bare integer line in the `bps` slot (legacy callers /
+  ;; existing smoke test) — wrap it as a single unconditional spec.
+  (define specs
+    (cond [(list? bps) bps]
+          [(exact-integer? bps) (list (bp-spec bps #f #f))]
+          [else '()]))
+  (define fallback-line
+    (cond [(pair? specs) (bp-spec-line (car specs))] [else 0]))
   (define stopped? (and evt #t))
   (define locals (if evt (hash-ref evt 'locals '()) '()))
+  (define stop-line (if evt (hash-ref evt 'line fallback-line) fallback-line))
   (define base
     (hasheq 'version headless-version
             'stopped stopped?
             'source  (hasheq 'file (if evt (hash-ref evt 'file src) src)
-                             'line (if evt (hash-ref evt 'line line) line))
+                             'line stop-line)
             'locals  (locals->json locals)
             'domain  (domain->json locals)
             'sql     (or (sql->json sql-cap) 'null)))
-  (if stopped? base (hash-set base 'reason reason)))
+  (cond
+    [stopped?
+     ;; Identify which requested breakpoint stopped us (line + its condition/hit).
+     (define spec (matching-bp-spec specs stop-line))
+     (define bp (if spec (bp-spec->json spec) (hasheq 'line stop-line)))
+     (hash-set base 'breakpoint bp)]
+    [else (hash-set base 'reason reason)]))
 
 ;; ── Live runner ──────────────────────────────────────────────────────────────
 ;; Compile-time gate: TESL_DEBUG must be set BEFORE the debuggee is expanded via
@@ -262,10 +360,24 @@
 ;;
 ;; Returns the result JSON hasheq.  Never throws on a debuggee runtime error —
 ;; reports it as stopped=false with a reason instead.
-(define (run-headless-inspect compiled-path src-path line [mode "program"])
+;; `bps` is a list of bp-spec (the agent's requested breakpoints) OR — for
+;; back-compat with the legacy single-line callers — a bare integer line.
+(define (run-headless-inspect compiled-path src-path bps [mode "program"])
   (putenv "TESL_DEBUG" "1")
-  ;; ONE breakpoint at the requested line, in the SAME table thsl-src!/runtime reads.
-  (hash-set! breakpoints src-path (list (make-bp-record line)))
+  (define specs
+    (cond [(list? bps) bps]
+          [(exact-integer? bps) (list (bp-spec bps #f #f))]
+          [else '()]))
+  ;; Register ALL requested breakpoints in the SAME table thsl-src!/runtime reads,
+  ;; each with its optional condition / hit-condition.  REUSE make-bp-record —
+  ;; the runtime evaluates condition + hitCondition via eval-bp-condition /
+  ;; eval-hit-condition (fail-open) exactly as the DAP does.  The inspector stops
+  ;; at whichever fires FIRST; build-result-json reports which.
+  (hash-set! breakpoints src-path
+             (for/list ([b (in-list specs)])
+               (make-bp-record (bp-spec-line b)
+                               (bp-spec-condition b)
+                               (bp-spec-hit b))))
   (define rkt-path   (path->complete-path compiled-path))
   (define submod-sym (if (equal? mode "test") 'test 'main))
   (define require-target `(submod ,rkt-path ,submod-sym))
@@ -316,7 +428,7 @@
       (or (let ([t (unbox prog-thread)]) (and t (sql-capture-for-thread t)))
           (most-recent-sql-capture))))
   (define result
-    (build-result-json evt src-path line
+    (build-result-json evt src-path specs
                        (if evt "stopped" "breakpoint-not-hit")
                        sql-cap))
   ;; Tear down: kill the (parked or running) debuggee thread so no further user
@@ -329,18 +441,47 @@
   (values result real-out))
 
 ;; ── Entry point ────────────────────────────────────────────────────────────
-;; racket headless-inspect.rkt <compiled.rkt> <srcfile> <line> [mode]
+;; Two argv shapes are accepted:
+;;   LEGACY (single positional line):  <compiled.rkt> <srcfile> <line> [mode]
+;;   STRUCTURED (multi/conditional):   <compiled.rkt> <srcfile> <mode> <bp-json>
+;; The two are distinguished by argv[2]: a NUMBER is the legacy line; otherwise it
+;; is the mode and argv[3] is a JSON array of breakpoint objects
+;; ([{"line":N,"condition":STR?,"hit":STR?}, ...]).  main.ml always emits the
+;; structured form; the legacy form keeps hand/test invocation working.
+(define (bp-specs-from-json arr)
+  (for/list ([o (in-list arr)] #:when (hash? o))
+    (define line (hash-ref o 'line #f))
+    (define cond* (let ([c (hash-ref o 'condition #f)]) (and (string? c) (non-empty-string? (string-trim c)) c)))
+    (define hit   (let ([h (hash-ref o 'hit #f)])       (and (string? h) (non-empty-string? (string-trim h)) h)))
+    (and (exact-positive-integer? line) (bp-spec line cond* hit)))
+  )
+
 (module+ main
   (define argv (current-command-line-arguments))
   (when (< (vector-length argv) 3)
     (eprintf "usage: headless-inspect.rkt <compiled.rkt> <srcfile> <line> [program|test]\n")
+    (eprintf "   or: headless-inspect.rkt <compiled.rkt> <srcfile> <mode> <bp-json>\n")
     (exit 2))
   (define compiled (vector-ref argv 0))
   (define src      (vector-ref argv 1))
-  (define line     (string->number (vector-ref argv 2)))
-  (define mode     (if (>= (vector-length argv) 4) (vector-ref argv 3) "program"))
+  (define legacy-line (string->number (vector-ref argv 2)))
+  (define-values (mode bps)
+    (cond
+      ;; legacy: argv[2] is a number → single unconditional line, optional mode
+      [(exact-positive-integer? legacy-line)
+       (values (if (>= (vector-length argv) 4) (vector-ref argv 3) "program")
+               (list (bp-spec legacy-line #f #f)))]
+      ;; structured: argv[2] is mode, argv[3] is the bp JSON array
+      [else
+       (define m (vector-ref argv 2))
+       (define arr
+         (if (>= (vector-length argv) 4)
+             (with-handlers ([exn:fail? (lambda (_e) '())])
+               (let ([j (string->jsexpr (vector-ref argv 3))]) (if (list? j) j '())))
+             '()))
+       (values m (filter values (bp-specs-from-json arr)))]))
   (define-values (result real-out)
-    (run-headless-inspect compiled src line mode))
+    (run-headless-inspect compiled src bps mode))
   ;; Emit EXACTLY one JSON object (+ trailing newline) on the real stdout.  The
   ;; write-string results are voided so the module-top-level printer can't append
   ;; their char counts to the protocol stream.

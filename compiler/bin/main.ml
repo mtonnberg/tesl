@@ -1145,53 +1145,130 @@ let () =
      | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
      | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
 
-  (* AC2: headless breakpoint inspector.
-       tesl debug-inspect <file.tesl> --break-at LINE[:COL] [--mode program|test]
-     Compiles the .tesl with debug instrumentation, runs it to the requested
-     breakpoint with stop-the-world active, and emits the paused runtime state
-     (locals + live domain registry + SQL capture) as ONE JSON object on stdout. *)
+  (* AC2: headless breakpoint inspector — agent-set breakpoints, full control.
+       tesl debug-inspect <file.tesl> --break-at SPEC [--break-at SPEC ...]
+                          [--when EXPR] [--hit SPEC] [--mode program|test]
+     Compiles the .tesl with debug instrumentation, registers ALL requested
+     breakpoints, runs to whichever fires FIRST (with stop-the-world active), and
+     emits the paused runtime state (locals + live domain registry + SQL capture)
+     plus the breakpoint that stopped it as ONE JSON object on stdout.
+
+     --break-at SPEC, where SPEC is one of:
+        LINE                bare, unconditional            e.g. 42
+        LINE:COL            column accepted and ignored    e.g. 42:7
+        LINE: <expr>        conditional (boolean over locals)  e.g. "42: n == 100"
+        LINE: <hit>         hit-count (==|>=|<=|>|<|% N)   e.g. "42: %3"
+        L1,L2,L3            comma-separated bare lines     e.g. 10,22,40
+     --break-at is repeatable; all breakpoints are registered.
+     --when EXPR  default boolean condition for breakpoints with no inline one.
+     --hit  SPEC  default hit-condition for breakpoints with no inline one.
+     A bad condition FAILS OPEN (treated as true) so a typo never silently drops a
+     breakpoint — same semantics as the DAP conditional breakpoints. *)
   | "debug-inspect" :: filename :: rest
     when not (String.length filename > 2 && filename.[0] = '-') ->
-    (* Parse --break-at LINE[:COL] (COL accepted and ignored — Tesl checkpoints
-       are per-line) and the optional --mode program|test. *)
-    let rec parse_opts brk mode = function
-      | [] -> (brk, mode)
+    let inspect_usage () =
+      Printf.eprintf "usage: tesl debug-inspect <file.tesl> --break-at SPEC [--break-at SPEC ...] [--when EXPR] [--hit SPEC] [--mode program|test]\n";
+      Printf.eprintf "  SPEC := LINE | LINE:COL | \"LINE: <cond-expr>\" | \"LINE: <hit-spec>\" | L1,L2,L3\n"
+    in
+    (* A single --break-at spec may carry several comma-separated bare lines OR one
+       conditional/hit breakpoint.  We classify the text after the first ':' the
+       SAME way the Racket driver's parse-bp-spec does:
+         - a bare integer after ':'         → a COLUMN (legacy), ignored
+         - an operator+int (==|>=|<=|>|<|%) → a hit-condition
+         - anything else                    → a boolean condition expression.
+       Comma-splitting only applies to a spec with NO ':' (a pure line list); a
+       spec containing ':' is treated as ONE breakpoint so commas inside an
+       expression are never mis-split. *)
+    let is_hit_spec s =                       (* (==|>=|<=|>|<|%) <digits> *)
+      let s = String.trim s in
+      let n = String.length s in
+      if n = 0 then false
+      else
+        let op_len =
+          if n >= 2 && (let p = String.sub s 0 2 in p="=="||p=">="||p="<=") then 2
+          else if (s.[0]='>'||s.[0]='<'||s.[0]='%') then 1
+          else 0
+        in
+        op_len > 0 &&
+        (let rest = String.trim (String.sub s op_len (n - op_len)) in
+         String.length rest > 0 &&
+         String.for_all (fun c -> c >= '0' && c <= '9') rest)
+    in
+    let is_all_digits s =
+      let s = String.trim s in
+      String.length s > 0 && String.for_all (fun c -> c >= '0' && c <= '9') s
+    in
+    (* Parse one chunk "LINE[: rest]" into (line, condition opt, hit opt). *)
+    let parse_chunk chunk : (int * string option * string option) option =
+      match String.index_opt chunk ':' with
+      | None ->
+        (match int_of_string_opt (String.trim chunk) with
+         | Some l when l > 0 -> Some (l, None, None)
+         | _ -> None)
+      | Some i ->
+        let line_str = String.trim (String.sub chunk 0 i) in
+        let rest = String.trim (String.sub chunk (i+1) (String.length chunk - i - 1)) in
+        (match int_of_string_opt line_str with
+         | Some l when l > 0 ->
+           if rest = "" || is_all_digits rest then Some (l, None, None)   (* COL ignored *)
+           else if is_hit_spec rest then Some (l, None, Some rest)
+           else Some (l, Some rest, None)
+         | _ -> None)
+    in
+    let parse_break_at spec : (int * string option * string option) list =
+      if String.contains spec ':' then
+        (match parse_chunk spec with Some bp -> [bp] | None -> [])
+      else
+        String.split_on_char ',' spec
+        |> List.filter_map (fun part ->
+             let part = String.trim part in
+             if part = "" then None else parse_chunk part)
+    in
+    let rec parse_opts bps when_opt hit_opt mode = function
+      | [] -> (List.rev bps, when_opt, hit_opt, mode)
       | "--break-at" :: spec :: tl ->
-        let line_str = match String.index_opt spec ':' with
-          | Some i -> String.sub spec 0 i
-          | None -> spec in
-        parse_opts (Some line_str) mode tl
-      | "--mode" :: m :: tl -> parse_opts brk (Some m) tl
+        let parsed = parse_break_at spec in
+        if parsed = [] then begin
+          Printf.eprintf "%serror%s: --break-at expects LINE[:COL]/LINE:<cond>/LINE:<hit>/L1,L2, got %s\n"
+            (col "1;31") (col "0") spec;
+          inspect_usage (); exit 2
+        end;
+        parse_opts (List.rev_append parsed bps) when_opt hit_opt mode tl
+      | "--when" :: w :: tl -> parse_opts bps (Some w) hit_opt mode tl
+      | "--hit"  :: h :: tl -> parse_opts bps when_opt (Some h) mode tl
+      | "--mode" :: m :: tl -> parse_opts bps when_opt hit_opt (Some m) tl
       | other :: _ ->
         Printf.eprintf "%serror%s: unexpected argument to debug-inspect: %s\n"
           (col "1;31") (col "0") other;
-        Printf.eprintf "usage: tesl debug-inspect <file.tesl> --break-at LINE[:COL] [--mode program|test]\n";
+        inspect_usage (); exit 2
+    in
+    let (bps, when_opt, hit_opt, mode_opt) = parse_opts [] None None None rest in
+    if bps = [] then begin
+      Printf.eprintf "%serror%s: debug-inspect requires at least one --break-at SPEC\n"
+        (col "1;31") (col "0");
+      inspect_usage (); exit 2
+    end;
+    (* Apply the global --when / --hit defaults to any breakpoint that has no
+       inline condition / hit-condition. *)
+    let breakpoints =
+      List.map (fun (line, c, h) ->
+        (line,
+         (match c with Some _ -> c | None -> when_opt),
+         (match h with Some _ -> h | None -> hit_opt)))
+        bps
+    in
+    let mode = match mode_opt with
+      | Some ("program" | "test" as m) -> m
+      | None -> "program"
+      | Some bad ->
+        Printf.eprintf "%serror%s: --mode must be program or test, got %s\n"
+          (col "1;31") (col "0") bad;
         exit 2
     in
-    let (brk, mode_opt) = parse_opts None None rest in
-    (match brk with
-     | None ->
-       Printf.eprintf "%serror%s: debug-inspect requires --break-at LINE[:COL]\n"
-         (col "1;31") (col "0");
-       exit 2
-     | Some line_str ->
-       let line = (try int_of_string (String.trim line_str)
-                   with _ ->
-                     Printf.eprintf "%serror%s: --break-at expects a line number, got %s\n"
-                       (col "1;31") (col "0") line_str;
-                     exit 2) in
-       let mode = match mode_opt with
-         | Some ("program" | "test" as m) -> m
-         | None -> "program"
-         | Some bad ->
-           Printf.eprintf "%serror%s: --mode must be program or test, got %s\n"
-             (col "1;31") (col "0") bad;
-           exit 2
-       in
-       (match Compile.debug_inspect ~root_path ~line ~mode filename with
-        | Compile.InspectDiags diags -> List.iter print_diagnostic diags; exit 1
-        | Compile.InspectErr msg ->
-          Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1))
+    (match Compile.debug_inspect ~root_path ~breakpoints ~mode filename with
+     | Compile.InspectDiags diags -> List.iter print_diagnostic diags; exit 1
+     | Compile.InspectErr msg ->
+       Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
 
   | [filename] when not (String.length filename > 2 && filename.[0] = '-') ->
     (try

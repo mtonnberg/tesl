@@ -3399,11 +3399,16 @@ let find_racket_binary () : string option =
       (match String.trim out with "" -> None | s -> Some s)
     else None
 
-(** Run [file] to a breakpoint at [line] (1-based) and dump the paused runtime
-    state as JSON.  [mode] is "program" (run the `main` block) or "test" (run the
-    `test` blocks).  On success this execs the Racket driver and never returns;
-    the JSON appears on the inherited stdout. *)
-let debug_inspect ?(root_path=default_root_path ()) ~line ~mode filename
+(** Run [file] to the FIRST matching breakpoint and dump the paused runtime state
+    as JSON.  [breakpoints] is a list of [(line, condition, hit)] triples — the
+    agent's requested breakpoints, each a 1-based [line] with an optional boolean
+    [condition] string (evaluated over the paused frame's locals) and/or an
+    optional [hit] hit-condition string (e.g. ["%3"] / [">=5"]).  Multiple
+    breakpoints are all registered; the inspector stops at whichever fires first
+    and the JSON's "breakpoint" field reports which.  [mode] is "program" (run the
+    `main` block) or "test" (run the `test` blocks).  On success this execs the
+    Racket driver and never returns; the JSON appears on the inherited stdout. *)
+let debug_inspect ?(root_path=default_root_path ()) ~breakpoints ~mode filename
   : debug_inspect_result =
   if not (Sys.file_exists filename) then
     InspectErr (Printf.sprintf "%s: No such file" filename)
@@ -3437,8 +3442,27 @@ let debug_inspect ?(root_path=default_root_path ()) ~line ~mode filename
                  (including any PLTCOLLECTS a dev worktree set to repoint the `tesl`
                  collection) and add TESL_DEBUG=1. *)
               Unix.putenv "TESL_DEBUG" "1";
+              (* Encode the requested breakpoints as a JSON array the driver
+                 parses: [{"line":N,"condition":STR?,"hit":STR?}, ...].  The driver
+                 distinguishes this STRUCTURED form (argv[2]=mode, argv[3]=json)
+                 from the LEGACY single-line form (argv[2]=number) by argv[2]. *)
+              let bp_json =
+                let one (line, cond_opt, hit_opt) =
+                  let fields =
+                    (Printf.sprintf {|"line":%d|} line)
+                    :: (match cond_opt with
+                        | Some c -> [Printf.sprintf {|"condition":%s|} (json_encode_string c)]
+                        | None -> [])
+                    @  (match hit_opt with
+                        | Some h -> [Printf.sprintf {|"hit":%s|} (json_encode_string h)]
+                        | None -> [])
+                  in
+                  "{" ^ String.concat "," fields ^ "}"
+                in
+                "[" ^ String.concat "," (List.map one breakpoints) ^ "]"
+              in
               let argv =
-                [| racket_bin; driver; tmp_rkt; abs_src; string_of_int line; mode |]
+                [| racket_bin; driver; tmp_rkt; abs_src; mode; bp_json |]
               in
               flush stdout; flush stderr;
               (* exec replaces this process: the driver's single JSON object is
