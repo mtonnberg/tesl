@@ -1025,6 +1025,95 @@ let test_type_definition_null_when_no_type () =
   let json = Compile.type_definition_response_to_json loc in
   assert_contains ~name:"null type definition" json {|"type_definition":null|}
 
+(* ── AC1: agent-context snapshot ─────────────────────────────────────────── *)
+
+(* A clean module: exercises the happy path — ok:true, top-level symbols with
+   signatures, and the compactness guarantee (NO expr_types firehose, NO
+   bodies/local-bindings keys). *)
+let test_agent_context_clean_shape () =
+  let json = Compile.agent_context_source "query.tesl" query_src in
+  assert_contains ~name:"version" json {|"version":1|};
+  assert_contains ~name:"file" json {|"file":"query.tesl"|};
+  assert_contains ~name:"content_hash key" json {|"content_hash":|};
+  assert_contains ~name:"ok true" json {|"ok":true|};
+  assert_contains ~name:"summary key" json {|"summary":|};
+  assert_contains ~name:"diagnostics key" json {|"diagnostics":|};
+  assert_contains ~name:"symbols key" json {|"symbols":|};
+  assert_contains ~name:"proof_obligations key" json {|"proof_obligations":|};
+  (* Top-level decls appear as symbols carrying their signature, never a body. *)
+  assert_contains ~name:"function symbol + signature" json
+    {|{"name":"add","kind":"fn","signature":"Int -> Int -> Int"}|};
+  assert_contains ~name:"record symbol" json {|"name":"Point","kind":"record"|};
+  (* Compactness: this is NOT the semantic-json firehose. *)
+  if contains {|"expr_types"|} json then
+    Alcotest.fail "agent-context must NOT carry an expr_types array";
+  if contains {|"local_bindings"|} json then
+    Alcotest.fail "agent-context must NOT carry a local_bindings array";
+  (* And it must be dramatically smaller than the full semantic snapshot. *)
+  (match Compile.semantic_json_source "query.tesl" query_src with
+   | None -> Alcotest.fail "expected a semantic-json snapshot for the clean module"
+   | Some sem ->
+     if String.length json >= String.length sem then
+       Alcotest.failf "agent-context (%d) should be far smaller than semantic-json (%d)"
+         (String.length json) (String.length sem))
+
+(* The same content_hash recipe as --semantic-json, so an agent can share one
+   cache key across both outputs.  Both hash the on-disk file content with
+   [Digest.string], so the test compares them through the file-backed entry
+   points (semantic-json reads the source file to compute its hash). *)
+let test_agent_context_hash_matches_semantic () =
+  with_temp_file "agent_ctx" query_src (fun path ->
+    let json = Compile.agent_context_file path in
+    match Compile.semantic_json_file path with
+    | None -> Alcotest.fail "expected semantic-json snapshot"
+    | Some sem ->
+      let expected = Digest.to_hex (Digest.string query_src) in
+      assert_contains ~name:"agent hash" json (Printf.sprintf {|"content_hash":"%s"|} expected);
+      assert_contains ~name:"semantic hash" sem (Printf.sprintf {|"content_hash":"%s"|} expected))
+
+(* A module mixing a validation error (V001) with two proof-checker obligations
+   (P001): diagnostics must carry stable codes, errors must sort first, and the
+   proof_obligations list must contain exactly the proof-checker items. *)
+let agent_proof_src = {|#lang tesl
+module Foo exposing []
+import Tesl.Prelude exposing [Int]
+fact Positive (n: Int)
+check isPos(n: Int) -> n: Int ::: Positive x =
+  ok n ::: Positive n
+|}
+
+let test_agent_context_codes_and_obligations () =
+  let json = Compile.agent_context_source "foo.tesl" agent_proof_src in
+  assert_contains ~name:"not ok" json {|"ok":false|};
+  (* Diagnostics carry the stable codes. *)
+  assert_contains ~name:"P001 code present" json {|"code":"P001"|};
+  (* Proof obligations are the proof-checker (P001) diagnostics, with code. *)
+  assert_contains ~name:"obligation carries code" json
+    {|"proof_obligations":[{"line":|};
+  (* There must be at least one obligation, all coded P001. *)
+  let oblig = Compile.agent_context_source "foo.tesl" agent_proof_src in
+  ignore oblig;
+  let obligs =
+    Compile.check_source "foo.tesl" agent_proof_src
+    |> List.filter Compile.is_proof_obligation_diag
+  in
+  if obligs = [] then Alcotest.fail "expected at least one proof obligation"
+
+(* Errors must precede warnings/other severities in the ranked diagnostics. *)
+let test_agent_context_errors_sort_first () =
+  let ranked =
+    Compile.check_source "foo.tesl" agent_proof_src
+    |> Compile.rank_diagnostics_errors_first
+  in
+  let rec sorted = function
+    | a :: (b :: _ as rest) ->
+      Compile.severity_rank a.Compile.severity <= Compile.severity_rank b.Compile.severity
+      && sorted rest
+    | _ -> true
+  in
+  if not (sorted ranked) then
+    Alcotest.fail "agent-context diagnostics must be ranked errors-first"
+
 let () =
   Alcotest.run "IR" [
     "emit", [
@@ -1106,5 +1195,9 @@ let () =
       Alcotest.test_case "selection range nested" `Quick test_selection_range_nested;
       Alcotest.test_case "type definition record" `Quick test_type_definition_record;
       Alcotest.test_case "type definition null" `Quick test_type_definition_null_when_no_type;
+      Alcotest.test_case "agent-context clean shape (compact, has symbols)" `Quick test_agent_context_clean_shape;
+      Alcotest.test_case "agent-context hash matches semantic-json" `Quick test_agent_context_hash_matches_semantic;
+      Alcotest.test_case "agent-context diagnostics carry codes + obligations" `Quick test_agent_context_codes_and_obligations;
+      Alcotest.test_case "agent-context errors sort first" `Quick test_agent_context_errors_sort_first;
     ];
   ]

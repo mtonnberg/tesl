@@ -44,6 +44,8 @@ let usage = {|Usage:
   tesl --ir <file>             emit API IR JSON
   tesl --deps <file>           list all transitively imported local .tesl files (one per line)
   tesl --semantic-json <file>  emit full module semantic snapshot as JSON (IR-1 foundation)
+  tesl agent-context <file>    emit a compact AI-agent snapshot (diagnostics+symbols+obligations) as JSON
+  tesl --agent-context-json <file>  alias for `tesl agent-context`
   tesl --mutate <file> [test-file ...]  run mutation testing; optionally merge tests from extra files
   tesl --exe <file> [--out <path>]  build a standalone executable via `raco exe` (needs raco on PATH)
 
@@ -847,6 +849,23 @@ let () =
        print_string (Compile.diagnostics_to_json diags);
        print_newline ();
        exit (if diags = [] then 0 else 1)
+     with Sys_error msg ->
+       Printf.eprintf "error: %s\n" msg; exit 1)
+
+  | ["--agent-context-json"; filename]
+  | ["agent-context"; filename] ->
+    (* AC1: token-economical compiler/linter snapshot for an AI coding agent.
+       Always emits a JSON snapshot; exit 0 iff there are no error-severity
+       diagnostics ([ok]), 1 otherwise, mirroring --check-json's exit code so a
+       wrapper can branch on the status without re-parsing. *)
+    (try
+       let source = In_channel.with_open_text filename In_channel.input_all in
+       let json = Compile.agent_context_source filename source in
+       print_string json;
+       print_newline ();
+       let diags = Compile.check_source filename source in
+       let has_error = List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") diags in
+       exit (if has_error then 1 else 0)
      with Sys_error msg ->
        Printf.eprintf "error: %s\n" msg; exit 1)
 

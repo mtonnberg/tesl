@@ -2836,6 +2836,212 @@ let semantic_json_file filename =
   let source = In_channel.with_open_text filename In_channel.input_all in
   semantic_json_source filename source
 
+(* ── AC1: agent-context snapshot ─────────────────────────────────────────── *)
+(** `--agent-context-json <file>` (alias `tesl agent-context <file>`): a
+    token-economical compiler/linter snapshot designed to be re-read by an AI
+    coding agent after each edit, instead of the [--semantic-json] firehose.
+
+    DELIBERATELY SMALL: top-level symbol signatures ONLY (no bodies), the
+    diagnostics (errors ranked first, then warnings), and the outstanding proof
+    obligations.  NO [expr_types] array, NO local bindings, NO bodies — so the
+    payload stays a tiny fraction of [--semantic-json].
+
+    Schema version 1.  Line/col values are 0-based, matching every other
+    compiler JSON output.  The [content_hash] is computed identically to
+    [--semantic-json] ([Digest.to_hex (Digest.string source)]) so an agent can
+    reuse one cache key across both outputs.
+
+    PROOF-OBLIGATION SOURCE: the compiler has no separate "outstanding
+    obligation" stream; an unproven obligation surfaces as a diagnostic from the
+    proof checker.  So [proof_obligations] is derived from exactly the
+    diagnostics whose [source] is ["proof-checker"] (stable code ["P001"]) — see
+    [is_proof_obligation_diag].  This is stated in the [notes] of the structured
+    report. *)
+
+(* Cap any list at this many entries to keep the snapshot small; the surplus
+   count is reported in an "omitted" field so an agent knows the list is
+   truncated rather than complete. *)
+let agent_context_cap = 50
+
+(* A diagnostic is a (proof/capability) obligation iff it came from the proof
+   checker.  Proof errors carry code "P001" and source "proof-checker"
+   ([diag_of_proof_error]); capability requirements that go unsatisfied are
+   reported through the same proof-checker stream. *)
+let is_proof_obligation_diag (d : diagnostic) = d.source = "proof-checker"
+
+(* Stable error-first ordering: error severities sort before everything else,
+   then by (line, col), so the most actionable items lead.  [List.stable_sort]
+   keeps the original relative order within a severity bucket. *)
+let severity_rank = function
+  | "error" -> 0
+  | "warning" | "warn" -> 1
+  | _ -> 2
+
+let rank_diagnostics_errors_first (diags : diagnostic list) : diagnostic list =
+  List.stable_sort (fun a b ->
+    let c = compare (severity_rank a.severity) (severity_rank b.severity) in
+    if c <> 0 then c
+    else
+      let c = compare a.start_line b.start_line in
+      if c <> 0 then c else compare a.start_col b.start_col
+  ) diags
+
+(* Take the first [cap] elements; return them with the omitted surplus count. *)
+let cap_list cap xs =
+  let n = List.length xs in
+  if n <= cap then (xs, 0)
+  else
+    let rec take k = function
+      | x :: rest when k > 0 -> x :: take (k - 1) rest
+      | _ -> []
+    in
+    (take cap xs, n - cap)
+
+(* Compact diagnostic record for the agent snapshot: the stable code, severity,
+   message, 0-based span, and a machine-applicable fix when one is available.
+   Distinct from [diag_to_json] (which also carries file/source) — this trims
+   redundant fields the agent already knows (the file) to save tokens. *)
+let agent_diag_json (d : diagnostic) : string =
+  let base = [
+    "code",       json_str d.code;
+    "severity",   json_str d.severity;
+    "message",    json_str d.message;
+    "line",       string_of_int d.start_line;
+    "col",        string_of_int d.start_col;
+    "end_line",   string_of_int d.end_line;
+    "end_col",    string_of_int d.end_col;
+  ] in
+  let with_fix = match d.fix with
+    | None -> base
+    | Some _ -> base @ ["fix", fix_to_json d.fix]
+  in
+  json_obj with_fix
+
+(* One outstanding proof obligation: location, message, and stable code. *)
+let agent_obligation_json (d : diagnostic) : string =
+  json_obj [
+    "line",    string_of_int d.start_line;
+    "col",     string_of_int d.start_col;
+    "message", json_str d.message;
+    "code",    json_str d.code;
+  ]
+
+(* Top-level symbol: name, kind, and signature/type ONLY — never a body. *)
+let agent_symbol_json ~name ~kind ~signature : string =
+  json_obj [
+    "name",      json_str name;
+    "kind",      json_str kind;
+    "signature", json_str signature;
+  ]
+
+(* Build the top-level symbol list from the parsed module's declarations.
+   Mirrors the declared-signature approach in [semantic_json_of_module]: for
+   functions we render the param/return arrow type; for types/records/entities
+   we render a compact structural signature.  No bodies, no expr types. *)
+let agent_symbols_of_module (m : Ast.module_form) : string list =
+  let field_sig (f : Ast.field_def) =
+    Printf.sprintf "%s: %s" f.name (Type_system.pp_ty (Checker.ty_of_type_expr f.type_expr))
+  in
+  List.filter_map (function
+    | Ast.DFunc fd ->
+      let param_tys = List.map (fun (b : Ast.binding) ->
+        Type_system.pp_ty (Checker.ty_of_type_expr b.type_expr)) fd.params in
+      let ret_ty = Type_system.pp_ty (Checker.ret_spec_type fd.return_spec) in
+      let signature = match param_tys with
+        | [] -> ret_ty
+        | ps -> String.concat " -> " ps ^ " -> " ^ ret_ty
+      in
+      let kind = (match fd.kind with
+        | Ast.FnKind         -> "fn"
+        | Ast.HandlerKind    -> "handler"
+        | Ast.WorkerKind     -> "worker"
+        | Ast.DeadWorkerKind -> "worker"
+        | Ast.CheckKind      -> "check"
+        | Ast.AuthKind       -> "auth"
+        | Ast.EstablishKind  -> "establish"
+        | Ast.MainKind       -> "main") in
+      Some (agent_symbol_json ~name:fd.name ~kind ~signature)
+    | Ast.DType (Ast.TypeNewtype { name; base_type; _ }) ->
+      Some (agent_symbol_json ~name ~kind:"newtype"
+              ~signature:(Type_system.pp_ty (Checker.ty_of_type_expr base_type)))
+    | Ast.DType (Ast.TypeAlias { name; base_type; _ }) ->
+      Some (agent_symbol_json ~name ~kind:"alias"
+              ~signature:(Type_system.pp_ty (Checker.ty_of_type_expr base_type)))
+    | Ast.DType (Ast.TypeAdt { name; variants; _ }) ->
+      let ctors = List.map (fun (v : Ast.adt_variant) -> v.ctor) variants in
+      Some (agent_symbol_json ~name ~kind:"type"
+              ~signature:(String.concat " | " ctors))
+    | Ast.DRecord r ->
+      let sig_str = "{ " ^ String.concat ", " (List.map field_sig r.fields) ^ " }" in
+      Some (agent_symbol_json ~name:r.name ~kind:"record" ~signature:sig_str)
+    | Ast.DEntity e ->
+      let sig_str = "{ " ^ String.concat ", " (List.map field_sig e.fields) ^ " }" in
+      Some (agent_symbol_json ~name:e.name ~kind:"entity" ~signature:sig_str)
+    | Ast.DConst c ->
+      Some (agent_symbol_json ~name:c.name ~kind:"const" ~signature:"unknown")
+    | _ -> None
+  ) m.decls
+
+(* Render the full agent-context object from already-computed pieces. *)
+let agent_context_to_json
+    ~file ~content_hash ~(diagnostics : diagnostic list) ~symbols : string =
+  let ranked = rank_diagnostics_errors_first diagnostics in
+  let n_errors = List.length (List.filter (fun d -> severity_rank d.severity = 0) ranked) in
+  let n_warnings = List.length (List.filter (fun d -> severity_rank d.severity = 1) ranked) in
+  let obligations = List.filter is_proof_obligation_diag ranked in
+  let n_oblig = List.length obligations in
+  let ok = n_errors = 0 in
+  let summary =
+    Printf.sprintf "%d error%s, %d warning%s; %d unproven obligation%s"
+      n_errors  (if n_errors = 1 then "" else "s")
+      n_warnings (if n_warnings = 1 then "" else "s")
+      n_oblig   (if n_oblig = 1 then "" else "s")
+  in
+  let diags_capped, diags_omitted = cap_list agent_context_cap ranked in
+  let symbols_capped, symbols_omitted = cap_list agent_context_cap symbols in
+  let oblig_capped, oblig_omitted = cap_list agent_context_cap obligations in
+  (* The three lists are plain arrays (matching the documented shape).  When any
+     list is truncated, a sibling "omitted" object names the surplus counts; it
+     is present only when something was actually capped, so the common
+     (uncapped) snapshot carries no extra bytes. *)
+  let omitted_pairs =
+    List.filter_map (fun (k, n) -> if n = 0 then None else Some (k, string_of_int n))
+      ["diagnostics", diags_omitted;
+       "symbols", symbols_omitted;
+       "proof_obligations", oblig_omitted]
+  in
+  let base = [
+    "version",      "1";
+    "file",         json_str file;
+    "content_hash", json_str content_hash;
+    "ok",           if ok then "true" else "false";
+    "summary",      json_str summary;
+    "diagnostics",  json_arr (List.map agent_diag_json diags_capped);
+    "symbols",      json_arr symbols_capped;
+    "proof_obligations", json_arr (List.map agent_obligation_json oblig_capped);
+  ] in
+  json_obj (if omitted_pairs = [] then base else base @ ["omitted", json_obj omitted_pairs])
+
+(** Produce the agent-context JSON for [source] under [filename].  Always
+    returns a snapshot: on a parse error the diagnostics carry the parse error
+    and [symbols] is empty (best-effort, so an agent still gets the error). *)
+let agent_context_source filename source : string =
+  let content_hash = Digest.to_hex (Digest.string source) in
+  let diagnostics = check_source filename source in
+  let symbols =
+    match parse_module filename source with
+    | Ok m -> agent_symbols_of_module m
+    | Err _ ->
+      (match Parser.parse_module_recover filename source with
+       | Some m -> (try agent_symbols_of_module m with _ -> [])
+       | None -> [])
+  in
+  agent_context_to_json ~file:filename ~content_hash ~diagnostics ~symbols
+
+let agent_context_file filename : string =
+  let source = In_channel.with_open_text filename In_channel.input_all in
+  agent_context_source filename source
+
 (* ── Built-in mutation testing ──────────────────────────────────────────── *)
 
 type mutate_result =
