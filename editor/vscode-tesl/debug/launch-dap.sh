@@ -50,9 +50,37 @@ if [[ -n "${TESL_DAP_SERVER:-}" && -f "${TESL_DAP_SERVER}" ]]; then
   # PLTCOLLECTS is also set by extension.js in this case
 fi
 
-# Strategy 1: TESL_REPO_ROOT env var
-if [[ -n "${TESL_REPO_ROOT:-}" ]]; then
+# Strategy 1: TESL_REPO_ROOT env var (only if it actually holds a repo checkout;
+# the VSCode extension may set TESL_REPO_ROOT to the user's *project* dir, which
+# has no dsl/debug/ — find_dap simply fails there and we fall through).
+if [[ -z "${DAP_SERVER}" && -n "${TESL_REPO_ROOT:-}" ]]; then
   find_dap "${TESL_REPO_ROOT}/dsl/debug/dap-server.rkt" "${TESL_REPO_ROOT}" || true
+fi
+
+# Strategy 1a: TESL_COLLECTIONS_DIR — baked into the installed `tesl` wrapper's
+# preamble, pointing at .../tesl-racket-collections/share/tesl-collections/tesl.
+# The DAP server ships inside that same collections derivation, so this is the
+# most reliable resolution for a flake-installed binary.
+if [[ -z "${DAP_SERVER}" && -n "${TESL_COLLECTIONS_DIR:-}" ]]; then
+  find_dap "${TESL_COLLECTIONS_DIR}/dsl/debug/dap-server.rkt" \
+           "$(dirname "${TESL_COLLECTIONS_DIR}")" || true
+fi
+
+# Strategy 1b: scan PLTCOLLECTS for a collections root that contains the DAP
+# server. The installed binary exports PLTCOLLECTS with the tesl collections
+# entry (…/share/tesl-collections holding tesl/dsl/…), so this resolves even
+# when ~/.nix-profile/share/ does not mirror the collections derivation — the
+# exact failure the user hit (dap-server: NOT FOUND with PLTCOLLECTS set).
+if [[ -z "${DAP_SERVER}" && -n "${PLTCOLLECTS:-}" ]]; then
+  IFS=':' read -ra _tesl_pc_entries <<< "${PLTCOLLECTS}"
+  for _entry in "${_tesl_pc_entries[@]}"; do
+    [[ -n "${_entry}" ]] || continue
+    if [[ -f "${_entry}/tesl/dsl/debug/dap-server.rkt" ]]; then
+      find_dap "${_entry}/tesl/dsl/debug/dap-server.rkt" "${_entry}"
+      break
+    fi
+  done
+  unset _tesl_pc_entries _entry
 fi
 
 # Strategy 2: dev/repo layout — script lives at editor/vscode-tesl/debug/

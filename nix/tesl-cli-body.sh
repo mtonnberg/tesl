@@ -121,6 +121,48 @@ _tesl_pg_resolve() {
 }
 _pg() { local tool="$1"; shift; if [ -n "${_TESL_PG_BIN:-}" ]; then "$_TESL_PG_BIN/$tool" "$@"; else "$tool" "$@"; fi; }
 
+# Is something listening on 127.0.0.1:<port>?  Best-effort: prefer ss/netstat,
+# fall back to a bash /dev/tcp probe.  rc 0 = in use.
+_tesl_port_in_use() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | grep -qE "127\.0\.0\.1:$port[[:space:]]|\*:$port[[:space:]]|0\.0\.0\.0:$port[[:space:]]" && return 0
+    return 1
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -ltn 2>/dev/null | grep -qE "127\.0\.0\.1:$port[[:space:]]|0\.0\.0\.0:$port[[:space:]]" && return 0
+    return 1
+  fi
+  ( exec 3<>"/dev/tcp/127.0.0.1/$port" ) >/dev/null 2>&1 && return 0
+  return 1
+}
+
+# Does OUR managed cluster (at $PGDATA) own the listener on <port>?  True when
+# pg_ctl reports the cluster running with that port in its command line.
+_tesl_pg_owns_port() {
+  local pgdata="$1" port="$2"
+  local status
+  status="$(_pg pg_ctl -D "$pgdata" status 2>/dev/null)" || return 1
+  echo "$status" | grep -q -- "-p\" \"$port\"\|-p $port\| $port " && return 0
+  # Fallback: if our cluster is running at all, assume it owns its own port.
+  _pg pg_ctl -D "$pgdata" status >/dev/null 2>&1
+}
+
+# Pick a stable, collision-resistant TCP port for a managed cluster, derived
+# from the project's destination path so re-init of the same project is stable
+# but two different projects rarely clash. Range 54000-54999 avoids the common
+# 5432 (system Postgres) collision. Probes for a free port near the seed.
+_tesl_pick_managed_port() {
+  local seed_str="$1" base seed p i
+  seed="$(printf '%s' "$seed_str" | cksum | cut -d' ' -f1)"
+  base=$(( 54000 + (seed % 1000) ))
+  for i in $(seq 0 50); do
+    p=$(( base + i )); [ "$p" -gt 54999 ] && p=$(( 54000 + (p - 54999) ))
+    if ! _tesl_port_in_use "$p"; then echo "$p"; return 0; fi
+  done
+  echo "$base"  # give up gracefully; start will report a clear error if taken
+}
+
 # ── tesl db start|stop|status ──────────────────────────────────────────────
 _tesl_db() {
   local SUB="${1:-status}"; shift || true
@@ -149,12 +191,32 @@ _tesl_db() {
       if _pg pg_ctl -D "$PGDATA" status >/dev/null 2>&1; then
         echo "tesl db: Postgres already running ($PGDATA, port $PGPORT)"
       else
+        # Guard against a foreign Postgres (e.g. a system install) already
+        # holding our TCP port: if we proceed, pg_ctl can't bind and the app
+        # would silently connect to the wrong server. Detect and abort clearly.
+        if _tesl_port_in_use "$PGPORT" && ! _tesl_pg_owns_port "$PGDATA" "$PGPORT"; then
+          echo "tesl db: ERROR — port $PGPORT (127.0.0.1) is already in use by another process" >&2
+          echo "  This is not our managed cluster ($PGDATA)." >&2
+          echo "  Set a free port in tesl.toml [env] TESL_POSTGRES_PORT (and .env), then retry." >&2
+          return 1
+        fi
         echo "tesl db: starting Postgres on port $PGPORT (data: $PGDATA)"
-        _pg pg_ctl -D "$PGDATA" -l "$PGLOG" \
+        if ! _pg pg_ctl -D "$PGDATA" -l "$PGLOG" \
           -o "-F -k '$PGSOCK' -p $PGPORT -c listen_addresses='127.0.0.1'" \
-          -w start >/dev/null
+          -w start >/dev/null; then
+          echo "tesl db: ERROR — Postgres failed to start on port $PGPORT" >&2
+          [ -f "$PGLOG" ] && { echo "  --- last lines of $PGLOG ---" >&2; tail -n 15 "$PGLOG" >&2; }
+          return 1
+        fi
       fi
-      _pg createdb -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" "$PGDB" >/dev/null 2>&1 || true
+      if ! _pg createdb -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" "$PGDB" >/dev/null 2>&1; then
+        # createdb fails harmlessly if the database already exists; only treat a
+        # genuine inability to reach/create as an error.
+        if ! _pg psql -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" -d "$PGDB" -tAc 'select 1' >/dev/null 2>&1; then
+          echo "tesl db: ERROR — could not create or reach database '$PGDB' on 127.0.0.1:$PGPORT as '$PGUSER'" >&2
+          return 1
+        fi
+      fi
       echo "tesl db: ready — database '$PGDB' as user '$PGUSER' at 127.0.0.1:$PGPORT"
       ;;
     stop)
@@ -280,6 +342,51 @@ _tesl_init_agents_md() {
   } > "$out"
 }
 
+# Emit .vscode/launch.json with Tesl debug + test profiles so F5/debug and the
+# test codelens work out of the box (no manual copy from the repo). In managed
+# mode the env block points the debugger at the project-local Postgres so a
+# debug session connects without a separate `tesl db start`.
+_tesl_init_vscode() {
+  local dest="$1" pgmode="$2" pgport="$3" pguser="$4" pgdb="$5"
+  mkdir -p "$dest/.vscode"
+  local env_block=""
+  if [ "$pgmode" = "managed" ] || [ "$pgmode" = "existing" ]; then
+    env_block=$(cat <<EOF
+      "env": {
+        "TESL_POSTGRES_HOST": "127.0.0.1",
+        "TESL_POSTGRES_PORT": "$pgport",
+        "TESL_POSTGRES_USER": "$pguser",
+        "TESL_POSTGRES_PASSWORD": "",
+        "TESL_POSTGRES_DATABASE": "$pgdb"
+      },
+EOF
+)
+  fi
+  {
+    echo '{'
+    echo '  "version": "0.2.0",'
+    echo '  "configurations": ['
+    echo '    {'
+    echo '      "type": "tesl",'
+    echo '      "request": "launch",'
+    echo '      "name": "Debug Tesl program",'
+    [ -n "$env_block" ] && echo "$env_block"
+    echo '      "program": "${file}",'
+    echo '      "mode": "program"'
+    echo '    },'
+    echo '    {'
+    echo '      "type": "tesl",'
+    echo '      "request": "launch",'
+    echo '      "name": "Debug Tesl tests",'
+    [ -n "$env_block" ] && echo "$env_block"
+    echo '      "program": "${file}",'
+    echo '      "mode": "test"'
+    echo '    }'
+    echo '  ]'
+    echo '}'
+  } > "$dest/.vscode/launch.json"
+}
+
 # ── tesl init ──────────────────────────────────────────────────────────────
 _tesl_init() {
   local NAME="" TEMPLATE="" PGMODE="" YES=0 NOGIT=0 ans
@@ -349,6 +456,16 @@ _tesl_init() {
     sed -i "s/^mode = \".*\"/mode = \"$PGMODE\"/" "$DEST/tesl.toml"
   fi
 
+  # Managed mode: the project-local Postgres must NOT default to 5432, which a
+  # system Postgres install commonly occupies — that collision is the headline
+  # "tesl run -> connection refused / wrong database" failure. Pick a stable,
+  # project-derived high port and bake it into tesl.toml [env] so `tesl db` and
+  # the app agree. (Docker all-in-one keeps 5432 — it runs in an isolated netns.)
+  if [ "$PGMODE" = "managed" ] && grep -q '^TESL_POSTGRES_PORT' "$DEST/tesl.toml"; then
+    local MANAGED_PORT; MANAGED_PORT="$(_tesl_pick_managed_port "$(cd "$DEST" 2>/dev/null && pwd || echo "$DEST")")"
+    sed -i "s/^TESL_POSTGRES_PORT = \".*\"/TESL_POSTGRES_PORT = \"$MANAGED_PORT\"/" "$DEST/tesl.toml"
+  fi
+
   {
     echo "# Generated by 'tesl init' from tesl.toml [env] defaults."
     echo "# In managed mode these point at the project-local Postgres ('tesl db start')."
@@ -380,6 +497,14 @@ _tesl_init() {
   _tesl_init_agents_md "$DEST/AGENTS.md" "$NAME" "$TEMPLATE" "$PGMODE"
   cp "$DEST/AGENTS.md" "$DEST/CLAUDE.md"
 
+  # VSCode/VSCodium debug + test profiles so F5 and the test codelens work
+  # out of the box (no manual launch.json copy).
+  local VSC_PORT VSC_USER VSC_DB
+  VSC_PORT="$(tesl_manifest_get "$DEST/tesl.toml" env TESL_POSTGRES_PORT 2>/dev/null || true)"; VSC_PORT="${VSC_PORT:-5432}"
+  VSC_USER="$(tesl_manifest_get "$DEST/tesl.toml" env TESL_POSTGRES_USER 2>/dev/null || true)"; VSC_USER="${VSC_USER:-app}"
+  VSC_DB="$(tesl_manifest_get "$DEST/tesl.toml" env TESL_POSTGRES_DATABASE 2>/dev/null || true)"; VSC_DB="${VSC_DB:-app}"
+  _tesl_init_vscode "$DEST" "$PGMODE" "$VSC_PORT" "$VSC_USER" "$VSC_DB"
+
   if [ "$NOGIT" != "1" ] && command -v git >/dev/null 2>&1; then
     ( cd "$DEST" && git init -q && git add -A && git commit -q -m "tesl init: scaffold $NAME ($TEMPLATE)" 2>/dev/null ) || true
   fi
@@ -395,7 +520,7 @@ _tesl_init() {
   echo "  tesl run app.tesl      # serve on http://localhost:$PORT"
   echo "  tesl build             # produce a runnable Docker image"
   echo ""
-  echo "Files: app.tesl, tesl.toml, .env, .gitignore, README.md, AGENTS.md, CLAUDE.md"
+  echo "Files: app.tesl, tesl.toml, .env, .gitignore, README.md, AGENTS.md, CLAUDE.md, .vscode/launch.json"
   echo "Learn more: tesl help manual   |   agent guide: AGENTS.md"
 }
 
@@ -484,7 +609,33 @@ _tesl_build() {
   fi
   command -v docker >/dev/null 2>&1 || { echo "tesl build: docker not found; context staged at $CTX" >&2; return 1; }
   echo "tesl build: building image '$TAG' ..."
-  docker build -t "$TAG" "$CTX" || { echo "tesl build: docker build failed" >&2; return 1; }
+  local BUILD_LOG; BUILD_LOG="$(mktemp)"
+  # Capture stderr to a log (then replay it) so we can synchronously inspect it
+  # for a Docker-daemon permission error and print actionable guidance.
+  if ! docker build -t "$TAG" "$CTX" 2>"$BUILD_LOG"; then
+    cat "$BUILD_LOG" >&2
+    if grep -qiE "permission denied.*docker\.sock|connect: permission denied|/var/run/docker\.sock" "$BUILD_LOG"; then
+      echo "" >&2
+      echo "tesl build: cannot reach the Docker daemon — permission denied on /var/run/docker.sock." >&2
+      echo "This is a Docker setup issue, not a Tesl error. The build context is staged at:" >&2
+      echo "  $CTX" >&2
+      echo "" >&2
+      echo "Fix it one of these ways (then re-run 'tesl build'):" >&2
+      echo "  1. Add yourself to the 'docker' group (rootful Docker):" >&2
+      echo "       sudo usermod -aG docker \"\$USER\"   # then log out/in (or: newgrp docker)" >&2
+      echo "  2. Use rootless Docker (no sudo / no group):" >&2
+      echo "       dockerd-rootless-setuptool.sh install" >&2
+      echo "       export DOCKER_HOST=unix://\$XDG_RUNTIME_DIR/docker.sock" >&2
+      echo "  3. Build the staged context yourself with whatever runtime you have:" >&2
+      echo "       docker build -t $TAG \"$CTX\"   # or: podman build -t $TAG \"$CTX\"" >&2
+      echo "" >&2
+      echo "  (Note: 'sudo tesl build' usually fails too — tesl is on your user nix profile, not root's.)" >&2
+      rm -f "$BUILD_LOG"; return 1
+    fi
+    rm -f "$BUILD_LOG"
+    echo "tesl build: docker build failed" >&2; return 1
+  fi
+  rm -f "$BUILD_LOG"
 
   echo ""
   echo "Built image: $TAG ($VARIANT)"
@@ -504,10 +655,107 @@ _tesl_build() {
   fi
 }
 
+# Reformat raco/rackunit test output into a developer-legible summary that maps
+# each failure back to the .tesl test name + source line + a readable message.
+#   $1 = .tesl source file   $2 = compiled .rkt   $3 = raco combined output
+# rackunit prints failure blocks delimited by dashed lines:
+#   --------------------
+#   <test-case name>
+#   FAILURE | ERROR
+#   name:       check-true
+#   location:   app.rkt:179:2
+#   params:     '(#f)
+#   message:    ...            (sometimes)
+#   --------------------
+# Each emitted check sits on a .rkt line carrying (thsl-src! "<file>" <line> …),
+# so we resolve the .rkt location to the original .tesl file:line.
+_tesl_test_format() {
+  local src="$1" rkt="$2" out="$3"
+  [ -f "$out" ] || return 0
+  awk -v rkt="$rkt" '
+    # Resolve a .rkt line number to its original .tesl "file:line" by reading the
+    # (thsl-src! "<file>" <line> …) marker that every emitted check carries.
+    function tesl_loc(n,   i, ln, seg, fn, lno, res) {
+      res = ""
+      i = 0
+      while ((getline ln < rkt) > 0) {
+        i++
+        if (i == n) {
+          if (match(ln, /thsl-src![ \t]+"[^"]+"[ \t]+[0-9]+/)) {
+            seg = substr(ln, RSTART, RLENGTH)
+            split(seg, q, "\""); fn = q[2]
+            if (match(seg, /[0-9]+[ \t]*$/)) { lno = substr(seg, RSTART, RLENGTH); gsub(/[ \t]/, "", lno) }
+            if (fn != "" && lno != "") res = fn ":" lno
+          }
+          break
+        }
+      }
+      close(rkt)
+      return res
+    }
+    function flush_block(   tloc, rl, a) {
+      if (!(in_block && name != "")) return
+      tloc = ""
+      if (rktloc ~ /:[0-9]+:/) { split(rktloc, a, ":"); rl = a[2]; tloc = tesl_loc(rl) }
+      printf "  FAILED  %s\n", name
+      if (tloc != "")        printf "    at %s\n", tloc
+      else if (rktloc != "") printf "    at %s (generated)\n", rktloc
+      if (kind == "ERROR" && msg != "") printf "    error: %s\n", msg
+      else if (msg != "")               printf "    %s\n", msg
+      else                              printf "    assertion did not hold\n"
+      emitted_any = 1
+    }
+    BEGIN { in_block=0; emitted_any=0; summary="" }
+    /^-{5,}$/ {
+      flush_block()
+      in_block=1; name=""; kind=""; rktloc=""; msg=""; expect_name=1; next
+    }
+    {
+      # The run summary ("N/M test failures", "N tests passed") trails the final
+      # delimiter; capture it directly and never mistake it for a test-case name.
+      if ($0 ~ /test(s)? (passed|failure)/ || $0 ~ /^[0-9]+\/[0-9]+ test/) {
+        summary=$0; in_block=0; expect_name=0; next
+      }
+      if (in_block) {
+        if (expect_name && $0 !~ /^(FAILURE|ERROR|name:|location:|params:|message:|actual:|expected:)/ && $0 != "") {
+          name=$0; expect_name=0; next
+        }
+        if ($0 ~ /^(FAILURE|ERROR)[ \t]*$/) { kind=$0; gsub(/[ \t]/,"",kind); next }
+        if ($0 ~ /^location:/) { sub(/^location:[ \t]*/,""); rktloc=$0; next }
+        if ($0 ~ /^message:/)  { sub(/^message:[ \t]*/,""); msg=$0; next }
+        if ($0 ~ /^(name|params|actual|expected):/) { next }
+      }
+    }
+    END {
+      flush_block()
+      if (summary != "") { if (emitted_any) printf "  %s\n", summary; else print summary }
+      else if (!emitted_any) print "  (no test results)"
+    }
+  ' "$out" > "$out.fmt" 2>/dev/null
+
+  if [ -s "$out.fmt" ] && grep -q "FAILED\|test\|results" "$out.fmt"; then
+    cat "$out.fmt" >&2
+  else
+    grep -Ev "^raco (setup|make|link|test):" "$out" >&2 || true
+  fi
+  rm -f "$out.fmt"
+}
+
 CMD="${1:-help}"
 shift || true
 
 case "$CMD" in
+  --test-name)
+    # Top-level passthrough: `tesl --test-name "NAME" file.tesl` emits a .rkt to
+    # stdout containing ONLY the named test block. The vscodium codelens invokes
+    # the `tesl` binary this way (then pipes to `raco test`), so the wrapper must
+    # forward it to the compiler rather than reporting "unknown command".
+    [ $# -ge 2 ] || { echo "Usage: tesl --test-name <name> <file.tesl>" >&2; exit 1; }
+    TEST_NAME="$1"; shift
+    FILE="$1"; shift
+    _tesl_require_compiler
+    exec "$TESL_OCAML_COMPILER" --test-name "$TEST_NAME" "$FILE"
+    ;;
   compile)
     FILE="${1:?Usage: tesl compile <file.tesl>}"
     OUT="${FILE%.tesl}.rkt"
@@ -669,10 +917,14 @@ case "$CMD" in
         if [ "${TESL_VERBOSE:-0}" = "1" ]; then
           raco test "$OUT" || RET=$?
         else
-          STDERR_TMP="$(mktemp)"
-          raco test "$OUT" 2>"$STDERR_TMP"; STATUS=$?
-          grep -Ev "^raco (setup|make|link|test):" "$STDERR_TMP" >&2 || true
-          rm -f "$STDERR_TMP"
+          # Capture raco's combined output and reformat rackunit failures back
+          # to the .tesl test name + source line + a readable message. The raw
+          # output ("name: check-true / location: app.rkt:179:2 / params: '(#f)")
+          # is unreadable for someone who wrote a .tesl test, not Racket.
+          OUTPUT_TMP="$(mktemp)"
+          raco test "$OUT" >"$OUTPUT_TMP" 2>&1; STATUS=$?
+          _tesl_test_format "$FILE" "$OUT" "$OUTPUT_TMP"
+          rm -f "$OUTPUT_TMP"
           [ "$STATUS" -ne 0 ] && RET="$STATUS"
         fi
       else

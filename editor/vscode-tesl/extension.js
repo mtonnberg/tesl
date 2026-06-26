@@ -146,6 +146,21 @@ function findDapServer(wsPath, extensionDir) {
     candidates.push(path.join(wsPath, "dsl", "debug", "dap-server.rkt"));
   }
 
+  // Derive from the tesl-lsp wrapper's baked PLTCOLLECTS. This is the reliable
+  // path for a flake-installed binary: the wrapper references the exact
+  // /nix/store/…-tesl-racket-collections/share/tesl-collections store path that
+  // ships dap-server.rkt — even though `nix profile install` does NOT mirror
+  // that derivation into ~/.nix-profile/share/ (the source of the user's
+  // "dap-server: NOT FOUND"). Each PLTCOLLECTS entry is a collections root
+  // holding tesl/{dsl,tesl,lang}.
+  const wrapper = readTeslLspWrapper();
+  if (wrapper && wrapper.pltcollects) {
+    for (const entry of wrapper.pltcollects.split(":")) {
+      if (!entry) continue;
+      candidates.push(path.join(entry, "tesl", "dsl", "debug", "dap-server.rkt"));
+    }
+  }
+
   candidates.push(
     path.join(os.homedir(), ".nix-profile", "share", "tesl-collections", "tesl", "dsl", "debug", "dap-server.rkt"),
     "/nix/var/nix/profiles/default/share/tesl-collections/tesl/dsl/debug/dap-server.rkt",
