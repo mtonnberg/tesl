@@ -1145,6 +1145,54 @@ let () =
      | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
      | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
 
+  (* AC2: headless breakpoint inspector.
+       tesl debug-inspect <file.tesl> --break-at LINE[:COL] [--mode program|test]
+     Compiles the .tesl with debug instrumentation, runs it to the requested
+     breakpoint with stop-the-world active, and emits the paused runtime state
+     (locals + live domain registry + SQL capture) as ONE JSON object on stdout. *)
+  | "debug-inspect" :: filename :: rest
+    when not (String.length filename > 2 && filename.[0] = '-') ->
+    (* Parse --break-at LINE[:COL] (COL accepted and ignored — Tesl checkpoints
+       are per-line) and the optional --mode program|test. *)
+    let rec parse_opts brk mode = function
+      | [] -> (brk, mode)
+      | "--break-at" :: spec :: tl ->
+        let line_str = match String.index_opt spec ':' with
+          | Some i -> String.sub spec 0 i
+          | None -> spec in
+        parse_opts (Some line_str) mode tl
+      | "--mode" :: m :: tl -> parse_opts brk (Some m) tl
+      | other :: _ ->
+        Printf.eprintf "%serror%s: unexpected argument to debug-inspect: %s\n"
+          (col "1;31") (col "0") other;
+        Printf.eprintf "usage: tesl debug-inspect <file.tesl> --break-at LINE[:COL] [--mode program|test]\n";
+        exit 2
+    in
+    let (brk, mode_opt) = parse_opts None None rest in
+    (match brk with
+     | None ->
+       Printf.eprintf "%serror%s: debug-inspect requires --break-at LINE[:COL]\n"
+         (col "1;31") (col "0");
+       exit 2
+     | Some line_str ->
+       let line = (try int_of_string (String.trim line_str)
+                   with _ ->
+                     Printf.eprintf "%serror%s: --break-at expects a line number, got %s\n"
+                       (col "1;31") (col "0") line_str;
+                     exit 2) in
+       let mode = match mode_opt with
+         | Some ("program" | "test" as m) -> m
+         | None -> "program"
+         | Some bad ->
+           Printf.eprintf "%serror%s: --mode must be program or test, got %s\n"
+             (col "1;31") (col "0") bad;
+           exit 2
+       in
+       (match Compile.debug_inspect ~root_path ~line ~mode filename with
+        | Compile.InspectDiags diags -> List.iter print_diagnostic diags; exit 1
+        | Compile.InspectErr msg ->
+          Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1))
+
   | [filename] when not (String.length filename > 2 && filename.[0] = '-') ->
     (try
        match Compile.compile_file ~root_path ~type_check:true filename with

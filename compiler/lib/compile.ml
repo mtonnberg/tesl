@@ -3372,3 +3372,80 @@ let build_exe ?(root_path=default_root_path ()) ?out filename : build_result =
          else BuildErr
              (Printf.sprintf "raco exe failed (exit %d):\n%s" exit_code output)
        with Sys_error msg -> BuildErr msg)
+
+(* ── AC2: headless `tesl debug-inspect` ──────────────────────────────────────
+   Compile a .tesl with debug instrumentation, then run it headlessly to a single
+   breakpoint via the Racket driver dsl/debug/headless-inspect.rkt, which dumps the
+   paused runtime state (locals + live domain registry + SQL capture) as ONE JSON
+   object on stdout.  No DAP client, no interactive protocol.
+
+   The compiled .rkt bakes its breakpointable source positions from the path
+   handed to the parser, so we compile with the COMPLETE (absolute) path and hand
+   that SAME absolute path to the driver — only then does the breakpoint line we
+   register match the file string in the emitted thsl-src! checkpoints. *)
+type debug_inspect_result =
+  | InspectDiags of diagnostic list   (* compile failed *)
+  | InspectErr of string              (* setup/exec failure *)
+  (* InspectOk never returns: a successful run execs the racket driver, which
+     streams its JSON to stdout and exits — replacing this process. *)
+
+(** Locate the `racket` executable: honour TESL_RACKET, else search PATH. *)
+let find_racket_binary () : string option =
+  match Sys.getenv_opt "TESL_RACKET" with
+  | Some p when p <> "" -> Some p
+  | _ ->
+    let exit_code, out = run_capture "command -v racket" in
+    if exit_code = 0 then
+      (match String.trim out with "" -> None | s -> Some s)
+    else None
+
+(** Run [file] to a breakpoint at [line] (1-based) and dump the paused runtime
+    state as JSON.  [mode] is "program" (run the `main` block) or "test" (run the
+    `test` blocks).  On success this execs the Racket driver and never returns;
+    the JSON appears on the inherited stdout. *)
+let debug_inspect ?(root_path=default_root_path ()) ~line ~mode filename
+  : debug_inspect_result =
+  if not (Sys.file_exists filename) then
+    InspectErr (Printf.sprintf "%s: No such file" filename)
+  else begin
+    (* Absolute source path — must match the file string the emitter bakes into
+       the thsl-src! checkpoints so the registered breakpoint line lines up. *)
+    let abs_src =
+      let p = if Filename.is_relative filename
+              then Filename.concat (Sys.getcwd ()) filename
+              else filename in
+      (try Unix.realpath p with _ -> p)
+    in
+    (* Compile with debug instrumentation, parsing under the absolute path. *)
+    let source = In_channel.with_open_text abs_src In_channel.input_all in
+    match compile_source ~root_path ~type_check:true ~debug:true abs_src source with
+    | Failure diags -> InspectDiags diags
+    | Success racket ->
+      (try
+         let tmp_rkt = Filename.temp_file "tesl-debug-inspect-" ".rkt" in
+         Out_channel.with_open_text tmp_rkt
+           (fun oc -> Out_channel.output_string oc racket);
+         let driver = Filename.concat root_path "dsl/debug/headless-inspect.rkt" in
+         if not (Sys.file_exists driver) then
+           InspectErr (Printf.sprintf "headless inspector not found at %s" driver)
+         else
+           (match find_racket_binary () with
+            | None -> InspectErr "racket not found; set TESL_RACKET or install Racket"
+            | Some racket_bin ->
+              (* TESL_DEBUG must be set so the driver's in-process expansion of the
+                 debuggee keeps its thsl-src! checkpoints.  Forward the existing env
+                 (including any PLTCOLLECTS a dev worktree set to repoint the `tesl`
+                 collection) and add TESL_DEBUG=1. *)
+              Unix.putenv "TESL_DEBUG" "1";
+              let argv =
+                [| racket_bin; driver; tmp_rkt; abs_src; string_of_int line; mode |]
+              in
+              flush stdout; flush stderr;
+              (* exec replaces this process: the driver's single JSON object is
+                 written straight to our inherited stdout, then it exits 0. *)
+              (try Unix.execv racket_bin argv
+               with Unix.Unix_error (e, _, _) ->
+                 InspectErr (Printf.sprintf "exec racket failed: %s"
+                               (Unix.error_message e))))
+       with Sys_error msg -> InspectErr msg)
+  end
