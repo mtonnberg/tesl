@@ -557,9 +557,7 @@
           ;; Scope any pending step to THIS (the parked) thread — whichever it is
           ;; (a request handler, a worker, or the main program). This is what makes
           ;; stepping work in worker code: when a worker thread is parked at a
-          ;; breakpoint and you step, the step belongs to the worker thread. It
-          ;; must be set BEFORE thawing the other threads so a thawed thread cannot
-          ;; match a step flag that was meant for this one.
+          ;; breakpoint and you step, the step belongs to the worker thread.
           (set-box! step-thread (current-thread))
           (cond
             [(eq? cmd 'step-in)
@@ -569,9 +567,15 @@
             [else
              ;; 'continue or any other symbol: no step flags set
              (void)])
-          ;; Released: thaw exactly the threads this stop froze, AFTER the step is
-          ;; scoped, so the program and its background workers proceed together.
-          (stop-the-world-resume!)))))
+          ;; Thaw the rest of the world only on CONTINUE/stepOut. Across a single
+          ;; step (step-in/step-over) keep every OTHER thread frozen so the stepping
+          ;; thread advances deterministically: otherwise a second worker (or the
+          ;; same handler on a concurrent request) can hit the SAME breakpoint and
+          ;; pre-empt the step, so F10 looks like it never left the line. The
+          ;; stepping thread itself is not in the suspended set, so it runs on; the
+          ;; frozen threads are released at the next continue.
+          (unless (memq cmd '(step-in step-over))
+            (stop-the-world-resume!))))))
   (thunk))
 
 ;; ── thsl-src! / thsl-src macros (expansion-time gated) ───────────────────────
