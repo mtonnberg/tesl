@@ -163,6 +163,49 @@ _tesl_pick_managed_port() {
   echo "$base"  # give up gracefully; start will report a clear error if taken
 }
 
+# Determine the EFFECTIVE managed-Postgres port for the project in $PWD, given
+# the manifest's configured port. Writes the resolved port to stdout (rc 0), or
+# rc 1 if no free port could be found (truly unrecoverable). Side effect: may
+# persist a chosen port to <pgdir>/PORT so it is STABLE across runs.
+#
+#   $1 = configured port (from manifest/.env)   $2 = PGDIR (.tesl-postgres)
+#   $3 = PGDATA
+#
+# Resolution order:
+#   (a) a port already persisted in <pgdir>/PORT  -> reuse it (stable)
+#   (b) the configured port is free OR owned by OUR cluster -> use it (normal case)
+#   (c) the configured port is held by a FOREIGN process -> pick a free high port,
+#       note it, and persist it to <pgdir>/PORT.
+# A note explaining (c) is printed to stderr the first time a foreign collision
+# is detected (i.e. when we have to deviate from the configured port).
+_tesl_effective_managed_port() {
+  local cfg_port="$1" pgdir="$2" pgdata="$3"
+  local port_file="$pgdir/PORT"
+
+  # (a) reuse a previously-persisted choice for stability across runs.
+  if [ -f "$port_file" ]; then
+    local saved; saved="$(tr -dc '0-9' < "$port_file" 2>/dev/null)"
+    if [ -n "$saved" ]; then echo "$saved"; return 0; fi
+  fi
+
+  # (b) configured port is usable as-is: free, or already ours.
+  if ! _tesl_port_in_use "$cfg_port" || _tesl_pg_owns_port "$pgdata" "$cfg_port"; then
+    echo "$cfg_port"; return 0
+  fi
+
+  # (c) foreign process holds the configured port — pick a free one and persist.
+  local picked; picked="$(_tesl_pick_managed_port "$pgdata")"
+  if _tesl_port_in_use "$picked" && ! _tesl_pg_owns_port "$pgdata" "$picked"; then
+    # Could not find a free port at all (the picked one is also occupied).
+    return 1
+  fi
+  echo "tesl db: configured port $cfg_port is in use by another process;" \
+       "using free port $picked for this project's managed database" >&2
+  mkdir -p "$pgdir" 2>/dev/null || true
+  echo "$picked" > "$port_file" 2>/dev/null || true
+  echo "$picked"; return 0
+}
+
 # ── tesl db start|stop|status ──────────────────────────────────────────────
 _tesl_db() {
   local SUB="${1:-status}"; shift || true
@@ -175,6 +218,19 @@ _tesl_db() {
   local PGDIR="${PWD}/.tesl-postgres"
   local PGDATA="$PGDIR/data"
   local PGLOG="$PGDIR/postgres.log"
+
+  # Resolve the EFFECTIVE port: reuse a persisted choice, use the configured
+  # port if free/ours, or fall back to a free high port if a FOREIGN process
+  # holds the configured one (persisting it for stability). This lets EXISTING
+  # projects whose manifest still says 5432 (or any occupied port) run cleanly.
+  local EFFPORT
+  if ! EFFPORT="$(_tesl_effective_managed_port "$PGPORT" "$PGDIR" "$PGDATA")"; then
+    echo "tesl db: ERROR — configured port $PGPORT is in use and no free port could be found" >&2
+    echo "  Set a free port in tesl.toml [env] TESL_POSTGRES_PORT (and .env), then retry." >&2
+    return 1
+  fi
+  PGPORT="$EFFPORT"
+
   # Unix-socket paths are capped at ~107 bytes, so keep the socket in a short
   # stable tmp dir; the app connects over TCP (127.0.0.1) regardless.
   local PGSOCK="${TMPDIR:-/tmp}/tesl-pg-$(echo "$PGDATA" | cksum | cut -d' ' -f1)"
@@ -192,8 +248,10 @@ _tesl_db() {
         echo "tesl db: Postgres already running ($PGDATA, port $PGPORT)"
       else
         # Guard against a foreign Postgres (e.g. a system install) already
-        # holding our TCP port: if we proceed, pg_ctl can't bind and the app
-        # would silently connect to the wrong server. Detect and abort clearly.
+        # holding our effective TCP port: if we proceed, pg_ctl can't bind and
+        # the app would silently connect to the wrong server. Detect and abort
+        # clearly. (The effective port was chosen to avoid this, but a race or
+        # a stale persisted PORT could still collide.)
         if _tesl_port_in_use "$PGPORT" && ! _tesl_pg_owns_port "$PGDATA" "$PGPORT"; then
           echo "tesl db: ERROR — port $PGPORT (127.0.0.1) is already in use by another process" >&2
           echo "  This is not our managed cluster ($PGDATA)." >&2
@@ -243,14 +301,31 @@ _tesl_db() {
   esac
 }
 
-# If the current project is managed-mode and Postgres isn't up, auto-start it.
-# Opt out with TESL_NO_DB_AUTOSTART=1. (Called by the `run` verb.)
+# If the current project is managed-mode, ensure Postgres is up AND point the
+# app at the EFFECTIVE managed port (which may differ from the manifest/.env
+# port when a foreign process holds the configured one). Exports
+# TESL_POSTGRES_PORT/HOST so the running app overrides any stale .env value.
+# Opt out of the autostart (but not the env override) with TESL_NO_DB_AUTOSTART=1.
+# (Called by the `run` verb AFTER _tesl_load_dotenv.)
 _tesl_db_autostart_if_managed() {
-  [ "${TESL_NO_DB_AUTOSTART:-0}" = "1" ] && return 0
   [ -f "./tesl.toml" ] || return 0
   local mode; mode="$(tesl_manifest_get ./tesl.toml database mode 2>/dev/null || true)"
   [ "$mode" = "managed" ] || return 0
-  local PGDATA="${PWD}/.tesl-postgres/data"
+
+  local PGDIR="${PWD}/.tesl-postgres"
+  local PGDATA="$PGDIR/data"
+  local PGPORT; PGPORT="$(tesl_manifest_get ./tesl.toml env TESL_POSTGRES_PORT 2>/dev/null || true)"; PGPORT="${PGPORT:-5432}"
+
+  # Resolve and pin the effective port so both `tesl db start` (below) and the
+  # app agree. Persisting happens inside the resolver for the foreign-collision
+  # case; here we just learn the value and export it for the app.
+  local EFFPORT
+  if EFFPORT="$(_tesl_effective_managed_port "$PGPORT" "$PGDIR" "$PGDATA")"; then
+    export TESL_POSTGRES_PORT="$EFFPORT"
+    export TESL_POSTGRES_HOST="127.0.0.1"
+  fi
+
+  [ "${TESL_NO_DB_AUTOSTART:-0}" = "1" ] && return 0
   _tesl_pg_resolve >/dev/null 2>&1 || return 0
   if _pg pg_ctl -D "$PGDATA" status >/dev/null 2>&1; then return 0; fi
   echo "tesl run: managed database not running — starting it (TESL_NO_DB_AUTOSTART=1 to skip)" >&2
