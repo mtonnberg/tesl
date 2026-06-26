@@ -199,6 +199,54 @@ else
   fi
 fi
 
+# ── Racket test suites (debugger / headless-inspect / MCP / lifted-stdlib) ───────
+# These exercise the DSL-side runtime the OCaml `dune test` does NOT cover: the DAP
+# debugger (breakpoints incl. conditional/hit, domain inspection, stop-the-world),
+# the headless `tesl debug-inspect` agent inspector, the tesl-mcp server protocol,
+# the codec specialization, and the lifted-stdlib parity.  They are real regression
+# gates (assert content, not just "no crash").  DB-dependent suites (cache/email/
+# api/load/httpclient/sql) are intentionally NOT run here — they need PostgreSQL and
+# remain available via `raco test`.  Set RKT_SUITES_SKIP=1 for a fast inner loop.
+echo ""
+echo "=== Racket test suites (debugger / headless-inspect / MCP / lifted-stdlib) ==="
+if [ "${RKT_SUITES_SKIP:-0}" = "1" ]; then
+  echo "  ⚠  RKT_SUITES_SKIP=1 — skipping"
+  record_section "Racket-suites" "SKIPPED (RKT_SUITES_SKIP=1)"
+elif ! command -v raco >/dev/null 2>&1; then
+  echo "  ⚠  raco not on PATH — skipping"
+  record_section "Racket-suites" "SKIPPED (no raco)"
+else
+  RKT_SUITES=(
+    "tests/dap-server-test.rkt"
+    "tests/checkpoint-condition-test.rkt"
+    "tests/dap-domain-registry-smoke.rkt"
+    "tests/dap-stop-the-world-smoke.rkt"
+    "tests/dap-headless-inspect-smoke.rkt"
+    "tests/dap-headless-inspect-conditional-smoke.rkt"
+    "tests/codec-specialization-test.rkt"
+    "tests/lifted-list-tests.rkt"
+    "editor/tesl-mcp/tests/protocol-smoke.rkt"
+  )
+  rkt_fail=0
+  for suite in "${RKT_SUITES[@]}"; do
+    if [ ! -f "$REPO_ROOT/$suite" ]; then
+      echo "  ⚠  $suite (missing — skipped)"
+      continue
+    fi
+    if TESL_REPO_ROOT="$REPO_ROOT" timeout 300 raco test "$REPO_ROOT/$suite" >/dev/null 2>&1; then
+      echo "  ✓  $suite"
+    else
+      echo "  ✗  $suite"
+      rkt_fail=1
+    fi
+  done
+  if [ $rkt_fail -eq 0 ]; then
+    record_section "Racket-suites" "OK (${#RKT_SUITES[@]} suites)"
+  else
+    record_section "Racket-suites" "FAILED (see ✗ above; re-run: raco test <suite>)"
+  fi
+fi
+
 echo ""
 echo "════════════════════════════════════════════"
 echo "  CI SUMMARY"
