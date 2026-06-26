@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1
+#
+# Tesl "all-in-one" image (TEMPLATE) — the "just `docker run` it" image.
+# ---------------------------------------------------------------------------
+# `tesl build` substitutes every __PLACEHOLDER__ below before `docker build`.
+# This image bundles the Tesl Racket runtime, your pre-compiled app, AND an
+# internal PostgreSQL. On first run the entrypoint creates a project-local
+# Postgres cluster, starts it, waits for readiness, then launches the app.
+# The Tesl runtime auto-creates its tables on boot (auto-migrate? defaults #t,
+# via ensure-database-ready!), so:
+#
+#     docker run -p __PORT__:__PORT__ <image>
+#
+# serves the full app with NO external database.
+#
+# Placeholders (see templates/docker/README.md for the full contract):
+#   __RACKET_BASE__   official Racket base image tag, e.g. racket/racket:8.18-full
+#   __APP_NAME__      human-readable app name (label only)
+#   __APP_RKT__       compiled entrypoint .rkt, relative to build context
+#   __PORT__          TCP port the Tesl web server listens on, e.g. 8086
+#
+# Build context layout `tesl build` MUST stage before building (identical to
+# the app-only image, PLUS the entrypoint script):
+#   <context>/
+#     collections/tesl/{dsl,tesl,lang}/   (copies of repo dsl/ tesl/ lang/)
+#     __APP_RKT__                          (output of `tesl compile`)
+#     <any dependency .rkt>                (compiled imports)
+#     entrypoint.sh                        (from entrypoint.sh.tmpl, substituted)
+# ---------------------------------------------------------------------------
+FROM __RACKET_BASE__
+
+LABEL org.opencontainers.image.title="__APP_NAME__" \
+      org.opencontainers.image.description="Tesl app (all-in-one, embedded Postgres)"
+
+# Embedded PostgreSQL. The Racket base is Debian-based, so apt is available.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends postgresql postgresql-client \
+ && rm -rf /var/lib/apt/lists/*
+
+# Make the postgres tools (initdb, pg_ctl, postgres) reachable on PATH without
+# hard-coding a version number; Debian installs them under /usr/lib/postgresql/<ver>/bin.
+ENV PATH="/usr/lib/postgresql/bin:${PATH}"
+RUN PG_BIN="$(dirname "$(ls /usr/lib/postgresql/*/bin/initdb | head -n1)")" \
+ && ln -sfn "$PG_BIN" /usr/lib/postgresql/bin
+
+ENV TESL_COLLECTIONS=/opt/tesl/collections
+ENV PLTCOLLECTS="/usr/share/racket/collects:${TESL_COLLECTIONS}"
+
+WORKDIR /opt/tesl/app
+
+# Runtime collections (require tesl/dsl/… tesl/tesl/… tesl/lang/…).
+COPY collections/ ${TESL_COLLECTIONS}/
+RUN raco make ${TESL_COLLECTIONS}/tesl/dsl/*.rkt \
+               ${TESL_COLLECTIONS}/tesl/tesl/*.rkt \
+               ${TESL_COLLECTIONS}/tesl/lang/*.rkt 2>/dev/null || true
+
+# Compiled application (+ any compiled dependency .rkt files).
+COPY __APP_RKT__ /opt/tesl/app/__APP_RKT__
+
+# Entrypoint: initdb (first run) → pg_ctl start → wait → racket app.rkt.
+COPY entrypoint.sh /opt/tesl/entrypoint.sh
+RUN chmod +x /opt/tesl/entrypoint.sh
+
+# Internal Postgres lives here. Persist across runs with `-v` on this path.
+ENV TESL_PG_DATA=/var/lib/tesl-postgres
+
+# Embedded-DB connection the app uses (consumed by env("TESL_POSTGRES_*")).
+# These point at the in-container cluster the entrypoint manages; override
+# only if you know what you are doing.
+ENV TESL_POSTGRES_HOST=127.0.0.1 \
+    TESL_POSTGRES_PORT=5432 \
+    TESL_POSTGRES_DATABASE=app \
+    TESL_POSTGRES_USER=app \
+    TESL_POSTGRES_PASSWORD=app
+
+# Web server port.
+ENV PORT=__PORT__
+EXPOSE __PORT__
+
+# Which compiled app the entrypoint launches (so the script stays generic).
+ENV TESL_APP_RKT=/opt/tesl/app/__APP_RKT__
+
+ENTRYPOINT ["/opt/tesl/entrypoint.sh"]

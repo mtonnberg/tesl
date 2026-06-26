@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# Tesl all-in-one entrypoint (TEMPLATE).
+#
+# Boots an internal PostgreSQL, then launches the compiled Tesl app. Designed
+# so that `docker run -p __PORT__:__PORT__ <image>` "just works" with no
+# external database. `tesl build` substitutes __PLACEHOLDER__ values; the
+# script otherwise reads its configuration from the env vars the Dockerfile
+# sets (TESL_PG_DATA, TESL_POSTGRES_*, TESL_APP_RKT, PORT).
+#
+# Lifecycle:
+#   1. First run: initdb a project-local cluster owned by the postgres user.
+#   2. pg_ctl start, listening on TESL_POSTGRES_PORT.
+#   3. Wait until the server accepts connections (pg_isready).
+#   4. Ensure role + database (TESL_POSTGRES_USER / TESL_POSTGRES_DATABASE) exist.
+#   5. exec `racket app.rkt`. The Tesl runtime auto-creates its tables on boot
+#      (ensure-database-ready!), so the schema appears on first request.
+# ---------------------------------------------------------------------------
+set -euo pipefail
+
+PGDATA="${TESL_PG_DATA:-/var/lib/tesl-postgres}"
+PGPORT="${TESL_POSTGRES_PORT:-5432}"
+PGUSER="${TESL_POSTGRES_USER:-app}"
+PGPASSWORD_VALUE="${TESL_POSTGRES_PASSWORD:-app}"
+PGDATABASE="${TESL_POSTGRES_DATABASE:-app}"
+APP_RKT="${TESL_APP_RKT:-/opt/tesl/app/__APP_RKT__}"
+
+# Postgres refuses to run as root. The apt package creates a `postgres` user;
+# run all cluster operations through it via `su`/`gosu`-style `su postgres -c`.
+PG_RUN_USER=postgres
+
+# Helper: run a command as the postgres OS user with the right env.
+as_pg() {
+  su "$PG_RUN_USER" -c "$*"
+}
+
+mkdir -p "$PGDATA"
+chown -R "$PG_RUN_USER":"$PG_RUN_USER" "$PGDATA"
+
+# 1. Initialise the cluster on first run (idempotent: PG_VERSION marks a cluster).
+if [ ! -s "$PGDATA/PG_VERSION" ]; then
+  echo "tesl-entrypoint: initialising embedded Postgres cluster at $PGDATA"
+  as_pg "initdb -D '$PGDATA' --auth-local=trust --auth-host=md5 --username='$PG_RUN_USER'"
+fi
+
+# 2. Start the server (project-local socket dir under PGDATA, TCP on PGPORT).
+echo "tesl-entrypoint: starting Postgres on port $PGPORT"
+as_pg "pg_ctl -D '$PGDATA' -o \"-p $PGPORT -k '$PGDATA' -c listen_addresses='127.0.0.1'\" -w -t 60 start"
+
+# 3. Wait for readiness (pg_ctl -w already waits, but double-check via pg_isready).
+for _ in $(seq 1 60); do
+  if as_pg "pg_isready -h 127.0.0.1 -p $PGPORT" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+# 4. Ensure the application role + database exist (idempotent).
+#    Admin operations connect over the local Unix socket (initdb gave it
+#    --auth-local=trust), so no superuser password is needed here. The socket
+#    lives in PGDATA (we passed `-k "$PGDATA"` to the postmaster).
+as_pg "psql -h '$PGDATA' -p $PGPORT -d postgres -tAc \"SELECT 1 FROM pg_roles WHERE rolname='$PGUSER'\"" \
+  | grep -q 1 \
+  || as_pg "psql -h '$PGDATA' -p $PGPORT -d postgres -c \"CREATE ROLE \\\"$PGUSER\\\" LOGIN PASSWORD '$PGPASSWORD_VALUE'\""
+
+as_pg "psql -h '$PGDATA' -p $PGPORT -d postgres -tAc \"SELECT 1 FROM pg_database WHERE datname='$PGDATABASE'\"" \
+  | grep -q 1 \
+  || as_pg "createdb -h '$PGDATA' -p $PGPORT -O '$PGUSER' '$PGDATABASE'"
+
+# Stop Postgres cleanly when the container is asked to terminate.
+shutdown() {
+  echo "tesl-entrypoint: stopping Postgres"
+  as_pg "pg_ctl -D '$PGDATA' -m fast -w stop" || true
+  exit 0
+}
+trap shutdown TERM INT
+
+# 5. Launch the Tesl app. Export the connection env the runtime reads via
+#    env("TESL_POSTGRES_*"). PORT drives the web server bind.
+export TESL_POSTGRES_HOST=127.0.0.1
+export TESL_POSTGRES_PORT="$PGPORT"
+export TESL_POSTGRES_DATABASE="$PGDATABASE"
+export TESL_POSTGRES_USER="$PGUSER"
+export TESL_POSTGRES_PASSWORD="$PGPASSWORD_VALUE"
+export PORT="${PORT:-__PORT__}"
+
+echo "tesl-entrypoint: launching app: racket $APP_RKT (PORT=$PORT)"
+exec racket "$APP_RKT" &
+APP_PID=$!
+wait "$APP_PID"

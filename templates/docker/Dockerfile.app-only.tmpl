@@ -1,0 +1,66 @@
+# syntax=docker/dockerfile:1
+#
+# Tesl "app-only" production image (TEMPLATE).
+# ---------------------------------------------------------------------------
+# `tesl build` substitutes every __PLACEHOLDER__ below before `docker build`.
+# This image carries ONLY the Tesl Racket runtime + your pre-compiled app.
+# It has NO database; it connects to an EXTERNAL Postgres configured purely
+# through environment variables at `docker run` time.
+#
+# Placeholders (see templates/docker/README.md for the full contract):
+#   __RACKET_BASE__   official Racket base image tag, e.g. racket/racket:8.18-full
+#   __APP_NAME__      human-readable app name (label only)
+#   __APP_RKT__       path of the compiled entrypoint .rkt RELATIVE to the build
+#                     context, e.g. app.rkt
+#   __PORT__          TCP port the Tesl web server listens on, e.g. 8086
+#
+# Build context layout `tesl build` MUST stage before building:
+#   <context>/
+#     collections/tesl/dsl/    (copy of repo dsl/)
+#     collections/tesl/tesl/   (copy of repo tesl/)
+#     collections/tesl/lang/   (copy of repo lang/)
+#     __APP_RKT__              (output of `tesl compile <app>.tesl`)
+#     <any dependency .rkt>    (compiled imports, same relative paths)
+# ---------------------------------------------------------------------------
+FROM __RACKET_BASE__
+
+LABEL org.opencontainers.image.title="__APP_NAME__" \
+      org.opencontainers.image.description="Tesl app (app-only, external Postgres)"
+
+# The Tesl runtime collections are required by the compiled app via
+#   (require tesl/dsl/… tesl/tesl/… tesl/lang/…)
+# We expose them as a Racket collection root through PLTCOLLECTS. The base
+# image's own collects dir MUST come first (so raco/the reader resolve), then
+# our collection root containing the single `tesl` collection.
+ENV TESL_COLLECTIONS=/opt/tesl/collections
+ENV PLTCOLLECTS="/usr/share/racket/collects:${TESL_COLLECTIONS}"
+
+WORKDIR /opt/tesl/app
+
+# Runtime collections first (changes rarely → better layer caching).
+COPY collections/ ${TESL_COLLECTIONS}/
+
+# Pre-compile the runtime collections to .zo so app startup is fast.
+# Non-fatal: if it fails the app still runs (compiled on first load).
+RUN raco make ${TESL_COLLECTIONS}/tesl/dsl/*.rkt \
+               ${TESL_COLLECTIONS}/tesl/tesl/*.rkt \
+               ${TESL_COLLECTIONS}/tesl/lang/*.rkt 2>/dev/null || true
+
+# The compiled application (+ any compiled dependency .rkt files).
+COPY __APP_RKT__ /opt/tesl/app/__APP_RKT__
+
+# Network port the Tesl web server binds. Honored via PORT below.
+ENV PORT=__PORT__
+EXPOSE __PORT__
+
+# External Postgres connection — supply these at `docker run` time.
+# Defaults match Tesl's `env("TESL_POSTGRES_*")` database config convention.
+# (Leave unset for apps that declare no `database` block.)
+#   TESL_POSTGRES_HOST       e.g. db.internal
+#   TESL_POSTGRES_PORT       e.g. 5432
+#   TESL_POSTGRES_DATABASE   e.g. appdb
+#   TESL_POSTGRES_USER       e.g. appuser
+#   TESL_POSTGRES_PASSWORD   e.g. (secret)
+ENV TESL_POSTGRES_PORT=5432
+
+ENTRYPOINT ["racket", "/opt/tesl/app/__APP_RKT__"]
