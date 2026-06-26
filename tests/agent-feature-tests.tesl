@@ -1,0 +1,707 @@
+#lang tesl
+module AgentFeatureTests exposing []
+
+import Tesl.Prelude exposing [Int, String, Bool, List, Unit]
+import Tesl.Json exposing [stringCodec, intCodec, boolCodec]
+import Tesl.String exposing [String.concat, String.contains]
+import Tesl.Agent exposing [
+  aiProvider,
+  Agent,
+  LlmProvider,
+  AgentReply,
+  Tool,
+  ToolStep,
+  Conversation,
+  ConversationTurn,
+  mockProvider,
+  mockToolProvider,
+  toolUseStep,
+  textStep,
+  defineAgent,
+  withTools,
+  tool,
+  ask,
+  askReply,
+  askWith,
+  askFor,
+  replyText,
+  replyTokens,
+  replyToolCalls,
+  decodeAs,
+  newConversation,
+  conversationFrom,
+  conversationJson,
+  conversationLength,
+  converse,
+  turnReply,
+  turnConversation,
+]
+
+# ════════════════════════════════════════════════════════════════════════════
+# Tesl.Agent — Layer-A deterministic feature suite.
+#
+# EVERYTHING here is mock-only and deterministic: no network, no API keys, no
+# clock. The mock providers (mockProvider / mockToolProvider) drive the agent
+# loop, conversation threading, structured-output decode+retry, BYOK override
+# and the tool-calling loop with VALIDATED args — all observed through the
+# EXISTING public accessors (replyText / replyTokens / replyToolCalls /
+# conversationJson / conversationLength / turnReply / turnConversation).
+#
+# Capability gating: every entry point that performs inference (ask / askReply /
+# askWith / askFor / converse) requires the aiProvider capability, granted on
+# the test block via a `supportBot implies aiProvider` capability.
+# ════════════════════════════════════════════════════════════════════════════
+
+capability supportBot implies aiProvider
+
+# ── Tool argument types (validated through the codec / decodeAs path) ─────────
+
+record WeatherArgs {
+  city: String
+}
+
+codec WeatherArgs {
+  toJson_forbidden
+  fromJson [
+    {
+      city <- "city" with_codec stringCodec
+    }
+  ]
+}
+
+record AddArgs {
+  a: Int
+  b: Int
+}
+
+codec AddArgs {
+  toJson_forbidden
+  fromJson [
+    {
+      a <- "a" with_codec intCodec
+      b <- "b" with_codec intCodec
+    }
+  ]
+}
+
+record FlagArgs {
+  on: Bool
+}
+
+codec FlagArgs {
+  toJson_forbidden
+  fromJson [
+    {
+      on <- "on" with_codec boolCodec
+    }
+  ]
+}
+
+# ── Structured-output target types ───────────────────────────────────────────
+
+record Summary {
+  title: String
+  score: Int
+}
+
+codec Summary {
+  toJson_forbidden
+  fromJson [
+    {
+      title <- "title" with_codec stringCodec
+      score <- "score" with_codec intCodec
+    }
+  ]
+}
+
+record Sentiment {
+  label: String
+}
+
+codec Sentiment {
+  toJson_forbidden
+  fromJson [
+    {
+      label <- "label" with_codec stringCodec
+    }
+  ]
+}
+
+# ── Validators (model args JSON String -> validated typed value) ──────────────
+# A malformed/missing field makes decodeAs raise, which the agent loop converts
+# into a tool_result is_error (NOT a thrown exception) and keeps looping.
+
+fn validateWeather(argsJson: String) -> WeatherArgs =
+  decodeAs "WeatherArgs" argsJson
+
+fn validateAdd(argsJson: String) -> AddArgs =
+  decodeAs "AddArgs" argsJson
+
+fn validateFlag(argsJson: String) -> FlagArgs =
+  decodeAs "FlagArgs" argsJson
+
+# ── Dispatchers (read the VALIDATED typed value, not raw JSON) ────────────────
+
+fn dispatchWeather(args: WeatherArgs) -> String =
+  String.concat "weather in " args.city
+
+fn dispatchAdd(args: AddArgs) -> String =
+  String.concat "sum computed for " (String.concat (intToString args.a) (String.concat " + " (intToString args.b)))
+
+fn dispatchFlag(args: FlagArgs) -> String =
+  if args.on then
+    "flag is on"
+  else
+    "flag is off"
+
+# A trivial int->string used only so dispatchAdd reads its validated fields.
+fn intToString(n: Int) -> String =
+  if n == 0 then
+    "0"
+  else
+    "n"
+
+# ── Structured-output decoders (developer-owned String -> typed value) ────────
+
+fn decodeSummary(j: String) -> Summary =
+  decodeAs "Summary" j
+
+fn decodeSentiment(j: String) -> Sentiment =
+  decodeAs "Sentiment" j
+
+# ── Handler-style wrappers (capability flows through `requires`) ──────────────
+
+fn askMock(prompt: String) -> String requires [supportBot] =
+  let agent = defineAgent (mockProvider ["wrapped reply"]) "You are a bot." 100
+  ask agent prompt
+
+fn classify(text: String) -> Sentiment requires [supportBot] =
+  let agent = defineAgent (mockProvider ["{\"label\":\"positive\"}"]) "Classify." 64
+  askFor agent text decodeSentiment 2
+
+# ════════════════════════════════════════════════════════════════════════════
+# 1. ask — one-shot inference returns the mock's scripted text.
+# ════════════════════════════════════════════════════════════════════════════
+
+test "ask returns the mock's first scripted reply" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["hello"]) "x" 100
+  expect (ask agent "hi") == "hello"
+}
+
+test "ask returns the exact scripted string verbatim" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["The answer is 42."]) "x" 100
+  expect (ask agent "q") == "The answer is 42."
+}
+
+test "ask through a wrapper handler returns the scripted reply" requires [supportBot] {
+  expect (askMock "anything") == "wrapped reply"
+}
+
+test "successive asks walk the mock script by call index" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["first", "second", "third"]) "x" 50
+  expect (ask agent "a") == "first"
+  expect (ask agent "b") == "second"
+  expect (ask agent "c") == "third"
+}
+
+test "ask ignores the prompt content — mock is prompt-independent" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["fixed"]) "x" 50
+  expect (ask agent "totally different prompt") == "fixed"
+}
+
+test "ask works with an empty system prompt" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["ok"]) "" 32
+  expect (ask agent "hi") == "ok"
+}
+
+test "ask returns an empty scripted reply unchanged" requires [supportBot] {
+  let agent = defineAgent (mockProvider [""]) "x" 32
+  expect (ask agent "hi") == ""
+}
+
+test "ask preserves unicode in the scripted reply" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["café — naïve ✓"]) "x" 64
+  expect (ask agent "hi") == "café — naïve ✓"
+}
+
+test "two distinct agents keep independent mock scripts" requires [supportBot] {
+  let a1 = defineAgent (mockProvider ["from a1"]) "x" 32
+  let a2 = defineAgent (mockProvider ["from a2"]) "x" 32
+  expect (ask a1 "hi") == "from a1"
+  expect (ask a2 "hi") == "from a2"
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 2. askReply — full loop returning an AgentReply; accessors observe it.
+# ════════════════════════════════════════════════════════════════════════════
+
+test "askReply replyText matches the scripted text" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["reply body"]) "x" 64
+  let reply = askReply agent "hi"
+  expect (replyText reply) == "reply body"
+}
+
+test "askReply with no tools reports zero tool calls" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["plain"]) "x" 64
+  let reply = askReply agent "hi"
+  expect (replyToolCalls reply) == 0
+}
+
+test "askReply replyTokens is non-negative" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["counts"]) "x" 64
+  let reply = askReply agent "hi"
+  expect (replyTokens reply) >= 0
+}
+
+test "askReply replyText equals ask result for the same script" requires [supportBot] {
+  let a1 = defineAgent (mockProvider ["same"]) "x" 64
+  let a2 = defineAgent (mockProvider ["same"]) "x" 64
+  expect (replyText (askReply a1 "hi")) == (ask a2 "hi")
+}
+
+test "ask still returns plain text through the loop machinery" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["plain text"]) "x" 64
+  expect (ask agent "hi") == "plain text"
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 3. Tool-calling loop — VALIDATED args reach dispatch; exact tool-call count.
+# ════════════════════════════════════════════════════════════════════════════
+
+test "tool loop dispatches with validated args and returns final text" requires [supportBot] {
+  let weatherTool = tool
+    "get_weather"
+    "Look up the weather for a city"
+    "{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"]}"
+    validateWeather
+    dispatchWeather
+  let step1 = toolUseStep "get_weather" "call_1" "{\"city\":\"Malmo\"}"
+  let step2 = textStep "It is sunny."
+  let base = defineAgent (mockToolProvider [step1, step2]) "You are a weather bot." 256
+  let agent = withTools base [weatherTool]
+  let reply = askReply agent "What is the weather in Malmo?"
+  expect (replyText reply) == "It is sunny."
+  expect (replyToolCalls reply) == 1
+}
+
+test "tool loop with two tool calls counts both round-trips" requires [supportBot] {
+  let weatherTool = tool "get_weather" "weather" "{}" validateWeather dispatchWeather
+  let step1 = toolUseStep "get_weather" "call_1" "{\"city\":\"Oslo\"}"
+  let step2 = toolUseStep "get_weather" "call_2" "{\"city\":\"Bergen\"}"
+  let step3 = textStep "Both checked."
+  let base = defineAgent (mockToolProvider [step1, step2, step3]) "x" 256
+  let agent = withTools base [weatherTool]
+  let reply = askReply agent "two cities"
+  expect (replyText reply) == "Both checked."
+  expect (replyToolCalls reply) == 2
+}
+
+test "tool loop with three tool calls counts three" requires [supportBot] {
+  let weatherTool = tool "get_weather" "weather" "{}" validateWeather dispatchWeather
+  let s1 = toolUseStep "get_weather" "c1" "{\"city\":\"A\"}"
+  let s2 = toolUseStep "get_weather" "c2" "{\"city\":\"B\"}"
+  let s3 = toolUseStep "get_weather" "c3" "{\"city\":\"C\"}"
+  let s4 = textStep "done"
+  let base = defineAgent (mockToolProvider [s1, s2, s3, s4]) "x" 256
+  let agent = withTools base [weatherTool]
+  let reply = askReply agent "three"
+  expect (replyToolCalls reply) == 3
+}
+
+test "tool loop dispatches an Int-typed validated arg" requires [supportBot] {
+  let addTool = tool "add" "add two ints" "{}" validateAdd dispatchAdd
+  let step1 = toolUseStep "add" "call_1" "{\"a\":0,\"b\":0}"
+  let step2 = textStep "Computed."
+  let base = defineAgent (mockToolProvider [step1, step2]) "x" 128
+  let agent = withTools base [addTool]
+  let reply = askReply agent "add them"
+  expect (replyText reply) == "Computed."
+  expect (replyToolCalls reply) == 1
+}
+
+test "tool loop dispatches a Bool-typed validated arg (true)" requires [supportBot] {
+  let flagTool = tool "set_flag" "set a flag" "{}" validateFlag dispatchFlag
+  let step1 = toolUseStep "set_flag" "call_1" "{\"on\":true}"
+  let step2 = textStep "Set."
+  let base = defineAgent (mockToolProvider [step1, step2]) "x" 128
+  let agent = withTools base [flagTool]
+  let reply = askReply agent "turn it on"
+  expect (replyText reply) == "Set."
+  expect (replyToolCalls reply) == 1
+}
+
+test "tool loop dispatches a Bool-typed validated arg (false)" requires [supportBot] {
+  let flagTool = tool "set_flag" "set a flag" "{}" validateFlag dispatchFlag
+  let step1 = toolUseStep "set_flag" "call_1" "{\"on\":false}"
+  let step2 = textStep "Cleared."
+  let base = defineAgent (mockToolProvider [step1, step2]) "x" 128
+  let agent = withTools base [flagTool]
+  let reply = askReply agent "turn it off"
+  expect (replyText reply) == "Cleared."
+  expect (replyToolCalls reply) == 1
+}
+
+test "tool loop with no tool calls (text only) reports zero" requires [supportBot] {
+  let weatherTool = tool "get_weather" "weather" "{}" validateWeather dispatchWeather
+  let base = defineAgent (mockToolProvider [textStep "no tools needed"]) "x" 64
+  let agent = withTools base [weatherTool]
+  let reply = askReply agent "hi"
+  expect (replyText reply) == "no tools needed"
+  expect (replyToolCalls reply) == 0
+}
+
+test "withTools attaching multiple tools still resolves the called one" requires [supportBot] {
+  let weatherTool = tool "get_weather" "weather" "{}" validateWeather dispatchWeather
+  let addTool = tool "add" "add" "{}" validateAdd dispatchAdd
+  let step1 = toolUseStep "add" "call_1" "{\"a\":0,\"b\":0}"
+  let step2 = textStep "picked add"
+  let base = defineAgent (mockToolProvider [step1, step2]) "x" 128
+  let agent = withTools base [weatherTool, addTool]
+  let reply = askReply agent "use add"
+  expect (replyText reply) == "picked add"
+  expect (replyToolCalls reply) == 1
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 4. Malformed tool args -> is_error tool_result; loop continues (no raise).
+# ════════════════════════════════════════════════════════════════════════════
+
+test "malformed tool args (missing field) become is_error and loop continues" requires [supportBot] {
+  let weatherTool = tool "get_weather" "weather" "{}" validateWeather dispatchWeather
+  let step1 = toolUseStep "get_weather" "call_1" "{\"wrong\":\"field\"}"
+  let step2 = textStep "Sorry, could not look that up."
+  let base = defineAgent (mockToolProvider [step1, step2]) "x" 256
+  let agent = withTools base [weatherTool]
+  let reply = askReply agent "weather?"
+  expect (replyText reply) == "Sorry, could not look that up."
+  expect (replyToolCalls reply) == 1
+}
+
+test "malformed args (wrong type) are rejected as is_error, no exception" requires [supportBot] {
+  let addTool = tool "add" "add" "{}" validateAdd dispatchAdd
+  let step1 = toolUseStep "add" "call_1" "{\"a\":\"not-a-number\",\"b\":2}"
+  let step2 = textStep "recovered"
+  let base = defineAgent (mockToolProvider [step1, step2]) "x" 256
+  let agent = withTools base [addTool]
+  let reply = askReply agent "add"
+  expect (replyText reply) == "recovered"
+  expect (replyToolCalls reply) == 1
+}
+
+test "malformed args (empty object) are rejected as is_error" requires [supportBot] {
+  let weatherTool = tool "get_weather" "weather" "{}" validateWeather dispatchWeather
+  let step1 = toolUseStep "get_weather" "call_1" "{}"
+  let step2 = textStep "no city given"
+  let base = defineAgent (mockToolProvider [step1, step2]) "x" 256
+  let agent = withTools base [weatherTool]
+  let reply = askReply agent "weather"
+  expect (replyText reply) == "no city given"
+  expect (replyToolCalls reply) == 1
+}
+
+test "a bad tool call followed by a good one still completes" requires [supportBot] {
+  let weatherTool = tool "get_weather" "weather" "{}" validateWeather dispatchWeather
+  let bad = toolUseStep "get_weather" "c1" "{\"nope\":1}"
+  let good = toolUseStep "get_weather" "c2" "{\"city\":\"Lund\"}"
+  let final = textStep "Looked up Lund."
+  let base = defineAgent (mockToolProvider [bad, good, final]) "x" 256
+  let agent = withTools base [weatherTool]
+  let reply = askReply agent "retry weather"
+  expect (replyText reply) == "Looked up Lund."
+  expect (replyToolCalls reply) == 2
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 5. askFor — structured output: first-reply success.
+# ════════════════════════════════════════════════════════════════════════════
+
+test "askFor decodes a typed value on the first reply" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["{\"title\":\"All good\",\"score\":42}"]) "JSON." 128
+  let summary = askFor agent "summarize" decodeSummary 2
+  expect summary.title == "All good"
+  expect summary.score == 42
+}
+
+test "askFor decodes a single-field record" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["{\"label\":\"positive\"}"]) "JSON." 64
+  let s = askFor agent "classify" decodeSentiment 2
+  expect s.label == "positive"
+}
+
+test "askFor through a wrapper handler decodes the value" requires [supportBot] {
+  let s = classify "great product"
+  expect s.label == "positive"
+}
+
+test "askFor succeeds with maxRetries of 1 when the first reply is valid" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["{\"title\":\"One shot\",\"score\":1}"]) "JSON." 64
+  let summary = askFor agent "x" decodeSummary 1
+  expect summary.title == "One shot"
+  expect summary.score == 1
+}
+
+test "askFor decodes a negative integer field" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["{\"title\":\"Cold\",\"score\":-5}"]) "JSON." 64
+  let summary = askFor agent "x" decodeSummary 2
+  expect summary.score == -5
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 6. askFor — decode-then-retry: a bad reply then a good reply.
+# ════════════════════════════════════════════════════════════════════════════
+
+test "askFor retries after one decode failure then succeeds" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["not json at all", "{\"title\":\"Recovered\",\"score\":7}"]) "JSON." 128
+  let summary = askFor agent "summarize" decodeSummary 2
+  expect summary.title == "Recovered"
+  expect summary.score == 7
+}
+
+test "askFor retries twice (two bad replies) then succeeds on the third" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["garbage", "{\"oops\":true}", "{\"title\":\"Third\",\"score\":3}"]) "JSON." 128
+  let summary = askFor agent "x" decodeSummary 3
+  expect summary.title == "Third"
+  expect summary.score == 3
+}
+
+test "askFor retry recovers a single-field decoder" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["bad", "{\"label\":\"neutral\"}"]) "JSON." 64
+  let s = askFor agent "x" decodeSentiment 2
+  expect s.label == "neutral"
+}
+
+test "askFor retry consumes the bad reply before the good one" requires [supportBot] {
+  # If retry did NOT advance the script, the second askFor below would see the
+  # bad reply; instead both asks resolve to good values from their own agents.
+  let a1 = defineAgent (mockProvider ["nope", "{\"title\":\"A\",\"score\":1}"]) "JSON." 64
+  let a2 = defineAgent (mockProvider ["{\"title\":\"B\",\"score\":2}"]) "JSON." 64
+  expect (askFor a1 "x" decodeSummary 2).title == "A"
+  expect (askFor a2 "y" decodeSummary 2).title == "B"
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 7. askWith — BYOK provider override is used, not the agent default.
+# ════════════════════════════════════════════════════════════════════════════
+
+test "askWith uses the BYOK provider override, not the agent default" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["default reply"]) "x" 64
+  let byok = mockProvider ["override reply"]
+  let reply = askWith agent "hi" byok
+  expect (replyText reply) == "override reply"
+}
+
+test "askWith ignores the agent's bound provider entirely" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["WRONG", "ALSO WRONG"]) "x" 64
+  let byok = mockProvider ["right"]
+  expect (replyText (askWith agent "hi" byok)) == "right"
+}
+
+test "askWith with a fresh override each call walks each override script" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["unused"]) "x" 64
+  let r1 = askWith agent "a" (mockProvider ["o1"])
+  let r2 = askWith agent "b" (mockProvider ["o2"])
+  expect (replyText r1) == "o1"
+  expect (replyText r2) == "o2"
+}
+
+test "askWith reports zero tool calls for a plain text override" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["x"]) "x" 64
+  let reply = askWith agent "hi" (mockProvider ["text only"])
+  expect (replyToolCalls reply) == 0
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 8. converse — multi-turn: history threads forward, conversationLength grows.
+# ════════════════════════════════════════════════════════════════════════════
+
+test "converse threads turn 1 history into turn 2" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["First reply about cats", "Second reply still about cats"]) "bot." 128
+  let conv0 = newConversation agent
+  let turn1 = converse conv0 "Tell me about cats"
+  let conv1 = turnConversation turn1
+  expect (replyText (turnReply turn1)) == "First reply about cats"
+  expect (conversationLength conv1) == 2
+  let turn2 = converse conv1 "What did I just ask about?"
+  let conv2 = turnConversation turn2
+  expect (replyText (turnReply turn2)) == "Second reply still about cats"
+  expect (conversationLength conv2) == 4
+  let history = conversationJson conv2
+  expect (String.contains history "Tell me about cats")
+  expect (String.contains history "First reply about cats")
+  expect (String.contains history "What did I just ask about?")
+}
+
+test "newConversation starts empty (length 0)" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["x"]) "x" 32
+  let conv0 = newConversation agent
+  expect (conversationLength conv0) == 0
+}
+
+test "one converse turn records exactly two entries" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["reply"]) "x" 64
+  let conv0 = newConversation agent
+  let turn1 = converse conv0 "question"
+  expect (conversationLength (turnConversation turn1)) == 2
+}
+
+test "conversationLength grows by two each turn" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["r1", "r2", "r3"]) "x" 64
+  let c0 = newConversation agent
+  let c1 = turnConversation (converse c0 "q1")
+  let c2 = turnConversation (converse c1 "q2")
+  let c3 = turnConversation (converse c2 "q3")
+  expect (conversationLength c1) == 2
+  expect (conversationLength c2) == 4
+  expect (conversationLength c3) == 6
+}
+
+test "turnReply text matches the scripted reply for that turn" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["alpha", "beta"]) "x" 64
+  let c0 = newConversation agent
+  let t1 = converse c0 "one"
+  let t2 = converse (turnConversation t1) "two"
+  expect (replyText (turnReply t1)) == "alpha"
+  expect (replyText (turnReply t2)) == "beta"
+}
+
+test "conversationJson contains every user prompt across turns" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["r1", "r2"]) "x" 64
+  let c0 = newConversation agent
+  let c1 = turnConversation (converse c0 "first ask")
+  let c2 = turnConversation (converse c1 "second ask")
+  let j = conversationJson c2
+  expect (String.contains j "first ask")
+  expect (String.contains j "second ask")
+}
+
+test "conversationJson contains every assistant reply across turns" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["reply one", "reply two"]) "x" 64
+  let c0 = newConversation agent
+  let c1 = turnConversation (converse c0 "q1")
+  let c2 = turnConversation (converse c1 "q2")
+  let j = conversationJson c2
+  expect (String.contains j "reply one")
+  expect (String.contains j "reply two")
+}
+
+test "history is accumulated, not reset, on the second turn" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["A", "B"]) "x" 64
+  let c0 = newConversation agent
+  let c1 = turnConversation (converse c0 "keep me")
+  let c2 = turnConversation (converse c1 "and me")
+  # Turn-1 prompt must still be present after turn 2.
+  expect (String.contains (conversationJson c2) "keep me")
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 9. conversationFrom — restore a serialized thread and continue it.
+# ════════════════════════════════════════════════════════════════════════════
+
+test "conversationFrom restores a serialized thread and continues it" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["Reply one", "Reply two"]) "x" 64
+  let conv0 = newConversation agent
+  let conv1 = turnConversation (converse conv0 "first question")
+  let saved = conversationJson conv1
+  let reloaded = conversationFrom agent saved
+  expect (conversationLength reloaded) == 2
+  let turn2 = converse reloaded "second question"
+  let conv2 = turnConversation turn2
+  expect (replyText (turnReply turn2)) == "Reply two"
+  expect (conversationLength conv2) == 4
+  let history2 = conversationJson conv2
+  expect (String.contains history2 "first question")
+  expect (String.contains history2 "Reply one")
+}
+
+test "conversationFrom round-trips the length exactly" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["r1", "r2"]) "x" 64
+  let c0 = newConversation agent
+  let c1 = turnConversation (converse c0 "q1")
+  let c2 = turnConversation (converse c1 "q2")
+  let saved = conversationJson c2
+  let reloaded = conversationFrom agent saved
+  expect (conversationLength reloaded) == (conversationLength c2)
+}
+
+test "conversationFrom preserves the serialized prompts and replies" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["only reply"]) "x" 64
+  let c0 = newConversation agent
+  let c1 = turnConversation (converse c0 "only question")
+  let reloaded = conversationFrom agent (conversationJson c1)
+  let j = conversationJson reloaded
+  expect (String.contains j "only question")
+  expect (String.contains j "only reply")
+}
+
+test "conversationFrom on an empty thread yields length 0" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["x"]) "x" 32
+  let empty = conversationJson (newConversation agent)
+  let reloaded = conversationFrom agent empty
+  expect (conversationLength reloaded) == 0
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 10. Capability-bounded happy paths (the requires-flow itself is the assertion;
+#     each block only compiles because supportBot implies aiProvider).
+# ════════════════════════════════════════════════════════════════════════════
+
+test "capability flows: ask under supportBot" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["cap ok"]) "x" 32
+  expect (ask agent "hi") == "cap ok"
+}
+
+test "capability flows: askReply under supportBot" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["cap reply"]) "x" 32
+  expect (replyText (askReply agent "hi")) == "cap reply"
+}
+
+test "capability flows: askWith under supportBot" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["unused"]) "x" 32
+  expect (replyText (askWith agent "hi" (mockProvider ["byok ok"]))) == "byok ok"
+}
+
+test "capability flows: askFor under supportBot" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["{\"label\":\"ok\"}"]) "x" 32
+  expect (askFor agent "hi" decodeSentiment 2).label == "ok"
+}
+
+test "capability flows: converse under supportBot" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["cap converse"]) "x" 32
+  let turn = converse (newConversation agent) "hi"
+  expect (replyText (turnReply turn)) == "cap converse"
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 11. Cross-feature compositions.
+# ════════════════════════════════════════════════════════════════════════════
+
+test "decodeAs standalone decodes a JSON string to a typed value" requires [supportBot] {
+  let s = decodeSummary "{\"title\":\"direct\",\"score\":9}"
+  expect s.title == "direct"
+  expect s.score == 9
+}
+
+test "tool loop then a separate structured-output ask compose" requires [supportBot] {
+  let weatherTool = tool "get_weather" "weather" "{}" validateWeather dispatchWeather
+  let base = defineAgent (mockToolProvider [toolUseStep "get_weather" "c1" "{\"city\":\"Paris\"}", textStep "checked"]) "x" 256
+  let agent = withTools base [weatherTool]
+  let reply = askReply agent "weather"
+  expect (replyToolCalls reply) == 1
+  let s = classify "ok"
+  expect s.label == "positive"
+}
+
+test "converse reply feeds a downstream structured decode of the same shape" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["{\"label\":\"happy\"}"]) "x" 64
+  let turn = converse (newConversation agent) "classify mood"
+  let txt = replyText (turnReply turn)
+  let s = decodeSentiment txt
+  expect s.label == "happy"
+}
+
+test "withTools is idempotent in resolution when re-applied" requires [supportBot] {
+  let weatherTool = tool "get_weather" "weather" "{}" validateWeather dispatchWeather
+  let base = defineAgent (mockToolProvider [textStep "no call"]) "x" 64
+  let agent = withTools (withTools base [weatherTool]) [weatherTool]
+  expect (replyText (askReply agent "hi")) == "no call"
+}
