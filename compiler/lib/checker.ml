@@ -3510,7 +3510,7 @@ let check_api_decl_types ctx (m : module_form) =
     let known = [ "Unit"; "Bool"; "Int"; "Float"; "String"; "List"; "Maybe";
                   "Dict"; "Set"; "PosixMillis"; "HttpRequest"; "HttpResponse";
                   "JwtToken"; "JwtSecret";
-                  "Agent"; "LlmProvider"; "AgentReply" ] in
+                  "Agent"; "LlmProvider"; "AgentReply"; "Tool"; "ToolStep" ] in
     if not (List.mem name known || List.mem name known_types) then
       add_error ctx loc (Printf.sprintf "unknown type: %s" name)
   in

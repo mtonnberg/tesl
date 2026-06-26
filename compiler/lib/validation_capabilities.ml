@@ -93,8 +93,10 @@ let collect_needed_capabilities
     else if List.mem name ["JWT.sign"; "JWT.verify"; "JWT.decode"] then ["jwt"]
     else if List.mem name ["HttpClient.get"; "HttpClient.post";
                            "HttpClient.put"; "HttpClient.delete"] then ["httpClient"]
-    (* Tesl.Agent: `ask` performs inference and requires the aiProvider capability. *)
-    else if name = "ask" then ["aiProvider"]
+    (* Tesl.Agent: every entry point that contacts a provider (one-shot ask, the
+       tool-calling loop, BYOK, and structured-output askFor) performs inference
+       and requires the aiProvider capability. Pure constructors/accessors do not. *)
+    else if List.mem name ["ask"; "askReply"; "askWith"; "askFor"] then ["aiProvider"]
     else []
   in
   (* acc is threaded left-to-right; result order is irrelevant (caller sort_uniqs). *)

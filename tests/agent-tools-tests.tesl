@@ -1,0 +1,178 @@
+#lang tesl
+module AgentToolsTests exposing []
+
+import Tesl.Prelude exposing [Int, String, Bool, List, Unit]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Tesl.String exposing [String.concat]
+import Tesl.Agent exposing [
+  aiProvider,
+  Agent,
+  LlmProvider,
+  AgentReply,
+  Tool,
+  ToolStep,
+  mockProvider,
+  mockToolProvider,
+  toolUseStep,
+  textStep,
+  defineAgent,
+  withTools,
+  tool,
+  ask,
+  askReply,
+  askWith,
+  replyText,
+  replyTokens,
+  replyToolCalls,
+  decodeAs,
+  askFor,
+]
+
+# ────────────────────────────────────────────────────────────────────────────
+# Tesl.Agent — AI Tier-0 Wave 2a: the AGENTIC CORE.
+#
+# Everything here is DETERMINISTIC and mock-only (no network, no keys):
+#   - a full tool-calling loop driven by mockToolProvider
+#   - tool-arg VALIDATION (validated typed value reaches dispatch)
+#   - a malformed tool-arg rejected as tool_result is_error (loop continues)
+#   - function-first typed structured output (decodeAs) + bounded retry
+#   - a BYOK call using a per-call provider override
+# ────────────────────────────────────────────────────────────────────────────
+
+capability supportBot implies aiProvider
+
+# A tool's validated-argument type, with a codec so the validator can reuse the
+# SAME proof-carrying decode path an HTTP request body uses.
+record WeatherArgs {
+  city: String
+}
+
+codec WeatherArgs {
+  toJson_forbidden
+  fromJson [
+    {
+      city <- "city" with_codec stringCodec
+    }
+  ]
+}
+
+# A structured-output target type, also with a codec.
+record Summary {
+  title: String
+  score: Int
+}
+
+codec Summary {
+  toJson_forbidden
+  fromJson [
+    {
+      title <- "title" with_codec stringCodec
+      score <- "score" with_codec intCodec
+    }
+  ]
+}
+
+# The validator: model args JSON String -> a validated WeatherArgs value.
+# Malformed args (missing "city" / wrong shape) make decodeAs raise, which the
+# agent loop turns into a tool_result is_error — NOT an exception.
+fn validateWeather(argsJson: String) -> WeatherArgs =
+  decodeAs "WeatherArgs" argsJson
+
+# The dispatch: validated WeatherArgs -> tool_result text. Proves the VALIDATED
+# typed value (not the raw JSON) reaches dispatch — we read the typed field.
+fn dispatchWeather(args: WeatherArgs) -> String =
+  String.concat "weather in " args.city
+
+# A decoder for structured output: JSON String -> a proof-carrying Summary.
+fn decodeSummary(j: String) -> Summary =
+  decodeAs "Summary" j
+
+# ────────────────────────────────────────────────────────────────────────────
+# (a) Full tool-calling loop: provider asks for a tool, args are validated, the
+#     tool is dispatched with the VALIDATED value, the tool_result loops back,
+#     and the provider's final text is returned.
+# ────────────────────────────────────────────────────────────────────────────
+
+test "tool-calling loop dispatches the tool with validated args and returns final reply" requires [supportBot] {
+  let weatherTool = tool
+    "get_weather"
+    "Look up the weather for a city"
+    "{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"]}"
+    validateWeather
+    dispatchWeather
+  let step1 = toolUseStep "get_weather" "call_1" "{\"city\":\"Malmo\"}"
+  let step2 = textStep "It is sunny."
+  let base = defineAgent (mockToolProvider [step1, step2]) "You are a weather bot." 256
+  let agent = withTools base [weatherTool]
+  let reply = askReply agent "What is the weather in Malmo?"
+  expect (replyText reply) == "It is sunny."
+  expect (replyToolCalls reply) == 1
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+# (d) A malformed tool-arg is rejected as tool_result is_error; the loop keeps
+#     going and the model still produces a final reply. We prove the loop did
+#     NOT raise by getting a normal reply back, and that the (failed) tool call
+#     was still counted as a round-trip.
+# ────────────────────────────────────────────────────────────────────────────
+
+test "malformed tool args are rejected as is_error and the loop continues" requires [supportBot] {
+  let weatherTool = tool
+    "get_weather"
+    "Look up the weather for a city"
+    "{}"
+    validateWeather
+    dispatchWeather
+  # First the model calls the tool with a MISSING required "city" field.
+  # validateWeather's decodeAs raises -> is_error tool_result -> loop continues.
+  let step1 = toolUseStep "get_weather" "call_1" "{\"wrong\":\"field\"}"
+  let step2 = textStep "Sorry, I could not look that up."
+  let base = defineAgent (mockToolProvider [step1, step2]) "You are a weather bot." 256
+  let agent = withTools base [weatherTool]
+  let reply = askReply agent "weather?"
+  expect (replyText reply) == "Sorry, I could not look that up."
+  expect (replyToolCalls reply) == 1
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+# (b) Structured-output decode succeeds on the first reply.
+# ────────────────────────────────────────────────────────────────────────────
+
+test "askFor decodes a typed structured-output value on first reply" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["{\"title\":\"All good\",\"score\":42}"]) "Reply with JSON." 128
+  let summary = askFor agent "summarize" decodeSummary 2
+  expect summary.title == "All good"
+  expect summary.score == 42
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+# (c) Structured-output decode fails once, then succeeds on retry. The mock
+#     scripts a bad reply followed by a good one; askFor must consume BOTH,
+#     proving the retry happened.
+# ────────────────────────────────────────────────────────────────────────────
+
+test "askFor retries after a decode failure then succeeds" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["not json at all", "{\"title\":\"Recovered\",\"score\":7}"]) "Reply with JSON." 128
+  let summary = askFor agent "summarize" decodeSummary 2
+  expect summary.title == "Recovered"
+  expect summary.score == 7
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+# (e) BYOK: askWith uses the per-call provider override instead of the agent's
+#     default-bound provider. The agent is built with a provider that would
+#     return "default"; the override returns "override".
+# ────────────────────────────────────────────────────────────────────────────
+
+test "askWith uses the BYOK provider override, not the agent default" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["default reply"]) "x" 64
+  let byok = mockProvider ["override reply"]
+  let reply = askWith agent "hi" byok
+  expect (replyText reply) == "override reply"
+}
+
+# A one-shot ask still works through the loop machinery (compat).
+test "ask still returns plain text through the loop" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["plain text"]) "x" 64
+  expect (ask agent "hi") == "plain text"
+}

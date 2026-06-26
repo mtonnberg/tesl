@@ -47,6 +47,8 @@ let t_http_response = TCon "HttpResponse"
 let t_agent       = TCon "Agent"
 let t_llm_provider = TCon "LlmProvider"
 let t_agent_reply = TCon "AgentReply"
+let t_tool        = TCon "Tool"
+let t_tool_step   = TCon "ToolStep"
 
 let t_list a        = TApp (TCon "List", a)
 let t_maybe a       = TApp (TCon "Maybe", a)
@@ -500,6 +502,44 @@ let stdlib_env : (string * scheme) list = [
      Requires the aiProvider capability (enforced in validation_capabilities). *)
   "ask",          mono (t_fun [t_agent; t_string] t_string);
 
+  (* ── Agent (AI Tier-0 Wave 2a — agentic core) ───────────────────────────
+     Provider constructors (all build an opaque LlmProvider). Positional args
+     only (Tesl forbids bare record literals). *)
+  "mockToolProvider", mono (t_fun [t_list t_tool_step] t_llm_provider);
+  "toolUseStep",  mono (t_fun [t_string; t_string; t_string] t_tool_step);
+  "textStep",     mono (t_fun [t_string] t_tool_step);
+  "anthropic",    mono (t_fun [t_string; t_string] t_llm_provider);
+  "openai",       mono (t_fun [t_string; t_string] t_llm_provider);
+  "local",        mono (t_fun [t_string; t_string] t_llm_provider);
+
+  (* tool: name, description, JSON-schema string, validator (args-JSON String → a),
+     dispatch (a → result String) → an opaque Tool. The validated-argument type
+     `a` is hidden inside the Tool value; tool is polymorphic in it. A malformed
+     arg makes the validator raise / return a check-fail and the loop returns it
+     to the model as a tool_result is_error (not an exception). *)
+  "tool",         { vars = _r1_a;
+                    mono = t_fun [t_string; t_string; t_string;
+                                  t_fun [t_string] _a; t_fun [_a] t_string] t_tool };
+  (* withTools: attach a list of tools to an agent. *)
+  "withTools",    mono (t_fun [t_agent; t_list t_tool] t_agent);
+
+  (* askReply / askWith: full tool-calling loop returning an AgentReply.
+     askWith takes a BYOK LlmProvider override as its last argument. *)
+  "askReply",     mono (t_fun [t_agent; t_string] t_agent_reply);
+  "askWith",      mono (t_fun [t_agent; t_string; t_llm_provider] t_agent_reply);
+  (* AgentReply accessors. *)
+  "replyText",      mono (t_fun [t_agent_reply] t_string);
+  "replyTokens",    mono (t_fun [t_agent_reply] t_int);
+  "replyToolCalls", mono (t_fun [t_agent_reply] t_int);
+
+  (* decodeAs: typeName, JSON String → proof-carrying value of the named type
+     (same codec registry path as an HTTP body decode). Polymorphic result. *)
+  "decodeAs",     { vars = _r1_a; mono = t_fun [t_string; t_string] _a };
+  (* askFor: ask the model for a typed value. decoder is the developer's
+     String → a function; maxRetries bounds the decode-failure retry loop. *)
+  "askFor",       { vars = _r1_a;
+                    mono = t_fun [t_agent; t_string; t_fun [t_string] _a; t_int] _a };
+
   (* ── GDP / proof utilities ───────────────────────────────────────────── *)
   "forgetFact",   { vars = _r1_a; mono = t_fun [_a] _a };
   "detachFact",   { vars = _r1_a; mono = t_fun [_a] t_fact };
@@ -677,8 +717,13 @@ let tesl_module_exports : (string * string list) list = [
     [ "httpClient"; "HttpResponse"; "HttpResponse?";
       "HttpClient.get"; "HttpClient.post"; "HttpClient.put"; "HttpClient.delete" ] );
   ( "Tesl.Agent",
-    [ "aiProvider"; "Agent"; "LlmProvider"; "AgentReply"; "AgentReply?";
-      "mockProvider"; "defineAgent"; "ask" ] );
+    [ "aiProvider"; "Agent"; "LlmProvider"; "AgentReply"; "AgentReply?"; "Tool"; "ToolStep";
+      "mockProvider"; "defineAgent"; "ask";
+      "mockToolProvider"; "toolUseStep"; "textStep";
+      "anthropic"; "openai"; "local";
+      "tool"; "withTools";
+      "askReply"; "askWith"; "replyText"; "replyTokens"; "replyToolCalls";
+      "decodeAs"; "askFor" ] );
   (* Tesl.Http, Tesl.DB, Tesl.Bool, Tesl.Uuid, Tesl.Crypto, Tesl.Map, Tesl.Logging,
      Tesl.Queue, Tesl.Channel, Tesl.Sse —
      internal modules; imports validated loosely (unknown names accepted)
