@@ -917,6 +917,114 @@ let test_ir_todo_api_fact_params () =
   assert_contains ~name:"Authenticated params" stdout
     {|"name":"Authenticated","params":[{"name":"req","type":"User"}]|}
 
+(* ---------------------------------------------------------------------------
+   Editor query flags — signature help, selection range, type definition,
+   and the additive occurrence `kind` field.  These exercise the
+   Compile.*_source producers + their *_to_json serializers (the exact path the
+   CLI flags dispatch through).
+   --------------------------------------------------------------------------- *)
+
+(* 0-based line/col layout:
+   0  #lang tesl
+   1  module Query exposing [add, useAdd]
+   2  (blank)
+   3  import Tesl.Prelude exposing [Int]
+   4  (blank)
+   5  record Point {
+   6    x: Int
+   7  }
+   8  (blank)
+   9  fn add(a: Int, b: Int) -> Int =
+   10   a + b
+   11 (blank)
+   12 fn useAdd(p: Point) -> Int =
+   13   add (p.x) (add 2 3) *)
+let query_src = {|#lang tesl
+module Query exposing [add, useAdd]
+
+import Tesl.Prelude exposing [Int]
+
+record Point {
+  x: Int
+}
+
+fn add(a: Int, b: Int) -> Int =
+  a + b
+
+fn useAdd(p: Point) -> Int =
+  add (p.x) (add 2 3)
+|}
+
+let test_occurrences_kind_write_and_read () =
+  (* Cursor on the `add` definition (line 9, col 3). *)
+  let occs = Compile.occurrences_source "query.tesl" query_src 9 3 in
+  let json = Compile.occurrences_response_to_json occs in
+  assert_contains ~name:"occurrences version" json {|"version":1|};
+  (* The definition site is a write. *)
+  assert_contains ~name:"def site is write" json {|"line":9,"col":3,"end_line":9,"end_col":6,"kind":"write"|};
+  (* The two call sites on line 13 are reads. *)
+  assert_contains ~name:"call site is read" json {|"line":13,"col":2,"end_line":13,"end_col":5,"kind":"read"|}
+
+let test_occurrences_param_binding_is_write () =
+  (* Cursor on parameter `a` of `add` (line 9, col 7). *)
+  let occs = Compile.occurrences_source "query.tesl" query_src 9 7 in
+  let json = Compile.occurrences_response_to_json occs in
+  assert_contains ~name:"param binding is write" json {|"line":9,"col":7,"end_line":9,"end_col":8,"kind":"write"|};
+  assert_contains ~name:"param use is read" json {|"line":10,"col":2,"end_line":10,"end_col":3,"kind":"read"|}
+
+let test_signature_help_first_param () =
+  (* Cursor inside the outer `add (...)` call, before any complete arg. *)
+  let sig_ = Compile.signature_help_source "query.tesl" query_src 13 6 in
+  let json = Compile.signature_help_response_to_json sig_ in
+  assert_contains ~name:"sig version" json {|"version":1|};
+  assert_contains ~name:"sig label" json {|"label":"add a: Int b: Int"|};
+  assert_contains ~name:"sig params" json {|"parameters":[{"label":"a","type":"Int"},{"label":"b","type":"Int"}]|};
+  assert_contains ~name:"active param 0" json {|"active_parameter":0|}
+
+let test_signature_help_second_param () =
+  (* Cursor positioned after the first argument of the outer `add` call. *)
+  let sig_ = Compile.signature_help_source "query.tesl" query_src 13 11 in
+  let json = Compile.signature_help_response_to_json sig_ in
+  assert_contains ~name:"active param 1" json {|"active_parameter":1|}
+
+let test_signature_help_outside_call_is_null () =
+  (* Cursor on the record field declaration — not inside any call. *)
+  let sig_ = Compile.signature_help_source "query.tesl" query_src 6 2 in
+  let json = Compile.signature_help_response_to_json sig_ in
+  assert_contains ~name:"no signature" json {|"signature":null|}
+
+let test_selection_range_nested () =
+  (* Cursor on `a` inside the body `a + b` (line 10, col 2). *)
+  let ranges = Compile.selection_range_source "query.tesl" query_src 10 2 in
+  let json = Compile.selection_ranges_response_to_json ranges in
+  assert_contains ~name:"selection version" json {|"version":1|};
+  (* Innermost-first: the binop body span appears, and the enclosing function
+     declaration span (line 9 .. line 12) appears later in the chain. *)
+  assert_contains ~name:"binop body range" json {|"line":10,"col":2,"end_line":10,"end_col":8|};
+  assert_contains ~name:"enclosing decl range" json {|"end_line":12|};
+  (* Must be non-empty and the first range no wider than the last. *)
+  (match ranges with
+   | [] -> Alcotest.fail "expected at least one selection range"
+   | first :: _ ->
+     let last = List.nth ranges (List.length ranges - 1) in
+     let span r = (r.Compile.sr_end_line - r.Compile.sr_line,
+                   r.Compile.sr_end_col - r.Compile.sr_col) in
+     if compare (span first) (span last) > 0 then
+       Alcotest.fail "selection ranges must be innermost-first")
+
+let test_type_definition_record () =
+  (* Cursor on `p` whose type is `Point`; expect the record declaration loc. *)
+  let loc = Compile.type_definition_source "query.tesl" query_src 13 7 in
+  let json = Compile.type_definition_response_to_json loc in
+  assert_contains ~name:"type-def version" json {|"version":1|};
+  assert_contains ~name:"points at record decl" json {|"line":5,"col":7,"end_line":5,"end_col":12|}
+
+let test_type_definition_null_when_no_type () =
+  (* Cursor on a blank line — nothing resolves. *)
+  let loc = Compile.type_definition_source "query.tesl" query_src 2 0 in
+  let json = Compile.type_definition_response_to_json loc in
+  assert_contains ~name:"null type definition" json {|"type_definition":null|}
+
 let () =
   Alcotest.run "IR" [
     "emit", [
@@ -988,5 +1096,15 @@ let () =
       Alcotest.test_case "single-param fact has params array" `Quick test_ir_single_param_fact_has_params;
       Alcotest.test_case "standalone fact appears in IR" `Quick test_ir_standalone_fact_appears;
       Alcotest.test_case "todo-api fact params" `Quick test_ir_todo_api_fact_params;
+    ];
+    "query-flags", [
+      Alcotest.test_case "occurrences kind write/read" `Quick test_occurrences_kind_write_and_read;
+      Alcotest.test_case "occurrences param binding is write" `Quick test_occurrences_param_binding_is_write;
+      Alcotest.test_case "signature help first param" `Quick test_signature_help_first_param;
+      Alcotest.test_case "signature help second param" `Quick test_signature_help_second_param;
+      Alcotest.test_case "signature help null outside call" `Quick test_signature_help_outside_call_is_null;
+      Alcotest.test_case "selection range nested" `Quick test_selection_range_nested;
+      Alcotest.test_case "type definition record" `Quick test_type_definition_record;
+      Alcotest.test_case "type definition null" `Quick test_type_definition_null_when_no_type;
     ];
   ]

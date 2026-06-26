@@ -43,6 +43,98 @@ If the module has a stable public surface, add it to `tesl_module_exports`.
 If you intentionally want loose import validation for an internal module, you can leave it out of `tesl_module_exports` while still listing it in `tesl_known_module_names`.
 ### 5. Add type entries for the module’s functions/types
 Add the relevant function/type constructor entries to `stdlib_env` so the type checker can resolve them.
+## Case C: lifted modules — combinators written in Tesl, not Racket
+
+Some stdlib modules now keep their **pure, leaf-free combinators in Tesl
+source** instead of hand-written Racket. This is the "smaller core" path: the
+language implements its own standard library, the OCaml checker infers the
+combinator types directly from the `.tesl` source (no `stdlib_env` rows), and
+the trusted hand-written Racket surface shrinks to irreducible leaves only.
+
+Two modules use this path today: **`Tesl.List`** (16 combinator bodies lifted;
+leaves head/tail/append live in `Tesl.ListPrim`) and **`Tesl.Either`** (10
+combinators lifted; the `define-adt` lives in `Tesl.EitherPrim`).
+
+### The two halves of a lifted module
+
+1. **Leaf half (hand-written Racket).** The irreducible primitives that pure
+   Tesl cannot express — list deconstruction (`car`/`cdr`), `define-adt`,
+   hash/set construction, float math, numeric parsing, and **all proof/GDP
+   machinery** (`validate-runtime-argument`, `attach`, `check`-backed
+   functions). These stay in a `*-prim.rkt` (or the shim) and keep their types
+   in `stdlib_env`.
+2. **Lifted half (Tesl source → generated Racket).** The pure combinators are
+   written as real recursive Tesl in `tesl/<mod>.tesl`. The compiler:
+   - **infers their types** from that source via
+     `Checker.load_imported_func_sigs` → `load_lifted_sigs`, gated by
+     `lifted_stdlib_basename` (`checker.ml`) — so their `stdlib_env` rows are
+     **deleted**; and
+   - **compiles their bodies** (build time) to a committed snapshot
+     `tesl/<mod>-derived.rkt` (see *Build* below). The public shim
+     `tesl/<mod>.rkt` re-exports those compiled bodies under the dotted
+     `Module.fn` runtime names via `(only-in "<mod>-derived.rkt" [fn Module.fn] …)`.
+
+### The require-cycle rule (do not skip)
+
+A compiled `<mod>.tesl` whose bodies delegate to leaf functions/constructors of
+its OWN module emits `(require tesl/tesl/<mod> …)` — i.e. it requires the shim.
+If the shim also requires `<mod>-derived.rkt`, Racket fails with **"cycle in
+loading"**. Break it by putting the leaves the bodies need in a **separate
+`Tesl.<Mod>Prim` module** (`list-prim`, `either-prim`) that both the shim and
+`<mod>-derived.rkt` require, and which requires neither. Have `<mod>.tesl`
+`import Tesl.<Mod>Prim` for those leaves so the generated require points at the
+prim module, not the shim. (Combinators that delegate only to *operators*
+— e.g. arithmetic — need no prim split, since their generated Racket requires
+nothing from the module.) Use `only-in`, NOT bare `rename-in`, on the
+`<mod>-derived.rkt` require: `rename-in` would import every bare provide of the
+derived module and shadow Racket builtins (`length`, `take`, `min`, …) used by
+the hand-written leaf bodies.
+
+### Registering a lifted (or prim) module — checklist
+
+For the lifted source module (e.g. `Tesl.List` / `Tesl.Either`):
+- `Checker.lifted_stdlib_basename`: add `| "Tesl.X" -> Some "x.tesl"` so types
+  load from source. **Delete** the lifted functions' rows from `stdlib_env`
+  (keep leaf/constructor rows).
+
+For a new prim module (e.g. `Tesl.ListPrim` / `Tesl.EitherPrim`):
+- `Emit_racket.module_path_table`: `add "Tesl.XPrim" "tesl/x-prim.rkt";`
+- `Type_system.tesl_module_exports`: an entry listing the prim's exports.
+- `Type_system.tesl_known_module_names`: add `"Tesl.XPrim"`.
+- Leaf types come from `stdlib_env` (constructors like `Left`/`Right`) or a
+  lifted `x-prim.tesl` type source (`ListPrim.head/tail/append`), as
+  appropriate. If the prim is referenced by a qualifier (`ListPrim.head`), add
+  it to `Checker.known_qualifier_modules` and `Checker.stdlib_module_of_prefix`.
+
+### Build: regenerating the `*-derived.rkt` snapshot
+
+`tesl/` is **outside** the dune project root (`compiler/`), so a dune
+`(mode promote)` rule cannot write these targets. Instead they are committed
+generated snapshots (exactly like the byte-exact `example/learn/*.rkt`):
+- `scripts/gen-stdlib-rkt.sh` regenerates them with the just-built `tesl`
+  binary. Add a `"tesl/<mod>.tesl:tesl/<mod>-derived.rkt"` row to its `LIFTED`
+  array when you lift a module.
+- `compiler/ci.sh` runs `scripts/gen-stdlib-rkt.sh --check` and **fails the
+  build if a snapshot has drifted** — so after editing a lifted `.tesl`, run the
+  script and commit the regenerated `*-derived.rkt`.
+
+### Invariants when lifting (hard requirements)
+
+- **User emission must stay byte-identical.** Keep `module_path_table`'s entry
+  and the shim's dotted `Module.fn` provides; user `.rkt` still requires
+  `tesl/tesl/<mod>` and calls `tesl_import_Module_fn`. The 58-lesson byte-exact
+  match (`test_integration`, `ci.sh` exact-match) is the gate.
+- **Type-display must stay byte-identical.** Choose the `.tesl` type-variable
+  names so `decl_scheme`'s alphabetical rigid-id assignment (`a`=-1, `b`=-2,
+  `c`=-3) reproduces the deleted `stdlib_env` rows exactly.
+- **Behavioral parity.** Keep a `<mod>` parity test (e.g.
+  `tests/lifted-list-tests.{tesl,rkt}`) that exercises every lifted function;
+  run it via `raco test` against the lifted runtime. Run `test_diag_snapshots`
+  after each module — diagnostics for lifted functions must be byte-identical.
+- **Leave proof machinery alone.** Never lift `check`/`establish`-backed
+  functions or proof-consuming ones (`Int.divide`, `Dict.get`, `List.take`); they
+  must remain Racket leaves.
+
 ## Constructors, types, and proof helpers
 If the stdlib change introduces:
 - new exported types

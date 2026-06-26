@@ -1,0 +1,19 @@
+#lang tesl
+module Email exposing [
+  ValidEmail,
+  checkEmail,
+]
+
+import Tesl.Prelude exposing [String]
+import Tesl.String exposing [String.contains, String.length]
+
+# Library module — no infrastructure ownership.
+# Provides: proof predicate, check function, type alias.
+
+fact ValidEmail (s: String)
+
+check checkEmail(s: String) -> s: String ::: ValidEmail s =
+  if String.contains s "@" && String.length s >= 5 then
+    ok s ::: ValidEmail s
+  else
+    fail 400 "invalid email address: must contain @ and be at least 5 characters"

@@ -217,3 +217,52 @@ Two modes:
    imports). `kind` is `"function"` for function types, `"variable"` for everything else.
 
 An empty array is returned when the file has parse errors or no completions are found.
+
+## Semantic snapshot response shape
+
+The `--semantic-json <file>` path returns the full typed module snapshot:
+
+```json
+{
+  "version": 1,
+  "file": "/abs/path.tesl",
+  "module_name": "Demo",
+  "content_hash": "…",
+  "records": [ { "name": "User", "fields": [ { "name": "email", "type": "String" } ] } ],
+  "adts":    [ { "name": "Color", "params": [], "variants": [ { "constructor": "Red", "fields": [] } ] } ],
+  "functions": [ { "name": "double", "kind": "fn", "type": "Int -> Int", "loc": { … } } ],
+  "local_bindings": [ { "name": "n", "type": "Int", "loc": { … } } ],
+  "expr_types": [ { "type": "Int", "loc": { … } } ]
+}
+```
+
+All `loc` objects use the shape `{ "file", "start_line", "start_col", "end_line", "end_col" }`
+with **0-based** line/column coordinates (matching LSP positions). The process exits non-zero and
+emits no JSON on a parse error; consumers must treat that as "no snapshot available".
+
+## LSP methods backed by the above flags
+
+The Racket LSP (`editor/tesl-lsp/tesl-lsp.rkt`) advertises and implements these read-only methods.
+None of them modify the compiler contract; each shells out to a frozen `--*-json` / `--fmt` flag.
+
+- `textDocument/documentSymbol` — flat `SymbolInformation[]` built from `--semantic-json`
+  (functions/checks/handlers/workers → Function, records → Struct + Field children, ADTs → Enum +
+  EnumMember children). Entries without a usable `loc` are skipped. Empty array on parse error.
+- `textDocument/semanticTokens/full` — delta-encoded tokens from `--semantic-json`. Each token
+  covers exactly ONE declared identifier name (function names + local-binding names); tokens are
+  never widened to a whole declaration body or to end-of-line, which previously over-painted the
+  minimap. Legend: tokenTypes `["function","type","enum","enumMember","property","variable"]`,
+  tokenModifiers `["declaration"]`.
+- `textDocument/formatting` — runs `--fmt` on a temp copy of the (possibly unsaved) buffer and
+  returns a single full-document `TextEdit`. Returns `[]` when the buffer is already canonical or
+  when `--fmt` fails (e.g. parse error), never a partial edit.
+- `textDocument/inlayHint` — inferred `let` types from `--local-bindings-json`. A hint `: T` is
+  emitted after the binding name only for `let <name> = …` forms WITHOUT an explicit annotation;
+  parameters and already-annotated lets are skipped. Parameter-name hints are not derivable from the
+  frozen flags and are intentionally omitted.
+- `textDocument/documentHighlight` — same-file occurrence ranges from `--occurrences-json`, each as
+  `{ range, kind: 1 }` (Text; the flag does not distinguish read vs write).
+
+The TextMate grammar (`editor/vscode-tesl/syntaxes/tesl.tmLanguage.json`) terminates string scopes at
+end-of-line (`"end": "\"|(?=$)"`); Tesl strings are single-line, so an unterminated quote no longer
+paints the string scope — and the minimap — to end-of-file.

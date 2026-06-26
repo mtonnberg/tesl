@@ -8,6 +8,7 @@
   tesl/dsl/sql
   tesl/dsl/web
   tesl/dsl/test-support
+  tesl/dsl/debug/checkpoint
   tesl/tesl/private/runtime
   tesl/tesl/queue
   tesl/tesl/sse
@@ -30,22 +31,22 @@
 (define/pow
   (readEnvVar [key : String])
   #:returns (Maybe String)
-  (raw-value (env *key)))
+  (thsl-src! "example/learn/lesson11-capabilities.tesl" 50 (list (cons 'key *key)) (lambda () (raw-value (env *key)))))
 
 (define/pow
   (getCurrentTime)
   #:capabilities [time]
   #:returns PosixMillis
-  (raw-value (nowMillis)))
+  (thsl-src! "example/learn/lesson11-capabilities.tesl" 54 (list) (lambda () (raw-value (nowMillis)))))
 
 (define/pow
   (logMessage [message : String])
   #:capabilities [auditWrite dbRead]
   #:returns String
-  (format "logged: ~a" (tesl-display-val *message)))
+  (thsl-src! "example/learn/lesson11-capabilities.tesl" 59 (list (cons 'message *message)) (lambda () (format "logged: ~a" (tesl-display-val *message)))))
 
 (define/pow
   (readAndWrite [key : String])
   #:capabilities [appCapability]
   #:returns String
-  (let ([value (readEnvVar key)]) (let ([valueStr (let ([tesl_case_0 (raw-value value)]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) "(not set)"] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl_case_0) 'value)]) *v)]))]) (format "read key: ~a, value: ~a" (tesl-display-val *key) (tesl-display-val *valueStr)))))
+  (let ([value (thsl-src! "example/learn/lesson11-capabilities.tesl" 64 (list (cons 'key *key)) (lambda () (readEnvVar key)))]) (let ([valueStr (thsl-src! "example/learn/lesson11-capabilities.tesl" 65 (list (cons 'value *value) (cons 'key *key)) (lambda () (let ([tesl_case_0 (raw-value value)]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) "(not set)"] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl_case_0) 'value)]) *v)]))))]) (thsl-src! "example/learn/lesson11-capabilities.tesl" 68 (list (cons 'valueStr *valueStr) (cons 'value *value) (cons 'key *key)) (lambda () (format "read key: ~a, value: ~a" (tesl-display-val *key) (tesl-display-val *valueStr)))))))

@@ -1,0 +1,93 @@
+#lang tesl
+# ─────────────────────────────────────────────────────────────────────────────
+# Tesl.Either — TYPE SOURCE OF TRUTH *and* real implementation source for the
+# pure Either combinators.
+#
+# `Either a b` is a builtin two-parameter ADT (Left a | Right b); its TYPE and
+# constructors are known to the checker directly (not via stdlib_env).  This
+# file lifts the 10 pure, leaf-free COMBINATORS off the hand-written Racket in
+# tesl/either.rkt into real Tesl, so:
+#   • their TYPES are inferred from the signatures here (the type-duplication
+#     win — the matching stdlib_env rows in type_system.ml are deleted), and
+#   • their BODIES compile (build-time) to tesl/either-derived.rkt, which the
+#     shim tesl/either.rkt re-exports under the dotted Either.* runtime names
+#     (the smaller-core win — these bodies are no longer hand-written Racket).
+#
+# Still hand-written leaves in tesl/either.rkt:
+#   • the `define-adt (Either a b)` constructors/predicates (Left/Right/…), and
+#   • Either.partition (consumes Racket list partition; has no stdlib_env type
+#     row today, so it is left exactly as-is and not lifted).
+#
+# Type-variable names a/b/c are chosen so decl_scheme's alphabetical rigid-id
+# assignment (a=-1, b=-2, c=-3) reproduces the deleted stdlib rows EXACTLY,
+# keeping inferred-type display byte-identical.
+# ─────────────────────────────────────────────────────────────────────────────
+module Either exposing [
+  isLeft,
+  isRight,
+  fromLeft,
+  fromRight,
+  map,
+  mapLeft,
+  andThen,
+  withDefault,
+  toMaybe,
+  fromMaybe,
+]
+
+import Tesl.Prelude exposing [Bool(..)]
+import Tesl.Maybe exposing [Maybe, Something, Nothing]
+# Import the ADT (Either/Left/Right) from the leaf module so the COMPILED
+# either-derived.rkt requires `tesl/tesl/either-prim` for the constructors —
+# never `tesl/tesl/either` (the shim), which would form a load cycle.
+import Tesl.EitherPrim exposing [Either(..), Left, Right]
+
+fn isLeft(x: Either a b) -> Bool =
+  case x of
+    Left _ -> True
+    Right _ -> False
+
+fn isRight(x: Either a b) -> Bool =
+  case x of
+    Left _ -> False
+    Right _ -> True
+
+fn fromLeft(x: Either a b) -> Maybe a =
+  case x of
+    Left v -> Something v
+    Right _ -> Nothing
+
+fn fromRight(x: Either a b) -> Maybe b =
+  case x of
+    Left _ -> Nothing
+    Right v -> Something v
+
+fn map(f: b -> c, x: Either a b) -> Either a c =
+  case x of
+    Left e -> Left e
+    Right v -> Right (f v)
+
+fn mapLeft(f: a -> c, x: Either a b) -> Either c b =
+  case x of
+    Left e -> Left (f e)
+    Right v -> Right v
+
+fn andThen(f: b -> Either a c, x: Either a b) -> Either a c =
+  case x of
+    Left e -> Left e
+    Right v -> f v
+
+fn withDefault(default: b, x: Either a b) -> b =
+  case x of
+    Left _ -> default
+    Right v -> v
+
+fn toMaybe(x: Either a b) -> Maybe b =
+  case x of
+    Left _ -> Nothing
+    Right v -> Something v
+
+fn fromMaybe(leftVal: a, m: Maybe b) -> Either a b =
+  case m of
+    Nothing -> Left leftVal
+    Something v -> Right v

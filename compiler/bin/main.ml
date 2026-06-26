@@ -3,6 +3,8 @@
     Usage:
       tesl <file>                compile .tesl file to Racket (stdout)
       tesl --check <file> ...    check for parse + type errors (exit 1 if any)
+      tesl --check-batch <file> ...  batch-check many files in one process (per-file summary)
+      tesl --check-all <dir>     recursively batch-check every .tesl file under <dir>
       tesl --check-json <file>   check, emit diagnostics as IR-2 JSON
       tesl --local-bindings-json <file> emit inferred local binding types as JSON
       tesl --definition-json <file> <line> <col> emit definition location as JSON
@@ -23,6 +25,8 @@
 let usage = {|Usage:
   tesl <file>                  compile .tesl file to Racket (stdout)
   tesl --check <file> [...]    check for parse + type errors (exit 1 if any)
+  tesl --check-batch <file> [...]  batch-check many files in one process (shared import cache, per-file summary)
+  tesl --check-all <dir>       recursively batch-check every .tesl file under <dir>
   tesl --check-json <file>     check, emit diagnostics as IR-2 JSON
   tesl --local-bindings-json <file> emit inferred local binding types as JSON
   tesl --definition-json <file> <line> <col> emit definition location as JSON
@@ -30,22 +34,31 @@ let usage = {|Usage:
   tesl --type-at-json <file> <line> <col> emit expression type at cursor as JSON
   tesl --field-at-json <file> <line> <col> emit record field info at cursor as JSON
   tesl --completions-json <file> <line> <col> emit completions at cursor as JSON
+  tesl --signature-help-json <file> <line> <col> emit call signature + active param as JSON
+  tesl --selection-range-json <file> <line> <col> emit nested node ranges at cursor as JSON
+  tesl --type-definition-json <file> <line> <col> emit the type's declaration location as JSON
   tesl --fmt <file>            format source file in place
   tesl --fmt-check <file>      check formatting without modifying
   tesl --lint <file> [...]     run the opinionated linter
+  tesl --debug <file>          compile with step-debugger instrumentation (thsl-src wrappers)
   tesl --ir <file>             emit API IR JSON
   tesl --deps <file>           list all transitively imported local .tesl files (one per line)
   tesl --semantic-json <file>  emit full module semantic snapshot as JSON (IR-1 foundation)
   tesl --mutate <file> [test-file ...]  run mutation testing; optionally merge tests from extra files
+  tesl --exe <file> [--out <path>]  build a standalone executable via `raco exe` (needs raco on PATH)
 
 Help:
   tesl help                    show this help message
   tesl help manual             show the complete manual index
-  tesl help manual <section>   show a specific manual section (overview, language-spec, examples, best-practices, faq)
+  tesl help manual <section>   show a specific manual section (overview, language-spec, examples, best-practices, faq, dev)
+  tesl help manual <section>#<anchor>  jump to a sub-section (e.g. best-practices#proof-management)
   tesl help manual full        show all documentation concatenated (for LLMs with large context windows)
   tesl help full               same as 'tesl help manual full'
   tesl help examples           show the list of all examples
   tesl help search <query>     search across all documentation for a query
+  tesl help codes              list every diagnostic code the compiler can emit
+  tesl help <CODE>             explain a diagnostic code (e.g. tesl help V001)
+  tesl explain <CODE>          same as 'tesl help <CODE>'
 |}
 
 (* ── ANSI colours ────────────────────────────────────────────────────────── *)
@@ -203,10 +216,19 @@ let section_to_embedded_key name =
   | "language-spec"                        -> "LANGUAGE-SPEC.md"
   | "examples"                             -> "manual/examples.md"
   | "best-practices"                       -> "manual/best-practices.md"
-  | "dev"                                  -> "manual/dev-docs/README.md"
+  (* dev docs live at the repo root in dev-docs/, embedded under "dev-docs/…" *)
+  | "dev"                                  -> "dev-docs/README.md"
   | "faq"                                  -> "manual/FAQ.md"
   | other ->
     let ex = remove_example_prefix other in
+    (* allow `dev/<file>` and `dev-docs/<file>` to reach a specific dev doc *)
+    let dev_rel =
+      if String.starts_with ~prefix:"dev/" other then
+        Some (String.sub other 4 (String.length other - 4))
+      else if String.starts_with ~prefix:"dev-docs/" other then
+        Some (String.sub other 9 (String.length other - 9))
+      else None
+    in
     (* Try each candidate embedded key in priority order; use the first that exists *)
     let candidates = [
       "manual/" ^ other ^ ".md";
@@ -218,7 +240,9 @@ let section_to_embedded_key name =
       "example/" ^ ex ^ ".md";
       other ^ ".md";
       other;
-    ] in
+    ] @ (match dev_rel with
+         | Some f -> [ "dev-docs/" ^ f ^ ".md"; "dev-docs/" ^ f ]
+         | None -> []) in
     (match List.find_opt (fun k -> Embedded_docs.lookup k <> None) candidates with
      | Some k -> k
      | None -> "manual/" ^ other ^ ".md")
@@ -233,7 +257,14 @@ let get_manual_content section =
     | "language-spec" -> Filename.concat !manual_dir "LANGUAGE-SPEC.md"
     | "examples" -> Filename.concat !manual_dir "examples.md"
     | "best-practices" -> Filename.concat !manual_dir "best-practices.md"
-    | "dev" -> Filename.concat !manual_dir "dev-docs/README.md"
+    (* dev docs live at the repo root in dev-docs/.  Prefer the repo-root copy;
+       fall back to a doc-dir copy if one was shipped there.  When neither is on
+       disk (installed binary), the embedded store ("dev-docs/README.md") is
+       consulted by the caller below. *)
+    | "dev" ->
+      let root_dev = Filename.concat !root_path "dev-docs/README.md" in
+      let doc_dev = Filename.concat !manual_dir "dev-docs/README.md" in
+      if Sys.file_exists root_dev then root_dev else doc_dev
     | "faq" -> Filename.concat !manual_dir "FAQ.md"
     | _ ->
       let try_path path = if Sys.file_exists path then Some path else None in
@@ -247,7 +278,22 @@ let get_manual_content section =
         else s
       in
       let example_name = remove_example_prefix name in
-      let possible_paths = [
+      (* `dev/<file>` and `dev-docs/<file>` reach a specific contributor doc. *)
+      let dev_rel =
+        if String.starts_with ~prefix:"dev/" name then
+          Some (String.sub name 4 (String.length name - 4))
+        else if String.starts_with ~prefix:"dev-docs/" name then
+          Some (String.sub name 9 (String.length name - 9))
+        else None
+      in
+      let dev_paths = match dev_rel with
+        | Some f ->
+          [ Filename.concat !root_path ("dev-docs/" ^ f ^ ".md");
+            Filename.concat !root_path ("dev-docs/" ^ f);
+            Filename.concat !manual_dir ("dev-docs/" ^ f ^ ".md") ]
+        | None -> []
+      in
+      let possible_paths = dev_paths @ [
         Filename.concat !manual_dir (name ^ ".md");
         Filename.concat !manual_dir name;
         Filename.concat doc_example_path (example_name ^ ".tesl");
@@ -308,20 +354,17 @@ let get_full_manual () =
     Filename.concat !manual_dir "README.md",          "README.md";
   ] in
 
-  let dev_doc_pairs = [
-    Filename.concat !manual_dir "dev-docs/README.md",                   "manual/dev-docs/README.md";
-    Filename.concat !manual_dir "dev-docs/01-overview.md",              "manual/dev-docs/01-overview.md";
-    Filename.concat !manual_dir "dev-docs/02-parser.md",                "manual/dev-docs/02-parser.md";
-    Filename.concat !manual_dir "dev-docs/03-module-system.md",         "manual/dev-docs/03-module-system.md";
-    Filename.concat !manual_dir "dev-docs/04-body-compiler.md",         "manual/dev-docs/04-body-compiler.md";
-    Filename.concat !manual_dir "dev-docs/05-adding-stdlib-function.md","manual/dev-docs/05-adding-stdlib-function.md";
-    Filename.concat !manual_dir "dev-docs/06-gdp-runtime.md",           "manual/dev-docs/06-gdp-runtime.md";
-    Filename.concat !manual_dir "dev-docs/07-sql-layer.md",             "manual/dev-docs/07-sql-layer.md";
-    Filename.concat !manual_dir "dev-docs/08-queue-pubsub.md",          "manual/dev-docs/08-queue-pubsub.md";
-    Filename.concat !manual_dir "dev-docs/09-adding-tests.md",          "manual/dev-docs/09-adding-tests.md";
-    Filename.concat !manual_dir "dev-docs/10-common-patterns.md",       "manual/dev-docs/10-common-patterns.md";
-    Filename.concat !manual_dir "dev-docs/11-frontend-ir.md",           "manual/dev-docs/11-frontend-ir.md";
-  ] in
+  (* Contributor docs live at the repo root in dev-docs/ (NOT manual/dev-docs/).
+     Disk path is rooted at !root_path; embedded key is "dev-docs/<file>" to
+     match what gen_docs.ml bakes in. *)
+  let dev_doc_pairs =
+    List.map (fun f ->
+      Filename.concat !root_path ("dev-docs/" ^ f), "dev-docs/" ^ f)
+      [ "README.md"; "01-overview.md"; "02-parser.md"; "03-module-system.md";
+        "04-body-compiler.md"; "05-adding-stdlib-function.md"; "06-gdp-runtime.md";
+        "07-sql-layer.md"; "08-queue-pubsub.md"; "09-adding-tests.md";
+        "10-common-patterns.md"; "11-frontend-ir.md"; "zero-cost-proofs-contract.md" ]
+  in
 
   (* Collect disk-based example .md files (only in dev/repo environments) *)
   let disk_example_md_files =
@@ -468,16 +511,100 @@ let display_help () =
   print_string usage;
   exit 0
 
-let display_manual section =
+(* ── Anchor (slug) resolution within a manual section ─────────────────────────
+
+   The manual is addressed as `<section>[#<anchor>]` (see manual/anchors.md).
+   `<anchor>` is a GitHub-flavoured-Markdown heading slug. We resolve it the
+   same way the anchor-contract test does, so a citation printed by a diagnostic
+   (`tesl help manual best-practices#proof-management`) jumps to that heading. *)
+
+(** Turn a heading line's text into its slug (lower-case; keep [a-z0-9 -]; drop
+    other characters incl. punctuation/emoji/UTF-8; collapse spaces to single
+    '-'; trim).  Mirrors manual/anchors.md and manual/tests/test_embedded_docs.ml. *)
+let slug_of_heading (heading : string) : string =
+  let b = Buffer.create (String.length heading) in
+  String.iter
+    (fun c ->
+       let c = Char.lowercase_ascii c in
+       if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') then Buffer.add_char b c
+       else if c = ' ' || c = '-' then Buffer.add_char b ' ')
+    heading;
+  String.split_on_char ' ' (Buffer.contents b)
+  |> List.filter (fun s -> s <> "")
+  |> String.concat "-"
+
+(* Is [line] a Markdown ATX heading?  Returns Some (level, text) if so. *)
+let heading_of_line line =
+  let l = String.trim line in
+  if String.length l >= 2 && l.[0] = '#' then begin
+    let i = ref 0 in
+    while !i < String.length l && l.[!i] = '#' do incr i done;
+    let level = !i in
+    let text = String.sub l !i (String.length l - !i) |> String.trim in
+    if text = "" then None else Some (level, text)
+  end else None
+
+(** Extract the sub-section of [content] whose heading slugs to [anchor]: the
+    heading line plus everything up to (not including) the next heading at the
+    same-or-shallower level.  Returns [None] if no heading matches. *)
+let extract_anchor_section content anchor =
+  let lines = Array.of_list (String.split_on_char '\n' content) in
+  let n = Array.length lines in
+  let rec find i =
+    if i >= n then None
+    else match heading_of_line lines.(i) with
+      | Some (level, text) when slug_of_heading text = anchor -> Some (i, level)
+      | _ -> find (i + 1)
+  in
+  match find 0 with
+  | None -> None
+  | Some (start, level) ->
+    let buf = Buffer.create 1024 in
+    let j = ref start in
+    let stop = ref false in
+    Buffer.add_string buf lines.(!j);
+    Buffer.add_char buf '\n';
+    incr j;
+    while !j < n && not !stop do
+      (match heading_of_line lines.(!j) with
+       | Some (lvl, _) when lvl <= level -> stop := true
+       | _ ->
+         Buffer.add_string buf lines.(!j);
+         Buffer.add_char buf '\n';
+         incr j)
+    done;
+    Some (Buffer.contents buf)
+
+(** Display a manual section, resolving an optional `#anchor` to just that
+    sub-section.  `section_spec` may be "<section>" or "<section>#<anchor>".
+    When an anchor is present but does not resolve, we print the whole section
+    with a note so the citation still leads somewhere useful. *)
+let display_manual section_spec =
   init_paths ();
+  (* split off a trailing #anchor (only the FIRST '#'; slugs never contain '#') *)
+  let section, anchor =
+    match String.index_opt section_spec '#' with
+    | Some i ->
+      String.sub section_spec 0 i,
+      Some (String.sub section_spec (i + 1) (String.length section_spec - i - 1))
+    | None -> section_spec, None
+  in
   match get_manual_content section with
   | Some content ->
-    print_string content;
-    exit 0
+    (match anchor with
+     | None | Some "" -> print_string content; exit 0
+     | Some a ->
+       (match extract_anchor_section content a with
+        | Some sub -> print_string sub; exit 0
+        | None ->
+          Printf.eprintf
+            "note: no heading in section '%s' slugs to '#%s'; showing the whole section.\n\n"
+            section a;
+          print_string content; exit 0))
   | None ->
     Printf.eprintf "Error: Manual section '%s' not found.\n" section;
-    Printf.eprintf "Available sections: manual (index), manual/overview, manual/language-spec, manual/examples, manual/best-practices\n";
-    Printf.eprintf "Use 'tesl help' for command line usage.\n";
+    Printf.eprintf "Available sections: getting-started, overview, language-spec, examples, best-practices, faq, anchors, dev\n";
+    Printf.eprintf "Use 'tesl help' for command line usage; 'tesl help codes' for the diagnostic-code index.\n";
     exit 1
 
 let display_examples () =
@@ -497,6 +624,41 @@ let display_full_manual () =
   | _ ->
     Printf.eprintf "Error: Could not load full manual.\n";
     exit 1
+
+(* ── Diagnostic-code help (`tesl help <code>` / `tesl explain <code>`) ──────── *)
+
+(** Does [s] look like a diagnostic code (E000, T001, V001, W010, VBOOL001, …)?
+    Used to route `tesl help E000` to the code explainer rather than treating it
+    as a manual section name.  Codes are letters+digits and always contain a
+    digit; manual section names are lower-case-with-hyphens and contain no
+    digits, so the shape alone disambiguates (no risk of shadowing a section).
+    Case-insensitive on letters so `tesl help v001` works (the explainer
+    upper-cases). Code-shaped-but-unknown input still routes here, so the user
+    gets the helpful "unknown diagnostic code — run `tesl help codes`" message. *)
+let looks_like_code s =
+  let n = String.length s in
+  n >= 2
+  && (let c = Char.uppercase_ascii s.[0] in c >= 'A' && c <= 'Z')
+  && String.exists (fun c -> c >= '0' && c <= '9') s
+  && String.for_all
+       (fun c -> let u = Char.uppercase_ascii c in
+                 (u >= 'A' && u <= 'Z') || (c >= '0' && c <= '9')) s
+
+(** Print the registry explanation for a code and exit.  The code is normalised
+    to upper-case so `tesl help e000` works too. *)
+let display_code_explanation raw =
+  let code = String.uppercase_ascii raw in
+  match Error_codes.explain code with
+  | Some text -> print_string text; exit 0
+  | None ->
+    Printf.eprintf "Error: unknown diagnostic code '%s'.\n\n" raw;
+    Printf.eprintf "Run `tesl help codes` for the list of all diagnostic codes.\n";
+    exit 1
+
+(** Print the full diagnostic-code index (`tesl help codes`). *)
+let display_codes_index () =
+  print_string (Error_codes.index ());
+  exit 0
 
 (* ── Help suggestions for error messages ───────────────────────────────────── *)
 
@@ -540,8 +702,12 @@ let handle_help args =
   init_paths ();
   match args with
   | [] -> display_help ()
+  | ("codes" | "code") :: [] -> display_codes_index ()
+  (* `tesl help manual <section>[#anchor]` — anchor resolution lives in
+     display_manual.  A single arg carries any `#anchor` verbatim. *)
   | "manual" :: [] -> display_manual ""
   | "manual" :: "full" :: [] -> display_full_manual ()
+  | "manual" :: "codes" :: [] -> display_codes_index ()
   | "manual" :: sections when sections <> [] ->
     let section = String.concat "/" sections in
     display_manual section
@@ -551,6 +717,9 @@ let handle_help args =
     let results = search_docs query in
     print_string (format_search_results results query);
     exit 0
+  (* `tesl help <CODE>` — explain a diagnostic code (e.g. `tesl help V001`). *)
+  | [single] when looks_like_code single ->
+    display_code_explanation single
   | _ ->
     Printf.eprintf "Error: Unknown help command.\n\n";
     display_help ()
@@ -560,7 +729,17 @@ let check_json_diags filename source =
   if List.exists (fun (d : Compile.diagnostic) -> d.source = "parser") diags then diags
   else diags @ Linter.lint_file filename
 
-(** Print a single diagnostic to stderr. *)
+(** Print a single diagnostic to stderr.
+
+    Each diagnostic carries a stable [code] (documented in [Error_codes]). When
+    the code maps to a manual section we print a "read more" deep-link that the
+    reader can paste verbatim: `tesl help manual <section>#<anchor>`. We also
+    point at `tesl help <code>` so the full explanation is one command away.
+
+    The manual anchor is resolved from the central registry first (keyed on the
+    code, refined by the message for the broad [V001] validation code). If the
+    registry has nothing, we fall back to the older keyword-based suggestion so
+    no diagnostic loses its existing hint. *)
 let print_diagnostic (d : Compile.diagnostic) =
   let sev_col = match d.severity with
     | "error"   -> col "1;31"
@@ -573,12 +752,52 @@ let print_diagnostic (d : Compile.diagnostic) =
   Printf.eprintf "  %s-->%s %s:%d:%d\n"
     (col "1;34") (col "0")
     d.file (d.start_line + 1) (d.start_col + 1);
-  (* Add help suggestion if available *)
-  match get_help_suggestion d.message with
-  | Some suggestion ->
-    Printf.eprintf "  %s%s\n" (col "1;36") (col "0");
-    Printf.eprintf "  hint: %s\n" suggestion
-  | None -> ()
+  (* Prefer the registry's code → manual anchor mapping; fall back to the
+     legacy keyword matcher so existing hints never regress. *)
+  let manual_link = Error_codes.manual_for ~code:d.code ~message:d.message in
+  (match manual_link with
+   | Some anchor ->
+     Printf.eprintf "  %s%s\n" (col "1;36") (col "0");
+     Printf.eprintf "  read more: tesl help manual %s%s%s  (explain: tesl help %s)\n"
+       (col "1;36") anchor (col "0") d.code
+   | None ->
+     (match get_help_suggestion d.message with
+      | Some suggestion ->
+        Printf.eprintf "  %s%s\n" (col "1;36") (col "0");
+        Printf.eprintf "  hint: %s\n" suggestion
+      | None ->
+        (* Even with no manual section, surface the explain command if the code
+           is documented in the registry. *)
+        (match Error_codes.lookup d.code with
+         | Some _ ->
+           Printf.eprintf "  hint: run `tesl help %s` for an explanation\n" d.code
+         | None -> ())))
+
+(** WS4: print per-file results for a batch / whole-project check, then a
+    one-line summary, and exit (1 if any file has an error diagnostic, else 0).
+    Diagnostics go to stderr (as for `--check`); the summary goes to stdout so
+    it is easy to capture separately. *)
+let print_batch_results (results : (string * Compile.diagnostic list) list) =
+  let file_has_error diags =
+    List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") diags
+  in
+  let total = List.length results in
+  let failed = ref 0 in
+  List.iter (fun (filename, diags) ->
+    if diags <> [] then begin
+      Printf.eprintf "%s%s%s\n" (col "1") filename (col "0");
+      List.iter print_diagnostic diags
+    end;
+    if file_has_error diags then incr failed
+  ) results;
+  let passed = total - !failed in
+  Printf.printf "%schecked %d file%s%s: %s%d passed%s"
+    (col "1") total (if total = 1 then "" else "s") (col "0")
+    (col "1;32") passed (col "0");
+  if !failed > 0 then
+    Printf.printf ", %s%d failed%s" (col "1;31") !failed (col "0");
+  print_newline ();
+  exit (if !failed > 0 then 1 else 0)
 
 (* ── Root-path discovery ─────────────────────────────────────────────────── *)
 
@@ -591,12 +810,35 @@ let () =
   | "--help" :: rest -> handle_help rest
   | "help" :: rest -> handle_help rest
   | ["-h"] -> display_help ()
+  (* `tesl explain <CODE>` — alias for `tesl help <CODE>`; show a diagnostic
+     code's explanation + manual link. *)
+  | "explain" :: [code] -> display_code_explanation code
+  | ["explain"] | "explain" :: _ ->
+    Printf.eprintf "Usage: tesl explain <CODE>   (e.g. tesl explain V001)\n";
+    Printf.eprintf "Run `tesl help codes` for the list of all diagnostic codes.\n";
+    exit 1
   | [] -> print_string usage; exit 1
 
   | ("--check" :: filenames) when filenames <> [] ->
     let all_diags = List.concat_map Compile.check_file filenames in
     List.iter print_diagnostic all_diags;
     exit (if all_diags = [] then 0 else 1)
+
+  | ("--check-batch" :: filenames) when filenames <> [] ->
+    (* WS4: batch check N explicit files in ONE process, sharing the imported-
+       module parse cache across files, with a per-file pass/fail summary. *)
+    let results = Compile.check_files_batch filenames in
+    print_batch_results results
+
+  | ["--check-all"; dir] ->
+    (* WS4: recursively find and batch-check every .tesl file under [dir]. *)
+    let results = Compile.check_all_in_dir dir in
+    if results = [] then begin
+      Printf.eprintf "%swarning%s: no .tesl files found under %s\n"
+        (col "1;33") (col "0") dir;
+      exit 0
+    end;
+    print_batch_results results
 
   | ["--check-json"; filename] ->
     (try
@@ -667,6 +909,39 @@ let () =
        let source = In_channel.with_open_text filename In_channel.input_all in
        let items = Compile.completions_source filename source (int_of_string line) (int_of_string col) in
        print_string (Compile.completions_response_to_json items);
+       print_newline ();
+       exit 0
+     with
+     | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
+     | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
+
+  | ["--signature-help-json"; filename; line; col] ->
+    (try
+       let source = In_channel.with_open_text filename In_channel.input_all in
+       let sig_ = Compile.signature_help_source filename source (int_of_string line) (int_of_string col) in
+       print_string (Compile.signature_help_response_to_json sig_);
+       print_newline ();
+       exit 0
+     with
+     | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
+     | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
+
+  | ["--selection-range-json"; filename; line; col] ->
+    (try
+       let source = In_channel.with_open_text filename In_channel.input_all in
+       let ranges = Compile.selection_range_source filename source (int_of_string line) (int_of_string col) in
+       print_string (Compile.selection_ranges_response_to_json ranges);
+       print_newline ();
+       exit 0
+     with
+     | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
+     | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
+
+  | ["--type-definition-json"; filename; line; col] ->
+    (try
+       let source = In_channel.with_open_text filename In_channel.input_all in
+       let loc = Compile.type_definition_source filename source (int_of_string line) (int_of_string col) in
+       print_string (Compile.type_definition_response_to_json loc);
        print_newline ();
        exit 0
      with
@@ -814,6 +1089,43 @@ let () =
      with Sys_error msg ->
        Printf.eprintf "error: %s\n" msg; exit 1)
 
+  | ["--debug"; filename] ->
+    (try
+       Emit_racket.set_debug_mode true;
+       match Compile.compile_file ~root_path ~type_check:true filename with
+       | Compile.Success racket -> print_string racket
+       | Compile.Failure diags ->
+         List.iter print_diagnostic diags;
+         exit 1
+     with
+     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
+     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+
+  | ["--test-name"; test_name; filename] ->
+    (try
+       Emit_racket.set_test_name_filter (Some test_name);
+       match Compile.compile_file ~root_path ~type_check:true filename with
+       | Compile.Success racket -> print_string racket
+       | Compile.Failure diags ->
+         List.iter print_diagnostic diags;
+         exit 1
+     with
+     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
+     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+
+  | ["--debug"; "--test-name"; test_name; filename] ->
+    (try
+       Emit_racket.set_debug_mode true;
+       Emit_racket.set_test_name_filter (Some test_name);
+       match Compile.compile_file ~root_path ~type_check:true filename with
+       | Compile.Success racket -> print_string racket
+       | Compile.Failure diags ->
+         List.iter print_diagnostic diags;
+         exit 1
+     with
+     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
+     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+
   | [filename] when not (String.length filename > 2 && filename.[0] = '-') ->
     (try
        match Compile.compile_file ~root_path ~type_check:true filename with
@@ -824,6 +1136,20 @@ let () =
      with
      | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
      | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+
+  | "--exe" :: filename :: rest
+    when not (String.length filename > 2 && filename.[0] = '-')
+         && (rest = [] || (match rest with ["--out"; _] -> true | _ -> false)) ->
+    (* WS6: build a standalone executable via `raco exe`.  Emits byte-identical
+       Racket (same as `tesl <file>`) next to the source, then bundles it. *)
+    let out = match rest with ["--out"; f] -> Some f | _ -> None in
+    (match Compile.build_exe ~root_path ?out filename with
+     | Compile.BuildOk exe_path ->
+       Printf.eprintf "%sbuilt%s %s\n" (col "1;32") (col "0") exe_path; exit 0
+     | Compile.BuildDiags diags ->
+       List.iter print_diagnostic diags; exit 1
+     | Compile.BuildErr msg ->
+       Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
 
   | "--mutate" :: filename :: rest when rest = [] || List.for_all (fun s -> not (String.length s > 2 && s.[0] = '-' && s.[1] = '-')) rest ->
     let extra_test_files = rest in

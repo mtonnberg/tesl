@@ -2,22 +2,7 @@ open Ast
 open Location
 open Validation_common
 
-let build_field_proof_map (decls : top_decl list) : (string * (string * proof_expr)) list =
-  List.concat_map (function
-    | DRecord r ->
-      List.filter_map (fun (f : field_def) ->
-        match f.proof_ann with
-        | Some p -> Some (f.name, (f.name, p))
-        | None -> None
-      ) r.fields
-    | DEntity e ->
-      List.filter_map (fun (f : field_def) ->
-        match f.proof_ann with
-        | Some p -> Some (f.name, (f.name, p))
-        | None -> None
-      ) e.fields
-    | _ -> []
-  ) decls
+(* build_field_proof_map now lives in Validation_common (shared via module_facts). *)
 
 let rec carried_proofs_of_expr
     ?(funcs : (string * func_info) list = [])
@@ -88,9 +73,32 @@ let rec carried_proofs_of_expr
       in
       resolve_proof_ref normalized
     in
-    (match base with
-     | Some proofs -> Some (proofs @ extra)
-     | None -> Some extra)
+    (* GAP-CONJPROJ: when the explicit annotation is a bare proof-VARIABLE
+       reattach (`value ::: pf`, where `pf` resolves through proof_env to a
+       concrete proof set), the user is explicitly stating exactly what is
+       being claimed.  We must NOT silently OR in `value`'s own inherited
+       proofs — otherwise a value carrying `P && Q`, reattached with only the
+       wrong projected half (`bare ::: pSmall`), would still appear to carry
+       both conjuncts and could masquerade as the other one.  In that case the
+       annotation is authoritative and `base` is dropped.  (Composite `p && q`
+       annotations and non-proof-var annotations keep the additive behaviour,
+       so legitimate sidecar uses are unaffected.) *)
+    let annotation_is_authoritative =
+      match proof with
+      | PredApp { pred; args = []; _ }
+        when String.length pred > 0 && pred.[0] >= 'a' && pred.[0] <= 'z' ->
+        (match List.assoc_opt pred proof_env with
+         | Some (_ :: _) -> true
+         | _ ->
+           let subj = match List.assoc_opt pred subject_env with Some s -> s | None -> pred in
+           (match List.assoc_opt subj proof_env with Some (_ :: _) -> true | _ -> false))
+      | _ -> false
+    in
+    if annotation_is_authoritative then Some extra
+    else
+      (match base with
+       | Some proofs -> Some (proofs @ extra)
+       | None -> Some extra)
   | EApp _ ->
     let (head, args) = collect_call_head_and_args [] expr in
     (match function_name_of_expr head, args with
@@ -116,10 +124,24 @@ let rec carried_proofs_of_expr
          | _ -> proofs_of_evidence_expr ~funcs subject_env proof_env arg
        ) pf_args in
        Some (List.concat all)
-     | Some ("andLeft" | "andRight"), [pf] ->
-       (* andLeft/andRight: conservative — carries same proofs as input
-          (static analysis doesn't know the structural split) *)
-       carried_proofs_of_expr ~funcs subject_env proof_env pf
+     | Some (("andLeft" | "andRight") as proj), [pf] ->
+       (* andLeft/andRight narrow a conjunction proof to one conjunct:
+          andLeft P&&Q ⇒ P, andRight P&&Q ⇒ Q.  We project the input's
+          flattened proof list (left = first element, right = last). *)
+       (match carried_proofs_of_expr ~funcs subject_env proof_env pf with
+        | Some preds when List.length preds >= 2 ->
+          let flat =
+            List.concat_map
+              (let rec f = function
+                 | PredAnd { left; right; _ } -> f left @ f right
+                 | p -> [p]
+               in f) preds
+          in
+          if List.length flat >= 2 then
+            Some [ if proj = "andLeft" then List.hd flat
+                   else List.nth flat (List.length flat - 1) ]
+          else Some preds
+        | other -> other)
      | _ -> None)
   | EField { obj; field; _ } ->
     (* When a proof-annotated record field is accessed, propagate the field's
@@ -407,13 +429,18 @@ let path_param_names (path : string) : string list =
          Some (String.sub segment 1 (String.length segment - 1))
        else None)
 
-let check_api_endpoint_structure (decls : top_decl list) : validation_error list =
+let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
+  (* Validation-consolidation Phase 1: iterate the API forms precomputed ONCE in
+     [module_facts] instead of re-filtering [decls].  [mf_api_forms] preserves
+     source order, and the previous [_ -> []] arm contributed nothing, so the
+     emitted error stream is byte-identical.  The ?facts/facts_or_compute opt-in
+     keeps standalone/test callers (no facts threaded) byte-identical too. *)
+  let api_forms = (facts_or_compute ?facts ~extra_funcs decls).mf_api_forms in
   let method_str = function
     | GET -> "get" | POST -> "post" | PUT -> "put"
     | DELETE -> "delete" | PATCH -> "patch" | SSE -> "sse"
   in
-  List.concat_map (function
-    | DApi af ->
+  List.concat_map (fun (af : api_form) ->
       let seen_method_paths : (string * loc) list ref = ref [] in
       List.concat_map (fun (ep : api_endpoint) ->
         let errors = ref [] in
@@ -518,14 +545,16 @@ let check_api_endpoint_structure (decls : top_decl list) : validation_error list
 
         List.rev !errors
       ) af.endpoints
-    | _ -> []
-  ) decls
+  ) api_forms
 
 (* ── Queue / channel / workers / database / api-test structure checks ─────── *)
 
-let check_entity_structure (decls : top_decl list) : validation_error list =
-  List.concat_map (function
-    | DEntity e ->
+let check_entity_structure ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
+  (* Validation-consolidation Phase 1: iterate the entity forms precomputed once
+     in [module_facts] (source-order preserved) instead of re-filtering [decls].
+     Byte-identical because the dropped [_ -> []] arm produced nothing. *)
+  let entities = (facts_or_compute ?facts ~extra_funcs decls).mf_entities in
+  List.concat_map (fun (e : entity_form) ->
       let errs = ref [] in
       let add hint msg = errs := make_error e.loc ~hint msg :: !errs in
       if e.table = "" then
@@ -540,8 +569,7 @@ let check_entity_structure (decls : top_decl list) : validation_error list =
             "entity `%s` declares `%s` as its primary key but has no field named `%s`"
             e.name e.primary_key e.primary_key);
       List.rev !errs
-    | _ -> []
-  ) decls
+  ) entities
 
 let check_queue_structure (decls : top_decl list) : validation_error list =
   let known_dbs =
@@ -624,6 +652,56 @@ let check_workers_structure ?(extra_funcs = []) (decls : top_decl list) : valida
             (Printf.sprintf "workers `%s`: `%s` for job type `%s` is not declared as a `worker` function"
                w.name fn_name job_type)
       ) w.bindings;
+      List.rev !errs
+    | _ -> []
+  ) decls
+
+let check_cache_structure (decls : top_decl list) : validation_error list =
+  let known_dbs =
+    List.filter_map (function DDatabase db -> Some db.name | _ -> None) decls
+  in
+  List.concat_map (function
+    | DCache (c : Ast.cache_form) ->
+      let errs = ref [] in
+      let add hint msg = errs := make_error c.loc ~hint msg :: !errs in
+      if c.database = "" then
+        add "add `database: MainDB` inside the cache block"
+          (Printf.sprintf "cache `%s` is missing a `database` clause" c.name)
+      else if not (List.mem c.database known_dbs) then
+        add (Printf.sprintf "declare `database %s { ... }` in this module" c.database)
+          (Printf.sprintf
+            "cache `%s` references unknown database `%s`" c.name c.database);
+      (match c.default_ttl with
+       | Some n when n <= 0 ->
+         add "use a positive integer (seconds), e.g. `defaultTtl: 3600`"
+           (Printf.sprintf "cache `%s` has invalid `defaultTtl` %d; must be > 0" c.name n)
+       | _ -> ());
+      List.rev !errs
+    | _ -> []
+  ) decls
+
+let check_email_structure (decls : top_decl list) : validation_error list =
+  let known_dbs =
+    List.filter_map (function DDatabase db -> Some db.name | _ -> None) decls
+  in
+  List.concat_map (function
+    | DEmail (e : Ast.email_form) ->
+      let errs = ref [] in
+      let add hint msg = errs := make_error e.loc ~hint msg :: !errs in
+      if e.database = "" then
+        add "add `database: MainDB` inside the email block"
+          (Printf.sprintf "email `%s` is missing a `database` clause" e.name)
+      else if not (List.mem e.database known_dbs) then
+        add (Printf.sprintf "declare `database %s { ... }` in this module" e.database)
+          (Printf.sprintf
+            "email `%s` references unknown database `%s`" e.name e.database);
+      if e.smtp.host = "" then
+        add "add `host: env(\"SMTP_HOST\")` inside the smtp block"
+          (Printf.sprintf "email `%s` smtp block is missing a `host`" e.name);
+      if e.smtp.port < 1 || e.smtp.port > 65535 then
+        add "use a valid port number (e.g. 587 or 465)"
+          (Printf.sprintf "email `%s` has invalid smtp `port` %d; must be 1-65535"
+            e.name e.smtp.port);
       List.rev !errs
     | _ -> []
   ) decls
@@ -794,6 +872,73 @@ let check_capture_codec_types (decls : top_decl list) : validation_error list =
     | _ -> None
   ) decls
 
+(** A top-level `capture` that DECLARES a proof must establish it through a `via`
+    check/auth function, exactly as a codec decoder field must (§11.7,
+    validation_sql_codec.ml). Otherwise a `capture x: T ::: P x using c via f`
+    where `f` does not produce `P` (or there is no `via` at all) would hand an
+    unverified value to the handler param that requires `P x` — the obligation is
+    lost at the HTTP entry point.
+
+    Conservative: only captures whose binding carries a `proof_ann` are checked,
+    and a missing/wrong `via` is rejected. Captures with no proof annotation are
+    untouched. *)
+let check_capture_proof_via
+    ?facts
+    ?(extra_funcs : (string * func_info) list = [])
+    (decls : top_decl list)
+    : validation_error list =
+  let funcs = (facts_or_compute ?facts ~extra_funcs decls).mf_funcs in
+  List.filter_map (function
+    | DCapture cf ->
+      (match cf.binding.proof_ann with
+       | None -> None
+       | Some proof ->
+         let required_preds =
+           List.sort_uniq String.compare (proof_predicates proof) in
+         (match cf.checker with
+          | None ->
+            Some (make_error cf.binding.loc
+              ~hint:(Printf.sprintf
+                "add `via <checkFn>` so capture `%s` is validated before it reaches the handler"
+                cf.name)
+              (Printf.sprintf
+                "capture `%s` declares proof %s but has no `via` validation; \
+                 the HTTP value reaches the handler unverified"
+                cf.name (String.concat ", " required_preds)))
+          | Some via_fn ->
+            (match List.assoc_opt via_fn funcs with
+             | None ->
+               Some (make_error cf.binding.loc
+                 ~hint:"capture `via` must reference a declared `check` or `auth` function"
+                 (Printf.sprintf "capture `%s`: `via %s` is not a declared function" cf.name via_fn))
+             | Some info when info.fi_kind <> CheckKind && info.fi_kind <> AuthKind ->
+               Some (make_error cf.binding.loc
+                 ~hint:"only `check` and `auth` functions may appear after `via`"
+                 (Printf.sprintf "capture `%s`: `via %s` is a %s, not a check/auth function"
+                    cf.name via_fn
+                    (match info.fi_kind with
+                     | FnKind -> "fn" | HandlerKind -> "handler"
+                     | WorkerKind -> "worker" | DeadWorkerKind -> "dead-worker"
+                     | EstablishKind -> "establish" | MainKind -> "main"
+                     | CheckKind -> "check" | AuthKind -> "auth")))
+             | Some info ->
+               let covered = pred_names_of_return_spec info.fi_return in
+               let uncovered =
+                 List.filter (fun p -> not (List.mem p covered)) required_preds in
+               if uncovered = [] then None
+               else
+                 Some (make_error cf.binding.loc
+                   ~hint:(Printf.sprintf
+                     "`via %s` establishes %s; use a check function that produces %s"
+                     via_fn
+                     (if covered = [] then "no proof" else String.concat ", " covered)
+                     (String.concat ", " uncovered))
+                   (Printf.sprintf
+                     "capture `%s` declares proof %s that is not established by `via %s`"
+                     cf.name (String.concat ", " uncovered) via_fn)))))
+    | _ -> None
+  ) decls
+
 let check_server_handler_binding
     (handlers : (string * handler_decl_ref) list)
     (auth_preds : string list)
@@ -886,7 +1031,110 @@ let check_server_handler_binding
                but endpoint '%s' declares no `auth` clause"
               sv.name handler_name endpoint_name)
             :: !errors
-    end
+    end;
+    (* Capture/body proof reconciliation (mirror the auth reconciliation above):
+       a handler parameter that REQUIRES a proof `P x` must have that proof supplied
+       at the HTTP boundary. The router can only supply param proofs via `auth`,
+       `capture`, or `body`. Auth predicates are reconciled above, so here we require
+       that any remaining (non-auth) proof-carrying handler param is matched, BY NAME,
+       to a capture or body binding whose declared proof covers `P`. Without this a
+       `handler getTodo(todoId ::: TodoId todoId)` wired to a `capture todoId: String`
+       (which establishes nothing) silently drops the obligation at the entry point. *)
+    (match endpoint_opt with
+     | None -> ()
+     | Some ep ->
+       let handler_params = match hdl with
+         | LocalHandler fd -> fd.params
+         | ImportedHandler info -> info.fi_params
+       in
+       (* Auth-supplied predicates are reconciled by the auth block above, NOT by
+          name here. We exclude them endpoint-wide: any predicate the endpoint's own
+          `auth` clause carries (read off `ep.auth.binding.proof_ann`) plus the global
+          auth_preds set. Reading the endpoint's auth clause directly matters because
+          auth functions written in the named-pack form `-> T ? Authenticated` are not
+          picked up by auth_proof_pred_of_return_spec, so relying on auth_preds alone
+          would wrongly demand a capture/body for an auth-supplied param (and the auth
+          param name need not match the handler param name). *)
+       let endpoint_auth_preds =
+         auth_preds @ (match ep.auth with
+           | Some a -> (match a.binding.proof_ann with
+               | Some p -> proof_predicates p | None -> [])
+           | None -> [])
+       in
+       (* Non-auth proofs the endpoint supplies for a given param name, via a
+          same-named capture or body binding. *)
+       let supplied_for (param_name : string) : string list =
+         let from_captures =
+           List.concat_map (fun (c : api_capture) ->
+             if c.binding.name = param_name then
+               (match c.binding.proof_ann with
+                | Some p -> proof_predicates p | None -> [])
+             else []
+           ) ep.captures
+         in
+         let from_body =
+           match ep.body with
+           | Some b when b.name = param_name ->
+             (match b.proof_ann with Some p -> proof_predicates p | None -> [])
+           | _ -> []
+         in
+         from_captures @ from_body
+       in
+       (* A capture or body binding with the same name exists at all? *)
+       let has_named_source (param_name : string) : bool =
+         List.exists (fun (c : api_capture) -> c.binding.name = param_name) ep.captures
+         || (match ep.body with Some b -> b.name = param_name | None -> false)
+       in
+       List.iter (fun (p : binding) ->
+         match p.proof_ann with
+         | None -> ()
+         | Some proof ->
+           (* Predicates the handler requires on this param, excluding auth
+              predicates (reconciled in the auth block above). *)
+           let required =
+             List.filter (fun pred -> not (List.mem pred endpoint_auth_preds))
+               (proof_predicates proof)
+           in
+           if required <> [] then begin
+             let supplied = supplied_for p.name in
+             let uncovered =
+               List.filter (fun pred -> not (List.mem pred supplied)) required
+             in
+             if uncovered <> [] then
+               let handler_loc = match hdl with
+                 | LocalHandler fd -> fd.loc
+                 | ImportedHandler info -> info.fi_loc
+               in
+               if has_named_source p.name then
+                 errors := make_error handler_loc
+                   ~hint:(Printf.sprintf
+                     "annotate the capture/body for `%s` with `::: %s %s` (and a `via` \
+                      that establishes it) in endpoint '%s', so the proof reaches the handler"
+                     p.name (String.concat " && " uncovered) p.name endpoint_name)
+                   (Printf.sprintf
+                     "server '%s': handler '%s' requires proof %s on `%s`, but the \
+                      capture/body for `%s` in endpoint '%s' establishes %s — the \
+                      obligation is lost at the HTTP boundary"
+                     sv.name handler_name (String.concat ", " uncovered) p.name
+                     p.name endpoint_name
+                     (if supplied = [] then "nothing" else String.concat ", " supplied))
+                   :: !errors
+               else
+                 errors := make_error handler_loc
+                   ~hint:(Printf.sprintf
+                     "add `capture %s: %s ::: %s %s via <checkFn>` (or a proof-carrying \
+                      `body`) to endpoint '%s' so the proof reaches the handler"
+                     p.name (pp_type_expr p.type_expr) (String.concat " && " uncovered)
+                     p.name endpoint_name)
+                   (Printf.sprintf
+                     "server '%s': handler '%s' requires proof %s on `%s`, but endpoint \
+                      '%s' supplies no capture or body for `%s` — the obligation cannot \
+                      be established at the HTTP boundary"
+                     sv.name handler_name (String.concat ", " uncovered) p.name
+                     endpoint_name p.name)
+                   :: !errors
+           end
+       ) handler_params)
 
 let check_server_completeness ?(extra_funcs = []) (decls : top_decl list) : validation_error list =
   let apis = List.filter_map (function
@@ -953,6 +1201,83 @@ let check_server_completeness ?(extra_funcs = []) (decls : top_decl list) : vali
     | _ -> ()
   ) decls;
   List.rev !errors
+
+(* ── Library boundary validation ─────────────────────────────────────────── *)
+
+(** Check that locally-imported modules do not contain application-only
+    declarations (`api`, `server`).  These declarations define an app's
+    external interface and cannot be meaningfully shared as a library.
+
+    The check runs at the *importer* level: when compiling module B that
+    imports module A, we load A's AST and look for forbidden declarations.
+    Errors are pinned to the `import` statement in B, not to A. *)
+(** Validate that a module declared with the `library` keyword does not contain
+    application-only declarations.  When `is_library = true` the compiler enforces
+    the boundary immediately without waiting for an import to trigger the check. *)
+let check_library_self_boundary (m : module_form) : validation_error list =
+  if not m.is_library then []
+  else
+    let decl_kind_loc = function
+      | DApi api      -> Some ("api",      api.loc)
+      | DServer sv    -> Some ("server",   sv.loc)
+      | DFunc fd when fd.kind = MainKind -> Some ("main", fd.loc)
+      | DWorkers w    -> Some ("workers",  w.loc)
+      | DDatabase db  -> Some ("database", db.loc)
+      | DEntity e     -> Some ("entity",   e.loc)
+      | _ -> None
+    in
+    List.filter_map (fun decl ->
+      match decl_kind_loc decl with
+      | None -> None
+      | Some (kind, loc) ->
+        Some (make_error loc
+          ~hint:(Printf.sprintf
+            "remove the `%s` block from this library module, or change `library` to `module`"
+            kind)
+          (Printf.sprintf
+            "library module `%s` contains a `%s` declaration; \
+             library modules cannot own application infrastructure"
+            m.module_name kind))
+    ) m.decls
+
+let check_imported_module_is_library (m : module_form) : validation_error list =
+  let is_tesl_module name =
+    String.length name >= 5 && String.sub name 0 5 = "Tesl."
+  in
+  let decl_kind_name = function
+    | DApi _     -> Some "api"
+    | DServer _  -> Some "server"
+    | DWorkers _ -> Some "workers"
+    | DFunc fd when fd.kind = MainKind -> Some "main"
+    | _ -> None
+  in
+  List.concat_map (fun (imp : import_decl) ->
+    if is_tesl_module imp.module_name then []
+    else
+      let path = resolve_local_import_path m.source_file imp.module_name in
+      if not (Sys.file_exists path) then []
+      else
+        let source = In_channel.with_open_text path In_channel.input_all in
+        match Parser.parse_module path source with
+        | Err _ -> []
+        | Ok imported ->
+          (* Collect all forbidden declaration kinds present in the imported module *)
+          let forbidden =
+            List.filter_map decl_kind_name imported.decls
+            |> List.sort_uniq String.compare
+          in
+          List.map (fun kind ->
+            make_error imp.loc
+              ~hint:(Printf.sprintf
+                "move the `%s` block to your application's root module, \
+                 or create a separate app entry-point that imports from `%s`"
+                kind imp.module_name)
+              (Printf.sprintf
+                "imported module `%s` contains a `%s` declaration, \
+                 which is not allowed in library modules"
+                imp.module_name kind)
+          ) forbidden
+  ) m.imports
 
 (* ── 2. SQL/record field name validation ─────────────────────────────────── *)
 

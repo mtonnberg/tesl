@@ -8,6 +8,7 @@
   tesl/dsl/sql
   tesl/dsl/web
   tesl/dsl/test-support
+  tesl/dsl/debug/checkpoint
   tesl/tesl/private/runtime
   tesl/tesl/queue
   tesl/tesl/sse
@@ -30,10 +31,10 @@
             [(check-ok? v) (loop (check-ok-value v))]
             [else v])))
   (define _fields (record-value-fields _raw))
-  (hash 'message (tesl-codec-encode-field (raw-value (hash-ref _fields 'message)) tesl-json-string-codec)
+  (hash 'message (tesl-encode-prim-string (raw-value (hash-ref _fields 'message)))
   ))
 (define (tesl-codec-decode-EchoRequest-0 _j)
-  (define _f_message (tesl-codec-decode-field _j "message" tesl-json-string-codec))
+  (define _f_message (tesl-decode-prim-field _j "message" tesl-decode-prim-string))
   (record-value 'EchoRequest (hash 'message _f_message)))
 (register-type-codec! 'EchoRequest tesl-codec-encode-EchoRequest (list tesl-codec-decode-EchoRequest-0))
 
@@ -59,13 +60,13 @@
 (define-handler
   (echo [req : EchoRequest])
   #:returns EchoRequest
-  req)
+  (thsl-src! "example/learn/lesson32-api-tests.tesl" 49 (list (cons 'req *req)) (lambda () req)))
 
 (define-handler
   (getSeededNote)
   #:capabilities [dbRead]
   #:returns Note
-  (let ([found (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) "note-1")))]) (if tesl_match (Something tesl_match) Nothing))]) (let ([tesl_case_0 (raw-value found)]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (reject "note not found" #:http-code 404)] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl_case_0) 'value)]) *n)]))))
+  (let ([found (thsl-src! "example/learn/lesson32-api-tests.tesl" 53 (list) (lambda () (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) "note-1")))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src! "example/learn/lesson32-api-tests.tesl" 54 (list (cons 'found *found)) (lambda () (let ([tesl_case_0 (raw-value found)]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (reject "note not found" #:http-code 404)] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl_case_0) 'value)]) *n)]))))))
 
 (define Lesson32Server-sse-routes '())
 (define-api Lesson32Api

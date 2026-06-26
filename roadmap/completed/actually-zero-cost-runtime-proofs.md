@@ -83,6 +83,15 @@ This covers the vast majority of handler code (fetch from DB with proof,
 validate, pass to business logic). Estimated savings: 3–6 allocations per
 handler invocation.
 
+**Constraint — debug builds must not elide.** The interactive debugger in
+`roadmap/next/improved_devx.md` (workstream 1 / B3) displays a value's proofs by
+reading the `facts` off the runtime `named-value` struct. Elision erases those structs,
+so the agreed contract is that **elision only applies to release builds; `--debug`
+compilation keeps the proof wrappers.** This is a natural extension of the gating below
+(elision is opt-in/gated anyway) and lets the debugger and this item proceed in any
+order. Practically: the `fi_static_proofs` fast path is suppressed when the compiler is
+in debug mode.
+
 Implementation sketch:
 1. Add a flag to `func_info` / `func_decl`: `fi_static_proofs : bool` — set
    during validation when all proof params are statically resolved.

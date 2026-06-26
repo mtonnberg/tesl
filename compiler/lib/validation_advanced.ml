@@ -7,16 +7,22 @@ open Validation_names
 
 let build_record_field_bindings (decls : top_decl list)
     : (string * binding list) list =
+  (* Records AND entities both construct via `Name { field: value, ... }` and both
+     may carry field-level proof annotations, so construction from a RAW value must
+     be rejected for either. *)
+  let annotated_fields (name : string) (fields : field_def list) =
+    let annotated = List.filter_map (fun (f : field_def) ->
+      match f.proof_ann with
+      | None -> None
+      | Some proof ->
+        Some { name = f.name; type_expr = f.type_expr;
+               proof_ann = Some proof; loc = f.loc }
+    ) fields in
+    if annotated = [] then None else Some (name, annotated)
+  in
   List.filter_map (function
-    | DRecord r ->
-      let annotated = List.filter_map (fun (f : field_def) ->
-        match f.proof_ann with
-        | None -> None
-        | Some proof ->
-          Some { name = f.name; type_expr = f.type_expr;
-                 proof_ann = Some proof; loc = f.loc }
-      ) r.fields in
-      if annotated = [] then None else Some (r.name, annotated)
+    | DRecord r -> annotated_fields r.name r.fields
+    | DEntity e -> annotated_fields e.name e.fields
     | _ -> None
   ) decls
 
@@ -33,12 +39,14 @@ let build_record_field_bindings (decls : top_decl list)
       - a `Maybe T` check for `isNull`/`isNotNull` (rejects these on
         non-nullable columns). *)
 let check_sql_where_clauses
+    ?facts
     ?(extra_funcs : (string * func_info) list = [])
     (decls : top_decl list)
     : validation_error list =
-  let funcs = build_func_info decls @ extra_funcs in
-  let fields_by_type = build_fields_map decls in
-  let ctors = build_ctor_info decls in
+  let mf = facts_or_compute ?facts ~extra_funcs decls in
+  let funcs = mf.mf_funcs in
+  let fields_by_type = mf.mf_fields_map in
+  let ctors = mf.mf_ctors in
   (* Newtypes are transparent at JSON/SQL boundaries (spec §11.6). Build a map
      from newtype head name to its base-type head name so SQL WHERE comparisons
      against a newtype field can accept the underlying primitive literal. *)
@@ -311,13 +319,15 @@ let check_sql_where_clauses
     `SafeReq { count: rawInt }` cannot pass a non-validated Int to a field
     declared as `count: Int ::: IsPositive count`. *)
 let check_record_field_proof_construction
+    ?facts
     ?(extra_funcs : (string * func_info) list = [])
     (decls : top_decl list)
     : validation_error list =
-  let funcs = build_func_info decls @ extra_funcs in
+  let mf = facts_or_compute ?facts ~extra_funcs decls in
+  let funcs = mf.mf_funcs in
   let rec_bindings = build_record_field_bindings decls in
-  let fields_by_type = build_fields_map decls in
-  let ctors = build_ctor_info decls in
+  let fields_by_type = mf.mf_fields_map in
+  let ctors = mf.mf_ctors in
   if rec_bindings = [] then []
   else
     let errors = ref [] in
@@ -530,6 +540,20 @@ let check_record_field_proof_construction
       | EConstructor { args; _ } ->
         List.iter (walk_expr type_env subject_env proof_env) args
       | EStartWorkers _ | ELit _ | EVar _ | EField _ | EFail _ -> ()
+      | ECacheGet { key; _ } -> walk_expr type_env subject_env proof_env key
+      | ECacheSet { key; value; ttl; _ } ->
+        walk_expr type_env subject_env proof_env key;
+        walk_expr type_env subject_env proof_env value;
+        Option.iter (walk_expr type_env subject_env proof_env) ttl
+      | ECacheDelete { key; _ } -> walk_expr type_env subject_env proof_env key
+      | ECacheInvalidate { prefix; _ } -> walk_expr type_env subject_env proof_env prefix
+      | ESendEmail { to_; subject; body; _ } ->
+        walk_expr type_env subject_env proof_env to_;
+        walk_expr type_env subject_env proof_env subject;
+        walk_expr type_env subject_env proof_env body
+      | EStartEmailWorker _ -> ()
+      | ERuntimeCall { segments; _ } ->
+        List.iter (function RLit _ -> () | RArg e -> walk_expr type_env subject_env proof_env e) segments
     in
     List.iter (function
       | DFunc fd ->
@@ -553,13 +577,15 @@ let check_record_field_proof_construction
     Accepts: [fn f(n: Int ::: P n) -> n: Int ::: P n = n]  (passthrough)
     Rejects: [fn liar(n: Int) -> n: Int ::: P n = n]        (new proof, not from params) *)
 let check_fn_return_proof_annotations
+    ?facts
     ?(extra_funcs : (string * func_info) list = [])
     (decls : top_decl list)
     : validation_error list =
-  let funcs = build_func_info decls @ extra_funcs in
-  let fields_by_type = build_fields_map decls in
-  let ctors = build_ctor_info decls in
-  field_proof_registry := build_field_proof_map decls;
+  let mf = facts_or_compute ?facts ~extra_funcs decls in
+  let funcs = mf.mf_funcs in
+  let fields_by_type = mf.mf_fields_map in
+  let ctors = mf.mf_ctors in
+  field_proof_registry := mf.mf_field_proof_map;
   let errors = ref [] in
   let actual_proof_summary proofs =
     match combine_proof_list (dummy_loc "named-pack return") proofs with
@@ -757,7 +783,8 @@ let check_fn_return_proof_annotations
           base @ deduped
         else base
       in
-      let kind_label = match fd.kind with HandlerKind -> "handler" | _ -> "fn" in
+      let kind_label = match fd.kind with
+        | HandlerKind -> "handler" | WorkerKind -> "worker" | _ -> "fn" in
       let check_required kind required =
         let required_pred = match required with PredApp { pred; _ } -> Some pred | _ -> None in
         let is_stdlib_auto = match required_pred with Some pred -> List.mem pred stdlib_auto_preds | None -> false in
@@ -835,10 +862,20 @@ let check_fn_return_proof_annotations
          check_required "cargo" required
        | None -> ())
   in
+  (* §7.12 forgery restriction applies to fn, handler, and worker: none of these
+     can fabricate a proof their inputs do not carry. (check/auth/establish are the
+     only kinds that may introduce a fresh proof at a boundary.) deadWorker is
+     intentionally excluded — its job carries an infrastructure FromDeadQueue proof
+     handled elsewhere. *)
+  let is_forgery_restricted_kind = function
+    | FnKind | HandlerKind | WorkerKind -> true
+    | _ -> false
+  in
   List.iter (function
-    | DFunc fd when fd.kind = FnKind || fd.kind = HandlerKind ->
+    | DFunc fd when is_forgery_restricted_kind fd.kind ->
       (match fd.return_spec with
-       | RetAttached { binding = b; loc = ret_loc } when fd.kind = FnKind && b.proof_ann <> None ->
+       | RetAttached { binding = b; loc = ret_loc }
+         when is_forgery_restricted_kind fd.kind && b.proof_ann <> None ->
          (* The guard `b.proof_ann <> None` ensures Some here; use Option.get with safe fallback *)
          let required_proof = match b.proof_ann with Some p -> p | None -> PredApp { pred = ""; args = []; loc = ret_loc } in
          let proof_env = build_initial_proof_env fd.params in
@@ -921,14 +958,17 @@ let check_fn_return_proof_annotations
             && not (proof_matches required_norm all_carried)
             && not (body_uses_attach_or_ok fd.body) then begin
            let proof_str = pp_proof required_proof in
+           let kw = match fd.kind with
+             | HandlerKind -> "handler" | WorkerKind -> "worker" | _ -> "fn" in
            errors := make_error ret_loc
              ~hint:(Printf.sprintf
-               "use `check %s(...)` to validate and return a proof-carrying value; \
-                `fn` cannot introduce new proofs" fd.name)
+               "receive `%s` with that proof on an input parameter, or use `check %s(...)` \
+                to validate it at a boundary; a `%s` cannot introduce new proofs" b.name fd.name kw)
              (Printf.sprintf
-               "fn `%s` cannot declare a proof return type (`-> %s ::: %s`); \
-                only `check` and `auth` functions may have proof return types"
-               fd.name (pp_type_expr b.type_expr) proof_str)
+               "%s `%s` cannot declare a proof return type (`-> %s ::: %s`) \
+                unless `%s` was received with that proof on an input parameter; \
+                only `check` and `auth` functions may introduce new proofs"
+               kw fd.name (pp_type_expr b.type_expr) proof_str b.name)
            :: !errors
          end
        | RetNamedPack { entity_proof; other_proof; loc; _ } when entity_proof <> None || other_proof <> None ->
@@ -958,29 +998,17 @@ let check_circular_const_bindings (decls : top_decl list) : validation_error lis
       let refs = ref [] in
       let rec walk = function
         | EVar { name; _ } when List.mem name name_set -> refs := name :: !refs
+        (* These were deliberately NON-descending in the original collector:
+           a const-binding reference cannot live inside a `fail` message in a
+           cycle-relevant way, and the others are genuine leaves. Keep them as
+           explicit no-ops — `Ast_visitor.iter_children` would descend into the
+           `fail` message expr, changing behaviour. *)
         | EVar _ | ELit _ | EFail _ | EStartWorkers _ -> ()
-        | EApp { fn; arg; _ } -> walk fn; walk arg
-        | ELet { value; body; _ } | ELetProof { value; body; _ } ->
-          walk value; walk body
-        | EIf { cond; then_; else_; _ } -> walk cond; walk then_; walk else_
-        | ECase { scrut; arms; _ } ->
-          walk scrut; List.iter (fun (a : case_arm) -> walk a.body) arms
-        | EBinop { left; right; _ } -> walk left; walk right
-        | EUnop { arg; _ } -> walk arg
-        | EField { obj; _ } -> walk obj
-        | EList { elems; _ } -> List.iter walk elems
-        | ERecord { fields; _ } -> List.iter (fun (_, v) -> walk v) fields
-        | EConstructor { args; _ } -> List.iter walk args
-        | ELambda { body; _ } -> walk body
-        | EOk { value; _ } -> walk value
-        | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
-        | EWithTransaction { body; _ } -> walk body
-        | ETelemetry { fields; _ } -> List.iter (fun (_, v) -> walk v) fields
-        | EEnqueue { payload; _ } -> walk payload
-        | EPublish { key; payload; _ } ->
-          (match key with Some e -> walk e | None -> ());
-          (match payload with Some e -> walk e | None -> ())
-        | EServe { port; _ } -> walk port
+        (* Every remaining variant recurses into ALL its child exprs (the
+           const-name set is constant — no per-arm threading), so the
+           mechanical recursion is exactly {!Ast_visitor.iter_children}, which
+           visits the same children in the same left-to-right order. *)
+        | e -> Ast_visitor.iter_children walk e
       in
       walk e;
       List.sort_uniq String.compare !refs
@@ -1170,31 +1198,24 @@ let check_ghost_witness_predicates (decls : top_decl list)
               | _ -> ());
              walk_body value
            | _ -> walk_body value);
-        | EApp { fn; arg; _ } -> walk_body fn; walk_body arg
+        (* ELet keeps its explicit arm because the `track_let_binding` side
+           effect (registering an establish/check binding in `local_fact_map`)
+           must fire for THIS binder before recursing — that is a semantic
+           action, not pure recursion. *)
         | ELet { name; value; body; _ } ->
           track_let_binding name value;
           walk_body value; walk_body body
-        | ELetProof { value; body; _ } -> walk_body value; walk_body body
-        | EIf { cond; then_; else_; _ } ->
-          walk_body cond; walk_body then_; walk_body else_
-        | ECase { scrut; arms; _ } ->
-          walk_body scrut;
-          List.iter (fun (arm : case_arm) -> walk_body arm.body) arms
-        | ELambda { body = b; _ } -> walk_body b
-        | EList { elems; _ } -> List.iter walk_body elems
-        | ERecord { fields; _ } -> List.iter (fun (_, v) -> walk_body v) fields
-        | EBinop { left; right; _ } -> walk_body left; walk_body right
-        | EUnop { arg; _ } -> walk_body arg
-        | EWithDatabase { body = b; _ } | EWithCapabilities { body = b; _ }
-        | EWithTransaction { body = b; _ } -> walk_body b
-        | ETelemetry { fields; _ } -> List.iter (fun (_, v) -> walk_body v) fields
-        | EEnqueue { payload; _ } -> walk_body payload
-        | EPublish { key; payload; _ } ->
-          (match key with Some e -> walk_body e | None -> ());
-          (match payload with Some e -> walk_body e | None -> ())
-        | EServe { port; _ } -> walk_body port
-        | EConstructor { args; _ } -> List.iter walk_body args
-        | EStartWorkers _ | ELit _ | EVar _ | EField _ | EFail _ -> ()
+        (* The original walk treated these as NON-descending no-ops; a ghost
+           witness mismatch is reported only at an `EOk { value = Ctor {...} }`
+           site, which never lives inside a `fail` message or a field-projection
+           object. `Ast_visitor.iter_children` WOULD descend into EField.obj /
+           EFail.message, so keep these explicit no-ops to preserve behaviour. *)
+        | EStartWorkers _ | ELit _ | EVar _ | EField _ | EFail _
+        | EStartEmailWorker _ -> ()
+        (* Every remaining variant recurses into all child exprs with the same
+           captured `errors`/`local_fact_map` refs — the shared
+           {!Ast_visitor.iter_children} traversal, same children, same order. *)
+        | e -> Ast_visitor.iter_children walk_body e
       in
       walk_body body
     in
@@ -1257,41 +1278,21 @@ called from handler bodies or other auth functions"
                  | AuthKind -> "auth" | HandlerKind -> "handler" | MainKind -> "main"))
             :: !errors
         ) callees;
-        (* Still recurse into sub-expressions *)
+        (* Still recurse into sub-expressions — identical to the children of an
+           EApp, in fn-then-arg order. *)
         walk_body caller_name caller_kind (match e with EApp { fn; _ } -> fn | _ -> e);
         (match e with EApp { arg; _ } -> walk_body caller_name caller_kind arg | _ -> ())
-      | ELit _ | EVar _ | EConstructor _ | EFail _ | EStartWorkers _ | EServe _ | EField _ -> ()
-      | EApp { fn; arg; _ } ->
-        walk_body caller_name caller_kind fn;
-        walk_body caller_name caller_kind arg
-      | EBinop { left; right; _ } ->
-        walk_body caller_name caller_kind left;
-        walk_body caller_name caller_kind right
-      | EUnop { arg; _ } -> walk_body caller_name caller_kind arg
-      | EIf { cond; then_; else_; _ } ->
-        walk_body caller_name caller_kind cond;
-        walk_body caller_name caller_kind then_;
-        walk_body caller_name caller_kind else_
-      | ECase { scrut; arms; _ } ->
-        walk_body caller_name caller_kind scrut;
-        List.iter (fun (arm : case_arm) -> walk_body caller_name caller_kind arm.body) arms
-      | ELet { value; body; _ } | ELetProof { value; body; _ } ->
-        walk_body caller_name caller_kind value;
-        walk_body caller_name caller_kind body
-      | ERecord { fields; _ } ->
-        List.iter (fun (_, v) -> walk_body caller_name caller_kind v) fields
-      | EList { elems; _ } ->
-        List.iter (walk_body caller_name caller_kind) elems
-      | EOk { value; _ } -> walk_body caller_name caller_kind value
-      | ETelemetry { fields; _ } ->
-        List.iter (fun (_, v) -> walk_body caller_name caller_kind v) fields
-      | EEnqueue { payload; _ } -> walk_body caller_name caller_kind payload
-      | EPublish { key; payload; _ } ->
-        Option.iter (walk_body caller_name caller_kind) key;
-        Option.iter (walk_body caller_name caller_kind) payload
-      | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
-      | EWithTransaction { body; _ } -> walk_body caller_name caller_kind body
-      | ELambda { body; _ } -> walk_body caller_name caller_kind body
+      (* The original walk treated these as NON-descending no-ops; an auth call
+         travels through `check` (handled above) or operator chains, never via
+         a constructor's args, a `serve` port, a field object, or a `fail`
+         message in a way this rule observes. `Ast_visitor.iter_children` would
+         descend into those, so keep the explicit no-ops to preserve behaviour. *)
+      | ELit _ | EVar _ | EConstructor _ | EFail _ | EStartWorkers _ | EServe _ | EField _
+      | EStartEmailWorker _ -> ()
+      (* Every remaining variant (including the non-`check` EApp form) recurses
+         into all child exprs with the same constant caller name/kind — exactly
+         {!Ast_visitor.iter_children}, same children, same left-to-right order. *)
+      | e -> Ast_visitor.iter_children (walk_body caller_name caller_kind) e
     in
     List.iter (function
       | DFunc fd -> walk_body fd.name fd.kind fd.body
@@ -1321,27 +1322,19 @@ extract shared logic into a helper `fn` function instead"
 — only the server router may reference handlers"
             caller_name name)
         :: !errors
-      | ELit _ | EVar _ | EConstructor _ | EFail _ | EStartWorkers _ | EServe _ | EField _ -> ()
-      | EApp { fn; arg; _ } -> walk_body caller_name fn; walk_body caller_name arg
-      | EBinop { left; right; _ } -> walk_body caller_name left; walk_body caller_name right
-      | EUnop { arg; _ } -> walk_body caller_name arg
-      | EIf { cond; then_; else_; _ } ->
-        walk_body caller_name cond; walk_body caller_name then_; walk_body caller_name else_
-      | ECase { scrut; arms; _ } ->
-        walk_body caller_name scrut;
-        List.iter (fun (arm : case_arm) -> walk_body caller_name arm.body) arms
-      | ELet { value; body; _ } | ELetProof { value; body; _ } ->
-        walk_body caller_name value; walk_body caller_name body
-      | ERecord { fields; _ } -> List.iter (fun (_, v) -> walk_body caller_name v) fields
-      | EList { elems; _ } -> List.iter (walk_body caller_name) elems
-      | EOk { value; _ } -> walk_body caller_name value
-      | ETelemetry { fields; _ } -> List.iter (fun (_, v) -> walk_body caller_name v) fields
-      | EEnqueue { payload; _ } -> walk_body caller_name payload
-      | EPublish { key; payload; _ } ->
-        Option.iter (walk_body caller_name) key; Option.iter (walk_body caller_name) payload
-      | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
-      | EWithTransaction { body; _ } -> walk_body caller_name body
-      | ELambda { body; _ } -> walk_body caller_name body
+      (* The original walk treated these as NON-descending no-ops: a direct
+         handler reference is an `EVar` (handled above), and a handler name can
+         only appear in call position, never inside a constructor's args, a
+         `serve` port, a field projection's object, or a `fail` message in a
+         way this rule cares about. `Ast_visitor.iter_children` WOULD descend
+         into EConstructor.args / EServe.port / EField.obj / EFail.message, so
+         keep them explicit no-ops to preserve behaviour exactly. *)
+      | ELit _ | EVar _ | EConstructor _ | EFail _ | EStartWorkers _ | EServe _ | EField _
+      | EStartEmailWorker _ -> ()
+      (* Every remaining variant recurses into all child exprs with the same
+         constant `caller_name`, i.e. the shared {!Ast_visitor.iter_children}
+         traversal, same children, same left-to-right order. *)
+      | e -> Ast_visitor.iter_children (walk_body caller_name) e
     in
     List.iter (function
       | DFunc fd -> walk_body fd.name fd.body

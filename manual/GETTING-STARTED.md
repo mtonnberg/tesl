@@ -285,10 +285,15 @@ In Tesl:
 - Proofs flow through function calls automatically
 - Missing proofs are compile-time errors
 
-**Runtime behavior (current alpha):**
-- Proofs are carried as lightweight runtime structs (`named-value`)
-- This acts as a safety net while the static checker matures
-- **Future goal:** Proof structs will be completely elided (zero runtime overhead)
+**Runtime cost — proofs are zero-cost by default:**
+- In a normal (release) build, proofs are **erased** after type-checking: no struct, no allocation,
+  zero runtime overhead. The proof lives only in the compiler's static checker.
+- Even under `--debug`, proofs stay erased: the step debugger shows the raw runtime value and
+  overlays a binding's proof/type from compile-time type info. `TESL_ZERO_COST_PROOFS=0` restores
+  the runtime net for regression comparison.
+- Free-floating proofs (`detachFact` / `attachFact`) always keep a minimal runtime token, because
+  they are explicit first-class values.
+- See [best practices › proof cost model](best-practices.md#proof-cost-model) for the full table.
 
 ### Proof Flow Example
 
@@ -474,7 +479,7 @@ Now that you have a basic understanding, explore:
 
 1. **[Examples](examples.md)** - See complete working examples
 2. **[Best Practices](best-practices.md)** - Learn idiomatic patterns
-3. **[Language Specification](LANGUAGE-SPEC.md)** - Dive into the details
+3. **[Language Specification](../LANGUAGE-SPEC.md)** - Dive into the details
 4. **[TESL.md](../TESL.md)** - High-level language introduction
 
 ---

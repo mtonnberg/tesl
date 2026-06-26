@@ -7,6 +7,54 @@
 
 open Ast
 
+(** B5 — one emission path.  The emitter ALWAYS wraps each user statement /
+    terminal expression in [(thsl-src! file line locals thunk)] and always emits
+    the [tesl/dsl/debug/checkpoint] require.  The debug-vs-release decision moved
+    to EXPANSION time in [dsl/debug/checkpoint.rkt]: with [TESL_DEBUG] set the
+    macro expands to a real checkpoint; otherwise it erases to the bare thunk
+    body (zero residue).  There is no longer a [--debug] emitter fork, so
+    [tesl <file>] and [tesl --debug <file>] produce byte-identical Racket.
+
+    [set_debug_mode] is retained as a NO-OP purely so the existing callers in
+    [compile.ml] / [main.ml] (owned elsewhere) keep linking; it no longer alters
+    emission. *)
+let set_debug_mode (_ : bool) = ()
+
+(** When Some "name", only emit the test-case whose description matches.
+    Set from main.ml via [set_test_name_filter] before calling [compile_to_string]. *)
+let test_name_filter : string option ref = ref None
+
+let set_test_name_filter v = test_name_filter := v
+
+(* ── Source-position map recording (A1) ──────────────────────────────────────
+   Purely *observational* instrumentation: when recording is enabled we measure
+   how many newlines the buffer has accumulated around each emitted form/body and
+   pair that emitted line-range with the form's [Location.loc].  Recording NEVER
+   writes to the buffer, so emitted Racket is byte-identical whether recording is
+   on or off (the data goes to a sidecar .tesl.map, not into the .rkt).
+
+   State is module-level (mirroring [debug_mode]); the emitter is single-threaded
+   per [compile_to_string] call, which resets it. *)
+
+let sm_recording : bool ref = ref false
+let sm_entries : Source_map.entry list ref = ref []
+
+(** Enable/disable source-map recording for the next [compile_to_string].
+    Resets any previously recorded entries. *)
+let set_source_map_recording v =
+  sm_recording := v;
+  sm_entries := []
+
+(** Take (and clear) the entries recorded during the last emission, as a
+    finalised {!Source_map.t} describing [rkt_file]. *)
+let take_source_map ~rkt_file () : Source_map.t =
+  let es = List.rev !sm_entries in
+  sm_entries := [];
+  Source_map.of_entries ~rkt_file es
+
+(* The [ctx]-dependent recording helpers ([sm_current_line], [sm_region]) are
+   defined further down, right after the [ctx] type and the buffer primitives. *)
+
 (* ── Module path resolution ──────────────────────────────────────────────── *)
 
 (** Map Tesl module names to their Racket file paths.
@@ -20,9 +68,11 @@ let module_path_table : (string, string) Hashtbl.t =
   add "Tesl.Float"     "tesl/float.rkt";
   add "Tesl.Bool"      "tesl/bool.rkt";
   add "Tesl.List"      "tesl/list.rkt";
+  add "Tesl.ListPrim"  "tesl/list-prim.rkt";
   add "Tesl.Dict"      "tesl/dict.rkt";
   add "Tesl.Maybe"     "tesl/maybe.rkt";
   add "Tesl.Either"    "tesl/either.rkt";
+  add "Tesl.EitherPrim" "tesl/either-prim.rkt";
   add "Tesl.Result"    "tesl/result.rkt";
   add "Tesl.Http"      "tesl/http.rkt";
   add "Tesl.Json"      "tesl/json.rkt";
@@ -44,6 +94,11 @@ let module_path_table : (string, string) Hashtbl.t =
   add "Tesl.Sql"       "tesl/sql.rkt";
   add "Tesl.Sse"       "tesl/sse.rkt";
   add "Tesl.Logging"   "tesl/logging.rkt";
+  add "Tesl.JWT"        "tesl/jwt.rkt";
+  add "Tesl.HttpClient" "tesl/http-client.rkt";
+  add "Tesl.UUID"       "tesl/uuid.rkt";  (* canonical uppercase alias *)
+  add "Tesl.Cache"     "tesl/cache.rkt";
+  add "Tesl.Email"     "tesl/email.rkt";
   h
 
 (** Mapping from qualified import names to renamed Racket identifiers.
@@ -66,6 +121,88 @@ let codec_name = function
   | "dictCodec"       -> "tesl-json-dict-codec"
   | "setCodec"        -> "tesl-json-set-codec"
   | other             -> Printf.sprintf "'%s" other  (* user-defined type → registry symbol *)
+
+(** Compile-time specialization of field ENCODE (compile_time_specialization).
+
+    For a PRIMITIVE codec the generic runtime path
+      [(tesl-codec-encode-field <val> <prim-codec-pair>)]
+    routes through an interpreter that conds on the codec-spec kind and then
+    calls the codec pair's [car] indirectly.  We instead emit a DIRECT call to
+    the matching [tesl-encode-prim-*] helper (the SAME definition the primitive
+    codec pair is built from in dsl/types.rkt), eliminating the per-field
+    dispatch and the indirect call.  Output and error text are byte-identical
+    by construction (one shared definition).
+
+    For a USER-TYPE codec we KEEP the generic [tesl-codec-encode-field <val>
+    '<name>] path: that symbol is the user's [with_codec] name and the runtime
+    looks it up in the type-codec registry, falling back to
+    [runtime-value->jsexpr] when no encoder is registered.  A direct
+    [tesl-codec-encode-<name>] call would (a) reference a possibly-undefined
+    identifier and (b) drop that fallback, so it is intentionally NOT
+    specialized here.  Returns [None] when no primitive specialization applies. *)
+let prim_encode_helper = function
+  | "stringCodec"      -> Some "tesl-encode-prim-string"
+  | "intCodec"         -> Some "tesl-encode-prim-int"
+  | "boolCodec"        -> Some "tesl-encode-prim-bool"
+  | "floatCodec"       -> Some "tesl-encode-prim-float"
+  | "posixMillisCodec" -> Some "tesl-encode-prim-posix-millis"
+  | "listCodec"        -> Some "tesl-encode-prim-list"
+  | "dictCodec"        -> Some "tesl-encode-prim-dict"
+  | "setCodec"         -> Some "tesl-encode-prim-set"
+  | _                  -> None
+
+(** Emit the encode call for one record field, specializing primitive codecs to
+    a direct helper call and leaving user-type codecs on the generic path. *)
+let codec_encode_field_call codec field_name =
+  match prim_encode_helper codec with
+  | Some helper ->
+    Printf.sprintf "(%s (raw-value (hash-ref _fields '%s)))" helper field_name
+  | None ->
+    Printf.sprintf "(tesl-codec-encode-field (raw-value (hash-ref _fields '%s)) %s)"
+      field_name (codec_name codec)
+
+(** Compile-time specialization of field DECODE (compile_time_specialization,
+    Phase 2 — mirrors the encoder specialization above).
+
+    The generic runtime path
+      [(tesl-codec-decode-field _j "key" <prim-codec-pair>)]
+    routes through an interpreter that (a) does the missing-field check raising
+    the localized [codec: required field "X" not found in JSON] error, then (b)
+    conds on the codec-spec kind and calls the pair's [cdr] (the prim decoder)
+    indirectly.  We instead emit a DIRECT call to
+      [(tesl-decode-prim-field _j "key" <tesl-decode-prim-*>)]
+    — the SAME shared helper the generic path's primitive branch now delegates
+    to, with the SAME [tesl-decode-prim-*] type-mismatch decoder.  The
+    missing-field error (in [tesl-decode-prim-field] via [jsexpr-required-field])
+    and the type-mismatch error (in the prim decoder) are therefore byte-
+    identical on every branch by construction (one shared definition each).
+
+    For a USER-TYPE codec we KEEP the generic [tesl-codec-decode-field _j "key"
+    '<name>] path: that symbol is looked up in the type-codec registry (and the
+    missing-field check + registry dispatch + fallback stay intact).  A direct
+    specialized call would drop that registry indirection, so user-type fields
+    are intentionally NOT specialized.  Returns [None] when no primitive
+    specialization applies. *)
+let prim_decode_helper = function
+  | "stringCodec"      -> Some "tesl-decode-prim-string"
+  | "intCodec"         -> Some "tesl-decode-prim-int"
+  | "boolCodec"        -> Some "tesl-decode-prim-bool"
+  | "floatCodec"       -> Some "tesl-decode-prim-float"
+  | "posixMillisCodec" -> Some "tesl-decode-prim-posix-millis"
+  | "listCodec"        -> Some "tesl-decode-prim-list"
+  | "dictCodec"        -> Some "tesl-decode-prim-dict"
+  | "setCodec"         -> Some "tesl-decode-prim-set"
+  | _                  -> None
+
+(** Emit the decode expression for one field from the JSON object [_j],
+    specializing primitive codecs to a direct [tesl-decode-prim-field] call and
+    leaving user-type codecs on the generic [tesl-codec-decode-field] path. *)
+let codec_decode_field_call codec json_key =
+  match prim_decode_helper codec with
+  | Some helper ->
+    Printf.sprintf "(tesl-decode-prim-field _j %S %s)" json_key helper
+  | None ->
+    Printf.sprintf "(tesl-codec-decode-field _j %S %s)" json_key (codec_name codec)
 
 (* ── Buffer helpers ──────────────────────────────────────────────────────── *)
 
@@ -154,6 +291,57 @@ let mk_ctx ?(root_path=default_root_path ()) ?(record_fields=[]) ?(record_meta=[
 let emit ctx s = Buffer.add_string ctx.buf s
 let emit_nl ctx = Buffer.add_char ctx.buf '\n'
 let emit_line ctx s = emit ctx s; emit_nl ctx
+
+(* ── Source-position map: ctx-dependent recording helpers (A1) ───────────────
+   These only *read* the buffer length; they never change what is written, so
+   emitted Racket is identical with recording on or off.  Counting newlines from
+   scratch each call is O(n) but only happens when [sm_recording] is true (the
+   sidecar/--source-map path), never on the hot release-emit path. *)
+
+(* 1-based line of the *next* character to be written = newlines so far + 1. *)
+let sm_current_line ctx =
+  let s = Buffer.contents ctx.buf in
+  let n = ref 1 in
+  String.iter (fun c -> if c = '\n' then incr n) s;
+  !n
+
+(** Run [thunk] while recording the emitted-Racket line range it produces and
+    associating it with [loc].  No-op (other than running [thunk]) when recording
+    is off or [loc] is a dummy/synthetic location (line 0/col 0 — lowerings with
+    no real source origin are never mapped, matching the B2 stepping design). *)
+let sm_region ctx ~(form : string) (loc : Location.loc) (thunk : unit -> unit) =
+  if not !sm_recording then thunk ()
+  else begin
+    let is_dummy =
+      loc.Location.start.line = 0 && loc.Location.start.col = 0
+      && loc.Location.stop.line = 0 && loc.Location.stop.col = 0
+    in
+    if is_dummy then thunk ()
+    else begin
+      let start_bytes = Buffer.length ctx.buf in
+      let start_line = sm_current_line ctx in
+      thunk ();
+      let end_bytes = Buffer.length ctx.buf in
+      (* Skip regions that emitted nothing (e.g. the DTest/DFact dispatch arms,
+         which emit no Racket here — tests are emitted in a later batch block).
+         A zero-byte region would otherwise record a spurious entry at the
+         current line. *)
+      if end_bytes <= start_bytes then ()
+      else begin
+        let after_line = sm_current_line ctx in
+        (* Lines fully emitted by this region span [start_line, end]; if the
+           region advanced the line counter, the last fully-owned line is
+           [after_line - 1] (the current partial line belongs to whatever emits
+           next).  Clamp so a region that emitted text but no newline still
+           records its single starting line. *)
+        let rkt_end_line = if after_line > start_line then after_line - 1 else start_line in
+        let rkt_end_line = if rkt_end_line < start_line then start_line else rkt_end_line in
+        sm_entries :=
+          Source_map.entry_of_loc ~rkt_start_line:start_line ~rkt_end_line ~form loc
+          :: !sm_entries
+      end
+    end
+  end
 
 let fresh_case ctx =
   let n = ctx.case_counter in
@@ -1670,7 +1858,7 @@ let rec emit_expr ctx e =
     (match extract_multiline_select_query seq with
      | Some (seed, clauses) -> emit_sql_select seed clauses
      | None -> failwith "emit_racket: extract_multiline_select_query guard passed but returned None — compiler invariant violation; please report this bug")
-  | ELet { name = "_"; value = ((ETelemetry _ | EEnqueue _ | EPublish _ | EStartWorkers _ | EWithDatabase _ | EWithCapabilities _ | EWithTransaction _ | EServe _) as stmt); body; _ } ->
+  | ELet { name = "_"; value = ((ETelemetry _ | EEnqueue _ | EPublish _ | EStartWorkers _ | EWithDatabase _ | EWithCapabilities _ | EWithTransaction _ | EServe _ | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _ | ESendEmail _ | EStartEmailWorker _ | ERuntimeCall _) as stmt); body; _ } ->
     (* Runtime statements in sequence lower to begin blocks. *)
     emit ctx "(begin ";
     emit_expr ctx stmt;
@@ -2067,14 +2255,13 @@ let rec emit_expr ctx e =
       emit ctx "]"
     ) fields;
     emit ctx "))"
-  | EEnqueue { job_type; payload; _ } ->
-    let queue_ref = match Hashtbl.find_opt job_type_to_queue job_type with
-      | Some q -> q
-      | None -> "_queue_for_" ^ job_type
-    in
-    emit ctx (Printf.sprintf "(enqueue! %s " queue_ref);
-    emit_expr_simple ctx payload;
-    emit ctx ")"
+  | EEnqueue _ | EStartWorkers _ | EServe _ ->
+    (* These fixed-shape effect forms are lowered to [ERuntimeCall] by
+       {!Desugar.desugar_module}, which [compile_to_string] runs before
+       [emit_module].  Reaching emit means the module was not desugared — a
+       pipeline bug — so fail loudly rather than emit malformed Racket. *)
+    failwith "emit_racket: EEnqueue/EStartWorkers/EServe reached the emitter \
+              un-desugared (Desugar.desugar_module must run before emit_module)"
   | EPublish { channel_name; key; event_ctor; payload; _ } ->
     emit ctx (Printf.sprintf "(publish-event! %s " channel_name);
     (match key with
@@ -2096,15 +2283,6 @@ let rec emit_expr ctx e =
      | Some payload_expr -> emit_expr_simple ctx payload_expr
      | None -> emit ctx (Printf.sprintf "(%s)" event_ctor));
     emit ctx ")"
-  | EStartWorkers { workers_name; capabilities; concurrency; is_dead; _ } ->
-    let runtime_fn = if is_dead then "start-dead-workers!" else "start-workers!" in
-    emit ctx (Printf.sprintf "(%s %s (list" runtime_fn workers_name);
-    List.iter (fun cap -> emit ctx (Printf.sprintf " %s" cap)) capabilities;
-    emit ctx ")";
-    (match concurrency with
-     | Some n when n <> 1 -> emit ctx (Printf.sprintf " #:concurrency %d" n)
-     | _ -> ());
-    emit ctx ")"
   | EWithDatabase { database_name; body; _ } ->
     emit ctx (Printf.sprintf "(call-with-database %s (lambda () " database_name);
     emit_expr ctx body;
@@ -2119,16 +2297,46 @@ let rec emit_expr ctx e =
     emit ctx "(call-with-queue-transaction (lambda () ";
     emit_expr ctx body;
     emit ctx "))"
-  | EServe { server_name; port; capabilities; static_dir; _ } ->
-    emit ctx (Printf.sprintf "(serve %s #:port " server_name);
-    emit_expr_simple ctx port;
-    emit ctx " #:capabilities (list";
-    List.iter (fun cap -> emit ctx (Printf.sprintf " %s" cap)) capabilities;
-    emit ctx ")";
-    (match static_dir with
-     | Some dir -> emit ctx (Printf.sprintf " #:static-dir %S" dir)
+  | ECacheGet { cache_name; key; _ } ->
+    emit ctx (Printf.sprintf "(cache-get! %s " cache_name);
+    emit_expr_simple ctx key;
+    emit ctx ")"
+  | ECacheSet { cache_name; key; value; ttl; _ } ->
+    emit ctx (Printf.sprintf "(cache-set! %s " cache_name);
+    emit_expr_simple ctx key;
+    emit ctx " ";
+    emit_expr_simple ctx value;
+    (match ttl with
+     | Some ttl_expr -> emit ctx " "; emit_expr_simple ctx ttl_expr
      | None -> ());
-    emit ctx (Printf.sprintf " #:sse-routes %s-sse-routes)" server_name)
+    emit ctx ")"
+  | ECacheDelete { cache_name; key; _ } ->
+    emit ctx (Printf.sprintf "(cache-delete! %s " cache_name);
+    emit_expr_simple ctx key;
+    emit ctx ")"
+  | ECacheInvalidate { cache_name; prefix; _ } ->
+    emit ctx (Printf.sprintf "(cache-invalidate-prefix! %s " cache_name);
+    emit_expr_simple ctx prefix;
+    emit ctx ")"
+  | ESendEmail { email_name; to_; subject; body; _ } ->
+    emit ctx (Printf.sprintf "(send-email! %s #:to " email_name);
+    emit_expr_simple ctx to_;
+    emit ctx " #:subject ";
+    emit_expr_simple ctx subject;
+    emit ctx " #:body ";
+    emit_expr_simple ctx body;
+    emit ctx ")"
+  | EStartEmailWorker { email_name; _ } ->
+    emit ctx (Printf.sprintf "(start-email-worker! %s)" email_name)
+  | ERuntimeCall { segments; _ } ->
+    (* Desugar-lowered fixed-shape runtime call (EEnqueue / EStartWorkers /
+       EServe).  Literal segments are emitted verbatim (the call prefix, keyword
+       args and runtime fn names were rendered at desugar time); argument
+       sub-expressions are emitted through the context-aware emit_expr_simple
+       path, exactly as the original effect arms did. *)
+    List.iter (function
+      | RLit s -> emit ctx s
+      | RArg e -> emit_expr_simple ctx e) segments
   | EConstructor { name = "Nothing"; args = []; _ } ->
     emit ctx "Nothing"
   | EConstructor { name = "True"; args = []; _ } ->
@@ -2293,7 +2501,9 @@ and emit_expr_simple ctx e =
   | ELambda _ | EList _ | EBinop _ | EUnop _ | EIf _ | ECase _
   | ELet _ | ELetProof _ | ERecord _ | EOk _ | EFail _ | ETelemetry _
   | EEnqueue _ | EPublish _ | EStartWorkers _ | EWithDatabase _
-  | EWithCapabilities _ | EWithTransaction _ | EServe _ | EConstructor _ -> emit_expr ctx e
+  | EWithCapabilities _ | EWithTransaction _ | EServe _ | EConstructor _
+  | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
+  | ESendEmail _ | EStartEmailWorker _ | ERuntimeCall _ -> emit_expr ctx e
   | EApp _ as app ->
     (* SQL-like expressions and TypeName { } record construction need the full emit_expr lowering. *)
     let is_typename_record = match app with
@@ -2911,37 +3121,22 @@ let collect_proof_names (m : module_form) =
     in
     go rs
   in
-  let rec visit_expr = function
-    | ELit _ | EVar _ -> ()
-    | EField { obj; _ } -> visit_expr obj
-    | EApp { fn; arg; _ } -> visit_expr fn; visit_expr arg
-    | EBinop { left; right; _ } -> visit_expr left; visit_expr right
-    | EUnop { arg; _ } -> visit_expr arg
-    | EIf { cond; then_; else_; _ } ->
-      visit_expr cond; visit_expr then_; visit_expr else_
-    | ECase { scrut; arms; _ } ->
-      visit_expr scrut;
-      List.iter (fun (arm : Ast.case_arm) -> visit_expr arm.body) arms
-    | ELet { value; body; _ } | ELetProof { value; body; _ } ->
-      visit_expr value; visit_expr body
-    | ERecord { fields; _ } -> List.iter (fun (_, v) -> visit_expr v) fields
-    | EList { elems; _ } -> List.iter visit_expr elems
+  (* Collect proof-predicate names referenced inside an expression.  Only the
+     two variants that carry a [proof_expr] alongside their sub-exprs get
+     bespoke handling — [EOk]'s attached proof and [ELambda]'s parameter proof
+     annotations.  Recursion into every other variant's child exprs (including,
+     now, [EFail.message] — previously skipped by an [EFail _ -> ()] arm) is
+     delegated to {!Ast_visitor.iter_children}, the single shared traversal, so
+     a proof nested in any expression position cannot be silently missed. *)
+  let rec visit_expr e =
+    match e with
     | EOk { value; proof; _ } ->
       visit_expr value;
       visit_proof proof
-    | EFail _ -> ()
-    | ETelemetry { fields; _ } -> List.iter (fun (_, v) -> visit_expr v) fields
-    | EEnqueue { payload; _ } -> visit_expr payload
-    | EPublish { key; payload; _ } ->
-      Option.iter visit_expr key;
-      Option.iter visit_expr payload
-    | EStartWorkers _ -> ()
-    | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } -> visit_expr body
-    | EServe { port; _ } -> visit_expr port
-    | EConstructor { args; _ } -> List.iter visit_expr args
     | ELambda { params; body; _ } ->
       List.iter (fun (b : Ast.binding) -> Option.iter visit_proof b.proof_ann) params;
       visit_expr body
+    | _ -> Ast_visitor.iter_children visit_expr e
   in
   List.iter (fun decl ->
     match decl with
@@ -3127,7 +3322,17 @@ let collect_qualified_uses_for_module short_name (m : module_form) : string list
       (match payload with Some p -> walk_expr p | None -> ())
     | EServe { port; _ } -> walk_expr port
     | EFail { message; _ } -> walk_expr message
-    | ELit _ | EVar _ | EStartWorkers _ -> ()
+    | ELit _ | EVar _ | EStartWorkers _ | EStartEmailWorker _ -> ()
+    | ECacheGet { key; _ } -> walk_expr key
+    | ECacheSet { key; value; ttl; _ } ->
+      walk_expr key; walk_expr value;
+      (match ttl with Some e -> walk_expr e | None -> ())
+    | ECacheDelete { key; _ } -> walk_expr key
+    | ECacheInvalidate { prefix; _ } -> walk_expr prefix
+    | ESendEmail { to_; subject; body; _ } ->
+      walk_expr to_; walk_expr subject; walk_expr body
+    | ERuntimeCall { segments; _ } ->
+      List.iter (function RLit _ -> () | RArg e -> walk_expr e) segments
   in
   List.iter (function
     | DFunc (fd : Ast.func_decl) -> walk_expr fd.body
@@ -3156,9 +3361,20 @@ let emit_requires ctx (m : module_form) =
   emit_line ctx "  tesl/dsl/sql";
   emit_line ctx "  tesl/dsl/web";
   emit_line ctx "  tesl/dsl/test-support";
+  (* B5: always require checkpoint.  thsl-src!/thsl-src are expansion-time-gated
+     macros there — zero residue in release, real checkpoint under TESL_DEBUG. *)
+  emit_line ctx "  tesl/dsl/debug/checkpoint";
   emit_line ctx "  tesl/tesl/private/runtime";
   emit_line ctx "  tesl/tesl/queue";
   emit_line ctx "  tesl/tesl/sse";
+  (* cache and email DSL macros live in their own tesl/tesl modules.
+     Only emit their require when the module actually uses them so that
+     files compiled without a database/SMTP connection don't load the
+     runtime eagerly. *)
+  let has_cache = List.exists (function Ast.DCache _ -> true | _ -> false) m.decls in
+  let has_email = List.exists (function Ast.DEmail _ -> true | _ -> false) m.decls in
+  if has_cache then emit_line ctx "  tesl/tesl/cache";
+  if has_email then emit_line ctx "  tesl/tesl/email";
   if needs_runtime_path then
     emit_line ctx "  racket/runtime-path";
 
@@ -3379,6 +3595,17 @@ let emit_provide ctx (m : module_form) =
 
 (* ── Top-level declaration emitters ─────────────────────────────────────── *)
 
+(* Shared helper: emit a Racket (list (cons 'display racket) ...) for the
+   Variables panel.  Used by both emit_func and emit_test. *)
+let emit_locals_list ctx pairs =
+  if pairs = [] then emit ctx "(list)"
+  else begin
+    emit ctx "(list";
+    List.iter (fun (display, racket) ->
+      emit ctx (Printf.sprintf " (cons '%s %s)" display racket)) pairs;
+    emit ctx ")"
+  end
+
 let emit_func ctx (fd : func_decl) =
   (* MainKind emits as (module+ main ...) *)
   if fd.kind = MainKind then begin
@@ -3386,7 +3613,43 @@ let emit_func ctx (fd : func_decl) =
     emit ctx "  ";
     ctx.func_kind <- Some MainKind;
     ctx.func_return_spec <- None;
-    emit_expr ctx fd.body;
+    (* B5: always wrap each statement in (thsl-src! file line locals thunk) so
+       breakpoints can fire inside main blocks.  The macro erases to the bare
+       thunk body in release (zero residue) and to a real checkpoint under
+       TESL_DEBUG.  Wrapped in sm_region so the source-map tool still records
+       the body's emitted line range. *)
+    let rec emit_main_debug e =
+      match e with
+      | ELet { name; value; body; _ } ->
+        let val_loc = Checker.expr_loc value in
+        emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d (list) (lambda () " name
+          val_loc.Location.file (val_loc.Location.start.line + 1));
+        emit_expr ctx value;
+        emit ctx "))])";   (* ) closes lambda, ) closes thsl-src!, ] closes [, ) closes let bindings *)
+        emit_nl ctx;
+        emit ctx "  ";
+        emit_main_debug body;
+        emit ctx ")"
+      | ELetProof { value_name; proof_name; value; body; _ } ->
+        let val_loc = Checker.expr_loc value in
+        let tmp = Printf.sprintf "tesl_proof_binding_%d" ctx.case_counter in
+        ctx.case_counter <- ctx.case_counter + 1;
+        emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d (list) (lambda () " tmp
+          val_loc.Location.file (val_loc.Location.start.line + 1));
+        emit_expr ctx value;
+        emit ctx (Printf.sprintf "))]) (let ([%s (forget-proof %s)] [%s (detach-all-proof %s)]) "
+          value_name tmp proof_name tmp);
+        emit_main_debug body;
+        emit ctx "))"
+      | other ->
+        let loc = Checker.expr_loc other in
+        emit ctx (Printf.sprintf "(thsl-src! %S %d (list) (lambda () "
+          loc.Location.file (loc.Location.start.line + 1));
+        emit_expr ctx other;
+        emit ctx "))"
+    in
+    sm_region ctx ~form:"main block body" (Checker.expr_loc fd.body)
+      (fun () -> emit_main_debug fd.body);
     ctx.func_kind <- None;
     emit_line ctx ")";
     emit_nl ctx
@@ -3581,7 +3844,7 @@ let emit_func ctx (fd : func_decl) =
       emit ctx ") (lambda () ";
       emit_with_raw_tail body;
       emit ctx "))"
-    | ELet { name = "_"; value = ((ETelemetry _ | EEnqueue _ | EPublish _ | EStartWorkers _ | EWithDatabase _ | EWithCapabilities _ | EServe _) as stmt); body; _ } ->
+    | ELet { name = "_"; value = ((ETelemetry _ | EEnqueue _ | EPublish _ | EStartWorkers _ | EWithDatabase _ | EWithCapabilities _ | EServe _ | ERuntimeCall _) as stmt); body; _ } ->
       (* Runtime statement as statement → (begin stmt body) *)
       emit ctx "(begin ";
       emit_expr ctx stmt;
@@ -3885,30 +4148,200 @@ let emit_func ctx (fd : func_decl) =
     | EVar { name; _ }, FnKind when List.mem name param_names && not has_forall_return -> true
     | _ -> false
   in
-  (match tail with
-   | EApp _ when (is_user_defined_fn_call tail && not has_forall_return) || is_gdp_stdlib_tail ->
-     emit_with_raw_tail fd.body
-   | EVar _ when (is_local_var_tail || is_worker_param_tail || is_fn_param_tail) && not has_forall_return ->
-     emit_with_raw_tail fd.body
-   | ECase _ when case_arms_have_fn_calls ->
-     emit_with_raw_tail fd.body
-   | ECase _ when fd.kind = FnKind && not has_forall_return ->
-     emit_with_raw_tail fd.body
-   | EIf _ when fd.kind = FnKind && not has_forall_return ->
-     emit_with_raw_tail fd.body
-   | _ when fd.kind = EstablishKind ->
-     emit_with_raw_tail fd.body
-   | _ when has_forall_return ->
-     (* RetAttached/RetNamedPack returns: emit WITHOUT raw-value so GDP proof is preserved.
-        For field access like `payload.serial`, emit `(tesl-dot/runtime payload 'serial)`
-        instead of `(raw-value (tesl-dot/runtime ...))`. *)
-     (match fd.body with
-      | EField { obj; field; _ } when (match obj with EVar _ -> true | _ -> false) ->
-        emit ctx "(tesl-dot/runtime ";
-        emit_field_inner ctx obj;
-        emit ctx (Printf.sprintf " '%s)" field)
-      | _ -> emit_expr ctx fd.body)
-   | _ -> emit_expr ctx fd.body);
+  (* Inside define/pow, transform-body-sequence wraps every let binding with
+     wrap-runtime-named-binding, which creates:
+       (let ([*name (runtime-binding-raw bind)]   ; *name = raw value (int, string, etc.)
+             [name  (runtime-binding-name bind)])  ; name  = gensym for GDP tracking
+         ...)
+     So 'name' is always a gensym inside a define/pow fn, while '*name' is the raw value.
+     We must use *name everywhere — both for locals capture AND for the terminal expression —
+     to get actual values in the Variables panel and avoid validate-signature-return errors.
+     This applies equally to parameters (already using *name) and let-bound variables. *)
+  let emit_locals_list = emit_locals_list ctx in
+  let star name = Printf.sprintf "*%s" name in
+  (* All bindings use *name: parameters (already raw via runtime-binding-raw) and
+     let-bound variables (raw via wrap-runtime-named-binding's *name let). *)
+  let param_locals = List.map (fun n -> (n, star n)) param_names in
+  (* B5 — unified body emitter.  ONE emission path: the emitter ALWAYS wraps the
+     function body in [(thsl-src! file line locals (lambda () …))] checkpoints,
+     and the macro erases them to the bare body in release (zero residue).
+
+     Two shapes:
+       • "peelable" bodies — a chain of plain [let x = v] / [let (x ::: p) = v]
+         bindings ending in a simple terminal — are peeled so EACH binding gets
+         its own checkpoint LINE (per-statement stepping for the debugger).  Every
+         value / terminal inside a checkpoint is emitted by the SAME release
+         helpers ([emit_expr] / [emit_with_raw_tail]), so erasure recovers the
+         exact release semantics (proofs, fact tracking, …).
+       • everything else (SQL update/select lowering, check-call let/check chains,
+         runtime-statement sequencing, with-blocks, …) is emitted WHOLE by the
+         release path under a SINGLE function-entry checkpoint — never
+         re-implemented, so those forms keep byte-for-byte release semantics.
+         Granularity there is function-entry rather than per-line, which is
+         acceptable; correctness is preserved exactly.
+
+     [locals] threads (display, *raw) pairs for the debugger Variables panel; the
+     macro drops the list entirely in release. *)
+
+  (* Emit [fd.body] EXACTLY as the former release path did (the old `match tail`
+     decision).  Used both for the non-peelable whole-body checkpoint and for the
+     peeled terminal leaf. *)
+  let emit_release_body e =
+    match tail with
+    | EApp _ when (is_user_defined_fn_call tail && not has_forall_return) || is_gdp_stdlib_tail ->
+      emit_with_raw_tail e
+    | EVar _ when (is_local_var_tail || is_worker_param_tail || is_fn_param_tail) && not has_forall_return ->
+      emit_with_raw_tail e
+    | ECase _ when case_arms_have_fn_calls -> emit_with_raw_tail e
+    | ECase _ when fd.kind = FnKind && not has_forall_return -> emit_with_raw_tail e
+    | EIf _ when fd.kind = FnKind && not has_forall_return -> emit_with_raw_tail e
+    | _ when fd.kind = EstablishKind -> emit_with_raw_tail e
+    | _ when has_forall_return ->
+      (match e with
+       | EField { obj; field; _ } when (match obj with EVar _ -> true | _ -> false) ->
+         emit ctx "(tesl-dot/runtime ";
+         emit_field_inner ctx obj;
+         emit ctx (Printf.sprintf " '%s)" field)
+       | _ -> emit_expr ctx e)
+    | _ -> emit_expr ctx e
+  in
+  (* A let node is plainly peelable when it is NOT one of the special forms the
+     release ELet arms / emit_expr lowerings recognise (runtime-statement "_",
+     check-call, SQL update/select chains). *)
+  let plain_let_node e =
+    match e with
+    | ELet { name; value; _ } ->
+      let is_runtime_stmt_underscore =
+        String.equal name "_" &&
+        (match value with
+         | ETelemetry _ | EEnqueue _ | EPublish _ | EStartWorkers _
+         | EWithDatabase _ | EWithCapabilities _ | EWithTransaction _ | EServe _
+         | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
+         | ESendEmail _ | EStartEmailWorker _ | ERuntimeCall _ -> true
+         | _ -> false)
+      in
+      let is_check_call =
+        match value with
+        | EApp _ ->
+          let rec find_check = function
+            | EApp { fn = EVar { name = "check"; _ }; _ } -> true
+            | EApp { fn; _ } -> find_check fn
+            | _ -> false
+          in find_check value
+        | _ -> false
+      in
+      (* SQL update/select chains are recognised by emit_expr over the *chain*;
+         peeling the outer let would hide them, so they are not peelable. *)
+      let is_sql_chain =
+        (match extract_update e with Some _ -> true | None -> false)
+        || (match extract_multiline_select_query e with Some _ -> true | None -> false)
+        || (match extract_select_query e with Some _ -> true | None -> false)
+      in
+      not is_runtime_stmt_underscore && not is_check_call && not is_sql_chain
+    | _ -> false
+  in
+  (* The whole body is peelable iff every binding down the chain is a plain let
+     or an ELetProof whose value is a direct check-call (the ELetProof shape the
+     peeler reproduces faithfully), and the final tail is a non-let expression. *)
+  let rec body_peelable e =
+    match e with
+    | ELet _ -> plain_let_node e && body_peelable (match e with ELet { body; _ } -> body | _ -> e)
+    | ELetProof { value; body; _ } ->
+      (match direct_check_call value with Some _ -> true | None -> false) && body_peelable body
+    | _ -> true
+  in
+  (* Emit a single checkpoint over [e], delegating the body to [emit_release_body]
+     (so SQL / proof / terminal forms keep exact release semantics). *)
+  let emit_checkpoint_tail locals e =
+    let loc = Checker.expr_loc e in
+    emit ctx (Printf.sprintf "(thsl-src! %S %d " loc.Location.file (loc.Location.start.line + 1));
+    emit_locals_list locals;
+    emit ctx " (lambda () ";
+    emit_release_body e;
+    emit ctx "))"
+  in
+  let rec emit_debug_stmts ?(locals=[]) e =
+    match e with
+    | ELet { name; value; body; _ } when plain_let_node e ->
+      (* Replicate the plain-ELet fact / proof-carrier tracking from
+         emit_with_raw_tail so downstream case-arm proof propagation is identical. *)
+      let is_fact_here = match value with
+        | EApp _ ->
+          let rec hd = function EApp { fn; _ } -> hd fn | e -> e in
+          (match hd value with
+           | EVar { name = fn_name; _ } ->
+             fn_name = "detachFact" ||
+             (Hashtbl.mem ctx.fn_names fn_name &&
+              not (Hashtbl.mem stdlib_plain_imports fn_name))
+           | _ -> false)
+        | EBinop { op = BAnd; left; right; _ } ->
+          let rec all_facts e = match e with
+            | EVar { name; _ } -> Hashtbl.mem ctx.fact_locals name
+            | EBinop { op = BAnd; left; right; _ } -> all_facts left && all_facts right
+            | _ -> false
+          in all_facts left && all_facts right
+        | _ -> false
+      in
+      if is_fact_here then Hashtbl.replace ctx.fact_locals name ();
+      let is_proof_carrier_here =
+        match value with
+        | EApp _ ->
+          let rec get_fn = function EApp { fn; _ } -> get_fn fn | e -> e in
+          (match get_fn value with
+           | EVar { name = fn_name; _ } ->
+             (match Hashtbl.find_opt ctx.fn_return_specs fn_name with
+              | Some (RetMaybeAttached { binding = b; _ }) when b.proof_ann <> None -> true
+              | _ -> false)
+           | _ -> false)
+        | _ -> false
+      in
+      if is_proof_carrier_here then Hashtbl.replace ctx.proof_carrier_lets name ();
+      let val_loc = Checker.expr_loc value in
+      emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d " name
+        val_loc.Location.file (val_loc.Location.start.line + 1));
+      emit_locals_list locals;
+      emit ctx " (lambda () ";
+      emit_expr ctx value;
+      emit ctx "))]) ";
+      (* Use *name so the next checkpoint's locals show the raw value. *)
+      emit_debug_stmts ~locals:((name, star name) :: locals) body;
+      if is_fact_here then Hashtbl.remove ctx.fact_locals name;
+      if is_proof_carrier_here then Hashtbl.remove ctx.proof_carrier_lets name;
+      emit ctx ")"
+    | ELetProof { value_name; proof_name; value; body; _ } ->
+      let val_loc = Checker.expr_loc value in
+      let tmp = Printf.sprintf "tesl_proof_binding_%d" ctx.case_counter in
+      ctx.case_counter <- ctx.case_counter + 1;
+      emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d " tmp
+        val_loc.Location.file (val_loc.Location.start.line + 1));
+      emit_locals_list locals;
+      emit ctx " (lambda () ";
+      (* Preserve check-ok result for proof decomposition — match emit_with_raw_tail. *)
+      (match direct_check_call value with
+       | Some (check_fn, check_args) ->
+         emit ctx "(";
+         emit_expr ctx check_fn;
+         List.iter (fun arg -> emit ctx " "; emit_expr_simple ctx arg) check_args;
+         emit ctx ")"
+       | None -> emit_expr ctx value);
+      emit ctx (Printf.sprintf "))]) (let ([%s (forget-proof %s)] [%s (detach-all-proof %s)]) "
+        value_name tmp proof_name tmp);
+      emit_debug_stmts ~locals:((value_name, star value_name) :: locals) body;
+      emit ctx "))"
+    | other ->
+      (* Terminal leaf of a peelable body: one checkpoint, release emission. *)
+      emit_checkpoint_tail locals other
+  in
+  (* Record the body's emitted line range against the body's source span so a
+     runtime trace into this function resolves to the body, refining the
+     form-level entry recorded by emit_module's dispatch. *)
+  sm_region ctx ~form:(Printf.sprintf "body of %s" fd.name) (Checker.expr_loc fd.body) (fun () ->
+  if body_peelable fd.body then
+    emit_debug_stmts ~locals:param_locals fd.body
+  else
+    (* Non-peelable: emit the whole body via the release path under one
+       function-entry checkpoint (correct for SQL / special forms). *)
+    emit_checkpoint_tail param_locals fd.body);
   ctx.func_kind <- old_kind;
   ctx.func_return_spec <- old_return_spec;
   ctx.auth_return_binding <- old_auth_return_binding;
@@ -4056,8 +4489,8 @@ let emit_codec ctx (cf : codec_form) =
      emit ctx "  (hash ";
      List.iteri (fun i (e : codec_encode_entry) ->
        if i > 0 then emit ctx "\n        ";
-       emit ctx (Printf.sprintf "'%s (tesl-codec-encode-field (raw-value (hash-ref _fields '%s)) %s)"
-         e.json_key e.field_name (codec_name e.codec))
+       emit ctx (Printf.sprintf "'%s %s"
+         e.json_key (codec_encode_field_call e.codec e.field_name))
      ) entries;
      emit_line ctx "\n  ))";
    | ToJsonAdt -> () (* handled by emit_adt_codec; should not reach here *)
@@ -4074,13 +4507,13 @@ let emit_codec ctx (cf : codec_form) =
        emit_line ctx (Printf.sprintf "(define (tesl-codec-decode-%s-%d _j)" cf.name i);
        List.iter (function
          | DecodeField { field_name; json_key; codec; via = []; _ } ->
-           emit_line ctx (Printf.sprintf "  (define _f_%s (tesl-codec-decode-field _j %S %s))"
-             field_name json_key (codec_name codec))
+           emit_line ctx (Printf.sprintf "  (define _f_%s %s)"
+             field_name (codec_decode_field_call codec json_key))
          | DecodeField { field_name; json_key; codec; via = [via_fn]; _ } ->
            (* Via checker: decode raw then apply checker *)
            let r_var = Printf.sprintf "_r1_%s" field_name in
-           emit_line ctx (Printf.sprintf "  (define _fraw_%s (tesl-codec-decode-field _j %S %s))"
-             field_name json_key (codec_name codec));
+           emit_line ctx (Printf.sprintf "  (define _fraw_%s %s)"
+             field_name (codec_decode_field_call codec json_key));
            emit_line ctx (Printf.sprintf "  (define %s" r_var);
            emit_line ctx (Printf.sprintf "    (let ([_r (%s _fraw_%s)])" via_fn field_name);
            emit_line ctx "      (cond [(check-ok? _r) _r] [(check-fail? _r) _r] [else _r])))";
@@ -4098,12 +4531,12 @@ let emit_codec ctx (cf : codec_form) =
            ) via_fns None in
            (match combined_via with
             | None ->
-              emit_line ctx (Printf.sprintf "  (define _f_%s (tesl-codec-decode-field _j %S %s))"
-                field_name json_key (codec_name codec))
+              emit_line ctx (Printf.sprintf "  (define _f_%s %s)"
+                field_name (codec_decode_field_call codec json_key))
             | Some combined ->
               let r_var = Printf.sprintf "_r1_%s" field_name in
-              emit_line ctx (Printf.sprintf "  (define _fraw_%s (tesl-codec-decode-field _j %S %s))"
-                field_name json_key (codec_name codec));
+              emit_line ctx (Printf.sprintf "  (define _fraw_%s %s)"
+                field_name (codec_decode_field_call codec json_key));
               emit_line ctx (Printf.sprintf "  (define %s" r_var);
               emit_line ctx (Printf.sprintf "    (let ([_r (%s _fraw_%s)])" combined field_name);
               emit_line ctx "      (cond [(check-ok? _r) _r] [(check-fail? _r) _r] [else _r])))";
@@ -4559,7 +4992,8 @@ let emit_test ctx (t : test_form) =
       ) conds;
       emit ctx ")"
   in
-  let rec emit_test_stmt indent stmt =
+  (* locals: (display-name, racket-name) pairs accumulated from prior let bindings *)
+  let rec emit_test_stmt ?(locals=[]) indent stmt =
     match stmt with
     | TsLet { name; value = (EApp _ as check_app); _ } when (let rec find_check = function
          | EApp { fn = EVar { name = "check"; _ }; _ } -> true
@@ -4618,7 +5052,7 @@ let emit_test ctx (t : test_form) =
         emit_line ctx (Printf.sprintf "%s(define %s (detach-all-proof %s))" indent pname tmp);
         Hashtbl.replace ctx.proof_locals pname ()
       ) proof_names
-    | TsLet { name; value; _ } ->
+    | TsLet { name; value; loc; _ } ->
       let binding_name =
         if String.equal name "_" then begin
           let n = ctx.case_counter in
@@ -4629,26 +5063,41 @@ let emit_test ctx (t : test_form) =
       in
       emit ctx indent;
       emit ctx (Printf.sprintf "(define %s " binding_name);
+      emit ctx (Printf.sprintf "(thsl-src! %S %d " loc.Location.file (loc.Location.start.line + 1));
+      emit_locals_list ctx locals;
+      emit ctx " (lambda () ";
       emit_expr ctx value;
+      emit ctx "))";
       emit_line ctx ")"
-    | TsExpect { left = EBinop { op = BNeq; left = l; right = r; _ }; right = None; _ } ->
+    | TsExpect { left = EBinop { op = BNeq; left = l; right = r; _ }; right = None; loc } ->
       emit ctx indent;
       emit ctx "(check-not-equal? ";
+      emit ctx (Printf.sprintf "(thsl-src! %S %d " loc.Location.file (loc.Location.start.line + 1));
+      emit_locals_list ctx locals;
+      emit ctx " (lambda () ";
       emit_expr_simple ctx l;
-      emit ctx " ";
+      emit ctx ")) ";
       emit_expr_simple ctx r;
       emit_line ctx ")"
-    | TsExpect { left = EBinop { op = (BLt | BLe | BGt | BGe | BEq | BAnd | BOr); _ } as cmp; right = None; _ } ->
+    | TsExpect { left = EBinop { op = (BLt | BLe | BGt | BGe | BEq | BAnd | BOr); _ } as cmp; right = None; loc } ->
       emit ctx indent;
       emit ctx "(check-true ";
+      emit ctx (Printf.sprintf "(thsl-src! %S %d " loc.Location.file (loc.Location.start.line + 1));
+      emit_locals_list ctx locals;
+      emit ctx " (lambda () ";
       emit_expr ctx cmp;
+      emit ctx "))";
       emit_line ctx ")"
-    | TsExpect { left; right = None; _ } ->
+    | TsExpect { left; right = None; loc } ->
       emit ctx indent;
       emit ctx "(check-true (raw-value ";
+      emit ctx (Printf.sprintf "(thsl-src! %S %d " loc.Location.file (loc.Location.start.line + 1));
+      emit_locals_list ctx locals;
+      emit ctx " (lambda () ";
       emit_expr ctx left;
+      emit ctx "))";
       emit_line ctx "))"
-    | TsExpect { left; right = Some right; _ } ->
+    | TsExpect { left; right = Some right; loc } ->
       emit ctx indent;
       let needs_raw = match left with
         | ELit _ -> false
@@ -4657,16 +5106,23 @@ let emit_test ctx (t : test_form) =
       in
       if needs_raw then begin
         emit ctx "(check-equal? (raw-value ";
+        emit ctx (Printf.sprintf "(thsl-src! %S %d " loc.Location.file (loc.Location.start.line + 1));
+        emit_locals_list ctx locals;
+        emit ctx " (lambda () ";
         emit_expr ctx left;
+        emit ctx "))";
         emit ctx ") "
       end else begin
         emit ctx "(check-equal? ";
+        emit ctx (Printf.sprintf "(thsl-src! %S %d " loc.Location.file (loc.Location.start.line + 1));
+        emit_locals_list ctx locals;
+        emit ctx " (lambda () ";
         emit_expr ctx left;
-        emit ctx " "
+        emit ctx ")) "
       end;
       emit_expr ctx right;
       emit_line ctx ")"
-    | TsExpectFail { fn; arg; _ } ->
+    | TsExpectFail { fn; arg; loc } ->
       let rec flatten_args acc a = match a with
         | EApp { fn = base; arg = last; _ } -> flatten_args (last :: acc) base
         | _ -> a :: acc
@@ -4686,10 +5142,13 @@ let emit_test ctx (t : test_form) =
           emit ctx ")"
       in
       emit ctx indent;
-      emit_line ctx "(let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)])";
+      emit ctx (Printf.sprintf "(let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! %S %d "
+        loc.Location.file (loc.Location.start.line + 1));
+      emit_locals_list ctx locals;
+      emit_line ctx " (lambda ()";
       emit ctx (indent ^ "                        ");
       emit_expect_fail_call ();
-      emit_line ctx ")])";
+      emit_line ctx ")))])";
       emit_line ctx (indent ^ "  (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))");
       let escape_for_str s = String.escaped s in
       let fn_buf = Buffer.create 32 in
@@ -4705,13 +5164,19 @@ let emit_test ctx (t : test_form) =
         indent
         (escape_for_str (Buffer.contents fn_buf))
         (escape_for_str (Buffer.contents args_buf)))
-    | TsExpectHasProof { fn; arg; proof_name; _ } ->
+    | TsExpectHasProof { fn; arg; proof_name; loc } ->
       emit ctx indent;
-      emit ctx "(let ([tesl-hpv (";
+      (* B5: always wrap in a 4-arg thsl-src! (file line locals thunk).  The
+         former --debug branch emitted a 3-arg call (no locals) which would
+         crash the runtime checkpoint; unified here with an empty locals list. *)
+      emit ctx (Printf.sprintf "(let ([tesl-hpv (thsl-src! %S %d "
+        loc.Location.file (loc.Location.start.line + 1));
+      emit_locals_list ctx locals;
+      emit ctx " (lambda () (";
       emit_expr ctx fn;
       emit ctx " ";
       emit_expr_simple ctx arg;
-      emit_line ctx ")])";
+      emit_line ctx ")))])";
       emit_line ctx (indent ^ "  (check-true");
       emit_line ctx (indent ^ "    (for/or ([f (in-list (facts-of tesl-hpv))])");
       emit_line ctx (Printf.sprintf "%s      (and (pair? f) (eq? (car f) '%s)))" indent proof_name);
@@ -4826,7 +5291,20 @@ let emit_test ctx (t : test_form) =
   let body_indent = if t.capabilities = [] then "  " else "    " in
   if t.capabilities <> [] then
     emit_line ctx (Printf.sprintf "    (with-capabilities (%s)" (String.concat " " t.capabilities));
-  List.iter (emit_test_stmt body_indent) t.stmts;
+  (* Fold through stmts accumulating in-scope locals for the Variables panel *)
+  let _ = List.fold_left (fun locals stmt ->
+    emit_test_stmt ~locals body_indent stmt;
+    (* After a user-named let binding, add it to locals for subsequent stmts.
+       B5: always thread locals (the thsl-src! wrapper is now always emitted; the
+       macro drops the locals list in release). *)
+    match stmt with
+    | TsLet { name; _ } when not (String.equal name "_")
+                           && not (String.length name >= 5 && String.sub name 0 5 = "tesl_") ->
+      (name, name) :: locals
+    | TsLetProof { value_name; _ } ->
+      (value_name, value_name) :: locals
+    | _ -> locals
+  ) [] t.stmts in
   if t.capabilities <> [] then emit_line ctx "    )";
   emit_line ctx "  )"
 
@@ -5307,6 +5785,41 @@ let emit_load_test ctx ~(database_names : string list) (t : load_test_form) =
 
 (* ── Main module emitter ─────────────────────────────────────────────────── *)
 
+(* For the source-map: the [Location.loc] and a short human label of each
+   top-level declaration.  Every [top_decl] payload already carries a [loc]
+   (parser-assigned) — we read it, never duplicate it. *)
+let top_decl_loc_label (d : top_decl) : Location.loc * string =
+  match d with
+  | DFunc fd ->
+    let k = match fd.kind with
+      | FnKind -> "fn" | CheckKind -> "check" | AuthKind -> "auth"
+      | EstablishKind -> "establish" | HandlerKind -> "handler"
+      | WorkerKind -> "worker" | DeadWorkerKind -> "dead-letter worker"
+      | MainKind -> "main"
+    in
+    fd.loc, (if fd.kind = MainKind then "main block" else Printf.sprintf "%s %s" k fd.name)
+  | DType (TypeNewtype { loc; name; _ }) -> loc, Printf.sprintf "newtype %s" name
+  | DType (TypeAlias { loc; name; _ })   -> loc, Printf.sprintf "type alias %s" name
+  | DType (TypeAdt { loc; name; _ })     -> loc, Printf.sprintf "type %s" name
+  | DRecord r     -> r.loc, Printf.sprintf "record %s" r.name
+  | DEntity e     -> e.loc, Printf.sprintf "entity %s" e.name
+  | DFact f       -> f.loc, Printf.sprintf "fact %s" f.name
+  | DCodec c      -> c.loc, Printf.sprintf "codec %s" c.name
+  | DDatabase d   -> d.loc, Printf.sprintf "database %s" d.name
+  | DCapability c -> c.loc, Printf.sprintf "capability %s" c.name
+  | DConst c      -> c.loc, Printf.sprintf "const %s" c.name
+  | DQueue q      -> q.loc, Printf.sprintf "queue %s" q.name
+  | DChannel c    -> c.loc, Printf.sprintf "channel %s" c.name
+  | DWorkers w    -> w.loc, Printf.sprintf "workers %s" w.name
+  | DCache c      -> c.loc, Printf.sprintf "cache %s" c.name
+  | DEmail e      -> e.loc, Printf.sprintf "email %s" e.name
+  | DCapture c    -> c.loc, Printf.sprintf "capture %s" c.name
+  | DApi a        -> a.loc, Printf.sprintf "api %s" a.name
+  | DServer s     -> s.loc, Printf.sprintf "server %s" s.name
+  | DTest t       -> t.loc, Printf.sprintf "test %S" t.description
+  | DApiTest t    -> t.loc, Printf.sprintf "api test %S" t.description
+  | DLoadTest t   -> t.loc, Printf.sprintf "load test %S" t.description
+
 let emit_module ctx (m : module_form) =
   (* Pre-populate known stdlib ADT constructor → field labels.
      These are not in user-imports (stdlib is always skipped) but pattern matching
@@ -5419,6 +5932,8 @@ let emit_module ctx (m : module_form) =
 
   (* Emit each declaration *)
   List.iter (fun decl ->
+    let sm_loc, sm_form = top_decl_loc_label decl in
+    sm_region ctx ~form:sm_form sm_loc (fun () ->
     match decl with
     | DFunc fd -> emit_func ctx fd
     | DType tf -> emit_type_form ctx tf
@@ -5488,15 +6003,43 @@ let emit_module ctx (m : module_form) =
     | DTest _ -> ()  (* collected and emitted in one batch below *)
     | DApiTest t -> emit_api_test ctx ~database_names t
     | DLoadTest t -> emit_load_test ctx ~database_names t
+    | DCache c ->
+      emit ctx (Printf.sprintf "(define-cache %s #:database %s" c.name c.database);
+      (match c.default_ttl with
+       | Some ttl -> emit ctx (Printf.sprintf " #:default-ttl %d" ttl)
+       | None -> ());
+      emit_line ctx ")";
+      emit_nl ctx
+    | DEmail e ->
+      emit ctx (Printf.sprintf "(define-email %s #:database %s" e.name e.database);
+      emit ctx " #:smtp-host ";
+      emit_postgres_value ctx e.smtp.host;
+      emit ctx (Printf.sprintf " #:smtp-port %d" e.smtp.port);
+      emit ctx " #:smtp-username ";
+      emit_postgres_value ctx e.smtp.username;
+      emit ctx " #:smtp-password ";
+      emit_postgres_value ctx e.smtp.password;
+      emit ctx (Printf.sprintf " #:smtp-tls %s" (if e.smtp.tls then "#t" else "#f"));
+      emit_line ctx ")";
+      emit_nl ctx
+    )  (* close sm_region thunk *)
   ) m.decls;
 
   (* Emit all DTest blocks in a single (module+ test ...) to avoid rackunit
      side-effects from multiple (require rackunit) calls in separate fragments. *)
-  let plain_tests = List.filter_map (function DTest t -> Some t | _ -> None) m.decls in
+  let plain_tests =
+    let all = List.filter_map (function DTest t -> Some t | _ -> None) m.decls in
+    match !test_name_filter with
+    | None      -> all
+    | Some name -> List.filter (fun (t : test_form) -> String.equal t.description name) all
+  in
   if plain_tests <> [] then begin
     emit_line ctx "(module+ test";
     emit_line ctx "  (require rackunit)";
-    List.iter (fun t -> emit_test ctx t; emit_nl ctx) plain_tests;
+    List.iter (fun (t : test_form) ->
+      sm_region ctx ~form:(Printf.sprintf "test %S" t.description) t.loc
+        (fun () -> emit_test ctx t);
+      emit_nl ctx) plain_tests;
     emit_line ctx ")";
     emit_nl ctx
   end;
@@ -5615,6 +6158,14 @@ let compile_to_string ?(root_path=default_root_path ()) ?(cyclic_local_import_pa
     | DQueue q -> List.iter (fun job -> Hashtbl.replace job_type_to_queue job q.name) q.jobs
     | _ -> ()
   ) m.decls;
+  (* Surface-form lowering (reduce_language_size).  Run here, AFTER the type
+     checker has seen the surface forms (so [expr_type_tbl] keys/diagnostics are
+     unchanged) and immediately BEFORE [emit_module], so the emitter only ever
+     sees the lowered core forms (EEnqueue/EStartWorkers/EServe → ERuntimeCall).
+     Idempotent: re-running on an already-lowered module is the identity, so the
+     compile.ml pipeline's own desugar pass and direct callers of this function
+     both produce identical output. *)
+  let m = Desugar.desugar_module m in
   emit_module ctx m;
   (* Trim trailing blank line to match Python compiler output *)
   let s = Buffer.contents ctx.buf in

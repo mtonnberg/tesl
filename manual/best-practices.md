@@ -13,11 +13,12 @@ Use `tesl help manual best-practices` to access this from the CLI.
 3. [Naming Conventions](#naming-conventions)
 4. [Validation Patterns](#validation-patterns)
 5. [Proof Management](#proof-management)
-6. [Error Handling](#error-handling)
-7. [API Design](#api-design)
-8. [Database Access](#database-access)
-9. [Testing](#testing)
-10. [Performance](#performance)
+6. [Proof Cost Model](#proof-cost-model)
+7. [Error Handling](#error-handling)
+8. [API Design](#api-design)
+9. [Database Access](#database-access)
+10. [Testing](#testing)
+11. [Performance](#performance)
 
 ---
 
@@ -197,6 +198,48 @@ handler getAllTodos() -> List Todo ? ForAll (FromDb (Id == todo.id))
   requires [db] =
   select todo from Todo
 ```
+
+---
+
+## Proof Cost Model
+
+**Proofs are zero-cost by default.** In a normal (release) build, every proof annotation
+(`:::`) is **erased after type-checking** — there is no wrapper, no struct, and no allocation.
+The proof exists only in the compiler's static checker; by the time your code runs, it is gone.
+
+This means you should reach for proofs **freely**. Adding a `:::` annotation, composing predicates
+with `&&`, or constraining a list with `ForAll` costs nothing at runtime. Design your types around
+the guarantees you want, not around an imagined allocation budget.
+
+### Debugging proofs
+
+Proofs are erased even under `--debug`. A binding's proof is *compile-time* information (the static
+checker already knows `port : Int ::: ValidPort`), so the step debugger shows the raw runtime value
+and overlays the proof/type from compile-time type info — it needs no runtime struct. Breakpoints
+and stepping work normally. If you ever want the old runtime safety net back (e.g. to diagnose a
+suspected static-checker gap), set `TESL_ZERO_COST_PROOFS=0`, which restores it for regression
+comparison.
+
+```bash
+tesl run my-api.tesl                            # proofs erased, zero overhead
+tesl run --debug my-api.tesl                    # breakpoints + raw-value inspection; proofs still erased
+TESL_ZERO_COST_PROOFS=0 tesl run my-api.tesl    # restores the runtime net (regression comparison)
+```
+
+### Per-feature runtime cost
+
+| Feature | Runtime cost |
+|---|---|
+| Proof annotations (`:::`) | **Zero.** Checked once at the boundary, then erased — in release and `--debug` alike. The debugger reads proof/type from compile-time info. `TESL_ZERO_COST_PROOFS=0` restores the runtime net for regression comparison. |
+| `check` functions | The check body runs **once**, at the validation boundary. It never re-runs downstream. |
+| Capabilities (`requires [...]`) | **Zero.** A compile-time contract with no runtime representation. |
+| `ForAll` on lists | **Zero.** The list is a plain list at runtime; the annotation is erased — no per-element boxing. |
+| Free-floating proofs (`detachFact` / `attachFact`) | **Minimal token, always.** These are explicit first-class values passed around at runtime, so they keep a small representation even in release builds. |
+| ADTs / sum types | A normal tagged-union struct, like a discriminated union in any other language. |
+| Newtypes (`type UserId = String`) | A thin wrapper struct for nominal distinctness; unwrapped automatically on DB and JSON boundaries. |
+
+> The wording here matches the cost table in [`TESL.md`](../TESL.md) and the proof-erasure rules in
+> [`LANGUAGE-SPEC.md`](../LANGUAGE-SPEC.md). If those diverge, the language spec is authoritative.
 
 ---
 
@@ -993,15 +1036,15 @@ test "second" = ...  -- depends on data from first
 
 ## Performance
 
----
-
-## Performance
-
 ### Minimize Allocations
 
-- **Proof structs** are currently allocated at runtime but will be elided in the future
-- **Use value-level proofs** where possible instead of free-floating proofs
-- **Batch database queries** when possible
+- **Proofs are free.** In a release build proof structs are erased entirely (see
+  [Proof Cost Model](#proof-cost-model)), so a `:::` annotation adds no allocation. They are only
+  materialised under `--debug` for the step debugger.
+- **Prefer value-level proofs** over free-floating proofs (`detachFact` / `attachFact`): a
+  free-floating proof keeps a small runtime token even in release builds, a value-level annotation
+  does not.
+- **Batch database queries** when possible.
 
 ### Caching
 
@@ -1047,6 +1090,7 @@ fn validateEmail(email: String) -> String = ...
 ## See Also
 
 - [Manual Index](MANUAL.md) - Back to the main manual
+- [Stable Anchor Scheme](anchors.md) - Deep-link IDs (error messages cite this file's anchors)
 - [Examples](examples.md) - Complete list of examples
 - [LANGUAGE-SPEC.md](../LANGUAGE-SPEC.md) - Formal specification
 - [TESL.md](../TESL.md) - High-level introduction

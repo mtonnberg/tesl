@@ -118,6 +118,12 @@ and expr =
   | EEnqueue of { job_type : string; payload : expr; loc : loc }
   | EPublish of { channel_name : string; key : expr option; event_ctor : string; payload : expr option; loc : loc }
   | EStartWorkers of { workers_name : string; capabilities : string list; concurrency : int option; is_dead : bool; loc : loc }
+  | ECacheGet    of { cache_name : string; key : expr; loc : loc }
+  | ECacheSet    of { cache_name : string; key : expr; value : expr; ttl : expr option; loc : loc }
+  | ECacheDelete of { cache_name : string; key : expr; loc : loc }
+  | ECacheInvalidate of { cache_name : string; prefix : expr; loc : loc }
+  | ESendEmail   of { email_name : string; to_ : expr; subject : expr; body : expr; loc : loc }
+  | EStartEmailWorker of { email_name : string; loc : loc }
   | EWithDatabase of { database_name : string; body : expr; loc : loc }
   | EWithCapabilities of { capabilities : string list; body : expr; loc : loc }
   | EWithTransaction of { body : expr; loc : loc }
@@ -126,6 +132,21 @@ and expr =
                (** Constructor applied to zero or more args *)
   | ELambda of { params : binding list; body : expr; loc : loc }
                (** Anonymous function: fn(x: T, y: T) -> body *)
+  | ERuntimeCall of { segments : rcall_seg list; loc : loc }
+               (** Desugar-only lowering target (reduce_language_size, Wave 2).
+                   A pre-rendered Racket runtime call: an alternation of verbatim
+                   token strings ([RLit]) and argument sub-expressions ([RArg],
+                   emitted through the context-aware {!Emit_racket.emit_expr_simple}
+                   path).  Produced ONLY by {!Desugar} from fixed-shape effect
+                   forms (EEnqueue / EStartWorkers / EServe) whose templates are
+                   fully determined at desugar time; the emitter walks [segments]
+                   verbatim.  This is never produced by the parser, so all
+                   surface-form enforcement/diagnostics (which run BEFORE desugar)
+                   still see the original variant. *)
+
+and rcall_seg =
+  | RLit of string   (** verbatim Racket tokens emitted as-is *)
+  | RArg of expr     (** argument sub-expression, emitted via emit_expr_simple *)
 
 and binop =
   | BAdd | BSub | BMul | BDiv | BMod
@@ -166,6 +187,19 @@ type func_kind =
   | DeadWorkerKind
   | MainKind
 
+(** Desugaring provenance: where a synthesised AST node was lowered FROM.
+
+    Platinum groundwork for the upcoming desugar pass (Wave 2). When a later
+    pass replaces a piece of surface syntax with a more primitive form, it must
+    record the ORIGINAL source location here so that go-to-definition, hover and
+    diagnostics keep pointing at what the user actually wrote, never at the
+    machine-generated lowering. It is [None] for every node parsed directly from
+    source (the only producer today is the parser, which always sets [None]), so
+    adding it changes no current behaviour. *)
+type provenance = {
+  desugared_from : loc;   (** the surface loc this node was lowered from *)
+}
+
 type func_decl = {
   kind        : func_kind;
   name        : string;
@@ -174,6 +208,9 @@ type func_decl = {
   capabilities : string list;
   body        : expr;
   loc         : loc;
+  desugared_from : provenance option;
+                (** [None] when parsed from source; [Some p] when synthesised by
+                    a desugaring pass, recording the original surface location. *)
 }
 
 type adt_variant = {
@@ -294,6 +331,29 @@ type channel_form = {
   database   : string;
   payload    : type_expr;
   loc        : loc;
+}
+
+type cache_form = {
+  name        : string;
+  database    : string;
+  value_type  : type_expr;
+  default_ttl : int option;
+  loc         : loc;
+}
+
+type smtp_config = {
+  host     : string;
+  port     : int;
+  username : string;
+  password : string;
+  tls      : bool;
+}
+
+type email_form = {
+  name     : string;
+  database : string;
+  smtp     : smtp_config;
+  loc      : loc;
 }
 
 type workers_form = {
@@ -471,6 +531,8 @@ type top_decl =
   | DQueue      of queue_form
   | DChannel    of channel_form
   | DWorkers    of workers_form
+  | DCache      of cache_form
+  | DEmail      of email_form
   | DCapture    of capture_form
   | DApi        of api_form
   | DServer     of server_form
@@ -482,6 +544,7 @@ type top_decl =
 
 type module_form = {
   module_name : string;
+  is_library  : bool;    (** true when declared with `library` keyword instead of `module` *)
   exports     : export_item list;
   imports     : import_decl list;
   decls       : top_decl list;

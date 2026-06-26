@@ -60,37 +60,27 @@ let rec check_exists_witness_shadowing (exist_seen : string list) (e : expr)
     in
     let exist_seen' = if witness = "_" then exist_seen else witness :: exist_seen in
     shadow_errors @ check_exists_witness_shadowing exist_seen' body
-  | EApp { fn; arg; _ } ->
-    check_exists_witness_shadowing exist_seen fn
-    @ check_exists_witness_shadowing exist_seen arg
-  | ELet { value; body; _ } | ELetProof { value; body; _ } ->
-    check_exists_witness_shadowing exist_seen value
-    @ check_exists_witness_shadowing exist_seen body
-  | EIf { cond; then_; else_; _ } ->
-    check_exists_witness_shadowing exist_seen cond
-    @ check_exists_witness_shadowing exist_seen then_
-    @ check_exists_witness_shadowing exist_seen else_
-  | ECase { scrut; arms; _ } ->
-    check_exists_witness_shadowing exist_seen scrut
-    @ List.concat_map (fun (arm : case_arm) ->
-        check_exists_witness_shadowing exist_seen arm.body) arms
-  | EBinop { left; right; _ } ->
-    check_exists_witness_shadowing exist_seen left
-    @ check_exists_witness_shadowing exist_seen right
-  | EUnop { arg; _ } | EField { obj = arg; _ } ->
-    check_exists_witness_shadowing exist_seen arg
-  | EList { elems; _ } ->
-    List.concat_map (check_exists_witness_shadowing exist_seen) elems
-  | EOk { value; _ } -> check_exists_witness_shadowing exist_seen value
-  | ERecord { fields; _ } ->
-    List.concat_map (fun (_, v) -> check_exists_witness_shadowing exist_seen v) fields
-  | ELambda { body; _ }
-  | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
-  | EWithTransaction { body; _ } -> check_exists_witness_shadowing exist_seen body
-  | EConstructor { args; _ } ->
-    List.concat_map (check_exists_witness_shadowing exist_seen) args
+  (* These variants were deliberately NON-descending in the original walk: an
+     `exists`/`make-witness` frame cannot appear inside a `fail` message, a
+     `serve` port, the worker-start capability list, or telemetry/queue/pubsub
+     payloads in well-formed programs, so the hand-walk returned `[]` for them
+     WITHOUT recursing. `Ast_visitor.fold_children` would descend into their
+     child exprs (e.g. EServe.port, ETelemetry/EEnqueue/EPublish payloads),
+     changing behaviour, so keep them explicit no-ops. *)
   | ELit _ | EVar _ | EFail _ | EServe _ | EStartWorkers _
-  | ETelemetry _ | EEnqueue _ | EPublish _ -> []
+  | ETelemetry _ | EEnqueue _ | EPublish _ | EStartEmailWorker _ -> []
+  (* Every remaining variant carries `exist_seen` UNCHANGED into all its child
+     exprs (only the `make-witness` arm above extends the witness frame), and
+     accumulates errors left-to-right.  That is exactly a left-to-right fold
+     over the immediate children via the shared {!Ast_visitor}, so the
+     mechanical arms collapse into one fall-through.  `fold_children` visits
+     children in the same source order the hand-walk did, and `acc @ f child`
+     preserves the prior `@`-concatenation order verbatim. (EField only visits
+     `obj`, matching the original `EField { obj = arg; _ }` arm.) *)
+  | _ ->
+    Ast_visitor.fold_children
+      (fun acc child -> acc @ check_exists_witness_shadowing exist_seen child)
+      [] e
 
 let rec check_name_shadowing_expr
     (seen : string list)
@@ -139,17 +129,6 @@ let rec check_name_shadowing_expr
       dup_errors @ shadow_errors @ guard_errors @ check_name_shadowing_expr seen' arm.body
     ) arms in
     scrut_errors @ arm_errors
-  | ELit _ | EVar _ | EConstructor _ | EFail _ -> []
-  | EField { obj; _ } -> check_name_shadowing_expr seen obj
-  | EApp { fn; arg; _ } ->
-    check_name_shadowing_expr seen fn @ check_name_shadowing_expr seen arg
-  | EBinop { left; right; _ } ->
-    check_name_shadowing_expr seen left @ check_name_shadowing_expr seen right
-  | EUnop { arg; _ } -> check_name_shadowing_expr seen arg
-  | EIf { cond; then_; else_; _ } ->
-    check_name_shadowing_expr seen cond
-    @ check_name_shadowing_expr seen then_
-    @ check_name_shadowing_expr seen else_
   | ELetProof { value_name; proof_name; value; body; loc; _ } ->
     let value_errors = check_name_shadowing_expr seen value in
     let bound_names =
@@ -173,20 +152,6 @@ let rec check_name_shadowing_expr
     @ duplicate_errors
     @ shadow_errors
     @ check_name_shadowing_expr (bound_names @ seen) body
-  | ERecord { fields; _ } ->
-    List.concat_map (fun (_, v) -> check_name_shadowing_expr seen v) fields
-  | EList { elems; _ } -> List.concat_map (check_name_shadowing_expr seen) elems
-  | EOk { value; _ } -> check_name_shadowing_expr seen value
-  | ETelemetry { fields; _ } ->
-    List.concat_map (fun (_, v) -> check_name_shadowing_expr seen v) fields
-  | EEnqueue { payload; _ } -> check_name_shadowing_expr seen payload
-  | EPublish { key; payload; _ } ->
-    (match key with Some e -> check_name_shadowing_expr seen e | None -> [])
-    @ (match payload with Some e -> check_name_shadowing_expr seen e | None -> [])
-  | EStartWorkers _ -> []
-  | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } ->
-    check_name_shadowing_expr seen body
-  | EServe { port; _ } -> check_name_shadowing_expr seen port
   | ELambda { params; body; _ } ->
     let duplicate_errors = duplicate_parameter_errors params in
     let shadow_errors = List.filter_map (fun (b : binding) ->
@@ -201,6 +166,25 @@ let rec check_name_shadowing_expr
       ) params seen
     in
     duplicate_errors @ shadow_errors @ check_name_shadowing_expr seen' body
+  (* EConstructor and EFail are kept explicit as no-ops: the original walk
+     returned `[]` for both WITHOUT descending into their child exprs
+     (constructor args / the `fail` message). `Ast_visitor.fold_children` DOES
+     visit those children, so falling through would newly report shadowing
+     inside e.g. `Some (let x = ... in x)` or `fail (let x = ... in 401)` —
+     a behaviour change. Preserve the exact prior (non-descending) semantics. *)
+  | EConstructor _ | EFail _ -> []
+  (* All remaining variants pass `seen` UNCHANGED into every child expr — only
+     the binder-introducing arms above (ELet, ECase, ELetProof, ELambda) extend
+     it.  Their hand-rolled recursion is exactly a left-to-right fold over the
+     immediate children, so it collapses into one {!Ast_visitor} fall-through.
+     `fold_children` threads children in the same source order, and `acc @ f
+     child` preserves the prior `@`-concatenation order verbatim. (EField only
+     visits `obj`, the cache/email/serve/with forms only their child exprs, and
+     the leaves contribute nothing — all matched by `fold_children`.) *)
+  | _ ->
+    Ast_visitor.fold_children
+      (fun acc child -> acc @ check_name_shadowing_expr seen child)
+      [] e
 
 
 and check_name_shadowing_test_stmts
@@ -600,6 +584,49 @@ let check_name_shadowing (m : module_form) : validation_error list =
   ) decls;
   List.rev !errors
 
+(** A `check` or `auth` function MUST declare a proof in its return type.
+
+    Writing `check f(n: Int) -> n: Int` (no `:::`) is a silent footgun: the
+    compiler accepts `ok n ::: IsPositive n` in the body, but the proof is
+    invisible to callers because it was never promised in the return spec.
+    Callers cannot use what was never contracted. *)
+let check_check_fn_has_proof_return (decls : top_decl list) : validation_error list =
+  List.filter_map (function
+    | DFunc fd when fd.kind = CheckKind || fd.kind = AuthKind ->
+      let has_proof = match fd.return_spec with
+        | RetAttached    { binding; _ } -> binding.proof_ann <> None
+        | RetMaybeAttached { binding; _ } -> binding.proof_ann <> None
+        | RetForAll _
+        | RetMaybeForAll _
+        | RetSetForAll _
+        | RetMaybeSetForAll _
+        | RetForAllDictValues _
+        | RetForAllDictKeys _ -> true
+        | RetExists _ -> true
+        | RetNamedPack _ -> true
+        | RetPlain _ -> false
+      in
+      if has_proof then None
+      else
+        let kind = match fd.kind with CheckKind -> "check" | _ -> "auth" in
+        let example_binding =
+          match fd.return_spec with
+          | RetAttached { binding; _ } ->
+            Printf.sprintf "-> %s: <Type> ::: <Predicate> %s" binding.name binding.name
+          | _ ->
+            "-> result: <Type> ::: <Predicate> result"
+        in
+        Some (make_error fd.loc
+          ~hint:(Printf.sprintf "add a proof to the return type: `%s`" example_binding)
+          (Printf.sprintf
+            "`%s` function `%s` has no proof in its return type — \
+             callers cannot use any proof produced in the body; \
+             a `%s` function without `:::` in its return type is always a bug"
+            kind fd.name kind))
+    | _ -> None
+  ) decls
+
+
 (* ── Duplicate top-level names ──────────────────────────────────────────── *)
 
 let check_duplicate_top_level_names (decls : top_decl list) : validation_error list =
@@ -853,6 +880,47 @@ let check_local_imports_exist (m : module_form) : validation_error list =
           (Printf.sprintf "module `%s` not found: looked for `%s`"
              imp.module_name kebab_path))
   ) m.imports
+
+
+(** E090 — library exports a function whose signature references a locally-defined
+    type or proof predicate that is not also exported.
+
+    Consumers of the library cannot call such a function: they cannot create
+    values of the unexported type, nor satisfy the unexported proof predicate.
+    For `library` modules this is a hard error (the library has a broken public
+    API).  Regular `module` declarations get a lint warning instead (W080). *)
+let check_exported_signature_completeness (m : module_form) : validation_error list =
+  if not m.is_library then []
+  else begin
+    let locally_defined = List.filter_map (function
+      | DRecord r -> Some r.name
+      | DType (TypeAdt { name; _ }) -> Some name
+      | DType (TypeNewtype { name; _ }) -> Some name
+      | DType (TypeAlias { name; _ }) -> Some name
+      | DFact f -> Some f.name
+      | DCapability cap -> Some cap.name
+      | _ -> None
+    ) m.decls in
+    let exported_set = List.filter_map (function
+      | ExportName n | ExportAdt n -> Some n) m.exports in
+    List.concat_map (function
+      | DFunc fd when List.mem fd.name exported_set ->
+        let seen = Hashtbl.create 4 in
+        List.filter_map (fun (name, loc) ->
+          if Hashtbl.mem seen name then None
+          else if List.mem name locally_defined && not (List.mem name exported_set) then begin
+            Hashtbl.add seen name ();
+            Some (make_error loc
+              ~hint:(Printf.sprintf "add `%s` to the `exposing [...]` list" name)
+              (Printf.sprintf
+                "library `%s` exports `%s` but `%s` (used in its signature) is not \
+                 exported — consumers cannot use this function"
+                m.module_name fd.name name))
+          end else None
+        ) (func_sig_refs fd)
+      | _ -> []
+    ) m.decls
+  end
 
 
 (** Build a map from function name → declared capabilities for all DFunc decls *)

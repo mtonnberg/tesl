@@ -2,6 +2,7 @@
 
 (require "../capability.rkt"
          "evidence.rkt"
+         "proof-utils.rkt"
          "../types.rkt"
          racket/list
          racket/match
@@ -654,11 +655,15 @@
 ;; subject: the GDP gensym (e.g. the `n` gensym from define/pow binding)
 ;; raw-val: the raw Racket value (the *n raw value)
 ;; proof-fact: a fully-instantiated fact datum, e.g. '(IsPositive n-gensym)
-(define (tesl-establish-param-proof subject raw-val proof-fact)
-  ;; named-value-facts holds plain datums, not detached-proof objects
+(define (tesl-establish-param-proof subject raw-val proof-fact [all-bindings (hash)])
+  ;; named-value-facts holds plain datums, not detached-proof objects.
+  ;; [all-bindings] carries the sibling parameters' (public-name → raw) bindings so a
+  ;; CROSS-PARAMETER proof (e.g. `HasKey key dict`, consumed at runtime by a proof-total
+  ;; stdlib like Dict.get) can resolve its other subjects — mirroring the non-erased
+  ;; path's all-arg-bindings.  A single-arg proof (e.g. IsNonZero) is unaffected.
   (named-value subject raw-val
                (list proof-fact)
-               (hash subject raw-val)))
+               (hash-set all-bindings subject raw-val)))
 
 (define (normalize-typecheck-value value)
   (cond
@@ -675,14 +680,9 @@
      (map normalize-typecheck-value value)]
     [else value]))
 
-(define (proof-infix-operands datum op)
-  (and (list? datum)
-       (>= (length datum) 3)
-       (odd? (length datum))
-       (for/and ([index (in-range 1 (length datum) 2)])
-         (eq? (list-ref datum index) op))
-       (for/list ([index (in-range 0 (length datum) 2)])
-         (list-ref datum index))))
+;; proof-infix-operands is shared via private/proof-utils.rkt (the only helper
+;; that is byte-identical AND dependency-free across check-runtime.rkt and
+;; web.rkt; see proof-utils.rkt for why the other 4 candidates stay duplicated).
 
 ;; Structural proof match that allows free interned symbols in `template` to act
 ;; as wildcards when the corresponding position in `fact` holds an uninterned
@@ -744,6 +744,18 @@
     [else #f]))
 
 
+;; A2 — Tesl-level failure rendering (reject / type / proof path).
+;; The runtime intentionally does not know .tesl positions (those are resolved by
+;; the OCaml `tesl-sourcemap render` step from the trace + compile-time map).  We
+;; DO know the originating construct (`who`/`subject`/`public-name`) and the
+;; expected type/proof, so we lead the message with a stable, classifiable
+;; "expected …" headline naming the construct.  The trailing "does not satisfy
+;; declared type/proof <X>" fragment is preserved verbatim so the OCaml failure
+;; classifier (and any existing matchers) keep working.  Verbose under
+;; TESL_VERBOSE.  Read once at load (mirrors tesl/logging.rkt's tesl-verbose?).
+(define tesl-verbose?
+  (let ([v (getenv "TESL_VERBOSE")]) (and v (not (string=? v "")))))
+
 (define (validate-runtime-argument who subject public-name value expected-type [expected-proof #f] [name-env #f] [extra-bindings (hash)])
   (define evidence
     (if (named-value? value)
@@ -751,7 +763,10 @@
         (runtime-evidence public-name value)))
   (unless (runtime-type-satisfied? expected-type (normalize-typecheck-value evidence))
     (raise-user-error who
-                      "~a argument ~a does not satisfy declared type ~a"
+                      "expected ~a for ~a~a: ~a argument ~a does not satisfy declared type ~a"
+                      (type-datum-display expected-type)
+                      public-name
+                      (if tesl-verbose? (format " (construct ~a)" who) "")
                       subject
                       public-name
                       (type-datum-display expected-type)))
@@ -774,7 +789,10 @@
                          extra-bindings))
       (unless (proof-satisfied? expected-proof actual-facts effective-name-env bindings)
         (raise-user-error who
-                          "~a argument ~a does not satisfy declared proof ~a"
+                          "expected proof ~a for ~a~a: ~a argument ~a does not satisfy declared proof ~a"
+                          expected-proof
+                          public-name
+                          (if tesl-verbose? (format " (construct ~a)" who) "")
                           subject
                           public-name
                           expected-proof))))
@@ -874,6 +892,29 @@
 ;; standalone.  Given the semantic divergence, the duplication is intentional
 ;; and should be maintained in sync rather than mechanically merged.
 (begin-for-syntax
+  ;; ── Zero-cost-proofs erasure gate (roadmap A) ──────────────────────────────
+  ;; DEFAULT-ON and UNCONDITIONAL.  The differential audit proved the erased
+  ;; expansion ≡ the runtime safety net across the full corpus (byte-identical
+  ;; emission, 80/80 behavioral parity), and for a SOUND static checker the
+  ;; runtime proof structs are pure redundancy: the proof carried by a binding is
+  ;; type-level information known at compile time (exactly what --type-at / hover
+  ;; report).  So the param-binding macros below ALWAYS generate the ERASED
+  ;; expansion — no runtime-bind+evidence, no validate-runtime-argument, no
+  ;; six-way parameterize — INCLUDING under `--debug`.  TESL_ZERO_COST_PROOFS=0
+  ;; (0/false/no/off, case-insensitive) restores the net, for regression
+  ;; comparison only.  Read at PHASE 1 so the erased path emits *less code*.
+  ;;
+  ;; The debugger needs no runtime structs: its Variables panel shows the RAW
+  ;; value (the *x binding), and proof/type display is sourced from compile-time
+  ;; type information.  Breakpoint checkpoints (thsl-src!) are emitted separately
+  ;; by the OCaml emitter and are unaffected by erasure.
+  (define zero-cost-proofs?
+    (let ([v (getenv "TESL_ZERO_COST_PROOFS")])
+      (cond [(not v) #t]
+            [(member (string-downcase v) '("0" "false" "no" "off")) #f]
+            [(member (string-downcase v) '("1" "true" "yes" "on")) #t]
+            [else #t])))
+
   (define-syntax-class typed-binding
     (pattern [name:id (~datum :) type:expr (~datum :::) proof:expr])
     (pattern [name:id (~datum :) type:expr]))
@@ -1016,33 +1057,30 @@
                              (proof-unbound-names (normalize-gdp-expr (syntax->datum proof-stx))
                                                   effective-bound-names))))
 
-  (define (wrap-runtime-named-binding name-id expr-stx body-stx)
+  ;; wrap-runtime-named-binding binds a GDP let/lambda local: *x (raw value) and
+  ;; x (the proof-carrying value, or raw if none).  #:erasable? (default #t)
+  ;; controls whether the zero-cost-proofs? mode drops the wrap/validate/
+  ;; parameterize machinery.  pack/unpack witness binders pass #:erasable? #f
+  ;; because their values ARE the proof carrier (a packed witness) that later
+  ;; code structurally depends on — see callers at the pack/unpack sites.
+  (define (wrap-runtime-named-binding name-id expr-stx body-stx #:erasable? [erasable? #t])
     (define star-name-id (star-id name-id))
     (define value-id (format-id name-id "~a-runtime-value" (syntax-e name-id)))
     (define evidence-id (format-id name-id "~a-runtime-evidence" (syntax-e name-id)))
     (define binding-id (format-id name-id "~a-runtime-binding" (syntax-e name-id)))
     (define type-id (format-id name-id "~a-runtime-type" (syntax-e name-id)))
-    #`(let* ([#,value-id #,expr-stx]
-             [#,type-id (value-field-access-type #,value-id)])
-        (if (check-fail? #,value-id)
-            #,value-id
-            (let-values ([(#,evidence-id #,binding-id)
-                          (runtime-bind+evidence '#,(syntax-e name-id) #,value-id)])
-              (parameterize ([current-name-env
-                              (extend-name-env (current-name-env)
-                                               '(#,(syntax-e name-id))
-                                               (list #,binding-id))]
-                             [current-proof-env
-                              (extend-proof-env (current-proof-env)
-                                                (list #,binding-id))]
-                             [current-evidence-env
-                              (extend-evidence-env (current-evidence-env)
-                                                   (list #,evidence-id))]
-                             [current-type-env
-                              (extend-type-env (current-type-env)
-                                               (list #,binding-id)
-                                               (list #,type-id))])
-                (let ([#,star-name-id (runtime-binding-raw #,binding-id)]
+    (if (and zero-cost-proofs? erasable?)
+        ;; ── ERASED: no runtime-bind+evidence / validate / parameterize ────────
+        ;; Preserve the check-fail? short-circuit (control flow, not a proof net).
+        ;; Bind *x to the raw value; bind x to the value itself when it is a
+        ;; proof-carrying structure (check-ok / named-value / detached-proof /
+        ;; packed-* / procedure / boolean — exactly the net-on predicate set) so
+        ;; detach/attach/forget on x still resolve structurally, and to the raw
+        ;; value otherwise (the proof-free common case → zero allocation).
+        #`(let ([#,value-id #,expr-stx])
+            (if (check-fail? #,value-id)
+                #,value-id
+                (let ([#,star-name-id (raw-value #,value-id)]
                       [#,name-id (if (or (named-value? #,value-id)
                                          (check-result? #,value-id)
                                          (runtime-binding? #,value-id)
@@ -1052,8 +1090,41 @@
                                          (procedure? #,value-id)
                                          (boolean? #,value-id))
                                      #,value-id
-                                     (runtime-binding-name #,binding-id))])
-                  #,body-stx))))))
+                                     (raw-value #,value-id))])
+                  #,body-stx)))
+        ;; ── DEFAULT: runtime safety net on ────────────────────────────────────
+        #`(let* ([#,value-id #,expr-stx]
+                 [#,type-id (value-field-access-type #,value-id)])
+            (if (check-fail? #,value-id)
+                #,value-id
+                (let-values ([(#,evidence-id #,binding-id)
+                              (runtime-bind+evidence '#,(syntax-e name-id) #,value-id)])
+                  (parameterize ([current-name-env
+                                  (extend-name-env (current-name-env)
+                                                   '(#,(syntax-e name-id))
+                                                   (list #,binding-id))]
+                                 [current-proof-env
+                                  (extend-proof-env (current-proof-env)
+                                                    (list #,binding-id))]
+                                 [current-evidence-env
+                                  (extend-evidence-env (current-evidence-env)
+                                                       (list #,evidence-id))]
+                                 [current-type-env
+                                  (extend-type-env (current-type-env)
+                                                   (list #,binding-id)
+                                                   (list #,type-id))])
+                    (let ([#,star-name-id (runtime-binding-raw #,binding-id)]
+                          [#,name-id (if (or (named-value? #,value-id)
+                                             (check-result? #,value-id)
+                                             (runtime-binding? #,value-id)
+                                             (detached-proof? #,value-id)
+                                             (packed-witness? #,value-id)
+                                             (packed-exists? #,value-id)
+                                             (procedure? #,value-id)
+                                             (boolean? #,value-id))
+                                         #,value-id
+                                         (runtime-binding-name #,binding-id))])
+                      #,body-stx)))))))
 
   (define (wrap-runtime-evidence-binding name-id expr-stx body-stx)
     (define star-name-id (star-id name-id))
@@ -1295,9 +1366,24 @@
     (define default-expr (if (= (length arg-binding-ids) 1)
                              #`(runtime-binding-raw #,(car arg-binding-ids))
                              #'#f))
+    ;; Erased twin of default-expr: the raw value of the single argument, read
+    ;; directly off the incoming parameter (no runtime-binding allocated).
+    (define default-expr-erased (if (= (length arg-name-ids) 1)
+                                    #`(raw-value #,(car arg-name-ids))
+                                    #'#f))
     (define input-facts-expr (if (= (length arg-name-ids) 1)
                                #`(facts-of #,(car arg-name-ids))
                                #'(list)))
+    ;; Erased binding clauses: bind *arg and arg to the raw incoming value (no
+    ;; allocation).  A checker/auther body reads its inputs through *arg and
+    ;; produces proofs via `accept` (the proof FACTORY, kept below); it never
+    ;; decomposes a proof off its own parameter, so the raw value suffices.
+    (define erased-arg-clauses
+      (append*
+       (for/list ([arg-id   (in-list arg-name-ids)]
+                  [star-arg (in-list star-ids)])
+         (list #`[#,star-arg (raw-value #,arg-id)]
+               #`[#,arg-id #,star-arg]))))
     (with-syntax ([(arg-id ...) arg-name-ids]
                   [(star-arg ...) star-ids]
                   [(quoted-name ...) quoted-name-stxs]
@@ -1308,6 +1394,7 @@
                                         #`'#,datum)]
                   [(arg-proof-expr ...) (for/list ([datum (in-list arg-proof-datums)])
                                          (if datum #`'#,datum #'#f))]
+                  [(erased-arg-clause ...) erased-arg-clauses]
                   [signature-id signature-id]
                   [name name-id]
                   [who-id (datum->syntax whole-stx who)]
@@ -1317,9 +1404,10 @@
                   [returns-expr returns-expr]
                   [raw-expr raw-expr]
                   [default-expr default-expr]
+                  [default-expr-erased default-expr-erased]
                   [input-facts-expr input-facts-expr]
                   [body-expr trusted-body])
-      #'(begin
+      #`(begin
           (define signature-id
             (signature-spec 'kind-id
                             'name
@@ -1327,7 +1415,26 @@
                             '(cap-id ...)
                             returns-expr
                             raw-expr))
-          (define (name arg-id ...)
+          #,(if zero-cost-proofs?
+                ;; ── ERASED expansion (zero-cost mode) ─────────────────────────
+                ;; Drop runtime-bind+evidence, validate-runtime-argument, and the
+                ;; four env-extension parameterizes.  KEEP the check proof factory:
+                ;; the accept→accept/trusted rename (in body-expr) plus the two
+                ;; check parameters accept/reject read (current-check-default-value
+                ;; for `accept`'s implicit value, current-check-input-facts for
+                ;; carrying chained input proofs).  input-facts-expr reads the
+                ;; INCOMING argument before it is rebound to raw, so check chaining
+                ;; (checkB (checkA x)) still accumulates facts.
+                #'(define (name arg-id ...)
+                    (call-with-declared-capabilities
+                     (list cap-id ...)
+                     (lambda ()
+                       (parameterize ([current-check-default-value default-expr-erased]
+                                      [current-check-input-facts input-facts-expr])
+                         (let* (erased-arg-clause ...)
+                           body-expr)))))
+                ;; ── DEFAULT expansion (runtime safety net on) ─────────────────
+                #'(define (name arg-id ...)
             (call-with-declared-capabilities
              (list cap-id ...)
              (lambda ()
@@ -1355,7 +1462,7 @@
                                   [current-check-input-facts input-facts-expr])
                      (let ([star-arg (runtime-binding-raw arg-binding)] ...
                            [arg-id (runtime-binding-name arg-binding)] ...)
-                       body-expr)))))))))
+                       body-expr)))))))))) ; last 2 ) close the default (define …) and the (if zero-cost-proofs? …)
 
 ))
 
@@ -1457,7 +1564,10 @@
       (for/fold ([expanded wrapped-body])
                 ([witness-id (in-list (reverse witness-ids))]
                  [witness-value-id (in-list (reverse witness-value-ids))])
-        (wrap-runtime-named-binding witness-id witness-value-id expanded)))
+        ;; #:erasable? #f — existential witness binders carry the hidden packed
+        ;; witness that ensure-no-skolem-escape and the body structurally depend
+        ;; on; never erase their wrapping (carve-out).
+        (wrap-runtime-named-binding witness-id witness-value-id expanded #:erasable? #f)))
     (define witness-binding-exprs
       (for/list ([witness-value-id (in-list witness-value-ids)]
                  [index (in-naturals)])
@@ -1531,7 +1641,9 @@
        (define transformed-witness-expr (second entry))
        (define introduce? (third entry))
        (if introduce?
-           (wrap-runtime-named-binding binder-id transformed-witness-expr expanded)
+           ;; #:erasable? #f — a pack witness binder introduces the hidden
+           ;; witness value the existential package carries; keep it wrapped.
+           (wrap-runtime-named-binding binder-id transformed-witness-expr expanded #:erasable? #f)
            expanded))]))
 
 (define-syntax (unpack stx)

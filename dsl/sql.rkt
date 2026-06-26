@@ -8,6 +8,13 @@
          "capability.rkt"
          "private/check-runtime.rkt"
          "types.rkt"
+         ;; SQL TRANSPARENCY (task #43): capture the EXACT parameterized statement +
+         ;; ordered params + row count for the DAP "SQL" scope.  domain-registry is
+         ;; dependency-free and already DEBUG-GATED (TESL_DEBUG); these calls are a
+         ;; no-op in a release run, so there is zero release-path cost.
+         (only-in "private/domain-registry.rkt"
+                  sql-capture-pending!
+                  sql-capture-executed!)
          (only-in "../tesl/logging.rkt"
                   tesl-verbose?
                   tesl-log-sql!)
@@ -1199,7 +1206,38 @@
                created_at   timestamptz  not null default now()
              )"
             (format "\"~a\"" schema-str)
-            (format "\"~a\"" "tesl_pubsub_outbox"))))
+            (format "\"~a\"" "tesl_pubsub_outbox")))
+  ;; tesl_cache: native key-value cache (UNLOGGED for performance — no WAL overhead)
+  (query-exec conn
+    (format "create unlogged table if not exists ~a.~a (
+               key        text         primary key,
+               value      jsonb        not null,
+               expires_at timestamptz
+             )"
+            (format "\"~a\"" schema-str)
+            (format "\"~a\"" "tesl_cache")))
+  ;; tesl_email_outbox: transactional email delivery (outbox pattern, logged for durability)
+  (query-exec conn
+    (format "create table if not exists ~a.~a (
+               id              bigserial    primary key,
+               to_address      text         not null,
+               subject         text         not null,
+               text_body       text,
+               html_body       text,
+               status          text         not null default 'pending',
+               attempts        integer      not null default 0,
+               created_at      timestamptz  not null default now(),
+               next_attempt_at timestamptz,
+               updated_at      timestamptz  not null default now()
+             )"
+            (format "\"~a\"" schema-str)
+            (format "\"~a\"" "tesl_email_outbox")))
+  ;; Add updated_at to existing deployments that may not have it.
+  (query-exec conn
+    (format "alter table ~a.~a
+               add column if not exists updated_at timestamptz not null default now()"
+            (format "\"~a\"" schema-str)
+            (format "\"~a\"" "tesl_email_outbox"))))
 
 (define (ensure-database-ready! runtime)
   (unless (database-runtime? runtime)
@@ -1220,6 +1258,32 @@
     [other
      (raise-user-error 'ensure-database-ready! "unsupported database backend ~a" other)])
   runtime)
+
+;; ── SQL transparency capture (task #43) ────────────────────────────────────────
+;;
+;; Each postgres-* operation records the EXACT parameterized statement + ordered
+;; params it is about to run (sql-capture-pending!), runs it, then records the
+;; post-exec row count (sql-capture-executed!).  Both calls are DEBUG-GATED and
+;; FAIL-OPEN inside domain-registry, so this is a no-op in a release run and can
+;; never disturb a query.  `capture-table-name` never raises.
+(define (capture-table-name entity)
+  (with-handlers ([(lambda (_) #t) (lambda (_) #f)])
+    ;; entity-table-name yields a SYMBOL (the unquoted table name); stringify it so
+    ;; the capture's 'table field is the string the DAP "SQL" scope expects (the
+    ;; capture store keeps only string tables, so a bare symbol would otherwise
+    ;; drop to #f and the scope would show the table as "(unknown)").
+    (define t (entity-table-name entity))
+    (cond [(string? t) t] [(symbol? t) (symbol->string t)] [else #f])))
+
+;; Capture + run + record-count, returning the query result unchanged.  `run`
+;; is a 0-arg thunk that performs the actual `apply query-*`; `count-of` maps its
+;; result to the executed row count (or #f).  Capture must never alter behaviour,
+;; so the result flows through untouched and only the count is derived for display.
+(define (with-sql-capture sql params table op run count-of)
+  (sql-capture-pending! sql params table op)
+  (define result (run))
+  (sql-capture-executed! (count-of result))
+  result)
 
 (define (postgres-select-many runtime entity predicates [order #f] [lim #f] [off #f] [grp #f] [joins '()])
   (define-values (where-sql params _next-index)
@@ -1267,7 +1331,11 @@
             limit-sql
             offset-sql))
   (when tesl-verbose? (tesl-log-sql! sql params))
-  (for/list ([row (in-list (apply query-rows (database-runtime-connection runtime) sql params))])
+  (define rows
+    (with-sql-capture sql params (capture-table-name entity) 'select-many
+      (lambda () (apply query-rows (database-runtime-connection runtime) sql params))
+      (lambda (rs) (length rs))))
+  (for/list ([row (in-list rows)])
     (attach-query-proofs entity (vector->entity-row entity row) predicates)))
 
 (define (postgres-select-one runtime entity predicates [order #f])
@@ -1287,7 +1355,9 @@
             order-sql))
   (when tesl-verbose? (tesl-log-sql! sql params))
   (define row
-    (apply query-maybe-row (database-runtime-connection runtime) sql params))
+    (with-sql-capture sql params (capture-table-name entity) 'select-one
+      (lambda () (apply query-maybe-row (database-runtime-connection runtime) sql params))
+      (lambda (r) (if r 1 0))))
   (and row
        (attach-query-proofs entity (vector->entity-row entity row) predicates)))
 
@@ -1313,10 +1383,13 @@
                                      (row-field-ref row field)
                                      'insert-one!)))
   (when tesl-verbose? (tesl-log-sql! sql params))
+  (define inserted
+    (with-sql-capture sql params (capture-table-name entity) 'insert-one!
+      (lambda () (apply query-row (database-runtime-connection runtime) sql params))
+      (lambda (_r) 1)))
   (attach-insert-proofs
    entity
-   (vector->entity-row entity
-                       (apply query-row (database-runtime-connection runtime) sql params))
+   (vector->entity-row entity inserted)
    primary-key-name
    bindings))
 
@@ -1354,10 +1427,13 @@
     (for/list ([field (in-list fields)])
       (field-runtime-value->db-value field (row-field-ref row field) 'upsert-one!)))
   (when tesl-verbose? (tesl-log-sql! sql params))
+  (define upserted
+    (with-sql-capture sql params (capture-table-name entity) 'upsert-one!
+      (lambda () (apply query-row (database-runtime-connection runtime) sql params))
+      (lambda (_r) 1)))
   (attach-insert-proofs
    entity
-   (vector->entity-row entity
-                       (apply query-row (database-runtime-connection runtime) sql params))
+   (vector->entity-row entity upserted)
    primary-key-name
    bindings))
 
@@ -1384,7 +1460,11 @@
                                              'update-many!))
             where-params))
   (when tesl-verbose? (tesl-log-sql! sql params))
-  (for/list ([row (in-list (apply query-rows (database-runtime-connection runtime) sql params))])
+  (define rows
+    (with-sql-capture sql params (capture-table-name entity) 'update-many!
+      (lambda () (apply query-rows (database-runtime-connection runtime) sql params))
+      (lambda (rs) (length rs))))
+  (for/list ([row (in-list rows)])
     (attach-query-proofs entity (vector->entity-row entity row) predicates)))
 
 (define (postgres-delete-many! runtime entity predicates)
@@ -1393,7 +1473,10 @@
   (define sql
     (format "delete from ~a~a" (qualified-table-name (database-runtime-database runtime) entity) where-sql))
   (when tesl-verbose? (tesl-log-sql! sql params))
-  (apply query-exec (database-runtime-connection runtime) sql params)
+  ;; query-exec returns no row count in db-lib's simple form, so the count stays #f.
+  (with-sql-capture sql params (capture-table-name entity) 'delete-many!
+    (lambda () (apply query-exec (database-runtime-connection runtime) sql params))
+    (lambda (_r) #f))
   (void))
 
 (define (postgres-delete-many-with-count! runtime entity predicates)
@@ -1402,17 +1485,20 @@
   (when tesl-verbose? (tesl-log-sql! (format "delete from ~a~a (with count)"
                                               (qualified-table-name (database-runtime-database runtime) entity)
                                               where-sql) params))
+  ;; Capture the ACTUAL parameterized statement the driver runs (the counting CTE),
+  ;; not the human-readable log line — the SQL scope must show exactly what executes.
+  (define sql
+    (format "with deleted as (
+               delete from ~a~a
+               returning 1
+             )
+             select count(*) from deleted"
+            (qualified-table-name (database-runtime-database runtime) entity)
+            where-sql))
   (define count
-    (apply query-value
-           (database-runtime-connection runtime)
-           (format "with deleted as (
-                      delete from ~a~a
-                      returning 1
-                    )
-                    select count(*) from deleted"
-                   (qualified-table-name (database-runtime-database runtime) entity)
-                   where-sql)
-           params))
+    (with-sql-capture sql params (capture-table-name entity) 'delete-many-with-count!
+      (lambda () (apply query-value (database-runtime-connection runtime) sql params))
+      (lambda (c) (and (exact-nonnegative-integer? c) c))))
   (if (= count 0)
       NoRowDeleted
       (RowsDeleted count)))
@@ -1470,7 +1556,10 @@
                   (qualified-table-name (database-runtime-database runtime) entity)
                   where-sql))
         (when tesl-verbose? (tesl-log-sql! sql params))
-        (define result (apply query-value (database-runtime-connection runtime) sql params))
+        (define result
+          (with-sql-capture sql params (capture-table-name entity) 'select-count
+            (lambda () (apply query-value (database-runtime-connection runtime) sql params))
+            (lambda (_r) 1)))   ; an aggregate returns one scalar row
         (if (integer? result) result (inexact->exact result)))
       (length (in-memory-select-many entity predicates))))
 
@@ -1499,7 +1588,10 @@
                   (qualified-table-name (database-runtime-database runtime) entity)
                   where-sql))
         (when tesl-verbose? (tesl-log-sql! sql params))
-        (define result (apply query-value (database-runtime-connection runtime) sql params))
+        (define result
+          (with-sql-capture sql params (capture-table-name entity) 'select-sum
+            (lambda () (apply query-value (database-runtime-connection runtime) sql params))
+            (lambda (_r) 1)))
         (if (integer? result) result (inexact->exact result)))
       (for/sum ([row (in-list (in-memory-select-many entity predicates))])
         (define v (row-field-ref row field 0))
@@ -1526,7 +1618,10 @@
                   (qualified-table-name (database-runtime-database runtime) entity)
                   where-sql))
         (when tesl-verbose? (tesl-log-sql! sql params))
-        (define result (apply query-value (database-runtime-connection runtime) sql params))
+        (define result
+          (with-sql-capture sql params (capture-table-name entity) 'select-max
+            (lambda () (apply query-value (database-runtime-connection runtime) sql params))
+            (lambda (_r) 1)))
         (if (and result (integer? result)) (inexact->exact result) result))
       (let ([rows (in-memory-select-many entity predicates)])
         (if (null? rows) #f
@@ -1553,7 +1648,10 @@
                   (qualified-table-name (database-runtime-database runtime) entity)
                   where-sql))
         (when tesl-verbose? (tesl-log-sql! sql params))
-        (define result (apply query-value (database-runtime-connection runtime) sql params))
+        (define result
+          (with-sql-capture sql params (capture-table-name entity) 'select-min
+            (lambda () (apply query-value (database-runtime-connection runtime) sql params))
+            (lambda (_r) 1)))
         (if (and result (integer? result)) (inexact->exact result) result))
       (let ([rows (in-memory-select-many entity predicates)])
         (if (null? rows) #f

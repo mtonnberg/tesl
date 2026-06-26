@@ -8,6 +8,7 @@
   tesl/dsl/sql
   tesl/dsl/web
   tesl/dsl/test-support
+  tesl/dsl/debug/checkpoint
   tesl/tesl/private/runtime
   tesl/tesl/queue
   tesl/tesl/sse
@@ -24,184 +25,184 @@
 (define/pow
   (safeHead [xs : (List Integer)])
   #:returns (Maybe Integer)
-  (raw-value (tesl_import_List_head *xs)))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 67 (list (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_head *xs)))))
 
 (define/pow
   (safeTail [xs : (List Integer)])
   #:returns (Maybe (List Integer))
-  (raw-value (tesl_import_List_tail *xs)))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 71 (list (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_tail *xs)))))
 
 (define/pow
   (firstOrDefault [xs : (List Integer)] [default : Integer])
   #:returns Integer
-  (let ([tesl_case_0 (raw-value (tesl_import_List_head *xs))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) *default] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([h (hash-ref (adt-value-fields *tesl_case_0) 'value)]) *h)])))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 75 (list (cons 'xs *xs) (cons 'default *default)) (lambda () (let ([tesl_case_0 (raw-value (tesl_import_List_head *xs))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) *default] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([h (hash-ref (adt-value-fields *tesl_case_0) 'value)]) *h)])))))
 
 (define/pow
   (addInt [acc : Integer] [x : Integer])
   #:returns Integer
-  (+ *acc *x))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 104 (list (cons 'acc *acc) (cons 'x *x)) (lambda () (+ *acc *x))))
 
 (define/pow
   (mulInt [acc : Integer] [x : Integer])
   #:returns Integer
-  (* *acc *x))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 107 (list (cons 'acc *acc) (cons 'x *x)) (lambda () (* *acc *x))))
 
 (define/pow
   (countInt [acc : Integer] [_x : Integer])
   #:returns Integer
-  (+ *acc 1))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 110 (list (cons 'acc *acc) (cons '_x *_x)) (lambda () (+ *acc 1))))
 
 (define/pow
   (sumRecursive [ns : (List Integer)])
   #:returns Integer
-  (raw-value (tesl_import_List_foldl addInt 0 *ns)))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 114 (list (cons 'ns *ns)) (lambda () (raw-value (tesl_import_List_foldl addInt 0 *ns)))))
 
 (define/pow
   (productRecursive [ns : (List Integer)])
   #:returns Integer
-  (raw-value (tesl_import_List_foldl mulInt 1 *ns)))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 118 (list (cons 'ns *ns)) (lambda () (raw-value (tesl_import_List_foldl mulInt 1 *ns)))))
 
 (define/pow
   (myLength [xs : (List Integer)])
   #:returns Integer
-  (raw-value (tesl_import_List_foldl countInt 0 *xs)))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 122 (list (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_foldl countInt 0 *xs)))))
 
 (define/pow
   (prependInt [x : Integer] [acc : (List Integer)])
   #:returns (List Integer)
-  (raw-value (tesl_import_List_append (list *x) *acc)))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 149 (list (cons 'x *x) (cons 'acc *acc)) (lambda () (raw-value (tesl_import_List_append (list *x) *acc)))))
 
 (define/pow
   (myReverse [xs : (List Integer)])
   #:returns (List Integer)
-  (raw-value (tesl_import_List_foldl (let () (define/pow (tesl-lambda-1 [acc : (List Integer)] [x : Integer]) #:returns Any (tesl_import_List_append (list *x) *acc)) tesl-lambda-1) (list) *xs)))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 153 (list (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_foldl (let () (define/pow (tesl-lambda-1 [acc : (List Integer)] [x : Integer]) #:returns Any (tesl_import_List_append (list *x) *acc)) tesl-lambda-1) (list) *xs)))))
 
 (define/pow
   (increment [x : Integer])
   #:returns Integer
-  (+ *x 1))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 168 (list (cons 'x *x)) (lambda () (+ *x 1))))
 
 (define/pow
   (isPositive [x : Integer])
   #:returns Boolean
-  (> *x 0))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 171 (list (cons 'x *x)) (lambda () (> *x 0))))
 
 (define/pow
   (mapIncrement [xs : (List Integer)])
   #:returns (List Integer)
-  (raw-value (tesl_import_List_map increment *xs)))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 175 (list (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_map increment *xs)))))
 
 (define/pow
   (keepPositive [xs : (List Integer)])
   #:returns (List Integer)
-  (raw-value (tesl_import_List_filter isPositive *xs)))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 179 (list (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_filter isPositive *xs)))))
 
 (define/pow
   (addPair [acc : Integer] [x : Integer])
   #:returns Integer
-  (+ *acc *x))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 198 (list (cons 'acc *acc) (cons 'x *x)) (lambda () (+ *acc *x))))
 
 (define/pow
   (pairHeads [xs : (List Integer)] [ys : (List Integer)])
   #:returns (Maybe Integer)
-  (let ([tesl_case_2 (raw-value (tesl_import_List_head *xs))]) (cond [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Nothing)) (raw-value Nothing)] [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Something)) (let ([hx (hash-ref (adt-value-fields *tesl_case_2) 'value)]) (let ([tesl_case_3 (raw-value (tesl_import_List_head *ys))]) (cond [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Nothing)) (raw-value Nothing)] [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Something)) (let ([hy (hash-ref (adt-value-fields *tesl_case_3) 'value)]) (raw-value (raw-value (Something (+ *hx *hy)))))])))])))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 202 (list (cons 'xs *xs) (cons 'ys *ys)) (lambda () (let ([tesl_case_2 (raw-value (tesl_import_List_head *xs))]) (cond [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Nothing)) (raw-value Nothing)] [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Something)) (let ([hx (hash-ref (adt-value-fields *tesl_case_2) 'value)]) (let ([tesl_case_3 (raw-value (tesl_import_List_head *ys))]) (cond [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Nothing)) (raw-value Nothing)] [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Something)) (let ([hy (hash-ref (adt-value-fields *tesl_case_3) 'value)]) (raw-value (raw-value (Something (+ *hx *hy)))))])))])))))
 
 (define/pow
   (zipWith [xs : (List Integer)] [ys : (List Integer)])
   #:returns (List Integer)
-  (let ([pairs (raw-value (tesl_import_List_zip *xs *ys))]) (raw-value (tesl_import_List_map (let () (define/pow (tesl-lambda-4 [p : (Tuple2 Integer Integer)]) #:returns Integer (+ (raw-value (tesl_import_Tuple2_first *p)) (raw-value (tesl_import_Tuple2_second *p)))) tesl-lambda-4) (raw-value pairs)))))
+  (let ([pairs (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 217 (list (cons 'xs *xs) (cons 'ys *ys)) (lambda () (raw-value (tesl_import_List_zip *xs *ys))))]) (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 218 (list (cons 'pairs *pairs) (cons 'xs *xs) (cons 'ys *ys)) (lambda () (raw-value (tesl_import_List_map (let () (define/pow (tesl-lambda-4 [p : (Tuple2 Integer Integer)]) #:returns Integer (+ (raw-value (tesl_import_Tuple2_first *p)) (raw-value (tesl_import_Tuple2_second *p)))) tesl-lambda-4) (raw-value pairs)))))))
 
 (define/pow
   (splitAt [xs : (List Integer)] [n : Integer])
   #:returns (List Integer)
-  (let/check ([tesl_checked_5 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl_checked_5]) (raw-value (tesl_import_List_take safeN *xs)))))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 228 (list (cons 'xs *xs) (cons 'n *n)) (lambda () (let/check ([tesl_checked_5 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl_checked_5]) (raw-value (tesl_import_List_take safeN *xs)))))))
 
 (define/pow
   (chunksOf [xs : (List Integer)] [n : Integer])
   #:returns (List (List Integer))
-  (let/check ([tesl_checked_6 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl_checked_6]) (let ([len (raw-value (tesl_import_List_length *xs))]) (if (equal? (raw-value len) 0) (raw-value (list)) (let ([chunk (tesl_import_List_take safeN *xs)]) (let ([rest (tesl_import_List_drop safeN *xs)]) (if (< (raw-value (tesl_import_List_length (raw-value chunk))) (raw-value safeN)) (raw-value (list)) (if (raw-value (tesl_import_List_isEmpty (raw-value rest))) (raw-value (list *chunk)) (raw-value (tesl_import_List_append (list *chunk) (raw-value (chunksOf rest n)))))))))))))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 234 (list (cons 'xs *xs) (cons 'n *n)) (lambda () (let/check ([tesl_checked_6 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl_checked_6]) (let ([len (raw-value (tesl_import_List_length *xs))]) (if (equal? (raw-value len) 0) (raw-value (list)) (let ([chunk (tesl_import_List_take safeN *xs)]) (let ([rest (tesl_import_List_drop safeN *xs)]) (if (< (raw-value (tesl_import_List_length (raw-value chunk))) (raw-value safeN)) (raw-value (list)) (if (raw-value (tesl_import_List_isEmpty (raw-value rest))) (raw-value (list *chunk)) (raw-value (tesl_import_List_append (list *chunk) (raw-value (chunksOf rest n)))))))))))))))
 
 (define/pow
   (describeList [xs : (List Integer)])
   #:returns String
-  (if (raw-value (tesl_import_List_isEmpty *xs)) (raw-value "empty") (let ([tesl_case_7 (raw-value (tesl_import_List_tail *xs))]) (cond [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Nothing)) (raw-value "one element")] [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Something)) (let ([rest (hash-ref (adt-value-fields *tesl_case_7) 'value)]) (if (raw-value (tesl_import_List_isEmpty *rest)) (raw-value "one element") (let ([tesl_case_8 (raw-value (tesl_import_List_tail *rest))]) (cond [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Nothing)) (raw-value "exactly two elements")] [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Something)) (let ([rest2 (hash-ref (adt-value-fields *tesl_case_8) 'value)]) (if (raw-value (tesl_import_List_isEmpty *rest2)) (raw-value "exactly two elements") (raw-value "three or more elements")))]))))]))))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 267 (list (cons 'xs *xs)) (lambda () (if (raw-value (tesl_import_List_isEmpty *xs)) (raw-value "empty") (let ([tesl_case_7 (raw-value (tesl_import_List_tail *xs))]) (cond [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Nothing)) (raw-value "one element")] [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Something)) (let ([rest (hash-ref (adt-value-fields *tesl_case_7) 'value)]) (if (raw-value (tesl_import_List_isEmpty *rest)) (raw-value "one element") (let ([tesl_case_8 (raw-value (tesl_import_List_tail *rest))]) (cond [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Nothing)) (raw-value "exactly two elements")] [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Something)) (let ([rest2 (hash-ref (adt-value-fields *tesl_case_8) 'value)]) (if (raw-value (tesl_import_List_isEmpty *rest2)) (raw-value "exactly two elements") (raw-value "three or more elements")))]))))]))))))
 
 (module+ test
   (require rackunit)
   (test-case "safeHead"
-  (check-equal? (raw-value (safeHead (list 10 20 30))) (raw-value (Something 10)))
-  (check-equal? (raw-value (safeHead (list))) Nothing)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 80 (list) (lambda () (safeHead (list 10 20 30))))) (raw-value (Something 10)))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 81 (list) (lambda () (safeHead (list))))) Nothing)
   )
 
   (test-case "safeTail"
-  (check-equal? (raw-value (safeTail (list 10 20 30))) (raw-value (Something (list 20 30))))
-  (check-equal? (raw-value (safeTail (list 42))) (raw-value (Something (list))))
-  (check-equal? (raw-value (safeTail (list))) Nothing)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 85 (list) (lambda () (safeTail (list 10 20 30))))) (raw-value (Something (list 20 30))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 86 (list) (lambda () (safeTail (list 42))))) (raw-value (Something (list))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 87 (list) (lambda () (safeTail (list))))) Nothing)
   )
 
   (test-case "firstOrDefault"
-  (check-equal? (raw-value (firstOrDefault (list 5 6 7) 99)) 5)
-  (check-equal? (raw-value (firstOrDefault (list) 99)) 99)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 91 (list) (lambda () (firstOrDefault (list 5 6 7) 99)))) 5)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 92 (list) (lambda () (firstOrDefault (list) 99)))) 99)
   )
 
   (test-case "sumRecursive"
-  (check-equal? (raw-value (sumRecursive (list 1 2 3 4))) 10)
-  (check-equal? (raw-value (sumRecursive (list))) 0)
-  (check-equal? (raw-value (sumRecursive (list 5))) 5)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 125 (list) (lambda () (sumRecursive (list 1 2 3 4))))) 10)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 126 (list) (lambda () (sumRecursive (list))))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 127 (list) (lambda () (sumRecursive (list 5))))) 5)
   )
 
   (test-case "productRecursive"
-  (check-equal? (raw-value (productRecursive (list 2 3 4))) 24)
-  (check-equal? (raw-value (productRecursive (list))) 1)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 131 (list) (lambda () (productRecursive (list 2 3 4))))) 24)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 132 (list) (lambda () (productRecursive (list))))) 1)
   )
 
   (test-case "myLength"
-  (check-equal? (raw-value (myLength (list 1 2 3))) 3)
-  (check-equal? (raw-value (myLength (list))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 136 (list) (lambda () (myLength (list 1 2 3))))) 3)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 137 (list) (lambda () (myLength (list))))) 0)
   )
 
   (test-case "myReverse"
-  (check-equal? (raw-value (myReverse (list 1 2 3))) (list 3 2 1))
-  (check-equal? (raw-value (myReverse (list))) (list))
-  (check-equal? (raw-value (myReverse (list 42))) (list 42))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 156 (list) (lambda () (myReverse (list 1 2 3))))) (list 3 2 1))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 157 (list) (lambda () (myReverse (list))))) (list))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 158 (list) (lambda () (myReverse (list 42))))) (list 42))
   )
 
   (test-case "mapIncrement"
-  (check-equal? (raw-value (mapIncrement (list 1 2 3))) (list 2 3 4))
-  (check-equal? (raw-value (mapIncrement (list))) (list))
-  (check-equal? (raw-value (mapIncrement (list -1 0 1))) (list 0 1 2))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 182 (list) (lambda () (mapIncrement (list 1 2 3))))) (list 2 3 4))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 183 (list) (lambda () (mapIncrement (list))))) (list))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 184 (list) (lambda () (mapIncrement (list -1 0 1))))) (list 0 1 2))
   )
 
   (test-case "keepPositive"
-  (check-equal? (raw-value (keepPositive (list -2 -1 0 1 2))) (list 1 2))
-  (check-equal? (raw-value (keepPositive (list))) (list))
-  (check-equal? (raw-value (keepPositive (list 1 2 3))) (list 1 2 3))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 188 (list) (lambda () (keepPositive (list -2 -1 0 1 2))))) (list 1 2))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 189 (list) (lambda () (keepPositive (list))))) (list))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 190 (list) (lambda () (keepPositive (list 1 2 3))))) (list 1 2 3))
   )
 
   (test-case "pairHeads"
-  (check-equal? (raw-value (pairHeads (list 10 20) (list 1 2))) (raw-value (Something 11)))
-  (check-equal? (raw-value (pairHeads (list) (list 1 2))) Nothing)
-  (check-equal? (raw-value (pairHeads (list 10) (list))) Nothing)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 210 (list) (lambda () (pairHeads (list 10 20) (list 1 2))))) (raw-value (Something 11)))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 211 (list) (lambda () (pairHeads (list) (list 1 2))))) Nothing)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 212 (list) (lambda () (pairHeads (list 10) (list))))) Nothing)
   )
 
   (test-case "splitAt"
-  (check-equal? (raw-value (splitAt (list 1 2 3 4 5) 3)) (list 1 2 3))
-  (check-equal? (raw-value (splitAt (list 1 2) 10)) (list 1 2))
-  (check-equal? (raw-value (splitAt (list) 3)) (list))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 249 (list) (lambda () (splitAt (list 1 2 3 4 5) 3)))) (list 1 2 3))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 250 (list) (lambda () (splitAt (list 1 2) 10)))) (list 1 2))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 251 (list) (lambda () (splitAt (list) 3)))) (list))
   )
 
   (test-case "chunksOf"
-  (check-equal? (raw-value (chunksOf (list 1 2 3 4 5 6) 2)) (list (list 1 2) (list 3 4) (list 5 6)))
-  (check-equal? (raw-value (chunksOf (list 1 2 3) 2)) (list (list 1 2)))
-  (check-equal? (raw-value (chunksOf (list) 3)) (list))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 255 (list) (lambda () (chunksOf (list 1 2 3 4 5 6) 2)))) (list (list 1 2) (list 3 4) (list 5 6)))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 256 (list) (lambda () (chunksOf (list 1 2 3) 2)))) (list (list 1 2)))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 257 (list) (lambda () (chunksOf (list) 3)))) (list))
   )
 
   (test-case "describeList"
-  (check-equal? (raw-value (describeList (list))) "empty")
-  (check-equal? (raw-value (describeList (list 1))) "one element")
-  (check-equal? (raw-value (describeList (list 1 2))) "exactly two elements")
-  (check-equal? (raw-value (describeList (list 1 2 3))) "three or more elements")
-  (check-equal? (raw-value (describeList (list 1 2 3 4 5))) "three or more elements")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 285 (list) (lambda () (describeList (list))))) "empty")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 286 (list) (lambda () (describeList (list 1))))) "one element")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 287 (list) (lambda () (describeList (list 1 2))))) "exactly two elements")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 288 (list) (lambda () (describeList (list 1 2 3))))) "three or more elements")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 289 (list) (lambda () (describeList (list 1 2 3 4 5))))) "three or more elements")
   )
 
 )

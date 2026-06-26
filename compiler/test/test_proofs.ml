@@ -130,7 +130,7 @@ module Foo exposing []
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Prelude exposing [String]
 auth myAuth(request: HttpRequest) -> user: String ::: Authenticated user =
-  ok "admin" ::: Authenticated user
+  ok user ::: Authenticated user
 |}
 
 let test_fn_cannot_use_ok () =

@@ -1,0 +1,30 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "tesl",
+      "request": "launch",
+      "name": "Debug Tesl program",
+      "env": {
+        "TESL_POSTGRES_PORT": "55432",
+        "TESL_POSTGRES_USER": "tesl",
+        "CHAT_DB_NAME": "chat",
+        "CHAT_DB_USER": "tesl",
+        "CHAT_DB_PASSWORD": "",
+        "CHAT_DB_HOST": "127.0.0.1",
+        "CHAT_DB_PORT": "55432",
+        "CHAT_DB_SOCKET": "",
+        "CHAT_PORT": "3000"
+      },
+      "program": "${file}",
+      "mode": "program",
+    },
+    {
+      "type": "tesl",
+      "request": "launch",
+      "name": "Debug Tesl tests",
+      "program": "${file}",
+      "mode": "test"
+    }
+  ]
+}

@@ -19,6 +19,7 @@ type t =
   | HASH_LANG            (** #lang *)
   | TESL                 (** tesl — after #lang *)
   | MODULE
+  | LIBRARY  (** library keyword — explicit library module declaration *)
   | EXPOSING
   | IMPORT
   | FN
@@ -44,6 +45,9 @@ type t =
   | CHANNEL
   | WORKERS
   | DEAD_WORKERS         (** deadWorkers *)
+  | CACHE                (** cache *)
+  | EMAIL                (** email *)
+  | SMTP                 (** smtp *)
   | CAPABILITY
   | IMPLIES
   | CASE
@@ -138,7 +142,7 @@ let pp fmt t =
     | TRUE -> "true" | FALSE -> "false"
     | IDENT s -> s | UIDENT s -> s
     | HASH_LANG -> "#lang" | TESL -> "tesl"
-    | MODULE -> "module" | EXPOSING -> "exposing" | IMPORT -> "import"
+    | MODULE -> "module" | LIBRARY -> "library" | EXPOSING -> "exposing" | IMPORT -> "import"
     | FN -> "fn" | HANDLER -> "handler" | CHECK -> "check" | AUTH -> "auth"
     | CAPTURE -> "capture" | ESTABLISH -> "establish" | FACT -> "fact"
     | TYPE -> "type" | RECORD -> "record" | ENTITY -> "entity"
@@ -146,7 +150,8 @@ let pp fmt t =
     | CODEC -> "codec" | DATABASE -> "database" | BACKEND -> "backend"
     | SCHEMA -> "schema" | API -> "api" | SERVER -> "server"
     | FOR -> "for" | QUEUE -> "queue" | CHANNEL -> "channel"
-    | WORKERS -> "workers" | DEAD_WORKERS -> "deadWorkers"
+    | WORKERS -> "workers" | DEAD_WORKERS -> "deadWorkers" | CACHE -> "cache"
+    | EMAIL -> "email" | SMTP -> "smtp"
     | CAPABILITY -> "capability" | IMPLIES -> "implies"
     | CASE -> "case" | OF -> "of" | LET -> "let" | IF -> "if"
     | THEN -> "then" | ELSE -> "else" | OK -> "ok" | FAIL -> "fail"

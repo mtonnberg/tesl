@@ -144,12 +144,12 @@ database ChatDatabase {
   schema "chat"
   entities [ChatUser, Room, Message]
   postgres {
-    database env("CHAT_DB_NAME")
-    user env("CHAT_DB_USER")
-    password env("CHAT_DB_PASSWORD")
-    host env("CHAT_DB_HOST")
-    port envInt("CHAT_DB_PORT", 5432)
-    socket env("CHAT_DB_SOCKET")
+    database "chat" # env("CHAT_DB_NAME", "chat")
+    user "tesl" # env("CHAT_DB_USER", "tesl")
+    password "" # env("CHAT_DB_PASSWORD", "")
+    host "127.0.0.1" # env("CHAT_DB_HOST", "tesl")
+    port 55432 # envInt("CHAT_DB_PORT", 55432)
+    socket "" # env("CHAT_DB_SOCKET", "")
   }
 }
 
@@ -525,7 +525,7 @@ api-test "failed notification jobs publish dead-letter events to room streams" f
 # ─── Main ─────────────────────────────────────────────────────────────────────
 main with capabilities [chatService, notifyCap, deadLetterCap] {
   initTelemetry service "chat-backend" endpoint "in-memory" console True
-  let port = envInt "CHAT_PORT" 8080
+  let port = envInt "CHAT_PORT" 3000
   with database ChatDatabase {
     with capabilities [chatService] {
       startWorkers 3 NotificationWorkers with capabilities [notifyCap]

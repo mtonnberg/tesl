@@ -26,6 +26,13 @@ let check_module (m : module_form) : validation_error list =
   let decls = m.decls in
   let imported_funcs = load_imported_func_info m in
   let cap_map = build_local_cap_map decls @ load_imported_cap_map m in
+  (* Module-level facts computed ONCE and threaded through the passes that would
+     otherwise rebuild build_func_info/build_fields_map/build_ctor_info/
+     build_field_proof_map. Built with ~extra_funcs:imported_funcs so mf_funcs is
+     exactly [build_func_info decls @ imported_funcs] — matching every pass below
+     that is called ~extra_funcs:imported_funcs. (check_existential_proof_enforcement
+     is intentionally NOT given facts: the orchestrator calls it without extra_funcs.) *)
+  let facts = build_module_facts ~extra_funcs:imported_funcs decls in
   check_file_module_name_match m
   @ check_local_imports_exist m
   @ check_duplicate_imports m.imports
@@ -36,28 +43,33 @@ let check_module (m : module_form) : validation_error list =
   @ check_duplicate_adt_constructors decls
   @ check_duplicate_decl_fields decls
   @ check_capability_cycles decls
-  @ check_entity_structure decls
+  @ check_check_fn_has_proof_return decls
+  @ check_library_self_boundary m
+  @ check_entity_structure ~facts decls
   @ check_capture_codec_types decls
-  @ check_api_endpoint_structure decls
+  @ check_capture_proof_via ~facts decls
+  @ check_api_endpoint_structure ~facts decls
   @ check_queue_structure decls
   @ check_channel_structure decls
   @ check_workers_structure ~extra_funcs:imported_funcs decls
+  @ check_cache_structure decls
+  @ check_email_structure decls
   @ check_database_entities m
   @ check_api_test_structure m
   @ check_test_descriptions decls
   @ check_server_completeness ~extra_funcs:imported_funcs decls
-  @ check_sql_field_names ~extra_funcs:imported_funcs decls
-  @ check_codec_target_types decls
-  @ check_codec_proof_coverage ~extra_funcs:imported_funcs decls
-  @ check_codec_field_types decls
-  @ check_call_site_proofs ~extra_funcs:imported_funcs decls
-  @ check_record_field_proof_construction ~extra_funcs:imported_funcs decls
-  @ check_sql_where_clauses ~extra_funcs:imported_funcs decls
-  @ check_fn_return_proof_annotations ~extra_funcs:imported_funcs decls
+  @ check_sql_field_names ~facts decls
+  @ check_codec_target_types ~facts decls
+  @ check_codec_proof_coverage ~facts decls
+  @ check_codec_field_types ~facts decls
+  @ check_call_site_proofs ~facts decls
+  @ check_record_field_proof_construction ~facts decls
+  @ check_sql_where_clauses ~facts decls
+  @ check_fn_return_proof_annotations ~facts decls
   @ check_circular_const_bindings decls
   @ check_ghost_witness_predicates decls
-  @ check_filter_check_args ~extra_funcs:imported_funcs decls
-  @ check_forall_consistency ~extra_funcs:imported_funcs decls
+  @ check_filter_check_args ~facts decls
+  @ check_forall_consistency ~facts decls
   @ check_fact_arg_types decls
   @ check_exists_bindings decls
   @ check_existential_proof_enforcement decls
@@ -71,7 +83,9 @@ let check_module (m : module_form) : validation_error list =
   @ check_adt_variant_names decls
   @ check_self_referential_aliases decls
   @ check_type_arities decls
-  @ check_ord_operator_types ~extra_funcs:imported_funcs decls
+  @ check_ord_operator_types ~facts decls
   @ check_handler_isolation decls
   @ check_auth_call_restriction decls
+  @ check_imported_module_is_library m
+  @ check_exported_signature_completeness m
   @ collect_import_parse_errors m

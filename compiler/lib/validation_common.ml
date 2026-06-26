@@ -164,6 +164,66 @@ let forall_preds_of_return_spec (spec : return_spec) : string list =
   | RetForAllDictValues { proof; _ } | RetForAllDictKeys { proof; _ } -> proof_predicates proof
   | _ -> []
 
+(* ── Signature reference helpers ─────────────────────────────────────────── *)
+
+(** All TName nodes in a type expression, with their source locations. *)
+let rec type_names_with_locs (te : type_expr) : (string * loc) list =
+  match te with
+  | TName { name; loc } -> [(name, loc)]
+  | TVar _ -> []
+  | TApp { head; arg; _ } -> type_names_with_locs head @ type_names_with_locs arg
+  | TFun { dom; cod; _ } -> type_names_with_locs dom @ type_names_with_locs cod
+  | TTuple { elems; _ } -> List.concat_map type_names_with_locs elems
+
+(** All PredApp nodes in a proof expression, with their source locations.
+    Also captures UpperCamelCase args (e.g. the `IsPositive` in `ForAll IsPositive xs`)
+    since those are predicate or type names, not variable names. *)
+let rec pred_names_with_locs (pe : proof_expr) : (string * loc) list =
+  match pe with
+  | PredApp { pred; args; loc } ->
+    let upper_args = List.filter_map (fun arg ->
+      if String.length arg > 0 && Char.uppercase_ascii arg.[0] = arg.[0]
+      then Some (arg, loc)
+      else None
+    ) args in
+    (pred, loc) :: upper_args
+  | PredAnd { left; right; _ } ->
+    pred_names_with_locs left @ pred_names_with_locs right
+
+let binding_sig_refs (b : binding) : (string * loc) list =
+  type_names_with_locs b.type_expr
+  @ (match b.proof_ann with None -> [] | Some pe -> pred_names_with_locs pe)
+
+(** All type and predicate names referenced in a return spec. *)
+let rec return_spec_sig_refs (rs : return_spec) : (string * loc) list =
+  match rs with
+  | RetPlain { ty; _ } -> type_names_with_locs ty
+  | RetAttached { binding; _ } -> binding_sig_refs binding
+  | RetNamedPack { ty; entity_proof; other_proof; _ } ->
+    type_names_with_locs ty
+    @ (match entity_proof with None -> [] | Some pe -> pred_names_with_locs pe)
+    @ (match other_proof with None -> [] | Some pe -> pred_names_with_locs pe)
+  | RetForAll { elem_ty; proof; _ }
+  | RetMaybeForAll { elem_ty; proof; _ }
+  | RetSetForAll { elem_ty; proof; _ }
+  | RetMaybeSetForAll { elem_ty; proof; _ } ->
+    type_names_with_locs elem_ty @ pred_names_with_locs proof
+  | RetForAllDictValues { key_ty; val_ty; proof; _ }
+  | RetForAllDictKeys   { key_ty; val_ty; proof; _ } ->
+    type_names_with_locs key_ty @ type_names_with_locs val_ty @ pred_names_with_locs proof
+  | RetMaybeAttached { outer_ty = Some ty; binding; _ } ->
+    type_names_with_locs ty @ binding_sig_refs binding
+  | RetMaybeAttached { binding; _ } -> binding_sig_refs binding
+  | RetExists { binding; body; _ } ->
+    binding_sig_refs binding @ return_spec_sig_refs body
+
+(** All type and predicate names referenced in a function's parameter and return
+    signature. These are the names consumers must have access to in order to
+    call or use the function. *)
+let func_sig_refs (fd : func_decl) : (string * loc) list =
+  List.concat_map binding_sig_refs fd.params
+  @ return_spec_sig_refs fd.return_spec
+
 (* ── Type helpers ────────────────────────────────────────────────────────── *)
 
 let gen_loc = dummy_loc "<validation>"
@@ -599,12 +659,36 @@ let load_imported_func_info (m : module_form) : (string * func_info) list =
           ) imported.decls
   ) m.imports
 
+(** Capabilities provided by each Tesl stdlib module. *)
+let tesl_stdlib_cap_map : (string * (string * string list) list) list = [
+  "Tesl.DB",         [("dbRead", []); ("dbWrite", ["dbRead"])];
+  "Tesl.Time",       [("time", [])];
+  "Tesl.Random",     [("random", [])];
+  "Tesl.Queue",      [("queueRead", []); ("queueWrite", ["queueRead"]); ("pubsub", [])];
+  "Tesl.UUID",       [("uuid", [])];
+  "Tesl.JWT",        [("jwt", [])];
+  "Tesl.HttpClient", [("httpClient", [])];
+]
+
 let load_imported_cap_map (m : module_form) : (string * string list) list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
   in
   List.concat_map (fun (imp : import_decl) ->
-    if is_tesl_module imp.module_name then []
+    if is_tesl_module imp.module_name then
+      (* For Tesl stdlib modules, use the static capability table *)
+      (match List.assoc_opt imp.module_name tesl_stdlib_cap_map with
+       | None -> []
+       | Some caps ->
+         let requested = match imp.names with
+           | ImportAll -> None
+           | ImportExposing names -> Some names
+         in
+         List.filter (fun (name, _) ->
+           match requested with
+           | Some names -> List.mem name names
+           | None -> false
+         ) caps)
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
       if not (Sys.file_exists path) then []
@@ -839,6 +923,10 @@ let rec infer_expr_type
           | "upsert" -> Some (mk_name_type "Unit")
           | _ -> None))
     | None -> None)
+  | ECacheGet _ -> Some (mk_app_type (mk_name_type "Maybe") (mk_name_type "a"))
+  | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _ -> Some (mk_name_type "Unit")
+  | ESendEmail _ | EStartEmailWorker _ -> Some (mk_name_type "Unit")
+  | ERuntimeCall _ -> Some (mk_name_type "Unit")  (* desugar-only infra call → Unit *)
 
 let rec pattern_bindings (scrut_ty : type_expr option) (ctors : ctor_info) (pat : pattern) : type_env =
   match pat with
@@ -985,13 +1073,25 @@ let rec normalize_proof_aliases (proof_env : proof_env) (proof : proof_expr) : p
     (match combine_proof_list loc component_proofs with
      | Some combined -> combined
      | None -> proof)
-  | PredApp { pred = ("andLeft" | "andRight"); args = [pf_name]; loc } ->
-    (* andLeft/andRight: statically, return all proofs from the input (conservative) *)
+  | PredApp { pred = (("andLeft" | "andRight") as proj); args = [pf_name]; loc } ->
+    (* andLeft/andRight narrow a conjunction proof to one conjunct:
+       andLeft P&&Q ⇒ P, andRight P&&Q ⇒ Q. *)
     (match List.assoc_opt pf_name proof_env with
      | Some proofs ->
-       (match combine_proof_list loc proofs with
-        | Some combined -> combined
-        | None -> proof)
+       let flat =
+         List.concat_map
+           (let rec f = function
+              | PredAnd { left; right; _ } -> f left @ f right
+              | p -> [p]
+            in f) proofs
+       in
+       (match flat with
+        | _ :: _ :: _ ->
+          if proj = "andLeft" then List.hd flat
+          else List.nth flat (List.length flat - 1)
+        | _ -> (match combine_proof_list loc proofs with
+                | Some combined -> combined
+                | None -> proof))
      | None -> proof)
   | PredApp _ -> proof
   | PredAnd { left; right; loc } ->
@@ -1099,3 +1199,73 @@ let field_proof_registry : (string * (string * proof_expr)) list ref = ref []
 
 (** Build a flat map from field name to (field_param_name, proof_expr) for all
     proof-annotated record/entity fields in [decls]. *)
+let build_field_proof_map (decls : top_decl list) : (string * (string * proof_expr)) list =
+  List.concat_map (function
+    | DRecord r ->
+      List.filter_map (fun (f : field_def) ->
+        match f.proof_ann with
+        | Some p -> Some (f.name, (f.name, p))
+        | None -> None
+      ) r.fields
+    | DEntity e ->
+      List.filter_map (fun (f : field_def) ->
+        match f.proof_ann with
+        | Some p -> Some (f.name, (f.name, p))
+        | None -> None
+      ) e.fields
+    | _ -> []
+  ) decls
+
+(** Precomputed module-level facts, derived once from a module's [decls] (and the
+    imported function infos) and threaded through the validation passes that would
+    otherwise rebuild them on every call.
+
+    Invariants preserved verbatim from the per-pass recomputation:
+      - [mf_funcs] is exactly [build_func_info decls @ extra_funcs] — the LOCAL
+        decls first, then the IMPORTED/extra funcs appended (order is significant
+        for List.assoc shadowing semantics).
+      - [mf_field_proof_map] is [build_field_proof_map decls]; passes that use the
+        mutable [field_proof_registry] still assign/reset it themselves, but assign
+        FROM this precomputed value rather than recomputing. *)
+type module_facts = {
+  mf_funcs : (string * func_info) list;       (* build_func_info decls @ extra_funcs *)
+  mf_fields_map : field_map;                  (* build_fields_map decls *)
+  mf_ctors : ctor_info;                       (* build_ctor_info decls *)
+  mf_field_proof_map : (string * (string * proof_expr)) list; (* build_field_proof_map decls *)
+  (* Validation-consolidation Phase 1: per-decl projections extracted ONCE here
+     instead of being re-filtered out of [decls] by every structural/codec pass.
+     Each list preserves the SOURCE ORDER of [decls] (List.filter_map is
+     order-preserving), so any pass that iterates one of these in place of a
+     [List.concat_map (function DApi.. | _ -> [])] over [decls] produces a
+     byte-identical error stream — the dropped [_ -> []] branch contributed
+     nothing. *)
+  mf_api_forms : api_form list;               (* every DApi form, in source order *)
+  mf_entities  : entity_form list;            (* every DEntity form, in source order *)
+  mf_codecs    : codec_form list;             (* every DCodec form, in source order *)
+}
+
+(** Compute all module-level facts ONCE. [extra_funcs] are the imported/extra
+    function infos that must be appended (NOT prepended) to the local ones, exactly
+    as each pass did with [build_func_info decls @ extra_funcs]. *)
+let build_module_facts ?(extra_funcs : (string * func_info) list = []) (decls : top_decl list) : module_facts =
+  {
+    mf_funcs = build_func_info decls @ extra_funcs;
+    mf_fields_map = build_fields_map decls;
+    mf_ctors = build_ctor_info decls;
+    mf_field_proof_map = build_field_proof_map decls;
+    mf_api_forms = List.filter_map (function DApi af -> Some af | _ -> None) decls;
+    mf_entities  = List.filter_map (function DEntity e -> Some e | _ -> None) decls;
+    mf_codecs    = List.filter_map (function DCodec cf -> Some cf | _ -> None) decls;
+  }
+
+(** Resolve module facts for a pass: use the precomputed [facts] when threaded
+    through (the orchestrator path), else fall back to recomputing them from
+    [decls]/[extra_funcs] (the standalone/test path). The recomputation is
+    byte-identical to what each pass previously did inline. *)
+let facts_or_compute
+    ?(facts : module_facts option)
+    ?(extra_funcs : (string * func_info) list = [])
+    (decls : top_decl list) : module_facts =
+  match facts with
+  | Some f -> f
+  | None -> build_module_facts ~extra_funcs decls

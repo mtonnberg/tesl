@@ -1,0 +1,197 @@
+#lang tesl
+module Lesson58HttpClient exposing [
+  fetchJson,
+  fetchWithBearer,
+  postJson,
+  classifyStatusCode,
+  isSuccessCode,
+  buildBearerHeader,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 58 — HttpClient: Outgoing HTTP Requests
+#
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Tesl.HttpClient lets you make outgoing HTTP requests to external services
+# (REST APIs, microservices, webhooks, payment providers).
+#
+#   HttpClient.get    url headers          → HttpResponse
+#   HttpClient.post   url headers body     → HttpResponse
+#   HttpClient.put    url headers body     → HttpResponse
+#   HttpClient.delete url headers          → HttpResponse
+#
+# HttpResponse fields:
+#   resp.status  : Int                          — e.g. 200, 404, 503
+#   resp.body    : String                       — full response body as text
+#   resp.headers : List (Tuple2 String String)  — response headers
+#
+# All outbound HTTP calls require the `httpClient` capability. Declare a
+# capability that implies it, then add `requires [...]` to your handler.
+#
+# Headers are a List of Tuple2 String String:
+#   [Tuple2 "Authorization" "Bearer my-token",
+#    Tuple2 "Content-Type"  "application/json"]
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [Int, String, Bool(..)]
+import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
+import Tesl.String exposing [String.concat]
+import Tesl.HttpClient exposing [
+  httpClient,
+  HttpResponse,
+  HttpClient.get,
+  HttpClient.post,
+]
+
+# ── Capability ────────────────────────────────────────────────────────────────
+#
+# Declare a capability that implies httpClient.
+# Any handler with `requires [webClient]` can make outbound HTTP requests.
+# You can bundle it with other capabilities:
+#   capability microserviceCap implies httpClient, dbRead
+
+capability webClient implies httpClient
+
+# ── Pure helpers — no capability needed ─────────────────────────────────────
+#
+# These functions work WITH HttpResponse values but do NOT make any requests.
+# They are pure data transformations and require no capability.
+# Write tests for them freely without mocking any network.
+
+# Check if a response indicates success (HTTP 2xx status code).
+fn isSuccessCode(code: Int) -> Bool =
+  code >= 200 && code < 300
+
+# Classify a raw status code into a human-readable category.
+# Use this for logging, metrics, or error branching.
+fn classifyStatusCode(code: Int) -> String =
+  if code >= 200 && code < 300 then
+    "success"
+  else if code >= 400 && code < 500 then
+    "client-error"
+  else if code >= 500 then
+    "server-error"
+  else
+    "redirect-or-info"
+
+# Build a "Bearer <token>" Authorization header tuple.
+# Use this to authenticate outgoing requests with a JWT or API key.
+fn buildBearerHeader(token: String) -> Tuple2 String String =
+  Tuple2 "Authorization" (String.concat "Bearer " token)
+
+# ── Handlers that make HTTP calls ─────────────────────────────────────────────
+#
+# Note: handler vs fn
+#   - `handler` can be wired into an API route (takes request context, etc.)
+#   - `fn` is a standalone function; use it for helper logic
+# Either can use `requires [webClient]` — the capability is about effects,
+# not about whether the function is a route handler.
+
+# Simple GET — no custom headers.
+# Common for: fetching public API data, health checks.
+handler fetchJson(url: String) -> HttpResponse
+  requires [webClient] =
+  HttpClient.get url []
+
+# GET with Bearer authentication header.
+# Common for: calling protected REST APIs with a JWT or API key.
+handler fetchWithBearer(url: String, token: String) -> HttpResponse
+  requires [webClient] =
+  let authHeader = buildBearerHeader token
+  let acceptHeader = Tuple2 "Accept" "application/json"
+  HttpClient.get url [authHeader, acceptHeader]
+
+# POST with JSON body.
+# The body is a String (JSON-encoded). Build it with your JSON codec or manually.
+handler postJson(url: String, jsonBody: String, token: String) -> HttpResponse
+  requires [webClient] =
+  let authHeader = buildBearerHeader token
+  let contentType = Tuple2 "Content-Type" "application/json"
+  HttpClient.post url [authHeader, contentType] jsonBody
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UNDERSTANDING — why HttpClient works this way
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WHY CAPABILITY-GATE OUTBOUND HTTP?
+#
+# Outbound HTTP calls are side-effectful: they can be slow, expensive (paid
+# APIs charge per call), or a security risk (SSRF — Server Side Request Forgery).
+# The `httpClient` capability makes this visible in every function signature.
+# A reviewer reading `requires [webClient]` immediately knows the function
+# makes network calls. Pure business logic stays free of hidden I/O.
+#
+# WHY LIST (Tuple2 String String) FOR HEADERS?
+#
+# HTTP headers are a multi-valued list (the same header name can appear
+# multiple times, e.g., Set-Cookie). A List of pairs is the most faithful
+# representation. Building headers as plain Tesl values means no special
+# builder API — just list literals.
+#
+# WHY IS resp.body A String?
+#
+# Tesl decodes the response body as UTF-8 text. If you expect JSON, parse it
+# using your codec. If you expect binary (images, files), use a library.
+#
+# COMBINING HttpClient WITH JWT:
+#
+# A common pattern is to call an internal microservice with a short-lived JWT:
+#
+#   fn callInternalService(url: String, userJwt: JwtToken, secret: JwtSecret)
+#     -> HttpResponse
+#     requires [webClient, jwt] =
+#     let header = buildBearerHeader userJwt.value
+#     HttpClient.get url [header]
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+test "classifyStatusCode: 200-series are success" {
+  expect classifyStatusCode 200 == "success"
+  expect classifyStatusCode 201 == "success"
+  expect classifyStatusCode 204 == "success"
+  expect classifyStatusCode 299 == "success"
+}
+
+test "classifyStatusCode: 4xx are client-error" {
+  expect classifyStatusCode 400 == "client-error"
+  expect classifyStatusCode 404 == "client-error"
+  expect classifyStatusCode 422 == "client-error"
+  expect classifyStatusCode 429 == "client-error"
+}
+
+test "classifyStatusCode: 5xx are server-error" {
+  expect classifyStatusCode 500 == "server-error"
+  expect classifyStatusCode 502 == "server-error"
+  expect classifyStatusCode 503 == "server-error"
+}
+
+test "classifyStatusCode: redirects and info" {
+  expect classifyStatusCode 301 == "redirect-or-info"
+  expect classifyStatusCode 302 == "redirect-or-info"
+  expect classifyStatusCode 100 == "redirect-or-info"
+}
+
+test "isSuccessCode identifies 2xx" {
+  expect isSuccessCode 200 == True
+  expect isSuccessCode 201 == True
+  expect isSuccessCode 204 == True
+  expect isSuccessCode 399 == False
+  expect isSuccessCode 404 == False
+  expect isSuccessCode 500 == False
+}
+
+test "buildBearerHeader creates correct Authorization header" {
+  let h = buildBearerHeader "mytoken123"
+  expect Tuple2.first h == "Authorization"
+  expect Tuple2.second h == "Bearer mytoken123"
+}
+
+test "buildBearerHeader with API key token" {
+  let h = buildBearerHeader "sk-abc123xyz"
+  expect Tuple2.second h == "Bearer sk-abc123xyz"
+}

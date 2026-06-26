@@ -164,12 +164,18 @@ Tesl's architecture is designed for simplicity and reliability:
 ┌─────────────────────────────────────────────────────────────┐
 │                   Runtime (Racket)                               │
 │  - Executes compiled code                                      │
-│  - Manages proofs at runtime (temporarily)                       │
 │  - Provides database, queue, and pub/sub support                │
+│  - Carries proof structs only in `--debug` builds (see below)    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Note:** Runtime proof structs will be elided in the future as the static checker matures. The proof will exist only in the type checker, with zero runtime overhead.
+**Proof cost model:** Proofs are **zero-cost by default**. In a normal (release) build they are
+erased after type-checking — there is no wrapper, no struct, and no allocation; the proof exists
+only in the compiler's static checker. Even under `--debug` they are erased: the step debugger
+shows the raw runtime value and overlays a binding's proof/type from compile-time type info, so it
+needs no runtime struct. `TESL_ZERO_COST_PROOFS=0` restores the runtime net for regression
+comparison. See [proof cost model](best-practices.md#proof-cost-model) and the
+[FAQ](FAQ.md#is-there-runtime-overhead-for-proofs).
 
 ---
 
@@ -180,6 +186,7 @@ Tesl's architecture is designed for simplicity and reliability:
 - [x] `.tesl` surface language with clean syntax
 - [x] Working compiler (OCaml) with type checking
 - [x] GDP-style proof system with compile-time verification
+- [x] Zero-cost proofs — erased unconditionally (release and `--debug`); runtime net only via `TESL_ZERO_COST_PROOFS=0` for regression
 - [x] CLI with validation, compilation, and execution
 - [x] Built-in linter and formatter
 - [x] Typed SQL database access
@@ -193,7 +200,7 @@ Tesl's architecture is designed for simplicity and reliability:
 
 ### 🚧 In Development
 
-- [ ] Full proof elision (zero runtime overhead for proofs)
+- [ ] Step debugger (VS Code DAP) that overlays proof/type from compile-time at breakpoints
 - [ ] More standard library functions
 - [ ] Additional database backends
 - [ ] Performance optimizations

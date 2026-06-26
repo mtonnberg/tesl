@@ -8,6 +8,7 @@
   tesl/dsl/sql
   tesl/dsl/web
   tesl/dsl/test-support
+  tesl/dsl/debug/checkpoint
   tesl/tesl/private/runtime
   tesl/tesl/queue
   tesl/tesl/sse
@@ -47,12 +48,12 @@
             [(check-ok? v) (loop (check-ok-value v))]
             [else v])))
   (define _fields (record-value-fields _raw))
-  (hash 'userId (tesl-codec-encode-field (raw-value (hash-ref _fields 'userId)) tesl-json-string-codec)
-        'message (tesl-codec-encode-field (raw-value (hash-ref _fields 'message)) tesl-json-string-codec)
+  (hash 'userId (tesl-encode-prim-string (raw-value (hash-ref _fields 'userId)))
+        'message (tesl-encode-prim-string (raw-value (hash-ref _fields 'message)))
   ))
 (define (tesl-codec-decode-SendNoticeRequest-0 _j)
-  (define _f_userId (tesl-codec-decode-field _j "userId" tesl-json-string-codec))
-  (define _f_message (tesl-codec-decode-field _j "message" tesl-json-string-codec))
+  (define _f_userId (tesl-decode-prim-field _j "userId" tesl-decode-prim-string))
+  (define _f_message (tesl-decode-prim-field _j "message" tesl-decode-prim-string))
   (record-value 'SendNoticeRequest (hash 'userId _f_userId 'message _f_message)))
 (register-type-codec! 'SendNoticeRequest tesl-codec-encode-SendNoticeRequest (list tesl-codec-decode-SendNoticeRequest-0))
 
@@ -63,7 +64,7 @@
 (define/pow
   (parseUserId [id : String])
   #:returns String
-  *id)
+  (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 65 (list (cons 'id *id)) (lambda () *id)))
 
 (define-capture userIdCapture
   [userIdCapture : String]
@@ -82,7 +83,7 @@
   (handleNotice [job : NotifyJob ::: (FromQueue (Id == jobId) job)])
   #:capabilities [queueRead pubsub]
   #:returns NotifyJob
-  (begin (publish-event! Lesson33Events (format "~a" (raw-value job.userId)) (NoticeSent (raw-value job.message))) *job))
+  (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 86 (list (cons 'job *job)) (lambda () (begin (publish-event! Lesson33Events (format "~a" (raw-value job.userId)) (NoticeSent (raw-value job.message))) *job))))
 
 (define Lesson33Workers
   (list (cons Lesson33Queue handleNotice)))
@@ -92,7 +93,7 @@
   (sendNotice [req : SendNoticeRequest])
   #:capabilities [queueWrite]
   #:returns String
-  (begin (enqueue! Lesson33Queue (NotifyJob #:userId (raw-value req.userId) #:message (raw-value req.message))) "queued"))
+  (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 95 (list (cons 'req *req)) (lambda () (begin (enqueue! Lesson33Queue (NotifyJob #:userId (raw-value req.userId) #:message (raw-value req.message))) "queued"))))
 
 (define Lesson33Server-sse-routes
   (list (list (list "events") #f Lesson33Events)))

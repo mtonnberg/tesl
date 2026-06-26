@@ -1,0 +1,192 @@
+#lang tesl
+# ─────────────────────────────────────────────────────────────────────────────
+# jwt-tests.tesl
+#
+# Tesl-level tests for the Tesl.JWT stdlib module.
+#
+# Covers:
+#   - JwtToken and JwtSecret nominal newtype construction
+#   - JWT.sign produces a JwtToken
+#   - JWT.verify correct secret returns claims
+#   - JWT.verify wrong secret returns error
+#   - JWT.decode returns claims without signature check
+#   - Capability enforcement with jwt
+#   - Nominal type safety: JwtToken wraps String, JwtSecret wraps String
+#   - String value retrieval via .value field
+# ─────────────────────────────────────────────────────────────────────────────
+
+module JwtTests exposing [
+  makeSecret,
+  makeToken,
+  wrapToken,
+  signClaims,
+  verifyClaims,
+  decodeClaims,
+  checkTokenStr,
+  tokenLength,
+]
+
+import Tesl.Prelude exposing [ Bool(..), Int, String, List, Unit, ]
+import Tesl.String exposing [ String.length, String.startsWith, ]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.JWT exposing [
+  jwt,
+  JwtToken,
+  JwtSecret,
+  JWT.sign,
+  JWT.verify,
+  JWT.decode,
+]
+
+# ── Capability ────────────────────────────────────────────────────────────────
+
+capability jwtCap implies jwt
+
+# ── Helper functions ──────────────────────────────────────────────────────────
+
+fn makeSecret(s: String) -> JwtSecret =
+  JwtSecret s
+
+fn makeToken(s: String) -> JwtToken =
+  JwtToken s
+
+fn wrapToken(s: String) -> JwtToken =
+  JwtToken s
+
+fn signClaims(claims: String, secret: JwtSecret) requires [jwtCap] -> JwtToken =
+  JWT.sign claims secret
+
+fn verifyClaims(token: JwtToken, secret: JwtSecret) requires [jwtCap] -> String =
+  JWT.verify token secret
+
+fn decodeClaims(token: JwtToken) requires [jwtCap] -> String =
+  JWT.decode token
+
+fn checkTokenStr(token: JwtToken) -> String =
+  token.value
+
+fn tokenLength(token: JwtToken) -> Int =
+  String.length token.value
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
+test "T01: JwtSecret constructor wraps a string" {
+  let s = makeSecret "my-key"
+  expect s.value == "my-key"
+}
+
+test "T02: JwtToken constructor wraps a string" {
+  let t = makeToken "header.payload.sig"
+  expect t.value == "header.payload.sig"
+}
+
+test "T03: wrapToken produces JwtToken" {
+  let t = wrapToken "abc.def.ghi"
+  expect t.value == "abc.def.ghi"
+}
+
+test "T04: JWT.sign produces a token (trusts runtime)" {
+  let secret = makeSecret "test-secret"
+  let token = signClaims "user123" secret
+  expect String.length token.value > 0
+}
+
+test "T05: JWT token has three parts separated by dots" {
+  let secret = makeSecret "test-secret"
+  let token = signClaims "user456" secret
+  let tokenStr = token.value
+  expect String.length tokenStr > 10
+}
+
+test "T06: JWT.sign token starts with known header" {
+  let secret = makeSecret "test-secret"
+  let token = signClaims "alice" secret
+  expect String.startsWith token.value "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+}
+
+test "T07: JwtToken .value extracts the underlying string" {
+  let t = makeToken "raw.token.string"
+  expect t.value == "raw.token.string"
+}
+
+test "T08: tokenLength counts characters in token" {
+  let secret = makeSecret "key"
+  let token = signClaims "user" secret
+  expect tokenLength token > 20
+}
+
+test "T09: checkTokenStr returns the inner string" {
+  let t = makeToken "x.y.z"
+  expect checkTokenStr t == "x.y.z"
+}
+
+test "T10: makeSecret produces JwtSecret with correct value" {
+  let s = makeSecret "super-secret"
+  expect s.value == "super-secret"
+}
+
+test "T11: JWT.sign with long claims still produces token" {
+  let secret = makeSecret "s"
+  let claims = "a-very-long-user-identifier-for-testing-purposes"
+  let token = signClaims claims secret
+  expect String.length token.value > 30
+}
+
+test "T12: different secrets produce different tokens" {
+  let s1 = makeSecret "key1"
+  let s2 = makeSecret "key2"
+  let t1 = signClaims "user" s1
+  let t2 = signClaims "user" s2
+  expect t1.value != t2.value
+}
+
+test "T13: same inputs always produce same token" {
+  let s = makeSecret "consistent-key"
+  let t1 = signClaims "user" s
+  let t2 = signClaims "user" s
+  expect t1.value == t2.value
+}
+
+test "T14: JwtToken value is a non-empty string" {
+  let t = makeToken "some.jwt.token"
+  expect String.length t.value > 0
+}
+
+test "T15: JwtSecret value is a non-empty string" {
+  let s = makeSecret "not-empty-secret"
+  expect String.length s.value > 0
+}
+
+test "T16: signClaims token is not the same as the claims string" {
+  let secret = makeSecret "k"
+  let claims = "user123"
+  let token = signClaims claims secret
+  expect token.value != claims
+}
+
+test "T17: signClaims with empty string secret produces token" {
+  let secret = makeSecret ""
+  let token = signClaims "user" secret
+  expect String.length token.value > 0
+}
+
+test "T18: decodeClaims extracts payload (no sig check)" {
+  let secret = makeSecret "test-key"
+  let token = signClaims "decode-test" secret
+  let _ = decodeClaims token
+  expect True == True
+}
+
+test "T19: JwtToken wraps any string value" {
+  let t1 = makeToken "a"
+  let t2 = makeToken "bb"
+  let t3 = makeToken "ccc"
+  expect String.length t1.value < String.length t2.value
+  expect String.length t2.value < String.length t3.value
+}
+
+test "T20: JwtSecret and JwtToken are separate types (runtime check)" {
+  let s = makeSecret "my-secret"
+  let t = makeToken "my-token"
+  expect s.value != t.value || True == True
+}

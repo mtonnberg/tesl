@@ -1,0 +1,63 @@
+#lang tesl
+module Main exposing []
+
+# Application that imports from the tesl-validate library.
+# The library provides proof predicates; the app owns infrastructure.
+#
+# Note: in a real package-managed project these would be imported as:
+#   import myorg/tesl-validate/Email exposing [ValidEmail, checkEmail]
+# For this local example we resolve by relative file path (same directory).
+
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Email exposing [ValidEmail, checkEmail]
+import Money exposing [NonNegativeCents, checkNonNegativeCents, PositiveCents, checkPositiveCents]
+
+# ── Domain record using library proof predicates ─────────────────────────────
+
+record NewUserRequest {
+  email:   String ::: ValidEmail email
+  balance: Int    ::: NonNegativeCents balance
+}
+
+record PurchaseRequest {
+  email:  String ::: ValidEmail email
+  amount: Int    ::: PositiveCents amount
+}
+
+# ── Constructor functions (validate at the boundary) ─────────────────────────
+
+fn makeNewUserRequest(rawEmail: String, rawBalance: Int) -> NewUserRequest =
+  let email   = check checkEmail rawEmail
+  let balance = check checkNonNegativeCents rawBalance
+  NewUserRequest { email: email balance: balance }
+
+fn makePurchaseRequest(rawEmail: String, rawAmount: Int) -> PurchaseRequest =
+  let email  = check checkEmail rawEmail
+  let amount = check checkPositiveCents rawAmount
+  PurchaseRequest { email: email amount: amount }
+
+# ── Handler functions that require validated inputs ───────────────────────────
+
+handler createUser(rawEmail: String, rawBalance: Int) -> String requires [] =
+  let req = makeNewUserRequest rawEmail rawBalance
+  "Created user: ${req.email} with balance ${req.balance}"
+
+handler processPurchase(rawEmail: String, rawAmount: Int) -> String requires [] =
+  let req = makePurchaseRequest rawEmail rawAmount
+  "Purchase by ${req.email} for ${req.amount} cents"
+
+# ── Codec with via — validation happens at JSON decode time ──────────────────
+
+codec NewUserRequest {
+  toJson {
+    email   -> "email"   with_codec stringCodec
+    balance -> "balance" with_codec intCodec
+  }
+  fromJson [
+    {
+      email   <- "email"   with_codec stringCodec via checkEmail
+      balance <- "balance" with_codec intCodec    via checkNonNegativeCents
+    }
+  ]
+}

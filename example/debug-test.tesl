@@ -1,0 +1,20 @@
+#lang tesl
+module DebugTest exposing []
+import Tesl.Prelude exposing [Int, String, Unit]
+
+# Minimal debugger test. Set breakpoint on line 8 (the "let doubled" line),
+# press F5 → "Debug Tesl program". The session should pause at line 8.
+
+fn double(x: Int) -> Int =
+  let doubled = x * 2    # ← breakpoint line 8
+  doubled
+
+fn greet(name: String) -> String =
+  let prefix = "Hello, " # ← breakpoint line 12
+  prefix ++ name ++ "!"
+
+main {
+  let result = double 21
+  let message = greet "Tesl"
+  telemetry "done" {}
+}

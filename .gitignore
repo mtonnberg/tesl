@@ -12,3 +12,11 @@ _build/
 .claude/
 .agents/
 result
+.tesl-collections/dsl/debug/compiled/
+dsl/compiled/
+dsl/private/compiled/
+tesl/compiled/
+
+# worktree-local DSL-resolution symlinks + benchmark output dumps (env-specific / scratch)
+.tesl-collections/
+compiler/baseline*.txt

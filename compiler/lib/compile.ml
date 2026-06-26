@@ -167,13 +167,40 @@ let definition_to_json = function
 let definition_response_to_json definition =
   Printf.sprintf {|{"version":1,"definition":%s}|} (definition_to_json definition)
 
+(* An occurrence is a definition_location plus a [kind] tag describing the
+   role the occurrence plays:
+     "write" — the binding/definition site of the symbol (where it is bound)
+     "read"  — a use site (reference) of the symbol
+     "text"  — an unresolved textual match (no semantic backing)
+   The [kind] field is ADDITIVE: existing consumers that read only file/line/col
+   continue to work unchanged.  The bare location record stays as
+   [occurrence_location] so the definition machinery can keep sharing it. *)
 type occurrence_location = definition_location
+
+type occurrence_kind = OccWrite | OccRead | OccText
+
+let occurrence_kind_to_string = function
+  | OccWrite -> "write"
+  | OccRead  -> "read"
+  | OccText  -> "text"
+
+type occurrence = {
+  occ_loc  : occurrence_location;
+  occ_kind : occurrence_kind;
+}
 
 let occurrence_location_to_json = definition_location_to_json
 
-let occurrences_to_json (occurrences : occurrence_location list) =
+let occurrence_to_json (o : occurrence) : string =
+  Printf.sprintf
+    {|{"file":%s,"line":%d,"col":%d,"end_line":%d,"end_col":%d,"kind":%s}|}
+    (json_encode_string o.occ_loc.file) o.occ_loc.line o.occ_loc.col
+    o.occ_loc.end_line o.occ_loc.end_col
+    (json_encode_string (occurrence_kind_to_string o.occ_kind))
+
+let occurrences_to_json (occurrences : occurrence list) =
   Printf.sprintf "[%s]"
-    (String.concat "," (List.map occurrence_location_to_json occurrences))
+    (String.concat "," (List.map occurrence_to_json occurrences))
 
 let occurrences_response_to_json occurrences =
   Printf.sprintf {|{"version":1,"occurrences":%s}|} (occurrences_to_json occurrences)
@@ -411,17 +438,32 @@ let symbol_equal a b =
   && a.symbol_name = b.symbol_name
   && loc_equal a.symbol_loc b.symbol_loc
 
-let location_list_to_occurrences (locs : Location.loc list) : occurrence_location list =
-  let rec go (seen : occurrence_location list) = function
+(* Deduplicate raw locations and classify each as a write or read occurrence.
+   [write_loc] is the symbol's definition/binding site (from the resolved
+   target): an occurrence whose source span equals it is the "write" site;
+   every other occurrence is a "read".  Backward compatible — callers that
+   ignore [occ_kind] see the same set of locations as before. *)
+let location_list_to_occurrences ?(write_loc : Location.loc option)
+    (locs : Location.loc list) : occurrence list =
+  let is_write (loc : Location.loc) =
+    match write_loc with
+    | Some w -> loc_equal loc w
+    | None -> false
+  in
+  let rec go (seen : occurrence list) = function
     | [] -> List.rev seen
     | loc :: rest ->
-      let occurrence : occurrence_location = location_to_definition loc in
-      if List.exists (fun (existing : occurrence_location) ->
-        existing.file = occurrence.file
-        && existing.line = occurrence.line
-        && existing.col = occurrence.col
-        && existing.end_line = occurrence.end_line
-        && existing.end_col = occurrence.end_col
+      let occ_loc : occurrence_location = location_to_definition loc in
+      let occurrence = {
+        occ_loc;
+        occ_kind = if is_write loc then OccWrite else OccRead;
+      } in
+      if List.exists (fun (existing : occurrence) ->
+        existing.occ_loc.file = occ_loc.file
+        && existing.occ_loc.line = occ_loc.line
+        && existing.occ_loc.col = occ_loc.col
+        && existing.occ_loc.end_line = occ_loc.end_line
+        && existing.occ_loc.end_col = occ_loc.end_col
       ) seen
       then go seen rest
       else go (occurrence :: seen) rest
@@ -597,6 +639,29 @@ let rec definition_in_expr env locals line col (expr : Ast.expr) =
     definition_in_expr env locals line col body
   | Ast.EServe { port; _ } ->
     definition_in_expr env locals line col port
+  | Ast.ECacheGet { key; _ } ->
+    definition_in_expr env locals line col key
+  | Ast.ECacheSet { key; value; ttl; _ } ->
+    let r = definition_in_expr env locals line col key in
+    (match r with Some _ -> r | None ->
+      let r2 = definition_in_expr env locals line col value in
+      match r2 with Some _ -> r2 | None ->
+        match ttl with Some e -> definition_in_expr env locals line col e | None -> None)
+  | Ast.ECacheDelete { key; _ } ->
+    definition_in_expr env locals line col key
+  | Ast.ECacheInvalidate { prefix; _ } ->
+    definition_in_expr env locals line col prefix
+  | Ast.ESendEmail { to_; subject; body; _ } ->
+    (match definition_in_expr env locals line col to_ with
+     | Some _ as r -> r
+     | None ->
+       match definition_in_expr env locals line col subject with
+       | Some _ as r -> r
+       | None ->
+         definition_in_expr env locals line col body)
+  | Ast.EStartEmailWorker _ -> None
+  | Ast.ERuntimeCall { segments; _ } ->
+    List.find_map (function Ast.RLit _ -> None | Ast.RArg e -> recurse e) segments
   | Ast.EConstructor { name; args; loc } ->
     let ctor_loc = precise_name_loc loc name in
     if loc_contains_position ctor_loc line col then
@@ -805,7 +870,7 @@ let definition_in_top_decl env line col (decl : Ast.top_decl) =
          | Some _ as result -> result
          | None -> None)
   | Ast.DDatabase _ | Ast.DCapability _ | Ast.DQueue _
-  | Ast.DWorkers _ | Ast.DServer _ | Ast.DFact _ -> None
+  | Ast.DWorkers _ | Ast.DServer _ | Ast.DFact _ | Ast.DCache _ | Ast.DEmail _ -> None
 
 let collect_definition_env (m : Ast.module_form) =
   List.fold_left (fun env decl ->
@@ -830,6 +895,8 @@ let collect_definition_env (m : Ast.module_form) =
     | Ast.DApi a -> add_term_def env a.name (precise_name_loc a.loc a.name)
     | Ast.DServer s -> add_term_def env s.name (precise_name_loc s.loc s.name)
     | Ast.DTest _ | Ast.DApiTest _ | Ast.DLoadTest _ | Ast.DFact _ -> env
+    | Ast.DCache c -> add_term_def env c.name (precise_name_loc c.loc c.name)
+    | Ast.DEmail e -> add_term_def env e.name (precise_name_loc e.loc e.name)
   ) empty_definition_env m.decls
 
 let definition_source filename source line col =
@@ -1022,6 +1089,26 @@ let rec resolve_symbol_in_expr env locals line col (expr : Ast.expr) =
   | Ast.EWithCapabilities { body; _ }
   | Ast.EWithTransaction { body; _ } -> resolve_symbol_in_expr env locals line col body
   | Ast.EServe { port; _ } -> resolve_symbol_in_expr env locals line col port
+  | Ast.ECacheGet { key; _ } -> resolve_symbol_in_expr env locals line col key
+  | Ast.ECacheSet { key; value; ttl; _ } ->
+    let r = resolve_symbol_in_expr env locals line col key in
+    (match r with Some _ -> r | None ->
+      let r2 = resolve_symbol_in_expr env locals line col value in
+      match r2 with Some _ -> r2 | None ->
+        match ttl with Some e -> resolve_symbol_in_expr env locals line col e | None -> None)
+  | Ast.ECacheDelete { key; _ } -> resolve_symbol_in_expr env locals line col key
+  | Ast.ECacheInvalidate { prefix; _ } -> resolve_symbol_in_expr env locals line col prefix
+  | Ast.ESendEmail { to_; subject; body; _ } ->
+    (match resolve_symbol_in_expr env locals line col to_ with
+     | Some _ as r -> r
+     | None ->
+       match resolve_symbol_in_expr env locals line col subject with
+       | Some _ as r -> r
+       | None ->
+         resolve_symbol_in_expr env locals line col body)
+  | Ast.EStartEmailWorker _ -> None
+  | Ast.ERuntimeCall { segments; _ } ->
+    List.find_map (function Ast.RLit _ -> None | Ast.RArg e -> recurse e) segments
   | Ast.EConstructor { name; args; loc } ->
     let ctor_loc = precise_name_loc loc name in
     if loc_contains_position ctor_loc line col then find_ctor_symbol env.ctor_defs name
@@ -1262,6 +1349,8 @@ let resolve_symbol_in_top_decl env line col (decl : Ast.top_decl) =
   | Ast.DWorkers w -> let name_loc = precise_name_loc w.loc w.name in if loc_contains_position name_loc line col then Some (term_symbol w.name name_loc) else None
   | Ast.DServer s -> let name_loc = precise_name_loc s.loc s.name in if loc_contains_position name_loc line col then Some (term_symbol s.name name_loc) else None
   | Ast.DFact f -> let name_loc = precise_name_loc f.loc f.name in if loc_contains_position name_loc line col then Some (type_symbol f.name name_loc) else None
+  | Ast.DCache c -> let name_loc = precise_name_loc c.loc c.name in if loc_contains_position name_loc line col then Some (term_symbol c.name name_loc) else None
+  | Ast.DEmail e -> let name_loc = precise_name_loc e.loc e.name in if loc_contains_position name_loc line col then Some (term_symbol e.name name_loc) else None
 
 let rec collect_occurrences_in_type_expr env target (te : Ast.type_expr) =
   match te with
@@ -1361,6 +1450,20 @@ let rec collect_occurrences_in_expr env locals target (expr : Ast.expr) =
   | Ast.EWithCapabilities { body; _ }
   | Ast.EWithTransaction { body; _ } -> collect_occurrences_in_expr env locals target body
   | Ast.EServe { port; _ } -> collect_occurrences_in_expr env locals target port
+  | Ast.ECacheGet { key; _ } -> collect_occurrences_in_expr env locals target key
+  | Ast.ECacheSet { key; value; ttl; _ } ->
+    collect_occurrences_in_expr env locals target key
+    @ collect_occurrences_in_expr env locals target value
+    @ (match ttl with Some e -> collect_occurrences_in_expr env locals target e | None -> [])
+  | Ast.ECacheDelete { key; _ } -> collect_occurrences_in_expr env locals target key
+  | Ast.ECacheInvalidate { prefix; _ } -> collect_occurrences_in_expr env locals target prefix
+  | Ast.ESendEmail { to_; subject; body; _ } ->
+    collect_occurrences_in_expr env locals target to_
+    @ collect_occurrences_in_expr env locals target subject
+    @ collect_occurrences_in_expr env locals target body
+  | Ast.EStartEmailWorker _ -> []
+  | Ast.ERuntimeCall { segments; _ } ->
+    List.concat_map (function Ast.RLit _ -> [] | Ast.RArg e -> recurse e) segments
   | Ast.EConstructor { name; args; loc } ->
     (match find_ctor_symbol env.ctor_defs name with
      | Some symbol when symbol_equal symbol target -> loc :: List.concat_map (collect_occurrences_in_expr env locals target) args
@@ -1520,6 +1623,8 @@ let rec collect_occurrences_in_top_decl env target (decl : Ast.top_decl) =
   | Ast.DWorkers w -> let name_loc = precise_name_loc w.loc w.name in if symbol_equal (term_symbol w.name name_loc) target then [name_loc] else []
   | Ast.DServer s -> let name_loc = precise_name_loc s.loc s.name in if symbol_equal (term_symbol s.name name_loc) target then [name_loc] else []
   | Ast.DFact f -> let name_loc = precise_name_loc f.loc f.name in if symbol_equal (type_symbol f.name name_loc) target then [name_loc] else []
+  | Ast.DCache c -> let name_loc = precise_name_loc c.loc c.name in if symbol_equal (term_symbol c.name name_loc) target then [name_loc] else []
+  | Ast.DEmail e -> let name_loc = precise_name_loc e.loc e.name in if symbol_equal (term_symbol e.name name_loc) target then [name_loc] else []
 
 and collect_occurrences_in_return_spec env target ret =
   match ret with
@@ -1547,7 +1652,7 @@ let occurrences_source filename source line col =
     | None -> []
     | Some target ->
       List.concat_map (collect_occurrences_in_top_decl env target) m.decls
-      |> location_list_to_occurrences
+      |> location_list_to_occurrences ~write_loc:target.symbol_loc
 
 let occurrences_file filename line col =
   let source = In_channel.with_open_text filename In_channel.input_all in
@@ -1621,6 +1726,325 @@ let field_at_source filename source line col =
 let field_at_file filename line col =
   let source = In_channel.with_open_text filename In_channel.input_all in
   field_at_source filename source line col
+
+(* ── Shared module-walking helpers for the position queries below ───────────── *)
+
+(* The source span of a top-level declaration. *)
+let top_decl_loc (decl : Ast.top_decl) : Location.loc =
+  match decl with
+  | Ast.DFunc fd -> fd.loc
+  | Ast.DType (Ast.TypeNewtype { loc; _ })
+  | Ast.DType (Ast.TypeAlias { loc; _ })
+  | Ast.DType (Ast.TypeAdt { loc; _ }) -> loc
+  | Ast.DRecord r -> r.loc
+  | Ast.DEntity e -> e.loc
+  | Ast.DFact f -> f.loc
+  | Ast.DCodec c -> c.loc
+  | Ast.DDatabase d -> d.loc
+  | Ast.DCapability c -> c.loc
+  | Ast.DConst c -> c.loc
+  | Ast.DQueue q -> q.loc
+  | Ast.DChannel c -> c.loc
+  | Ast.DWorkers w -> w.loc
+  | Ast.DCache c -> c.loc
+  | Ast.DEmail e -> e.loc
+  | Ast.DCapture c -> c.loc
+  | Ast.DApi a -> a.loc
+  | Ast.DServer s -> s.loc
+  | Ast.DTest t -> t.loc
+  | Ast.DApiTest t -> t.loc
+  | Ast.DLoadTest t -> t.loc
+
+(* Fold [f] over every top-level expression ROOT in a module: function bodies,
+   const initialisers, capture/channel sub-expressions and the expressions that
+   live inside test statements.  Callers descend each root recursively via
+   {!Ast_visitor.iter}.  This covers every place a function call can appear. *)
+let fold_module_expr_roots (f : 'a -> Ast.expr -> 'a) (acc : 'a)
+    (m : Ast.module_form) : 'a =
+  let rec fold_test_stmts acc (stmts : Ast.test_stmt list) =
+    List.fold_left fold_test_stmt acc stmts
+  and fold_test_stmt acc (stmt : Ast.test_stmt) =
+    match stmt with
+    | Ast.TsLet { value; _ } | Ast.TsLetProof { value; _ } -> f acc value
+    | Ast.TsExpect { left; right; _ } ->
+      let acc = f acc left in
+      (match right with Some r -> f acc r | None -> acc)
+    | Ast.TsExpectFail { fn; arg; _ }
+    | Ast.TsExpectHasProof { fn; arg; _ } -> f (f acc fn) arg
+    | Ast.TsProperty { params; body; _ } ->
+      let acc =
+        List.fold_left (fun acc (p : Ast.property_param) ->
+          match p.where_clause with Some g -> f acc g | None -> acc
+        ) acc params
+      in
+      f acc body
+    | Ast.TsIf { cond; then_stmts; else_stmts; _ } ->
+      let acc = f acc cond in
+      let acc = fold_test_stmts acc then_stmts in
+      fold_test_stmts acc else_stmts
+    | Ast.TsCase { scrut; arms; _ } ->
+      let acc = f acc scrut in
+      List.fold_left (fun acc (arm : Ast.ts_case_arm) ->
+        let acc = match arm.ts_guard with Some g -> f acc g | None -> acc in
+        fold_test_stmts acc arm.ts_body
+      ) acc arms
+    | Ast.TsExpr { e; _ } -> f acc e
+  in
+  List.fold_left (fun acc decl ->
+    match decl with
+    | Ast.DFunc fd -> f acc fd.body
+    | Ast.DConst c -> f acc c.value
+    | Ast.DTest t -> fold_test_stmts acc t.stmts
+    | Ast.DApiTest t ->
+      let acc = List.fold_left f acc t.seed_stmts in
+      fold_test_stmts acc t.stmts
+    | Ast.DLoadTest t ->
+      let acc = List.fold_left f acc t.seed_stmts in
+      fold_test_stmts acc t.request_stmts
+    | _ -> acc
+  ) acc m.decls
+
+(* ── Signature help ──────────────────────────────────────────────────────────
+   {"version":1, "signature": {label, parameters:[{label,type}], active_parameter} | null}
+   When the cursor is inside the argument list of a function call, report the
+   callee's declared parameter labels + types and which parameter is active. *)
+
+type signature_param = {
+  sp_label : string;
+  sp_type  : string;
+}
+
+type signature_info = {
+  si_label            : string;
+  si_parameters       : signature_param list;
+  si_active_parameter : int;
+}
+
+let signature_param_to_json (p : signature_param) : string =
+  Printf.sprintf {|{"label":%s,"type":%s}|}
+    (json_encode_string p.sp_label) (json_encode_string p.sp_type)
+
+let signature_info_to_json (s : signature_info) : string =
+  Printf.sprintf
+    {|{"label":%s,"parameters":[%s],"active_parameter":%d}|}
+    (json_encode_string s.si_label)
+    (String.concat "," (List.map signature_param_to_json s.si_parameters))
+    s.si_active_parameter
+
+let signature_to_json = function
+  | None -> "null"
+  | Some s -> signature_info_to_json s
+
+let signature_help_response_to_json sig_ =
+  Printf.sprintf {|{"version":1,"signature":%s}|} (signature_to_json sig_)
+
+(* Map a function declaration to its parameter labels + rendered types and a
+   human-readable label "name p1: T1 p2: T2". *)
+let signature_of_func_decl (fd : Ast.func_decl) : signature_info =
+  let parameters =
+    List.map (fun (b : Ast.binding) -> {
+      sp_label = b.name;
+      sp_type  = Validation_common.pp_type_expr b.type_expr;
+    }) fd.params
+  in
+  let label =
+    let params_str =
+      String.concat " "
+        (List.map (fun p -> Printf.sprintf "%s: %s" p.sp_label p.sp_type) parameters)
+    in
+    if params_str = "" then fd.name else fd.name ^ " " ^ params_str
+  in
+  { si_label = label; si_parameters = parameters; si_active_parameter = 0 }
+
+(* Collect every callable function declaration by name (last definition wins). *)
+let func_decls_by_name (m : Ast.module_form) : (string * Ast.func_decl) list =
+  List.filter_map (function
+    | Ast.DFunc fd -> Some (fd.name, fd)
+    | _ -> None
+  ) m.decls
+
+(* Find the innermost function-application expression that contains the cursor.
+   We walk every top-level expression root in the module, descend into every
+   sub-expression (pre-order, via {!Ast_visitor.iter}), and keep the
+   smallest-span EApp chain whose head is a plain variable naming a function and
+   whose overall span contains the position. *)
+let signature_help_source filename source line col : signature_info option =
+  set_query_source_lines source;
+  match parse_module filename source with
+  | Err _ -> None
+  | Ok m ->
+    let funcs = func_decls_by_name m in
+    (* best = innermost (smallest span) matching call site *)
+    let best : (string * Ast.expr list * Location.loc) option ref = ref None in
+    let consider (e : Ast.expr) =
+      match e with
+      | Ast.EApp _ ->
+        let head, args = Checker.flatten_app_expr [] e in
+        let call_loc = Checker.expr_loc e in
+        (match head with
+         | Ast.EVar { name; _ } when List.mem_assoc name funcs ->
+           if loc_contains_position call_loc line col then begin
+             let better =
+               match !best with
+               | None -> true
+               | Some (_, _, prev) ->
+                 compare (loc_specificity_key call_loc) (loc_specificity_key prev) < 0
+             in
+             if better then best := Some (name, args, call_loc)
+           end
+         | _ -> ())
+      | _ -> ()
+    in
+    fold_module_expr_roots (fun () e -> Ast_visitor.iter consider e) () m;
+    match !best with
+    | None -> None
+    | Some (name, args, _call_loc) ->
+      let fd = List.assoc name funcs in
+      let sig_ = signature_of_func_decl fd in
+      (* active parameter = how many fully-typed args precede the cursor.
+         An argument is "before the cursor" if it ends at/strictly before the
+         position; the active param is the count of such complete args, clamped
+         to the last parameter index. *)
+      let completed =
+        List.fold_left (fun acc arg ->
+          let aloc = Checker.expr_loc arg in
+          if position_leq (aloc.Location.stop.line, aloc.Location.stop.col) (line, col)
+             && not (loc_contains_position aloc line col)
+          then acc + 1 else acc
+        ) 0 args
+      in
+      let nparams = List.length sig_.si_parameters in
+      let active =
+        if nparams = 0 then 0 else min completed (nparams - 1)
+      in
+      Some { sig_ with si_active_parameter = active }
+
+let signature_help_file filename line col =
+  let source = In_channel.with_open_text filename In_channel.input_all in
+  signature_help_source filename source line col
+
+(* ── Selection range ─────────────────────────────────────────────────────────
+   {"version":1, "ranges":[{line,col,end_line,end_col}, ...]}  innermost-first.
+   The nested chain of AST node spans covering the cursor (expr → enclosing
+   expr/stmt → block → decl). *)
+
+type selection_range = {
+  sr_line     : int;
+  sr_col      : int;
+  sr_end_line : int;
+  sr_end_col  : int;
+}
+
+let selection_range_of_loc (loc : Location.loc) : selection_range = {
+  sr_line     = loc.start.line;
+  sr_col      = loc.start.col;
+  sr_end_line = loc.stop.line;
+  sr_end_col  = loc.stop.col;
+}
+
+let selection_range_to_json (r : selection_range) : string =
+  Printf.sprintf {|{"line":%d,"col":%d,"end_line":%d,"end_col":%d}|}
+    r.sr_line r.sr_col r.sr_end_line r.sr_end_col
+
+let selection_ranges_response_to_json (ranges : selection_range list) : string =
+  Printf.sprintf {|{"version":1,"ranges":[%s]}|}
+    (String.concat "," (List.map selection_range_to_json ranges))
+
+let selection_range_source filename source line col : selection_range list =
+  match parse_module filename source with
+  | Err _ -> []
+  | Ok m ->
+    (* Gather every AST node loc that contains the cursor: every expression
+       span (via the recursive expr walk), every top-level declaration span,
+       and the enclosing module span itself. *)
+    let acc : Location.loc list ref = ref [] in
+    let add (loc : Location.loc) =
+      if loc_contains_position loc line col then acc := loc :: !acc
+    in
+    fold_module_expr_roots (fun () root ->
+      Ast_visitor.iter (fun e -> add (Checker.expr_loc e)) root
+    ) () m;
+    List.iter (fun decl -> add (top_decl_loc decl)) m.decls;
+    (* Dedup identical spans, then sort innermost (smallest span) first. *)
+    let uniq =
+      List.fold_left (fun seen loc ->
+        if List.exists (loc_equal loc) seen then seen else loc :: seen
+      ) [] !acc
+    in
+    let sorted =
+      List.sort (fun a b ->
+        compare (loc_specificity_key a) (loc_specificity_key b)
+      ) uniq
+    in
+    List.map selection_range_of_loc sorted
+
+let selection_range_file filename line col =
+  let source = In_channel.with_open_text filename In_channel.input_all in
+  selection_range_source filename source line col
+
+(* ── Type definition ─────────────────────────────────────────────────────────
+   {"version":1, "type_definition": {file,line,col,end_line,end_col} | null}
+   Location of the DEFINITION OF THE TYPE of the symbol at the cursor — the
+   record / adt / newtype / entity declaration, distinct from --definition-json
+   (which goes to the value's binding site). *)
+
+let type_definition_response_to_json (loc : definition_location option) : string =
+  Printf.sprintf {|{"version":1,"type_definition":%s}|}
+    (match loc with None -> "null" | Some d -> definition_location_to_json d)
+
+(* Strip a rendered type string down to its head type-constructor name so we can
+   look it up in the module's type declarations.  e.g. "List Item" -> "List",
+   "Maybe User" -> "Maybe", "UserId" -> "UserId". *)
+let head_type_name (display_ty : string) : string option =
+  let s = String.trim display_ty in
+  if s = "" then None
+  else
+    (* take up to the first space / non-identifier char *)
+    let n = String.length s in
+    let rec take i =
+      if i < n && is_ident_char s.[i] then take (i + 1) else i
+    in
+    let stop = take 0 in
+    if stop = 0 then None else Some (String.sub s 0 stop)
+
+let type_definition_source filename source line col : definition_location option =
+  set_query_source_lines source;
+  match parse_module filename source with
+  | Err _ -> None
+  | Ok m ->
+    let type_env = collect_definition_env m in
+    (* 1. Try expression types from the checker: the type of the expr under the
+          cursor, mapped to its declaring record/adt/newtype/entity. *)
+    let expr_types, _ = Checker.check_module_with_expr_types m in
+    let best =
+      List.fold_left (fun best info ->
+        if loc_contains_position info.Checker.loc line col && better_expr_type best info
+        then Some info else best
+      ) None expr_types
+    in
+    let from_expr_type =
+      match best with
+      | None -> None
+      | Some info ->
+        (match head_type_name info.Checker.display_ty with
+         | None -> None
+         | Some tname -> find_named_loc type_env.type_defs tname)
+    in
+    match from_expr_type with
+    | Some loc -> Some (location_to_definition loc)
+    | None ->
+      (* 2. Fall back: cursor is itself on a type name / value whose declared
+            type we can resolve via the same symbol resolver. *)
+      (match find_map_list (resolve_symbol_in_top_decl type_env line col) m.decls with
+       | Some { symbol_kind = TypeSymbol; symbol_name; _ } ->
+         (match find_named_loc type_env.type_defs symbol_name with
+          | Some loc -> Some (location_to_definition loc)
+          | None -> None)
+       | _ -> None)
+
+let type_definition_file filename line col =
+  let source = In_channel.with_open_text filename In_channel.input_all in
+  type_definition_source filename source line col
 
 let starts_with ~prefix s =
   let prefix_len = String.length prefix in
@@ -1770,38 +2194,28 @@ let legacy_bool_diagnostics _filename source (m : module_form) =
       visit_type_expr key_ty; visit_type_expr val_ty
     | RetMaybeAttached { binding; _ } -> visit_binding binding
     | RetExists { binding; body; _ } -> visit_binding binding; visit_return_spec body
-  and visit_expr = function
+  and visit_expr e =
+    (* Only the legacy-bool-bearing variants get bespoke handling; the
+       structural recursion into every other variant's children is delegated to
+       {!Ast_visitor.iter_children}, the single shared traversal.  This is what
+       fixes the historical bug where [EFail _ -> ()] never descended into
+       [EFail.message] (an expr): the structural default now visits it, so a
+       legacy `true`/`false`/`Boolean` inside a fail message is diagnosed too.
+       ELambda additionally needs its parameter *types* walked for `Boolean`/
+       `bool` annotations — bindings carry type_expr, which the expr visitor
+       (correctly) does not traverse — so that arm is kept explicit. *)
+    match e with
     | ELit { lit = LBool true; loc } ->
         diags := legacy_bool_diag source_lines loc ~old_text:"true" ~replacement:"True"
           ~message:"use `True`, not `true`" :: !diags
     | ELit { lit = LBool false; loc } ->
         diags := legacy_bool_diag source_lines loc ~old_text:"false" ~replacement:"False"
           ~message:"use `False`, not `false`" :: !diags
-    | ELit _ | EVar _ | EFail _ | EStartWorkers _ -> ()
-    | EField { obj; _ } -> visit_expr obj
-    | EApp { fn; arg; _ } -> visit_expr fn; visit_expr arg
-    | EBinop { left; right; _ } -> visit_expr left; visit_expr right
-    | EUnop { arg; _ } -> visit_expr arg
-    | EIf { cond; then_; else_; _ } -> visit_expr cond; visit_expr then_; visit_expr else_
-    | ECase { scrut; arms; _ } ->
-        visit_expr scrut;
-        List.iter (fun arm -> Option.iter visit_expr arm.guard; visit_expr arm.body) arms
-    | ELet { value; body; _ } -> visit_expr value; visit_expr body
-    | ELetProof { value; body; _ } -> visit_expr value; visit_expr body
-    | ERecord { fields; _ } -> List.iter (fun (_, e) -> visit_expr e) fields
-    | EList { elems; _ } -> List.iter visit_expr elems
-    | EOk { value; _ } -> visit_expr value
-    | ETelemetry { fields; _ } -> List.iter (fun (_, e) -> visit_expr e) fields
-    | EEnqueue { payload; _ } -> visit_expr payload
-    | EPublish { key; payload; _ } -> Option.iter visit_expr key; Option.iter visit_expr payload
-    | EWithDatabase { body; _ }
-    | EWithCapabilities { body; _ }
-    | EWithTransaction { body; _ } -> visit_expr body
-    | EServe { port; _ } -> visit_expr port
     | EConstructor { name = ("True" | "False"); args = []; loc } ->
         note_bool_ctor_use loc
-    | EConstructor { args; _ } -> List.iter visit_expr args
-    | ELambda { params; body; _ } -> List.iter visit_binding params; visit_expr body
+    | ELambda { params; body; _ } ->
+        List.iter visit_binding params; visit_expr body
+    | _ -> Ast_visitor.iter_children visit_expr e
   in
   let rec visit_test_stmt = function
     | TsLetProof { value; _ } -> visit_expr value
@@ -1928,13 +2342,38 @@ let cyclic_local_import_paths_for_entry entry_path =
   | Some component when List.length component > 1 -> component
   | _ -> []
 
-(** Produce a diagnostic for each pair of files involved in an import cycle.
-    Returns [] if the file is synthetic (empty path, <test>, etc.). *)
-(** Run the full check pipeline on a parsed module; returns diagnostics. *)
-let check_module source (m : Ast.module_form) : diagnostic list =
+(* ── WS1: opt-in per-phase wall-clock timing ────────────────────────────────
+   When the environment variable [TESL_PHASE_TIMING=1] is set, each compiler
+   phase (parse / typecheck / proof / validation / emit) prints its wall-clock
+   duration in milliseconds to *stderr* so it never pollutes the emitted Racket
+   on stdout.  When the flag is unset the cost is a single [Sys.getenv_opt]
+   lookup per [compile_source] call and the phase thunks run unwrapped — no
+   timing, no allocation, no stderr writes. *)
+let phase_timing_enabled () =
+  match Sys.getenv_opt "TESL_PHASE_TIMING" with
+  | Some ("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON") -> true
+  | _ -> false
+
+(** Run [f ()], and when [enabled] print "[phase-timing] <label>: <ms> ms" to
+    stderr.  Returns [f]'s result unchanged.  When [enabled] is false, [f] is
+    called directly with no timing overhead. *)
+let time_phase enabled label (f : unit -> 'a) : 'a =
+  if not enabled then f ()
+  else begin
+    let t0 = Unix.gettimeofday () in
+    let result = f () in
+    let elapsed_ms = (Unix.gettimeofday () -. t0) *. 1000.0 in
+    Printf.eprintf "[phase-timing] %-10s %8.3f ms\n%!" label elapsed_ms;
+    result
+  end
+
+(* Typecheck → diagnostics, factored out of [check_module] so the timed
+   pipeline in [compile_source] can reuse the *identical* diagnostic-building
+   logic (including the bare-record-literal quick-fix) without duplicating it. *)
+let type_diags_of source (m : Ast.module_form) : diagnostic list =
   let source_lines = Array.of_list (String.split_on_char '\n' source) in
   let _, _, _, bare_hints, type_errors = Checker.check_module_with_metadata m in
-  let type_diags = List.map (fun (e : Type_system.type_error) ->
+  List.map (fun (e : Type_system.type_error) ->
     let base = diag_of_type_error e in
     if starts_with ~prefix:"bare record literal" e.message then
       match List.find_opt (fun (loc, _) ->
@@ -1947,9 +2386,14 @@ let check_module source (m : Ast.module_form) : diagnostic list =
         { base with fix }
       | None -> base
     else base
-  ) type_errors in
+  ) type_errors
+
+(** Produce a diagnostic for each pair of files involved in an import cycle.
+    Returns [] if the file is synthetic (empty path, <test>, etc.). *)
+(** Run the full check pipeline on a parsed module; returns diagnostics. *)
+let check_module source (m : Ast.module_form) : diagnostic list =
   legacy_bool_diagnostics m.source_file source m
-  @ type_diags
+  @ type_diags_of source m
   @ List.map diag_of_proof_error (Proof_checker.check_module m)
   @ List.map diag_of_validation_error (Validation.check_module m)
 
@@ -1971,33 +2415,89 @@ let default_root_path () =
 (** Compile a source string: parse + (optional) type-check + emit Racket.
     When type_check=true (the default), returns Failure if any errors exist — no
     Racket is emitted for a module that would fail `tesl check`. *)
-let compile_source ?(root_path=default_root_path ()) ?(type_check=true) filename source =
-  match parse_module filename source with
+let compile_source ?(root_path=default_root_path ()) ?(type_check=true) ?(debug=false) filename source =
+  (* Read the timing flag exactly once per compile; [time_phase] is a no-op
+     wrapper when it is false, so the non-timing path is unchanged. *)
+  let timing = phase_timing_enabled () in
+  match time_phase timing "parse" (fun () -> parse_module filename source) with
   | Err e -> Failure [diag_of_parse_error e]
   | Ok m ->
-    let diags = if type_check then check_module source m else [] in
+    let diags =
+      if not type_check then []
+      else
+        (* Same phases, same order as [check_module]; split here only so each
+           wall-clock segment can be reported independently.  The list built is
+           byte-identical to [check_module source m]. *)
+        let type_diags =
+          time_phase timing "typecheck" (fun () ->
+            legacy_bool_diagnostics m.source_file source m
+            @ type_diags_of source m)
+        in
+        let proof_diags =
+          time_phase timing "proof" (fun () ->
+            List.map diag_of_proof_error (Proof_checker.check_module m))
+        in
+        let validation_diags =
+          time_phase timing "validation" (fun () ->
+            List.map diag_of_validation_error (Validation.check_module m))
+        in
+        type_diags @ proof_diags @ validation_diags
+    in
     if diags <> [] then Failure diags
-    else
-      let racket = Emit_racket.compile_to_string ~root_path m in
+    else begin
+      Emit_racket.set_debug_mode debug;
+      (* Desugar AFTER all enforcement/diagnostics ran on the surface forms,
+         BEFORE emit.  Identity-preserving today (see Desugar). *)
+      let m = time_phase timing "desugar" (fun () -> Desugar.desugar_module m) in
+      let racket =
+        time_phase timing "emit" (fun () ->
+          Emit_racket.compile_to_string ~root_path m)
+      in
+      Emit_racket.set_debug_mode false;
       Success racket
+    end
 
 let compile_file ?(root_path=default_root_path ()) ?(type_check=true) filename =
+  (* WS1: same opt-in per-phase timing as [compile_source].  This is the entry
+     point the CLI file-compile path (`tesl <file>`) actually uses, so timing
+     must live here too.  No-op when TESL_PHASE_TIMING is unset. *)
+  let timing = phase_timing_enabled () in
   let source = In_channel.with_open_text filename In_channel.input_all in
-  match parse_module filename source with
+  match time_phase timing "parse" (fun () -> parse_module filename source) with
   | Err e -> Failure [diag_of_parse_error e]
   | Ok m ->
-    let diags = if type_check then check_module source m else [] in
+    let diags =
+      if not type_check then []
+      else
+        let type_diags =
+          time_phase timing "typecheck" (fun () ->
+            legacy_bool_diagnostics m.source_file source m
+            @ type_diags_of source m)
+        in
+        let proof_diags =
+          time_phase timing "proof" (fun () ->
+            List.map diag_of_proof_error (Proof_checker.check_module m))
+        in
+        let validation_diags =
+          time_phase timing "validation" (fun () ->
+            List.map diag_of_validation_error (Validation.check_module m))
+        in
+        type_diags @ proof_diags @ validation_diags
+    in
     if diags <> [] then Failure diags
     else
-      let cyclic_local_import_paths =
-        if m.source_file = "" || m.source_file = "<test>" then []
-        else cyclic_local_import_paths_for_entry m.source_file
-      in
+      (* Desugar AFTER enforcement/diagnostics, BEFORE emit (identity today). *)
+      let m = time_phase timing "desugar" (fun () -> Desugar.desugar_module m) in
       let racket =
-        Emit_racket.compile_to_string
-          ~root_path
-          ~cyclic_local_import_paths
-          m
+        time_phase timing "emit" (fun () ->
+          let cyclic_local_import_paths =
+            if m.source_file = "" || m.source_file = "<test>" then []
+            else cyclic_local_import_paths_for_entry m.source_file
+          in
+          Emit_racket.compile_to_string
+            ~root_path
+            ~cyclic_local_import_paths
+            m)
       in
       Success racket
 
@@ -2123,6 +2623,58 @@ let check_source filename source =
 let check_file filename =
   let source = In_channel.with_open_text filename In_channel.input_all in
   check_source filename source
+
+(* ── WS4: whole-project / batch checking ─────────────────────────────────────
+   A normal `tesl --check f1 f2 ...` already checks N files in one OS process,
+   so it pays the process-spawn cost once instead of N times.  These helpers go
+   one step further: they share the imported-module parse cache
+   ([Checker.import_parse_cache]) across every file in the run, so a project
+   whose files share local imports (e.g. several modules all importing a common
+   `Db`/`Auth` module) parses each imported module *once* for the whole batch
+   instead of once per consumer.
+
+   Per-file results are returned as an ordered association list so callers can
+   report a per-file pass/fail summary.  Each file is checked independently:
+   the diagnostics for one file are exactly what `check_file` would produce for
+   it on its own (the cache only avoids redundant *imported-module* parses, it
+   never shares the primary module's check state), so batch output is identical
+   to running the files separately. *)
+
+(** Check each of [filenames] in one process, sharing the imported-module parse
+    cache.  Returns [(filename, diagnostics)] in input order. *)
+let check_files_batch (filenames : string list) : (string * diagnostic list) list =
+  List.map (fun filename ->
+    let diags =
+      try check_file filename
+      with Sys_error msg ->
+        [{ file = filename; start_line = 0; start_col = 0;
+           end_line = 0; end_col = 0; severity = "error";
+           code = "E000"; message = msg; fix = None; source = "io" }]
+    in
+    (filename, diags)
+  ) filenames
+
+(** Recursively collect every `.tesl` file under [dir] (sorted, deterministic).
+    A plain file path is returned as-is if it ends in `.tesl`. *)
+let collect_tesl_files (dir : string) : string list =
+  let acc = ref [] in
+  let rec walk path =
+    match (try Some (Sys.is_directory path) with Sys_error _ -> None) with
+    | Some true ->
+      let entries = try Sys.readdir path with Sys_error _ -> [||] in
+      Array.sort compare entries;
+      Array.iter (fun name -> walk (Filename.concat path name)) entries
+    | Some false ->
+      if Filename.check_suffix path ".tesl" then acc := path :: !acc
+    | None -> ()
+  in
+  walk dir;
+  List.rev !acc
+
+(** `--check-all <dir>`: recursively find and batch-check every `.tesl` file
+    under [dir].  Returns [(filename, diagnostics)] in sorted path order. *)
+let check_all_in_dir (dir : string) : (string * diagnostic list) list =
+  check_files_batch (collect_tesl_files dir)
 
 (** Legacy: format errors (parse errors only) as JSON. *)
 let errors_to_json filename errors =
@@ -2269,8 +2821,16 @@ let semantic_json_of_module (m : Ast.module_form) : string =
 
 let semantic_json_source filename source =
   match parse_module filename source with
-  | Err _ -> None
   | Ok m  -> Some (semantic_json_of_module m)
+  | Err _ ->
+    (* Resilient path (editor/LSP): the buffer has a syntax error, but the
+       parser's top-level recovery can still salvage the declarations that did
+       parse.  Emit a best-effort snapshot of those rather than [None], so
+       completion/hover/documentSymbol degrade gracefully mid-edit.  The full
+       checker may itself raise on a partial module, so guard it. *)
+    (match Parser.parse_module_recover filename source with
+     | None -> None
+     | Some m -> (try Some (semantic_json_of_module m) with _ -> None))
 
 let semantic_json_file filename =
   let source = In_channel.with_open_text filename In_channel.input_all in
@@ -2300,6 +2860,139 @@ let collect_extra_test_decls test_files =
   in
   go [] test_files
 
+(** Per-mutant wall-clock budget (seconds) for one [raco test] run.  Generous
+    enough for a real DSL test suite to warm up and run, but bounded so a mutant
+    that introduces a non-terminating loop cannot hang the whole session. *)
+let mutant_timeout_secs =
+  (* Per-mutant wall-clock ceiling (DSL warmed, so runs are fast — this only
+     bounds hangs).  Honors TESL_MUTATE_TIMEOUT (main's knob); default 120s. *)
+  match Sys.getenv_opt "TESL_MUTATE_TIMEOUT" with
+  | Some s -> (try int_of_string s with _ -> 120)
+  | None   -> 120
+
+(** Shell prefix that bounds a command's wall-clock time, when the coreutils
+    [timeout] utility is available; empty otherwise (so the command still runs,
+    just unbounded).  Computed once.  [timeout] exits 124 when the budget is
+    exceeded, which [classify_mutant_run] treats as a kill. *)
+let timeout_prefix = lazy (
+  if Sys.command "command -v timeout >/dev/null 2>&1" = 0
+  then Printf.sprintf "timeout %d " mutant_timeout_secs
+  else "")
+
+(** Run [cmd] via the shell, capturing its combined stdout+stderr and exit code.
+    Output is redirected to a temporary file and read back, so this depends only
+    on [Sys.command] (whose result is the shell exit code, already decoded — a
+    process killed by a signal surfaces as a non-zero [128 + signo] code, and
+    [timeout] surfaces as 124).  Callers that treat "non-zero ⇒ failure" thus
+    handle test failures, crashes, and timeouts uniformly.  Returns
+    [(exit_code, output)]. *)
+let run_capture cmd : int * string =
+  let out_tmp = Filename.temp_file "tesl_mutant_out_" ".txt" in
+  Fun.protect
+    ~finally:(fun () -> (try Sys.remove out_tmp with Sys_error _ -> ()))
+    (fun () ->
+       let full = Printf.sprintf "%s > %s 2>&1" cmd (Filename.quote out_tmp) in
+       let exit_code = Sys.command full in
+       let output =
+         try In_channel.with_open_text out_tmp In_channel.input_all
+         with Sys_error _ -> ""
+       in
+       (exit_code, output))
+
+(** [true] when [output] contains a rackunit failure/error marker.  rackunit
+    prints a "FAILURE" banner for every failed check ([exn:test:check]) and an
+    "ERROR" banner for any other raised exception, each on its own line.  This
+    mirrors the failure detection in [tests/example-test-batch.rkt]. *)
+let output_indicates_failure output =
+  (* Implemented with a plain line scan rather than [Str]: this predicate runs
+     on worker domains during parallel mutant evaluation, and [Str]'s matcher
+     keeps global, non-reentrant match state that is unsafe to touch from
+     several domains at once.  A line scan is allocation-light and trivially
+     thread-safe.  Equivalent to the regex "(^|\n)(FAILURE|ERROR)(\n|$)": true
+     iff some line of [output] is exactly "FAILURE" or exactly "ERROR". *)
+  List.exists (fun line -> line = "FAILURE" || line = "ERROR")
+    (String.split_on_char '\n' output)
+
+(** Classify a single mutant's [raco test] run.  Returns [true] when the mutant
+    SURVIVED (the test suite demonstrably ran and passed), [false] when it was
+    KILLED.
+
+    A mutant is a survivor ONLY when the run exited 0 AND produced no rackunit
+    failure/error marker.  Any non-zero exit (test failure, raised exception,
+    module load/expansion error, crash, or a timeout — [timeout] exits 124) is
+    a kill.  Crucially, an exit of 0 that is nonetheless accompanied by a
+    "FAILURE"/"ERROR" marker is ALSO a kill: this guards against the case where
+    [raco test] reports success without actually exercising the test suite to a
+    clean pass, which previously caused genuinely-killed mutants to be reported
+    as false survivors. *)
+let classify_mutant_run ~exit_code ~output =
+  exit_code = 0 && not (output_indicates_failure output)
+
+(** Number of mutant [raco test] processes to run concurrently.  Defaults to
+    the machine's available parallelism (≈ [nproc]), capped at 16 so a very
+    large core count doesn't spawn an unreasonable number of Racket processes,
+    and floored at 1.  [TESL_MUTATE_JOBS] overrides it (1 ⇒ fully serial, which
+    is handy for A/B'ing the parallel path against the historical behaviour). *)
+let mutate_jobs =
+  let detected =
+    let n = Domain.recommended_domain_count () in
+    if n < 1 then 1 else if n > 16 then 16 else n
+  in
+  match Sys.getenv_opt "TESL_MUTATE_JOBS" with
+  | Some s -> (match int_of_string_opt s with Some n when n >= 1 -> n | _ -> detected)
+  | None   -> detected
+
+(** Run [f 0], …, [f (n-1)] across a bounded pool of at most [jobs] worker
+    domains and return their results in an array indexed by [i] (so the output
+    order is independent of which worker ran which item).
+
+    Each worker repeatedly claims the next index via a single mutex-guarded
+    counter and stores [f i] at [results.(i)].  This is the canonical
+    "shared work queue" pattern: the only mutable state shared across domains is
+    the [next] counter (protected by [mu]) and disjoint cells of [results]
+    (each written by exactly one worker), so there are no data races and the
+    collated result array is deterministic.  [f] is expected to do its heavy
+    lifting in an external process (here, [raco test]), so blocking workers
+    simply let the OS schedule those subprocesses concurrently.
+
+    With [jobs <= 1] (or [n <= 1]) it runs inline on the calling domain, so the
+    fully-serial path spawns no domains at all. *)
+let parallel_map ~jobs (n : int) (f : int -> 'a) : 'a array =
+  if n = 0 then [||]
+  else begin
+    (* Results land in an [option] array so the array can be allocated before
+       any element is computed without needing a dummy ['a] value; each cell is
+       filled exactly once (by the worker that claimed that index) and unwrapped
+       at the end. *)
+    let results : 'a option array = Array.make n None in
+    let store i v = results.(i) <- Some v in
+    if jobs <= 1 || n = 1 then
+      for i = 0 to n - 1 do store i (f i) done
+    else begin
+      let mu = Mutex.create () in
+      let next = ref 0 in
+      let claim () =
+        Mutex.lock mu;
+        let i = !next in
+        if i < n then incr next;
+        Mutex.unlock mu;
+        if i < n then Some i else None
+      in
+      let worker () =
+        let rec loop () =
+          match claim () with
+          | None   -> ()
+          | Some i -> store i (f i); loop ()
+        in
+        loop ()
+      in
+      let pool = min jobs n in
+      let domains = List.init pool (fun _ -> Domain.spawn worker) in
+      List.iter Domain.join domains
+    end;
+    Array.map (function Some v -> v | None -> assert false) results
+  end
+
 (** Run mutation testing on [filename].  Returns a [Mutate.mutation_report]
     or an error string if the file doesn't parse / type-check.
     [extra_test_files] provides additional .tesl files whose test blocks are
@@ -2320,45 +3013,156 @@ let mutate_file ?(root_path=default_root_path ()) ?(extra_test_files=[]) filenam
         | `Err msg -> MutateErr msg
         | `Ok extra_test_decls ->
        let mutants = Mutate.generate_mutants m in
-       let results = List.map (fun (mut : Mutate.mutant) ->
-         let result =
-           (* Merge extra tests into this mutant's module before emitting *)
-           let module_with_tests =
+       (* Warm the Tesl DSL bytecode ONCE before timing any mutant.  The first
+          per-mutant `raco test` otherwise cold-compiles the whole DSL (~10-13s),
+          which can exceed [timeout_secs] and misclassify a genuinely-killed mutant
+          as [Error] (124).  Compiling the original module's emitted .rkt with
+          `raco make` builds the shared DSL .zo so each subsequent `raco test` just
+          loads it.  Best-effort: any failure here is harmless (mutants still run). *)
+       (let base_module =
+          if extra_test_decls = [] then m
+          else { m with decls = m.decls @ extra_test_decls }
+        in
+        match (try Some (Emit_racket.compile_to_string ~root_path base_module)
+               with _ -> None) with
+        | None -> ()
+        | Some r ->
+          let warm = Filename.temp_file "tesl_mutant_warm_" ".rkt" in
+          Fun.protect
+            ~finally:(fun () -> (try Sys.remove warm with Sys_error _ -> ()))
+            (fun () ->
+              Out_channel.with_open_text warm
+                (fun oc -> Out_channel.output_string oc r);
+              ignore (Sys.command
+                (Printf.sprintf "raco make %s >/dev/null 2>&1" (Filename.quote warm)))));
+       (* ── Phase 1 (SERIAL): emit + prepare every mutant ─────────────────────
+          [Emit_racket.compile_to_string] mutates module-level tables
+          (qualified imports, queue map, …), so it is NOT safe to call from
+          several domains at once; doing so could corrupt the emitted Racket and
+          silently change which mutants are killed.  We therefore emit all
+          mutants here, in deterministic order, on the calling domain.  Emission
+          is pure OCaml and cheap relative to a `raco test` run, so keeping it
+          serial costs little.  Each mutant becomes either a *final* result
+          (emit failure ⇒ [Error]; no test block ⇒ [NoTests]) or a [`Run]
+          carrying the temp `.rkt` path whose `raco test` must still run.
+
+          DB stub: infrastructure-touching test blocks (Postgres DB / server /
+          queue / cache / email) are stripped from each mutant via
+          [Mutate.strip_infra_tests] so they cannot hang a DB-less mutant run.
+          Files with no such tests (lesson42, lesson44, …) are unaffected, so
+          their mutation score is identical to the un-stubbed serial run. *)
+       let arr = Array.of_list mutants in
+       let n = Array.length arr in
+       let prepared = Array.map (fun (mut : Mutate.mutant) ->
+         (* Merge extra tests into this mutant's module, then strip the
+            infrastructure-touching ones before emitting. *)
+         let module_with_tests =
+           let merged =
              if extra_test_decls = [] then mut.module_
              else { mut.module_ with decls = mut.module_.decls @ extra_test_decls }
            in
-           (* Emit without type-checking — the mutant may be semantically
-              invalid from the proof perspective, but Racket will still run
-              the runtime checks and tests. *)
-           let racket_str =
-             match (try Some (Emit_racket.compile_to_string ~root_path module_with_tests)
-                    with _ -> None)
-             with
-             | None   -> `Err "emit error"
-             | Some r -> `Ok r
-           in
-           match racket_str with
-           | `Err msg -> Mutate.Error msg
-           | `Ok r ->
-             let has_test = List.exists (function Ast.DTest _ -> true | _ -> false) module_with_tests.decls in
-             if not has_test then Mutate.NoTests
-             else begin
-               let tmp = Filename.temp_file "tesl_mutant_" ".rkt" in
-               Fun.protect
-                 ~finally:(fun () -> (try Sys.remove tmp with Sys_error _ -> ()))
-                 (fun () ->
-                   Out_channel.with_open_text tmp
-                     (fun oc -> Out_channel.output_string oc r);
-                   let cmd = Printf.sprintf "raco test --quiet %s 2>/dev/null"
-                               (Filename.quote tmp) in
-                   let exit_code = Sys.command cmd in
-                   if exit_code = 0 then Mutate.Survived
-                   else Mutate.Killed)
-             end
+           Mutate.strip_infra_tests merged
          in
-         (mut, result)
-       ) mutants in
+         (* Emit without type-checking — the mutant may be semantically
+            invalid from the proof perspective, but Racket will still run
+            the runtime checks and tests. *)
+         match (try Some (Emit_racket.compile_to_string ~root_path module_with_tests)
+                with _ -> None)
+         with
+         | None   -> `Done (Mutate.Error "emit error")
+         | Some r ->
+           let has_test = List.exists (function Ast.DTest _ -> true | _ -> false) module_with_tests.decls in
+           if not has_test then `Done Mutate.NoTests
+           else begin
+             let tmp = Filename.temp_file "tesl_mutant_" ".rkt" in
+             Out_channel.with_open_text tmp
+               (fun oc -> Out_channel.output_string oc r);
+             `Run tmp
+           end
+       ) arr in
+       (* ── Phase 2 (PARALLEL): run the `raco test` of each prepared mutant ────
+          Only the external [raco test] subprocess is parallelized, across a
+          bounded pool of [mutate_jobs] worker domains.  Classification is
+          byte-for-byte identical to the serial path: a mutant SURVIVES only on
+          exit 0 with no rackunit FAILURE/ERROR marker; exit 124 (timeout, e.g.
+          an unavailable DB) is [Error]; everything else is KILLED.  Results are
+          collated by mutant index, so the report order — and thus the score —
+          is independent of which worker ran which mutant. *)
+       (* Force the [lazy] timeout prefix ONCE here, on the calling domain:
+          [Lazy.force] is not safe to evaluate concurrently from several domains
+          (it raises [CamlinternalLazy.Undefined]), so resolve it before the
+          pool starts and pass the plain string to the workers. *)
+       let timeout_pfx = Lazy.force timeout_prefix in
+       let run_one i =
+         match prepared.(i) with
+         | `Done result -> result
+         | `Run tmp ->
+           Fun.protect
+             ~finally:(fun () -> (try Sys.remove tmp with Sys_error _ -> ()))
+             (fun () ->
+               let cmd = Printf.sprintf "%sraco test --quiet %s"
+                           timeout_pfx (Filename.quote tmp) in
+               let exit_code, output = run_capture cmd in
+               if exit_code = 124 then Mutate.Error "raco test timed out (no DB?)"
+               else if classify_mutant_run ~exit_code ~output then Mutate.Survived
+               else Mutate.Killed)
+       in
+       let result_arr = parallel_map ~jobs:mutate_jobs n run_one in
+       let results = List.mapi (fun i mut -> (mut, result_arr.(i))) mutants in
        let killed   = List.length (List.filter (fun (_, r) -> r = Mutate.Killed)   results) in
        let survived = List.length (List.filter (fun (_, r) -> r = Mutate.Survived) results) in
        let errors   = List.length (List.filter (fun (_, r) -> match r with Mutate.Error _ -> true | _ -> false) results) in
        MutateOk { Mutate.total = List.length mutants; killed; survived; errors; results }))
+
+(* ── WS6: standalone-executable build (`tesl --exe`) ─────────────────────────
+   Emit the program's Racket *exactly* as `tesl <file>` would (byte-identical
+   — this reuses [compile_file], so the distribution path never changes the
+   emitted source) and then bundle it into a standalone native executable with
+   `raco exe`.
+
+   The `.rkt` is written next to the source file (`<src>.rkt`), not to a temp
+   dir, because emitted local-import requires use *relative* `(file "X.rkt")`
+   paths resolved against the requiring module's own directory.  Writing in
+   place lets those resolve against the sibling emitted `.rkt` files (the same
+   layout `tesl <file> > <file>.rkt` already produces).  `raco exe` then
+   inlines every required module — including the `tesl/...` DSL collection — so
+   the resulting binary starts without paying the Racket source cold-start and
+   needs no `raco link`.  (Data files referenced at runtime, e.g. a server's
+   `#:static-dir`, are not bundled by `raco exe`; that is a `raco distribute`
+   concern, out of scope here.) *)
+type build_result =
+  | BuildOk      of string          (** path to the produced executable *)
+  | BuildDiags   of diagnostic list (** compile/type errors — nothing emitted *)
+  | BuildErr     of string          (** raco/IO failure with combined output *)
+
+(** Compile [filename] and bundle it into a standalone executable.
+    [out] overrides the executable path (default: source basename without the
+    `.tesl` suffix).  Requires `raco` on PATH. *)
+let build_exe ?(root_path=default_root_path ()) ?out filename : build_result =
+  if not (Sys.file_exists filename) then
+    BuildErr (Printf.sprintf "%s: No such file" filename)
+  else
+    match compile_file ~root_path ~type_check:true filename with
+    | Failure diags -> BuildDiags diags
+    | Success racket ->
+      (* Emit the .rkt next to the source so relative (file ...) requires of
+         sibling modules resolve (identical layout to `tesl <file> > x.rkt`). *)
+      let stem =
+        if Filename.check_suffix filename ".tesl"
+        then Filename.chop_suffix filename ".tesl"
+        else filename
+      in
+      let rkt_path = stem ^ ".rkt" in
+      let exe_path = match out with Some p -> p | None -> stem in
+      (try
+         Out_channel.with_open_text rkt_path
+           (fun oc -> Out_channel.output_string oc racket);
+         let cmd =
+           Printf.sprintf "raco exe -o %s %s"
+             (Filename.quote exe_path) (Filename.quote rkt_path)
+         in
+         let exit_code, output = run_capture cmd in
+         if exit_code = 0 then BuildOk exe_path
+         else BuildErr
+             (Printf.sprintf "raco exe failed (exit %d):\n%s" exit_code output)
+       with Sys_error msg -> BuildErr msg)

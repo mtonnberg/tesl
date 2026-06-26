@@ -109,14 +109,6 @@ let rec validate_field_accesses
     insert_errors
     @ validate_field_accesses sql_binder_env funcs fields_by_type ctors fn_e
     @ validate_field_accesses sql_binder_env funcs fields_by_type ctors arg_e
-  | EBinop { left; right; _ } ->
-    validate_field_accesses env funcs fields_by_type ctors left
-    @ validate_field_accesses env funcs fields_by_type ctors right
-  | EUnop { arg; _ } -> validate_field_accesses env funcs fields_by_type ctors arg
-  | EIf { cond; then_; else_; _ } ->
-    validate_field_accesses env funcs fields_by_type ctors cond
-    @ validate_field_accesses env funcs fields_by_type ctors then_
-    @ validate_field_accesses env funcs fields_by_type ctors else_
   | ECase { scrut; arms; _ } ->
     let scrut_errors = validate_field_accesses env funcs fields_by_type ctors scrut in
     let scrut_ty = infer_expr_type env funcs fields_by_type ctors scrut in
@@ -156,30 +148,32 @@ let rec validate_field_accesses
       | None -> env
     in
     value_errors @ validate_field_accesses env' funcs fields_by_type ctors body
-  | ERecord { fields; _ } ->
-    List.concat_map (fun (_, v) -> validate_field_accesses env funcs fields_by_type ctors v) fields
-  | EList { elems; _ } ->
-    List.concat_map (validate_field_accesses env funcs fields_by_type ctors) elems
-  | EOk { value; _ } -> validate_field_accesses env funcs fields_by_type ctors value
-  | ETelemetry { fields; _ } ->
-    List.concat_map (fun (_, v) -> validate_field_accesses env funcs fields_by_type ctors v) fields
-  | EEnqueue { payload; _ } ->
-    validate_field_accesses env funcs fields_by_type ctors payload
-  | EPublish { key; payload; _ } ->
-    (match key with Some e -> validate_field_accesses env funcs fields_by_type ctors e | None -> [])
-    @ (match payload with Some e -> validate_field_accesses env funcs fields_by_type ctors e | None -> [])
-  | EStartWorkers _ -> []
-  | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } ->
-    validate_field_accesses env funcs fields_by_type ctors body
-  | EServe { port; _ } -> validate_field_accesses env funcs fields_by_type ctors port
   | ELambda { params; body; _ } ->
     let env' = List.map (fun (b : binding) -> (b.name, b.type_expr)) params @ env in
     validate_field_accesses env' funcs fields_by_type ctors body
+  (* EConstructor and EFail were NON-descending no-ops in the original walk
+     (the leaf `ELit _ | EVar _ | EConstructor _ | EFail _ -> []` arm above
+     already matched EConstructor/EFail), and EStartWorkers/EStartEmailWorker
+     are genuine leaves. `Ast_visitor.fold_children` DOES descend into
+     EConstructor.args / EFail.message, so keep these explicit no-ops to
+     preserve behaviour exactly. (EConstructor/EFail are matched at the top.) *)
+  | EStartWorkers _ | EStartEmailWorker _ -> []
+  (* Every remaining variant recurses into all child exprs with `env`
+     UNCHANGED (only EField/EApp/ECase/ELet/ELetProof/ELambda above touch the
+     type env), so the mechanical recursion is exactly a left-to-right fold
+     over the immediate children. `fold_children` visits the same children in
+     the same source order, and `acc @ f child` preserves the prior
+     `@`-concatenation order verbatim. *)
+  | _ ->
+    Ast_visitor.fold_children
+      (fun acc child -> acc @ validate_field_accesses env funcs fields_by_type ctors child)
+      [] e
 
-let check_sql_field_names ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
-  let funcs = build_func_info decls @ extra_funcs in
-  let fields_by_type = build_fields_map decls in
-  let ctors = build_ctor_info decls in
+let check_sql_field_names ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
+  let mf = facts_or_compute ?facts ~extra_funcs decls in
+  let funcs = mf.mf_funcs in
+  let fields_by_type = mf.mf_fields_map in
+  let ctors = mf.mf_ctors in
   let errors = ref [] in
   List.iter (function
     | DFunc fd ->
@@ -199,23 +193,72 @@ let local_declared_type_names (decls : top_decl list) : string list =
     | _ -> []
   ) decls
 
-let check_codec_target_types (decls : top_decl list) : validation_error list =
+(* Classify a declared type's KIND so codec forms can be checked against it.
+   `Adt` has constructors; `Record` (record/entity) has named fields.
+   Newtypes/aliases are kind-ambiguous without resolution, so they are left
+   `Other` and not subjected to the kind check (conservative — avoids
+   over-rejecting an alias that resolves to a record or ADT). *)
+type codec_target_kind = Adt | Record | Other
+
+let codec_target_kinds (decls : top_decl list) : (string * codec_target_kind) list =
+  List.concat_map (function
+    | DType (TypeAdt { name; _ }) -> [(name, Adt)]
+    | DRecord r -> [(r.name, Record)]
+    | DEntity e -> [(e.name, Record)]
+    | DType (TypeNewtype { name; _ })
+    | DType (TypeAlias { name; _ }) -> [(name, Other)]
+    | _ -> []
+  ) decls
+
+let check_codec_target_types ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
+  (* Validation-consolidation Phase 1: the per-codec iteration runs over the
+     precomputed [mf_codecs] (source-order preserved) instead of re-filtering
+     [decls].  [known_types]/[kinds] still scan all decls (they read record/
+     entity/type decls, not just codecs).  Byte-identical: the previous
+     [_ -> ()] arm produced no errors. *)
+  let codecs = (facts_or_compute ?facts ~extra_funcs decls).mf_codecs in
   let known_types = local_declared_type_names decls in
+  let kinds = codec_target_kinds decls in
   let errors = ref [] in
-  List.iter (function
-    | DCodec cf when not (List.mem cf.type_name known_types) ->
+  List.iter (fun (cf : codec_form) ->
+    if not (List.mem cf.type_name known_types) then
       errors := make_error cf.loc
         ~hint:(Printf.sprintf "declare `record %s { ... }`, `entity %s { ... }`, or `type %s ...` before this codec" cf.type_name cf.type_name cf.type_name)
         (Printf.sprintf "codec '%s' refers to unknown type '%s'" cf.name cf.type_name)
         :: !errors
-    | _ -> ()
-  ) decls;
+    else begin
+      (* Target is a known type — verify the codec FORM matches its KIND.
+         `adtJson` requires an ADT (has constructors); a record-style
+         `toJson { ... }` / `fromJson [ ... ]` requires a record/entity. *)
+      let uses_adt_json =
+        cf.to_json = ToJsonAdt || cf.from_json = FromJsonAdt in
+      let uses_record_json =
+        (match cf.to_json with ToJsonFields _ -> true | _ -> false)
+        || (match cf.from_json with FromJsonAlts _ -> true | _ -> false) in
+      (match List.assoc_opt cf.type_name kinds with
+       | Some Record when uses_adt_json ->
+         errors := make_error cf.loc
+           ~hint:(Printf.sprintf "use a record-style codec (`toJson { ... }` / `fromJson [ ... ]`) for record/entity `%s`, or apply `adtJson` to an ADT (a `type` with constructors)" cf.type_name)
+           (Printf.sprintf "codec '%s': `adtJson` requires an ADT target, but '%s' is a record/entity (it has no constructors)" cf.name cf.type_name)
+           :: !errors
+       | Some Adt when uses_record_json ->
+         errors := make_error cf.loc
+           ~hint:(Printf.sprintf "use `adtJson` for ADT `%s` (a `type` with constructors), or apply a record-style codec to a record/entity" cf.type_name)
+           (Printf.sprintf "codec '%s': record-style `toJson`/`fromJson` requires a record/entity target, but '%s' is an ADT" cf.name cf.type_name)
+           :: !errors
+       | _ -> ())
+    end
+  ) codecs;
   List.rev !errors
 
 (* ── 3. Codec proof coverage ──────────────────────────────────────────────── *)
 
-let check_codec_proof_coverage ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
-  let funcs = build_func_info decls @ extra_funcs in
+let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
+  let mf = facts_or_compute ?facts ~extra_funcs decls in
+  let funcs = mf.mf_funcs in
+  (* Validation-consolidation Phase 1: iterate precomputed [mf_codecs] for the
+     per-codec coverage scan (source-order preserved, byte-identical). *)
+  let codecs = mf.mf_codecs in
   let record_proofs = List.filter_map (function
     | DRecord r ->
       let field_proofs = List.filter_map (fun (f : field_def) ->
@@ -227,8 +270,7 @@ let check_codec_proof_coverage ?(extra_funcs=[]) (decls : top_decl list) : valid
     | _ -> None
   ) decls in
   let errors = ref [] in
-  List.iter (function
-    | DCodec cf ->
+  List.iter (fun (cf : codec_form) ->
       (match List.assoc_opt cf.name record_proofs with
        | None -> ()
        | Some field_requirements ->
@@ -286,8 +328,7 @@ let check_codec_proof_coverage ?(extra_funcs=[]) (decls : top_decl list) : valid
                 | DecodeDefault _ | DecodeCrossCheck _ -> ()
               ) alt
             ) alts))
-    | _ -> ()
-  ) decls;
+  ) codecs;
   List.rev !errors
 
 (* ── 3b. Codec field type vs codec type ───────────────────────────────────
@@ -295,15 +336,20 @@ let check_codec_proof_coverage ?(extra_funcs=[]) (decls : top_decl list) : valid
    the declared field type.  User-defined codec names (e.g. `Priority`) must
    match the field's head type name.  §11.7 of the language spec. *)
 
-let check_codec_field_types (decls : top_decl list) : validation_error list =
-  (* Build a map: record/entity name -> (field_name -> type_expr) *)
+let check_codec_field_types ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
+  let mf = facts_or_compute ?facts ~extra_funcs decls in
+  (* Validation-consolidation Phase 1: the record/entity field-type map is now
+     derived from the precomputed [mf_fields_map] (build_fields_map decls) rather
+     than re-filtering DRecord/DEntity out of [decls].  [mf_fields_map] is itself
+     [build_fields_map decls] in source order (DRecord/DEntity), so the derived
+     name->(field,type) projection is byte-identical to the previous inline
+     filter_map.  The per-codec scan iterates the precomputed [mf_codecs]. *)
   let field_types_by_type : (string * (string * type_expr) list) list =
-    List.filter_map (function
-      | DRecord r -> Some (r.name, List.map (fun (f : field_def) -> (f.name, f.type_expr)) r.fields)
-      | DEntity e -> Some (e.name, List.map (fun (f : field_def) -> (f.name, f.type_expr)) e.fields)
-      | _ -> None
-    ) decls
+    List.map (fun (tname, fields) ->
+      (tname, List.map (fun (f : field_def) -> (f.name, f.type_expr)) fields))
+      mf.mf_fields_map
   in
+  let codecs = mf.mf_codecs in
   (* Build newtype-to-base-type map: NoteId -> String, UserId -> String, etc. *)
   let newtype_base_type : (string * string) list =
     List.filter_map (function
@@ -361,8 +407,7 @@ let check_codec_field_types (decls : top_decl list) : validation_error list =
               :: !errors
           | _ -> ()))
   in
-  List.iter (function
-    | DCodec cf ->
+  List.iter (fun (cf : codec_form) ->
       let field_types = match List.assoc_opt cf.type_name field_types_by_type with
         | Some ft -> ft
         | None -> []
@@ -385,8 +430,7 @@ let check_codec_field_types (decls : top_decl list) : validation_error list =
          List.iter (fun (entry : codec_encode_entry) ->
            check_field_codec ~direction:`Encode cf.name field_types entry.field_name entry.codec entry.loc
          ) entries)
-    | _ -> ()
-  ) decls;
+  ) codecs;
   List.rev !errors
 
 

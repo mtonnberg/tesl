@@ -1,0 +1,241 @@
+#lang tesl
+module Lesson65PipeOperators exposing [
+  double,
+  addOne,
+  measureWord,
+  processWord,
+  describeLength,
+  formatResult,
+  processChain,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 65 — Pipe Operators: |> and <|
+#
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Tesl has two pipe operators that eliminate deep parentheses nesting:
+#
+#   x |> f          -- forward pipe: equivalent to  f x
+#   f <| x          -- backward pipe: equivalent to  f x
+#
+# They both mean "apply this function to this value", just written differently.
+# Choose whichever makes the code most readable.
+#
+# ── FORWARD PIPE |> ──────────────────────────────────────────────────────────
+#
+# x |> f reads: "take x, then apply f to it".
+# Great for data that flows left-to-right through a series of transforms:
+#
+#   "  hello  " |> String.trim |> String.length
+#   -- reads: take the string, trim it, measure it
+#
+# Left-associative:  x |> f |> g  =  g (f x)
+# The result of the left pipe becomes the argument for the right pipe.
+#
+# ── BACKWARD PIPE <| ─────────────────────────────────────────────────────────
+#
+# f <| x reads: "apply f to x" — function first, argument on the right.
+# Useful when the function is the focus and the argument is long or complex:
+#
+#   String.length <| String.trim <| "  hello  "
+#   -- reads: length of (trim of "  hello  ")
+#
+# Right-associative:  f <| g <| x  =  f (g x)
+#
+# ── LOWEST PRECEDENCE — works naturally with ::: ──────────────────────────────
+#
+# Both pipe operators have LOWER precedence than ::: (proof attachment).
+# This means:
+#
+#   f <| x ::: proof   parses as   f <| (x ::: proof)
+#
+# No extra parentheses needed to pass a proof-carrying value to a function.
+# This is the idiomatic way to apply a function to a proven value.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Example code
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [Int, String, Bool(..)]
+import Tesl.String exposing [String.length, String.trim, IsTrimmed]
+
+# Basic building blocks — used in examples below.
+
+fn double(n: Int) -> Int = n * 2
+
+fn addOne(n: Int) -> Int = n + 1
+
+# measureWord: get the length of a string after trimming whitespace.
+# Forward-pipe version: data flows left-to-right.
+fn measureWord(raw: String) -> Int =
+  raw |> String.trim |> String.length
+
+# processWord: same computation using backward pipe.
+# Function-first style: read it top-to-bottom as "length of (trim of raw)".
+fn processWord(raw: String) -> Int =
+  String.length <| String.trim <| raw
+
+# describeLength: categorise an integer length as short, medium, or long.
+fn describeLength(n: Int) -> String =
+  if n <= 4 then
+    "short"
+  else if n <= 10 then
+    "medium"
+  else
+    "long"
+
+# formatResult: combine a label and an integer into a display string.
+fn formatResult(label: String, n: Int) -> String =
+  "${label}: ${n}"
+
+# processChain: a longer pipeline that chains several transforms.
+# n -> double -> addOne -> double
+# Written with |>: reads like a sequence of steps.
+fn processChain(n: Int) -> Int =
+  n |> double |> addOne |> double
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# PRECEDENCE HIERARCHY (lowest to highest)
+#
+#   <|   right-associative — lowest precedence of all expression operators
+#   |>   left-associative  — just above <|
+#   :::  proof attachment  — above both pipes
+#   ==, !=, <, >, <=, >=  — comparisons
+#   +, -                   — additive
+#   *, /, %                — multiplicative
+#   function application   — highest, left-associative
+#
+# Because ::: binds tighter than the pipes, you can write:
+#
+#   requiresProof <| someValue ::: MyProof someValue
+#
+# without any extra parentheses. The ::: groups first, so the function
+# receives the proof-carrying value correctly.
+#
+# WHEN TO USE EACH OPERATOR
+#
+# Use |> (forward pipe) when:
+#   - Data is the subject: you are transforming a value step by step.
+#   - The pipeline is long and each step is a named function or partial app.
+#   - Reading left-to-right is natural ("take this data, then do X, then Y").
+#
+# Use <| (backward pipe) when:
+#   - The function is the subject: you want to emphasise what operation runs.
+#   - The argument is a complex expression that would need trailing parens.
+#   - You are building function composition in right-to-left order.
+#   - Passing a proof-carrying value to a function without extra parentheses.
+#
+# ASSOCIATIVITY IN DETAIL
+#
+# Forward pipe is LEFT-associative:
+#   x |> f |> g |> h
+#   = ((x |> f) |> g) |> h
+#   = h (g (f x))
+#
+# Backward pipe is RIGHT-associative:
+#   f <| g <| x
+#   = f <| (g <| x)
+#   = f (g x)
+#
+# RIGHT-associativity for <| is important: it means you chain FUNCTIONS on
+# the left and put the DATA at the far right. Each operator binds to the right,
+# so g receives x first, then f receives the result.
+#
+# COMPILED OUTPUT
+#
+# Both operators lower directly to function application in the compiled Racket.
+# There is no runtime cost — they are purely syntactic conveniences:
+#
+#   x |> f        →   (f x)
+#   f <| x        →   (f x)
+#   x |> f |> g   →   (g (f x))
+#   f <| g <| x   →   (f (g x))
+#
+# MIXING WITH STDLIB AND USER-DEFINED FUNCTIONS
+#
+# Both pipes work with any callable: stdlib functions, user-defined functions,
+# partially applied functions, or lambdas.
+#
+#   "hello" |> String.length              -- stdlib function
+#   5 |> double |> addOne                 -- user-defined functions
+#   [1,2,3] |> List.map (fn(x: Int) -> x * 2)  -- partial application
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+test "forward pipe: basic application" {
+  let result = 5 |> double
+  expect result == 10
+}
+
+test "forward pipe: chain two functions" {
+  let result = 3 |> double |> addOne
+  expect result == 7
+}
+
+test "forward pipe: chain three functions" {
+  let result = 2 |> double |> addOne |> double
+  expect result == 10
+}
+
+test "backward pipe: basic application" {
+  let result = double <| 5
+  expect result == 10
+}
+
+test "backward pipe: chain two functions" {
+  let result = addOne <| double <| 3
+  expect result == 7
+}
+
+test "backward pipe: chain three functions" {
+  let result = double <| addOne <| double <| 2
+  expect result == 10
+}
+
+test "forward pipe with stdlib function" {
+  let result = "hello" |> String.length
+  expect result == 5
+}
+
+test "backward pipe with stdlib function" {
+  let result = String.length <| "hello"
+  expect result == 5
+}
+
+test "measureWord trims before measuring" {
+  expect measureWord "  hi  " == 2
+  expect measureWord "hello" == 5
+  expect measureWord "  " == 0
+}
+
+test "processWord gives same result as measureWord" {
+  expect processWord "  hi  " == 2
+  expect processWord "hello" == 5
+  expect processWord "  world  " == 5
+}
+
+test "processChain applies double, addOne, double in order" {
+  # n -> double -> addOne -> double
+  # 3 -> 6 -> 7 -> 14
+  expect processChain 3 == 14
+  # 0 -> 0 -> 1 -> 2
+  expect processChain 0 == 2
+  # 1 -> 2 -> 3 -> 6
+  expect processChain 1 == 6
+}
+
+test "describeLength classifies correctly" {
+  let short = 3 |> describeLength
+  let medium = 7 |> describeLength
+  let long = 12 |> describeLength
+  expect short == "short"
+  expect medium == "medium"
+  expect long == "long"
+}

@@ -14,6 +14,35 @@ Tesl is an alpha-stage language for building web APIs where validation, auth, an
 - **Hover types** — see the inferred type of any expression
 - **Completions** — context-aware field and identifier suggestions
 - **Occurrence highlighting** — all uses of a symbol highlighted on cursor
+- **Interactive debugging** — set breakpoints on `.tesl` lines, step through
+  execution, and inspect locals with their compile-time **proof** annotations
+  (e.g. `port = 8080 : Int ::: ValidPort port`)
+
+---
+
+## Debugging
+
+The extension contributes a `tesl` debug type. To debug a `.tesl` file:
+
+- Open the file, set breakpoints in the gutter, and press **F5**, or
+- Right-click the file → **Debug Tesl Program** / **Debug Tesl Tests**, or
+- Click the **🐛 Debug test** CodeLens above any `test "…" { … }` block.
+
+Behind the scenes the adapter compiles the file with `tesl --debug`, runs the
+chosen `main` (program mode) or `test` blocks (test mode), and pauses at your
+breakpoints. The **Variables** panel shows each local's raw runtime value
+overlaid with its **compile-time type and proof** — the proof annotation is
+recovered from the compiler (it is erased from the runtime, by design), so a
+proof-carrying value reads e.g. `port = 8080 : Int ::: ValidPort port`. Records,
+newtypes, ADTs, tuples, and lists are formatted readably.
+
+A reference `launch.json` lives in `.vscode/launch.json`; the same
+configurations are offered automatically via **Run → Add Configuration… →
+Tesl**. Set `"mode": "test"` plus an optional `"testName"` to debug a single
+test block.
+
+For diagnostics, set the `TESL_DAP_LOG` environment variable to a file path
+(or `stderr`) before launching VS Code to capture an adapter trace.
 
 ---
 

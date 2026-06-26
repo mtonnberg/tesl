@@ -33,9 +33,11 @@ check isValidTitle(title: String) -> title: String ::: ValidTitle title =
 
 `check` is like a function that returns `Result<T, Error>` — except instead of wrapping the value in a `Some`/`Ok`, it *stamps* the original value with a proof. The `:::` annotation is the stamp. The check runs **once**, at the validation boundary, and never again.
 
-**Current alpha behaviour:** After a successful `check`, the compiler tracks which facts are attached to which value using a lightweight runtime struct (`named-value`). This acts as a safety net while Tesl's static checker matures — if there is ever a gap in the static analysis, the runtime record catches it. For the vast majority of web-API code the overhead is negligible (one small struct allocation per validation boundary).
+**Runtime cost — erased by default:** After a successful `check`, the proof is a *compile-time* fact. In a normal (release) build the proof-tracking machinery — the `named-value` struct, the per-argument re-validation, the proof-environment threading — is **erased during macro expansion**: by the time your code runs there is no wrapper and no allocation for standard `check`/`fn`/`handler` paths. This was switched on by default once a differential audit proved the erased program behaves identically to the runtime-checked one across the whole corpus (byte-identical emitted code, 80/80 behavioral parity, ~1,150 negative tests). On proof-annotated calls this is ~81% faster with ~47% less allocation; proof-*free* parameters cost exactly zero.
 
-**The goal — and the plan:** Once the static checker has proven itself reliable in production, proof structs will be elided for all standard `check`/`fn` paths. The proof will exist only in the type checker; by the time your code runs it will be completely erased and there will be no wrapper, no allocation. Free-floating proofs (`detachFact`, `attachFact`) will always carry a minimal runtime token since they are explicitly passed around as first-class values.
+**The "(almost)":** A few things deliberately keep a minimal runtime representation. Free-floating proofs (`detachFact`, `attachFact`) are first-class values explicitly passed around, so they carry a small token; a proof-*annotated* parameter keeps a single allocation so `detachFact`/decomposition still work on it; and `establish`/`Fact`, existential `pack`/`unpack`, newtype nominal wrappers, and DB-sourced (`FromDb`) proofs retain their carriers.
+
+**Even debug builds erase.** Proofs are erased under `--debug` too. The debugger's Variables panel shows the raw runtime value, and a binding's proof/type is *compile-time* information (exactly what hover / `--type-at` report), so the debugger overlays it from there rather than from runtime structs. Breakpoints and stepping (`thsl-src!` checkpoints) are emitted separately and unaffected. `TESL_ZERO_COST_PROOFS=0` restores the runtime net for regression comparison only.
 
 **mutation testing** Since the check function is where crititical bugs can creep in Tesl has built in mutation testing for all check, establish and auth functions.
 
@@ -508,7 +510,7 @@ Most of Tesl's safety guarantees are *compile-time only* and disappear before yo
 
 | Feature | Runtime cost |
 |---|---|
-| Proof annotations (`:::`) | **Near-zero (alpha).** Proof checking runs once, at the validation boundary. In the current alpha, a small `named-value` struct carries proof identity as a safety net while the static checker matures. **The goal is full erasure** — no wrapper, no struct, no allocation — once the static checker has proven itself in production. Free-floating proofs (`detachFact`/`attachFact`) will always carry a minimal runtime token. |
+| Proof annotations (`:::`) | **Zero by default.** Proof checking runs once at the validation boundary; the proof itself is a compile-time fact. In release builds the `named-value` struct, argument re-validation, and proof-env threading are **erased during expansion** — no wrapper, no allocation — for standard `check`/`fn`/`handler` paths (verified behavior-identical across the corpus). The "(almost)": free-floating proofs (`detachFact`/`attachFact`) carry a small token, a proof-annotated parameter keeps one allocation, and `establish`/existential/newtype/`FromDb` carriers are retained. Erased under `--debug` too; `TESL_ZERO_COST_PROOFS=0` restores the net for regression comparison. |
 | `check` functions | Runs **once**, at the validation boundary. Never re-runs downstream. |
 | Capabilities (`requires [...]`) | **Zero.** A compile-time contract with no runtime representation. |
 | `ForAll` on lists | **Zero.** The list is a plain list at runtime; the annotation is erased. |
@@ -546,7 +548,7 @@ Tesl is built on two well-established ideas from programming language research, 
 
 ### Ghosts of Departed Proofs (GDP)
 
-The proof-annotation system — `value ::: Predicate value` — is an implementation of [Ghosts of Departed Proofs](https://kataskeue.com/gdp.pdf) (Noonan, 2018). The core insight is that you can attach arbitrary compile-time *evidence* to a value using phantom types, without changing the value's runtime representation. In Tesl's alpha implementation, a small runtime struct carries proof identity as a safety net while the static checker matures; the design goal is full erasure once the checker is production-proven.
+The proof-annotation system — `value ::: Predicate value` — is an implementation of [Ghosts of Departed Proofs](https://kataskeue.com/gdp.pdf) (Noonan, 2018). The core insight is that you can attach arbitrary compile-time *evidence* to a value using phantom types, without changing the value's runtime representation. In Tesl this is realised literally: the proof is erased during compilation and exists only in the static checker — including under `--debug`. The debugger overlays a binding's proof/type from compile-time information and shows the raw runtime value, so it needs no runtime struct.
 
 If you have used **F# units of measure**, you have seen a restricted version of this idea: `float<kg>` and `float<m>` are the same at runtime but the compiler keeps them distinct. GDP generalises this — instead of just tracking units, you can track any predicate (`ValidTitle`, `FromDb`, `Authenticated`), and you can compose predicates with `&&`, extract them with pattern matching, and pass them across function boundaries.
 
@@ -619,7 +621,7 @@ Tesl compiles to [Racket](https://racket-lang.org/), a Lisp dialect with a stron
 
 - The generated code is readable and debuggable
 - The Racket ecosystem (libraries, tooling, REPL) is available for advanced use cases
-- Proof annotations drive the static-checking pass; in the current alpha a lightweight runtime record also carries proof identity as a safety net (see the cost table above)
+- Proof annotations drive the static-checking pass; the proof is then erased (see the cost table above) and exists only at compile time (`TESL_ZERO_COST_PROOFS=0` restores a lightweight runtime evidence record for regression comparison)
 
 The compiler runs two orthogonal static-checking passes:
 

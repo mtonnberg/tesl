@@ -1,0 +1,30 @@
+#lang tesl
+module Money exposing [
+  NonNegativeCents,
+  checkNonNegativeCents,
+  PositiveCents,
+  checkPositiveCents,
+]
+
+import Tesl.Prelude exposing [Int]
+
+# Library module — pure validation predicates for monetary amounts.
+# Amounts are in integer cents to avoid floating-point precision issues.
+
+# NonNegativeCents: zero or positive — valid for balances, credits
+fact NonNegativeCents (n: Int)
+
+# PositiveCents: strictly greater than zero — valid for prices, charges
+fact PositiveCents (n: Int)
+
+check checkNonNegativeCents(n: Int) -> n: Int ::: NonNegativeCents n =
+  if n >= 0 then
+    ok n ::: NonNegativeCents n
+  else
+    fail 400 "amount must be zero or positive (in cents)"
+
+check checkPositiveCents(n: Int) -> n: Int ::: PositiveCents n =
+  if n > 0 then
+    ok n ::: PositiveCents n
+  else
+    fail 400 "amount must be greater than zero (in cents)"

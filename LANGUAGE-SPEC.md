@@ -54,18 +54,20 @@ This is the intended authoring surface. Users write modules, imports, records, e
 ### 4.2 Elaborated Racket DSL layer
 The `.tesl` compiler lowers surface forms into Racket DSL forms such as `define/pow`, `define-checker`, `define-auther`, `define-handler`, `define-trusted`, `define-record`, `define-entity`, `define-api`, and `define-server`.
 
-### 4.3 Runtime evidence layer (alpha safety net)
+### 4.3 Runtime evidence layer (erased by default; retained under `--debug`)
 
-The runtime currently carries proof-relevant information through evidence-bearing values:
+Proof-relevant information *can* be carried at runtime through evidence-bearing values:
 
 - named values (`named-value` struct: name, raw value, fact list, bindings);
 - successful check results (`check-ok`);
 - detached proofs (`detached-proof`);
 - existential packages.
 
-**This is an alpha-phase safety net.** The evidence layer exists because the static checker is still maturing; if there is ever a gap in the static analysis, the runtime record catches it. The long-term goal is to elide all `named-value` wrapping for standard `check`/`fn` paths — proofs will be fully erased after the static checker has proven itself reliable in production. Free-floating proofs (`detachFact`, `attachFact`) and cross-boundary proof transport will always retain a minimal runtime representation.
+**By default this layer is erased.** For standard `check`/`fn`/`handler` paths the param-binding machinery (struct wrapping, `validate-runtime-argument`, the proof-environment `parameterize`) is dropped during macro expansion, so a release build allocates nothing for proof tracking. The flip to default-on followed a full differential audit: the emitted Racket is byte-identical regardless of the setting, and the erased program behaves identically to the runtime-checked one across the whole corpus (80/80), backed by ~1,150 negative tests.
 
-For all practical web-API workloads the current overhead is negligible (one small struct allocation per validation boundary, never repeated downstream).
+**Retained pieces ("(almost)"):** free-floating proofs (`detached-proof`, via `detachFact`/`attachFact`) and cross-boundary proof transport keep their carriers; a proof-annotated parameter keeps one allocation so decomposition still works; `establish`/trusted facts, existential packages, newtype nominal wrappers, and `FromDb` proofs retain their representation.
+
+**Erased under `--debug` too.** For a sound checker the runtime structs are redundant — a binding's proof is compile-time information. So `--debug` also erases; the debugger shows the raw runtime value and overlays proof/type from compile-time type info, and breakpoints (`thsl-src!` checkpoints, emitted separately by the OCaml emitter) are unaffected. `TESL_ZERO_COST_PROOFS=0` restores the runtime evidence layer for regression comparison.
 
 ### 4.4 Public interface
 
@@ -218,9 +220,9 @@ A hidden existential witness is scoped to its package/elimination context. Retur
 ### 7.10 Static checking and runtime checking are both part of the alpha contract
 **Accepted design, Implemented.**
 
-The `.tesl` frontend performs proof-aware static checking when it has enough information. In the current alpha, structural type checking and proof-aware checking run as separate frontend passes before lowering to the Racket DSL. The runtime also maintains a lightweight evidence record (`named-value` structs) as a safety net while the static checker matures.
+The `.tesl` frontend performs proof-aware static checking when it has enough information. In the current implementation, structural type checking and proof-aware checking run as separate frontend passes before lowering to the Racket DSL.
 
-**The long-term design goal is compile-time only** (excluding free-floating proofs). Once the static checker has proven itself reliable in production, the runtime evidence structs will be elided for standard `check`/`fn` paths, and proof verification will be a purely compile-time guarantee with zero runtime cost. The alpha runtime safety net exists to catch any static-checker gaps before they reach production users.
+**Proof verification is compile-time** (excluding the retained carriers noted in §4.3). The runtime evidence structs are erased for standard `check`/`fn` paths — in release and `--debug` alike — so proof verification is a purely compile-time guarantee with zero runtime cost. `TESL_ZERO_COST_PROOFS=0` restores the runtime evidence layer as a regression-comparison safety net.
 
 ### 7.11 Newtype nominal identity is enforced at runtime
 **Accepted design, Implemented.**
@@ -531,6 +533,9 @@ The current frontend gives special treatment to these module names:
 - `Tesl.Http` — HTTP request type (`HttpRequest`)
 - `Tesl.Telemetry` — telemetry sentinel bindings (`telemetry`, `initTelemetry`)
 - `Tesl.Queue` — queue capabilities (`queueRead`, `queueWrite`, `pubsub`), proof predicates (`FromQueue`, `FromDeadQueue`)
+- `Tesl.UUID` — UUID generation and validation: `UUID.v4`, `UUID.v7`, `UUID.validate`, `IsUuid` proof predicate, `uuidV4Codec`, `uuidV7Codec`. The `uuid` capability gates generation; `UUID.validate` requires no capability. See §21.1.
+- `Tesl.JWT` — JSON Web Token support: `JWT.sign`, `JWT.verify`, `JWT.decode`, nominal newtypes `JwtToken` and `JwtSecret`. The `jwt` capability gates all operations. Algorithm: HS256. See §21.2.
+- `Tesl.HttpClient` — outgoing HTTP requests: `HttpClient.get`, `HttpClient.post`, `HttpClient.put`, `HttpClient.delete`, the `HttpResponse` record, and the `httpClient` capability. See §21.3.
 
 **String and number utilities**
 
@@ -660,6 +665,142 @@ fn f(s: String) -> String ? IsTrimmed = String.trim(s)
 fn f(s: String) -> String = String.trim(s)
 ```
 
+### 10.7 Libraries (`library` keyword)
+**Accepted design, Implemented.**
+
+The `library` keyword declares a module intended for reuse. It is syntactically identical to `module` but enforces a strict logic-only boundary at compile time.
+
+```tesl
+library ModuleName exposing [TypeA, FactB, checkB, helperFn]
+```
+
+#### Boundary rules
+
+**Allowed in a `library` module:**
+
+| Construct | Examples |
+|---|---|
+| Data types | `record`, `type` (ADTs), newtype |
+| Proof system | `fact`, `check`, `establish`, `auth` |
+| Functions | `fn`, `handler`, `worker` (function definitions only, not wiring) |
+| Capabilities and codecs | `capability`, `codec` |
+| Tests | `test` blocks |
+| Constants | Top-level immutable bindings |
+
+**Not allowed in a `library` module (compile error):**
+
+| Construct | Reason |
+|---|---|
+| `api`, `server` | HTTP server wiring — app-level only |
+| `main` | Entry point — app-level only |
+| `workers` | Background worker wiring — app-level only |
+| `database`, `entity` | Storage declarations — app-level only |
+
+The compiler rejects any `library` module that contains these infra constructs. This makes the boundary machine-checked: a library is always safe to import from any other module.
+
+**Import restriction:** Importing a `module` that itself contains `api`, `server`, `main`, or `workers` wiring is also a compile error. Those constructs are application entry points and cannot be consumed as library dependencies.
+
+#### Signature completeness
+
+If a `library` module exports a function, every type and proof predicate referenced in that function's parameter or return types must also be exported. This is a **compile error** for library modules.
+
+```tesl
+# WRONG — compile error
+library UsernameLib exposing [checkName]
+# checkName's return type uses IsValidName, but IsValidName is not exported.
+# Consumers cannot write `String ::: IsValidName name` in their own code.
+
+fact IsValidName (name: String)
+check checkName(name: String) -> name: String ::: IsValidName name = ...
+# Error: library UsernameLib exports checkName but IsValidName
+#        (used in its signature) is not exported — consumers cannot use this function
+
+# CORRECT — export everything the signature touches
+library UsernameLib exposing [IsValidName, checkName]
+```
+
+#### W080 lint warning for regular modules
+
+The same signature-completeness check runs on regular `module` declarations, but as lint warning **W080** rather than an error. Regular (non-library) modules may be internal app modules where incomplete exposure is intentional. Libraries are held to a stricter standard because they are explicitly designed for external consumption.
+
+#### Proof ownership across library boundaries
+
+Only the module that declares `fact F` can produce values carrying `F` (via `check`, `establish`, or `auth`). This is called **proof minting**, and the right belongs solely to the declaring module.
+
+Other modules that import `F` can:
+- Require `F` in function parameter types: `fn f(x: T ::: F x) -> ...`
+- Pass `F`-carrying values between functions
+- Re-export `F` in their own `exposing [...]`
+
+They cannot produce new `F`-carrying values. Attempting to return `ok x ::: F x` in a module that does not own `F` is a compile-time error (P001: proof ownership violation).
+
+```tesl
+# email-lib.tesl
+library EmailLib exposing [IsValidEmail, checkEmail]
+fact IsValidEmail (addr: String)
+check checkEmail(addr: String) -> addr: String ::: IsValidEmail addr =
+  if String.contains addr "@" then
+    ok addr ::: IsValidEmail addr
+  else
+    fail 400 "not a valid email"
+
+# my-handler.tesl — CORRECT usage
+import EmailLib exposing [IsValidEmail, checkEmail]
+
+fn sendTo(addr: String ::: IsValidEmail addr) -> String =
+  "sending to ${addr}"
+
+fn handle(rawAddr: String) -> String =
+  let addr = check checkEmail rawAddr   # proof minted here, by EmailLib's check
+  sendTo addr                           # proof flows through — accepted
+
+# my-handler.tesl — WRONG: trying to forge the proof
+fn forge(addr: String) -> addr: String ::: IsValidEmail addr =
+  ok addr ::: IsValidEmail addr         # P001: my-handler does not own IsValidEmail
+```
+
+#### Re-export support
+
+A library can re-export names from its imports by listing them in `exposing [...]`. This supports the **facade pattern**: a library imports from multiple internal modules and presents a unified API surface.
+
+```tesl
+# username-validation.tesl
+library UsernameValidation exposing [IsValidUsername, checkUsername]
+fact IsValidUsername (name: String)
+check checkUsername(name: String) -> name: String ::: IsValidUsername name = ...
+
+# email-validation.tesl
+library EmailValidation exposing [IsValidEmail, checkEmail]
+fact IsValidEmail (addr: String)
+check checkEmail(addr: String) -> addr: String ::: IsValidEmail addr = ...
+
+# user-lib.tesl — FACADE
+library UserLib exposing [
+  IsValidUsername, checkUsername,   # re-exported from UsernameValidation
+  IsValidEmail,    checkEmail,      # re-exported from EmailValidation
+  UserProfile,     makeUserProfile, # declared in UserLib
+]
+
+import UsernameValidation exposing [IsValidUsername, checkUsername]
+import EmailValidation exposing [IsValidEmail, checkEmail]
+
+record UserProfile {
+  username: String ::: IsValidUsername username
+  email:    String ::: IsValidEmail email
+}
+
+fn makeUserProfile(rawName: String, rawEmail: String) -> UserProfile =
+  let name = check checkUsername rawName
+  let addr = check checkEmail rawEmail
+  UserProfile { username: name email: addr }
+```
+
+Consumers import only from `UserLib` and see a single, stable API. The internal split between `UsernameValidation` and `EmailValidation` is an implementation detail.
+
+**Re-export does not transfer minting rights.** `UserLib` re-exports `IsValidEmail` from `EmailValidation`, but `UserLib` cannot produce new `IsValidEmail` values. `EmailValidation` retains sole minting authority.
+
+**Signature completeness applies to re-exports.** If `UserLib` re-exports `checkUsername`, then `IsValidUsername` must also appear in `UserLib`'s `exposing [...]` — even if both were originally declared in `UsernameValidation`. The compiler checks this.
+
 ## 11. Surface grammar for top-level declarations
 ### 11.1 Overview
 **Accepted design.**
@@ -683,6 +824,8 @@ fn f(s: String) -> String = String.trim(s)
                    | <queue-decl>
                    | <channel-decl>
                    | <workers-decl>
+                   | <cache-decl>
+                   | <email-decl>
 ```
 
 `const` is not part of the intended public language. Top-level immutability is already the default.
@@ -1539,6 +1682,7 @@ The `with capabilities [...]` declaration on `main` lists every capability the a
 <main-statement> ::= ...existing...
                    | "startWorkers"     [ <integer> ] <identifier> "with" "capabilities" <capability-list>
                    | "startDeadWorkers" <identifier> "with" "capabilities" <capability-list>
+                   | "startEmailWorker" <identifier>
 ```
 
 `startWorkers N`: the optional integer `N` sets the number of concurrent worker threads for that worker group (default 1). Each thread independently dequeues and processes one job at a time using PostgreSQL's `SELECT ... FOR UPDATE SKIP LOCKED`, so threads never block each other.
@@ -2793,6 +2937,18 @@ All constructs are fully implemented with the PostgreSQL backend. The chat examp
 
 **In-memory fallback**: when no PostgreSQL context is active (unit tests), all operations use the in-memory store — no database required. Design archived in `future-roadmap/completed/well_designed_reactivity_design.md`.
 
+### 16.10 Previously open areas now resolved
+**Implemented.**
+
+The following design areas were open in earlier drafts and are now resolved:
+
+- **Native Cache** — resolved and implemented. See §19.
+- **Email Support** — resolved and implemented. See §20.
+- **Outgoing HTTP client** — resolved and implemented via `Tesl.HttpClient`. See §21.3.
+- **UUID generation and validation** — resolved and implemented via `Tesl.UUID`. See §21.1.
+- **JWT signing and verification** — resolved and implemented via `Tesl.JWT`. See §21.2.
+- **Step debugger (Phase 0+1)** — resolved and implemented. See §22. Phases 2–4 remain open.
+
 ## 17. Worked examples
 ### 17.1 Valid proof transport
 ```tesl
@@ -2894,6 +3050,469 @@ In particular, new syntax should not be accepted unless it can answer all of the
 - How does the feature elaborate to the existing core machinery?
 
 If a proposed feature cannot be explained cleanly in those terms, it should not yet be part of the language.
+
+## 19. Native Cache
+**Implemented.**
+
+A `cache` declaration creates a typed, name-scoped cache backed by a PostgreSQL `UNLOGGED` table. The unlogged storage provides write performance comparable to Redis while retaining the transactional guarantees of PostgreSQL. An in-memory hash is used as a fallback when no PostgreSQL context is active (unit tests, development).
+
+### 19.1 Declaration syntax
+
+```text
+<cache-decl> ::= "cache" <identifier> "{"
+                   "database" ":" <identifier>
+                   "defaultTtl" ":" <integer>
+                   "valueType" ":" <type-expr>
+                 "}"
+```
+
+```tesl
+cache UserProfileCache {
+  database:   MainDB
+  defaultTtl: 3600
+  valueType:  UserProfile
+}
+
+cache ProductListCache {
+  database:   MainDB
+  defaultTtl: 300
+  valueType:  List Product
+}
+```
+
+Each `cache` block declares:
+- `database` — the `database` declaration that backs this cache. The compiler emits the `tesl_cache` unlogged table into that database schema automatically.
+- `defaultTtl` — default time-to-live in seconds. Individual `Cache.set` calls may override this.
+- `valueType` — the Tesl type of stored values. The compiler derives the codec automatically; no user annotation is needed.
+
+### 19.2 Capability
+
+Each named cache declares its own capability token: `cache CacheName` (where `CacheName` is the declared identifier). The capability name uses a space, which the compiler normalises to an underscore in the generated Racket identifier (`cache_CacheName`).
+
+```tesl
+capability appService implies cache UserProfileCache
+```
+
+A handler that reads or writes `UserProfileCache` must declare `cache UserProfileCache` in its `requires` list (directly or transitively via `implies`):
+
+```tesl
+handler getProfile(id: String) -> UserProfile
+  requires [dbRead, cache UserProfileCache] =
+  ...
+```
+
+### 19.3 Operations
+
+```text
+Cache.get      CacheName key               # -> Maybe ValueType
+Cache.set      CacheName key value         # -> Unit (uses defaultTtl)
+Cache.set      CacheName key value ttl     # -> Unit (overrides defaultTtl; ttl in seconds)
+Cache.delete   CacheName key               # -> Unit
+Cache.invalidate CacheName prefix          # -> Unit (deletes all keys with this prefix)
+```
+
+`Cache.get` returns `Maybe ValueType` where `ValueType` is the type declared in the `cache` block. The return type is statically known — no runtime cast is needed. If no entry exists for `key`, `Nothing` is returned.
+
+`Cache.invalidate` is a prefix scan: it deletes every entry whose key starts with `prefix`. This is useful for cache tag patterns such as invalidating all `"user_<id>_*"` entries when a user record changes.
+
+### 19.4 Stale-entry handling
+
+If a stored value cannot be deserialized (for example because the application was redeployed with new required fields on `ValueType`), the runtime silently deletes the entry and returns `Nothing`. The cache degrades gracefully across schema evolution. There is no error propagation.
+
+### 19.5 Transactional cache writes
+
+`Cache.set`, `Cache.delete`, and `Cache.invalidate` inside a `with transaction` block participate in the surrounding PostgreSQL transaction atomically. This eliminates the dual-write problem that arises when a separate Redis cache is used alongside PostgreSQL: if the transaction rolls back, no cache mutation is committed.
+
+```tesl
+handler updateProfile(userId: String, req: UpdateProfileRequest)
+  -> UserProfile
+  requires [dbWrite, cache UserProfileCache] =
+  with transaction {
+    let updated = update ... in User ...
+    Cache.delete UserProfileCache ("profile_" ++ userId)
+    updated
+  }
+```
+
+### 19.6 Background sweeper
+
+A sweeper thread runs every 60 seconds and deletes expired rows (`expires_at < NOW()`). No application code is needed to trigger expiry cleanup.
+
+### 19.7 Worked example
+
+```tesl
+import Tesl.Maybe exposing [Maybe, Something, Nothing]
+
+cache UserProfileCache {
+  database:   MainDB
+  defaultTtl: 3600
+  valueType:  UserProfile
+}
+
+handler getUserProfile(id: String) -> UserProfile
+  requires [dbRead, cache UserProfileCache] =
+  let cached = Cache.get UserProfileCache ("profile_" ++ id)
+  case cached of
+    Something profile ->
+      profile
+    Nothing ->
+      let profile = selectOne p from UserProfile where p.id == id
+      Cache.set UserProfileCache ("profile_" ++ id) profile
+      profile
+```
+
+---
+
+## 20. Email Support
+**Implemented.**
+
+Tesl provides native transactional email via the outbox pattern: `Email.send` writes a row to a `tesl_email_outbox` table inside the current database transaction. A background worker thread polls for pending rows and delivers via SMTP with exponential-backoff retry. If the surrounding transaction rolls back, the email row is never inserted and no email is ever sent.
+
+### 20.1 Declaration syntax
+
+```text
+<email-decl> ::= "email" <identifier> "{"
+                   "database" ":" <identifier>
+                   "smtp" "{"
+                     "host"     ":" <expr>
+                     "port"     ":" <integer>
+                     "username" ":" <expr>
+                     "password" ":" <expr>
+                     "tls"      ":" ( "true" | "false" )
+                   "}"
+                 "}"
+```
+
+```tesl
+email AppEmail {
+  database: MainDB
+  smtp {
+    host:     env("SMTP_HOST")
+    port:     587
+    username: env("SMTP_USER")
+    password: env("SMTP_PASS")
+    tls:      true
+  }
+}
+```
+
+Multiple `email` blocks can coexist, each backed by the same or a different database.
+
+### 20.2 Capability
+
+The capability is `email` — a single shared token, not name-specific. Any function that calls `Email.send` must declare `requires [email]`:
+
+```tesl
+capability appService implies email
+
+fn sendWelcomeEmail(to: String) -> Unit requires [email] =
+  Email.send AppEmail {
+    to:      to
+    subject: "Welcome!"
+    text:    "Welcome to the service."
+    html:    "<h1>Welcome!</h1>"
+  }
+```
+
+### 20.3 Operations
+
+**`Email.send`** — fire-and-queue, non-blocking:
+
+```text
+Email.send EmailName {
+  to:      String
+  subject: String
+  text:    String      # optional — plain-text body
+  html:    String      # optional — HTML body
+}
+```
+
+`Email.send` inserts a row into `tesl_email_outbox` and returns immediately. It does not open a TCP connection. At least one of `text` or `html` should be provided; both may be provided to send a multipart message.
+
+**`startEmailWorker`** — starts the background delivery thread in `main`:
+
+```text
+startEmailWorker EmailName
+```
+
+This statement must appear inside a `with database` block in `main`, before `serve`. Without it, rows accumulate in the outbox but are never delivered.
+
+```tesl
+main with capabilities [appService] {
+  with database MainDB {
+    with capabilities [appService] {
+      startEmailWorker AppEmail
+      serve MyServer on port with capabilities [appService]
+    }
+  }
+}
+```
+
+### 20.4 Delivery model
+
+The worker uses two threads:
+
+- **Poller thread** — every 5 seconds, issues `SELECT ... FOR UPDATE SKIP LOCKED` on `tesl_email_outbox` for `pending` rows. On success, marks the row `sent`. On SMTP failure, increments `attempts` and sets `next_attempt_at` with exponential backoff: `5 minutes × 2^attempts`.
+- **Cleanup thread** — every hour, deletes `sent` rows older than 24 hours.
+
+After 5 failed attempts a row is marked `dead` and is no longer retried. Dead rows remain in the table for inspection.
+
+### 20.5 Transactional atomicity
+
+`Email.send` inside a `with transaction` block is part of the same database transaction. If the transaction rolls back, the row is never inserted and the email is never sent. This prevents sending notifications for events that did not actually persist.
+
+```tesl
+handler registerUser(req: RegistrationRequest) -> User requires [dbWrite, email] =
+  with transaction {
+    let user = insert User { id: newId, email: req.email }
+    Email.send AppEmail {
+      to:      req.email
+      subject: "Welcome!"
+      text:    "Your account has been created."
+    }
+    user
+  }
+```
+
+If the `insert` or any subsequent step raises an exception, the transaction rolls back and no email row is committed.
+
+---
+
+## 21. Standard Library Extensions
+
+This section documents three new modules added to the Tesl standard library.
+
+### 21.1 `Tesl.UUID`
+**Implemented.**
+
+Provides UUID generation and validation. Import:
+
+```tesl
+import Tesl.UUID exposing [uuid, UUID.v4, UUID.v7, UUID.validate, IsUuid,
+                           uuidV4Codec, uuidV7Codec]
+```
+
+**Capability:** `uuid` — required by `UUID.v4` and `UUID.v7`. `UUID.validate` is a pure `check` function and requires no capability.
+
+**Functions:**
+
+| Function | Signature | Notes |
+|---|---|---|
+| `UUID.v4` | `() -> String` | Random UUID (RFC 4122 v4). Requires `uuid`. |
+| `UUID.v7` | `() -> String` | Time-ordered UUID (RFC 9562 v7). Requires `uuid`. Better for database primary keys — monotonically increasing within a millisecond. |
+| `UUID.validate` | `check (s: String) -> s: String ::: IsUuid s` | Validates UUID format (8-4-4-4-12 hex). No capability required. |
+
+**Proof predicate:** `IsUuid s` — attached to the result of `UUID.validate` on success.
+
+**JSON codecs:**
+
+- `uuidV4Codec` — encodes/decodes UUID v4 strings. Decoder validates the UUID format.
+- `uuidV7Codec` — encodes/decodes UUID v7 strings. Decoder validates the UUID format.
+
+Use in codec blocks:
+
+```tesl
+codec CreateRequest {
+  fromJson [
+    { id <- "id" with_codec uuidV7Codec }
+  ]
+}
+```
+
+**Example:**
+
+```tesl
+import Tesl.UUID exposing [uuid, UUID.v4, UUID.v7, UUID.validate, IsUuid]
+
+capability appService implies uuid
+
+fn makeEntityId() -> String requires [uuid] =
+  UUID.v7()
+
+check validateId(s: String) -> s: String ::: IsUuid s =
+  UUID.validate s
+
+fn requiresValidId(id: String ::: IsUuid id) -> String = id
+```
+
+**`UUID.v7` for primary keys.** UUID v7 encodes a 48-bit millisecond timestamp in the most-significant bits, making newly-generated IDs sort later than older ones. This is preferable to v4 for database primary keys: index pages fill sequentially instead of randomly, which substantially reduces B-tree fragmentation at high insert rates.
+
+### 21.2 `Tesl.JWT`
+**Implemented.**
+
+Provides JSON Web Token signing, verification, and decoding using HMAC-SHA256 (HS256). Import:
+
+```tesl
+import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify, JWT.decode]
+```
+
+**Capability:** `jwt` — required by all three operations.
+
+**Nominal newtypes:**
+
+- `JwtToken` — wraps `String`. Represents a signed JWT (`header.payload.signature`). Not interchangeable with `String` — the type system prevents passing a raw string where a `JwtToken` is expected, and vice versa.
+- `JwtSecret` — wraps `String`. Represents the HMAC signing key. Nominal separation ensures that secrets cannot be accidentally swapped with tokens or plain strings.
+
+**Functions:**
+
+| Function | Signature | Notes |
+|---|---|---|
+| `JWT.sign` | `(claims: a) (secret: JwtSecret) -> JwtToken` | Signs an arbitrary record as claims. Requires `jwt`. |
+| `JWT.verify` | `(token: JwtToken) (secret: JwtSecret) -> a` | Verifies signature and expiry. Fails 401 on bad signature or expired token. Requires `jwt`. |
+| `JWT.decode` | `(token: JwtToken) -> a` | Decodes payload without verifying signature. Use only for non-security-critical inspection. Requires `jwt`. |
+
+`JWT.sign` accepts any Tesl record as the claims payload. `JWT.verify` and `JWT.decode` return the same record type — the compiler infers the type from context.
+
+**Algorithm:** HS256 (HMAC-SHA256). The header is always `{"alg":"HS256","typ":"JWT"}`.
+
+**Example:**
+
+```tesl
+import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify]
+
+capability authService implies jwt
+
+record TokenClaims {
+  sub: String
+  exp: Int
+}
+
+fn issueToken(userId: String, secret: JwtSecret) -> JwtToken requires [jwt] =
+  let claims = TokenClaims { sub: userId, exp: nowMillis() + 3600000 }
+  JWT.sign claims secret
+
+fn authenticate(token: JwtToken, secret: JwtSecret) -> TokenClaims requires [jwt] =
+  JWT.verify token secret
+```
+
+### 21.3 `Tesl.HttpClient`
+**Implemented.**
+
+Provides outgoing HTTP requests. Import:
+
+```tesl
+import Tesl.HttpClient exposing [httpClient, HttpResponse,
+                                 HttpClient.get, HttpClient.post,
+                                 HttpClient.put, HttpClient.delete]
+```
+
+**Capability:** `httpClient` — required by all four functions. The identifier is camelCase to match Tesl identifier rules.
+
+**`HttpResponse` record:**
+
+```tesl
+record HttpResponse {
+  status:  Int
+  body:    String
+  headers: List (Tuple2 String String)
+}
+```
+
+**Functions:**
+
+| Function | Signature | Notes |
+|---|---|---|
+| `HttpClient.get` | `(url: String) (headers: List (Tuple2 String String)) -> HttpResponse` | Issues a GET request. |
+| `HttpClient.post` | `(url: String) (headers: List (Tuple2 String String)) (body: String) -> HttpResponse` | Issues a POST request with a string body. |
+| `HttpClient.put` | `(url: String) (headers: List (Tuple2 String String)) (body: String) -> HttpResponse` | Issues a PUT request with a string body. |
+| `HttpClient.delete` | `(url: String) (headers: List (Tuple2 String String)) -> HttpResponse` | Issues a DELETE request. |
+
+All functions are synchronous and block until the response is received. Both `http://` and `https://` schemes are supported.
+
+**Example:**
+
+```tesl
+import Tesl.HttpClient exposing [httpClient, HttpResponse,
+                                 HttpClient.get, HttpClient.post]
+import Tesl.Tuple exposing [Tuple2]
+
+capability appService implies httpClient
+
+handler fetchExternalUser(id: String) -> HttpResponse requires [httpClient] =
+  let url     = "https://api.example.com/users/" ++ id
+  let headers = [Tuple2 "Accept" "application/json",
+                 Tuple2 "Authorization" "Bearer token"]
+  HttpClient.get url headers
+```
+
+**Header lists.** Headers are `List (Tuple2 String String)` — a list of name/value pairs. Pass `[]` for requests with no custom headers.
+
+**Response inspection.** Inspect `response.status` (HTTP status code) and `response.body` (raw response body string). Parse JSON bodies with the standard codec layer or with `Dict`/`String` operations.
+
+---
+
+## 22. Step Debugger
+**Phase 0+1 Implemented. Phases 2–4 Open.**
+
+Tesl provides a source-level step debugger using the Debug Adapter Protocol (DAP), integrated with the VSCode extension.
+
+### 22.1 Architecture
+
+```
+VSCode
+  │  DAP JSON-RPC over stdio
+  ▼
+dsl/debug/dap-server.rkt    — DAP protocol handler
+  │  spawns compiled .rkt with debug instrumentation
+  ▼
+dsl/debug/checkpoint.rkt    — (thsl-src file line expr) macro
+  │  signals stopped events via Racket channels
+  ▼
+dap-server.rkt              — receives stopped events, serves variables/stackTrace
+```
+
+### 22.2 Compiling with debug instrumentation
+
+Pass `--debug` to the Tesl compiler:
+
+```bash
+tesl --debug file.tesl
+```
+
+When `--debug` is active:
+1. Every emitted expression is wrapped with `(thsl-src "file.tesl" LINE expr)` using the `loc` of the AST node.
+2. A `.tesl.srcmap.json` sidecar file is written alongside the compiled `.rkt`. It maps Tesl source lines to generated Racket lines:
+
+```json
+{
+  "tesl_file": "foo.tesl",
+  "entries": [
+    { "tesl_line": 12, "rkt_line": 47 },
+    ...
+  ]
+}
+```
+
+The sidecar allows the DAP server to translate VSCode breakpoint line numbers into the correct Racket positions.
+
+### 22.3 VSCode integration
+
+The `editor/vscode-tesl` extension contributes a `debuggers` entry in `package.json`. Launching `Debug Tesl Program` via VSCode:
+
+1. Invokes `editor/vscode-tesl/debug/launch-dap.sh` which starts `dsl/debug/dap-server.rkt` via Racket.
+2. The DAP server compiles the `.tesl` file with `--debug`, loads the compiled `.rkt`, and runs it with `debug-enabled? = true`.
+3. Breakpoints set in VSCode are sent via `setBreakpoints` DAP messages. The `(thsl-src ...)` macro checks for a matching breakpoint, sends a stopped event, and waits on a resume channel.
+4. The variables panel calls `variables` → the `locals-thunk` captured at the pause point, which uses `thsl-display-value` to unwrap GDP proof wrappers and show plain user-level values.
+
+**GDP value unwrapping in the debugger.** The `thsl-display-value` helper unwraps the runtime evidence layer before display: `named-value` structs are shown as their raw value (with proof tags listed as annotations), `newtype-value` is shown as its inner value, and `record-value` fields are recursed. The user sees the application-level value, not the proof-carrying runtime wrapper.
+
+### 22.4 Phase 1 capabilities (implemented)
+
+- Breakpoints at statement and function level.
+- `continue` resumes execution.
+- Local variable inspection (proof-unwrapped values).
+- Stack trace showing the currently paused function and source location.
+
+### 22.5 Deferred phases
+
+| Phase | Feature | Status |
+|---|---|---|
+| 2 | Step-over (`next`) and step-into (`stepIn`) | **Open** — requires a `step-depth` parameter to track call depth. |
+| 3 | GDP proof tags as variable annotations | **Open** — show `"Alice" [IsTrimmed, IsNonEmpty]` in the variables panel. |
+| 4 | Conditional breakpoints | **Open** — pause only when a user expression is truthy. |
+| 4 | Watch expressions | **Open** — user-defined expressions evaluated at each pause. |
+
+---
 
 ## Appendix A. Current implementation divergences
 This appendix is descriptive rather than normative.

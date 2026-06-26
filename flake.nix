@@ -322,12 +322,24 @@
               exit "$RET"
               ;;
             test)
-              [ $# -gt 0 ] || { echo "Usage: tesl test <file.tesl> [more.tesl ...]" >&2; exit 1; }
+              # Optional: --test-name "name" runs only the named test case.
+              TEST_NAME=""
+              if [ "''${1:-}" = "--test-name" ]; then
+                TEST_NAME="''${2:?--test-name requires a test name argument}"
+                shift 2
+              fi
+              [ $# -gt 0 ] || { echo "Usage: tesl test [--test-name <name>] <file.tesl> [more.tesl ...]" >&2; exit 1; }
               RET=0
               for FILE in "$@"; do
                 OUT="''${FILE%.tesl}.rkt"
                 OUT_TMP="$(mktemp --suffix=.rkt)"
-                if _tesl_compile_to_stdout "$FILE" > "$OUT_TMP"; then
+                _tesl_require_compiler
+                if [ -n "$TEST_NAME" ]; then
+                  "$TESL_OCAML_COMPILER" --test-name "$TEST_NAME" "$FILE" > "$OUT_TMP"
+                else
+                  _tesl_compile_to_stdout "$FILE" > "$OUT_TMP"
+                fi
+                if [ $? -eq 0 ]; then
                   mv "$OUT_TMP" "$OUT"
                   if [ "''${TESL_VERBOSE:-0}" = "1" ]; then
                     raco test "$OUT" || RET=$?
@@ -339,7 +351,7 @@
                     [ "$STATUS" -ne 0 ] && RET="$STATUS"
                   fi
                 else
-                  STATUS=$?; rm -f "$OUT_TMP"; RET="$STATUS"
+                  rm -f "$OUT_TMP"; RET=1
                 fi
               done
               exit "$RET"
@@ -548,6 +560,9 @@ EOF
             ocamlPackages.dune_3
             ocamlPackages.findlib
             ocamlPackages.alcotest
+            # Integration test mock servers
+            mailhog   # SMTP mock for email integration tests (MailHog binary in PATH as MailHog)
+            python3   # HTTP mock server for httpclient integration tests
           ];
 
           shellHook = ''

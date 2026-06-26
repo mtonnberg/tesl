@@ -1,4 +1,24 @@
 #lang racket
+;; ─────────────────────────────────────────────────────────────────────────────
+;; Tesl.List — public runtime module (SHIM).
+;;
+;; This file no longer hand-implements the pure List combinators.  It is now a
+;; thin shim that:
+;;   • keeps the irreducible LEAVES + proof/FFI machinery as hand-written Racket
+;;     (head/tail/append re-exported from `list-prim.rkt`; the rest defined below),
+;;   • re-exports the 16 LIFTED combinators (map/filter/foldl/foldr/length/any/
+;;     all/find/sum/maximum/minimum/member/contains/concat/concatMap/reverse) from
+;;     `list-derived.rkt`, which is COMPILED FROM `tesl/list.tesl` at build time.
+;;
+;; The lifted bodies are therefore written in Tesl and dogfood the language; the
+;; trusted hand-written Racket core shrinks accordingly.  The public dotted
+;; `List.*` runtime names and the `tesl/list.rkt` collection path are UNCHANGED,
+;; so user-program emission is byte-identical.
+;;
+;; `list-prim.rkt` is required by BOTH this shim and `list-derived.rkt`; neither
+;; requires the other, so there is no module-load cycle.
+;; ─────────────────────────────────────────────────────────────────────────────
+
 
 (require "../dsl/check.rkt"
          "../dsl/types.rkt"
@@ -23,26 +43,14 @@
 
 (provide
  List.isEmpty
- List.length
- List.head
- List.tail
  List.last
  List.nth
- List.map
- List.filter
  List.filterCheck
  List.allCheck
  List.emptyForAll
  List.filterMap
- List.foldl
- List.foldr
- List.append
- List.concat
- List.reverse
  List.sort
  List.sortBy
- List.contains
- List.find
  List.findIndex
  List.take
  List.drop
@@ -53,20 +61,13 @@
  List.dedupe
  List.range
  List.repeat
- List.sum
  List.product
- List.maximum
- List.minimum
- List.any
- List.all
  List.count
  List.partition
  List.intersperse
  List.intercalate
  List.groupBy
- List.unique
- List.concatMap
- List.member)
+ List.unique)
 
 (define (rv x) (raw-value x))
 
@@ -77,18 +78,13 @@
   (null? (rv xs)))
 
 ;; List.length — returns plain Int (can be used inline in comparisons)
-(define (List.length xs)
-  (length (rv xs)))
+; (moved) List.length
 
 ;; Returns Something(first) or Nothing
-(define (List.head xs)
-  (define lst (rv xs))
-  (if (pair? lst) (Something (car lst)) Nothing))
+; (moved) List.head
 
 ;; Returns Something(rest) or Nothing for empty list
-(define (List.tail xs)
-  (define lst (rv xs))
-  (if (pair? lst) (Something (cdr lst)) Nothing))
+; (moved) List.tail
 
 ;; Returns Something(last) or Nothing
 (define (List.last xs)
@@ -105,11 +101,9 @@
       (Something (list-ref lst idx))
       Nothing))
 
-(define (List.map f xs)
-  (map f (rv xs)))
+; (moved) List.map
 
-(define (List.filter pred xs)
-  (filter pred (rv xs)))
+; (moved) List.filter
 
 ;; filterCheck: apply a check function to each element; keep elements that pass (check-ok?).
 ;; Returns a plain list of the passing elements (ForAll is a compile-time annotation only).
@@ -169,22 +163,17 @@
               (rv xs)))
 
 ;; foldl: (List.foldl f init xs) — strict left fold
-(define (List.foldl f init xs)
-  (foldl (lambda (x acc) (f acc x)) (rv init) (rv xs)))
+; (moved) List.foldl
 
 ;; foldr: (List.foldr f init xs)
-(define (List.foldr f init xs)
-  (foldr (lambda (x acc) (f x acc)) (rv init) (rv xs)))
+; (moved) List.foldr
 
-(define (List.append xs ys)
-  (append (rv xs) (rv ys)))
+; (moved) List.append
 
 ;; Flatten a list of lists one level
-(define (List.concat xss)
-  (apply append (map rv (rv xss))))
+; (moved) List.concat
 
-(define (List.reverse xs)
-  (reverse (rv xs)))
+; (moved) List.reverse
 
 ;; Natural sort — returns sorted list ::: IsSorted result
 (define (List.sort xs)
@@ -208,13 +197,10 @@
                       [else #f]))))
   (attach-sorted-proof sorted))
 
-(define (List.contains x xs)
-  (and (member (rv x) (map rv (rv xs))) #t))
+; (moved) List.contains
 
 ;; Returns Something(first match) or Nothing
-(define (List.find pred xs)
-  (define found (findf pred (rv xs)))
-  (if found (Something found) Nothing))
+; (moved) List.find
 
 ;; Returns Something(index) of first matching element or Nothing
 (define (List.findIndex pred xs)
@@ -272,25 +258,18 @@
   (define checked-n (require-non-negative-count 'List.repeat n))
   (make-list (rv checked-n) x))
 
-(define (List.sum xs)
-  (apply + (map rv (rv xs))))
+; (moved) List.sum
 
 (define (List.product xs)
   (apply * (map rv (rv xs))))
 
-(define (List.maximum xs)
-  (define lst (rv xs))
-  (if (null? lst) Nothing (Something (apply max (map rv lst)))))
+; (moved) List.maximum
 
-(define (List.minimum xs)
-  (define lst (rv xs))
-  (if (null? lst) Nothing (Something (apply min (map rv lst)))))
+; (moved) List.minimum
 
-(define (List.any pred xs)
-  (ormap pred (rv xs)))
+; (moved) List.any
 
-(define (List.all pred xs)
-  (andmap pred (rv xs)))
+; (moved) List.all
 
 (define (List.count pred xs)
   (count pred (rv xs)))
@@ -341,9 +320,43 @@
     x))
 
 ;; flatMap: apply f to each element, concatenate the resulting lists
-(define (List.concatMap f xs)
-  (List.flatten (List.map f xs)))
+; (moved) List.concatMap
 
 ;; membership test: is x an element of xs?
-(define (List.member x xs)
-  (and (member (rv x) (map rv (rv xs))) #t))
+; (moved) List.member
+
+;; ── LEAF primitives (head/tail/append) — re-exported from list-prim.rkt ──────
+;; `only-in` (not bare `rename-in`) so ONLY these three names enter this module;
+;; otherwise list-prim's other provides would shadow Racket builtins here.
+(require (only-in "list-prim.rkt"
+                  [ListPrim.head List.head]
+                  [ListPrim.tail List.tail]
+                  [ListPrim.append List.append]))
+(provide List.head List.tail List.append)
+
+;; ── LIFTED combinators — compiled from tesl/list.tesl into list-derived.rkt ──
+;; CRITICAL: use `only-in`, NOT `rename-in`.  `rename-in` imports EVERY provide
+;; of list-derived.rkt (it also provides bare `length`, `take`, `drop`, `zip`,
+;; … stubs), which would shadow the Racket `length`/`take`/`drop`/`min` used by
+;; the hand-written leaf bodies above.  `only-in` brings in exactly the 16 lifted
+;; names and nothing else.
+(require (only-in "list-derived.rkt"
+                  [map List.map]
+                  [filter List.filter]
+                  [foldl List.foldl]
+                  [foldr List.foldr]
+                  [length List.length]
+                  [any List.any]
+                  [all List.all]
+                  [find List.find]
+                  [sum List.sum]
+                  [maximum List.maximum]
+                  [minimum List.minimum]
+                  [member List.member]
+                  [contains List.contains]
+                  [concat List.concat]
+                  [concatMap List.concatMap]
+                  [reverse List.reverse]))
+(provide List.map List.filter List.foldl List.foldr List.length List.any List.all
+         List.find List.sum List.maximum List.minimum List.member List.contains
+         List.concat List.concatMap List.reverse)

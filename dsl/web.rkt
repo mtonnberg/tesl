@@ -12,6 +12,7 @@
          web-server/servlet-env
          "capability.rkt"
          "private/check-runtime.rkt"
+         "private/proof-utils.rkt"
          (only-in "../tesl/logging.rkt"
                   tesl-verbose?
                   tesl-log-http-request!
@@ -77,6 +78,25 @@
 (define current-handler-error-port (make-parameter #f))
 (define (handler-error-port) (or (current-handler-error-port) (current-error-port)))
 
+;; Phase-0 (runtime) twin of the expansion-time erasure gate (roadmap A).  Read
+;; once at module load.  Gates the runtime proof RE-CHECK on a function/handler
+;; return value (the static checker is the sole guarantor of the returned proof
+;; in zero-cost mode).  The existential-shape check and the return TYPE check
+;; stay enabled regardless.  DEFAULT-ON, matching the expansion gate: the return
+;; re-check is skipped unless TESL_ZERO_COST_PROOFS explicitly opts OUT.
+;;
+;; NOTE(Contract-1): unlike the expansion gate, this cannot see the --debug
+;; checkpoint require (it is phase-0 module-load code, shared by all programs).
+;; The return re-check is a no-op for statically-valid programs, so a uniform
+;; default is behavior-preserving; re-enabling the full return-net during an
+;; interactive --debug/DAP session (via debug-enabled?) is a tracked follow-up.
+(define zero-cost-proofs?/rt
+  (let ([v (getenv "TESL_ZERO_COST_PROOFS")])
+    (cond [(not v) #t]
+          [(member (string-downcase v) '("0" "false" "no" "off")) #f]
+          [(member (string-downcase v) '("1" "true" "yes" "on")) #t]
+          [else #t])))
+
 (define (parse-cookies-header cookie-header-str)
   (for*/hash ([raw-part  (in-list (string-split (or cookie-header-str "") ";"))]
               [part      (in-value (string-trim raw-part))]
@@ -111,6 +131,24 @@
 ;;    check-runtime.rkt's begin-for-syntax.
 ;; The duplication is intentional and load-bearing; keep both copies in sync.
 (begin-for-syntax
+  ;; ── Zero-cost-proofs erasure gate (roadmap A) ──────────────────────────────
+  ;; Mirror of the gate in dsl/private/check-runtime.rkt (kept in sync — the two
+  ;; transformer environments are intentionally duplicated, see the NOTE above).
+  ;; DEFAULT-ON and UNCONDITIONAL: build-executable-expansion always generates the
+  ;; ERASED expansion (no runtime-bind+evidence / validate-runtime-argument /
+  ;; parameterize; *arg/arg bound to the raw value, proof-annotated params keeping
+  ;; ONE allocation via tesl-establish-param-proof), INCLUDING under `--debug`.
+  ;; A sound static checker makes the runtime proof structs redundant; the
+  ;; debugger sources proof/type display from compile-time type info (see
+  ;; check-runtime.rkt for the full rationale).  TESL_ZERO_COST_PROOFS=0 restores
+  ;; the net for regression comparison only.
+  (define zero-cost-proofs?
+    (let ([v (getenv "TESL_ZERO_COST_PROOFS")])
+      (cond [(not v) #t]
+            [(member (string-downcase v) '("0" "false" "no" "off")) #f]
+            [(member (string-downcase v) '("1" "true" "yes" "on")) #t]
+            [else #t])))
+
   (struct capture-kind-info (binding parser checker raw) #:transparent)
 
   (define-syntax-class typed-binding
@@ -558,6 +596,42 @@
                                                   (check-fail-status cf)))])
                 #,trusted-body))))
     (define full-name-env-id (format-id name-id "~a-runtime-name-env" (syntax-e name-id)))
+    ;; ── Erased param-binding clauses (zero-cost-proofs? = #t) ──────────────────
+    ;; For each parameter, bind *arg to the raw value (zero allocation) and arg to:
+    ;;   • the SAME raw value when the param carries no proof annotation, or
+    ;;   • a single named-value via tesl-establish-param-proof when it does, so
+    ;;     detachFact / proof decomposition on `arg` still resolve the fact (1 alloc).
+    ;; The proof datum is already expressed in terms of the public param name (e.g.
+    ;; (ValidPort port)); we use that public name as the GDP subject so the fact and
+    ;; its self-binding are internally consistent.  No runtime-bind+evidence, no
+    ;; validate-runtime-argument, no parameterize — the static checker is the sole
+    ;; guarantor that the proof held.
+    (define all-bindings-id
+      (format-id name-id "~a-erased-all-arg-bindings" (syntax-e name-id)))
+    (define erased-arg-clauses
+      (append
+       ;; (1) bind every *arg to its raw value (zero alloc)
+       (for/list ([arg-id (in-list arg-name-ids)] [star-arg (in-list star-ids)])
+         #`[#,star-arg (raw-value #,arg-id)])
+       ;; (2) one cross-parameter bindings table (public-name → raw value), so a proof
+       ;;     on one param that references a sibling param (e.g. HasKey key dict —
+       ;;     consumed at runtime by a proof-total stdlib like Dict.get) can resolve all
+       ;;     its subjects.  Mirrors the non-erased path's all-arg-bindings.
+       (list #`[#,all-bindings-id
+                (hash #,@(append* (for/list ([arg-id (in-list arg-name-ids)]
+                                             [star-arg (in-list star-ids)])
+                                    (list #`'#,(syntax-e arg-id) star-arg))))])
+       ;; (3) bind each arg: proof-annotated → 1-alloc named-value carrying the fact
+       ;;     AND the full cross-param bindings; proof-free → the raw value.
+       (for/list ([arg-id (in-list arg-name-ids)]
+                  [star-arg (in-list star-ids)]
+                  [proof-datum (in-list arg-proof-datums)])
+         (if proof-datum
+             #`[#,arg-id (tesl-establish-param-proof '#,(syntax-e arg-id)
+                                                     #,star-arg
+                                                     '#,proof-datum
+                                                     #,all-bindings-id)]
+             #`[#,arg-id #,star-arg]))))
     (with-syntax ([(arg-id ...) arg-name-ids]
                   [(star-arg ...) star-ids]
                   [(quoted-name ...) quoted-name-stxs]
@@ -569,6 +643,7 @@
                                         #`'#,datum)]
                   [(arg-proof-expr ...) (for/list ([datum (in-list arg-proof-datums)])
                                          (if datum #`'#,datum #'#f))]
+                  [(erased-arg-clause ...) erased-arg-clauses]
                   [signature-id signature-id]
                   [name name-id]
                   [who-id (datum->syntax whole-stx who)]
@@ -578,7 +653,7 @@
                   [returns-expr returns-expr]
                   [raw-expr raw-expr]
                   [body-expr scoped-body])
-      #'(begin
+      #`(begin
           (define signature-id
             (signature-spec 'kind-id
                             'name
@@ -586,7 +661,17 @@
                             '(cap-id ...)
                             returns-expr
                             raw-expr))
-          (define (name arg-id ...)
+          #,(if zero-cost-proofs?
+                ;; ── ERASED expansion (zero-cost mode) ─────────────────────────
+                #'(define (name arg-id ...)
+                    (call-with-declared-capabilities
+                     (list cap-id ...)
+                     (lambda ()
+                       (let* (erased-arg-clause ...)
+                         (let ([result body-expr])
+                           (validate-signature-return signature-id result))))))
+                ;; ── DEFAULT expansion (runtime safety net on) ─────────────────
+                #'(define (name arg-id ...)
             (call-with-declared-capabilities
              (list cap-id ...)
              (lambda ()
@@ -625,7 +710,7 @@
                                          arg-value-id
                                          (runtime-binding-name arg-binding))] ...)
                          (let ([result body-expr])
-                           (validate-signature-return signature-id result))))))))))
+                           (validate-signature-return signature-id result))))))))))) ; last ) closes the (if zero-cost-proofs? …)
 
   )))
 
@@ -1349,14 +1434,10 @@
          [else
           (error 'route "unsupported segment declaration: ~a" segment)])])))
 
-(define (proof-infix-operands datum op)
-  (and (list? datum)
-       (>= (length datum) 3)
-       (odd? (length datum))
-       (for/and ([index (in-range 1 (length datum) 2)])
-         (eq? (list-ref datum index) op))
-       (for/list ([index (in-range 0 (length datum) 2)])
-         (list-ref datum index))))
+;; proof-infix-operands is shared via private/proof-utils.rkt (see that file for
+;; why this is the only one of the 5 collision candidates safe to deduplicate;
+;; flatten-proof-conjunction-facts / proof-fact-matches? / proof-satisfied? /
+;; normalize-typecheck-value stay duplicated here on purpose — they diverge).
 
 (define (input-bearing-segments route)
   (for/list ([segment (in-list (route-spec-segments route))]
@@ -1510,7 +1591,11 @@
   (define-values (expected-type expected-proof effective-name-env)
     (return-spec-expected-shape result normalized-return name-env))
   (validate-type-expression subject result expected-type effective-name-env)
-  (when expected-proof
+  ;; The return PROOF re-check is part of the runtime safety net: in zero-cost
+  ;; mode it is erased (the static checker guarantees the returned proof).  The
+  ;; return TYPE check above, and the existential-package SHAPE check in
+  ;; validate-exists-return, are NOT proof re-validation and stay enabled.
+  (when (and expected-proof (not zero-cost-proofs?/rt))
     (unless (proof-satisfied? expected-proof (facts-of result) effective-name-env)
       (return-validation-error subject
                                "~a returned a value that does not satisfy declared return proof ~a"
@@ -1695,6 +1780,31 @@
                               (hash)))
   result)
 
+;; A2 — Tesl-level failure rendering for runtime errors caught at the handler
+;; boundary.  Classifies the raw backend message into one of the categories A2
+;; targets (capability violation, runtime type / proof error, check reject) and
+;; renders it naming the originating Tesl construct (the handler/operation).
+;; Position resolution stays the OCaml `tesl-sourcemap render` step's job (this
+;; runtime is deliberately position-agnostic); here we provide the construct +
+;; category so the message is legible even without the source map, and richer
+;; under TESL_VERBOSE.  Pure string building — no behavioural change.
+(define (tesl-render-handler-failure operation method path msg)
+  (define category
+    (cond
+      [(regexp-match? #rx"Missing capabilities|Capabilities not declared" msg) "capability violation"]
+      [(regexp-match? #rx"does not satisfy declared proof" msg) "proof rejection"]
+      [(regexp-match? #rx"does not satisfy declared type" msg) "runtime type error"]
+      [(regexp-match? #rx"\\(HTTP [0-9]+\\)" msg) "check reject"]
+      [else "runtime error"]))
+  (define head
+    (format "~a ~a: ~a in handler ~a" method path category operation))
+  (if tesl-verbose?
+      ;; Verbose: include the raw backend detail and a hint to resolve the Tesl
+      ;; source position from the trace via `tesl-sourcemap render`.
+      (format "~a\n    detail: ~a\n    (resolve .tesl position: tesl-sourcemap render <map> <trace>)"
+              head msg)
+      (format "~a — ~a" head msg)))
+
 (define (handler-result->response route result)
   (cond
     [(dsl-response? result) result]
@@ -1752,10 +1862,18 @@
        (route-context route auth-value)
        (lambda ()
          (with-handlers ([exn:fail? (lambda (exn)
-                                      (fprintf (handler-error-port) "~a ~a handler error: ~a\n"
-                                               (dsl-request-method req)
-                                               (string-append "/" (string-join (dsl-request-path req) "/"))
-                                               (exn-message exn))
+                                      ;; A2: render the failure at the originating Tesl
+                                      ;; construct (the handler/operation), classified by
+                                      ;; category, instead of an opaque "handler error".
+                                      ;; Additive: the 500 response is unchanged; only the
+                                      ;; logged diagnostic is upgraded (richer under
+                                      ;; TESL_VERBOSE).
+                                      (fprintf (handler-error-port) "~a\n"
+                                               (tesl-render-handler-failure
+                                                (route-spec-operation route)
+                                                (dsl-request-method req)
+                                                (string-append "/" (string-join (dsl-request-path req) "/"))
+                                                (exn-message exn)))
                                       (error-response 500
                                                       "Internal server error"
                                                       #:details (list (exn-message exn))))])

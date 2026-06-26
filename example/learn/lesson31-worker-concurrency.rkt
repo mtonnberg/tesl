@@ -8,6 +8,7 @@
   tesl/dsl/sql
   tesl/dsl/web
   tesl/dsl/test-support
+  tesl/dsl/debug/checkpoint
   tesl/tesl/private/runtime
   tesl/tesl/queue
   tesl/tesl/sse
@@ -54,7 +55,7 @@
   (processEmail [job : EmailJob ::: (FromQueue (Id == jobId) job)])
   #:capabilities [emailCap]
   #:returns EmailJob
-  (begin (telemetry-event! "email.sent" #:attributes (["recipient" (raw-value job.recipientId)] ["subject" (raw-value job.subject)])) *job))
+  (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 85 (list (cons 'job *job)) (lambda () (begin (telemetry-event! "email.sent" #:attributes (["recipient" (raw-value job.recipientId)] ["subject" (raw-value job.subject)])) *job))))
 
 (define EmailWorkers
   (list (cons EmailQueue processEmail)))
@@ -64,7 +65,7 @@
   (handleDeadEmail [job : EmailJob ::: (FromDeadQueue (Id == jobId) job)])
   #:capabilities [deadEmailCap]
   #:returns EmailJob
-  (begin (telemetry-event! "email.dead" #:attributes (["recipient" (raw-value job.recipientId)] ["subject" (raw-value job.subject)])) *job))
+  (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 100 (list (cons 'job *job)) (lambda () (begin (telemetry-event! "email.dead" #:attributes (["recipient" (raw-value job.recipientId)] ["subject" (raw-value job.subject)])) *job))))
 
 (define DeadEmailWorkers
   (list (cons EmailQueue handleDeadEmail)))
@@ -74,7 +75,7 @@
   (sendWelcomeEmail)
   #:capabilities [enqueueEmail]
   #:returns String
-  (begin (enqueue! EmailQueue (EmailJob #:recipientId "user-123" #:subject "Welcome!" #:body "Thanks for signing up.")) "queued"))
+  (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 112 (list) (lambda () (begin (enqueue! EmailQueue (EmailJob #:recipientId "user-123" #:subject "Welcome!" #:body "Thanks for signing up.")) "queued"))))
 
 (define ConcurrencyServer-sse-routes '())
 (define-api ConcurrencyApi
@@ -90,4 +91,5 @@
 )
 
 (module+ main
-  (let ([port 8090]) (call-with-database EmailDatabase (lambda () (with-capabilities (fullService) (begin (start-workers! EmailWorkers (list emailCap) #:concurrency 4) (begin (start-dead-workers! DeadEmailWorkers (list deadEmailCap)) (serve ConcurrencyServer #:port port #:capabilities (list enqueueEmail) #:sse-routes ConcurrencyServer-sse-routes))))))))
+  (let ([port (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 138 (list) (lambda () 8090))])
+  (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 139 (list) (lambda () (call-with-database EmailDatabase (lambda () (with-capabilities (fullService) (begin (start-workers! EmailWorkers (list emailCap) #:concurrency 4) (begin (start-dead-workers! DeadEmailWorkers (list deadEmailCap)) (serve ConcurrencyServer #:port port #:capabilities (list enqueueEmail) #:sse-routes ConcurrencyServer-sse-routes))))))))))

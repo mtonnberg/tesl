@@ -38,18 +38,39 @@ let has_mutate_support () =
 
 (** Run `tesl --mutate` on the given source and return (exit_code, output). *)
 let run_mutate src =
-  let tmp = Filename.temp_file "tesl-mutate-test" ".tesl" in
+  (* Write the fixture to a file whose name matches its `module X` header so the
+     structural file-name/module-name check (V001) does not fire — otherwise
+     `--mutate` errors out before mutating and the test sees empty output.
+     (Mirrors the kebab-deriving helper used by the other antagonistic suites.) *)
+  let dir = Filename.temp_dir "tesl-mutate-test" "" in
+  let fname =
+    let re = Str.regexp "module[ \t\n]+\\([A-Z][A-Za-z0-9_]*\\)" in
+    try
+      ignore (Str.search_forward re src 0);
+      let mname = Str.matched_group 1 src in
+      let buf = Buffer.create (String.length mname + 4) in
+      String.iteri (fun i c ->
+        if i = 0 then Buffer.add_char buf (Char.lowercase_ascii c)
+        else if c >= 'A' && c <= 'Z' then
+          (Buffer.add_char buf '-'; Buffer.add_char buf (Char.lowercase_ascii c))
+        else Buffer.add_char buf c) mname;
+      Buffer.contents buf ^ ".tesl"
+    with Not_found -> "test.tesl"
+  in
+  let tmp = Filename.concat dir fname in
   let oc = open_out tmp in
   output_string oc src;
   close_out oc;
-  let out_tmp = Filename.temp_file "tesl-mutate-out" ".txt" in
+  let out_tmp = Filename.concat dir "out.txt" in
   let status = Sys.command
-    (Printf.sprintf "%s %s %s > %s 2>&1" tesl mutate_subcmd tmp out_tmp) in
+    (Printf.sprintf "%s %s %s > %s 2>&1" tesl mutate_subcmd
+       (Filename.quote tmp) (Filename.quote out_tmp)) in
   let ic = open_in out_tmp in
   let out = In_channel.input_all ic in
   close_in ic;
   (try Sys.remove tmp with _ -> ());
   (try Sys.remove out_tmp with _ -> ());
+  (try Sys.rmdir dir with _ -> ());
   (status, out)
 
 (* ── Test cases ───────────────────────────────────────────────────────────── *)

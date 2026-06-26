@@ -324,7 +324,11 @@ codec Task {
 |} in
   let racket = compile_ok src "codec_full" in
   assert_contains ~name:"tesl-codec-encode-Task" racket "tesl-codec-encode-Task";
-  assert_contains ~name:"tesl-json-string-codec" racket "tesl-json-string-codec";
+  (* compile_time_specialization: primitive-codec fields encode via a DIRECT
+     tesl-encode-prim-* helper call rather than routing each field through the
+     generic tesl-codec-encode-field interpreter (behaviour-identical: the
+     primitive codec pairs in dsl/types.rkt are built from these same helpers). *)
+  assert_contains ~name:"tesl-encode-prim-string" racket "tesl-encode-prim-string";
   assert_contains ~name:"register-type-codec!" racket "register-type-codec!"
 
 (* ── Capability emission tests ───────────────────────────────────────────── *)
@@ -458,8 +462,11 @@ test "raw arithmetic" {
 }
 |} in
   let racket = compile_ok src "test_raw_arithmetic_emit" in
-  assert_contains ~name:"raw arithmetic unwraps let-bound value" racket "(define total (+ (raw-value n) 2))";
-  assert_not_contains ~name:"raw arithmetic does not use bare named value" racket "(define total (+ n 2))"
+  (* B5: the let value is wrapped in a (thsl-src! … (lambda () …)) checkpoint
+     that erases in release; the inner arithmetic is unchanged. *)
+  assert_contains ~name:"raw arithmetic unwraps let-bound value" racket "(lambda () (+ (raw-value n) 2))";
+  assert_contains ~name:"raw arithmetic define total" racket "(define total (thsl-src!";
+  assert_not_contains ~name:"raw arithmetic does not use bare named value" racket "(+ n 2)"
 
 let test_api_test_template_emission () =
   let src = {|#lang tesl

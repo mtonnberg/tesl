@@ -1,0 +1,193 @@
+#lang tesl
+# Behavioral + type coverage for the LIFTED Tesl.List combinators (their TYPES
+# now come from tesl/list.tesl, their runtime from tesl/list.rkt).  Exercises
+# every lifted function so a regression in either the lifted type or the runtime
+# is caught.  Deferred (still stdlib_env): sort, sortBy, filterCheck, allCheck,
+# emptyForAll — not exercised here.
+module LiftedListTests exposing []
+
+import Tesl.Prelude exposing [Int, String, Bool, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Tuple exposing [Tuple2]
+import Tesl.Int exposing [Int.nonNegative, IsNonNegative]
+import Tesl.List exposing [
+  List.map,
+  List.filter,
+  List.foldl,
+  List.foldr,
+  List.length,
+  List.isEmpty,
+  List.head,
+  List.tail,
+  List.concat,
+  List.append,
+  List.reverse,
+  List.unique,
+  List.take,
+  List.drop,
+  List.zip,
+  List.range,
+  List.repeat,
+  List.any,
+  List.all,
+  List.find,
+  List.sum,
+  List.maximum,
+  List.minimum,
+  List.concatMap,
+  List.member,
+  List.contains,
+]
+
+# ── TRANSFORM ────────────────────────────────────────────────────────────────
+
+test "List.map" {
+  expect List.map (fn(x: Int) -> x * 2) [1, 2, 3] == [2, 4, 6]
+  expect List.map (fn(x: Int) -> x + 1) [] == []
+}
+
+test "List.filter" {
+  expect List.filter (fn(x: Int) -> x > 2) [1, 2, 3, 4] == [3, 4]
+  expect List.filter (fn(x: Int) -> x > 10) [1, 2, 3] == []
+}
+
+test "List.concatMap" {
+  expect List.concatMap (fn(x: Int) -> [x, x]) [1, 2] == [1, 1, 2, 2]
+}
+
+test "List.reverse" {
+  expect List.reverse [1, 2, 3] == [3, 2, 1]
+  expect List.reverse [] == []
+}
+
+test "List.unique" {
+  expect List.unique [1, 1, 2, 3, 3, 3] == [1, 2, 3]
+}
+
+test "List.zip" {
+  expect List.zip [1, 2] ["a", "b"] == [Tuple2 1 "a", Tuple2 2 "b"]
+  expect List.zip [1, 2, 3] ["a"] == [Tuple2 1 "a"]
+}
+
+# ── QUERY ──────────────────────────────────────────────────────────────────
+
+test "List.length" {
+  expect List.length [1, 2, 3] == 3
+  expect List.length [] == 0
+}
+
+test "List.isEmpty" {
+  expect List.isEmpty [] == True
+  expect List.isEmpty [1] == False
+}
+
+test "List.head" {
+  expect List.head [1, 2, 3] == Something 1
+  expect List.head [] == Nothing
+}
+
+test "List.tail" {
+  expect List.tail [1, 2, 3] == Something [2, 3]
+  expect List.tail [] == Nothing
+}
+
+test "List.any" {
+  expect List.any (fn(x: Int) -> x > 2) [1, 2, 3] == True
+  expect List.any (fn(x: Int) -> x > 9) [1, 2, 3] == False
+}
+
+test "List.all" {
+  expect List.all (fn(x: Int) -> x > 0) [1, 2, 3] == True
+  expect List.all (fn(x: Int) -> x > 1) [1, 2, 3] == False
+}
+
+test "List.find" {
+  expect List.find (fn(x: Int) -> x > 2) [1, 2, 3, 4] == Something 3
+  expect List.find (fn(x: Int) -> x > 9) [1, 2, 3] == Nothing
+}
+
+test "List.member" {
+  expect List.member 2 [1, 2, 3] == True
+  expect List.member 9 [1, 2, 3] == False
+}
+
+test "List.contains" {
+  expect List.contains 3 [1, 2, 3] == True
+  expect List.contains 9 [1, 2, 3] == False
+}
+
+test "List.sum" {
+  expect List.sum [1, 2, 3, 4] == 10
+  expect List.sum [] == 0
+}
+
+test "List.maximum" {
+  expect List.maximum [3, 1, 4, 1, 5] == Something 5
+  expect List.maximum [] == Nothing
+}
+
+test "List.minimum" {
+  expect List.minimum [3, 1, 4, 1, 5] == Something 1
+  expect List.minimum [] == Nothing
+}
+
+# ── BUILD ──────────────────────────────────────────────────────────────────
+
+test "List.append" {
+  expect List.append [1, 2] [3, 4] == [1, 2, 3, 4]
+  expect List.append [] [1] == [1]
+}
+
+test "List.concat" {
+  expect List.concat [[1, 2], [3], [4, 5]] == [1, 2, 3, 4, 5]
+  expect List.concat [] == []
+}
+
+test "List.range" {
+  expect List.range 0 4 == [0, 1, 2, 3]
+  expect List.range 3 3 == []
+}
+
+# List.repeat / take / drop carry an IsNonNegative proof obligation on their
+# count argument (proof metadata in validation_common.ml — unchanged by the
+# lift).  These helpers establish the proof via `check Int.nonNegative`, which
+# also exercises that the lift preserves that proof behavior.
+fn repeatN(value: Int, n: Int) -> List Int =
+  let safeN = check Int.nonNegative n
+  List.repeat value safeN
+
+fn takeN(n: Int, xs: List Int) -> List Int =
+  let safeN = check Int.nonNegative n
+  List.take safeN xs
+
+fn dropN(n: Int, xs: List Int) -> List Int =
+  let safeN = check Int.nonNegative n
+  List.drop safeN xs
+
+test "List.repeat" {
+  expect repeatN 7 3 == [7, 7, 7]
+  expect repeatN 7 0 == []
+}
+
+# ── FOLD ─────────────────────────────────────────────────────────────────────
+
+test "List.foldl" {
+  expect List.foldl (fn(acc: Int, x: Int) -> acc + x) 0 [1, 2, 3] == 6
+  expect List.foldl (fn(acc: Int, x: Int) -> acc - x) 0 [1, 2, 3] == -6
+}
+
+test "List.foldr" {
+  expect List.foldr (fn(x: Int, acc: Int) -> x + acc) 0 [1, 2, 3] == 6
+}
+
+# ── SLICE ────────────────────────────────────────────────────────────────────
+
+test "List.take" {
+  expect takeN 2 [1, 2, 3, 4] == [1, 2]
+  expect takeN 0 [1, 2, 3] == []
+}
+
+test "List.drop" {
+  expect dropN 2 [1, 2, 3, 4] == [3, 4]
+  expect dropN 0 [1, 2, 3] == [1, 2, 3]
+}

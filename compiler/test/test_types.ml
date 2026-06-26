@@ -736,26 +736,51 @@ let test_stdlib_nothing_type () =
       (String.length s >= 5 && String.sub s 0 5 = "Maybe")
   | None -> Alcotest.fail "Nothing not in stdlib"
 
+(* `List.map`'s TYPE is now LIFTED to source (tesl/list.tesl) — it is
+   intentionally NO LONGER hardcoded in stdlib_env.  Its scheme is loaded by
+   Checker.load_imported_func_sigs via decl_scheme.  We reconstruct that scheme
+   here the same way the checker does (parse list.tesl, run decl_scheme on the
+   `map` decl) and assert it is polymorphic — the equivalent of the old
+   stdlib_env assertion, now sourced from the lifted file. *)
+let lifted_list_scheme (fn : string) : Type_system.scheme option =
+  match Checker.lifted_stdlib_source_path "Tesl.List" with
+  | None -> None
+  | Some path ->
+    let src = In_channel.with_open_text path In_channel.input_all in
+    (match Parser.parse_module path src with
+     | Parser.Ok m ->
+       List.find_map (function
+         | Ast.DFunc fd when fd.Ast.name = fn -> Some (Checker.decl_scheme fd)
+         | _ -> None) m.Ast.decls
+     | Parser.Err _ -> None)
+
 let test_stdlib_list_map_type () =
+  (* List.map must NOT be in stdlib_env (it was lifted to source). *)
   let env = make_stdlib_env () in
-  match List.assoc_opt "List.map" env with
+  Alcotest.(check bool) "List.map lifted out of stdlib_env" false
+    (List.mem_assoc "List.map" env);
+  (* …and its lifted scheme must be polymorphic. *)
+  match lifted_list_scheme "map" with
   | Some sch ->
-    Alcotest.(check bool) "List.map is polymorphic" true (sch.vars <> [])
-  | None -> Alcotest.fail "List.map not in stdlib"
+    Alcotest.(check bool) "lifted List.map is polymorphic" true (sch.vars <> [])
+  | None -> Alcotest.fail "could not load lifted List.map from tesl/list.tesl"
 
 let test_stdlib_compose_types () =
-  (* List.map (fn: a -> b) (xs: List a) : List b should unify *)
+  (* List.map (fn: a -> b) (xs: List a) : List b should unify — using the
+     LIFTED scheme (from tesl/list.tesl), proving it behaves identically to the
+     old hardcoded row. *)
   reset ();
-  let env = make_stdlib_env () in
-  let list_map_sch = List.assoc "List.map" env in
-  let map_ty = instantiate list_map_sch in
-  (* Apply to (Int -> String) *)
-  let fn_ty = TFun (t_int, t_string) in
-  let arg_ty = t_list t_int in
-  let result = fresh () in
-  let s = unify empty_subst map_ty (TFun (fn_ty, TFun (arg_ty, result))) in
-  Alcotest.(check string) "List.map result" "List String"
-    (pp_ty (apply s result))
+  match lifted_list_scheme "map" with
+  | None -> Alcotest.fail "could not load lifted List.map from tesl/list.tesl"
+  | Some list_map_sch ->
+    let map_ty = instantiate list_map_sch in
+    (* Apply to (Int -> String) *)
+    let fn_ty = TFun (t_int, t_string) in
+    let arg_ty = t_list t_int in
+    let result = fresh () in
+    let s = unify empty_subst map_ty (TFun (fn_ty, TFun (arg_ty, result))) in
+    Alcotest.(check string) "List.map result" "List String"
+      (pp_ty (apply s result))
 
 let test_stdlib_dict_lookup () =
   reset ();

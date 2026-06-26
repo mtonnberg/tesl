@@ -534,12 +534,115 @@ let module_name_to_kebab name =
   ) name;
   Buffer.contents buf
 
+(* ── Lifted-stdlib source resolution (type source of truth) ───────────────────
+   A small subset of the [Tesl.*] standard library has its TYPES lifted out of
+   the hardcoded [stdlib_env] (type_system.ml) and into bundled `.tesl` sources
+   under the repo's `tesl/` directory.  [load_imported_func_sigs] reads those
+   signatures from source instead of short-circuiting to [stdlib_env].
+
+   RUNTIME emission is unaffected: the emitter still maps each lifted module to
+   its existing `tesl/<mod>.rkt` runtime via its own collection-path table.  This
+   resolver only locates the `.tesl` *type* source, never a runtime require, and
+   it is NOT [resolve_local_import_path] (which resolves relative to the user's
+   importing file — it would never find the bundled stdlib). *)
+
+(** Repo root: honor [TESL_REPO_ROOT], else walk up from the running executable
+    looking for a directory that contains a `compiler/` sibling.  Mirrors
+    [Compile.default_root_path] (which the checker, a lower layer, cannot call). *)
+let stdlib_repo_root () =
+  match Sys.getenv_opt "TESL_REPO_ROOT" with
+  | Some p when p <> "" -> p
+  | _ ->
+    let rec find dir =
+      let candidate = Filename.concat dir "compiler" in
+      if (try Sys.file_exists candidate && Sys.is_directory candidate with _ -> false)
+      then dir
+      else
+        let parent = Filename.dirname dir in
+        if parent = dir then Filename.current_dir_name
+        else find parent
+    in
+    find (Filename.dirname Sys.executable_name)
+
+(** Map a lifted [Tesl.X] module name to its bundled `.tesl` TYPE source's
+    kebab basename, e.g. [Tesl.List] -> [Some "list.tesl"].  Only modules whose
+    types have actually been lifted return [Some]; every other [Tesl.*] returns
+    [None] so callers fall back to [stdlib_env]. *)
+let lifted_stdlib_basename (module_name : string) : string option =
+  match module_name with
+  | "Tesl.List" -> Some "list.tesl"
+  | "Tesl.ListPrim" -> Some "list-prim.tesl"
+  | "Tesl.Either" -> Some "either.tesl"
+  | _ -> None
+
+(** Resolve a lifted [Tesl.X] module to its bundled `.tesl` TYPE source path.
+    Returns [None] when the module is not lifted OR the source cannot be located
+    (graceful: the import then contributes no rows).  Looked up under the repo's
+    `tesl/` dir, with the installed-distribution collections layout
+    (`share/tesl-collections/tesl/tesl/`) as a fallback so an installed binary —
+    whose `tesl/` sources ship via the same path as the `.rkt` runtime — also
+    finds them.  This NEVER points at a runtime require; emission is unaffected. *)
+let lifted_stdlib_source_path (module_name : string) : string option =
+  match lifted_stdlib_basename module_name with
+  | None -> None
+  | Some base ->
+    let root = stdlib_repo_root () in
+    let candidates = [
+      Filename.concat root (Filename.concat "tesl" base);
+      (* Installed distribution: cp -r tesl share/tesl-collections/tesl/tesl *)
+      Filename.concat root
+        (Filename.concat "share"
+           (Filename.concat "tesl-collections"
+              (Filename.concat "tesl" (Filename.concat "tesl" base))));
+    ] in
+    List.find_opt Sys.file_exists candidates
+
 let resolve_local_import_path source_file module_name =
   let dir = Filename.dirname source_file in
   let kebab_path = Filename.concat dir (module_name_to_kebab module_name ^ ".tesl") in
   if Sys.file_exists kebab_path then kebab_path
   else Filename.concat dir (module_name ^ ".tesl")
 
+(* ── Imported-module parse cache (WS4: batch / per-file amortization) ──────
+   A single [check_module_*] run reads + re-parses each locally-imported
+   `.tesl` file once per consumer site — [load_imported_func_kinds],
+   [load_imported_func_sigs], [load_imported_ctors], [check_local_import_names]
+   and [check_type_names_in_scope] each independently open and parse the same
+   path.  That is ~5 redundant parses of every imported file *within one file
+   check*, and in a whole-project / batch run the same shared module is
+   re-parsed by every file that imports it.
+
+   This cache memoizes the read+parse by resolved path.  The compiler is a
+   one-shot process and never mutates source files mid-run, so caching by path
+   is sound: a given path always parses to the same result.  The cache is
+   purely a performance optimization — every call site behaves exactly as
+   before (same [Parser.result], same handling of a missing file), so emitted
+   output and diagnostics are byte-identical.
+
+   [clear_import_parse_cache] is exposed for tests / long-lived hosts that may
+   want a fresh slate; the normal CLI never needs to call it. *)
+let import_parse_cache : (string, module_form Parser.result option) Hashtbl.t =
+  Hashtbl.create 32
+
+let clear_import_parse_cache () = Hashtbl.reset import_parse_cache
+
+(** Read + parse a locally-imported module at [path], memoized by path.
+    Returns [None] if the file does not exist (so callers can keep their
+    existing "skip missing import" behavior), otherwise [Some result] where
+    [result] is the parse outcome ([Ok]/[Err]) exactly as
+    [Parser.parse_module] would return it for a fresh read. *)
+let parse_local_import_module (path : string) : module_form Parser.result option =
+  match Hashtbl.find_opt import_parse_cache path with
+  | Some cached -> cached
+  | None ->
+    let result =
+      if not (Sys.file_exists path) then None
+      else
+        let source = In_channel.with_open_text path In_channel.input_all in
+        Some (Parser.parse_module path source)
+    in
+    Hashtbl.replace import_parse_cache path result;
+    result
 
 let load_imported_func_kinds (m : module_form) : (string * func_kind) list =
   let is_tesl_module name =
@@ -549,12 +652,9 @@ let load_imported_func_kinds (m : module_form) : (string * func_kind) list =
     if is_tesl_module imp.module_name then []
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
-      else
-        let source = In_channel.with_open_text path In_channel.input_all in
-        match Parser.parse_module path source with
-        | Err _ -> []
-        | Ok imported ->
+      match parse_local_import_module path with
+      | None | Some (Err _) -> []
+      | Some (Ok imported) ->
           let requested = match imp.names with
             | ImportAll -> None
             | ImportExposing names -> Some names
@@ -595,16 +695,60 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
     in
     go
   in
+  (* Load the lifted-stdlib TYPE signatures for a module whose types now come
+     from a bundled `.tesl` source instead of [stdlib_env] (the "type source of
+     truth" path).  The bundled module declares functions under their bare name
+     (e.g. `fn map`), but the type environment keys them by the stdlib's dotted
+     convention (`List.map`), which is also exactly how the user exposes them
+     (`import Tesl.List exposing [List.map]`).  So the env key and the requested
+     name are both `<ShortMod>.<fn>` (e.g. `List.map`), where `<ShortMod>` is the
+     trailing segment of the [Tesl.X] module name.  Returns [] when the source is
+     absent / unparsable (only reachable in an unsupported config — no repo root
+     and no installed `tesl/` collection; the harness always sets the env var and
+     the distribution ships `tesl/list.tesl`); the lifted rows are gone from
+     [stdlib_env], so a genuinely missing source would surface as unbound names
+     rather than silently mistyping. *)
+  let load_lifted_sigs (imp : import_decl) (path : string) : (string * scheme) list =
+    match parse_local_import_module path with
+    | None | Some (Err _) -> []
+    | Some (Ok imported) ->
+        (* `Tesl.List` -> `List`; the env/exposing key prefix. *)
+        let short_mod =
+          match String.rindex_opt imp.module_name '.' with
+          | Some i -> String.sub imp.module_name (i + 1)
+                        (String.length imp.module_name - i - 1)
+          | None -> imp.module_name
+        in
+        let strip_dotdot s =
+          let n = String.length s in
+          if n > 4 && String.sub s (n-4) 4 = "(..)" then String.sub s 0 (n-4) else s
+        in
+        let requested = match imp.names with
+          | ImportAll -> None
+          | ImportExposing names -> Some (List.map strip_dotdot names)
+        in
+        List.concat_map (function
+          | DFunc fd ->
+            let dotted = short_mod ^ "." ^ fd.name in   (* e.g. "List.map" *)
+            let sch = decl_scheme fd in
+            let include_it = match requested with
+              | Some names -> List.mem dotted names
+              | None -> true
+            in
+            if include_it then [ (dotted, sch) ] else []
+          | _ -> []
+        ) imported.decls
+  in
   List.concat_map (fun (imp : import_decl) ->
-    if is_tesl_module imp.module_name then []
+    if is_tesl_module imp.module_name then
+      (match lifted_stdlib_source_path imp.module_name with
+       | Some path -> load_lifted_sigs imp path
+       | None -> [])
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
-      else
-        let source = In_channel.with_open_text path In_channel.input_all in
-        match Parser.parse_module path source with
-        | Err _ -> []
-        | Ok imported ->
+      match parse_local_import_module path with
+      | None | Some (Err _) -> []
+      | Some (Ok imported) ->
           (* Collect locally-defined type names from the imported module *)
           let local_types = List.concat_map (function
             | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
@@ -688,12 +832,9 @@ let load_imported_ctors (m : module_form) : (string * (string * scheme)) list =
     if is_tesl_module imp.module_name then []
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
-      if not (Sys.file_exists path) then []
-      else
-        let source = In_channel.with_open_text path In_channel.input_all in
-        match Parser.parse_module path source with
-        | Err _ -> []
-        | Ok imported ->
+      match parse_local_import_module path with
+      | None | Some (Err _) -> []
+      | Some (Ok imported) ->
           let requested = match imp.names with
             | ImportAll -> None
             | ImportExposing names -> Some names
@@ -748,7 +889,10 @@ let expr_loc (e : expr) =
   | ERecord { loc; _ } | EList { loc; _ } | EOk { loc; _ } | EFail { loc; _ }
   | ETelemetry { loc; _ } | EEnqueue { loc; _ } | EPublish { loc; _ }
   | EStartWorkers { loc; _ } | EWithDatabase { loc; _ } | EWithCapabilities { loc; _ }
-  | EWithTransaction { loc; _ } | EServe { loc; _ } | EConstructor { loc; _ } | ELambda { loc; _ } -> loc
+  | EWithTransaction { loc; _ } | EServe { loc; _ } | EConstructor { loc; _ } | ELambda { loc; _ }
+  | ECacheGet { loc; _ } | ECacheSet { loc; _ } | ECacheDelete { loc; _ } | ECacheInvalidate { loc; _ }
+  | ESendEmail { loc; _ } | EStartEmailWorker { loc; _ }
+  | ERuntimeCall { loc; _ } -> loc
 
 let rec flatten_app_expr acc = function
   | EApp { fn; arg; _ } -> flatten_app_expr (arg :: acc) fn
@@ -1155,9 +1299,9 @@ let local_let_reason name expected_ty =
   Printf.sprintf "let binding `%s` must have declared type %s" name (pp_ty expected_ty)
 
 let known_qualifier_modules =
-  [ "List"; "Dict"; "String"; "Int"; "Float"; "Set"; "Maybe";
-    "Either"; "Result"; "Time"; "Random"; "Uuid"; "Env";
-    "Http"; "Json"; "DB"; "Telemetry"; "Tesl" ]
+  [ "List"; "ListPrim"; "Dict"; "String"; "Int"; "Float"; "Set"; "Maybe";
+    "Either"; "Result"; "Time"; "Random"; "Uuid"; "UUID"; "Env";
+    "Http"; "HttpClient"; "Json"; "DB"; "Telemetry"; "Tesl"; "JWT"; "Email" ]
 
 type constructor_resolution =
   | KnownConstructor of ty
@@ -1889,6 +2033,48 @@ let rec infer_expr ctx (e : expr) : ty =
   | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } ->
     infer_expr ctx body
   | EServe _ -> t_unit
+  | ECacheGet { cache_name; key; loc } ->
+    let key_ty = infer_expr ctx key in
+    unify_at ctx loc key_ty t_string;
+    (* Look up the declared value type for this cache *)
+    let val_ty = match List.assoc_opt ("__cache_" ^ cache_name) ctx.env with
+      | Some s -> s.mono
+      | None -> fresh ()
+    in
+    t_maybe val_ty
+  | ECacheSet { cache_name; key; value; ttl; loc } ->
+    let key_ty = infer_expr ctx key in
+    unify_at ctx loc key_ty t_string;
+    let val_ty = infer_expr ctx value in
+    (* Check against declared type if available *)
+    (match List.assoc_opt ("__cache_" ^ cache_name) ctx.env with
+     | Some s -> unify_at ctx loc val_ty s.mono
+     | None -> ());
+    Option.iter (fun ttl_expr ->
+      let ttl_ty = infer_expr ctx ttl_expr in
+      unify_at ctx loc ttl_ty t_int
+    ) ttl;
+    t_unit
+  | ECacheDelete { key; loc; _ } ->
+    let key_ty = infer_expr ctx key in
+    unify_at ctx loc key_ty t_string;
+    t_unit
+  | ECacheInvalidate { prefix; loc; _ } ->
+    let pfx_ty = infer_expr ctx prefix in
+    unify_at ctx loc pfx_ty t_string;
+    t_unit
+
+  | ESendEmail { to_; subject; body; loc; _ } ->
+    let to_ty      = infer_expr ctx to_ in
+    unify_at ctx loc to_ty t_string;
+    let subj_ty    = infer_expr ctx subject in
+    unify_at ctx loc subj_ty t_string;
+    let body_ty    = infer_expr ctx body in
+    unify_at ctx loc body_ty (TCon "EmailBody");
+    t_unit
+
+  | EStartEmailWorker { loc = _; _ } ->
+    t_unit
 
   | EConstructor { name; args; loc } ->
     (match resolve_constructor_type ctx name loc with
@@ -1909,6 +2095,11 @@ let rec infer_expr ctx (e : expr) : ty =
     let ctx' = { ctx with env = param_schemes @ ctx.env } in
     let body_ty = infer_expr ctx' body in
     List.fold_right (fun (_, t) acc -> TFun (t, acc)) param_tys body_ty
+  | ERuntimeCall { segments; _ } ->
+    (* Desugar-only node: never present during type-checking (desugar runs
+       AFTER the checker).  Infer children defensively, result is Unit. *)
+    List.iter (function RLit _ -> () | RArg e -> ignore (infer_expr ctx e)) segments;
+    t_unit
   in
   let expr_meta = match binding_meta_of_expr ctx e with Some m -> m | None -> PlainBinding in
   record_expr_type_with_meta ctx (expr_loc e) inferred expr_meta;
@@ -2472,11 +2663,18 @@ let check_func_decl ctx (fd : func_decl) =
     let hover_note = hover_note_for_meta ctx'.subject_chain_env b.name meta in
     record_local_binding ?hover_note ctx' b.name b.loc (ty_of_type_expr b.type_expr) meta
   ) fd.params;
-  (* A fn may use RetAttached only if the proof was already on the matching input parameter.
-     Fabricating a new proof inside a fn body and declaring it in the return type is banned;
-     only check/establish/auth may introduce new proof-carrying return types. *)
+  (* A fn/handler/worker may use RetAttached only if the proof was already on the
+     matching input parameter. Fabricating a new proof inside the body and declaring
+     it in the return type is banned (§7.12 forgery hole); only check/establish/auth
+     may introduce new proof-carrying return types. deadWorker is excluded — its job
+     carries an infrastructure FromDeadQueue proof handled elsewhere. *)
+  let is_forgery_restricted_kind = function
+    | FnKind | HandlerKind | WorkerKind -> true
+    | _ -> false
+  in
   (match fd.kind, fd.return_spec with
-   | FnKind, RetAttached { binding = ret_b; loc; _ } when ret_b.proof_ann <> None ->
+   | k, RetAttached { binding = ret_b; loc; _ }
+     when is_forgery_restricted_kind k && ret_b.proof_ann <> None ->
      let param_has_proof =
        List.exists (fun (b : binding) ->
          b.name = ret_b.name && b.proof_ann <> None
@@ -2515,12 +2713,14 @@ let check_func_decl ctx (fd : func_decl) =
        is_infrastructure_proof || body_returns_named ret_name fd.body
      in
      if not param_has_proof && not body_is_valid_passthrough then
+       let kw = match k with
+         | HandlerKind -> "handler" | WorkerKind -> "worker" | _ -> "plain `fn`" in
        add_error ctx loc
          (Printf.sprintf
-            "plain `fn` cannot declare a proof-carrying return type for `%s` \
+            "%s cannot declare a proof-carrying return type for `%s` \
              unless `%s` was received with that proof on an input parameter; \
              use `check` to validate at a boundary or `establish` to assert an axiom"
-            ret_b.name ret_b.name)
+            kw ret_b.name ret_b.name)
    | _ -> ());
   (* Check that return binding doesn't reuse a parameter name with a different type *)
   (match fd.return_spec with
@@ -2617,12 +2817,9 @@ let check_local_import_names (m : module_form) : type_error list =
       | ImportAll -> []
       | ImportExposing names ->
         let path = resolve_local_import_path m.source_file imp.module_name in
-        if not (Sys.file_exists path) then []
-        else
-          let source = In_channel.with_open_text path In_channel.input_all in
-          (match Parser.parse_module path source with
-           | Err _ -> []
-           | Ok imported ->
+        (match parse_local_import_module path with
+           | None | Some (Err _) -> []
+           | Some (Ok imported) ->
              let exported_adt_names =
                List.fold_left (fun acc -> function
                  | ExportAdt n -> n :: acc
@@ -2697,7 +2894,7 @@ let collect_in_scope_type_names (m : module_form) : string list =
     | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
     | DType (TypeAlias { name; _ }) | DRecord { name; _ }
     | DEntity { name; _ } | DFact { name; _ }
-    | DQueue { name; _ } | DChannel { name; _ } -> Some name
+    | DQueue { name; _ } | DChannel { name; _ } | DCache { name; _ } -> Some name
     | _ -> None
   ) m.decls in
   let imported = List.concat_map (fun (imp : import_decl) ->
@@ -2709,12 +2906,9 @@ let collect_in_scope_type_names (m : module_form) : string list =
          | Some exports -> exports)
       else
         let path = resolve_local_import_path m.source_file imp.module_name in
-        if not (Sys.file_exists path) then []
-        else
-          let source = In_channel.with_open_text path In_channel.input_all in
-          (match Parser.parse_module path source with
-           | Err _ -> []
-           | Ok imp_m ->
+        (match parse_local_import_module path with
+           | None | Some (Err _) -> []
+           | Some (Ok imp_m) ->
              List.filter_map (function
                | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
                | DType (TypeAlias { name; _ }) | DRecord { name; _ }
@@ -2914,6 +3108,7 @@ let collect_proof_predicate_uses (m : module_form) : (string * Location.loc) lis
 (** Map from short module name prefix to canonical Tesl stdlib module name. *)
 let stdlib_module_of_prefix : (string * string) list = [
   ("List",   "Tesl.List");
+  ("ListPrim", "Tesl.ListPrim");
   ("Dict",   "Tesl.Dict");
   ("String", "Tesl.String");
   ("Int",    "Tesl.Int");
@@ -2924,9 +3119,14 @@ let stdlib_module_of_prefix : (string * string) list = [
   ("Tuple3", "Tesl.Tuple");
   ("Time",   "Tesl.Time");
   ("Random", "Tesl.Random");
-  ("Env",    "Tesl.Env");
-  ("Cli",    "Tesl.Cli");
-  ("Id",     "Tesl.Id");
+  ("UUID",       "Tesl.UUID");
+  ("Env",        "Tesl.Env");
+  ("Cli",        "Tesl.Cli");
+  ("Id",         "Tesl.Id");
+  ("JWT",        "Tesl.JWT");
+  ("HttpClient", "Tesl.HttpClient");
+  ("Cache",      "Tesl.Cache");
+  ("Email",      "Tesl.Email");
 ]
 
 (** Collect all qualified stdlib function uses from function/const bodies.
@@ -2970,6 +3170,16 @@ let collect_stdlib_fn_uses (m : module_form) : (string * Location.loc) list =
     | EServe { port; _ } -> walk port
     | EFail { message; _ } -> walk message
     | ELit _ | EVar _ | EStartWorkers _ -> ()
+    | ECacheGet { key; _ } -> walk key
+    | ECacheSet { key; value; ttl; _ } ->
+      walk key; walk value; Option.iter walk ttl
+    | ECacheDelete { key; _ } -> walk key
+    | ECacheInvalidate { prefix; _ } -> walk prefix
+    | ESendEmail { to_; subject; body; _ } ->
+      walk to_; walk subject; walk body
+    | EStartEmailWorker _ -> ()
+    | ERuntimeCall { segments; _ } ->
+      List.iter (function RLit _ -> () | RArg e -> walk e) segments
   in
   List.iter (function
     | DFunc fd -> walk fd.body
@@ -3109,7 +3319,8 @@ let check_api_test_scope ctx (m : module_form) seed_stmts stmts =
   let record_names = List.map fst ctx.records in
   let decl_type_names = List.filter_map (function
     | DQueue { name; _ } | DChannel { name; _ } | DFact { name; _ }
-    | DCapability { name; _ } | DServer { name; _ } -> Some name
+    | DCapability { name; _ } | DServer { name; _ } | DCache { name; _ }
+    | DEmail { name; _ } -> Some name
     | _ -> None
   ) m.decls in
   (* Names explicitly imported from Tesl.* stdlib modules via `exposing [...]`.
@@ -3196,6 +3407,11 @@ let check_api_test_scope ctx (m : module_form) seed_stmts stmts =
     | ELambda { params; body; _ } ->
       let param_names = List.map (fun (b : binding) -> b.name) params in
       check_expr (param_names @ locals) body
+    | ESendEmail { to_; subject; body; _ } ->
+      check_expr locals to_;
+      check_expr locals subject;
+      check_expr locals body
+    | EStartEmailWorker _ -> ()
     | ELit _ -> ()
     | _ -> ()
   in
@@ -3292,7 +3508,8 @@ let check_api_decl_types ctx (m : module_form) =
   in
   let check_type_name_in_scope loc name =
     let known = [ "Unit"; "Bool"; "Int"; "Float"; "String"; "List"; "Maybe";
-                  "Dict"; "Set"; "PosixMillis"; "HttpRequest"; "HttpResponse" ] in
+                  "Dict"; "Set"; "PosixMillis"; "HttpRequest"; "HttpResponse";
+                  "JwtToken"; "JwtSecret" ] in
     if not (List.mem name known || List.mem name known_types) then
       add_error ctx loc (Printf.sprintf "unknown type: %s" name)
   in
@@ -3350,6 +3567,17 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
     proof_returns = collect_proof_returns m.decls;
     function_kinds = collect_func_kinds m.decls @ ctx.function_kinds;
   } in
+
+  (* 3b. Add cache value types as synthetic env bindings "__cache_<Name>" → type *)
+  let ctx =
+    let cache_bindings = List.filter_map (function
+      | DCache (c : Ast.cache_form) ->
+        let ty = ty_of_type_expr c.value_type in
+        Some ("__cache_" ^ c.name, mono ty)
+      | _ -> None
+    ) m.decls in
+    { ctx with env = cache_bindings @ ctx.env }
+  in
 
   (* 4. Type-check each declaration *)
   List.iter (fun decl ->
@@ -3618,7 +3846,21 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
     | _ -> []
   ) m.decls in
 
-  let all_known_names = decl_names @ predicate_names @ List.map fst ctx.ctors in
+  (* Names imported via explicit `exposing [...]` clauses are also valid to re-export.
+     Re-export preserves the original proof predicate identity (it is still owned by
+     the defining module; the re-exporting module just exposes it on its surface). *)
+  let imported_exposed_names =
+    let strip_dotdot s =
+      let n = String.length s in
+      if n > 4 && String.sub s (n-4) 4 = "(..)" then String.sub s 0 (n-4) else s
+    in
+    List.concat_map (fun (imp : import_decl) ->
+      match imp.names with
+      | ImportAll -> []
+      | ImportExposing names -> List.map strip_dotdot names
+    ) m.imports
+  in
+  let all_known_names = decl_names @ predicate_names @ List.map fst ctx.ctors @ imported_exposed_names in
   let seen_exports : (string, Location.loc) Hashtbl.t = Hashtbl.create 16 in
   let export_errors = List.concat_map (fun export ->
     let n = match export with ExportName n | ExportAdt n -> n in

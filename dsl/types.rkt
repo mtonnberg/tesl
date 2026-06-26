@@ -102,8 +102,27 @@
  tesl-json-list-codec
  tesl-json-dict-codec
  tesl-json-set-codec
+ ;; specialized primitive encode/decode helpers (single source of truth;
+ ;; the emitter inlines direct calls to these from per-type codecs)
+ tesl-encode-prim-string
+ tesl-encode-prim-int
+ tesl-encode-prim-bool
+ tesl-encode-prim-float
+ tesl-encode-prim-posix-millis
+ tesl-encode-prim-list
+ tesl-encode-prim-dict
+ tesl-encode-prim-set
+ tesl-decode-prim-string
+ tesl-decode-prim-int
+ tesl-decode-prim-bool
+ tesl-decode-prim-float
+ tesl-decode-prim-posix-millis
+ tesl-decode-prim-list
+ tesl-decode-prim-dict
+ tesl-decode-prim-set
  tesl-codec-encode-field
  tesl-codec-decode-field
+ tesl-decode-prim-field
  (for-syntax normalize-type-stx
              normalize-type-binding-stx
              normalize-type-return-stx))
@@ -1984,58 +2003,74 @@
     [else
      (raise-user-error 'codec "no decoder succeeded for type ~a on JSON: ~a" type-name jsexpr)]))
 
-;; Primitive codec pairs (cons encoder decoder).
+;; ── Specialized primitive codec helpers (compile_time_specialization) ────────
+;; These are the SINGLE SOURCE OF TRUTH for primitive encode/decode behaviour.
+;; The primitive codec PAIRS below are built from them (so the runtime
+;; `tesl-codec-encode-field`/`tesl-codec-decode-field` interpreter path stays
+;; behaviour-identical), AND the emitter inlines DIRECT calls to these from a
+;; type's specialized encoder/decoder — skipping the codec-spec `cond` dispatch
+;; and the indirect `(car/cdr codec-spec)` call.  Inlining a named call and
+;; routing through the registry therefore produce byte-identical jsexpr and
+;; byte-identical error text on every branch by construction.
+;;
+;; NOTE: `error` here treats the first arg as a message PREFIX, not a format
+;; string — `(error "expected String, got ~a" v)` prints "expected String,
+;; got ~a <printed-v>".  This (pre-existing) text is reproduced verbatim.
+
+;; Encoders: raw Tesl value -> jsexpr-compatible (raises on type mismatch).
+(define (tesl-encode-prim-string v)
+  (if (string? (raw-value v)) (raw-value v) (error "expected String, got ~a" v)))
+(define (tesl-encode-prim-int v)
+  (if (integer? (raw-value v)) (raw-value v) (error "expected Int, got ~a" v)))
+(define (tesl-encode-prim-bool v)
+  (if (boolean? (raw-value v)) (raw-value v) (error "expected Bool, got ~a" v)))
+(define (tesl-encode-prim-float v)
+  (if (real? (raw-value v)) (raw-value v) (error "expected Float, got ~a" v)))
+(define (tesl-encode-prim-posix-millis v)
+  (define raw (raw-value v))
+  (if (integer? raw) raw (error "expected PosixMillis (integer), got ~a" v)))
+(define (tesl-encode-prim-list v)
+  (define raw (raw-value v))
+  (if (list? raw) (map runtime-value->jsexpr raw) (error "expected List, got ~a" v)))
+(define (tesl-encode-prim-dict v)
+  (define raw (raw-value v))
+  (if (hash? raw)
+      (for/hash ([(k item) (in-hash raw)]) (values k (runtime-value->jsexpr item)))
+      (error "expected Dict, got ~a" v)))
+(define (tesl-encode-prim-set v)
+  (define raw (raw-value v))
+  (if (set? raw) (map runtime-value->jsexpr (set->list raw)) (error "expected Set, got ~a" v)))
+
+;; Decoders: jsexpr-compatible -> raw value (raises on type mismatch).
+(define (tesl-decode-prim-string j)
+  (if (string? j) j (error "expected JSON string, got ~a" j)))
+(define (tesl-decode-prim-int j)
+  (if (integer? j) j (error "expected JSON integer, got ~a" j)))
+(define (tesl-decode-prim-bool j)
+  (if (boolean? j) j (error "expected JSON boolean, got ~a" j)))
+(define (tesl-decode-prim-float j)
+  (if (real? j) j (error "expected JSON number, got ~a" j)))
+(define (tesl-decode-prim-posix-millis j)
+  (if (integer? j) j (error "expected JSON integer for PosixMillis, got ~a" j)))
+(define (tesl-decode-prim-list j)
+  (if (list? j) j (error "expected JSON array for List, got ~a" j)))
+(define (tesl-decode-prim-dict j)
+  (if (hash? j) j (error "expected JSON object for Dict, got ~a" j)))
+(define (tesl-decode-prim-set j)
+  (if (list? j) (list->set j) (error "expected JSON array for Set, got ~a" j)))
+
+;; Primitive codec pairs (cons encoder decoder) — built from the helpers above
+;; so the interpreter path and the inlined path share one definition.
 ;; encoder: raw Tesl value -> jsexpr-compatible
 ;; decoder: jsexpr-compatible -> raw value (raises on type mismatch)
-(define tesl-json-string-codec
-  (cons (lambda (v) (if (string? (raw-value v)) (raw-value v)
-                        (error "expected String, got ~a" v)))
-        (lambda (j) (if (string? j) j (error "expected JSON string, got ~a" j)))))
-
-(define tesl-json-int-codec
-  (cons (lambda (v) (if (integer? (raw-value v)) (raw-value v)
-                        (error "expected Int, got ~a" v)))
-        (lambda (j) (if (integer? j) j (error "expected JSON integer, got ~a" j)))))
-
-(define tesl-json-bool-codec
-  (cons (lambda (v) (if (boolean? (raw-value v)) (raw-value v)
-                        (error "expected Bool, got ~a" v)))
-        (lambda (j) (if (boolean? j) j (error "expected JSON boolean, got ~a" j)))))
-
-(define tesl-json-float-codec
-  (cons (lambda (v) (if (real? (raw-value v)) (raw-value v)
-                        (error "expected Float, got ~a" v)))
-        (lambda (j) (if (real? j) j (error "expected JSON number, got ~a" j)))))
-
-(define tesl-json-posix-millis-codec
-  (cons (lambda (v)
-          (define raw (raw-value v))
-          (if (integer? raw) raw
-              (error "expected PosixMillis (integer), got ~a" v)))
-        (lambda (j) (if (integer? j) j (error "expected JSON integer for PosixMillis, got ~a" j)))))
-
-(define tesl-json-list-codec
-  (cons (lambda (v)
-          (define raw (raw-value v))
-          (if (list? raw) (map runtime-value->jsexpr raw)
-              (error "expected List, got ~a" v)))
-        (lambda (j) (if (list? j) j (error "expected JSON array for List, got ~a" j)))))
-
-(define tesl-json-dict-codec
-  (cons (lambda (v)
-          (define raw (raw-value v))
-          (if (hash? raw)
-              (for/hash ([(k item) (in-hash raw)])
-                (values k (runtime-value->jsexpr item)))
-              (error "expected Dict, got ~a" v)))
-        (lambda (j) (if (hash? j) j (error "expected JSON object for Dict, got ~a" j)))))
-
-(define tesl-json-set-codec
-  (cons (lambda (v)
-          (define raw (raw-value v))
-          (if (set? raw) (map runtime-value->jsexpr (set->list raw))
-              (error "expected Set, got ~a" v)))
-        (lambda (j) (if (list? j) (list->set j) (error "expected JSON array for Set, got ~a" j)))))
+(define tesl-json-string-codec       (cons tesl-encode-prim-string       tesl-decode-prim-string))
+(define tesl-json-int-codec          (cons tesl-encode-prim-int          tesl-decode-prim-int))
+(define tesl-json-bool-codec         (cons tesl-encode-prim-bool         tesl-decode-prim-bool))
+(define tesl-json-float-codec        (cons tesl-encode-prim-float        tesl-decode-prim-float))
+(define tesl-json-posix-millis-codec (cons tesl-encode-prim-posix-millis tesl-decode-prim-posix-millis))
+(define tesl-json-list-codec         (cons tesl-encode-prim-list         tesl-decode-prim-list))
+(define tesl-json-dict-codec         (cons tesl-encode-prim-dict         tesl-decode-prim-dict))
+(define tesl-json-set-codec          (cons tesl-encode-prim-set          tesl-decode-prim-set))
 
 ;; Encode a single field value using a codec-spec.
 ;; codec-spec: either a primitive (cons encode decode) or a type-name symbol
@@ -2050,18 +2085,41 @@
          (runtime-value->jsexpr value))]
     [else (runtime-value->jsexpr value)]))
 
-;; Decode a field from a JSON object using a codec-spec.
-;; jsexpr: JSON hash  json-key: string  codec-spec: pair or type-name symbol
-(define (tesl-codec-decode-field jsexpr json-key codec-spec)
+;; Look up `json-key` in `jsexpr`, raising the localized 'codec missing-field
+;; error if absent.  SINGLE SOURCE of the missing-field error string, shared by
+;; every decode path (generic primitive, generic user-type, and the emitter's
+;; inlined specialized primitive decoder via tesl-decode-prim-field).
+(define (jsexpr-required-field jsexpr json-key)
   (define raw (jsexpr-object-ref jsexpr json-key 'TESL-MISSING))
   (when (eq? raw 'TESL-MISSING)
     (raise-user-error 'codec "required field \"~a\" not found in JSON" json-key))
+  raw)
+
+;; Decode a PRIMITIVE field from a JSON object: (1) the missing-field check
+;; (the shared localized 'codec error) and (2) the primitive type-mismatch
+;; decode via the supplied `prim-decoder` (one of the `tesl-decode-prim-*`
+;; helpers above).  The type-mismatch error string is owned by `prim-decoder`;
+;; the missing-field string by `jsexpr-required-field`.  The generic
+;; `tesl-codec-decode-field` routes its primitive (pair codec-spec) branch
+;; through here, and the emitter inlines DIRECT calls to this from a type's
+;; specialized decoder — so the inlined path and the generic path produce
+;; byte-identical decoded values AND byte-identical error text on every branch
+;; (missing field, wrong primitive type) by construction.
+(define (tesl-decode-prim-field jsexpr json-key prim-decoder)
+  (prim-decoder (jsexpr-required-field jsexpr json-key)))
+
+;; Decode a field from a JSON object using a codec-spec.
+;; jsexpr: JSON hash  json-key: string  codec-spec: pair or type-name symbol
+(define (tesl-codec-decode-field jsexpr json-key codec-spec)
   (cond
     [(pair? codec-spec)
-     ((cdr codec-spec) raw)]
+     ;; Primitive: missing-field check + type-mismatch decode share ONE
+     ;; definition with the inlined specialized path (tesl-decode-prim-field).
+     (tesl-decode-prim-field jsexpr json-key (cdr codec-spec))]
     [(symbol? codec-spec)
-     (tesl-type-codec-decode codec-spec raw)]
-    [else raw]))
+     (tesl-type-codec-decode codec-spec (jsexpr-required-field jsexpr json-key))]
+    [else
+     (jsexpr-required-field jsexpr json-key)]))
 
 
 (define-adt (Maybe value)

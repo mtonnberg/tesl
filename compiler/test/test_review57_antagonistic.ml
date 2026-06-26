@@ -230,13 +230,13 @@ fn attack(x: Int, y: Int) -> Int =
   requiresPositive <| y ::: pf
 |})
 
-(* R57_CS02: decompose-reattach with wrong predicate — static checker gap
-   The static checker does NOT catch that tp = ValidTag (String proof) being
-   attached to an Int after conjunction decomposition. Runtime checks catch it.
-   This is a known gap: the static checker tracks proof subjects (hidden symbols)
-   but not predicate types through conjunction decompose paths. *)
+(* R57_CS02: decompose-reattach with wrong predicate — NOW STATICALLY REJECTED.
+   Closed by GAP-CONJPROJ: conjunction decomposition now projects each binder to its
+   specific conjunct, so reattaching `tp` (ValidTag) where ValidScore is required no
+   longer type-checks.  (Was a documented static-checker gap caught only at runtime;
+   the proofsuite found it independently as GAP-CONJPROJ.) *)
 let r57_cs02_wrong_pred_via_conj_decompose_static_gap () =
-  should_pass (
+  should_fail "does not statically satisfy" (
     base_header ^ {|
 fact ValidScore (n: Int)
 fact ValidTag (s: String)

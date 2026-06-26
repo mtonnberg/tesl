@@ -1,0 +1,264 @@
+#lang tesl
+module Lesson56Uuid exposing [
+  validateId,
+  describeUuid,
+  uuidLength,
+  hasVersionDigit,
+  checkUuidFormat,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 56 — UUID: Universally Unique Identifiers
+#
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# UUIDs are the standard way to generate collision-resistant identifiers without
+# a central coordinator. Tesl provides Tesl.UUID with:
+#
+#   UUID.v4()        → String  (random UUID; requires [uuid])
+#   UUID.v7()        → String  (time-ordered UUID; requires [uuid])
+#   UUID.validate s  → String  (validated UUID string with IsUuid proof)
+#
+# The `uuid` capability gates generation — functions that call UUID.v4 or
+# UUID.v7 must declare `requires [uuid]` in their signature.
+#
+# UUID.validate is a check function: it returns the string with an IsUuid proof
+# on success (fail 400 on invalid input). Use it at API boundaries to verify
+# that a user-supplied string is a well-formed UUID.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# CHOOSING v4 vs v7
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# UUID v4 — purely random
+#   Use when: you need an opaque ID with no ordering guarantees.
+#   Common for: correlation IDs, idempotency keys, session tokens.
+#   Format: 8-4-4-4-12 hex with "4" in position 13.
+#   Example: a8098c1a-f86e-4f11-8d1c-6e9e14b9d8e2
+#
+# UUID v7 — time-ordered (millisecond precision)
+#   Use when: you are using UUIDs as primary keys in a database.
+#   Why: v7 UUIDs sort lexicographically by creation time, giving B-tree index
+#   locality. New rows cluster near the end of the index instead of fragmenting
+#   it randomly. Result: faster INSERT, fewer page splits, better cache hit rate.
+#   Format: same 8-4-4-4-12; first 48 bits encode the timestamp.
+#   Example: 018e7a30-a1b2-7c3d-8e4f-123456789abc
+#
+# Rule of thumb:
+#   - v7 for entity primary keys (they go into DB indexes)
+#   - v4 for everything else (correlation IDs, nonces, idempotency keys)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# USING UUID IN A HANDLER (with uuid capability)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# To use UUID.v4 or UUID.v7 in your own code, import uuid and add it to your
+# capability's implies list:
+#
+#   import Tesl.UUID exposing [uuid, UUID.v7]
+#   capability myService implies dbWrite, uuid
+#
+#   handler createUser(body: CreateUserRequest)
+#     -> String
+#     requires [myService] =
+#     let userId = UUID.v7()
+#     insert User { id: userId, name: body.name }
+#     userId
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [String, Bool(..), Int]
+import Tesl.UUID exposing [ IsUuid, UUID.validate, ]
+import Tesl.String exposing [String.length, String.slice]
+
+# ── Validating UUIDs at the API boundary ─────────────────────────────────────
+#
+# UUID.validate checks that the string matches the standard UUID format:
+#   ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+#
+# On success: returns the string (annotated with IsUuid proof internally).
+# On failure: fails with status 400 "not a valid UUID".
+#
+# Use UUID.validate in a `check` call at the HTTP boundary, or directly in
+# a function body when you want to fail-fast on bad input.
+
+fn validateId(s: String) -> String =
+  UUID.validate s
+
+# ── Pure UUID helper functions ────────────────────────────────────────────────
+#
+# These are pure data functions: no capability, no effects.
+# Test them directly without any mock or capability setup.
+
+# UUID strings are always exactly 36 characters: 32 hex + 4 hyphens.
+fn uuidLength(s: String) -> Int =
+  String.length s
+
+# The version digit sits at position 14 (0-indexed).
+# Position 14 is the first character after the second hyphen:
+#   550e8400-e29b-41d4-a716-446655440000
+#                   ^ position 14 = '4' (version 4)
+fn hasVersionDigit(s: String, expected: String) -> Bool =
+  String.slice s 14 15 == expected
+
+# Describe a UUID by its version digit.
+fn describeUuid(s: String) -> String =
+  let version = String.slice s 14 15
+  if version == "4" then
+    "UUID v4 (random)"
+  else if version == "7" then
+    "UUID v7 (time-ordered)"
+  else
+    "UUID (unknown version)"
+
+# Simple format check: a UUID is always exactly 36 characters.
+fn checkUuidFormat(s: String) -> Bool =
+  String.length s == 36
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UNDERSTANDING — why these specific choices
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WHY CAPABILITY-GATE GENERATION BUT NOT VALIDATION?
+#
+# UUID.v4 and UUID.v7 call the OS random number generator (crypto-random-bytes).
+# That makes them stateful effects — they read system entropy. Gating them on
+# the `uuid` capability makes this visible in function signatures, just as
+# `time` makes clock access visible.
+#
+# UUID.validate is a pure string-format check. It has no side effects, so it
+# needs no capability. You can call it freely in any context.
+#
+# WHY IsUuid AS A PROOF?
+#
+# IsUuid is a GDP (Ghosts of Departed Proofs) fact. When a function receives
+# a value with the IsUuid proof, the caller must have validated the string
+# through UUID.validate. This prevents bypassing validation — you cannot pass
+# a raw user-supplied string where a validated UUID is expected without going
+# through the check.
+#
+# WHY uuidV4Codec AND uuidV7Codec?
+#
+# These codecs let you use UUID strings as JSON fields in record types. The
+# decoder validates the incoming JSON string as a well-formed UUID; the encoder
+# is the identity (a UUID is already a JSON string). Use them in `fromJson` rules:
+#
+#   record CreateItemRequest { idempotencyKey: String }
+#   codec CreateItemRequest {
+#     fromJson [
+#       { idempotencyKey <- "idempotency_key" with_codec stringCodec }
+#     ]
+#   }
+#
+# WHY NOT sequential integer IDs?
+#
+# Sequential integer IDs leak information (enumeration attacks: GET /user/1,
+# GET /user/2 ...) and require a central sequence generator — a single point
+# of contention in distributed systems. UUIDs eliminate both problems with no
+# coordination overhead.
+#
+# WHY v7 FOR DATABASE PRIMARY KEYS?
+#
+# B-tree indexes (PostgreSQL's default index type) insert new entries at a
+# position determined by the key value. With random (v4) UUIDs as primary keys:
+#   - New rows can go anywhere in the index tree.
+#   - Frequently accessed pages are evicted from the buffer pool by random new pages.
+#   - Page splits are scattered throughout the index → fragmentation.
+#
+# With time-ordered (v7) UUIDs:
+#   - New rows always append near the END of the index (like SERIAL integers).
+#   - Only the last few pages of the index need to be in memory during INSERTs.
+#   - No fragmentation. Much better cache hit rate.
+#
+# v7 gives you all the benefits of a random UUID (no coordination, globally
+# unique, opaque) PLUS B-tree locality. Use it for every entity primary key.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+test "UUID.validate accepts a valid v4 UUID" {
+  let id = "a8098c1a-f86e-4f11-8d1c-6e9e14b9d8e2"
+  let result = validateId id
+  expect result == id
+}
+
+test "UUID.validate accepts a valid v7 UUID" {
+  let id = "018e7a30-a1b2-7c3d-8e4f-123456789abc"
+  let result = validateId id
+  expect result == id
+}
+
+test "UUID.validate accepts all-zeros UUID" {
+  let id = "00000000-0000-0000-0000-000000000000"
+  let result = validateId id
+  expect String.length result == 36
+}
+
+test "UUID.validate accepts uppercase hex UUID" {
+  let id = "A8098C1A-F86E-4F11-8D1C-6E9E14B9D8E2"
+  let result = validateId id
+  expect String.length result == 36
+}
+
+test "UUID.validate rejects plain string" {
+  expectFail (validateId "not-a-uuid")
+}
+
+test "UUID.validate rejects empty string" {
+  expectFail (validateId "")
+}
+
+test "UUID.validate rejects too-short UUID" {
+  expectFail (validateId "a8098c1a-f86e-4f11-8d1c")
+}
+
+test "UUID.validate rejects UUID with extra characters" {
+  expectFail (validateId "a8098c1a-f86e-4f11-8d1c-6e9e14b9d8e2-extra")
+}
+
+test "uuidLength of any UUID is 36" {
+  let v4 = "550e8400-e29b-41d4-a716-446655440000"
+  let v7 = "018e7a30-a1b2-7c3d-8e4f-123456789abc"
+  expect uuidLength v4 == 36
+  expect uuidLength v7 == 36
+}
+
+test "hasVersionDigit detects v4 at position 14" {
+  let v4 = "550e8400-e29b-41d4-a716-446655440000"
+  expect hasVersionDigit v4 "4" == True
+  expect hasVersionDigit v4 "7" == False
+}
+
+test "hasVersionDigit detects v7 at position 14" {
+  let v7 = "018e7a30-a1b2-7c3d-8e4f-123456789abc"
+  expect hasVersionDigit v7 "7" == True
+  expect hasVersionDigit v7 "4" == False
+}
+
+test "describeUuid recognizes v4" {
+  let v4 = "550e8400-e29b-41d4-a716-446655440000"
+  expect describeUuid v4 == "UUID v4 (random)"
+}
+
+test "describeUuid recognizes v7" {
+  let v7 = "018e7a30-a1b2-7c3d-8e4f-123456789abc"
+  expect describeUuid v7 == "UUID v7 (time-ordered)"
+}
+
+test "checkUuidFormat accepts 36-char UUID" {
+  expect checkUuidFormat "550e8400-e29b-41d4-a716-446655440000" == True
+}
+
+test "checkUuidFormat rejects short string" {
+  expect checkUuidFormat "550e8400-e29b-41d4" == False
+}
+
+test "UUID hyphens are at correct positions" {
+  let v4 = "550e8400-e29b-41d4-a716-446655440000"
+  expect String.slice v4 8 9 == "-"
+  expect String.slice v4 13 14 == "-"
+  expect String.slice v4 18 19 == "-"
+  expect String.slice v4 23 24 == "-"
+}

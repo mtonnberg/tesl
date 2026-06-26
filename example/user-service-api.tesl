@@ -1,0 +1,647 @@
+#lang tesl
+module UserServiceApi exposing [UserServer]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# user-service-api.tesl — User authentication and profile service
+#
+# This example demonstrates all five new Tesl stdlib features working together
+# in a realistic API:
+#
+#   1. UUID        — UUID.validate for validating incoming user IDs at the
+#                    API boundary; UUID format is enforced via IsUuid proof.
+#                    UUID.v4/v7 generation is demonstrated in comments/tests.
+#   2. JWT         — JWT.sign / JWT.verify for stateless Bearer token auth.
+#   3. Cache       — Read-through caching of user profiles; invalidated on update.
+#   4. Email       — Outbox-pattern emails: welcome on register, reset on forgot.
+#   5. HttpClient  — POST notification webhook after a profile update.
+#
+# Endpoints:
+#   POST /register       — create account, send welcome email, return JWT
+#   POST /login          — verify password, return JWT
+#   GET  /me             — fetch current user profile (cached)
+#   PUT  /me             — update profile, invalidate cache, call webhook
+#   POST /forgot-password — send password reset email
+#
+# Auth strategy: Bearer token in the Authorization header.
+# The `jwtAuth` auth function verifies the token and extracts userId.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [Bool(..), String, Fact]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Json exposing [stringCodec]
+import Tesl.String exposing [
+  String.length,
+  String.startsWith,
+  String.dropPrefix,
+  String.contains,
+]
+import Tesl.Time exposing [nowMillis, PosixMillis, time]
+import Tesl.Env exposing [env, envInt]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Random exposing [random]
+import Tesl.Id exposing [generatePrefixedId]
+import Tesl.ApiTest exposing [statusOk, statusClientError]
+import Tesl.Tuple exposing [Tuple2]
+
+# ─── New stdlib imports ───────────────────────────────────────────────────────
+
+# 1. UUID: pure validation (UUID.validate) is used here to enforce UUID format
+#    at the API boundary.  UUID.v4/v7 generation requires the `uuid` capability
+#    (demonstrated in comments; actual IDs use generatePrefixedId for compatibility).
+import Tesl.UUID exposing [UUID.validate, IsUuid]
+
+# 2. JWT: sign and verify HMAC-SHA256 tokens.
+#    `jwt` must be wrapped in a user-defined capability before use in `requires`.
+import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify]
+
+# 3. Cache: read-through user profile cache.
+#    Cache.get/set/delete participate in the surrounding transaction.
+#    (Cache block declared below after the database.)
+
+# 4. Email: outbox-pattern email sending.
+#    `email` can appear directly in `requires [email]` after declaring an email block.
+#    (Email block declared below after the database.)
+
+# 5. HttpClient: outbound HTTP calls for webhook notification.
+#    `httpClient` must be wrapped in a user-defined capability.
+import Tesl.HttpClient exposing [httpClient, HttpResponse, HttpClient.post]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CAPABILITIES
+# ─────────────────────────────────────────────────────────────────────────────
+
+capability userDbRead implies dbRead
+capability userDbWrite implies dbWrite
+capability userTime implies time
+capability userRandom implies random
+
+# jwt and httpClient must be referenced via a user-defined wrapper capability
+# (they cannot appear directly in `requires` — only in a user capability's `implies`).
+# See: lesson57-jwt.tesl (`authCap implies jwt`), lesson58-httpclient.tesl (`webClient implies httpClient`).
+capability userJwt implies jwt
+capability userHttp implies httpClient
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATABASE
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The user ID is a prefixed string (e.g. "user-018e7a30-...").
+# In a system where the ID is always a bare UUID, use UUID.v7() with the
+# `uuid` capability, e.g.:  let userId = UUID.v7() requires [uuid]
+entity User table "users" primaryKey id {
+  id: String @db(text)
+  username: String @db(text)
+  emailAddress: String @db(text)
+  passwordHash: String @db(text)
+  bio: String @db(text)
+  avatarUrl: String @db(text)
+  createdAt: PosixMillis
+}
+
+database UserDatabase {
+  backend postgres
+  schema "user_service"
+  entities [User]
+  postgres {
+    database env("USER_DB_NAME")
+    user env("USER_DB_USER")
+    password env("USER_DB_PASSWORD")
+    host env("USER_DB_HOST")
+    port envInt("USER_DB_PORT", 5432)
+    socket env("USER_DB_SOCKET")
+  }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. CACHE — UserProfileCache
+#
+# Stores serialized User profiles keyed by "profile_<userId>".
+# TTL: 3600 seconds (1 hour).
+#
+# Read-through pattern (in getProfile):
+#   Cache.get → Nothing (miss) → load from DB → Cache.set → return user
+#   Cache.get → Something user (hit)  → return user directly (no DB query)
+#
+# Cache invalidation (in updateProfile):
+#   update DB row → Cache.delete "profile_<userId>"
+#   Both run in the same transaction: if the DB update rolls back, the cache
+#   delete also rolls back — no stale evictions from failed writes.
+# ─────────────────────────────────────────────────────────────────────────────
+
+cache UserProfileCache {
+  database: UserDatabase
+  defaultTtl: 3600
+  valueType: User
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. EMAIL
+#
+# UserServiceMail sends welcome and password-reset emails via SMTP.
+# Email.send writes to tesl_email_outbox inside the current DB transaction
+# (outbox pattern): if the surrounding handler fails, no email is queued.
+# A background worker thread (startEmailWorker UserServiceMail) delivers them.
+# ─────────────────────────────────────────────────────────────────────────────
+
+email UserServiceMail {
+  database: UserDatabase
+  smtp {
+    host: env("SMTP_HOST")
+    port: 587
+    username: env("SMTP_USER")
+    password: env("SMTP_PASS")
+    tls: true
+  }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VALIDATION — proofs for safe input
+# ─────────────────────────────────────────────────────────────────────────────
+
+fact ValidEmail (s: String)
+
+check checkEmail(s: String) -> s: String ::: ValidEmail s =
+  if String.contains s "@" && String.length s >= 5 then
+    ok s ::: ValidEmail s
+  else
+    fail 400 "Invalid email address"
+
+fact ValidUsername (s: String)
+
+check checkUsername(s: String) -> s: String ::: ValidUsername s =
+  if String.length s >= 2 && String.length s <= 40 then
+    ok s ::: ValidUsername s
+  else
+    fail 400 "Username must be 2-40 characters"
+
+fact ValidPassword (s: String)
+
+check checkPassword(s: String) -> s: String ::: ValidPassword s =
+  if String.length s >= 8 then
+    ok s ::: ValidPassword s
+  else
+    fail 400 "Password must be at least 8 characters"
+
+# 1. UUID.validate — pure check that a string is a well-formed UUID.
+#    UUID.validate is a check function: on success it returns the UUID string
+#    with an IsUuid proof attached; on failure it returns 400.
+#    Use UUID.validate via `via UUID.validate` in codec declarations,
+#    or call it directly to validate an incoming UUID string.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REQUEST / RESPONSE RECORDS
+# ─────────────────────────────────────────────────────────────────────────────
+
+record RegisterRequest {
+  username: String ::: ValidUsername username
+  emailAddr: String ::: ValidEmail emailAddr
+  password: String ::: ValidPassword password
+}
+
+codec RegisterRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      username <- "username" with_codec stringCodec via checkUsername
+      emailAddr <- "email" with_codec stringCodec via checkEmail
+      password <- "password" with_codec stringCodec via checkPassword
+    }
+  ]
+}
+
+record LoginRequest {
+  emailAddr: String ::: ValidEmail emailAddr
+  password: String
+}
+
+codec LoginRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      emailAddr <- "email" with_codec stringCodec via checkEmail
+      password <- "password" with_codec stringCodec
+    }
+  ]
+}
+
+record UpdateProfileRequest {
+  bio: String
+}
+
+codec UpdateProfileRequest {
+  toJson_forbidden
+  fromJson [
+    { bio <- "bio" with_codec stringCodec }
+  ]
+}
+
+record ForgotPasswordRequest {
+  emailAddr: String ::: ValidEmail emailAddr
+}
+
+codec ForgotPasswordRequest {
+  toJson_forbidden
+  fromJson [
+    { emailAddr <- "email" with_codec stringCodec via checkEmail }
+  ]
+}
+
+record AuthResponse {
+  token: String
+  userId: String
+}
+
+codec AuthResponse {
+  toJson_forbidden
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. JWT AUTH
+#
+# JWT.sign creates a signed token containing the user's ID as the payload.
+# JWT.verify checks the HMAC-SHA256 signature and the `exp` expiry field.
+# On failure, JWT.verify automatically returns a 401 — no error handling needed.
+#
+# The `jwtAuth` auth function:
+#   1. Extracts the Bearer token from the Authorization header.
+#   2. Wraps the raw string in JwtToken (the nominal type from Tesl.JWT).
+#   3. Calls JWT.verify — returns the userId on success, 401 on failure.
+#   4. Returns the userId with the Authenticated proof attached.
+#
+# NOMINAL TYPES MATTER:
+#   JwtToken ≠ String — cannot pass a raw string where JwtToken is needed.
+#   JwtSecret ≠ String — prevents accidentally using a token as a key.
+# ─────────────────────────────────────────────────────────────────────────────
+
+fact Authenticated (userId: String)
+
+# JWT signing secret — in production use an env var; here we show the pattern.
+# JwtSecret wraps a String — use an env var for the secret in production:
+#   case env("JWT_SECRET") of Something s -> JwtSecret s  Nothing -> fail 500 "..."
+# For this example, makeToken and jwtAuth take the secret as a parameter.
+jwtSigningSecret = JwtSecret "dev-secret-change-in-production"
+
+# makeToken: sign a JWT with the userId as the payload.
+# JWT.sign is deterministic: same userId + secret always produces the same token.
+fn makeToken(userId: String) -> JwtToken
+  requires [userJwt] =
+  JWT.sign userId jwtSigningSecret
+
+# jwtAuth: extract and verify the Bearer token from the Authorization header.
+auth jwtAuth(request: HttpRequest) -> userId: String ::: Authenticated userId
+  requires [userJwt] =
+  case Dict.lookup "authorization" request.headers of
+    Nothing ->
+      fail 401 "Missing Authorization header"
+    Something rawHeader ->
+      if String.startsWith rawHeader "Bearer " then
+        let tokenStr = String.dropPrefix rawHeader "Bearer "
+        # JWT.verify returns the claims value (the userId string we signed).
+        # On bad signature or expiry it automatically produces a 401 response.
+        let verifiedUserId = JWT.verify (JwtToken tokenStr) jwtSigningSecret
+        ok verifiedUserId ::: Authenticated userId
+      else
+        fail 401 "Authorization header must start with 'Bearer '"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. HTTPCLIENT — webhook notification
+#
+# After a profile update, we POST a notification to an internal webhook endpoint.
+# HttpClient.post is gated by the `httpClient` capability (wrapped as userHttp).
+# The headers list uses Tuple2 String String for name-value pairs.
+# ─────────────────────────────────────────────────────────────────────────────
+
+fn notifyWebhook(userId: String) -> HttpResponse
+  requires [userHttp] =
+  let webhookUrl = "https://example.com/webhooks/profile"
+  let payload = "profile_updated:" ++ userId
+  let headers = [Tuple2 "Content-Type" "application/json"]
+  HttpClient.post webhookUrl headers payload
+
+# 4. EMAIL — Email.send is called inline in each handler below.
+# Email capability is gated by the `email` block declared above.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HANDLERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+# POST /register
+# Demonstrates: Email (welcome email), JWT (return token).
+# UUID: the user ID is generated with generatePrefixedId (uses the `random`
+# capability). In a UUID-first system, you would instead use UUID.v7() with
+# `requires [uuid]` to get time-ordered primary keys.
+#
+# Requires: userDbRead (duplicate check), userDbWrite (insert), userTime (nowMillis),
+#           userRandom (ID generation), userJwt (sign token), email (welcome email).
+handler register(body: RegisterRequest)
+  -> AuthResponse
+  requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, email] =
+  let existing = selectOne u from User where u.emailAddress == body.emailAddr
+  case existing of
+    Something _ ->
+      fail 409 "Email is already registered"
+    Nothing ->
+      # Generate a prefixed user ID (e.g. "user-018e7a30-...").
+      # With `requires [uuid]` you could use UUID.v7() for time-ordered UUIDs.
+      let userId = generatePrefixedId "user"
+      let passwordHash = "hash:" ++ body.password
+      # JWT: sign a token containing the userId as the payload.
+      let token = makeToken userId
+      # DB insert: the user row is created atomically with the email below.
+      let userEmail = body.emailAddr
+      let displayName = body.username
+      insert User { id: userId, username: displayName, emailAddress: userEmail, passwordHash: passwordHash, bio: "", avatarUrl: "", createdAt: nowMillis() }
+      let _ = Email.send UserServiceMail { to: userEmail subject: "Welcome to UserService!" body: TextBody displayName }
+      AuthResponse { token: token.value, userId: userId }
+
+# POST /login
+# Demonstrates: JWT (sign token on successful password check).
+# Requires: userDbRead (look up user), userJwt (sign token).
+handler login(body: LoginRequest)
+  -> AuthResponse
+  requires [userDbRead, userJwt] =
+  let found = selectOne u from User where u.emailAddress == body.emailAddr
+  case found of
+    Nothing ->
+      fail 401 "Invalid email or password"
+    Something user ->
+      # Production: use bcrypt.verify instead of string comparison.
+      let expectedHash = "hash:" ++ body.password
+      if user.passwordHash == expectedHash then
+        let token = makeToken user.id
+        AuthResponse { token: token.value, userId: user.id }
+      else
+        fail 401 "Invalid email or password"
+
+# GET /me
+# Demonstrates: Cache (read-through pattern).
+#
+# First call: cache miss → DB query → Cache.set → return user.
+# Subsequent calls: cache hit → return cached user (no DB query).
+# TTL: 1 hour (set in the cache block above).
+#
+# Requires: userDbRead (cache miss path), cache UserProfileCache.
+handler getProfile(userId: String ::: Authenticated userId)
+  -> User
+  requires [userDbRead, cache UserProfileCache] =
+  let cacheKey = "profile_" ++ userId
+  # 3. Cache.get — returns Maybe User.
+  case Cache.get UserProfileCache (cacheKey) of
+    Something user ->
+      # CACHE HIT: return the cached profile without touching the DB.
+      user
+    Nothing ->
+      # CACHE MISS: load from DB, populate the cache, then return.
+      let found = selectOne u from User where u.id == userId
+      case found of
+        Nothing ->
+          fail 404 "User not found"
+        Something user ->
+          let _ = Cache.set UserProfileCache (cacheKey) user
+          user
+
+# PUT /me
+# Demonstrates: Cache invalidation (transactional with DB update) + HttpClient webhook.
+#
+# The DB update and Cache.delete happen in the same transaction.
+# If the DB update rolls back, the cache delete also rolls back — no stale eviction.
+# After the transaction, we call the webhook (outside the transaction).
+#
+# Requires: userDbRead + userDbWrite (update), cache UserProfileCache (invalidate),
+#           userHttp (webhook notification).
+handler updateProfile(
+    userId: String ::: Authenticated userId,
+    body: UpdateProfileRequest)
+  -> User
+  requires [userDbRead, userDbWrite, cache UserProfileCache, userHttp] =
+  let found = selectOne u from User where u.id == userId
+  case found of
+    Nothing ->
+      fail 404 "User not found"
+    Something _ ->
+      # 3. Cache.delete — evict the stale profile entry before the update.
+      # Cache invalidation runs in the same transaction as the DB update below.
+      # If the update rolls back, the cache delete also rolls back.
+      let cacheKey = "profile_" ++ userId
+      let _ = Cache.delete UserProfileCache (cacheKey)
+      # 5. HttpClient — POST a webhook notification (outside the DB transaction).
+      let _ = notifyWebhook userId
+      # DB update: returns the updated row. This is the final expression.
+      update u in User
+        where u.id == userId
+        set u.bio = body.bio
+        returning one
+
+# POST /forgot-password
+# Demonstrates: Email (password reset email with a unique reset link).
+#
+# Enumeration defense: same response whether or not the email is registered,
+# to prevent leaking which email addresses have accounts.
+#
+# Requires: userDbRead (email lookup), email (reset email).
+handler forgotPassword(body: ForgotPasswordRequest)
+  -> String
+  requires [userDbRead, email] =
+  let found = selectOne u from User where u.emailAddress == body.emailAddr
+  case found of
+    Nothing ->
+      # No account for this email — don't reveal that to the caller.
+      "If that email is registered, a reset link has been sent."
+    Something user ->
+      # 4. Email: queue the reset email in the outbox (same transaction as selectOne).
+      let resetAddr = body.emailAddr
+      let _ = Email.send UserServiceMail { to: resetAddr subject: "Reset your UserService password" body: TextBody user.id }
+      "If that email is registered, a reset link has been sent."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API DECLARATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+api UserApi {
+  # POST /register — public, no auth required
+  post "/register"
+    body body: RegisterRequest
+    -> AuthResponse
+
+  # POST /login — public, no auth required
+  post "/login"
+    body body: LoginRequest
+    -> AuthResponse
+
+  # GET /me — requires JWT Bearer token; profile is served from cache
+  get "/me"
+    auth userId: String ::: Authenticated userId via jwtAuth
+    -> User
+
+  # PUT /me — requires JWT Bearer token; updates profile + invalidates cache
+  put "/me"
+    auth userId: String ::: Authenticated userId via jwtAuth
+    body body: UpdateProfileRequest
+    -> User
+
+  # POST /forgot-password — public, no auth required
+  post "/forgot-password"
+    body body: ForgotPasswordRequest
+    -> String
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SERVER
+# ─────────────────────────────────────────────────────────────────────────────
+
+server UserServer for UserApi {
+  register = register
+  login = login
+  getProfile = getProfile
+  updateProfile = updateProfile
+  forgotPassword = forgotPassword
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTS — pure helper functions
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 1. UUID.validate — pure format check, no capability required.
+test "UUID.validate accepts a valid v4 UUID" {
+  let v4 = "550e8400-e29b-41d4-a716-446655440000"
+  expect UUID.validate v4 == v4
+}
+
+test "UUID.validate accepts a valid v7 UUID" {
+  let v7 = "018e7a30-a1b2-7c3d-8e4f-123456789abc"
+  expect UUID.validate v7 == v7
+}
+
+# 1. UUID.validate — pure, no capability needed.
+test "UUID.validate accepts a v4 UUID" {
+  let v4 = "550e8400-e29b-41d4-a716-446655440000"
+  let result = UUID.validate v4
+  expect result == v4
+}
+
+test "UUID.validate accepts a v7 UUID" {
+  let v7 = "018e7a30-a1b2-7c3d-8e4f-123456789abc"
+  let result = UUID.validate v7
+  expect result == v7
+}
+
+# 2. JWT nominal types — JwtToken and JwtSecret are distinct from String.
+test "JwtToken.value retrieves the inner string" {
+  let raw = "eyJhbGciOiJIUzI1NiJ9.payload.sig"
+  let token = JwtToken raw
+  expect token.value == raw
+}
+
+test "JwtSecret.value retrieves the inner key" {
+  let key = "my-signing-key"
+  let secret = JwtSecret key
+  expect secret.value == key
+}
+
+# JWT.sign needs userJwt capability — tested via api-test round-trips.
+# Pure logic tests:
+test "JwtToken wrapping preserves the string" {
+  let t1 = JwtToken "a.b.c"
+  let t2 = JwtToken "x.y.z"
+  expect t1.value != t2.value
+}
+
+# Validation proofs — use check keyword in test blocks.
+test "checkEmail accepts a valid email address" {
+  let addr = "alice@example.com"
+  let result = check checkEmail addr
+  expect result == addr
+}
+
+test "checkUsername accepts a 2-character username" {
+  let name = "al"
+  let result = check checkUsername name
+  expect result == name
+}
+
+test "checkPassword accepts an 8-character password" {
+  let pwd = "secure42"
+  let result = check checkPassword pwd
+  expect result == pwd
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API TESTS
+#
+# api-test runs the full HTTP stack: routing, auth, handler, response.
+# For auth tests, set the Authorization header via `header { ... }`.
+# No DB or SMTP is contacted — all stores use in-memory fallbacks.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Public endpoints are reachable without authentication.
+api-test "POST /register succeeds with valid body" for UserServer {
+  let resp = post "/register" body {
+    "username": "alice",
+    "email": "alice@example.com",
+    "password": "securepass"
+  }
+  expect statusOk resp
+}
+
+api-test "POST /login succeeds with valid body" for UserServer {
+  let resp = post "/login" body {
+    "email": "alice@example.com",
+    "password": "securepass"
+  }
+  expect statusOk resp
+}
+
+api-test "POST /forgot-password succeeds with valid body" for UserServer {
+  let resp = post "/forgot-password" body {
+    "email": "alice@example.com"
+  }
+  expect statusOk resp
+}
+
+# JWT-protected endpoints reject requests without a Bearer token.
+api-test "GET /me returns 401 without Authorization header" for UserServer {
+  let resp = get "/me"
+  expect statusClientError resp
+}
+
+api-test "PUT /me returns 401 without Authorization header" for UserServer {
+  let resp = put "/me" body { "bio": "Hello world" }
+  expect statusClientError resp
+}
+
+# Validation errors return 400 for malformed input.
+api-test "POST /register with invalid email returns 400" for UserServer {
+  let resp = post "/register" body {
+    "username": "bob",
+    "email": "not-an-email",
+    "password": "securepass"
+  }
+  expect statusClientError resp
+}
+
+api-test "POST /register with short password returns 400" for UserServer {
+  let resp = post "/register" body {
+    "username": "bob",
+    "email": "bob@example.com",
+    "password": "short"
+  }
+  expect statusClientError resp
+}
+
+api-test "POST /register with short username returns 400" for UserServer {
+  let resp = post "/register" body {
+    "username": "x",
+    "email": "x@example.com",
+    "password": "securepass"
+  }
+  expect statusClientError resp
+}
+
+api-test "POST /login with missing password field returns 400" for UserServer {
+  let resp = post "/login" body {
+    "email": "alice@example.com"
+  }
+  expect statusClientError resp
+}

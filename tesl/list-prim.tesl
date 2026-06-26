@@ -1,0 +1,36 @@
+#lang tesl
+# ─────────────────────────────────────────────────────────────────────────────
+# Tesl.ListPrim — TYPE SOURCE OF TRUTH for the irreducible List LEAF primitives.
+#
+# These three leaves are the deconstruction/reconstruction primitives that pure
+# Tesl cannot express (no car/cdr/cons, no `[h | t]` patterns).  Their RUNTIME
+# lives in `tesl/list-prim.rkt`; the DERIVED combinators in `tesl/list.tesl`
+# import them to build map/filter/sum/… in real Tesl.
+#
+# The bodies below are trivial stubs that exist only so this module type-checks
+# — they are never emitted for user code (emission is decoupled, keyed on the
+# collection-path table, exactly like tesl/list.tesl).
+#
+# Type-variable name `a` is chosen so decl_scheme's alphabetical rigid-id
+# assignment reproduces the historical stdlib rows for List.head/tail/append,
+# keeping inferred-type display byte-identical.
+# ─────────────────────────────────────────────────────────────────────────────
+module ListPrim exposing [
+  head,
+  tail,
+  append,
+]
+
+import Tesl.Prelude exposing [List]
+import Tesl.Maybe exposing [Maybe, Something, Nothing]
+
+fn head(xs: List a) -> Maybe a =
+  Nothing
+
+fn tail(xs: List a) -> Maybe (List a) =
+  case head xs of
+    Nothing -> Nothing
+    Something _ -> Nothing
+
+fn append(xs: List a, ys: List a) -> List a =
+  ys

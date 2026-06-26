@@ -8,6 +8,7 @@
   tesl/dsl/sql
   tesl/dsl/web
   tesl/dsl/test-support
+  tesl/dsl/debug/checkpoint
   tesl/tesl/private/runtime
   tesl/tesl/queue
   tesl/tesl/sse
@@ -30,12 +31,12 @@
             [(check-ok? v) (loop (check-ok-value v))]
             [else v])))
   (define _fields (record-value-fields _raw))
-  (hash 'name (tesl-codec-encode-field (raw-value (hash-ref _fields 'name)) tesl-json-string-codec)
-        'message (tesl-codec-encode-field (raw-value (hash-ref _fields 'message)) tesl-json-string-codec)
+  (hash 'name (tesl-encode-prim-string (raw-value (hash-ref _fields 'name)))
+        'message (tesl-encode-prim-string (raw-value (hash-ref _fields 'message)))
   ))
 (define (tesl-codec-decode-Greeting-0 _j)
-  (define _f_name (tesl-codec-decode-field _j "name" tesl-json-string-codec))
-  (define _f_message (tesl-codec-decode-field _j "message" tesl-json-string-codec))
+  (define _f_name (tesl-decode-prim-field _j "name" tesl-decode-prim-string))
+  (define _f_message (tesl-decode-prim-field _j "message" tesl-decode-prim-string))
   (record-value 'Greeting (hash 'name _f_name 'message _f_message)))
 (register-type-codec! 'Greeting tesl-codec-encode-Greeting (list tesl-codec-decode-Greeting-0))
 
@@ -62,13 +63,13 @@
 (define-handler
   (greet [g : Greeting])
   #:returns Greeting
-  (Greeting #:name (raw-value g.name) #:message (format "Hello, ~a!" (tesl-display-val (raw-value g.name)))))
+  (thsl-src! "example/learn/lesson41-load-tests.tesl" 59 (list (cons 'g *g)) (lambda () (Greeting #:name (raw-value g.name) #:message (format "Hello, ~a!" (tesl-display-val (raw-value g.name)))))))
 
 (define-handler
   (listBooks)
   #:capabilities [dbRead]
   #:returns (List Book)
-  (select-many (from Book)))
+  (thsl-src! "example/learn/lesson41-load-tests.tesl" 63 (list) (lambda () (select-many (from Book)))))
 
 (define Lesson41Server-sse-routes '())
 (define-api Lesson41Api

@@ -57,10 +57,16 @@ fn processRequestWithSpan(userId: String, requestCount: Int) -> String requires 
   telemetry "batch.process" { user.id = userId, count = requestCount, timestamp = Time.posixToSeconds(nowMillis()) }
   result
 
+fn foo() -> String =
+  let x = "my-service"
+  let y = 1
+  x
+
 main {
+  let x = foo()
   # initTelemetry sets up the OpenTelemetry exporter.
   # "endpoint" is the OTLP endpoint URL, or "in-memory" for local testing.
   # "console True" also prints spans to stdout.
-  initTelemetry service "my-service" endpoint "in-memory" console True
+  initTelemetry service x endpoint "in-memory" console True
   # now any telemetry calls in function bodies will emit spans
 }

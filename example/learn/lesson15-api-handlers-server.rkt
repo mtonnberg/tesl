@@ -8,6 +8,7 @@
   tesl/dsl/sql
   tesl/dsl/web
   tesl/dsl/test-support
+  tesl/dsl/debug/checkpoint
   tesl/tesl/private/runtime
   tesl/tesl/queue
   tesl/tesl/sse
@@ -43,8 +44,8 @@
 (define (tesl-codec-encode-NewTask _v)
   (error "toJson is forbidden for type NewTask: this type cannot be JSON-encoded"))
 (define (tesl-codec-decode-NewTask-0 _j)
-  (define _f_title (tesl-codec-decode-field _j "title" tesl-json-string-codec))
-  (define _f_priority (tesl-codec-decode-field _j "priority" tesl-json-int-codec))
+  (define _f_title (tesl-decode-prim-field _j "title" tesl-decode-prim-string))
+  (define _f_priority (tesl-decode-prim-field _j "priority" tesl-decode-prim-int))
   (record-value 'NewTask (hash 'title _f_title 'priority _f_priority)))
 (register-type-codec! 'NewTask tesl-codec-encode-NewTask (list tesl-codec-decode-NewTask-0))
 
@@ -55,22 +56,22 @@
             [(check-ok? v) (loop (check-ok-value v))]
             [else v])))
   (define _fields (record-value-fields _raw))
-  (hash 'id (tesl-codec-encode-field (raw-value (hash-ref _fields 'id)) tesl-json-string-codec)
-        'title (tesl-codec-encode-field (raw-value (hash-ref _fields 'title)) tesl-json-string-codec)
-        'priority (tesl-codec-encode-field (raw-value (hash-ref _fields 'priority)) tesl-json-int-codec)
-        'done (tesl-codec-encode-field (raw-value (hash-ref _fields 'done)) tesl-json-bool-codec)
+  (hash 'id (tesl-encode-prim-string (raw-value (hash-ref _fields 'id)))
+        'title (tesl-encode-prim-string (raw-value (hash-ref _fields 'title)))
+        'priority (tesl-encode-prim-int (raw-value (hash-ref _fields 'priority)))
+        'done (tesl-encode-prim-bool (raw-value (hash-ref _fields 'done)))
   ))
 (register-type-codec! 'Task tesl-codec-encode-Task (list ))
 
 (define-checker
   (validatePriority [p : Integer])
   #:returns [p : Integer ::: (ValidPriority p)]
-  (if (and (>= *p 1) (<= *p 5)) (accept (ValidPriority p) #:value *p) (reject "priority must be 1-5" #:http-code 400)))
+  (thsl-src! "example/learn/lesson15-api-handlers-server.tesl" 76 (list (cons 'p *p)) (lambda () (if (and (>= *p 1) (<= *p 5)) (accept (ValidPriority p) #:value *p) (reject "priority must be 1-5" #:http-code 400)))))
 
 (define-auther
   (cookieAuth [request : HttpRequest])
   #:returns [user : String ::: (Authenticated user)]
-  (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (reject "not authenticated" #:http-code 401)] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (accept (Authenticated userId) #:value *userId))])))
+  (thsl-src! "example/learn/lesson15-api-handlers-server.tesl" 89 (list (cons 'request *request)) (lambda () (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (reject "not authenticated" #:http-code 401)] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (accept (Authenticated userId) #:value *userId))])))))
 
 (define-capture taskIdCapture
   [id : String]
@@ -80,13 +81,13 @@
   (createTask [user : String ::: (Authenticated user)] [body : NewTask])
   #:capabilities [taskDbWrite]
   #:returns Task
-  (Task #:id "task-1" #:title (raw-value body.title) #:priority (raw-value body.priority) #:done #f))
+  (thsl-src! "example/learn/lesson15-api-handlers-server.tesl" 107 (list (cons 'user *user) (cons 'body *body)) (lambda () (Task #:id "task-1" #:title (raw-value body.title) #:priority (raw-value body.priority) #:done #f))))
 
 (define-handler
   (getTask [user : String ::: (Authenticated user)] [id : String])
   #:capabilities [taskDbRead]
   #:returns (Maybe Task)
-  (raw-value (Something (Task #:id *id #:title "example task" #:priority 3 #:done #f))))
+  (thsl-src! "example/learn/lesson15-api-handlers-server.tesl" 115 (list (cons 'user *user) (cons 'id *id)) (lambda () (raw-value (Something (Task #:id *id #:title "example task" #:priority 3 #:done #f))))))
 
 (define TaskServer-sse-routes '())
 (define-api TaskApi

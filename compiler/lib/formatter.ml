@@ -4,6 +4,8 @@
       - Tabs replaced with 2 spaces
       - Trailing whitespace stripped
       - Consecutive blank lines collapsed to a single blank line
+      - Leading and trailing blank lines removed (file never starts or
+        ends with a blank line)
       - File ends with exactly one newline
 
     Phase 2 -- Token-aware formatting (string/comment-safe):
@@ -17,6 +19,10 @@
       - Comma spacing: comma followed by space
       - Type annotation colon: name:Type becomes name: Type
       - Import header: exposing followed by bracket gets a space
+      - Exposing lists: canonicalised to "[a, b, c]" (no inner padding,
+        no stray/trailing commas); split onto one item per line, with a
+        trailing comma, only when the single-line form exceeds the max
+        width
 
     Preserved:
       - Indentation (leading whitespace is never changed)
@@ -75,12 +81,15 @@ let cleanup_lines (src : string) : string list =
       else (line :: acc, is_blank)
     ) fixed ([], false) |> fst
   in
-  let rev = List.rev collapsed in
+  (* Drop blank lines from the front of a list. *)
   let rec drop = function
     | [] -> []
     | x :: rest -> if String.trim x = "" then drop rest else x :: rest
   in
-  List.rev (drop rev)
+  (* Strip leading blank lines, then trailing blank lines. A formatted file
+     never starts or ends with a blank line; internal runs were already
+     collapsed to a single blank above. *)
+  collapsed |> drop |> List.rev |> drop |> List.rev
 
 (* ── Phase 2: Token-aware formatting ─────────────────────────────────── *)
 
@@ -634,30 +643,38 @@ let reflow_exposing_lists ?(max_len = 80) (lines : string list) : string list =
         ) full;
         Buffer.contents buf
       in
-      if String.length normalised <= max_len then
-        (* Fits on one line — emit the normalised single-line form *)
-        result := normalised :: !result
+      (* Extract: prefix = "module/import Foo exposing [", names = the
+         comma-separated exported items, then a closing "]". Parsing the
+         names once lets BOTH the single-line and the multi-line branch emit
+         a canonical form — no inner padding, no stray/trailing commas. This
+         is what makes the two paths agree (and stay idempotent). *)
+      let open_bracket = String.index normalised '[' in
+      let prefix = String.sub normalised 0 (open_bracket + 1) in
+      let rest_s = String.sub normalised (open_bracket + 1)
+                     (String.length normalised - open_bracket - 1) in
+      (* Strip trailing "]" *)
+      let inner = String.trim rest_s in
+      let inner =
+        if String.length inner > 0 && inner.[String.length inner - 1] = ']' then
+          String.sub inner 0 (String.length inner - 1) |> String.trim
+        else inner
+      in
+      (* Split on commas (exposing names never nest) and drop empties so that
+         trailing, leading, or doubled commas are normalised away. *)
+      let names = String.split_on_char ',' inner
+                  |> List.map String.trim
+                  |> List.filter (fun s -> s <> "") in
+      (* Canonical single-line form: "prefix name1, name2, ...]" with the
+         exact same one-space-after-comma rule used everywhere else, and no
+         padding inside the brackets. *)
+      let single_line = prefix ^ String.concat ", " names ^ "]" in
+      if String.length single_line <= max_len then
+        result := single_line :: !result
       else begin
-        (* Need to split into multi-line form.
-           Extract: prefix = "module/import Foo exposing [", names = comma-separated, "]" *)
-        let open_bracket = String.index normalised '[' in
-        let prefix = String.sub normalised 0 (open_bracket + 1) in
-        let rest_s = String.sub normalised (open_bracket + 1)
-                       (String.length normalised - open_bracket - 1) in
-        (* Strip trailing "]" *)
-        let inner = String.trim rest_s in
-        let inner =
-          if String.length inner > 0 && inner.[String.length inner - 1] = ']' then
-            String.sub inner 0 (String.length inner - 1) |> String.trim
-          else inner
-        in
-        (* Split on commas (not inside brackets, but exposing names never nest) *)
-        let names = String.split_on_char ',' inner
-                    |> List.map String.trim
-                    |> List.filter (fun s -> s <> "") in
-        (* Prepend in order: prefix first, names in normal order, "]" last.
-           Since result is reversed and List.rev is applied at the end,
-           the correct prepend sequence is: prefix → names[0..n] → "]" *)
+        (* Too long — split into multi-line form with a trailing comma on the
+           last item (so adding/removing exports is a one-line diff).
+           Prepend order, since result is reversed and List.rev'd at the end:
+           prefix → names[0..n] → "]". *)
         result := prefix :: !result;
         List.iter (fun name ->
           result := (Printf.sprintf "  %s," name) :: !result

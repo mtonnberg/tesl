@@ -1,0 +1,243 @@
+#lang tesl
+module Lesson63LibraryProofOwnership exposing [
+  IsValidEmail,
+  checkEmail,
+  requiresValidEmail,
+  describeEmail,
+  validateAndDescribe,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 63 — Library Proof Ownership
+#
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# When a library exports a proof predicate, the ownership rules are strict:
+#
+#   1. ONLY the module that declares `fact F` can PRODUCE values carrying F.
+#      (Via check, establish, or auth functions in that module.)
+#
+#   2. Any module that IMPORTS F can:
+#      - Require F in function parameter types
+#      - Pass F-carrying values between functions
+#      - Re-export F in their own exposing list
+#
+#   3. A module that re-exports F does NOT gain the right to MINT new F values.
+#      Trying to return `ok x ::: F x` in a module that does not own F is a
+#      compile-time error (P001: proof ownership violation).
+#
+# This is why libraries are safe: you can trust that any value carrying IsValid
+# actually went through the owning library's validation logic — no shortcuts.
+#
+# ── PATTERN: LIBRARY OWNS THE PROOF, CONSUMER USES IT ────────────────────────
+#
+# In a real codebase you would have two files:
+#
+#   email-lib.tesl:
+#     library EmailLib exposing [IsValidEmail, checkEmail]
+#     fact IsValidEmail (addr: String)
+#     check checkEmail(addr: String) -> addr: String ::: IsValidEmail addr = ...
+#
+#   my-handler.tesl:
+#     import EmailLib exposing [IsValidEmail, checkEmail]
+#     fn sendTo(addr: String ::: IsValidEmail addr) -> ... = ...
+#     fn handle(rawAddr: String) -> ... =
+#       let addr = check checkEmail rawAddr
+#       sendTo addr   # proof satisfies the requirement — accepted
+#
+# The handler USES the proof but cannot CREATE new ones.
+# This lesson demonstrates the same pattern in a single module.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [Int, String, Bool(..)]
+import Tesl.String exposing [String.length, String.contains]
+
+# ── Proof predicate ───────────────────────────────────────────────────────────
+
+# IsValidEmail is declared here — this module OWNS it.
+# Only functions in this module can produce IsValidEmail-carrying values.
+fact IsValidEmail (addr: String)
+
+# ── Trust boundary ────────────────────────────────────────────────────────────
+
+# checkEmail is the single gate that mints IsValidEmail proofs.
+# Rules: must contain "@", length at least 5, length at most 200.
+#
+# Once a caller has `addr ::: IsValidEmail addr`, they know these rules hold.
+# They do not need to re-check — and they CANNOT bypass checkEmail to create
+# a fake IsValidEmail proof.
+check checkEmail(addr: String) -> addr: String ::: IsValidEmail addr =
+  if String.contains addr "@" == False then
+    fail 400 "email must contain @"
+  else if String.length addr < 5 then
+    fail 400 "email address too short"
+  else if String.length addr > 200 then
+    fail 400 "email address too long"
+  else
+    ok addr ::: IsValidEmail addr
+
+# ── Functions that require the proof ─────────────────────────────────────────
+
+# requiresValidEmail: only accepts pre-validated addresses.
+# Any caller must pass a value carrying IsValidEmail — the compiler enforces this.
+# A raw String cannot be passed here.
+fn requiresValidEmail(addr: String ::: IsValidEmail addr) -> String =
+  "sending to: ${addr}"
+
+# describeEmail: inspects a validated email address.
+# No raw String is accepted; the caller must prove validity first.
+fn describeEmail(addr: String ::: IsValidEmail addr) -> String =
+  if String.length addr <= 20 then
+    "short address"
+  else if String.length addr <= 50 then
+    "medium address"
+  else
+    "long address"
+
+# validateAndDescribe: the typical entry point.
+# Takes raw input, runs the check, then passes the proven value to consumers.
+# This is the pattern consumers of a library follow: validate once at the edge,
+# then pass the proven value freely through the rest of the call graph.
+fn validateAndDescribe(raw: String) -> String =
+  let addr = check checkEmail raw
+  let msg = requiresValidEmail addr
+  let desc = describeEmail addr
+  "${msg} (${desc})"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# PROOF OWNERSHIP
+#
+# The Tesl proof system tracks WHERE each proof was minted. Only the module
+# that declares a fact can emit values carrying that fact. This is called
+# proof minting, and the right is called proof ownership.
+#
+# Ownership is determined by the `fact` declaration, not by the module that
+# runs the check. Consider:
+#
+#   library EmailLib exposing [IsValidEmail, checkEmail]
+#   fact IsValidEmail (addr: String)
+#   check checkEmail(...) -> addr: String ::: IsValidEmail addr = ...
+#
+# EmailLib owns IsValidEmail. If another module imports IsValidEmail and tries:
+#
+#   fn forgeProof(addr: String) -> addr: String ::: IsValidEmail addr =
+#     ok addr ::: IsValidEmail addr     # P001: not the owner of IsValidEmail
+#
+# The compiler rejects this with error P001 (proof ownership violation).
+# There is no way to construct an IsValidEmail value without going through
+# checkEmail in EmailLib.
+#
+# WHY THIS MATTERS
+#
+# Imagine a library that enforces "this string was sanitized against XSS".
+# Proof ownership guarantees that:
+#   - Every IsSanitized-carrying value actually went through the sanitizer.
+#   - No consumer can construct a "pre-approved" IsSanitized value by hand.
+#   - The invariant holds everywhere in the codebase, not just locally.
+#
+# This is stronger than a type alias or a newtype — those can be bypassed by
+# constructing the type directly. A GDP proof cannot be forged.
+#
+# RE-EXPORTING DOES NOT TRANSFER MINTING RIGHTS
+#
+# A library can re-export a proof predicate it imported. Consumers can then
+# import it from the re-exporting library. But re-exporting does NOT transfer
+# the right to produce new instances. The original declaring module retains
+# sole minting authority.
+#
+#   library FacadeLib exposing [IsValidEmail, checkEmail]  # re-exports EmailLib's fact
+#   import EmailLib exposing [IsValidEmail, checkEmail]
+#   # FacadeLib consumers can now import from FacadeLib
+#   # but FacadeLib itself cannot forge new IsValidEmail proofs
+#
+# USING PROOFS ACROSS THE CALL GRAPH
+#
+# Once a value carries a proof, it flows freely through functions that
+# require that proof. The proof does not need to be re-minted at each step:
+#
+#   fn step1(addr: String ::: IsValidEmail addr) -> String = ...
+#   fn step2(addr: String ::: IsValidEmail addr) -> String = step1 addr
+#   fn step3(addr: String ::: IsValidEmail addr) -> String = step2 addr
+#
+#   fn entryPoint(raw: String) -> String =
+#     let addr = check checkEmail raw  # mint the proof once
+#     step3 addr                       # threads through step3 → step2 → step1
+#
+# The proof is checked once at the trust boundary; functions downstream trust
+# the proof without re-checking.
+#
+# THE P001 ERROR
+#
+# If you see error P001, you are trying to produce a proof your module does
+# not own. The fix is always one of:
+#   1. Import the check function from the owning library and use it.
+#   2. Move the `fact` declaration into your module (making you the owner).
+#   3. Rethink the design — perhaps you need a different proof predicate.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+test "checkEmail accepts a valid address" {
+  let raw = "alice@example.com"
+  let addr = check checkEmail raw
+  expect requiresValidEmail addr == "sending to: alice@example.com"
+}
+
+test "checkEmail accepts a minimal valid address" {
+  let raw = "a@b.c"
+  let addr = check checkEmail raw
+  expect describeEmail addr == "short address"
+}
+
+test "checkEmail rejects address without @" {
+  let raw = "notanemail"
+  expectFail (check checkEmail raw)
+}
+
+test "checkEmail rejects address that is too short" {
+  let raw = "a@b"
+  expectFail (check checkEmail raw)
+}
+
+test "checkEmail rejects an empty string" {
+  let raw = ""
+  expectFail (check checkEmail raw)
+}
+
+test "describeEmail classifies short address" {
+  let raw = "hi@example.com"
+  let addr = check checkEmail raw
+  expect describeEmail addr == "short address"
+}
+
+test "describeEmail classifies medium address" {
+  let raw = "firstname.lastname@workplace-domain.org"
+  let addr = check checkEmail raw
+  expect describeEmail addr == "medium address"
+}
+
+test "validateAndDescribe composes check and consumers" {
+  let raw = "bob@example.com"
+  let result = validateAndDescribe raw
+  expect result == "sending to: bob@example.com (short address)"
+}
+
+test "validateAndDescribe fails on invalid input" {
+  let raw = "badaddress"
+  expectFail (validateAndDescribe raw)
+}
+
+test "proof flows through multiple function calls" {
+  let raw = "carol@example.com"
+  let addr = check checkEmail raw
+  let msg = requiresValidEmail addr
+  let desc = describeEmail addr
+  expect msg == "sending to: carol@example.com"
+  expect desc == "short address"
+}

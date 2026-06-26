@@ -1,0 +1,19 @@
+; Self-contained manual-coherence test.
+; Reads the manual/*.md files directly — no compiler library, no Racket.
+;
+; Run it from this directory (manual/tests):
+;
+;   dune runtest                  ; build + run via the alias below
+;   dune exec ./test_embedded_docs.exe   ; or run the executable directly
+;
+; The test locates the manual/ directory by walking up from its own executable
+; (or from TESL_MANUAL_DIR if set), so it works both under `dune runtest`
+; (cwd = build dir) and when invoked directly.
+
+(executable
+ (name test_embedded_docs)
+ (libraries str unix))
+
+(rule
+ (alias runtest)
+ (action (run %{exe:test_embedded_docs.exe})))

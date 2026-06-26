@@ -1,0 +1,251 @@
+#lang tesl
+module Lesson62BuildingALibrary exposing [
+  UserName,
+  IsValidName,
+  checkName,
+  describeNameLength,
+  formatGreeting,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 62 — Building a Tesl Library
+#
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The `library` keyword declares a module meant for reuse across an application
+# (or across multiple applications). It is identical to `module` in syntax,
+# but it enforces a strict boundary: libraries contain only logic, never
+# infrastructure wiring.
+#
+# ── DECLARING A LIBRARY ───────────────────────────────────────────────────────
+#
+#   library MyLib exposing [Widget, makeWidget, processWidget]
+#
+# The `exposing [...]` list is the library's public API.
+# Everything not listed is private to the library.
+#
+# ── WHAT IS ALLOWED IN A LIBRARY ─────────────────────────────────────────────
+#
+#   ALLOWED:
+#     record, type (ADTs), newtype     — data types
+#     fact, check, establish, auth     — proof system
+#     fn, handler, worker              — functions (not wiring)
+#     capability, codec                — capabilities and codecs
+#     test                             — unit tests
+#     constants                        — top-level bindings
+#
+#   NOT ALLOWED (compile error if present):
+#     api, server, main, workers       — infrastructure wiring
+#     database, entity                 — storage declarations
+#
+# The compiler rejects any library module that uses these infra constructs.
+# This makes the boundary machine-checked: a library is always safe to import
+# from any other module.
+#
+# ── SIGNATURE COMPLETENESS ────────────────────────────────────────────────────
+#
+# If you export a function, EVERY type and proof predicate referenced in that
+# function's parameter or return types must also be exported.
+#
+# Otherwise the consumer cannot call the function because they cannot name
+# the types or proofs in their own code.
+#
+# EXAMPLE — would produce a compile error:
+#
+#   library UsernameLib exposing [checkName]   # exports fn but NOT IsValidName!
+#
+#   fact IsValidName (name: String)
+#   check checkName(name: String) -> name: String ::: IsValidName name = ...
+#
+# Error: library UsernameLib exports checkName but IsValidName (used in its
+#        signature) is not exported — consumers cannot use this function
+#
+# FIX — export everything the signature touches:
+#
+#   library UsernameLib exposing [IsValidName, checkName]
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# ILLUSTRATIVE EXAMPLE: a username validation library
+#
+# The library owns:
+#   - UserName  — a newtype wrapping a validated string
+#   - IsValidName — a proof predicate
+#   - checkName   — the trust boundary that mints IsValidName proofs
+#   - describeNameLength, formatGreeting — functions that consume those proofs
+#
+# Notice: the LESSON FILE uses `module` (lesson files are standalone modules).
+# A real library would write `library UsernameLib exposing [...]` instead.
+# The lesson demonstrates the patterns; the `library` keyword is the only
+# difference in the file header.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [Int, String, Bool(..)]
+import Tesl.String exposing [String.length, String.contains]
+
+# ── Types ─────────────────────────────────────────────────────────────────────
+
+# A newtype for a validated username.
+# Callers cannot construct a UserName directly — they must go through checkName.
+record UserName {
+  value: String
+}
+
+# ── Proof predicate ───────────────────────────────────────────────────────────
+
+# IsValidName is the proof that a String has been checked as a valid username.
+# Only this module can produce IsValidName proofs (via checkName below).
+# Other modules can require IsValidName in their parameter types, but they
+# cannot mint new ones — that would be a P001 proof ownership error.
+fact IsValidName (name: String)
+
+# ── Trust boundary ────────────────────────────────────────────────────────────
+
+# checkName is the single gate that validates a raw String.
+# After calling `let safe = check checkName raw`, the binding `safe` carries
+# the IsValidName proof and can be passed to any function that requires it.
+#
+# Rules enforced:
+#   - Length between 2 and 50 characters
+#   - No "@" symbol (usernames are not email addresses)
+check checkName(name: String) -> name: String ::: IsValidName name =
+  if String.length name < 2 then
+    fail 400 "username must be at least 2 characters"
+  else if String.length name > 50 then
+    fail 400 "username must be at most 50 characters"
+  else if String.contains name "@" then
+    fail 400 "username must not contain @"
+  else
+    ok name ::: IsValidName name
+
+# ── Functions that consume the proof ─────────────────────────────────────────
+
+# describeNameLength requires IsValidName — so it only accepts pre-validated names.
+# A raw String cannot be passed here; the compiler enforces the boundary.
+fn describeNameLength(name: String ::: IsValidName name) -> String =
+  if String.length name <= 10 then
+    "short"
+  else if String.length name <= 30 then
+    "medium"
+  else
+    "long"
+
+# formatGreeting also requires the proof.
+# Consumers of this library call `check checkName` once at the input boundary,
+# then pass the proven value freely to any function that needs it.
+fn formatGreeting(name: String ::: IsValidName name) -> String =
+  "Hello, ${name}!"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WHY `library` INSTEAD OF `module`?
+#
+# Both `module` and `library` accept the same top-level declarations for logic.
+# The difference is enforcement:
+#
+#   module    — any top-level form is allowed; designed for app-level modules
+#               that may include api, server, database, etc.
+#
+#   library   — only logic forms are allowed; api/server/database/entity/main/
+#               workers produce a compile error.
+#
+# This machine-checked boundary means:
+#   - A library can be safely imported by any other module.
+#   - A library has no runtime dependencies on infrastructure.
+#   - You can test library functions with plain `test` blocks (no server needed).
+#   - The compiler rejects accidental infrastructure leakage into shared code.
+#
+# SIGNATURE COMPLETENESS DETAIL
+#
+# When a module exposes a function, every name that appears in that function's
+# type signature must also be exported. The compiler checks this because a
+# consumer that imports your library will need to name those types and proof
+# predicates in their own code — to write annotations, to pass values, to
+# call downstream functions.
+#
+# If IsValidName were not exported, a consumer could call checkName and receive
+# a value that carries IsValidName, but they could NOT:
+#   - Write a function that accepts `name: String ::: IsValidName name`
+#   - Pass that value to formatGreeting from another import
+#
+# The compiler catches this at the LIBRARY side (compile error), not at the
+# consumer side (which would give a confusing "unknown predicate" error).
+#
+# W080 LINT WARNING (for regular `module`)
+#
+# The same signature-completeness check runs on regular `module` declarations,
+# but as a WARNING (W080) rather than an error. Regular modules might be
+# internal app modules where incompleteness is deliberate. Libraries are held
+# to a stricter standard because they are designed for external consumption.
+#
+# PROOF MINTING RIGHTS
+#
+# Only the module that declares `fact IsValidName` can produce IsValidName-
+# carrying values (via check/establish/auth). This is enforced by the compiler
+# as error P001. No other module — not even one that imports and re-exports
+# IsValidName — gains the right to produce new IsValidName values.
+#
+# This is a security invariant: if checkName enforces a rule, nothing can
+# bypass it by constructing a "fake" IsValidName proof elsewhere.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+test "checkName accepts a valid username" {
+  let raw = "alice"
+  let name = check checkName raw
+  expect formatGreeting name == "Hello, alice!"
+}
+
+test "checkName accepts a name at the lower length boundary" {
+  let raw = "ab"
+  let name = check checkName raw
+  expect describeNameLength name == "short"
+}
+
+test "checkName accepts a medium-length name" {
+  let raw = "alexanderthegreater"
+  let name = check checkName raw
+  expect describeNameLength name == "medium"
+}
+
+test "checkName rejects a single-character name" {
+  let raw = "a"
+  expectFail (check checkName raw)
+}
+
+test "checkName rejects an empty string" {
+  let raw = ""
+  expectFail (check checkName raw)
+}
+
+test "checkName rejects a name with @ symbol" {
+  let raw = "alice@example"
+  expectFail (check checkName raw)
+}
+
+test "checkName rejects a name that is too long" {
+  let raw = "this-username-is-way-too-long-for-our-system-abcdefghijk"
+  expectFail (check checkName raw)
+}
+
+test "describeNameLength returns short for a short name" {
+  let raw = "bob"
+  let name = check checkName raw
+  expect describeNameLength name == "short"
+}
+
+test "describeNameLength returns long for a long name" {
+  let raw = "christopher-alexander-von-humboldt"
+  let name = check checkName raw
+  expect describeNameLength name == "long"
+}
+
+test "formatGreeting produces the expected string" {
+  let raw = "tesl"
+  let name = check checkName raw
+  expect formatGreeting name == "Hello, tesl!"
+}

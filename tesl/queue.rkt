@@ -52,6 +52,9 @@
                   check-fail-message)
          (only-in "../dsl/check.rkt"
                   check-fail-status)
+         (only-in "../dsl/private/domain-registry.rkt"
+                  domain-registry-add!
+                  register-background-thread!)
          (only-in "../dsl/types.rkt"
                   runtime-value->jsexpr
                   jsexpr->typed-value
@@ -105,7 +108,11 @@
  ;; Struct accessors (tests)
  (struct-out queue-spec)
  (struct-out channel-spec)
- (struct-out dead-job))
+ (struct-out dead-job)
+ ;; Worker-pool tracking (for DAP inspection)
+ (struct-out worker-pool)
+ worker-pool-live-count
+ worker-pool-status)
 
 ;; ── Capabilities ────────────────────────────────────────────────────────────
 
@@ -144,6 +151,32 @@
 ;;   id         — the job's primary key string
 ;;   named-val  — the payload wrapped with FromDeadQueue proof
 (struct dead-job (queue-spec id named-val) #:transparent)
+
+;; A worker-pool tracks a set of fire-and-forget worker threads spawned by
+;; start-workers! / start-dead-workers!.  It exists purely so the DAP debugger can
+;; inspect otherwise-untrackable running workers — the threads' behaviour is
+;; unchanged.  `threads` is the mutable list of spawned thread descriptors; the
+;; LIVE worker count is derived as (count thread-running? threads), and `status`
+;; is a coarse 'running | 'stopped summary computed on demand.
+;;   kind        — 'worker | 'dead-worker
+;;   queue-name  — symbol — the (first) drained queue's name
+;;   queue-names — (listof symbol) — all queues this pool drains
+;;   concurrency — integer — worker threads requested per queue
+;;   threads     — box of (listof thread) — the spawned worker threads
+(struct worker-pool
+  (kind queue-name queue-names concurrency threads)
+  #:transparent)
+
+;; Live count = threads still running.  Best-effort and never raises.
+(define (worker-pool-live-count pool)
+  (with-handlers ([exn:fail? (lambda (_) 0)])
+    (for/sum ([t (in-list (unbox (worker-pool-threads pool)))]
+              #:when (thread-running? t))
+      1)))
+
+;; Coarse status for display.
+(define (worker-pool-status pool)
+  (if (> (worker-pool-live-count pool) 0) 'running 'stopped))
 
 ;; ── PostgreSQL context helpers ───────────────────────────────────────────────
 
@@ -248,13 +281,17 @@
         #:backoff backoff-sym:id
         #:initial-delay init-delay:integer)
      #'(define name
-         (queue-spec 'name
-                     '(job-type ...)
-                     (make-hash)
-                     (make-semaphore 0)
-                     max-att
-                     'backoff-sym
-                     init-delay))]))
+         (let ([spec (queue-spec 'name
+                                 '(job-type ...)
+                                 (make-hash)
+                                 (make-semaphore 0)
+                                 max-att
+                                 'backoff-sym
+                                 init-delay)])
+           ;; Register the LIVE spec so the DAP debugger can enumerate this queue
+           ;; (and read its pending jobs) even when it is not a paused-frame local.
+           (domain-registry-add! 'queues spec)
+           spec))]))
 
 ;; ── Proof attachment ─────────────────────────────────────────────────────────
 
@@ -457,19 +494,35 @@
 ;; Polls every 10 seconds; drains all dead jobs before sleeping again.
 (define (start-dead-workers! workers-alist capabilities)
   (define db-runtime (current-database-runtime))
+  ;; Track the dead-letter worker threads in a pool for DAP inspection (additive).
+  (define worker-threads (box '()))
   (for ([pair (in-list workers-alist)])
     (define queue-s    (car pair))
     (define handler-fn (cdr pair))
-    (thread (lambda ()
-              (let loop ()
-                (sleep 10)
-                (with-handlers ([exn:fail? void])
-                  (parameterize ([current-capabilities  capabilities]
-                                 [current-database-runtime db-runtime])
-                    (let drain ()
-                      (when (process-next-dead-job! queue-s handler-fn)
-                        (drain)))))
-                (loop))))))
+    (define wt
+      ;; register-background-thread! records the handle for DAP stop-the-world
+      ;; (no-op unless TESL_DEBUG is set); behaviour is otherwise unchanged.
+      (register-background-thread!
+       (thread (lambda ()
+                 (let loop ()
+                   (sleep 10)
+                   (with-handlers ([exn:fail? void])
+                     (parameterize ([current-capabilities  capabilities]
+                                    [current-database-runtime db-runtime])
+                       (let drain ()
+                         (when (process-next-dead-job! queue-s handler-fn)
+                           (drain)))))
+                   (loop))))))
+    (set-box! worker-threads (cons wt (unbox worker-threads))))
+  ;; Register the live dead-letter worker pool for DAP inspection.
+  (define queue-names (map (lambda (p) (queue-spec-name (car p))) workers-alist))
+  (domain-registry-add!
+   'workers
+   (worker-pool 'dead-worker
+                (if (pair? queue-names) (car queue-names) '|<none>|)
+                queue-names
+                1
+                worker-threads)))
 
 ;; ── Transaction parameters ───────────────────────────────────────────────────
 
@@ -761,70 +814,94 @@
     (and db-runtime
          (eq? (database-spec-backend (database-runtime-database db-runtime)) 'postgres)))
 
+  ;; Track the SKIP-LOCKED worker threads in a pool so the DAP debugger can
+  ;; inspect these otherwise-untracked workers.  Purely additive: the threads'
+  ;; behaviour is unchanged.
+  (define worker-threads (box '()))
+
   (for ([pair (in-list workers-alist)])
     (define queue-s    (car pair))
     (define handler-fn (cdr pair))
     (define sem        (queue-spec-semaphore queue-s))
 
     ;; Thread 1: Fallback poller + stuck-job sweeper
-    (thread (lambda ()
-              (let loop ([n 0])
-                (sleep 5)
-                (semaphore-post sem)
-                (when (and use-pg? (= (modulo n 12) 0))
-                  (with-handlers ([exn:fail? void])
-                    (query-exec
-                     (database-runtime-connection db-runtime)
-                     (format "update ~a
+    ;; register-background-thread! records the handle for DAP stop-the-world
+    ;; (no-op unless TESL_DEBUG is set); this was previously fire-and-forget.
+    (register-background-thread!
+     (thread (lambda ()
+               (let loop ([n 0])
+                 (sleep 5)
+                 (semaphore-post sem)
+                 (when (and use-pg? (= (modulo n 12) 0))
+                   (with-handlers ([exn:fail? void])
+                     (query-exec
+                      (database-runtime-connection db-runtime)
+                      (format "update ~a
                               set status = 'pending', locked_at = null
                               where queue_name = $1
                                 and status = 'processing'
                                 and locked_at < now() - interval '10 minutes'"
-                             (pg-table
-                              (database-schema-name
-                               (database-runtime-database db-runtime))
-                              "tesl_jobs"))
-                     (symbol->string (queue-spec-name queue-s)))))
-                (loop (add1 n)))))
+                              (pg-table
+                               (database-schema-name
+                                (database-runtime-database db-runtime))
+                               "tesl_jobs"))
+                      (symbol->string (queue-spec-name queue-s)))))
+                 (loop (add1 n))))))
 
     ;; Thread 2: LISTEN connection (PostgreSQL only)
     (when use-pg?
       (define notify-ch (queue-notify-channel queue-s))
-      (thread
-       (lambda ()
-         (let reconnect ()
-           (with-handlers ([exn:fail? (lambda (_)
-                                        (sleep 5)
-                                        (reconnect))])
-             (define listen-conn
-               (make-dedicated-pg-conn
-                db-runtime
-                #:notification-handler
-                (lambda (channel _payload)
-                  (when (string=? channel notify-ch)
-                    (semaphore-post sem)))))
-             (query-exec listen-conn (~a "listen \"" notify-ch "\""))
-             (let loop ()
-               (sync (send listen-conn async-message-evt))
-               (loop)))))))
+      (register-background-thread!
+       (thread
+        (lambda ()
+          (let reconnect ()
+            (with-handlers ([exn:fail? (lambda (_)
+                                         (sleep 5)
+                                         (reconnect))])
+              (define listen-conn
+                (make-dedicated-pg-conn
+                 db-runtime
+                 #:notification-handler
+                 (lambda (channel _payload)
+                   (when (string=? channel notify-ch)
+                     (semaphore-post sem)))))
+              (query-exec listen-conn (~a "listen \"" notify-ch "\""))
+              (let loop ()
+                (sync (send listen-conn async-message-evt))
+                (loop))))))))
 
     ;; Thread 3 × concurrency: SKIP LOCKED Workers
     ;; Multiple workers compete safely via FOR UPDATE SKIP LOCKED — no duplicate processing.
     (for ([_ (in-range concurrency)])
-      (thread (lambda ()
-                (let loop ()
-                  (semaphore-wait sem)
-                  (let drain ()
-                    (when (semaphore-try-wait? sem)
-                      (drain)))
-                  (let work ()
-                    (define ok?
-                      (with-handlers ([exn:fail? (lambda (_) #f)])
-                        (parameterize ([current-capabilities  capabilities]
-                                       [current-database-runtime db-runtime])
-                          (process-next-job! queue-s handler-fn))))
-                    (when ok? (work)))
-                  (loop)))))))
+      (define wt
+        ;; Also registered globally (in addition to the worker-pool box) so DAP
+        ;; stop-the-world enumerates it uniformly with all other bg threads.
+        (register-background-thread!
+         (thread (lambda ()
+                   (let loop ()
+                     (semaphore-wait sem)
+                     (let drain ()
+                       (when (semaphore-try-wait? sem)
+                         (drain)))
+                     (let work ()
+                       (define ok?
+                         (with-handlers ([exn:fail? (lambda (_) #f)])
+                           (parameterize ([current-capabilities  capabilities]
+                                          [current-database-runtime db-runtime])
+                             (process-next-job! queue-s handler-fn))))
+                       (when ok? (work)))
+                     (loop))))))
+      (set-box! worker-threads (cons wt (unbox worker-threads)))))
+
+  ;; Register the live worker pool for DAP inspection.
+  (define queue-names (map (lambda (p) (queue-spec-name (car p))) workers-alist))
+  (domain-registry-add!
+   'workers
+   (worker-pool 'worker
+                (if (pair? queue-names) (car queue-names) '|<none>|)
+                queue-names
+                concurrency
+                worker-threads)))
 
 ;; ── define-channel macro ─────────────────────────────────────────────────────
 
@@ -832,7 +909,11 @@
   (syntax-parse stx
     [(_ name:id)
      #'(define name
-         (channel-spec 'name (make-hash) (make-hash)))]))
+         (let ([spec (channel-spec 'name (make-hash) (make-hash))])
+           ;; Register the LIVE channel so the DAP debugger can show this SSE
+           ;; channel and its CONNECTED CLIENTS (the listeners hash) when paused.
+           (domain-registry-add! 'channels spec)
+           spec))]))
 
 ;; ── In-memory listener delivery ──────────────────────────────────────────────
 
@@ -988,34 +1069,38 @@
           (disconnect conn)))))
 
   ;; Sweep + TTL cleanup thread (every 5 s)
-  (thread (lambda ()
-            (let loop ()
-              (sleep 5)
-              (sweep-and-cleanup!)
-              (loop))))
+  ;; register-background-thread! records the handle for DAP stop-the-world
+  ;; (no-op unless TESL_DEBUG is set); previously fire-and-forget.
+  (register-background-thread!
+   (thread (lambda ()
+             (let loop ()
+               (sleep 5)
+               (sweep-and-cleanup!)
+               (loop)))))
 
   ;; LISTEN thread: woken by NOTIFY, delivers outbox row to local listeners
-  (thread
-   (lambda ()
-     (let reconnect ()
-       (with-handlers ([exn:fail? (lambda (_)
-                                    (sleep 5)
-                                    (reconnect))])
-         (define listen-conn
-           (make-dedicated-pg-conn
-            db-runtime
-            #:notification-handler
-            (lambda (_channel payload-str)
-              (with-handlers ([exn:fail? void])
-                (define row-id (string->number payload-str))
-                (when row-id
-                  (deliver-row! row-id))))))
-         (query-exec listen-conn (~a "listen \"" PUBSUB-NOTIFY-CHANNEL "\""))
-         ;; Deliver any rows that arrived before LISTEN was established
-         (sweep-and-cleanup!)
-         (let loop ()
-           (sync (send listen-conn async-message-evt))
-           (loop)))))))
+  (register-background-thread!
+   (thread
+    (lambda ()
+      (let reconnect ()
+        (with-handlers ([exn:fail? (lambda (_)
+                                     (sleep 5)
+                                     (reconnect))])
+          (define listen-conn
+            (make-dedicated-pg-conn
+             db-runtime
+             #:notification-handler
+             (lambda (_channel payload-str)
+               (with-handlers ([exn:fail? void])
+                 (define row-id (string->number payload-str))
+                 (when row-id
+                   (deliver-row! row-id))))))
+          (query-exec listen-conn (~a "listen \"" PUBSUB-NOTIFY-CHANNEL "\""))
+          ;; Deliver any rows that arrived before LISTEN was established
+          (sweep-and-cleanup!)
+          (let loop ()
+            (sync (send listen-conn async-message-evt))
+            (loop))))))))
 
 ;; ── received-events (for test assertions) ────────────────────────────────────
 

@@ -1412,12 +1412,34 @@ codec Data {
 }
 |} in
   let racket = compile_ok "codec_primitives" src in
-  if not (contains "tesl-json-string-codec" racket) then
-    Alcotest.failf "codec_primitives: expected tesl-json-string-codec";
-  if not (contains "tesl-json-int-codec" racket) then
-    Alcotest.failf "codec_primitives: expected tesl-json-int-codec";
-  if not (contains "tesl-json-bool-codec" racket) then
-    Alcotest.failf "codec_primitives: expected tesl-json-bool-codec"
+  (* compile_time_specialization Phase 2: the DECODER side inlines a direct
+     tesl-decode-prim-field call per primitive field, passing the bare
+     tesl-decode-prim-X decoder.  This is the SAME shared helper + prim decoder
+     the generic tesl-codec-decode-field path now delegates to, so the
+     missing-field and type-mismatch error text are byte-identical by
+     construction.  No generic per-field decode dispatch is emitted for these
+     primitive fields. *)
+  if not (contains "tesl-decode-prim-field" racket) then
+    Alcotest.failf "codec_primitives: expected specialized tesl-decode-prim-field";
+  if not (contains "tesl-decode-prim-string" racket) then
+    Alcotest.failf "codec_primitives: expected specialized tesl-decode-prim-string";
+  if not (contains "tesl-decode-prim-int" racket) then
+    Alcotest.failf "codec_primitives: expected specialized tesl-decode-prim-int";
+  if not (contains "tesl-decode-prim-bool" racket) then
+    Alcotest.failf "codec_primitives: expected specialized tesl-decode-prim-bool";
+  (* The generic per-field decode dispatch is no longer emitted for primitive
+     fields (it remains the runtime oracle + the user-type registry path). *)
+  if contains "tesl-codec-decode-field _j \"name\" tesl-json-string-codec" racket then
+    Alcotest.failf "codec_primitives: decoder must not use generic tesl-codec-decode-field for primitive field";
+  (* compile_time_specialization: the ENCODER side inlines a direct
+     tesl-encode-prim-* call per primitive field (no generic encode-field
+     dispatch).  Behaviour-identical — the codec pairs are built from these. *)
+  if not (contains "tesl-encode-prim-string" racket) then
+    Alcotest.failf "codec_primitives: expected specialized tesl-encode-prim-string";
+  if not (contains "tesl-encode-prim-int" racket) then
+    Alcotest.failf "codec_primitives: expected specialized tesl-encode-prim-int";
+  if not (contains "tesl-encode-prim-bool" racket) then
+    Alcotest.failf "codec_primitives: expected specialized tesl-encode-prim-bool"
 
 let test_codec_via_proof () =
   let src = module_ ~exports:"Msg, nonEmpty" {|

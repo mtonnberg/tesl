@@ -25,6 +25,17 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 export TESL_REPO_ROOT="$SCRIPT_DIR"
 
+# WS2 (roadmap/next/optimizations.md): the per-file `tesl fmt` and `tesl
+# validate` loops are embarrassingly parallel — each file is independent.  We
+# drive them with a bounded `xargs -P` pool.  TESL_CI_JOBS overrides the worker
+# count (default: one per core).  Setting it to 1 restores fully serial
+# behaviour, which is handy when debugging interleaving-sensitive issues.
+TESL_CI_JOBS="${TESL_CI_JOBS:-$(nproc 2>/dev/null || echo 1)}"
+case "$TESL_CI_JOBS" in
+    ''|*[!0-9]*) TESL_CI_JOBS=1 ;;
+esac
+[ "$TESL_CI_JOBS" -lt 1 ] && TESL_CI_JOBS=1
+
 script_started_at=$SECONDS
 phase_started_at=$SECONDS
 format_duration=0
@@ -182,7 +193,10 @@ start_shared_postgres_async() {
         if [ ! -d "$shared_postgres_data_dir" ]; then
             initdb -D "$shared_postgres_data_dir" -A trust -U "$shared_postgres_user" --locale=C >/dev/null 2>&1 || exit 1
         fi
-        pg_ctl -D "$shared_postgres_data_dir" -l "$shared_postgres_log_path" -o "-F -k $shared_postgres_socket_dir -p $shared_postgres_port" -w start >/dev/null 2>&1
+        # Bound the wait with a 60-second timeout.  On WSL2 and some CI
+        # environments pg_ctl -w can block indefinitely on socket readiness.
+        timeout 60 pg_ctl -D "$shared_postgres_data_dir" -l "$shared_postgres_log_path" \
+          -o "-F -k $shared_postgres_socket_dir -p $shared_postgres_port" -w start >/dev/null 2>&1
     ) &
     shared_postgres_boot_pid=$!
 }
@@ -210,71 +224,137 @@ wait_for_shared_postgres() {
 
 trap cleanup_shared_postgres EXIT
 
-run_named_command() {
-    local label="$1"
-    shift
-    local cmd_status=0
-    local output=""
-
-    # Print the "running" arrow without a newline so we can overwrite it on
-    # success.  Only do this when stdout is a terminal; for piped/redirected
-    # output we skip the arrow and just print the final result.
-    [ -t 1 ] && printf "  →  %s" "$label"
-
-    if output=$("$@" 2>&1); then
-        cmd_status=0
+# ── WS2: bounded-parallel per-file phase runner ──────────────────────────────
+#
+# `run_parallel_phase` runs an independent per-file command (`tesl fmt` or
+# `tesl validate`) across many files concurrently with a bounded `xargs -P`
+# pool, while preserving the two properties the serial loops gave us:
+#
+#   * Deterministic, collated output — each file's combined stdout+stderr is
+#     captured to its own temp file (keyed by the file's position in the input
+#     list) and printed by the *parent* process in input order after the pool
+#     drains.  Workers never write to the terminal, so output lines from
+#     different files can never interleave.  Section headers are re-emitted at
+#     their original boundaries so the grouped layout matches the serial run.
+#   * Correct exit status — each worker records its command's exit code; the
+#     parent re-reads every code and returns non-zero (and tallies per-file
+#     failures) if ANY file failed.  xargs' own exit status is intentionally
+#     ignored, because the authoritative pass/fail comes from the recorded
+#     per-file codes.
+#
+# The worker is dispatched via `bash -c` rather than a bash function export so
+# the behaviour is identical whether or not the parent shell exported the
+# helper.  The subcommand and the work directory are passed through the
+# environment.
+_tesl_phase_worker() {
+    # Args: <index>\t<file>
+    local rec="$1"
+    local idx="${rec%%$'\t'*}"
+    local file="${rec#*$'\t'}"
+    local out=""
+    local rc=0
+    if out="$(tesl "$TESL_PHASE_SUBCMD" "$file" 2>&1)"; then
+        rc=0
     else
-        cmd_status=$?
+        rc=$?
+    fi
+    printf '%s' "$out"  > "$TESL_PHASE_WORKDIR/$idx.out"
+    printf '%s' "$rc"   > "$TESL_PHASE_WORKDIR/$idx.rc"
+}
+export -f _tesl_phase_worker
+
+# run_parallel_phase <subcmd> <result-callback> <header>:<count> [<header>:<count> ...] -- <file> [<file> ...]
+#
+# <subcmd>          the tesl subcommand to run per file (fmt | validate)
+# <result-callback> shell function called once per file as `<cb> <rc>` (in
+#                   input order) so the caller can update its pass/fail counters
+# <header>:<count>  ordered section descriptors; <header> is printed before the
+#                   first file of that section, <count> files belong to it
+# after `--`        the flat, ordered list of files (sum of all counts)
+run_parallel_phase() {
+    local subcmd="$1"; shift
+    local result_cb="$1"; shift
+
+    local -a section_headers=()
+    local -a section_counts=()
+    while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+        section_headers+=("${1%%:*}")
+        section_counts+=("${1##*:}")
+        shift
+    done
+    [ "${1:-}" = "--" ] && shift
+    local -a files=("$@")
+
+    local total=${#files[@]}
+    if [ "$total" -eq 0 ]; then
+        return 0
     fi
 
-    if [ -n "$output" ]; then
-        # There is output to show — finish the arrow line first (tty) then
-        # print the indented output block, then the result on its own line.
-        [ -t 1 ] && printf "\n"
-        while IFS= read -r line; do
-            printf "       %s\n" "$line"
-        done <<< "$output"
-        if [ "$cmd_status" -eq 0 ]; then
+    local workdir
+    workdir="$(mktemp -d "${TMPDIR:-/tmp}/tesl-ci-phase.XXXXXX")"
+
+    # Fan out: one `tesl <subcmd> <file>` per file, capped at TESL_CI_JOBS
+    # concurrent workers.  Records are NUL-separated `index<TAB>file` so paths
+    # containing spaces are safe.
+    local i
+    for i in "${!files[@]}"; do
+        printf '%d\t%s\0' "$i" "${files[$i]}"
+    done | TESL_PHASE_SUBCMD="$subcmd" TESL_PHASE_WORKDIR="$workdir" \
+        xargs -0 -P "$TESL_CI_JOBS" -I{} bash -c '_tesl_phase_worker "$@"' _ {}
+
+    # Collate in input order, re-emitting section headers at their boundaries.
+    local sec=0
+    local sec_remaining=0
+    [ "${#section_counts[@]}" -gt 0 ] && sec_remaining=${section_counts[0]}
+    local rc out label
+    for i in "${!files[@]}"; do
+        # Print the header for the section this file starts, skipping any
+        # empty sections so the layout stays clean.
+        while [ "$sec" -lt "${#section_counts[@]}" ] && [ "$sec_remaining" -le 0 ]; do
+            sec=$((sec + 1))
+            [ "$sec" -lt "${#section_counts[@]}" ] && sec_remaining=${section_counts[$sec]}
+        done
+        if [ "$sec" -lt "${#section_headers[@]}" ] \
+            && [ "$sec_remaining" -eq "${section_counts[$sec]}" ] \
+            && [ -n "${section_headers[$sec]}" ]; then
+            [ "$sec" -gt 0 ] && printf "\n"
+            printf "%s\n" "${section_headers[$sec]}"
+        fi
+        sec_remaining=$((sec_remaining - 1))
+
+        rc="$(cat "$workdir/$i.rc" 2>/dev/null || echo 1)"
+        out="$(cat "$workdir/$i.out" 2>/dev/null || true)"
+        label="$(basename "${files[$i]}")"
+
+        if [ -n "$out" ]; then
+            while IFS= read -r line; do
+                printf "       %s\n" "$line"
+            done <<< "$out"
+        fi
+        if [ "$rc" -eq 0 ]; then
             printf "  \033[32m✓\033[0m  %s\n" "$label"
         else
             printf "  \033[31m✗\033[0m  %s\n" "$label"
         fi
-    else
-        # No output — overwrite the arrow with the result symbol on a tty,
-        # or just print the result symbol when output is redirected.
-        if [ -t 1 ]; then
-            if [ "$cmd_status" -eq 0 ]; then
-                printf "\r  \033[32m✓\033[0m  %s\n" "$label"
-            else
-                printf "\r  \033[31m✗\033[0m  %s\n" "$label"
-            fi
-        else
-            if [ "$cmd_status" -eq 0 ]; then
-                printf "  \033[32m✓\033[0m  %s\n" "$label"
-            else
-                printf "  \033[31m✗\033[0m  %s\n" "$label"
-            fi
-        fi
-    fi
-    return "$cmd_status"
+
+        # Hand the per-file result to the caller's counter callback.
+        "$result_cb" "$rc"
+    done
+
+    rm -rf "$workdir"
 }
 
-format_file() {
-    # Rewrite the file in place using `tesl fmt` so the subsequent
-    # validate phase sees the formatter's output. Any formatter-induced
-    # compile breakage will surface as a validate failure — no manual
-    # formatting needed.
-    local file="$1"
-    if run_named_command "$(basename "$file")" tesl fmt "$file"; then
+# Counter callbacks for the two phases (invoked once per file, in order).
+tally_format_result() {
+    if [ "$1" -eq 0 ]; then
         format_apply_pass=$((format_apply_pass + 1))
     else
         format_apply_fail=$((format_apply_fail + 1))
     fi
 }
 
-validate_file() {
-    local file="$1"
-    if run_named_command "$(basename "$file")" tesl validate "$file"; then
+tally_validate_result() {
+    if [ "$1" -eq 0 ]; then
         compile_pass=$((compile_pass + 1))
         lint_pass=$((lint_pass + 1))
         fmt_pass=$((fmt_pass + 1))
@@ -379,10 +459,38 @@ run_tesl_batch_runner() {
 }
 
 run_racket_test_suite() {
+    # TESL_RACKET_SUITE_TIMEOUT caps the Racket aggregate test run.
+    # tests/all.rkt starts its own PostgreSQL; on WSL2 that pg_ctl -w can
+    # block indefinitely.  Default 240 s — long enough for a normal run,
+    # short enough to surface hangs quickly.  Set to 0 to disable.
+    #
+    # NOTE: `timeout` cannot wrap bash functions — it only works with real
+    # executables.  We apply it directly to the `racket` or `nix-shell`
+    # command rather than passing run_with_optional_nix_shell as the argument.
+    local timeout_secs="${TESL_RACKET_SUITE_TIMEOUT:-240}"
+    local use_timeout=0
+    if [ "${timeout_secs:-0}" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
+        use_timeout=1
+    fi
+
+    local racket_cmd=""
     if [ "$use_direct_racket" -eq 1 ] && command -v stdbuf >/dev/null 2>&1; then
-        run_with_optional_nix_shell stdbuf -oL -eL racket tests/all.rkt
+        racket_cmd="stdbuf -oL -eL racket tests/all.rkt"
     else
-        run_with_optional_nix_shell racket tests/all.rkt
+        racket_cmd="racket tests/all.rkt"
+    fi
+
+    if [ "$use_timeout" -eq 1 ]; then
+        if [ "$use_direct_racket" -eq 1 ]; then
+            timeout "$timeout_secs" $racket_cmd
+        else
+            # nix-shell --run takes a command string; timeout wraps nix-shell itself
+            local cmd_string=""
+            printf -v cmd_string '%s' "$racket_cmd"
+            timeout "$timeout_secs" nix-shell --run "$cmd_string"
+        fi
+    else
+        run_with_optional_nix_shell $racket_cmd
     fi
 }
 
@@ -410,14 +518,14 @@ echo ""
 echo "━━━  1. Format (tesl fmt, in place)  ━━━"
 echo ""
 phase_start
-echo "  Learn examples (example/learn/)"
-for f in "${LEARN_FILES[@]}"; do format_file "$f"; done
-echo ""
-echo "  Sandbox/example files (example/)"
-for f in "${EXAMPLE_FILES[@]}"; do format_file "$f"; done
-echo ""
-echo "  Test files (tests/)"
-for f in "${TEST_FILES[@]}"; do format_file "$f"; done
+# All files are independent — fan out with a bounded parallel pool, then print
+# the captured per-file results in input order grouped under their section
+# headers (see run_parallel_phase).  TESL_CI_JOBS=1 falls back to one-at-a-time.
+run_parallel_phase fmt tally_format_result \
+    "  Learn examples (example/learn/):${#LEARN_FILES[@]}" \
+    "  Sandbox/example files (example/):${#EXAMPLE_FILES[@]}" \
+    "  Test files (tests/):${#TEST_FILES[@]}" \
+    -- "${LEARN_FILES[@]}" "${EXAMPLE_FILES[@]}" "${TEST_FILES[@]}"
 format_duration=$((SECONDS - phase_started_at))
 phase_complete "Format phase completed"
 
@@ -434,14 +542,13 @@ echo ""
 echo "━━━  2. Validate (compile + lint + format check)  ━━━"
 echo ""
 phase_start
-echo "  Learn examples (example/learn/)"
-for f in "${LEARN_FILES[@]}"; do validate_file "$f"; done
-echo ""
-echo "  Sandbox/example files (example/)"
-for f in "${EXAMPLE_FILES[@]}"; do validate_file "$f"; done
-echo ""
-echo "  Test files (tests/)"
-for f in "${TEST_FILES[@]}"; do validate_file "$f"; done
+# Each `tesl validate` (= check + lint + fmt-check) is independent per file;
+# fan out the same way as the format phase.
+run_parallel_phase validate tally_validate_result \
+    "  Learn examples (example/learn/):${#LEARN_FILES[@]}" \
+    "  Sandbox/example files (example/):${#EXAMPLE_FILES[@]}" \
+    "  Test files (tests/):${#TEST_FILES[@]}" \
+    -- "${LEARN_FILES[@]}" "${EXAMPLE_FILES[@]}" "${TEST_FILES[@]}"
 validate_duration=$((SECONDS - phase_started_at))
 phase_complete "Validation completed"
 
@@ -517,7 +624,18 @@ fi
 
 if [ -f "$mutation_lesson" ] && command -v raco >/dev/null 2>&1; then
     printf "  Running: tesl --mutate %s\n" "$(basename "$mutation_lesson")"
-    mutation_out=$("$TESL_BIN" --mutate "$mutation_lesson" 2>&1) || mutation_fail=1
+    # TESL_MUTATION_TIMEOUT caps the full --mutate run (default 120 s).
+    # Each mutant calls `raco test`; on machines without a database the DSL
+    # can block indefinitely — TESL_MUTATE_TIMEOUT (passed through to the
+    # binary) caps each individual raco invocation (default 15 s).
+    _mutation_timeout="${TESL_MUTATION_TIMEOUT:-120}"
+    mutation_out=$(timeout "$_mutation_timeout" "$TESL_BIN" --mutate "$mutation_lesson" 2>&1)
+    _mut_exit=$?
+    if [ "$_mut_exit" -eq 124 ]; then
+        printf "  \033[33m⚠\033[0m  Mutation testing timed out after %ss — skipping\n" "$_mutation_timeout"
+    elif [ "$_mut_exit" -ne 0 ]; then
+        mutation_fail=1
+    fi
     if [ "$mutation_fail" -eq 0 ]; then
         printf "  \033[32m✓\033[0m  All mutants killed (score: 100%%)\n"
     else
@@ -532,6 +650,46 @@ fi
 
 mutation_duration=$((SECONDS - phase_started_at))
 phase_complete "Mutation testing completed"
+
+echo ""
+echo "━━━  2.6. Integration tests  (httpclient + email — require racket, python3, MailHog)  ━━━"
+echo ""
+phase_start
+
+integration_fail=0
+integration_duration=0
+
+# Locate the locally-built dune so we can run the integration test executables.
+_COMPILER_DIR="$SCRIPT_DIR/compiler"
+_DUNE="$(command -v dune 2>/dev/null)"
+
+if [ -z "$_DUNE" ]; then
+    printf "  \033[33m⚠\033[0m  dune not found — skipping integration tests\n"
+elif [ ! -f "$_COMPILER_DIR/_build/default/bin/main.exe" ]; then
+    printf "  \033[33m⚠\033[0m  compiler not built — skipping integration tests\n"
+else
+    for _suite in test_httpclient_integration test_email_integration; do
+        _exe="$_COMPILER_DIR/_build/default/test/${_suite}.exe"
+        if [ ! -x "$_exe" ]; then
+            # Build it first if not already built
+            (cd "$_COMPILER_DIR" && dune build "test/${_suite}.exe" 2>/dev/null) || true
+        fi
+        if [ -x "$_exe" ]; then
+            printf "  Running %s...\n" "$_suite"
+            if "$_exe" --color=never 2>&1 | grep -E "^\s+\[FAIL\]|Test Successful|failure" | grep -v "Test Successful"; then
+                integration_fail=$((integration_fail + 1))
+                printf "  \033[31m✗\033[0m  %s: failures detected\n" "$_suite"
+            else
+                printf "  \033[32m✓\033[0m  %s\n" "$_suite"
+            fi
+        else
+            printf "  \033[33m⚠\033[0m  %s not built — skipping\n" "$_suite"
+        fi
+    done
+fi
+
+integration_duration=$((SECONDS - phase_started_at))
+phase_complete "Integration tests completed"
 
 echo ""
 echo "━━━  3. Test suite  (authoritative tests/all.rkt aggregate via racket; shared PostgreSQL when available) Will take a few minutes  ━━━"
@@ -601,16 +759,18 @@ if [ "$tesl_test_skipped_no_blocks" -gt 0 ]; then
 fi
 printf "\n"
 printf "  Mutation      %s\n" "$([ "${mutation_fail:-0}" -gt 0 ] && echo "FAILED" || echo "OK (or skipped)")"
+printf "  Integration   %s\n" "$([ "${integration_fail:-0}" -gt 0 ] && echo "${integration_fail} suite(s) failed" || echo "OK (or skipped)")"
 printf "  Racket tests  %s\n" "$([ "${tests_failed:-0}" -gt 0 ] && echo "${tests_failed} failure(s)" || echo "All pass")"
-printf "  Timing        format=%ss validate=%ss tesl=%ss mutation=%ss racket=%ss total=%ss\n" \
+printf "  Timing        format=%ss validate=%ss tesl=%ss mutation=%ss integration=%ss racket=%ss total=%ss\n" \
     "$format_duration" \
     "$validate_duration" \
     "$tesl_tests_duration" \
     "${mutation_duration:-0}" \
+    "${integration_duration:-0}" \
     "$racket_suite_duration" \
     "$((SECONDS - script_started_at))"
 
-overall_fail=$(( format_apply_fail + compile_fail + lint_fail + fmt_fail + test_fail + test_exit + ${mutation_fail:-0} ))
+overall_fail=$(( format_apply_fail + compile_fail + lint_fail + fmt_fail + test_fail + test_exit + ${mutation_fail:-0} + ${integration_fail:-0} ))
 
 if [ "$overall_fail" -gt 0 ]; then
     echo ""

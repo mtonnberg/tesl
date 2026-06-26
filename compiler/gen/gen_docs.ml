@@ -72,9 +72,13 @@ let () =
   let manual_dir = Filename.concat repo_root "manual" in
   walk_dir manual_dir "manual/" [".md"] oc;
 
-  (* manual/dev-docs/ *)
-  let dev_dir = Filename.concat manual_dir "dev-docs" in
-  walk_dir dev_dir "manual/dev-docs/" [".md"] oc;
+  (* dev-docs/ — the contributor docs live at the REPO ROOT (dev-docs/), not
+     under manual/.  Earlier this walked manual/dev-docs/ which does not exist,
+     so `tesl help manual dev` was broken in a packaged binary (the dev docs
+     were never embedded).  Embed them under the key that matches their real
+     on-disk path so the CLI's disk and embedded lookups agree. *)
+  let dev_dir = Filename.concat repo_root "dev-docs" in
+  walk_dir dev_dir "dev-docs/" [".md"] oc;
 
   (* example/*.tesl (top-level, single-file examples) *)
   let example_dir = Filename.concat repo_root "example" in

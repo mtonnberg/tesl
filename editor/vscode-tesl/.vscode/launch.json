@@ -1,0 +1,40 @@
+{
+  // Reference launch configurations for the Tesl debugger (type: "tesl").
+  //
+  // These are also contributed as `initialConfigurations` / `configurationSnippets`
+  // by package.json, so clicking "Add Configuration..." in a launch.json offers
+  // them automatically.  This file documents the full shape, including the
+  // optional `testName` field used by the "Debug This Test" CodeLens.
+  //
+  // The debug adapter is launched by extension.js's
+  // registerDebugAdapterDescriptorFactory, which resolves Racket, the compiler,
+  // dap-server.rkt, and PLTCOLLECTS from the workspace / nix profile and spawns
+  // Racket directly (no bash wrapper needed).  On launch the adapter compiles
+  // the .tesl file with `--debug`, runs the chosen submodule, and proxies
+  // breakpoints/stepping/variables over DAP.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "tesl",
+      "request": "launch",
+      "name": "Tesl: Debug program (current file)",
+      "program": "${file}",
+      "mode": "program"
+    },
+    {
+      "type": "tesl",
+      "request": "launch",
+      "name": "Tesl: Debug tests (current file)",
+      "program": "${file}",
+      "mode": "test"
+    },
+    {
+      "type": "tesl",
+      "request": "launch",
+      "name": "Tesl: Debug a single test (current file)",
+      "program": "${file}",
+      "mode": "test",
+      "testName": "name of the test block to run"
+    }
+  ]
+}

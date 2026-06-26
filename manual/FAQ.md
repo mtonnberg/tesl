@@ -461,7 +461,20 @@ tesl mutate example/todo-api.tesl
 
 ### Is there runtime overhead for proofs?
 
-Currently, yes - proofs are represented as runtime structs. However, as the static checker matures, we plan to **elide** (remove) these runtime proofs for most code paths, resulting in **zero runtime overhead** for the proof system.
+**No — proofs are zero-cost by default.** In a normal (release) build the proof annotations
+(`:::`) are **erased** after type-checking: there is no wrapper, no struct, and no allocation.
+The proof exists only in the compiler's static checker, so by the time your code runs it is
+completely gone.
+
+Even under `--debug`, proofs stay erased — the step debugger shows the raw runtime value and
+overlays a binding's proof/type from compile-time type info (the static checker already knows it).
+Setting `TESL_ZERO_COST_PROOFS=0` restores the runtime net for regression comparison.
+
+The one construct that always carries a minimal runtime token is a *free-floating* proof
+(`detachFact` / `attachFact`), because such a proof is an explicit first-class value that is
+passed around at runtime.
+
+See the [proof cost model](best-practices.md#proof-cost-model) for the full per-feature table.
 
 ### How fast is Tesl?
 

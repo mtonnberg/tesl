@@ -8,11 +8,12 @@
   tesl/dsl/sql
   tesl/dsl/web
   tesl/dsl/test-support
+  tesl/dsl/debug/checkpoint
   tesl/tesl/private/runtime
   tesl/tesl/queue
   tesl/tesl/sse
   (only-in tesl/tesl/prelude Int Fact String)
-  (only-in tesl/example/sandbox IsPositive)
+  (only-in (file "sandbox.rkt") IsPositive)
   (only-in tesl/tesl/maybe Maybe Something Nothing)
   (only-in tesl/tesl/string [String.length tesl_import_String_length] [String.startsWith tesl_import_String_startsWith])
 )
@@ -25,17 +26,17 @@
 (define/pow
   (double [n : Integer])
   #:returns Integer
-  (+ *n *n))
+  (thsl-src! "example/sandbox2.test.tesl" 16 (list (cons 'n *n)) (lambda () (+ *n *n))))
 
 (define/pow
   (add [x : Integer] [y : Integer])
   #:returns Integer
-  (+ *x *y))
+  (thsl-src! "example/sandbox2.test.tesl" 24 (list (cons 'x *x) (cons 'y *y)) (lambda () (+ *x *y))))
 
 (define-checker
   (isLargerThan [x : Integer] [y : Integer])
   #:returns [x : Integer ::: (IsLargerThan x y)]
-  (if (> *x *y) (accept (IsLargerThan x y) #:value *x) (reject "x must be larger than y" #:http-code 400)))
+  (thsl-src! "example/sandbox2.test.tesl" 29 (list (cons 'x *x) (cons 'y *y)) (lambda () (if (> *x *y) (accept (IsLargerThan x y) #:value *x) (reject "x must be larger than y" #:http-code 400)))))
 
 (define-record AnIntRecord
   [someProp : Integer]
@@ -54,40 +55,40 @@
 (define/pow
   (genSmallPositive [seed : Integer])
   #:returns Integer
-  (+ 1 (remainder *seed 100)))
+  (thsl-src! "example/sandbox2.test.tesl" 122 (list (cons 'seed *seed)) (lambda () (+ 1 (remainder *seed 100)))))
 
 (module+ test
   (require rackunit)
   (test-case "double basics"
-  (check-equal? (raw-value (double 0)) 0)
-  (check-equal? (raw-value (double 5)) 10)
-  (check-equal? (raw-value (double -3)) -6)
-  (check-not-equal? (double 1) 0)
+  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 37 (list) (lambda () (double 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 38 (list) (lambda () (double 5)))) 10)
+  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 39 (list) (lambda () (double -3)))) -6)
+  (check-not-equal? (thsl-src! "example/sandbox2.test.tesl" 40 (list) (lambda () (double 1))) 0)
   )
 
   (test-case "add basics"
-  (check-equal? (raw-value (add 3 7)) 10)
-  (check-equal? (raw-value (add 0 0)) 0)
-  (check-equal? (raw-value (add -1 1)) 0)
+  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 44 (list) (lambda () (add 3 7)))) 10)
+  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 45 (list) (lambda () (add 0 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 46 (list) (lambda () (add -1 1)))) 0)
   )
 
   (test-case "String.length"
-  (check-equal? (raw-value (tesl_import_String_length "hello")) 5)
-  (check-equal? (raw-value (tesl_import_String_length "")) 0)
-  (check-equal? (raw-value (tesl_import_String_length "a")) 1)
+  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 50 (list) (lambda () (tesl_import_String_length "hello")))) 5)
+  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 51 (list) (lambda () (tesl_import_String_length "")))) 0)
+  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 52 (list) (lambda () (tesl_import_String_length "a")))) 1)
   )
 
   (test-case "String.startsWith"
-  (check-true (raw-value (tesl_import_String_startsWith "hello" "hel")))
-  (check-true (raw-value (tesl_import_String_startsWith "hello" "")))
+  (check-true (raw-value (thsl-src! "example/sandbox2.test.tesl" 56 (list) (lambda () (tesl_import_String_startsWith "hello" "hel")))))
+  (check-true (raw-value (thsl-src! "example/sandbox2.test.tesl" 57 (list) (lambda () (tesl_import_String_startsWith "hello" "")))))
   )
 
   (test-case "comparisons"
-  (check-true (> 5 3))
-  (check-true (< 3 5))
-  (check-true (>= 5 5))
-  (check-true (<= 5 5))
-  (check-not-equal? 5 3)
+  (check-true (thsl-src! "example/sandbox2.test.tesl" 61 (list) (lambda () (> 5 3))))
+  (check-true (thsl-src! "example/sandbox2.test.tesl" 62 (list) (lambda () (< 3 5))))
+  (check-true (thsl-src! "example/sandbox2.test.tesl" 63 (list) (lambda () (>= 5 5))))
+  (check-true (thsl-src! "example/sandbox2.test.tesl" 64 (list) (lambda () (<= 5 5))))
+  (check-not-equal? (thsl-src! "example/sandbox2.test.tesl" 65 (list) (lambda () 5)) 3)
   )
 
   (test-case "property: double is 2*n"
@@ -183,14 +184,14 @@
   )
 
   (test-case "doctest: double"
-  (check-equal? (raw-value (double 5)) 10)
-  (check-equal? (raw-value (double 0)) 0)
-  (check-equal? (raw-value (double -3)) -6)
+  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 1 (list) (lambda () (double 5)))) 10)
+  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 1 (list) (lambda () (double 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 1 (list) (lambda () (double -3)))) -6)
   )
 
   (test-case "doctest: add"
-  (check-equal? (raw-value (add 3 7)) 10)
-  (check-equal? (raw-value (add 0 0)) 0)
+  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 1 (list) (lambda () (add 3 7)))) 10)
+  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 1 (list) (lambda () (add 0 0)))) 0)
   )
 
 )

@@ -380,6 +380,33 @@ let r41_23_semantic_json_erases_check_return_refinement () =
     assert_not_contains ~label:"check signature refinement" out
       "\"kind\":\"check\",\"type\":\"String -> String ::: ValidTitle s\"")
 
+(* Resilient semantic snapshot (Platinum P2): a buffer with a mid-declaration
+   syntax error must still yield a best-effort JSON snapshot of the declarations
+   that DID parse, not None/empty.  The earlier well-formed function and the
+   later well-formed functions must both survive; only the broken one is lost. *)
+let partial_recovery_src = {|#lang tesl
+module Recover exposing [alpha, gamma]
+import Tesl.Prelude exposing [Int]
+
+fn alpha(n: Int) -> Int =
+  n + 1
+
+fn beta(n: Int) -> Int =
+  n + @@@ )(
+
+fn gamma(n: Int) -> Int =
+  n + 3
+|}
+
+let r41_25_semantic_json_partial_on_parse_error () =
+  with_temp_file "recover" ".tesl" partial_recovery_src (fun path ->
+    let code, out = run_compiler ["--semantic-json"; path] in
+    check int "exit code (partial snapshot succeeds)" 0 code;
+    assert_contains ~label:"valid module header parsed" out "\"module_name\":\"Recover\"";
+    assert_contains ~label:"function before the error survives" out "\"name\":\"alpha\"";
+    assert_contains ~label:"function after the error survives" out "\"name\":\"gamma\"";
+    assert_not_contains ~label:"broken function is dropped" out "\"name\":\"beta\"")
+
 let r41_24_help_exits_nonzero () =
   let code, out = run_compiler ["--help"] in
   (* --help exits 0 (POSIX convention for successful help display) *)
@@ -417,5 +444,6 @@ let () =
          test_case "R41_22 semantic-json erases field refinements" `Quick r41_22_semantic_json_erases_refined_record_field_types;
          test_case "R41_23 semantic-json erases check refinements" `Quick r41_23_semantic_json_erases_check_return_refinement;
          test_case "R41_24 help exits non-zero" `Quick r41_24_help_exits_nonzero;
+         test_case "R41_25 semantic-json partial on parse error" `Quick r41_25_semantic_json_partial_on_parse_error;
        ]);
     ]

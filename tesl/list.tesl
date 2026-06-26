@@ -1,0 +1,287 @@
+#lang tesl
+# ─────────────────────────────────────────────────────────────────────────────
+# Tesl.List — TYPE SOURCE OF TRUTH *and* (for the lifted subset) the real
+# implementation source for the pure List combinators.
+#
+# This file is the authoritative TYPE declaration for the lifted subset of the
+# `Tesl.List` standard library.  The compiler's checker reads the function
+# SIGNATURES here (via load_imported_func_sigs) instead of the hardcoded
+# stdlib_env rows in type_system.ml — that is the "type source of truth" win.
+#
+# IMPLEMENTATION SOURCE-OF-TRUTH (the "smaller core" win): the 16 pure, leaf-free
+# combinators below (map, filter, concatMap, reverse, concat, append, foldl,
+# foldr, length, any, all, find, sum, maximum, minimum, member, contains) have
+# REAL recursive bodies, written in Tesl, that delegate to the irreducible LEAF
+# primitives in `Tesl.ListPrim` (head/tail/append).  This file is compiled at
+# build time to `tesl/list-derived.rkt`; the shim `tesl/list.rkt` re-exports
+# those compiled bodies under the dotted `List.*` runtime names.  So these
+# bodies now ARE the runtime — they are no longer hand-written Racket.
+#
+# RUNTIME is otherwise unchanged: user programs that `import Tesl.List` still
+# emit a require of `tesl/list.rkt` and call `tesl_import_List_*`.  Emission of
+# *user* code is decoupled from this file (the emitter keys on the
+# collection-path table, never on this source).
+#
+# STILL hand-written leaves in `tesl/list.rkt` (NOT lifted — proof/FFI machinery
+# pure Tesl cannot express):
+#   - head, tail, isEmpty, last, nth, filterMap, zip, zipWith, unzip, flatten,
+#     dedupe, unique, range, repeat, product, count, partition, intersperse,
+#     intercalate, groupBy, findIndex, take, drop  (proof obligations / opaque ops)
+#   - sort, sortBy   (carry the `? IsSorted` return proof)
+#   - filterCheck, allCheck, emptyForAll  (check/ForAll machinery — in stdlib_env)
+# Their SIGNATURES still live here (so the module type-checks and the type
+# source-of-truth stays complete); their stub bodies are never emitted for
+# user code.
+#
+# Type-variable names are chosen so decl_scheme's alphabetical rigid-id
+# assignment (a=-1, b=-2, c=-3) reproduces the deleted stdlib rows EXACTLY,
+# keeping inferred-type display byte-identical.
+# ─────────────────────────────────────────────────────────────────────────────
+module List exposing [
+  map,
+  filter,
+  foldl,
+  foldr,
+  length,
+  isEmpty,
+  head,
+  tail,
+  concat,
+  append,
+  reverse,
+  unique,
+  take,
+  drop,
+  zip,
+  range,
+  repeat,
+  any,
+  all,
+  find,
+  sum,
+  maximum,
+  minimum,
+  concatMap,
+  member,
+  contains,
+]
+
+import Tesl.Prelude exposing [Int, Bool(..), List]
+import Tesl.Maybe exposing [Maybe, Something, Nothing]
+import Tesl.Tuple exposing [Tuple2]
+import Tesl.ListPrim exposing [ListPrim.head, ListPrim.tail, ListPrim.append]
+
+# ── TRANSFORM ────────────────────────────────────────────────────────────────
+
+fn map(f: a -> b, xs: List a) -> List b =
+  case ListPrim.head xs of
+    Nothing -> []
+    Something first ->
+      case ListPrim.tail xs of
+        Nothing -> [f first]
+        Something rest -> ListPrim.append [f first] (map f rest)
+
+fn filter(pred: a -> Bool, xs: List a) -> List a =
+  case ListPrim.head xs of
+    Nothing -> []
+    Something first ->
+      case ListPrim.tail xs of
+        Nothing ->
+          if pred first then
+            [first]
+          else
+            []
+        Something rest ->
+          if pred first then
+            ListPrim.append [first] (filter pred rest)
+          else
+            filter pred rest
+
+fn concatMap(f: a -> List b, xs: List a) -> List b =
+  concat (map f xs)
+
+fn reverse(xs: List a) -> List a =
+  case ListPrim.head xs of
+    Nothing -> []
+    Something first ->
+      case ListPrim.tail xs of
+        Nothing -> [first]
+        Something rest -> ListPrim.append (reverse rest) [first]
+
+fn unique(xs: List a) -> List a =
+  xs
+
+fn zip(xs: List a, ys: List b) -> List (Tuple2 a b) =
+  case head xs of
+    Nothing -> []
+    Something x ->
+      case head ys of
+        Nothing -> []
+        Something y -> [Tuple2 x y]
+
+# ── QUERY ──────────────────────────────────────────────────────────────────
+
+fn length(xs: List a) -> Int =
+  case ListPrim.head xs of
+    Nothing -> 0
+    Something _ ->
+      case ListPrim.tail xs of
+        Nothing -> 1
+        Something rest -> 1 + length rest
+
+fn isEmpty(xs: List a) -> Bool =
+  case head xs of
+    Nothing -> True
+    Something _ -> False
+
+fn head(xs: List a) -> Maybe a =
+  case tail xs of
+    Nothing -> Nothing
+    Something _ -> Nothing
+
+fn tail(xs: List a) -> Maybe (List a) =
+  case isEmpty xs of
+    True -> Nothing
+    False -> Something xs
+
+fn any(pred: a -> Bool, xs: List a) -> Bool =
+  case ListPrim.head xs of
+    Nothing -> False
+    Something first ->
+      if pred first then
+        True
+      else
+        case ListPrim.tail xs of
+          Nothing -> False
+          Something rest -> any pred rest
+
+fn all(pred: a -> Bool, xs: List a) -> Bool =
+  case ListPrim.head xs of
+    Nothing -> True
+    Something first ->
+      if pred first then
+        case ListPrim.tail xs of
+          Nothing -> True
+          Something rest -> all pred rest
+      else
+        False
+
+fn find(pred: a -> Bool, xs: List a) -> Maybe a =
+  case ListPrim.head xs of
+    Nothing -> Nothing
+    Something first ->
+      if pred first then
+        Something first
+      else
+        case ListPrim.tail xs of
+          Nothing -> Nothing
+          Something rest -> find pred rest
+
+fn member(x: a, xs: List a) -> Bool =
+  case ListPrim.head xs of
+    Nothing -> False
+    Something first ->
+      if x == first then
+        True
+      else
+        case ListPrim.tail xs of
+          Nothing -> False
+          Something rest -> member x rest
+
+fn contains(x: a, xs: List a) -> Bool =
+  member x xs
+
+fn sum(xs: List Int) -> Int =
+  case ListPrim.head xs of
+    Nothing -> 0
+    Something first ->
+      case ListPrim.tail xs of
+        Nothing -> first
+        Something rest -> first + sum rest
+
+fn maximum(xs: List a) -> Maybe a =
+  case ListPrim.head xs of
+    Nothing -> Nothing
+    Something first ->
+      case ListPrim.tail xs of
+        Nothing -> Something first
+        Something rest ->
+          case maximum rest of
+            Nothing -> Something first
+            Something m ->
+              if first > m then
+                Something first
+              else
+                Something m
+
+fn minimum(xs: List a) -> Maybe a =
+  case ListPrim.head xs of
+    Nothing -> Nothing
+    Something first ->
+      case ListPrim.tail xs of
+        Nothing -> Something first
+        Something rest ->
+          case minimum rest of
+            Nothing -> Something first
+            Something m ->
+              if first < m then
+                Something first
+              else
+                Something m
+
+# ── BUILD ──────────────────────────────────────────────────────────────────
+
+fn append(xs: List a, ys: List a) -> List a =
+  ListPrim.append xs ys
+
+fn concat(xss: List (List a)) -> List a =
+  case ListPrim.head xss of
+    Nothing -> []
+    Something first ->
+      case ListPrim.tail xss of
+        Nothing -> first
+        Something rest -> ListPrim.append first (concat rest)
+
+fn range(start: Int, end: Int) -> List Int =
+  if start < end then
+    [start]
+  else
+    []
+
+fn repeat(x: a, n: Int) -> List a =
+  if n > 0 then
+    [x]
+  else
+    []
+
+# ── FOLD ─────────────────────────────────────────────────────────────────────
+
+fn foldl(f: b -> a -> b, acc: b, xs: List a) -> b =
+  case ListPrim.head xs of
+    Nothing -> acc
+    Something first ->
+      case ListPrim.tail xs of
+        Nothing -> f acc first
+        Something rest -> foldl f (f acc first) rest
+
+fn foldr(f: a -> b -> b, acc: b, xs: List a) -> b =
+  case ListPrim.head xs of
+    Nothing -> acc
+    Something first ->
+      case ListPrim.tail xs of
+        Nothing -> f first acc
+        Something rest -> f first (foldr f acc rest)
+
+# ── SLICE ────────────────────────────────────────────────────────────────────
+
+fn take(n: Int, xs: List a) -> List a =
+  if n > 0 then
+    xs
+  else
+    []
+
+fn drop(n: Int, xs: List a) -> List a =
+  if n > 0 then
+    xs
+  else
+    xs

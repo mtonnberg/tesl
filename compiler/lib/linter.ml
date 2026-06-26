@@ -19,6 +19,16 @@
       W021  type name not UpperCamelCase
       W022  function name not lowerCamelCase
       W040  single-line ADT-looking type alias (footgun: use multi-line syntax)
+      W041  unparenthesized lambda in argument position
+      W050  unused import
+      W060  unused `let` binding (skips proof half of a proof-decompose)
+      W061  unused function parameter
+      W062  unreachable code after `fail`
+      W063  redundant re-check of an already-validated value (proof footgun)
+      W064  discarded `check`/`auth` validation result (proof footgun)
+      W070  email declared but startEmailWorker never called
+      W080  exported function references unexported type or proof predicate
+      W090  bare `print` call bypasses telemetry capability
 *)
 
 (* A lint diagnostic uses the same type as Compile.diagnostic so it can
@@ -32,6 +42,8 @@ type lint_diag = {
   message : string;
   fix     : Compile.diagnostic_fix option;
 }
+
+open Validation_common
 
 (* ── Regex helpers ───────────────────────────────────────────────────────── *)
 
@@ -382,15 +394,23 @@ let lint_lambda_in_arg_position (file : string) (lines : string array) (out : li
 
 (* ── AST-based unused import/variable detection ──────────────────────────── *)
 
-(** Collect all names referenced in an expression (recursively). *)
+(** Collect all names referenced in an expression (recursively).
+
+    Only the variants that contribute MORE than their child expressions — a
+    referenced identifier, a qualified name, a capability/effect marker, an
+    embedded type or proof annotation, or a pattern's constructor name — are
+    matched explicitly.  Each of those still recurses into its child exprs via
+    {!Ast_visitor.fold_children}, the single shared structural traversal, and
+    the purely-mechanical variants (application, operators, conditionals,
+    lists, [fail], [with database]/[with transaction], plain/interpolated
+    literals) fall through to it directly.  Sharing one traversal means a new
+    {!Ast.expr} variant cannot silently escape unused-name analysis.
+
+    Order is irrelevant downstream: the result is only ever consulted with
+    [List.mem], so delegating recursion to [fold_children] (which also threads
+    left-to-right) preserves behaviour exactly. *)
 let rec collect_expr_names acc (e : Ast.expr) =
   match e with
-  | ELit { lit = LInterp segs; _ } ->
-    List.fold_left (fun a seg -> match seg with
-      | Ast.ILiteral _ -> a
-      | Ast.IExpr e -> collect_expr_names a e
-    ) acc segs
-  | ELit _ -> acc
   | EVar { name; _ } -> name :: acc
   | EField { obj; field; _ } ->
     let acc = collect_expr_names acc obj in
@@ -401,14 +421,6 @@ let rec collect_expr_names acc (e : Ast.expr) =
       | _ -> field
     in
     qname :: field :: acc
-  | EApp { fn; arg; _ } ->
-    collect_expr_names (collect_expr_names acc fn) arg
-  | EBinop { left; right; _ } ->
-    collect_expr_names (collect_expr_names acc left) right
-  | EUnop { arg; _ } -> collect_expr_names acc arg
-  | EIf { cond; then_; else_; _ } ->
-    collect_expr_names
-      (collect_expr_names (collect_expr_names acc cond) then_) else_
   | ECase { scrut; arms; _ } ->
     let acc = collect_expr_names acc scrut in
     List.fold_left (fun a (arm : Ast.case_arm) ->
@@ -417,16 +429,10 @@ let rec collect_expr_names acc (e : Ast.expr) =
         | Some g -> collect_expr_names a g | None -> a in
       collect_expr_names a arm.body
     ) acc arms
-  | ELet { name = _; declared_type; value; body; _ } ->
+  | ELet { declared_type; _ } ->
     let acc = match declared_type with
       | Some te -> collect_type_expr_names acc te | None -> acc in
-    collect_expr_names (collect_expr_names acc value) body
-  | ELetProof { value; body; _ } ->
-    collect_expr_names (collect_expr_names acc value) body
-  | ERecord { fields; _ } ->
-    List.fold_left (fun a (_, e) -> collect_expr_names a e) acc fields
-  | EList { elems; _ } ->
-    List.fold_left collect_expr_names acc elems
+    Ast_visitor.fold_children collect_expr_names acc e
   | EOk { value; proof; _ } ->
     let acc = collect_expr_names acc value in
     (* Proof annotations reference identifiers too — e.g. in
@@ -435,33 +441,40 @@ let rec collect_expr_names acc (e : Ast.expr) =
        Without this walk, the linter spuriously flags `scoreProof`
        as unused. *)
     collect_proof_names acc proof
-  | EFail { message; _ } -> collect_expr_names acc message
-  | ETelemetry { fields; _ } ->
-    let acc = "telemetry" :: acc in
-    List.fold_left (fun a (_, e) -> collect_expr_names a e) acc fields
-  | EEnqueue { payload; _ } ->
-    collect_expr_names ("queueWrite" :: acc) payload
-  | EPublish { key; payload; _ } ->
-    let acc = "pubsub" :: acc in
-    let acc = match key with Some k -> collect_expr_names acc k | None -> acc in
-    (match payload with Some p -> collect_expr_names acc p | None -> acc)
+  | ETelemetry _ ->
+    Ast_visitor.fold_children collect_expr_names ("telemetry" :: acc) e
+  | EEnqueue _ ->
+    Ast_visitor.fold_children collect_expr_names ("queueWrite" :: acc) e
+  | EPublish _ ->
+    Ast_visitor.fold_children collect_expr_names ("pubsub" :: acc) e
   | EStartWorkers { capabilities; _ } ->
     List.fold_left (fun a c -> c :: a) acc capabilities
-  | EWithDatabase { body; _ } -> collect_expr_names acc body
-  | EWithCapabilities { capabilities; body; _ } ->
+  | EWithCapabilities { capabilities; _ } ->
     let acc = List.fold_left (fun a c -> c :: a) acc capabilities in
-    collect_expr_names acc body
-  | EWithTransaction { body; _ } -> collect_expr_names acc body
-  | EServe { capabilities; port; _ } ->
+    Ast_visitor.fold_children collect_expr_names acc e
+  | EServe { capabilities; _ } ->
     let acc = List.fold_left (fun a c -> c :: a) acc capabilities in
-    collect_expr_names acc port
-  | EConstructor { name; args; _ } ->
-    List.fold_left collect_expr_names (name :: acc) args
-  | ELambda { params; body; _ } ->
+    Ast_visitor.fold_children collect_expr_names acc e
+  | EConstructor { name; _ } ->
+    Ast_visitor.fold_children collect_expr_names (name :: acc) e
+  | ELambda { params; _ } ->
     let acc = List.fold_left (fun a (b : Ast.binding) ->
       collect_type_expr_names a b.type_expr
     ) acc params in
-    collect_expr_names acc body
+    Ast_visitor.fold_children collect_expr_names acc e
+  | ECacheGet { cache_name; _ }
+  | ECacheSet { cache_name; _ }
+  | ECacheDelete { cache_name; _ }
+  | ECacheInvalidate { cache_name; _ } ->
+    Ast_visitor.fold_children collect_expr_names (cache_name :: acc) e
+  | ESendEmail { email_name; _ } ->
+    Ast_visitor.fold_children collect_expr_names (email_name :: acc) e
+  | EStartEmailWorker { email_name; _ } -> email_name :: acc
+  (* Purely-mechanical variants: recurse into child exprs only.  This includes
+     EApp, EBinop, EUnop, EIf, ELetProof, ERecord, EList, EFail (now correctly
+     descends into its message expr), EWithDatabase, EWithTransaction, and
+     plain/interpolated literals. *)
+  | _ -> Ast_visitor.fold_children collect_expr_names acc e
 
 and collect_proof_names (acc : string list) (p : Ast.proof_expr) : string list =
   match p with
@@ -640,7 +653,7 @@ let collect_decl_names acc (d : Ast.top_decl) =
       | _ -> a
     ) acc df.postgres
   | DConst _ | DQueue _ | DChannel _
-  | DWorkers _ -> acc
+  | DWorkers _ | DCache _ | DEmail _ -> acc
   | DCapability cf ->
     List.fold_left (fun a c -> c :: a) acc cf.implies
 
@@ -737,14 +750,16 @@ let rec collect_let_names (acc : (string * Location.loc) list) (e : Ast.expr) =
     let acc = if name <> "_" && not (String.length name > 0 && name.[0] = '_')
               then (name, loc) :: acc else acc in
     collect_let_names (collect_let_names acc value) body
-  | Ast.ELetProof { value_name; proof_name; value; body; loc; _ } ->
+  | Ast.ELetProof { value_name; proof_name = _; value; body; loc; _ } ->
+    (* Only the VALUE half of a proof-decompose is checked for being unused.
+       The PROOF half (the detached fact `let (v ::: p) = x`) is intentionally
+       left unbound-to-a-use in idiomatic code: extracting a proof you do not
+       immediately re-attach is the decompose analogue of `detachFact`, and the
+       learning corpus ships it that way (e.g. lesson08 `showAge`, lesson09
+       `decomposeBoth`). Flagging `p` there is a false positive, so we skip it. *)
     let acc =
       if value_name <> "_" && not (String.length value_name > 0 && value_name.[0] = '_')
       then (value_name, loc) :: acc else acc
-    in
-    let acc =
-      if proof_name <> "_" && not (String.length proof_name > 0 && proof_name.[0] = '_')
-      then (proof_name, loc) :: acc else acc
     in
     collect_let_names (collect_let_names acc value) body
   | Ast.EIf { cond; then_; else_; _ } ->
@@ -801,6 +816,132 @@ let rec find_dead_after_fail (acc : Location.loc list) (e : Ast.expr) =
       find_dead_after_fail a arm.body) acc arms
   | Ast.EWithDatabase { body; _ } | Ast.EWithCapabilities { body; _ }
   | Ast.EWithTransaction { body; _ } -> find_dead_after_fail acc body
+  | _ -> acc
+
+(** Recognise the expression form of a validating call written with the
+    `check`/`auth` keyword.
+
+    In expression position (e.g. `let v = check checkScore n`), the keyword is
+    parsed as a head identifier applied to the checker and then the value:
+    [EApp { fn = EApp { fn = EVar "check"; arg = checker }; arg = value }].
+    Returns [(keyword, checker_name, value_expr)] for the single-checker shape
+    where [checker] is a plain identifier.  Compound `(checkA && checkB)`
+    checkers and other shapes return [None] (kept deliberately narrow so the
+    footgun rules below stay false-positive-free). *)
+let check_call_shape (e : Ast.expr) :
+  (string * string * Ast.expr) option =
+  match e with
+  | Ast.EApp { fn = Ast.EApp { fn = Ast.EVar { name = kw; _ };
+                               arg = Ast.EVar { name = checker; _ }; _ };
+               arg = value; _ }
+    when kw = "check" || kw = "auth" ->
+    Some (kw, checker, value)
+  | _ -> None
+
+(** W063 / W064 — proof-validation footguns that the type checker does *not*
+    reject (it happily accepts both, because proofs only ever accumulate):
+
+    - W063 redundant re-check: validating a binding that was already produced
+      by the *same* checker. Re-running an HTTP-boundary validator on an
+      already-proven value is wasted work and, per lesson54's "scattered
+      re-validation" anti-pattern, scatters spurious failure paths through
+      business logic.
+    - W064 discarded validation result: `let _ = check … ` / `_`-prefixed.
+      A `check`/`auth` call is the only way to mint a proof; binding its result
+      to `_` throws that proof away while keeping the can-fail side effect. The
+      idiomatic "validate but rename" form keeps the proof
+      (`let (_ ::: p) = check …`), so a fully-discarded result is suspect.
+
+    We walk the let-chain carrying an environment mapping each binding to the
+    checker that produced it (when it was produced by a single-checker
+    `check`/`auth`). *)
+let rec find_proof_footguns
+    (env : (string * string) list)   (* var_name -> checker_name *)
+    (acc : lint_diag list)
+    (filename : string)
+    (e : Ast.expr) : lint_diag list =
+  let emit acc (loc : Location.loc) severity code message =
+    { file = filename; line = loc.start.line; col = loc.start.col;
+      severity; code; message; fix = None } :: acc
+  in
+  (* Inspect a bound value: flag W063 if it re-checks an already-checked
+     binding, and report the checker name it establishes (for env tracking). *)
+  let inspect_value acc value : lint_diag list * string option =
+    let acc = find_proof_footguns env acc filename value in
+    match check_call_shape value with
+    | Some (_, checker, Ast.EVar { name = arg_name; loc = arg_loc }) ->
+      let acc =
+        match List.assoc_opt arg_name env with
+        | Some prev when prev = checker ->
+          emit acc arg_loc "warning" "W063"
+            (Printf.sprintf
+               "redundant re-check: `%s` was already validated by `%s`, so \
+                checking it again attaches no new proof. Drop this `check` \
+                (proofs accumulate — the existing value already carries it)."
+               arg_name checker)
+        | _ -> acc
+      in
+      acc, Some checker
+    | Some (_, checker, _) -> acc, Some checker
+    | None -> acc, None
+  in
+  match e with
+  | Ast.ELet { name; value; body; loc; _ } ->
+    let acc, produced = inspect_value acc value in
+    (* W064: a fully-discarded validation result. *)
+    let acc =
+      if (name = "_" || (String.length name > 0 && name.[0] = '_'))
+         && produced <> None
+      then
+        emit acc loc "warning" "W064"
+          "discarded validation result — a `check`/`auth` call is the only way \
+           to mint a proof, and binding it to `_` throws that proof away while \
+           keeping the failure path. Bind the result, or keep just the proof \
+           with `let (_ ::: p) = …`."
+      else acc
+    in
+    let env' = match produced with
+      | Some checker when name <> "_" -> (name, checker) :: env
+      | _ -> env
+    in
+    find_proof_footguns env' acc filename body
+  | Ast.ELetProof { value_name; value; body; _ } ->
+    let acc, produced = inspect_value acc value in
+    let env' = match produced with
+      | Some checker when value_name <> "_" -> (value_name, checker) :: env
+      | _ -> env
+    in
+    find_proof_footguns env' acc filename body
+  | Ast.EIf { cond; then_; else_; _ } ->
+    let acc = find_proof_footguns env acc filename cond in
+    let acc = find_proof_footguns env acc filename then_ in
+    find_proof_footguns env acc filename else_
+  | Ast.ECase { scrut; arms; _ } ->
+    let acc = find_proof_footguns env acc filename scrut in
+    List.fold_left (fun acc (arm : Ast.case_arm) ->
+      let acc = match arm.guard with
+        | Some g -> find_proof_footguns env acc filename g | None -> acc in
+      find_proof_footguns env acc filename arm.body
+    ) acc arms
+  | Ast.EApp { fn; arg; _ } ->
+    let acc = find_proof_footguns env acc filename fn in
+    find_proof_footguns env acc filename arg
+  | Ast.EBinop { left; right; _ } ->
+    let acc = find_proof_footguns env acc filename left in
+    find_proof_footguns env acc filename right
+  | Ast.EUnop { arg; _ } -> find_proof_footguns env acc filename arg
+  | Ast.ERecord { fields; _ } ->
+    List.fold_left (fun acc (_, v) -> find_proof_footguns env acc filename v) acc fields
+  | Ast.EList { elems; _ } ->
+    List.fold_left (fun acc v -> find_proof_footguns env acc filename v) acc elems
+  | Ast.EWithDatabase { body; _ } | Ast.EWithCapabilities { body; _ }
+  | Ast.EWithTransaction { body; _ } -> find_proof_footguns env acc filename body
+  | Ast.EOk { value; _ } -> find_proof_footguns env acc filename value
+  | Ast.EFail { message; _ } -> find_proof_footguns env acc filename message
+  | Ast.ELambda { body; _ } ->
+    (* Lambdas open a fresh scope; the outer check-bindings do not flow in via
+       parameters, but captured bindings still do, so keep the env. *)
+    find_proof_footguns env acc filename body
   | _ -> acc
 
 let lint_unused_locals_and_dead_code filename (source : string) (out : lint_diag list ref) =
@@ -878,7 +1019,189 @@ let lint_unused_locals_and_dead_code filename (source : string) (out : lint_diag
             message  = "unreachable code after `fail` — everything after a `fail` statement is dead";
             fix      = None;
           } :: !out
-        ) dead_locs
+        ) dead_locs;
+        (* 4. Proof-validation footguns (W063 redundant re-check, W064 discarded
+           validation result). *)
+        let footguns = find_proof_footguns [] [] filename fd.body in
+        List.iter (fun d -> out := d :: !out) footguns
+      | _ -> ()
+    ) m.decls
+
+(** W070 — email declared but never started.
+    For every [DEmail] declaration in a module, check that at least one
+    [EStartEmailWorker] call with that email name appears somewhere in the
+    module (any function body).  If not, queued emails will never be
+    delivered. *)
+
+let rec collect_start_email_workers (acc : string list) (e : Ast.expr) : string list =
+  match e with
+  | Ast.EStartEmailWorker { email_name; _ } -> email_name :: acc
+  | Ast.ELet { value; body; _ } ->
+    collect_start_email_workers (collect_start_email_workers acc value) body
+  | Ast.ELetProof { value; body; _ } ->
+    collect_start_email_workers (collect_start_email_workers acc value) body
+  | Ast.EIf { cond; then_; else_; _ } ->
+    collect_start_email_workers
+      (collect_start_email_workers (collect_start_email_workers acc cond) then_) else_
+  | Ast.ECase { scrut; arms; _ } ->
+    let acc = collect_start_email_workers acc scrut in
+    List.fold_left (fun a (arm : Ast.case_arm) ->
+      collect_start_email_workers a arm.body) acc arms
+  | Ast.EApp { fn; arg; _ } ->
+    collect_start_email_workers (collect_start_email_workers acc fn) arg
+  | Ast.EBinop { left; right; _ } ->
+    collect_start_email_workers (collect_start_email_workers acc left) right
+  | Ast.EUnop { arg; _ } -> collect_start_email_workers acc arg
+  | Ast.EWithDatabase { body; _ } | Ast.EWithCapabilities { body; _ }
+  | Ast.EWithTransaction { body; _ } -> collect_start_email_workers acc body
+  | Ast.EServe _ | Ast.ETelemetry _ | Ast.EEnqueue _ | Ast.EPublish _
+  | Ast.EStartWorkers _ | Ast.ESendEmail _ | Ast.ECacheGet _
+  | Ast.ECacheSet _ | Ast.ECacheDelete _ | Ast.ECacheInvalidate _
+  | Ast.ELambda _ | Ast.ERecord _ | Ast.EList _ | Ast.EOk _ | Ast.EFail _
+  | Ast.EConstructor _ | Ast.EField _ | Ast.EVar _ | Ast.ELit _
+  | Ast.ERuntimeCall _ -> acc
+
+let lint_missing_email_worker filename (source : string) (out : lint_diag list ref) =
+  match Parser.parse_module filename source with
+  | Err _ -> ()
+  | Ok m ->
+    (* 1. Collect all DEmail declaration names + locations. *)
+    let email_decls = List.filter_map (function
+      | Ast.DEmail ef -> Some (ef.name, ef.loc)
+      | _ -> None
+    ) m.decls in
+    if email_decls <> [] then begin
+      (* 2. Walk every function body to find EStartEmailWorker calls. *)
+      let started_names = List.fold_left (fun acc decl ->
+        match decl with
+        | Ast.DFunc fd -> collect_start_email_workers acc fd.body
+        | _ -> acc
+      ) [] m.decls in
+      (* 3. Warn for each email that is never started. *)
+      List.iter (fun (name, (loc : Location.loc)) ->
+        if not (List.mem name started_names) then
+          out := {
+            file     = filename;
+            line     = loc.start.line;
+            col      = loc.start.col;
+            severity = "warning";
+            code     = "W070";
+            message  = Printf.sprintf
+              "email `%s` is declared but `startEmailWorker %s` is never called — \
+queued emails will not be delivered; add `startEmailWorker %s` in your \
+`main` function or server setup"
+              name name name;
+            fix      = None;
+          } :: !out
+      ) email_decls
+    end
+
+(** W080 — exported function references a locally-defined type or proof
+    predicate that is not also exported.
+
+    For library modules this is also a compile error (E090); for regular
+    modules it remains advisory: the consumer may still be able to import the
+    type from its original source, and app modules are never imported at all. *)
+let lint_unexported_signature_names filename (source : string) (out : lint_diag list ref) =
+  match Parser.parse_module filename source with
+  | Err _ -> ()
+  | Ok m ->
+    let locally_defined = List.filter_map (function
+      | Ast.DRecord r -> Some r.name
+      | Ast.DType (Ast.TypeAdt { name; _ }) -> Some name
+      | Ast.DType (Ast.TypeNewtype { name; _ }) -> Some name
+      | Ast.DType (Ast.TypeAlias { name; _ }) -> Some name
+      | Ast.DFact f -> Some f.name
+      | Ast.DCapability cap -> Some cap.name
+      | _ -> None
+    ) m.decls in
+    let exported_set = List.filter_map (function
+      | Ast.ExportName n | Ast.ExportAdt n -> Some n) m.exports in
+    List.iter (function
+      | Ast.DFunc fd when List.mem fd.name exported_set ->
+        let seen = Hashtbl.create 4 in
+        List.iter (fun (name, (loc : Location.loc)) ->
+          if not (Hashtbl.mem seen name)
+          && List.mem name locally_defined
+          && not (List.mem name exported_set) then begin
+            Hashtbl.add seen name ();
+            out := {
+              file     = filename;
+              line     = loc.start.line;
+              col      = loc.start.col;
+              severity = "warning";
+              code     = "W080";
+              message  = Printf.sprintf
+                "`%s` is exported but `%s` (used in its signature) is not — \
+                 consumers who import `%s` may not be able to call it; \
+                 add `%s` to the `exposing [...]` list"
+                fd.name name fd.name name;
+              fix = None;
+            } :: !out
+          end
+        ) (func_sig_refs fd)
+      | _ -> ()
+    ) m.decls
+
+(** W090 — bare `print` call bypasses the telemetry capability.
+
+    `print` is available via Racket interop and returns Unit, but it is an
+    uncontrolled side effect that bypasses Tesl's `telemetry` capability guard.
+    Use `telemetry` events instead, or add `telemetry` to the function's
+    `requires [...]` clause and wrap the call appropriately.
+
+    This fires when `print` appears as a function call in any function body. *)
+let rec collect_print_calls (acc : Location.loc list) (e : Ast.expr) : Location.loc list =
+  match e with
+  | Ast.EApp { fn = Ast.EVar { name = "print"; loc; _ }; arg; _ } ->
+    let acc = loc :: acc in
+    collect_print_calls acc arg
+  | Ast.EApp { fn; arg; _ } ->
+    collect_print_calls (collect_print_calls acc fn) arg
+  | Ast.ELet { value; body; _ } | Ast.ELetProof { value; body; _ } ->
+    collect_print_calls (collect_print_calls acc value) body
+  | Ast.EIf { cond; then_; else_; _ } ->
+    collect_print_calls (collect_print_calls (collect_print_calls acc cond) then_) else_
+  | Ast.ECase { scrut; arms; _ } ->
+    let acc = collect_print_calls acc scrut in
+    List.fold_left (fun a (arm : Ast.case_arm) -> collect_print_calls a arm.body) acc arms
+  | Ast.EBinop { left; right; _ } ->
+    collect_print_calls (collect_print_calls acc left) right
+  | Ast.EUnop { arg; _ } | Ast.EField { obj = arg; _ } ->
+    collect_print_calls acc arg
+  | Ast.EList { elems; _ } -> List.fold_left collect_print_calls acc elems
+  | Ast.EOk { value; _ } -> collect_print_calls acc value
+  | Ast.ERecord { fields; _ } ->
+    List.fold_left (fun a (_, v) -> collect_print_calls a v) acc fields
+  | Ast.ELambda { body; _ }
+  | Ast.EWithDatabase { body; _ } | Ast.EWithCapabilities { body; _ }
+  | Ast.EWithTransaction { body; _ } -> collect_print_calls acc body
+  | Ast.EConstructor { args; _ } -> List.fold_left collect_print_calls acc args
+  | Ast.EFail _ | Ast.EVar _ | Ast.ELit _ | Ast.EServe _ | Ast.EStartWorkers _
+  | Ast.ETelemetry _ | Ast.EEnqueue _ | Ast.EPublish _ | Ast.ECacheGet _
+  | Ast.ECacheSet _ | Ast.ECacheDelete _ | Ast.ECacheInvalidate _
+  | Ast.ESendEmail _ | Ast.EStartEmailWorker _ | Ast.ERuntimeCall _ -> acc
+
+let lint_bare_print filename (source : string) (out : lint_diag list ref) =
+  match Parser.parse_module filename source with
+  | Err _ -> ()
+  | Ok m ->
+    List.iter (function
+      | Ast.DFunc fd ->
+        let locs = collect_print_calls [] fd.body in
+        List.iter (fun (loc : Location.loc) ->
+          out := {
+            file     = filename;
+            line     = loc.start.line;
+            col      = loc.start.col;
+            severity = "warning";
+            code     = "W090";
+            message  =
+              "bare `print` call bypasses Tesl's telemetry capability — \
+               use `telemetry` events for observable output, or remove for production";
+            fix = None;
+          } :: !out
+        ) locs
       | _ -> ()
     ) m.decls
 
@@ -901,6 +1224,9 @@ let lint_file (filename : string) : Compile.diagnostic list =
   lint_lambda_in_arg_position  filename lines out;
   lint_unused_imports          filename src out;
   lint_unused_locals_and_dead_code filename src out;
+  lint_missing_email_worker    filename src out;
+  lint_unexported_signature_names filename src out;
+  lint_bare_print                 filename src out;
   (* Sort by line then col *)
   let sorted = List.sort (fun a b ->
     let c = compare a.line b.line in

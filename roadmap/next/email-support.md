@@ -1,1 +1,0 @@
-Maybe we should add native support for sending emails, I think this should be similar to queues or something and not just simple functions. 

@@ -1,0 +1,244 @@
+#lang tesl
+module Lesson60Email exposing [
+  sendWelcomeEmail,
+  sendPasswordReset,
+  sendNotification,
+  sendHtmlNewsletter,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 60 — Email Support (Outbox Pattern)
+#
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Tesl provides native email sending via the `email` block.
+#
+# Step 1: Declare an `email` block with database and SMTP config.
+# Step 2: Call `Email.send EmailName { to: ... subject: ... }` in any
+#         function that requires [email].
+# Step 3: Call `startEmailWorker EmailName` in your `main` to start the
+#         background delivery thread.
+#
+# Email.send is NON-BLOCKING: it writes to a `tesl_email_outbox` table
+# inside the current database transaction (the outbox pattern). The call
+# returns immediately and a background worker delivers the email via SMTP.
+#
+# Key guarantee: if the surrounding database transaction rolls back,
+# NO email is inserted and therefore NO email is ever delivered.
+# The database and email state are always consistent.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Email.send parameters:
+#   to:      String     — recipient address (required)
+#   subject: String     — subject line (required)
+#   body:    EmailBody  — one of:
+#              TextBody "plain text"           — plain text only
+#              HtmlBody "<h1>html</h1>"        — HTML only
+#              RichBody "plain text" "<h1>…"   — both (recommended)
+#
+# Returns: Unit — fire-and-queue
+# Requires: [email] capability
+#
+# The EmailBody ADT makes no-body emails impossible to construct.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [String, Unit, Bool(..)]
+
+# ── Database ──────────────────────────────────────────────────────────────────
+#
+# The email outbox is stored as a table in this database.
+# The email block references it with `database: AppDB`.
+
+database AppDB {
+  backend postgres
+  schema "lesson60"
+  entities []
+  postgres {
+    database env("LESSON60_DB")
+    user env("TESL_POSTGRES_USER")
+    password env("TESL_POSTGRES_PASSWORD")
+    host env("TESL_POSTGRES_HOST")
+    port envInt("TESL_POSTGRES_PORT", 5432)
+    socket env("TESL_POSTGRES_SOCKET")
+  }
+}
+
+# ── Email declaration ─────────────────────────────────────────────────────────
+#
+# Supported smtp fields:
+#   host     — SMTP server hostname (e.g. "smtp.sendgrid.net", "smtp.gmail.com")
+#   port     — TCP port: 587 (STARTTLS), 465 (SMTPS), 25 (plain)
+#   username — SMTP auth username (often your API key for transactional providers)
+#   password — SMTP auth password
+#   tls      — true to use STARTTLS, false for plain
+#
+# Always use env() for credentials — never hardcode secrets.
+
+email AppEmail {
+  database: AppDB
+  smtp {
+    host: env("SMTP_HOST")
+    port: 587
+    username: env("SMTP_USER")
+    password: env("SMTP_PASS")
+    tls: true
+  }
+}
+
+# ── Email functions ────────────────────────────────────────────────────────────
+
+# Welcome email: sent after a user registers.
+# Uses both text and html bodies — all major clients handle both.
+fn sendWelcomeEmail(recipientAddr: String, firstName: String) -> Unit
+  requires [email] =
+  Email.send AppEmail {
+    to: recipientAddr
+    subject: "Welcome to our service!"
+    body: RichBody "Hello ${firstName}, welcome! We're glad to have you." "<h1>Welcome, ${firstName}!</h1><p>Great to have you with us.</p>"
+  }
+
+# Password reset: sends a link. The link should be pre-signed or time-limited.
+fn sendPasswordReset(recipientAddr: String, resetLink: String) -> Unit
+  requires [email] =
+  Email.send AppEmail {
+    to: recipientAddr
+    subject: "Password Reset Request"
+    body: RichBody "Click this link to reset your password: ${resetLink}" "<p>Click <a href=\"${resetLink}\">here</a> to reset your password. Link expires in 30 minutes.</p>"
+  }
+
+# Plain text notification — no HTML.
+fn sendNotification(addr: String, message: String) -> Unit
+  requires [email] =
+  Email.send AppEmail {
+    to: addr
+    subject: "Notification"
+    body: TextBody message
+  }
+
+# HTML-only newsletter.
+fn sendHtmlNewsletter(addr: String, htmlContent: String) -> Unit
+  requires [email] =
+  Email.send AppEmail {
+    to: addr
+    subject: "Monthly Newsletter"
+    body: HtmlBody htmlContent
+  }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UNDERSTANDING — the outbox pattern and why it matters
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# THE OUTBOX PATTERN
+#
+# The dual-write problem for email:
+#   1. Database UPDATE succeeds (user is created).
+#   2. Server crashes before the SMTP call.
+#   3. No welcome email is ever sent. No log of the failed send.
+#
+# The outbox pattern fixes this by writing the email to a database table
+# (the "outbox") inside the SAME database transaction as the business logic:
+#
+#   withTransaction {
+#     insert User { id: newId, email: addr, name: firstName }
+#     Email.send AppEmail { to: addr subject: "Welcome!" text: "..." }
+#     # ↑ this inserts a row into tesl_email_outbox, not to SMTP
+#   }
+#
+# If the transaction commits: the user row AND the outbox row exist.
+# If the transaction rolls back: NEITHER exists.
+# The background worker picks up the outbox row and delivers via SMTP.
+# If SMTP fails: the worker retries with exponential backoff (5m × 2^n).
+# After 5 failed attempts: the row is marked 'dead' and an alert is raised.
+# Delivered rows are cleaned up after 24 hours.
+#
+# This gives you:
+#   - Guaranteed "at-least-once" delivery (never lost if the commit succeeded)
+#   - Transactional safety (no email on rollback)
+#   - Retry on SMTP failure with backoff
+#   - No lost emails on server restart or crash
+#
+# WHY startEmailWorker IN main?
+#
+# The background delivery thread must be started explicitly so you control
+# its lifetime. In tests or batch jobs, you may not want it running at all.
+# In production, call startEmailWorker AppEmail inside your main block:
+#
+#   main with capabilities [email] {
+#     with database AppDB {
+#       startEmailWorker AppEmail
+#       serve MyServer on 8080 with capabilities [myService]
+#     }
+#   }
+#
+# The worker runs as a daemon thread (does not block server exit).
+#
+# WHY NOT A SEPARATE QUEUE SERVICE?
+#
+# Redis queues, SQS, RabbitMQ — all require a separate service, separate
+# deployment, and introduce the dual-write problem again (write to DB,
+# then enqueue to queue). Tesl's outbox uses only your existing PostgreSQL
+# database. No additional infrastructure to deploy or monitor.
+#
+# WHY `email` CAPABILITY (NOT NAME-SPECIFIC LIKE cache)?
+#
+# The email capability is `email` — shared across all email configurations.
+# Rationale: most apps have one email provider; name-specific capabilities
+# would add friction for the common case. If you need to restrict access to
+# a specific email config, use separate capability declarations:
+#   capability marketingEmailCap implies email
+#   capability transactionalEmailCap implies email
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Note: Email.send is non-blocking and does not deliver synchronously in tests.
+# The tests below verify that Email.send compiles and runs without error
+# (it inserts into the in-memory outbox store in test mode, no SMTP needed).
+
+test "sendWelcomeEmail compiles and runs without error" {
+  let _ = sendWelcomeEmail "alice@example.com" "Alice"
+  expect True == True
+}
+
+test "sendPasswordReset compiles and runs without error" {
+  let _ = sendPasswordReset "bob@example.com" "https://example.com/reset?token=abc123"
+  expect True == True
+}
+
+test "sendNotification with plain text" {
+  let _ = sendNotification "ops@example.com" "Deployment completed successfully."
+  expect True == True
+}
+
+test "sendHtmlNewsletter with HTML content" {
+  let _ = sendHtmlNewsletter "newsletter@example.com" "<h1>June Update</h1><p>Here's what's new.</p>"
+  expect True == True
+}
+
+test "multiple emails can be queued in sequence" {
+  let _ = sendWelcomeEmail "user1@example.com" "User1"
+  let _ = sendWelcomeEmail "user2@example.com" "User2"
+  let _ = sendWelcomeEmail "user3@example.com" "User3"
+  expect True == True
+}
+
+test "email with special characters in body" {
+  let _ = sendNotification "test@example.com" "Reset link: https://example.com/reset?token=abc&user=1"
+  expect True == True
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# START THE WORKER
+#
+# Call startEmailWorker in your main function or server setup.
+# Without this, emails are queued but never sent.
+# ─────────────────────────────────────────────────────────────────────────────
+
+fn startEmailDelivery() -> Unit requires [email] =
+  startEmailWorker AppEmail
+
+test "startEmailWorker function compiles" {
+  expect True == True
+}

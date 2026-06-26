@@ -8,6 +8,7 @@
   tesl/dsl/sql
   tesl/dsl/web
   tesl/dsl/test-support
+  tesl/dsl/debug/checkpoint
   tesl/tesl/private/runtime
   tesl/tesl/queue
   tesl/tesl/sse
@@ -21,53 +22,53 @@
 (define/pow
   (double [n : Integer])
   #:returns Integer
-  (* *n 2))
+  (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 36 (list (cons 'n *n)) (lambda () (* *n 2))))
 
 (define/pow
   (negate [n : Integer])
   #:returns Integer
-  (- 0 *n))
+  (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 43 (list (cons 'n *n)) (lambda () (- 0 *n))))
 
 (define/pow
   (isEmpty [xs : (List a)])
   #:returns Boolean
-  (raw-value (tesl_import_List_isEmpty *xs)))
+  (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 46 (list (cons 'xs *xs)) (lambda () (raw-value (tesl_import_List_isEmpty *xs)))))
 
 (define/pow
   (clamp [lo : Integer] [hi : Integer] [n : Integer])
   #:returns Integer
-  (if (< *n *lo) *lo (if (> *n *hi) *hi *n)))
+  (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 56 (list (cons 'lo *lo) (cons 'hi *hi) (cons 'n *n)) (lambda () (if (< *n *lo) *lo (if (> *n *hi) *hi *n)))))
 
 (define/pow
   (greetAge [name : String] [age : Integer])
   #:returns String
-  (let ([greeting (format "Hello, ~a!" (tesl-display-val *name))]) (if (>= *age 18) (raw-value (format "~a You are an adult." (tesl-display-val *greeting))) (raw-value (format "~a You are a minor." (tesl-display-val *greeting))))))
+  (let ([greeting (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 65 (list (cons 'name *name) (cons 'age *age)) (lambda () (format "Hello, ~a!" (tesl-display-val *name))))]) (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 66 (list (cons 'greeting *greeting) (cons 'name *name) (cons 'age *age)) (lambda () (if (>= *age 18) (raw-value (format "~a You are an adult." (tesl-display-val *greeting))) (raw-value (format "~a You are a minor." (tesl-display-val *greeting))))))))
 
 (module+ test
   (require rackunit)
   (test-case "double"
-  (check-equal? (raw-value (double 0)) 0)
-  (check-equal? (raw-value (double 5)) 10)
-  (check-equal? (raw-value (double -2)) -4)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 72 (list) (lambda () (double 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 73 (list) (lambda () (double 5)))) 10)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 74 (list) (lambda () (double -2)))) -4)
   )
 
   (test-case "negate"
-  (check-equal? (raw-value (negate 5)) -5)
-  (check-equal? (raw-value (negate 0)) 0)
-  (check-equal? (raw-value (negate -3)) 3)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 78 (list) (lambda () (negate 5)))) -5)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 79 (list) (lambda () (negate 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 80 (list) (lambda () (negate -3)))) 3)
   )
 
   (test-case "clamp"
-  (check-equal? (raw-value (clamp 0 10 5)) 5)
-  (check-equal? (raw-value (clamp 0 10 -3)) 0)
-  (check-equal? (raw-value (clamp 0 10 99)) 10)
-  (check-equal? (raw-value (clamp 0 10 0)) 0)
-  (check-equal? (raw-value (clamp 0 10 10)) 10)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 84 (list) (lambda () (clamp 0 10 5)))) 5)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 85 (list) (lambda () (clamp 0 10 -3)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 86 (list) (lambda () (clamp 0 10 99)))) 10)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 87 (list) (lambda () (clamp 0 10 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 88 (list) (lambda () (clamp 0 10 10)))) 10)
   )
 
   (test-case "greetAge"
-  (check-equal? (raw-value (greetAge "Alice" 20)) "Hello, Alice! You are an adult.")
-  (check-equal? (raw-value (greetAge "Bob" 17)) "Hello, Bob! You are a minor.")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 92 (list) (lambda () (greetAge "Alice" 20)))) "Hello, Alice! You are an adult.")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 93 (list) (lambda () (greetAge "Bob" 17)))) "Hello, Bob! You are a minor.")
   )
 
   (test-case "clamp is bounded"
@@ -79,19 +80,19 @@
   )
 
   (test-case "doctest: double"
-  (check-equal? (raw-value (double 0)) 0)
-  (check-equal? (raw-value (double 5)) 10)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (double 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (double 5)))) 10)
   )
 
   (test-case "doctest: negate"
-  (check-equal? (raw-value (negate 3)) -3)
-  (check-equal? (raw-value (negate 0)) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (negate 3)))) -3)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (negate 0)))) 0)
   )
 
   (test-case "doctest: clamp"
-  (check-equal? (raw-value (clamp 0 10 5)) 5)
-  (check-equal? (raw-value (clamp 0 10 -3)) 0)
-  (check-equal? (raw-value (clamp 0 10 99)) 10)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (clamp 0 10 5)))) 5)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (clamp 0 10 -3)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson01-basic-types-and-functions.tesl" 1 (list) (lambda () (clamp 0 10 99)))) 10)
   )
 
 )

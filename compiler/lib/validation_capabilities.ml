@@ -8,17 +8,69 @@ let build_func_capability_map (decls : top_decl list) : (string * string list) l
     | _ -> None
   ) decls
 
+(** Capability ENFORCEMENT table for the runtime/effect expression forms.
+
+    Wave-2 reduce_language_size step: the per-effect-form capability requirement
+    used to be spelled out inline in {!collect_needed_capabilities}'s match arms
+    (one arm per form prepending a literal token list).  That enforcement is now
+    RELOCATED here as data — one row per effect form, giving the fixed capability
+    token(s) the form's own primitive requires.  The match arm in
+    {!collect_needed_capabilities} consults this table and then recurses into the
+    form's sub-expressions, so the WHAT (which capability each effect demands) is
+    declarative and the HOW (tree walk + transitive closure + handler/worker
+    denial in {!check_handler_capabilities}) is unchanged.
+
+    Enforcement is NOT dropped: every token a form produced before still flows
+    through the identical {!check_handler_capabilities} denial path, so a
+    capability-denied effect still fails to compile.  Cache forms stay inline
+    because their required token is data-dependent (the cache_name is
+    interpolated into the token), not a fixed string. *)
+let effect_form_fixed_caps : (string * string list) list = [
+  "EEnqueue",          ["queueWrite"];
+  "EPublish",          ["pubsub"];
+  "ETelemetry",        [];          (* needs only what its field exprs need *)
+  "ESendEmail",        ["email"];
+  "EStartEmailWorker", ["email"];
+]
+
+let effect_caps key =
+  match List.assoc_opt key effect_form_fixed_caps with Some c -> c | None -> []
+
 (** Check whether an expression body uses any DB or queue/pubsub operations,
     or calls any functions that require capabilities.
-    Returns a list of capability names needed. *)
-let rec collect_needed_capabilities
+    Returns a list of capability names needed.
+
+    Wave-2 visitor migration: this is a pure fold over an expression's children
+    whose result is ONLY ever consumed through [List.sort_uniq String.compare]
+    (every caller dedups + sorts immediately), so accumulation ORDER is
+    irrelevant downstream.  The mechanical descent — every variant that
+    contributes nothing of its own beyond what its child exprs need — is now
+    delegated to the single shared {!Ast_visitor.fold_children} traversal,
+    mirroring {!Linter.collect_expr_names}.  Only the THREE semantically
+    load-bearing classes of arm remain explicit:
+
+      1. [EVar] / [EField] capability LOOKUP (SQL keywords, time/random/jwt/
+         httpClient primitives, user-function caps) — the leaf that introduces a
+         requirement out of a bare name.
+      2. The fixed-token EFFECT forms ([EEnqueue]/[EPublish]/[ETelemetry]/
+         [ESendEmail]/[EStartEmailWorker]) which prepend their {!effect_caps}
+         token and THEN recurse into children.
+      3. The CACHE forms, whose required token is data-dependent (the token is
+         the cache name interpolated after a 'cache ' prefix) and so cannot live
+         in the static data table.
+
+    Sharing one descent means a new {!Ast.expr} variant cannot silently escape
+    capability analysis.  An internal accumulator threads the list; the list-
+    concatenation-vs-prepend difference is invisible to callers because they
+    sort_uniq the result. *)
+let collect_needed_capabilities
     ?(func_caps : (string * string list) list = [])
     (e : expr)
     : string list =
   let sql_read_names = ["select"; "selectOne"; "selectCount"; "selectSum"; "selectMax"; "selectMin"] in
   let sql_write_names = ["insert"; "update"; "delete"; "upsert"] in
-  match e with
-  | EVar { name; _ } ->
+  (* var_caps: the capability(ies) a bare referenced name introduces. *)
+  let var_caps name =
     (* BUG-1 fix: Check user-defined functions FIRST.
        A user function named `insert`, `select`, `update`, or `delete` must NOT be
        treated as a SQL operation. `List.mem_assoc` returns true even for functions
@@ -38,37 +90,64 @@ let rec collect_needed_capabilities
     (* BUG-4 fix: generatePrefixedId and randomInt require the `random` capability. *)
     else if List.mem name ["generatePrefixedId"; "randomInt";
                            "Tesl.Id.generatePrefixedId"; "Tesl.Random.randomInt"] then ["random"]
+    else if List.mem name ["JWT.sign"; "JWT.verify"; "JWT.decode"] then ["jwt"]
+    else if List.mem name ["HttpClient.get"; "HttpClient.post";
+                           "HttpClient.put"; "HttpClient.delete"] then ["httpClient"]
     else []
-  | EEnqueue _ -> ["queueWrite"]
-  | EPublish _ -> ["pubsub"]
-  | ELit _ | EConstructor _ | EFail _ | EStartWorkers _ -> []
-  | EField { obj; _ } -> collect_needed_capabilities ~func_caps obj
-  | EApp { fn; arg; _ } ->
-    collect_needed_capabilities ~func_caps fn @ collect_needed_capabilities ~func_caps arg
-  | EBinop { left; right; _ } ->
-    collect_needed_capabilities ~func_caps left @ collect_needed_capabilities ~func_caps right
-  | EUnop { arg; _ } -> collect_needed_capabilities ~func_caps arg
-  | EIf { cond; then_; else_; _ } ->
-    collect_needed_capabilities ~func_caps cond
-    @ collect_needed_capabilities ~func_caps then_
-    @ collect_needed_capabilities ~func_caps else_
-  | ECase { scrut; arms; _ } ->
-    collect_needed_capabilities ~func_caps scrut
-    @ List.concat_map (fun (arm : case_arm) -> collect_needed_capabilities ~func_caps arm.body) arms
-  | ELet { value; body; _ } ->
-    collect_needed_capabilities ~func_caps value @ collect_needed_capabilities ~func_caps body
-  | ELetProof { value; body; _ } ->
-    collect_needed_capabilities ~func_caps value @ collect_needed_capabilities ~func_caps body
-  | ERecord { fields; _ } ->
-    List.concat_map (fun (_, v) -> collect_needed_capabilities ~func_caps v) fields
-  | EList { elems; _ } -> List.concat_map (collect_needed_capabilities ~func_caps) elems
-  | EOk { value; _ } -> collect_needed_capabilities ~func_caps value
-  | ETelemetry { fields; _ } ->
-    List.concat_map (fun (_, v) -> collect_needed_capabilities ~func_caps v) fields
-  | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } ->
-    collect_needed_capabilities ~func_caps body
-  | EServe { port; _ } -> collect_needed_capabilities ~func_caps port
-  | ELambda { body; _ } -> collect_needed_capabilities ~func_caps body
+  in
+  (* acc is threaded left-to-right; result order is irrelevant (caller sort_uniqs). *)
+  let rec go (acc : string list) (e : expr) : string list =
+    match e with
+    | EVar { name; _ } -> var_caps name @ acc
+    | EField { obj = EConstructor { name = "JWT"; _ }; field; _ }
+      when List.mem field ["sign"; "verify"; "decode"] -> "jwt" :: acc
+    | EField { obj = EVar { name = "JWT"; _ }; field; _ }
+      when List.mem field ["sign"; "verify"; "decode"] -> "jwt" :: acc
+    | EField { obj = EConstructor { name = "HttpClient"; _ }; field; _ } ->
+      (* HttpClient.get / .post / .put / .delete accessed as EField on EConstructor.
+         Note: the EConstructor obj is intentionally NOT recursed into here (it
+         carries no further capability), matching the original arm exactly. *)
+      if List.mem ("HttpClient." ^ field)
+           ["HttpClient.get"; "HttpClient.post"; "HttpClient.put"; "HttpClient.delete"]
+      then "httpClient" :: acc
+      else acc
+    (* Effect forms: prepend the fixed data-table token, then descend into
+       children via the shared traversal. *)
+    | EEnqueue _ | EPublish _ | ETelemetry _ | ESendEmail _ ->
+      let key = match e with
+        | EEnqueue _ -> "EEnqueue" | EPublish _ -> "EPublish"
+        | ETelemetry _ -> "ETelemetry" | _ -> "ESendEmail" in
+      Ast_visitor.fold_children go (effect_caps key @ acc) e
+    | EStartEmailWorker _ -> effect_caps "EStartEmailWorker" @ acc
+    (* EConstructor is kept EXPLICIT as a no-capability LEAF: the original arm
+       was `EConstructor _ -> []`, which did NOT walk constructor arguments.
+       fold_children WOULD descend into the args, so we keep the original
+       non-descent to remain byte-identical. *)
+    | EConstructor _ -> acc
+    (* ECase is kept EXPLICIT (not delegated to fold_children) to preserve the
+       original traversal set EXACTLY: the hand-rolled arm descended into the
+       scrutinee and each arm BODY but NOT the arm guards.  fold_children would
+       additionally descend into guards — a strictly-safe over-approximation, but
+       we keep behaviour byte-identical rather than widen the analysed set here. *)
+    | ECase { scrut; arms; _ } ->
+      let acc = go acc scrut in
+      List.fold_left (fun acc (arm : case_arm) -> go acc arm.body) acc arms
+    (* Cache forms: data-dependent token, then descend into key/value/ttl/prefix. *)
+    | ECacheGet { cache_name; _ } | ECacheSet { cache_name; _ }
+    | ECacheDelete { cache_name; _ } | ECacheInvalidate { cache_name; _ } ->
+      Ast_visitor.fold_children go (("cache " ^ cache_name) :: acc) e
+    (* Purely-mechanical variants: descend into child exprs only.  This includes
+       EField (non-special obj), EApp, EBinop, EUnop, EIf, ELet, ELetProof,
+       ERecord, EList, EOk, EWithDatabase/EWithCapabilities/EWithTransaction,
+       EServe, ELambda, and the no-capability leaves (ELit, EFail, EStartWorkers,
+       EConstructor, plain EVar handled above).
+
+       NOTE on EServe: fold_children visits exactly the [port] child (the only
+       expr field), matching the original `EServe { port; _ }` arm.  EWith*
+       forms each carry a single [body] child, also matched exactly. *)
+    | _ -> Ast_visitor.fold_children go acc e
+  in
+  go [] e
 
 let check_handler_capabilities ?(cap_map=[]) (decls : top_decl list) : validation_error list =
   let func_caps = build_func_capability_map decls in
@@ -485,6 +564,10 @@ let check_cookies_field_access (decls : top_decl list) : validation_error list =
 let build_local_cap_map (decls : top_decl list) : (string * string list) list =
   List.filter_map (function
     | DCapability c -> Some (c.name, c.implies)
+    (* Cache declarations implicitly define a "cache <Name>" capability *)
+    | DCache (c : Ast.cache_form) -> Some ("cache " ^ c.name, [])
+    (* Email declarations implicitly define an "email" capability *)
+    | DEmail _ -> Some ("email", [])
     | _ -> None
   ) decls
 
@@ -749,6 +832,18 @@ check your fact declaration or the type of `%s`"
         Option.iter (walk_expr local_env) key;
         Option.iter (walk_expr local_env) payload
       | ELit _ | EVar _ | EConstructor _ | EFail _ | EStartWorkers _ | EServe _ -> ()
+      | ECacheGet { key; _ } -> walk_expr local_env key
+      | ECacheSet { key; value; ttl; _ } ->
+        walk_expr local_env key; walk_expr local_env value;
+        Option.iter (walk_expr local_env) ttl
+      | ECacheDelete { key; _ } -> walk_expr local_env key
+      | ECacheInvalidate { prefix; _ } -> walk_expr local_env prefix
+      | ESendEmail { to_; subject; body; _ } ->
+        walk_expr local_env to_; walk_expr local_env subject;
+        walk_expr local_env body
+      | EStartEmailWorker _ -> ()
+      | ERuntimeCall { segments; _ } ->
+        List.iter (function RLit _ -> () | RArg e -> walk_expr local_env e) segments
     in
     List.iter (function
       | DFunc fd ->
@@ -871,10 +966,11 @@ let check_type_arities (decls : top_decl list) : validation_error list =
     types that support a meaningful total order: Int, Float, PosixMillis, and
     any nominal type (type alias or newtype) whose declared base type resolves
     to one of those three through a chain of such declarations. *)
-let check_ord_operator_types ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
-  let funcs = build_func_info decls @ extra_funcs in
-  let fields_by_type = build_fields_map decls in
-  let ctors = build_ctor_info decls in
+let check_ord_operator_types ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
+  let mf = facts_or_compute ?facts ~extra_funcs decls in
+  let funcs = mf.mf_funcs in
+  let fields_by_type = mf.mf_fields_map in
+  let ctors = mf.mf_ctors in
   (* Map: nominal type name -> declared base type_expr *)
   let alias_map : (string * type_expr) list =
     List.filter_map (function
@@ -968,6 +1064,17 @@ let check_ord_operator_types ?(extra_funcs=[]) (decls : top_decl list) : validat
     | EServe { port; _ } -> walk_expr env port
     | EStartWorkers _ | ELit _ | EVar _ | EField _
     | EFail _ | EConstructor _ -> []
+    | ECacheGet { key; _ } -> walk_expr env key
+    | ECacheSet { key; value; ttl; _ } ->
+      walk_expr env key @ walk_expr env value
+      @ (match ttl with Some e -> walk_expr env e | None -> [])
+    | ECacheDelete { key; _ } -> walk_expr env key
+    | ECacheInvalidate { prefix; _ } -> walk_expr env prefix
+    | ESendEmail { to_; subject; body; _ } ->
+      walk_expr env to_ @ walk_expr env subject @ walk_expr env body
+    | EStartEmailWorker _ -> []
+    | ERuntimeCall { segments; _ } ->
+      List.concat_map (function RLit _ -> [] | RArg e -> walk_expr env e) segments
   in
   let rec walk_test_stmts (env : type_env) (stmts : test_stmt list)
       : validation_error list =

@@ -476,6 +476,11 @@ let rec check_expr_call_proofs
                    if not (List.exists (fun (p : binding) -> p.name = name) params)
                    then visit b
                  | ELit _ | EVar _ | EStartWorkers _ -> ()
+                 | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> ()
+                 | ECacheSet { value; _ } -> visit value
+                 | ESendEmail _ | EStartEmailWorker _ -> ()
+                 | ERuntimeCall { segments; _ } ->
+                   List.iter (function RLit _ -> () | RArg e -> visit e) segments
                in
                visit body;
                let non_call_errors =
@@ -560,6 +565,11 @@ let rec check_expr_call_proofs
             if not (List.exists (fun (p : binding) -> p.name = name) ps)
             then visit b
           | ELit _ | EVar _ | EStartWorkers _ -> ()
+          | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> ()
+          | ECacheSet { value; _ } -> visit value
+          | ESendEmail _ | EStartEmailWorker _ -> ()
+          | ERuntimeCall { segments; _ } ->
+            List.iter (function RLit _ -> () | RArg e -> visit e) segments
         in
         visit body;
         let non_call_errors =
@@ -851,10 +861,6 @@ let rec check_expr_call_proofs
     in
     let proof_env' = if detached_proofs = [] then proof_env else (proof_name, detached_proofs) :: proof_env in
     value_errors @ no_proof_errors @ check_expr_call_proofs subject_env' proof_env' funcs body
-  | EIf { cond; then_; else_; _ } ->
-    check_expr_call_proofs subject_env proof_env funcs cond
-    @ check_expr_call_proofs subject_env proof_env funcs then_
-    @ check_expr_call_proofs subject_env proof_env funcs else_
   | ECase { scrut; arms; _ } ->
     let scrut_errors = check_expr_call_proofs subject_env proof_env funcs scrut in
     (* For `case (establish_fn arg) of Something proof ->`, the `proof` binding
@@ -970,21 +976,6 @@ let rec check_expr_call_proofs
             (Printf.sprintf "the right operand of `%s` is an expression with no trackable `IsNonZero` proof" op_name) ]
     in
     child_errors @ div_errors
-  | EBinop { left; right; _ } ->
-    check_expr_call_proofs subject_env proof_env funcs left
-    @ check_expr_call_proofs subject_env proof_env funcs right
-  | EUnop { arg; _ } -> check_expr_call_proofs subject_env proof_env funcs arg
-  | EList { elems; _ } -> List.concat_map (check_expr_call_proofs subject_env proof_env funcs) elems
-  | ERecord { fields; _ } -> List.concat_map (fun (_, v) -> check_expr_call_proofs subject_env proof_env funcs v) fields
-  | EOk { value; _ } -> check_expr_call_proofs subject_env proof_env funcs value
-  | ETelemetry { fields; _ } -> List.concat_map (fun (_, v) -> check_expr_call_proofs subject_env proof_env funcs v) fields
-  | EEnqueue { payload; _ } -> check_expr_call_proofs subject_env proof_env funcs payload
-  | EPublish { key; payload; _ } ->
-    (match key with Some e -> check_expr_call_proofs subject_env proof_env funcs e | None -> [])
-    @ (match payload with Some e -> check_expr_call_proofs subject_env proof_env funcs e | None -> [])
-  | EStartWorkers _ -> []
-  | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } -> check_expr_call_proofs subject_env proof_env funcs body
-  | EServe { port; _ } -> check_expr_call_proofs subject_env proof_env funcs port
   | ELambda { params; body; _ } ->
     (* Inject lambda parameter proofs into proof_env so callee's proof
        requirements can be satisfied by explicitly-annotated lambda params.
@@ -995,8 +986,32 @@ let rec check_expr_call_proofs
       | Some proof -> (b.name, flatten_proof_conj proof) :: acc
     ) proof_env params in
     check_expr_call_proofs subject_env proof_env' funcs body
-  | ELit _ | EVar _ | EField _ | EFail _ -> []
-  | EConstructor { args; _ } -> List.concat_map (check_expr_call_proofs subject_env proof_env funcs) args
+  (* Explicit no-obligation LEAVES.  EField is deliberately a leaf here (it does
+     NOT descend into its [obj]): the original arm returned [] and that omission
+     is load-bearing — qualified-name field accesses like `Module.fn` are not
+     call sites and carry no proof obligation, so we must NOT start walking into
+     [obj].  EVar/ELit/EFail/EStartWorkers/EStartEmailWorker have no proof-bearing
+     children either. *)
+  | ELit _ | EVar _ | EField _ | EFail _ | EStartWorkers _ | EStartEmailWorker _ -> []
+  (* Purely-MECHANICAL structural descent: thread the SAME (subject_env, proof_env,
+     funcs) context UNCHANGED into every immediate child and concatenate the
+     resulting error lists left-to-right.  Migrated onto the shared
+     {!Ast_visitor.fold_children_env} (Wave-2 visitor consolidation) so a new
+     {!Ast.expr} variant cannot silently escape proof-call checking.
+
+     This fall-through covers exactly the variants whose old hand-rolled arms did
+     nothing but recurse with the unchanged env: EApp's argument/sub-walks are
+     handled in the dedicated EApp arm above; the remaining mechanical forms are
+     EIf, EBinop (non Div/Mod — Div/Mod has the div-by-zero arm above), EUnop,
+     EList, ERecord, EOk, ETelemetry, EEnqueue, EPublish, EWithDatabase/
+     EWithCapabilities/EWithTransaction, EServe, EConstructor, the four cache
+     forms, and ESendEmail.  fold_children_env visits children in the identical
+     left-to-right order the explicit arms used, so the concatenated error order
+     (and thus diagnostic byte-identity) is preserved. *)
+  | _ ->
+    Ast_visitor.fold_children_env
+      (fun (s, p, f) acc child -> acc @ check_expr_call_proofs s p f child)
+      (subject_env, proof_env, funcs) [] e
 
 (** In test blocks, `let x = e` compiles to a bare Racket `(define x e)`, so
     the value is NOT wrapped in a named-value.  Every time a bare integer/string
@@ -1329,9 +1344,10 @@ and check_test_stmts_call_proofs
   in
   errors
 
-let check_call_site_proofs ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
-  let funcs = build_func_info decls @ extra_funcs in
-  field_proof_registry := build_field_proof_map decls;
+let check_call_site_proofs ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
+  let mf = facts_or_compute ?facts ~extra_funcs decls in
+  let funcs = mf.mf_funcs in
+  field_proof_registry := mf.mf_field_proof_map;
   let errors = ref [] in
   List.iter (function
     | DFunc fd ->
@@ -1363,8 +1379,8 @@ let check_call_site_proofs ?(extra_funcs=[]) (decls : top_decl list) : validatio
     check-ok or check-fail".  This is a compile-time soundness gap: the type system
     does not distinguish check functions from plain functions, so we enforce this
     constraint here. *)
-let check_filter_check_args ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
-  let funcs = build_func_info decls @ extra_funcs in
+let check_filter_check_args ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
+  let funcs = (facts_or_compute ?facts ~extra_funcs decls).mf_funcs in
   let errors = ref [] in
   let filter_fns = [
     "List.filterCheck"; "Set.filterCheck";
@@ -1465,7 +1481,17 @@ pass a `check` function or a `&&` combination of check functions"
        Option.iter walk key; Option.iter walk payload
      | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
      | EWithTransaction { body; _ } -> walk body
-     | ELambda { body; _ } -> walk body);
+     | ELambda { body; _ } -> walk body
+     | ECacheGet { key; _ } -> walk key
+     | ECacheSet { key; value; ttl; _ } ->
+       walk key; walk value; Option.iter walk ttl
+     | ECacheDelete { key; _ } -> walk key
+     | ECacheInvalidate { prefix; _ } -> walk prefix
+     | ESendEmail { to_; subject; body; _ } ->
+       walk to_; walk subject; walk body
+     | EStartEmailWorker _ -> ()
+     | ERuntimeCall { segments; _ } ->
+       List.iter (function RLit _ -> () | RArg e -> walk e) segments);
   in
   List.iter (function
     | DFunc fd -> walk fd.body
@@ -1473,8 +1499,8 @@ pass a `check` function or a `&&` combination of check functions"
   ) decls;
   List.rev !errors
 
-let check_forall_consistency ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
-  let funcs = build_func_info decls @ extra_funcs in
+let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
+  let funcs = (facts_or_compute ?facts ~extra_funcs decls).mf_funcs in
   let errors = ref [] in
   (* Detect if an expression is a SQL select (which carries FromDb proofs). *)
   let rec is_sql_select e =
@@ -1711,6 +1737,31 @@ let check_forall_consistency ?(extra_funcs=[]) (decls : top_decl list) : validat
        | None -> ())
     | _ -> ()
   in
+  (* A `ForAll (P1 && P2) xs` proof annotation is stored as
+     `PredApp { pred="ForAll"; args=["(P1 && P2)"; "xs"] }` — the inner
+     conjunction lives in the first arg as a string.  Recover it as a proper
+     `proof_expr` (a left-assoc PredAnd chain of bare PredApps) so that
+     `proof_predicates`/`walk` see the element predicates [P1; P2].
+     This is how `Maybe (xs: List T ::: ForAll (P) xs)` returns expose their
+     ForAll obligation — they parse to RetMaybeAttached, not RetMaybeForAll. *)
+  let forall_inner_proof_of_ann (p : proof_expr) : proof_expr option =
+    match p with
+    | PredApp { pred = ("ForAll" | "ForAllValues" | "ForAllKeys"); args = inner_pred :: _; loc } ->
+      let names =
+        String.split_on_char ' '
+          (String.concat "" (List.map (fun c ->
+             match c with '(' | ')' -> "" | c -> String.make 1 c)
+             (List.of_seq (String.to_seq inner_pred))))
+        |> List.filter (fun s -> s <> "" && s <> "&&")
+      in
+      (match names with
+       | [] -> None
+       | first :: rest ->
+         Some (List.fold_left
+                 (fun acc n -> PredAnd { left = acc; right = PredApp { pred = n; args = []; loc }; loc })
+                 (PredApp { pred = first; args = []; loc }) rest))
+    | _ -> None
+  in
   List.iter (function
     | DFunc fd ->
       let expected = match fd.return_spec with
@@ -1720,6 +1771,13 @@ let check_forall_consistency ?(extra_funcs=[]) (decls : top_decl list) : validat
         | RetMaybeSetForAll { proof; _ }
         | RetForAllDictValues { proof; _ }
         | RetForAllDictKeys { proof; _ } -> Some proof
+        (* `Maybe (xs: List T ::: ForAll (P) xs)` / `name: T ::: ForAll (P) xs`
+           parse to RetMaybeAttached / RetAttached with a ForAll proof_ann;
+           extract the same element-predicate obligation so allCheck/filterCheck
+           returns are validated here too (GAP-ALLCHECK-RET). *)
+        | RetMaybeAttached { binding = { proof_ann = Some pa; _ }; _ }
+        | RetAttached { binding = { proof_ann = Some pa; _ }; _ } ->
+          forall_inner_proof_of_ann pa
         | _ -> None
       in
       (* Seed forall_env with predicates already on ForAll-annotated parameters. *)
@@ -1766,6 +1824,17 @@ let rec exists_witnesses (e : expr) : string list =
   | EServe { port; _ } -> exists_witnesses port
   | ELambda { body; _ } -> exists_witnesses body
   | ELit _ | EVar _ | EField _ | EConstructor _ | EFail _ -> []
+  | ECacheGet { key; _ } -> exists_witnesses key
+  | ECacheSet { key; value; ttl; _ } ->
+    exists_witnesses key @ exists_witnesses value
+    @ (match ttl with Some e -> exists_witnesses e | None -> [])
+  | ECacheDelete { key; _ } -> exists_witnesses key
+  | ECacheInvalidate { prefix; _ } -> exists_witnesses prefix
+  | ESendEmail { to_; subject; body; _ } ->
+    exists_witnesses to_ @ exists_witnesses subject @ exists_witnesses body
+  | EStartEmailWorker _ -> []
+  | ERuntimeCall { segments; _ } ->
+    List.concat_map (function RLit _ -> [] | RArg e -> exists_witnesses e) segments
 
 let check_exists_bindings (decls : top_decl list) : validation_error list =
   let errors = ref [] in
@@ -1864,26 +1933,52 @@ let looks_proof_carrying (funcs : (string * func_info) list) (e : expr) : bool =
      | None -> false)
   | _ -> false
 
-let check_existential_proof_enforcement (decls : top_decl list) : validation_error list =
-  let _funcs = () in
-  let _ = _funcs in
+(* Like packed_body_exprs, but also threads the in-scope `let`-bound local
+   environment (name → bound value expression) down to each pack site.  Only
+   plain `let x = v` bindings are tracked — case-pattern bindings and
+   destructuring binders are intentionally NOT, so packing a value bound by a
+   `case ... of Ctor x ->` arm is never flagged (it carries the scrutinee's
+   proof history, validated elsewhere). *)
+let packed_body_exprs_with_locals (e : expr) : (expr * (string * expr) list) list =
+  let rec go (env : (string * expr) list) (e : expr) : (expr * (string * expr) list) list =
+    match e with
+    | EApp {
+        fn = EVar { name = "make-witness"; _ };
+        arg = EApp { arg = body; _ };
+        _ } -> [(body, env)]
+    | EIf { then_; else_; _ } -> go env then_ @ go env else_
+    | ECase { arms; _ } ->
+      List.concat_map (fun (a : case_arm) -> go env a.body) arms
+    | ELet { name; value; body; _ } -> go ((name, value) :: env) body
+    | ELetProof { body; _ } -> go env body
+    | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+    | EWithTransaction { body; _ } -> go env body
+    | _ -> []
+  in
+  go [] e
+
+let check_existential_proof_enforcement ?(extra_funcs = []) (decls : top_decl list) : validation_error list =
+  let funcs = build_func_info decls @ extra_funcs in
   List.concat_map (function
     | DFunc fd ->
       (match fd.return_spec with
        | RetExists _ ->
          (match inner_return_proof_spec fd.return_spec with
           | Some _ ->
-            (* A non-trivial proof is declared for the inner body.
-               Narrow heuristic — only flag when the packed expression is
-               *literally a function parameter* with no further tracking,
-               because a parameter has no proof history. `let`-bound names
-               or database-operation results are left to the runtime
-               evidence layer; they are too easily false-positive in this
-               static analysis. *)
+            (* A non-trivial proof is declared for the inner body.  Flag a pack
+               whose witness has NO demonstrable proof history:
+                 - a raw function parameter (no proof unless annotated), or
+                 - a `let`-bound LOCAL whose bound value is not proof-carrying
+                   (e.g. `let x = generatePrefixedId "tok"` — a plain stdlib call
+                   that attaches no proof).
+               We deliberately do NOT flag: packed literals/expressions that
+               aren't bare identifiers, case-pattern binders, or let-locals whose
+               value looks proof-carrying (check/establish/auth/insert/select/…),
+               keeping the check conservative against false positives. *)
             let param_names =
               List.map (fun (b : binding) -> b.name) fd.params
             in
-            List.concat_map (fun body ->
+            List.concat_map (fun (body, local_env) ->
               match body with
               | EVar { loc; name } when List.mem name param_names ->
                 [ make_error loc
@@ -1891,8 +1986,17 @@ let check_existential_proof_enforcement (decls : top_decl list) : validation_err
                     (Printf.sprintf
                        "existential pack returns the raw parameter `%s` but the declared proof is not demonstrably attached to it; the inner body of `exists ... => body` must carry the proof declared in the return spec"
                        name) ]
+              | EVar { loc; name } ->
+                (match List.assoc_opt name local_env with
+                 | Some value when not (looks_proof_carrying funcs value) ->
+                   [ make_error loc
+                       ~hint:"validate the packed value with a `check` function so it carries the proof, or attach an existing proof with `value ::: proofVar`"
+                       (Printf.sprintf
+                          "existential pack returns the raw local `%s` but the declared proof is not demonstrably attached to it; the inner body of `exists ... => body` must carry the proof declared in the return spec"
+                          name) ]
+                 | _ -> [])
               | _ -> []
-            ) (packed_body_exprs fd.body)
+            ) (packed_body_exprs_with_locals fd.body)
           | None -> [])
        | _ -> [])
     | _ -> []
@@ -2306,4 +2410,14 @@ if every guard fails at runtime, the case has no match"
   | ELambda { params; body; _ } ->
     let env' = List.map (fun (b : binding) -> (b.name, b.type_expr)) params @ env in
     check_case_exhaustiveness_expr env' funcs fields_by_type ctors body
+  | ECacheGet { key; _ } -> recurse key
+  | ECacheSet { key; value; ttl; _ } ->
+    recurse key @ recurse value @ (match ttl with Some e -> recurse e | None -> [])
+  | ECacheDelete { key; _ } -> recurse key
+  | ECacheInvalidate { prefix; _ } -> recurse prefix
+  | ESendEmail { to_; subject; body; _ } ->
+    recurse to_ @ recurse subject @ recurse body
+  | EStartEmailWorker _ -> []
+  | ERuntimeCall { segments; _ } ->
+    List.concat_map (function RLit _ -> [] | RArg e -> recurse e) segments
 

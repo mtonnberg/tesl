@@ -1,5 +1,12 @@
 #lang tesl
-module Lesson13PartialApplicationAndPipelines exposing [add, double, triple, increment, decrement, pipeline]
+module Lesson13PartialApplicationAndPipelines exposing [
+  add,
+  double,
+  triple,
+  increment,
+  decrement,
+  pipeline,
+]
 
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed

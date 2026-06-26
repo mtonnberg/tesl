@@ -13,6 +13,7 @@ let keywords : (string, Token.t) Hashtbl.t =
   let h = Hashtbl.create 64 in
   List.iter (fun (k, v) -> Hashtbl.add h k v) [
     "module",      MODULE;
+    "library",     LIBRARY;
     "exposing",    EXPOSING;
     "import",      IMPORT;
     "fn",          FN;
@@ -36,6 +37,9 @@ let keywords : (string, Token.t) Hashtbl.t =
     "for",         FOR;
     "queue",       QUEUE;
     "channel",     CHANNEL;
+    "cache",       CACHE;
+    "email",       EMAIL;
+    "smtp",        SMTP;
     "workers",     WORKERS;
     "deadWorkers", DEAD_WORKERS;
     "capability",  CAPABILITY;

@@ -64,6 +64,10 @@ let normalize_conj (p : proof_expr) : string =
 let build_cap_map (decls : top_decl list) : (string * string list) list =
   List.filter_map (function
     | DCapability c -> Some (c.name, c.implies)
+    (* Cache declarations implicitly define a "cache <Name>" capability *)
+    | DCache (c : Ast.cache_form) -> Some ("cache " ^ c.name, [])
+    (* Email declarations implicitly define an "email" capability *)
+    | DEmail _ -> Some ("email", [])
     | _ -> None
   ) decls
 
@@ -87,10 +91,13 @@ let resolve_local_import_path source_file module_name =
 
 (** Capabilities exported by each Tesl stdlib module, with their implication chains. *)
 let stdlib_capabilities : (string * (string * string list) list) list = [
-  "Tesl.DB",     [("dbRead", []); ("dbWrite", ["dbRead"])];
-  "Tesl.Time",   [("time", [])];
-  "Tesl.Random", [("random", [])];
-  "Tesl.Queue",  [("queueRead", []); ("queueWrite", ["queueRead"]); ("pubsub", [])];
+  "Tesl.DB",         [("dbRead", []); ("dbWrite", ["dbRead"])];
+  "Tesl.Time",       [("time", [])];
+  "Tesl.Random",     [("random", [])];
+  "Tesl.Queue",      [("queueRead", []); ("queueWrite", ["queueRead"]); ("pubsub", [])];
+  "Tesl.UUID",       [("uuid", [])];
+  "Tesl.JWT",        [("jwt", [])];
+  "Tesl.HttpClient", [("httpClient", [])];
 ]
 
 let load_imported_cap_map (m : module_form) : (string * string list) list =
@@ -321,27 +328,39 @@ let validate_no_ok_in_fn (body : expr) (kind : func_kind) (fd_loc : loc)
         [{ loc; message = "establish functions cannot call 'check' (or 'auth') functions — \
 establish must be total and check/auth can fail with HTTP errors at runtime. \
 Use an 'if' expression and return 'Nothing' for the failure case instead." }]
+      (* Explicit leaves / DELIBERATE non-descents — these arms are semantically
+         load-bearing and must NOT be routed through the shared visitor, because
+         the canonical "all children" traversal would search MORE subtrees for a
+         forbidden `ok`/`fail`/`check` than this establish-totality check
+         intends.  Each deliberate omission below is preserved exactly:
+           - EConstructor: does NOT descend into its args (the original arm
+             returned []).  A proof constructor's arguments are not a control
+             path the establish-totality rule inspects.
+           - ECase: walks the scrutinee and each arm BODY but NOT the arm guards
+             (guards are pure boolean tests, not establish return paths).
+           - The cache forms and the email forms return [] without descending.
+           - EStartWorkers returns []. *)
       | ELit _ | EVar _ | EConstructor _ -> []
-      | EField { obj; _ } -> walk obj
-      | EApp { fn; arg; _ } -> walk fn @ walk arg
-      | EBinop { left; right; _ } -> walk left @ walk right
-      | EUnop { arg; _ } -> walk arg
-      | EIf { cond; then_; else_; _ } -> walk cond @ walk then_ @ walk else_
       | ECase { scrut; arms; _ } ->
         walk scrut @ List.concat_map (fun (a : Ast.case_arm) -> walk a.body) arms
-      | ELet { value; body; _ } -> walk value @ walk body
-      | ELetProof { value; body; _ } -> walk value @ walk body
-      | ERecord { fields; _ } -> List.concat_map (fun (_, v) -> walk v) fields
-      | EList { elems; _ } -> List.concat_map walk elems
-      | ETelemetry { fields; _ } -> List.concat_map (fun (_, v) -> walk v) fields
-      | EEnqueue { payload; _ } -> walk payload
-      | EPublish { key; payload; _ } ->
-        (match key with Some e -> walk e | None -> [])
-        @ (match payload with Some e -> walk e | None -> [])
       | EStartWorkers _ -> []
-      | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } -> walk body
-      | EServe { port; _ } -> walk port
-      | ELambda { body; _ } -> walk body
+      | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> []
+      | ESendEmail _ | EStartEmailWorker _ -> []
+      (* ECacheSet is kept EXPLICIT: the original arm descended ONLY into the
+         [value] child, not [key]/[ttl].  fold_children would descend into all
+         three, so we preserve the original single-child descent to keep the
+         analysed set (and thus the verdict) byte-identical. *)
+      | ECacheSet { value; _ } -> walk value
+      (* Purely-MECHANICAL full descent into every immediate child — migrated
+         onto the shared {!Ast_visitor.fold_children} (Wave-2 visitor
+         consolidation).  Covers EField (into obj), EApp, EBinop, EUnop, EIf,
+         ELet, ELetProof, ERecord, EList, ETelemetry, EEnqueue, EPublish,
+         EWithDatabase/EWithCapabilities/EWithTransaction, EServe, ELambda.
+         For every one of these the original arm already descended into EXACTLY
+         the set of children fold_children visits, in the SAME left-to-right
+         order, so the concatenated error order is preserved.  A new
+         full-descent {!Ast.expr} variant is now traversed automatically here. *)
+      | _ -> Ast_visitor.fold_children (fun acc c -> acc @ walk c) [] e
     in
     ignore fd_loc;
     walk body
@@ -355,27 +374,26 @@ Use an 'if' expression and return 'Nothing' for the failure case instead." }]
         [{ loc; message = Printf.sprintf
              "ok ::: proof construction is not allowed in `%s`; use a check, auth, or establish function"
              (string_of_func_kind kind) }]
+      (* Explicit leaves / DELIBERATE non-descents — preserved exactly as the
+         EOk-search rule intends (EConstructor does NOT walk its args; ECase
+         walks bodies but NOT guards; cache/email forms and EStartWorkers do not
+         descend).  Routing these through the shared visitor would search more
+         subtrees and could change the verdict, so they stay explicit. *)
       | ELit _ | EVar _ | EConstructor _ | EFail _ -> []
-      | EField { obj; _ } -> walk obj
-      | EApp { fn; arg; _ } -> walk fn @ walk arg
-      | EBinop { left; right; _ } -> walk left @ walk right
-      | EUnop { arg; _ } -> walk arg
-      | EIf { cond; then_; else_; _ } -> walk cond @ walk then_ @ walk else_
       | ECase { scrut; arms; _ } ->
         walk scrut @ List.concat_map (fun (a : Ast.case_arm) -> walk a.body) arms
-      | ELet { value; body; _ } -> walk value @ walk body
-      | ELetProof { value; body; _ } -> walk value @ walk body
-      | ERecord { fields; _ } -> List.concat_map (fun (_, v) -> walk v) fields
-      | EList { elems; _ } -> List.concat_map walk elems
-      | ETelemetry { fields; _ } -> List.concat_map (fun (_, v) -> walk v) fields
-      | EEnqueue { payload; _ } -> walk payload
-      | EPublish { key; payload; _ } ->
-        (match key with Some e -> walk e | None -> [])
-        @ (match payload with Some e -> walk e | None -> [])
       | EStartWorkers _ -> []
-      | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } -> walk body
-      | EServe { port; _ } -> walk port
-      | ELambda { body; _ } -> walk body
+      | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> []
+      | ESendEmail _ | EStartEmailWorker _ -> []
+      (* ECacheSet stays EXPLICIT: original descended ONLY into [value]. *)
+      | ECacheSet { value; _ } -> walk value
+      (* Purely-MECHANICAL full descent — migrated onto {!Ast_visitor.fold_children}.
+         Covers EField (into obj), EApp, EBinop, EUnop, EIf, ELet, ELetProof,
+         ERecord, EList, ETelemetry, EEnqueue, EPublish, EWithDatabase/
+         EWithCapabilities/EWithTransaction, EServe, ELambda — each of which
+         already descended into EXACTLY fold_children's children, in the same
+         left-to-right order, so error order is preserved. *)
+      | _ -> Ast_visitor.fold_children (fun acc c -> acc @ walk c) [] e
     in
     ignore fd_loc;
     walk body
@@ -582,13 +600,16 @@ in a constructor: `ok BindingName ::: ...` or `ok (Ctor arg) ::: Proof bindingNa
                      "ok proof does not match declared return spec: got `%s`, expected `%s`"
                      (pp_proof normalized) (pp_proof expected) } :: !errors)
             | AuthKind ->
-              (* Auth functions with RetAttached: ok value must be a named identifier
-                 or a named-constructor application — bare record literals bypass
-                 record-field-proof checking and must be rejected. *)
+              (* Auth functions PRODUCE the proof subject (the authenticated identity);
+                 they do not validate an input.  So, unlike `check` (LANGUAGE-SPEC §"ok
+                 binding name requirement in check functions", which is scoped to check),
+                 the ok value may be any expression auth vouches for — an identifier, a
+                 constructor application, or a literal (e.g. a fixed dev identity
+                 `ok "admin"`).  Only a bare anonymous record literal is rejected, since
+                 it bypasses record-field-proof checking; use a named constructor. *)
               let ok_name = value_name_of_expr value in
               (match ok_name with
                | None ->
-                 (* Allow EApp (constructor applied to record), reject bare ERecord *)
                  (match value with
                   | ERecord _ ->
                     errors := { loc; message = Printf.sprintf
@@ -1216,6 +1237,11 @@ let check_module (m : module_form) : proof_error list =
     | EWithDatabase { body; _ } | EWithCapabilities { body; _ } ->
       expr_contains_transaction body
     | ELambda { body; _ } -> expr_contains_transaction body
+    | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> false
+    | ECacheSet { value; _ } -> expr_contains_transaction value
+    | ESendEmail _ | EStartEmailWorker _ -> false
+    | ERuntimeCall { segments; _ } ->
+      List.exists (function RLit _ -> false | RArg e -> expr_contains_transaction e) segments
   in
   let rec expr_called_functions (e : expr) : string list =
     let dedup = List.sort_uniq String.compare in
@@ -1250,6 +1276,11 @@ let check_module (m : module_form) : proof_error list =
     | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ }
       | ELambda { body; _ } ->
       expr_called_functions body
+    | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> []
+    | ECacheSet { value; _ } -> expr_called_functions value
+    | ESendEmail _ | EStartEmailWorker _ -> []
+    | ERuntimeCall { segments; _ } ->
+      dedup (List.concat_map (function RLit _ -> [] | RArg e -> expr_called_functions e) segments)
   in
   let rec close_transaction_functions txn_funcs =
     let grown =
@@ -1278,6 +1309,30 @@ let check_module (m : module_form) : proof_error list =
       (* 1. Validate parameter proof subjects *)
       errors := validate_param_proof_subjects fd @ !errors;
 
+      (* 1b. Reject self-referential Fact-typed parameters:
+         `fn bad(p: Fact (ValidScore p))` is nonsensical because `p` names the
+         Fact *holder*, not the value being proven — `Fact (P x)` describes a
+         fact about `x`, not about the Fact holder itself.  This mirrors the
+         self-referential check already enforced on `let`/test-let bindings
+         (`let p: Fact (ValidScore p) = …`), extended to function parameters. *)
+      List.iter (fun (b : binding) ->
+        let inner_proof_opt = match b.type_expr with
+          | TApp { head = TName { name = "Fact"; _ }; arg; _ } -> type_expr_to_proof_expr arg
+          | TApp { head = TName { name = "Maybe"; _ };
+                   arg = TApp { head = TName { name = "Fact"; _ }; arg = inner; _ }; _ } ->
+            type_expr_to_proof_expr inner
+          | _ -> None
+        in
+        match inner_proof_opt with
+        | Some proof when List.mem b.name (pred_arg_names_in_proof proof) ->
+          errors := { loc = b.loc; message = Printf.sprintf
+            "`%s` is used as both the binding name and a proof argument; \
+`Fact (P x)` describes a fact about `x`, not about the `Fact` holder itself — \
+name the proof-carrying value (a different parameter or local), not the Fact parameter itself"
+            b.name } :: !errors
+        | _ -> ()
+      ) fd.params;
+
       (* 2. Check ok ::: only in check/auth/establish *)
       errors := validate_no_ok_in_fn fd.body fd.kind fd.loc @ !errors;
 
@@ -1286,21 +1341,48 @@ let check_module (m : module_form) : proof_error list =
 
       (* 4. Validate establish return type: must be Fact (...) or Maybe (Fact (...)) *)
       if fd.kind = EstablishKind then begin
-        (* Extract the declared predicate name from Fact (Pred ...) or Maybe (Fact (Pred ...)) *)
-        let declared_pred_of_return spec =
+        (* Peel a (possibly nested) type-application left-spine into
+           (head_name, arg_name_list).  The parser encodes a multi-arg fact
+           `Clamped 1 100 n` as nested TApps whose leftmost head is `Clamped`
+           and whose args are TName nodes carrying the literal/subject text
+           ("1", "100", "n").  This lets us recover both the predicate NAME
+           and the declared literal/subject ARGS for multi-arg facts. *)
+        let flatten_type_app ty =
+          let rec go acc = function
+            (* Subject identifiers parse as TVar (lowercase) and literals/uppercase
+               names as TName; capture both as their surface text. *)
+            | TApp { head; arg = TName { name = a; _ }; _ }
+            | TApp { head; arg = TVar { name = a; _ }; _ } -> go (a :: acc) head
+            | TApp { head; arg = _; _ } -> go ("?" :: acc) head
+            | TName { name; _ } | TVar { name; _ } -> Some (name, acc)
+            | _ -> None
+          in go [] ty
+        in
+        (* From the return spec, extract the inner Fact argument type (the
+           `Clamped 1 100 n` part), unwrapping any Maybe (Fact (...)). *)
+        let fact_arg_type_of_return spec =
           match spec with
-          | RetPlain { ty = TApp { head = TName { name = "Fact"; _ };
-                                    arg = TApp { head = TName { name = pred; _ }; _ }; _ }; _ }
-          | RetPlain { ty = TApp { head = TName { name = "Fact"; _ };
-                                    arg = TName { name = pred; _ }; _ }; _ }
+          | RetPlain { ty = TApp { head = TName { name = "Fact"; _ }; arg; _ }; _ } -> Some arg
           | RetPlain { ty = TApp { head = TName { name = "Maybe"; _ };
                                     arg = TApp { head = TName { name = "Fact"; _ };
-                                                 arg = TApp { head = TName { name = pred; _ }; _ }; _ }; _ }; _ }
-          | RetPlain { ty = TApp { head = TName { name = "Maybe"; _ };
-                                    arg = TApp { head = TName { name = "Fact"; _ };
-                                                 arg = TName { name = pred; _ }; _ }; _ }; _ }
-            -> Some pred
+                                                 arg; _ }; _ }; _ } -> Some arg
+          | RetPlain { ty = TApp {
+              head = TApp { head = TName { name = "Maybe"; _ };
+                            arg  = TName { name = "Fact"; _ }; _ };
+              arg; _ }; _ } -> Some arg
           | _ -> None
+        in
+        (* Declared predicate name (works for 1-arg AND multi-arg facts). *)
+        let declared_pred_of_return spec =
+          match fact_arg_type_of_return spec with
+          | Some arg -> (match flatten_type_app arg with Some (pred, _) -> Some pred | None -> None)
+          | None -> None
+        in
+        (* Declared (name, args) of the return Fact, e.g. ("Clamped",["1";"100";"n"]). *)
+        let declared_fact_of_return spec =
+          match fact_arg_type_of_return spec with
+          | Some arg -> flatten_type_app arg
+          | None -> None
         in
         let valid_establish_return = match fd.return_spec with
           | RetPlain { ty = TApp { head = TName { name = "Fact"; _ }; _ }; _ } -> true
@@ -1351,7 +1433,94 @@ let check_module (m : module_form) : proof_error list =
 fact constructor `%s`; the body must return the declared fact constructor"
                  fd.name declared_pred wrong }
                :: !errors
-             ) wrong_ctors)
+             ) wrong_ctors;
+             (* For multi-arg / literal-param facts, ALSO verify that a body use of
+                the *correct* constructor supplies the declared literal arguments.
+                `establish e -> Fact (Clamped 1 100 n) = Clamped 2 200 n` uses the
+                right constructor but the wrong literals (2/200 vs 1/100) — that
+                lies about which fact it proves, just like using a wrong ctor.
+                We only constrain positions whose DECLARED argument is a literal
+                (numeric / string / boolean), leaving subject positions (lowercase
+                identifiers like `n`) free to be bound to any value. *)
+             (match declared_fact_of_return fd.return_spec with
+              | None -> ()
+              | Some (_, declared_args) ->
+                (* Is this declared-arg position a literal constant rather than a
+                   GDP subject?  Subjects are lowercase-initial identifiers; `_`
+                   is a placeholder; everything else (digits, minus sign, string
+                   quote, uppercase) we treat as a literal we must match exactly. *)
+                let is_literal_arg a =
+                  String.length a > 0 &&
+                  not (a = "_") &&
+                  not (a = "?") &&
+                  not ((a.[0] >= 'a' && a.[0] <= 'z'))
+                in
+                (* Render a body argument expression into the same surface string
+                   the type-arg encoding uses: integers as digits (ELit (LInt 2)
+                   -> "2") and string literals WITH their surrounding quotes
+                   (ELit (LString "http") -> "\"http\"", matching the TName the
+                   parser builds for `Named "http" …`).  Float / bool literals
+                   return None so they are never compared (their textual encoding
+                   is not reliably round-trippable — staying conservative avoids
+                   false positives). *)
+                let expr_arg_to_string (e : Ast.expr) : string option =
+                  match e with
+                  | ELit { lit = LInt n; _ } -> Some (string_of_int n)
+                  | ELit { lit = LString s; _ } -> Some ("\"" ^ s ^ "\"")
+                  | EVar { name; _ } -> Some name
+                  | EUnop { op = UNeg; arg = ELit { lit = LInt n; _ }; _ } -> Some (string_of_int (- n))
+                  | _ -> None
+                in
+                (* Flatten an expression into (ctor_name_opt, arg_exprs) covering
+                   both `EConstructor { name; args }` and the curried-EApp spine
+                   `EApp(EApp(EConstructor name, a), b)` the parser may produce. *)
+                let flatten_ctor_app (e : Ast.expr) : (string * Ast.expr list) option =
+                  let rec go acc = function
+                    | EConstructor { name; args; _ } -> Some (name, args @ acc)
+                    | EApp { fn; arg; _ } -> go (arg :: acc) fn
+                    | EVar { name; _ } -> Some (name, acc)
+                    | _ -> None
+                  in go [] e
+                in
+                (* Walk the body; for every application of the DECLARED constructor,
+                   compare its literal-position args against the declared literals. *)
+                let arg_mismatches : string list ref = ref [] in
+                let check_ctor_args name body_args =
+                  if name = declared_pred
+                     && List.length body_args = List.length declared_args then
+                    List.iteri (fun i declared_a ->
+                      if is_literal_arg declared_a then
+                        match expr_arg_to_string (List.nth body_args i) with
+                        | Some actual when actual <> declared_a ->
+                          arg_mismatches :=
+                            Printf.sprintf "argument %d is `%s` but the return spec declares `%s`"
+                              (i + 1) actual declared_a :: !arg_mismatches
+                        | _ -> ()
+                    ) declared_args
+                in
+                let rec walk_args (e : Ast.expr) =
+                  (match flatten_ctor_app e with
+                   | Some (name, body_args) when name = declared_pred -> check_ctor_args name body_args
+                   | _ -> ());
+                  match e with
+                  | EConstructor { args; _ } -> List.iter walk_args args
+                  | EApp { fn; arg; _ } -> walk_args fn; walk_args arg
+                  | EIf { cond; then_; else_; _ } -> walk_args cond; walk_args then_; walk_args else_
+                  | ECase { scrut; arms; _ } ->
+                    walk_args scrut; List.iter (fun (a : Ast.case_arm) -> walk_args a.body) arms
+                  | ELet { value; body; _ } | ELetProof { value; body; _ } ->
+                    walk_args value; walk_args body
+                  | ELambda { body; _ } -> walk_args body
+                  | _ -> ()
+                in
+                walk_args fd.body;
+                List.iter (fun detail ->
+                  errors := { loc = fd.loc; message = Printf.sprintf
+                    "establish '%s' declares return type `Fact (%s)` but its body's `%s` constructor \
+supplies the wrong literal arguments (%s); the body must return the declared fact"
+                    fd.name (String.concat " " (declared_pred :: declared_args)) declared_pred detail }
+                  :: !errors
+                ) (List.sort_uniq String.compare !arg_mismatches)))
         end
       end;
 
@@ -1402,6 +1571,11 @@ fact constructor `%s`; the body must return the declared fact constructor"
           check_nested_txn in_txn body
         | EStartWorkers _ | EServe _ -> ()
         | ELambda { body; _ } -> check_nested_txn in_txn body
+        | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> ()
+        | ECacheSet { value; _ } -> check_nested_txn in_txn value
+        | ESendEmail _ | EStartEmailWorker _ -> ()
+        | ERuntimeCall { segments; _ } ->
+          List.iter (function RLit _ -> () | RArg e -> check_nested_txn in_txn e) segments
       in
       check_nested_txn false fd.body;
 

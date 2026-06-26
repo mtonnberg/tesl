@@ -41,6 +41,9 @@ let t_unit    = TCon "Unit"
 let t_posix   = TCon "PosixMillis"
 let t_fact    = TCon "Fact"
 let t_delete_result = TCon "DeleteResult"
+let t_jwt_token  = TCon "JwtToken"
+let t_jwt_secret = TCon "JwtSecret"
+let t_http_response = TCon "HttpResponse"
 
 let t_list a        = TApp (TCon "List", a)
 let t_maybe a       = TApp (TCon "Maybe", a)
@@ -321,37 +324,21 @@ let stdlib_env : (string * scheme) list = [
   "RowsDeleted", { vars = []; mono = t_fun [t_int] t_delete_result };
 
   (* ── List ────────────────────────────────────────────────────────────── *)
-  "List.map",    { vars = _r2_ab; mono = t_fun [t_fun [_a] _b; t_list _a] (t_list _b) };
-  "List.filter", { vars = _r1_a;  mono = t_fun [t_fun [_a] t_bool; t_list _a] (t_list _a) };
+  (* TYPE SOURCE OF TRUTH: the 26 PURE, PROOF-FREE List combinators below were
+     LIFTED — their type signatures now live in `tesl/list.tesl` and are loaded
+     from source by [Checker.load_imported_func_sigs].  They are intentionally
+     ABSENT here.  (Runtime is unchanged: emission still maps `Tesl.List` to
+     `tesl/list.rkt`.)  Lifted, no longer in stdlib_env:
+       map filter foldl foldr length isEmpty head tail concat append reverse
+       unique take drop zip range repeat any all find sum maximum minimum
+       concatMap member contains
+     DEFERRED (still hardcoded here — they carry the IsSorted proof or use the
+     check/ForAll machinery, which is soundness-sensitive to lift): *)
   "List.filterCheck", { vars = _r1_a; mono = t_fun [t_fun [_a] _a; t_list _a] (t_list _a) };
   "List.allCheck",    { vars = _r1_a; mono = t_fun [t_fun [_a] _a; t_list _a] (t_maybe (t_list _a)) };
   "List.emptyForAll", { vars = _r1_a; mono = t_fun [t_fun [_a] _a] (t_list _a) };
-  "List.foldl", { vars = _r2_ab; mono = t_fun [t_fun [_b; _a] _b; _b; t_list _a] _b };
-  "List.foldr", { vars = _r2_ab; mono = t_fun [t_fun [_a; _b] _b; _b; t_list _a] _b };
-  "List.length",  { vars = _r1_a; mono = t_fun [t_list _a] t_int };
-  "List.isEmpty", { vars = _r1_a; mono = t_fun [t_list _a] t_bool };
-  "List.head",    { vars = _r1_a; mono = t_fun [t_list _a] (t_maybe _a) };
-  "List.tail",    { vars = _r1_a; mono = t_fun [t_list _a] (t_maybe (t_list _a)) };
-  "List.concat",  { vars = _r1_a; mono = t_fun [t_list (t_list _a)] (t_list _a) };
-  "List.append",  { vars = _r1_a; mono = t_fun [t_list _a; t_list _a] (t_list _a) };
-  "List.reverse", { vars = _r1_a; mono = t_fun [t_list _a] (t_list _a) };
-  "List.unique",  { vars = _r1_a; mono = t_fun [t_list _a] (t_list _a) };
-  "List.take",    { vars = _r1_a; mono = t_fun [t_int; t_list _a] (t_list _a) };
-  "List.drop",    { vars = _r1_a; mono = t_fun [t_int; t_list _a] (t_list _a) };
-  "List.zip",     { vars = _r2_ab; mono = t_fun [t_list _a; t_list _b] (t_list (TApp (TApp (TCon "Tuple2", _a), _b))) };
-  "List.range",   mono (t_fun [t_int; t_int] (t_list t_int));
-  "List.repeat",  { vars = _r1_a; mono = t_fun [_a; t_int] (t_list _a) };
-  "List.any",     { vars = _r1_a; mono = t_fun [t_fun [_a] t_bool; t_list _a] t_bool };
-  "List.all",     { vars = _r1_a; mono = t_fun [t_fun [_a] t_bool; t_list _a] t_bool };
-  "List.find",    { vars = _r1_a; mono = t_fun [t_fun [_a] t_bool; t_list _a] (t_maybe _a) };
-  "List.sum",     mono (t_fun [t_list t_int] t_int);
-  "List.maximum", { vars = _r1_a; mono = t_fun [t_list _a] (t_maybe _a) };
-  "List.minimum", { vars = _r1_a; mono = t_fun [t_list _a] (t_maybe _a) };
   "List.sort",    { vars = _r1_a; mono = t_fun [t_list _a] (t_list _a) };
   "List.sortBy",  { vars = _r2_ab; mono = t_fun [t_fun [_a] _b; t_list _a] (t_list _a) };
-  "List.concatMap", { vars = _r2_ab; mono = t_fun [t_fun [_a] (t_list _b); t_list _a] (t_list _b) };
-  "List.member",  { vars = _r1_a; mono = t_fun [_a; t_list _a] t_bool };
-  "List.contains", { vars = _r1_a; mono = t_fun [_a; t_list _a] t_bool };
 
   (* ── String ──────────────────────────────────────────────────────────── *)
   "String.length",     mono (t_fun [t_string] t_int);
@@ -440,18 +427,13 @@ let stdlib_env : (string * scheme) list = [
   "subtractMs",    mono (t_fun [t_posix; t_int] t_posix);
 
   (* ── Either ─────────────────────────────────────────────────────────── *)
+  (* The two ADT CONSTRUCTORS stay here (they are leaves).  The 10 pure Either
+     COMBINATORS (isLeft/isRight/fromLeft/fromRight/map/mapLeft/andThen/
+     withDefault/toMaybe/fromMaybe) were LIFTED to tesl/either.tesl — their
+     types are now inferred from that source via load_imported_func_sigs, and
+     their bodies compile to tesl/either-derived.rkt. *)
   "Left",             { vars = _r2_ab; mono = t_fun [_a] (t_either _a _b) };
   "Right",            { vars = _r2_ab; mono = t_fun [_b] (t_either _a _b) };
-  "Either.isLeft",    { vars = _r2_ab; mono = t_fun [t_either _a _b] t_bool };
-  "Either.isRight",   { vars = _r2_ab; mono = t_fun [t_either _a _b] t_bool };
-  "Either.fromLeft",  { vars = _r2_ab; mono = t_fun [t_either _a _b] (t_maybe _a) };
-  "Either.fromRight", { vars = _r2_ab; mono = t_fun [t_either _a _b] (t_maybe _b) };
-  "Either.map",       { vars = _r3_abc; mono = t_fun [t_fun [_b] _c; t_either _a _b] (t_either _a _c) };
-  "Either.mapLeft",   { vars = _r3_abc; mono = t_fun [t_fun [_a] _c; t_either _a _b] (t_either _c _b) };
-  "Either.andThen",   { vars = _r3_abc; mono = t_fun [t_fun [_b] (t_either _a _c); t_either _a _b] (t_either _a _c) };
-  "Either.withDefault", { vars = _r2_ab; mono = t_fun [_b; t_either _a _b] _b };
-  "Either.toMaybe",   { vars = _r2_ab; mono = t_fun [t_either _a _b] (t_maybe _b) };
-  "Either.fromMaybe", { vars = _r2_ab; mono = t_fun [_a; t_maybe _b] (t_either _a _b) };
 
   (* ── Cli ─────────────────────────────────────────────────────────────── *)
   "cli.args",          mono (t_list t_string);
@@ -474,6 +456,14 @@ let stdlib_env : (string * scheme) list = [
   "randomInt",     mono (t_fun [t_int; t_int] t_int);
   "randomFloat",   mono t_float;
 
+  (* ── UUID ────────────────────────────────────────────────────────────── *)
+  "UUID.v4",       mono (t_fun [t_unit] t_string);
+  "UUID.v7",       mono (t_fun [t_unit] t_string);
+  "UUID.validate", mono (t_fun [t_string] t_string);
+  "IsUuid",        mono t_string;
+  "uuidV4Codec",   mono t_string;
+  "uuidV7Codec",   mono t_string;
+
   (* ── ID generation ───────────────────────────────────────────────────── *)
   "generateId",          mono t_string;
   "generatePrefixedId",  mono (t_fun [t_string] t_string);
@@ -488,6 +478,13 @@ let stdlib_env : (string * scheme) list = [
   "statusClientError", mono t_int;
   "statusServerError", mono t_int;
 
+  (* ── HttpClient ─────────────────────────────────────────────────────── *)
+  "HttpResponse",         mono t_http_response;
+  "HttpClient.get",       mono (t_fun [t_string; t_list (t_tuple2 t_string t_string)] t_http_response);
+  "HttpClient.post",      mono (t_fun [t_string; t_list (t_tuple2 t_string t_string); t_string] t_http_response);
+  "HttpClient.put",       mono (t_fun [t_string; t_list (t_tuple2 t_string t_string); t_string] t_http_response);
+  "HttpClient.delete",    mono (t_fun [t_string; t_list (t_tuple2 t_string t_string)] t_http_response);
+
   (* ── GDP / proof utilities ───────────────────────────────────────────── *)
   "forgetFact",   { vars = _r1_a; mono = t_fun [_a] _a };
   "detachFact",   { vars = _r1_a; mono = t_fun [_a] t_fact };
@@ -496,6 +493,17 @@ let stdlib_env : (string * scheme) list = [
   "andLeft",      mono (t_fun [t_fact] t_fact);
   "andRight",     mono (t_fun [t_fact] t_fact);
   "introAnd",     mono (t_fun [t_fact; t_fact] t_fact);
+
+  (* ── JWT ─────────────────────────────────────────────────────────────────── *)
+  (* JwtToken and JwtSecret are nominal newtypes wrapping String. *)
+  "JwtToken",  mono (t_fun [t_string] t_jwt_token);
+  "JwtSecret", mono (t_fun [t_string] t_jwt_secret);
+  (* JWT.sign: takes any claims value (polymorphic) and a JwtSecret, returns JwtToken. *)
+  "JWT.sign",   { vars = _r1_a; mono = t_fun [_a; t_jwt_secret] t_jwt_token };
+  (* JWT.verify: takes a JwtToken and JwtSecret, returns claims (polymorphic). *)
+  "JWT.verify", { vars = _r1_a; mono = t_fun [t_jwt_token; t_jwt_secret] _a };
+  (* JWT.decode: takes a JwtToken, returns claims without checking signature. *)
+  "JWT.decode", { vars = _r1_a; mono = t_fun [t_jwt_token] _a };
 
   (* ── Queue / Tesl infrastructure ─────────────────────────────────────── *)
   (* requeue: accepts any dead-job value, returns the declared return type freely.
@@ -512,6 +520,11 @@ let stdlib_env : (string * scheme) list = [
   (* ── Telemetry ───────────────────────────────────────────────────────── *)
   "initTelemetry", mono t_unit;
   "telemetry",     mono (t_fun [t_string] t_unit);
+
+  (* ── EmailBody ADT ───────────────────────────────────────────────────── *)
+  "TextBody", mono (t_fun [t_string] (TCon "EmailBody"));
+  "HtmlBody", mono (t_fun [t_string] (TCon "EmailBody"));
+  "RichBody", mono (t_fun [t_string; t_string] (TCon "EmailBody"));
 
   (* ── Misc ────────────────────────────────────────────────────────────── *)
   "check",   { vars = _r1_a; mono = t_fun [t_fun [_a] _a; _a] _a };
@@ -548,6 +561,8 @@ let tesl_module_exports : (string * string list) list = [
     [ "Result"; "Ok"; "Err" ] );
   ( "Tesl.DB",
     [ "dbRead"; "dbWrite"; "DeleteResult"; "NoRowDeleted"; "RowsDeleted" ] );
+  ( "Tesl.EitherPrim",
+    [ "Either"; "Left"; "Right" ] );
   ( "Tesl.Either",
     [ "Either"; "Left"; "Right";
       "Either.isLeft"; "Either.isRight"; "Either.fromLeft"; "Either.fromRight";
@@ -575,6 +590,8 @@ let tesl_module_exports : (string * string list) list = [
       "List.all"; "List.count"; "List.partition"; "List.intersperse";
       "List.intercalate"; "List.groupBy"; "List.unique";
       "List.concatMap"; "List.member"; "List.emptyForAll" ] );
+  ( "Tesl.ListPrim",
+    [ "ListPrim.head"; "ListPrim.tail"; "ListPrim.append" ] );
   ( "Tesl.Int",
     [ "IsNonNegative"; "IsNonZero";
       "Int.parse"; "Int.fromFloat"; "Int.toString"; "Int.abs"; "Int.min"; "Int.max";
@@ -616,6 +633,9 @@ let tesl_module_exports : (string * string list) list = [
       "Time.posixToSeconds"; "Time.secondsToPosix"; "Time.millisToSeconds" ] );
   ( "Tesl.Random",
     [ "randomInt"; "randomFloat"; "random" ] );
+  ( "Tesl.UUID",
+    [ "IsUuid"; "uuid"; "UUID.v4"; "UUID.v7"; "UUID.validate";
+      "uuidV4Codec"; "uuidV7Codec" ] );
   ( "Tesl.Env",
     [ "env"; "envInt" ] );
   ( "Tesl.Json",
@@ -631,9 +651,20 @@ let tesl_module_exports : (string * string list) list = [
       "JobResult"; "JobOk"; "JobFailed";
       "processNextJob"; "processNextDeadJob"; "drainQueue"; "pendingJobCount";
       "expectJobOk"; "expectJobFailed" ] );
+  ( "Tesl.JWT",
+    [ "jwt"; "JwtToken"; "JwtSecret"; "JWT.sign"; "JWT.verify"; "JWT.decode" ] );
+  ( "Tesl.Cache",
+    [ "cache"; "Cache.get"; "Cache.set"; "Cache.delete"; "Cache.invalidate" ] );
+  ( "Tesl.Email",
+    [ "email"; "EmailBody"; "TextBody"; "HtmlBody"; "RichBody";
+      "Email.send"; "startEmailWorker" ] );
+  ( "Tesl.HttpClient",
+    [ "httpClient"; "HttpResponse"; "HttpResponse?";
+      "HttpClient.get"; "HttpClient.post"; "HttpClient.put"; "HttpClient.delete" ] );
   (* Tesl.Http, Tesl.DB, Tesl.Bool, Tesl.Uuid, Tesl.Crypto, Tesl.Map, Tesl.Logging,
      Tesl.Queue, Tesl.Channel, Tesl.Sse —
-     internal modules; imports validated loosely (unknown names accepted) *)
+     internal modules; imports validated loosely (unknown names accepted)
+     Note: Tesl.UUID (uppercase) now has a full export list above. *)
 ]
 
 (** Look up the known exports for a Tesl stdlib module.
@@ -647,11 +678,12 @@ let tesl_module_export_set (module_name : string) : string list option =
     Used to reject `import Tesl.Unknown` with a compile-time error. *)
 let tesl_known_module_names : string list = [
   "Tesl.Prelude"; "Tesl.String"; "Tesl.Int"; "Tesl.Float"; "Tesl.Bool";
-  "Tesl.List"; "Tesl.Dict"; "Tesl.Maybe"; "Tesl.Either"; "Tesl.Result";
-  "Tesl.Http"; "Tesl.Json"; "Tesl.DB"; "Tesl.Time"; "Tesl.Random";
-  "Tesl.Uuid"; "Tesl.Crypto"; "Tesl.Set"; "Tesl.Map"; "Tesl.Env";
+  "Tesl.List"; "Tesl.ListPrim"; "Tesl.Dict"; "Tesl.Maybe"; "Tesl.Either"; "Tesl.EitherPrim"; "Tesl.Result";
+  "Tesl.Http"; "Tesl.HttpClient"; "Tesl.Json"; "Tesl.DB"; "Tesl.Time"; "Tesl.Random";
+  "Tesl.Uuid"; "Tesl.UUID"; "Tesl.Crypto"; "Tesl.Set"; "Tesl.Map"; "Tesl.Env";
   "Tesl.Telemetry"; "Tesl.Cli"; "Tesl.ApiTest"; "Tesl.Tuple"; "Tesl.Id";
   "Tesl.Queue"; "Tesl.Channel"; "Tesl.Sql"; "Tesl.Sse"; "Tesl.Logging";
+  "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email";
 ]
 
 (** Returns [true] when [name] is a known Tesl.* stdlib module. *)

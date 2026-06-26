@@ -1,0 +1,267 @@
+#lang tesl
+module Lesson64ReexportingFromLibraries exposing [
+  # Re-exported names from the "inner" validation layer IsValidUsername,
+  IsValidEmail,
+  checkUsername,
+  checkEmail,
+  # Facade functions describeUser,
+  formatUserSummary,
+  UserProfile,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 64 — Re-exporting from Libraries
+#
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# A library can act as a FACADE: it imports from one or more internal modules
+# and re-exports a unified, curated API for consumers.
+#
+# Re-exporting is simple: list the imported name in your own `exposing [...]`.
+# Any name that appears in your exposing list is part of your public API,
+# whether it was declared in THIS module or imported from elsewhere.
+#
+# ── REAL-WORLD PATTERN ────────────────────────────────────────────────────────
+#
+# In a real multi-file codebase you might have:
+#
+#   username-validation.tesl  — declares IsValidUsername, checkUsername
+#   email-validation.tesl     — declares IsValidEmail, checkEmail
+#   user-lib.tesl             — FACADE: imports both and re-exports a unified API
+#
+#   library UserLib exposing [
+#     IsValidUsername, checkUsername,   # re-exported from UsernameValidation
+#     IsValidEmail,    checkEmail,      # re-exported from EmailValidation
+#     UserProfile,     makeUserProfile, # declared here in UserLib
+#   ]
+#
+# Consumers import only from UserLib — they never need to know about the
+# internal split between UsernameValidation and EmailValidation.
+#
+# ── THIS LESSON ───────────────────────────────────────────────────────────────
+#
+# Because each lesson is a single file, we simulate the facade pattern inside
+# one module: the declarations that would live in "inner" modules are defined
+# here and then re-exported alongside the higher-level facade functions.
+#
+# The lesson file itself uses `module` (lesson files are standalone modules).
+# A real facade library would use `library UserLib exposing [...]`.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# SIGNATURE COMPLETENESS WITH RE-EXPORTS
+#
+# Signature completeness applies equally to re-exported names.
+# If your facade re-exports a function, every type and proof predicate in that
+# function's signature must ALSO appear in your exposing list.
+#
+# EXAMPLE — would produce a compile error:
+#
+#   library UserLib exposing [checkUsername]     # re-exports the fn
+#   # but IsValidUsername is NOT in the exposing list!
+#
+# Error: library UserLib exports checkUsername but IsValidUsername
+#        (used in its signature) is not exported — consumers cannot use it
+#
+# FIX — always expose the signature's types and predicates alongside the fn:
+#
+#   library UserLib exposing [IsValidUsername, checkUsername]
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [Int, String, Bool(..)]
+import Tesl.String exposing [String.length, String.contains]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# INNER LAYER — validation logic
+# (In a real codebase these would live in separate library modules)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Username validation ───────────────────────────────────────────────────────
+
+fact IsValidUsername (name: String)
+
+check checkUsername(name: String) -> name: String ::: IsValidUsername name =
+  if String.length name < 2 then
+    fail 400 "username must be at least 2 characters"
+  else if String.length name > 30 then
+    fail 400 "username must be at most 30 characters"
+  else if String.contains name "@" then
+    fail 400 "username must not contain @"
+  else
+    ok name ::: IsValidUsername name
+
+# ── Email validation ──────────────────────────────────────────────────────────
+
+fact IsValidEmail (addr: String)
+
+check checkEmail(addr: String) -> addr: String ::: IsValidEmail addr =
+  if String.contains addr "@" == False then
+    fail 400 "email must contain @"
+  else if String.length addr < 5 then
+    fail 400 "email address too short"
+  else if String.length addr > 200 then
+    fail 400 "email address too long"
+  else
+    ok addr ::: IsValidEmail addr
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FACADE LAYER — declared in this module, consumes both validation layers
+# ══════════════════════════════════════════════════════════════════════════════
+
+# UserProfile bundles validated username and email together.
+# The record fields carry proof annotations — you cannot construct a UserProfile
+# with a raw (unvalidated) String for either field.
+record UserProfile {
+  username: String ::: IsValidUsername username
+  email: String ::: IsValidEmail email
+}
+
+# describeUser: a facade function that operates on a validated profile.
+# Consumers of this library call checkUsername and checkEmail, build the
+# UserProfile, and then call describeUser — no further validation needed.
+fn describeUser(profile: UserProfile) -> String =
+  "user ${profile.username} <${profile.email}>"
+
+# formatUserSummary: composes validation + description in one step.
+# This is the highest-level entry point in the facade.
+# Consumers pass raw strings; this function validates both and produces
+# a summary string, or fails with a descriptive error if either is invalid.
+fn formatUserSummary(rawName: String, rawEmail: String) -> String =
+  let name = check checkUsername rawName
+  let addr = check checkEmail rawEmail
+  let profile = UserProfile { username: name email: addr }
+  describeUser profile
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# HOW RE-EXPORT WORKS
+#
+# In Tesl, `exposing [...]` controls what names are visible to importers.
+# Any name in your exposing list is re-exported — the distinction between
+# "declared here" and "imported from elsewhere" is invisible to consumers.
+#
+# This is intentional: it lets facades hide their internal structure.
+# A consumer that imports from UserLib does not know (or care) whether
+# IsValidUsername was declared in UserLib or in a sub-library called
+# UsernameValidation.
+#
+# FROM THE CONSUMER'S PERSPECTIVE:
+#
+#   import UserLib exposing [
+#     IsValidUsername, checkUsername,
+#     IsValidEmail,    checkEmail,
+#     UserProfile, describeUser, formatUserSummary,
+#   ]
+#
+# The consumer sees a flat, unified API. The internal split is an
+# implementation detail of UserLib.
+#
+# PROOF OWNERSHIP UNDER RE-EXPORT
+#
+# Re-exporting does NOT transfer minting rights. If UserLib re-exports
+# IsValidUsername from UsernameValidation, then:
+#   - Consumers can IMPORT and USE IsValidUsername via UserLib.
+#   - UsernameValidation retains sole minting authority.
+#   - UserLib CANNOT produce IsValidUsername values itself.
+#   - A consumer CANNOT produce IsValidUsername values either.
+#
+# The ownership chain is always traced back to the declaring module,
+# regardless of how many layers re-export the name.
+#
+# WHEN TO USE A FACADE
+#
+# Use a facade library when:
+#   - Multiple internal modules implement different concerns.
+#   - Consumers should interact with a single, stable API surface.
+#   - You want to be able to refactor internal modules without breaking consumers.
+#   - You want to document and test the combined API as a unit.
+#
+# Avoid using facades purely to add abstraction layers. Tesl's import system
+# is explicit — if two modules are independently useful, let consumers import
+# them directly.
+#
+# WHAT GETS RE-EXPORTED vs NOT
+#
+# ONLY names listed in `exposing [...]` are exported — nothing else.
+# A name imported from another module that is NOT in your exposing list
+# is invisible to your consumers.
+#
+#   library UserLib exposing [
+#     checkUsername,       # re-exported — consumers can call this
+#                          # IsValidUsername is NOT listed — consumers cannot name it
+#   ]
+#
+# The compiler enforces signature completeness and would reject this exposing
+# list because checkUsername's return type references IsValidUsername, which
+# is not exported. You must export both.
+#
+# COMPOSING VALIDATIONS IN THE FACADE
+#
+# The facade layer can compose multiple validated pieces into aggregate types
+# (like UserProfile) that carry multiple proof annotations. This moves the
+# composition logic into one place, so consumers just build the aggregate and
+# use it — without needing to understand the individual validation modules.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+test "checkUsername accepts a valid username" {
+  let rawName = "alice"
+  let rawEmail = "alice@example.com"
+  let name = check checkUsername rawName
+  let addr = check checkEmail rawEmail
+  expect describeUser (UserProfile { username: name email: addr }) == "user alice <alice@example.com>"
+}
+
+test "checkUsername rejects too-short username" {
+  let raw = "a"
+  expectFail (check checkUsername raw)
+}
+
+test "checkUsername rejects username with @" {
+  let raw = "alice@bad"
+  expectFail (check checkUsername raw)
+}
+
+test "checkEmail accepts a valid email" {
+  let rawEmail = "bob@example.com"
+  let rawName = "bob"
+  let addr = check checkEmail rawEmail
+  let name = check checkUsername rawName
+  expect describeUser (UserProfile { username: name email: addr }) == "user bob <bob@example.com>"
+}
+
+test "checkEmail rejects address without @" {
+  let raw = "notanemail"
+  expectFail (check checkEmail raw)
+}
+
+test "formatUserSummary produces correct output" {
+  let result = formatUserSummary "carol" "carol@example.com"
+  expect result == "user carol <carol@example.com>"
+}
+
+test "formatUserSummary fails when username is invalid" {
+  expectFail (formatUserSummary "x" "x@example.com")
+}
+
+test "formatUserSummary fails when email is invalid" {
+  expectFail (formatUserSummary "dave" "notanemail")
+}
+
+test "formatUserSummary fails when both are invalid" {
+  expectFail (formatUserSummary "x" "notanemail")
+}
+
+test "UserProfile requires both proofs" {
+  let rawName = "eve"
+  let rawEmail = "eve@example.com"
+  let name = check checkUsername rawName
+  let addr = check checkEmail rawEmail
+  let profile = UserProfile { username: name email: addr }
+  expect describeUser profile == "user eve <eve@example.com>"
+}

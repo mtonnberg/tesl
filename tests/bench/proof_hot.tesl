@@ -1,0 +1,39 @@
+#lang tesl
+module ProofHot exposing [hotPath, checkBound]
+
+# A proof-heavy hot path used by tests/bench/proof-overhead.rkt as a
+# realistic shape reference: a `fn` with three proof-annotated parameters,
+# each carrying a `Bounded` fact, called in a tight loop.
+#
+# Under today's runtime "safety net" every call to `hotPath` wraps each of
+# a/b/c in a `named-value`, runs `validate-runtime-argument`, and installs a
+# six-way `parameterize`.  Under the future TESL_ZERO_COST_PROOFS erasure
+# those cost sites vanish (proof-annotated params keep at most one allocation
+# via `tesl-establish-param-proof`; proof-free params allocate nothing).
+#
+# The .rkt benchmark measures the underlying DSL primitives directly so the
+# numbers are stable across compiler revisions; this .tesl file documents the
+# equivalent surface program and is compiled by the bench as a smoke check.
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Fact]
+
+fact Bounded (n: Int)
+
+check checkBound(n: Int) -> n: Int ::: Bounded n =
+  if n >= 0 && n <= 1000000 then
+    ok n ::: Bounded n
+  else
+    fail 400 "out of bounds"
+
+fn hotPath(a: Int ::: Bounded a, b: Int ::: Bounded b, c: Int ::: Bounded c) -> Int =
+  a + b + c
+
+test "hot path sums three bounded values" {
+  let one = 1
+  let two = 2
+  let three = 3
+  let a = check checkBound one
+  let b = check checkBound two
+  let c = check checkBound three
+  expect hotPath a b c == 6
+}

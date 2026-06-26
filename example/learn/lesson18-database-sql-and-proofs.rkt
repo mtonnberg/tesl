@@ -8,6 +8,7 @@
   tesl/dsl/sql
   tesl/dsl/web
   tesl/dsl/test-support
+  tesl/dsl/debug/checkpoint
   tesl/tesl/private/runtime
   tesl/tesl/queue
   tesl/tesl/sse
@@ -66,7 +67,7 @@
 (define-checker
   (checkNoteTitle [s : String])
   #:returns [s : String ::: (ValidNoteTitle s)]
-  (if (and (>= (raw-value (tesl_import_String_length *s)) 1) (<= (raw-value (tesl_import_String_length *s)) 200)) (accept (ValidNoteTitle s) #:value *s) (reject "title must be 1-200 characters" #:http-code 400)))
+  (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 101 (list (cons 's *s)) (lambda () (if (and (>= (raw-value (tesl_import_String_length *s)) 1) (<= (raw-value (tesl_import_String_length *s)) 200)) (accept (ValidNoteTitle s) #:value *s) (reject "title must be 1-200 characters" #:http-code 400)))))
 
 (define-record NewNote
   [title : String ::: (ValidNoteTitle title)]
@@ -76,7 +77,7 @@
 (define (tesl-codec-encode-NewNote _v)
   (error "toJson is forbidden for type NewNote: this type cannot be JSON-encoded"))
 (define (tesl-codec-decode-NewNote-0 _j)
-  (define _fraw_title (tesl-codec-decode-field _j "title" tesl-json-string-codec))
+  (define _fraw_title (tesl-decode-prim-field _j "title" tesl-decode-prim-string))
   (define _r1_title
     (let ([_r (checkNoteTitle _fraw_title)])
       (cond [(check-ok? _r) _r] [(check-fail? _r) _r] [else _r])))
@@ -84,7 +85,7 @@
     (if (check-ok? _r1_title)
         (ensure-named 'title (check-ok-value _r1_title) (check-ok-facts _r1_title) (check-ok-bindings _r1_title) #:subject 'title)
         _r1_title))
-  (define _f_content (tesl-codec-decode-field _j "content" tesl-json-string-codec))
+  (define _f_content (tesl-decode-prim-field _j "content" tesl-decode-prim-string))
   (or (and (check-fail? _f_title) _f_title)
       (record-value 'NewNote (hash 'title _f_title 'content _f_content))))
 (register-type-codec! 'NewNote tesl-codec-encode-NewNote (list tesl-codec-decode-NewNote-0))
@@ -92,7 +93,7 @@
 (define-checker
   (checkNoteId [s : String])
   #:returns [s : String ::: (ValidNoteId s)]
-  (if (> (raw-value (tesl_import_String_length *s)) 5) (accept (ValidNoteId s) #:value *s) (reject "invalid note id" #:http-code 400)))
+  (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 124 (list (cons 's *s)) (lambda () (if (> (raw-value (tesl_import_String_length *s)) 5) (accept (ValidNoteId s) #:value *s) (reject "invalid note id" #:http-code 400)))))
 
 (define-capture noteIdCapture
   [noteId : String ::: (ValidNoteId noteId)]
@@ -102,31 +103,31 @@
   (cookieAuth [request : HttpRequest])
   #:capabilities [noteReadCookie]
   #:returns [user : String ::: (Authenticated user)]
-  (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (reject "not logged in" #:http-code 401)] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (accept (Authenticated userId) #:value *userId))])))
+  (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 136 (list (cons 'request *request)) (lambda () (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (reject "not logged in" #:http-code 401)] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (accept (Authenticated userId) #:value *userId))])))))
 
 (define-handler
   (getNote [user : String ::: (Authenticated user)] [noteId : String ::: (ValidNoteId noteId)])
   #:capabilities [noteDbRead]
   #:returns (? Note _entity ::: (FromDb (Id == noteId) _entity))
-  (let ([existing (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) noteId)))]) (if tesl_match (Something tesl_match) Nothing))]) (let ([tesl_case_1 (raw-value existing)]) (cond [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Nothing)) (reject "note not found" #:http-code 404)] [(and (and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Something)) (let ([note (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (not (equal? (raw-value note.authorId) *user)))) (let ([note (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (reject "not your note" #:http-code 403))] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Something)) (let ([note (hash-ref (adt-value-fields *tesl_case_1) 'value)]) note)]))))
+  (let ([existing (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 149 (list (cons 'user *user) (cons 'noteId *noteId)) (lambda () (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) noteId)))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 150 (list (cons 'existing *existing) (cons 'user *user) (cons 'noteId *noteId)) (lambda () (let ([tesl_case_1 (raw-value existing)]) (cond [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Nothing)) (reject "note not found" #:http-code 404)] [(and (and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Something)) (let ([note (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (not (equal? (raw-value note.authorId) *user)))) (let ([note (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (reject "not your note" #:http-code 403))] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Something)) (let ([note (hash-ref (adt-value-fields *tesl_case_1) 'value)]) note)]))))))
 
 (define-handler
   (listNotes [user : String ::: (Authenticated user)])
   #:capabilities [noteDbRead]
   #:returns (List Note)
-  (begin (telemetry-event! "notes.list" #:attributes (["user.id" *user])) (select-many (from Note) (where (==. (entity-field-ref Note 'authorId) user)))))
+  (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 158 (list (cons 'user *user)) (lambda () (begin (telemetry-event! "notes.list" #:attributes (["user.id" *user])) (select-many (from Note) (where (==. (entity-field-ref Note 'authorId) user)))))))
 
 (define-handler
   (createNote [user : String ::: (Authenticated user)] [body : NewNote])
   #:capabilities [noteDbRead noteDbWrite noteTime random]
   #:returns (Exists [noteId : String] (? Note _entity ::: (FromDb (Id == noteId) _entity)))
-  (let ([noteId (generatePrefixedId "note")]) (pack ([noteId]) (insert-one! Note (hash 'id noteId 'title (raw-value body.title) 'content (raw-value body.content) 'authorId user 'createdAt (raw-value (nowMillis)))))))
+  (let ([noteId (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 168 (list (cons 'user *user) (cons 'body *body)) (lambda () (generatePrefixedId "note")))]) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 169 (list (cons 'noteId *noteId) (cons 'user *user) (cons 'body *body)) (lambda () (pack ([noteId]) (insert-one! Note (hash 'id noteId 'title (raw-value body.title) 'content (raw-value body.content) 'authorId user 'createdAt (raw-value (nowMillis)))))))))
 
 (define-handler
   (updateNoteTitle [user : String ::: (Authenticated user)] [noteId : String ::: (ValidNoteId noteId)] [body : NewNote])
   #:capabilities [noteDbRead noteDbWrite]
   #:returns (? Note _entity ::: (FromDb (Id == noteId) _entity))
-  (let ([existing (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) noteId)))]) (if tesl_match (Something tesl_match) Nothing))]) (let ([tesl_case_2 (raw-value existing)]) (cond [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Nothing)) (reject "note not found" #:http-code 404)] [(and (and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Something)) (let ([note (hash-ref (adt-value-fields *tesl_case_2) 'value)]) (not (equal? (raw-value note.authorId) *user)))) (let ([note (hash-ref (adt-value-fields *tesl_case_2) 'value)]) (reject "not your note" #:http-code 403))] [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Something)) (car (update-many! (from Note) (hash (entity-field-ref Note 'title) (raw-value body.title)) (where (==. (entity-field-ref Note 'id) noteId))))]))))
+  (let ([existing (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 182 (list (cons 'user *user) (cons 'noteId *noteId) (cons 'body *body)) (lambda () (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) noteId)))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 183 (list (cons 'existing *existing) (cons 'user *user) (cons 'noteId *noteId) (cons 'body *body)) (lambda () (let ([tesl_case_2 (raw-value existing)]) (cond [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Nothing)) (reject "note not found" #:http-code 404)] [(and (and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Something)) (let ([note (hash-ref (adt-value-fields *tesl_case_2) 'value)]) (not (equal? (raw-value note.authorId) *user)))) (let ([note (hash-ref (adt-value-fields *tesl_case_2) 'value)]) (reject "not your note" #:http-code 403))] [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Something)) (car (update-many! (from Note) (hash (entity-field-ref Note 'title) (raw-value body.title)) (where (==. (entity-field-ref Note 'id) noteId))))]))))))
 
 (define NoteServer-sse-routes '())
 (define-api NoteApi
@@ -167,4 +168,5 @@
 )
 
 (module+ main
-  (let ([_ (init-opentelemetry! #:service-name "notes-api" #:endpoint "in-memory" #:console? #t)]) (call-with-database NoteDatabase (lambda () (with-capabilities (noteService) (serve NoteServer #:port defaultNotePort #:capabilities (list noteService) #:sse-routes NoteServer-sse-routes))))))
+  (let ([_ (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 229 (list) (lambda () (init-opentelemetry! #:service-name "notes-api" #:endpoint "in-memory" #:console? #t)))])
+  (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 230 (list) (lambda () (call-with-database NoteDatabase (lambda () (with-capabilities (noteService) (serve NoteServer #:port defaultNotePort #:capabilities (list noteService) #:sse-routes NoteServer-sse-routes))))))))

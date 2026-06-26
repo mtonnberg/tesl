@@ -303,6 +303,9 @@ pkgs.mkShell {
     ocamlPackages.dune_3
     ocamlPackages.findlib
     ocamlPackages.alcotest
+    # Integration test mock servers
+    mailhog   # SMTP mock for email integration tests (MailHog binary in PATH as MailHog)
+    python3   # HTTP mock server for httpclient integration tests
   ];
 
   shellHook = ''

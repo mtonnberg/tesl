@@ -1,0 +1,215 @@
+#lang tesl
+module Lesson61StepDebugging exposing [ describeScore, computeGrade, ]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 61 — Step Debugging with VSCode
+#
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Tesl integrates with VSCode's standard debugger (DAP — Debug Adapter Protocol).
+# You can set breakpoints, inspect local variables (including GDP proof tags),
+# and step through your code just like a TypeScript or Python program.
+#
+# ── STEP 1: Compile with debug instrumentation ────────────────────────────────
+#
+#   tesl --debug myfile.tesl
+#
+# This produces the normal `myfile.rkt` PLUS a `myfile.tesl.srcmap.json`
+# sidecar that maps Tesl source lines to compiled Racket lines.
+# The compiled output contains `(thsl-src ...)` wrappers at every statement.
+#
+# ── STEP 2: Set up VSCode ──────────────────────────────────────────────────────
+#
+# Install the `tesl` VSCode extension. It provides syntax highlighting, the
+# language server (completions, errors), AND the debugger.
+#
+# A minimal `.vscode/launch.json` for your workspace:
+#
+#   {
+#     "version": "0.2.0",
+#     "configurations": [
+#       {
+#         "type": "tesl",
+#         "request": "launch",
+#         "name": "Debug Tesl Program",
+#         "program": "${file}"
+#       }
+#     ]
+#   }
+#
+# ── STEP 3: Debug ─────────────────────────────────────────────────────────────
+#
+# 1. Open a .tesl file in VSCode.
+# 2. Click the gutter to the left of a line number to set a breakpoint (red dot).
+# 3. Press F5 (or Run > Start Debugging) to launch.
+# 4. When the breakpoint is hit, execution pauses.
+# 5. Inspect local variables in the Variables panel (left sidebar).
+# 6. Press F5 to continue.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# WHAT THE DEBUGGER SHOWS
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Variables panel — shows all local bindings at the current breakpoint:
+#
+#   score     = 85          (plain Int)
+#   validated = 85          (Int, with proof tag: ValidScore)
+#   label     = "B"         (String)
+#
+# GDP PROOF TAGS: proof-carrying values show the inner value PLUS their proof
+# annotations. A `String ::: IsTrimmed, IsNonEmpty` displays as:
+#   userInput = "hello"  [IsTrimmed, IsNonEmpty]
+#
+# Nominal newtypes (JwtToken, JwtSecret) are unwrapped to their inner value:
+#   token = "eyJhbGci..."  (JwtToken)
+#
+# ── WHAT PHASE 1 SUPPORTS (current) ──────────────────────────────────────────
+#   - Breakpoints at statement and function level
+#   - Local variable inspection (see all bindings at pause point)
+#   - Continue (F5) to resume execution
+#   - GDP proof tags shown as value annotations
+#
+# ── DEFERRED TO LATER PHASES ─────────────────────────────────────────────────
+#   - Step Over (F10): execute one statement, stay in current function
+#   - Step Into (F11): follow a function call
+#   - Conditional breakpoints: pause only when an expression is truthy
+#   - Watch expressions: evaluate user-defined expressions at each pause
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# ILLUSTRATIVE CODE — this is what you would debug
+#
+# The functions below are normal Tesl code. Use them as debugging examples:
+# set a breakpoint inside clampScore or computeGrade and watch variables.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [Int, String, Bool(..)]
+
+fact ValidScore (n: Int)
+
+check checkScore(n: Int) -> n: Int ::: ValidScore n =
+  if n >= 0 && n <= 100 then
+    ok n ::: ValidScore n
+  else
+    fail 400 "score must be 0-100"
+
+# describeScore: returns a letter grade string.
+# Step through the if-else chain to see which branch is taken.
+# Set a breakpoint inside to watch `score` in the Variables panel.
+fn describeScore(score: Int ::: ValidScore score) -> String =
+  if score >= 90 then
+    "A"
+  else if score >= 80 then
+    "B"
+  else if score >= 70 then
+    "C"
+  else if score >= 60 then
+    "D"
+  else
+    "F"
+
+# computeGrade: validate and grade in one step.
+# Set a breakpoint at the `let validated` line to pause before grading.
+# The Variables panel will show `rawScore` as a plain Int and
+# `validated` as an Int with the ValidScore proof tag.
+fn computeGrade(rawScore: Int) -> String =
+  let validated = check checkScore rawScore
+  describeScore validated
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UNDERSTANDING — how the debugger works inside Tesl
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# HOW BREAKPOINTS WORK
+#
+# When you compile with `tesl --debug`, the emitter wraps every AST expression
+# with `(thsl-src "file.tesl" LINE expr)`. At runtime, before evaluating `expr`,
+# the thsl-src macro checks if LINE is in the active breakpoints set. If so, it:
+#   1. Captures all local bindings (the "locals thunk").
+#   2. Sends a 'stopped' event to the DAP server thread.
+#   3. Blocks on a 'continue' channel.
+#
+# The DAP server receives the 'stopped' event, signals VSCode, and VSCode shows
+# the Variables panel. When you press F5, the DAP server sends 'continue' on
+# the channel, and the program resumes.
+#
+# THE OCaml ADVANTAGE
+#
+# The OCaml compiler already tracks `loc` (file, line, column) on every AST
+# node. This means Phase 0 (source maps) is an emitter change, not a frontend
+# refactor. Every expression in the AST already knows its source position; the
+# emitter just emits that position in the `thsl-src` wrapper.
+#
+# GDP PROOF DISPLAY
+#
+# Tesl's runtime wraps proof-carrying values in `named-value` structs. The
+# debugger's `thsl-display-value` function unwraps these layers:
+#   named-value   → show inner value + proof tag list as annotations
+#   newtype-value → show inner value + type name (e.g. "JwtToken")
+#   check-ok      → show inner value
+#   record-value  → recurse into fields
+#   plain value   → show as-is
+#
+# This means the Variables panel shows you what your code "means", not the
+# internal runtime representation. A `String ::: IsUuid s` displays as a
+# plain string with an [IsUuid] annotation, not as a wrapped struct.
+#
+# SOURCEMAP SIDECAR
+#
+# `tesl --debug myfile.tesl` writes `myfile.tesl.srcmap.json`:
+#   { "tesl_file": "myfile.tesl",
+#     "entries": [{"tesl_line": 12, "rkt_line": 47}, ...] }
+#
+# The DAP server uses this sidecar to translate VSCode breakpoint lines
+# (Tesl source lines) into the correct positions in the compiled Racket.
+# You never see the Racket code — you debug at the Tesl source level.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+test "checkScore accepts valid score 0" {
+  let n = 0
+  let result = check checkScore n
+  expect result == 0
+}
+
+test "checkScore accepts valid score 100" {
+  let n = 100
+  let result = check checkScore n
+  expect result == 100
+}
+
+test "checkScore accepts mid-range score" {
+  let n = 75
+  let result = check checkScore n
+  expect result == 75
+}
+
+test "checkScore rejects negative score" {
+  let n = -10
+  let y = "doo"
+  let z = 2.32
+  expectFail (check checkScore n)
+}
+
+test "checkScore rejects score over 100" {
+  let n = 150
+  expectFail (check checkScore n)
+}
+
+test "computeGrade returns A for 95" {
+  expect computeGrade 95 == "A"
+}
+
+test "computeGrade returns B for 85" {
+  expect computeGrade 85 == "B"
+}
+
+test "computeGrade returns C for 75" {
+  expect computeGrade 75 == "C"
+}
+
+test "computeGrade returns F for 55" {
+  expect computeGrade 55 == "F"
+}

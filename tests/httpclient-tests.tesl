@@ -1,0 +1,188 @@
+#lang tesl
+module HttpClientTests exposing [
+  isSuccess,
+  getStatusClass,
+  buildAuthHeader,
+  fetchAndExtractBody,
+  isOkStatus,
+  classifyStatus,
+  headersToDict,
+  hasJsonContent,
+  extractFirstHeader,
+  emptyHeadersFetch,
+  postWithBody,
+  putWithBody,
+  deleteResource,
+  buildGetHeaders,
+  responseIsOk,
+]
+
+import Tesl.Prelude exposing [Int, String, Bool, List, Unit]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
+import Tesl.List exposing [List.head, List.filter, List.any]
+import Tesl.String exposing [String.length, String.contains]
+import Tesl.HttpClient exposing [
+  httpClient,
+  HttpResponse,
+  HttpClient.get,
+  HttpClient.post,
+  HttpClient.put,
+  HttpClient.delete,
+]
+
+# ────────────────────────────────────────────────────────────────────────────
+# HttpClient capability declaration
+# ────────────────────────────────────────────────────────────────────────────
+
+capability webService implies httpClient
+
+# ────────────────────────────────────────────────────────────────────────────
+# 1. Pure helper functions (no capability needed)
+# ────────────────────────────────────────────────────────────────────────────
+
+# Check if a response indicates success (2xx range)
+fn isSuccess(resp: HttpResponse) -> Bool =
+  resp.status >= 200 && resp.status < 300
+
+# Classify HTTP status code as string category
+fn getStatusClass(status: Int) -> String =
+  if status >= 200 && status < 300 then
+    "success"
+  else if status >= 400 && status < 500 then
+    "client-error"
+  else if status >= 500 then
+    "server-error"
+  else
+    "other"
+
+# Build an Authorization header tuple
+fn buildAuthHeader(token: String) -> Tuple2 String String =
+  Tuple2 "Authorization" token
+
+# Extract just the body text from a response
+fn fetchAndExtractBody(resp: HttpResponse) -> String =
+  resp.body
+
+# Check if status is OK (200)
+fn isOkStatus(resp: HttpResponse) -> Bool =
+  resp.status == 200
+
+# Classify a response status
+fn classifyStatus(resp: HttpResponse) -> String =
+  getStatusClass resp.status
+
+# Convert a list of Tuple2 headers to check if a name exists
+fn hasHeader(name: String, headers: List (Tuple2 String String)) -> Bool =
+  List.any (fn(h: Tuple2 String String) -> Tuple2.first h == name) headers
+
+# Filter headers to find a specific one
+fn findHeader(name: String, headers: List (Tuple2 String String)) -> Maybe (Tuple2 String String) =
+  List.head (List.filter (fn(h: Tuple2 String String) -> Tuple2.first h == name) headers)
+
+# Check if response has JSON content type
+fn hasJsonContent(headers: List (Tuple2 String String)) -> Bool =
+  hasHeader "Content-Type" headers
+
+# Get the first header name
+fn extractFirstHeader(headers: List (Tuple2 String String)) -> Maybe String =
+  case List.head headers of
+    Something h -> Something (Tuple2.first h)
+    Nothing -> Nothing
+
+# Build a headers dict-like check from response
+fn headersToDict(resp: HttpResponse) -> List (Tuple2 String String) =
+  resp.headers
+
+# ────────────────────────────────────────────────────────────────────────────
+# 2. Handler functions (require httpClient capability)
+# ────────────────────────────────────────────────────────────────────────────
+
+# Fetch a URL with empty headers
+handler emptyHeadersFetch(url: String) -> HttpResponse
+  requires [webService] =
+  HttpClient.get url []
+
+# POST JSON data
+handler postWithBody(url: String, body: String) -> HttpResponse
+  requires [webService] =
+  let headers = [Tuple2 "Content-Type" "application/json"]
+  HttpClient.post url headers body
+
+# PUT JSON data
+handler putWithBody(url: String, id: String, body: String) -> HttpResponse
+  requires [webService] =
+  let headers = [Tuple2 "Content-Type" "application/json"]
+  HttpClient.put url headers body
+
+# DELETE a resource
+handler deleteResource(url: String, token: String) -> HttpResponse
+  requires [webService] =
+  let authHeader = Tuple2 "Authorization" token
+  HttpClient.delete url [authHeader]
+
+# Build and use GET headers
+handler buildGetHeaders(url: String, token: String) -> HttpResponse
+  requires [webService] =
+  let authHeader = buildAuthHeader token
+  let acceptHeader = Tuple2 "Accept" "application/json"
+  HttpClient.get url [authHeader, acceptHeader]
+
+# Check if a GET response is OK
+handler responseIsOk(url: String) -> Bool
+  requires [webService] =
+  let resp = HttpClient.get url []
+  isOkStatus resp
+
+# ────────────────────────────────────────────────────────────────────────────
+# 3. Tests — pure functions that don't need HttpResponse
+# ────────────────────────────────────────────────────────────────────────────
+
+test "getStatusClass for success codes" {
+  expect getStatusClass 200 == "success"
+  expect getStatusClass 201 == "success"
+  expect getStatusClass 204 == "success"
+}
+
+test "getStatusClass for client error codes" {
+  expect getStatusClass 400 == "client-error"
+  expect getStatusClass 404 == "client-error"
+  expect getStatusClass 422 == "client-error"
+}
+
+test "getStatusClass for server error codes" {
+  expect getStatusClass 500 == "server-error"
+  expect getStatusClass 503 == "server-error"
+}
+
+test "getStatusClass for other codes" {
+  expect getStatusClass 100 == "other"
+  expect getStatusClass 301 == "other"
+}
+
+test "buildAuthHeader creates correct tuple" {
+  expect Tuple2.first (buildAuthHeader "Bearer abc") == "Authorization"
+  expect Tuple2.second (buildAuthHeader "Bearer abc") == "Bearer abc"
+  expect Tuple2.second (buildAuthHeader "") == ""
+}
+
+test "extractFirstHeader with empty list returns Nothing" {
+  expect extractFirstHeader [] == Nothing
+}
+
+test "extractFirstHeader with non-empty list returns Something" {
+  let headers = [Tuple2 "Content-Type" "application/json"]
+  expect extractFirstHeader headers == Something "Content-Type"
+}
+
+test "hasHeader returns correct results" {
+  let headers = [Tuple2 "Authorization" "Bearer token", Tuple2 "Accept" "application/json"]
+  expect hasHeader "Authorization" headers == True
+  expect hasHeader "Accept" headers == True
+  expect hasHeader "X-Custom" headers == False
+}
+
+test "hasHeader with empty headers is always False" {
+  expect hasHeader "Authorization" [] == False
+  expect hasHeader "Content-Type" [] == False
+}

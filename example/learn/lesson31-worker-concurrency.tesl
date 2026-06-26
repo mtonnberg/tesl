@@ -1,5 +1,9 @@
 #lang tesl
-module Lesson31WorkerConcurrency exposing [EmailWorkers, DeadEmailWorkers, ConcurrencyServer]
+module Lesson31WorkerConcurrency exposing [
+  EmailWorkers,
+  DeadEmailWorkers,
+  ConcurrencyServer,
+]
 
 # Lesson 31 — Worker Concurrency with startWorkers N
 #

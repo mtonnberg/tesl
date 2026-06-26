@@ -8,6 +8,7 @@
   tesl/dsl/sql
   tesl/dsl/web
   tesl/dsl/test-support
+  tesl/dsl/debug/checkpoint
   tesl/tesl/private/runtime
   tesl/tesl/queue
   tesl/tesl/sse
@@ -55,13 +56,13 @@
 (define-checker
   (isPositive [taskId : Integer])
   #:returns [taskId : Integer ::: (Positive taskId)]
-  (if (> *taskId 0) (accept (Positive taskId) #:value *taskId) (reject "Task id must be positive" #:http-code 400)))
+  (thsl-src! "example/admin-task-api.tesl" 37 (list (cons 'taskId *taskId)) (lambda () (if (> *taskId 0) (accept (Positive taskId) #:value *taskId) (reject "Task id must be positive" #:http-code 400)))))
 
 (define-auther
   (cookieUserAuth [request : HttpRequest])
   #:capabilities [readTaskCookie]
   #:returns [requestUser : AdminUser ::: (Authenticated requestUser)]
-  (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (reject "Missing user cookie" #:http-code 401)] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (let ([tesl_case_1 (raw-value (tesl_import_Dict_lookup "role" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Something)) (let ([role (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (accept Authenticated #:value (AdminUser #:id *userId #:role *role)))] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Nothing)) (accept Authenticated #:value (AdminUser #:id *userId #:role "user"))])))])))
+  (thsl-src! "example/admin-task-api.tesl" 46 (list (cons 'request *request)) (lambda () (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (reject "Missing user cookie" #:http-code 401)] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (let ([tesl_case_1 (raw-value (tesl_import_Dict_lookup "role" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Something)) (let ([role (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (accept Authenticated #:value (AdminUser #:id *userId #:role *role)))] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Nothing)) (accept Authenticated #:value (AdminUser #:id *userId #:role "user"))])))])))))
 
 (define-capture positiveTaskCapture
   [taskId : Integer ::: (Positive taskId)]
@@ -70,7 +71,7 @@
 (define-handler
   (getAdminTask [requestUser : AdminUser ::: (Authenticated requestUser)] [taskId : Integer ::: (Positive taskId)])
   #:returns AdminTask
-  (if (equal? (raw-value requestUser.role) "admin") (begin (telemetry-event! "task.fetch.admin" #:attributes (["user.id" (raw-value requestUser.id)] ["task.id" *taskId])) (if (equal? *taskId 2) (AdminTask #:id *taskId #:title "Review audit log" #:ownerId "anna") (reject "Task not found" #:http-code 404))) (reject "Admin role required" #:http-code 403)))
+  (thsl-src! "example/admin-task-api.tesl" 56 (list (cons 'requestUser *requestUser) (cons 'taskId *taskId)) (lambda () (if (equal? (raw-value requestUser.role) "admin") (begin (telemetry-event! "task.fetch.admin" #:attributes (["user.id" (raw-value requestUser.id)] ["task.id" *taskId])) (if (equal? *taskId 2) (AdminTask #:id *taskId #:title "Review audit log" #:ownerId "anna") (reject "Task not found" #:http-code 404))) (reject "Admin role required" #:http-code 403)))))
 
 (define AdminTaskServer-sse-routes '())
 (define-api AdminTaskApi
@@ -89,4 +90,5 @@
 )
 
 (module+ main
-  (let ([_ (init-opentelemetry! #:service-name "admin-task-api" #:endpoint "in-memory" #:console? #t)]) (serve AdminTaskServer #:port defaultExamplePort #:capabilities (list readTaskCookie) #:sse-routes AdminTaskServer-sse-routes)))
+  (let ([_ (thsl-src! "example/admin-task-api.tesl" 77 (list) (lambda () (init-opentelemetry! #:service-name "admin-task-api" #:endpoint "in-memory" #:console? #t)))])
+  (thsl-src! "example/admin-task-api.tesl" 78 (list) (lambda () (serve AdminTaskServer #:port defaultExamplePort #:capabilities (list readTaskCookie) #:sse-routes AdminTaskServer-sse-routes)))))

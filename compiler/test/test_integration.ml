@@ -40,7 +40,22 @@ let read_file path =
   try In_channel.with_open_text path In_channel.input_all
   with Sys_error _ -> ""
 
+(* B5: the emitter now bakes the *input* .tesl path into each (thsl-src! "PATH" …)
+   checkpoint.  Committed snapshots use a repo-relative path (stable across
+   machines); these tests compile with an absolute path, so the baked string
+   differs only in its directory prefix.  Canonicalise the thsl-src! file string
+   to its basename on both sides before comparing — this keeps the exact-match
+   asserting the full emission structure while tolerating the path prefix. *)
+let canonicalize_thsl_paths s =
+  let re = Str.regexp "(thsl-src! \"\\([^\"]*\\)\"" in
+  Str.global_substitute re
+    (fun whole ->
+       let path = Str.matched_group 1 whole in
+       Printf.sprintf "(thsl-src! \"%s\"" (Filename.basename path))
+    s
+
 let normalize s =
+  let s = canonicalize_thsl_paths s in
   let rec trim_trailing_newlines i =
     if i >= 0 && (s.[i] = '\n' || s.[i] = '\r') then trim_trailing_newlines (i - 1)
     else i
@@ -553,7 +568,9 @@ handler create(x: String) -> String
   check_contains "capabilities" src "#:capabilities [dbWrite]"
 
 let test_let_binding_in_test () =
-  (* let bindings in tests should emit as (define ...) *)
+  (* let bindings in tests should emit as (define ...).  B5: the value is now
+     wrapped in a (thsl-src! … (lambda () 42)) checkpoint that erases in release;
+     assert the binding shape and the inner value rather than the exact text. *)
   let src = {|#lang tesl
 module Foo exposing []
 test "demo" {
@@ -561,7 +578,8 @@ test "demo" {
   expect x == 42
 }
 |} in
-  check_contains "define_x" src "(define x 42)"
+  check_contains "define_x" src "(define x (thsl-src!";
+  check_contains "define_x_value" src "(lambda () 42))"
 
 let test_expect_fail_test () =
   (* expectFail should emit with-handlers pattern *)
@@ -761,8 +779,13 @@ test "comparisons" {
   expect 5 != 3
 }
 |} in
-  check_contains "expect greater-than" src "(check-true (> 5 3))";
-  check_contains "expect not-equal" src "(check-not-equal? 5 3)"
+  (* B5: the compared expression is wrapped in a (thsl-src! … (lambda () …))
+     checkpoint (erased in release).  Assert the boolean check shape and the
+     inner comparison rather than the pre-B5 unwrapped text. *)
+  check_contains "expect greater-than" src "(check-true (thsl-src!";
+  check_contains "expect greater-than inner" src "(lambda () (> 5 3))";
+  check_contains "expect not-equal" src "(check-not-equal? (thsl-src!";
+  check_contains "expect not-equal inner" src "(lambda () 5)) 3)"
 
 let test_property_record_generator_uses_constructor () =
   let src = {|#lang tesl

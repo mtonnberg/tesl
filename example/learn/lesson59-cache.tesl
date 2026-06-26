@@ -1,0 +1,268 @@
+#lang tesl
+module Lesson59Cache exposing [
+  getCachedProfile,
+  setCachedProfile,
+  invalidateUserCache,
+  getProfileOrDefault,
+  storeSession,
+  lookupSession,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 59 — Native Cache
+#
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Tesl has a built-in cache backed by a PostgreSQL UNLOGGED table — no Redis,
+# no external service, no dual-write problem.
+#
+# Operations:
+#   Cache.get      CacheName key              → Maybe ValueType
+#   Cache.set      CacheName key value [ttl]  → Unit  (ttl in seconds, optional)
+#   Cache.delete   CacheName key              → Unit
+#   Cache.invalidate CacheName prefix         → Unit  (deletes all keys with prefix)
+#
+# Step 1: Declare a cache block (like declaring a database).
+#   The `valueType` field is important: Cache.get returns `Maybe ValueType`.
+#
+#   cache UserProfileCache {
+#     database: MainDB
+#     defaultTtl: 3600    # optional; 1 hour
+#     valueType: String   # Cache.get returns Maybe String
+#   }
+#
+# Step 2: Use it with `requires [cache UserProfileCache]`.
+#   Each cache has its own capability token — name-specific, like databases.
+#
+# Step 3: Keys are always Strings. Build composite keys with string concatenation.
+#   Cache.get UserProfileCache ("profile:" ++ userId)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [Int, String, Bool(..), Unit]
+import Tesl.Maybe exposing [Maybe(..), Nothing, Something]
+
+# ── Database (required as backing store for the cache) ────────────────────────
+
+database MainDB {
+  backend postgres
+  schema "lesson59"
+  entities []
+  postgres {
+    database env("LESSON59_DB")
+    user env("TESL_POSTGRES_USER")
+    password env("TESL_POSTGRES_PASSWORD")
+    host env("TESL_POSTGRES_HOST")
+    port envInt("TESL_POSTGRES_PORT", 5432)
+    socket env("TESL_POSTGRES_SOCKET")
+  }
+}
+
+# ── Cache declarations ─────────────────────────────────────────────────────────
+#
+# Three independent caches, each backed by the same MainDB.
+# Different TTLs and value types are all fine.
+
+# Profile cache — serialized JSON strings, TTL 1 hour.
+cache UserProfileCache {
+  database: MainDB
+  defaultTtl: 3600
+  valueType: String
+}
+
+# Short-lived counter cache — Int values, TTL 60s.
+cache CounterCache {
+  database: MainDB
+  defaultTtl: 60
+  valueType: Int
+}
+
+# Session cache — no defaultTtl; we always pass TTL explicitly on set.
+cache SessionCache {
+  database: MainDB
+  valueType: String
+}
+
+# ── Functions using the cache ──────────────────────────────────────────────────
+
+# Get a cached user profile. Returns Nothing on cache miss or stale data.
+fn getCachedProfile(userId: String) -> Maybe String
+  requires [cache UserProfileCache] =
+  Cache.get UserProfileCache ("profile:" ++ userId)
+
+# Set a cached profile with the default TTL (3600s).
+fn setCachedProfile(userId: String, profile: String) -> Unit
+  requires [cache UserProfileCache] =
+  Cache.set UserProfileCache ("profile:" ++ userId) profile
+
+# Delete a specific cached profile.
+fn deleteProfileCache(userId: String) -> Unit
+  requires [cache UserProfileCache] =
+  Cache.delete UserProfileCache ("profile:" ++ userId)
+
+# Invalidate all cached profiles whose key starts with a prefix.
+# Useful after a bulk update: invalidate ("profile:") to flush all profiles.
+fn invalidateUserCache(prefix: String) -> Unit
+  requires [cache UserProfileCache] =
+  Cache.invalidate UserProfileCache prefix
+
+# Cache-aside read: return the cached value, or fall back to a default.
+# In production, you would also fetch from the database and repopulate the cache.
+fn getProfileOrDefault(userId: String, defaultProfile: String) -> String
+  requires [cache UserProfileCache] =
+  case Cache.get UserProfileCache ("profile:" ++ userId) of
+    Something profile -> profile
+    Nothing -> defaultProfile
+
+# Counter cache helpers.
+fn getCachedCounter(name: String) -> Maybe Int
+  requires [cache CounterCache] =
+  Cache.get CounterCache name
+
+fn setCachedCounter(name: String, value: Int) -> Unit
+  requires [cache CounterCache] =
+  Cache.set CounterCache name value
+
+# Session cache: store with explicit TTL (24 hours = 86400 seconds).
+fn storeSession(sessionId: String, userId: String) -> Unit
+  requires [cache SessionCache] =
+  Cache.set SessionCache ("session:" ++ sessionId) userId 86400
+
+fn lookupSession(sessionId: String) -> Maybe String
+  requires [cache SessionCache] =
+  Cache.get SessionCache ("session:" ++ sessionId)
+
+fn invalidateUserSessions(userId: String) -> Unit
+  requires [cache SessionCache] =
+  Cache.invalidate SessionCache ("session:" ++ userId)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UNDERSTANDING — why Tesl's cache is different
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# THE DUAL-WRITE PROBLEM
+#
+# A standard Redis/Memcached cache lives outside your database transaction.
+# When you write to the DB and then to Redis, you have two separate operations.
+# If the server crashes between them, the DB has the new data but the cache
+# has the old data (or vice versa). This inconsistency is the dual-write problem.
+#
+# Tesl's cache uses a PostgreSQL UNLOGGED table as the backing store.
+# UNLOGGED = no Write-Ahead Log overhead → almost as fast as Redis for typical
+# workloads. But because it IS a Postgres table, Cache.set inside a transaction
+# participates atomically:
+#
+#   withTransaction {
+#     update user where user.id == userId set { name = newName }
+#     Cache.set UserProfileCache ("profile:" ++ userId) newProfile
+#   }
+#
+# If the UPDATE fails, the cache write is automatically rolled back too.
+# The DB and cache are ALWAYS consistent — no eventual consistency lag.
+# This is the unique PostgreSQL advantage.
+#
+# WHY STALE JSON RETURNS Nothing
+#
+# When the app is updated and the schema for a cached record type changes
+# (e.g., a new required field is added), the stored JSON can no longer be
+# deserialized into the new type. Tesl handles this gracefully:
+#   - Cache.get deserializes the stored JSON; if deserialization fails, the
+#     stale entry is silently deleted.
+#   - Nothing is returned — no crash, no error propagation.
+#   - The application falls back to the source of truth (the database).
+#
+# This means you get safe schema evolution for free: deploy the new schema,
+# old cache entries are treated as misses and naturally replaced.
+#
+# WHY NAME-SPECIFIC CAPABILITIES?
+#
+# `requires [cache UserProfileCache]` is more specific than just `requires [cache]`.
+# Each named cache has its own capability token. This means:
+#   - A function can access UserProfileCache without access to SessionCache.
+#   - Access is explicit at the function boundary, not implied.
+#   - Code review makes it obvious which caches a function touches.
+#
+# WHY STRING KEYS?
+#
+# Cache keys are always Strings. Composite keys are built with string
+# concatenation: "profile:" ++ userId. This is a deliberate design:
+#   - Keys are human-readable and debuggable in the database.
+#   - Cache.invalidate (prefix) works on a string prefix match.
+#   - No separate key codec or hash function is needed.
+#
+# BACKGROUND SWEEPER
+#
+# A daemon thread deletes expired cache rows from the PostgreSQL UNLOGGED table
+# every 60 seconds. You do not need to configure this — it starts automatically.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+test "cache miss returns Nothing" {
+  let result = getCachedProfile "unknown-user-xyz-never-set"
+  expect result == Nothing
+}
+
+test "set and get profile round-trip" {
+  let _ = setCachedProfile "user1" "{\"name\":\"Alice\"}"
+  let result = getCachedProfile "user1"
+  expect result == Something "{\"name\":\"Alice\"}"
+}
+
+test "delete removes cached entry" {
+  let _ = setCachedProfile "del-user" "data"
+  let _ = deleteProfileCache "del-user"
+  let result = getCachedProfile "del-user"
+  expect result == Nothing
+}
+
+test "getProfileOrDefault returns default on cache miss" {
+  let result = getProfileOrDefault "nonexistent-user-abc" "default-profile"
+  expect result == "default-profile"
+}
+
+test "getProfileOrDefault returns cached value on hit" {
+  let _ = setCachedProfile "user2" "profile-data"
+  let result = getProfileOrDefault "user2" "default"
+  expect result == "profile-data"
+}
+
+test "counter cache get and set" {
+  let _ = setCachedCounter "visits" 42
+  let result = getCachedCounter "visits"
+  expect result == Something 42
+}
+
+test "overwriting a cache entry stores the new value" {
+  let _ = setCachedProfile "user3" "old-data"
+  let _ = setCachedProfile "user3" "new-data"
+  let result = getCachedProfile "user3"
+  expect result == Something "new-data"
+}
+
+test "session cache round-trip" {
+  let _ = storeSession "sess123" "user42"
+  let result = lookupSession "sess123"
+  expect result == Something "user42"
+}
+
+test "multiple caches are independent (same key, different caches)" {
+  let _ = setCachedProfile "key" "string-val"
+  let _ = setCachedCounter "key" 100
+  let r1 = getCachedProfile "key"
+  let r2 = getCachedCounter "key"
+  expect r1 == Something "string-val"
+  expect r2 == Something 100
+}
+
+test "invalidate by prefix clears matching entries" {
+  let _ = setCachedProfile "alice" "alice-data"
+  let _ = setCachedProfile "alicia" "alicia-data"
+  let _ = invalidateUserCache "profile:al"
+  let r1 = getCachedProfile "alice"
+  let r2 = getCachedProfile "alicia"
+  expect r1 == Nothing
+  expect r2 == Nothing
+}

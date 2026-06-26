@@ -8,6 +8,7 @@
   tesl/dsl/sql
   tesl/dsl/web
   tesl/dsl/test-support
+  tesl/dsl/debug/checkpoint
   tesl/tesl/private/runtime
   tesl/tesl/queue
   tesl/tesl/sse
@@ -49,7 +50,7 @@
   (notifWorker [job : SendNotif ::: (FromQueue (Id == jobId) job)])
   #:capabilities [notifCap]
   #:returns SendNotif
-  (reject "notification service unavailable" #:http-code 500))
+  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 72 (list (cons 'job *job)) (lambda () (reject "notification service unavailable" #:http-code 500))))
 
 (define NotifWorkers
   (list (cons NotifQueue notifWorker)))
@@ -59,7 +60,7 @@
   (handleDeadNotif [job : SendNotif ::: (FromDeadQueue (Id == jobId) job)])
   #:capabilities [deadCap]
   #:returns SendNotif
-  (begin (telemetry-event! "notif.dead" #:attributes (["userId" (raw-value job.userId)])) *job))
+  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 87 (list (cons 'job *job)) (lambda () (begin (telemetry-event! "notif.dead" #:attributes (["userId" (raw-value job.userId)])) *job))))
 
 (define DeadNotifWorkers
   (list (cons NotifQueue handleDeadNotif)))

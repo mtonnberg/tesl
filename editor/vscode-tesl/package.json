@@ -2,7 +2,7 @@
   "name": "vscode-tesl",
   "displayName": "Tesl Language",
   "description": "Syntax highlighting, live diagnostics, go-to-definition, hover types, and completions for the Tesl (.tesl) language",
-  "version": "0.4.0",
+  "version": "0.6.22",
   "publisher": "Tesl",
   "namespace": "Tesl",
   "license": "BSD-3-Clause",
@@ -63,6 +63,167 @@
           "description": "Absolute path to tesl-lsp.rkt (advanced override). Leave empty to use the tesl-lsp binary from PATH (installed via nix profile install github:mtonnberg/tesl) or to auto-detect from the workspace."
         }
       }
+    },
+    "debuggers": [
+      {
+        "type": "tesl",
+        "label": "Tesl Debugger",
+        "program": "./debug/launch-dap.sh",
+        "runtime": "bash",
+        "languages": [
+          "tesl"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Absolute path to the .tesl file to debug.",
+                "default": "${file}"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Pause at the first instrumented line on launch.",
+                "default": false
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "program",
+                  "test"
+                ],
+                "description": "What to run: 'program' executes the main function, 'test' runs test blocks.",
+                "default": "program"
+              },
+              "testName": {
+                "type": "string",
+                "description": "When mode is 'test', run only the test block with this exact name (optional)."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "tesl",
+            "request": "launch",
+            "name": "Debug Tesl program",
+            "program": "${file}",
+            "mode": "program"
+          },
+          {
+            "type": "tesl",
+            "request": "launch",
+            "name": "Debug Tesl tests",
+            "program": "${file}",
+            "mode": "test"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Tesl: Debug program",
+            "description": "Debug the current file's main function.",
+            "body": {
+              "type": "tesl",
+              "request": "launch",
+              "name": "Debug Tesl program",
+              "program": "^\"\\${file}\"",
+              "mode": "program"
+            }
+          },
+          {
+            "label": "Tesl: Debug tests",
+            "description": "Debug the current file's test blocks.",
+            "body": {
+              "type": "tesl",
+              "request": "launch",
+              "name": "Debug Tesl tests",
+              "program": "^\"\\${file}\"",
+              "mode": "test"
+            }
+          }
+        ]
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "tesl"
+      }
+    ],
+    "commands": [
+      {
+        "command": "tesl.debugTests",
+        "title": "Debug Tesl Tests",
+        "category": "Tesl"
+      },
+      {
+        "command": "tesl.debugProgram",
+        "title": "Debug Tesl Program",
+        "category": "Tesl"
+      },
+      {
+        "command": "tesl.runTests",
+        "title": "Run Tesl Tests in Terminal",
+        "category": "Tesl"
+      },
+      {
+        "command": "tesl.runSingleTest",
+        "title": "Run This Test",
+        "category": "Tesl"
+      },
+      {
+        "command": "tesl.debugSingleTest",
+        "title": "Debug This Test",
+        "category": "Tesl"
+      },
+      {
+        "command": "tesl.runFunctionWithInput",
+        "title": "Run Function with Input...",
+        "category": "Tesl"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "tesl.debugTests",
+          "when": "resourceExtname == .tesl",
+          "group": "tesl@1"
+        },
+        {
+          "command": "tesl.debugProgram",
+          "when": "resourceExtname == .tesl",
+          "group": "tesl@2"
+        },
+        {
+          "command": "tesl.runTests",
+          "when": "resourceExtname == .tesl",
+          "group": "tesl@3"
+        },
+        {
+          "command": "tesl.runFunctionWithInput",
+          "when": "resourceExtname == .tesl",
+          "group": "tesl@4"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "tesl.debugTests",
+          "when": "resourceExtname == .tesl",
+          "group": "tesl@1"
+        },
+        {
+          "command": "tesl.debugProgram",
+          "when": "resourceExtname == .tesl",
+          "group": "tesl@2"
+        },
+        {
+          "command": "tesl.runTests",
+          "when": "resourceExtname == .tesl",
+          "group": "tesl@3"
+        }
+      ]
     }
   },
   "scripts": {

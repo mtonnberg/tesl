@@ -1,0 +1,180 @@
+(** Surface-syntax lowering pass (Wave 2: reduce_language_size).
+
+    {2 Where this runs}
+
+    The pipeline is: parse → type-check + proof-check + validation → DESUGAR →
+    emit.  Crucially the pass runs AFTER all enforcement/diagnostics (so every
+    error message still points at the surface form the user wrote) and BEFORE
+    {!Emit_racket} (so the emitter sees the lowered, more primitive forms).
+
+    {2 Identity-first contract}
+
+    This module starts life as a STRICT IDENTITY transform.  {!desugar_module}
+    walks every expression in every top-level declaration through
+    {!Ast_visitor.map} and applies {!lower_expr} at each node; today
+    {!lower_expr} returns its argument unchanged, so the output module is
+    structurally identical to the input and the emitted Racket is byte-for-byte
+    unchanged.  The value of landing the identity transform now is the plumbing:
+    the pass is wired into the pipeline, the provenance helpers exist, and a
+    future lowering only has to fill in one [lower_expr] arm.
+
+    {2 Provenance — go-to-definition / error spans}
+
+    When a real lowering eventually replaces a surface node with a synthesised
+    primitive form, it MUST thread the original surface {!Location.loc} so that
+    hover / go-to-definition / diagnostics keep resolving to what the user typed,
+    never to the machine-generated lowering.  For synthesised {!Ast.func_decl}s
+    that is the [desugared_from] field ({!provenance_from}); for expressions the
+    convention is to REUSE the surface node's own [loc] verbatim on the lowered
+    node (every expression variant carries its own [loc], so a structurally
+    equal-or-smaller lowering preserves spans for free).
+
+    {2 Why the two pilot sugar forms (EUnop / LInterp) are NOT lowered here}
+
+    The reduce_language_size pilot considered lowering [EUnop] and the [LInterp]
+    interpolation literal to a core application form.  Both were investigated and
+    deliberately LEFT UN-LOWERED, because neither is context-free at emit and a
+    pre-emit lowering cannot reproduce the emitter's byte output:
+
+    - [EUnop] (emit_racket.ml ~1719): the [UNeg]/[UNot] arms consult emit-time
+      context unavailable to a desugar pass — [ctx.func_kind], [ctx.param_names]
+      and [ctx.raw_locals] — to decide whether a bare-[EVar] operand is emitted
+      raw ([*name]) or normally, and special-case a negative integer LITERAL to
+      the bare token [-n].  Even the seemingly context-free literal fold
+      ([EUnop(UNeg, ELit(LInt n))] -> [ELit(LInt (-n))]) is NOT safe: a folded
+      [ELit(LInt _)] is matched by [int_literal_value] in the SQL clause
+      extractor (emit_racket.ml ~586), so a negative LIMIT/OFFSET literal would
+      take a different emit path than the un-folded [EUnop].
+
+    - [LInterp] ([emit_interp], emit_racket.ml ~2483): interpolation emits a
+      Racket [(format "...~a..." (tesl-display-val ...))] call (NOT a [BConcat]
+      / string-append chain), and the per-segment operand again branches on
+      [ctx.func_kind] to choose [*name] / [(raw-value name.field)] / the generic
+      [(tesl-display-val e)] wrapping.
+
+    Lowering either form at this stage would be a behaviour-changing rewrite, so
+    per the wave's hard byte-identity invariant they remain explicit in
+    {!Emit_racket}.  When the emitter's context-dependent unwrapping is itself
+    moved into a core primitive (a later wave), these become safe to lower and
+    the arms below are where that lowering lands. *)
+
+open Ast
+
+(** Build a {!provenance} tag recording the surface location a synthesised node
+    was lowered FROM.  Use this when a lowering creates a fresh {!func_decl}: set
+    its [desugared_from] to [provenance_from surface_loc] so navigation/spans
+    keep pointing at the user's original construct. *)
+let provenance_from (surface : Location.loc) : provenance = { desugared_from = surface }
+
+(** {2 Fixed-shape effect-form lowering (reduce_language_size Wave 2, P3)}
+
+    [EEnqueue], [EStartWorkers] and [EServe] are lowered to the core
+    {!Ast.ERuntimeCall} node — a pre-rendered Racket runtime call composed of
+    verbatim token strings ([RLit]) interleaved with argument sub-expressions
+    ([RArg]).  These three families are exactly the ones whose emit template is
+    {e position-independent} and {e context-free}:
+
+    - their literal tokens (runtime fn name, the resolved queue/worker/server
+      name, [#:capabilities]/[#:concurrency]/[#:static-dir]/[#:sse-routes]
+      keyword args) are fully determined at desugar time, and
+    - their argument sub-expressions ([payload] / [port]) were emitted by the
+      former emit arms through {!Emit_racket.emit_expr_simple}; carrying them as
+      [RArg] re-emits them through that SAME context-aware path, so the byte
+      output is identical.
+
+    Deliberately NOT lowered (documented BLOCKED, see roadmap):
+    - [ETelemetry] / [EPublish]: their operands branch on emit-time-only
+      [ctx.func_kind] / [ctx.raw_locals] to choose [*name] (the raw-param
+      blocker) — a desugar pass cannot reproduce that per-leaf decision.
+    - [EWithDatabase] / [EWithCapabilities] / [EWithTransaction]: position
+      dependent — they emit DIFFERENT runtime calls in tail-raw position
+      ([with-database] / [call-with-declared-capabilities]) than in statement
+      position ([call-with-database] / [with-capabilities]); a single core form
+      cannot capture both.
+    - cache / email families: feasible in shape but not exercised by any
+      byte-gated lesson reference, so byte-identity cannot be verified.
+    - [EUnop] / [LInterp]: the raw-param blocker (see module docstring above). *)
+
+(** The job-type → queue-name resolution table the emitter builds from [DQueue]
+    declarations.  Mirrors [Emit_racket.job_type_to_queue]: when a job type has
+    no declared queue the emitter falls back to ["_queue_for_" ^ job_type]. *)
+let queue_ref_of (queues : (string, string) Hashtbl.t) (job_type : string) : string =
+  match Hashtbl.find_opt queues job_type with
+  | Some q -> q
+  | None -> "_queue_for_" ^ job_type
+
+(** Per-node lowering.  [queues] is the module's job-type → queue map (for
+    [EEnqueue]).  {!Ast_visitor.map} has already lowered the node's children by
+    the time this is called, so each arm only rewrites the node's own shape and
+    reuses the surface node's own [loc] verbatim (span-preserving). *)
+let lower_expr (queues : (string, string) Hashtbl.t) (e : expr) : expr =
+  match e with
+  | EEnqueue { job_type; payload; loc } ->
+    (* (enqueue! QUEUE_REF <payload via emit_expr_simple>) *)
+    let queue_ref = queue_ref_of queues job_type in
+    ERuntimeCall { segments =
+      [ RLit (Printf.sprintf "(enqueue! %s " queue_ref)
+      ; RArg payload
+      ; RLit ")" ]; loc }
+  | EStartWorkers { workers_name; capabilities; concurrency; is_dead; loc } ->
+    (* (start-workers!|start-dead-workers! NAME (list CAP...)[ #:concurrency N]) *)
+    let runtime_fn = if is_dead then "start-dead-workers!" else "start-workers!" in
+    let buf = Buffer.create 64 in
+    Buffer.add_string buf (Printf.sprintf "(%s %s (list" runtime_fn workers_name);
+    List.iter (fun cap -> Buffer.add_string buf (Printf.sprintf " %s" cap)) capabilities;
+    Buffer.add_string buf ")";
+    (match concurrency with
+     | Some n when n <> 1 -> Buffer.add_string buf (Printf.sprintf " #:concurrency %d" n)
+     | _ -> ());
+    Buffer.add_string buf ")";
+    ERuntimeCall { segments = [ RLit (Buffer.contents buf) ]; loc }
+  | EServe { server_name; port; capabilities; static_dir; loc } ->
+    (* (serve NAME #:port <port via emit_expr_simple> #:capabilities (list CAP...)
+        [ #:static-dir "DIR"] #:sse-routes NAME-sse-routes) *)
+    let prefix = Printf.sprintf "(serve %s #:port " server_name in
+    let mid_buf = Buffer.create 64 in
+    Buffer.add_string mid_buf " #:capabilities (list";
+    List.iter (fun cap -> Buffer.add_string mid_buf (Printf.sprintf " %s" cap)) capabilities;
+    Buffer.add_string mid_buf ")";
+    (match static_dir with
+     | Some dir -> Buffer.add_string mid_buf (Printf.sprintf " #:static-dir %S" dir)
+     | None -> ());
+    Buffer.add_string mid_buf (Printf.sprintf " #:sse-routes %s-sse-routes)" server_name);
+    ERuntimeCall { segments =
+      [ RLit prefix
+      ; RArg port
+      ; RLit (Buffer.contents mid_buf) ]; loc }
+  | _ -> e
+
+(** Lower a single expression: bottom-up rewrite via the shared traversal
+    framework, so a new {!Ast.expr} variant cannot silently escape the pass. *)
+let desugar_expr (queues : (string, string) Hashtbl.t) (e : expr) : expr =
+  Ast_visitor.map (lower_expr queues) e
+
+(** Lower every expression carried by a top-level declaration.  Only [DFunc] and
+    [DConst] carry an {!Ast.expr} body reachable from the surface program; the
+    rest are pure declarations (types, records, codecs, schema/queue/cache/email
+    metadata) with no expression children, so they pass through verbatim.  This
+    mirrors the "children = sub-[expr]s reachable without crossing a top-level
+    declaration boundary" coverage decision documented in {!Ast_visitor}. *)
+let desugar_decl (queues : (string, string) Hashtbl.t) (d : top_decl) : top_decl =
+  match d with
+  | DFunc fd -> DFunc { fd with body = desugar_expr queues fd.body }
+  | DConst cf -> DConst { cf with value = desugar_expr queues cf.value }
+  | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _ | DDatabase _
+  | DCapability _ | DQueue _ | DChannel _ | DWorkers _ | DCache _
+  | DEmail _ | DCapture _ | DApi _ | DServer _ | DTest _ | DApiTest _
+  | DLoadTest _ -> d
+
+(** Lower a whole module.  Lowers the fixed-shape effect forms (EEnqueue /
+    EStartWorkers / EServe) to {!Ast.ERuntimeCall}; all other nodes pass through
+    structurally identical (every [loc] preserved), so {!Emit_racket} produces
+    byte-identical Racket. *)
+let desugar_module (m : module_form) : module_form =
+  (* Rebuild the emitter's job-type → queue map from this module's DQueue
+     declarations (same construction as Emit_racket's pre-pass). *)
+  let queues : (string, string) Hashtbl.t = Hashtbl.create 16 in
+  List.iter (function
+    | DQueue (q : queue_form) -> List.iter (fun job -> Hashtbl.replace queues job q.name) q.jobs
+    | _ -> ()) m.decls;
+  { m with decls = List.map (desugar_decl queues) m.decls }

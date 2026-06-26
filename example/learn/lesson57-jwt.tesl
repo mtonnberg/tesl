@@ -1,0 +1,255 @@
+#lang tesl
+module Lesson57Jwt exposing [
+  makeLoginToken,
+  getUserFromToken,
+  decodeToken,
+  wrapAndVerify,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 57 — JWT: JSON Web Tokens
+#
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# JWTs are compact, self-contained tokens for transmitting claims between
+# parties without a database lookup on every request ("stateless auth").
+#
+# Tesl provides Tesl.JWT with:
+#
+#   JWT.sign   claims secret  → JwtToken    (sign with HMAC-SHA256)
+#   JWT.verify token  secret  → claims      (verify signature + expiry → auto-401)
+#   JWT.decode token          → claims      (decode only, no signature check)
+#
+# JwtToken  — nominal newtype wrapping String (the "header.payload.sig" token)
+# JwtSecret — nominal newtype wrapping String (the HMAC signing key)
+#
+# NOMINAL TYPES MATTER:
+#   - JwtToken  ≠ String    (cannot pass raw string where JwtToken is expected)
+#   - JwtSecret ≠ JwtToken  (cannot accidentally use a token as a secret)
+#   - JwtToken  ≠ JwtSecret (prevents signing with a token instead of a key)
+#
+# All JWT operations require the `jwt` capability. Declare a capability that
+# implies `jwt` and list it in `requires [...]` on your fn/handler.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# PRACTICAL PATTERN: Login → Token → Protected endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Step 1 (login handler):
+#   let token = JWT.sign { sub: userId, role: "user" } appSecret
+#   # Return token.value as the session token in a cookie or JSON response
+#
+# Step 2 (auth function for protected endpoints):
+#   auth jwtAuth(req: HttpRequest) -> user: String ::: Authenticated user =
+#     case Dict.lookup "Authorization" req.headers of
+#       Nothing -> fail 401 "missing Authorization header"
+#       Something raw ->
+#         let token  = JwtToken (String.dropPrefix "Bearer " raw)
+#         let claims = JWT.verify token appSecret
+#         ok claims.sub ::: Authenticated user
+#
+# Step 3 (protected handler):
+#   handler profile(user: String ::: Authenticated user) -> String requires [] =
+#     "profile of ${user}"
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [String]
+import Tesl.JWT exposing [
+  jwt,
+  JwtToken,
+  JwtSecret,
+  JWT.sign,
+  JWT.verify,
+  JWT.decode,
+]
+import Tesl.String exposing [String.length]
+
+# ── Step 1: Declare a capability that implies `jwt` ───────────────────────────
+#
+# `jwt` is a primitive stdlib capability. You must declare your own capability
+# that implies it, then list it in `requires [...]`.
+
+capability authCap implies jwt
+
+# ── Step 2: Sign a JWT at login time ─────────────────────────────────────────
+#
+# JWT.sign takes ANY claims value (polymorphic) and a JwtSecret.
+# The claims are JSON-serialized into the JWT payload.
+#
+# Best practice: always include an `exp` field (expiry as posix milliseconds).
+# Without `exp`, the token never expires and cannot be revoked without changing
+# the secret.
+#
+# JWT.sign is deterministic: the same claims + secret always produce the same
+# token (no random nonce). This means tokens are idempotent to generate.
+
+fn makeLoginToken(userId: String, secret: JwtSecret) -> JwtToken requires [authCap] =
+  JWT.sign userId secret
+
+# ── Step 3: Verify the JWT on protected endpoints ─────────────────────────────
+#
+# JWT.verify validates BOTH the HMAC-SHA256 signature AND the token expiry (exp).
+# On success: returns the claims value.
+# On failure (bad signature, expired): automatically returns check-fail 401.
+#
+# You do NOT need to check the return value for errors — JWT.verify propagates
+# failure as a 401 response if the token is invalid. The happy path continues.
+
+fn getUserFromToken(token: JwtToken, secret: JwtSecret) -> String requires [authCap] =
+  JWT.verify token secret
+
+# ── Step 4: Decode without verifying ─────────────────────────────────────────
+#
+# JWT.decode decodes the payload WITHOUT checking the signature.
+# Use this ONLY for tokens from trusted internal sources (e.g., tokens issued
+# by your own service and passed internally — you already verified them at the
+# API boundary). Never use JWT.decode on user-supplied tokens.
+#
+# Still requires the `jwt` capability to prevent accidental misuse.
+
+fn decodeToken(token: JwtToken) -> String requires [authCap] =
+  JWT.decode token
+
+# ── Step 5: Constructing nominal newtypes from raw strings ───────────────────
+#
+# When receiving a token from an HTTP header (as a plain String), wrap it in
+# JwtToken before calling JWT.verify. This makes the type boundary explicit.
+#
+# JwtToken rawStr  → creates a JwtToken wrapping rawStr
+# JwtSecret rawStr → creates a JwtSecret wrapping rawStr
+#
+# Accessing the inner string: token.value, secret.value
+
+fn wrapAndVerify(rawToken: String, rawSecret: String) -> String requires [authCap] =
+  let token = JwtToken rawToken
+  let secret = JwtSecret rawSecret
+  JWT.verify token secret
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UNDERSTANDING — why JWT works this way in Tesl
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WHY NOMINAL TYPES FOR JwtToken AND JwtSecret?
+#
+# Without nominal types, `String` is a String is a String. You could
+# accidentally pass the token where the secret is expected (both are strings)
+# and the compiler would not catch it. The signature would verify against itself.
+#
+# JwtToken and JwtSecret are DIFFERENT TYPES that happen to wrap a String.
+# The compiler enforces that you can never pass one where the other is required.
+# This makes JWT API misuse a compile error, not a runtime failure.
+#
+# WHY THE `jwt` CAPABILITY?
+#
+# JWT.sign and JWT.verify perform cryptographic operations using OpenSSL HMAC-
+# SHA256. They are stateful effects (they read system time for expiry checking).
+# The capability makes this visible in function signatures, so a reader can
+# see at a glance which functions perform JWT operations.
+#
+# WHY DOES JWT.verify AUTO-RETURN 401?
+#
+# JWT.verify raises a check-fail with status 401 on invalid tokens. This fits
+# Tesl's philosophy: validation failures propagate automatically without
+# requiring explicit error handling at every call site. If you call JWT.verify
+# inside an auth function, a bad token immediately produces a 401 response.
+#
+# WHY HMAC-SHA256, NOT RSA?
+#
+# HMAC-SHA256 (symmetric): one secret key, fast, simpler key management.
+# RSA (asymmetric): private key signs, public key verifies — needed when
+# third-party services must verify your tokens without access to your secret.
+# Tesl uses HMAC-SHA256 via OpenSSL FFI. For RSA-signed JWTs from an external
+# identity provider, use JWT.decode (which trusts the payload) after verifying
+# with the provider's public key via a dedicated library.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+test "makeLoginToken produces a 36+ character JwtToken" {
+  let secret = JwtSecret "lesson57-test-key"
+  let token = makeLoginToken "user:alice" secret
+  expect String.length token.value > 36
+}
+
+test "JwtToken.value retrieves the inner string" {
+  let raw = "eyJhbGciOiJIUzI1NiJ9.payload.sig"
+  let token = JwtToken raw
+  expect token.value == raw
+}
+
+test "JwtSecret.value retrieves the inner key" {
+  let key = "my-signing-key-2025"
+  let secret = JwtSecret key
+  expect secret.value == key
+}
+
+test "different secrets produce different tokens" {
+  let s1 = JwtSecret "key-alpha"
+  let s2 = JwtSecret "key-beta"
+  let t1 = makeLoginToken "user" s1
+  let t2 = makeLoginToken "user" s2
+  expect t1.value != t2.value
+}
+
+test "same inputs always produce the same token (deterministic)" {
+  let secret = JwtSecret "stable-key"
+  let t1 = makeLoginToken "user:123" secret
+  let t2 = makeLoginToken "user:123" secret
+  expect t1.value == t2.value
+}
+
+test "different claims produce different tokens" {
+  let secret = JwtSecret "same-secret"
+  let t1 = makeLoginToken "alice" secret
+  let t2 = makeLoginToken "bob" secret
+  expect t1.value != t2.value
+}
+
+test "getUserFromToken round-trip: verify recovers claims" {
+  let secret = JwtSecret "roundtrip-key"
+  let token = makeLoginToken "user:42" secret
+  let result = getUserFromToken token secret
+  expect String.length result > 0
+}
+
+test "decodeToken extracts payload without verification" {
+  let secret = JwtSecret "decode-key"
+  let token = makeLoginToken "decode-user" secret
+  let result = decodeToken token
+  expect String.length result > 0
+}
+
+test "wrapAndVerify: wrap raw strings and verify" {
+  let secret = JwtSecret "wrap-test-key"
+  let token = makeLoginToken "wrapped-user" secret
+  let result = wrapAndVerify token.value secret.value
+  expect String.length result > 0
+}
+
+test "token length grows with longer claims" {
+  let secret = JwtSecret "length-test"
+  let short = makeLoginToken "u" secret
+  let long = makeLoginToken "user:with-a-very-long-id-value-here-123456789" secret
+  expect String.length long.value > String.length short.value
+}
+
+test "signing with a long secret works" {
+  let longKey = "a-very-long-secret-key-that-is-at-least-64-characters-long-abcdefgh"
+  let secret = JwtSecret longKey
+  let token = makeLoginToken "user" secret
+  expect String.length token.value > 0
+}
+
+test "sequential sign-verify pairs work independently" {
+  let s1 = JwtSecret "seq-key-1"
+  let s2 = JwtSecret "seq-key-2"
+  let t1 = makeLoginToken "user1" s1
+  let t2 = makeLoginToken "user2" s2
+  let r1 = getUserFromToken t1 s1
+  let r2 = getUserFromToken t2 s2
+  expect String.length r1 > 0
+  expect String.length r2 > 0
+}

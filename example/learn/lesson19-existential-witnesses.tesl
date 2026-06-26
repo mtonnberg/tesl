@@ -82,8 +82,11 @@ capability sessionCapability implies time, random
 fn generateToken() -> exists tokenId: String => tokenId: String ::: IsTokenId tokenId
   requires [sessionCapability] =
   let tokenId = generatePrefixedId "tok"
+  # validate the freshly-generated id before packing — `check checkTokenId`
+  # is the trusted boundary that attaches the `IsTokenId` proof to the value.
+  let validated = check checkTokenId tokenId
   exists tokenId =>
-    tokenId
+    validated
 
 fn shouldWork_OnlyMeansAnyStringWithAProofThatSomethingIsATokenId() -> exists tokenId: String => String ::: IsTokenId tokenId
   requires [sessionCapability] =

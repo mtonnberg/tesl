@@ -1,3 +1,11 @@
 (executable
  (name main)
+ (modules main)
+ (libraries tesl_compiler_lib unix))
+
+; A1: headless source-map CLI (emit-map / translate). Separate executable so it
+; never touches the main `tesl` CLI dispatch.
+(executable
+ (name tesl_sourcemap)
+ (modules tesl_sourcemap)
  (libraries tesl_compiler_lib unix))

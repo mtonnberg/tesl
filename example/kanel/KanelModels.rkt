@@ -8,6 +8,7 @@
   tesl/dsl/sql
   tesl/dsl/web
   tesl/dsl/test-support
+  tesl/dsl/debug/checkpoint
   tesl/tesl/private/runtime
   tesl/tesl/queue
   tesl/tesl/sse
@@ -219,32 +220,32 @@
 (define-checker
   (checkOrgId [orgId : String])
   #:returns [orgId : String ::: (ValidOrgId orgId)]
-  (if (< (raw-value (tesl_import_String_length *orgId)) 3) (reject "invalid org id" #:http-code 400) (accept (ValidOrgId orgId) #:value *orgId)))
+  (thsl-src! "example/kanel/KanelModels.tesl" 227 (list (cons 'orgId *orgId)) (lambda () (if (< (raw-value (tesl_import_String_length *orgId)) 3) (reject "invalid org id" #:http-code 400) (accept (ValidOrgId orgId) #:value *orgId)))))
 
 (define-checker
   (checkProjectId [projectId : String])
   #:returns [projectId : String ::: (ValidProjectId projectId)]
-  (if (< (raw-value (tesl_import_String_length *projectId)) 3) (reject "invalid project id" #:http-code 400) (accept (ValidProjectId projectId) #:value *projectId)))
+  (thsl-src! "example/kanel/KanelModels.tesl" 235 (list (cons 'projectId *projectId)) (lambda () (if (< (raw-value (tesl_import_String_length *projectId)) 3) (reject "invalid project id" #:http-code 400) (accept (ValidProjectId projectId) #:value *projectId)))))
 
 (define-checker
   (checkIssueId [issueId : String])
   #:returns [issueId : String ::: (ValidIssueId issueId)]
-  (if (< (raw-value (tesl_import_String_length *issueId)) 3) (reject "invalid issue id" #:http-code 400) (accept (ValidIssueId issueId) #:value *issueId)))
+  (thsl-src! "example/kanel/KanelModels.tesl" 243 (list (cons 'issueId *issueId)) (lambda () (if (< (raw-value (tesl_import_String_length *issueId)) 3) (reject "invalid issue id" #:http-code 400) (accept (ValidIssueId issueId) #:value *issueId)))))
 
 (define-checker
   (checkInvoiceId [invoiceId : String])
   #:returns [invoiceId : String ::: (ValidInvoiceId invoiceId)]
-  (if (< (raw-value (tesl_import_String_length *invoiceId)) 3) (reject "invalid invoice id" #:http-code 400) (accept (ValidInvoiceId invoiceId) #:value *invoiceId)))
+  (thsl-src! "example/kanel/KanelModels.tesl" 251 (list (cons 'invoiceId *invoiceId)) (lambda () (if (< (raw-value (tesl_import_String_length *invoiceId)) 3) (reject "invalid invoice id" #:http-code 400) (accept (ValidInvoiceId invoiceId) #:value *invoiceId)))))
 
 (define-checker
   (checkUserId [userId : String])
   #:returns [userId : String ::: (ValidUserId userId)]
-  (if (< (raw-value (tesl_import_String_length *userId)) 3) (reject "invalid user id" #:http-code 400) (accept (ValidUserId userId) #:value *userId)))
+  (thsl-src! "example/kanel/KanelModels.tesl" 259 (list (cons 'userId *userId)) (lambda () (if (< (raw-value (tesl_import_String_length *userId)) 3) (reject "invalid user id" #:http-code 400) (accept (ValidUserId userId) #:value *userId)))))
 
 (define-checker
   (checkTargetUserId [targetUserId : String])
   #:returns [targetUserId : String ::: (ValidUserId targetUserId)]
-  (if (< (raw-value (tesl_import_String_length *targetUserId)) 3) (reject "invalid user id" #:http-code 400) (accept (ValidUserId targetUserId) #:value *targetUserId)))
+  (thsl-src! "example/kanel/KanelModels.tesl" 265 (list (cons 'targetUserId *targetUserId)) (lambda () (if (< (raw-value (tesl_import_String_length *targetUserId)) 3) (reject "invalid user id" #:http-code 400) (accept (ValidUserId targetUserId) #:value *targetUserId)))))
 
 (define (tesl-codec-encode-OrgRole _v)
   (define _raw (raw-value _v))
