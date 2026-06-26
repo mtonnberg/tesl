@@ -49,6 +49,8 @@ let t_llm_provider = TCon "LlmProvider"
 let t_agent_reply = TCon "AgentReply"
 let t_tool        = TCon "Tool"
 let t_tool_step   = TCon "ToolStep"
+let t_conversation = TCon "Conversation"
+let t_conversation_turn = TCon "ConversationTurn"
 
 let t_list a        = TApp (TCon "List", a)
 let t_maybe a       = TApp (TCon "Maybe", a)
@@ -540,6 +542,20 @@ let stdlib_env : (string * scheme) list = [
   "askFor",       { vars = _r1_a;
                     mono = t_fun [t_agent; t_string; t_fun [t_string] _a; t_int] _a };
 
+  (* ── Agent (AI Tier-0 Wave 2b — conversation + worker-backed run) ──────────
+     Multi-turn conversation (function-first; the developer owns persistence via
+     conversationJson / conversationFrom into their OWN entity). *)
+  "newConversation",  mono (t_fun [t_agent] t_conversation);
+  "conversationFrom", mono (t_fun [t_agent; t_string] t_conversation);
+  "converse",         mono (t_fun [t_conversation; t_string] t_conversation_turn);
+  "turnReply",        mono (t_fun [t_conversation_turn] t_agent_reply);
+  "turnConversation", mono (t_fun [t_conversation_turn] t_conversation);
+  "conversationJson",   mono (t_fun [t_conversation] t_string);
+  "conversationLength", mono (t_fun [t_conversation] t_int);
+  (* agentRun: run the loop to completion on a worker, publishing each step via
+     the developer's (String → Unit) callback (which closes over `publish`). *)
+  "agentRun",         mono (t_fun [t_agent; t_string; t_fun [t_string] t_unit] t_agent_reply);
+
   (* ── GDP / proof utilities ───────────────────────────────────────────── *)
   "forgetFact",   { vars = _r1_a; mono = t_fun [_a] _a };
   "detachFact",   { vars = _r1_a; mono = t_fun [_a] t_fact };
@@ -723,7 +739,10 @@ let tesl_module_exports : (string * string list) list = [
       "anthropic"; "openai"; "local";
       "tool"; "withTools";
       "askReply"; "askWith"; "replyText"; "replyTokens"; "replyToolCalls";
-      "decodeAs"; "askFor" ] );
+      "decodeAs"; "askFor";
+      "Conversation"; "Conversation?"; "ConversationTurn"; "ConversationTurn?";
+      "newConversation"; "conversationFrom"; "converse"; "turnReply";
+      "turnConversation"; "conversationJson"; "conversationLength"; "agentRun" ] );
   (* Tesl.Http, Tesl.DB, Tesl.Bool, Tesl.Uuid, Tesl.Crypto, Tesl.Map, Tesl.Logging,
      Tesl.Queue, Tesl.Channel, Tesl.Sse —
      internal modules; imports validated loosely (unknown names accepted)

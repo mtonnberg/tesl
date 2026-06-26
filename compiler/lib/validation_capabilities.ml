@@ -96,7 +96,8 @@ let collect_needed_capabilities
     (* Tesl.Agent: every entry point that contacts a provider (one-shot ask, the
        tool-calling loop, BYOK, and structured-output askFor) performs inference
        and requires the aiProvider capability. Pure constructors/accessors do not. *)
-    else if List.mem name ["ask"; "askReply"; "askWith"; "askFor"] then ["aiProvider"]
+    else if List.mem name ["ask"; "askReply"; "askWith"; "askFor";
+                           "converse"; "agentRun"] then ["aiProvider"]
     else []
   in
   (* acc is threaded left-to-right; result order is irrelevant (caller sort_uniqs). *)

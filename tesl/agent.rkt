@@ -7,8 +7,35 @@
 ;;; typed structured output with bounded retry, and BYOK — while staying within
 ;;; the registration recipe (no parser/AST/emitter-shape changes).
 ;;;
-;;; DEFERRED to Wave 2b: multi-turn conversation/agentReply threading,
-;;; agentRun/worker, streaming.
+;;; Wave 2b COMPLETES the core: multi-turn conversation, agentRun (a
+;;; worker-backed long loop that publishes step events to a channel), and
+;;; streaming — all COMPOSING existing primitives (the agentic loop, the
+;;; entity/database the developer owns, and the channel/sse/subscribe path).
+;;;
+;;; ── Wave 2b surface (all function-first; no new grammar) ─────────────────────
+;;;
+;;;   Multi-turn conversation (the developer owns persistence):
+;;;     Conversation, ConversationTurn   (opaque)
+;;;     newConversation  : Agent -> Conversation        -- empty history
+;;;     conversationFrom : Agent -> String -> Conversation
+;;;                          -- restore from a JSON history string the developer
+;;;                             previously persisted (via their OWN entity).
+;;;     converse         : Conversation -> String -> ConversationTurn
+;;;                          -- append the user turn, run the loop with ALL prior
+;;;                             history threaded in, return reply + new conversation.
+;;;     turnReply        : ConversationTurn -> AgentReply
+;;;     turnConversation : ConversationTurn -> Conversation   -- carries history fwd
+;;;     conversationJson : Conversation -> String  -- serialize history to persist
+;;;     conversationLength : Conversation -> Int    -- message count (for asserts)
+;;;
+;;;   agentRun (worker-backed long loop + streaming via a publish callback):
+;;;     agentRun : Agent -> String -> (String -> Unit) -> AgentReply
+;;;                  -- run the (possibly multi-tool) loop to completion; for each
+;;;                     step (a tool dispatch, then the final assistant text) call
+;;;                     the publisher with a step-event String.  The developer's
+;;;                     publisher closes over a `publish MyChannel(key) ...` so the
+;;;                     SAME channel/sse/subscribe path streams the events.  DB is
+;;;                     still acquired per tool-exec (never across a provider call).
 ;;;
 ;;; ── Surface (all function-first; Tesl forbids bare record literals) ──────────
 ;;;
@@ -105,7 +132,21 @@
          replyTokens
          replyToolCalls
          decodeAs
-         askFor)
+         askFor
+         ;; Wave 2b — conversation
+         Conversation
+         Conversation?
+         ConversationTurn
+         ConversationTurn?
+         newConversation
+         conversationFrom
+         converse
+         turnReply
+         turnConversation
+         conversationJson
+         conversationLength
+         ;; Wave 2b — worker-backed run + streaming
+         agentRun)
 
 ;;; The aiProvider capability — required by all inference functions.  It IMPLIES
 ;;; httpClient because real providers perform outbound HTTP; granting aiProvider
@@ -131,6 +172,17 @@
 ;;;   tool-calls : Int       — number of tools dispatched during the loop
 (struct agent-reply (text usage tool-calls) #:transparent)
 
+;;; A multi-turn conversation: an agent bound to the accumulated message
+;;; transcript (user/assistant/tool turns, normalized exactly like run-loop's
+;;; `messages`).  Persistence is the DEVELOPER's job — `conversationJson` /
+;;; `conversationFrom` round-trip the history through a String they store in
+;;; their own entity; the agent runtime is NOT coupled to any user schema.
+(struct conversation (agent messages) #:transparent)
+
+;;; One turn's outcome: the reply plus the conversation advanced by this turn
+;;; (so the developer threads it into the next `converse`).
+(struct conv-turn (reply conversation) #:transparent)
+
 ;;; Opaque type-name bindings (only need to be bound identifiers for `(only-in
 ;;; ...)` to resolve).
 (define LlmProvider procedure?)
@@ -138,6 +190,10 @@
 (define AgentReply agent-reply?)
 (define AgentReply? agent-reply?)
 (define Tool tool-spec?)
+(define Conversation conversation?)
+(define Conversation? conversation?)
+(define ConversationTurn conv-turn?)
+(define ConversationTurn? conv-turn?)
 ;; ToolStep is the opaque type of a mock provider script entry (a tool_use or a
 ;; text turn).  At runtime these ARE normalized llm-response values; the type
 ;; only needs to be a bound identifier so the emitted (only-in ...) resolves.
@@ -287,10 +343,18 @@
     (hash-set h k (+ (hash-ref h k 0) (hash-ref u k 0)))))
 
 ;;; The agentic loop: provider → on tool_use, validate+dispatch each tool →
-;;; append tool_results → loop until end-turn (or no tool calls).  Returns an
-;;; agent-reply.  Provider is passed explicitly so BYOK reuses this.
-(define (run-loop a provider initial-messages)
+;;; append tool_results → loop until end-turn (or no tool calls).  Returns
+;;; (values final-agent-reply full-message-transcript) — the transcript carries
+;;; the user/assistant/tool turns so a conversation can thread it into the NEXT
+;;; turn.  Provider is passed explicitly so BYOK reuses this.
+;;;
+;;; on-step : (or/c #f (String -> any))  — when non-#f, called once per loop
+;;; step with a step-event String (a tool dispatch, then the final text).  This
+;;; is how agentRun streams progress: the developer's callback publishes each
+;;; event to a channel.  on-step never holds a DB connection.
+(define (run-loop a provider initial-messages [on-step #f])
   (define max-iters 16) ; defensive bound against a runaway provider
+  (define (step! s) (when on-step (on-step s)))
   (let loop ([messages initial-messages]
              [usage (hash 'input 0 'output 0 'cache-read 0 'cache-write 0)]
              [tool-count 0]
@@ -307,11 +371,21 @@
     (define calls (llm-response-tool-calls resp))
     (cond
       [(null? calls)
-       (agent-reply (llm-response-text resp) usage* tool-count)]
+       (define text (llm-response-text resp))
+       (define messages*
+         (if (> (string-length text) 0)
+             (append messages
+                     (list (hash 'role "assistant"
+                                 'content (assistant-block-of resp))))
+             messages))
+       (step! (format "text: ~a" text))
+       (values (agent-reply text usage* tool-count) messages*)]
       [else
        ;; Append the assistant turn, then a single tool message carrying every
        ;; tool_result.  Each tool runs with its own DB connection; NONE held
        ;; across the next call-provider above.
+       (for ([tc (in-list calls)])
+         (step! (format "tool: ~a" (tool-call-name tc))))
        (define results (map (lambda (tc) (run-tool-call a tc)) calls))
        (define messages*
          (append messages
@@ -340,14 +414,25 @@
   (run-the-loop the-agent prompt (raw-value provider)))
 
 (define (run-the-loop the-agent prompt override-provider)
+  (define-values (reply _transcript)
+    (run-the-loop/transcript the-agent prompt override-provider '() #f))
+  reply)
+
+;;; Shared core: run the loop starting from `prior-messages` (the conversation
+;;; transcript so far) plus this turn's user prompt; returns BOTH the reply and
+;;; the FULL transcript (prior + this turn's user/assistant/tool turns).  This is
+;;; the single place ask/askReply/askWith/converse/agentRun route through.
+(define (run-the-loop/transcript the-agent prompt override-provider prior-messages on-step)
   (define a (raw-value the-agent))
   (unless (agent? a)
     (raise-user-error 'ask "first argument is not an Agent: ~e" a))
   (define provider (or override-provider (agent-provider a)))
   (unless (procedure? provider)
     (raise-user-error 'askWith "provider override must be an LlmProvider, got ~e" provider))
-  (run-loop a provider
+  (define initial
+    (append prior-messages
             (list (hash 'role "user" 'content (raw-value prompt)))))
+  (run-loop a provider initial on-step))
 
 ;;; AgentReply accessors.
 (define (replyText r)
@@ -414,3 +499,130 @@
                  (cdr outcome)
                  "\nReturn ONLY valid JSON matching the requested shape.")
                 (sub1 left))])))
+
+;;; ── Multi-turn conversation ─────────────────────────────────────────────────
+;;;
+;;; A Conversation is an agent + the message transcript so far.  `converse` runs
+;;; the loop with the WHOLE transcript threaded in, so turn N sees turns 1..N-1.
+;;; The developer persists/loads the history themselves via conversationJson /
+;;; conversationFrom (string round-trip) into their OWN entity — the runtime is
+;;; not coupled to any user schema.
+
+;;; newConversation : Agent -> Conversation — an empty (no-history) conversation.
+(define (newConversation the-agent)
+  (define a (raw-value the-agent))
+  (unless (agent? a)
+    (raise-user-error 'newConversation "first argument is not an Agent: ~e" a))
+  (conversation a '()))
+
+;;; converse : Conversation -> String -> ConversationTurn
+;;; Threads the prior transcript in, runs the loop, returns the reply plus the
+;;; conversation advanced by this turn (so the next converse sees this turn too).
+;;; Gated by aiProvider (it contacts the provider).
+(define (converse conv prompt)
+  (require-capabilities! (list aiProvider))
+  (define c (raw-value conv))
+  (unless (conversation? c)
+    (raise-user-error 'converse "first argument is not a Conversation: ~e" c))
+  (define a (conversation-agent c))
+  (define-values (reply transcript)
+    (run-the-loop/transcript a prompt #f (conversation-messages c) #f))
+  (conv-turn reply (conversation a transcript)))
+
+;;; turnReply : ConversationTurn -> AgentReply
+(define (turnReply t)
+  (define tt (raw-value t))
+  (unless (conv-turn? tt)
+    (raise-user-error 'turnReply "not a ConversationTurn: ~e" tt))
+  (conv-turn-reply tt))
+
+;;; turnConversation : ConversationTurn -> Conversation — carries history forward.
+(define (turnConversation t)
+  (define tt (raw-value t))
+  (unless (conv-turn? tt)
+    (raise-user-error 'turnConversation "not a ConversationTurn: ~e" tt))
+  (conv-turn-conversation tt))
+
+;;; conversationLength : Conversation -> Int — number of messages in the
+;;; transcript (for test assertions that history is threaded/persisted).
+(define (conversationLength conv)
+  (define c (raw-value conv))
+  (unless (conversation? c)
+    (raise-user-error 'conversationLength "not a Conversation: ~e" c))
+  (length (conversation-messages c)))
+
+;;; ── Conversation persistence (developer-owned) ──────────────────────────────
+;;;
+;;; conversationJson / conversationFrom round-trip the transcript through a
+;;; String the developer stores in their own entity.  The transcript is a list
+;;; of normalized message hashes with symbol keys; some values (the block 'kind
+;;; tag) are symbols.  We tag symbol values as {"$sym": "..."} so the round-trip
+;;; reproduces the EXACT runtime shape the loop consumes — including content
+;;; blocks (tool_use args, tool_result is-error, etc.).
+
+(define (encode-symbols v)
+  (cond
+    [(symbol? v) (hash '$sym (symbol->string v))]
+    [(hash? v)
+     (for/hash ([(k val) (in-hash v)])
+       (values (if (symbol? k) (string->symbol (string-append "$k:" (symbol->string k))) k)
+               (encode-symbols val)))]
+    [(list? v) (map encode-symbols v)]
+    [else v]))
+
+(define (decode-symbols v)
+  (cond
+    [(and (hash? v) (= (hash-count v) 1) (hash-has-key? v '$sym))
+     (string->symbol (hash-ref v '$sym))]
+    [(hash? v)
+     (for/hash ([(k val) (in-hash v)])
+       (define ks (symbol->string k))
+       (values (if (string-prefix? ks "$k:")
+                   (string->symbol (substring ks 3))
+                   k)
+               (decode-symbols val)))]
+    [(list? v) (map decode-symbols v)]
+    [else v]))
+
+;;; conversationJson : Conversation -> String
+(define (conversationJson conv)
+  (define c (raw-value conv))
+  (unless (conversation? c)
+    (raise-user-error 'conversationJson "not a Conversation: ~e" c))
+  (jsexpr->string (encode-symbols (conversation-messages c))))
+
+;;; conversationFrom : Agent -> String -> Conversation
+;;; Restore a conversation's history from a String previously produced by
+;;; conversationJson (and persisted by the developer).  Binds it to `the-agent`.
+(define (conversationFrom the-agent json-str)
+  (define a (raw-value the-agent))
+  (unless (agent? a)
+    (raise-user-error 'conversationFrom "first argument is not an Agent: ~e" a))
+  (define raw (raw-value json-str))
+  (define parsed
+    (with-handlers ([exn:fail?
+                     (lambda (e)
+                       (raise-user-error 'conversationFrom
+                                         "history is not valid JSON: ~a" (exn-message e)))])
+      (string->jsexpr raw)))
+  (conversation a (decode-symbols parsed)))
+
+;;; ── agentRun (worker-backed long loop + streaming) ───────────────────────────
+;;;
+;;; agentRun : Agent -> String -> (String -> Unit) -> AgentReply
+;;; Run the agent loop to completion, calling `publisher` once per step with a
+;;; step-event String.  Intended to be called from a `workers`/`queue` job body:
+;;; the handler enqueues + returns; the worker runs agentRun and the publisher
+;;; closure publishes each event to a channel, which a `subscribe` handler then
+;;; streams over SSE.  DB connections are acquired per tool-exec inside the loop,
+;;; never held across a provider call.  Gated by aiProvider.
+(define (agentRun the-agent prompt publisher)
+  (require-capabilities! (list aiProvider))
+  (define pub (raw-value publisher))
+  (unless (procedure? pub)
+    (raise-user-error 'agentRun
+                      "publisher must be a function String -> Unit, got ~e" pub))
+  (define-values (reply _transcript)
+    (run-the-loop/transcript the-agent prompt #f '()
+                             (lambda (s) (pub s))))
+  reply)

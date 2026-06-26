@@ -1,0 +1,205 @@
+#lang tesl
+module AgentRunTests exposing [AgentRunServer, AgentRunWorkers]
+
+import Tesl.Prelude exposing [String, Unit]
+import Tesl.Json exposing [stringCodec]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Queue exposing [queueRead, queueWrite, pubsub]
+import Tesl.String exposing [String.concat]
+import Tesl.ApiTest exposing [
+  statusOk,
+  hasLength,
+  includesWhere,
+  arrayAt,
+  fieldAt,
+  subscribe,
+  collect,
+  JobResult(..),
+  processNextJob,
+  pendingJobCount,
+  expectJobOk,
+]
+import Tesl.Agent exposing [
+  aiProvider,
+  mockToolProvider,
+  toolUseStep,
+  textStep,
+  defineAgent,
+  withTools,
+  tool,
+  decodeAs,
+  agentRun,
+]
+
+# ────────────────────────────────────────────────────────────────────────────
+# Tesl.Agent — AI Tier-0 Wave 2b: agentRun on a WORKER, publishing step events
+# to a CHANNEL, streamed to a SUBSCRIBER. Deterministic & mock-only.
+#
+# Composition (no new agent surface beyond agentRun):
+#   - the HTTP handler enqueues a job and returns immediately;
+#   - the worker runs `agentRun`, whose publisher closure `publish`es each step
+#     to the channel (the SAME channel/sse/subscribe path as example/chat/);
+#   - a `subscribe` SSE route streams those events; the api-test `collect`s them.
+# ────────────────────────────────────────────────────────────────────────────
+
+capability runRead   implies dbRead
+capability runWrite  implies dbWrite
+capability runPubSub implies pubsub
+capability runQueue  implies queueWrite
+capability runWorker implies queueRead, runPubSub, aiProvider
+capability runService implies runRead, runWrite, runPubSub, runQueue
+
+# The job that drives one agentRun.
+record RunJob {
+  prompt: String
+}
+
+# A tool's validated argument (reuses the codec/decode path).
+record EchoArgs {
+  text: String
+}
+
+# The streamed step events.
+type RunEvent
+  = Step content: String
+
+codec RunJob {
+  toJson {
+    prompt -> "prompt" with_codec stringCodec
+  }
+  fromJson [
+    {
+      prompt <- "prompt" with_codec stringCodec
+    }
+  ]
+}
+
+codec EchoArgs {
+  toJson_forbidden
+  fromJson [
+    {
+      text <- "text" with_codec stringCodec
+    }
+  ]
+}
+
+# Minimal entity so a database can be declared (required by channel/queue).
+entity RunLog table "run_log" primaryKey id {
+  id: String
+}
+
+database RunDatabase {
+  backend postgres
+  schema "agent_run"
+  entities [RunLog]
+  postgres {
+    database "agent_run"
+    user "tesl"
+    password ""
+    host "127.0.0.1"
+    port 55432
+    socket ""
+  }
+}
+
+queue RunQueue {
+  database RunDatabase
+  jobs [RunJob]
+  retry {
+    maxAttempts: 1
+    backoff: exponential
+    initialDelay: 0
+  }
+}
+
+channel RunSteps(runId: String) {
+  database RunDatabase
+  payload RunEvent
+}
+
+# Tool validator + dispatch (the agent scripts one tool call, then final text).
+fn validateEcho(argsJson: String) -> EchoArgs =
+  decodeAs "EchoArgs" argsJson
+
+fn dispatchEcho(args: EchoArgs) -> String =
+  String.concat "echo: " args.text
+
+# The publisher closure agentRun calls once per step — it bridges the agent loop
+# to the channel. A named function so its body can use the `publish` statement
+# (the pubsub capability flows from the worker that grants runWorkerHandler => pubsub).
+fn publishStep(event: String) -> Unit requires [runPubSub] =
+  publish RunSteps("run-1") Step { content: event }
+
+# Handler: enqueue a RunJob and return. (Fire-and-return; the worker does work.)
+handler startRun(req: RunJob)
+  -> exists logId: String => RunLog ? FromDb (Id == logId)
+  requires [runWrite, runQueue] =
+    let logId = "run-1"
+    with transaction {
+      enqueue RunJob { prompt: req.prompt }
+      exists logId =>
+        insert RunLog { id: logId }
+    }
+
+# Worker: build a mock tool-calling agent and run it to completion, publishing
+# each step event to the RunSteps channel. The publisher closure is the bridge
+# from the agent loop to the channel — agentRun calls it once per step.
+worker runWorkerHandler(job: RunJob ::: FromQueue (Id == jobId) job) requires [runWorker] =
+  let echoTool = tool "echo" "Echo back some text" "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}" validateEcho dispatchEcho
+  let steps = [toolUseStep "echo" "call_1" "{\"text\":\"hi\"}", textStep "All done."]
+  let base = defineAgent (mockToolProvider steps) "You are a runner." 256
+  let agent = withTools base [echoTool]
+  let reply = agentRun agent job.prompt publishStep
+  job
+
+workers AgentRunWorkers for RunQueue {
+  RunJob = runWorkerHandler
+}
+
+api AgentRunApi {
+  post "/runs"
+    body req: RunJob
+    -> exists logId: String => RunLog ? FromDb (Id == logId)
+
+  sse "/events/runs/:runId"
+    capture runId: String
+    subscribe RunSteps(runId)
+}
+
+server AgentRunServer for AgentRunApi {
+  startRun = startRun
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+# agentRun on a worker publishes step events to the channel; the subscriber
+# collects them. The mock scripts a tool call then final text, so the loop emits
+# at least two step events: "tool: echo" and "text: All done."
+# ────────────────────────────────────────────────────────────────────────────
+api-test "agentRun on a worker publishes step events a subscriber collects" for AgentRunServer requires [runRead, runWrite, runPubSub, runQueue, runWorker] {
+  let stream = subscribe "/events/runs/run-1"
+
+  let posted = post "/runs" body { "prompt": "please echo" }
+  expect statusOk posted.status
+  expect pendingJobCount RunQueue == 1
+
+  # Run the worker — agentRun runs the loop and publishes each step.
+  let done = processNextJob RunQueue
+  let job = expectJobOk done
+  expect job.prompt == "please echo"
+  expect pendingJobCount RunQueue == 0
+
+  # Collect the streamed step events. At least the tool step and the text step.
+  let events = collect stream count 2 timeout 2000ms
+  expect hasLength 2 events
+  # Streaming order is preserved by the channel: the tool dispatch is published
+  # first, then the final assistant text. Assert BOTH the order (positional) and
+  # the content.
+  let first = arrayAt 0 events
+  let second = arrayAt 1 events
+  expect fieldAt "tag" first == "Step"
+  expect fieldAt "tag" second == "Step"
+  expect first.fields.content == "tool: echo"
+  expect second.fields.content == "text: All done."
+  expect includesWhere { "tag": "Step", "fields": { "content": "tool: echo" } } events
+  expect includesWhere { "tag": "Step", "fields": { "content": "text: All done." } } events
+}

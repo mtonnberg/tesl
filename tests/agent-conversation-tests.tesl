@@ -1,0 +1,85 @@
+#lang tesl
+module AgentConversationTests exposing []
+
+import Tesl.Prelude exposing [Int, String, Bool]
+import Tesl.String exposing [String.contains]
+import Tesl.Agent exposing [
+  aiProvider,
+  mockProvider,
+  defineAgent,
+  newConversation,
+  conversationFrom,
+  converse,
+  turnReply,
+  turnConversation,
+  conversationJson,
+  conversationLength,
+  replyText,
+]
+
+# ────────────────────────────────────────────────────────────────────────────
+# Tesl.Agent — AI Tier-0 Wave 2b: MULTI-TURN CONVERSATION (deterministic, mock).
+#
+# Function-first: a Conversation carries the accumulated transcript; `converse`
+# threads ALL prior turns into the next provider call and returns the reply plus
+# the conversation advanced by that turn. The developer owns persistence via
+# conversationJson / conversationFrom (proved on a real DB in the racket-level
+# tests/agent-conversation-pg-test.rkt).
+# ────────────────────────────────────────────────────────────────────────────
+
+capability supportBot implies aiProvider
+
+# A 2-turn conversation. The mock scripts two distinct replies (one per turn).
+# We prove turn 2 SAW turn 1's history by inspecting the conversation value that
+# `converse` feeds back into the loop: after turn 2 it must contain turn 1's
+# user prompt AND turn 1's assistant reply AND turn 2's, i.e. the full thread.
+test "converse threads turn 1 history into turn 2" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["First reply about cats", "Second reply still about cats"]) "You are a helpful bot." 128
+
+  let conv0 = newConversation agent
+
+  # Turn 1.
+  let turn1 = converse conv0 "Tell me about cats"
+  let conv1 = turnConversation turn1
+  expect (replyText (turnReply turn1)) == "First reply about cats"
+  # One user + one assistant turn recorded.
+  expect (conversationLength conv1) == 2
+
+  # Turn 2 — uses conv1, so the loop is fed turns 1 AND 2.
+  let turn2 = converse conv1 "What did I just ask about?"
+  let conv2 = turnConversation turn2
+  expect (replyText (turnReply turn2)) == "Second reply still about cats"
+  # Two user + two assistant turns recorded — history accumulated, not reset.
+  expect (conversationLength conv2) == 4
+
+  # The serialized transcript fed forward MUST carry turn 1's user prompt and
+  # assistant reply alongside turn 2's — proving history was threaded in.
+  let history = conversationJson conv2
+  expect (String.contains history "Tell me about cats")
+  expect (String.contains history "First reply about cats")
+  expect (String.contains history "What did I just ask about?")
+}
+
+# conversationJson / conversationFrom round-trip the history losslessly, so a
+# developer can persist it as a String and resume the SAME thread later.
+test "conversationFrom restores a serialized thread and continues it" requires [supportBot] {
+  let agent = defineAgent (mockProvider ["Reply one", "Reply two"]) "x" 64
+
+  let conv0 = newConversation agent
+  let turn1 = converse conv0 "first question"
+  let conv1 = turnConversation turn1
+  let saved = conversationJson conv1
+
+  # Reload into a fresh conversation bound to the agent (as if from a DB row).
+  let reloaded = conversationFrom agent saved
+  expect (conversationLength reloaded) == 2
+
+  # Continue the reloaded thread — the next turn still sees turn 1.
+  let turn2 = converse reloaded "second question"
+  let conv2 = turnConversation turn2
+  expect (replyText (turnReply turn2)) == "Reply two"
+  expect (conversationLength conv2) == 4
+  let history2 = conversationJson conv2
+  expect (String.contains history2 "first question")
+  expect (String.contains history2 "Reply one")
+}
