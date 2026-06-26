@@ -6,10 +6,10 @@ compiled/
 __pycache__/
 .pytest_cache/
 *.pyc
-.claude
+.claude/*
+!.claude/commands/
 .direnv/
 _build/
-.claude/
 .agents/
 result
 .tesl-collections/dsl/debug/compiled/
