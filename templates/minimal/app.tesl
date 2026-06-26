@@ -1,0 +1,88 @@
+#lang tesl
+# ── __APP_NAME__ ──────────────────────────────────────────────────────────────
+# A minimal Tesl web service: cookie auth + telemetry, NO database.
+#
+# The module header is always `App` because `tesl build` resolves imports by
+# file name and this file is `app.tesl`. The human-facing name of your project
+# lives in `tesl.toml` ([project] name) and in the telemetry service string
+# below — both seeded from the name you passed to `tesl init`.
+module App exposing [AppServer]
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
+import Tesl.Json exposing [intCodec]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Telemetry exposing [telemetry, initTelemetry]
+import Tesl.Env exposing [env, envInt]
+
+# A capability is an explicit permission. A handler can only do what its
+# capabilities allow, and `main` decides which capabilities to grant.
+capability readSessionCookie
+
+record SessionUser {
+  id: String
+  role: String
+}
+
+defaultPort = 8088
+
+# ── PROOF #1 (INPUT): a fact + the check that establishes it ──────────────────
+# A `fact` is a named claim about a value. A `check` is the ONLY way to turn an
+# untrusted value into one that carries the fact. Downstream code that demands
+# `::: Positive taskId` literally cannot be called without this proof — the type
+# checker rejects it. This is the gradual-proof payoff: start with one fact,
+# add more as you learn the language.
+fact Positive (taskId: Int)
+
+check isPositive(taskId: Int) -> taskId: Int ::: Positive taskId =
+  if taskId > 0 then
+    ok taskId ::: Positive taskId
+  else
+    fail 400 "Task id must be positive"
+
+# An `auth` is a check that runs against the HTTP request and produces a trusted
+# user. `requires [readSessionCookie]` declares the capability it needs.
+fact Authenticated (req: SessionUser)
+
+auth cookieAuth(request: HttpRequest) -> requestUser: SessionUser ::: Authenticated requestUser
+  requires [readSessionCookie] =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "Missing user cookie"
+    Something userId ->
+      case Dict.lookup "role" request.cookies of
+        Something role -> ok SessionUser { id: userId, role: role } ::: Authenticated requestUser
+        Nothing -> ok SessionUser { id: userId, role: "user" } ::: Authenticated requestUser
+
+# A `capture` wires a route parameter through a check + codec so the handler
+# receives an already-proven value (here: `Positive taskId`).
+capture positiveTaskCapture: Int ::: Positive taskId using intCodec via isPositive
+
+# ── PROOF #2 (OUTPUT): a handler that hands a proof back to the caller ────────
+# A `handler` cannot MINT a new proof — only `check`/`auth` can. What it CAN do
+# is RETURN a value still carrying a proof it received on input, using the `?`
+# return spec. Here `getTask` receives `taskId: Int ::: Positive taskId` and the
+# `? Positive` return means callers downstream get the still-proven id back —
+# the positivity guarantee survives the round trip instead of being thrown away.
+handler getTask(requestUser: SessionUser ::: Authenticated requestUser, taskId: Int ::: Positive taskId)
+  -> Int ? Positive =
+  telemetry "task.fetch" { user.id = requestUser.id, task.id = taskId }
+  # `taskId` already carries `Positive`; returning it satisfies `? Positive`
+  # without any unsafe re-assertion. Drop the proof here and `tesl build` fails.
+  taskId
+
+api AppApi {
+  get "/tasks/:taskId"
+    auth requestUser: SessionUser ::: Authenticated requestUser via cookieAuth
+    capture taskId: Int ::: Positive taskId via positiveTaskCapture
+    -> Int ? Positive
+}
+
+server AppServer for AppApi {
+  getTask = getTask
+}
+
+main with capabilities [readSessionCookie] {
+  initTelemetry service "__APP_NAME__" endpoint "in-memory" console True
+  let port = envInt "PORT" defaultPort
+  serve AppServer on port with capabilities [readSessionCookie]
+}

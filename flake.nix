@@ -538,6 +538,9 @@ EOF
         packages = {
           inherit tesl-compiler tesl-racket tesl-cli tesl-lsp tesl-full;
           default = tesl-full;
+          # Reusable PostgreSQL so the managed-PG lifecycle (`tesl db`) can source
+          # initdb / pg_ctl / createdb via nix without entering a dev shell.
+          postgresql = pkgs.postgresql;
         };
 
         # ── Apps (for `nix run github:mtonnberg/tesl`) ────────────────────────

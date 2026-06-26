@@ -1,0 +1,30 @@
+# tesl.toml — project manifest for __APP_NAME__
+# Read by `tesl build` (to find the entrypoint + env contract) and written by
+# `tesl init`. Schema: dev-docs/tesl-manifest.md.
+
+[project]
+name = "__APP_NAME__"
+entrypoint = "app.tesl"
+
+# Environment variables the app reads, with defaults. The TESL_POSTGRES_* vars
+# are consumed by the `database` block in app.tesl. In "managed" mode `tesl db`
+# fills these in for a local PostgreSQL; in "existing" mode you set them to
+# point at your own database.
+[env]
+PORT = "8086"
+TESL_POSTGRES_DATABASE = "app"
+TESL_POSTGRES_HOST = "localhost"
+TESL_POSTGRES_PORT = "5432"
+TESL_POSTGRES_USER = "app"
+TESL_POSTGRES_PASSWORD = "app"
+
+[database]
+# "none"     — no database.
+# "managed"  — `tesl db` provisions a local PostgreSQL using the TESL_POSTGRES_* env.
+# "existing" — connect to a database you already run.
+mode = "managed"
+
+[deploy]
+# "local"     — run the compiled binary directly.
+# "container" — build an OCI image (see the Dockerfile produced by `tesl build`).
+target = "local"

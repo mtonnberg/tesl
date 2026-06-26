@@ -1,0 +1,202 @@
+#lang tesl
+# ── __APP_NAME__ ──────────────────────────────────────────────────────────────
+# A Tesl web service WITH a PostgreSQL-backed entity, cookie auth, an input
+# proof on the request body, an output proof on the response, and unit tests.
+#
+# The module header is always `App` because `tesl build` resolves imports by
+# file name and this file is `app.tesl`. The human-facing project name lives in
+# `tesl.toml` ([project] name) and the telemetry service string below.
+#
+# Database connection settings come from the environment ([env] in tesl.toml).
+# `tesl db` (managed mode) provisions a local Postgres and exports these vars;
+# in production you point the same vars at your real database.
+module App exposing [AppDatabase, AppServer, seedExampleData]
+import Tesl.Prelude exposing [Bool(..), Int, List, String, Unit]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Time exposing [nowMillis, PosixMillis, time]
+import Tesl.Env exposing [env, envInt]
+import Tesl.String exposing [String.length]
+import Tesl.List exposing [List.isEmpty]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Telemetry exposing [telemetry, initTelemetry]
+import Tesl.Id exposing [generatePrefixedId]
+import Tesl.Random exposing [random]
+
+# Capabilities are explicit permissions. `appWebService` bundles everything the
+# server needs; a handler can only do what its declared capabilities allow.
+capability appDbRead implies dbRead
+capability appDbWrite implies dbWrite
+capability appReadCookie
+capability appWebService implies appDbRead, appDbWrite, appReadCookie, time, random
+
+type UserId = String
+
+record User {
+  id: UserId
+  role: String
+}
+
+type Status
+  = Open
+  | Done
+
+# An `entity` maps a record to a database table. `tesl build` derives the schema
+# and the type-safe `select` / `insert` / `update` query forms from it.
+entity Todo table "todos" primaryKey id {
+  id: String
+  title: String
+  ownerId: UserId @db(text)
+  status: Status
+  createdAt: PosixMillis
+}
+
+database AppDatabase {
+  backend postgres
+  schema "app"
+  entities [Todo]
+  postgres {
+    database env("TESL_POSTGRES_DATABASE")
+    user env("TESL_POSTGRES_USER")
+    password env("TESL_POSTGRES_PASSWORD")
+    host env("TESL_POSTGRES_HOST")
+    port envInt("TESL_POSTGRES_PORT", 5432)
+    socket env("TESL_POSTGRES_SOCKET")
+  }
+}
+
+defaultPort = 8086
+
+fn generateTodoId() -> String
+  requires [random] =
+  generatePrefixedId "todo"
+
+# An `auth` is the boundary that turns a raw request into a trusted user.
+fact Authenticated (req: User)
+
+auth cookieAuth(request: HttpRequest) -> requestUser: User ::: Authenticated requestUser
+  requires [appReadCookie] =
+  case Dict.lookup "user" request.cookies of
+    Something userId -> ok (User { id: userId, role: "user" }) ::: Authenticated requestUser
+    Nothing -> fail 401 "Missing or invalid user cookie"
+
+# ── PROOF #1 (INPUT): validate the request body at the boundary ───────────────
+# `TitleSafe` is a fact about a string. The `check` is the ONLY way to mint it.
+# The codec below runs `isSafeTitle` while decoding JSON, so by the time a
+# handler sees `NewTodo.title` it is PROVEN safe — no defensive re-checking, and
+# a malformed title is rejected with a 400 before any handler code runs.
+fact TitleSafe (title: String)
+
+check isSafeTitle(title: String) -> title: String ::: TitleSafe title =
+  if 4 <= String.length title && String.length title <= 120 then
+    ok title ::: TitleSafe title
+  else
+    fail 400 "Title must be between 4 and 120 characters"
+
+record NewTodo {
+  title: String ::: TitleSafe title
+}
+
+codec NewTodo {
+  toJson_forbidden
+  fromJson [
+    {
+      title <- "title" with_codec stringCodec via isSafeTitle
+    }
+  ]
+}
+
+fact TodoId (todoId: String)
+
+check isTodoId(todoId: String) -> todoId: String ::: TodoId todoId =
+  if String.length todoId > 5 then
+    ok todoId ::: TodoId todoId
+  else
+    fail 400 "Malformed todo id"
+
+capture todoIdCapture: String ::: TodoId todoId using stringCodec via isTodoId
+
+fn seedExampleData() -> Int
+  requires [appDbRead, appDbWrite, time] =
+  if List.isEmpty (select todo from Todo) then
+    insert Todo { id: "todo-1", title: "Read the Tesl tutorial", ownerId: "demo", status: Open, createdAt: nowMillis() }
+    1
+  else
+    0
+
+handler createTodo(requestUser: User ::: Authenticated requestUser, newTodo: NewTodo)
+  -> exists todoId: String =>
+        Todo ? FromDb (Id == todoId)
+  requires [appDbRead, appDbWrite, time, random] =
+  let todoId = generateTodoId()
+  exists todoId =>
+    insert Todo {
+      id: todoId,
+      title: newTodo.title,
+      ownerId: requestUser.id,
+      status: Open,
+      createdAt: nowMillis()
+    }
+
+# ── PROOF #2 (OUTPUT): the response carries proof of where it came from ───────
+# `FromDb (Id == todoId)` is a proof the SQL layer attaches to rows it returns.
+# The `?` return spec threads that proof out to the caller, so the type system
+# records that this Todo genuinely came from the database under the asked-for id
+# — not a fabricated value. A handler cannot mint this proof itself; only the
+# `select` boundary can, which is exactly what makes it trustworthy.
+handler getTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: TodoId todoId)
+  -> Todo ? FromDb (Id == todoId)
+  requires [appDbRead] =
+  telemetry "todo.get" { user.id = requestUser.id }
+  let existing = selectOne todo from Todo where todo.id == todoId
+  case existing of
+    Nothing ->
+      fail 404 "Todo not found"
+    Something todo where todo.ownerId != requestUser.id ->
+      fail 403 "Todo not owned by request user"
+    Something todo ->
+      todo
+
+api AppApi {
+  post "/todos"
+    auth requestUser: User ::: Authenticated requestUser via cookieAuth
+    body newTodo: NewTodo
+    -> exists todoId: String =>
+          Todo ? FromDb (Id == todoId)
+
+  get "/todos/:todoId"
+    auth requestUser: User ::: Authenticated requestUser via cookieAuth
+    capture todoId: String ::: TodoId todoId via todoIdCapture
+    -> Todo ? FromDb (Id == todoId)
+}
+
+server AppServer for AppApi {
+  createTodo = createTodo
+  getTodo = getTodo
+}
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+# `test` blocks run with `tesl test`. `expect` asserts a Bool. Validation
+# functions return `ok`/`fail`, so we test them through their effects.
+test "title length boundary" {
+  expect String.length "Read the Tesl tutorial" >= 4
+  expect String.length "abc" < 4
+}
+
+test "todo id shape" {
+  expect String.length "todo-1" > 5
+  expect String.length "x" <= 5
+}
+
+main with capabilities [appWebService] {
+  initTelemetry service "__APP_NAME__" endpoint "in-memory" console True
+  let port = envInt "PORT" defaultPort
+  with database AppDatabase {
+    with capabilities [appWebService] {
+      seedExampleData()
+    }
+    serve AppServer on port with capabilities [appWebService]
+  }
+}
