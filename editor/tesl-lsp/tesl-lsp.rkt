@@ -1448,26 +1448,43 @@
        (let ([toks '()])
          (define (emit! line col len type) (set! toks (cons (mk-token line col len type) toks)))
          (for ([fn (in-list (hash-ref semantic 'functions '()))])
-           (let ([loc (hash-ref fn 'loc #f)])
-             (when (hash? loc)
+           (let ([loc  (hash-ref fn 'loc #f)]
+                 [kind (hash-ref fn 'kind "fn")])
+             ;; `main` is a KEYWORD, not a user-named function: its decl `name`
+             ;; is literally "main", so name-col-in-line would anchor a "function"
+             ;; token onto the `main` keyword and override its keyword color
+             ;; (the "main is just yellow like a function" bug). Skip it and let
+             ;; the TextMate grammar scope `main` as a declaration keyword.
+             (when (and (hash? loc) (not (equal? kind "main")))
                (let* ([line (hash-ref loc 'start_line 0)]
                       ;; The decl loc starts at the keyword; the name follows it.
                       ;; Find the name's column from source for an exact span.
                       [nm   (hash-ref fn 'name "")]
                       [ncol (name-col-in-line lines line nm (hash-ref loc 'start_col 0))]
                       [len  (string-length nm)])
-                 (emit! line ncol (max 1 len) (decl-kind->token-type (hash-ref fn 'kind "fn")))))))
+                 (emit! line ncol (max 1 len) (decl-kind->token-type kind))))))
          (for ([b (in-list (hash-ref semantic 'local_bindings '()))])
            ;; semantic-json bindings carry their span under `loc` (start_line/
-           ;; start_col), unlike the flat --local-bindings-json shape.
-           (let ([loc (hash-ref b 'loc #f)])
-             (when (hash? loc)
+           ;; start_col). IMPORTANT: that loc is the binding STATEMENT start — it
+           ;; points at the `let` keyword for a `let x = …`, and at the leading
+           ;; keyword of an effect statement (telemetry/initTelemetry/with/…) that
+           ;; the checker binds to `_`. Trusting start_col paints a `variable`
+           ;; token straight onto the keyword and steals its color (the
+           ;; "let / first-letter-of-with-telemetry-initTelemetry loses keyword
+           ;; color" bug). So: skip wildcard/anonymous `_` bindings, and re-anchor
+           ;; named bindings to the NAME's column (like the decl path); if the name
+           ;; isn't on the line, skip rather than risk painting a keyword.
+           (let ([loc (hash-ref b 'loc #f)]
+                 [nm  (hash-ref b 'name "")])
+             (when (and (hash? loc)
+                        (> (string-length nm) 0)
+                        (not (string=? nm "_")))
                (let* ([line (hash-ref loc 'start_line 0)]
-                      [col  (hash-ref loc 'start_col 0)]
-                      [nm   (hash-ref b 'name "")]
-                      [len  (max 1 (min (string-length nm)
-                                        (name-length-on-line lines line col (string-length nm))))])
-                 (emit! line col len "variable")))))
+                      [ncol (name-col-in-line lines line nm -1)])
+                 (when (>= ncol 0)
+                   (let ([len (max 1 (min (string-length nm)
+                                          (name-length-on-line lines line ncol (string-length nm))))])
+                     (emit! line ncol len "variable")))))))
          ;; Sort by (line, col) — required for delta encoding.
          (sort (reverse toks)
                (lambda (a b)

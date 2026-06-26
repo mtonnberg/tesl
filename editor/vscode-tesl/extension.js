@@ -361,29 +361,31 @@ function activate(context) {
     vscode.languages.registerCodeLensProvider({ language: "tesl" }, lensProvider)
   );
 
-  // "Run test" — compile only the named test, then run with raco test.
-  // Uses the compiler directly so this works regardless of which version
-  // of the tesl shell script is installed (the --test-name flag may not
-  // be present in older nix-installed wrappers).
-  // Shared helper: compile a single named test (or doctest) to a temp .rkt and
-  // run it with `raco test`, in a freshly-created terminal. Returns the terminal.
-  // Shelling directly to the compiler keeps this independent of the installed
-  // `tesl` shell wrapper's flag support.
+  // "Run test" — run a single named test via the `tesl` CLI wrapper.
+  //
+  // IMPORTANT: do NOT emit a .rkt and run bare `raco test` on it. The emitted
+  // test module does `(require tesl/dsl/...)`, and those collections are only on
+  // PLTCOLLECTS when the `tesl` *wrapper* runs raco — a direct `raco test` fails
+  // with "collection not found: tesl/dsl/capability". `tesl test --test-name`
+  // sets PLTCOLLECTS and also reformats rackunit output to the .tesl test name +
+  // source line. Resolve the wrapper (NOT the raw compiler, which has no `test`
+  // verb): prefer `tesl` on PATH (dev shell or nix profile), then nix profile.
+  function findTeslWrapper() {
+    if (commandOnPath("tesl")) return "tesl";
+    const nixPaths = [
+      path.join(os.homedir(), ".nix-profile", "bin", "tesl"),
+      "/nix/var/nix/profiles/default/bin/tesl",
+    ];
+    for (const p of nixPaths) {
+      if (fs.existsSync(p)) return p;
+    }
+    return "tesl";
+  }
   function runNamedTestInTerminal(file, testName, terminalName) {
-    const compiler = findTeslCompiler(wsPath);
-    const racketBin = findRacketBinary();
-    const raco = racketBin ? path.join(path.dirname(racketBin), "raco") : "raco";
+    const tesl = findTeslWrapper();
     const terminal = vscode.window.createTerminal({ name: terminalName || `Tesl: ${testName}` });
     terminal.show(true);
-    if (compiler) {
-      const tmp = `/tmp/tesl-test-${Date.now()}.rkt`;
-      terminal.sendText(
-        `"${compiler}" --test-name "${testName}" "${file}" > "${tmp}" && "${raco}" test "${tmp}"; rm -f "${tmp}"`
-      );
-    } else {
-      // Fallback: requires a recent enough tesl script
-      terminal.sendText(`tesl test --test-name "${testName}" "${file}"`);
-    }
+    terminal.sendText(`"${tesl}" test --test-name "${testName}" "${file}"`);
     return terminal;
   }
 

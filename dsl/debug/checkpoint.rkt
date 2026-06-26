@@ -52,6 +52,9 @@
 
 (provide
  debug-enabled?
+ set-debug-active!
+ debug-active?
+ current-paused-thread
  breakpoints
  event-ch
  paused-ch
@@ -82,6 +85,29 @@
 
 ;; When #t, thsl-src checks for breakpoints before evaluating each expression.
 (define debug-enabled? (make-parameter #f))
+
+;; Thread-GLOBAL debug switch. `debug-enabled?` is a PARAMETER and therefore
+;; thread-local: the DAP server parameterizes it only in the program thread, so a
+;; checkpoint that runs in ANOTHER thread never sees it. The critical case is a
+;; `serve`d web app — the web server dispatches each request on a FRESH handler
+;; thread, which does not inherit the program thread's parameterization, so every
+;; handler/SQL breakpoint silently no-opped once the server was running ("debug
+;; dies after main / never catches breakpoints when the API is called"). This box
+;; is a process-wide override the DAP server flips on at launch so EVERY thread
+;; honors breakpoints. It is only ever set during a debug session (TESL_DEBUG=1,
+;; where checkpoints are not erased at expansion time); release/`tesl run` builds
+;; erase thsl-src! entirely and never read it.
+(define debug-active-box (box #f))
+(define (set-debug-active! on?) (set-box! debug-active-box (and on? #t)))
+(define (debug-active?) (or (unbox debug-active-box) (debug-enabled?)))
+
+;; The thread currently parked at a breakpoint (or #f when running). A `serve`d
+;; app runs each handler on its own thread, so the paused thread is NOT the
+;; program thread — the DAP server needs this to read per-thread state (e.g. the
+;; SQL capture) for the RIGHT thread instead of guessing the program thread or a
+;; stale global. Set when a checkpoint parks, cleared on resume.
+(define paused-thread-box (box #f))
+(define (current-paused-thread) (unbox paused-thread-box))
 
 ;; Maps filename (string) -> list of bp-record (see make-bp-record below).
 ;; Each record carries the 1-based line plus the optional DAP `condition` and
@@ -463,7 +489,7 @@
 ;; resumes it.  Release builds never reach here — the thsl-src! macro erases the
 ;; call entirely (see below).
 (define (thsl-src!/runtime file line locals thunk)
-  (when (debug-enabled?)
+  (when (debug-active?)
     (let* ([line-hit?  (set-member? (file-breakpoint-lines breakpoints file) line)]
            ;; A line breakpoint fires only if its condition (if any) is truthy
            ;; against the current locals AND its hitCondition (if any) is met.
@@ -497,6 +523,9 @@
         ;; bp thread is released, which happens for continue / next / stepIn / stepOut
         ;; alike (every resume routes through paused-ch).
         (stop-the-world-suspend!)
+        ;; Record WHICH thread is parked so the DAP server can read this thread's
+        ;; per-thread state (SQL capture, etc.) rather than the program thread's.
+        (set-box! paused-thread-box (current-thread))
         ;; Send stopped event with locals
         (channel-put event-ch
           (hasheq 'event  "stopped"
@@ -510,6 +539,7 @@
         (let ([cmd (channel-get paused-ch)])
           ;; Released: thaw exactly the threads this stop froze, BEFORE running on so
           ;; the program and its background workers proceed together.
+          (set-box! paused-thread-box #f)
           (stop-the-world-resume!)
           (cond
             [(eq? cmd 'step-in)

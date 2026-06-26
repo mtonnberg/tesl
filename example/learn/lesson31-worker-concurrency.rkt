@@ -92,4 +92,4 @@
 
 (module+ main
   (let ([port (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 138 (list) (lambda () 8090))])
-  (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 139 (list) (lambda () (call-with-database EmailDatabase (lambda () (with-capabilities (fullService) (begin (start-workers! EmailWorkers (list emailCap) #:concurrency 4) (begin (start-dead-workers! DeadEmailWorkers (list deadEmailCap)) (serve ConcurrencyServer #:port port #:capabilities (list enqueueEmail) #:sse-routes ConcurrencyServer-sse-routes))))))))))
+  (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 139 (list (cons 'port port)) (lambda () (call-with-database EmailDatabase (lambda () (with-capabilities (fullService) (begin (start-workers! EmailWorkers (list emailCap) #:concurrency 4) (begin (start-dead-workers! DeadEmailWorkers (list deadEmailCap)) (serve ConcurrencyServer #:port port #:capabilities (list enqueueEmail) #:sse-routes ConcurrencyServer-sse-routes))))))))))

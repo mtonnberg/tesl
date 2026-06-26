@@ -67,8 +67,7 @@
 ;; runs.  domain-registry is dependency-free, debug-gated, and already required
 ;; above — these readers add no new runtime dependency.
 (require (only-in tesl/dsl/private/domain-registry
-                  sql-capture-for-thread
-                  most-recent-sql-capture))
+                  sql-capture-for-thread))
 ;; sql-null? recognises the db-lib NULL sentinel among captured params so the SQL
 ;; scope can tag/escape it correctly.  db/base is the LIGHTWEIGHT base layer of the
 ;; `db` package (no DB connector pulled in) and loads in isolation, so this keeps
@@ -322,6 +321,52 @@
 
 ;; ── Program launch ────────────────────────────────────────────────────────────
 
+;; Best-effort TCP reachability probe with a hard timeout. Used to fail FAST with
+;; a clear message instead of letting the debuggee hang inside postgresql-connect
+;; — on some platforms (e.g. WSL2) a connect to a port with no listener does not
+;; refuse promptly, it hangs, so the debug session would silently stall at the
+;; `with database` line with no error. Returns #t iff a TCP connection opened
+;; within `timeout-secs`.
+(define (tcp-port-reachable? host port [timeout-secs 2.0])
+  (define ch (make-channel))
+  (define worker
+    (thread (lambda ()
+      (with-handlers ([(lambda (_) #t) (lambda (_) (channel-put ch #f))])
+        (define-values (in out) (tcp-connect host port))
+        (close-input-port in)
+        (close-output-port out)
+        (channel-put ch #t)))))
+  (define result (sync/timeout timeout-secs ch))
+  (kill-thread worker)
+  (eq? result #t))
+
+;; If the launch env points the app at a database (TESL_POSTGRES_HOST/PORT — set
+;; from .vscode/launch.json), check it is actually reachable BEFORE running the
+;; program. If not, emit actionable guidance and end the session cleanly rather
+;; than hang/crash silently at `with database`. Returns #t to proceed, #f to abort.
+(define (db-preflight-ok?)
+  (define host (getenv "TESL_POSTGRES_HOST"))
+  (define port-str (getenv "TESL_POSTGRES_PORT"))
+  (define port (and port-str (string->number port-str)))
+  (cond
+    [(not (and host port (exact-integer? port))) #t]   ; no DB configured → nothing to check
+    [(tcp-port-reachable? host port) #t]
+    [else
+     (dap-event "output"
+       (hasheq 'category "stderr"
+               'output (format
+                 (string-append
+                  "[dbg] ── Cannot reach the database at ~a:~a — not starting the program.\n"
+                  "[dbg]    The app would block/fail at its `with database` block. Fix it by:\n"
+                  "[dbg]      • starting the database — managed project:  tesl db start\n"
+                  "[dbg]      • or correcting TESL_POSTGRES_* in .vscode/launch.json\n"
+                  "[dbg]        (host/port/user/database must match a running server;\n"
+                  "[dbg]         a managed port can differ from the default — see `tesl db status`).\n")
+                 host port)))
+     (dap-event "exited" (hasheq 'exitCode 1))
+     (dap-event "terminated" (hasheq))
+     #f]))
+
 ;; mode is "program" (load (submod ... main)) or "test" (load (submod ... test))
 (define (launch-program compiled-path mode)
   (start-event-pump)
@@ -336,6 +381,13 @@
   ;; freshly emitted per session (no stale .zo), so this expansion sees it; the DSL
   ;; itself keeps its bytecode (its `thsl-src!` macro reads the env per use-site).
   (putenv "TESL_DEBUG" "1")
+
+  ;; Enable the PROCESS-WIDE debug switch (not just the thread-local
+  ;; `debug-enabled?` parameter): a `serve`d app handles each request on a fresh
+  ;; web-server thread that does NOT inherit the program thread's parameterize, so
+  ;; without this, breakpoints inside handlers / SQL never fired once `serve` was
+  ;; running.  Set before the program thread spawns so every descendant sees it.
+  (set-debug-active! #t)
 
   ;; Redirect program output (stdout→Debug Console, stderr→stderr category) so
   ;; user prints never reach the raw protocol stream.  Bind it for the whole
@@ -390,6 +442,9 @@
                               (format "  ~a: lines ~a" file lines)
                               (if (null? annots) "" (string-append "\n" (string-join annots "\n"))))))
                         "\n"))))
+    ;; Preflight the database connection so a down/misconfigured DB yields a clear
+    ;; message instead of a silent hang at `with database`.
+    (when (db-preflight-ok?)
     (dap-event "output" (hasheq 'category "console"
       'output (format "[dbg] Launching (~a) with debug-enabled?=#t ...\n" submod-sym)))
     (define t
@@ -399,9 +454,25 @@
             (with-handlers
                 ([exn:fail?
                   (lambda (e)
+                    (define msg (exn-message e))
                     (dap-event "output"
                       (hasheq 'category "stderr"
-                              'output (format "[dbg] Runtime error: ~a\n" (exn-message e))))
+                              'output (format "[dbg] Runtime error: ~a\n" msg)))
+                    ;; Turn an opaque DB connection failure into actionable guidance
+                    ;; instead of a bare stack trace + silent session close. This is
+                    ;; the common "stepped onto `with database` and it crashed" case.
+                    (when (regexp-match?
+                           #px"(?i:tcp-connect|connection (failed|refused)|postgresql-connect|errno=111|database .* does not exist)"
+                           msg)
+                      (dap-event "output"
+                        (hasheq 'category "stderr"
+                                'output (string-append
+                                  "[dbg] ── The app could not connect to its database. Check that:\n"
+                                  "[dbg]    • the database is running — for a managed project run:  tesl db start\n"
+                                  "[dbg]    • TESL_POSTGRES_* in .vscode/launch.json point at it\n"
+                                  "[dbg]      (host/port/user/database must match the running server)\n"
+                                  "[dbg]    • the port matches `tesl db status` (a managed port can differ\n"
+                                  "[dbg]      from the launch.json default if it was relocated).\n"))))
                     (dap-event "exited" (hasheq 'exitCode 1))
                     (dap-event "terminated" (hasheq)))])
               (dap-event "output" (hasheq 'category "console"
@@ -411,7 +482,7 @@
                 'output "[dbg] Program thread finished.\n"))
               (dap-event "exited" (hasheq 'exitCode 0))
               (dap-event "terminated" (hasheq)))))))
-    (set-box! program-thread t))))  ; close: when / parameterize / define
+    (set-box! program-thread t)))))  ; close: when db-preflight / when submod / parameterize / define
 
 ;; ── Compile-time proof/type overlay ───────────────────────────────────────────
 ;;
@@ -793,6 +864,39 @@
          [mode      (hash-ref args 'mode "program")]
          [test-name (hash-ref args 'testName #f)])
     (dap-response req #t (hasheq))
+
+    ;; Apply the launch config's `env` to THIS process. The debuggee runs
+    ;; in-process (dynamic-require), so it reads env via getenv — and previously
+    ;; we ignored `env` entirely, which meant the TESL_POSTGRES_* vars set in
+    ;; .vscode/launch.json never reached the program. The app then defaulted to
+    ;; localhost:5432, `with database` failed to connect, and the session died at
+    ;; that line ("debug crashes after main"). Honor `env` so a managed/existing
+    ;; DB config in launch.json actually takes effect.
+    (let ([env-hash (hash-ref args 'env (hasheq))])
+      (when (hash? env-hash)
+        (for ([(k v) (in-hash env-hash)])
+          (define key (if (symbol? k) (symbol->string k) (format "~a" k)))
+          (when (and (string? key) (non-empty-string? key))
+            (putenv key (if (string? v) v (format "~a" v)))))))
+
+    ;; Prefer the EFFECTIVE managed-DB port over a possibly-stale launch.json
+    ;; value: `tesl db`/`tesl run` relocate a managed cluster when the configured
+    ;; port is taken and persist the choice in <project>/.tesl-postgres/PORT. The
+    ;; init-time launch.json bakes the ORIGINAL port, which then no longer matches
+    ;; the running server — debug would connect to the wrong (dead) port. If a
+    ;; PORT file exists, it wins, so debug targets the same DB as `tesl run`.
+    (when (non-empty-string? program)
+      (define-values (proj-dir _name _root?)
+        (split-path (path->complete-path (string->path program))))
+      (when (path? proj-dir)
+        (define port-file (build-path proj-dir ".tesl-postgres" "PORT"))
+        (when (file-exists? port-file)
+          (define raw (with-handlers ([(lambda (_) #t) (lambda (_) #f)])
+                        (with-input-from-file port-file read-line)))
+          (define m (and (string? raw) (regexp-match #px"[0-9]+" raw)))
+          (when m
+            (putenv "TESL_POSTGRES_PORT" (car m))
+            (unless (getenv "TESL_POSTGRES_HOST") (putenv "TESL_POSTGRES_HOST" "127.0.0.1"))))))
     (with-handlers
         ([exn:fail?
           (lambda (e)
@@ -881,7 +985,19 @@
                           (pair? (domain-registry-objects))))
   ;; SQL scope (task #43): advertise it ONLY when a SQL statement ran or is pending
   ;; on this pause (so the panel isn't cluttered with an empty scope otherwise).
-  (define has-sql? (and (current-sql-capture-record) #t))
+  ;; Label it with the op + table so multiple queries are distinguishable rather
+  ;; than a bare "SQL".
+  (define sql-cap (current-sql-capture-record))
+  (define has-sql? (and sql-cap #t))
+  (define sql-scope-name
+    (if sql-cap
+        (let ([op (hash-ref sql-cap 'op #f)] [table (hash-ref sql-cap 'table #f)])
+          (cond
+            [(and op table) (format "SQL · ~a ~a" op table)]
+            [op             (format "SQL · ~a" op)]
+            [table          (format "SQL · ~a" table)]
+            [else           "SQL"]))
+        "SQL"))
   (dap-response req #t
     (hasheq 'scopes
             (append
@@ -899,7 +1015,7 @@
              ;; SQL scope shows exactly what the driver runs when paused on/at a
              ;; query; omitted entirely when no SQL ran/pending on this thread.
              (if has-sql?
-                 (list (hasheq 'name "SQL"
+                 (list (hasheq 'name sql-scope-name
                                'variablesReference 3
                                'expensive #f))
                  '())))))
@@ -978,11 +1094,17 @@
 ;; fail-open: any error yields no scope rather than crashing the adapter.
 
 ;; The SQL capture to display for the current pause, or #f if none ran/pending.
+;; Use the ACTUALLY-PAUSED thread's capture — NOT the program thread's, and never
+;; a global "most recent across all threads" fallback. A `serve`d handler runs on
+;; its own request thread, so the program thread has no capture and the global
+;; fallback showed an UNRELATED query (e.g. the startup `seedExampleData` insert)
+;; on every pause. Reading the paused thread means: the SQL scope reflects what
+;; THIS thread actually ran/has-pending, and is empty (scope hidden) when the
+;; paused thread has not run a query — so it can't show a stale/unrelated one.
 (define (current-sql-capture-record)
   (with-handlers ([exn:fail? (lambda (_) #f)])
-    (define pt (unbox program-thread))
-    (or (and pt (sql-capture-for-thread pt))
-        (most-recent-sql-capture))))
+    (define pt (current-paused-thread))
+    (and pt (sql-capture-for-thread pt))))
 
 ;; A short, human type tag for a bound param's runtime db-value.  Params are the
 ;; ALREADY-ENCODED db-values dsl/sql.rkt hands the driver (strings, numbers,

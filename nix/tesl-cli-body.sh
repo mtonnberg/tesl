@@ -112,11 +112,24 @@ _tesl_pg_resolve() {
   local flake="${TESL_REPO_ROOT:-github:mtonnberg/tesl}"
   echo "tesl db: postgres not on PATH; resolving via 'nix build $flake#postgresql' ..." >&2
   if command -v nix >/dev/null 2>&1; then
-    local out
-    out="$(nix build "$flake#postgresql" --no-link --print-out-paths 2>/dev/null | head -n1)"
-    if [ -n "$out" ] && [ -x "$out/bin/initdb" ]; then _TESL_PG_BIN="$out/bin"; return 0; fi
+    # `postgresql` is a multi-output derivation: --print-out-paths lists ALL of
+    # them (e.g. the `-man` output sorts FIRST), so we must NOT just take the
+    # first line — only the main `out` carries bin/initdb. Scan every printed
+    # path and pick the one that actually has the binaries.
+    local out paths
+    paths="$(nix build "$flake#postgresql" --no-link --print-out-paths 2>/dev/null)"
+    for out in $paths; do
+      if [ -n "$out" ] && [ -x "$out/bin/initdb" ] && [ -x "$out/bin/pg_ctl" ]; then
+        _TESL_PG_BIN="$out/bin"; return 0
+      fi
+    done
   fi
-  echo "error: could not find PostgreSQL binaries (initdb/pg_ctl). Enter 'nix develop' or install postgresql." >&2
+  echo "error: tesl could not find PostgreSQL binaries (initdb/pg_ctl) for the managed database." >&2
+  echo "  Fix it one of these ways:" >&2
+  echo "    - ensure 'nix' is available and online so 'tesl' can fetch PostgreSQL automatically, or" >&2
+  echo "    - install PostgreSQL yourself so initdb/pg_ctl are on PATH, or" >&2
+  echo "    - switch this project to an external database: set [database] mode = \"existing\" in tesl.toml" >&2
+  echo "      and point TESL_POSTGRES_* at it." >&2
   return 1
 }
 _pg() { local tool="$1"; shift; if [ -n "${_TESL_PG_BIN:-}" ]; then "$_TESL_PG_BIN/$tool" "$@"; else "$tool" "$@"; fi; }
@@ -326,10 +339,18 @@ _tesl_db_autostart_if_managed() {
   fi
 
   [ "${TESL_NO_DB_AUTOSTART:-0}" = "1" ] && return 0
-  _tesl_pg_resolve >/dev/null 2>&1 || return 0
+  # Surface (don't swallow) a PostgreSQL-resolution failure: otherwise the app
+  # just fails later with a bare "connection refused" on the configured port.
+  if ! _tesl_pg_resolve; then
+    echo "tesl run: WARNING — could not start the managed database (PostgreSQL binaries unavailable);" \
+         "the app will likely fail to connect to ${TESL_POSTGRES_HOST:-localhost}:${EFFPORT:-$PGPORT}." >&2
+    return 0
+  fi
   if _pg pg_ctl -D "$PGDATA" status >/dev/null 2>&1; then return 0; fi
   echo "tesl run: managed database not running — starting it (TESL_NO_DB_AUTOSTART=1 to skip)" >&2
-  _tesl_db start >&2 || true
+  if ! _tesl_db start >&2; then
+    echo "tesl run: WARNING — managed database failed to start; the app may not be able to connect." >&2
+  fi
 }
 
 # `tesl run` convenience: load ./.env (KEY="value" lines) into the environment
@@ -830,6 +851,16 @@ case "$CMD" in
     FILE="$1"; shift
     _tesl_require_compiler
     exec "$TESL_OCAML_COMPILER" --test-name "$TEST_NAME" "$FILE"
+    ;;
+  --debug)
+    # Top-level passthrough for the DAP debug adapter, which invokes the resolved
+    # `tesl` binary (TESL_COMPILER) as `tesl --debug [--test-name "NAME"] file.tesl`
+    # to emit a debug-instrumented .rkt. The OCaml compiler accepts both
+    # `--debug <file>` and `--debug --test-name <name> <file>`, so forward the
+    # remaining args verbatim instead of reporting "unknown command: --debug".
+    [ $# -ge 1 ] || { echo "Usage: tesl --debug [--test-name <name>] <file.tesl>" >&2; exit 1; }
+    _tesl_require_compiler
+    exec "$TESL_OCAML_COMPILER" --debug "$@"
     ;;
   compile)
     FILE="${1:?Usage: tesl compile <file.tesl>}"

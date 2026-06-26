@@ -3618,38 +3618,65 @@ let emit_func ctx (fd : func_decl) =
        thunk body in release (zero residue) and to a real checkpoint under
        TESL_DEBUG.  Wrapped in sm_region so the source-map tool still records
        the body's emitted line range. *)
-    let rec emit_main_debug e =
+    (* [locals] accumulates the names bound by enclosing `let`s so each checkpoint
+       reports the in-scope locals for the Variables panel — mirroring the
+       fn/handler path (emit_checkpoint_tail). Without this, debugging `main`
+       showed an always-empty Locals panel. `main` binds names bare (no `*`
+       prefix), so a local `port` is referenced as `port`. `_` (effect
+       statements like initTelemetry) is never a user-visible local and is
+       skipped. A let's VALUE checkpoint sees only the PRECEDING locals (the new
+       name isn't bound yet); the body checkpoints see it. *)
+    let emit_main_cp_locals locals =
+      if locals = [] then emit ctx "(list)"
+      else begin
+        emit ctx "(list";
+        List.iter (fun n -> emit ctx (Printf.sprintf " (cons '%s %s)" n n)) (List.rev locals);
+        emit ctx ")"
+      end
+    in
+    let rec emit_main_debug locals e =
       match e with
       | ELet { name; value; body; _ } ->
         let val_loc = Checker.expr_loc value in
-        emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d (list) (lambda () " name
+        emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d " name
           val_loc.Location.file (val_loc.Location.start.line + 1));
+        emit_main_cp_locals locals;
+        emit ctx " (lambda () ";
         emit_expr ctx value;
         emit ctx "))])";   (* ) closes lambda, ) closes thsl-src!, ] closes [, ) closes let bindings *)
         emit_nl ctx;
         emit ctx "  ";
-        emit_main_debug body;
+        let locals' = if name = "_" then locals else name :: locals in
+        emit_main_debug locals' body;
         emit ctx ")"
       | ELetProof { value_name; proof_name; value; body; _ } ->
         let val_loc = Checker.expr_loc value in
         let tmp = Printf.sprintf "tesl_proof_binding_%d" ctx.case_counter in
         ctx.case_counter <- ctx.case_counter + 1;
-        emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d (list) (lambda () " tmp
+        emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d " tmp
           val_loc.Location.file (val_loc.Location.start.line + 1));
+        emit_main_cp_locals locals;
+        emit ctx " (lambda () ";
         emit_expr ctx value;
         emit ctx (Printf.sprintf "))]) (let ([%s (forget-proof %s)] [%s (detach-all-proof %s)]) "
           value_name tmp proof_name tmp);
-        emit_main_debug body;
+        let locals' =
+          let add n acc = if n = "_" then acc else n :: acc in
+          add proof_name (add value_name locals)
+        in
+        emit_main_debug locals' body;
         emit ctx "))"
       | other ->
         let loc = Checker.expr_loc other in
-        emit ctx (Printf.sprintf "(thsl-src! %S %d (list) (lambda () "
+        emit ctx (Printf.sprintf "(thsl-src! %S %d "
           loc.Location.file (loc.Location.start.line + 1));
+        emit_main_cp_locals locals;
+        emit ctx " (lambda () ";
         emit_expr ctx other;
         emit ctx "))"
     in
     sm_region ctx ~form:"main block body" (Checker.expr_loc fd.body)
-      (fun () -> emit_main_debug fd.body);
+      (fun () -> emit_main_debug [] fd.body);
     ctx.func_kind <- None;
     emit_line ctx ")";
     emit_nl ctx

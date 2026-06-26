@@ -33,8 +33,13 @@ LABEL org.opencontainers.image.title="__APP_NAME__" \
       org.opencontainers.image.description="Tesl app (all-in-one, embedded Postgres)"
 
 # Embedded PostgreSQL. The Racket base is Debian-based, so apt is available.
+# DEBIAN_FRONTEND=noninteractive silences the "unable to initialize frontend:
+# Dialog / TERM is not set" debconf warnings during the build (the postgresql
+# postinst is interactive by default). The lone "pg_lsclusters: not found"
+# notice from postgresql-common's postinst is harmless (the cluster is created
+# at runtime by `tesl db`, not at build time).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends postgresql postgresql-client \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql postgresql-client \
  && rm -rf /var/lib/apt/lists/*
 
 # Make the postgres tools (initdb, pg_ctl, postgres) reachable on PATH without

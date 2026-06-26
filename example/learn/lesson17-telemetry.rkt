@@ -41,4 +41,4 @@
 
 (module+ main
   (let ([x (thsl-src! "example/learn/lesson17-telemetry.tesl" 66 (list) (lambda () (foo)))])
-  (thsl-src! "example/learn/lesson17-telemetry.tesl" 70 (list) (lambda () (init-opentelemetry! #:service-name x #:endpoint "in-memory" #:console? #t)))))
+  (thsl-src! "example/learn/lesson17-telemetry.tesl" 70 (list (cons 'x x)) (lambda () (init-opentelemetry! #:service-name x #:endpoint "in-memory" #:console? #t)))))
