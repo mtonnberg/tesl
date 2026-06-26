@@ -83,10 +83,28 @@ The launch command is `racket <abs path>/editor/tesl-mcp/tesl-mcp.rkt` with
 
 ### Claude Code
 
+**Installed via the Nix flake** (`nix profile install github:mtonnberg/tesl`) —
+the `tesl-mcp` binary is on your PATH; no repo checkout or env needed (the wrapper
+bakes in the compiler + runtime collections, so `tesl.debug_inspect` works too):
+
+```sh
+claude mcp add tesl -- tesl-mcp
+```
+
+Or run it on demand without installing:
+
+```sh
+claude mcp add tesl -- nix run github:mtonnberg/tesl#tesl-mcp
+```
+
+**From a repo checkout** (developing Tesl) — point it at your build:
+
 ```sh
 claude mcp add tesl -e TESL_REPO_ROOT=/abs/path/to/tesl -- \
   racket /abs/path/to/tesl/editor/tesl-mcp/tesl-mcp.rkt
 ```
+
+Then restart Claude Code (MCP servers load at startup).
 
 ### Generic MCP config (`mcpServers` JSON)
 

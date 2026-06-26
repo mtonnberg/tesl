@@ -3430,9 +3430,22 @@ let debug_inspect ?(root_path=default_root_path ()) ~breakpoints ~mode filename
          let tmp_rkt = Filename.temp_file "tesl-debug-inspect-" ".rkt" in
          Out_channel.with_open_text tmp_rkt
            (fun oc -> Out_channel.output_string oc racket);
-         let driver = Filename.concat root_path "dsl/debug/headless-inspect.rkt" in
+         let driver =
+           let primary = Filename.concat root_path "dsl/debug/headless-inspect.rkt" in
+           if Sys.file_exists primary then primary
+           else
+             (* Installed (no repo checkout): the inspector ships inside the
+                tesl-racket collections, located via TESL_COLLECTIONS_DIR (set by
+                the Nix wrappers to <store>/share/tesl-collections/tesl). *)
+             (match Sys.getenv_opt "TESL_COLLECTIONS_DIR" with
+              | Some d when d <> "" ->
+                let c = Filename.concat d "dsl/debug/headless-inspect.rkt" in
+                if Sys.file_exists c then c else primary
+              | _ -> primary)
+         in
          if not (Sys.file_exists driver) then
-           InspectErr (Printf.sprintf "headless inspector not found at %s" driver)
+           InspectErr (Printf.sprintf
+             "headless inspector not found at %s (set TESL_REPO_ROOT or TESL_COLLECTIONS_DIR)" driver)
          else
            (match find_racket_binary () with
             | None -> InspectErr "racket not found; set TESL_RACKET or install Racket"

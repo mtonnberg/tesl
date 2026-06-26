@@ -155,6 +155,25 @@
           '';
         };
 
+        # ── MCP Racket script ─────────────────────────────────────────────────
+        # Bundle the MCP server entry-point so tesl-mcp can reference it by
+        # absolute store path without assuming a live repo checkout.
+        tesl-mcp-script = pkgs.stdenv.mkDerivation {
+          pname   = "tesl-mcp-script";
+          version = "0.1.0";
+
+          src = pkgs.lib.cleanSourceWith {
+            src    = ./editor/tesl-mcp;
+            filter = path: _type:
+              !(pkgs.lib.hasInfix "/compiled/" (toString path));
+          };
+
+          dontBuild    = true;
+          installPhase = ''
+            install -Dm644 tesl-mcp.rkt $out/share/tesl-mcp/tesl-mcp.rkt
+          '';
+        };
+
         # ── Shared preamble injected at the top of all installed wrappers ─────
         # Sets the Racket collection path so the wrapper works with the
         # pre-compiled .zo files baked into the tesl-racket Nix derivation.
@@ -214,16 +233,25 @@
           exec racket "${tesl-lsp-script}/share/tesl-lsp/tesl-lsp.rkt" "$@"
         '');
 
-        # ── Combined default: CLI + LSP in one profile install ─────────────────
+        # ── tesl-mcp wrapper ──────────────────────────────────────────────────
+        # MCP stdio server exposing the Tesl agent API to AI agents (Claude Code,
+        # etc.). Same compiler discovery as tesl-lsp — sets TESL_COMPILER, so no
+        # TESL_REPO_ROOT / repo checkout is needed.
+        tesl-mcp = pkgs.writeShellScriptBin "tesl-mcp" (runtimePreamble + ''
+          export TESL_COMPILER="$TESL_OCAML_COMPILER"
+          exec racket "${tesl-mcp-script}/share/tesl-mcp/tesl-mcp.rkt" "$@"
+        '');
+
+        # ── Combined default: CLI + LSP + MCP in one profile install ───────────
         tesl-full = pkgs.symlinkJoin {
           name = "tesl";
-          paths = [ tesl-cli tesl-lsp ];
+          paths = [ tesl-cli tesl-lsp tesl-mcp ];
         };
 
       in {
         # ── Packages ──────────────────────────────────────────────────────────
         packages = {
-          inherit tesl-compiler tesl-racket tesl-cli tesl-lsp tesl-full;
+          inherit tesl-compiler tesl-racket tesl-cli tesl-lsp tesl-mcp tesl-full;
           default = tesl-full;
           # Reusable PostgreSQL so the managed-PG lifecycle (`tesl db`) can source
           # initdb / pg_ctl / createdb via nix without entering a dev shell.
@@ -234,6 +262,7 @@
         apps = {
           default  = { type = "app"; program = "${tesl-cli}/bin/tesl"; };
           tesl-lsp = { type = "app"; program = "${tesl-lsp}/bin/tesl-lsp"; };
+          tesl-mcp = { type = "app"; program = "${tesl-mcp}/bin/tesl-mcp"; };
         };
 
         # ── Dev shell ─────────────────────────────────────────────────────────

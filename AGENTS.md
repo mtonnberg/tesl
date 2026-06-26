@@ -127,7 +127,20 @@ For MCP-capable agents, `editor/tesl-mcp/tesl-mcp.rkt` exposes the surface above
 discoverable tools over stdio: `tesl.agent_context`, `tesl.check`, `tesl.type_at`,
 `tesl.signature`, `tesl.completions`, `tesl.definition`, `tesl.references`,
 `tesl.proof_obligations`, `tesl.debug_inspect` (with full breakpoint-setting incl.
-conditional/hit-count). Register it with your client:
+conditional/hit-count). Register it with your client.
+
+If Tesl is **installed via the Nix flake** (`nix profile install github:mtonnberg/tesl`),
+the `tesl-mcp` binary is on PATH — no repo checkout or env needed:
+
+```sh
+claude mcp add tesl -- tesl-mcp           # Claude Code
+```
+
+```json
+{ "mcpServers": { "tesl": { "command": "tesl-mcp" } } }   # generic client
+```
+
+From a repo checkout, run the script directly with `TESL_REPO_ROOT` set:
 
 ```json
 { "mcpServers": { "tesl": {
