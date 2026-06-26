@@ -1,5 +1,27 @@
 # tesl init — zero-to-running Tesl project in one command
 
+> **STATUS: SHIPPED (2026-06-26).** Shipped:
+> - **`tesl init [name] [--template minimal|api] [--postgres managed|existing|none]
+>   [--yes] [--no-git]`** — scaffolds a runnable project from `templates/{minimal,api}`:
+>   `app.tesl` + `tesl.toml` manifest + `.env` + `.gitignore` + `README.md` +
+>   `AGENTS.md`/`CLAUDE.md` (with MCP-server + agent-skills onboarding guidance).
+>   Friendly guided prompt when flags are omitted; welcoming next-steps message.
+> - **`tesl.toml`** manifest (`dev-docs/tesl-manifest.md`) + dependency-free reader
+>   `scripts/tesl-manifest.sh` — the shared seam `tesl build` consumes.
+> - **`tesl db start|stop|status`** — managed project-local PostgreSQL (binaries via
+>   the flake `postgresql` output); auto-starts on `tesl run` in managed mode; `tesl
+>   run` auto-loads `./.env` so a fresh project connects with no manual sourcing.
+> - Works from the **nix-installed** binary (`nix profile install github:mtonnberg/tesl`
+>   → `tesl init` → `tesl run`/`tesl build`): templates + collections are bundled into
+>   the derivation, and the CLI body is de-duplicated into `nix/tesl-cli-body.sh` so
+>   `flake.nix` and `shell.nix` share one source (can't drift). Verified out-of-repo.
+> - **README 3-step quick start** above the fold (install Nix → `nix profile install`
+>   → `tesl init`).
+> - **Deferred:** `ssr`/`full`/`ai` templates; deploy-target plugin registry beyond
+>   `local`/`container`.
+>
+> _Original proposal below._
+
 > **Status:** Later · **Effort:** M (CLI + templates) + S (managed-PG seam) +
 > M (deploy plugins) · **Scope:** project scaffolding, the local-Postgres
 > decision, and a deploy-target plugin seam — **not** the deploy artifact itself
@@ -45,6 +67,7 @@ this item's job is to guarantee its input — a runnable app plus a project mani
   — input/output proofs and value-level, combined, and record-wide proofs — as an
   empowering payoff, introduced gradually so a newcomer feels it without being
   overwhelmed.
+- We have guided the install/usage of the Tesl MCP-server for debugging and development + the agent skills
 
 ## Current state — what we build on
 

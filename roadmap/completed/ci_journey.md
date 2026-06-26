@@ -1,5 +1,27 @@
 # The CI / Deployment Journey — Tesl apps to production
 
+> **STATUS: SHIPPED (2026-06-26).** Re-scoped per the maintainer: the deployment
+> story is **a Docker image you can just `docker run`** — *no runtime code changes*
+> (no `/healthz`, no graceful-SIGTERM; the runtime already auto-creates its tables
+> on boot). Shipped:
+> - **`tesl build`** → a runnable OCI image in two flavours: **all-in-one**
+>   (`--with-postgres`: app + embedded PostgreSQL + entrypoint, runs with no
+>   external DB) and **app-only** (`--app-only`: connects to your own DB via env).
+>   Built + `docker run` + curl-verified end-to-end (incl. auth/ownership proof
+>   boundaries enforced inside the container).
+> - Generated multi-stage Dockerfiles in `templates/docker/`; runtime config via
+>   `PORT` / `TESL_POSTGRES_*`; tables auto-created on first boot.
+> - **GitHub Actions reference** (`templates/docker/github-deploy.yml.example`) +
+>   a full deploy guide (`dev-docs/deploy.md`, also in `tesl help manual`).
+> - Verified through the **nix-installed** binary (`nix profile install` path), not
+>   just the dev shell.
+> - **Deferred** (add per platform if needed): health/readiness endpoints + graceful
+>   SIGTERM (deliberately out of scope), Nix `dockerTools` reproducible twin,
+>   multi-arch (arm64), PaaS adapters (`fly.toml` etc.), NixOS module, `raco distribute`.
+>
+> _Original proposal below (some specifics were stale — e.g. the runtime-contract
+> workstream was dropped by design)._
+
 > **Status:** Later · **Effort:** L–XL (infrastructure) · **Scope:** deploying a
 > *web API written in Tesl* to a production environment — **not** distributing
 > the toolchain to developers.
