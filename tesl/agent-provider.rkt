@@ -34,8 +34,14 @@
 ;;; provider.
 
 (require json
+         racket/runtime-path
          (only-in "../dsl/types.rkt" record-value-fields record-value?)
          (only-in "../dsl/private/evidence.rkt" raw-value))
+
+;; Resolve http-client.rkt relative to THIS source file (it sits beside us in
+;; tesl/), not via the `tesl` collection or the CWD — so the dynamic-require
+;; works regardless of where/how the process is launched.
+(define-runtime-path http-client-source "http-client.rkt")
 
 (provide (struct-out llm-response)
          (struct-out tool-call)
@@ -102,8 +108,7 @@
 ;;; capability) and so the mock-only test path never touches net code.
 (define (http-post-json url headers-alist body-jsexpr)
   (define post
-    (dynamic-require (collection-file-path "http-client.rkt" "tesl")
-                     'HttpClient.post))
+    (dynamic-require http-client-source 'HttpClient.post))
   ;; headers as Tesl Tuple2 list (2-element lists), body as a JSON string.
   (define header-list
     (for/list ([h (in-list headers-alist)]) (list (car h) (cdr h))))

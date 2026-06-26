@@ -30,9 +30,9 @@
 (require racket/tcp
          json
          rackunit
-         tesl/agent-provider
-         dsl/capability
-         (only-in tesl/http-client httpClient))
+         "../tesl/agent-provider.rkt"
+         "../dsl/capability.rkt"
+         (only-in "../tesl/http-client.rkt" httpClient))
 
 ;;; ── In-process canned HTTP server ────────────────────────────────────────────
 ;;;

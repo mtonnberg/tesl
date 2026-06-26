@@ -247,6 +247,51 @@ else
   fi
 fi
 
+# ── AI suites (Tesl.Agent): deterministic, mock-based agent tests ─────────────
+# The OCaml negative families (test_aisuite_capability/entitlement/structured)
+# already run in the dune-test gate above.  Here we run the RUNTIME-level agent
+# tests: the .tesl mock feature/example blocks (emit→raco test) and the racket
+# provider-normalization + runtime suites.  All mock-based — no network/keys/cost;
+# the temp-PG runtime suite self-skips when PostgreSQL is absent.
+echo ""
+echo "=== AI suites (Tesl.Agent mock feature / runtime tests) ==="
+if [ "${RKT_SUITES_SKIP:-0}" = "1" ]; then
+  echo "  ⚠  RKT_SUITES_SKIP=1 — skipping"
+  record_section "AI-suites" "SKIPPED (RKT_SUITES_SKIP=1)"
+elif ! command -v raco >/dev/null 2>&1; then
+  echo "  ⚠  raco not on PATH — skipping"
+  record_section "AI-suites" "SKIPPED (no raco)"
+else
+  ai_fail=0
+  ai_tmp="$(mktemp -d)"
+  AI_TESL=( "tests/agent-feature-tests.tesl" "example/support-assistant.tesl" )
+  AI_RKT=( "tests/agent-provider-norm-test.rkt" "tests/agent-runtime-tests.rkt" )
+  for f in "${AI_TESL[@]}"; do
+    [ -f "$REPO_ROOT/$f" ] || { echo "  ⚠  $f (missing — skipped)"; continue; }
+    out="$ai_tmp/$(basename "$f" .tesl).rkt"
+    if TESL_REPO_ROOT="$REPO_ROOT" "$REPO_ROOT/compiler/_build/default/bin/main.exe" "$REPO_ROOT/$f" > "$out" 2>/dev/null \
+       && TESL_REPO_ROOT="$REPO_ROOT" timeout 300 raco test "$out" >/dev/null 2>&1; then
+      echo "  ✓  $f"
+    else
+      echo "  ✗  $f"; ai_fail=1
+    fi
+  done
+  rm -rf "$ai_tmp"
+  for suite in "${AI_RKT[@]}"; do
+    [ -f "$REPO_ROOT/$suite" ] || { echo "  ⚠  $suite (missing — skipped)"; continue; }
+    if TESL_REPO_ROOT="$REPO_ROOT" timeout 300 raco test "$REPO_ROOT/$suite" >/dev/null 2>&1; then
+      echo "  ✓  $suite"
+    else
+      echo "  ✗  $suite"; ai_fail=1
+    fi
+  done
+  if [ $ai_fail -eq 0 ]; then
+    record_section "AI-suites" "OK"
+  else
+    record_section "AI-suites" "FAILED (see ✗ above)"
+  fi
+fi
+
 echo ""
 echo "════════════════════════════════════════════"
 echo "  CI SUMMARY"
