@@ -76,8 +76,9 @@
       "name": "keyword.operator.tesl"
     },
     "declaration-keywords": {
+      "comment": "Use keyword.other.* (a plain keyword scope) rather than keyword.declaration.*: the user's theme renders the declaration scope at a larger glyph size in the scroll minimap (the type/entity/database/fn/auth/codec/handler 'large minimap text' bug). keyword.other is universally themed as a normal-weight keyword and renders at normal size.",
       "match": "\\b(module|exposing|import|fn|establish|check|auth|handler|worker|workers|record|entity|database|type|fact|codec|capability|capture|api|server|main|implies|requires|queue|channel|test|seed|property)\\b|\\b(api-test|load-test|dead-worker|dead-workers)\\b",
-      "name": "keyword.declaration.tesl"
+      "name": "keyword.other.declaration.tesl"
     },
     "control-keywords": {
       "match": "\\b(if|then|else|case|of|let|exists|ok|fail|where|with|transaction|and)\\b",
