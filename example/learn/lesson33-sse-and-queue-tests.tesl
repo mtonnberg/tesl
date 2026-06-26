@@ -26,7 +26,7 @@ database Lesson33Database {
   schema "lesson33"
   entities []
   postgres {
-    database "demo"
+    dbName "demo"
     user "demo"
     password "demo"
     host "localhost"

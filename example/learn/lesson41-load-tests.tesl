@@ -46,7 +46,7 @@ database Lesson41Database {
   schema "lesson41"
   entities [Book]
   postgres {
-    database "lesson41"
+    dbName "lesson41"
     user "lesson41"
     password "lesson41"
     host "localhost"

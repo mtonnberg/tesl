@@ -58,7 +58,7 @@ database TodoDatabase {
   schema "todo_api"
   entities [Todo]
   postgres {
-    database env("TESL_POSTGRES_DATABASE")
+    dbName env("TESL_POSTGRES_DATABASE")
     user env("TESL_POSTGRES_USER")
     password env("TESL_POSTGRES_PASSWORD")
     host env("TESL_POSTGRES_HOST")

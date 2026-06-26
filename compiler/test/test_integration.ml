@@ -925,7 +925,11 @@ fn unwrap(m: Maybe Int) -> Int =
     Something value -> value
     Nothing -> 0
 |} in
-  check_contains "case bound value raw return" src "(let ([value (hash-ref (adt-value-fields *tesl_case_0) 'value)]) *value)"
+  (* The bound payload is still extracted and returned RAW as the starred name;
+     the arm body is now wrapped in a per-arm thsl-src! checkpoint (erased in
+     release), so the raw return is the checkpoint thunk body, not the bare let. *)
+  check_contains "case bound value binding" src "(let ([value (hash-ref (adt-value-fields *tesl_case_0) 'value)])";
+  check_contains "case bound value raw return" src "(lambda () *value)"
 
 let test_constructor_payload_unwraps_named_values () =
   let src = {|#lang tesl

@@ -114,7 +114,7 @@
   (cookieAuth [request : HttpRequest])
   #:capabilities [noteReadCookie]
   #:returns [user : String ::: (Authenticated user)]
-  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 188 (list (cons 'request *request)) (lambda () (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (reject "not logged in" #:http-code 401)] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (accept (Authenticated userId) #:value *userId))])))))
+  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 188 (list (cons 'request *request)) (lambda () (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 189 (list) (lambda () (reject "not logged in" #:http-code 401)))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 190 (list (cons 'userId userId)) (lambda () (accept (Authenticated userId) #:value *userId))))])))))
 
 (define-handler
   (listNotes [user : String ::: (Authenticated user)])

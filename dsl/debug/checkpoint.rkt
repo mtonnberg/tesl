@@ -168,6 +168,15 @@
 ;; step-next-file: when set to a string, pause at next call in this file (step-over)
 (define step-next-file (box #f))
 
+;; The thread a pending step belongs to. A `serve`d app runs each request on its
+;; own thread, and the step flags above are process-global — without scoping, a
+;; step issued while paused in one request thread would make ANOTHER thread's
+;; checkpoint stop (e.g. the next request's capture-validation `check`), and a
+;; flag left set when the stepping handler returns would stop a future, unrelated
+;; request ("randomly breaks on a line with no breakpoint"). A step is honored
+;; only on the thread that requested it.
+(define step-thread (box #f))
+
 ;; ── Expansion-time debug gate ────────────────────────────────────────────────
 ;; for-syntax predicate consulted by the thsl-src! / thsl-src macros below.
 ;; TESL_DEBUG ∈ {1,true,yes,on} (case-insensitive) enables checkpoints; anything
@@ -510,8 +519,15 @@
                          (let ([hc (add1 (unbox (bp-record-hit-count rec)))])
                            (set-box! (bp-record-hit-count rec) hc)
                            (eval-hit-condition (bp-record-hit-condition rec) hc)))]))]
-           [step-in?   (unbox step-into-next?)]
-           [step-over? (and (unbox step-next-file)
+           ;; A pending step is honored ONLY on the thread that requested it, so a
+           ;; step never makes a different request/worker thread stop spuriously.
+           ;; (#f step-thread = unscoped: the initial state, when no step flag is
+           ;; set anyway; the real flow always sets step-thread before other
+           ;; threads thaw, so an active step is always thread-scoped.)
+           [my-step?   (let ([st (unbox step-thread)])
+                         (or (not st) (eq? (current-thread) st)))]
+           [step-in?   (and my-step? (unbox step-into-next?))]
+           [step-over? (and my-step? (unbox step-next-file)
                             (equal? file (unbox step-next-file)))])
       (when (or bp-match? step-in? step-over?)
         ;; Reset step flags before pausing so they don't re-trigger immediately
@@ -537,10 +553,14 @@
                                 [else      "step"])))
         ;; Block until DAP sends a resume command, then interpret it
         (let ([cmd (channel-get paused-ch)])
-          ;; Released: thaw exactly the threads this stop froze, BEFORE running on so
-          ;; the program and its background workers proceed together.
           (set-box! paused-thread-box #f)
-          (stop-the-world-resume!)
+          ;; Scope any pending step to THIS (the parked) thread — whichever it is
+          ;; (a request handler, a worker, or the main program). This is what makes
+          ;; stepping work in worker code: when a worker thread is parked at a
+          ;; breakpoint and you step, the step belongs to the worker thread. It
+          ;; must be set BEFORE thawing the other threads so a thawed thread cannot
+          ;; match a step flag that was meant for this one.
+          (set-box! step-thread (current-thread))
           (cond
             [(eq? cmd 'step-in)
              (set-box! step-into-next? #t)]
@@ -548,7 +568,10 @@
              (set-box! step-next-file file)]
             [else
              ;; 'continue or any other symbol: no step flags set
-             (void)])))))
+             (void)])
+          ;; Released: thaw exactly the threads this stop froze, AFTER the step is
+          ;; scoped, so the program and its background workers proceed together.
+          (stop-the-world-resume!)))))
   (thunk))
 
 ;; ── thsl-src! / thsl-src macros (expansion-time gated) ───────────────────────
@@ -628,7 +651,20 @@
     [(check-ok? v)      (safe-display (check-ok-value v))]
     ;; Format by Racket type
     [(newtype-value? v)
-     (format "~a(~a)" (newtype-value-type-name v) (safe-display (newtype-value-value v)))]
+     ;; A newtype's type-name may be a `type-ref` prefab struct (owner name); show
+     ;; just the readable NAME, not the raw `#s(type-ref /nix/store/… Name)`.
+     ;; types.rkt doesn't export type-ref?, so read the prefab structurally.
+     (let* ([tn (newtype-value-type-name v)]
+            [nm (cond
+                  [(string? tn) tn]
+                  [(symbol? tn) tn]
+                  [(and (struct? tn)
+                        (let ([k (prefab-struct-key tn)])
+                          (and k (eq? (if (pair? k) (car k) k) 'type-ref))))
+                   (let ([vec (struct->vector tn)])  ; #(struct:type-ref owner name)
+                     (if (>= (vector-length vec) 3) (vector-ref vec 2) tn))]
+                  [else tn])])
+       (format "~a(~a)" nm (safe-display (newtype-value-value v))))]
     [(record-value? v)
      (let ([fields (record-value-fields v)])
        (string-append (~a (record-value-type v)) " {"
@@ -639,6 +675,18 @@
     [(adt-value? v)     (safe-display-adt v)]
     [(list? v)
      (string-append "[" (string-join (map safe-display v) ", ") "]")]
+    ;; Raw hash (e.g. a database entity ROW returned by select — stored as a
+    ;; field->value hash, not a record-value struct). Render it like a record so
+    ;; the Variables panel shows `{id: "todo-1", title: "…", …}` with each value
+    ;; recursively unwrapped, instead of a raw `#hash((… . #(struct:newtype-value …)))`.
+    [(hash? v)
+     (string-append "{"
+       (string-join
+         (for/list ([k (in-list (sort (hash-keys v)
+                                      (lambda (a b) (string<? (format "~a" a) (format "~a" b)))))])
+           (format "~a: ~a" k (safe-display (hash-ref v k))))
+         ", ")
+       "}")]
     [(string? v)  (format "\"~a\"" v)]       ; show strings with quotes
     [(boolean? v) (if v "True" "False")]     ; Tesl capitalised booleans
     [(symbol? v)  (~a v)]                    ; strip Racket ' prefix from gensyms

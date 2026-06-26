@@ -55,7 +55,7 @@
   (processEmail [job : EmailJob ::: (FromQueue (Id == jobId) job)])
   #:capabilities [emailCap]
   #:returns EmailJob
-  (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 85 (list (cons 'job *job)) (lambda () (begin (telemetry-event! "email.sent" #:attributes (["recipient" (raw-value job.recipientId)] ["subject" (raw-value job.subject)])) *job))))
+  (let ([_ (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 85 (list (cons 'job *job)) (lambda () (telemetry-event! "email.sent" #:attributes (["recipient" (raw-value job.recipientId)] ["subject" (raw-value job.subject)]))))]) (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 86 (list (cons 'job *job)) (lambda () *job))))
 
 (define EmailWorkers
   (list (cons EmailQueue processEmail)))
@@ -65,7 +65,7 @@
   (handleDeadEmail [job : EmailJob ::: (FromDeadQueue (Id == jobId) job)])
   #:capabilities [deadEmailCap]
   #:returns EmailJob
-  (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 100 (list (cons 'job *job)) (lambda () (begin (telemetry-event! "email.dead" #:attributes (["recipient" (raw-value job.recipientId)] ["subject" (raw-value job.subject)])) *job))))
+  (let ([_ (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 100 (list (cons 'job *job)) (lambda () (telemetry-event! "email.dead" #:attributes (["recipient" (raw-value job.recipientId)] ["subject" (raw-value job.subject)]))))]) (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 101 (list (cons 'job *job)) (lambda () *job))))
 
 (define DeadEmailWorkers
   (list (cons EmailQueue handleDeadEmail)))
@@ -75,7 +75,7 @@
   (sendWelcomeEmail)
   #:capabilities [enqueueEmail]
   #:returns String
-  (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 112 (list) (lambda () (begin (enqueue! EmailQueue (EmailJob #:recipientId "user-123" #:subject "Welcome!" #:body "Thanks for signing up.")) "queued"))))
+  (let ([_ (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 112 (list) (lambda () (enqueue! EmailQueue (EmailJob #:recipientId "user-123" #:subject "Welcome!" #:body "Thanks for signing up."))))]) (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 113 (list) (lambda () "queued"))))
 
 (define ConcurrencyServer-sse-routes '())
 (define-api ConcurrencyApi

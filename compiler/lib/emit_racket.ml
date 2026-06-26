@@ -2862,14 +2862,36 @@ and emit_case_arm ctx scrut_var arm =
   emit ctx full_guard;
   emit ctx " ";
   let has_guard_with_bindings = arm.guard <> None && binding_code <> [] in
+  (* Wrap the arm BODY in its own checkpoint (at the arm's source line) so a step
+     lands on the arm the code actually takes — the macro erases in release, and
+     only the chosen arm's body runs, so exactly one fires. Empty locals keeps it
+     decoupled from the arm's raw/proof binding scheme (no `*name` references). *)
+  let emit_arm_body () =
+    let bloc = Checker.expr_loc arm.body in
+    (* Surface the pattern-bound variables (e.g. `todo` in `Something todo`) in the
+       arm checkpoint's Locals. They are bound by binding_code, which wraps this
+       checkpoint, so referencing each by its bound name is in scope. *)
+    let arm_vars = collect_bound_names arm.pattern in
+    emit ctx (Printf.sprintf "(thsl-src! %S %d "
+      bloc.Location.file (bloc.Location.start.line + 1));
+    (if arm_vars = [] then emit ctx "(list)"
+     else begin
+       emit ctx "(list";
+       List.iter (fun n -> emit ctx (Printf.sprintf " (cons '%s %s)" n n)) arm_vars;
+       emit ctx ")"
+     end);
+    emit ctx " (lambda () ";
+    emit_expr ctx arm.body;
+    emit ctx "))"
+  in
   (match binding_code with
-   | [] -> emit_expr ctx arm.body
+   | [] -> emit_arm_body ()
    | _ ->
      (* Nested single-binding lets ensure sequential deps work (e.g. nested patterns).
         Guard and body both use the same bindings when has_guard_with_bindings. *)
      ignore has_guard_with_bindings;
      List.iter (fun b -> emit ctx (Printf.sprintf "(let (%s) " b)) binding_code;
-     emit_expr ctx arm.body;
+     emit_arm_body ();
      List.iter (fun _ -> emit ctx ")") binding_code);
   emit ctx "]";
   List.iter (fun name -> Hashtbl.remove ctx.raw_locals name) raw_bound_names
@@ -4105,12 +4127,35 @@ let emit_func ctx (fd : func_decl) =
         emit ctx full_guard;
         emit ctx " ";
         let has_guard_with_bindings = arm.guard <> None && binding_code <> [] in
+        (* Per-arm checkpoint (see emit_case_arm): step lands on the taken arm, and
+           the arm's pattern-bound variables show in Locals (bound by binding_code,
+           which wraps this checkpoint). *)
+        let emit_arm_body () =
+          let bloc = Checker.expr_loc arm.body in
+          let rec collect_vars = function
+            | PVar n -> if n = "_" then [] else [n]
+            | PWild | PLit _ | PNullary _ -> []
+            | PCon { fields; _ } -> List.concat_map (fun (_, sub) -> collect_vars sub) fields
+          in
+          let arm_vars = collect_vars arm.pattern in
+          emit ctx (Printf.sprintf "(thsl-src! %S %d "
+            bloc.Location.file (bloc.Location.start.line + 1));
+          (if arm_vars = [] then emit ctx "(list)"
+           else begin
+             emit ctx "(list";
+             List.iter (fun n -> emit ctx (Printf.sprintf " (cons '%s %s)" n n)) arm_vars;
+             emit ctx ")"
+           end);
+          emit ctx " (lambda () ";
+          emit_with_raw_tail arm.body;
+          emit ctx "))"
+        in
         (match binding_code with
-         | [] -> emit_with_raw_tail arm.body
+         | [] -> emit_arm_body ()
          | _ ->
            ignore has_guard_with_bindings;
            List.iter (fun b -> emit ctx (Printf.sprintf "(let (%s) " b)) binding_code;
-           emit_with_raw_tail arm.body;
+           emit_arm_body ();
            List.iter (fun _ -> emit ctx ")") binding_code);
         emit ctx "]";
         List.iter (fun name -> Hashtbl.remove ctx.raw_locals name) raw_bound_names;
@@ -4267,12 +4312,30 @@ let emit_func ctx (fd : func_decl) =
       not is_runtime_stmt_underscore && not is_check_call && not is_sql_chain
     | _ -> false
   in
-  (* The whole body is peelable iff every binding down the chain is a plain let
-     or an ELetProof whose value is a direct check-call (the ELetProof shape the
-     peeler reproduces faithfully), and the final tail is a non-let expression. *)
+  (* A `let _ = <simple effect>` statement (telemetry/enqueue/publish/cache/email/
+     runtime-call). These lower to a bare effect via emit_expr (the same code the
+     non-peeled `(begin stmt body)` arm uses), so each can SAFELY get its own
+     checkpoint line — enabling per-statement stepping through a handler (e.g. step
+     from `telemetry` onto the SQL line). The STRUCTURAL `_`-statements (with-*,
+     serve, startWorkers/startEmailWorker) have nested blocks and stay whole. *)
+  let is_simple_effect_underscore e =
+    match e with
+    | ELet { name = "_"; value; _ } ->
+      (match value with
+       | ETelemetry _ | EEnqueue _ | EPublish _
+       | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
+       | ESendEmail _ | ERuntimeCall _ -> true
+       | _ -> false)
+    | _ -> false
+  in
+  (* The whole body is peelable iff every binding down the chain is a plain let, a
+     simple-effect `_` statement, or an ELetProof whose value is a direct
+     check-call (the ELetProof shape the peeler reproduces faithfully), and the
+     final tail is a non-let expression. *)
   let rec body_peelable e =
     match e with
-    | ELet _ -> plain_let_node e && body_peelable (match e with ELet { body; _ } -> body | _ -> e)
+    | ELet _ -> (plain_let_node e || is_simple_effect_underscore e)
+                && body_peelable (match e with ELet { body; _ } -> body | _ -> e)
     | ELetProof { value; body; _ } ->
       (match direct_check_call value with Some _ -> true | None -> false) && body_peelable body
     | _ -> true
@@ -4289,6 +4352,20 @@ let emit_func ctx (fd : func_decl) =
   in
   let rec emit_debug_stmts ?(locals=[]) e =
     match e with
+    | ELet { value; body; _ } when is_simple_effect_underscore e ->
+      (* `let _ = <simple effect>` → its own checkpoint at the effect's line, then
+         continue peeling the rest of the body. Emit the effect with emit_expr
+         (identical to the non-peeled `(begin stmt body)` arm). `_` is not a
+         user-visible local, so it is NOT added to the locals list (and there is
+         no `*_` raw binding to reference). *)
+      let loc = Checker.expr_loc value in
+      emit ctx (Printf.sprintf "(let ([_ (thsl-src! %S %d " loc.Location.file (loc.Location.start.line + 1));
+      emit_locals_list locals;
+      emit ctx " (lambda () ";
+      emit_expr ctx value;
+      emit ctx "))]) ";
+      emit_debug_stmts ~locals body;
+      emit ctx ")"
     | ELet { name; value; body; _ } when plain_let_node e ->
       (* Replicate the plain-ELet fact / proof-carrier tracking from
          emit_with_raw_tail so downstream case-arm proof propagation is identical. *)

@@ -36,7 +36,7 @@ database Lesson32Database {
   schema "lesson32"
   entities [Note]
   postgres {
-    database "lesson32"
+    dbName "lesson32"
     user "lesson32"
     password "lesson32"
     host "localhost"

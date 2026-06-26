@@ -144,7 +144,7 @@ database ChatDatabase {
   schema "chat"
   entities [ChatUser, Room, Message]
   postgres {
-    database "chat" # env("CHAT_DB_NAME", "chat")
+    dbName "chat" # env("CHAT_DB_NAME", "chat")
     user "tesl" # env("CHAT_DB_USER", "tesl")
     password "" # env("CHAT_DB_PASSWORD", "")
     host "127.0.0.1" # env("CHAT_DB_HOST", "tesl")

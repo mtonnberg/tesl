@@ -42,7 +42,7 @@ database FakeDb {
   schema "notifications"
   entities []
   postgres {
-    database "notif_db"
+    dbName "notif_db"
     user "notif"
     password ""
     host "localhost"

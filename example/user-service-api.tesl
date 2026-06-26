@@ -105,7 +105,7 @@ database UserDatabase {
   schema "user_service"
   entities [User]
   postgres {
-    database env("USER_DB_NAME")
+    dbName env("USER_DB_NAME")
     user env("USER_DB_USER")
     password env("USER_DB_PASSWORD")
     host env("USER_DB_HOST")

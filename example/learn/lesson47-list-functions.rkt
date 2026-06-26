@@ -56,7 +56,7 @@
 (define/pow
   (parseInts [strs : (List String)])
   #:returns (List Integer)
-  (thsl-src! "example/learn/lesson47-list-functions.tesl" 142 (list (cons 'strs *strs)) (lambda () (raw-value (tesl_import_List_filterMap (let () (define/pow (tesl-lambda-5 [s : String]) #:returns Any (let ([tesl_case_6 (raw-value (tesl_import_String_toInt *s))]) (cond [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl_case_6) 'value)]) (raw-value (Something *n)))] [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Nothing)) Nothing]))) tesl-lambda-5) *strs)))))
+  (thsl-src! "example/learn/lesson47-list-functions.tesl" 142 (list (cons 'strs *strs)) (lambda () (raw-value (tesl_import_List_filterMap (let () (define/pow (tesl-lambda-5 [s : String]) #:returns Any (let ([tesl_case_6 (raw-value (tesl_import_String_toInt *s))]) (cond [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl_case_6) 'value)]) (thsl-src! "example/learn/lesson47-list-functions.tesl" 144 (list (cons 'n n)) (lambda () (raw-value (Something *n)))))] [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Nothing)) (thsl-src! "example/learn/lesson47-list-functions.tesl" 145 (list) (lambda () Nothing))]))) tesl-lambda-5) *strs)))))
 
 (define/pow
   (total [ns : (List Integer)])

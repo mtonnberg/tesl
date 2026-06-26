@@ -52,7 +52,7 @@ database MjDatabase {
   schema "medical_journal"
   entities [Provider, Patient, JournalEntry, Prescription, DomainEvent]
   postgres {
-    database env("MJ_DB")
+    dbName env("MJ_DB")
     user env("TESL_POSTGRES_USER")
     password env("TESL_POSTGRES_PASSWORD")
     host env("TESL_POSTGRES_HOST")

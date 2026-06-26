@@ -67,7 +67,7 @@ database EmailDatabase {
   schema "lesson31"
   entities []
   postgres {
-    database env("LESSON31_DB")
+    dbName env("LESSON31_DB")
     user env("TESL_POSTGRES_USER")
     password env("TESL_POSTGRES_PASSWORD")
     host env("TESL_POSTGRES_HOST")

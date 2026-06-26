@@ -83,7 +83,7 @@
   (handleNotice [job : NotifyJob ::: (FromQueue (Id == jobId) job)])
   #:capabilities [queueRead pubsub]
   #:returns NotifyJob
-  (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 86 (list (cons 'job *job)) (lambda () (begin (publish-event! Lesson33Events (format "~a" (raw-value job.userId)) (NoticeSent (raw-value job.message))) *job))))
+  (let ([_ (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 86 (list (cons 'job *job)) (lambda () (publish-event! Lesson33Events (format "~a" (raw-value job.userId)) (NoticeSent (raw-value job.message)))))]) (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 87 (list (cons 'job *job)) (lambda () *job))))
 
 (define Lesson33Workers
   (list (cons Lesson33Queue handleNotice)))
@@ -93,7 +93,7 @@
   (sendNotice [req : SendNoticeRequest])
   #:capabilities [queueWrite]
   #:returns String
-  (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 95 (list (cons 'req *req)) (lambda () (begin (enqueue! Lesson33Queue (NotifyJob #:userId (raw-value req.userId) #:message (raw-value req.message))) "queued"))))
+  (let ([_ (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 95 (list (cons 'req *req)) (lambda () (enqueue! Lesson33Queue (NotifyJob #:userId (raw-value req.userId) #:message (raw-value req.message)))))]) (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 96 (list (cons 'req *req)) (lambda () "queued"))))
 
 (define Lesson33Server-sse-routes
   (list (list (list "events") #f Lesson33Events)))

@@ -3676,8 +3676,13 @@ let parse_database_form s =
             skip_layout s;
             if peek s = RBRACE || peek s = EOF then ()
             else begin
-              (* Key can be an IDENT or a keyword like DATABASE *)
+              (* Key can be an IDENT or a keyword like DATABASE. The database NAME
+                 field is written `dbName` (not `database`) so the `database`
+                 keyword is reserved for the `database … { }` block; `dbName` maps
+                 to the internal "database" key so consumers are unchanged. The
+                 bare `database` keyword is still accepted here for back-compat. *)
               let k_opt = match peek s with
+                | IDENT "dbName" -> advance s; Some "database"
                 | IDENT k -> advance s; Some k
                 | DATABASE -> advance s; Some "database"
                 | _ -> None

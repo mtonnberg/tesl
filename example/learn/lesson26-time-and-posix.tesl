@@ -109,7 +109,7 @@ database TimedDatabase {
   schema "timed_app"
   entities [Event]
   postgres {
-    database env("TIMED_DB_NAME")
+    dbName env("TIMED_DB_NAME")
     user env("TIMED_DB_USER")
     password env("TIMED_DB_PASSWORD")
     host env("TIMED_DB_HOST")

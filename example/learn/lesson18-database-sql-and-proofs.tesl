@@ -84,7 +84,7 @@ database NoteDatabase {
   schema "notes_app"
   entities [Note]
   postgres {
-    database env("NOTES_DB_NAME")
+    dbName env("NOTES_DB_NAME")
     user env("NOTES_DB_USER")
     password env("NOTES_DB_PASSWORD")
     host env("NOTES_DB_HOST")

@@ -60,7 +60,7 @@
   (handleDeadNotif [job : SendNotif ::: (FromDeadQueue (Id == jobId) job)])
   #:capabilities [deadCap]
   #:returns SendNotif
-  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 87 (list (cons 'job *job)) (lambda () (begin (telemetry-event! "notif.dead" #:attributes (["userId" (raw-value job.userId)])) *job))))
+  (let ([_ (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 87 (list (cons 'job *job)) (lambda () (telemetry-event! "notif.dead" #:attributes (["userId" (raw-value job.userId)]))))]) (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 89 (list (cons 'job *job)) (lambda () *job))))
 
 (define DeadNotifWorkers
   (list (cons NotifQueue handleDeadNotif)))

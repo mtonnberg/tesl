@@ -55,7 +55,7 @@ database AppDB {
   schema "lesson60"
   entities []
   postgres {
-    database env("LESSON60_DB")
+    dbName env("LESSON60_DB")
     user env("TESL_POSTGRES_USER")
     password env("TESL_POSTGRES_PASSWORD")
     host env("TESL_POSTGRES_HOST")

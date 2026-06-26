@@ -50,7 +50,7 @@ database MainDB {
   schema "lesson59"
   entities []
   postgres {
-    database env("LESSON59_DB")
+    dbName env("LESSON59_DB")
     user env("TESL_POSTGRES_USER")
     password env("TESL_POSTGRES_PASSWORD")
     host env("TESL_POSTGRES_HOST")

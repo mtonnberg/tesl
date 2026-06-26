@@ -13,7 +13,7 @@ database MainDatabase {
   schema  "app"
   entities []
   postgres {
-    database "app_db"
+    dbName "app_db"
     user     "app"
     password ""
     host     "localhost"

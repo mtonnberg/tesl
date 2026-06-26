@@ -77,7 +77,7 @@
     },
     "declaration-keywords": {
       "comment": "Use keyword.other.* (a plain keyword scope) rather than keyword.declaration.*: the user's theme renders the declaration scope at a larger glyph size in the scroll minimap (the type/entity/database/fn/auth/codec/handler 'large minimap text' bug). keyword.other is universally themed as a normal-weight keyword and renders at normal size.",
-      "match": "\\b(module|exposing|import|fn|establish|check|auth|handler|worker|workers|record|entity|database|type|fact|codec|capability|capture|api|server|main|implies|requires|queue|channel|test|seed|property)\\b|\\b(api-test|load-test|dead-worker|dead-workers)\\b",
+      "match": "\\b(module|exposing|import|fn|establish|check|auth|handler|worker|workers|deadWorker|deadWorkers|record|entity|database|email|type|fact|codec|capability|capture|api|server|main|implies|requires|queue|channel|test|seed|property)\\b|\\b(api-test|load-test)\\b",
       "name": "keyword.other.declaration.tesl"
     },
     "control-keywords": {
@@ -89,7 +89,7 @@
       "name": "keyword.other.test.tesl"
     },
     "body-keywords": {
-      "match": "\\b(using|for|on|table|primaryKey|backend|postgres|schema|entities|select|selectOne|selectCount|selectSum|selectMax|selectMin|from|insert|insertMany|update|updateAndReturnOne|set|returning|one|in|delete|deleteAndReturnResult|upsert|onConflict|doUpdate|order|limit|offset|groupBy|like|ilike|innerJoin|serve|telemetry|initTelemetry|service|endpoint|console|body|response|get|post|put|enqueue|publish|subscribe|websocket|startWorkers|startWebSocket|auth|capture|jobs|retry|maxAttempts|backoff|exponential|fixed|initialDelay|payload|database|static|cookie|headers|with_codec|toJson|fromJson|via)\\b",
+      "match": "\\b(using|for|on|table|primaryKey|backend|postgres|schema|entities|select|selectOne|selectCount|selectSum|selectMax|selectMin|from|insert|insertMany|update|updateAndReturnOne|set|returning|one|in|delete|deleteAndReturnResult|upsert|onConflict|doUpdate|order|limit|offset|groupBy|like|ilike|innerJoin|serve|telemetry|initTelemetry|service|endpoint|console|body|response|get|post|put|enqueue|publish|subscribe|startWorkers|startDeadWorkers|startEmailWorker|auth|capture|jobs|retry|maxAttempts|backoff|exponential|fixed|initialDelay|payload|dbName|static|cookie|headers|with_codec|toJson|fromJson|via)\\b",
       "name": "keyword.other.tesl"
     },
     "builtin-functions": {
@@ -112,7 +112,7 @@
       }
     },
     "http-methods": {
-      "match": "^\\s*(get|post|put|delete|websocket)(?=\\s)",
+      "match": "^\\s*(get|post|put|delete|sse)(?=\\s)",
       "captures": {
         "1": { "name": "keyword.other.http-method.tesl" }
       }

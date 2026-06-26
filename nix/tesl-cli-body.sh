@@ -445,19 +445,28 @@ _tesl_init_agents_md() {
 _tesl_init_vscode() {
   local dest="$1" pgmode="$2" pgport="$3" pguser="$4" pgdb="$5"
   mkdir -p "$dest/.vscode"
-  local env_block=""
+  # Always set TESL_DAP_LOG=stderr so a debug session emits verbose diagnostics
+  # (compiler/dap resolution, breakpoints, DB connect) to the Debug Console —
+  # makes "it didn't stop / it crashed" self-explanatory instead of silent.
+  local pg_vars=""
   if [ "$pgmode" = "managed" ] || [ "$pgmode" = "existing" ]; then
-    env_block=$(cat <<EOF
-      "env": {
+    pg_vars=$(cat <<EOF
+,
         "TESL_POSTGRES_HOST": "127.0.0.1",
         "TESL_POSTGRES_PORT": "$pgport",
         "TESL_POSTGRES_USER": "$pguser",
         "TESL_POSTGRES_PASSWORD": "",
         "TESL_POSTGRES_DATABASE": "$pgdb"
-      },
 EOF
 )
   fi
+  local env_block
+  env_block=$(cat <<EOF
+      "env": {
+        "TESL_DAP_LOG": "stderr"$pg_vars
+      },
+EOF
+)
   {
     echo '{'
     echo '  "version": "0.2.0",'

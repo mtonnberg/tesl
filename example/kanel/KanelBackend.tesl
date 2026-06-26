@@ -138,7 +138,7 @@ database KanelDatabase {
   schema "kanel"
   entities [KanelUser, Org, OrgMembership, Project, ProjectMembership, Issue, IssueComment, TimeEntry, Invoice]
   postgres {
-    database env("KANEL_DB")
+    dbName env("KANEL_DB")
     user env("TESL_POSTGRES_USER")
     password env("TESL_POSTGRES_PASSWORD")
     host env("TESL_POSTGRES_HOST")
