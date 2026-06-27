@@ -2174,11 +2174,12 @@ and parse_record_literal s =
         end else continue_ := false
       | IDENT _
       (* Allow keyword tokens as record field names (e.g. email, smtp, and the
-         config-block field keywords schema/database/backend). *)
-      | EMAIL | SMTP | SCHEMA | DATABASE | BACKEND ->
+         config-block field keywords schema/database/backend/api). *)
+      | EMAIL | SMTP | SCHEMA | DATABASE | BACKEND | API ->
         let fname = match peek s with
           | IDENT n -> n | EMAIL -> "email" | SMTP -> "smtp"
           | SCHEMA -> "schema" | DATABASE -> "database" | BACKEND -> "backend"
+          | API -> "api"
           | _ -> "_"
         in
         advance s;
@@ -2865,10 +2866,7 @@ let parse_func_body s =
   end
 
 (** Parse [fn name(params) -> RetSpec = body]. *)
-let parse_fn_decl kind s =
-  let loc0 = current_loc s in
-  (* keyword already consumed by caller *)
-  let* name = expect_ident s in
+let parse_fn_decl_named kind name loc0 s =
   let* params = parse_params s in
   (* optional 'requires [...]' — for handlers, before or after return type *)
   let* caps_before = parse_requires s in
@@ -2970,6 +2968,14 @@ let parse_fn_decl kind s =
   let loc = span loc0 (current_loc s) in
   return { kind; name; params; return_spec; capabilities; body = body'; loc;
            desugared_from = None }
+
+(* Read the function name, then parse the rest of the declaration. The decl's
+   loc must start at the name (callers consumed the keyword), matching the
+   pre-refactor behaviour relied on by go-to-definition / occurrences. *)
+let parse_fn_decl kind s =
+  let loc0 = current_loc s in
+  let* name = expect_ident s in
+  parse_fn_decl_named kind name loc0 s
 
 let parse_field_defs s =
   let* _ = expect s LBRACE in
@@ -3764,13 +3770,17 @@ let parse_database_form s =
 let parse_queue_form s =
   let loc0 = current_loc s in
   let* name = expect_uident s in
+  (* App pass: `queue NAME requires [caps] = Queue { … }` — the workers folded
+     into the queue inherit these capabilities. *)
+  let* reqs = parse_requires s in
   if peek s = EQ then begin
     advance s;
     let* type_name = expect_uident s in
     let* body = parse_record_literal s in
     let loc = span loc0 (current_loc s) in
     return { name; database = ""; jobs = []; max_attempts = None;
-             backoff = None; initial_delay = None; raw_fields = [];
+             backoff = None; initial_delay = None;
+             capabilities = reqs; number_of_workers = None; raw_fields = [];
              config_expr = Some (hint_expr_type type_name body); loc }
   end else begin
   let* _ = expect s LBRACE in
@@ -3835,7 +3845,8 @@ let parse_queue_form s =
   let loc = span loc0 (current_loc s) in
   return { name; database = !database_; jobs = List.rev !jobs;
            max_attempts = !max_attempts; backoff = !backoff;
-           initial_delay = !initial_delay; raw_fields = List.rev !raw;
+           initial_delay = !initial_delay; capabilities = reqs;
+           number_of_workers = None; raw_fields = List.rev !raw;
            config_expr = None; loc }
   end
 
@@ -5000,6 +5011,7 @@ and parse_top_decl s =
     let* fd = parse_fn_decl DeadWorkerKind s in
     return (DFunc fd)
   | MAIN ->
+    let main_loc = current_loc s in
     advance s;
     (* main { ... } or main requires [...] { ... } or main with capabilities [...] { ... } *)
     if peek s = LBRACE || peek s = REQUIRES ||
@@ -5049,7 +5061,9 @@ and parse_top_decl s =
          } in
          return (DFunc fd))
     end else begin
-      let* fd = parse_fn_decl MainKind s in
+      (* New App-style entry point: `main() -> App requires [...] = App { … }`.
+         `main` is already consumed, so parse the rest with the name pre-set. *)
+      let* fd = parse_fn_decl_named MainKind "main" main_loc s in
       return (DFunc fd)
     end
   | RECORD ->

@@ -2850,6 +2850,20 @@ let check_func_decl ctx (fd : func_decl) =
     | RetMaybeAttached { binding = b; _ } -> t_maybe (ty_of_type_expr b.type_expr)
     | RetExists { body; _ } -> ret_spec_type body
   in
+  (* App-pass entry point: `main() -> App = … App { … }` is declarative
+     configuration whose fields reference declarations (databases/queues/servers)
+     by name, not as values. It is validated structurally and lowered by the
+     desugar pass, so its body is not type-checked here. *)
+  let is_app_main =
+    fd.kind = MainKind &&
+    (let rec tail = function
+       | ELet { body; _ } | ELetProof { body; _ } -> tail body
+       | ERecord { type_hint = Some "App"; _ } -> true
+       | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord _; _ } -> true
+       | _ -> false
+     in tail fd.body)
+  in
+  if is_app_main then () else
   check_stmt ctx' fd.body
     (mk_expectation ~origin:fd.loc ~role:(ReturnBody fd.name)
       ~reason:(return_reason fd.name expected) expected)

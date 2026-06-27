@@ -252,6 +252,49 @@ let int_value = function ELit { lit = LInt n; _ } -> Some n | _ -> None
 let string_value = function ELit { lit = LString s; _ } -> Some s | _ -> None
 let bool_value = function ELit { lit = LBool b; _ } -> Some b | _ -> None
 
+(* App pass: a folded queue's `jobs: [Job J fn (Something dead)]` pairs each job
+   type with its handler and an optional dead-letter handler. Returns
+   (jobType, handler, dead_handler option) per entry; [] for the plain
+   `jobs: [JobType]` form. *)
+let job_entries (jobs_v : expr) : (string * string * string option) list =
+  match jobs_v with
+  | EList { elems; _ } ->
+    List.filter_map (fun e ->
+      match e with
+      | EApp { fn = EApp { fn = EApp { fn = EConstructor { name = "Job"; _ }; arg = jt; _ };
+                           arg = h; _ }; arg = dead; _ } ->
+        let jobtype = Option.value ~default:"" (config_ctor_name jt) in
+        let handler = (match h with
+          | EVar { name; _ } -> name
+          | _ -> Option.value ~default:"" (config_ctor_name h)) in
+        let dead_h = (match dead with
+          | EApp { fn = EConstructor { name = "Something"; _ }; arg = EVar { name; _ }; _ } -> Some name
+          | EConstructor { name = "Something"; args = [ EVar { name; _ } ]; _ } -> Some name
+          | _ -> None) in
+        if jobtype = "" then None else Some (jobtype, handler, dead_h)
+      | _ -> None) elems
+  | _ -> []
+
+(* Synthesize the worker declarations folded into a queue's job list. Names are
+   deterministic (`<Queue>Workers` / `<Queue>DeadWorkers`) so the App-startup
+   desugar can reference them. *)
+let folded_queue_workers (q : queue_form) : workers_form list =
+  match q.config_expr with
+  | None -> []
+  | Some e ->
+    let entries = match List.assoc_opt "jobs" (config_record_fields e) with
+      | Some v -> job_entries v | None -> [] in
+    if entries = [] then []
+    else
+      let regular = { Ast.name = q.name ^ "Workers"; queue_name = q.name;
+                      bindings = List.map (fun (jt, h, _) -> (jt, h)) entries;
+                      is_dead = false; loc = q.loc } in
+      let dead = List.filter_map (fun (jt, _, d) ->
+        Option.map (fun dh -> (jt, dh)) d) entries in
+      regular :: (if dead = [] then []
+                  else [ { Ast.name = q.name ^ "DeadWorkers"; queue_name = q.name;
+                           bindings = dead; is_dead = true; loc = q.loc } ])
+
 let desugar_queue_config (q : queue_form) : queue_form =
   match q.config_expr with
   | None -> q
@@ -259,8 +302,14 @@ let desugar_queue_config (q : queue_form) : queue_form =
     let top = config_record_fields e in
     let database = match List.assoc_opt "database" top with
       | Some v -> Option.value ~default:"" (config_ctor_name v) | None -> "" in
-    let jobs = match List.assoc_opt "jobs" top with
-      | Some (EList { elems; _ }) -> List.filter_map config_ctor_name elems | _ -> [] in
+    let jobs_v = List.assoc_opt "jobs" top in
+    let entries = match jobs_v with Some v -> job_entries v | None -> [] in
+    let jobs =
+      if entries <> [] then List.map (fun (jt, _, _) -> jt) entries
+      else (match jobs_v with
+            | Some (EList { elems; _ }) -> List.filter_map config_ctor_name elems | _ -> []) in
+    let number_of_workers = match List.assoc_opt "numberOfWorkers" top with
+      | Some v -> int_value v | None -> q.number_of_workers in
     let max_attempts = ref None and backoff = ref None and initial_delay = ref None in
     (match List.assoc_opt "retry" top with
      | Some r ->
@@ -276,7 +325,7 @@ let desugar_queue_config (q : queue_form) : queue_form =
         | None -> ())
      | None -> ());
     { q with database; jobs; max_attempts = !max_attempts; backoff = !backoff;
-             initial_delay = !initial_delay; config_expr = None }
+             initial_delay = !initial_delay; number_of_workers; config_expr = None }
 
 let desugar_email_config (em : email_form) : email_form =
   match em.config_expr with
@@ -358,6 +407,63 @@ let desugar_api_inline_captures (synthetic : capture_form list ref) (counter : i
   in
   { api with endpoints = List.map lower_endpoint api.endpoints }
 
+(* App pass: lower `main() -> App requires [R] = … App { database, queues, email,
+   sseChannels, api, port }` into the imperative startup the runtime already
+   understands: `with capabilities [R] { with database D { startWorkers… ;
+   startEmailWorker… ; serve api #:port port } }`. Worker capabilities/concurrency
+   come from each queue's `requires`/`numberOfWorkers`. *)
+let queue_startup_info (q : queue_form) : string * string list * int option * bool =
+  let nw, has_dead = match q.config_expr with
+    | Some e ->
+      let fields = config_record_fields e in
+      let nw = match List.assoc_opt "numberOfWorkers" fields with Some v -> int_value v | None -> None in
+      let hd = match List.assoc_opt "jobs" fields with
+        | Some v -> List.exists (fun (_, _, d) -> d <> None) (job_entries v) | None -> false in
+      (nw, hd)
+    | None -> (q.number_of_workers, false)
+  in
+  (q.name, q.capabilities, nw, has_dead)
+
+let lower_main_app (decls : top_decl list) (fd : func_decl) : func_decl =
+  if fd.kind <> MainKind then fd else
+  let qinfo = List.filter_map (function DQueue q -> Some (queue_startup_info q) | _ -> None) decls in
+  let find_q n = List.find_opt (fun (qn, _, _, _) -> qn = n) qinfo in
+  let main_caps = fd.capabilities and loc = fd.loc in
+  let names_of = function
+    | EList { elems; _ } -> List.filter_map config_ctor_name elems | _ -> [] in
+  let is_app = function
+    | ERecord { type_hint = Some "App"; fields; _ } -> Some fields
+    | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord { fields; _ }; _ } -> Some fields
+    | _ -> None in
+  let gen_startup fields =
+    let db  = match List.assoc_opt "database" fields with Some v -> Option.value ~default:"" (config_ctor_name v) | None -> "" in
+    let qs  = match List.assoc_opt "queues" fields with Some v -> names_of v | None -> [] in
+    let es  = match List.assoc_opt "email" fields with Some v -> names_of v | None -> [] in
+    let api = match List.assoc_opt "api" fields with Some v -> Option.value ~default:"" (config_ctor_name v) | None -> "" in
+    let port = match List.assoc_opt "port" fields with Some v -> v | None -> ELit { lit = LInt 8080; loc } in
+    let worker_stmts = List.concat_map (fun qn ->
+      let (caps, nw, has_dead) = match find_q qn with Some (_, c, n, d) -> (c, n, d) | None -> ([], None, false) in
+      EStartWorkers { workers_name = qn ^ "Workers"; capabilities = caps; concurrency = nw; is_dead = false; loc }
+      :: (if has_dead then [ EStartWorkers { workers_name = qn ^ "DeadWorkers"; capabilities = caps; concurrency = nw; is_dead = true; loc } ] else [])
+    ) qs in
+    let email_stmts = List.map (fun en -> EStartEmailWorker { email_name = en; loc }) es in
+    let serve = EServe { server_name = api; port; capabilities = main_caps; static_dir = None; loc } in
+    let rec chain = function
+      | [] -> serve
+      | [ last ] -> last
+      | s :: rest -> ELet { name = "_"; declared_type = None; declared_proof = None; value = s; body = chain rest; loc }
+    in
+    let inner = chain (worker_stmts @ email_stmts @ [ serve ]) in
+    EWithCapabilities { capabilities = main_caps;
+                        body = EWithDatabase { database_name = db; body = inner; loc }; loc }
+  in
+  let rec rewrite e = match e with
+    | ELet r      -> ELet { r with body = rewrite r.body }
+    | ELetProof r -> ELetProof { r with body = rewrite r.body }
+    | _ -> (match is_app e with Some fields -> gen_startup fields | None -> e)
+  in
+  { fd with body = rewrite fd.body }
+
 let desugar_module (m : module_form) : module_form =
   (* Rebuild the emitter's job-type → queue map from this module's DQueue
      declarations (same construction as Emit_racket's pre-pass). *)
@@ -376,4 +482,18 @@ let desugar_module (m : module_form) : module_form =
   (* Prepend the synthesized capturers (define-capture must precede the
      define-api/server that references them), then run the normal desugaring. *)
   let decls2 = List.rev_map (fun cf -> DCapture cf) !synthetic @ decls1 in
-  { m with decls = List.map (desugar_decl queues) decls2 }
+  (* App pass: synthesize the worker declarations folded into each queue's job
+     list (`jobs: [Job J fn (Something dead)]`). *)
+  let folded_workers =
+    List.concat_map (function
+      | DQueue q -> List.map (fun w -> DWorkers w) (folded_queue_workers q)
+      | _ -> []) decls2
+  in
+  (* App pass: lower `main() -> App = App { … }` into the imperative startup
+     (before desugar_decl lowers the EStartWorkers/EServe it generates). *)
+  let decls3 =
+    List.map (function
+      | DFunc fd when fd.kind = MainKind -> DFunc (lower_main_app decls2 fd)
+      | d -> d) (decls2 @ folded_workers)
+  in
+  { m with decls = List.map (desugar_decl queues) decls3 }

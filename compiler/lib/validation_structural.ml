@@ -1464,8 +1464,9 @@ type vkind =
   | VBackoff        (* QueueRetryBackoff: Exponential | Fixed *)
   | VDatabaseRef    (* UIDENT naming a declared database *)
   | VEntityList     (* [Entity, …] naming declared entities *)
-  | VJobList        (* [JobType, …] naming declared records/entities *)
-  | VTypeRef        (* UIDENT naming a declared type/record/entity *)
+  | VJobList        (* [JobType, …] naming declared records/entities (or Job entries) *)
+  | VRefList        (* [Name, …] naming declared components (queues/email/channels) *)
+  | VTypeRef        (* UIDENT naming a declared type/record/entity/server *)
 
 let config_block_schema = function
   (* schema is required for the postgres backend but not for Memory; the
@@ -1475,22 +1476,27 @@ let config_block_schema = function
   | "PostgresConfig" -> [ "dbName", VStr, true; "user", VStr, true;
                           "password", VStr, true; "connection", VConn, true ]
   | "Queue" -> [ "database", VDatabaseRef, true; "jobs", VJobList, true;
-                 "retry", VSub "QueueRetryStrategy", false ]
+                 "retry", VSub "QueueRetryStrategy", false;
+                 "numberOfWorkers", VInt, false ]
   | "QueueRetryStrategy" -> [ "maxAttempts", VInt, true; "backoff", VBackoff, true;
                               "initialDelay", VInt, true ]
   | "Email" -> [ "database", VDatabaseRef, true; "smtp", VSub "SmtpConfig", true ]
   | "SmtpConfig" -> [ "host", VStr, true; "port", VInt, false; "username", VStr, false;
                       "password", VStr, false; "tls", VBool, false ]
   | "SseChannel" -> [ "database", VDatabaseRef, true; "payload", VTypeRef, true ]
+  (* App-pass entry point: `main() -> App = App { … }`. *)
+  | "App" -> [ "database", VDatabaseRef, true; "queues", VRefList, false;
+               "email", VRefList, false; "sseChannels", VRefList, false;
+               "api", VTypeRef, true; "port", VInt, false ]
   | _ -> []
 
 let cfg_fields = function
   | ERecord { fields; _ } -> fields
   | EApp { fn = EConstructor _; arg = ERecord { fields; _ }; _ } -> fields
   | _ -> []
-let cfg_ctor = function
+let rec cfg_ctor = function
   | EConstructor { name; _ } -> Some name
-  | EApp { fn = EConstructor { name; _ }; _ } -> Some name
+  | EApp { fn; _ } -> cfg_ctor fn   (* peel nested application: `Job J fn dead` → "Job" *)
   | _ -> None
 (* The single positional argument of `Ctor (arg)` (e.g. `Postgres (PostgresConfig {…})`). *)
 let cfg_ctor_arg = function
@@ -1568,6 +1574,12 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
          List.concat_map (fun e -> match cfg_ctor e with
            | Some _ -> [] | None -> [ make_error loc "`jobs` must be a list of job types, e.g. `[EmailJob]`" ]) elems
        | _ -> err "`jobs` must be a list of job types, e.g. `[EmailJob]`")
+    | VRefList ->
+      (match v with
+       | EList { elems; _ } ->
+         List.concat_map (fun e -> match cfg_ctor e with
+           | Some _ -> [] | None -> [ make_error loc (Printf.sprintf "`%s` must be a list of declared component names" fname) ]) elems
+       | _ -> err (Printf.sprintf "`%s` must be a list, e.g. `[MyQueue]`" fname))
     | VTypeRef ->
       (match cfg_ctor v with
        | Some _ -> []
@@ -1616,6 +1628,15 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
     | DQueue r    -> check_decl "Queue" r.loc r.config_expr
     | DEmail r    -> check_decl "Email" r.loc r.config_expr
     | DChannel r  -> check_decl "SseChannel" r.loc r.config_expr
+    | DFunc fd when fd.kind = MainKind ->
+      (* Validate the `App { … }` record an App-style main returns. *)
+      let rec tail = function
+        | ELet { body; _ } | ELetProof { body; _ } -> tail body | e -> e in
+      (match tail fd.body with
+       | (ERecord { type_hint = Some "App"; _ }
+         | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord _; _ }) as e ->
+         check_record fd.loc "App" (cfg_fields e)
+       | _ -> [])
     | _ -> []
   ) decls
 

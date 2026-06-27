@@ -337,15 +337,17 @@ type database_form = {
 (* ─── Queue / channel / workers ─────────────────────────────────────────── *)
 
 type queue_form = {
-  name          : string;
-  database      : string;
-  jobs          : string list;
-  max_attempts  : int option;
-  backoff       : string option;
-  initial_delay : int option;
-  raw_fields    : config_field list;
-  config_expr   : expr option;
-  loc           : loc;
+  name             : string;
+  database         : string;
+  jobs             : string list;
+  max_attempts     : int option;
+  backoff          : string option;
+  initial_delay    : int option;
+  capabilities     : string list;     (** `requires [...]` for the folded workers (App pass) *)
+  number_of_workers : int option;     (** `numberOfWorkers: N` (App pass); workers started on App activation *)
+  raw_fields       : config_field list;
+  config_expr      : expr option;
+  loc              : loc;
 }
 
 type channel_form = {
