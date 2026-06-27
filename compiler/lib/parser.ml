@@ -3764,6 +3764,15 @@ let parse_database_form s =
 let parse_queue_form s =
   let loc0 = current_loc s in
   let* name = expect_uident s in
+  if peek s = EQ then begin
+    advance s;
+    let* type_name = expect_uident s in
+    let* body = parse_record_literal s in
+    let loc = span loc0 (current_loc s) in
+    return { name; database = ""; jobs = []; max_attempts = None;
+             backoff = None; initial_delay = None; raw_fields = [];
+             config_expr = Some (hint_expr_type type_name body); loc }
+  end else begin
   let* _ = expect s LBRACE in
   skip_layout s;
   let database_ = ref "" in
@@ -3826,7 +3835,9 @@ let parse_queue_form s =
   let loc = span loc0 (current_loc s) in
   return { name; database = !database_; jobs = List.rev !jobs;
            max_attempts = !max_attempts; backoff = !backoff;
-           initial_delay = !initial_delay; raw_fields = List.rev !raw; loc }
+           initial_delay = !initial_delay; raw_fields = List.rev !raw;
+           config_expr = None; loc }
+  end
 
 (** Parse a cache block:
       cache UserProfileCache {
@@ -3877,6 +3888,16 @@ let parse_cache_form s =
 let parse_email_form s =
   let loc0 = current_loc s in
   let* name = expect_uident s in
+  if peek s = EQ then begin
+    advance s;
+    let* type_name = expect_uident s in
+    let* body = parse_record_literal s in
+    let loc = span loc0 (current_loc s) in
+    return ({ Ast.name; database = "";
+              smtp = { Ast.host = ""; port = 587; username = ""; password = ""; tls = true };
+              raw_fields = []; config_expr = Some (hint_expr_type type_name body); loc }
+            : Ast.email_form)
+  end else begin
   let* _ = expect s LBRACE in
   skip_layout s;
   let database_ = ref "" in
@@ -3938,7 +3959,9 @@ let parse_email_form s =
   let smtp = { Ast.host = !smtp_host; port = !smtp_port;
                username = !smtp_username; password = !smtp_password;
                tls = !smtp_tls } in
-  return ({ Ast.name; database = !database_; smtp; raw_fields = List.rev !raw; loc } : Ast.email_form)
+  return ({ Ast.name; database = !database_; smtp; raw_fields = List.rev !raw;
+            config_expr = None; loc } : Ast.email_form)
+  end
 
 (** Parse a channel block. *)
 let parse_channel_form s =
@@ -3952,6 +3975,15 @@ let parse_channel_form s =
       | Err _ -> []
     end else []
   in
+  if peek s = EQ then begin
+    advance s;
+    let* type_name = expect_uident s in
+    let* body = parse_record_literal s in
+    let loc = span loc0 (current_loc s) in
+    return { name; key_params = key_params_from_decl; database = "";
+             payload = TName { name = "String"; loc = loc0 };
+             raw_fields = []; config_expr = Some (hint_expr_type type_name body); loc }
+  end else begin
   let* _ = expect s LBRACE in
   skip_layout s;
   let key_params = ref key_params_from_decl in
@@ -3977,7 +4009,8 @@ let parse_channel_form s =
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
   return { name; key_params = !key_params; database = !database_;
-           payload = !payload; raw_fields = List.rev !raw; loc }
+           payload = !payload; raw_fields = List.rev !raw; config_expr = None; loc }
+  end
 
 (** Parse capture declaration. *)
 let parse_capture_form s =

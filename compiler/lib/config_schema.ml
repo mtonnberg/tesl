@@ -156,6 +156,9 @@ let top_schema_of_decl (d : Ast.top_decl) : (schema * Ast.config_field list) opt
   (* New typed-record syntax (`= Database { … }`) is validated by the config
      type-checker, not this raw-fields schema pass — skip it here. *)
   | Ast.DDatabase r when r.Ast.config_expr <> None -> None
+  | Ast.DQueue r    when r.Ast.config_expr <> None -> None
+  | Ast.DChannel r  when r.Ast.config_expr <> None -> None
+  | Ast.DEmail r    when r.Ast.config_expr <> None -> None
   | Ast.DDatabase r -> Option.map (fun s -> (s, r.Ast.raw_fields)) (schema_for "database")
   | Ast.DQueue r    -> Option.map (fun s -> (s, r.Ast.raw_fields)) (schema_for "queue")
   | Ast.DChannel r  -> Option.map (fun s -> (s, r.Ast.raw_fields)) (schema_for "channel")

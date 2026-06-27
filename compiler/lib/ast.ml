@@ -344,6 +344,7 @@ type queue_form = {
   backoff       : string option;
   initial_delay : int option;
   raw_fields    : config_field list;
+  config_expr   : expr option;
   loc           : loc;
 }
 
@@ -353,6 +354,7 @@ type channel_form = {
   database   : string;
   payload    : type_expr;
   raw_fields : config_field list;
+  config_expr : expr option;
   loc        : loc;
 }
 
@@ -378,6 +380,7 @@ type email_form = {
   database   : string;
   smtp       : smtp_config;
   raw_fields : config_field list;
+  config_expr : expr option;
   loc        : loc;
 }
 

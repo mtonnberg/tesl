@@ -38,6 +38,7 @@ let keywords : (string, Token.t) Hashtbl.t =
     "for",         FOR;
     "queue",       QUEUE;
     "channel",     CHANNEL;
+    "sseChannel",  CHANNEL;
     "cache",       CACHE;
     "email",       EMAIL;
     "smtp",        SMTP;

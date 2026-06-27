@@ -650,7 +650,7 @@ let check_queue_structure (decls : top_decl list) : validation_error list =
     List.filter_map (function DDatabase db -> Some db.name | _ -> None) decls
   in
   List.concat_map (function
-    | DQueue q ->
+    | DQueue q when q.config_expr = None ->
       let errs = ref [] in
       let add hint msg = errs := make_error q.loc ~hint msg :: !errs in
       if q.database = "" then
@@ -672,7 +672,7 @@ let check_channel_structure (decls : top_decl list) : validation_error list =
     List.filter_map (function DDatabase db -> Some db.name | _ -> None) decls
   in
   List.concat_map (function
-    | DChannel ch ->
+    | DChannel ch when ch.config_expr = None ->
       let errs = ref [] in
       if ch.database = "" then
         errs := make_error ch.loc
@@ -759,7 +759,7 @@ let check_email_structure (decls : top_decl list) : validation_error list =
     List.filter_map (function DDatabase db -> Some db.name | _ -> None) decls
   in
   List.concat_map (function
-    | DEmail (e : Ast.email_form) ->
+    | DEmail (e : Ast.email_form) when e.config_expr = None ->
       let errs = ref [] in
       let add hint msg = errs := make_error e.loc ~hint msg :: !errs in
       if e.database = "" then

@@ -234,14 +234,79 @@ let desugar_database_config (d : database_form) : database_form =
     in
     { d with backend = "postgres"; schema; entities; postgres; config_expr = None }
 
+let int_value = function ELit { lit = LInt n; _ } -> Some n | _ -> None
+let string_value = function ELit { lit = LString s; _ } -> Some s | _ -> None
+let bool_value = function ELit { lit = LBool b; _ } -> Some b | _ -> None
+
+let desugar_queue_config (q : queue_form) : queue_form =
+  match q.config_expr with
+  | None -> q
+  | Some e ->
+    let top = config_record_fields e in
+    let database = match List.assoc_opt "database" top with
+      | Some v -> Option.value ~default:"" (config_ctor_name v) | None -> "" in
+    let jobs = match List.assoc_opt "jobs" top with
+      | Some (EList { elems; _ }) -> List.filter_map config_ctor_name elems | _ -> [] in
+    let max_attempts = ref None and backoff = ref None and initial_delay = ref None in
+    (match List.assoc_opt "retry" top with
+     | Some r ->
+       let rf = config_record_fields r in
+       (match List.assoc_opt "maxAttempts" rf with Some v -> max_attempts := int_value v | None -> ());
+       (match List.assoc_opt "initialDelay" rf with Some v -> initial_delay := int_value v | None -> ());
+       (match List.assoc_opt "backoff" rf with
+        | Some v -> (match config_ctor_name v with
+            | Some "Exponential" -> backoff := Some "exponential"
+            | Some "Fixed" -> backoff := Some "fixed"
+            | _ -> ())
+        | None -> ())
+     | None -> ());
+    { q with database; jobs; max_attempts = !max_attempts; backoff = !backoff;
+             initial_delay = !initial_delay; config_expr = None }
+
+let desugar_email_config (em : email_form) : email_form =
+  match em.config_expr with
+  | None -> em
+  | Some e ->
+    let top = config_record_fields e in
+    let database = match List.assoc_opt "database" top with
+      | Some v -> Option.value ~default:"" (config_ctor_name v) | None -> "" in
+    let smtp =
+      match List.assoc_opt "smtp" top with
+      | Some sm ->
+        let sf = config_record_fields sm in
+        let str k d = match List.assoc_opt k sf with Some v -> render_config_value v |> (fun r -> if r = "" then d else r) | None -> d in
+        let host = (match List.assoc_opt "host" sf with Some v -> render_config_value v | None -> "") in
+        let port = (match List.assoc_opt "port" sf with Some v -> Option.value ~default:587 (int_value v) | None -> 587) in
+        let tls = (match List.assoc_opt "tls" sf with Some v -> Option.value ~default:true (bool_value v) | None -> true) in
+        { Ast.host; port; username = str "username" ""; password = str "password" ""; tls }
+      | None -> em.smtp
+    in
+    { em with database; smtp; config_expr = None }
+
+let desugar_channel_config (c : channel_form) : channel_form =
+  match c.config_expr with
+  | None -> c
+  | Some e ->
+    let top = config_record_fields e in
+    let database = match List.assoc_opt "database" top with
+      | Some v -> Option.value ~default:"" (config_ctor_name v) | None -> "" in
+    let payload = match List.assoc_opt "payload" top with
+      | Some v -> (match config_ctor_name v with
+          | Some n -> TName { name = n; loc = c.loc } | None -> c.payload)
+      | None -> c.payload in
+    { c with database; payload; config_expr = None }
+
 let desugar_decl (queues : (string, string) Hashtbl.t) (d : top_decl) : top_decl =
   match d with
   | DFunc fd -> DFunc { fd with body = desugar_expr queues fd.body }
   | DConst cf -> DConst { cf with value = desugar_expr queues cf.value }
   | DDatabase db -> DDatabase (desugar_database_config db)
+  | DQueue q -> DQueue (desugar_queue_config q)
+  | DEmail em -> DEmail (desugar_email_config em)
+  | DChannel c -> DChannel (desugar_channel_config c)
   | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _
-  | DCapability _ | DQueue _ | DChannel _ | DWorkers _ | DCache _
-  | DEmail _ | DCapture _ | DApi _ | DServer _ | DTest _ | DApiTest _
+  | DCapability _ | DWorkers _ | DCache _
+  | DCapture _ | DApi _ | DServer _ | DTest _ | DApiTest _
   | DLoadTest _ -> d
 
 (** Lower a whole module.  Lowers the fixed-shape effect forms (EEnqueue /

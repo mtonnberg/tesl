@@ -93,6 +93,8 @@ let module_path_table : (string, string) Hashtbl.t =
   add "Tesl.Channel"   "tesl/channel.rkt";
   add "Tesl.Sql"       "tesl/sql.rkt";
   add "Tesl.Sse"       "tesl/sse.rkt";
+  add "Tesl.SSE"       "tesl/sse.rkt";
+  add "Tesl.Database"  "tesl/db.rkt";
   add "Tesl.Logging"   "tesl/logging.rkt";
   add "Tesl.JWT"        "tesl/jwt.rkt";
   add "Tesl.HttpClient" "tesl/http-client.rkt";

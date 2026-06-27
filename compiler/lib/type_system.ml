@@ -664,6 +664,8 @@ let tesl_module_exports : (string * string list) list = [
   ( "Tesl.Database",
     [ "Database"; "PostgresConfig"; "PostgresConnection";
       "TcpConnection"; "SocketConnection" ] );
+  ( "Tesl.SSE",
+    [ "SseChannel" ] );
   ( "Tesl.HttpClient",
     [ "httpClient"; "HttpResponse"; "HttpResponse?";
       "HttpClient.get"; "HttpClient.post"; "HttpClient.put"; "HttpClient.delete" ] );
@@ -689,7 +691,7 @@ let tesl_known_module_names : string list = [
   "Tesl.Uuid"; "Tesl.UUID"; "Tesl.Crypto"; "Tesl.Set"; "Tesl.Map"; "Tesl.Env";
   "Tesl.Telemetry"; "Tesl.Cli"; "Tesl.ApiTest"; "Tesl.Tuple"; "Tesl.Id";
   "Tesl.Queue"; "Tesl.Channel"; "Tesl.Sql"; "Tesl.Sse"; "Tesl.Logging";
-  "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database";
+  "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database"; "Tesl.SSE";
 ]
 
 (** Returns [true] when [name] is a known Tesl.* stdlib module. *)
