@@ -95,6 +95,7 @@ let module_path_table : (string, string) Hashtbl.t =
   add "Tesl.Sse"       "tesl/sse.rkt";
   add "Tesl.SSE"       "tesl/sse.rkt";
   add "Tesl.Database"  "tesl/db.rkt";
+  add "Tesl.App"       "tesl/prelude.rkt";
   add "Tesl.Logging"   "tesl/logging.rkt";
   add "Tesl.JWT"        "tesl/jwt.rkt";
   add "Tesl.HttpClient" "tesl/http-client.rkt";
@@ -3496,8 +3497,9 @@ let emit_requires ctx (m : module_form) =
       let config_only_names =
         [ "Database"; "DatabaseBackend"; "Postgres"; "Memory"; "PostgresConfig";
           "PostgresConnection"; "TcpConnection"; "SocketConnection";
-          "Queue"; "QueueRetryStrategy"; "QueueRetryBackoff"; "Exponential"; "Fixed";
-          "Email"; "SmtpConfig"; "SseChannel" ] in
+          "Queue"; "QueueRetryStrategy"; "QueueRetryConfig"; "QueueRetryBackoff";
+          "Exponential"; "Fixed"; "Linear";
+          "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job" ] in
       let expanded = List.filter (fun n -> not (List.mem n config_only_names)) expanded in
       let qualified = List.filter (fun n -> String.contains n '.') expanded in
       let plain = List.filter (fun n -> not (String.contains n '.')) expanded in

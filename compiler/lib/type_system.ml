@@ -665,6 +665,11 @@ let tesl_module_exports : (string * string list) list = [
     [ "Database"; "DatabaseBackend"; "Postgres"; "Memory";
       "PostgresConfig"; "PostgresConnection";
       "TcpConnection"; "SocketConnection" ] );
+  (* App-simplification (roadmap/next/app_simplification.md): `main : () -> App`
+     returning a typed App record; `Job` pairs a job type with its handler +
+     optional dead-letter handler inside a folded `queue`. *)
+  ( "Tesl.App",
+    [ "App" ] );
   ( "Tesl.SSE",
     [ "SseChannel" ] );
   ( "Tesl.HttpClient",
@@ -692,7 +697,7 @@ let tesl_known_module_names : string list = [
   "Tesl.Uuid"; "Tesl.UUID"; "Tesl.Crypto"; "Tesl.Set"; "Tesl.Map"; "Tesl.Env";
   "Tesl.Telemetry"; "Tesl.Cli"; "Tesl.ApiTest"; "Tesl.Tuple"; "Tesl.Id";
   "Tesl.Queue"; "Tesl.Channel"; "Tesl.Sql"; "Tesl.Sse"; "Tesl.Logging";
-  "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database"; "Tesl.SSE";
+  "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database"; "Tesl.SSE"; "Tesl.App";
 ]
 
 (** Returns [true] when [name] is a known Tesl.* stdlib module. *)
