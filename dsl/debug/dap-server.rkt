@@ -1251,13 +1251,13 @@
   (resume! 'step-in)
   (dap-response req #t (hasheq 'allThreadsContinued #t)))
 
-;; Step out: Tesl's checkpoint model is a flat per-statement stream (no call-stack
-;; frames in the runtime), so there is no enclosing frame to run to completion.  We
-;; therefore treat stepOut as a plain resume — equivalent to continue — which also
-;; guarantees the paused bp thread is released so STOP-THE-WORLD thaws the frozen
-;; background threads (leaving stepOut unhandled would strand them suspended).
+;; Step out: run until this thread returns to a SHALLOWER checkpoint frame (the
+;; caller). The runtime now tracks per-thread checkpoint depth, so 'step-out stops
+;; at the next checkpoint with depth < the depth where stepOut was issued. At the
+;; top frame (depth 0) nothing is shallower, so it runs to the next breakpoint or
+;; completion — i.e. behaves like continue.
 (define (handle-step-out req)
-  (resume! 'continue)
+  (resume! 'step-out)
   (dap-response req #t (hasheq 'allThreadsContinued #t)))
 
 ;; VSCodium sends 'source' when it wants file content from the adapter.

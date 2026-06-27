@@ -62,6 +62,7 @@
  step-next-file
  thsl-src
  thsl-src!
+ thsl-src-control!
  thsl-src!/runtime
  thsl-display-value
  safe-display
@@ -176,6 +177,24 @@
 ;; request ("randomly breaks on a line with no breakpoint"). A step is honored
 ;; only on the thread that requested it.
 (define step-thread (box #f))
+
+;; Per-thread checkpoint NESTING DEPTH. Incremented around each checkpoint thunk,
+;; so a called function's statements — which run INSIDE the caller's statement
+;; thunk — read a strictly greater depth than the caller. This yields true
+;; call-stack depth for the step logic with ZERO emitter cooperation (no function
+;; bodies to wrap, no goldens to change). Each thread starts at 0, so a request
+;; handler / worker / main is the depth-0 "top frame" of its own thread.
+(define checkpoint-depth-cell (make-thread-cell 0))
+
+;; The active step request, thread-scoped via step-thread:
+;;   'over → stop at the next checkpoint with depth <= base  (step over: skip calls)
+;;   'in   → stop at the very next checkpoint                 (step into)
+;;   'out  → stop at the next checkpoint with depth < base    (run to the caller)
+;; `step-base-depth` is the depth at which the step was issued. (step-into-next?
+;; and step-next-file above are retained only for compatibility; the decision is
+;; now depth-based.)
+(define step-mode (box #f))
+(define step-base-depth (box 0))
 
 ;; ── Expansion-time debug gate ────────────────────────────────────────────────
 ;; for-syntax predicate consulted by the thsl-src! / thsl-src macros below.
@@ -497,85 +516,89 @@
 ;; by the DAP server) and, when a stop is warranted, blocks until the DAP server
 ;; resumes it.  Release builds never reach here — the thsl-src! macro erases the
 ;; call entirely (see below).
-(define (thsl-src!/runtime file line locals thunk)
+;; Shared pause logic for both checkpoint variants. `d` is the current frame
+;; depth. Decides bp/step stops and, when warranted, freezes the world, reports
+;; the stop, and blocks until the DAP server resumes — recording the resumed
+;; step's mode + base depth.
+(define (checkpoint-pause! file line locals d)
   (when (debug-active?)
     (let* ([line-hit?  (set-member? (file-breakpoint-lines breakpoints file) line)]
            ;; A line breakpoint fires only if its condition (if any) is truthy
            ;; against the current locals AND its hitCondition (if any) is met.
-           ;; When the stored entry is the legacy seteq form (no records), there
-           ;; is no condition/hitCondition, so a line hit fires unconditionally.
            [rec        (and line-hit? (lookup-bp-record breakpoints file line))]
            [bp-match?
             (and line-hit?
                  (cond
                    [(not rec) #t]   ; legacy seteq line, or unconditional record absent
                    [else
-                    ;; DAP semantics: when both `condition` and `hitCondition` are
-                    ;; present, the hit counter advances only on arrivals where the
-                    ;; condition is satisfied — hitCondition then gates *those*
-                    ;; hits.  So evaluate the condition first; only a satisfied
-                    ;; condition increments the counter and consults hitCondition.
                     (and (eval-bp-condition (bp-record-condition rec) locals)
                          (let ([hc (add1 (unbox (bp-record-hit-count rec)))])
                            (set-box! (bp-record-hit-count rec) hc)
                            (eval-hit-condition (bp-record-hit-condition rec) hc)))]))]
            ;; A pending step is honored ONLY on the thread that requested it, so a
            ;; step never makes a different request/worker thread stop spuriously.
-           ;; (#f step-thread = unscoped: the initial state, when no step flag is
-           ;; set anyway; the real flow always sets step-thread before other
-           ;; threads thaw, so an active step is always thread-scoped.)
            [my-step?   (let ([st (unbox step-thread)])
                          (or (not st) (eq? (current-thread) st)))]
-           [step-in?   (and my-step? (unbox step-into-next?))]
-           [step-over? (and my-step? (unbox step-next-file)
-                            (equal? file (unbox step-next-file)))])
-      (when (or bp-match? step-in? step-over?)
-        ;; Reset step flags before pausing so they don't re-trigger immediately
-        (set-box! step-into-next? #f)
-        (set-box! step-next-file #f)
-        ;; STOP-THE-WORLD: freeze all OTHER Tesl background threads BEFORE we report
-        ;; the stop, so the queue depth / outbox / caches the user inspects cannot
-        ;; change while paused.  Fail-open (never raises).  Resumed below when this
-        ;; bp thread is released, which happens for continue / next / stepIn / stepOut
-        ;; alike (every resume routes through paused-ch).
+           ;; Depth-based step semantics:
+           ;;   over → next checkpoint at the same-or-shallower frame (skip calls)
+           ;;   in   → the very next checkpoint (descend into the call)
+           ;;   out  → next checkpoint shallower than here (returned to the caller)
+           [step-hit?
+            (and my-step?
+                 (case (unbox step-mode)
+                   [(in)   #t]
+                   [(over) (<= d (unbox step-base-depth))]
+                   [(out)  (<  d (unbox step-base-depth))]
+                   [else   #f]))])
+      (when (or bp-match? step-hit?)
+        ;; Clear the step so it does not immediately re-trigger at this same stop.
+        (set-box! step-mode #f)
+        ;; STOP-THE-WORLD: freeze all OTHER Tesl background threads while paused so
+        ;; the queue depth / outbox / caches cannot change under inspection.
         (stop-the-world-suspend!)
-        ;; Record WHICH thread is parked so the DAP server can read this thread's
-        ;; per-thread state (SQL capture, etc.) rather than the program thread's.
+        ;; Record WHICH thread is parked so the DAP server reads this thread's
+        ;; per-thread state (SQL capture, etc.).
         (set-box! paused-thread-box (current-thread))
-        ;; Send stopped event with locals
         (channel-put event-ch
           (hasheq 'event  "stopped"
                   'file   file
                   'line   line
                   'locals locals
-                  'reason (cond [bp-match? "breakpoint"]
-                                [step-in?  "step"]
-                                [else      "step"])))
-        ;; Block until DAP sends a resume command, then interpret it
+                  'reason (if bp-match? "breakpoint" "step")))
+        ;; Block until DAP sends a resume command, then interpret it.
         (let ([cmd (channel-get paused-ch)])
           (set-box! paused-thread-box #f)
-          ;; Scope any pending step to THIS (the parked) thread — whichever it is
-          ;; (a request handler, a worker, or the main program). This is what makes
-          ;; stepping work in worker code: when a worker thread is parked at a
-          ;; breakpoint and you step, the step belongs to the worker thread.
+          ;; Scope any pending step to THIS (the parked) thread and record the
+          ;; frame depth the step started from. Works in any thread (handler,
+          ;; worker, main) — the depth is relative to that thread's own stack.
           (set-box! step-thread (current-thread))
           (cond
-            [(eq? cmd 'step-in)
-             (set-box! step-into-next? #t)]
-            [(eq? cmd 'step-over)
-             (set-box! step-next-file file)]
-            [else
-             ;; 'continue or any other symbol: no step flags set
-             (void)])
-          ;; Thaw the rest of the world only on CONTINUE/stepOut. Across a single
-          ;; step (step-in/step-over) keep every OTHER thread frozen so the stepping
-          ;; thread advances deterministically: otherwise a second worker (or the
-          ;; same handler on a concurrent request) can hit the SAME breakpoint and
-          ;; pre-empt the step, so F10 looks like it never left the line. The
-          ;; stepping thread itself is not in the suspended set, so it runs on; the
-          ;; frozen threads are released at the next continue.
+            [(eq? cmd 'step-in)   (set-box! step-mode 'in)   (set-box! step-base-depth d)]
+            [(eq? cmd 'step-over) (set-box! step-mode 'over) (set-box! step-base-depth d)]
+            [(eq? cmd 'step-out)  (set-box! step-mode 'out)  (set-box! step-base-depth d)]
+            [else                 (set-box! step-mode #f)])  ; continue
+          ;; Freeze the world across step-in/step-over so the stepping thread
+          ;; advances deterministically (no second worker / concurrent request can
+          ;; pre-empt it at the same breakpoint). continue and stepOut thaw it.
           (unless (memq cmd '(step-in step-over))
-            (stop-the-world-resume!))))))
+            (stop-the-world-resume!)))))))
+
+;; A normal statement checkpoint: pause, then run the statement at depth+1 so a
+;; called function's checkpoints nest one level deeper (step-over skips them).
+;; dynamic-wind restores the depth even if the statement escapes (e.g. `fail`).
+(define (thsl-src!/runtime file line locals thunk)
+  (define d (thread-cell-ref checkpoint-depth-cell))
+  (checkpoint-pause! file line locals d)
+  (dynamic-wind
+    (lambda () (thread-cell-set! checkpoint-depth-cell (add1 d)))
+    thunk
+    (lambda () (thread-cell-set! checkpoint-depth-cell d))))
+
+;; A CONTROL-FLOW checkpoint (a `case` dispatch): pause, then run the thunk at the
+;; SAME depth — its nested arm checkpoints are same-frame control flow, NOT a
+;; function call, so step-over must reach them rather than skip over them.
+(define (thsl-src-control!/runtime file line locals thunk)
+  (checkpoint-pause! file line locals (thread-cell-ref checkpoint-depth-cell))
   (thunk))
 
 ;; ── thsl-src! / thsl-src macros (expansion-time gated) ───────────────────────
@@ -593,6 +616,20 @@
     [(_ file:expr line:expr locals:expr thunk:expr)
      (if (tesl-debug-checkpoints?)
          #'(thsl-src!/runtime file line locals thunk)
+         (syntax-parse #'thunk
+           #:literals (lambda)
+           [(lambda () body:expr ...+) #'(let () body ...)]
+           [_ #'(thunk)]))]))
+
+;; thsl-src-control! — same as thsl-src! but for a CONTROL-FLOW dispatch (a `case`):
+;; it does NOT deepen the call frame, so step-over reaches the case's arm
+;; checkpoints (same frame) instead of skipping them as if they were a call.
+;; Erases identically to thsl-src! in release.
+(define-syntax (thsl-src-control! stx)
+  (syntax-parse stx
+    [(_ file:expr line:expr locals:expr thunk:expr)
+     (if (tesl-debug-checkpoints?)
+         #'(thsl-src-control!/runtime file line locals thunk)
          (syntax-parse #'thunk
            #:literals (lambda)
            [(lambda () body:expr ...+) #'(let () body ...)]

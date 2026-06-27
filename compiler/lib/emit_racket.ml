@@ -4344,7 +4344,12 @@ let emit_func ctx (fd : func_decl) =
      (so SQL / proof / terminal forms keep exact release semantics). *)
   let emit_checkpoint_tail locals e =
     let loc = Checker.expr_loc e in
-    emit ctx (Printf.sprintf "(thsl-src! %S %d " loc.Location.file (loc.Location.start.line + 1));
+    (* A `case` is CONTROL FLOW, not a call: its arm-body checkpoints are in the
+       same frame, so use the control-flow checkpoint (which does not deepen the
+       step frame) — otherwise step-over would skip over the arm the code takes.
+       Everything else uses the normal (frame-deepening) checkpoint. *)
+    let macro = (match e with ECase _ -> "thsl-src-control!" | _ -> "thsl-src!") in
+    emit ctx (Printf.sprintf "(%s %S %d " macro loc.Location.file (loc.Location.start.line + 1));
     emit_locals_list locals;
     emit ctx " (lambda () ";
     emit_release_body e;
