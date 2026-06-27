@@ -137,6 +137,44 @@ the session; re-create from this doc if gone) — line-based, handles the struct
 postgres→connection-ADT transform; `--no-imports` mode for `.ml` heredocs. It does NOT
 handle single-line blocks or escaped `"…\n…"` strings, and does NOT rewrite tests.
 
+## KEY FINDING — the capability checker needs NO rewiring (de-risks the pass)
+
+Investigated the current machinery. The static capability checker
+(`validation_capabilities.ml` `check_handler_capabilities` / `collect_needed_capabilities`)
+is **already per-function and scope-UNAWARE**: for each `DFunc` it collects the
+capabilities its body uses and checks them against that function's declared `requires`
+(`func_decl.capabilities`). It does NOT consult `with capabilities` scopes at all — those
+are enforced only at RUNTIME by the Racket substrate. So:
+
+- Removing `with capabilities` does **not** require rewiring the static checker. The
+  per-function `requires` checking stays as-is.
+- The only thing `with capabilities` does is establish the runtime capability scope at
+  startup. In the App model, the **desugar generates** that scope from `main.requires`
+  (and per-queue `requires`).
+
+So the App pass is NOT a deep checker change. It is:
+**parser (new `main`/`queue` forms) → DESUGAR that lowers the declarative forms into the
+EXISTING imperative AST → migrate → delete old.** Emit and the cap checker are reused.
+
+### Desugar bridge (the heart of it)
+
+- `main() -> App requires [R] = App { database: D, queues: [Q…], email: [E…],
+  sseChannels: [C…], api: S, port: P }` lowers to the existing imperative `main` body:
+  `with capabilities [R] { with database D { startWorkers … (per Q) ; startEmailWorker …
+  (per E) ; serve S #:port P … } }` — i.e. build the same `EWithCapabilities` /
+  `EWithDatabase` / `EStartWorkers` / `EServe` / runtime calls the old `main` used.
+- Folded `queue X requires [R] = Queue { jobs: [Job J fn (Something dead)], retry:{…},
+  numberOfWorkers: N }` lowers to: the existing `queue_form` (database/jobs/retry) PLUS
+  synthesized `workers_form` (J→fn) and dead `workers_form` (J→dead) prepended to the
+  module (same trick as synthesized capturers). `numberOfWorkers`/`requires` feed the
+  `startWorkers` the `App` desugar generates for each activated queue.
+
+Relevant current anchors: `main` parses to `DFunc {kind=MainKind; capabilities=…}`
+(parser.ml ~5002-5054); imperative startup forms `EWithCapabilities`/`EWithDatabase`
+(parser ~2462-2494) and `EStartWorkers`/`EServe` (desugared to `ERuntimeCall`,
+desugar.ml ~119-146); `workers_form` parse ~4285-4313, emit emit_racket ~6111-6125;
+`parse_requires` (parser ~1013-1032) is reusable for queue/main.
+
 ## Implementation sketch (where the work lands)
 
 - **Parser:** `queue NAME requires [...] { … jobs: [Job T fn (Maybe fn)] … numberOfWorkers: N }`;
