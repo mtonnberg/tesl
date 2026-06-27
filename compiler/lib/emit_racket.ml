@@ -4728,6 +4728,15 @@ let emit_postgres_value ctx v =
        emit ctx (Printf.sprintf "(tesl-env-int-raw %S %s)" var_name def_val)
      | _ ->
        emit ctx (Printf.sprintf "(tesl-env-raw %S)" inner))
+  end else if String.length v >= 10 && String.sub v 0 10 = "envString(" then begin
+    (* envString("VAR", "default") *)
+    let inner = String.sub v 10 (String.length v - 11) in
+    (match String.split_on_char ',' inner with
+     | var :: rest ->
+       let var_name = strip_parens (String.trim var) in
+       let def_val  = strip_parens (String.trim (String.concat "," rest)) in
+       emit ctx (Printf.sprintf "(tesl-env-string-raw %S %S)" var_name def_val)
+     | _ -> emit ctx (Printf.sprintf "(tesl-env-raw %S)" inner))
   end else begin
     (* Check if value is a plain integer *)
     let is_int = String.length v > 0 && String.for_all (fun c -> c >= '0' && c <= '9') v in

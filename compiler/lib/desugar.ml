@@ -157,11 +157,89 @@ let desugar_expr (queues : (string, string) Hashtbl.t) (e : expr) : expr =
     metadata) with no expression children, so they pass through verbatim.  This
     mirrors the "children = sub-[expr]s reachable without crossing a top-level
     declaration boundary" coverage decision documented in {!Ast_visitor}. *)
+(* ── Typed-config-block lowering (`database X = Database { … }`) ────────────
+   The parser leaves the new typed-record syntax as a record-construction [expr]
+   in [config_expr]; here we extract the structured fields the emitter reads, so
+   {!Emit_racket} is untouched.  Scalar values (`env "X"`, `envInt "X" n`,
+   `envString "X" "d"`, literals) are rendered to the same intermediate strings
+   the emitter already understands. *)
+
+let config_record_fields (e : expr) : (string * expr) list =
+  match e with
+  | ERecord { fields; _ } -> fields
+  | EApp { fn = EConstructor _; arg = ERecord { fields; _ }; _ } -> fields
+  | _ -> []
+
+let config_ctor_name (e : expr) : string option =
+  match e with
+  | EConstructor { name; _ } -> Some name
+  | EApp { fn = EConstructor { name; _ }; _ } -> Some name
+  | _ -> None
+
+(* Render a scalar config value to the emitter's intermediate string form. *)
+let render_config_value (e : expr) : string =
+  match e with
+  | ELit { lit = LString s; _ } -> s
+  | ELit { lit = LInt n; _ } -> string_of_int n
+  | ELit { lit = LBool b; _ } -> if b then "true" else "false"
+  | EApp { fn = EVar { name = "env"; _ }; arg = ELit { lit = LString v; _ }; _ } ->
+    Printf.sprintf "env(%S)" v
+  | EApp { fn = EApp { fn = EVar { name = "envInt"; _ };
+                       arg = ELit { lit = LString v; _ }; _ };
+           arg = ELit { lit = LInt n; _ }; _ } ->
+    Printf.sprintf "envInt(%S,%d)" v n
+  | EApp { fn = EApp { fn = EVar { name = "envString"; _ };
+                       arg = ELit { lit = LString v; _ }; _ };
+           arg = ELit { lit = LString d; _ }; _ } ->
+    Printf.sprintf "envString(%S,%S)" v d
+  | _ -> ""
+
+let desugar_database_config (d : database_form) : database_form =
+  match d.config_expr with
+  | None -> d
+  | Some e ->
+    let top = config_record_fields e in
+    let schema =
+      match List.assoc_opt "schema" top with
+      | Some (ELit { lit = LString s; _ }) -> s | _ -> ""
+    in
+    let entities =
+      match List.assoc_opt "entities" top with
+      | Some (EList { elems; _ }) -> List.filter_map config_ctor_name elems
+      | _ -> []
+    in
+    let postgres =
+      match List.assoc_opt "postgres" top with
+      | Some pg ->
+        let pf = config_record_fields pg in
+        let scalar key out =
+          match List.assoc_opt key pf with
+          | Some v -> [ (out, render_config_value v) ] | None -> []
+        in
+        let conn =
+          match List.assoc_opt "connection" pf with
+          | Some c ->
+            let cf = config_record_fields c in
+            let get k out = match List.assoc_opt k cf with
+              | Some v -> [ (out, render_config_value v) ] | None -> [] in
+            (match config_ctor_name c with
+             | Some "TcpConnection" -> get "host" "host" @ get "port" "port"
+             | Some "SocketConnection" -> get "path" "socket"
+             | _ -> [])
+          | None -> []
+        in
+        scalar "dbName" "database" @ scalar "user" "user"
+        @ scalar "password" "password" @ conn
+      | None -> []
+    in
+    { d with backend = "postgres"; schema; entities; postgres; config_expr = None }
+
 let desugar_decl (queues : (string, string) Hashtbl.t) (d : top_decl) : top_decl =
   match d with
   | DFunc fd -> DFunc { fd with body = desugar_expr queues fd.body }
   | DConst cf -> DConst { cf with value = desugar_expr queues cf.value }
-  | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _ | DDatabase _
+  | DDatabase db -> DDatabase (desugar_database_config db)
+  | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _
   | DCapability _ | DQueue _ | DChannel _ | DWorkers _ | DCache _
   | DEmail _ | DCapture _ | DApi _ | DServer _ | DTest _ | DApiTest _
   | DLoadTest _ -> d

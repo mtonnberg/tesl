@@ -330,6 +330,7 @@ type database_form = {
   entities   : string list;
   postgres   : (string * string) list;  (** key-value connection params *)
   raw_fields : config_field list;        (** surface fields for schema validation *)
+  config_expr : expr option;             (** new typed-record syntax: `= Database { … }` (desugar fills the fields above) *)
   loc        : loc;
 }
 

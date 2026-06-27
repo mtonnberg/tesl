@@ -153,6 +153,9 @@ let kind_label (f : field) : string =
     schema-validated kinds.  Returns [(schema, raw_fields)]. *)
 let top_schema_of_decl (d : Ast.top_decl) : (schema * Ast.config_field list) option =
   match d with
+  (* New typed-record syntax (`= Database { … }`) is validated by the config
+     type-checker, not this raw-fields schema pass — skip it here. *)
+  | Ast.DDatabase r when r.Ast.config_expr <> None -> None
   | Ast.DDatabase r -> Option.map (fun s -> (s, r.Ast.raw_fields)) (schema_for "database")
   | Ast.DQueue r    -> Option.map (fun s -> (s, r.Ast.raw_fields)) (schema_for "queue")
   | Ast.DChannel r  -> Option.map (fun s -> (s, r.Ast.raw_fields)) (schema_for "channel")

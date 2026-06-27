@@ -2173,10 +2173,13 @@ and parse_record_literal s =
           | Err _ -> continue_ := false
         end else continue_ := false
       | IDENT _
-      (* Allow keyword tokens as record field names (e.g. email, smtp) *)
-      | EMAIL | SMTP ->
+      (* Allow keyword tokens as record field names (e.g. email, smtp, and the
+         config-block field keywords schema/database/backend). *)
+      | EMAIL | SMTP | SCHEMA | DATABASE | BACKEND ->
         let fname = match peek s with
-          | IDENT n -> n | EMAIL -> "email" | SMTP -> "smtp" | _ -> "_"
+          | IDENT n -> n | EMAIL -> "email" | SMTP -> "smtp"
+          | SCHEMA -> "schema" | DATABASE -> "database" | BACKEND -> "backend"
+          | _ -> "_"
         in
         advance s;
         (* Field separator: either ':' (new record) or '=' (record update) *)
@@ -3681,6 +3684,17 @@ let parse_pg_value s func_name =
 let parse_database_form s =
   let loc0 = current_loc s in
   let* name = expect_uident s in
+  if peek s = EQ then begin
+    (* New typed-record syntax: `database NAME = Database { … }`. The RHS is an
+       ordinary record-construction expression; the config checker validates it
+       and the desugar pass fills the structured fields below. *)
+    advance s;
+    let* type_name = expect_uident s in
+    let* body = parse_record_literal s in
+    let loc = span loc0 (current_loc s) in
+    return { name; backend = ""; schema = ""; entities = []; postgres = [];
+             raw_fields = []; config_expr = Some (hint_expr_type type_name body); loc }
+  end else begin
   let* _ = expect s LBRACE in
   skip_layout s;
   let backend = ref "" in
@@ -3742,7 +3756,9 @@ let parse_database_form s =
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
   return { name; backend = !backend; schema = !schema; entities = List.rev !entities;
-           postgres = List.rev !postgres; raw_fields = List.rev !raw; loc }
+           postgres = List.rev !postgres; raw_fields = List.rev !raw;
+           config_expr = None; loc }
+  end
 
 (** Parse a queue block. *)
 let parse_queue_form s =
