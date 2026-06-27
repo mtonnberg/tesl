@@ -880,17 +880,22 @@ let config_stdlib_seed (m : module_form) :
   if imported "Tesl.Database" then begin
     adts := adt "PostgresConnection" []
       [ ("TcpConnection", [ ("host", TCon "String"); ("port", TCon "Int") ]);
-        ("SocketConnection", [ ("path", TCon "String") ]) ] :: !adts;
+        ("SocketConnection", [ ("path", TCon "String") ]) ]
+      :: adt "DatabaseBackend" []
+      [ ("Postgres", [ ("config", TCon "PostgresConfig") ]); ("Memory", []) ] :: !adts;
     ctors :=
       fn_ctor "PostgresConnection" "TcpConnection" [ TCon "String"; TCon "Int" ]
       :: fn_ctor "PostgresConnection" "SocketConnection" [ TCon "String" ]
+      :: fn_ctor "DatabaseBackend" "Postgres" [ TCon "PostgresConfig" ]
+      :: nullary_ctor "DatabaseBackend" "Memory"
       :: !ctors
   end;
   if imported "Tesl.Queue" then begin
-    adts := adt "QueueRetryBackoff" [] [ ("Exponential", []); ("Fixed", []) ] :: !adts;
+    adts := adt "QueueRetryBackoff" [] [ ("Exponential", []); ("Fixed", []); ("Linear", []) ] :: !adts;
     ctors :=
       nullary_ctor "QueueRetryBackoff" "Exponential"
-      :: nullary_ctor "QueueRetryBackoff" "Fixed" :: !ctors
+      :: nullary_ctor "QueueRetryBackoff" "Fixed"
+      :: nullary_ctor "QueueRetryBackoff" "Linear" :: !ctors
   end;
   (!adts, !ctors)
 

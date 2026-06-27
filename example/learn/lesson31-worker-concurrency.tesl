@@ -30,7 +30,8 @@ module Lesson31WorkerConcurrency exposing [
 # 4 parallel workers to process it.
 
 import Tesl.Prelude exposing [String, Unit]
-import Tesl.Queue exposing [FromQueue, FromDeadQueue, queueRead, queueWrite]
+import Tesl.Queue exposing [FromQueue, FromDeadQueue, queueRead, queueWrite, Queue, QueueRetryStrategy, Exponential, Fixed]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
 
 # ── Capabilities ──────────────────────────────────────────────────────────────
 
@@ -50,30 +51,30 @@ record EmailJob {
 
 # ── Queue declaration ─────────────────────────────────────────────────────────
 
-queue EmailQueue {
+queue EmailQueue = Queue {
   database: EmailDatabase
   jobs: [EmailJob]
-  retry {
+  retry: QueueRetryStrategy {
     maxAttempts: 3
-    backoff: exponential
+    backoff: Exponential
     initialDelay: 10
   }
 }
 
 # ── Database ──────────────────────────────────────────────────────────────────
 
-database EmailDatabase {
-  backend: postgres
+database EmailDatabase = Database {
   schema: "lesson31"
   entities: []
-  postgres {
-    dbName: env("LESSON31_DB")
-    user: env("TESL_POSTGRES_USER")
-    password: env("TESL_POSTGRES_PASSWORD")
-    host: env("TESL_POSTGRES_HOST")
-    port: envInt("TESL_POSTGRES_PORT", 5432)
-    socket: env("TESL_POSTGRES_SOCKET")
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "LESSON31_DB"
+    user: env "TESL_POSTGRES_USER"
+    password: env "TESL_POSTGRES_PASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_POSTGRES_HOST"
+      port: envInt "TESL_POSTGRES_PORT" 5432
+    }
+  })
 }
 
 # ── Workers ───────────────────────────────────────────────────────────────────

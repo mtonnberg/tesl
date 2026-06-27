@@ -55,6 +55,7 @@ let check_module (m : module_form) : validation_error list =
   @ check_cache_structure decls
   @ check_email_structure decls
   @ check_config_field_schema decls
+  @ check_typed_config_blocks decls
   @ check_database_entities m
   @ check_api_test_structure m
   @ check_test_descriptions decls

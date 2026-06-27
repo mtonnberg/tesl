@@ -61,14 +61,13 @@
   #:password (tesl-env-raw "NOTES_DB_PASSWORD")
   #:server (tesl-env-raw "NOTES_DB_HOST")
   #:port 5432
-  #:socket (tesl-env-raw "NOTES_DB_SOCKET")
   #:schema notes_lesson29
   #:entities Note)
 
 (define-checker
   (checkTitle [s : String])
   #:returns [s : String ::: (ValidTitle s)]
-  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 134 (list (cons 's *s)) (lambda () (if (and (>= (raw-value (tesl_import_String_length *s)) 1) (<= (raw-value (tesl_import_String_length *s)) 200)) (accept (ValidTitle s) #:value *s) (reject "title must be 1-200 characters" #:http-code 400)))))
+  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 135 (list (cons 's *s)) (lambda () (if (and (>= (raw-value (tesl_import_String_length *s)) 1) (<= (raw-value (tesl_import_String_length *s)) 200)) (accept (ValidTitle s) #:value *s) (reject "title must be 1-200 characters" #:http-code 400)))))
 
 (define-record NewNote
   [title : String ::: (ValidTitle title)]
@@ -94,7 +93,7 @@
 (define-checker
   (checkNoteId [s : String])
   #:returns [s : String ::: (ValidNoteId s)]
-  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 157 (list (cons 's *s)) (lambda () (if (> (raw-value (tesl_import_String_length *s)) 5) (accept (ValidNoteId s) #:value *s) (reject "invalid note id" #:http-code 400)))))
+  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 158 (list (cons 's *s)) (lambda () (if (> (raw-value (tesl_import_String_length *s)) 5) (accept (ValidNoteId s) #:value *s) (reject "invalid note id" #:http-code 400)))))
 
 (define-capture noteIdCapture
   [noteId : String ::: (ValidNoteId noteId)]
@@ -103,67 +102,67 @@
 (define-checker
   (checkActive [note : Note])
   #:returns [note : Note ::: (IsActive note)]
-  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 169 (list (cons 'note *note)) (lambda () (if (equal? (raw-value note.active) "yes") (accept (IsActive note) #:value *note) (reject "note is not active" #:http-code 422)))))
+  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 170 (list (cons 'note *note)) (lambda () (if (equal? (raw-value note.active) "yes") (accept (IsActive note) #:value *note) (reject "note is not active" #:http-code 422)))))
 
 (define-checker
   (checkPinned [note : Note])
   #:returns [note : Note ::: (IsPinned note)]
-  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 177 (list (cons 'note *note)) (lambda () (if (equal? (raw-value note.pinned) "yes") (accept (IsPinned note) #:value *note) (reject "note is not pinned" #:http-code 422)))))
+  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 178 (list (cons 'note *note)) (lambda () (if (equal? (raw-value note.pinned) "yes") (accept (IsPinned note) #:value *note) (reject "note is not pinned" #:http-code 422)))))
 
 (define-auther
   (cookieAuth [request : HttpRequest])
   #:capabilities [noteReadCookie]
   #:returns [user : String ::: (Authenticated user)]
-  (thsl-src-control! "example/learn/lesson29-forall-list-proofs.tesl" 188 (list (cons 'request *request)) (lambda () (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 189 (list) (lambda () (reject "not logged in" #:http-code 401)))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 190 (list (cons 'userId userId)) (lambda () (accept (Authenticated userId) #:value *userId))))])))))
+  (thsl-src-control! "example/learn/lesson29-forall-list-proofs.tesl" 189 (list (cons 'request *request)) (lambda () (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 190 (list) (lambda () (reject "not logged in" #:http-code 401)))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 191 (list (cons 'userId userId)) (lambda () (accept (Authenticated userId) #:value *userId))))])))))
 
 (define-handler
   (listNotes [user : String ::: (Authenticated user)])
   #:capabilities [noteDbRead]
   #:returns (List Note)
-  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 197 (list (cons 'user *user)) (lambda () (select-many (from Note) (where (==. (entity-field-ref Note 'authorId) user))))))
+  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 198 (list (cons 'user *user)) (lambda () (select-many (from Note) (where (==. (entity-field-ref Note 'authorId) user))))))
 
 (define-handler
   (listActiveNotes [user : String ::: (Authenticated user)])
   #:capabilities [noteDbRead]
   #:returns (List Note)
-  (let ([allNotes (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 204 (list (cons 'user *user)) (lambda () (select-many (from Note) (where (==. (entity-field-ref Note 'authorId) user)))))]) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 205 (list (cons 'allNotes *allNotes) (cons 'user *user)) (lambda () (tesl_import_List_filterCheck checkActive (raw-value allNotes))))))
+  (let ([allNotes (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 205 (list (cons 'user *user)) (lambda () (select-many (from Note) (where (==. (entity-field-ref Note 'authorId) user)))))]) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 206 (list (cons 'allNotes *allNotes) (cons 'user *user)) (lambda () (tesl_import_List_filterCheck checkActive (raw-value allNotes))))))
 
 (define-handler
   (listActivePinnedNotes [user : String ::: (Authenticated user)])
   #:capabilities [noteDbRead]
   #:returns (List Note)
-  (let ([allNotes (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 215 (list (cons 'user *user)) (lambda () (select-many (from Note) (where (==. (entity-field-ref Note 'authorId) user)))))]) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 216 (list (cons 'allNotes *allNotes) (cons 'user *user)) (lambda () (tesl_import_List_filterCheck (check-and checkActive checkPinned) (raw-value allNotes))))))
+  (let ([allNotes (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 216 (list (cons 'user *user)) (lambda () (select-many (from Note) (where (==. (entity-field-ref Note 'authorId) user)))))]) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 217 (list (cons 'allNotes *allNotes) (cons 'user *user)) (lambda () (tesl_import_List_filterCheck (check-and checkActive checkPinned) (raw-value allNotes))))))
 
 (define/pow
   (filterActivePinned [notes : (List Note)])
   #:returns (List Note)
-  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 226 (list (cons 'notes *notes)) (lambda () (tesl_import_List_filterCheck (check-and checkActive checkPinned) *notes))))
+  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 227 (list (cons 'notes *notes)) (lambda () (tesl_import_List_filterCheck (check-and checkActive checkPinned) *notes))))
 
 (define/pow
   (verifyAllActive [notes : (List Note)])
   #:returns (Maybe (List Note))
-  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 238 (list (cons 'notes *notes)) (lambda () (tesl_import_List_allCheck checkActive *notes))))
+  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 239 (list (cons 'notes *notes)) (lambda () (tesl_import_List_allCheck checkActive *notes))))
 
 (define/pow
   (verifyAllActivePinned [notes : (List Note)])
   #:returns (Maybe (List Note))
-  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 247 (list (cons 'notes *notes)) (lambda () (tesl_import_List_allCheck (check-and checkActive checkPinned) *notes))))
+  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 248 (list (cons 'notes *notes)) (lambda () (tesl_import_List_allCheck (check-and checkActive checkPinned) *notes))))
 
 (define/pow
   (countActivePinned [notes : (List Note)])
   #:returns Integer
-  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 255 (list (cons 'notes *notes)) (lambda () (raw-value (tesl_import_List_length *notes)))))
+  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 256 (list (cons 'notes *notes)) (lambda () (raw-value (tesl_import_List_length *notes)))))
 
 (define/pow
   (applyCombined [note : Note])
   #:returns (? Note _entity ::: ((IsActive _entity) && (IsPinned _entity)))
-  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 273 (list (cons 'note *note)) (lambda () ((check-and checkActive checkPinned) note))))
+  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 274 (list (cons 'note *note)) (lambda () ((check-and checkActive checkPinned) note))))
 
 (define-handler
   (createNote [user : String ::: (Authenticated user)] [body : NewNote])
   #:capabilities [noteDbRead noteDbWrite random]
   #:returns (Exists [noteId : String] (? Note _entity ::: (FromDb (Id == noteId) _entity)))
-  (let ([noteId (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 281 (list (cons 'user *user) (cons 'body *body)) (lambda () (generatePrefixedId "note")))]) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 282 (list (cons 'noteId *noteId) (cons 'user *user) (cons 'body *body)) (lambda () (pack ([noteId]) (insert-one! Note (hash 'id noteId 'title (raw-value body.title) 'content (raw-value body.content) 'authorId user 'active "yes" 'pinned "no")))))))
+  (let ([noteId (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 282 (list (cons 'user *user) (cons 'body *body)) (lambda () (generatePrefixedId "note")))]) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 283 (list (cons 'noteId *noteId) (cons 'user *user) (cons 'body *body)) (lambda () (pack ([noteId]) (insert-one! Note (hash 'id noteId 'title (raw-value body.title) 'content (raw-value body.content) 'authorId user 'active "yes" 'pinned "no")))))))
 
 (define NoteServer-sse-routes '())
 (define-api NoteApi

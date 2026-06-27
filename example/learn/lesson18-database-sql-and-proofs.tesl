@@ -29,6 +29,7 @@ import Tesl.Time exposing [nowMillis, time, PosixMillis]
 import Tesl.Random exposing [random]
 import Tesl.Telemetry exposing [initTelemetry]
 import Tesl.Id exposing [generatePrefixedId]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
 
 # ─────────────────────────────────────────────
 # UNDERSTANDING — why it works this way
@@ -79,18 +80,18 @@ entity Note table "notes" primaryKey id {
 
 # ─── Database configuration ───────────────────────────────────────────────────
 
-database NoteDatabase {
-  backend: postgres
+database NoteDatabase = Database {
   schema: "notes_app"
   entities: [Note]
-  postgres {
-    dbName: env("NOTES_DB_NAME")
-    user: env("NOTES_DB_USER")
-    password: env("NOTES_DB_PASSWORD")
-    host: env("NOTES_DB_HOST")
-    port: envInt("NOTES_DB_PORT", 5432)
-    socket: env("NOTES_DB_SOCKET")
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "NOTES_DB_NAME"
+    user: env "NOTES_DB_USER"
+    password: env "NOTES_DB_PASSWORD"
+    connection: TcpConnection {
+      host: env "NOTES_DB_HOST"
+      port: envInt "NOTES_DB_PORT" 5432
+    }
+  })
 }
 
 # ─── Validation ───────────────────────────────────────────────────────────────

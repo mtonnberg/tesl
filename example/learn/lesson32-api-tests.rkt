@@ -53,20 +53,19 @@
   #:password "lesson32"
   #:server "localhost"
   #:port 5432
-  #:socket ""
   #:schema lesson32
   #:entities Note)
 
 (define-handler
   (echo [req : EchoRequest])
   #:returns EchoRequest
-  (thsl-src! "example/learn/lesson32-api-tests.tesl" 49 (list (cons 'req *req)) (lambda () req)))
+  (thsl-src! "example/learn/lesson32-api-tests.tesl" 50 (list (cons 'req *req)) (lambda () req)))
 
 (define-handler
   (getSeededNote)
   #:capabilities [dbRead]
   #:returns Note
-  (let ([found (thsl-src! "example/learn/lesson32-api-tests.tesl" 53 (list) (lambda () (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) "note-1")))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/learn/lesson32-api-tests.tesl" 54 (list (cons 'found *found)) (lambda () (let ([tesl_case_0 (raw-value found)]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "example/learn/lesson32-api-tests.tesl" 56 (list) (lambda () (reject "note not found" #:http-code 404)))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "example/learn/lesson32-api-tests.tesl" 58 (list (cons 'n n)) (lambda () *n)))]))))))
+  (let ([found (thsl-src! "example/learn/lesson32-api-tests.tesl" 54 (list) (lambda () (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) "note-1")))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/learn/lesson32-api-tests.tesl" 55 (list (cons 'found *found)) (lambda () (let ([tesl_case_0 (raw-value found)]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "example/learn/lesson32-api-tests.tesl" 57 (list) (lambda () (reject "note not found" #:http-code 404)))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "example/learn/lesson32-api-tests.tesl" 59 (list (cons 'n n)) (lambda () *n)))]))))))
 
 (define Lesson32Server-sse-routes '())
 (define-api Lesson32Api

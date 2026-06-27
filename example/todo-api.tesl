@@ -20,6 +20,7 @@ import Tesl.Telemetry exposing [telemetry, initTelemetry]
 import Tesl.Cli exposing [cli.args, lookupPortArgument]
 import Tesl.Id exposing [generatePrefixedId]
 import Tesl.Random exposing [random]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
 capability todoDbRead implies dbRead
 capability todoDbWrite implies dbWrite
 capability todoReadHttpCookie
@@ -53,18 +54,18 @@ entity Todo table "todos" primaryKey id {
   createdAt: PosixMillis
 }
 
-database TodoDatabase {
-  backend: postgres
+database TodoDatabase = Database {
   schema: "todo_api"
   entities: [Todo]
-  postgres {
-    dbName: env("TESL_POSTGRES_DATABASE")
-    user: env("TESL_POSTGRES_USER")
-    password: env("TESL_POSTGRES_PASSWORD")
-    host: env("TESL_POSTGRES_HOST")
-    port: envInt("TESL_POSTGRES_PORT", 5432)
-    socket: env("TESL_POSTGRES_SOCKET")
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "TESL_POSTGRES_DATABASE"
+    user: env "TESL_POSTGRES_USER"
+    password: env "TESL_POSTGRES_PASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_POSTGRES_HOST"
+      port: envInt "TESL_POSTGRES_PORT" 5432
+    }
+  })
 }
 
 defaultExamplePort = 8086

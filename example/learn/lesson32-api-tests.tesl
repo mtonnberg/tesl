@@ -5,6 +5,7 @@ import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.ApiTest exposing [ statusOk, isNull ]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
 
 # ── Goal ─────────────────────────────────────────────────────────────────────
 # Learn the new `api-test` block by writing the same kinds of tests you would
@@ -31,18 +32,18 @@ entity Note table "notes" primaryKey id {
   title: String
 }
 
-database Lesson32Database {
-  backend: postgres
+database Lesson32Database = Database {
   schema: "lesson32"
   entities: [Note]
-  postgres {
+  backend: Postgres (PostgresConfig {
     dbName: "lesson32"
     user: "lesson32"
     password: "lesson32"
-    host: "localhost"
-    port: 5432
-    socket: ""
-  }
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
 }
 
 handler echo(req: EchoRequest) -> EchoRequest =

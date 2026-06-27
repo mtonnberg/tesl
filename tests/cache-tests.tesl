@@ -3,10 +3,19 @@ module Cache_tests exposing []
 
 import Tesl.Prelude exposing [Int, String, Bool, List, Unit]
 import Tesl.Maybe exposing [Maybe, Nothing, Something]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
 
-database TestDB {
+database TestDB = Database {
   schema: public
-  backend: postgres {}
+  backend: Postgres (PostgresConfig {
+    dbName: ""
+    user: ""
+    password: ""
+    connection: TcpConnection {
+      host: ""
+      port: 5432
+    }
+  })
 }
 
 # ── Cache declarations ─────────────────────────────────────────────────────

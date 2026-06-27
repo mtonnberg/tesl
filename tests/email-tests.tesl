@@ -2,43 +2,53 @@
 module Email_tests exposing []
 
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.Email exposing [Email, SmtpConfig]
 
-database TestDB {
+database TestDB = Database {
   schema: public
-  backend: postgres {}
+  backend: Postgres (PostgresConfig {
+    dbName: ""
+    user: ""
+    password: ""
+    connection: TcpConnection {
+      host: ""
+      port: 5432
+    }
+  })
 }
 
 # ── Email declarations ─────────────────────────────────────────────────────
 
-email AppEmail {
+email AppEmail = Email {
   database: TestDB
-  smtp {
-    host: env("SMTP_HOST")
+  smtp: SmtpConfig {
+    host: env "SMTP_HOST"
     port: 587
-    username: env("SMTP_USER")
-    password: env("SMTP_PASS")
+    username: env "SMTP_USER"
+    password: env "SMTP_PASS"
     tls: true
   }
 }
 
-email MarketingEmail {
+email MarketingEmail = Email {
   database: TestDB
-  smtp {
-    host: env("MKT_SMTP_HOST")
+  smtp: SmtpConfig {
+    host: env "MKT_SMTP_HOST"
     port: 465
-    username: env("MKT_SMTP_USER")
-    password: env("MKT_SMTP_PASS")
+    username: env "MKT_SMTP_USER"
+    password: env "MKT_SMTP_PASS"
     tls: true
   }
 }
 
-email NoTlsEmail {
+email NoTlsEmail = Email {
   database: TestDB
-  smtp {
-    host: env("SMTP_HOST")
+  smtp: SmtpConfig {
+    host: env "SMTP_HOST"
     port: 25
-    username: env("SMTP_USER")
-    password: env("SMTP_PASS")
+    username: env "SMTP_USER"
+    password: env "SMTP_PASS"
     tls: false
   }
 }

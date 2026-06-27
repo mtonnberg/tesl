@@ -52,6 +52,7 @@ import Tesl.String exposing [String.length]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Random exposing [random]
 import Tesl.Id exposing [generatePrefixedId]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
 
 # ─────────────────────────────────────────────
 # UNDERSTANDING — why it works this way
@@ -112,18 +113,18 @@ entity Note table "notes" primaryKey id {
   pinned: String @db(text)
 }
 
-database NoteDatabase {
-  backend: postgres
+database NoteDatabase = Database {
   schema: "notes_lesson29"
   entities: [Note]
-  postgres {
-    dbName: env("NOTES_DB_NAME")
-    user: env("NOTES_DB_USER")
-    password: env("NOTES_DB_PASSWORD")
-    host: env("NOTES_DB_HOST")
-    port: 5432
-    socket: env("NOTES_DB_SOCKET")
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "NOTES_DB_NAME"
+    user: env "NOTES_DB_USER"
+    password: env "NOTES_DB_PASSWORD"
+    connection: TcpConnection {
+      host: env "NOTES_DB_HOST"
+      port: 5432
+    }
+  })
 }
 
 # ─── Validation / Check functions ─────────────────────────────────────────────

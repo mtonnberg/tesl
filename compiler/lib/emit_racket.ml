@@ -3489,6 +3489,16 @@ let emit_requires ctx (m : module_form) =
         else
           expand_local_import_names m.source_file imp.module_name names
       in
+      (* Config-block types (database/queue/email/sse) are compile-time only:
+         the desugar pass consumes the config record literal and they never
+         appear in emitted Racket, so importing them must NOT emit a `require`
+         for runtime bindings that don't exist. *)
+      let config_only_names =
+        [ "Database"; "DatabaseBackend"; "Postgres"; "Memory"; "PostgresConfig";
+          "PostgresConnection"; "TcpConnection"; "SocketConnection";
+          "Queue"; "QueueRetryStrategy"; "QueueRetryBackoff"; "Exponential"; "Fixed";
+          "Email"; "SmtpConfig"; "SseChannel" ] in
+      let expanded = List.filter (fun n -> not (List.mem n config_only_names)) expanded in
       let qualified = List.filter (fun n -> String.contains n '.') expanded in
       let plain = List.filter (fun n -> not (String.contains n '.')) expanded in
       (* Register plain names from Tesl stdlib modules as stdlib functions *)
@@ -3529,7 +3539,10 @@ let emit_requires ctx (m : module_form) =
            will be emitted inline by emit_module after the main module's declarations.
            No require or lazy-import is needed. *)
         ignore (require_path, all_bindings)
-      end else begin
+      end else if all_bindings = [] then
+        (* All imported names were compile-time-only config types — no require. *)
+        ()
+      else begin
         let pairs_str = String.concat " " (List.map binding_pair_to_string all_bindings) in
         if is_absolute || use_file_syntax
         then emit_line ctx (Printf.sprintf "  (only-in (file \"%s\") %s)" require_path pairs_str)

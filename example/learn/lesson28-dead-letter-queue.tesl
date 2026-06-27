@@ -21,7 +21,8 @@ module Lesson28DeadLetterQueue exposing [NotifWorkers, DeadNotifWorkers]
 # dead-queue dequeue boundary, not by arbitrary user code.
 
 import Tesl.Prelude exposing [String]
-import Tesl.Queue exposing [FromQueue, FromDeadQueue, queueRead, pubsub]
+import Tesl.Queue exposing [FromQueue, FromDeadQueue, queueRead, pubsub, Queue, QueueRetryStrategy, Exponential, Fixed]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
 
 # ── Capabilities ──────────────────────────────────────────────────────────────
 
@@ -37,28 +38,28 @@ record SendNotif {
 
 # ── Database ──────────────────────────────────────────────────────────────────
 
-database FakeDb {
-  backend: postgres
+database FakeDb = Database {
   schema: "notifications"
   entities: []
-  postgres {
+  backend: Postgres (PostgresConfig {
     dbName: "notif_db"
     user: "notif"
     password: ""
-    host: "localhost"
-    port: 5432
-    socket: ""
-  }
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
 }
 
 # ── Queue ─────────────────────────────────────────────────────────────────────
 
-queue NotifQueue {
+queue NotifQueue = Queue {
   database: FakeDb
   jobs: [SendNotif]
-  retry {
+  retry: QueueRetryStrategy {
     maxAttempts: 3
-    backoff: exponential
+    backoff: Exponential
     initialDelay: 30
   }
 }

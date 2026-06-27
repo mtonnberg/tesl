@@ -42,21 +42,22 @@ module Lesson59Cache exposing [
 
 import Tesl.Prelude exposing [Int, String, Bool(..), Unit]
 import Tesl.Maybe exposing [Maybe(..), Nothing, Something]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
 
 # ── Database (required as backing store for the cache) ────────────────────────
 
-database MainDB {
-  backend: postgres
+database MainDB = Database {
   schema: "lesson59"
   entities: []
-  postgres {
-    dbName: env("LESSON59_DB")
-    user: env("TESL_POSTGRES_USER")
-    password: env("TESL_POSTGRES_PASSWORD")
-    host: env("TESL_POSTGRES_HOST")
-    port: envInt("TESL_POSTGRES_PORT", 5432)
-    socket: env("TESL_POSTGRES_SOCKET")
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "LESSON59_DB"
+    user: env "TESL_POSTGRES_USER"
+    password: env "TESL_POSTGRES_PASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_POSTGRES_HOST"
+      port: envInt "TESL_POSTGRES_PORT" 5432
+    }
+  })
 }
 
 # ── Cache declarations ─────────────────────────────────────────────────────────

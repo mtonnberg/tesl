@@ -67,6 +67,8 @@ import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify]
 # 5. HttpClient: outbound HTTP calls for webhook notification.
 #    `httpClient` must be wrapped in a user-defined capability.
 import Tesl.HttpClient exposing [httpClient, HttpResponse, HttpClient.post]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.Email exposing [Email, SmtpConfig]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CAPABILITIES
@@ -100,18 +102,18 @@ entity User table "users" primaryKey id {
   createdAt: PosixMillis
 }
 
-database UserDatabase {
-  backend: postgres
+database UserDatabase = Database {
   schema: "user_service"
   entities: [User]
-  postgres {
-    dbName: env("USER_DB_NAME")
-    user: env("USER_DB_USER")
-    password: env("USER_DB_PASSWORD")
-    host: env("USER_DB_HOST")
-    port: envInt("USER_DB_PORT", 5432)
-    socket: env("USER_DB_SOCKET")
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "USER_DB_NAME"
+    user: env "USER_DB_USER"
+    password: env "USER_DB_PASSWORD"
+    connection: TcpConnection {
+      host: env "USER_DB_HOST"
+      port: envInt "USER_DB_PORT" 5432
+    }
+  })
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -145,13 +147,13 @@ cache UserProfileCache {
 # A background worker thread (startEmailWorker UserServiceMail) delivers them.
 # ─────────────────────────────────────────────────────────────────────────────
 
-email UserServiceMail {
+email UserServiceMail = Email {
   database: UserDatabase
-  smtp {
-    host: env("SMTP_HOST")
+  smtp: SmtpConfig {
+    host: env "SMTP_HOST"
     port: 587
-    username: env("SMTP_USER")
-    password: env("SMTP_PASS")
+    username: env "SMTP_USER"
+    password: env "SMTP_PASS"
     tls: true
   }
 }

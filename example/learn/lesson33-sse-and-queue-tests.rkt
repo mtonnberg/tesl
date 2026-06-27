@@ -27,7 +27,6 @@
   #:password "demo"
   #:server "localhost"
   #:port 5432
-  #:socket ""
   #:schema lesson33
   #:entities )
 
@@ -64,7 +63,7 @@
 (define/pow
   (parseUserId [id : String])
   #:returns String
-  (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 65 (list (cons 'id *id)) (lambda () *id)))
+  (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 67 (list (cons 'id *id)) (lambda () *id)))
 
 (define-capture userIdCapture
   [userIdCapture : String]
@@ -83,7 +82,7 @@
   (handleNotice [job : NotifyJob ::: (FromQueue (Id == jobId) job)])
   #:capabilities [queueRead pubsub]
   #:returns NotifyJob
-  (let ([_ (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 86 (list (cons 'job *job)) (lambda () (publish-event! Lesson33Events (format "~a" (raw-value job.userId)) (NoticeSent (raw-value job.message)))))]) (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 87 (list (cons 'job *job)) (lambda () *job))))
+  (let ([_ (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 88 (list (cons 'job *job)) (lambda () (publish-event! Lesson33Events (format "~a" (raw-value job.userId)) (NoticeSent (raw-value job.message)))))]) (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 89 (list (cons 'job *job)) (lambda () *job))))
 
 (define Lesson33Workers
   (list (cons Lesson33Queue handleNotice)))
@@ -93,7 +92,7 @@
   (sendNotice [req : SendNoticeRequest])
   #:capabilities [queueWrite]
   #:returns String
-  (let ([_ (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 95 (list (cons 'req *req)) (lambda () (enqueue! Lesson33Queue (NotifyJob #:userId (raw-value req.userId) #:message (raw-value req.message)))))]) (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 96 (list (cons 'req *req)) (lambda () "queued"))))
+  (let ([_ (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 97 (list (cons 'req *req)) (lambda () (enqueue! _queue_for_NotifyJob (NotifyJob #:userId (raw-value req.userId) #:message (raw-value req.message)))))]) (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 98 (list (cons 'req *req)) (lambda () "queued"))))
 
 (define Lesson33Server-sse-routes
   (list (list (list "events") #f Lesson33Events)))

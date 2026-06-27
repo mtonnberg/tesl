@@ -662,7 +662,8 @@ let tesl_module_exports : (string * string list) list = [
       (* config-block types (typed config blocks) *)
       "Email"; "SmtpConfig" ] );
   ( "Tesl.Database",
-    [ "Database"; "PostgresConfig"; "PostgresConnection";
+    [ "Database"; "DatabaseBackend"; "Postgres"; "Memory";
+      "PostgresConfig"; "PostgresConnection";
       "TcpConnection"; "SocketConnection" ] );
   ( "Tesl.SSE",
     [ "SseChannel" ] );

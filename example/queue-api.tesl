@@ -2,24 +2,26 @@
 module QueueApi exposing [EmailQueue, UserEvents, EmailWorkers]
 import Tesl.Prelude exposing [Bool(..), List, String, Fact]
 import Tesl.DB        exposing [dbRead, dbWrite]
-import Tesl.Queue     exposing [deadJobs, requeue, DeadJob, FromDeadQueue, queueRead, queueWrite, pubsub]
+import Tesl.Queue exposing [deadJobs, requeue, DeadJob, FromDeadQueue, queueRead, queueWrite, pubsub, Queue, QueueRetryStrategy, Exponential, Fixed]
 import Tesl.Telemetry exposing [initTelemetry]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.SSE exposing [SseChannel]
 
 capability emailWrite implies queueWrite
 capability appService implies dbRead, dbWrite, emailWrite, pubsub
 
-database MainDatabase {
-  backend: postgres
+database MainDatabase = Database {
   schema: "app"
   entities: []
-  postgres {
+  backend: Postgres (PostgresConfig {
     dbName: "app_db"
     user: "app"
     password: ""
-    host: "localhost"
-    port: 5432
-    socket: ""
-  }
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
 }
 
 record SendEmail {
@@ -32,17 +34,17 @@ type UserEvent
   = ProfileUpdated bio: String
   | AccountDeleted
 
-queue EmailQueue {
+queue EmailQueue = Queue {
   database: MainDatabase
   jobs: [SendEmail]
-  retry {
+  retry: QueueRetryStrategy {
     maxAttempts: 3
-    backoff: exponential
+    backoff: Exponential
     initialDelay: 60
   }
 }
 
-channel UserEvents(userId: String) {
+sseChannel UserEvents(userId: String) = SseChannel {
   database: MainDatabase
   payload: UserEvent
 }

@@ -208,8 +208,22 @@ let desugar_database_config (d : database_form) : database_form =
       | Some (EList { elems; _ }) -> List.filter_map config_ctor_name elems
       | _ -> []
     in
+    (* backend: Postgres (PostgresConfig { … }) | Memory *)
+    let backend_expr = List.assoc_opt "backend" top in
+    let backend = match Option.map config_ctor_name backend_expr with
+      | Some (Some "Memory") -> "memory"
+      | _ -> "postgres"
+    in
+    let postgres_expr =
+      match backend_expr with
+      | Some b -> (match config_ctor_name b with
+          | Some "Postgres" ->
+            (match b with EApp { arg; _ } -> Some arg | _ -> None)
+          | _ -> None)
+      | None -> None
+    in
     let postgres =
-      match List.assoc_opt "postgres" top with
+      match postgres_expr with
       | Some pg ->
         let pf = config_record_fields pg in
         let scalar key out =
@@ -232,7 +246,7 @@ let desugar_database_config (d : database_form) : database_form =
         @ scalar "password" "password" @ conn
       | None -> []
     in
-    { d with backend = "postgres"; schema; entities; postgres; config_expr = None }
+    { d with backend; schema; entities; postgres; config_expr = None }
 
 let int_value = function ELit { lit = LInt n; _ } -> Some n | _ -> None
 let string_value = function ELit { lit = LString s; _ } -> Some s | _ -> None
@@ -257,6 +271,7 @@ let desugar_queue_config (q : queue_form) : queue_form =
         | Some v -> (match config_ctor_name v with
             | Some "Exponential" -> backoff := Some "exponential"
             | Some "Fixed" -> backoff := Some "fixed"
+            | Some "Linear" -> backoff := Some "linear"
             | _ -> ())
         | None -> ())
      | None -> ());

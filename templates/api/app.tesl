@@ -24,6 +24,7 @@ import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Telemetry exposing [telemetry, initTelemetry]
 import Tesl.Id exposing [generatePrefixedId]
 import Tesl.Random exposing [random]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
 
 # Capabilities are explicit permissions. `appWebService` bundles everything the
 # server needs; a handler can only do what its declared capabilities allow.
@@ -53,18 +54,18 @@ entity Todo table "todos" primaryKey id {
   createdAt: PosixMillis
 }
 
-database AppDatabase {
-  backend: postgres
+database AppDatabase = Database {
   schema: "app"
   entities: [Todo]
-  postgres {
-    dbName: env("TESL_POSTGRES_DATABASE")
-    user: env("TESL_POSTGRES_USER")
-    password: env("TESL_POSTGRES_PASSWORD")
-    host: env("TESL_POSTGRES_HOST")
-    port: envInt("TESL_POSTGRES_PORT", 5432)
-    socket: env("TESL_POSTGRES_SOCKET")
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "TESL_POSTGRES_DATABASE"
+    user: env "TESL_POSTGRES_USER"
+    password: env "TESL_POSTGRES_PASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_POSTGRES_HOST"
+      port: envInt "TESL_POSTGRES_PORT" 5432
+    }
+  })
 }
 
 defaultPort = 8086

@@ -130,21 +130,24 @@ import KanelBilling exposing [
   markSentHandler,
   markPaidHandler,
 ]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, Fixed]
+import Tesl.SSE exposing [SseChannel]
 
 # ── Database ─────────────────────────────────────────────────────────────────
 
-database KanelDatabase {
-  backend: postgres
+database KanelDatabase = Database {
   schema: "kanel"
   entities: [KanelUser, Org, OrgMembership, Project, ProjectMembership, Issue, IssueComment, TimeEntry, Invoice]
-  postgres {
-    dbName: env("KANEL_DB")
-    user: env("TESL_POSTGRES_USER")
-    password: env("TESL_POSTGRES_PASSWORD")
-    host: env("TESL_POSTGRES_HOST")
-    port: envInt("TESL_POSTGRES_PORT", 5432)
-    socket: env("TESL_POSTGRES_SOCKET")
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "KANEL_DB"
+    user: env "TESL_POSTGRES_USER"
+    password: env "TESL_POSTGRES_PASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_POSTGRES_HOST"
+      port: envInt "TESL_POSTGRES_PORT" 5432
+    }
+  })
 }
 
 # ── Notification queue ────────────────────────────────────────────────────────
@@ -156,12 +159,12 @@ record KanelNotifyJob {
   body: String
 }
 
-queue KanelNotifyQueue {
+queue KanelNotifyQueue = Queue {
   database: KanelDatabase
   jobs: [KanelNotifyJob]
-  retry {
+  retry: QueueRetryStrategy {
     maxAttempts: 3
-    backoff: exponential
+    backoff: Exponential
     initialDelay: 30
   }
 }
@@ -172,7 +175,7 @@ type UserNotificationEvent
   = NotificationDelivered recipientEmail: String subject: String
   | NotificationFailed recipientEmail: String subject: String
 
-channel UserNotifications(userId: String) {
+sseChannel UserNotifications(userId: String) = SseChannel {
   database: KanelDatabase
   payload: UserNotificationEvent
 }

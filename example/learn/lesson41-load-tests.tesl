@@ -4,6 +4,7 @@ module Lesson41LoadTests exposing [Lesson41Server]
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.Json exposing [stringCodec]
 import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
 
 # ── Goal ─────────────────────────────────────────────────────────────────────
 # Learn the `load-test` block — Tesl's built-in load/performance testing.
@@ -41,18 +42,18 @@ entity Book table "books" primaryKey id {
   pages: Int
 }
 
-database Lesson41Database {
-  backend: postgres
+database Lesson41Database = Database {
   schema: "lesson41"
   entities: [Book]
-  postgres {
+  backend: Postgres (PostgresConfig {
     dbName: "lesson41"
     user: "lesson41"
     password: "lesson41"
-    host: "localhost"
-    port: 5432
-    socket: ""
-  }
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
 }
 
 handler greet(g: Greeting) -> Greeting =

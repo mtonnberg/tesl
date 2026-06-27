@@ -1448,5 +1448,176 @@ let check_config_field_schema (decls : top_decl list) : validation_error list =
     | None -> []
   ) decls
 
+(* ── Typed config-block validation (new `= Type { … }` syntax) ───────────────
+   The parser leaves the typed-record config as an [expr] in [config_expr]; this
+   pass validates it structurally against a per-block schema: required fields,
+   unknown fields, value shape (String/Int/Bool/env-call/ADT), and reference
+   fields (database/entities/jobs/payload must name declared things). *)
+
+type vkind =
+  | VStr            (* string literal, or env/envString call *)
+  | VInt            (* int literal, or envInt call *)
+  | VBool
+  | VSub of string  (* nested record, validated against the named sub-schema *)
+  | VConn           (* PostgresConnection: Tcp { host,port } | Socket { path } *)
+  | VBackend        (* DatabaseBackend: Postgres (PostgresConfig {…}) | Memory *)
+  | VBackoff        (* QueueRetryBackoff: Exponential | Fixed *)
+  | VDatabaseRef    (* UIDENT naming a declared database *)
+  | VEntityList     (* [Entity, …] naming declared entities *)
+  | VJobList        (* [JobType, …] naming declared records/entities *)
+  | VTypeRef        (* UIDENT naming a declared type/record/entity *)
+
+let config_block_schema = function
+  (* schema is required for the postgres backend but not for Memory; the
+     postgres-specific requirement is enforced in check_typed_config_blocks. *)
+  | "Database" -> [ "schema", VStr, false; "entities", VEntityList, false;
+                    "backend", VBackend, true ]
+  | "PostgresConfig" -> [ "dbName", VStr, true; "user", VStr, true;
+                          "password", VStr, true; "connection", VConn, true ]
+  | "Queue" -> [ "database", VDatabaseRef, true; "jobs", VJobList, true;
+                 "retry", VSub "QueueRetryStrategy", false ]
+  | "QueueRetryStrategy" -> [ "maxAttempts", VInt, true; "backoff", VBackoff, true;
+                              "initialDelay", VInt, true ]
+  | "Email" -> [ "database", VDatabaseRef, true; "smtp", VSub "SmtpConfig", true ]
+  | "SmtpConfig" -> [ "host", VStr, true; "port", VInt, false; "username", VStr, false;
+                      "password", VStr, false; "tls", VBool, false ]
+  | "SseChannel" -> [ "database", VDatabaseRef, true; "payload", VTypeRef, true ]
+  | _ -> []
+
+let cfg_fields = function
+  | ERecord { fields; _ } -> fields
+  | EApp { fn = EConstructor _; arg = ERecord { fields; _ }; _ } -> fields
+  | _ -> []
+let cfg_ctor = function
+  | EConstructor { name; _ } -> Some name
+  | EApp { fn = EConstructor { name; _ }; _ } -> Some name
+  | _ -> None
+(* The single positional argument of `Ctor (arg)` (e.g. `Postgres (PostgresConfig {…})`). *)
+let cfg_ctor_arg = function
+  | EApp { fn = EConstructor _; arg; _ } -> Some arg
+  | _ -> None
+let is_env_call name = function
+  | EApp { fn = EVar { name = n; _ }; _ } when n = name -> true
+  | EApp { fn = EApp { fn = EVar { name = n; _ }; _ }; _ } when n = name -> true
+  | _ -> false
+let cfg_expr_loc (e : expr) : loc = match e with
+  | ELit r -> r.loc | EVar r -> r.loc | EApp r -> r.loc | EConstructor r -> r.loc
+  | ERecord r -> r.loc | EList r -> r.loc | EField r -> r.loc | _ -> dummy_loc ""
+
+let check_typed_config_blocks (decls : top_decl list) : validation_error list =
+  let names f = List.filter_map f decls in
+  let dbs = names (function DDatabase d -> Some d.name | _ -> None) in
+  let entities = names (function DEntity e -> Some e.name | _ -> None) in
+  let records = names (function DRecord r -> Some r.name | _ -> None) in
+  let types = entities @ records
+    @ names (function DType (TypeAdt { name; _ }) -> Some name
+                    | DType (TypeNewtype { name; _ }) -> Some name
+                    | DType (TypeAlias { name; _ }) -> Some name | _ -> None) in
+  let rec check_value loc fname kind v : validation_error list =
+    let err m = [ make_error (cfg_expr_loc v) m ] in
+    match kind with
+    | VStr ->
+      (match v with
+       | ELit { lit = LString _; _ } -> []
+       | _ when is_env_call "env" v || is_env_call "envString" v -> []
+       | _ -> err (Printf.sprintf "field `%s` must be a String (a literal, `env \"VAR\"` or `envString \"VAR\" \"default\"`)" fname))
+    | VInt ->
+      (match v with
+       | ELit { lit = LInt _; _ } -> []
+       | _ when is_env_call "envInt" v -> []
+       | _ -> err (Printf.sprintf "field `%s` must be an Int (a literal or `envInt \"VAR\" default`)" fname))
+    | VBool ->
+      (match v with ELit { lit = LBool _; _ } -> [] | _ -> err (Printf.sprintf "field `%s` must be a Bool (true/false)" fname))
+    | VSub sub -> check_record (cfg_expr_loc v) sub (cfg_fields v)
+    | VBackoff ->
+      (match cfg_ctor v with
+       | Some ("Exponential" | "Fixed" | "Linear") -> []
+       | _ -> err "`backoff` must be `Exponential`, `Fixed`, or `Linear` (from Tesl.Queue)")
+    | VConn ->
+      (match cfg_ctor v with
+       | Some "TcpConnection" -> check_record (cfg_expr_loc v) "__Tcp" (cfg_fields v)
+       | Some "SocketConnection" -> check_record (cfg_expr_loc v) "__Socket" (cfg_fields v)
+       | _ -> err "`connection` must be `TcpConnection { host, port }` or `SocketConnection { path }`")
+    | VBackend ->
+      (match cfg_ctor v with
+       | Some "Memory" -> []
+       | Some "Postgres" ->
+         (match cfg_ctor_arg v with
+          | Some arg -> check_record (cfg_expr_loc arg) "PostgresConfig" (cfg_fields arg)
+          | None -> err "`Postgres` needs a config, e.g. `Postgres (PostgresConfig { … })`")
+       | _ -> err "`backend` must be `Postgres (PostgresConfig { … })` or `Memory`")
+    (* Reference fields name databases / entities / record types that may be
+       *imported* from another module, so we validate shape (a UIDENT, or a
+       list of them) rather than local existence — local existence for these is
+       covered by the type checker / per-block reference checks. *)
+    | VDatabaseRef ->
+      (match cfg_ctor v with
+       | Some _ -> ignore (dbs); []
+       | None -> err (Printf.sprintf "field `%s` must reference a database, e.g. `MyDb`" fname))
+    | VEntityList ->
+      (match v with
+       | EList { elems; _ } ->
+         ignore (entities);
+         List.concat_map (fun e -> match cfg_ctor e with
+           | Some _ -> [] | None -> [ make_error loc "`entities` must be a list of entity types, e.g. `[Item]`" ]) elems
+       | _ -> err "`entities` must be a list of entity types, e.g. `[Item]`")
+    | VJobList ->
+      (match v with
+       | EList { elems; _ } ->
+         ignore (types);
+         List.concat_map (fun e -> match cfg_ctor e with
+           | Some _ -> [] | None -> [ make_error loc "`jobs` must be a list of job types, e.g. `[EmailJob]`" ]) elems
+       | _ -> err "`jobs` must be a list of job types, e.g. `[EmailJob]`")
+    | VTypeRef ->
+      (match cfg_ctor v with
+       | Some _ -> []
+       | None -> err (Printf.sprintf "field `%s` must reference a type, e.g. `MyEvent`" fname))
+  and check_record loc schema_name fields : validation_error list =
+    let schema = match schema_name with
+      | "__Tcp" -> [ "host", VStr, true; "port", VInt, true ]
+      | "__Socket" -> [ "path", VStr, true ]
+      | s -> config_block_schema s in
+    if schema = [] then []  (* unknown sub-schema: don't second-guess *)
+    else begin
+      let provided = List.map fst fields in
+      let missing =
+        List.filter_map (fun (fn, _, req) ->
+          if req && not (List.mem fn provided)
+          then Some (make_error loc (Printf.sprintf "`%s` is missing required field `%s`" schema_name fn))
+          else None) schema in
+      let per_field =
+        List.concat_map (fun (fn, v) ->
+          match List.find_opt (fun (n,_,_) -> n = fn) schema with
+          | Some (_, kind, _) -> check_value loc fn kind v
+          | None -> [ make_error (cfg_expr_loc v) (Printf.sprintf "unknown field `%s` in `%s`" fn schema_name) ]
+        ) fields in
+      missing @ per_field
+    end
+  in
+  let check_decl top_schema loc = function
+    | Some e -> check_record loc top_schema (cfg_fields e)
+    | None -> []
+  in
+  List.concat_map (fun d ->
+    match d with
+    | DDatabase r ->
+      let base = check_decl "Database" r.loc r.config_expr in
+      let schema_req = match r.config_expr with
+        | Some e ->
+          let top = cfg_fields e in
+          let is_postgres = match List.assoc_opt "backend" top with
+            | Some b -> cfg_ctor b = Some "Postgres" | None -> true in
+          if is_postgres && not (List.mem_assoc "schema" top)
+          then [ make_error r.loc "`Database` (postgres backend) is missing required field `schema`" ]
+          else []
+        | None -> []
+      in
+      base @ schema_req
+    | DQueue r    -> check_decl "Queue" r.loc r.config_expr
+    | DEmail r    -> check_decl "Email" r.loc r.config_expr
+    | DChannel r  -> check_decl "SseChannel" r.loc r.config_expr
+    | _ -> []
+  ) decls
+
 (* ── 2. SQL/record field name validation ─────────────────────────────────── *)
 

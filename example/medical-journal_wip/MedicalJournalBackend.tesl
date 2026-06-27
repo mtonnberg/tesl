@@ -44,21 +44,22 @@ import MedicalJournalDB exposing [
   dbInsertPrescription, dbListPrescriptions,
   dbInsertEvent, dbGetTimeline
 ]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
 
 # ── Database ─────────────────────────────────────────────────────────────────
 
-database MjDatabase {
-  backend: postgres
+database MjDatabase = Database {
   schema: "medical_journal"
   entities: [Provider, Patient, JournalEntry, Prescription, DomainEvent]
-  postgres {
-    dbName: env("MJ_DB")
-    user: env("TESL_POSTGRES_USER")
-    password: env("TESL_POSTGRES_PASSWORD")
-    host: env("TESL_POSTGRES_HOST")
-    port: envInt("TESL_POSTGRES_PORT", 5432)
-    socket: env("TESL_POSTGRES_SOCKET")
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "MJ_DB"
+    user: env "TESL_POSTGRES_USER"
+    password: env "TESL_POSTGRES_PASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_POSTGRES_HOST"
+      port: envInt "TESL_POSTGRES_PORT" 5432
+    }
+  })
 }
 
 # ── Login response ─────────────────────────────────────────────────────────

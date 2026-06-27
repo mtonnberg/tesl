@@ -32,7 +32,6 @@
   #:password ""
   #:server "localhost"
   #:port 5432
-  #:socket ""
   #:schema app
   #:entities )
 
@@ -60,7 +59,7 @@
   (sendEmailWorker [job : SendEmail ::: (FromQueue (Id == jobId) job)])
   #:capabilities [queueRead]
   #:returns SendEmail
-  (thsl-src! "example/queue-api.tesl" 52 (list (cons 'job *job)) (lambda () *job)))
+  (thsl-src! "example/queue-api.tesl" 54 (list (cons 'job *job)) (lambda () *job)))
 
 (define EmailWorkers
   (list (cons EmailQueue sendEmailWorker)))
@@ -70,13 +69,13 @@
   (listDeadEmails [q : EmailQueue])
   #:capabilities [queueRead]
   #:returns (List DeadJob)
-  (thsl-src! "example/queue-api.tesl" 62 (list (cons 'q *q)) (lambda () (raw-value (deadJobs *q)))))
+  (thsl-src! "example/queue-api.tesl" 64 (list (cons 'q *q)) (lambda () (raw-value (deadJobs *q)))))
 
 (define/pow
   (replayEmail [job : DeadJob ::: (FromDeadQueue (Id == jobId) job)])
   #:capabilities [queueWrite]
   #:returns Boolean
-  (thsl-src! "example/queue-api.tesl" 69 (list (cons 'job *job)) (lambda () (raw-value (requeue *job)))))
+  (thsl-src! "example/queue-api.tesl" 71 (list (cons 'job *job)) (lambda () (raw-value (requeue *job)))))
 
 (module+ main
-  (thsl-src! "example/queue-api.tesl" 72 (list) (lambda () (init-opentelemetry! #:service-name "queue-api" #:endpoint "in-memory" #:console? #f))))
+  (thsl-src! "example/queue-api.tesl" 74 (list) (lambda () (init-opentelemetry! #:service-name "queue-api" #:endpoint "in-memory" #:console? #f))))

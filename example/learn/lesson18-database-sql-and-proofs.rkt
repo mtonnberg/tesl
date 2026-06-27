@@ -60,14 +60,13 @@
   #:password (tesl-env-raw "NOTES_DB_PASSWORD")
   #:server (tesl-env-raw "NOTES_DB_HOST")
   #:port (tesl-env-int-raw "NOTES_DB_PORT" 5432)
-  #:socket (tesl-env-raw "NOTES_DB_SOCKET")
   #:schema notes_app
   #:entities Note)
 
 (define-checker
   (checkNoteTitle [s : String])
   #:returns [s : String ::: (ValidNoteTitle s)]
-  (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 101 (list (cons 's *s)) (lambda () (if (and (>= (raw-value (tesl_import_String_length *s)) 1) (<= (raw-value (tesl_import_String_length *s)) 200)) (accept (ValidNoteTitle s) #:value *s) (reject "title must be 1-200 characters" #:http-code 400)))))
+  (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 102 (list (cons 's *s)) (lambda () (if (and (>= (raw-value (tesl_import_String_length *s)) 1) (<= (raw-value (tesl_import_String_length *s)) 200)) (accept (ValidNoteTitle s) #:value *s) (reject "title must be 1-200 characters" #:http-code 400)))))
 
 (define-record NewNote
   [title : String ::: (ValidNoteTitle title)]
@@ -93,7 +92,7 @@
 (define-checker
   (checkNoteId [s : String])
   #:returns [s : String ::: (ValidNoteId s)]
-  (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 124 (list (cons 's *s)) (lambda () (if (> (raw-value (tesl_import_String_length *s)) 5) (accept (ValidNoteId s) #:value *s) (reject "invalid note id" #:http-code 400)))))
+  (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 125 (list (cons 's *s)) (lambda () (if (> (raw-value (tesl_import_String_length *s)) 5) (accept (ValidNoteId s) #:value *s) (reject "invalid note id" #:http-code 400)))))
 
 (define-capture noteIdCapture
   [noteId : String ::: (ValidNoteId noteId)]
@@ -103,31 +102,31 @@
   (cookieAuth [request : HttpRequest])
   #:capabilities [noteReadCookie]
   #:returns [user : String ::: (Authenticated user)]
-  (thsl-src-control! "example/learn/lesson18-database-sql-and-proofs.tesl" 136 (list (cons 'request *request)) (lambda () (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 137 (list) (lambda () (reject "not logged in" #:http-code 401)))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 138 (list (cons 'userId userId)) (lambda () (accept (Authenticated userId) #:value *userId))))])))))
+  (thsl-src-control! "example/learn/lesson18-database-sql-and-proofs.tesl" 137 (list (cons 'request *request)) (lambda () (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 138 (list) (lambda () (reject "not logged in" #:http-code 401)))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 139 (list (cons 'userId userId)) (lambda () (accept (Authenticated userId) #:value *userId))))])))))
 
 (define-handler
   (getNote [user : String ::: (Authenticated user)] [noteId : String ::: (ValidNoteId noteId)])
   #:capabilities [noteDbRead]
   #:returns (? Note _entity ::: (FromDb (Id == noteId) _entity))
-  (let ([existing (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 149 (list (cons 'user *user) (cons 'noteId *noteId)) (lambda () (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) noteId)))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/learn/lesson18-database-sql-and-proofs.tesl" 150 (list (cons 'existing *existing) (cons 'user *user) (cons 'noteId *noteId)) (lambda () (let ([tesl_case_1 (raw-value existing)]) (cond [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Nothing)) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 151 (list) (lambda () (reject "note not found" #:http-code 404)))] [(and (and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Something)) (let ([note (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (not (equal? (raw-value note.authorId) *user)))) (let ([note (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 152 (list (cons 'note note)) (lambda () (reject "not your note" #:http-code 403))))] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Something)) (let ([note (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 153 (list (cons 'note note)) (lambda () note)))]))))))
+  (let ([existing (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 150 (list (cons 'user *user) (cons 'noteId *noteId)) (lambda () (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) noteId)))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/learn/lesson18-database-sql-and-proofs.tesl" 151 (list (cons 'existing *existing) (cons 'user *user) (cons 'noteId *noteId)) (lambda () (let ([tesl_case_1 (raw-value existing)]) (cond [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Nothing)) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 152 (list) (lambda () (reject "note not found" #:http-code 404)))] [(and (and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Something)) (let ([note (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (not (equal? (raw-value note.authorId) *user)))) (let ([note (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 153 (list (cons 'note note)) (lambda () (reject "not your note" #:http-code 403))))] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Something)) (let ([note (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 154 (list (cons 'note note)) (lambda () note)))]))))))
 
 (define-handler
   (listNotes [user : String ::: (Authenticated user)])
   #:capabilities [noteDbRead]
   #:returns (List Note)
-  (let ([_ (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 158 (list (cons 'user *user)) (lambda () (telemetry-event! "notes.list" #:attributes (["user.id" *user]))))]) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 159 (list (cons 'user *user)) (lambda () (select-many (from Note) (where (==. (entity-field-ref Note 'authorId) user)))))))
+  (let ([_ (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 159 (list (cons 'user *user)) (lambda () (telemetry-event! "notes.list" #:attributes (["user.id" *user]))))]) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 160 (list (cons 'user *user)) (lambda () (select-many (from Note) (where (==. (entity-field-ref Note 'authorId) user)))))))
 
 (define-handler
   (createNote [user : String ::: (Authenticated user)] [body : NewNote])
   #:capabilities [noteDbRead noteDbWrite noteTime random]
   #:returns (Exists [noteId : String] (? Note _entity ::: (FromDb (Id == noteId) _entity)))
-  (let ([noteId (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 168 (list (cons 'user *user) (cons 'body *body)) (lambda () (generatePrefixedId "note")))]) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 169 (list (cons 'noteId *noteId) (cons 'user *user) (cons 'body *body)) (lambda () (pack ([noteId]) (insert-one! Note (hash 'id noteId 'title (raw-value body.title) 'content (raw-value body.content) 'authorId user 'createdAt (raw-value (nowMillis)))))))))
+  (let ([noteId (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 169 (list (cons 'user *user) (cons 'body *body)) (lambda () (generatePrefixedId "note")))]) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 170 (list (cons 'noteId *noteId) (cons 'user *user) (cons 'body *body)) (lambda () (pack ([noteId]) (insert-one! Note (hash 'id noteId 'title (raw-value body.title) 'content (raw-value body.content) 'authorId user 'createdAt (raw-value (nowMillis)))))))))
 
 (define-handler
   (updateNoteTitle [user : String ::: (Authenticated user)] [noteId : String ::: (ValidNoteId noteId)] [body : NewNote])
   #:capabilities [noteDbRead noteDbWrite]
   #:returns (? Note _entity ::: (FromDb (Id == noteId) _entity))
-  (let ([existing (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 182 (list (cons 'user *user) (cons 'noteId *noteId) (cons 'body *body)) (lambda () (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) noteId)))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/learn/lesson18-database-sql-and-proofs.tesl" 183 (list (cons 'existing *existing) (cons 'user *user) (cons 'noteId *noteId) (cons 'body *body)) (lambda () (let ([tesl_case_2 (raw-value existing)]) (cond [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Nothing)) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 184 (list) (lambda () (reject "note not found" #:http-code 404)))] [(and (and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Something)) (let ([note (hash-ref (adt-value-fields *tesl_case_2) 'value)]) (not (equal? (raw-value note.authorId) *user)))) (let ([note (hash-ref (adt-value-fields *tesl_case_2) 'value)]) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 185 (list (cons 'note note)) (lambda () (reject "not your note" #:http-code 403))))] [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Something)) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 187 (list) (lambda () (car (update-many! (from Note) (hash (entity-field-ref Note 'title) (raw-value body.title)) (where (==. (entity-field-ref Note 'id) noteId))))))]))))))
+  (let ([existing (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 183 (list (cons 'user *user) (cons 'noteId *noteId) (cons 'body *body)) (lambda () (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) noteId)))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/learn/lesson18-database-sql-and-proofs.tesl" 184 (list (cons 'existing *existing) (cons 'user *user) (cons 'noteId *noteId) (cons 'body *body)) (lambda () (let ([tesl_case_2 (raw-value existing)]) (cond [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Nothing)) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 185 (list) (lambda () (reject "note not found" #:http-code 404)))] [(and (and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Something)) (let ([note (hash-ref (adt-value-fields *tesl_case_2) 'value)]) (not (equal? (raw-value note.authorId) *user)))) (let ([note (hash-ref (adt-value-fields *tesl_case_2) 'value)]) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 186 (list (cons 'note note)) (lambda () (reject "not your note" #:http-code 403))))] [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Something)) (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 188 (list) (lambda () (car (update-many! (from Note) (hash (entity-field-ref Note 'title) (raw-value body.title)) (where (==. (entity-field-ref Note 'id) noteId))))))]))))))
 
 (define NoteServer-sse-routes '())
 (define-api NoteApi
@@ -168,5 +167,5 @@
 )
 
 (module+ main
-  (let ([_ (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 229 (list) (lambda () (init-opentelemetry! #:service-name "notes-api" #:endpoint "in-memory" #:console? #t)))])
-  (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 230 (list) (lambda () (call-with-database NoteDatabase (lambda () (with-capabilities (noteService) (serve NoteServer #:port defaultNotePort #:capabilities (list noteService) #:sse-routes NoteServer-sse-routes))))))))
+  (let ([_ (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 230 (list) (lambda () (init-opentelemetry! #:service-name "notes-api" #:endpoint "in-memory" #:console? #t)))])
+  (thsl-src! "example/learn/lesson18-database-sql-and-proofs.tesl" 231 (list) (lambda () (call-with-database NoteDatabase (lambda () (with-capabilities (noteService) (serve NoteServer #:port defaultNotePort #:capabilities (list noteService) #:sse-routes NoteServer-sse-routes))))))))
