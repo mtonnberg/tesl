@@ -861,6 +861,39 @@ let load_imported_ctors (m : module_form) : (string * (string * scheme)) list =
           ) (exported_ctor_entries imported)
   ) m.imports
 
+(* Builtin ADTs that back the typed configuration blocks.  They are seeded into
+   the checker (like Maybe/Either) when the owning stdlib module is imported, so
+   `connection: TcpConnection { host: ..., port: ... }` and `backoff: Exponential`
+   type-check via the normal record/constructor machinery.  The surrounding
+   config records (Database/Queue/…) are validated by the dedicated config
+   checker rather than as generic record literals, because their entities/jobs/
+   payload fields reference declared types, not ordinary values. *)
+let config_stdlib_seed (m : module_form) :
+    (string * adt_def) list * (string * (string * scheme)) list =
+  let imported name = List.exists (fun (i : import_decl) -> i.module_name = name) m.imports in
+  let adt name params variants = (name, { ad_name = name; ad_params = params; ad_variants = variants }) in
+  let nullary_ctor adt_name name = (name, (adt_name, mono (TCon adt_name))) in
+  let fn_ctor adt_name name arg_tys =
+    (name, (adt_name, mono (List.fold_right (fun a acc -> TFun (a, acc)) arg_tys (TCon adt_name))))
+  in
+  let adts = ref [] and ctors = ref [] in
+  if imported "Tesl.Database" then begin
+    adts := adt "PostgresConnection" []
+      [ ("TcpConnection", [ ("host", TCon "String"); ("port", TCon "Int") ]);
+        ("SocketConnection", [ ("path", TCon "String") ]) ] :: !adts;
+    ctors :=
+      fn_ctor "PostgresConnection" "TcpConnection" [ TCon "String"; TCon "Int" ]
+      :: fn_ctor "PostgresConnection" "SocketConnection" [ TCon "String" ]
+      :: !ctors
+  end;
+  if imported "Tesl.Queue" then begin
+    adts := adt "QueueRetryBackoff" [] [ ("Exponential", []); ("Fixed", []) ] :: !adts;
+    ctors :=
+      nullary_ctor "QueueRetryBackoff" "Exponential"
+      :: nullary_ctor "QueueRetryBackoff" "Fixed" :: !ctors
+  end;
+  (!adts, !ctors)
+
 (** Add all function signatures from a module to the typing environment. *)
 let collect_func_sigs ctx (decls : top_decl list) : ctx =
   List.fold_left (fun ctx decl ->
@@ -3607,7 +3640,10 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
   (* 1. Collect type definitions (records, ADTs, newtypes) *)
   let ctx = collect_type_defs ctx m.decls in
   let imported_ctors = load_imported_ctors m in
-  let ctx = { ctx with ctors = imported_ctors @ ctx.ctors } in
+  let (config_adts, config_ctors) = config_stdlib_seed m in
+  let ctx = { ctx with
+    ctors = config_ctors @ imported_ctors @ ctx.ctors;
+    adts  = config_adts @ ctx.adts } in
 
   (* 2. Add ADT constructors and record types to env *)
   let ctx = {

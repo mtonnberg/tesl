@@ -658,7 +658,12 @@ let tesl_module_exports : (string * string list) list = [
     [ "cache"; "Cache.get"; "Cache.set"; "Cache.delete"; "Cache.invalidate" ] );
   ( "Tesl.Email",
     [ "email"; "EmailBody"; "TextBody"; "HtmlBody"; "RichBody";
-      "Email.send"; "startEmailWorker" ] );
+      "Email.send"; "startEmailWorker";
+      (* config-block types (typed config blocks) *)
+      "Email"; "SmtpConfig" ] );
+  ( "Tesl.Database",
+    [ "Database"; "PostgresConfig"; "PostgresConnection";
+      "TcpConnection"; "SocketConnection" ] );
   ( "Tesl.HttpClient",
     [ "httpClient"; "HttpResponse"; "HttpResponse?";
       "HttpClient.get"; "HttpClient.post"; "HttpClient.put"; "HttpClient.delete" ] );
@@ -684,7 +689,7 @@ let tesl_known_module_names : string list = [
   "Tesl.Uuid"; "Tesl.UUID"; "Tesl.Crypto"; "Tesl.Set"; "Tesl.Map"; "Tesl.Env";
   "Tesl.Telemetry"; "Tesl.Cli"; "Tesl.ApiTest"; "Tesl.Tuple"; "Tesl.Id";
   "Tesl.Queue"; "Tesl.Channel"; "Tesl.Sql"; "Tesl.Sse"; "Tesl.Logging";
-  "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email";
+  "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database";
 ]
 
 (** Returns [true] when [name] is a known Tesl.* stdlib module. *)
