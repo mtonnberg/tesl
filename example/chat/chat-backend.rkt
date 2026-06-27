@@ -79,7 +79,16 @@
 (define (tesl-codec-encode-LoginRequest _v)
   (error "toJson is forbidden for type LoginRequest: this type cannot be JSON-encoded"))
 (define (tesl-codec-decode-LoginRequest-0 _j)
-  (record-value 'LoginRequest (hash )))
+  (define _fraw_username (tesl-decode-prim-field _j "username" tesl-decode-prim-string))
+  (define _r1_username
+    (let ([_r (checkNonEmptyString _fraw_username)])
+      (cond [(check-ok? _r) _r] [(check-fail? _r) _r] [else _r])))
+  (define _f_username
+    (if (check-ok? _r1_username)
+        (ensure-named 'username (check-ok-value _r1_username) (check-ok-facts _r1_username) (check-ok-bindings _r1_username) #:subject 'username)
+        _r1_username))
+  (or (and (check-fail? _f_username) _f_username)
+      (record-value 'LoginRequest (hash 'username _f_username))))
 (register-type-codec! 'LoginRequest tesl-codec-encode-LoginRequest (list tesl-codec-decode-LoginRequest-0))
 
 (define (tesl-codec-encode-CreateRoomRequest _v)

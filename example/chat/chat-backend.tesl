@@ -100,7 +100,7 @@ codec LoginRequest {
   toJson_forbidden
   fromJson [
     {
-      username: <- "username" with_codec stringCodec via checkNonEmptyString
+      username <- "username" with_codec stringCodec via checkNonEmptyString
     }
   ]
 }

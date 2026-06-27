@@ -3595,6 +3595,13 @@ let parse_codec_form s name type_name =
                    let saved = s.pos in
                    (match expect_ident s with
                     | Ok fname ->
+                      (* Tolerate a stray `:` after the field name (a config-block
+                         habit: `username: <- "username"`).  The codec mapping syntax
+                         is `field <- "key"`; without this the `:` fell through to the
+                         "skip unknown" arm below, silently dropping the ENTIRE mapping
+                         and emitting an empty decoder — i.e. a runtime body-validation
+                         400 with no compile-time signal. *)
+                      (if peek s = COLON then advance s);
                       (match peek s with
                        | BACKARROW ->
                          advance s;

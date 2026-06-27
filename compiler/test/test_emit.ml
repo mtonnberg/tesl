@@ -837,6 +837,33 @@ test "task" {
   let racket = compile_ok src "prop_unknown_proof" in
   assert_not_contains ~name:"no tesl-test-proof-field for unknown pred" racket "tesl-test-proof-field"
 
+(* ── Codec field-mapping regression ──────────────────────────────────────── *)
+
+(* A stray `:` after a codec field name (`name: <- "name"`, a config-block habit)
+   used to fall through the parser's "skip unknown" arm, silently dropping the
+   ENTIRE field mapping and emitting an empty decoder — a runtime body-validation
+   400 with no compile-time signal.  The field must still be decoded. *)
+let test_codec_field_stray_colon () =
+  let src = {|#lang tesl
+module ColonCodec exposing [Req]
+record Req {
+  name: String
+}
+codec Req {
+  toJson_forbidden
+  fromJson [
+    {
+      name: <- "name" with_codec stringCodec
+    }
+  ]
+}
+|} in
+  let racket = compile_ok src "colon_codec" in
+  assert_contains ~name:"codec decodes the field despite the stray colon"
+    racket "(tesl-decode-prim-field _j \"name\"";
+  assert_not_contains ~name:"decoder is not empty (field not dropped)"
+    racket "(record-value 'Req (hash ))"
+
 (* ── Suite ───────────────────────────────────────────────────────────────── *)
 
 let () =
@@ -924,5 +951,8 @@ let () =
     "property-tests", [
       Alcotest.test_case "known proof uses tesl-test-proof-field" `Quick test_property_known_proof_uses_proof_field;
       Alcotest.test_case "unknown proof no fabrication" `Quick test_property_unknown_proof_no_fabrication;
+    ];
+    "codec", [
+      Alcotest.test_case "stray colon after codec field name still decodes" `Quick test_codec_field_stray_colon;
     ];
   ]
