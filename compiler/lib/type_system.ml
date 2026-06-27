@@ -470,8 +470,9 @@ let stdlib_env : (string * scheme) list = [
   "newId",               mono t_string;
 
   (* ── Env ─────────────────────────────────────────────────────────────── *)
-  "env",    mono (t_fun [t_string] (t_maybe t_string));
-  "envInt", mono (t_fun [t_string; t_int] t_int);
+  "env",       mono (t_fun [t_string] (t_maybe t_string));
+  "envInt",    mono (t_fun [t_string; t_int] t_int);
+  "envString", mono (t_fun [t_string; t_string] t_string);
 
   (* ── HTTP ────────────────────────────────────────────────────────────── *)
   "statusOk",          mono t_int;
@@ -637,7 +638,7 @@ let tesl_module_exports : (string * string list) list = [
     [ "IsUuid"; "uuid"; "UUID.v4"; "UUID.v7"; "UUID.validate";
       "uuidV4Codec"; "uuidV7Codec" ] );
   ( "Tesl.Env",
-    [ "env"; "envInt" ] );
+    [ "env"; "envInt"; "envString" ] );
   ( "Tesl.Json",
     [ "stringCodec"; "intCodec"; "boolCodec"; "floatCodec"; "posixMillisCodec";
       "listCodec"; "dictCodec"; "setCodec" ] );

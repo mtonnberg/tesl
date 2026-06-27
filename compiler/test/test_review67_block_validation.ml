@@ -711,6 +711,48 @@ channel Ch {
 }
 |}
 
+(* ── R67_NC — Named-field ADT construction (`Ctor { field: v }`) ─────────── *)
+
+let test_R67_NC01_valid_named_ctor_accepted () =
+  should_pass {|
+#lang tesl
+module R67Nc01 exposing []
+import Tesl.Prelude exposing [String, Int]
+type Conn = Tcp host: String port: Int | Sock path: String
+record Holder { conn: Conn }
+fn mk() -> Holder = Holder { conn: Tcp { host: "h", port: 5432 } }
+|}
+
+let test_R67_NC02_missing_ctor_field_rejected () =
+  should_fail "missing required field `port`" {|
+#lang tesl
+module R67Nc02 exposing []
+import Tesl.Prelude exposing [String, Int]
+type Conn = Tcp host: String port: Int | Sock path: String
+record Holder { conn: Conn }
+fn mk() -> Holder = Holder { conn: Tcp { host: "h" } }
+|}
+
+let test_R67_NC03_unknown_ctor_field_rejected () =
+  should_fail "has no field `bogus`" {|
+#lang tesl
+module R67Nc03 exposing []
+import Tesl.Prelude exposing [String, Int]
+type Conn = Tcp host: String port: Int | Sock path: String
+record Holder { conn: Conn }
+fn mk() -> Holder = Holder { conn: Tcp { host: "h", port: 1, bogus: 2 } }
+|}
+
+let test_R67_NC04_wrong_ctor_field_type_rejected () =
+  should_fail "unify\\|type mismatch" {|
+#lang tesl
+module R67Nc04 exposing []
+import Tesl.Prelude exposing [String, Int]
+type Conn = Tcp host: String port: Int | Sock path: String
+record Holder { conn: Conn }
+fn mk() -> Holder = Holder { conn: Tcp { host: "h", port: "not-int" } }
+|}
+
 (* ── Test runner ─────────────────────────────────────────────────────────── *)
 
 let () =
@@ -776,5 +818,11 @@ let () =
       test_case "R67_CF05 missing required field rejected" `Quick test_R67_CF05_missing_required_field_rejected;
       test_case "R67_CF06 memory backend needs no schema" `Quick test_R67_CF06_memory_backend_needs_no_schema;
       test_case "R67_CF07 channel missing payload rejected" `Quick test_R67_CF07_channel_missing_payload_rejected;
+    ];
+    "named-ctor-construction", [
+      test_case "R67_NC01 valid named ctor accepted" `Quick test_R67_NC01_valid_named_ctor_accepted;
+      test_case "R67_NC02 missing ctor field rejected" `Quick test_R67_NC02_missing_ctor_field_rejected;
+      test_case "R67_NC03 unknown ctor field rejected" `Quick test_R67_NC03_unknown_ctor_field_rejected;
+      test_case "R67_NC04 wrong ctor field type rejected" `Quick test_R67_NC04_wrong_ctor_field_type_rejected;
     ];
   ]

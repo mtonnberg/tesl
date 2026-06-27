@@ -1565,21 +1565,45 @@ let rec infer_expr ctx (e : expr) : ty =
           | None -> [])
       | None -> []
     in
-    (* Apply ctor_ty to each field value in declaration order (match by name) *)
-    let ordered_values =
+    let ret_ty =
       if named_field_tys = [] then
-        (* No metadata: fall back to source order *)
-        List.map snd fields
-      else
-        List.filter_map (fun (fname, _) ->
-          List.assoc_opt fname fields) named_field_tys
+        (* No ADT metadata: fall back to applying values in source order. *)
+        List.fold_left (fun cur_ty value_expr ->
+          let arg_ty = infer_expr ctx value_expr in
+          let next_ty = fresh () in
+          unify_at ctx loc cur_ty (TFun (arg_ty, next_ty));
+          apply !(ctx.subst) next_ty
+        ) ctor_ty (List.map snd fields)
+      else begin
+        (* Validate the named fields like a record literal: every declared field
+           must be present, no unknown fields. Then consume every declared arrow
+           (matching values by name) so the result is the ADT type even when a
+           field is missing — avoiding a confusing cascade arity error. *)
+        List.iter (fun (fname, _) ->
+          if not (List.mem_assoc fname fields) then
+            add_error ctx loc
+              (Printf.sprintf "constructor `%s` is missing required field `%s`"
+                 ctor_name fname)
+        ) named_field_tys;
+        List.iter (fun (fname, value_expr) ->
+          if not (List.mem_assoc fname named_field_tys) then begin
+            add_error ctx (expr_loc value_expr)
+              (Printf.sprintf "constructor `%s` has no field `%s`" ctor_name fname);
+            ignore (infer_expr ctx value_expr)
+          end
+        ) fields;
+        List.fold_left (fun cur_ty (fname, _decl_ty) ->
+          let next_ty = fresh () in
+          (match List.assoc_opt fname fields with
+           | Some value_expr ->
+             let arg_ty = infer_expr ctx value_expr in
+             unify_at ctx loc cur_ty (TFun (arg_ty, next_ty))
+           | None ->
+             unify_at ctx loc cur_ty (TFun (fresh (), next_ty)));
+          apply !(ctx.subst) next_ty
+        ) ctor_ty named_field_tys
+      end
     in
-    let ret_ty = List.fold_left (fun cur_ty value_expr ->
-      let arg_ty = infer_expr ctx value_expr in
-      let next_ty = fresh () in
-      unify_at ctx loc cur_ty (TFun (arg_ty, next_ty));
-      apply !(ctx.subst) next_ty
-    ) ctor_ty ordered_values in
     apply !(ctx.subst) ret_ty
 
   | EApp { fn; arg = (EList { elems = []; _ } as empty_list); loc } ->
@@ -2507,16 +2531,40 @@ and check_expr ctx (e : expr) (expected : expectation) : ty =
           | Some nft -> nft | None -> [])
       | None -> []
     in
-    let ordered_values =
-      if named_field_tys = [] then List.map snd fields
-      else List.filter_map (fun (fname, _) -> List.assoc_opt fname fields) named_field_tys
+    let ret_ty =
+      if named_field_tys = [] then
+        List.fold_left (fun cur_ty value_expr ->
+          let arg_ty = infer_expr ctx value_expr in
+          let next_ty = fresh () in
+          unify_at ctx loc cur_ty (TFun (arg_ty, next_ty));
+          apply !(ctx.subst) next_ty
+        ) ctor_ty (List.map snd fields)
+      else begin
+        List.iter (fun (fname, _) ->
+          if not (List.mem_assoc fname fields) then
+            add_error ctx loc
+              (Printf.sprintf "constructor `%s` is missing required field `%s`"
+                 ctor_name fname)
+        ) named_field_tys;
+        List.iter (fun (fname, value_expr) ->
+          if not (List.mem_assoc fname named_field_tys) then begin
+            add_error ctx (expr_loc value_expr)
+              (Printf.sprintf "constructor `%s` has no field `%s`" ctor_name fname);
+            ignore (infer_expr ctx value_expr)
+          end
+        ) fields;
+        List.fold_left (fun cur_ty (fname, _decl_ty) ->
+          let next_ty = fresh () in
+          (match List.assoc_opt fname fields with
+           | Some value_expr ->
+             let arg_ty = infer_expr ctx value_expr in
+             unify_at ctx loc cur_ty (TFun (arg_ty, next_ty))
+           | None ->
+             unify_at ctx loc cur_ty (TFun (fresh (), next_ty)));
+          apply !(ctx.subst) next_ty
+        ) ctor_ty named_field_tys
+      end
     in
-    let ret_ty = List.fold_left (fun cur_ty value_expr ->
-      let arg_ty = infer_expr ctx value_expr in
-      let next_ty = fresh () in
-      unify_at ctx loc cur_ty (TFun (arg_ty, next_ty));
-      apply !(ctx.subst) next_ty
-    ) ctor_ty ordered_values in
     let resolved = apply !(ctx.subst) ret_ty in
     unify_expected_at ctx loc resolved expected;
     apply !(ctx.subst) expected_ty

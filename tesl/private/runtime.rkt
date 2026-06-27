@@ -9,6 +9,7 @@
 
 (provide tesl-env
          tesl-env-raw
+         tesl-env-string-raw
          tesl-env-int
          tesl-env-int-raw
          tesl-cli-args
@@ -32,6 +33,12 @@
   (if raw
       (Something raw)
       Nothing))
+
+;; envString: read an env var as a String, falling back to `default` when the
+;; variable is unset or empty.  (Required, fail-fast reads use tesl-env-raw via
+;; the config-block emitter; this is the with-default variant.)
+(define (tesl-env-string-raw name default)
+  (or (tesl-env-raw name) default))
 
 (define (parse-integer-env name raw who)
   (define maybe-int (and raw (string->number raw)))
