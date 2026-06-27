@@ -51,16 +51,16 @@ import Tesl.Prelude exposing [String, Unit, Bool(..)]
 # The email block references it with `database: AppDB`.
 
 database AppDB {
-  backend postgres
-  schema "lesson60"
-  entities []
+  backend: postgres
+  schema: "lesson60"
+  entities: []
   postgres {
-    dbName env("LESSON60_DB")
-    user env("TESL_POSTGRES_USER")
-    password env("TESL_POSTGRES_PASSWORD")
-    host env("TESL_POSTGRES_HOST")
-    port envInt("TESL_POSTGRES_PORT", 5432)
-    socket env("TESL_POSTGRES_SOCKET")
+    dbName: env("LESSON60_DB")
+    user: env("TESL_POSTGRES_USER")
+    password: env("TESL_POSTGRES_PASSWORD")
+    host: env("TESL_POSTGRES_HOST")
+    port: envInt("TESL_POSTGRES_PORT", 5432)
+    socket: env("TESL_POSTGRES_SOCKET")
   }
 }
 

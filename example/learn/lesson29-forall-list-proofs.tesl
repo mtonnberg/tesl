@@ -113,16 +113,16 @@ entity Note table "notes" primaryKey id {
 }
 
 database NoteDatabase {
-  backend postgres
-  schema "notes_lesson29"
-  entities [Note]
+  backend: postgres
+  schema: "notes_lesson29"
+  entities: [Note]
   postgres {
-    dbName env("NOTES_DB_NAME")
-    user env("NOTES_DB_USER")
-    password env("NOTES_DB_PASSWORD")
-    host env("NOTES_DB_HOST")
-    port 5432
-    socket env("NOTES_DB_SOCKET")
+    dbName: env("NOTES_DB_NAME")
+    user: env("NOTES_DB_USER")
+    password: env("NOTES_DB_PASSWORD")
+    host: env("NOTES_DB_HOST")
+    port: 5432
+    socket: env("NOTES_DB_SOCKET")
   }
 }
 

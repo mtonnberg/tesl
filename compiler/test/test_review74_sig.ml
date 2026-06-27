@@ -472,9 +472,9 @@ let test_LB04_library_with_workers_wiring_rejected () =
 #lang tesl
 library Lb04 exposing []
 import Tesl.Prelude exposing [String]
-database Lb04Db { backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" } }
-queue Lb04Q { database Lb04Db jobs [Lb04Job] }
+database Lb04Db { backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" } }
+queue Lb04Q { database: Lb04Db jobs: [Lb04Job] }
 record Lb04Job { msg: String }
 worker doLb04Job(j: Lb04Job) requires [] = j
 workers Lb04Workers for Lb04Q { Lb04Job = doLb04Job }
@@ -489,8 +489,8 @@ let test_LB05_library_with_database_rejected () =
   should_fail "not allowed in library\\|library.*database\\|database.*library\\|infrastructure\\|V00" {|
 #lang tesl
 library Lb05 exposing []
-database Lb05Db { backend postgres schema "s" entities []
-  postgres { database "mydb" user "u" password "" host "localhost" port 5432 socket "" } }
+database Lb05Db { backend: postgres schema: "s" entities: []
+  postgres { database: "mydb" user: "u" password: "" host: "localhost" port: 5432 socket: "" } }
 |}
 
 (* LB06: library with `entity` block — entities are infrastructure, not allowed *)

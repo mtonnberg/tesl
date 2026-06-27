@@ -394,7 +394,7 @@ type Foo = Foo
 (* R51_T03b — self-reference through a type application. Tesl's parser
    treats `type Name = Maybe Name` as an ADT declaration attempt rather
    than a transparent alias, so the parser error is the first thing the
-   user sees. Either error is acceptable; we assert we REACH one of them. *)
+   user: sees. Either error is acceptable; we assert we REACH one of them. *)
 let r51_t03b_self_ref_through_tapp_fixed () =
   should_fail_src "Loop\\|self-referential" (base_header ^ {|
 type Loop = Maybe Loop

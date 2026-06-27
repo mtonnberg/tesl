@@ -9,16 +9,16 @@ capability emailWrite implies queueWrite
 capability appService implies dbRead, dbWrite, emailWrite, pubsub
 
 database MainDatabase {
-  backend postgres
-  schema  "app"
-  entities []
+  backend: postgres
+  schema: "app"
+  entities: []
   postgres {
-    dbName "app_db"
-    user     "app"
-    password ""
-    host     "localhost"
-    port     5432
-    socket   ""
+    dbName: "app_db"
+    user: "app"
+    password: ""
+    host: "localhost"
+    port: 5432
+    socket: ""
   }
 }
 
@@ -33,8 +33,8 @@ type UserEvent
   | AccountDeleted
 
 queue EmailQueue {
-  database MainDatabase
-  jobs     [SendEmail]
+  database: MainDatabase
+  jobs: [SendEmail]
   retry {
     maxAttempts: 3
     backoff: exponential
@@ -43,8 +43,8 @@ queue EmailQueue {
 }
 
 channel UserEvents(userId: String) {
-  database MainDatabase
-  payload UserEvent
+  database: MainDatabase
+  payload: UserEvent
 }
 
 worker sendEmailWorker(job: SendEmail ::: FromQueue (Id == jobId) job)

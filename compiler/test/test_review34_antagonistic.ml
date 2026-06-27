@@ -352,8 +352,8 @@ let test_h09_nested_transaction_rejected () =
     "import Tesl.DB exposing [dbRead, dbWrite]\n" ^
     "entity Item table \"items\" primaryKey id { id: String name: String }\n" ^
     "database MyDb {\n" ^
-    "  backend postgres schema \"s\" entities [Item]\n" ^
-    "  postgres { database env(\"DB\") user env(\"U\") password env(\"P\") host env(\"H\") port envInt(\"PORT\", 5432) socket env(\"SOCK\") }\n" ^
+    "  backend: postgres schema: \"s\" entities: [Item]\n" ^
+    "  postgres { database: env(\"DB\") user: env(\"U\") password: env(\"P\") host: env(\"H\") port: envInt(\"PORT\", 5432) socket: env(\"SOCK\") }\n" ^
     "}\n" ^
     "fn test() -> String requires [dbWrite] =\n" ^
     "  with transaction {\n" ^
@@ -624,8 +624,8 @@ let test_h23_select_without_capability_rejected () =
     "import Tesl.DB exposing [dbRead, dbWrite]\n" ^
     "entity Item table \"items\" primaryKey id { id: String name: String }\n" ^
     "database MyDb {\n" ^
-    "  backend postgres schema \"s\" entities [Item]\n" ^
-    "  postgres { database env(\"DB\") user env(\"U\") password env(\"P\") host env(\"H\") port envInt(\"PORT\", 5432) socket env(\"SOCK\") }\n" ^
+    "  backend: postgres schema: \"s\" entities: [Item]\n" ^
+    "  postgres { database: env(\"DB\") user: env(\"U\") password: env(\"P\") host: env(\"H\") port: envInt(\"PORT\", 5432) socket: env(\"SOCK\") }\n" ^
     "}\n" ^
     "fn missingCap() -> String =\n" ^
     "  let items = select item from Item\n" ^
@@ -641,8 +641,8 @@ let test_h24_select_with_capability_compiles () =
     "import Tesl.DB exposing [dbRead, dbWrite]\n" ^
     "entity Item table \"items\" primaryKey id { id: String name: String }\n" ^
     "database MyDb {\n" ^
-    "  backend postgres schema \"s\" entities [Item]\n" ^
-    "  postgres { database env(\"DB\") user env(\"U\") password env(\"P\") host env(\"H\") port envInt(\"PORT\", 5432) socket env(\"SOCK\") }\n" ^
+    "  backend: postgres schema: \"s\" entities: [Item]\n" ^
+    "  postgres { database: env(\"DB\") user: env(\"U\") password: env(\"P\") host: env(\"H\") port: envInt(\"PORT\", 5432) socket: env(\"SOCK\") }\n" ^
     "}\n" ^
     "fn withCap() -> List Item requires [dbRead] =\n" ^
     "  select item from Item\n"

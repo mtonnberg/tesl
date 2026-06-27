@@ -48,16 +48,16 @@ import MedicalJournalDB exposing [
 # ── Database ─────────────────────────────────────────────────────────────────
 
 database MjDatabase {
-  backend postgres
-  schema "medical_journal"
-  entities [Provider, Patient, JournalEntry, Prescription, DomainEvent]
+  backend: postgres
+  schema: "medical_journal"
+  entities: [Provider, Patient, JournalEntry, Prescription, DomainEvent]
   postgres {
-    dbName env("MJ_DB")
-    user env("TESL_POSTGRES_USER")
-    password env("TESL_POSTGRES_PASSWORD")
-    host env("TESL_POSTGRES_HOST")
-    port envInt("TESL_POSTGRES_PORT", 5432)
-    socket env("TESL_POSTGRES_SOCKET")
+    dbName: env("MJ_DB")
+    user: env("TESL_POSTGRES_USER")
+    password: env("TESL_POSTGRES_PASSWORD")
+    host: env("TESL_POSTGRES_HOST")
+    port: envInt("TESL_POSTGRES_PORT", 5432)
+    socket: env("TESL_POSTGRES_SOCKET")
   }
 }
 

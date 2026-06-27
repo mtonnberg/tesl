@@ -712,15 +712,15 @@ entity User table "users" primaryKey id {
 }
 
 database TestDB {
-  backend  postgres
-  schema   "test"
-  entities [User]
+  backend: postgres
+  schema: "test"
+  entities: [User]
   postgres {
-    database env("DB_NAME")
-    user     env("DB_USER")
-    password env("DB_PASS")
-    host     env("DB_HOST")
-    port     envInt("DB_PORT", 5432)
+    database: env("DB_NAME")
+    user: env("DB_USER")
+    password: env("DB_PASS")
+    host: env("DB_HOST")
+    port: envInt("DB_PORT", 5432)
   }
 }
 
@@ -752,15 +752,15 @@ entity User table "users" primaryKey id {
 }
 
 database TestDB {
-  backend  postgres
-  schema   "test"
-  entities [User]
+  backend: postgres
+  schema: "test"
+  entities: [User]
   postgres {
-    database env("DB_NAME")
-    user     env("DB_USER")
-    password env("DB_PASS")
-    host     env("DB_HOST")
-    port     envInt("DB_PORT", 5432)
+    database: env("DB_NAME")
+    user: env("DB_USER")
+    password: env("DB_PASS")
+    host: env("DB_HOST")
+    port: envInt("DB_PORT", 5432)
   }
 }
 

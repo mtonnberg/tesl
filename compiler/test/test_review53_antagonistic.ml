@@ -349,15 +349,15 @@ entity Item table "items" primaryKey id {
 }
 
 database ItemDb {
-  backend postgres
-  schema "test"
-  entities [Item]
+  backend: postgres
+  schema: "test"
+  entities: [Item]
   postgres {
-    database "test"
-    user "test"
-    password "test"
-    host "localhost"
-    port 5432
+    database: "test"
+    user: "test"
+    password: "test"
+    host: "localhost"
+    port: 5432
   }
 }
 
@@ -480,15 +480,15 @@ entity Note table "notes" primaryKey id {
 }
 
 database NoteDb {
-  backend postgres
-  schema "test"
-  entities [Note]
+  backend: postgres
+  schema: "test"
+  entities: [Note]
   postgres {
-    database "test"
-    user "test"
-    password "test"
-    host "localhost"
-    port 5432
+    database: "test"
+    user: "test"
+    password: "test"
+    host: "localhost"
+    port: 5432
   }
 }
 
@@ -677,15 +677,15 @@ entity Widget table "widgets" primaryKey id {
 }
 
 database WidgetDb {
-  backend postgres
-  schema "test"
-  entities [Widget]
+  backend: postgres
+  schema: "test"
+  entities: [Widget]
   postgres {
-    database "test"
-    user "test"
-    password "test"
-    host "localhost"
-    port 5432
+    database: "test"
+    user: "test"
+    password: "test"
+    host: "localhost"
+    port: 5432
   }
 }
 

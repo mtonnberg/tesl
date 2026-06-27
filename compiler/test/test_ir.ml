@@ -1132,6 +1132,42 @@ let test_field_hover_in_telemetry () =
   assert_contains ~name:"telemetry field-at type" fjson {|"field_type":"String"|};
   assert_contains ~name:"telemetry field-at record" fjson {|"record_type":"User"|}
 
+(* ── Config-block context (LSP field hover + completion) ─────────────────── *)
+
+let config_ctx_src =
+  "#lang tesl\n\
+   module Cfg exposing []\n\
+   import Tesl.Prelude exposing [String]\n\
+   database Db {\n\
+  \  backend: postgres\n\
+  \  schema: \"app\"\n\
+  \  postgres {\n\
+  \    dbName: env(\"DB\")\n\
+  \  }\n\
+   }\n"
+
+let test_config_context_top_level () =
+  (* Line 4 (0-based 3) `backend: postgres` is inside the database block. *)
+  let cc = Compile.config_context_source "Cfg.tesl" config_ctx_src 4 4 in
+  let json = Compile.config_context_response_to_json cc in
+  assert_contains ~name:"top block is database" json {|"block":"database"|};
+  assert_contains ~name:"has postgres field" json {|"name":"postgres"|};
+  assert_contains ~name:"backend present" json {|"name":"backend","type":"postgres","doc":|}
+
+let test_config_context_nested_postgres () =
+  (* Line 8 (0-based 7) `dbName: env("DB")` is inside the nested postgres block. *)
+  let cc = Compile.config_context_source "Cfg.tesl" config_ctx_src 7 6 in
+  let json = Compile.config_context_response_to_json cc in
+  assert_contains ~name:"nested block is postgres" json {|"block":"postgres"|};
+  assert_contains ~name:"dbName present" json {|"name":"dbName"|};
+  assert_contains ~name:"dbName marked present" json {|"name":"dbName","type":"env(...)","doc":|}
+
+let test_config_context_outside_is_null () =
+  (* Line 2 (the module header) is not inside any config block. *)
+  let cc = Compile.config_context_source "Cfg.tesl" config_ctx_src 1 0 in
+  let json = Compile.config_context_response_to_json cc in
+  assert_contains ~name:"null outside config block" json {|"config_context":null|}
+
 (* ── AC1: agent-context snapshot ─────────────────────────────────────────── *)
 
 (* A clean module: exercises the happy path — ok:true, top-level symbols with
@@ -1313,5 +1349,8 @@ let () =
       Alcotest.test_case "agent-context hash matches semantic-json" `Quick test_agent_context_hash_matches_semantic;
       Alcotest.test_case "agent-context diagnostics carry codes + obligations" `Quick test_agent_context_codes_and_obligations;
       Alcotest.test_case "agent-context errors sort first" `Quick test_agent_context_errors_sort_first;
+      Alcotest.test_case "config-context top-level database block" `Quick test_config_context_top_level;
+      Alcotest.test_case "config-context nested postgres block" `Quick test_config_context_nested_postgres;
+      Alcotest.test_case "config-context null outside any block" `Quick test_config_context_outside_is_null;
     ];
   ]

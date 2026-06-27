@@ -93,7 +93,7 @@ let test_R67_QU01_queue_missing_database_rejected () =
   should_fail "missing a `database` clause\\|missing.*database" {|
 #lang tesl
 module R67Qu01 exposing []
-queue R67Qu01 { jobs [MyJob] }
+queue R67Qu01 { jobs: [MyJob] }
 |}
 
 let test_R67_QU02_queue_empty_jobs_rejected () =
@@ -101,10 +101,10 @@ let test_R67_QU02_queue_empty_jobs_rejected () =
 #lang tesl
 module R67Qu02 exposing []
 database R67Qu02Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
-queue R67Qu02 { database R67Qu02Db jobs [] }
+queue R67Qu02 { database: R67Qu02Db jobs: [] }
 |}
 
 let test_R67_QU03_queue_no_jobs_clause_rejected () =
@@ -112,10 +112,10 @@ let test_R67_QU03_queue_no_jobs_clause_rejected () =
 #lang tesl
 module R67Qu03 exposing []
 database R67Qu03Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
-queue R67Qu03 { database R67Qu03Db }
+queue R67Qu03 { database: R67Qu03Db }
 |}
 
 let test_R67_QU04_queue_with_database_and_jobs_accepted () =
@@ -123,10 +123,10 @@ let test_R67_QU04_queue_with_database_and_jobs_accepted () =
 #lang tesl
 module R67Qu04 exposing []
 database R67Qu04Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
-queue R67Qu04 { database R67Qu04Db jobs [JobA, JobB] }
+queue R67Qu04 { database: R67Qu04Db jobs: [JobA, JobB] }
 |}
 
 let test_R67_QU05_queue_with_retry_config_accepted () =
@@ -134,12 +134,12 @@ let test_R67_QU05_queue_with_retry_config_accepted () =
 #lang tesl
 module R67Qu05 exposing []
 database R67Qu05Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
 queue R67Qu05 {
-  database R67Qu05Db
-  jobs [Job1]
+  database: R67Qu05Db
+  jobs: [Job1]
   retry { maxAttempts: 3 backoff: "exponential" initialDelay: 1000 }
 }
 |}
@@ -151,7 +151,7 @@ let test_R67_CH01_channel_missing_database_rejected () =
 #lang tesl
 module R67Ch01 exposing []
 type Ev = EvA msg: String
-channel R67Ch01 { payload Ev }
+channel R67Ch01 { payload: Ev }
 |}
 
 let test_R67_CH02_channel_empty_database_rejected () =
@@ -160,7 +160,7 @@ let test_R67_CH02_channel_empty_database_rejected () =
 module R67Ch02 exposing []
 import Tesl.Prelude exposing [String]
 type Ev = EvB msg: String
-channel R67Ch02 { database "" payload Ev }
+channel R67Ch02 { database: "" payload: Ev }
 |}
 
 let test_R67_CH03_channel_with_database_accepted () =
@@ -169,11 +169,11 @@ let test_R67_CH03_channel_with_database_accepted () =
 module R67Ch03 exposing []
 import Tesl.Prelude exposing [String]
 database R67Ch03Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
 type EvC = EvCA msg: String
-channel R67Ch03 { database R67Ch03Db payload EvC }
+channel R67Ch03 { database: R67Ch03Db payload: EvC }
 |}
 
 let test_R67_CH04_channel_with_key_params_accepted () =
@@ -182,11 +182,11 @@ let test_R67_CH04_channel_with_key_params_accepted () =
 module R67Ch04 exposing []
 import Tesl.Prelude exposing [String]
 database R67Ch04Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
 type EvD = EvDA msg: String
-channel R67Ch04(userId: String) { database R67Ch04Db payload EvD }
+channel R67Ch04(userId: String) { database: R67Ch04Db payload: EvD }
 |}
 
 (* ── R67_WK — Workers structure ──────────────────────────────────────────── *)
@@ -203,10 +203,10 @@ let test_R67_WK02_workers_empty_bindings_rejected () =
 #lang tesl
 module R67Wk02 exposing []
 database R67Wk02Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
-queue R67Wk02Q { database R67Wk02Db jobs [MyJob] }
+queue R67Wk02Q { database: R67Wk02Db jobs: [MyJob] }
 workers R67Wk02 for R67Wk02Q { }
 |}
 
@@ -216,10 +216,10 @@ let test_R67_WK03_workers_undefined_handler_rejected () =
 module R67Wk03 exposing []
 import Tesl.Prelude exposing [String]
 database R67Wk03Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
-queue R67Wk03Q { database R67Wk03Db jobs [MyJob] }
+queue R67Wk03Q { database: R67Wk03Db jobs: [MyJob] }
 workers R67Wk03 for R67Wk03Q { MyJob = undefinedWorkerFn }
 |}
 
@@ -229,10 +229,10 @@ let test_R67_WK04_workers_with_valid_worker_accepted () =
 module R67Wk04 exposing []
 import Tesl.Prelude exposing [String]
 database R67Wk04Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
-queue R67Wk04Q { database R67Wk04Db jobs [MyJob] }
+queue R67Wk04Q { database: R67Wk04Db jobs: [MyJob] }
 record MyJob { msg: String }
 worker processMyJob(job: MyJob) -> String requires [] = job.msg
 workers R67Wk04 for R67Wk04Q { MyJob = processMyJob }
@@ -244,10 +244,10 @@ let test_R67_WK05_workers_fn_instead_of_worker_rejected () =
 module R67Wk05 exposing []
 import Tesl.Prelude exposing [String]
 database R67Wk05Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
-queue R67Wk05Q { database R67Wk05Db jobs [MyJob] }
+queue R67Wk05Q { database: R67Wk05Db jobs: [MyJob] }
 record MyJob { msg: String }
 fn notAWorker(job: MyJob) -> String requires [] = job.msg
 workers R67Wk05 for R67Wk05Q { MyJob = notAWorker }
@@ -268,10 +268,10 @@ let test_R67_WK07_dead_workers_valid_accepted () =
 module R67Wk07 exposing []
 import Tesl.Prelude exposing [String]
 database R67Wk07Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
-queue R67Wk07Q { database R67Wk07Db jobs [DeadJob] }
+queue R67Wk07Q { database: R67Wk07Db jobs: [DeadJob] }
 record DeadJob { msg: String }
 deadWorker handleDeadDeadJob(job: DeadJob) -> String requires [] = job.msg
 deadWorkers R67Wk07 for R67Wk07Q { DeadJob = handleDeadDeadJob }
@@ -284,10 +284,10 @@ let test_R67_WK08_workers_multiple_job_types_accepted () =
 module R67Wk08 exposing []
 import Tesl.Prelude exposing [String, Int]
 database R67Wk08Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
-queue R67Wk08Q { database R67Wk08Db jobs [JobA, JobB] }
+queue R67Wk08Q { database: R67Wk08Db jobs: [JobA, JobB] }
 record JobA { name: String }
 record JobB { count: Int }
 worker handleJobA(job: JobA) -> String requires [] = job.name
@@ -302,10 +302,10 @@ let test_R67_WK09_handler_kind_instead_of_worker_rejected () =
 module R67Wk09 exposing []
 import Tesl.Prelude exposing [String]
 database R67Wk09Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
-queue R67Wk09Q { database R67Wk09Db jobs [MyJob] }
+queue R67Wk09Q { database: R67Wk09Db jobs: [MyJob] }
 record MyJob { msg: String }
 handler httpHandler() -> String requires [] = "response"
 workers R67Wk09 for R67Wk09Q { MyJob = httpHandler }
@@ -318,10 +318,10 @@ let test_R67_DB01_database_undefined_entity_rejected () =
 #lang tesl
 module R67Db01 exposing []
 database R67Db01 {
-  backend postgres
-  schema "s"
-  entities [GhostEntity]
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres
+  schema: "s"
+  entities: [GhostEntity]
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
 |}
 
@@ -330,10 +330,10 @@ let test_R67_DB02_database_multiple_undefined_entities_rejected () =
 #lang tesl
 module R67Db02 exposing []
 database R67Db02 {
-  backend postgres
-  schema "s"
-  entities [GhostA, GhostB]
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres
+  schema: "s"
+  entities: [GhostA, GhostB]
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
 |}
 
@@ -347,10 +347,10 @@ entity R67Item table "items" primaryKey id {
   name: String
 }
 database R67Db03 {
-  backend postgres
-  schema "s"
-  entities [R67Item]
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres
+  schema: "s"
+  entities: [R67Item]
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
 |}
 
@@ -360,10 +360,10 @@ let test_R67_DB04_database_empty_entities_accepted () =
 #lang tesl
 module R67Db04 exposing []
 database R67Db04 {
-  backend postgres
-  schema "s"
-  entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres
+  schema: "s"
+  entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
 |}
 
@@ -375,9 +375,9 @@ module R67Db05 exposing []
 import Tesl.Prelude exposing [Int, String]
 entity ValidEntity table "valid" primaryKey id { id: Int name: String }
 database R67Db05 {
-  backend postgres schema "s"
-  entities [ValidEntity, GhostEntity]
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s"
+  entities: [ValidEntity, GhostEntity]
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
 |}
 
@@ -398,9 +398,9 @@ entity Product table "products" primaryKey id {
   price: Int
 }
 database R67Db06 {
-  backend postgres schema "shop"
-  entities [Product]
-  postgres { database "shop" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "shop"
+  entities: [Product]
+  postgres { database: "shop" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
 |}
 
@@ -564,13 +564,13 @@ let test_R67_OK01_full_queue_worker_pipeline_accepted () =
 module R67Ok01 exposing []
 import Tesl.Prelude exposing [String, Int]
 database R67Ok01Db {
-  backend postgres schema "myapp" entities []
-  postgres { database "myapp" user "app" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "myapp" entities: []
+  postgres { database: "myapp" user: "app" password: "" host: "localhost" port: 5432 socket: "" }
 }
 record NotifyJob { userId: String message: String }
 queue NotifyQueue {
-  database R67Ok01Db
-  jobs [NotifyJob]
+  database: R67Ok01Db
+  jobs: [NotifyJob]
   retry { maxAttempts: 3 backoff: "exponential" initialDelay: 1000 }
 }
 worker sendNotification(job: NotifyJob) -> String requires [] =
@@ -585,11 +585,11 @@ module R67Ok02 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 database R67Ok02Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
 type Event = EventA msg: String
-channel EventChannel(userId: String) { database R67Ok02Db payload Event }
+channel EventChannel(userId: String) { database: R67Ok02Db payload: Event }
 |}
 
 let test_R67_OK03_database_with_entities_accepted () =
@@ -600,8 +600,8 @@ import Tesl.Prelude exposing [String, Int]
 entity User table "users" primaryKey id { id: Int name: String }
 entity Post table "posts" primaryKey id { id: Int title: String authorId: Int }
 database R67Ok03Db {
-  backend postgres schema "app" entities [User, Post]
-  postgres { database "app" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "app" entities: [User, Post]
+  postgres { database: "app" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
 |}
 
@@ -615,6 +615,64 @@ fn mul(a: Int, b: Int) -> Int = a * b
 test "addition" { expect add 2 3 == 5 }
 test "multiplication" { expect mul 2 3 == 6 }
 test "zero identity" { expect add 0 5 == 5 }
+|}
+
+(* ── R67_CF — Config-field schema (colon-required + unknown-field) ───────── *)
+
+let test_R67_CF01_missing_colon_rejected () =
+  should_fail "missing its `:`\\|must be written" {|
+#lang tesl
+module R67Cf01 exposing []
+import Tesl.Prelude exposing [String]
+database Db {
+  backend postgres
+  schema: "app"
+  postgres {}
+}
+|}
+
+let test_R67_CF02_unknown_field_rejected () =
+  should_fail "unknown field" {|
+#lang tesl
+module R67Cf02 exposing []
+import Tesl.Prelude exposing [String]
+database Db {
+  backend: postgres
+  schema: "app"
+  tsl: True
+  postgres {}
+}
+|}
+
+let test_R67_CF03_unknown_nested_field_rejected () =
+  should_fail "unknown field `hostt`\\|unknown field" {|
+#lang tesl
+module R67Cf03 exposing []
+import Tesl.Prelude exposing [String]
+database Db {
+  backend: postgres
+  schema: "app"
+  postgres {
+    hostt: env("H")
+  }
+}
+|}
+
+let test_R67_CF04_colon_form_accepted () =
+  should_pass {|
+#lang tesl
+module R67Cf04 exposing []
+import Tesl.Prelude exposing [String]
+database Db {
+  backend: postgres
+  schema: "app"
+  entities: []
+  postgres {
+    dbName: env("DB")
+    host: env("H")
+    port: envInt("PORT", 5432)
+  }
+}
 |}
 
 (* ── Test runner ─────────────────────────────────────────────────────────── *)
@@ -673,5 +731,11 @@ let () =
       test_case "R67_OK02 channel pipeline accepted" `Quick test_R67_OK02_channel_pipeline_accepted;
       test_case "R67_OK03 database with entities accepted" `Quick test_R67_OK03_database_with_entities_accepted;
       test_case "R67_OK04 multiple test blocks accepted" `Quick test_R67_OK04_multiple_test_blocks_accepted;
+    ];
+    "config-field-schema", [
+      test_case "R67_CF01 missing colon rejected" `Quick test_R67_CF01_missing_colon_rejected;
+      test_case "R67_CF02 unknown field rejected" `Quick test_R67_CF02_unknown_field_rejected;
+      test_case "R67_CF03 unknown nested field rejected" `Quick test_R67_CF03_unknown_nested_field_rejected;
+      test_case "R67_CF04 colon form accepted" `Quick test_R67_CF04_colon_form_accepted;
     ];
   ]

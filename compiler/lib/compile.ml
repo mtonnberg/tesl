@@ -1871,6 +1871,89 @@ let top_decl_loc (decl : Ast.top_decl) : Location.loc =
   | Ast.DApiTest t -> t.loc
   | Ast.DLoadTest t -> t.loc
 
+(* ── Config-block context (LSP hover + completion for config fields) ─────────
+   Given a cursor position, return the most-specific configuration block schema
+   enclosing it (database / postgres / queue / retry / channel / cache / email /
+   smtp) together with each schema field and whether the user already wrote it.
+   Drives the editor's field completion + hover from {!Config_schema} so there
+   is one source of truth. *)
+type config_field_info = {
+  cfi_name     : string;
+  cfi_type     : string;
+  cfi_doc      : string;
+  cfi_required : bool;
+  cfi_present  : bool;
+}
+type config_context = { cc_block : string; cc_fields : config_field_info list }
+
+let config_field_type_label (f : Config_schema.field) : string =
+  match f.kind with
+  | Config_schema.Scalar lbl -> lbl
+  | Config_schema.Block sub  -> sub ^ " { … }"
+  | Config_schema.Params     -> "(…)"
+
+let config_context_source filename source line col : config_context option =
+  match parse_module filename source with
+  | Err _ -> None
+  | Ok m ->
+    (match List.find_opt (fun d ->
+       Config_schema.top_schema_of_decl d <> None
+       && loc_contains_position (top_decl_loc d) line col) m.decls with
+     | None -> None
+     | Some d ->
+       let (top_sch, raw) = Option.get (Config_schema.top_schema_of_decl d) in
+       let decl_stop = (top_decl_loc d).stop in
+       (* Is the cursor inside a nested sub-block (postgres / retry / smtp)?
+          A block field's region runs from the line below its key to the next
+          sibling field's key (or the decl end). *)
+       let rec find_nested = function
+         | (cf : Ast.config_field) :: rest ->
+           (match Config_schema.field_in top_sch cf.cf_key with
+            | Some { kind = Config_schema.Block sub; _ } ->
+              let region_stop = match rest with
+                | (n : Ast.config_field) :: _ -> (n.cf_key_loc.start.line, n.cf_key_loc.start.col)
+                | [] -> (decl_stop.line, decl_stop.col)
+              in
+              if line > cf.cf_key_loc.start.line
+                 && position_lt (line, col) region_stop
+              then Some (sub, cf.cf_block)
+              else find_nested rest
+            | _ -> find_nested rest)
+         | [] -> None
+       in
+       let (sch, present_raw) =
+         match find_nested raw with
+         | Some (sub, subraw) ->
+           (match Config_schema.schema_for sub with
+            | Some s -> (s, subraw) | None -> (top_sch, raw))
+         | None -> (top_sch, raw)
+       in
+       let present = List.map (fun (cf : Ast.config_field) -> cf.cf_key) present_raw in
+       let fields =
+         List.map (fun (f : Config_schema.field) -> {
+           cfi_name     = f.fname;
+           cfi_type     = config_field_type_label f;
+           cfi_doc      = f.doc;
+           cfi_required = f.required;
+           cfi_present  = List.mem f.fname present;
+         }) sch.fields
+       in
+       Some { cc_block = sch.sname; cc_fields = fields })
+
+let config_context_response_to_json (cc : config_context option) : string =
+  match cc with
+  | None -> {|{"version":1,"config_context":null}|}
+  | Some c ->
+    let field_json (f : config_field_info) =
+      Printf.sprintf
+        {|{"name":%s,"type":%s,"doc":%s,"required":%b,"present":%b}|}
+        (json_encode_string f.cfi_name) (json_encode_string f.cfi_type)
+        (json_encode_string f.cfi_doc) f.cfi_required f.cfi_present
+    in
+    Printf.sprintf {|{"version":1,"config_context":{"block":%s,"fields":[%s]}}|}
+      (json_encode_string c.cc_block)
+      (String.concat "," (List.map field_json c.cc_fields))
+
 (* Fold [f] over every top-level expression ROOT in a module: function bodies,
    const initialisers, capture/channel sub-expressions and the expressions that
    live inside test statements.  Callers descend each root recursively via

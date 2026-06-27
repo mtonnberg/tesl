@@ -520,8 +520,8 @@ module LbApp14Pos exposing []
 import Tesl.Prelude exposing [String, Int]
 import LbSchema14 exposing [Product]
 database LbApp14Db {
-  backend postgres schema "shop" entities [Product]
-  postgres { database "shop" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "shop" entities: [Product]
+  postgres { database: "shop" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
 |} in
   should_pass_two lib_src app_src
@@ -533,10 +533,10 @@ module LbQueues15 exposing []
 import Tesl.Prelude exposing [String]
 record NotifyJob { msg: String }
 database LbQueues15Db {
-  backend postgres schema "q" entities []
-  postgres { database "q" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "q" entities: []
+  postgres { database: "q" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
-queue NotifyQueue { database LbQueues15Db jobs [NotifyJob] }
+queue NotifyQueue { database: LbQueues15Db jobs: [NotifyJob] }
 |} in
   let app_src = {|#lang tesl
 module LbApp15Pos exposing []

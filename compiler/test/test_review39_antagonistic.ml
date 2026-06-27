@@ -332,16 +332,16 @@ entity Note table "notes" primaryKey id {
 }
 
 database MainDatabase {
-  backend postgres
-  schema  "lesson32"
-  entities [Note]
+  backend: postgres
+  schema: "lesson32"
+  entities: [Note]
   postgres {
-    database "lesson32"
-    user     "lesson32"
-    password "lesson32"
-    host     "localhost"
-    port     5432
-    socket   ""
+    database: "lesson32"
+    user: "lesson32"
+    password: "lesson32"
+    host: "localhost"
+    port: 5432
+    socket: ""
   }
 }
 
@@ -400,16 +400,16 @@ import Tesl.ApiTest exposing [
 ]
 
 database MainDatabase {
-  backend postgres
-  schema  "lesson33"
-  entities []
+  backend: postgres
+  schema: "lesson33"
+  entities: []
   postgres {
-    database "demo"
-    user     "demo"
-    password "demo"
-    host     "localhost"
-    port     5432
-    socket   ""
+    database: "demo"
+    user: "demo"
+    password: "demo"
+    host: "localhost"
+    port: 5432
+    socket: ""
   }
 }
 
@@ -445,8 +445,8 @@ fn parseUserId(id: String) -> String =
 capture userIdCapture: String using stringCodec via parseUserId
 
 queue MainQueue {
-  database MainDatabase
-  jobs     [NotifyJob]
+  database: MainDatabase
+  jobs: [NotifyJob]
   retry {
     maxAttempts: 2
     backoff: linear
@@ -455,8 +455,8 @@ queue MainQueue {
 }
 
 channel MainEvents(userId: String) {
-  database MainDatabase
-  payload NoticeEvent
+  database: MainDatabase
+  payload: NoticeEvent
 }
 
 worker handleNotice(job: NotifyJob ::: FromQueue (Id == jobId) job)
@@ -563,16 +563,16 @@ entity Book table "books" primaryKey id {
 }
 
 database MainDatabase {
-  backend postgres
-  schema  "lesson41"
-  entities [Book]
+  backend: postgres
+  schema: "lesson41"
+  entities: [Book]
   postgres {
-    database "lesson41"
-    user     "lesson41"
-    password "lesson41"
-    host     "localhost"
-    port     5432
-    socket   ""
+    database: "lesson41"
+    user: "lesson41"
+    password: "lesson41"
+    host: "localhost"
+    port: 5432
+    socket: ""
   }
 }
 

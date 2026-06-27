@@ -239,10 +239,10 @@ let test_R66_RT04_sse_without_return_accepted () =
 module R66Rt04 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
-database EventDb { backend postgres schema "e" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" } }
+database EventDb { backend: postgres schema: "e" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" } }
 type Ev = EvA msg: String
-channel Events(userId: String) { database EventDb payload Ev }
+channel Events(userId: String) { database: EventDb payload: Ev }
 fn parseId(s: String) -> String = s
 capture userCapture: String using stringCodec via parseId
 api R66Rt04 {
@@ -777,10 +777,10 @@ let test_R66_OK04_sse_with_http_endpoints_accepted () =
 module R66Ok04 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
-database Db { backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" } }
+database Db { backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" } }
 type Ev = EvMsg msg: String
-channel Events(uid: String) { database Db payload Ev }
+channel Events(uid: String) { database: Db payload: Ev }
 fn parseId(s: String) -> String = s
 capture uidCapture: String using stringCodec via parseId
 api R66Ok04 {

@@ -295,8 +295,8 @@ let test_channel_with_params () =
 module Foo exposing []
 import Tesl.Prelude exposing [String]
 channel UserEvents(userId: String) {
-  database MainDb
-  payload String
+  database: MainDb
+  payload: String
 }
 |} in
   assert_ok src (fun m ->

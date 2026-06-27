@@ -72,7 +72,7 @@ record PostMessageRequest {
 codec SessionUser {
   toJson {
     id -> "id" with_codec stringCodec
-    username -> "username" with_codec stringCodec
+    username: -> "username" with_codec stringCodec
   }
   fromJson_forbidden
 }
@@ -81,7 +81,7 @@ codec LoginRequest {
   toJson_forbidden
   fromJson [
     {
-      username <- "username" with_codec stringCodec via checkNonEmptyString
+      username: <- "username" with_codec stringCodec via checkNonEmptyString
     }
   ]
 }
@@ -140,23 +140,23 @@ entity Message table "messages" primaryKey id {
 
 # ─── Database ────────────────────────────────────────────────────────────────
 database ChatDatabase {
-  backend postgres
-  schema "chat"
-  entities [ChatUser, Room, Message]
+  backend: postgres
+  schema: "chat"
+  entities: [ChatUser, Room, Message]
   postgres {
-    dbName "chat" # env("CHAT_DB_NAME", "chat")
-    user "tesl" # env("CHAT_DB_USER", "tesl")
-    password "" # env("CHAT_DB_PASSWORD", "")
-    host "127.0.0.1" # env("CHAT_DB_HOST", "tesl")
-    port 55432 # envInt("CHAT_DB_PORT", 55432)
-    socket "" # env("CHAT_DB_SOCKET", "")
+    dbName: "chat" # env("CHAT_DB_NAME", "chat")
+    user: "tesl" # env("CHAT_DB_USER", "tesl")
+    password: "" # env("CHAT_DB_PASSWORD", "")
+    host: "127.0.0.1" # env("CHAT_DB_HOST", "tesl")
+    port: 55432 # envInt("CHAT_DB_PORT", 55432)
+    socket: "" # env("CHAT_DB_SOCKET", "")
   }
 }
 
 # ─── Queue ───────────────────────────────────────────────────────────────────
 queue NotificationQueue {
-  database ChatDatabase
-  jobs [NotifyJob]
+  database: ChatDatabase
+  jobs: [NotifyJob]
   retry {
     maxAttempts: 3
     backoff: exponential
@@ -166,8 +166,8 @@ queue NotificationQueue {
 
 # ─── Channel ─────────────────────────────────────────────────────────────────
 channel RoomMessages(roomId: String) {
-  database ChatDatabase
-  payload RoomEvent
+  database: ChatDatabase
+  payload: RoomEvent
 }
 
 # ─── Auth ────────────────────────────────────────────────────────────────────

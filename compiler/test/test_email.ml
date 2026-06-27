@@ -33,7 +33,7 @@ let module_ ?(name="M") ?(exports="") ?(extra="") body =
     name exports base_imports extra body
 
 let with_db body =
-  "database MainDB {\n  schema: public\n  backend: postgres {}\n}\n" ^ body
+  "database MainDB {\n  schema: \"public\"\n  backend: postgres\n  postgres {}\n}\n" ^ body
 
 let compile_ok name src =
   match Compile.compile_source ~root_path:root "<test>" src with
@@ -327,7 +327,7 @@ let test_type_start_worker_sequence () =
      startEmailWorker AppEmail\n" in
   ignore (compile_ok "type_start_worker_seq" src)
 
-(** 2.15 Email block with port 465 is valid *)
+(** 2.15 Email block with port: 465 is valid *)
 let test_type_email_port_465 () =
   let block = "email TlsEmail {\n  database: MainDB\n  smtp {\n    host: env(\"H\")\n    port: 465\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db block) in
@@ -353,7 +353,7 @@ let test_structural_missing_host () =
   let src = module_ (with_db block) in
   check_err_contains "email_missing_host" src "missing a `host`"
 
-(** 3.4 Email block with port 0 produces error *)
+(** 3.4 Email block with port: 0 produces error *)
 let test_structural_port_zero () =
   let block = "email AppEmail {\n  database: MainDB\n  smtp {\n    host: env(\"H\")\n    port: 0\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db block) in
@@ -373,13 +373,13 @@ let test_structural_valid_block () =
     Alcotest.failf "structural_valid_block: unexpected email errors: %s"
       (String.concat "; " (List.map (fun (d : Compile.diagnostic) -> d.message) diags))
 
-(** 3.7 Email block with port 25 (SMTP) is valid *)
+(** 3.7 Email block with port: 25 (SMTP) is valid *)
 let test_structural_port_25 () =
   let block = "email AppEmail {\n  database: MainDB\n  smtp {\n    host: env(\"H\")\n    port: 25\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: false\n  }\n}\n" in
   let src = module_ (with_db block) in
   ignore (compile_ok "structural_port_25" src)
 
-(** 3.8 Email block with port 465 (SMTPS) is valid *)
+(** 3.8 Email block with port: 465 (SMTPS) is valid *)
 let test_structural_port_465 () =
   let block = "email AppEmail {\n  database: MainDB\n  smtp {\n    host: env(\"H\")\n    port: 465\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db block) in
@@ -502,7 +502,7 @@ let () =
       test_case "multiple email blocks"                `Quick test_parse_multiple_email_blocks;
       test_case "Email.send in let binding"            `Quick test_parse_email_send_let;
       test_case "env() emits tesl-env-raw"             `Quick test_parse_email_env_host;
-      test_case "tls false emits #f"                   `Quick test_parse_email_tls_false;
+      test_case "tls: false emits #f"                   `Quick test_parse_email_tls_false;
     ];
     "type_inference", [
       test_case "Email.send returns Unit"              `Quick test_type_email_send_unit;
@@ -519,17 +519,17 @@ let () =
       test_case "two sends in sequence"                `Quick test_type_two_sends;
       test_case "startEmailWorker in main"             `Quick test_type_start_worker_in_main;
       test_case "startEmailWorker after other stmts"   `Quick test_type_start_worker_sequence;
-      test_case "email block port 465"                 `Quick test_type_email_port_465;
+      test_case "email block port: 465"                 `Quick test_type_email_port_465;
     ];
     "structural_validation", [
       test_case "missing database error"               `Quick test_structural_missing_database;
       test_case "unknown database error"               `Quick test_structural_unknown_database;
       test_case "missing host error"                   `Quick test_structural_missing_host;
-      test_case "port 0 error"                         `Quick test_structural_port_zero;
+      test_case "port: 0 error"                         `Quick test_structural_port_zero;
       test_case "port > 65535 error"                   `Quick test_structural_port_too_large;
       test_case "valid block passes"                   `Quick test_structural_valid_block;
-      test_case "port 25 is valid"                     `Quick test_structural_port_25;
-      test_case "port 465 is valid"                    `Quick test_structural_port_465;
+      test_case "port: 25 is valid"                     `Quick test_structural_port_25;
+      test_case "port: 465 is valid"                    `Quick test_structural_port_465;
       test_case "multiple blocks pass"                 `Quick test_structural_multiple_blocks;
       test_case "plaintext password is valid"          `Quick test_structural_plaintext_password;
     ];

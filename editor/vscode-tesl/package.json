@@ -2,7 +2,7 @@
   "name": "vscode-tesl",
   "displayName": "Tesl Language",
   "description": "Syntax highlighting, live diagnostics, go-to-definition, hover types, and completions for the Tesl (.tesl) language",
-  "version": "0.6.29",
+  "version": "0.6.30",
   "publisher": "Tesl",
   "namespace": "Tesl",
   "license": "BSD-3-Clause",

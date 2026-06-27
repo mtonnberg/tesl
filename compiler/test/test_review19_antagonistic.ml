@@ -209,10 +209,10 @@ entity Todo table "todos" primaryKey id {
 }
 
 database Db {
-  backend postgres
-  schema "todo"
-  entities [Todo]
-  postgres { database "db" user "u" password "" host "localhost" port 5432 }
+  backend: postgres
+  schema: "todo"
+  entities: [Todo]
+  postgres { database: "db" user: "u" password: "" host: "localhost" port: 5432 }
 }
 
 fact IsOpen (t: Todo)
@@ -375,10 +375,10 @@ entity Note table "notes" primaryKey id {
 }
 
 database NoteDb {
-  backend postgres
-  schema "notes"
-  entities [Note]
-  postgres { database "db" user "u" password "" host "localhost" port 5432 }
+  backend: postgres
+  schema: "notes"
+  entities: [Note]
+  postgres { database: "db" user: "u" password: "" host: "localhost" port: 5432 }
 }
 
 fn tryWriteWithoutCap(id: String, content: String) -> Int

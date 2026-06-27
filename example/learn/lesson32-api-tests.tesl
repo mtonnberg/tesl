@@ -32,16 +32,16 @@ entity Note table "notes" primaryKey id {
 }
 
 database Lesson32Database {
-  backend postgres
-  schema "lesson32"
-  entities [Note]
+  backend: postgres
+  schema: "lesson32"
+  entities: [Note]
   postgres {
-    dbName "lesson32"
-    user "lesson32"
-    password "lesson32"
-    host "localhost"
-    port 5432
-    socket ""
+    dbName: "lesson32"
+    user: "lesson32"
+    password: "lesson32"
+    host: "localhost"
+    port: 5432
+    socket: ""
   }
 }
 

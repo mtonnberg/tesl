@@ -404,7 +404,7 @@ import Tesl.DB exposing [dbRead]
 entity A table "as" primaryKey id { id: String, bId: String, val: Int }
 entity B table "bs" primaryKey id { id: String, label: String }
 
-database TestDB { backend memory  entities [A, B] }
+database TestDB { backend: memory  entities: [A, B] }
 
 fn findMatched(minVal: Int) -> List A requires [dbRead] =
   with database TestDB {
@@ -425,7 +425,7 @@ import Tesl.DB exposing [dbRead]
 entity Post table "posts" primaryKey id { id: String, userId: String, title: String }
 entity User table "users" primaryKey id { id: String, active: Bool }
 
-database IJWhereDB { backend memory  entities [Post, User] }
+database IJWhereDB { backend: memory  entities: [Post, User] }
 
 fn query(userId: String) -> List Post requires [dbRead] =
   with database IJWhereDB {
@@ -446,7 +446,7 @@ import Tesl.DB exposing [dbRead]
 entity Article table "articles" primaryKey id { id: String, authorId: String, score: Int }
 entity Author table "authors" primaryKey id { id: String, name: String }
 
-database IJOrderDB { backend memory  entities [Article, Author] }
+database IJOrderDB { backend: memory  entities: [Article, Author] }
 
 fn topPosts(n: Int) -> List Article requires [dbRead] =
   with database IJOrderDB {
@@ -468,7 +468,7 @@ import Tesl.DB exposing [dbRead, dbWrite]
 entity Widget table "widgets" primaryKey id { id: String, thingId: String, name: String }
 entity Thing table "things" primaryKey id { id: String, label: String }
 
-database IJRuntimeDB { backend memory  entities [Widget, Thing] }
+database IJRuntimeDB { backend: memory  entities: [Widget, Thing] }
 
 fn doQuery() -> List Widget requires [dbRead] =
   with database IJRuntimeDB {
@@ -489,7 +489,7 @@ entity Order table "orders" primaryKey id { id: String, customerId: String, prod
 entity Customer table "customers" primaryKey id { id: String, name: String }
 entity Product table "products" primaryKey id { id: String, title: String }
 
-database MultiJoinDB { backend memory  entities [Order, Customer, Product] }
+database MultiJoinDB { backend: memory  entities: [Order, Customer, Product] }
 
 fn query() -> List Order requires [dbRead] =
   with database MultiJoinDB {

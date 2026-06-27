@@ -113,10 +113,10 @@ entity Message table "messages" primaryKey id {
 }
 
 database DB {
-  backend postgres
-  schema "chat"
-  entities [Message]
-  postgres { database env("DB") user env("U") password env("P") host env("H") port 5432 socket env("S") }
+  backend: postgres
+  schema: "chat"
+  entities: [Message]
+  postgres { database: env("DB") user: env("U") password: env("P") host: env("H") port: 5432 socket: env("S") }
 }
 
 |}
@@ -228,21 +228,21 @@ type RoomEvent = NotifyFailed senderName: String roomName: String
 entity Dummy table "dummy" primaryKey id { id: String }
 
 database DB {
-  backend postgres
-  schema "chat"
-  entities [Dummy]
-  postgres { database env("DB") user env("U") password env("P") host env("H") port 5432 socket env("S") }
+  backend: postgres
+  schema: "chat"
+  entities: [Dummy]
+  postgres { database: env("DB") user: env("U") password: env("P") host: env("H") port: 5432 socket: env("S") }
 }
 
 queue NotificationQueue {
-  database DB
-  jobs [NotifyJob]
+  database: DB
+  jobs: [NotifyJob]
   retry { maxAttempts: 3 backoff: exponential initialDelay: 5 }
 }
 
 channel RoomMessages(roomId: String) {
-  database DB
-  payload RoomEvent
+  database: DB
+  payload: RoomEvent
 }
 
 |}

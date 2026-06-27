@@ -195,7 +195,7 @@ auth cookieAuth(request: HttpRequest) -> session: SessionUser::: Authenticated s
 |} in
   let racket = compile_ok src "auth_record_return_emit" in
   assert_contains ~name:"typed SessionUser constructor" racket "(SessionUser #:id \"u1\" #:username \"alice\")";
-  assert_not_contains ~name:"raw hash auth return" racket "(hash 'id \"u1\" 'username \"alice\")"
+  assert_not_contains ~name:"raw hash auth return" racket "(hash 'id \"u1\" 'username: \"alice\")"
 
 let test_handler_emit () =
   let src = {|#lang tesl
@@ -521,8 +521,8 @@ capability chatPubSub implies pubsub
 type RoomEvent = NewMessage roomId: String
 
 channel RoomMessages(roomId: String) {
-  database MainDatabase
-  payload RoomEvent
+  database: MainDatabase
+  payload: RoomEvent
 }
 
 handler postMessage(roomId: String) -> String
@@ -547,8 +547,8 @@ record NotifyJob {
 type RoomEvent = NotifyFailed roomName: String
 
 channel RoomMessages(roomId: String) {
-  database MainDatabase
-  payload RoomEvent
+  database: MainDatabase
+  payload: RoomEvent
 }
 
 deadWorker handleDeadNotify(job: NotifyJob) -> NotifyJob

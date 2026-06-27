@@ -554,16 +554,16 @@ entity Item table "items" primaryKey id {
 }
 
 database TestDB {
-  backend postgres
-  schema "test"
-  entities [Item]
+  backend: postgres
+  schema: "test"
+  entities: [Item]
   postgres {
-    database "testdb"
-    user "testuser"
-    password "testpass"
-    host "localhost"
-    port 5432
-    socket ""
+    database: "testdb"
+    user: "testuser"
+    password: "testpass"
+    host: "localhost"
+    port: 5432
+    socket: ""
   }
 }
 
@@ -585,16 +585,16 @@ entity Item table "items" primaryKey id {
 }
 
 database TestDB {
-  backend postgres
-  schema "test"
-  entities [Item]
+  backend: postgres
+  schema: "test"
+  entities: [Item]
   postgres {
-    database "testdb"
-    user "testuser"
-    password "testpass"
-    host "localhost"
-    port 5432
-    socket ""
+    database: "testdb"
+    user: "testuser"
+    password: "testpass"
+    host: "localhost"
+    port: 5432
+    socket: ""
   }
 }
 
@@ -850,16 +850,16 @@ entity Item table "items" primaryKey id {
 }
 
 database TestDB {
-  backend postgres
-  schema "test"
-  entities [Item]
+  backend: postgres
+  schema: "test"
+  entities: [Item]
   postgres {
-    database "testdb"
-    user "testuser"
-    password "testpass"
-    host "localhost"
-    port 5432
-    socket ""
+    database: "testdb"
+    user: "testuser"
+    password: "testpass"
+    host: "localhost"
+    port: 5432
+    socket: ""
   }
 }
 |}

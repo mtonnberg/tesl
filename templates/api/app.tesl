@@ -54,16 +54,16 @@ entity Todo table "todos" primaryKey id {
 }
 
 database AppDatabase {
-  backend postgres
-  schema "app"
-  entities [Todo]
+  backend: postgres
+  schema: "app"
+  entities: [Todo]
   postgres {
-    dbName env("TESL_POSTGRES_DATABASE")
-    user env("TESL_POSTGRES_USER")
-    password env("TESL_POSTGRES_PASSWORD")
-    host env("TESL_POSTGRES_HOST")
-    port envInt("TESL_POSTGRES_PORT", 5432)
-    socket env("TESL_POSTGRES_SOCKET")
+    dbName: env("TESL_POSTGRES_DATABASE")
+    user: env("TESL_POSTGRES_USER")
+    password: env("TESL_POSTGRES_PASSWORD")
+    host: env("TESL_POSTGRES_HOST")
+    port: envInt("TESL_POSTGRES_PORT", 5432)
+    socket: env("TESL_POSTGRES_SOCKET")
   }
 }
 

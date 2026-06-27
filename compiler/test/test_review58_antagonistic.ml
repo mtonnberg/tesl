@@ -655,16 +655,16 @@ entity Item table "items" primaryKey id {
 }
 
 database TestDb {
-  backend postgres
-  schema "test"
-  entities [Item]
+  backend: postgres
+  schema: "test"
+  entities: [Item]
   postgres {
-    database env("TESL_POSTGRES_DATABASE")
-    user env("TESL_POSTGRES_USER")
-    password env("TESL_POSTGRES_PASSWORD")
-    host env("TESL_POSTGRES_HOST")
-    port envInt("TESL_POSTGRES_PORT", 5432)
-    socket env("TESL_POSTGRES_SOCKET")
+    database: env("TESL_POSTGRES_DATABASE")
+    user: env("TESL_POSTGRES_USER")
+    password: env("TESL_POSTGRES_PASSWORD")
+    host: env("TESL_POSTGRES_HOST")
+    port: envInt("TESL_POSTGRES_PORT", 5432)
+    socket: env("TESL_POSTGRES_SOCKET")
   }
 }
 

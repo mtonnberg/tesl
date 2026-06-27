@@ -135,7 +135,7 @@ codec RegisterRequest {
   fromJson [
     {
       email <- "email" with_codec stringCodec
-      password <- "password" with_codec stringCodec
+      password: <- "password" with_codec stringCodec
       displayName <- "displayName" with_codec stringCodec
     }
   ]
@@ -151,7 +151,7 @@ codec LoginRequest {
   fromJson [
     {
       email <- "email" with_codec stringCodec
-      password <- "password" with_codec stringCodec
+      password: <- "password" with_codec stringCodec
     }
   ]
 }

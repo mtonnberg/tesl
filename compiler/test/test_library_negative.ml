@@ -135,8 +135,8 @@ let test_LKWN04_library_with_workers_wiring_rejected () =
 library BadLib04 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Queue exposing [queueRead]
-database Db { backend postgres schema "s" entities [] postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" } }
-queue MyQ { database Db jobs [JobRec] }
+database Db { backend: postgres schema: "s" entities: [] postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" } }
+queue MyQ { database: Db jobs: [JobRec] }
 record JobRec { msg: String }
 worker doJob(j: JobRec) requires [] = j
 workers MyWorkers for MyQ { JobRec = doJob }
@@ -439,8 +439,8 @@ let test_LIMN04_importing_module_with_workers_block_rejected () =
 #lang tesl
 module AppWithWorkers exposing []
 import Tesl.Prelude exposing [String]
-database Db { backend postgres schema "s" entities [] postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" } }
-queue Q { database Db jobs [Job] }
+database Db { backend: postgres schema: "s" entities: [] postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" } }
+queue Q { database: Db jobs: [Job] }
 record Job { msg: String }
 worker handleJob(j: Job) requires [] = j
 workers Wiring for Q { Job = handleJob }

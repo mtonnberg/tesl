@@ -454,12 +454,12 @@ entity Item table "items" primaryKey id {
 }
 
 database D {
-  backend postgres
-  schema "s"
-  entities [Item]
+  backend: postgres
+  schema: "s"
+  entities: [Item]
   postgres {
-    database env("DB") user env("U") password env("P")
-    host env("H") port envInt("PORT", 5432) socket env("S")
+    database: env("DB") user: env("U") password: env("P")
+    host: env("H") port: envInt("PORT", 5432) socket: env("S")
   }
 }
 
@@ -482,12 +482,12 @@ entity Task table "tasks" primaryKey id {
 }
 
 database D {
-  backend postgres
-  schema "s"
-  entities [Task]
+  backend: postgres
+  schema: "s"
+  entities: [Task]
   postgres {
-    database env("DB") user env("U") password env("P")
-    host env("H") port envInt("PORT", 5432) socket env("S")
+    database: env("DB") user: env("U") password: env("P")
+    host: env("H") port: envInt("PORT", 5432) socket: env("S")
   }
 }
 
@@ -820,12 +820,12 @@ let test_capability_undeclared_write_caught () =
 entity Item table "items" primaryKey id { id: String }
 
 database D {
-  backend postgres
-  schema "s"
-  entities [Item]
+  backend: postgres
+  schema: "s"
+  entities: [Item]
   postgres {
-    database env("DB") user env("U") password env("P")
-    host env("H") port envInt("PORT", 5432) socket env("S")
+    database: env("DB") user: env("U") password: env("P")
+    host: env("H") port: envInt("PORT", 5432) socket: env("S")
   }
 }
 

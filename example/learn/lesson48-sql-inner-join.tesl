@@ -94,8 +94,8 @@ entity OrderItem table "order_items" primaryKey id {
 # ─── Database configuration ───────────────────────────────────────────────────
 
 database JoinDatabase {
-  backend memory
-  entities [Customer, Order, OrderItem]
+  backend: memory
+  entities: [Customer, Order, OrderItem]
 }
 
 # ─── Functions ────────────────────────────────────────────────────────────────

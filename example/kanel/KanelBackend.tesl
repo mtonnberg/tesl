@@ -134,16 +134,16 @@ import KanelBilling exposing [
 # ── Database ─────────────────────────────────────────────────────────────────
 
 database KanelDatabase {
-  backend postgres
-  schema "kanel"
-  entities [KanelUser, Org, OrgMembership, Project, ProjectMembership, Issue, IssueComment, TimeEntry, Invoice]
+  backend: postgres
+  schema: "kanel"
+  entities: [KanelUser, Org, OrgMembership, Project, ProjectMembership, Issue, IssueComment, TimeEntry, Invoice]
   postgres {
-    dbName env("KANEL_DB")
-    user env("TESL_POSTGRES_USER")
-    password env("TESL_POSTGRES_PASSWORD")
-    host env("TESL_POSTGRES_HOST")
-    port envInt("TESL_POSTGRES_PORT", 5432)
-    socket env("TESL_POSTGRES_SOCKET")
+    dbName: env("KANEL_DB")
+    user: env("TESL_POSTGRES_USER")
+    password: env("TESL_POSTGRES_PASSWORD")
+    host: env("TESL_POSTGRES_HOST")
+    port: envInt("TESL_POSTGRES_PORT", 5432)
+    socket: env("TESL_POSTGRES_SOCKET")
   }
 }
 
@@ -157,8 +157,8 @@ record KanelNotifyJob {
 }
 
 queue KanelNotifyQueue {
-  database KanelDatabase
-  jobs [KanelNotifyJob]
+  database: KanelDatabase
+  jobs: [KanelNotifyJob]
   retry {
     maxAttempts: 3
     backoff: exponential
@@ -173,8 +173,8 @@ type UserNotificationEvent
   | NotificationFailed recipientEmail: String subject: String
 
 channel UserNotifications(userId: String) {
-  database KanelDatabase
-  payload UserNotificationEvent
+  database: KanelDatabase
+  payload: UserNotificationEvent
 }
 
 worker notifyWorker(job: KanelNotifyJob ::: FromQueue (Id == jobId) job)

@@ -22,16 +22,16 @@ import Tesl.ApiTest exposing [
 # worker synchronously, and then collects the published event.
 
 database Lesson33Database {
-  backend postgres
-  schema "lesson33"
-  entities []
+  backend: postgres
+  schema: "lesson33"
+  entities: []
   postgres {
-    dbName "demo"
-    user "demo"
-    password "demo"
-    host "localhost"
-    port 5432
-    socket ""
+    dbName: "demo"
+    user: "demo"
+    password: "demo"
+    host: "localhost"
+    port: 5432
+    socket: ""
   }
 }
 
@@ -67,8 +67,8 @@ fn parseUserId(id: String) -> String =
 capturer userIdCapture: String using stringCodec via parseUserId
 
 queue Lesson33Queue {
-  database Lesson33Database
-  jobs [NotifyJob]
+  database: Lesson33Database
+  jobs: [NotifyJob]
   retry {
     maxAttempts: 2
     backoff: linear
@@ -77,8 +77,8 @@ queue Lesson33Queue {
 }
 
 channel Lesson33Events(userId: String) {
-  database Lesson33Database
-  payload NoticeEvent
+  database: Lesson33Database
+  payload: NoticeEvent
 }
 
 worker handleNotice(job: NotifyJob ::: FromQueue (Id == jobId) job)

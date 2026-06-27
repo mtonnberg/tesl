@@ -46,16 +46,16 @@ import Tesl.Maybe exposing [Maybe(..), Nothing, Something]
 # ── Database (required as backing store for the cache) ────────────────────────
 
 database MainDB {
-  backend postgres
-  schema "lesson59"
-  entities []
+  backend: postgres
+  schema: "lesson59"
+  entities: []
   postgres {
-    dbName env("LESSON59_DB")
-    user env("TESL_POSTGRES_USER")
-    password env("TESL_POSTGRES_PASSWORD")
-    host env("TESL_POSTGRES_HOST")
-    port envInt("TESL_POSTGRES_PORT", 5432)
-    socket env("TESL_POSTGRES_SOCKET")
+    dbName: env("LESSON59_DB")
+    user: env("TESL_POSTGRES_USER")
+    password: env("TESL_POSTGRES_PASSWORD")
+    host: env("TESL_POSTGRES_HOST")
+    port: envInt("TESL_POSTGRES_PORT", 5432)
+    socket: env("TESL_POSTGRES_SOCKET")
   }
 }
 

@@ -150,7 +150,7 @@ let test_R68_QD01_queue_named_db_not_declared_rejected () =
   should_fail "unknown database\\|references unknown database" {|
 #lang tesl
 module R68Qd01 exposing []
-queue R68Qd01 { database GhostDatabase jobs [MyJob] }
+queue R68Qd01 { database: GhostDatabase jobs: [MyJob] }
 |}
 
 let test_R68_QD02_channel_named_db_not_declared_rejected () =
@@ -159,7 +159,7 @@ let test_R68_QD02_channel_named_db_not_declared_rejected () =
 module R68Qd02 exposing []
 import Tesl.Prelude exposing [String]
 type Ev = EvA msg: String
-channel R68Qd02 { database GhostDatabase payload Ev }
+channel R68Qd02 { database: GhostDatabase payload: Ev }
 |}
 
 let test_R68_QD03_queue_with_declared_database_accepted () =
@@ -168,10 +168,10 @@ let test_R68_QD03_queue_with_declared_database_accepted () =
 module R68Qd03 exposing []
 import Tesl.Prelude exposing [String]
 database R68Qd03Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
-queue R68Qd03 { database R68Qd03Db jobs [NotifyJob] }
+queue R68Qd03 { database: R68Qd03Db jobs: [NotifyJob] }
 |}
 
 let test_R68_QD04_channel_with_declared_database_accepted () =
@@ -180,11 +180,11 @@ let test_R68_QD04_channel_with_declared_database_accepted () =
 module R68Qd04 exposing []
 import Tesl.Prelude exposing [String]
 database R68Qd04Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
 type Event = Happened msg: String
-channel R68Qd04 { database R68Qd04Db payload Event }
+channel R68Qd04 { database: R68Qd04Db payload: Event }
 |}
 
 let test_R68_QD05_multiple_queues_one_bad_database_rejected () =
@@ -193,11 +193,11 @@ let test_R68_QD05_multiple_queues_one_bad_database_rejected () =
 #lang tesl
 module R68Qd05 exposing []
 database R68Qd05Db {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
-queue GoodQueue { database R68Qd05Db jobs [JobA] }
-queue BadQueue  { database UndeclaredDb jobs [JobB] }
+queue GoodQueue { database: R68Qd05Db jobs: [JobA] }
+queue BadQueue  { database: UndeclaredDb jobs: [JobB] }
 |}
 
 let test_R68_QD06_queue_and_channel_same_db_accepted () =
@@ -207,12 +207,12 @@ let test_R68_QD06_queue_and_channel_same_db_accepted () =
 module R68Qd06 exposing []
 import Tesl.Prelude exposing [String]
 database SharedDb {
-  backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+  backend: postgres schema: "s" entities: []
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
 }
 type Notification = NotifyMsg text: String
-queue EmailQueue { database SharedDb jobs [EmailJob] }
-channel Updates { database SharedDb payload Notification }
+queue EmailQueue { database: SharedDb jobs: [EmailJob] }
+channel Updates { database: SharedDb payload: Notification }
 |}
 
 (* ── R68_FT — Fact type parameters ──────────────────────────────────────── *)

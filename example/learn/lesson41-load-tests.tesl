@@ -42,16 +42,16 @@ entity Book table "books" primaryKey id {
 }
 
 database Lesson41Database {
-  backend postgres
-  schema "lesson41"
-  entities [Book]
+  backend: postgres
+  schema: "lesson41"
+  entities: [Book]
   postgres {
-    dbName "lesson41"
-    user "lesson41"
-    password "lesson41"
-    host "localhost"
-    port 5432
-    socket ""
+    dbName: "lesson41"
+    user: "lesson41"
+    password: "lesson41"
+    host: "localhost"
+    port: 5432
+    socket: ""
   }
 }
 

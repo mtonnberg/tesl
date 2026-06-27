@@ -51,8 +51,8 @@ record EmailJob {
 # ── Queue declaration ─────────────────────────────────────────────────────────
 
 queue EmailQueue {
-  database EmailDatabase
-  jobs [EmailJob]
+  database: EmailDatabase
+  jobs: [EmailJob]
   retry {
     maxAttempts: 3
     backoff: exponential
@@ -63,16 +63,16 @@ queue EmailQueue {
 # ── Database ──────────────────────────────────────────────────────────────────
 
 database EmailDatabase {
-  backend postgres
-  schema "lesson31"
-  entities []
+  backend: postgres
+  schema: "lesson31"
+  entities: []
   postgres {
-    dbName env("LESSON31_DB")
-    user env("TESL_POSTGRES_USER")
-    password env("TESL_POSTGRES_PASSWORD")
-    host env("TESL_POSTGRES_HOST")
-    port envInt("TESL_POSTGRES_PORT", 5432)
-    socket env("TESL_POSTGRES_SOCKET")
+    dbName: env("LESSON31_DB")
+    user: env("TESL_POSTGRES_USER")
+    password: env("TESL_POSTGRES_PASSWORD")
+    host: env("TESL_POSTGRES_HOST")
+    port: envInt("TESL_POSTGRES_PORT", 5432)
+    socket: env("TESL_POSTGRES_SOCKET")
   }
 }
 

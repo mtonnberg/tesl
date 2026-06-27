@@ -188,16 +188,16 @@ let guarded_mailhog_test name f () =
 
 (** Common DB block template, shared by all email tests. *)
 let db_block = {|database AppDB {
-  backend postgres
-  schema "testschema"
-  entities []
+  backend: postgres
+  schema: "testschema"
+  entities: []
   postgres {
-    database env("TESL_EMAIL_TEST_DB")
-    user env("TESL_EMAIL_TEST_USER")
-    password env("TESL_EMAIL_TEST_PASS")
-    host "localhost"
-    port envInt("TESL_EMAIL_TEST_PORT", 5432)
-    socket env("TESL_EMAIL_TEST_SOCK")
+    database: env("TESL_EMAIL_TEST_DB")
+    user: env("TESL_EMAIL_TEST_USER")
+    password: env("TESL_EMAIL_TEST_PASS")
+    host: "localhost"
+    port: envInt("TESL_EMAIL_TEST_PORT", 5432)
+    socket: env("TESL_EMAIL_TEST_SOCK")
   }
 }|}
 

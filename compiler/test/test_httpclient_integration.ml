@@ -21,7 +21,7 @@ let contains needle haystack =
     !found
   end
 
-(** Pick an ephemeral free port by binding to port 0 and reading the assigned port. *)
+(** Pick an ephemeral free port by binding to port: 0 and reading the assigned port. *)
 let pick_free_port () =
   let sock = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
   Unix.setsockopt sock Unix.SO_REUSEADDR true;

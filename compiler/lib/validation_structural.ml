@@ -1353,5 +1353,57 @@ let check_imported_module_is_library (m : module_form) : validation_error list =
           ) forbidden
   ) m.imports
 
+(* ── Config-block field schema (colon-required + unknown-field) ──────────────
+   Every configuration block (database / queue / channel / cache / email and
+   their nested postgres / retry / smtp sub-blocks) is described once in
+   {!Config_schema}.  Here we walk the [raw_fields] the parser captured and:
+     - flag any field key not in the block's schema (catches typos that the
+       permissive parser would otherwise silently drop), and
+     - require a `:` after every scalar field (block/param fields like
+       `postgres { … }` / `key(…)` are written without one).
+   Value-type and missing-required checks for the critical fields stay in the
+   per-block checks above (check_queue_structure / check_email_structure / …);
+   this pass deliberately does not duplicate them. *)
+let check_config_field_schema (decls : top_decl list) : validation_error list =
+  let rec walk (sch : Config_schema.schema) (fields : config_field list) : validation_error list =
+    List.concat_map (fun (cf : config_field) ->
+      match Config_schema.field_in sch cf.cf_key with
+      | None ->
+        let valid =
+          String.concat ", "
+            (List.map (fun (f : Config_schema.field) -> f.fname) sch.fields)
+        in
+        [ make_error cf.cf_key_loc
+            ~hint:(Printf.sprintf "valid fields in a `%s` block: %s" sch.sname valid)
+            (Printf.sprintf "unknown field `%s` in `%s` block" cf.cf_key sch.sname) ]
+      | Some fld ->
+        let colon_err =
+          if Config_schema.is_colon_required fld && not cf.cf_colon then
+            [ make_error cf.cf_key_loc
+                ~hint:(Printf.sprintf
+                  "write `%s: <value>` — every configuration field uses a colon"
+                  cf.cf_key)
+                (Printf.sprintf
+                  "config field `%s` is missing its `:` — write `%s: <value>`"
+                  cf.cf_key cf.cf_key) ]
+          else []
+        in
+        let sub_err =
+          match fld.kind with
+          | Config_schema.Block sub ->
+            (match Config_schema.schema_for sub with
+             | Some subsch -> walk subsch cf.cf_block
+             | None -> [])
+          | _ -> []
+        in
+        colon_err @ sub_err
+    ) fields
+  in
+  List.concat_map (fun d ->
+    match Config_schema.top_schema_of_decl d with
+    | Some (sch, fields) -> walk sch fields
+    | None -> []
+  ) decls
+
 (* ── 2. SQL/record field name validation ─────────────────────────────────── *)
 

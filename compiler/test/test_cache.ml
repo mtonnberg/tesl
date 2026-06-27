@@ -33,7 +33,7 @@ let module_ ?(name="M") ?(exports="") ?(extra="") body =
     name exports base_imports extra body
 
 let with_db body =
-  "database MainDB {\n  schema: public\n  backend: postgres {}\n}\n" ^ body
+  "database MainDB {\n  schema: \"public\"\n  backend: postgres\n  postgres {}\n}\n" ^ body
 
 let compile_ok name src =
   match Compile.compile_source ~root_path:root "<test>" src with

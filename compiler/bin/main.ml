@@ -923,6 +923,17 @@ let () =
      | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
      | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
 
+  | ["--config-context-json"; filename; line; col] ->
+    (try
+       let source = In_channel.with_open_text filename In_channel.input_all in
+       let result = Compile.config_context_source filename source (int_of_string line) (int_of_string col) in
+       print_string (Compile.config_context_response_to_json result);
+       print_newline ();
+       exit 0
+     with
+     | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
+     | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
+
   | ["--completions-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in

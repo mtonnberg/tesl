@@ -327,15 +327,15 @@ entity User table "users" primaryKey id {
 }
 
 database MyDatabase {
-  backend postgres
-  schema "my_app"
-  entities [User]
+  backend: postgres
+  schema: "my_app"
+  entities: [User]
   postgres {
-    database env("POSTGRES_DB")
-    user env("POSTGRES_USER")
-    password env("POSTGRES_PASSWORD")
-    host env("POSTGRES_HOST")
-    port envInt("POSTGRES_PORT", 5432)
+    database: env("POSTGRES_DB")
+    user: env("POSTGRES_USER")
+    password: env("POSTGRES_PASSWORD")
+    host: env("POSTGRES_HOST")
+    port: envInt("POSTGRES_PORT", 5432)
   }
 }
 ```

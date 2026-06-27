@@ -151,16 +151,16 @@ module Foo exposing [S]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 database EventDatabase {
-  backend postgres
-  schema  "events"
-  entities []
+  backend: postgres
+  schema: "events"
+  entities: []
   postgres {
-    database "demo"
-    user     "demo"
-    password "demo"
-    host     "localhost"
-    port     5432
-    socket   ""
+    database: "demo"
+    user: "demo"
+    password: "demo"
+    host: "localhost"
+    port: 5432
+    socket: ""
   }
 }
 type NoticeEvent
@@ -169,8 +169,8 @@ fn parseUserId(id: String) -> String =
   id
 capture userIdCapture: String using stringCodec via parseUserId
 channel NoticeEvents(userId: String) {
-  database EventDatabase
-  payload NoticeEvent
+  database: EventDatabase
+  payload: NoticeEvent
 }
 handler sendNotice() -> String requires [] =
   "queued"
@@ -193,23 +193,23 @@ module Foo exposing [S]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 database EventDatabase {
-  backend postgres
-  schema  "events"
-  entities []
+  backend: postgres
+  schema: "events"
+  entities: []
   postgres {
-    database "demo"
-    user     "demo"
-    password "demo"
-    host     "localhost"
-    port     5432
-    socket   ""
+    database: "demo"
+    user: "demo"
+    password: "demo"
+    host: "localhost"
+    port: 5432
+    socket: ""
   }
 }
 type NoticeEvent
   = Notice text:String
 channel Notices(userId: String) {
-  database EventDatabase
-  payload  NoticeEvent
+  database: EventDatabase
+  payload: NoticeEvent
 }
 handler getValue() -> String requires [] = "ok"
 api DemoApi {

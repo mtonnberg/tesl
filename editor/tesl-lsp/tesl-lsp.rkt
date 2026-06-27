@@ -279,7 +279,7 @@
     (cons "randomInt"           "fn randomInt(n: Int) -> Int  requires [random]\n\nReturns a uniformly random integer in [0, n).")
     ;; Tesl.Env
     (cons "env"                 "fn env(name: String) -> Maybe String")
-    (cons "envInt"              "fn envInt(name: String, default: Int) -> Maybe Int")
+    (cons "envInt"              "fn envInt(name: String, default: Int) -> Int\n\nReads the env var as an integer, returning `default` when it is unset or unparseable (so the result is always an `Int`, never `Maybe Int`).")
     ;; Tesl.Cli
     (cons "lookupPortArgument"  "fn lookupPortArgument(args: List String) -> Maybe String")
     ;; Fact operations (Tesl.Prelude)
@@ -1025,6 +1025,52 @@
     (and (hash? j)
          (let ([td (hash-ref j 'type_definition 'null)])
            (and (hash? td) td)))))
+
+(define (run-config-context compiler file-path line col)
+  ;; --config-context-json → {config_context:{block,fields:[{name,type,doc,required,present}]}|null}.
+  ;; Returns the inner context hash (with 'block and 'fields), or #f when the
+  ;; cursor is not inside a configuration block.
+  (let ([j (run-compiler-positional-json compiler "--config-context-json" file-path line col #f "config-context")])
+    (and (hash? j)
+         (let ([cc (hash-ref j 'config_context 'null)])
+           (and (hash? cc) cc)))))
+
+;; Find a config field hash by name within a config-context's field list.
+(define (config-field-lookup cc name)
+  (and cc
+       (for/or ([f (in-list (hash-ref cc 'fields '()))])
+         (and (hash? f) (equal? (hash-ref f 'name #f) name) f))))
+
+;; Markdown hover for a config-block field: `field: Type` + doc + required note.
+(define (config-field-hover-markdown block f)
+  (let ([name (hash-ref f 'name "")]
+        [type (hash-ref f 'type "")]
+        [doc  (hash-ref f 'doc "")]
+        [req  (hash-ref f 'required #f)])
+    (string-append
+     "```tesl\n" name ": " type "\n```\n\n"
+     "*field of `" block "` block" (if req " — required" "") "*"
+     (if (and (string? doc) (> (string-length doc) 0))
+         (string-append "\n\n" doc) ""))))
+
+;; LSP completion items for the not-yet-written fields of a config block.
+;; `insertText` adds the `: ` so accepting a field lands the colon for free.
+(define lsp-kind-field-config 5)
+(define (config-field-completions cc)
+  (if (not cc) '()
+      (for/list ([f (in-list (hash-ref cc 'fields '()))]
+                 #:when (and (hash? f) (not (hash-ref f 'present #f))))
+        (let ([name (hash-ref f 'name "")]
+              [type (hash-ref f 'type "")]
+              [doc  (hash-ref f 'doc "")]
+              [req  (hash-ref f 'required #f)])
+          (hash 'label name
+                'kind lsp-kind-field-config
+                'detail (string-append ": " type (if req "  (required)" ""))
+                'insertText (string-append name ": ")
+                'insertTextFormat 1
+                'sortText (string-append "0" name)
+                'documentation (hash 'kind "markdown" 'value doc))))))
 
 ;; signature {label, parameters:[{label,type}], active_parameter} → LSP SignatureHelp.
 ;; Returns the SignatureHelp hash, or #f when there is no active signature.
@@ -2090,11 +2136,19 @@
                     ;;   finds "check isValidPort ... -> ... ValidPort ...")
                     [owner  (and (not entry) (not stdlib) word
                                  (find-proof-owner table word))]
-                    ;; Priority 4: ask the compiler for the precise inferred type
+                    ;; Priority 4: configuration-block field (database/postgres/
+                    ;;   queue/retry/channel/cache/email/smtp). When the cursor is
+                    ;;   inside a config block and the word is one of its schema
+                    ;;   fields, show the field's type + doc from Config_schema.
+                    [cfg-cc (and word text (not entry) (not stdlib) (not owner)
+                                 (with-text-tmp text (uri->path uri) compiler
+                                   (lambda (tmp) (run-config-context compiler tmp line-num char-num))))]
+                    [cfg-field (and cfg-cc (config-field-lookup cfg-cc word))]
+                    ;; Priority 5: ask the compiler for the precise inferred type
                     ;;   (record field access via --field-at-json, otherwise the
                     ;;   expression type via --type-at-json). Covers expressions the
                     ;;   text-based heuristics above cannot resolve.
-                    [compiler-md (and (not entry) (not stdlib) (not owner) text
+                    [compiler-md (and (not entry) (not stdlib) (not owner) (not cfg-field) text
                                       (compiler-hover-markdown compiler (uri->path uri) text line-num char-num))]
                     [result
                      (cond
@@ -2112,6 +2166,10 @@
                                                          [fname (if m (cadr m) "?")]
                                                          [note  (format "*Fact predicate declared by `~a ~a`*" kw fname)])
                                                     (format-hover-entry owner note))))]
+                       [cfg-field (hash 'contents
+                                        (hash 'kind  "markdown"
+                                              'value (config-field-hover-markdown
+                                                      (hash-ref cfg-cc 'block "") cfg-field)))]
                        [compiler-md (hash 'contents
                                           (hash 'kind  "markdown"
                                                 'value compiler-md))]
@@ -2148,7 +2206,13 @@
                               (run-completions compiler tmp line-num char-num))
                             (lambda ()
                               (when (file-exists? tmp) (delete-file tmp))))))]
-                  [items (build-completions (or compiler-items '()) after-dot?)])
+                  ;; Inside a config block (and not after a dot): offer the
+                  ;; block's not-yet-written schema fields, ranked first.
+                  [cfg-cc (and text (not after-dot?)
+                               (with-text-tmp text source-path compiler
+                                 (lambda (tmp) (run-config-context compiler tmp line-num char-num))))]
+                  [items (append (config-field-completions cfg-cc)
+                                 (build-completions (or compiler-items '()) after-dot?))])
              (write-message out (hash 'jsonrpc "2.0" 'id id
                                       'result (hash 'isIncomplete #f
                                                     'items items))))

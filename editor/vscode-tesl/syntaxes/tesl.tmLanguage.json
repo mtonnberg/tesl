@@ -15,6 +15,7 @@
     { "include": "#test-keywords" },
     { "include": "#load-test-metrics" },
     { "include": "#load-test-units" },
+    { "include": "#route-body-keyword" },
     { "include": "#body-keywords" },
     { "include": "#builtin-functions" },
     { "include": "#constants" },
@@ -89,7 +90,12 @@
       "name": "keyword.other.test.tesl"
     },
     "body-keywords": {
-      "match": "\\b(using|for|on|table|primaryKey|backend|postgres|schema|entities|select|selectOne|selectCount|selectSum|selectMax|selectMin|from|insert|insertMany|update|updateAndReturnOne|set|returning|one|in|delete|deleteAndReturnResult|upsert|onConflict|doUpdate|order|limit|offset|groupBy|like|ilike|innerJoin|serve|telemetry|initTelemetry|service|endpoint|console|body|response|get|post|put|enqueue|publish|subscribe|startWorkers|startDeadWorkers|startEmailWorker|auth|capture|jobs|retry|maxAttempts|backoff|exponential|fixed|initialDelay|payload|dbName|static|cookie|headers|with_codec|toJson|fromJson|via)\\b",
+      "match": "\\b(using|for|on|table|primaryKey|backend|postgres|schema|entities|select|selectOne|selectCount|selectSum|selectMax|selectMin|from|insert|insertMany|update|updateAndReturnOne|set|returning|one|in|delete|deleteAndReturnResult|upsert|onConflict|doUpdate|order|limit|offset|groupBy|like|ilike|innerJoin|serve|telemetry|initTelemetry|service|endpoint|console|response|get|post|put|enqueue|publish|subscribe|startWorkers|startDeadWorkers|startEmailWorker|auth|capture|capabilities|jobs|retry|maxAttempts|backoff|exponential|fixed|initialDelay|payload|dbName|static|cookie|headers|with_codec|toJson|fromJson|via)\\b",
+      "name": "keyword.other.tesl"
+    },
+    "route-body-keyword": {
+      "comment": "`body` is a route-clause keyword (`body req: T via decoder`) but also a common record field name (`body: String`). Color it only when it is NOT immediately followed by a colon, so record fields stay normal-weight (the field then falls through to #identifier).",
+      "match": "\\bbody\\b(?!\\s*:)",
       "name": "keyword.other.tesl"
     },
     "builtin-functions": {

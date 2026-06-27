@@ -101,16 +101,16 @@ entity User table "users" primaryKey id {
 }
 
 database UserDatabase {
-  backend postgres
-  schema "user_service"
-  entities [User]
+  backend: postgres
+  schema: "user_service"
+  entities: [User]
   postgres {
-    dbName env("USER_DB_NAME")
-    user env("USER_DB_USER")
-    password env("USER_DB_PASSWORD")
-    host env("USER_DB_HOST")
-    port envInt("USER_DB_PORT", 5432)
-    socket env("USER_DB_SOCKET")
+    dbName: env("USER_DB_NAME")
+    user: env("USER_DB_USER")
+    password: env("USER_DB_PASSWORD")
+    host: env("USER_DB_HOST")
+    port: envInt("USER_DB_PORT", 5432)
+    socket: env("USER_DB_SOCKET")
   }
 }
 
@@ -204,9 +204,9 @@ codec RegisterRequest {
   toJson_forbidden
   fromJson [
     {
-      username <- "username" with_codec stringCodec via checkUsername
+      username: <- "username" with_codec stringCodec via checkUsername
       emailAddr <- "email" with_codec stringCodec via checkEmail
-      password <- "password" with_codec stringCodec via checkPassword
+      password: <- "password" with_codec stringCodec via checkPassword
     }
   ]
 }
@@ -221,7 +221,7 @@ codec LoginRequest {
   fromJson [
     {
       emailAddr <- "email" with_codec stringCodec via checkEmail
-      password <- "password" with_codec stringCodec
+      password: <- "password" with_codec stringCodec
     }
   ]
 }

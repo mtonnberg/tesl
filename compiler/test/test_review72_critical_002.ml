@@ -449,8 +449,8 @@ let test_SQL2_01_complex_boolean_where_accepted () =
 module Sql201 exposing []
 import Tesl.Prelude exposing [Int, String, List, Bool(..)]
 import Tesl.DB exposing [dbRead]
-database Db { backend postgres schema "s" entities [Task]
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" } }
+database Db { backend: postgres schema: "s" entities: [Task]
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" } }
 entity Task table "tasks" primaryKey id { id: Int priority: Int done: Bool }
 fn highPriorityPending(minPriority: Int) -> List Task requires [dbRead] =
   select t from Task
@@ -463,8 +463,8 @@ let test_SQL2_02_select_with_order_and_limit_accepted () =
 module Sql202 exposing []
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.DB exposing [dbRead]
-database Db { backend postgres schema "s" entities [Post]
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" } }
+database Db { backend: postgres schema: "s" entities: [Post]
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" } }
 entity Post table "posts" primaryKey id { id: Int score: Int title: String }
 fn topPosts() -> List Post requires [dbRead] =
   select p from Post
@@ -478,8 +478,8 @@ let test_SQL2_03_select_nonexistent_field_rejected () =
 module Sql203 exposing []
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.DB exposing [dbRead]
-database Db { backend postgres schema "s" entities [Item]
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" } }
+database Db { backend: postgres schema: "s" entities: [Item]
+  postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" } }
 entity Item table "items" primaryKey id { id: Int name: String }
 fn bad() -> List Item requires [dbRead] =
   select i from Item where i.ghostField == 42

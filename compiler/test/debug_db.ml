@@ -3,7 +3,7 @@ let () =
 module Foo exposing []
 database DB {
   postgres {
-    database "mydb"
+    database: "mydb"
   }
 }
 |} in
