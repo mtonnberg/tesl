@@ -21,6 +21,7 @@ let keywords : (string, Token.t) Hashtbl.t =
     "check",       CHECK;
     "auth",        AUTH;
     "capture",     CAPTURE;
+    "capturer",    CAPTURER;
     "establish",   ESTABLISH;
     "fact",        FACT;
     "type",        TYPE;

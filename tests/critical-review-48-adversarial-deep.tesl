@@ -465,8 +465,8 @@ auth userCookieAuth(request: HttpRequest) -> user: String ::: UserAuth user =
     Nothing -> fail 401 "no user token"
     Something userId -> ok userId ::: UserAuth user
 
-capture itemIdCapture: String using stringCodec
-capture userIdCapture: String using stringCodec
+capturer itemIdCapture: String using stringCodec
+capturer userIdCapture: String using stringCodec
 
 record ItemResponse { itemId: String, fetchedBy: String }
 codec ItemResponse {

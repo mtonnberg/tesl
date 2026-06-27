@@ -206,7 +206,7 @@ check checkRoomId(id: String) -> id: String ::: ValidRoomId id =
   else
     fail 400 "invalid room id"
 
-capture roomIdCapture: String ::: ValidRoomId roomId using stringCodec via checkRoomId
+capturer roomIdCapture: String ::: ValidRoomId roomId using stringCodec via checkRoomId
 
 # ─── Handlers ────────────────────────────────────────────────────────────────
 

@@ -27,6 +27,7 @@ type t =
   | CHECK
   | AUTH
   | CAPTURE
+  | CAPTURER
   | ESTABLISH
   | FACT
   | TYPE
@@ -144,7 +145,7 @@ let pp fmt t =
     | HASH_LANG -> "#lang" | TESL -> "tesl"
     | MODULE -> "module" | LIBRARY -> "library" | EXPOSING -> "exposing" | IMPORT -> "import"
     | FN -> "fn" | HANDLER -> "handler" | CHECK -> "check" | AUTH -> "auth"
-    | CAPTURE -> "capture" | ESTABLISH -> "establish" | FACT -> "fact"
+    | CAPTURE -> "capture" | CAPTURER -> "capturer" | ESTABLISH -> "establish" | FACT -> "fact"
     | TYPE -> "type" | RECORD -> "record" | ENTITY -> "entity"
     | TABLE -> "table" | PRIMARY_KEY -> "primaryKey"
     | CODEC -> "codec" | DATABASE -> "database" | BACKEND -> "backend"

@@ -126,7 +126,7 @@ check checkNoteId(s: String) -> s: String ::: ValidNoteId s =
   else
     fail 400 "invalid note id"
 
-capture noteIdCapture: String ::: ValidNoteId noteId using stringCodec via checkNoteId
+capturer noteIdCapture: String ::: ValidNoteId noteId using stringCodec via checkNoteId
 
 # ─── Authentication ───────────────────────────────────────────────────────────
 fact Authenticated (user: String)

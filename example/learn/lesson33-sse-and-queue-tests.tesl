@@ -64,7 +64,7 @@ type NoticeEvent
 fn parseUserId(id: String) -> String =
   id
 
-capture userIdCapture: String using stringCodec via parseUserId
+capturer userIdCapture: String using stringCodec via parseUserId
 
 queue Lesson33Queue {
   database Lesson33Database

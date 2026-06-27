@@ -55,7 +55,7 @@ auth cookieAuth(request: HttpRequest) -> requestUser: SessionUser ::: Authentica
 
 # A `capture` wires a route parameter through a check + codec so the handler
 # receives an already-proven value (here: `Positive taskId`).
-capture positiveTaskCapture: Int ::: Positive taskId using intCodec via isPositive
+capturer positiveTaskCapture: Int ::: Positive taskId using intCodec via isPositive
 
 # ── PROOF #2 (OUTPUT): a handler that hands a proof back to the caller ────────
 # A `handler` cannot MINT a new proof — only `check`/`auth` can. What it CAN do

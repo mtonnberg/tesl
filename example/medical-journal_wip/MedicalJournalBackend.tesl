@@ -208,7 +208,7 @@ handler getTimeline(session: MjSession ::: Authenticated session, patientId: Str
 
 # ── URL captures ──────────────────────────────────────────────────────────────
 
-capture patientIdCapture: String ::: ValidPatientId patientId using stringCodec via checkValidPatientId
+capturer patientIdCapture: String ::: ValidPatientId patientId using stringCodec via checkValidPatientId
 
 # ── API ──────────────────────────────────────────────────────────────────────
 

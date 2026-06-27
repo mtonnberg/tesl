@@ -50,7 +50,7 @@ auth cookieUserAuth(request: HttpRequest) -> requestUser: AdminUser ::: Authenti
         Something role -> ok AdminUser { id: userId, role: role } ::: Authenticated requestUser
         Nothing -> ok AdminUser { id: userId, role: "user" } ::: Authenticated requestUser
 
-capture positiveTaskCapture: Int ::: Positive taskId using intCodec via isPositive
+capturer positiveTaskCapture: Int ::: Positive taskId using intCodec via isPositive
 
 handler getAdminTask(requestUser: AdminUser ::: Authenticated requestUser, taskId: Int ::: Positive taskId) -> AdminTask =
   if requestUser.role == "admin" then

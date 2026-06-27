@@ -595,6 +595,50 @@ api R66Ca12 {
 }
 |}
 
+let test_R66_CA13_inline_capture_accepted () =
+  (* Inline form: `capture x: T with <codec>` needs no top-level `capturer`. *)
+  should_pass {|
+#lang tesl
+module R66Ca13 exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+api R66Ca13 {
+  get "/items/:id"
+    capture id: String with stringCodec
+    -> String
+}
+|}
+
+let test_R66_CA14_inline_capture_with_check_accepted () =
+  (* Inline form with a `via <check>` proof: `capture x: T with <codec> via <fn>`. *)
+  should_pass {|
+#lang tesl
+module R66Ca14 exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+fn parseId(id: String) -> String =
+  id
+api R66Ca14 {
+  get "/items/:id"
+    capture id: String with stringCodec via parseId
+    -> String
+}
+|}
+
+let test_R66_CA15_inline_sse_capture_accepted () =
+  (* SSE endpoints accept the inline capture form too. *)
+  should_pass {|
+#lang tesl
+module R66Ca15 exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+api R66Ca15 {
+  sse "/events/:userId"
+    capture userId: String with stringCodec
+    -> String
+}
+|}
+
 (* ── R66_DU — Duplicate endpoints ───────────────────────────────────────── *)
 
 let test_R66_DU01_duplicate_method_and_path_rejected () =
@@ -817,6 +861,9 @@ let () =
       test_case "R66_CA10 capture using keyword rejected" `Quick test_R66_CA10_capture_using_keyword_rejected;
       test_case "R66_CA11 capture via undefined name rejected" `Quick test_R66_CA11_capture_via_undefined_name_rejected;
       test_case "R66_CA12 capture via real capture form accepted" `Quick test_R66_CA12_capture_via_real_capture_form_accepted;
+      test_case "R66_CA13 inline capture accepted" `Quick test_R66_CA13_inline_capture_accepted;
+      test_case "R66_CA14 inline capture with check accepted" `Quick test_R66_CA14_inline_capture_with_check_accepted;
+      test_case "R66_CA15 inline SSE capture accepted" `Quick test_R66_CA15_inline_sse_capture_accepted;
     ];
     "duplicate-endpoints", [
       test_case "R66_DU01 duplicate method+path rejected" `Quick test_R66_DU01_duplicate_method_and_path_rejected;

@@ -195,12 +195,12 @@ deadWorker deadNotifyWorker(job: KanelNotifyJob ::: FromDeadQueue (Id == jobId) 
 # Each capture validates the URL parameter and stamps it with a proof.
 # Endpoints reference the capture declaration by name.
 
-capture orgCapture: String ::: ValidOrgId orgId using stringCodec via checkOrgId
-capture projectCapture: String ::: ValidProjectId projectId using stringCodec via checkProjectId
-capture issueCapture: String ::: ValidIssueId issueId using stringCodec via checkIssueId
-capture invoiceCapture: String ::: ValidInvoiceId invoiceId using stringCodec via checkInvoiceId
-capture userCapture: String ::: ValidUserId userId using stringCodec via checkUserId
-capture targetUserCapture: String ::: ValidUserId targetUserId using stringCodec via checkTargetUserId
+capturer orgCapture: String ::: ValidOrgId orgId using stringCodec via checkOrgId
+capturer projectCapture: String ::: ValidProjectId projectId using stringCodec via checkProjectId
+capturer issueCapture: String ::: ValidIssueId issueId using stringCodec via checkIssueId
+capturer invoiceCapture: String ::: ValidInvoiceId invoiceId using stringCodec via checkInvoiceId
+capturer userCapture: String ::: ValidUserId userId using stringCodec via checkUserId
+capturer targetUserCapture: String ::: ValidUserId targetUserId using stringCodec via checkTargetUserId
 
 # ── API ───────────────────────────────────────────────────────────────────────
 

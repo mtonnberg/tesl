@@ -384,8 +384,10 @@ type api_auth = {
 }
 
 type api_capture = {
-  binding : binding;
-  via_fn  : string;
+  binding      : binding;
+  via_fn       : string;          (** references a top-level `capturer` (empty for inline) *)
+  inline_codec : string option;   (** inline form: `capture x: T with <codec> [via <check>]` *)
+  inline_check : string option;   (** optional `via <check>` of the inline form (mints a proof) *)
 }
 
 type api_endpoint = {

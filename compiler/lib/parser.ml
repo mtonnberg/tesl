@@ -176,7 +176,7 @@ let map_result f = function Ok x -> Ok (f x) | Err e -> Err e
 let token_as_ident = function
   | IDENT n | UIDENT n -> Some n
   | FN -> Some "fn" | HANDLER -> Some "handler" | CHECK -> Some "check"
-  | AUTH -> Some "auth" | CAPTURE -> Some "capture" | TYPE -> Some "type"
+  | AUTH -> Some "auth" | CAPTURE -> Some "capture" | CAPTURER -> Some "capturer" | TYPE -> Some "type"
   | FACT -> Some "fact" | RECORD -> Some "record" | ENTITY -> Some "entity" | TABLE -> Some "table"
   | DATABASE -> Some "database" | API -> Some "api" | SERVER -> Some "server"
   | QUEUE -> Some "queue" | CHANNEL -> Some "channel" | WORKERS -> Some "workers" | CACHE -> Some "cache"
@@ -438,7 +438,10 @@ and parse_type_app s =
     | UIDENT _ ->
       (* Type-level application: List Int, Maybe T — only uppercase names *)
       continue_with_type_arg ()
-    | IDENT "where" ->
+    | IDENT ("where" | "with") ->
+      (* `where` ends a type; `with` is never a type argument — it introduces an
+         inline capture codec (`capture x: T with <codec>`) or a `with database`
+         /`with capabilities` block, so it must terminate type application. *)
       return head
     | IDENT _ ->
       (* Lowercase: only a type arg if NOT followed by ':' (field label check) *)
@@ -4152,12 +4155,31 @@ let parse_api_form s =
                advance s;
                (match parse_binding s with
                 | Ok b ->
-                  (match expect s VIA with
-                   | Ok () ->
+                  (match peek s with
+                   (* Inline form: `capture x: T with <codec> [via <check>]` — no
+                      separate `capturer` declaration needed. (`with` is a bare
+                      identifier, not a keyword.) *)
+                   | IDENT "with" ->
+                     advance s;
                      (match expect_ident s with
-                      | Ok vfn -> captures := !captures @ [{ binding = b; via_fn = vfn }]
+                      | Ok codec ->
+                        let chk =
+                          if peek s = VIA then begin
+                            advance s;
+                            (match expect_ident s with Ok c -> Some c | Err _ -> None)
+                          end else None
+                        in
+                        captures := !captures @
+                          [{ binding = b; via_fn = ""; inline_codec = Some codec; inline_check = chk }]
                       | Err _ -> ())
-                   | Err _ -> ())
+                   (* Reference form: `capture x: T via <capturer>`. *)
+                   | VIA ->
+                     advance s;
+                     (match expect_ident s with
+                      | Ok vfn -> captures := !captures @
+                          [{ binding = b; via_fn = vfn; inline_codec = None; inline_check = None }]
+                      | Err _ -> ())
+                   | _ -> ())
                 | Err _ -> ())
              | SUBSCRIBE ->
                 advance s;
@@ -5061,7 +5083,10 @@ and parse_top_decl s =
     advance s;
     let* w = parse_workers_form true s in
     return (DWorkers w)
-  | CAPTURE ->
+  (* A top-level capture declaration is spelled `capturer` (the `capture` keyword
+     is reserved for the API-endpoint clause, avoiding the overloaded term).
+     `capture` is still accepted here for back-compat. *)
+  | CAPTURE | CAPTURER ->
     advance s;
     let* c = parse_capture_form s in
     return (DCapture c)
@@ -5105,7 +5130,7 @@ and parse_top_decl s =
             match peek s with
             | FN | HANDLER | CHECK | AUTH | RECORD | ENTITY | TYPE | CODEC
             | DATABASE | CAPABILITY | FACT | CONST | QUEUE | CHANNEL | WORKERS
-            | DEAD_WORKERS | CAPTURE | API | SERVER | TEST | API_TEST | LOAD_TEST | CACHE | EMAIL
+            | DEAD_WORKERS | CAPTURE | CAPTURER | API | SERVER | TEST | API_TEST | LOAD_TEST | CACHE | EMAIL
             | PROPERTY | MAIN | WORKER | DEAD_WORKER | ESTABLISH | EOF -> ()
             | _ -> advance s; skip_to_top ()
           in
@@ -5243,7 +5268,7 @@ and parse_module_header_body s =
 let starts_top_decl = function
   | FN | HANDLER | CHECK | AUTH | RECORD | ENTITY | TYPE | CODEC
   | DATABASE | CAPABILITY | FACT | CONST | QUEUE | CHANNEL | WORKERS
-  | DEAD_WORKERS | CAPTURE | API | SERVER | TEST | API_TEST | LOAD_TEST | CACHE | EMAIL
+  | DEAD_WORKERS | CAPTURE | CAPTURER | API | SERVER | TEST | API_TEST | LOAD_TEST | CACHE | EMAIL
   | PROPERTY | MAIN | WORKER | DEAD_WORKER | ESTABLISH -> true
   | _ -> false
 

@@ -77,7 +77,7 @@
     },
     "declaration-keywords": {
       "comment": "Use keyword.other.* (a plain keyword scope) rather than keyword.declaration.*: the user's theme renders the declaration scope at a larger glyph size in the scroll minimap (the type/entity/database/fn/auth/codec/handler 'large minimap text' bug). keyword.other is universally themed as a normal-weight keyword and renders at normal size.",
-      "match": "\\b(module|exposing|import|fn|establish|check|auth|handler|worker|workers|deadWorker|deadWorkers|record|entity|database|email|type|fact|codec|capability|capture|api|server|main|implies|requires|queue|channel|test|seed|property)\\b|\\b(api-test|load-test)\\b",
+      "match": "\\b(module|exposing|import|fn|establish|check|auth|handler|worker|workers|deadWorker|deadWorkers|record|entity|database|email|type|fact|codec|capability|capturer|api|server|main|implies|requires|queue|channel|test|seed|property)\\b|\\b(api-test|load-test)\\b",
       "name": "keyword.other.declaration.tesl"
     },
     "control-keywords": {

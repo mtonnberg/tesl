@@ -170,6 +170,36 @@ let desugar_decl (queues : (string, string) Hashtbl.t) (d : top_decl) : top_decl
     EStartWorkers / EServe) to {!Ast.ERuntimeCall}; all other nodes pass through
     structurally identical (every [loc] preserved), so {!Emit_racket} produces
     byte-identical Racket. *)
+(* Lower an inline endpoint capture (`capture x: T with <codec> [via <check>]`)
+   into a synthesized top-level `capturer` plus a plain `via` reference to it.
+   This keeps the emitter/runtime on a single capture path: every endpoint capture
+   becomes a `via <capturerName>` after desugaring. Synthesized capturers are
+   returned to be prepended to the module (so the define-capture precedes the
+   define-api that references it). *)
+let desugar_api_inline_captures (synthetic : capture_form list ref) (counter : int ref)
+    (api : api_form) : api_form =
+  let lower_endpoint (ep : api_endpoint) : api_endpoint =
+    let captures' =
+      List.map (fun (c : api_capture) ->
+        match c.inline_codec with
+        | None -> c
+        | Some codec ->
+          incr counter;
+          let cap_name = Printf.sprintf "__inline_capturer_%s_%d" c.binding.name !counter in
+          synthetic := {
+            name    = cap_name;
+            binding = c.binding;
+            parser  = codec;
+            checker = c.inline_check;
+            loc     = c.binding.loc;
+          } :: !synthetic;
+          { c with via_fn = cap_name; inline_codec = None; inline_check = None }
+      ) ep.captures
+    in
+    { ep with captures = captures' }
+  in
+  { api with endpoints = List.map lower_endpoint api.endpoints }
+
 let desugar_module (m : module_form) : module_form =
   (* Rebuild the emitter's job-type → queue map from this module's DQueue
      declarations (same construction as Emit_racket's pre-pass). *)
@@ -177,4 +207,15 @@ let desugar_module (m : module_form) : module_form =
   List.iter (function
     | DQueue (q : queue_form) -> List.iter (fun job -> Hashtbl.replace queues job q.name) q.jobs
     | _ -> ()) m.decls;
-  { m with decls = List.map (desugar_decl queues) m.decls }
+  (* First lower inline endpoint captures into synthesized top-level capturers. *)
+  let synthetic = ref [] in
+  let counter = ref 0 in
+  let decls1 =
+    List.map (function
+      | DApi api -> DApi (desugar_api_inline_captures synthetic counter api)
+      | d -> d) m.decls
+  in
+  (* Prepend the synthesized capturers (define-capture must precede the
+     define-api/server that references them), then run the normal desugaring. *)
+  let decls2 = List.rev_map (fun cf -> DCapture cf) !synthetic @ decls1 in
+  { m with decls = List.map (desugar_decl queues) decls2 }

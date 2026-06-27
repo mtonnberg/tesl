@@ -156,7 +156,7 @@ check isTodoId(todoId: String) -> todoId: String ::: TodoId todoId =
   else
     fail 400 "Malformed todo id"
 
-capture todoIdCapture: String ::: TodoId todoId using stringCodec via isTodoId
+capturer todoIdCapture: String ::: TodoId todoId using stringCodec via isTodoId
 
 fact IsOpen (todo: Todo)
 

@@ -542,9 +542,10 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
           then
             add_hint
               (Printf.sprintf
-                "add a capture clause before `->`, e.g. \
-                 `capture %s: String via %sCapture`, and declare a top-level \
-                 `capture %sCapture: %s: String using stringCodec`"
+                "add a capture clause before `->`: either the inline form \
+                 `capture %s: String with stringCodec` (no separate declaration), \
+                 or `capture %s: String via %sCapture` with a top-level \
+                 `capturer %sCapture: String using stringCodec`"
                 param param param param)
               (Printf.sprintf
                 "endpoint %s: path parameter `:%s` has no `capture` clause; \
@@ -558,24 +559,30 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
            identifier type-checks but fails at `tesl run` because the emitted
            route names a binding that is not a `define-capture`. *)
         List.iter (fun (c : api_capture) ->
-          if List.mem c.binding.name path_params
+          (* The inline form (`capture x: T with <codec> [via <check>]`) carries
+             its own codec, so it needs no top-level `capturer` reference. Only
+             the reference form (`via <capturer>`) must name a declared capturer. *)
+          if c.inline_codec = None
+             && List.mem c.binding.name path_params
              && not (List.mem c.via_fn capture_form_names)
           then
             add_hint
               (Printf.sprintf
-                "`via %s` must name a top-level `capture` form; declare \
-                 `capture %s: %s: String using stringCodec` and write \
+                "`via %s` must name a top-level `capturer`, or use the inline \
+                 form `capture %s: %s with stringCodec`; to use a capturer declare \
+                 `capturer %s: %s: String using stringCodec` and write \
                  `capture %s: String via %s`%s"
-                c.via_fn c.via_fn c.binding.name c.binding.name c.via_fn
+                c.via_fn c.binding.name c.binding.name
+                c.via_fn c.binding.name c.binding.name c.via_fn
                 (if capture_form_names = [] then ""
                  else Printf.sprintf
-                   " (declared capture forms: %s)"
+                   " (declared capturers: %s)"
                    (String.concat ", " capture_form_names)))
               (Printf.sprintf
                 "endpoint %s: capture `%s` uses `via %s`, but `%s` is not a \
-                 declared `capture` form (it may be a codec or undefined); a \
-                 capture's `via` must reference a top-level `capture` declaration"
-                ep_id c.binding.name c.via_fn c.via_fn)
+                 declared `capturer` (it may be a codec or undefined); use the \
+                 inline form `capture %s: %s with <codec>` or reference a `capturer`"
+                ep_id c.binding.name c.via_fn c.via_fn c.binding.name c.binding.name)
         ) ep.captures
 
         end;
