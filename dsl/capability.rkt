@@ -15,6 +15,23 @@
 (define current-capabilities (make-parameter '()))
 (define current-declared-capabilities (make-parameter #f))
 
+;; Zero-cost mode (default ON, mirroring the proof system's TESL_ZERO_COST_PROOFS
+;; switch).  In zero-cost mode the per-function DECLARED-CONTEXT (nesting) check is
+;; ELIDED — the static capability checker, with capability-row polymorphism, is the
+;; source of truth, and eliding it lets capability-bearing callbacks flow through
+;; capability-free higher-order functions (List.map/foldl/…) without the runtime
+;; narrowing each function's declared context to its own row.  The AMBIENT
+;; available-capability check below is ALWAYS enforced, so an ungranted capability
+;; still fails at runtime.  TESL_ZERO_COST_PROOFS=0 restores the declared-context
+;; net as a regression oracle (note: that net predates polymorphism and is not
+;; HOF-aware — see roadmap/next/capability_polymorphism.md).
+(define zero-cost-caps?
+  (let ([v (getenv "TESL_ZERO_COST_PROOFS")])
+    (cond [(not v) #t]
+          [(member (string-downcase v) '("0" "false" "no" "off")) #f]
+          [(member (string-downcase v) '("1" "true" "yes" "on")) #t]
+          [else #t])))
+
 (define (ensure-capability who value)
   (unless (capability-value? value)
     (raise-user-error who "expected a declared capability value, got ~a" value))
@@ -51,7 +68,7 @@
   (define declared-context
     (let ([caps (current-declared-capabilities)])
       (and caps (expand-capabilities caps))))
-  (when declared-context
+  (when (and (not zero-cost-caps?) declared-context)
     (define undeclared
       (missing-capability-names required-caps declared-context))
     (unless (null? undeclared)

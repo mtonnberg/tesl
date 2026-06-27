@@ -1,7 +1,9 @@
 # Capability polymorphism (capability-row variables on function types)
 
-Status: SPEC — to be implemented as a dedicated pass *after* the config/App pass,
-the `.rkt` regeneration sweep, and the proof-test refresh.
+Status: IMPLEMENTED (core).  Parser, checker, emit, runtime gate, and stdlib
+annotations landed; `example/kanel/KanelBackend.tesl`'s `List.foldl`-callback
+handler now passes.  See "Implementation status" at the bottom for what's done vs
+deferred.
 
 ## Problem
 
@@ -49,13 +51,13 @@ naming a **capability(-row) variable** on the parameter's function type and
 including it in its own `requires`:
 
 ```
-fn customMap(xs: List Int, f: (Int -> Int requires c)) -> List Int requires [time, c] =
+fn customMap(xs: List Int, f: (Int -> Int requires c)) -> List Int requires ([time] ++ c) =
   let now = nowMillis()
   List.map f xs
 
 fn customMap2(xs: List Int,
               f1: (Int -> Int requires c),
-              f2: (Int -> Int requires c2)) -> List Int requires [time, c, c2] =
+              f2: (Int -> Int requires c2)) -> List Int requires ([time] ++ c ++ c2) =
   ...
 ```
 
@@ -75,7 +77,7 @@ no concrete caps still guarantees a capability-free call tree.
    disambiguates — no new sigil. `time`/`random`/`dbRead` remain concrete.
 
 2. **`c` is a row variable (a set), not a single capability.** If `f` needs
-   `[dbRead, random]`, `c` instantiates to that whole set, and `requires [time, c]`
+   `[dbRead, random]`, `c` instantiates to that whole set, and `requires ([time] ++ c)`
    expands to `time ∪ {dbRead, random}`.
 
 3. **Arrow-type syntax.** `(Int -> Int requires c)`. A pure callback instantiates
@@ -148,3 +150,37 @@ static coverage proves insufficient.
 - Sequencing: **spec now, implement as the next pass.**
 - Runtime: **(b) lean on static**, with the gated-net / dual-mode discipline above.
 - `chat-backend` + `kanel` api-tests remain red until this pass lands (documented).
+
+## Implementation status
+
+Done:
+- **Parser** (`parser.ml`): capability-row grammar (`parse_cap_row`/`parse_cap_term`)
+  — `[a, b]`, bare `c`, `([time] ++ c ++ c2)`; `requires` on parenthesized function
+  types `(A -> B requires c)`. `type_expr.TFun` gained a `caps` field.
+- **Checker** (`validation_capabilities.ml` + `proof_checker.ml`): a function-typed
+  parameter binds row variables (`Ast.func_bound_cap_vars`); calling it requires
+  them; a called function's row variables are dropped (instantiated by the walked
+  argument); P001 accepts row variables. The `requires []` guarantee is preserved.
+- **Emit** (`emit_racket.ml`): row variables dropped from `#:capabilities`
+  (compile-time only) — emit is byte-identical for existing code.
+- **Runtime** (`dsl/capability.rkt`): the declared-context (nesting) check is gated
+  behind the zero-cost switch (`zero-cost-caps?`, default on); the ambient check is
+  always enforced. Lean-on-static, option (b).
+- **Stdlib** (`tesl/list.tesl`): `map`/`filter`/`concatMap`/`any`/`all`/`find`/
+  `foldl`/`foldr` annotated with `requires c` (emit-clean; `list-derived.rkt`
+  unchanged).
+- **Tests**: `compiler/test/test_capability_polymorphism.ml` (3 positive + 3
+  negative); full dune suite green; `kanel` api-tests pass.
+
+Deferred (acceptable; not blocking):
+- **Call-site instantiation is conservative**, not precise: a call `hof g` collects
+  `g`'s caps by walking the `g` argument (every callback is referenced/walked), and
+  drops the HOF's row variable. This is sound for the current corpus. A precise
+  unification (match the actual arg to the HOF's row-variable parameter) is a future
+  refinement — needed only if a callback is passed without being separately walkable.
+- **The non-zero-cost net is not HOF-aware** (the closure-tagging fallback above):
+  `tests/tesl-test.rkt` runs evidence-bearing checks under `TESL_ZERO_COST_PROOFS=0`,
+  where the declared-context narrowing still breaks HOF callbacks. Tracked in
+  `roadmap/next/nonzero_cost_test_harness.md`.
+- **`Dict.foldl`/`Set.foldl`** are hand-written Racket (`tesl/dict.rkt`,
+  `tesl/set.rkt`), not `.tesl`, so they bypass the checker and need no annotation.

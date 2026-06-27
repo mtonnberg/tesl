@@ -3734,9 +3734,15 @@ let emit_func ctx (fd : func_decl) =
   emit ctx (Printf.sprintf "  (%s" fd.name);
   emit_params ctx fd.params;
   emit_line ctx ")";
-  (if fd.capabilities <> [] then begin
+  (* Drop capability-row VARIABLES (e.g. the `c` in a higher-order function's
+     `requires ([time] ++ c)`): they are compile-time only — instantiated per call
+     site by the static checker — and have no runtime capability value.  Only
+     concrete capabilities reach `#:capabilities`. *)
+  (let bound_vars = Ast.func_bound_cap_vars fd in
+   let concrete = List.filter (fun c -> not (List.mem c bound_vars)) fd.capabilities in
+   if concrete <> [] then begin
     emit ctx "  #:capabilities [";
-    emit ctx (String.concat " " fd.capabilities);
+    emit ctx (String.concat " " concrete);
     emit_line ctx "]"
   end);
   emit ctx "  ";

@@ -44,7 +44,10 @@ let rec pp_type_expr (te : type_expr) : string =
   | TName { name; _ } -> name
   | TVar { name; _ } -> name
   | TApp { head; arg; _ } -> Printf.sprintf "%s %s" (pp_type_expr head) (pp_type_expr arg)
-  | TFun { dom; cod; _ } -> Printf.sprintf "%s -> %s" (pp_type_expr dom) (pp_type_expr cod)
+  | TFun { dom; cod; caps; _ } ->
+    let arrow = Printf.sprintf "%s -> %s" (pp_type_expr dom) (pp_type_expr cod) in
+    if caps = [] then arrow
+    else Printf.sprintf "(%s requires %s)" arrow (String.concat ", " caps)
   | TTuple { elems; _ } -> Printf.sprintf "(%s)" (String.concat ", " (List.map pp_type_expr elems))
 
 let strip_outer_parens (s : string) : string =

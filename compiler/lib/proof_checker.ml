@@ -942,9 +942,12 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
           } :: !errors
       ) c.implies
     | DFunc fd ->
-      (* Check requires: all listed caps must be declared *)
+      (* Check requires: every listed name must be either a declared capability or
+         a capability-row variable bound by one of this function's parameters
+         (`f: (A -> B requires c)` binds the row variable `c`). *)
+      let bound_vars = Ast.func_bound_cap_vars fd in
       List.iter (fun cap ->
-        if not (List.mem cap declared_caps) then
+        if not (List.mem cap declared_caps) && not (List.mem cap bound_vars) then
           errors := { loc = fd.loc;
             message = Printf.sprintf
               "function '%s' requires undeclared capability '%s'" fd.name cap

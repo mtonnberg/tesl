@@ -26,7 +26,11 @@ type type_expr =
   | TName   of uident                        (** Int, String, Bool, UserId … *)
   | TVar    of ident                         (** type variable: a, b … *)
   | TApp    of { head : type_expr; arg : type_expr; loc : loc } (** List Int, Maybe T *)
-  | TFun    of { dom : type_expr; cod : type_expr; loc : loc }  (** a -> b *)
+  | TFun    of { dom : type_expr; cod : type_expr;
+                 caps : string list;  (** capability row on the arrow: `(a -> b requires c)`;
+                                          names are row variables (bound by this occurrence)
+                                          or concrete capabilities. Empty for a plain `a -> b`. *)
+                 loc : loc }  (** a -> b [requires c] *)
   | TTuple  of { elems : type_expr list; loc : loc }
 
 (* ─── Proof expressions ──────────────────────────────────────────────────── *)
@@ -582,6 +586,29 @@ type module_form = {
   decls       : top_decl list;
   source_file : string;
 }
+
+(* ─── Capability-row helpers ──────────────────────────────────────────────── *)
+
+(** Capability-row variables bound by a function's parameters: the union of the
+    capability rows annotated on any arrow (`TFun`) type inside a parameter's
+    type, e.g. the [c] in [f: (Int -> Int requires c)].  Within the function's
+    own [requires] clause, names in this set are row *variables* (instantiated at
+    each call site); all other names are concrete capabilities.  Shared by the
+    capability checker (P001 + the needs⊆declares check) and the emitter (which
+    drops row variables from the emitted `#:capabilities`). *)
+let func_bound_cap_vars_of_params (params : binding list) : string list =
+  let rec from_type acc (t : type_expr) =
+    match t with
+    | TFun { dom; cod; caps; _ } -> from_type (from_type (caps @ acc) dom) cod
+    | TApp { head; arg; _ } -> from_type (from_type acc head) arg
+    | TTuple { elems; _ } -> List.fold_left from_type acc elems
+    | TName _ | TVar _ -> acc
+  in
+  List.fold_left (fun acc (b : binding) -> from_type acc b.type_expr) [] params
+  |> List.sort_uniq String.compare
+
+let func_bound_cap_vars (fd : func_decl) : string list =
+  func_bound_cap_vars_of_params fd.params
 
 (* ─── Proof/type conversion helper ────────────────────────────────────────── *)
 

@@ -62,13 +62,13 @@
 (define-handler
   (greet [g : Greeting])
   #:returns Greeting
-  (thsl-src! "example/learn/lesson41-load-tests.tesl" 60 (list (cons 'g *g)) (lambda () (Greeting #:name (raw-value g.name) #:message (format "Hello, ~a!" (tesl-display-val (raw-value g.name)))))))
+  (thsl-src! "example/learn/lesson41-load-tests.tesl" 68 (list (cons 'g *g)) (lambda () (Greeting #:name (raw-value g.name) #:message (format "Hello, ~a!" (tesl-display-val (raw-value g.name)))))))
 
 (define-handler
   (listBooks)
   #:capabilities [dbRead]
   #:returns (List Book)
-  (thsl-src! "example/learn/lesson41-load-tests.tesl" 64 (list) (lambda () (select-many (from Book)))))
+  (thsl-src! "example/learn/lesson41-load-tests.tesl" 72 (list) (lambda () (select-many (from Book)))))
 
 (define Lesson41Server-sse-routes '())
 (define-api Lesson41Api

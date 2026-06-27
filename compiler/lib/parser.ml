@@ -236,6 +236,55 @@ let parse_parenthesized_list parse_item s =
   let* _ = expect s RPAREN in
   return (List.rev !items)
 
+(* ── Capability rows ──────────────────────────────────────────────────────
+   A capability row is the `requires` payload: `[a, b]`, a bare `c`, or a
+   parenthesized concatenation `([time] ++ c ++ c2)`.  It flattens to a plain
+   name list; whether a name is a row *variable* or a concrete capability is
+   decided later by the checker (a name is a variable iff it is bound by a
+   parameter's arrow-type `requires`).  `cache X` / `email` keep their special
+   spellings, matching the bracketed form. *)
+let parse_cap_name s =
+  match peek s with
+  | IDENT n -> advance s; return n
+  | CACHE ->
+    advance s;
+    (match peek s with
+     | UIDENT cache_name -> advance s; return ("cache " ^ cache_name)
+     | _ -> return "cache")
+  | EMAIL -> advance s; return "email"
+  | t -> err s (Printf.sprintf "expected capability name, got %s" (tok_to_string t))
+
+let rec parse_cap_term s =
+  match peek s with
+  | LBRACKET -> parse_bracketed_list parse_cap_name s
+  | LPAREN ->
+    advance s;
+    let* r = parse_cap_row s in
+    let* _ = expect s RPAREN in
+    return r
+  | _ -> let* n = parse_cap_name s in return [n]
+and parse_cap_row s =
+  let* first = parse_cap_term s in
+  let rec loop acc =
+    if peek s = PLUS_PLUS then begin
+      advance s;
+      let* more = parse_cap_term s in
+      loop (acc @ more)
+    end else
+      return acc
+  in
+  loop first
+
+(** `requires <cap-row>`, or [] when absent.  Used both for declaration
+    `requires` clauses and for capability rows on parenthesized function types
+    `(A -> B requires c)`. *)
+let parse_requires s =
+  if peek s = REQUIRES then begin
+    advance s;
+    parse_cap_row s
+  end else
+    return []
+
 (** Try to parse something; backtrack on failure. *)
 let try_parse s f =
   let saved = s.pos in
@@ -416,7 +465,7 @@ let rec parse_type_expr s =
     advance s;
     let* right = parse_type_expr s in
     let loc = span (type_loc left) (type_loc right) in
-    return (TFun { dom = left; cod = right; loc })
+    return (TFun { dom = left; cod = right; caps = []; loc })
   end else
     return left
 
@@ -489,6 +538,17 @@ and parse_type_atom s =
     (match parse_type_expr s with
      | Ok ty ->
        skip_erased_type_pack_suffix s;
+       (* Capability row on a parenthesized function type: `(A -> B requires c)`.
+          Only recognized inside parens, so it never collides with a declaration's
+          own `requires` clause. *)
+       let* ty =
+         if peek s = REQUIRES then
+           let* caps = parse_requires s in
+           return (match ty with
+                   | TFun r -> TFun { r with caps = r.caps @ caps }
+                   | _ -> ty)
+         else return ty
+       in
        (match peek s with
         | RPAREN ->
           advance s;  (* consume ) *)
@@ -1008,28 +1068,10 @@ and parse_type_app_ret s =
   (* For use after "Maybe " — parse the next type atom *)
   parse_type_atom s
 
-(* ── Capabilities ────────────────────────────────────────────────────────── *)
-
-let parse_requires s =
-  if peek s = REQUIRES then begin
-    advance s;
-    let* caps = parse_bracketed_list (fun s ->
-      match peek s with
-      | IDENT n -> advance s; Ok n
-      | CACHE ->
-        (* "cache CacheName" — named cache capability *)
-        advance s;
-        (match peek s with
-         | UIDENT cache_name -> advance s; Ok ("cache " ^ cache_name)
-         | _ -> Ok "cache")
-      | EMAIL ->
-        (* "email" — email capability (flat, not name-specific) *)
-        advance s; Ok "email"
-      | t -> err s (Printf.sprintf "expected capability name, got %s" (tok_to_string t))
-    ) s in
-    return caps
-  end else
-    return []
+(* ── Capabilities ──────────────────────────────────────────────────────────
+   `parse_requires` and the capability-row grammar are defined earlier (before
+   the type parser) so parenthesized function types `(A -> B requires c)` can
+   reuse them. *)
 
 let is_statement_starter_ident = function
   | "with" | "exists" | "publish" | "enqueue"

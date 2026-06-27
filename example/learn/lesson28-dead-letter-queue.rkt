@@ -49,7 +49,7 @@
   (notifWorker [job : SendNotif ::: (FromQueue (Id == jobId) job)])
   #:capabilities [notifCap]
   #:returns SendNotif
-  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 73 (list (cons 'job *job)) (lambda () (reject "notification service unavailable" #:http-code 500))))
+  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 90 (list (cons 'job *job)) (lambda () (reject "notification service unavailable" #:http-code 500))))
 
 (define NotifWorkers
   (list (cons NotifQueue notifWorker)))
@@ -59,7 +59,7 @@
   (handleDeadNotif [job : SendNotif ::: (FromDeadQueue (Id == jobId) job)])
   #:capabilities [deadCap]
   #:returns SendNotif
-  (let ([_ (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 88 (list (cons 'job *job)) (lambda () (telemetry-event! "notif.dead" #:attributes (["userId" (raw-value job.userId)]))))]) (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 90 (list (cons 'job *job)) (lambda () *job))))
+  (let ([_ (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 105 (list (cons 'job *job)) (lambda () (telemetry-event! "notif.dead" #:attributes (["userId" (raw-value job.userId)]))))]) (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 107 (list (cons 'job *job)) (lambda () *job))))
 
 (define DeadNotifWorkers
   (list (cons NotifQueue handleDeadNotif)))
