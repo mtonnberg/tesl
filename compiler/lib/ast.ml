@@ -325,6 +325,7 @@ type config_field = {
 
 type database_form = {
   name       : string;
+  backend    : string;                   (** e.g. "postgres" | "memory" ("" = default postgres) *)
   schema     : string;
   entities   : string list;
   postgres   : (string * string) list;  (** key-value connection params *)

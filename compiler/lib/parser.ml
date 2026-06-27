@@ -3683,6 +3683,7 @@ let parse_database_form s =
   let* name = expect_uident s in
   let* _ = expect s LBRACE in
   skip_layout s;
+  let backend = ref "" in
   let schema = ref "" in
   let entities = ref [] in
   let postgres = ref [] in
@@ -3697,7 +3698,9 @@ let parse_database_form s =
         let sub = ref [] in
         (match k with
          | "backend" ->
-           (match peek s with IDENT _ | UIDENT _ -> advance s | _ -> ())
+           (match peek s with
+            | IDENT b | UIDENT b -> advance s; backend := b
+            | _ -> ())
          | "schema" ->
            (match expect_string s with Ok v -> schema := v | Err _ -> ())
          | "entities" ->
@@ -3738,7 +3741,7 @@ let parse_database_form s =
   done;
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
-  return { name; schema = !schema; entities = List.rev !entities;
+  return { name; backend = !backend; schema = !schema; entities = List.rev !entities;
            postgres = List.rev !postgres; raw_fields = List.rev !raw; loc }
 
 (** Parse a queue block. *)

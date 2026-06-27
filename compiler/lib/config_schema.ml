@@ -76,8 +76,8 @@ let retry_schema = {
 let queue_schema = {
   sname = "queue";
   fields = [
-    scalar "database" "Database" "Database backing this queue's job storage.";
-    scalar "jobs"     "[JobType]" "Job types this queue carries.";
+    scalar ~required:true "database" "Database" "Database backing this queue's job storage.";
+    scalar ~required:true "jobs"     "[JobType]" "Job types this queue carries.";
     block  "retry"    "retry" "Retry policy for failed jobs.";
     (* The three retry knobs are also accepted flattened at the queue top level. *)
     scalar "maxAttempts"  "Int" "Maximum delivery attempts (or nest under `retry`).";
@@ -93,8 +93,8 @@ let channel_schema = {
       doc = "Channel key parameters, e.g. `key(userId: String)`." };
     { fname = "keyParams"; kind = Params; required = false;
       doc = "Channel key parameters (alias of `key`)." };
-    scalar "database" "Database" "Database backing this channel.";
-    scalar "payload"  "Type" "Payload type published on this channel.";
+    scalar ~required:true "database" "Database" "Database backing this channel.";
+    scalar ~required:true "payload"  "Type" "Payload type published on this channel.";
   ];
 }
 
@@ -103,7 +103,7 @@ let cache_schema = {
   fields = [
     scalar ~required:true "database" "Database" "Database backing this cache.";
     scalar "defaultTtl" "Int" "Default time-to-live in seconds.";
-    scalar "valueType"  "Type" "Type of values stored in the cache.";
+    scalar ~required:true "valueType"  "Type" "Type of values stored in the cache.";
   ];
 }
 
@@ -141,6 +141,13 @@ let field_in (s : schema) (fname : string) : field option =
 
 let is_colon_required (f : field) : bool =
   match f.kind with Scalar _ -> true | Block _ | Params -> false
+
+(** A short, human label for a field's value shape, for diagnostics/hover. *)
+let kind_label (f : field) : string =
+  match f.kind with
+  | Scalar lbl -> lbl
+  | Block sub  -> sub ^ " { … }"
+  | Params     -> "(…)"
 
 (** The top-level schema for a config declaration, if it is one of the
     schema-validated kinds.  Returns [(schema, raw_fields)]. *)

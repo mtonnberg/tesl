@@ -675,6 +675,42 @@ database Db {
 }
 |}
 
+let test_R67_CF05_missing_required_field_rejected () =
+  (* A postgres database without `schema` / `postgres` is flagged. *)
+  should_fail "missing required field" {|
+#lang tesl
+module R67Cf05 exposing []
+import Tesl.Prelude exposing [String]
+database Db {
+  backend: postgres
+}
+|}
+
+let test_R67_CF06_memory_backend_needs_no_schema () =
+  (* A non-postgres (in-memory) backend needs neither schema nor postgres. *)
+  should_pass {|
+#lang tesl
+module R67Cf06 exposing []
+import Tesl.Prelude exposing [String]
+entity Item table "items" primaryKey id { id: String }
+database Db {
+  backend: memory
+  entities: [Item]
+}
+|}
+
+let test_R67_CF07_channel_missing_payload_rejected () =
+  should_fail "missing required field `payload`" {|
+#lang tesl
+module R67Cf07 exposing []
+import Tesl.Prelude exposing [String]
+entity Item table "items" primaryKey id { id: String }
+database Db { backend: postgres  schema: "s"  postgres {} }
+channel Ch {
+  database: Db
+}
+|}
+
 (* ── Test runner ─────────────────────────────────────────────────────────── *)
 
 let () =
@@ -737,5 +773,8 @@ let () =
       test_case "R67_CF02 unknown field rejected" `Quick test_R67_CF02_unknown_field_rejected;
       test_case "R67_CF03 unknown nested field rejected" `Quick test_R67_CF03_unknown_nested_field_rejected;
       test_case "R67_CF04 colon form accepted" `Quick test_R67_CF04_colon_form_accepted;
+      test_case "R67_CF05 missing required field rejected" `Quick test_R67_CF05_missing_required_field_rejected;
+      test_case "R67_CF06 memory backend needs no schema" `Quick test_R67_CF06_memory_backend_needs_no_schema;
+      test_case "R67_CF07 channel missing payload rejected" `Quick test_R67_CF07_channel_missing_payload_rejected;
     ];
   ]

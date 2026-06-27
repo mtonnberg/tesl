@@ -654,14 +654,14 @@ let check_queue_structure (decls : top_decl list) : validation_error list =
       let errs = ref [] in
       let add hint msg = errs := make_error q.loc ~hint msg :: !errs in
       if q.database = "" then
-        add "add `database MyDB` inside the queue block"
+        add "add `database: MyDB` inside the queue block"
           (Printf.sprintf "queue `%s` is missing a `database` clause" q.name)
       else if not (List.mem q.database known_dbs) then
         add (Printf.sprintf "declare `database %s { ... }` in this module" q.database)
           (Printf.sprintf
             "queue `%s` references unknown database `%s`" q.name q.database);
       if q.jobs = [] then
-        add "add `jobs [JobType]` listing the record types that can be enqueued"
+        add "add `jobs: [JobType]` listing the record types that can be enqueued"
           (Printf.sprintf "queue `%s` has no job types; at least one `jobs [JobType]` entry is required" q.name);
       List.rev !errs
     | _ -> []
@@ -676,7 +676,7 @@ let check_channel_structure (decls : top_decl list) : validation_error list =
       let errs = ref [] in
       if ch.database = "" then
         errs := make_error ch.loc
-          ~hint:"add `database MyDB` inside the channel block"
+          ~hint:"add `database: MyDB` inside the channel block"
           (Printf.sprintf "channel `%s` is missing a `database` clause" ch.name)
           :: !errs
       else if not (List.mem ch.database known_dbs) then
@@ -1361,47 +1361,90 @@ let check_imported_module_is_library (m : module_form) : validation_error list =
        permissive parser would otherwise silently drop), and
      - require a `:` after every scalar field (block/param fields like
        `postgres { … }` / `key(…)` are written without one).
-   Value-type and missing-required checks for the critical fields stay in the
-   per-block checks above (check_queue_structure / check_email_structure / …);
-   this pass deliberately does not duplicate them. *)
+   Value-type checks for the critical fields stay in the per-block checks above
+   (check_queue_structure / check_email_structure / …).  Those checks ALSO flag
+   a handful of missing fields (queue database/jobs, email database + smtp host,
+   cache/channel database); [covered_elsewhere] lists them so this pass does not
+   double-report — every other required field's absence IS reported here. *)
 let check_config_field_schema (decls : top_decl list) : validation_error list =
-  let rec walk (sch : Config_schema.schema) (fields : config_field list) : validation_error list =
-    List.concat_map (fun (cf : config_field) ->
-      match Config_schema.field_in sch cf.cf_key with
-      | None ->
-        let valid =
-          String.concat ", "
-            (List.map (fun (f : Config_schema.field) -> f.fname) sch.fields)
-        in
-        [ make_error cf.cf_key_loc
-            ~hint:(Printf.sprintf "valid fields in a `%s` block: %s" sch.sname valid)
-            (Printf.sprintf "unknown field `%s` in `%s` block" cf.cf_key sch.sname) ]
-      | Some fld ->
-        let colon_err =
-          if Config_schema.is_colon_required fld && not cf.cf_colon then
-            [ make_error cf.cf_key_loc
-                ~hint:(Printf.sprintf
-                  "write `%s: <value>` — every configuration field uses a colon"
-                  cf.cf_key)
-                (Printf.sprintf
-                  "config field `%s` is missing its `:` — write `%s: <value>`"
-                  cf.cf_key cf.cf_key) ]
-          else []
-        in
-        let sub_err =
-          match fld.kind with
-          | Config_schema.Block sub ->
-            (match Config_schema.schema_for sub with
-             | Some subsch -> walk subsch cf.cf_block
-             | None -> [])
-          | _ -> []
-        in
-        colon_err @ sub_err
-    ) fields
+  (* (block, field) presence already validated by the legacy per-block checks. *)
+  let covered_elsewhere =
+    [ "queue","database"; "queue","jobs"; "email","database"; "email","smtp";
+      "cache","database"; "channel","database"; "smtp","host" ]
+  in
+  let decl_loc (d : top_decl) : loc =
+    match d with
+    | DDatabase r -> r.loc | DQueue r -> r.loc | DChannel r -> r.loc
+    | DCache r -> r.loc | DEmail r -> r.loc | _ -> dummy_loc ""
+  in
+  (* Per-declaration extra skips for missing-required: a non-postgres backend
+     (e.g. an in-memory test database) needs neither `schema` nor `postgres`. *)
+  let extra_skip (d : top_decl) : (string * string) list =
+    match d with
+    | DDatabase r when r.backend <> "" && r.backend <> "postgres" ->
+      [ "database", "schema"; "database", "postgres" ]
+    | _ -> []
+  in
+  let rec walk (skip : (string * string) list) (sch : Config_schema.schema)
+      (fields : config_field list) (block_loc : loc) : validation_error list =
+    let is_covered (sch : Config_schema.schema) fname =
+      List.mem (sch.sname, fname) covered_elsewhere
+      || List.mem (sch.sname, fname) skip
+    in
+    let present = List.map (fun (cf : config_field) -> cf.cf_key) fields in
+    (* (a) per-field: unknown-field, missing colon, and recurse into sub-blocks. *)
+    let per_field =
+      List.concat_map (fun (cf : config_field) ->
+        match Config_schema.field_in sch cf.cf_key with
+        | None ->
+          let valid =
+            String.concat ", "
+              (List.map (fun (f : Config_schema.field) -> f.fname) sch.fields)
+          in
+          [ make_error cf.cf_key_loc
+              ~hint:(Printf.sprintf "valid fields in a `%s` block: %s" sch.sname valid)
+              (Printf.sprintf "unknown field `%s` in `%s` block" cf.cf_key sch.sname) ]
+        | Some fld ->
+          let colon_err =
+            if Config_schema.is_colon_required fld && not cf.cf_colon then
+              [ make_error cf.cf_key_loc
+                  ~hint:(Printf.sprintf
+                    "write `%s: <value>` — every configuration field uses a colon"
+                    cf.cf_key)
+                  (Printf.sprintf
+                    "config field `%s` is missing its `:` — write `%s: <value>`"
+                    cf.cf_key cf.cf_key) ]
+            else []
+          in
+          let sub_err =
+            match fld.kind with
+            | Config_schema.Block sub ->
+              (match Config_schema.schema_for sub with
+               | Some subsch -> walk skip subsch cf.cf_block cf.cf_key_loc
+               | None -> [])
+            | _ -> []
+          in
+          colon_err @ sub_err
+      ) fields
+    in
+    (* (b) missing required fields (skip those reported by legacy checks). *)
+    let missing =
+      List.filter_map (fun (f : Config_schema.field) ->
+        if f.required && not (List.mem f.fname present) && not (is_covered sch f.fname)
+        then
+          Some (make_error block_loc
+            ~hint:(Printf.sprintf "add `%s: <%s>` to the `%s` block"
+                     f.fname (Config_schema.kind_label f) sch.sname)
+            (Printf.sprintf "`%s` block is missing required field `%s`"
+               sch.sname f.fname))
+        else None
+      ) sch.fields
+    in
+    per_field @ missing
   in
   List.concat_map (fun d ->
     match Config_schema.top_schema_of_decl d with
-    | Some (sch, fields) -> walk sch fields
+    | Some (sch, fields) -> walk (extra_skip d) sch fields (decl_loc d)
     | None -> []
   ) decls
 
