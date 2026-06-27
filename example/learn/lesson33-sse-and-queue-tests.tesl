@@ -3,7 +3,16 @@ module Lesson33SseAndQueueTests exposing [Lesson33Server]
 
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
-import Tesl.Queue exposing [FromQueue, queueRead, queueWrite, pubsub, Queue, QueueRetryStrategy, Exponential, Fixed]
+import Tesl.Queue exposing [
+  FromQueue,
+  queueRead,
+  queueWrite,
+  pubsub,
+  Queue,
+  QueueRetryStrategy,
+  Exponential,
+  Fixed,
+]
 import Tesl.ApiTest exposing [
   statusOk,
   isNotEmpty,
@@ -15,7 +24,15 @@ import Tesl.ApiTest exposing [
   pendingJobCount,
   expectJobOk,
 ]
-import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 import Tesl.SSE exposing [SseChannel]
 
 # ── Goal ─────────────────────────────────────────────────────────────────────

@@ -72,7 +72,7 @@ module CriticalReview28Tests exposing [
   listSumReverseSame28,
 ]
 
-import Tesl.Prelude exposing [ Bool(..), Int, List, String, Fact, forgetFact, ]
+import Tesl.Prelude exposing [Bool(..), Int, List, String, Fact, forgetFact]
 import Tesl.String exposing [
   String.length,
   String.trim,

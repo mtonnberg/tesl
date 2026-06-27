@@ -34,7 +34,7 @@ import Tesl.Prelude exposing [
 ]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.List exposing [List.length, List.filterCheck, List.take, List.drop]
-import Tesl.Int exposing [ Int.nonZero, Int.nonNegative, Int.divide, ]
+import Tesl.Int exposing [Int.nonZero, Int.nonNegative, Int.divide]
 import Tesl.String exposing [String.length]
 
 # ─── Proof vocabulary ────────────────────────────────────────────────────────

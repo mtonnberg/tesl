@@ -94,14 +94,47 @@
       (run-inline-test path label)
       (run-external-test path label)))
 
+;; Several internal tests (check-test, exists-test, sql-test, web-test,
+;; record-test) validate the *evidence-bearing* proof/validation machinery —
+;; detach-proof / detached-proof-* / attach-proof / facts-of, and check-exn on
+;; validation exceptions that are *erased* under the default zero-cost mode.  That
+;; machinery only exists when proofs are NOT erased (TESL_ZERO_COST_PROOFS=0).
+;; Zero-cost erasure is the production default and the mode this suite otherwise
+;; runs in, so these must be compiled+run with the flag flipped.  We run them all
+;; in ONE subprocess (tests/run-nzc.rkt) with use-compiled-file-paths cleared: the
+;; non-zero-cost build is in-memory (never clobbering the default zero-cost cache
+;; shared with the zero-cost example-batch) and the shared deps compile once,
+;; instead of a full recompile per test.  See
+;; roadmap/next/nonzero_cost_test_harness.md.
+(define-runtime-path nzc-driver-path "run-nzc.rkt")
+
+(define (run-non-zero-cost-tests paths)
+  (define racket-path
+    (or (find-executable-path "racket")
+        (error 'tests "could not find racket on PATH")))
+  (define env (environment-variables-copy (current-environment-variables)))
+  (environment-variables-set! env #"TESL_ZERO_COST_PROOFS" #"0")
+  (define argv
+    (cons (path->string nzc-driver-path)
+          (for/list ([p (in-list paths)]) (path->string p))))
+  (define-values (status out err)
+    (parameterize ([current-environment-variables env])
+      (apply run-command/capture (path->string racket-path) argv)))
+  (display out)
+  (unless (string=? err "")
+    (display err (current-error-port)))
+  (when (or (not (zero? status))
+            (regexp-match? #px"(^|\n)(FAILURE|ERROR)(\n|$)" out)
+            (regexp-match? #px"NZC-ERROR" out)
+            (regexp-match? #px"NZC-ERROR" err))
+    (error 'tests "one or more non-zero-cost proof tests failed")))
+
 (define (run-internal-tests)
-  (load-test-module check-test-path)
-  (load-test-module exists-test-path)
-  (load-test-module sql-test-path)
+  (run-non-zero-cost-tests
+   (list check-test-path exists-test-path sql-test-path
+         web-test-path record-test-path))
   (load-test-module postgres-test-path)
   (load-test-module example-api-test-path)
-  (load-test-module web-test-path)
-  (load-test-module record-test-path)
   (run-self-contained-test tesl-test-path 'tesl-test)
   (run-self-contained-test port-test-path 'port-test)
   (run-self-contained-test codec-specialization-test-path 'codec-specialization-test)

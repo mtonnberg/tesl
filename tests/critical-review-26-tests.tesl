@@ -72,7 +72,7 @@ module CriticalReview26Tests exposing [
 ]
 
 import Tesl.Prelude exposing [Bool(..), Int, List, String, Fact]
-import Tesl.String exposing [ String.length, String.contains, String.isEmpty ]
+import Tesl.String exposing [String.length, String.contains, String.isEmpty]
 import Tesl.List exposing [
   List.map,
   List.filterCheck,

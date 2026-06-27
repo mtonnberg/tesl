@@ -130,7 +130,15 @@ import KanelBilling exposing [
   markSentHandler,
   markPaidHandler,
 ]
-import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, Fixed]
 import Tesl.SSE exposing [SseChannel]
 

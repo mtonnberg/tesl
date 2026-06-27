@@ -21,8 +21,25 @@ module Lesson28DeadLetterQueue exposing [NotifWorkers, DeadNotifWorkers]
 # dead-queue dequeue boundary, not by arbitrary user code.
 
 import Tesl.Prelude exposing [String]
-import Tesl.Queue exposing [FromQueue, FromDeadQueue, queueRead, pubsub, Queue, QueueRetryStrategy, Exponential, Fixed]
-import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.Queue exposing [
+  FromQueue,
+  FromDeadQueue,
+  queueRead,
+  pubsub,
+  Queue,
+  QueueRetryStrategy,
+  Exponential,
+  Fixed,
+]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 
 # ── Capabilities ──────────────────────────────────────────────────────────────
 

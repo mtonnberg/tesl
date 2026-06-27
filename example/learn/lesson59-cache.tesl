@@ -42,7 +42,15 @@ module Lesson59Cache exposing [
 
 import Tesl.Prelude exposing [Int, String, Bool(..), Unit]
 import Tesl.Maybe exposing [Maybe(..), Nothing, Something]
-import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 
 # ── Database (required as backing store for the cache) ────────────────────────
 

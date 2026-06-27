@@ -753,6 +753,73 @@ record Holder { conn: Conn }
 fn mk() -> Holder = Holder { conn: Tcp { host: "h", port: "not-int" } }
 |}
 
+(* ── R67_APP — App simplification (folded queue + `main() -> App`) ────────── *)
+
+let app_prelude = {|
+#lang tesl
+module R67App exposing []
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, Job]
+import Tesl.App exposing [App]
+import Tesl.Env exposing [env, envInt]
+capability emailCap
+capability pubsub
+record EmailJob { recipientId: String }
+worker processEmail(job: EmailJob) requires [emailCap] = job
+deadWorker handleDeadEmail(job: EmailJob) requires [emailCap] = job
+handler handleRoot() -> String requires [] = "ok"
+database DemoDb = Database {
+  schema: "demo"  entities: []
+  backend: Postgres (PostgresConfig { dbName: env "DB" user: env "U" password: env "P" connection: TcpConnection { host: env "H" port: envInt "PORT" 5432 } })
+}
+api DemoApi { get "/" -> String }
+server DemoServer for DemoApi { endpoint_0 = handleRoot }
+queue EmailQueue requires [emailCap, pubsub] = Queue {
+  database: DemoDb
+  jobs: [ Job EmailJob processEmail (Something handleDeadEmail) ]
+  retry: { maxAttempts: 3 backoff: Exponential initialDelay: 10 }
+  numberOfWorkers: 2
+}
+|}
+
+let test_R67_APP01_folded_queue_and_main_app_accepted () =
+  should_pass (app_prelude ^ {|
+main() -> App requires [emailCap, pubsub] =
+  let port = envInt "PORT" 8086
+  App { database: DemoDb  queues: [EmailQueue]  email: []  sseChannels: []  api: DemoServer  port: port }
+|})
+
+let test_R67_APP02_main_app_missing_api_rejected () =
+  should_fail "missing required field `api`" (app_prelude ^ {|
+main() -> App requires [emailCap, pubsub] =
+  App { database: DemoDb  queues: [EmailQueue]  port: 8086 }
+|})
+
+let test_R67_APP03_main_app_unknown_field_rejected () =
+  should_fail "unknown field `prt`\\|unknown field" (app_prelude ^ {|
+main() -> App requires [emailCap, pubsub] =
+  App { database: DemoDb  api: DemoServer  prt: 8086 }
+|})
+
+let test_R67_APP04_folded_queue_bad_backoff_rejected () =
+  should_fail "backoff.*must be\\|Exponential" {|
+#lang tesl
+module R67App4 exposing []
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Job]
+import Tesl.Env exposing [env, envInt]
+record EmailJob { recipientId: String }
+worker processEmail(job: EmailJob) requires [] = job
+database DemoDb = Database { schema: "d"  entities: []  backend: Postgres (PostgresConfig { dbName: env "DB" user: env "U" password: env "P" connection: TcpConnection { host: env "H" port: envInt "PORT" 5432 } }) }
+queue EmailQueue = Queue {
+  database: DemoDb
+  jobs: [ Job EmailJob processEmail Nothing ]
+  retry: { maxAttempts: 3 backoff: Sideways initialDelay: 10 }
+}
+|}
+
 (* ── Test runner ─────────────────────────────────────────────────────────── *)
 
 let () =
@@ -824,5 +891,11 @@ let () =
       test_case "R67_NC02 missing ctor field rejected" `Quick test_R67_NC02_missing_ctor_field_rejected;
       test_case "R67_NC03 unknown ctor field rejected" `Quick test_R67_NC03_unknown_ctor_field_rejected;
       test_case "R67_NC04 wrong ctor field type rejected" `Quick test_R67_NC04_wrong_ctor_field_type_rejected;
+    ];
+    "app-simplification", [
+      test_case "R67_APP01 folded queue + main->App accepted" `Quick test_R67_APP01_folded_queue_and_main_app_accepted;
+      test_case "R67_APP02 main App missing api rejected" `Quick test_R67_APP02_main_app_missing_api_rejected;
+      test_case "R67_APP03 main App unknown field rejected" `Quick test_R67_APP03_main_app_unknown_field_rejected;
+      test_case "R67_APP04 folded queue bad backoff rejected" `Quick test_R67_APP04_folded_queue_bad_backoff_rejected;
     ];
   ]

@@ -66,7 +66,15 @@ import Tesl.Random exposing [random]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Id exposing [generatePrefixedId]
 import Tesl.Dict exposing [Dict.lookup]
-import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 
 # ─── Capabilities ─────────────────────────────────────────────────────────────
 capability timedRead implies dbRead

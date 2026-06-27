@@ -119,7 +119,11 @@ echo "=== Verifying exact output matches for key lessons ==="
 # absolute path, so canonicalise the thsl-src! file string to its basename on
 # both sides before diffing (keeps the check asserting the full emission,
 # tolerating only the path prefix — same normalisation as test_integration).
-canon_thsl() { sed -E 's#\(thsl-src! "[^"]*/#(thsl-src! "#g'; }
+# Canonicalise the baked-in source path to its basename for BOTH checkpoint
+# forms — thsl-src! (statements) and thsl-src-control! (case dispatch). Matching
+# only thsl-src! left absolute-vs-relative path diffs on every case-bearing
+# lesson (false positives); this mirrors test_integration's normaliser.
+canon_thsl() { sed -E 's#\(thsl-src(-control)?! "[^"]*/#(thsl-src\1! "#g'; }
 # Wave-0 widening: assert byte-exact emit for EVERY committed example/learn/*.rkt
 # snapshot (was only lesson00/04/05).  Each committed .rkt is paired with its
 # <name>.tesl; we re-emit and diff (after canonicalising only the thsl-src! path

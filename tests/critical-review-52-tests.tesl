@@ -24,9 +24,9 @@
 
 module CriticalReview52Tests exposing []
 
-import Tesl.Prelude exposing [ Int, Bool(..), List, Fact, forgetFact, ]
+import Tesl.Prelude exposing [Int, Bool(..), List, Fact, forgetFact]
 import Tesl.Maybe exposing [Maybe(..)]
-import Tesl.List exposing [ List.length, List.filterCheck, List.allCheck, ]
+import Tesl.List exposing [List.length, List.filterCheck, List.allCheck]
 
 # ---------------------------------------------------------------------
 # Proof vocabulary

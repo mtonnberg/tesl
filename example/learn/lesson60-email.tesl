@@ -44,7 +44,15 @@ module Lesson60Email exposing [
 # ─────────────────────────────────────────────────────────────────────────────
 
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
-import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 import Tesl.Email exposing [Email, SmtpConfig]
 
 # ── Database ──────────────────────────────────────────────────────────────────

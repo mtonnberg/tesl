@@ -1467,6 +1467,7 @@ type vkind =
   | VJobList        (* [JobType, …] naming declared records/entities (or Job entries) *)
   | VRefList        (* [Name, …] naming declared components (queues/email/channels) *)
   | VTypeRef        (* UIDENT naming a declared type/record/entity/server *)
+  | VExpr           (* any value expression (e.g. App.port, which may be a let-bound var) *)
 
 let config_block_schema = function
   (* schema is required for the postgres backend but not for Memory; the
@@ -1487,7 +1488,7 @@ let config_block_schema = function
   (* App-pass entry point: `main() -> App = App { … }`. *)
   | "App" -> [ "database", VDatabaseRef, true; "queues", VRefList, false;
                "email", VRefList, false; "sseChannels", VRefList, false;
-               "api", VTypeRef, true; "port", VInt, false ]
+               "api", VTypeRef, true; "port", VExpr, false ]
   | _ -> []
 
 let cfg_fields = function
@@ -1584,6 +1585,7 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
       (match cfg_ctor v with
        | Some _ -> []
        | None -> err (Printf.sprintf "field `%s` must reference a type, e.g. `MyEvent`" fname))
+    | VExpr -> ignore v; []
   and check_record loc schema_name fields : validation_error list =
     let schema = match schema_name with
       | "__Tcp" -> [ "host", VStr, true; "port", VInt, true ]

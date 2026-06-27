@@ -29,7 +29,15 @@ import Tesl.Time exposing [nowMillis, time, PosixMillis]
 import Tesl.Random exposing [random]
 import Tesl.Telemetry exposing [initTelemetry]
 import Tesl.Id exposing [generatePrefixedId]
-import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 
 # ─────────────────────────────────────────────
 # UNDERSTANDING — why it works this way

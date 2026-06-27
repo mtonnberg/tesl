@@ -20,7 +20,15 @@ import Tesl.Telemetry exposing [telemetry, initTelemetry]
 import Tesl.Cli exposing [cli.args, lookupPortArgument]
 import Tesl.Id exposing [generatePrefixedId]
 import Tesl.Random exposing [random]
-import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 capability todoDbRead implies dbRead
 capability todoDbWrite implies dbWrite
 capability todoReadHttpCookie

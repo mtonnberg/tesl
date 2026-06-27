@@ -4,8 +4,16 @@ module Lesson32ApiTests exposing [Lesson32Server]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 import Tesl.DB exposing [dbRead, dbWrite]
-import Tesl.ApiTest exposing [ statusOk, isNull ]
-import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.ApiTest exposing [statusOk, isNull]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 
 # ── Goal ─────────────────────────────────────────────────────────────────────
 # Learn the new `api-test` block by writing the same kinds of tests you would

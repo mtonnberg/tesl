@@ -51,8 +51,8 @@ module CriticalReview48Tests exposing [
   makeOrderedPair,
 ]
 
-import Tesl.Prelude exposing [ Bool(..), Int, List, String, Fact, forgetFact, ]
-import Tesl.String exposing [ String.length, String.isEmpty, IsTrimmed, ]
+import Tesl.Prelude exposing [Bool(..), Int, List, String, Fact, forgetFact]
+import Tesl.String exposing [String.length, String.isEmpty, IsTrimmed]
 import Tesl.List exposing [
   List.map,
   List.filterCheck,

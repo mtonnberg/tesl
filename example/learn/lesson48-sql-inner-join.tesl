@@ -40,7 +40,15 @@ module Lesson48SqlInnerJoin exposing [
 
 import Tesl.Prelude exposing [Bool(..), Int, String, List]
 import Tesl.DB exposing [dbRead, dbWrite]
-import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 
 # ─────────────────────────────────────────────
 # UNDERSTANDING — the inner join model

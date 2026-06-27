@@ -327,6 +327,26 @@ let desugar_queue_config (q : queue_form) : queue_form =
     { q with database; jobs; max_attempts = !max_attempts; backoff = !backoff;
              initial_delay = !initial_delay; number_of_workers; config_expr = None }
 
+(** Effective job-type names for a queue, for the job→queue resolution table.
+    For the old syntax this is [q.jobs]; for the typed form ([queue Q = Queue {
+    jobs: [...] }]) [q.jobs] is still empty until {!desugar_queue_config} runs, so
+    we read the [jobs] field out of [config_expr] directly — the same extraction
+    {!desugar_queue_config} performs.  Without this the enqueue lowering falls
+    back to an unbound ["_queue_for_<JobType>"]. *)
+let queue_job_types (q : queue_form) : string list =
+  if q.jobs <> [] then q.jobs
+  else match q.config_expr with
+    | None -> []
+    | Some e ->
+      (match List.assoc_opt "jobs" (config_record_fields e) with
+       | None -> []
+       | Some v ->
+         let entries = job_entries v in
+         if entries <> [] then List.map (fun (jt, _, _) -> jt) entries
+         else (match v with
+               | EList { elems; _ } -> List.filter_map config_ctor_name elems
+               | _ -> []))
+
 let desugar_email_config (em : email_form) : email_form =
   match em.config_expr with
   | None -> em
@@ -469,7 +489,7 @@ let desugar_module (m : module_form) : module_form =
      declarations (same construction as Emit_racket's pre-pass). *)
   let queues : (string, string) Hashtbl.t = Hashtbl.create 16 in
   List.iter (function
-    | DQueue (q : queue_form) -> List.iter (fun job -> Hashtbl.replace queues job q.name) q.jobs
+    | DQueue (q : queue_form) -> List.iter (fun job -> Hashtbl.replace queues job q.name) (queue_job_types q)
     | _ -> ()) m.decls;
   (* First lower inline endpoint captures into synthesized top-level capturers. *)
   let synthetic = ref [] in

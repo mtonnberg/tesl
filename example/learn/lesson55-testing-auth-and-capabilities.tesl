@@ -1,5 +1,5 @@
 #lang tesl
-module Lesson55TestingAuthAndCapabilities exposing [ AuthServer, ]
+module Lesson55TestingAuthAndCapabilities exposing [AuthServer]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 55 — Testing Auth and Capabilities
