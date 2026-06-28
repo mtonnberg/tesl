@@ -3687,9 +3687,26 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
 
   (* 3b. Add cache value types as synthetic env bindings "__cache_<Name>" → type *)
   let ctx =
+    (* For the new typed `cache X = Cache { valueType: T … }` form the flat
+       [value_type] field is filled by the desugar pass (which runs AFTER the
+       checker), so resolve it from [config_expr] here. *)
+    let cache_value_type (c : Ast.cache_form) : Ast.type_expr =
+      match c.config_expr with
+      | None -> c.value_type
+      | Some e ->
+        let fields = (match e with
+          | Ast.ERecord { fields; _ } -> fields
+          | Ast.EApp { fn = Ast.EConstructor _; arg = Ast.ERecord { fields; _ }; _ } -> fields
+          | _ -> []) in
+        (match List.assoc_opt "valueType" fields with
+         | Some (Ast.EConstructor { name; _ })
+         | Some (Ast.EApp { fn = Ast.EConstructor { name; _ }; _ }) ->
+           Ast.TName { name; loc = c.loc }
+         | _ -> c.value_type)
+    in
     let cache_bindings = List.filter_map (function
       | DCache (c : Ast.cache_form) ->
-        let ty = ty_of_type_expr c.value_type in
+        let ty = ty_of_type_expr (cache_value_type c) in
         Some ("__cache_" ^ c.name, mono ty)
       | _ -> None
     ) m.decls in

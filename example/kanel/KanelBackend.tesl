@@ -139,8 +139,9 @@ import Tesl.Database exposing [
   TcpConnection,
   SocketConnection,
 ]
-import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, Fixed]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, Fixed, Job]
 import Tesl.SSE exposing [SseChannel]
+import Tesl.App exposing [App]
 
 # ── Database ─────────────────────────────────────────────────────────────────
 
@@ -167,14 +168,15 @@ record KanelNotifyJob {
   body: String
 }
 
-queue KanelNotifyQueue = Queue {
+queue KanelNotifyQueue requires [notifyWorkerCap, kanelPubSub] = Queue {
   database: KanelDatabase
-  jobs: [KanelNotifyJob]
+  jobs: [Job KanelNotifyJob notifyWorker (Something deadNotifyWorker)]
   retry: QueueRetryStrategy {
     maxAttempts: 3
     backoff: Exponential
     initialDelay: 30
   }
+  numberOfWorkers: 2
 }
 
 capability notifyWorkerCap implies queueRead
@@ -823,26 +825,14 @@ api-test "issue status can be updated through valid transitions" for KanelServer
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
-main with capabilities [kanelDbRead, kanelDbWrite, kanelQueue, kanelPubSub, random, time, notifyWorkerCap] {
+main() -> App
+  requires [kanelDbRead, kanelDbWrite, kanelQueue, kanelPubSub, random, time, notifyWorkerCap] =
   let port = envInt "KANEL_PORT" 8080
-  with database KanelDatabase {
-    # The compiler verifies at compile time that serve/startWorkers only reference
-    # capabilities declared on main — adding a new handler that requires a new
-    # capability will produce a compile error if it is missing from this declaration.
-    with capabilities [kanelDbRead, kanelDbWrite, kanelQueue, kanelPubSub, random, time, notifyWorkerCap] {
-      startWorkers 2 KanelNotifyWorkers with capabilities [notifyWorkerCap, kanelPubSub]
-      startDeadWorkers KanelDeadNotifyWorkers with capabilities [notifyWorkerCap, kanelPubSub]
-      serve KanelServer on port with capabilities [kanelDbRead, kanelDbWrite, kanelQueue, kanelPubSub, random, time] static "example/kanel/frontend"
-    }
+  App {
+    database: KanelDatabase
+    api: KanelServer
+    port: port
+    queues: [KanelNotifyQueue]
+    sseChannels: [UserNotifications]
+    static: "example/kanel/frontend"
   }
-}
-
-# ── Worker group declarations (must co-locate with queue declaration) ─────────
-
-workers KanelNotifyWorkers for KanelNotifyQueue {
-  KanelNotifyJob = notifyWorker
-}
-
-deadWorkers KanelDeadNotifyWorkers for KanelNotifyQueue {
-  KanelNotifyJob = deadNotifyWorker
-}

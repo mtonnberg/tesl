@@ -864,6 +864,55 @@ codec Req {
   assert_not_contains ~name:"decoder is not empty (field not dropped)"
     racket "(record-value 'Req (hash ))"
 
+(* ── EOk attach-proof: strip surface `check` wrapper ─────────────────────────
+   `ok (check (checkA && checkB)) n ::: p` (a proof-sidecar fn tail) reaches the
+   EOk attach-proof emit since the always-on-checkpoint change. It must emit
+   `(attach-proof ((check-and checkA checkB) n) p)` — NOT `(check (check-and …) n)`
+   with an unbound `check` head (which failed Racket expansion). *)
+let test_eok_check_value_strips_check_wrapper () =
+  let src = {|#lang tesl
+module SidecarEmit exposing [sc]
+import Tesl.Prelude exposing [Int]
+fact Positive (n: Int)
+fact Small (n: Int)
+check checkPositive(n: Int) -> n: Int ::: Positive n =
+  if n > 0 then
+    ok n ::: Positive n
+  else
+    fail 400 "must be positive"
+check checkSmall(n: Int) -> n: Int ::: Small n =
+  if n < 100 then
+    ok n ::: Small n
+  else
+    fail 400 "must be small"
+fn sc(n: Int, m: Int) -> (Int ? Positive && Small) ::: Positive m =
+  let (_ ::: p) = check checkPositive m
+  (check (checkPositive && checkSmall)) n ::: p
+|} in
+  let racket = compile_ok src "eok_check_value" in
+  assert_contains ~name:"EOk strips the surface check wrapper into a direct check-and call"
+    racket "(attach-proof ((check-and checkPositive checkSmall) n)";
+  assert_not_contains ~name:"no unbound (check (check-and ...) head"
+    racket "(check (check-and"
+
+(* Guard against over-eager matching: a USER function whose name merely contains
+   "check" (e.g. `checkout`) is NOT the `check` keyword and must NOT be stripped. *)
+let test_eok_checkout_not_stripped () =
+  let src = {|#lang tesl
+module CheckoutEmit exposing [sc]
+import Tesl.Prelude exposing [Int]
+fact P (n: Int)
+fn checkout(n: Int) -> Int =
+  n
+fn sc(n: Int ::: P n) -> Int ::: P n =
+  ok (checkout n) ::: P n
+|} in
+  let racket = compile_ok src "eok_checkout" in
+  assert_contains ~name:"checkout call preserved inside attach-proof"
+    racket "(attach-proof (checkout n)";
+  assert_not_contains ~name:"checkout is not treated as the check keyword"
+    racket "(check-and"
+
 (* ── Suite ───────────────────────────────────────────────────────────────── *)
 
 let () =
@@ -954,5 +1003,9 @@ let () =
     ];
     "codec", [
       Alcotest.test_case "stray colon after codec field name still decodes" `Quick test_codec_field_stray_colon;
+    ];
+    "eok-proof", [
+      Alcotest.test_case "EOk check-value strips check wrapper" `Quick test_eok_check_value_strips_check_wrapper;
+      Alcotest.test_case "checkout (user fn) not treated as check keyword" `Quick test_eok_checkout_not_stripped;
     ];
   ]

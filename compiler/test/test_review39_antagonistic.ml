@@ -310,6 +310,7 @@ import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.ApiTest exposing [statusOk]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 
 record EchoRequest {
   message: String
@@ -331,18 +332,15 @@ entity Note table "notes" primaryKey id {
   title: String
 }
 
-database MainDatabase {
-  backend: postgres
+database MainDatabase = Database {
   schema: "lesson32"
   entities: [Note]
-  postgres {
-    database: "lesson32"
+  backend: Postgres (PostgresConfig {
+    dbName: "lesson32"
     user: "lesson32"
     password: "lesson32"
-    host: "localhost"
-    port: 5432
-    socket: ""
-  }
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 
 handler echo(req: EchoRequest) -> EchoRequest =
@@ -386,7 +384,9 @@ let api_test_sse_collect_with_timeout_compiles () =
 module Main exposing [Server]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
-import Tesl.Queue exposing [FromQueue, queueRead, queueWrite, pubsub]
+import Tesl.Queue exposing [FromQueue, queueRead, queueWrite, pubsub, Queue, QueueRetryStrategy, Linear]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.SSE exposing [SseChannel]
 import Tesl.ApiTest exposing [
   statusOk,
   isNotEmpty,
@@ -399,18 +399,15 @@ import Tesl.ApiTest exposing [
   expectJobOk,
 ]
 
-database MainDatabase {
-  backend: postgres
+database MainDatabase = Database {
   schema: "lesson33"
   entities: []
-  postgres {
-    database: "demo"
+  backend: Postgres (PostgresConfig {
+    dbName: "demo"
     user: "demo"
     password: "demo"
-    host: "localhost"
-    port: 5432
-    socket: ""
-  }
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 
 record NotifyJob {
@@ -444,17 +441,17 @@ fn parseUserId(id: String) -> String =
 
 capture userIdCapture: String using stringCodec via parseUserId
 
-queue MainQueue {
+queue MainQueue = Queue {
   database: MainDatabase
   jobs: [NotifyJob]
-  retry {
+  retry: QueueRetryStrategy {
     maxAttempts: 2
-    backoff: linear
+    backoff: Linear
     initialDelay: 1
   }
 }
 
-channel MainEvents(userId: String) {
+sseChannel MainEvents(userId: String) = SseChannel {
   database: MainDatabase
   payload: NoticeEvent
 }
@@ -555,6 +552,7 @@ let load_test_seed_and_baseline_compiles () =
 module Main exposing [Server]
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 
 entity Book table "books" primaryKey id {
   id: String
@@ -562,18 +560,15 @@ entity Book table "books" primaryKey id {
   pages: Int
 }
 
-database MainDatabase {
-  backend: postgres
+database MainDatabase = Database {
   schema: "lesson41"
   entities: [Book]
-  postgres {
-    database: "lesson41"
+  backend: Postgres (PostgresConfig {
+    dbName: "lesson41"
     user: "lesson41"
     password: "lesson41"
-    host: "localhost"
-    port: 5432
-    socket: ""
-  }
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 
 handler listBooks() -> List Book

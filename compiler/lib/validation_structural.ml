@@ -735,7 +735,7 @@ let check_cache_structure (decls : top_decl list) : validation_error list =
     List.filter_map (function DDatabase db -> Some db.name | _ -> None) decls
   in
   List.concat_map (function
-    | DCache (c : Ast.cache_form) ->
+    | DCache (c : Ast.cache_form) when c.config_expr = None ->
       let errs = ref [] in
       let add hint msg = errs := make_error c.loc ~hint msg :: !errs in
       if c.database = "" then
@@ -1485,10 +1485,13 @@ let config_block_schema = function
   | "SmtpConfig" -> [ "host", VStr, true; "port", VInt, false; "username", VStr, false;
                       "password", VStr, false; "tls", VBool, false ]
   | "SseChannel" -> [ "database", VDatabaseRef, true; "payload", VTypeRef, true ]
+  | "Cache" -> [ "database", VDatabaseRef, true; "valueType", VTypeRef, true;
+                 "defaultTtl", VInt, false ]
   (* App-pass entry point: `main() -> App = App { … }`. *)
   | "App" -> [ "database", VDatabaseRef, true; "queues", VRefList, false;
                "email", VRefList, false; "sseChannels", VRefList, false;
-               "api", VTypeRef, true; "port", VExpr, false ]
+               "api", VTypeRef, true; "port", VExpr, false;
+               "static", VStr, false ]
   | _ -> []
 
 let cfg_fields = function
@@ -1630,6 +1633,18 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
     | DQueue r    -> check_decl "Queue" r.loc r.config_expr
     | DEmail r    -> check_decl "Email" r.loc r.config_expr
     | DChannel r  -> check_decl "SseChannel" r.loc r.config_expr
+    | DCache r    ->
+      (* schema validates shape; re-add the old-form `defaultTtl > 0` guarantee *)
+      let ttl_err = match r.config_expr with
+        | Some e ->
+          (match List.assoc_opt "defaultTtl" (cfg_fields e) with
+           | Some (ELit { lit = LInt n; _ }) when n <= 0 ->
+             [ make_error r.loc
+                 ~hint:"use a positive integer (seconds), e.g. `defaultTtl: 3600`"
+                 (Printf.sprintf "cache `%s` has invalid `defaultTtl` %d; must be > 0" r.name n) ]
+           | _ -> [])
+        | None -> [] in
+      check_decl "Cache" r.loc r.config_expr @ ttl_err
     | DFunc fd when fd.kind = MainKind ->
       (* Validate the `App { … }` record an App-style main returns. *)
       let rec tail = function
@@ -1641,6 +1656,71 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
        | _ -> [])
     | _ -> []
   ) decls
+
+(* ── App / config wiring-graph check ──────────────────────────────────────────
+   The per-block reference checks (check_queue_structure / check_channel_structure)
+   only run for OLD block syntax (config_expr = None); the typed-config-block schema
+   validation above validates ref SHAPE but deliberately not local existence (refs
+   may be imported).  But queue/channel/email database refs and the `main() -> App`
+   activation refs (database / api / queues / email / sseChannels) ARE local by
+   construction — an app wires its own declared components.  This check restores the
+   undeclared-reference guarantee for the new typed forms (and is the safety layer
+   that lets the old block syntax be removed). *)
+let check_app_wiring (decls : top_decl list) : validation_error list =
+  let names sel = List.filter_map sel decls in
+  let dbs      = names (function DDatabase d -> Some d.name | _ -> None) in
+  let servers  = names (function DServer s -> Some s.name | _ -> None) in
+  let queues   = names (function DQueue q -> Some q.name | _ -> None) in
+  let emails   = names (function DEmail e -> Some e.name | _ -> None) in
+  let channels = names (function DChannel c -> Some c.name | _ -> None) in
+  let cfg_db cexpr = match cexpr with
+    | Some e -> (match List.assoc_opt "database" (cfg_fields e) with Some v -> cfg_ctor v | None -> None)
+    | None -> None in
+  let unknown_db loc kind nm db =
+    make_error loc
+      ~hint:(Printf.sprintf "declare `database %s = Database { … }` in this module" db)
+      (Printf.sprintf "%s `%s` references unknown database `%s`" kind nm db) in
+  (* 1. new-form queue / sseChannel / email: `database:` must be declared locally *)
+  let decl_db_errs = List.filter_map (fun d -> match d with
+    | DQueue q when q.config_expr <> None ->
+      (match cfg_db q.config_expr with Some db when not (List.mem db dbs) -> Some (unknown_db q.loc "queue" q.name db) | _ -> None)
+    | DChannel c when c.config_expr <> None ->
+      (match cfg_db c.config_expr with Some db when not (List.mem db dbs) -> Some (unknown_db c.loc "sseChannel" c.name db) | _ -> None)
+    | DEmail e when e.config_expr <> None ->
+      (match cfg_db e.config_expr with Some db when not (List.mem db dbs) -> Some (unknown_db e.loc "email" e.name db) | _ -> None)
+    | DCache c when c.config_expr <> None ->
+      (match cfg_db c.config_expr with Some db when not (List.mem db dbs) -> Some (unknown_db c.loc "cache" c.name db) | _ -> None)
+    | _ -> None) decls in
+  (* 2. `main() -> App = App { … }` activation refs must resolve to declared decls *)
+  let names_of v = match v with EList { elems; _ } -> List.filter_map cfg_ctor elems | _ -> [] in
+  let app_errs = List.concat_map (fun d -> match d with
+    | DFunc fd when fd.kind = MainKind ->
+      let rec tail = function ELet { body; _ } | ELetProof { body; _ } -> tail body | e -> e in
+      (match tail fd.body with
+       | (ERecord { type_hint = Some "App"; _ }
+         | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord _; _ }) as e ->
+         let fields = cfg_fields e in
+         let loc = fd.loc in
+         let one key set kind = match List.assoc_opt key fields with
+           | Some v -> (match cfg_ctor v with
+               | Some n when not (List.mem n set) ->
+                 [ make_error loc ~hint:(Printf.sprintf "declare or import `%s`" n)
+                     (Printf.sprintf "App `%s` references unknown %s `%s`" key kind n) ]
+               | _ -> [])
+           | None -> [] in
+         let many key set kind = match List.assoc_opt key fields with
+           | Some v -> List.filter_map (fun n -> if List.mem n set then None
+               else Some (make_error loc ~hint:(Printf.sprintf "declare or import `%s`" n)
+                 (Printf.sprintf "App `%s` activates unknown %s `%s`" key kind n))) (names_of v)
+           | None -> [] in
+         one "database" dbs "database"
+         @ one "api" servers "server"
+         @ many "queues" queues "queue"
+         @ many "email" emails "email"
+         @ many "sseChannels" channels "sseChannel"
+       | _ -> [])
+    | _ -> []) decls in
+  decl_db_errs @ app_errs
 
 (* ── 2. SQL/record field name validation ─────────────────────────────────── *)
 

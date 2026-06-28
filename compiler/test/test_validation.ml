@@ -150,25 +150,24 @@ let test_server_sse_endpoint_does_not_require_binding () =
 module Foo exposing [S]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
-database EventDatabase {
-  backend: postgres
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.SSE exposing [SseChannel]
+database EventDatabase = Database {
   schema: "events"
   entities: []
-  postgres {
-    database: "demo"
+  backend: Postgres (PostgresConfig {
+    dbName: "demo"
     user: "demo"
     password: "demo"
-    host: "localhost"
-    port: 5432
-    socket: ""
-  }
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 type NoticeEvent
   = NoticeSent message:String
 fn parseUserId(id: String) -> String =
   id
 capture userIdCapture: String using stringCodec via parseUserId
-channel NoticeEvents(userId: String) {
+sseChannel NoticeEvents(userId: String) = SseChannel {
   database: EventDatabase
   payload: NoticeEvent
 }
@@ -192,22 +191,21 @@ let test_sse_endpoint_does_not_swallow_following_http_endpoint () =
 module Foo exposing [S]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
-database EventDatabase {
-  backend: postgres
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.SSE exposing [SseChannel]
+database EventDatabase = Database {
   schema: "events"
   entities: []
-  postgres {
-    database: "demo"
+  backend: Postgres (PostgresConfig {
+    dbName: "demo"
     user: "demo"
     password: "demo"
-    host: "localhost"
-    port: 5432
-    socket: ""
-  }
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 type NoticeEvent
   = Notice text:String
-channel Notices(userId: String) {
+sseChannel Notices(userId: String) = SseChannel {
   database: EventDatabase
   payload: NoticeEvent
 }

@@ -547,24 +547,22 @@ let r57_ca02_handler_db_cap_checked () =
 module Test exposing []
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.DB exposing [dbRead]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 
 entity Item table "items" primaryKey id {
   id: String @db(text)
   value: Int @db(integer)
 }
 
-database TestDB {
-  backend: postgres
+database TestDB = Database {
   schema: "test"
   entities: [Item]
-  postgres {
-    database: "testdb"
+  backend: Postgres (PostgresConfig {
+    dbName: "testdb"
     user: "testuser"
     password: "testpass"
-    host: "localhost"
-    port: 5432
-    socket: ""
-  }
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 
 handler getItems() -> List Item requires [] =
@@ -578,24 +576,22 @@ let r57_ca03_fn_db_cap_checked () =
 module Test exposing []
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.DB exposing [dbRead]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 
 entity Item table "items" primaryKey id {
   id: String @db(text)
   value: Int @db(integer)
 }
 
-database TestDB {
-  backend: postgres
+database TestDB = Database {
   schema: "test"
   entities: [Item]
-  postgres {
-    database: "testdb"
+  backend: Postgres (PostgresConfig {
+    dbName: "testdb"
     user: "testuser"
     password: "testpass"
-    host: "localhost"
-    port: 5432
-    socket: ""
-  }
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 
 fn getItemsFn() -> List Item requires [] =
@@ -843,24 +839,22 @@ let db_entity_header = {|#lang tesl
 module Test exposing []
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 
 entity Item table "items" primaryKey id {
   id: String @db(text)
   value: Int @db(integer)
 }
 
-database TestDB {
-  backend: postgres
+database TestDB = Database {
   schema: "test"
   entities: [Item]
-  postgres {
-    database: "testdb"
+  backend: Postgres (PostgresConfig {
+    dbName: "testdb"
     user: "testuser"
     password: "testpass"
-    host: "localhost"
-    port: 5432
-    socket: ""
-  }
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 |}
 

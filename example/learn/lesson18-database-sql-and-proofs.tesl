@@ -20,6 +20,7 @@ module Lesson18DatabaseSqlAndProofs exposing [NoteDatabase, NoteServer]
 #     Something note -> note    # note carries FromDb proof here
 
 import Tesl.Prelude exposing [Bool(..), List, String, Unit]
+import Tesl.App exposing [App]
 import Tesl.Json exposing [stringCodec]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Dict exposing [Dict.lookup]
@@ -234,11 +235,10 @@ server NoteServer for NoteApi {
   updateNoteTitle = updateNoteTitle
 }
 
-main with capabilities [noteService] {
-  initTelemetry service "notes-api" endpoint "in-memory" console True
-  with database NoteDatabase {
-    with capabilities [noteService] {
-      serve NoteServer on defaultNotePort with capabilities [noteService]
-    }
+main() -> App requires [noteService] =
+  let _ = initTelemetry service "notes-api" endpoint "in-memory" console True
+  App {
+    database: NoteDatabase
+    api: NoteServer
+    port: defaultNotePort
   }
-}

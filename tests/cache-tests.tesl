@@ -12,6 +12,7 @@ import Tesl.Database exposing [
   TcpConnection,
   SocketConnection,
 ]
+import Tesl.Cache exposing [Cache]
 
 database TestDB = Database {
   schema: "public"
@@ -28,19 +29,19 @@ database TestDB = Database {
 
 # ── Cache declarations ─────────────────────────────────────────────────────
 
-cache StringCache {
+cache StringCache = Cache {
   database: TestDB
   defaultTtl: 3600
   valueType: String
 }
 
-cache IntCache {
+cache IntCache = Cache {
   database: TestDB
   defaultTtl: 60
   valueType: Int
 }
 
-cache NoTtlCache {
+cache NoTtlCache = Cache {
   database: TestDB
   valueType: String
 }

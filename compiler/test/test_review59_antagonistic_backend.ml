@@ -99,6 +99,7 @@ import Tesl.Queue exposing [queueRead, queueWrite, pubsub, FromDeadQueue]
 import Tesl.String exposing [String.length]
 import Tesl.Random exposing [random]
 import Tesl.Id exposing [generatePrefixedId]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 
 fact ValidRoomId (id: String)
 check checkRoomId(id: String) -> id: String ::: ValidRoomId id =
@@ -112,11 +113,15 @@ entity Message table "messages" primaryKey id {
   roomId: String @db(text)
 }
 
-database DB {
-  backend: postgres
+database DB = Database {
   schema: "chat"
   entities: [Message]
-  postgres { database: env("DB") user: env("U") password: env("P") host: env("H") port: 5432 socket: env("S") }
+  backend: Postgres (PostgresConfig {
+    dbName: env "DB"
+    user: env "U"
+    password: env "P"
+    connection: TcpConnection { host: env "H"  port: 5432 }
+  })
 }
 
 |}
@@ -220,27 +225,33 @@ let base_dead = {|#lang tesl
 module BackendDeadTest exposing []
 
 import Tesl.Prelude exposing [String]
-import Tesl.Queue exposing [queueRead, pubsub, FromDeadQueue]
+import Tesl.Queue exposing [queueRead, pubsub, FromDeadQueue, Queue, QueueRetryStrategy, Exponential]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.SSE exposing [SseChannel]
 
 record NotifyJob { senderName: String roomName: String }
 type RoomEvent = NotifyFailed senderName: String roomName: String
 
 entity Dummy table "dummy" primaryKey id { id: String }
 
-database DB {
-  backend: postgres
+database DB = Database {
   schema: "chat"
   entities: [Dummy]
-  postgres { database: env("DB") user: env("U") password: env("P") host: env("H") port: 5432 socket: env("S") }
+  backend: Postgres (PostgresConfig {
+    dbName: env "DB"
+    user: env "U"
+    password: env "P"
+    connection: TcpConnection { host: env "H"  port: 5432 }
+  })
 }
 
-queue NotificationQueue {
+queue NotificationQueue = Queue {
   database: DB
   jobs: [NotifyJob]
-  retry { maxAttempts: 3 backoff: exponential initialDelay: 5 }
+  retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 5 }
 }
 
-channel RoomMessages(roomId: String) {
+sseChannel RoomMessages(roomId: String) = SseChannel {
   database: DB
   payload: RoomEvent
 }

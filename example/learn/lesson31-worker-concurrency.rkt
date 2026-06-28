@@ -17,7 +17,7 @@
 )
 
 
-(provide EmailWorkers DeadEmailWorkers ConcurrencyServer)
+(provide EmailQueue ConcurrencyServer)
 
 (define-capability emailCap (implies queueRead))
 
@@ -54,27 +54,19 @@
   (processEmail [job : EmailJob ::: (FromQueue (Id == jobId) job)])
   #:capabilities [emailCap]
   #:returns EmailJob
-  (let ([_ (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 103 (list (cons 'job *job)) (lambda () (telemetry-event! "email.sent" #:attributes (["recipient" (raw-value job.recipientId)] ["subject" (raw-value job.subject)]))))]) (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 104 (list (cons 'job *job)) (lambda () *job))))
-
-(define EmailWorkers
-  (list (cons EmailQueue processEmail)))
-(register-api-test-workers! (list (list EmailQueue 'EmailJob processEmail)))
+  (let ([_ (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 101 (list (cons 'job *job)) (lambda () (telemetry-event! "email.sent" #:attributes (["recipient" (raw-value job.recipientId)] ["subject" (raw-value job.subject)]))))]) (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 102 (list (cons 'job *job)) (lambda () *job))))
 
 (define/pow
   (handleDeadEmail [job : EmailJob ::: (FromDeadQueue (Id == jobId) job)])
   #:capabilities [deadEmailCap]
   #:returns EmailJob
-  (let ([_ (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 118 (list (cons 'job *job)) (lambda () (telemetry-event! "email.dead" #:attributes (["recipient" (raw-value job.recipientId)] ["subject" (raw-value job.subject)]))))]) (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 119 (list (cons 'job *job)) (lambda () *job))))
-
-(define DeadEmailWorkers
-  (list (cons EmailQueue handleDeadEmail)))
-(register-api-test-dead-workers! (list (list EmailQueue 'EmailJob handleDeadEmail)))
+  (let ([_ (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 112 (list (cons 'job *job)) (lambda () (telemetry-event! "email.dead" #:attributes (["recipient" (raw-value job.recipientId)] ["subject" (raw-value job.subject)]))))]) (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 113 (list (cons 'job *job)) (lambda () *job))))
 
 (define-handler
   (sendWelcomeEmail)
   #:capabilities [enqueueEmail]
   #:returns String
-  (let ([_ (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 130 (list) (lambda () (enqueue! EmailQueue (EmailJob #:recipientId "user-123" #:subject "Welcome!" #:body "Thanks for signing up."))))]) (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 131 (list) (lambda () "queued"))))
+  (let ([_ (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 120 (list) (lambda () (enqueue! EmailQueue (EmailJob #:recipientId "user-123" #:subject "Welcome!" #:body "Thanks for signing up."))))]) (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 121 (list) (lambda () "queued"))))
 
 (define ConcurrencyServer-sse-routes '())
 (define-api ConcurrencyApi
@@ -90,5 +82,12 @@
 )
 
 (module+ main
-  (let ([port (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 156 (list) (lambda () 8090))])
-  (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 157 (list (cons 'port port)) (lambda () (call-with-database EmailDatabase (lambda () (with-capabilities (fullService) (begin (start-workers! EmailWorkers (list emailCap) #:concurrency 4) (begin (start-dead-workers! DeadEmailWorkers (list deadEmailCap)) (serve ConcurrencyServer #:port port #:capabilities (list enqueueEmail) #:sse-routes ConcurrencyServer-sse-routes))))))))))
+  (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 145 (list) (lambda () (with-capabilities (fullService emailCap deadEmailCap enqueueEmail) (call-with-database EmailDatabase (lambda () (let ([port 8090]) (begin (start-workers! EmailQueueWorkers (list emailCap) #:concurrency 4) (begin (start-dead-workers! EmailQueueDeadWorkers (list emailCap) #:concurrency 4) (serve ConcurrencyServer #:port port #:capabilities (list fullService emailCap deadEmailCap enqueueEmail) #:sse-routes ConcurrencyServer-sse-routes))))))))))
+
+(define EmailQueueWorkers
+  (list (cons EmailQueue processEmail)))
+(register-api-test-workers! (list (list EmailQueue 'EmailJob processEmail)))
+
+(define EmailQueueDeadWorkers
+  (list (cons EmailQueue handleDeadEmail)))
+(register-api-test-dead-workers! (list (list EmailQueue 'EmailJob handleDeadEmail)))

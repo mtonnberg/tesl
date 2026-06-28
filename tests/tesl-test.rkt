@@ -524,12 +524,33 @@
 (define combinedProof/proof-decomposition (tesl-module-value proof-decomposition-module-path 'combinedProof))
 (define restoreCombined/proof-decomposition (tesl-module-value proof-decomposition-module-path 'restoreCombined))
 
+;; Zero-cost proof erasure is the production default (mirrors
+;; dsl/web.rkt:zero-cost-proofs?/rt); disabled only by TESL_ZERO_COST_PROOFS in
+;; {0,false,no,off}.  ProofDecomposition above is compiled in-process under the
+;; current env, so this predicate matches how its proofs were lowered.
+(define (zero-cost-proofs-default?)
+  (let ([v (getenv "TESL_ZERO_COST_PROOFS")])
+    (cond [(not v) #t]
+          [(member (string-downcase v) '("0" "false" "no" "off")) #f]
+          [else #t])))
+
 (check-equal? (decomposeSingle/proof-decomposition 8088) 8088)
 (define combined-proof/decomposition (combinedProof/proof-decomposition 8088))
 (check-true (detached-proof? combined-proof/decomposition))
 (match (detached-proof-fact combined-proof/decomposition)
   [`((ValidPort ,left-token) && (IsPositive ,right-token))
-   (check-equal? left-token right-token)]
+   ;; Both conjuncts are about the same subject `y` (= 8088).  How their tokens
+   ;; present depends on the proof-cost mode:
+   ;;  - non-zero-cost: the evidence carries the runtime witness, so both tokens
+   ;;    are 8088 and unify;
+   ;;  - zero-cost (default): proofs are erased to their symbolic shape, so each
+   ;;    token is its `establish` function's declared parameter name ('port / 'n).
+   ;; Either is correct for its mode — assert the structure holds and the tokens
+   ;; match the active mode (this is what made the test mode-fragile before).
+   (if (zero-cost-proofs-default?)
+       (begin (check-equal? left-token 'port)
+              (check-equal? right-token 'n))
+       (check-equal? left-token right-token))]
   [other
    (error 'test "unexpected combined proof shape: ~a" other)])
 (check-equal? (restoreCombined/proof-decomposition 8088) 8088)
@@ -601,7 +622,7 @@
     "defaultExamplePort = 8086\n"
     "fn mainPort() -> Int =\n"
     "  defaultExamplePort\n")))
-(check-true (regexp-match? #rx"expected module" missing-module-error))
+(check-true (regexp-match? #rx"expected .module. or .library." missing-module-error))
 
 (define binder-reuse-error
   (compile-tesl-error
@@ -1022,8 +1043,11 @@
    (unless (zero? lib-status)
      (error 'test "lib compilation failed: ~a" lib-errors))
    (write-file (build-path dir "lib.rkt") lib-generated)
-   (define compiled-app (compile-tesl-module app-path))
-   (define run/wc (tesl-module-value compiled-app 'run))
+   ; App's emitted code does (require (file "lib.rkt")) relative to its OWN
+   ; location, so App.rkt must be written into `dir` beside lib.rkt — not to a
+   ; random /var/tmp file (which is what compile-tesl-module does).
+   (compile-tesl-to-dir! app-path)
+   (define run/wc (tesl-module-value (build-path dir "App.rkt") 'run))
    ; Wildcard-imported function called via qualified name
    (check-equal? (run/wc 21) 42)))
 
@@ -1424,7 +1448,11 @@
      "  let parsed = check parsePort raw\n"
      "  parsed\n"))
    (compile-tesl-to-dir! shared-path)
-   (define compiled-consumer-path (compile-tesl-module consumer-path))
+   ; Consumer's emitted (require (file "shared.rkt")) is relative to Consumer's own
+   ; location, so Consumer.rkt must be written into `dir` beside shared.rkt — not to
+   ; a random /var/tmp file (which is what compile-tesl-module does).
+   (compile-tesl-to-dir! consumer-path)
+   (define compiled-consumer-path (build-path dir "consumer.rkt"))
    (define-values (status out err)
      (run-racket-script-with-linked-tesl
       (format
@@ -1459,7 +1487,11 @@
      "fn wrapAgain(value: String) -> Wrapper =\n"
      "  Wrapped value\n"))
    (compile-tesl-to-dir! shared-path)
-   (define compiled-consumer-path (compile-tesl-module consumer-path))
+   ; Consumer's emitted (require (file "shared.rkt")) is relative to Consumer's own
+   ; location, so Consumer.rkt must be written into `dir` beside shared.rkt — not to
+   ; a random /var/tmp file (which is what compile-tesl-module does).
+   (compile-tesl-to-dir! consumer-path)
+   (define compiled-consumer-path (build-path dir "consumer.rkt"))
    (define wrapAgain (tesl-module-value compiled-consumer-path 'wrapAgain))
    (define wrapped (wrapAgain "hi"))
    (check-equal? (adt-value-type wrapped) 'Wrapper)
@@ -1497,7 +1529,11 @@
      "    Opened count -> \"open ${count}\"\n"
      "    Finished message -> message\n"))
    (compile-tesl-to-dir! shared-path)
-   (define compiled-consumer-path (compile-tesl-module consumer-path))
+   ; Consumer's emitted (require (file "shared.rkt")) is relative to Consumer's own
+   ; location, so Consumer.rkt must be written into `dir` beside shared.rkt — not to
+   ; a random /var/tmp file (which is what compile-tesl-module does).
+   (compile-tesl-to-dir! consumer-path)
+   (define compiled-consumer-path (build-path dir "consumer.rkt"))
    (define makeOpened (tesl-module-value compiled-consumer-path 'makeOpened))
    (define makeFinished (tesl-module-value compiled-consumer-path 'makeFinished))
    (define describeStatus (tesl-module-value compiled-consumer-path 'describeStatus))
@@ -1588,13 +1624,22 @@
 (define invalid-positive-payload-response
   (dispatch-with-server PositivePayloadServer '() 'POST '("payload") #:body (hash 'serial 0)))
 
-(check-true (named-value? extracted-serial))
 (check-equal? (raw-value extracted-serial) 5)
-(match (facts-of extracted-serial)
-  [`((Positive ,subject))
-   (check-true (symbol? subject))]
-  [other
-   (error 'test (format "unexpected extracted record proof facts: ~a" other))])
+;; The proof annotation on a record field is evidence-bearing only under
+;; non-zero-cost; the production zero-cost default erases it to a raw value with
+;; no attached facts.  Assert the shape that matches the active mode (same
+;; mode-robustness as the proof-decomposition block above).
+(if (zero-cost-proofs-default?)
+    (begin
+      (check-false (named-value? extracted-serial))
+      (check-equal? (facts-of extracted-serial) '()))
+    (begin
+      (check-true (named-value? extracted-serial))
+      (match (facts-of extracted-serial)
+        [`((Positive ,subject))
+         (check-true (symbol? subject))]
+        [other
+         (error 'test (format "unexpected extracted record proof facts: ~a" other))])))
 (check-equal? (dsl-response-status positive-payload-response) 200)
 (check-equal? (dsl-response-body positive-payload-response) 9)
 (check-equal? (dsl-response-status invalid-positive-payload-response) 400)
@@ -1929,7 +1974,11 @@
 "))
    (define compiled-shared-path (compile-tesl-module shared-path))
    (compile-tesl-to-dir! shared-path)  ; write shared.rkt to source dir for consumer's require
-   (define compiled-consumer-path (compile-tesl-module consumer-path))
+   ; Consumer's emitted (require (file "shared.rkt")) is relative to Consumer's own
+   ; location, so Consumer.rkt must be written into `dir` beside shared.rkt — not to
+   ; a random /var/tmp file (which is what compile-tesl-module does).
+   (compile-tesl-to-dir! consumer-path)
+   (define compiled-consumer-path (build-path dir "consumer.rkt"))
    (define runNeedsShared (tesl-module-value compiled-consumer-path 'runNeedsShared))
    (define consumerRead (tesl-module-value compiled-consumer-path 'consumerRead))
    (check-equal? (parameterize ([current-capabilities (list consumerRead)]) (runNeedsShared)) 9)
@@ -2117,6 +2166,7 @@
       "import Tesl.Maybe exposing [Maybe(..)]\n"
       "import Tesl.DB exposing [dbRead, dbWrite]\n"
       "import Tesl.Env exposing [env, envInt]\n"
+      "import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection, Memory]\n"
       "capability ownedRead implies dbRead\n"
       "capability ownedWrite implies dbWrite\n"
       "capability ownedService implies ownedRead, ownedWrite\n"
@@ -2124,18 +2174,18 @@
       "  id: String\n"
       "  ownerId: String @db(text)\n"
       "}\n"
-      "database OwnedTodoDatabase {\n"
-      "  backend postgres\n"
-      "  schema \"tesl_owned_gap\"\n"
-      "  entities [OwnedTodo]\n"
-      "  postgres {\n"
-      "    database env(\"TESL_POSTGRES_DATABASE\")\n"
-      "    user env(\"TESL_POSTGRES_USER\")\n"
-      "    password env(\"TESL_POSTGRES_PASSWORD\")\n"
-      "    host env(\"TESL_POSTGRES_HOST\")\n"
-      "    port envInt(\"TESL_POSTGRES_PORT\", 5432)\n"
-      "    socket env(\"TESL_POSTGRES_SOCKET\")\n"
-      "  }\n"
+      "database OwnedTodoDatabase = Database {\n"
+      "  schema: \"tesl_owned_gap\"\n"
+      "  entities: [OwnedTodo]\n"
+      "  backend: Postgres (PostgresConfig {\n"
+      "    dbName: env \"TESL_POSTGRES_DATABASE\"\n"
+      "    user: env \"TESL_POSTGRES_USER\"\n"
+      "    password: env \"TESL_POSTGRES_PASSWORD\"\n"
+      "    connection: TcpConnection {\n"
+      "      host: env \"TESL_POSTGRES_HOST\"\n"
+      "      port: envInt \"TESL_POSTGRES_PORT\" 5432\n"
+      "    }\n"
+      "  })\n"
       "}\n"
       "fn seedOwnedTodo() -> Int\n"
       "  requires [ownedWrite] =\n"
@@ -2164,12 +2214,19 @@
        (check-true (named-value? owned-todo))
        (check-equal? (hash-ref (raw-value owned-todo) 'ownerId) "mikael")
        (define todo-facts (facts-of owned-todo))
-       (check-equal? (length todo-facts) 1 "expected one FromDb fact")
-       (match (first todo-facts)
-         [`(FromDb (OwnerId == ,token) ,_entity-subject)
-          (check-equal? (hash-ref (named-value-bindings owned-todo) token) "mikael")]
-         [other
-          (error 'test "unexpected tesl query fact: ~a" other)])
+       ;; The `FromDb` query proof is evidence-bearing only under non-zero-cost;
+       ;; the production zero-cost default erases it (the value stays a named-value
+       ;; carrying the raw row, but with no attached facts).  Same mode-robustness
+       ;; as the proof-decomposition / record-field-proof blocks above.
+       (if (zero-cost-proofs-default?)
+           (check-equal? (length todo-facts) 0 "zero-cost: FromDb fact erased")
+           (begin
+             (check-equal? (length todo-facts) 1 "expected one FromDb fact")
+             (match (first todo-facts)
+               [`(FromDb (OwnerId == ,token) ,_entity-subject)
+                (check-equal? (hash-ref (named-value-bindings owned-todo) token) "mikael")]
+               [other
+                (error 'test "unexpected tesl query fact: ~a" other)])))
        (define all-todos (listOwnedTodos "mikael"))
        (check-true (list? all-todos))
        (check-equal? (length all-todos) 1)))))
@@ -3329,13 +3386,17 @@
       "#lang tesl\n"
       "module Q01 exposing [MyQueue]\n"
       "import Tesl.Prelude exposing [String]\n"
-      "import Tesl.Queue exposing [queueWrite]\n"
+      "import Tesl.Queue exposing [queueWrite, Queue]\n"
+      "import Tesl.Database exposing [Database, Memory]\n"
       "record MyJob {\n"
       "  value: String\n"
       "}\n"
-      "queue MyQueue {\n"
-      "  database FakeDb\n"
-      "  jobs [MyJob]\n"
+      "database FakeDb = Database {\n"
+      "  backend: Memory\n"
+      "}\n"
+      "queue MyQueue = Queue {\n"
+      "  database: FakeDb\n"
+      "  jobs: [MyJob]\n"
       "}\n")))
   (check-true (path? q01-path) "Q01: queue declaration compiles"))
 
@@ -3348,12 +3409,17 @@
       "module Q02 exposing [MyChan]\n"
       "import Tesl.Prelude exposing [String]\n"
       "import Tesl.Queue exposing [pubsub]\n"
+      "import Tesl.SSE exposing [SseChannel]\n"
+      "import Tesl.Database exposing [Database, Memory]\n"
       "type MyEvent\n"
       "  = EventA\n"
       "  | EventB\n"
-      "channel MyChan(key: String) {\n"
-      "  database FakeDb\n"
-      "  payload MyEvent\n"
+      "database FakeDb = Database {\n"
+      "  backend: Memory\n"
+      "}\n"
+      "sseChannel MyChan(key: String) = SseChannel {\n"
+      "  database: FakeDb\n"
+      "  payload: MyEvent\n"
       "}\n")))
   (check-true (path? q02-path) "Q02: channel declaration compiles"))
 
@@ -3380,11 +3446,13 @@
       "#lang tesl\n"
       "module Q04 exposing [MyWorkers]\n"
       "import Tesl.Prelude exposing [String]\n"
-      "import Tesl.Queue exposing [queueRead, queueWrite]\n"
+      "import Tesl.Queue exposing [queueRead, queueWrite, Queue]\n"
+      "import Tesl.Database exposing [Database, Memory]\n"
       "record MyJob4 {\n  value: String\n}\n"
-      "queue MyQueue4 {\n"
-      "  database FakeDb\n"
-      "  jobs [MyJob4]\n"
+      "database FakeDb = Database {\n  backend: Memory\n}\n"
+      "queue MyQueue4 = Queue {\n"
+      "  database: FakeDb\n"
+      "  jobs: [MyJob4]\n"
       "}\n"
       "worker myWorker4(job: MyJob4::: FromQueue (Id == jobId) job)\n"
       "  requires [queueRead] =\n"
@@ -3402,14 +3470,16 @@
       "#lang tesl\n"
       "module Q05 exposing [RetryQueue]\n"
       "import Tesl.Prelude exposing [String]\n"
-      "import Tesl.Queue exposing [queueWrite]\n"
+      "import Tesl.Queue exposing [queueWrite, Queue, QueueRetryStrategy, Exponential]\n"
+      "import Tesl.Database exposing [Database, Memory]\n"
       "record RetryJob {\n  msg: String\n}\n"
-      "queue RetryQueue {\n"
-      "  database FakeDb\n"
-      "  jobs [RetryJob]\n"
-      "  retry {\n"
+      "database FakeDb = Database {\n  backend: Memory\n}\n"
+      "queue RetryQueue = Queue {\n"
+      "  database: FakeDb\n"
+      "  jobs: [RetryJob]\n"
+      "  retry: QueueRetryStrategy {\n"
       "    maxAttempts: 5\n"
-      "    backoff: exponential\n"
+      "    backoff: Exponential\n"
       "    initialDelay: 30\n"
       "  }\n"
       "}\n")))
@@ -3424,10 +3494,13 @@
       "module Q06 exposing [KeyedChan]\n"
       "import Tesl.Prelude exposing [String, Int]\n"
       "import Tesl.Queue exposing [pubsub]\n"
+      "import Tesl.SSE exposing [SseChannel]\n"
+      "import Tesl.Database exposing [Database, Memory]\n"
       "type Q06Event\n  = Q06A\n  | Q06B\n"
-      "channel KeyedChan(userId: String, version: Int) {\n"
-      "  database FakeDb\n"
-      "  payload Q06Event\n"
+      "database FakeDb = Database {\n  backend: Memory\n}\n"
+      "sseChannel KeyedChan(userId: String, version: Int) = SseChannel {\n"
+      "  database: FakeDb\n"
+      "  payload: Q06Event\n"
       "}\n")))
   (check-true (path? q06-path) "Q06: channel with multiple key parameters compiles"))
 
@@ -3439,11 +3512,13 @@
       "#lang tesl\n"
       "module Q07 exposing [doEnqueue]\n"
       "import Tesl.Prelude exposing [String, Int]\n"
-      "import Tesl.Queue exposing [queueWrite]\n"
+      "import Tesl.Queue exposing [queueWrite, Queue]\n"
+      "import Tesl.Database exposing [Database, Memory]\n"
       "record Q07Job {\n  msg: String\n}\n"
-      "queue Q07Queue {\n"
-      "  database FakeDb\n"
-      "  jobs [Q07Job]\n"
+      "database FakeDb = Database {\n  backend: Memory\n}\n"
+      "queue Q07Queue = Queue {\n"
+      "  database: FakeDb\n"
+      "  jobs: [Q07Job]\n"
       "}\n"
       "fn doEnqueue(msg: String) -> String requires [queueWrite] =\n"
       "  enqueue Q07Job { msg: msg }\n"
@@ -3459,10 +3534,13 @@
       "module Q08 exposing [doPublish]\n"
       "import Tesl.Prelude exposing [String]\n"
       "import Tesl.Queue exposing [pubsub]\n"
+      "import Tesl.SSE exposing [SseChannel]\n"
+      "import Tesl.Database exposing [Database, Memory]\n"
       "type Q08Ev\n  = Q08A\n"
-      "channel Q08Chan(k: String) {\n"
-      "  database FakeDb\n"
-      "  payload Q08Ev\n"
+      "database FakeDb = Database {\n  backend: Memory\n}\n"
+      "sseChannel Q08Chan(k: String) = SseChannel {\n"
+      "  database: FakeDb\n"
+      "  payload: Q08Ev\n"
       "}\n"
       "fn doPublish(k: String) -> String requires [pubsub] =\n"
       "  publish Q08Chan(k) Q08A\n"
@@ -3477,11 +3555,13 @@
       "#lang tesl\n"
       "module Q09 exposing [doTxn]\n"
       "import Tesl.Prelude exposing [String, Int]\n"
-      "import Tesl.Queue exposing [queueWrite]\n"
+      "import Tesl.Queue exposing [queueWrite, Queue]\n"
+      "import Tesl.Database exposing [Database, Memory]\n"
       "record Q09Job {\n  v: String\n}\n"
-      "queue Q09Queue {\n"
-      "  database FakeDb\n"
-      "  jobs [Q09Job]\n"
+      "database FakeDb = Database {\n  backend: Memory\n}\n"
+      "queue Q09Queue = Queue {\n"
+      "  database: FakeDb\n"
+      "  jobs: [Q09Job]\n"
       "}\n"
       "fn doTxn(v: String) -> String requires [queueWrite] =\n"
       "  with transaction {\n"
@@ -3498,11 +3578,13 @@
       "#lang tesl\n"
       "module Q10 exposing []\n"
       "import Tesl.Prelude exposing [String]\n"
-      "import Tesl.Queue exposing [queueRead, queueWrite]\n"
+      "import Tesl.Queue exposing [queueRead, queueWrite, Queue]\n"
+      "import Tesl.Database exposing [Database, Memory]\n"
       "record Q10Job {\n  v: String\n}\n"
-      "queue Q10Queue {\n"
-      "  database FakeDb\n"
-      "  jobs [Q10Job]\n"
+      "database FakeDb = Database {\n  backend: Memory\n}\n"
+      "queue Q10Queue = Queue {\n"
+      "  database: FakeDb\n"
+      "  jobs: [Q10Job]\n"
       "}\n"
       "worker q10Worker(job: Q10Job::: FromQueue (Id == jid) job)\n"
       "  requires [queueRead] =\n"
@@ -3524,17 +3606,20 @@
       "module Q11 exposing [Q11Api]\n"
       "import Tesl.Prelude exposing [String, Bool]\n"
       "import Tesl.Queue exposing [pubsub]\n"
+      "import Tesl.SSE exposing [SseChannel]\n"
+      "import Tesl.Database exposing [Database, Memory]\n"
       "type Q11Ev\n  = Q11A\n"
-      "channel Q11Chan(k: String) {\n"
-      "  database FakeDb\n"
-      "  payload Q11Ev\n"
+      "database FakeDb = Database {\n  backend: Memory\n}\n"
+      "sseChannel Q11Chan(k: String) = SseChannel {\n"
+      "  database: FakeDb\n"
+      "  payload: Q11Ev\n"
       "}\n"
       "fn q11Handler() -> Bool =\n"
       "  True\n"
       "api Q11Api {\n"
       "  get \"/status\"\n"
       "    -> Bool\n"
-      "  websocket \"/events\"\n"
+      "  sse \"/events\"\n"
       "    subscribe Q11Chan(\"key\")\n"
       "}\n")))
   (check-true (path? q11-path) "Q11: websocket endpoint in api compiles"))
@@ -3545,11 +3630,13 @@
              "#lang tesl\n"
              "module Q12 exposing []\n"
              "import Tesl.Prelude exposing [String]\n"
-             "import Tesl.Queue exposing [queueWrite]\n"
+             "import Tesl.Queue exposing [queueWrite, Queue]\n"
+             "import Tesl.Database exposing [Database, Memory]\n"
              "record Q12Job {\n  v: String\n}\n"
-             "queue Q12Queue {\n"
-             "  database FakeDb\n"
-             "  jobs [Q12Job]\n"
+             "database FakeDb = Database {\n  backend: Memory\n}\n"
+             "queue Q12Queue = Queue {\n"
+             "  database: FakeDb\n"
+             "  jobs: [Q12Job]\n"
              "}\n"
              "fn doNested(v: String) -> String requires [queueWrite] =\n"
              "  with transaction {\n"
@@ -3697,11 +3784,13 @@
       "#lang tesl\n"
       "module Q24 exposing [runEnqueue, Q24Queue]\n"
       "import Tesl.Prelude exposing [String]\n"
-      "import Tesl.Queue exposing [queueWrite]\n"
+      "import Tesl.Queue exposing [queueWrite, Queue]\n"
+      "import Tesl.Database exposing [Database, Memory]\n"
       "record Q24Job {\n  msg: String\n}\n"
-      "queue Q24Queue {\n"
-      "  database FakeDb\n"
-      "  jobs [Q24Job]\n"
+      "database FakeDb = Database {\n  backend: Memory\n}\n"
+      "queue Q24Queue = Queue {\n"
+      "  database: FakeDb\n"
+      "  jobs: [Q24Job]\n"
       "}\n"
       "fn runEnqueue(msg: String) -> String requires [queueWrite] =\n"
       "  enqueue Q24Job { msg: msg }\n"
@@ -3723,11 +3812,13 @@
       "#lang tesl\n"
       "module Q25 exposing [runTxn]\n"
       "import Tesl.Prelude exposing [String]\n"
-      "import Tesl.Queue exposing [queueWrite]\n"
+      "import Tesl.Queue exposing [queueWrite, Queue]\n"
+      "import Tesl.Database exposing [Database, Memory]\n"
       "record Q25Job {\n  v: String\n}\n"
-      "queue Q25Queue {\n"
-      "  database FakeDb\n"
-      "  jobs [Q25Job]\n"
+      "database FakeDb = Database {\n  backend: Memory\n}\n"
+      "queue Q25Queue = Queue {\n"
+      "  database: FakeDb\n"
+      "  jobs: [Q25Job]\n"
       "}\n"
       "fn runTxn(v: String) -> String requires [queueWrite] =\n"
       "  with transaction {\n"
@@ -3839,9 +3930,11 @@
     "#lang tesl\n"
     "module WorkerProof exposing [PingQueue, pingWorker, enqueuePing]\n"
     "import Tesl.Prelude exposing [String]\n"
-    "import Tesl.Queue  exposing [queueWrite, queueRead]\n"
+    "import Tesl.Queue  exposing [queueWrite, queueRead, Queue]\n"
+    "import Tesl.Database exposing [Database, Memory]\n"
     "record PingJob {\n  msg: String\n}\n"
-    "queue PingQueue {\n  database FakeDb\n  jobs [PingJob]\n}\n"
+    "database FakeDb = Database {\n  backend: Memory\n}\n"
+    "queue PingQueue = Queue {\n  database: FakeDb\n  jobs: [PingJob]\n}\n"
     "worker pingWorker(job: PingJob ::: FromQueue (Id == jobId) job)\n"
     "  requires [queueRead] =\n"
     "  job\n"
@@ -3901,11 +3994,13 @@
       "#lang tesl\n"
       "module Q28 exposing [listDead]\n"
       "import Tesl.Prelude exposing [String, List]\n"
-      "import Tesl.Queue exposing [queueRead, DeadJob, deadJobs]\n"
+      "import Tesl.Queue exposing [queueRead, DeadJob, deadJobs, Queue]\n"
+      "import Tesl.Database exposing [Database, Memory]\n"
       "record Q28Job {\n  v: String\n}\n"
-      "queue Q28Queue {\n"
-      "  database FakeDb\n"
-      "  jobs [Q28Job]\n"
+      "database FakeDb = Database {\n  backend: Memory\n}\n"
+      "queue Q28Queue = Queue {\n"
+      "  database: FakeDb\n"
+      "  jobs: [Q28Job]\n"
       "}\n"
       "fn listDead(q: Q28Queue) -> List DeadJob\n"
       "  requires [queueRead] =\n"
@@ -3932,11 +4027,13 @@
              "#lang tesl\n"
              "module Q30 exposing [listDead]\n"
              "import Tesl.Prelude exposing [String, List]\n"
-             "import Tesl.Queue exposing [DeadJob, deadJobs]\n"
+             "import Tesl.Queue exposing [DeadJob, deadJobs, Queue]\n"
+             "import Tesl.Database exposing [Database, Memory]\n"
              "record Q30Job {\n  v: String\n}\n"
-             "queue Q30Queue {\n"
-             "  database FakeDb\n"
-             "  jobs [Q30Job]\n"
+             "database FakeDb = Database {\n  backend: Memory\n}\n"
+             "queue Q30Queue = Queue {\n"
+             "  database: FakeDb\n"
+             "  jobs: [Q30Job]\n"
              "}\n"
              "fn listDead(q: Q30Queue) -> List DeadJob =\n"
              "  deadJobs q\n"))])
@@ -4020,35 +4117,37 @@
           " [PgDb, MsgQueue, MsgChannel, MsgWorkers, enqueueMsgs, pingWorker, echoWorker]\n"
           "import Tesl.Prelude  exposing [String]\n"
           "import Tesl.DB       exposing [dbRead, dbWrite]\n"
-          "import Tesl.Queue    exposing [queueWrite, queueRead, pubsub]\n"
+          "import Tesl.Queue    exposing [queueWrite, queueRead, pubsub, Queue, QueueRetryStrategy, Fixed]\n"
+          "import Tesl.SSE      exposing [SseChannel]\n"
+          "import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection, Memory]\n"
           "import Tesl.Env      exposing [env, envInt]\n"
           "record MsgJob {\n  text: String\n}\n"
           "type MsgEvent\n  = NewMsg text:String\n\n"
-          "database PgDb {\n"
-          "  backend postgres\n"
-          "  schema  \"public\"\n"
-          "  entities []\n"
-          "  postgres {\n"
-          "    database env(\"TESL_POSTGRES_DATABASE\")\n"
-          "    user     env(\"TESL_POSTGRES_USER\")\n"
-          "    password env(\"TESL_POSTGRES_PASSWORD\")\n"
-          "    host     env(\"TESL_POSTGRES_HOST\")\n"
-          "    port     envInt(\"TESL_POSTGRES_PORT\", 5432)\n"
-          "    socket   env(\"TESL_POSTGRES_SOCKET\")\n"
-          "  }\n"
+          "database PgDb = Database {\n"
+          "  schema:  \"public\"\n"
+          "  entities: []\n"
+          "  backend: Postgres (PostgresConfig {\n"
+          "    dbName: env \"TESL_POSTGRES_DATABASE\"\n"
+          "    user: env \"TESL_POSTGRES_USER\"\n"
+          "    password: env \"TESL_POSTGRES_PASSWORD\"\n"
+          "    connection: TcpConnection {\n"
+          "      host: env \"TESL_POSTGRES_HOST\"\n"
+          "      port: envInt \"TESL_POSTGRES_PORT\" 5432\n"
+          "    }\n"
+          "  })\n"
           "}\n"
-          "queue MsgQueue {\n"
-          "  database PgDb\n"
-          "  jobs     [MsgJob]\n"
-          "  retry {\n"
+          "queue MsgQueue = Queue {\n"
+          "  database: PgDb\n"
+          "  jobs:     [MsgJob]\n"
+          "  retry: QueueRetryStrategy {\n"
           "    maxAttempts:  2\n"
-          "    backoff:      fixed\n"
+          "    backoff:      Fixed\n"
           "    initialDelay: 0\n"
           "  }\n"
           "}\n"
-          "channel MsgChannel(key: String) {\n"
-          "  database PgDb\n"
-          "  payload  MsgEvent\n"
+          "sseChannel MsgChannel(key: String) = SseChannel {\n"
+          "  database: PgDb\n"
+          "  payload:  MsgEvent\n"
           "}\n"
           "worker echoWorker(job: MsgJob ::: FromQueue (Id == jobId) job)\n"
           "  requires [queueRead] =\n"
@@ -4236,26 +4335,27 @@
           "#lang tesl\n"
           "module LnTest exposing [LnDb, LnQueue, lnWorker, lnEnqueue]\n"
           "import Tesl.Prelude  exposing [String]\n"
-          "import Tesl.Queue    exposing [queueWrite, queueRead]\n"
+          "import Tesl.Queue    exposing [queueWrite, queueRead, Queue, QueueRetryStrategy, Fixed]\n"
+          "import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection, Memory]\n"
           "import Tesl.Env      exposing [env, envInt]\n"
           "record LnJob {\n  msg: String\n}\n"
-          "database LnDb {\n"
-          "  backend postgres\n"
-          "  schema  \"public\"\n"
-          "  entities []\n"
-          "  postgres {\n"
-          "    database env(\"TESL_POSTGRES_DATABASE\")\n"
-          "    user     env(\"TESL_POSTGRES_USER\")\n"
-          "    password env(\"TESL_POSTGRES_PASSWORD\")\n"
-          "    host     env(\"TESL_POSTGRES_HOST\")\n"
-          "    port     envInt(\"TESL_POSTGRES_PORT\", 5432)\n"
-          "    socket   env(\"TESL_POSTGRES_SOCKET\")\n"
-          "  }\n"
+          "database LnDb = Database {\n"
+          "  schema:  \"public\"\n"
+          "  entities: []\n"
+          "  backend: Postgres (PostgresConfig {\n"
+          "    dbName: env \"TESL_POSTGRES_DATABASE\"\n"
+          "    user: env \"TESL_POSTGRES_USER\"\n"
+          "    password: env \"TESL_POSTGRES_PASSWORD\"\n"
+          "    connection: TcpConnection {\n"
+          "      host: env \"TESL_POSTGRES_HOST\"\n"
+          "      port: envInt \"TESL_POSTGRES_PORT\" 5432\n"
+          "    }\n"
+          "  })\n"
           "}\n"
-          "queue LnQueue {\n"
-          "  database LnDb\n"
-          "  jobs     [LnJob]\n"
-          "  retry {\n    maxAttempts:  1\n    backoff:      fixed\n    initialDelay: 0\n  }\n"
+          "queue LnQueue = Queue {\n"
+          "  database: LnDb\n"
+          "  jobs:     [LnJob]\n"
+          "  retry: QueueRetryStrategy {\n    maxAttempts:  1\n    backoff:      Fixed\n    initialDelay: 0\n  }\n"
           "}\n"
           "worker lnWorker(job: LnJob ::: FromQueue (Id == jobId) job)\n"
           "  requires [queueRead] =\n"

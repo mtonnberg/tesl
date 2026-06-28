@@ -370,6 +370,7 @@ type cache_form = {
   value_type  : type_expr;
   default_ttl : int option;
   raw_fields  : config_field list;
+  config_expr : expr option;        (** new typed-record syntax: = Cache { … } *)
   loc         : loc;
 }
 

@@ -24,7 +24,16 @@ import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Telemetry exposing [telemetry, initTelemetry]
 import Tesl.Id exposing [generatePrefixedId]
 import Tesl.Random exposing [random]
-import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
+import Tesl.App exposing [App]
 
 # Capabilities are explicit permissions. `appWebService` bundles everything the
 # server needs; a handler can only do what its declared capabilities allow.
@@ -191,13 +200,12 @@ test "todo id shape" {
   expect String.length "x" <= 5
 }
 
-main with capabilities [appWebService] {
-  initTelemetry service "__APP_NAME__" endpoint "in-memory" console True
+main() -> App requires [appWebService] =
+  let _ = initTelemetry service "__APP_NAME__" endpoint "in-memory" console True
   let port = envInt "PORT" defaultPort
-  with database AppDatabase {
-    with capabilities [appWebService] {
-      seedExampleData()
-    }
-    serve AppServer on port with capabilities [appWebService]
+  let _ = seedExampleData()
+  App {
+    database: AppDatabase
+    api: AppServer
+    port: port
   }
-}

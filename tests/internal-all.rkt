@@ -107,6 +107,26 @@
 ;; instead of a full recompile per test.  See
 ;; roadmap/next/nonzero_cost_test_harness.md.
 (define-runtime-path nzc-driver-path "run-nzc.rkt")
+(define-runtime-path nzc-bodyproof-path "run-nzc-bodyproof.rkt")
+
+;; Run a self-contained non-zero-cost DRIVER program (e.g. the body-proof suite
+;; runner) in a fresh subprocess with TESL_ZERO_COST_PROOFS=0.  Same isolation as
+;; run-non-zero-cost-tests; the driver itself clears use-compiled-file-paths.
+(define (run-non-zero-cost-driver driver-path label)
+  (define racket-path
+    (or (find-executable-path "racket")
+        (error 'tests "could not find racket on PATH")))
+  (define env (environment-variables-copy (current-environment-variables)))
+  (environment-variables-set! env #"TESL_ZERO_COST_PROOFS" #"0")
+  (define-values (status out err)
+    (parameterize ([current-environment-variables env])
+      (run-command/capture (path->string racket-path) (path->string driver-path))))
+  (display out)
+  (unless (string=? err "")
+    (display err (current-error-port)))
+  (when (or (not (zero? status))
+            (regexp-match? #px"(^|\n)(FAILURE|ERROR)(\n|$)" out))
+    (error 'tests (format "~a failed under non-zero-cost mode" label))))
 
 (define (run-non-zero-cost-tests paths)
   (define racket-path
@@ -138,9 +158,12 @@
   (run-self-contained-test tesl-test-path 'tesl-test)
   (run-self-contained-test port-test-path 'port-test)
   (run-self-contained-test codec-specialization-test-path 'codec-specialization-test)
+  ;; body-proof asserts evidence-bearing proof behaviour erased under the
+  ;; zero-cost default, so it must run non-zero-cost (in-memory, no clobber).
+  ;; surface/existential are validation-only and pass in the default mode.
+  (run-non-zero-cost-driver nzc-bodyproof-path "body-proof regressions")
   (define failures
-    (+ (run-tests (load-test-suite body-proof-test-path 'body-proof-suite))
-       (run-tests (load-test-suite surface-regression-test-path 'surface-regression-suite))
+    (+ (run-tests (load-test-suite surface-regression-test-path 'surface-regression-suite))
        (run-tests (load-test-suite existential-regression-test-path 'existential-regression-suite))))
   (unless (zero? failures)
     (error 'tests (format "~a supplemental regression tests are failing" failures))))

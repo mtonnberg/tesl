@@ -1,5 +1,41 @@
 # App simplification: `main : () -> App`, queue/worker folding, capability rewiring
 
+**Status:** MIGRATION DONE + WIRING-CHECK LANDED; old-code removal + test-fixture
+migration remain.
+
+Progress (this pass):
+- Phase A — `App.static` schema field + `lower_main_app` now wraps the WHOLE main
+  body in the capability+database scope (so DB-context startup like `seedExampleData()`
+  works as `let _ = …` before the `App { … }`), and threads `static:` into `EServe`.
+- Phase B — ALL user-facing `.tesl` migrated to `main() -> App` (13 files; example
+  batch 113/113 green: Format/Compile/Lint/Fmt/Tesl-tests). `medical-journal_wip`
+  removed by the user. Bare-main demo files (queue-api, lesson17) got a minimal App;
+  debug-test (untracked scratch) had its main removed. Folded queues use
+  `jobs: [Job T handler (Maybe dead)]` + `numberOfWorkers`.
+- Phase E — `check_app_wiring` (validation_structural.ml) restores undeclared-ref
+  detection for the NEW typed forms: queue/sseChannel/email `database:` refs and the
+  App activation refs (`database`/`api`/`queues`/`email`/`sseChannels`) must resolve to
+  locally-declared decls. +4 R67_WIRE regression tests. No false positives on the
+  migrated corpus. This is the safety layer that lets the old block syntax be deleted.
+
+REMAINING (sequenced):
+- Phase C — migrate the OLD `postgres { … }` / `database X { … }` / `queue X { … }`
+  fixtures embedded in ~24 `compiler/test/*.ml` files to the new `= Database/Queue/…`
+  syntax (PRE-EXISTING task-#9 debt — these were already red before this pass), and
+  REWRITE the behavior tests whose premise is old-config validation (test_review67
+  queue/channel-structure, test_review68 queue-channel-database, test_email) plus the
+  Q01-class fixtures in tests/tesl-test.rkt. This is the fragile string-literal work
+  the note below warns automated conversion broke; do it per-file with --check
+  verification.
+- Phase D — delete old parser/config code (old `main { … }` path, parse_start_workers_stmt,
+  parse_serve_stmt, parse_with_stmt, parse_pg_value + old postgres/smtp blocks, the old
+  database/queue/channel/email block parsers, config_schema.ml, raw_fields). KEEP
+  DWorkers/EWith*/EStartWorkers/EServe (the App desugar synthesizes them) and the
+  `channel` lexer token (the new `sseChannel`/`channel` syntax uses it). Gated on Phase C.
+- (Separately, per the user) remove the runtime gated proof/capability safety net in
+  dsl/ — see zero_cost_capabilities.md / remove_old_safety_net.md.
+
+(original status below)
 **Status:** CORE IMPLEMENTED & GREEN (accept-both); migration + old-code removal remain.
 
 Implemented this pass (all green, old syntax still accepted so the tree stays green):

@@ -53,14 +53,12 @@ let database_schema = {
 let postgres_schema = {
   sname = "postgres";
   fields = [
-    scalar "dbName"   "env(...)" "Database name (logical DB), e.g. `env(\"DB_NAME\")`.";
-    scalar "user"     "env(...)" "Connection user.";
-    scalar "password" "env(...)" "Connection password.";
-    scalar "host"     "env(...)" "Server host.";
-    scalar "port"     "envInt(...)" "Server port, e.g. `envInt(\"PORT\", 5432)`.";
-    scalar "socket"   "env(...)" "Unix socket path (alternative to host/port).";
-    (* `database` is the legacy spelling of `dbName`, still accepted. *)
-    scalar "database" "env(...)" "Legacy spelling of `dbName`.";
+    scalar "dbName"   "String" "Database name (logical DB), e.g. `env(\"DB_NAME\")`.";
+    scalar "user"     "String" "Connection user, e.g. `env(\"DB_USER\")`.";
+    scalar "password" "String" "Connection password, e.g. `env(\"DB_PASS\")`.";
+    scalar "host"     "String" "Server host, e.g. `env(\"DB_HOST\")`.";
+    scalar "port"     "Int" "Server port, e.g. `envInt(\"PORT\", 5432)`.";
+    scalar "socket"   "String" "Unix socket path (alternative to host/port).";
   ];
 }
 
@@ -159,6 +157,7 @@ let top_schema_of_decl (d : Ast.top_decl) : (schema * Ast.config_field list) opt
   | Ast.DQueue r    when r.Ast.config_expr <> None -> None
   | Ast.DChannel r  when r.Ast.config_expr <> None -> None
   | Ast.DEmail r    when r.Ast.config_expr <> None -> None
+  | Ast.DCache r    when r.Ast.config_expr <> None -> None
   | Ast.DDatabase r -> Option.map (fun s -> (s, r.Ast.raw_fields)) (schema_for "database")
   | Ast.DQueue r    -> Option.map (fun s -> (s, r.Ast.raw_fields)) (schema_for "queue")
   | Ast.DChannel r  -> Option.map (fun s -> (s, r.Ast.raw_fields)) (schema_for "channel")

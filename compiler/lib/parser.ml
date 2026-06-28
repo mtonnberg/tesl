@@ -3908,6 +3908,16 @@ let parse_queue_form s =
 let parse_cache_form s =
   let loc0 = current_loc s in
   let* name = expect_uident s in
+  if peek s = EQ then begin
+    (* New typed-record syntax: `cache NAME = Cache { … }`. *)
+    advance s;
+    let* type_name = expect_uident s in
+    let* body = parse_record_literal s in
+    let loc = span loc0 (current_loc s) in
+    return { name; database = ""; value_type = TName { name = "Unit"; loc = dummy_loc "" };
+             default_ttl = None; raw_fields = [];
+             config_expr = Some (hint_expr_type type_name body); loc }
+  end else begin
   let* _ = expect s LBRACE in
   skip_layout s;
   let database_ = ref "" in
@@ -3932,7 +3942,9 @@ let parse_cache_form s =
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
   return { name; database = !database_; value_type = !value_type;
-           default_ttl = !default_ttl; raw_fields = List.rev !raw; loc }
+           default_ttl = !default_ttl; raw_fields = List.rev !raw;
+           config_expr = None; loc }
+  end
 
 (** Parse an email block:
       email AppEmail {

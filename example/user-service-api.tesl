@@ -59,6 +59,7 @@ import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify]
 # 3. Cache: read-through user profile cache.
 #    Cache.get/set/delete participate in the surrounding transaction.
 #    (Cache block declared below after the database.)
+import Tesl.Cache exposing [Cache]
 
 # 4. Email: outbox-pattern email sending.
 #    `email` can appear directly in `requires [email]` after declaring an email block.
@@ -67,7 +68,15 @@ import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify]
 # 5. HttpClient: outbound HTTP calls for webhook notification.
 #    `httpClient` must be wrapped in a user-defined capability.
 import Tesl.HttpClient exposing [httpClient, HttpResponse, HttpClient.post]
-import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 import Tesl.Email exposing [Email, SmtpConfig]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -132,7 +141,7 @@ database UserDatabase = Database {
 #   delete also rolls back — no stale evictions from failed writes.
 # ─────────────────────────────────────────────────────────────────────────────
 
-cache UserProfileCache {
+cache UserProfileCache = Cache {
   database: UserDatabase
   defaultTtl: 3600
   valueType: User

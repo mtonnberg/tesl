@@ -518,10 +518,20 @@ entity Product table "products" primaryKey id {
   let app_src = {|#lang tesl
 module LbApp14Pos exposing []
 import Tesl.Prelude exposing [String, Int]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, PostgresConfig, TcpConnection]
 import LbSchema14 exposing [Product]
-database LbApp14Db {
-  backend: postgres schema: "shop" entities: [Product]
-  postgres { database: "shop" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
+database LbApp14Db = Database {
+  schema: "shop"
+  entities: [Product]
+  backend: Postgres (PostgresConfig {
+    dbName: "shop"
+    user: "u"
+    password: ""
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
 }
 |} in
   should_pass_two lib_src app_src
@@ -531,12 +541,31 @@ let test_LB_POS15_queue_declarations_ok_in_phase1 () =
   let lib_src = {|#lang tesl
 module LbQueues15 exposing []
 import Tesl.Prelude exposing [String]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, PostgresConfig, TcpConnection]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
 record NotifyJob { msg: String }
-database LbQueues15Db {
-  backend: postgres schema: "q" entities: []
-  postgres { database: "q" user: "u" password: "" host: "localhost" port: 5432 socket: "" }
+database LbQueues15Db = Database {
+  schema: "q"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "q"
+    user: "u"
+    password: ""
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
 }
-queue NotifyQueue { database: LbQueues15Db jobs: [NotifyJob] }
+queue NotifyQueue = Queue {
+  database: LbQueues15Db
+  jobs: [NotifyJob]
+  retry: QueueRetryStrategy {
+    maxAttempts: 3
+    backoff: Exponential
+    initialDelay: 60
+  }
+}
 |} in
   let app_src = {|#lang tesl
 module LbApp15Pos exposing []

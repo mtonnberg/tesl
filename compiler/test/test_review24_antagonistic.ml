@@ -447,20 +447,22 @@ fn idLen(id: UserId) -> Int = String.length id
 let test_sql_or_in_where_compiles () =
   (* F09: `where a.id == x || a.id == y` — does OR compile? *)
   let src = prelude ^
-  "import Tesl.DB exposing [dbRead]\n" ^ {|
+  "import Tesl.DB exposing [dbRead]\n\
+   import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\n" ^ {|
 entity Item table "items" primaryKey id {
   id: String
   count: Int
 }
 
-database D {
-  backend: postgres
+database D = Database {
   schema: "s"
   entities: [Item]
-  postgres {
-    database: env("DB") user: env("U") password: env("P")
-    host: env("H") port: envInt("PORT", 5432) socket: env("S")
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "DB"
+    user: env "U"
+    password: env "P"
+    connection: TcpConnection { host: env "H" port: envInt "PORT" 5432 }
+  })
 }
 
 fn f(a: String, b: String) -> List Item
@@ -476,19 +478,21 @@ let test_sql_delete_bad_field_caught () =
      Currently: exit 0 (silently accepted) — SQL field validation NOT enforced
      for delete WHERE clauses. This is a real type-safety gap. *)
   let src = prelude ^
-  "import Tesl.DB exposing [dbWrite]\n" ^ {|
+  "import Tesl.DB exposing [dbWrite]\n\
+   import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\n" ^ {|
 entity Task table "tasks" primaryKey id {
   id: String
 }
 
-database D {
-  backend: postgres
+database D = Database {
   schema: "s"
   entities: [Task]
-  postgres {
-    database: env("DB") user: env("U") password: env("P")
-    host: env("H") port: envInt("PORT", 5432) socket: env("S")
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "DB"
+    user: env "U"
+    password: env "P"
+    connection: TcpConnection { host: env "H" port: envInt "PORT" 5432 }
+  })
 }
 
 fn f(id: String) -> Int
@@ -497,7 +501,8 @@ fn f(id: String) -> Int
   0
 |} in
   let status = exit_code_of src in
-  (* Documents the gap: ideally exit 1 (caught), currently exit 0 (not caught). *)
+  (* Documents the gap: under the new typed config the delete WHERE field IS
+     validated — exit 1 (caught). The assertion stays permissive. *)
   check bool "sql bad field in delete WHERE: documents whether caught (ideally 1)"
     true (status = 0 || status = 1)
 
@@ -816,17 +821,18 @@ fn f(c: Color) -> Int = 0
 let test_capability_undeclared_write_caught () =
   let src = prelude ^
   "import Tesl.DB exposing [dbRead, dbWrite]\n\
-   import Tesl.Maybe exposing [Maybe(..)]\n" ^ {|
+   import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\n" ^ {|
 entity Item table "items" primaryKey id { id: String }
 
-database D {
-  backend: postgres
+database D = Database {
   schema: "s"
   entities: [Item]
-  postgres {
-    database: env("DB") user: env("U") password: env("P")
-    host: env("H") port: envInt("PORT", 5432) socket: env("S")
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "DB"
+    user: env "U"
+    password: env "P"
+    connection: TcpConnection { host: env "H" port: envInt "PORT" 5432 }
+  })
 }
 
 fn f(id: String) -> String

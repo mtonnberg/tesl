@@ -26,10 +26,10 @@
   (notifyWorker [job : NotifyPayload ::: (FromQueue (Id == jobId) job)])
   #:capabilities [notifyWorkerCap]
   #:returns NotifyPayload
-  (thsl-src! "example/kanel/KanelNotify.tesl" 18 (list (cons 'job *job)) (lambda () (begin (telemetry-event! "kanel.email.sent" #:attributes (["recipient" (raw-value job.recipientEmail)] ["subject" (raw-value job.subject)])) *job))))
+  (let ([_ (thsl-src! "example/kanel/KanelNotify.tesl" 18 (list (cons 'job *job)) (lambda () (telemetry-event! "kanel.email.sent" #:attributes (["recipient" (raw-value job.recipientEmail)] ["subject" (raw-value job.subject)]))))]) (thsl-src! "example/kanel/KanelNotify.tesl" 21 (list (cons 'job *job)) (lambda () *job))))
 
 (define/pow
   (deadNotifyWorker [job : NotifyPayload ::: (FromDeadQueue (Id == jobId) job)])
   #:capabilities [notifyWorkerCap]
   #:returns NotifyPayload
-  (thsl-src! "example/kanel/KanelNotify.tesl" 25 (list (cons 'job *job)) (lambda () (begin (telemetry-event! "kanel.email.failed" #:attributes (["recipient" (raw-value job.recipientEmail)] ["subject" (raw-value job.subject)])) *job))))
+  (let ([_ (thsl-src! "example/kanel/KanelNotify.tesl" 25 (list (cons 'job *job)) (lambda () (telemetry-event! "kanel.email.failed" #:attributes (["recipient" (raw-value job.recipientEmail)] ["subject" (raw-value job.subject)]))))]) (thsl-src! "example/kanel/KanelNotify.tesl" 26 (list (cons 'job *job)) (lambda () *job))))

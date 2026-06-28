@@ -6,6 +6,8 @@ import Tesl.Http exposing [HttpRequest]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Dict exposing [Dict.lookup]
 import Tesl.Telemetry exposing [telemetry, initTelemetry]
+import Tesl.App exposing [App]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
 
 capability readTaskCookie
 
@@ -27,6 +29,11 @@ codec AdminTask {
     ownerId -> "ownerId" with_codec stringCodec
   }
   fromJson_forbidden
+}
+
+database AdminTaskDatabase = Database {
+  entities: []
+  backend: Memory
 }
 
 defaultExamplePort = 8088
@@ -73,7 +80,10 @@ server AdminTaskServer for AdminTaskApi {
   getAdminTask = getAdminTask
 }
 
-main with capabilities [readTaskCookie] {
-  initTelemetry service "admin-task-api" endpoint "in-memory" console True
-  serve AdminTaskServer on defaultExamplePort with capabilities [readTaskCookie]
-}
+main() -> App requires [readTaskCookie] =
+  let _ = initTelemetry service "admin-task-api" endpoint "in-memory" console True
+  App {
+    database: AdminTaskDatabase
+    api: AdminTaskServer
+    port: defaultExamplePort
+  }

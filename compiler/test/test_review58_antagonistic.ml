@@ -647,6 +647,7 @@ let r58_cp01_missing_capability_rejected () =
   should_fail "uses privileged operations.*requiring" (
     base_header ^ {|
 import Tesl.DB exposing [dbRead]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 capability myDbRead implies dbRead
 
 entity Item table "items" primaryKey id {
@@ -654,18 +655,18 @@ entity Item table "items" primaryKey id {
   value: Int
 }
 
-database TestDb {
-  backend: postgres
+database TestDb = Database {
   schema: "test"
   entities: [Item]
-  postgres {
-    database: env("TESL_POSTGRES_DATABASE")
-    user: env("TESL_POSTGRES_USER")
-    password: env("TESL_POSTGRES_PASSWORD")
-    host: env("TESL_POSTGRES_HOST")
-    port: envInt("TESL_POSTGRES_PORT", 5432)
-    socket: env("TESL_POSTGRES_SOCKET")
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "TESL_POSTGRES_DATABASE"
+    user: env "TESL_POSTGRES_USER"
+    password: env "TESL_POSTGRES_PASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_POSTGRES_HOST"
+      port: envInt "TESL_POSTGRES_PORT" 5432
+    }
+  })
 }
 
 fn readItems() -> List Item

@@ -380,6 +380,21 @@ let desugar_channel_config (c : channel_form) : channel_form =
       | None -> c.payload in
     { c with database; payload; config_expr = None }
 
+let desugar_cache_config (c : cache_form) : cache_form =
+  match c.config_expr with
+  | None -> c
+  | Some e ->
+    let top = config_record_fields e in
+    let database = match List.assoc_opt "database" top with
+      | Some v -> Option.value ~default:"" (config_ctor_name v) | None -> "" in
+    let default_ttl = match List.assoc_opt "defaultTtl" top with
+      | Some v -> int_value v | None -> None in
+    let value_type = match List.assoc_opt "valueType" top with
+      | Some v -> (match config_ctor_name v with
+          | Some n -> TName { name = n; loc = c.loc } | None -> c.value_type)
+      | None -> c.value_type in
+    { c with database; default_ttl; value_type; config_expr = None }
+
 let desugar_decl (queues : (string, string) Hashtbl.t) (d : top_decl) : top_decl =
   match d with
   | DFunc fd -> DFunc { fd with body = desugar_expr queues fd.body }
@@ -388,8 +403,9 @@ let desugar_decl (queues : (string, string) Hashtbl.t) (d : top_decl) : top_decl
   | DQueue q -> DQueue (desugar_queue_config q)
   | DEmail em -> DEmail (desugar_email_config em)
   | DChannel c -> DChannel (desugar_channel_config c)
+  | DCache c -> DCache (desugar_cache_config c)
   | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _
-  | DCapability _ | DWorkers _ | DCache _
+  | DCapability _ | DWorkers _
   | DCapture _ | DApi _ | DServer _ | DTest _ | DApiTest _
   | DLoadTest _ -> d
 
@@ -455,34 +471,58 @@ let lower_main_app (decls : top_decl list) (fd : func_decl) : func_decl =
     | ERecord { type_hint = Some "App"; fields; _ } -> Some fields
     | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord { fields; _ }; _ } -> Some fields
     | _ -> None in
-  let gen_startup fields =
-    let db  = match List.assoc_opt "database" fields with Some v -> Option.value ~default:"" (config_ctor_name v) | None -> "" in
+  let db_of fields =
+    match List.assoc_opt "database" fields with Some v -> Option.value ~default:"" (config_ctor_name v) | None -> "" in
+  (* The startup chain (start-workers per activated queue, start-email-workers,
+     then serve) that REPLACES the `App { … }` record at the tail of main's body. *)
+  let startup_chain fields =
     let qs  = match List.assoc_opt "queues" fields with Some v -> names_of v | None -> [] in
     let es  = match List.assoc_opt "email" fields with Some v -> names_of v | None -> [] in
     let api = match List.assoc_opt "api" fields with Some v -> Option.value ~default:"" (config_ctor_name v) | None -> "" in
     let port = match List.assoc_opt "port" fields with Some v -> v | None -> ELit { lit = LInt 8080; loc } in
+    let static_dir = match List.assoc_opt "static" fields with
+      | Some (ELit { lit = LString s; _ }) -> Some s
+      | _ -> None in
     let worker_stmts = List.concat_map (fun qn ->
       let (caps, nw, has_dead) = match find_q qn with Some (_, c, n, d) -> (c, n, d) | None -> ([], None, false) in
       EStartWorkers { workers_name = qn ^ "Workers"; capabilities = caps; concurrency = nw; is_dead = false; loc }
       :: (if has_dead then [ EStartWorkers { workers_name = qn ^ "DeadWorkers"; capabilities = caps; concurrency = nw; is_dead = true; loc } ] else [])
     ) qs in
     let email_stmts = List.map (fun en -> EStartEmailWorker { email_name = en; loc }) es in
-    let serve = EServe { server_name = api; port; capabilities = main_caps; static_dir = None; loc } in
+    let serve = EServe { server_name = api; port; capabilities = main_caps; static_dir; loc } in
     let rec chain = function
       | [] -> serve
       | [ last ] -> last
       | s :: rest -> ELet { name = "_"; declared_type = None; declared_proof = None; value = s; body = chain rest; loc }
     in
-    let inner = chain (worker_stmts @ email_stmts @ [ serve ]) in
-    EWithCapabilities { capabilities = main_caps;
-                        body = EWithDatabase { database_name = db; body = inner; loc }; loc }
+    chain (worker_stmts @ email_stmts @ [ serve ])
   in
+  (* Walk the let-chain of main's body to the trailing `App { … }` record. *)
+  let rec find_app e = match e with
+    | ELet r      -> find_app r.body
+    | ELetProof r -> find_app r.body
+    | _           -> is_app e
+  in
+  (* Replace ONLY the trailing App record with the startup chain, preserving the
+     user's `let … = …` startup statements (seed, telemetry, port) in place. *)
   let rec rewrite e = match e with
     | ELet r      -> ELet { r with body = rewrite r.body }
     | ELetProof r -> ELetProof { r with body = rewrite r.body }
-    | _ -> (match is_app e with Some fields -> gen_startup fields | None -> e)
+    | _ -> (match is_app e with Some fields -> startup_chain fields | None -> e)
   in
-  { fd with body = rewrite fd.body }
+  match find_app fd.body with
+  | None -> fd  (* no App record returned — leave untouched *)
+  | Some fields ->
+    (* Per the App-model design: the WHOLE main body (the user's seed/telemetry/
+       let statements AND the synthesized startup) runs inside main's capability +
+       database scope, so DB-context startup steps like `seedExampleData()` have
+       database access.  The static-checker is scope-unaware (per-function
+       `requires`), so this affects only the runtime scope, not capability checking. *)
+    let body' =
+      EWithCapabilities { capabilities = main_caps;
+        body = EWithDatabase { database_name = db_of fields; body = rewrite fd.body; loc }; loc }
+    in
+    { fd with body = body' }
 
 let desugar_module (m : module_form) : module_form =
   (* Rebuild the emitter's job-type → queue map from this module's DQueue

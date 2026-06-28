@@ -1,11 +1,33 @@
 #lang tesl
-module QueueApi exposing [EmailQueue, UserEvents, EmailWorkers]
+module QueueApi exposing [EmailQueue, UserEvents]
 import Tesl.Prelude exposing [Bool(..), List, String, Fact]
-import Tesl.DB        exposing [dbRead, dbWrite]
-import Tesl.Queue exposing [deadJobs, requeue, DeadJob, FromDeadQueue, queueRead, queueWrite, pubsub, Queue, QueueRetryStrategy, Exponential, Fixed]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Queue exposing [
+  deadJobs,
+  requeue,
+  DeadJob,
+  FromDeadQueue,
+  queueRead,
+  queueWrite,
+  pubsub,
+  Queue,
+  QueueRetryStrategy,
+  Exponential,
+  Fixed,
+  Job,
+]
 import Tesl.Telemetry exposing [initTelemetry]
-import Tesl.Database exposing [Database, DatabaseBackend, Postgres, Memory, PostgresConfig, TcpConnection, SocketConnection]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 import Tesl.SSE exposing [SseChannel]
+import Tesl.App exposing [App]
 
 capability emailWrite implies queueWrite
 capability appService implies dbRead, dbWrite, emailWrite, pubsub
@@ -34,9 +56,9 @@ type UserEvent
   = ProfileUpdated bio: String
   | AccountDeleted
 
-queue EmailQueue = Queue {
+queue EmailQueue requires [queueRead] = Queue {
   database: MainDatabase
-  jobs: [SendEmail]
+  jobs: [Job SendEmail sendEmailWorker Nothing]
   retry: QueueRetryStrategy {
     maxAttempts: 3
     backoff: Exponential
@@ -53,10 +75,6 @@ worker sendEmailWorker(job: SendEmail ::: FromQueue (Id == jobId) job)
   requires [queueRead] =
   job
 
-workers EmailWorkers for EmailQueue {
-  SendEmail = sendEmailWorker
-}
-
 # Inspect all dead jobs in the email queue.
 # Dead jobs have exhausted maxAttempts and are waiting for manual intervention.
 fn listDeadEmails(q: EmailQueue) -> List DeadJob
@@ -70,6 +88,23 @@ fn replayEmail(job: DeadJob ::: FromDeadQueue (Id == jobId) job) -> Bool
   requires [queueWrite] =
   requeue job
 
-main {
-  initTelemetry service "queue-api" endpoint "in-memory" console False
+handler appRoot() -> String
+  requires [] =
+  "ok"
+
+api AppApi {
+  get "/health" -> String
 }
+
+server AppServer for AppApi {
+  endpoint_0 = appRoot
+}
+
+main() -> App requires [appService, queueRead] =
+  let _ = initTelemetry service "queue-api" endpoint "in-memory" console False
+  App {
+    database: MainDatabase
+    api: AppServer
+    port: 8086
+    queues: [EmailQueue]
+  }

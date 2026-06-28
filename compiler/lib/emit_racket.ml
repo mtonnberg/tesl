@@ -110,6 +110,16 @@ let import_rename name =
   let escaped = String.concat "_" (String.split_on_char '.' name) in
   "tesl_import_" ^ escaped
 
+(** Render a capability name as a Racket identifier.  Most capabilities are
+    plain identifiers, but the implicit cache capability is two words
+    (`cache <Name>`); collapse spaces to underscores so it becomes the
+    `cache_<Name>` identifier that `define-cache` / `define-capability` bind. *)
+let cap_ident name =
+  if String.length name >= 6 && String.sub name 0 6 = "cache "
+  then String.concat "_" (String.split_on_char ' ' name)
+  else name
+let cap_list_str caps = String.concat " " (List.map cap_ident caps)
+
 (** Codec name mapping from Tesl codec name to Racket codec function name.
     Primitive codecs map to cons-pair functions; user-defined types are
     referenced as quoted symbols so tesl-codec-decode-field can look them
@@ -2230,15 +2240,32 @@ let rec emit_expr ctx e =
           emit ctx "(accept ";
           emit_auth_resolved_proof proof value;
           emit ctx " #:value ";
-          (match value with
-           | EVar { name; _ } -> emit ctx ("*" ^ name)
-           | _ -> emit_expr_simple ctx value);
+          (match direct_check_call value with
+           | Some (check_fn, check_args) ->
+             emit ctx "("; emit_expr ctx check_fn;
+             List.iter (fun arg -> emit ctx " "; emit_expr_simple ctx arg) check_args;
+             emit ctx ")"
+           | None ->
+             (match value with
+              | EVar { name; _ } -> emit ctx ("*" ^ name)
+              | _ -> emit_expr_simple ctx value));
           emit ctx ")")
      | _ ->
        emit ctx "(attach-proof ";
-       (match value with
-        | EVar { name; _ } -> emit ctx (resolve_name name)
-        | _ -> emit_expr_simple ctx value);
+       (* If the value is a surface `check …` call, emit `(checkFn args)` WITHOUT the
+          `check` wrapper (which has no runtime binding) so attach-proof carries the
+          check-ok result's proof — mirrors the ELetProof handling above.  Without this
+          the EOk path (reached for `ok (check …) ::: proof` tails since the always-on
+          checkpoint change) emitted a literal unbound `check` head. *)
+       (match direct_check_call value with
+        | Some (check_fn, check_args) ->
+          emit ctx "("; emit_expr ctx check_fn;
+          List.iter (fun arg -> emit ctx " "; emit_expr_simple ctx arg) check_args;
+          emit ctx ")"
+        | None ->
+          (match value with
+           | EVar { name; _ } -> emit ctx (resolve_name name)
+           | _ -> emit_expr_simple ctx value));
        emit ctx " ";
        emit_runtime_proof ctx proof;
        emit ctx ")")
@@ -2292,7 +2319,7 @@ let rec emit_expr ctx e =
     emit ctx "))"
   | EWithCapabilities { capabilities; body; _ } ->
     emit ctx "(with-capabilities (";
-    emit ctx (String.concat " " capabilities);
+    emit ctx (cap_list_str capabilities);
     emit ctx ") ";
     emit_expr ctx body;
     emit ctx ")"
@@ -3499,7 +3526,7 @@ let emit_requires ctx (m : module_form) =
           "PostgresConnection"; "TcpConnection"; "SocketConnection";
           "Queue"; "QueueRetryStrategy"; "QueueRetryConfig"; "QueueRetryBackoff";
           "Exponential"; "Fixed"; "Linear";
-          "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job" ] in
+          "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job"; "Cache" ] in
       let expanded = List.filter (fun n -> not (List.mem n config_only_names)) expanded in
       let qualified = List.filter (fun n -> String.contains n '.') expanded in
       let plain = List.filter (fun n -> not (String.contains n '.')) expanded in
@@ -3742,7 +3769,7 @@ let emit_func ctx (fd : func_decl) =
    let concrete = List.filter (fun c -> not (List.mem c bound_vars)) fd.capabilities in
    if concrete <> [] then begin
     emit ctx "  #:capabilities [";
-    emit ctx (String.concat " " concrete);
+    emit ctx (cap_list_str concrete);
     emit_line ctx "]"
   end);
   emit ctx "  ";
@@ -6145,6 +6172,9 @@ let emit_module ctx (m : module_form) =
     | DApiTest t -> emit_api_test ctx ~database_names t
     | DLoadTest t -> emit_load_test ctx ~database_names t
     | DCache c ->
+      (* The define-cache macro references the cache capability `cache_<name>`,
+         so bind it first (define-capability before define-cache). *)
+      emit_line ctx (Printf.sprintf "(define-capability cache_%s)" c.name);
       emit ctx (Printf.sprintf "(define-cache %s #:database %s" c.name c.database);
       (match c.default_ttl with
        | Some ttl -> emit ctx (Printf.sprintf " #:default-ttl %d" ttl)

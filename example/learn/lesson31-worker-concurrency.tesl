@@ -1,9 +1,5 @@
 #lang tesl
-module Lesson31WorkerConcurrency exposing [
-  EmailWorkers,
-  DeadEmailWorkers,
-  ConcurrencyServer,
-]
+module Lesson31WorkerConcurrency exposing [EmailQueue, ConcurrencyServer]
 
 # Lesson 31 — Worker Concurrency with startWorkers N
 #
@@ -30,6 +26,7 @@ module Lesson31WorkerConcurrency exposing [
 # 4 parallel workers to process it.
 
 import Tesl.Prelude exposing [String, Unit]
+import Tesl.App exposing [App]
 import Tesl.Queue exposing [
   FromQueue,
   FromDeadQueue,
@@ -68,14 +65,15 @@ record EmailJob {
 
 # ── Queue declaration ─────────────────────────────────────────────────────────
 
-queue EmailQueue = Queue {
+queue EmailQueue requires [emailCap] = Queue {
   database: EmailDatabase
-  jobs: [EmailJob]
+  jobs: [Job EmailJob processEmail (Something handleDeadEmail)]
   retry: QueueRetryStrategy {
     maxAttempts: 3
     backoff: Exponential
     initialDelay: 10
   }
+  numberOfWorkers: 4
 }
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -103,10 +101,6 @@ worker processEmail(job: EmailJob ::: FromQueue (Id == jobId) job)
   telemetry "email.sent" { recipient = job.recipientId, subject = job.subject }
   job
 
-workers EmailWorkers for EmailQueue {
-  EmailJob = processEmail
-}
-
 # Dead-letter worker: fires when an EmailJob has been retried maxAttempts
 # times without success.
 #
@@ -117,10 +111,6 @@ deadWorker handleDeadEmail(job: EmailJob ::: FromDeadQueue (Id == jobId) job)
   requires [deadEmailCap] =
   telemetry "email.dead" { recipient = job.recipientId, subject = job.subject }
   job
-
-deadWorkers DeadEmailWorkers for EmailQueue {
-  EmailJob = handleDeadEmail
-}
 
 # ── Example handler that enqueues an email ────────────────────────────────────
 
@@ -152,15 +142,11 @@ server ConcurrencyServer for ConcurrencyApi {
 # provider), 4 concurrent workers let you pipeline 4 email deliveries at
 # once, increasing throughput without adding complexity.
 
-main with capabilities [fullService, emailCap, deadEmailCap, enqueueEmail] {
+main() -> App requires [fullService, emailCap, deadEmailCap, enqueueEmail] =
   let port = 8090
-  with database EmailDatabase {
-    with capabilities [fullService] {
-      # 4 parallel email workers — each independently dequeues and delivers
-      startWorkers 4 EmailWorkers with capabilities [emailCap]
-      # Dead-letter workers are always single-threaded (no N parameter)
-      startDeadWorkers DeadEmailWorkers with capabilities [deadEmailCap]
-      serve ConcurrencyServer on port with capabilities [enqueueEmail]
-    }
+  App {
+    database: EmailDatabase
+    api: ConcurrencyServer
+    port: port
+    queues: [EmailQueue]
   }
-}

@@ -1,6 +1,8 @@
 # Internal regression suite must run in non-zero-cost mode
 
-Status: PARTIAL FIX LANDED (check/exists/sql/web) — remaining audit roadmapped.
+Status: RESOLVED. See "## Resolution" at the bottom.
+(Historical: PARTIAL FIX LANDED for check/exists/sql/web/record; this pass finished
+the audit and fixed the one remaining mode-fragile test, tesl-test.)
 
 ## Problem
 
@@ -69,3 +71,66 @@ batch:
    deliberately rather than by bytecode accident. Consider a single
    `racket tests/all.rkt` invocation under a dedicated non-zero-cost compiled root
    instead of per-test subprocesses.
+
+## Resolution
+
+Audited every remaining internal test by running it in a *fresh in-memory* compile
+(`racket tests/run-nzc.rkt <test>`, `use-compiled-file-paths` cleared so no stale
+`.zo` can mask the result) in the default (zero-cost) mode:
+
+- `body-proof-test`, `port-test`, `codec-specialization-test`,
+  `surface-regression-test`, `existential-regression-test`, `postgres-test`,
+  `example-api-test` — **all pass in zero-cost mode**. They assert on compile-time
+  validation and on the runtime helpers that exist in *both* modes, so they are NOT
+  non-zero-cost-dependent. No routing change needed; they stay in the default bucket.
+- `check-test`, `exists-test`, `sql-test`, `web-test`, `record-test` — genuinely
+  non-zero-cost (detach-proof / check-exn on erased evidence). Already routed through
+  the in-memory `run-nzc.rkt` driver. Unchanged.
+- `tesl-test` — had ONE mode-fragile assertion (`tesl-test.rkt:532`): a decomposed
+  combined proof `((ValidPort port) && (IsPositive n))` whose tokens unify to the
+  runtime witness under non-zero-cost but are the `establish` parameter names
+  (`'port` / `'n`) under zero-cost erasure. Rather than route tesl-test through a
+  dedicated non-zero-cost compiled root — which is pathological here, because
+  `install-linked-tesl!` (`raco pkg install --link`) runs 9× and each triggers a full
+  `raco setup` into a cold root — the assertion was made **mode-aware**: it asserts
+  the unified runtime witness under non-zero-cost and the symbolic `'port`/`'n` shape
+  under the zero-cost default. This is strictly *more* coverage (both modes are now
+  pinned) and removes the bytecode-accident fragility.
+- Also fixed in tesl-test as part of this: `:604` stale regex
+  (`expected module` → `expected .module. or .library.`, the library-keyword
+  rewording); a *second* mode-fragile evidence site (`~:1627`, record-field proof
+  extraction — `named-value?`/`facts-of`) made mode-aware the same way; and FIVE
+  cross-module-require path bugs (`~:1025`, `:1451`, `:1486`, `:1524`, `:1956`) where
+  the consumer/App module was compiled with `compile-tesl-module` to a random
+  `/var/tmp` file so its relative `(require (file "shared.rkt"|"lib.rkt"))` could not
+  resolve — now all use `compile-tesl-to-dir!` to place the output beside its sibling.
+
+  IMPORTANT — tesl-test is NOT fully green after this, and the remaining blocker is
+  NOT non-zero-cost: it is **task-#9 config-migration debt**. Once the evidence sites
+  pass (under NZC, or via the mode-aware fixes in zero-cost), the run reaches old-style
+  config/queue fixtures such as `Q01` (`tesl-test.rkt:~3370`,
+  `queue MyQueue { database FakeDb ... }`) that expect the OLD space-delimited
+  `queue { database X }` syntax to compile with an *undeclared* database — which the
+  current validator (correctly) rejects with `V001 queue references unknown database`.
+  These predate the undeclared-database check and need rewriting/migration, exactly the
+  fragile `.ml`/`.tesl` old-config fixtures that app_simplification.md says to migrate
+  in the App pass. So tesl-test's full greening is deferred to that
+  config-migration/App pass; the NZC-specific work for it (532, 1627) is done here.
+
+Note on NZC-routing tesl-test (rejected, with evidence): the dedicated-compiled-root
+approach HANGS — tesl-test calls `install-linked-tesl!` (`raco pkg install --link`) 9×,
+each of which triggers a full `raco setup` into the cold root. The in-memory
+`run-nzc.rkt` driver does NOT hang and does NOT clobber the zero-cost cache (verified:
+default `*.zo` mtimes unchanged), but its blanket exn handler turns tesl-test's
+intentional negative-compile fixtures (the Q01 `FakeDb` errors above) into fatal
+`NZC-ERROR`s. Hence the mode-aware approach for tesl-test's own evidence assertions,
+and deferral of the rest to the config-migration pass.
+
+Net architecture (as point 3 asked to document explicitly): the **zero-cost
+production path** is covered by the example-test-batch (snapshots, run in default
+mode); the **non-zero-cost evidence machinery** is covered by the five `run-nzc.rkt`
+tests; `tesl-test` pins BOTH modes for the proof-decomposition behavior. The dedicated
+non-zero-cost compiled root was prototyped and verified to isolate correctly
+(`PLTCOMPILEDROOTS=<abs>` populates a separate `compiled-nzc/` and leaves the
+zero-cost `tesl/dsl/compiled/` untouched) but is NOT needed given the audit — kept as
+a documented option should a future evidence-bearing-AND-install-linked test appear.

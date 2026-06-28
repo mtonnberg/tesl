@@ -61,8 +61,9 @@
   (error "toJson is forbidden for type RegisterRequest: this type cannot be JSON-encoded"))
 (define (tesl-codec-decode-RegisterRequest-0 _j)
   (define _f_email (tesl-decode-prim-field _j "email" tesl-decode-prim-string))
+  (define _f_password (tesl-decode-prim-field _j "password" tesl-decode-prim-string))
   (define _f_displayName (tesl-decode-prim-field _j "displayName" tesl-decode-prim-string))
-  (record-value 'RegisterRequest (hash 'email _f_email 'displayName _f_displayName)))
+  (record-value 'RegisterRequest (hash 'email _f_email 'password _f_password 'displayName _f_displayName)))
 (register-type-codec! 'RegisterRequest tesl-codec-encode-RegisterRequest (list tesl-codec-decode-RegisterRequest-0))
 
 (define-record LoginRequest
@@ -74,7 +75,8 @@
   (error "toJson is forbidden for type LoginRequest: this type cannot be JSON-encoded"))
 (define (tesl-codec-decode-LoginRequest-0 _j)
   (define _f_email (tesl-decode-prim-field _j "email" tesl-decode-prim-string))
-  (record-value 'LoginRequest (hash 'email _f_email)))
+  (define _f_password (tesl-decode-prim-field _j "password" tesl-decode-prim-string))
+  (record-value 'LoginRequest (hash 'email _f_email 'password _f_password)))
 (register-type-codec! 'LoginRequest tesl-codec-encode-LoginRequest (list tesl-codec-decode-LoginRequest-0))
 
 (define-handler

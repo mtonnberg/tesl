@@ -187,24 +187,24 @@ let guarded_mailhog_test name f () =
 (* ── Tesl email source templates ─────────────────────────────────────────────── *)
 
 (** Common DB block template, shared by all email tests. *)
-let db_block = {|database AppDB {
-  backend: postgres
+let db_block = {|database AppDB = Database {
   schema: "testschema"
   entities: []
-  postgres {
-    database: env("TESL_EMAIL_TEST_DB")
-    user: env("TESL_EMAIL_TEST_USER")
-    password: env("TESL_EMAIL_TEST_PASS")
-    host: "localhost"
-    port: envInt("TESL_EMAIL_TEST_PORT", 5432)
-    socket: env("TESL_EMAIL_TEST_SOCK")
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "TESL_EMAIL_TEST_DB"
+    user: env "TESL_EMAIL_TEST_USER"
+    password: env "TESL_EMAIL_TEST_PASS"
+    connection: TcpConnection {
+      host: "localhost"
+      port: envInt "TESL_EMAIL_TEST_PORT" 5432
+    }
+  })
 }|}
 
 (** Email block template. *)
-let email_block smtp_port = Printf.sprintf {|email AppEmail {
+let email_block smtp_port = Printf.sprintf {|email AppEmail = Email {
   database: AppDB
-  smtp {
+  smtp: SmtpConfig {
     host: "127.0.0.1"
     port: %d
     username: ""
@@ -219,6 +219,8 @@ let tesl_email_load_src ~module_name smtp_port =
 module %s exposing []
 
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.Email exposing [Email, SmtpConfig]
 
 %s
 
@@ -236,6 +238,8 @@ let tesl_email_send_src ~module_name smtp_port recipient =
 module %s exposing []
 
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.Email exposing [Email, SmtpConfig]
 
 %s
 
@@ -263,6 +267,8 @@ let tesl_email_html_src ~module_name smtp_port =
 module %s exposing []
 
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.Email exposing [Email, SmtpConfig]
 
 %s
 
@@ -290,6 +296,8 @@ let tesl_email_rich_src ~module_name smtp_port =
 module %s exposing []
 
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.Email exposing [Email, SmtpConfig]
 
 %s
 
@@ -317,6 +325,8 @@ let tesl_email_no_cap_src module_name =
 module %s exposing []
 
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.Email exposing [Email, SmtpConfig]
 
 %s
 

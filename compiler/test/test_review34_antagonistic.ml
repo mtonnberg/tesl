@@ -349,11 +349,19 @@ let test_h08_fn_proof_return_dropped_in_emitter () =
 (* rejected at compile time.                                                    *)
 let test_h09_nested_transaction_rejected () =
   let src = prelude ^
+    "import Tesl.Env exposing [env, envInt]\n" ^
+    "import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\n" ^
     "import Tesl.DB exposing [dbRead, dbWrite]\n" ^
     "entity Item table \"items\" primaryKey id { id: String name: String }\n" ^
-    "database MyDb {\n" ^
-    "  backend: postgres schema: \"s\" entities: [Item]\n" ^
-    "  postgres { database: env(\"DB\") user: env(\"U\") password: env(\"P\") host: env(\"H\") port: envInt(\"PORT\", 5432) socket: env(\"SOCK\") }\n" ^
+    "database MyDb = Database {\n" ^
+    "  schema: \"s\"\n" ^
+    "  entities: [Item]\n" ^
+    "  backend: Postgres (PostgresConfig {\n" ^
+    "    dbName: env \"DB\"\n" ^
+    "    user: env \"U\"\n" ^
+    "    password: env \"P\"\n" ^
+    "    connection: TcpConnection { host: env \"H\"  port: envInt \"PORT\" 5432 }\n" ^
+    "  })\n" ^
     "}\n" ^
     "fn test() -> String requires [dbWrite] =\n" ^
     "  with transaction {\n" ^
@@ -621,11 +629,19 @@ let test_h22_record_construction_without_proof_rejected () =
 (* must produce a capability error.                                             *)
 let test_h23_select_without_capability_rejected () =
   let src = prelude ^
+    "import Tesl.Env exposing [env, envInt]\n" ^
+    "import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\n" ^
     "import Tesl.DB exposing [dbRead, dbWrite]\n" ^
     "entity Item table \"items\" primaryKey id { id: String name: String }\n" ^
-    "database MyDb {\n" ^
-    "  backend: postgres schema: \"s\" entities: [Item]\n" ^
-    "  postgres { database: env(\"DB\") user: env(\"U\") password: env(\"P\") host: env(\"H\") port: envInt(\"PORT\", 5432) socket: env(\"SOCK\") }\n" ^
+    "database MyDb = Database {\n" ^
+    "  schema: \"s\"\n" ^
+    "  entities: [Item]\n" ^
+    "  backend: Postgres (PostgresConfig {\n" ^
+    "    dbName: env \"DB\"\n" ^
+    "    user: env \"U\"\n" ^
+    "    password: env \"P\"\n" ^
+    "    connection: TcpConnection { host: env \"H\"  port: envInt \"PORT\" 5432 }\n" ^
+    "  })\n" ^
     "}\n" ^
     "fn missingCap() -> String =\n" ^
     "  let items = select item from Item\n" ^
@@ -638,11 +654,19 @@ let test_h23_select_without_capability_rejected () =
 (* A `fn` that declares `requires [dbRead]` and uses `select` must compile.   *)
 let test_h24_select_with_capability_compiles () =
   let src = prelude ^
+    "import Tesl.Env exposing [env, envInt]\n" ^
+    "import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\n" ^
     "import Tesl.DB exposing [dbRead, dbWrite]\n" ^
     "entity Item table \"items\" primaryKey id { id: String name: String }\n" ^
-    "database MyDb {\n" ^
-    "  backend: postgres schema: \"s\" entities: [Item]\n" ^
-    "  postgres { database: env(\"DB\") user: env(\"U\") password: env(\"P\") host: env(\"H\") port: envInt(\"PORT\", 5432) socket: env(\"SOCK\") }\n" ^
+    "database MyDb = Database {\n" ^
+    "  schema: \"s\"\n" ^
+    "  entities: [Item]\n" ^
+    "  backend: Postgres (PostgresConfig {\n" ^
+    "    dbName: env \"DB\"\n" ^
+    "    user: env \"U\"\n" ^
+    "    password: env \"P\"\n" ^
+    "    connection: TcpConnection { host: env \"H\"  port: envInt \"PORT\" 5432 }\n" ^
+    "  })\n" ^
     "}\n" ^
     "fn withCap() -> List Item requires [dbRead] =\n" ^
     "  select item from Item\n"

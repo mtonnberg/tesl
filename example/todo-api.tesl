@@ -20,6 +20,7 @@ import Tesl.Telemetry exposing [telemetry, initTelemetry]
 import Tesl.Cli exposing [cli.args, lookupPortArgument]
 import Tesl.Id exposing [generatePrefixedId]
 import Tesl.Random exposing [random]
+import Tesl.App exposing [App]
 import Tesl.Database exposing [
   Database,
   DatabaseBackend,
@@ -285,13 +286,12 @@ server TodoServer for TodoApi {
   completeTodo = completeTodo
 }
 
-main with capabilities [todoWebService] {
-  initTelemetry service "todo-api" endpoint "in-memory" console True
+main() -> App requires [todoWebService] =
+  let _ = initTelemetry service "todo-api" endpoint "in-memory" console True
   let port = resolveExamplePort cli.args (env "TESL_TODO_API_PORT") (env "PORT")
-  with database TodoDatabase {
-    with capabilities [todoWebService] {
-      seedExampleData()
-    }
-    serve TodoServer on port with capabilities [todoWebService]
+  let _ = seedExampleData()
+  App {
+    database: TodoDatabase
+    api: TodoServer
+    port: port
   }
-}

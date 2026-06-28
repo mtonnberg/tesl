@@ -342,23 +342,22 @@ module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, PostgresConfig, TcpConnection]
 
 entity Item table "items" primaryKey id {
   id: String
   name: String
 }
 
-database ItemDb {
-  backend: postgres
+database ItemDb = Database {
   schema: "test"
   entities: [Item]
-  postgres {
-    database: "test"
+  backend: Postgres (PostgresConfig {
+    dbName: "test"
     user: "test"
     password: "test"
-    host: "localhost"
-    port: 5432
-  }
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 
 # fn with no requires — but uses selectOne which needs dbRead
@@ -473,23 +472,22 @@ handler badHandler(n: Int) -> n: Int ::: IsPositive n =
 let r53_t01_nested_transaction_rejected () =
   should_fail_src "nested.*transaction\\|transaction.*nested\\|inside.*transaction" (base_header ^ {|
 import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, PostgresConfig, TcpConnection]
 
 entity Note table "notes" primaryKey id {
   id: String
   body: String
 }
 
-database NoteDb {
-  backend: postgres
+database NoteDb = Database {
   schema: "test"
   entities: [Note]
-  postgres {
-    database: "test"
+  backend: Postgres (PostgresConfig {
+    dbName: "test"
     user: "test"
     password: "test"
-    host: "localhost"
-    port: 5432
-  }
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 
 handler badHandler(noteId: String)
@@ -670,23 +668,22 @@ module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbRead]
 import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, PostgresConfig, TcpConnection]
 
 entity Widget table "widgets" primaryKey id {
   id: String
   name: String
 }
 
-database WidgetDb {
-  backend: postgres
+database WidgetDb = Database {
   schema: "test"
   entities: [Widget]
-  postgres {
-    database: "test"
+  backend: Postgres (PostgresConfig {
+    dbName: "test"
     user: "test"
     password: "test"
-    host: "localhost"
-    port: 5432
-  }
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 
 fn goodReturn(wid: String)

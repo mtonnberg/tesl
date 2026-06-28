@@ -655,7 +655,9 @@ let tesl_module_exports : (string * string list) list = [
   ( "Tesl.JWT",
     [ "jwt"; "JwtToken"; "JwtSecret"; "JWT.sign"; "JWT.verify"; "JWT.decode" ] );
   ( "Tesl.Cache",
-    [ "cache"; "Cache.get"; "Cache.set"; "Cache.delete"; "Cache.invalidate" ] );
+    [ "cache"; "Cache.get"; "Cache.set"; "Cache.delete"; "Cache.invalidate";
+      (* config-block type (typed config block) *)
+      "Cache" ] );
   ( "Tesl.Email",
     [ "email"; "EmailBody"; "TextBody"; "HtmlBody"; "RichBody";
       "Email.send"; "startEmailWorker";

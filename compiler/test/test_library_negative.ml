@@ -134,9 +134,19 @@ let test_LKWN04_library_with_workers_wiring_rejected () =
 #lang tesl
 library BadLib04 exposing []
 import Tesl.Prelude exposing [String]
-import Tesl.Queue exposing [queueRead]
-database Db { backend: postgres schema: "s" entities: [] postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" } }
-queue MyQ { database: Db jobs: [JobRec] }
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
+database Db = Database {
+  schema: "s"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "d"
+    user: "u"
+    password: ""
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
+}
+queue MyQ = Queue { database: Db  jobs: [JobRec]  retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 } }
 record JobRec { msg: String }
 worker doJob(j: JobRec) requires [] = j
 workers MyWorkers for MyQ { JobRec = doJob }
@@ -439,8 +449,19 @@ let test_LIMN04_importing_module_with_workers_block_rejected () =
 #lang tesl
 module AppWithWorkers exposing []
 import Tesl.Prelude exposing [String]
-database Db { backend: postgres schema: "s" entities: [] postgres { database: "d" user: "u" password: "" host: "localhost" port: 5432 socket: "" } }
-queue Q { database: Db jobs: [Job] }
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
+database Db = Database {
+  schema: "s"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "d"
+    user: "u"
+    password: ""
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
+}
+queue Q = Queue { database: Db  jobs: [Job]  retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 } }
 record Job { msg: String }
 worker handleJob(j: Job) requires [] = j
 workers Wiring for Q { Job = handleJob }

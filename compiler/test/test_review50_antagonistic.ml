@@ -705,23 +705,22 @@ let r50_e01_indirect_nested_txn_rejected () =
 module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 
 entity User table "users" primaryKey id {
   id:   String
   name: String
 }
 
-database TestDB {
-  backend: postgres
+database TestDB = Database {
   schema: "test"
   entities: [User]
-  postgres {
-    database: env("DB_NAME")
-    user: env("DB_USER")
-    password: env("DB_PASS")
-    host: env("DB_HOST")
-    port: envInt("DB_PORT", 5432)
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "DB_NAME"
+    user: env "DB_USER"
+    password: env "DB_PASS"
+    connection: TcpConnection { host: env "DB_HOST"  port: envInt "DB_PORT" 5432 }
+  })
 }
 
 fn doInner(uid: String, n: String) -> Int
@@ -745,23 +744,22 @@ let r50_e02_direct_nested_txn_rejected () =
 module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 
 entity User table "users" primaryKey id {
   id:   String
   name: String
 }
 
-database TestDB {
-  backend: postgres
+database TestDB = Database {
   schema: "test"
   entities: [User]
-  postgres {
-    database: env("DB_NAME")
-    user: env("DB_USER")
-    password: env("DB_PASS")
-    host: env("DB_HOST")
-    port: envInt("DB_PORT", 5432)
-  }
+  backend: Postgres (PostgresConfig {
+    dbName: env "DB_NAME"
+    user: env "DB_USER"
+    password: env "DB_PASS"
+    connection: TcpConnection { host: env "DB_HOST"  port: envInt "DB_PORT" 5432 }
+  })
 }
 
 fn doNested(uid: String, n: String) -> Int requires [dbWrite] =

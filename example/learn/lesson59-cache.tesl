@@ -51,6 +51,7 @@ import Tesl.Database exposing [
   TcpConnection,
   SocketConnection,
 ]
+import Tesl.Cache exposing [Cache]
 
 # ── Database (required as backing store for the cache) ────────────────────────
 
@@ -74,21 +75,21 @@ database MainDB = Database {
 # Different TTLs and value types are all fine.
 
 # Profile cache — serialized JSON strings, TTL 1 hour.
-cache UserProfileCache {
+cache UserProfileCache = Cache {
   database: MainDB
   defaultTtl: 3600
   valueType: String
 }
 
 # Short-lived counter cache — Int values, TTL 60s.
-cache CounterCache {
+cache CounterCache = Cache {
   database: MainDB
   defaultTtl: 60
   valueType: Int
 }
 
 # Session cache — no defaultTtl; we always pass TTL explicitly on set.
-cache SessionCache {
+cache SessionCache = Cache {
   database: MainDB
   valueType: String
 }
