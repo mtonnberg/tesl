@@ -1,7 +1,12 @@
 # `.rkt` snapshot regeneration sweep (committed artifacts are stale)
 
-Status: ROADMAP — surfaced while making compile-examples green. Attempted in full;
-backed out because it surfaces a real current-compiler emit regression (below).
+Status: ✅ COMPLETE. The blocking emit regression (below) was fixed — the EOk
+`check`-strip bug in emit_racket.ml (a surface `check …` in an `ok`/`attach-proof`
+tail emitted an unbound `(check …)` head) now strips to `(attach-proof ((check-and …) n) p)`,
+verified by 2 new emit tests (test_emit.ml "eok-proof"). With that fixed, the drifted
+snapshots were regenerated (24 genuinely-changed `.rkt`, all raco-expand clean) and the
+full example batch is green (113/113 Format/Compile/Lint/Tesl-tests). Snapshot
+regeneration is now part of the normal workflow after any emit change.
 
 ## Context
 

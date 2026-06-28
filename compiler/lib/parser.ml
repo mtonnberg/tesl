@@ -241,16 +241,18 @@ let parse_parenthesized_list parse_item s =
    parenthesized concatenation `([time] ++ c ++ c2)`.  It flattens to a plain
    name list; whether a name is a row *variable* or a concrete capability is
    decided later by the checker (a name is a variable iff it is bound by a
-   parameter's arrow-type `requires`).  `cache X` / `email` keep their special
-   spellings, matching the bracketed form. *)
+   parameter's arrow-type `requires`).  `cacheCap X` / `email` keep their special
+   spellings, matching the bracketed form.  The per-cache capability is spelled
+   `cacheCap <Name>` (NOT `cache <Name>`) so it doesn't collide with the `cache`
+   declaration keyword — `cacheCap` is an ordinary identifier here. *)
 let parse_cap_name s =
   match peek s with
-  | IDENT n -> advance s; return n
-  | CACHE ->
+  | IDENT "cacheCap" ->
     advance s;
     (match peek s with
-     | UIDENT cache_name -> advance s; return ("cache " ^ cache_name)
-     | _ -> return "cache")
+     | UIDENT cache_name -> advance s; return ("cacheCap " ^ cache_name)
+     | _ -> return "cacheCap")
+  | IDENT n -> advance s; return n
   | EMAIL -> advance s; return "email"
   | t -> err s (Printf.sprintf "expected capability name, got %s" (tok_to_string t))
 
@@ -2367,13 +2369,19 @@ and hint_expr_type type_name = function
 and parse_capability_names s =
   parse_bracketed_list (fun s ->
     match peek s with
-    | IDENT n -> advance s; Ok n
-    | CACHE ->
-      (* "cache CacheName" — named cache capability in startWorkers/serve *)
+    | IDENT "cacheCap" ->
+      (* "cacheCap CacheName" — named cache capability in startWorkers/serve *)
       advance s;
       (match peek s with
-       | UIDENT cache_name -> advance s; Ok ("cache " ^ cache_name)
-       | _ -> Ok "cache")
+       | UIDENT cache_name -> advance s; Ok ("cacheCap " ^ cache_name)
+       | _ -> Ok "cacheCap")
+    | IDENT n -> advance s; Ok n
+    | CACHE ->
+      (* legacy "cache CacheName" — named cache capability in startWorkers/serve *)
+      advance s;
+      (match peek s with
+       | UIDENT cache_name -> advance s; Ok ("cacheCap " ^ cache_name)
+       | _ -> Ok "cacheCap")
     | EMAIL ->
       (* "email" — email capability *)
       advance s; Ok "email"

@@ -228,7 +228,7 @@ let capability_class = function
   (* External services with no in-process test fallback — always need infra. *)
   | "queueRead" | "queueWrite" | "enqueue" | "publish" | "subscribe"
   | "email" -> `ExternalService
-  | c when c = "cache" || (String.length c >= 6 && String.sub c 0 6 = "cache ") ->
+  | c when c = "cacheCap" || (String.length c >= 9 && String.sub c 0 9 = "cacheCap ") ->
     `ExternalService
   | _ -> `Local
 

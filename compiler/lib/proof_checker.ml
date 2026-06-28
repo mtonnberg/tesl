@@ -64,8 +64,8 @@ let normalize_conj (p : proof_expr) : string =
 let build_cap_map (decls : top_decl list) : (string * string list) list =
   List.filter_map (function
     | DCapability c -> Some (c.name, c.implies)
-    (* Cache declarations implicitly define a "cache <Name>" capability *)
-    | DCache (c : Ast.cache_form) -> Some ("cache " ^ c.name, [])
+    (* Cache declarations implicitly define a "cacheCap <Name>" capability *)
+    | DCache (c : Ast.cache_form) -> Some ("cacheCap " ^ c.name, [])
     (* Email declarations implicitly define an "email" capability *)
     | DEmail _ -> Some ("email", [])
     | _ -> None

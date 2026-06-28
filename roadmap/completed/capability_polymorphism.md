@@ -1,9 +1,10 @@
 # Capability polymorphism (capability-row variables on function types)
 
-Status: IMPLEMENTED (core).  Parser, checker, emit, runtime gate, and stdlib
-annotations landed; `example/kanel/KanelBackend.tesl`'s `List.foldl`-callback
-handler now passes.  See "Implementation status" at the bottom for what's done vs
-deferred.
+Status: ✅ COMPLETE (core).  Parser, checker, emit, runtime gate, and stdlib
+annotations landed + committed; `example/kanel/KanelBackend.tesl`'s `List.foldl`-callback
+handler passes; 6 dedicated tests (test_capability_polymorphism.ml) green.  The one
+deferred piece (precise call-site row unification) is an acceptable future
+enhancement, not blocking — see "Implementation status" at the bottom.
 
 ## Problem
 

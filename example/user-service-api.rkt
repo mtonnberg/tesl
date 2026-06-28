@@ -74,7 +74,7 @@
   #:schema user_service
   #:entities User)
 
-(define-capability cache_UserProfileCache)
+(define-capability cacheCap_UserProfileCache)
 (define-cache UserProfileCache #:database UserDatabase #:default-ttl 3600)
 
 (define-email UserServiceMail #:database UserDatabase #:smtp-host (tesl-env-raw "SMTP_HOST") #:smtp-port 587 #:smtp-username (tesl-env-raw "SMTP_USER") #:smtp-password (tesl-env-raw "SMTP_PASS") #:smtp-tls #t)
@@ -225,13 +225,13 @@
 
 (define-handler
   (getProfile [userId : String ::: (Authenticated userId)])
-  #:capabilities [userDbRead cache_UserProfileCache]
+  #:capabilities [userDbRead cacheCap_UserProfileCache]
   #:returns User
   (let ([cacheKey (thsl-src! "example/user-service-api.tesl" 400 (list (cons 'userId *userId)) (lambda () (string-append "profile_" *userId)))]) (thsl-src-control! "example/user-service-api.tesl" 402 (list (cons 'cacheKey *cacheKey) (cons 'userId *userId)) (lambda () (let ([tesl_case_3 (raw-value (cache-get! UserProfileCache cacheKey))]) (cond [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Something)) (let ([user (hash-ref (adt-value-fields *tesl_case_3) 'value)]) (thsl-src! "example/user-service-api.tesl" 405 (list (cons 'user user)) (lambda () *user)))] [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 408 (list) (lambda () (let ([found (let ([tesl_match (select-one (from User) (where (==. (entity-field-ref User 'id) userId)))]) (if tesl_match (Something tesl_match) Nothing))]) (let ([tesl_case_4 (raw-value found)]) (cond [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 411 (list) (lambda () (reject "User not found" #:http-code 404)))] [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Something)) (let ([user (hash-ref (adt-value-fields *tesl_case_4) 'value)]) (thsl-src! "example/user-service-api.tesl" 413 (list (cons 'user user)) (lambda () (begin (cache-set! UserProfileCache cacheKey *user) *user))))])))))]))))))
 
 (define-handler
   (updateProfile [userId : String ::: (Authenticated userId)] [body : UpdateProfileRequest])
-  #:capabilities [userDbRead userDbWrite cache_UserProfileCache userHttp]
+  #:capabilities [userDbRead userDbWrite cacheCap_UserProfileCache userHttp]
   #:returns User
   (let ([found (thsl-src! "example/user-service-api.tesl" 430 (list (cons 'userId *userId) (cons 'body *body)) (lambda () (let ([tesl_match (select-one (from User) (where (==. (entity-field-ref User 'id) userId)))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/user-service-api.tesl" 431 (list (cons 'found *found) (cons 'userId *userId) (cons 'body *body)) (lambda () (let ([tesl_case_5 (raw-value found)]) (cond [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 433 (list) (lambda () (reject "User not found" #:http-code 404)))] [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Something)) (thsl-src! "example/user-service-api.tesl" 438 (list) (lambda () (let ([cacheKey (string-append "profile_" *userId)]) (begin (cache-delete! UserProfileCache cacheKey) (let ([_ (notifyWebhook userId)]) (car (update-many! (from User) (hash (entity-field-ref User 'bio) (raw-value body.bio)) (where (==. (entity-field-ref User 'id) userId)))))))))]))))))
 

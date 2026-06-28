@@ -117,43 +117,43 @@ let test_parse_cache_ttl_emitted () =
 (** 1.6 Cache.get parses and emits cache-get! *)
 let test_parse_cache_get () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn getVal(k: String) -> Maybe String requires [cache C] =\n  Cache.get C (k)\n" in
+    "fn getVal(k: String) -> Maybe String requires [cacheCap C] =\n  Cache.get C (k)\n" in
   check_contains "parse_cache_get" src "cache-get!"
 
 (** 1.7 Cache.set parses and emits cache-set! *)
 let test_parse_cache_set () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn setVal(k: String, v: String) -> Unit requires [cache C] =\n  Cache.set C (k) v\n" in
+    "fn setVal(k: String, v: String) -> Unit requires [cacheCap C] =\n  Cache.set C (k) v\n" in
   check_contains "parse_cache_set" src "cache-set!"
 
 (** 1.8 Cache.delete parses and emits cache-delete! *)
 let test_parse_cache_delete () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn delVal(k: String) -> Unit requires [cache C] =\n  Cache.delete C (k)\n" in
+    "fn delVal(k: String) -> Unit requires [cacheCap C] =\n  Cache.delete C (k)\n" in
   check_contains "parse_cache_delete" src "cache-delete!"
 
 (** 1.9 Cache.invalidate parses and emits cache-invalidate-prefix! *)
 let test_parse_cache_invalidate () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn inv(prefix: String) -> Unit requires [cache C] =\n  Cache.invalidate C (prefix)\n" in
+    "fn inv(prefix: String) -> Unit requires [cacheCap C] =\n  Cache.invalidate C (prefix)\n" in
   check_contains "parse_cache_invalidate" src "cache-invalidate-prefix!"
 
 (** 1.10 Cache.get with string literal key *)
 let test_parse_cache_get_string_key () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f() -> Maybe String requires [cache C] =\n  Cache.get C (\"mykey\")\n" in
+    "fn f() -> Maybe String requires [cacheCap C] =\n  Cache.get C (\"mykey\")\n" in
   check_contains "cache_get_string_key" src "cache-get!"
 
 (** 1.11 Cache.set with explicit TTL *)
 let test_parse_cache_set_with_ttl () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String, v: String) -> Unit requires [cache C] =\n  Cache.set C (k) v 3600\n" in
+    "fn f(k: String, v: String) -> Unit requires [cacheCap C] =\n  Cache.set C (k) v 3600\n" in
   check_contains "cache_set_with_ttl" src "cache-set!"
 
 (** 1.12 Cache.set with parenthesized TTL *)
 let test_parse_cache_set_ttl_paren () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String, v: String) -> Unit requires [cache C] =\n  Cache.set C (k) v (300)\n" in
+    "fn f(k: String, v: String) -> Unit requires [cacheCap C] =\n  Cache.set C (k) v (300)\n" in
   check_contains "cache_set_ttl_paren" src "cache-set!"
 
 (** 1.13 Multiple cache blocks parse correctly *)
@@ -177,45 +177,45 @@ let test_parse_cache_list_value_type () =
 (** 1.16 Cache.get in let binding *)
 let test_parse_cache_get_let_binding () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String) -> Maybe String requires [cache C] =\n  let cached = Cache.get C (k)\n  cached\n" in
+    "fn f(k: String) -> Maybe String requires [cacheCap C] =\n  let cached = Cache.get C (k)\n  cached\n" in
   let racket = compile_ok "cache_get_let_binding" src in
   assert (contains "cache-get!" racket)
 
 (** 1.17 Cache.set in let _ = ... sequence *)
 let test_parse_cache_set_statement_sequence () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String, v: String) -> Unit requires [cache C] =\n  Cache.set C (k) v\n" in
+    "fn f(k: String, v: String) -> Unit requires [cacheCap C] =\n  Cache.set C (k) v\n" in
   ignore (compile_ok "cache_set_stmt_seq" src)
 
 (** 1.18 Cache.delete in statement position *)
 let test_parse_cache_delete_stmt () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String) -> Unit requires [cache C] =\n  Cache.delete C (k)\n" in
+    "fn f(k: String) -> Unit requires [cacheCap C] =\n  Cache.delete C (k)\n" in
   ignore (compile_ok "cache_delete_stmt" src)
 
 (** 1.19 Cache.invalidate in statement position *)
 let test_parse_cache_invalidate_stmt () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(pfx: String) -> Unit requires [cache C] =\n  Cache.invalidate C (pfx)\n" in
+    "fn f(pfx: String) -> Unit requires [cacheCap C] =\n  Cache.invalidate C (pfx)\n" in
   ignore (compile_ok "cache_invalidate_stmt" src)
 
 (** 1.20 Cache name emitted in cache-get! call *)
 let test_parse_cache_get_cache_name_in_output () =
   let src = module_ ~extra:(with_db "cache UserCache = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String) -> Maybe String requires [cache UserCache] =\n  Cache.get UserCache (k)\n" in
+    "fn f(k: String) -> Maybe String requires [cacheCap UserCache] =\n  Cache.get UserCache (k)\n" in
   check_contains "cache_get_cache_name" src "UserCache"
 
 (** 1.21 Cache.set emits value argument *)
 let test_parse_cache_set_value_in_output () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String, v: String) -> Unit requires [cache C] =\n  Cache.set C (k) v\n" in
+    "fn f(k: String, v: String) -> Unit requires [cacheCap C] =\n  Cache.set C (k) v\n" in
   let racket = compile_ok "cache_set_value" src in
   ignore racket  (* just check it compiles cleanly *)
 
 (** 1.22 Cache in function body with other statements *)
 let test_parse_cache_mixed_body () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String, v: String) -> Maybe String requires [cache C] =\n\
+    "fn f(k: String, v: String) -> Maybe String requires [cacheCap C] =\n\
      let _ = Cache.set C (k) v\n\
      Cache.get C (k)\n" in
   ignore (compile_ok "cache_mixed_body" src)
@@ -223,7 +223,7 @@ let test_parse_cache_mixed_body () =
 (** 1.23 Cache in case expression scrutinee position *)
 let test_parse_cache_in_case () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    {|fn f(k: String) -> String requires [cache C] =
+    {|fn f(k: String) -> String requires [cacheCap C] =
   case Cache.get C (k) of
     Something v -> v
     Nothing -> "default"
@@ -233,7 +233,7 @@ let test_parse_cache_in_case () =
 (** 1.24 Cache.get with concatenated key *)
 let test_parse_cache_get_concat_key () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(id: String) -> Maybe String requires [cache C] =\n\
+    "fn f(id: String) -> Maybe String requires [cacheCap C] =\n\
      Cache.get C (\"profile_\" ++ id)\n" in
   ignore (compile_ok "cache_get_concat_key" src)
 
@@ -248,25 +248,25 @@ let test_parse_cache_int_value_type () =
 let test_type_cache_get_returns_maybe () =
   (* If Cache.get returns Maybe String, it can be used where Maybe String is expected *)
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String) -> Maybe String requires [cache C] =\n  Cache.get C (k)\n" in
+    "fn f(k: String) -> Maybe String requires [cacheCap C] =\n  Cache.get C (k)\n" in
   ignore (compile_ok "type_cache_get_maybe" src)
 
 (** 2.2 Cache.set returns Unit *)
 let test_type_cache_set_returns_unit () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String, v: String) -> Unit requires [cache C] =\n  Cache.set C (k) v\n" in
+    "fn f(k: String, v: String) -> Unit requires [cacheCap C] =\n  Cache.set C (k) v\n" in
   ignore (compile_ok "type_cache_set_unit" src)
 
 (** 2.3 Cache.delete returns Unit *)
 let test_type_cache_delete_returns_unit () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String) -> Unit requires [cache C] =\n  Cache.delete C (k)\n" in
+    "fn f(k: String) -> Unit requires [cacheCap C] =\n  Cache.delete C (k)\n" in
   ignore (compile_ok "type_cache_delete_unit" src)
 
 (** 2.4 Cache.invalidate returns Unit *)
 let test_type_cache_invalidate_returns_unit () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(pfx: String) -> Unit requires [cache C] =\n  Cache.invalidate C (pfx)\n" in
+    "fn f(pfx: String) -> Unit requires [cacheCap C] =\n  Cache.invalidate C (pfx)\n" in
   ignore (compile_ok "type_cache_invalidate_unit" src)
 
 (** 2.5 Cache key must be a String — Int key causes type error *)
@@ -274,7 +274,7 @@ let test_type_cache_int_key_error () =
   (* Non-string key might produce a type error since key is unified with t_string *)
   (* Actually the checker unifies with t_string, so passing an Int should fail type check *)
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f() -> Maybe String requires [cache C] =\n  Cache.get C (42)\n" in
+    "fn f() -> Maybe String requires [cacheCap C] =\n  Cache.get C (42)\n" in
   (* This may or may not fail depending on inference; just check it compiles without crash *)
   (* A type error here is acceptable — we check it doesn't crash the compiler *)
   let _ = Compile.check_source "<test>" src in
@@ -283,19 +283,19 @@ let test_type_cache_int_key_error () =
 (** 2.6 Cache.set with correct value type succeeds *)
 let test_type_cache_set_correct_type () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: Int }\n")
-    "fn f(k: String, v: Int) -> Unit requires [cache C] =\n  Cache.set C (k) v\n" in
+    "fn f(k: String, v: Int) -> Unit requires [cacheCap C] =\n  Cache.set C (k) v\n" in
   ignore (compile_ok "type_cache_set_correct" src)
 
 (** 2.7 Cache.set TTL is an Int *)
 let test_type_cache_set_ttl_is_int () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String, v: String) -> Unit requires [cache C] =\n  Cache.set C (k) v 600\n" in
+    "fn f(k: String, v: String) -> Unit requires [cacheCap C] =\n  Cache.set C (k) v 600\n" in
   ignore (compile_ok "type_cache_set_ttl_int" src)
 
 (** 2.8 Cache.get result used in case-of *)
 let test_type_cache_get_case () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    {|fn f(k: String) -> String requires [cache C] =
+    {|fn f(k: String) -> String requires [cacheCap C] =
   case Cache.get C (k) of
     Something v -> v
     Nothing -> "miss"
@@ -305,7 +305,7 @@ let test_type_cache_get_case () =
 (** 2.9 Multiple cache operations in sequence — all Unit in do-block *)
 let test_type_cache_sequence () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String, v: String) -> Unit requires [cache C] =\n\
+    "fn f(k: String, v: String) -> Unit requires [cacheCap C] =\n\
      let _ = Cache.set C (k) v\n\
      Cache.delete C (k)\n" in
   ignore (compile_ok "type_cache_sequence" src)
@@ -313,19 +313,19 @@ let test_type_cache_sequence () =
 (** 2.10 Cache.get with Int value type returns Maybe Int *)
 let test_type_cache_get_int_value () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: Int }\n")
-    "fn f(k: String) -> Maybe Int requires [cache C] =\n  Cache.get C (k)\n" in
+    "fn f(k: String) -> Maybe Int requires [cacheCap C] =\n  Cache.get C (k)\n" in
   ignore (compile_ok "type_cache_get_int" src)
 
 (** 2.11 Cache prefix is String — same as key *)
 let test_type_cache_invalidate_string_prefix () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(pfx: String) -> Unit requires [cache C] =\n  Cache.invalidate C (pfx)\n" in
+    "fn f(pfx: String) -> Unit requires [cacheCap C] =\n  Cache.invalidate C (pfx)\n" in
   ignore (compile_ok "type_cache_invalidate_str" src)
 
 (** 2.12 Cache in function with multiple params *)
 let test_type_cache_multi_param_fn () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    {|fn getOrDefault(k: String, def: String) -> String requires [cache C] =
+    {|fn getOrDefault(k: String, def: String) -> String requires [cacheCap C] =
   case Cache.get C (k) of
     Something v -> v
     Nothing -> def
@@ -335,7 +335,7 @@ let test_type_cache_multi_param_fn () =
 (** 2.13 Cache.set with String value in Int cache — type mismatch *)
 let test_type_cache_set_wrong_type () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: Int }\n")
-    "fn f(k: String) -> Unit requires [cache C] =\n  Cache.set C (k) \"hello\"\n" in
+    "fn f(k: String) -> Unit requires [cacheCap C] =\n  Cache.set C (k) \"hello\"\n" in
   (* This should produce a type error — string vs int *)
   (* Just check it doesn't crash the compiler *)
   let _ = Compile.check_source "<test>" src in
@@ -345,7 +345,7 @@ let test_type_cache_set_wrong_type () =
 let test_type_cache_get_is_maybe () =
   (* Using Cache.get result directly where String is expected should type-error *)
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String) -> String requires [cache C] =\n  Cache.get C (k)\n" in
+    "fn f(k: String) -> String requires [cacheCap C] =\n  Cache.get C (k)\n" in
   (* This should fail — get returns Maybe String, not String *)
   let diags = Compile.check_source "<test>" src in
   ignore diags  (* may or may not fail depending on inference depth *)
@@ -353,19 +353,19 @@ let test_type_cache_get_is_maybe () =
 (** 2.15 Cache ops with Bool value type *)
 let test_type_cache_bool_value () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: Bool }\n")
-    "fn f(k: String) -> Maybe Bool requires [cache C] =\n  Cache.get C (k)\n" in
+    "fn f(k: String) -> Maybe Bool requires [cacheCap C] =\n  Cache.get C (k)\n" in
   ignore (compile_ok "type_cache_bool" src)
 
 (** 2.16 Cache.set without TTL uses defaultTtl *)
 let test_type_cache_set_no_ttl () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB defaultTtl: 3600 valueType: String }\n")
-    "fn f(k: String, v: String) -> Unit requires [cache C] =\n  Cache.set C (k) v\n" in
+    "fn f(k: String, v: String) -> Unit requires [cacheCap C] =\n  Cache.set C (k) v\n" in
   ignore (compile_ok "type_cache_set_no_ttl" src)
 
 (** 2.17 Cache.invalidate with concatenated prefix *)
 let test_type_cache_invalidate_concat () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(id: String) -> Unit requires [cache C] =\n\
+    "fn f(id: String) -> Unit requires [cacheCap C] =\n\
      Cache.invalidate C (\"user_\" ++ id)\n" in
   ignore (compile_ok "type_cache_invalidate_concat" src)
 
@@ -374,16 +374,16 @@ let test_type_two_caches_different_types () =
   let src = module_ (with_db
     "cache StrCache = Cache { database: MainDB valueType: String }\n\
      cache IntCache = Cache { database: MainDB valueType: Int }\n\
-     fn f(k: String) -> Maybe String requires [cache StrCache] =\n\
+     fn f(k: String) -> Maybe String requires [cacheCap StrCache] =\n\
        Cache.get StrCache (k)\n\
-     fn g(k: String) -> Maybe Int requires [cache IntCache] =\n\
+     fn g(k: String) -> Maybe Int requires [cacheCap IntCache] =\n\
        Cache.get IntCache (k)\n") in
   ignore (compile_ok "type_two_caches" src)
 
 (** 2.19 Cache.set inside let binding chain *)
 let test_type_cache_set_in_let_chain () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String, v: String) -> Maybe String requires [cache C] =\n\
+    "fn f(k: String, v: String) -> Maybe String requires [cacheCap C] =\n\
      let _ = Cache.set C (k) v\n\
      Cache.get C (k)\n" in
   ignore (compile_ok "type_cache_set_in_chain" src)
@@ -391,14 +391,14 @@ let test_type_cache_set_in_let_chain () =
 (** 2.20 Cache.get with interpolated string key *)
 let test_type_cache_get_interp_key () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(id: String) -> Maybe String requires [cache C] =\n\
+    "fn f(id: String) -> Maybe String requires [cacheCap C] =\n\
      Cache.get C (\"user:${id}\")\n" in
   ignore (compile_ok "type_cache_get_interp_key" src)
 
 (** 2.21 Cache.delete in case arm *)
 let test_type_cache_delete_in_case () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    {|fn f(k: String, cond: Bool) -> Unit requires [cache C] =
+    {|fn f(k: String, cond: Bool) -> Unit requires [cacheCap C] =
   case cond of
     True -> Cache.delete C (k)
     False -> Cache.delete C (k)
@@ -408,7 +408,7 @@ let test_type_cache_delete_in_case () =
 (** 2.22 Cache operations are available in handler functions *)
 let test_type_cache_in_handler () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    {|fn getFromCache(k: String) -> Maybe String requires [cache C] =
+    {|fn getFromCache(k: String) -> Maybe String requires [cacheCap C] =
   Cache.get C (k)
 |} in
   ignore (compile_ok "type_cache_in_handler" src)
@@ -416,14 +416,14 @@ let test_type_cache_in_handler () =
 (** 2.23 Cache TTL expr can be a variable binding *)
 let test_type_cache_ttl_variable () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String, v: String, ttl: Int) -> Unit requires [cache C] =\n\
+    "fn f(k: String, v: String, ttl: Int) -> Unit requires [cacheCap C] =\n\
      Cache.set C (k) v (ttl)\n" in
   ignore (compile_ok "type_cache_ttl_variable" src)
 
 (** 2.24 Cache.get in if-then-else *)
 let test_type_cache_get_in_if () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    {|fn f(k: String, cond: Bool) -> Maybe String requires [cache C] =
+    {|fn f(k: String, cond: Bool) -> Maybe String requires [cacheCap C] =
   if cond then
     Cache.get C (k)
   else
@@ -434,7 +434,7 @@ let test_type_cache_get_in_if () =
 (** 2.25 Cache.invalidate with literal prefix *)
 let test_type_cache_invalidate_literal () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f() -> Unit requires [cache C] =\n\
+    "fn f() -> Unit requires [cacheCap C] =\n\
      Cache.invalidate C (\"session_\")\n" in
   ignore (compile_ok "type_cache_invalidate_literal" src)
 
@@ -497,51 +497,51 @@ let test_struct_cache_does_not_affect_queues () =
 
 (* ── 4. Capability tests ─────────────────────────────────────────────────── *)
 
-(** 4.1 Cache.get requires [cache CacheName] *)
+(** 4.1 Cache.get requires [cacheCap CacheName] *)
 let test_cap_cache_get_requires_cache () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
     "handler h(k: String) -> Maybe String =\n  ok (Cache.get C (k)) ::: True\n" in
-  check_err_contains "cap_get_requires_cache" src "cache C"
+  check_err_contains "cap_get_requires_cache" src "cacheCap C"
 
-(** 4.2 Cache.set requires [cache CacheName] *)
+(** 4.2 Cache.set requires [cacheCap CacheName] *)
 let test_cap_cache_set_requires_cache () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
     "handler h(k: String, v: String) -> Unit =\n  ok (Cache.set C (k) v) ::: True\n" in
-  check_err_contains "cap_set_requires_cache" src "cache C"
+  check_err_contains "cap_set_requires_cache" src "cacheCap C"
 
-(** 4.3 Cache.delete requires [cache CacheName] *)
+(** 4.3 Cache.delete requires [cacheCap CacheName] *)
 let test_cap_cache_delete_requires_cache () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
     "handler h(k: String) -> Unit =\n  ok (Cache.delete C (k)) ::: True\n" in
-  check_err_contains "cap_delete_requires_cache" src "cache C"
+  check_err_contains "cap_delete_requires_cache" src "cacheCap C"
 
-(** 4.4 Cache.invalidate requires [cache CacheName] *)
+(** 4.4 Cache.invalidate requires [cacheCap CacheName] *)
 let test_cap_cache_invalidate_requires_cache () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
     "handler h(pfx: String) -> Unit =\n  ok (Cache.invalidate C (pfx)) ::: True\n" in
-  check_err_contains "cap_invalidate_requires_cache" src "cache C"
+  check_err_contains "cap_invalidate_requires_cache" src "cacheCap C"
 
 (** 4.5 Correct capability declaration allows compilation *)
 let test_cap_correct_capability () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn f(k: String) -> Maybe String requires [cache C] =\n  Cache.get C (k)\n" in
+    "fn f(k: String) -> Maybe String requires [cacheCap C] =\n  Cache.get C (k)\n" in
   ignore (compile_ok "cap_correct" src)
 
 (** 4.6 Capability name includes cache name — not generic "cache" *)
 let test_cap_name_specific () =
-  (* The capability for UserProfileCache is "cache UserProfileCache", not just "cache" *)
+  (* The capability for UserProfileCache is "cacheCap UserProfileCache", not just "cacheCap" *)
   let src = module_ ~extra:(with_db "cache UserProfileCache = Cache { database: MainDB valueType: String }\n")
     "handler h(k: String) -> Maybe String =\n  ok (Cache.get UserProfileCache (k)) ::: True\n" in
-  check_err_contains "cap_name_specific" src "cache UserProfileCache"
+  check_err_contains "cap_name_specific" src "cacheCap UserProfileCache"
 
 (** 4.7 Different cache names require different capabilities *)
 let test_cap_different_caches_different_caps () =
   let src = module_ (with_db
     "cache CacheA = Cache { database: MainDB valueType: String }\n\
      cache CacheB = Cache { database: MainDB valueType: Int }\n\
-     fn f(k: String) -> Maybe String requires [cache CacheA] =\n\
+     fn f(k: String) -> Maybe String requires [cacheCap CacheA] =\n\
        Cache.get CacheA (k)\n\
-     fn g(k: String) -> Maybe Int requires [cache CacheB] =\n\
+     fn g(k: String) -> Maybe Int requires [cacheCap CacheB] =\n\
        Cache.get CacheB (k)\n") in
   ignore (compile_ok "cap_different_caches" src)
 
@@ -550,20 +550,20 @@ let test_cap_wrong_cache_name () =
   let src = module_ (with_db
     "cache CacheA = Cache { database: MainDB valueType: String }\n\
      cache CacheB = Cache { database: MainDB valueType: Int }\n\
-     handler h(k: String) -> Maybe Int requires [cache CacheA] =\n\
+     handler h(k: String) -> Maybe Int requires [cacheCap CacheA] =\n\
        ok (Cache.get CacheB (k)) ::: True\n") in
-  check_err_contains "cap_wrong_name" src "cache CacheB"
+  check_err_contains "cap_wrong_name" src "cacheCap CacheB"
 
 (** 4.9 fn with cache capability can call cache ops *)
 let test_cap_fn_with_cache_cap () =
   let src = module_ ~extra:(with_db "cache C = Cache { database: MainDB valueType: String }\n")
-    "fn getCache(k: String) -> Maybe String requires [cache C] =\n  Cache.get C (k)\n" in
+    "fn getCache(k: String) -> Maybe String requires [cacheCap C] =\n  Cache.get C (k)\n" in
   ignore (compile_ok "cap_fn_with_cap" src)
 
 (** 4.10 Handler declares correct cache capability *)
 let test_cap_handler_correct () =
   let src = module_ ~extra:(with_db "cache UserCache = Cache { database: MainDB valueType: String }\n")
-    {|fn getUser(id: String) -> Maybe String requires [cache UserCache] =
+    {|fn getUser(id: String) -> Maybe String requires [cacheCap UserCache] =
   Cache.get UserCache (id)
 |} in
   ignore (compile_ok "cap_handler_correct" src)

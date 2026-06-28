@@ -3067,13 +3067,13 @@ A `cache` declaration creates a typed, name-scoped cache backed by a PostgreSQL 
 ```
 
 ```tesl
-cache UserProfileCache {
+cacheCap UserProfileCache {
   database:   MainDB
   defaultTtl: 3600
   valueType:  UserProfile
 }
 
-cache ProductListCache {
+cacheCap ProductListCache {
   database:   MainDB
   defaultTtl: 300
   valueType:  List Product
@@ -3087,17 +3087,17 @@ Each `cache` block declares:
 
 ### 19.2 Capability
 
-Each named cache declares its own capability token: `cache CacheName` (where `CacheName` is the declared identifier). The capability name uses a space, which the compiler normalises to an underscore in the generated Racket identifier (`cache_CacheName`).
+Each named cache declares its own capability token: `cacheCap CacheName` (where `CacheName` is the declared identifier). The capability name uses a space, which the compiler normalises to an underscore in the generated Racket identifier (`cache_CacheName`).
 
 ```tesl
-capability appService implies cache UserProfileCache
+capability appService implies cacheCap UserProfileCache
 ```
 
-A handler that reads or writes `UserProfileCache` must declare `cache UserProfileCache` in its `requires` list (directly or transitively via `implies`):
+A handler that reads or writes `UserProfileCache` must declare `cacheCap UserProfileCache` in its `requires` list (directly or transitively via `implies`):
 
 ```tesl
 handler getProfile(id: String) -> UserProfile
-  requires [dbRead, cache UserProfileCache] =
+  requires [dbRead, cacheCap UserProfileCache] =
   ...
 ```
 
@@ -3126,7 +3126,7 @@ If a stored value cannot be deserialized (for example because the application wa
 ```tesl
 handler updateProfile(userId: String, req: UpdateProfileRequest)
   -> UserProfile
-  requires [dbWrite, cache UserProfileCache] =
+  requires [dbWrite, cacheCap UserProfileCache] =
   with transaction {
     let updated = update ... in User ...
     Cache.delete UserProfileCache ("profile_" ++ userId)
@@ -3143,14 +3143,14 @@ A sweeper thread runs every 60 seconds and deletes expired rows (`expires_at < N
 ```tesl
 import Tesl.Maybe exposing [Maybe, Something, Nothing]
 
-cache UserProfileCache {
+cacheCap UserProfileCache {
   database:   MainDB
   defaultTtl: 3600
   valueType:  UserProfile
 }
 
 handler getUserProfile(id: String) -> UserProfile
-  requires [dbRead, cache UserProfileCache] =
+  requires [dbRead, cacheCap UserProfileCache] =
   let cached = Cache.get UserProfileCache ("profile_" ++ id)
   case cached of
     Something profile ->

@@ -393,10 +393,10 @@ handler login(body: LoginRequest)
 # Subsequent calls: cache hit → return cached user (no DB query).
 # TTL: 1 hour (set in the cache block above).
 #
-# Requires: userDbRead (cache miss path), cache UserProfileCache.
+# Requires: userDbRead (cache miss path), cacheCap UserProfileCache.
 handler getProfile(userId: String ::: Authenticated userId)
   -> User
-  requires [userDbRead, cache UserProfileCache] =
+  requires [userDbRead, cacheCap UserProfileCache] =
   let cacheKey = "profile_" ++ userId
   # 3. Cache.get — returns Maybe User.
   case Cache.get UserProfileCache (cacheKey) of
@@ -420,13 +420,13 @@ handler getProfile(userId: String ::: Authenticated userId)
 # If the DB update rolls back, the cache delete also rolls back — no stale eviction.
 # After the transaction, we call the webhook (outside the transaction).
 #
-# Requires: userDbRead + userDbWrite (update), cache UserProfileCache (invalidate),
+# Requires: userDbRead + userDbWrite (update), cacheCap UserProfileCache (invalidate),
 #           userHttp (webhook notification).
 handler updateProfile(
     userId: String ::: Authenticated userId,
     body: UpdateProfileRequest)
   -> User
-  requires [userDbRead, userDbWrite, cache UserProfileCache, userHttp] =
+  requires [userDbRead, userDbWrite, cacheCap UserProfileCache, userHttp] =
   let found = selectOne u from User where u.id == userId
   case found of
     Nothing ->

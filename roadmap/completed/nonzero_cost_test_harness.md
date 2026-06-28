@@ -1,8 +1,10 @@
 # Internal regression suite must run in non-zero-cost mode
 
-Status: RESOLVED. See "## Resolution" at the bottom.
-(Historical: PARTIAL FIX LANDED for check/exists/sql/web/record; this pass finished
-the audit and fixed the one remaining mode-fragile test, tesl-test.)
+Status: ✅ COMPLETE. See "## Resolution" at the bottom.
+(Historical: PARTIAL FIX LANDED for check/exists/sql/web/record; a later pass finished
+the audit + fixed the mode-fragile tesl-test; the FINAL pass routed body-proof-test —
+the one NZC-dependent test the audit missed because the suite aborted at tesl-test
+before reaching it — through a suite-aware in-memory NZC driver. Racket suite all-pass.)
 
 ## Problem
 
@@ -134,3 +136,20 @@ non-zero-cost compiled root was prototyped and verified to isolate correctly
 (`PLTCOMPILEDROOTS=<abs>` populates a separate `compiled-nzc/` and leaves the
 zero-cost `tesl/dsl/compiled/` untouched) but is NOT needed given the audit — kept as
 a documented option should a future evidence-bearing-AND-install-linked test appear.
+
+## Final pass: body-proof-test was the audit's blind spot
+
+The audit above ran each test in a fresh in-memory compile and concluded body-proof
+"passes in zero-cost" — that was WRONG. body-proof is packaged as a `body-proof-suite`
+value run via `run-tests` (not top-level checks), and the internal-all suite ran it in
+the DEFAULT mode AFTER tesl-test. Because tesl-test's Q01 failure aborted
+`run-internal-tests` first, body-proof was NEVER REACHED — so its zero-cost failures
+(detach-proof / attached-proof / Skolem-witness scoping erased) were hidden. Once
+tesl-test was fixed (and the cache work recompiled `dsl/*` in default, clearing the
+stale-NZC bytecode accident it had been passing on), body-proof surfaced 6 failures.
+
+Fix: `tests/run-nzc-bodyproof.rkt` — a suite-aware driver that, under
+`use-compiled-file-paths null` (in-memory, no clobber) + `TESL_ZERO_COST_PROOFS=0`,
+`dynamic-require`s `body-proof-suite` and `run-tests` it. `internal-all.rkt` runs it
+via a new `run-non-zero-cost-driver`; body-proof no longer runs in the default suite.
+Verified 21/21 pass under NZC; the racket internal suite is all-pass.

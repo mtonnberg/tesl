@@ -1,7 +1,11 @@
 # App simplification: `main : () -> App`, queue/worker folding, capability rewiring
 
-**Status:** MIGRATION DONE + WIRING-CHECK LANDED; old-code removal + test-fixture
-migration remain.
+**Status:** MIGRATION + WIRING-CHECK + TEST-FIXTURE MIGRATION + CACHE config-type all
+DONE (committed; example batch 113/113, OCaml dune green, racket suite all-pass).
+ONLY REMAINING: deleting the old parser/config-block code (Phase D below) — the new
+typed `= Type{}` forms are accepted everywhere and nothing uses the old block syntax,
+so the old branches can be removed (make each `parse_*_form` require `= Type{}`, drop
+the old-block else-branches + `parse_pg_value`; config_schema/raw_fields cleanup).
 
 Progress (this pass):
 - Phase A — `App.static` schema field + `lower_main_app` now wraps the WHOLE main

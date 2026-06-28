@@ -1,14 +1,60 @@
 # Rename the cache capability `cache <Name>` → `cacheCap <Name>`
 
+**Status:** ✅ COMPLETE. The capability is now `cacheCap <Name>` end-to-end; the
+declaration keyword stays `cache X = Cache { … }`. The focused pass also fixed
+the cache-capability GRANTING gap and uncovered + fixed two latent cache-runtime
+bugs (see below). Full example batch green: examples 113/113, Tesl tests 113/113,
+Racket suite all-pass, OCaml dune green.
+
+## What landed
+
+- **Pipeline rename** (`cache <Name>` → `cacheCap <Name>` capability token →
+  `cacheCap_<Name>` Racket identifier): `parser.ml` (`parse_cap_name` +
+  `parse_capability_names` accept `cacheCap <UIdent>`), `validation_capabilities.ml`,
+  `proof_checker.ml`, `emit_racket.ml` (`cap_ident`/`cap_list_str` + `DCache`
+  `define-capability cacheCap_<name>`), `mutate.ml`, and the runtime macro
+  `tesl/cache.rkt` `define-cache` (builds `cacheCap_<name>`).
+- **All usages migrated** to `requires [cacheCap X]`: lesson59-cache, user-service-api,
+  cache-tests.tesl, test_cache.ml, LANGUAGE-SPEC.md, and the hand-written DAP smoke
+  fixtures (`tests/dap-*-smoke.rkt` `define-capability cacheCap_<Name>`).
+
+## Cache-capability GRANTING gap — RESOLVED (threading, like databases)
+
+Settled by precedent (lesson21 DB tests declare `requires [dbRead, dbWrite]` on the
+test block): test blocks GRANT the caps they use. Each cache-using test block in
+lesson59-cache.tesl and cache-tests.tesl now declares the precise `requires
+[cacheCap …]`; pure `expect True` tests stay bare. NOT ambient auto-grant.
+
+## Two latent cache-runtime bugs exposed by the granting fix (both FIXED)
+
+Once the cap was granted, the tests ran far enough to hit real bugs the cap-failure
+had masked:
+1. **emit:** test / api-test / load-test `with-capabilities` (+ api-test `(list …)`)
+   rendered the cap list with raw `String.concat " "`, so the two-word `cacheCap X`
+   became two unbound identifiers. Fixed: those 4 sites now use `cap_list_str`
+   (the same sanitiser used for function `#:capabilities`).
+2. **runtime (`tesl/cache.rkt`):**
+   - `mem-get!`/`pg-get!` returned a non-canonical `Maybe` (`'Nothing` /
+     `(list 'Something v)`) instead of the `adt-value` the emitted case-match and
+     handler-return net expect. Fixed to return `Nothing` / `(Something v)`.
+   - the in-memory backend stored raw values but `mem-get!` tried to JSON-`deserialize`
+     them (`string->jsexpr "foo"` → fail → `#f` → every string-cache hit became a
+     miss). Fixed: in-memory backend stores/returns raw (no JSON round-trip);
+     `mem-set!` unwraps named-values to match the PG path.
+
+---
+
+## Original notes (kept for context)
+
 **Status:** TODO (deferred — surfaced during the cache config-block migration).
 
 ## Why
 
 `cache` is currently overloaded:
 - the declaration keyword: `cache X = Cache { … }`
-- the cache runtime functions: `Cache.get` / `Cache.set` / …
+- the cache runtime functions: `Cache.get` / `Cache.set` / … (this is fine since this is a module with capital C)
 - the implicit per-cache **capability**: `requires [cache X]` (each cache gets its
-  own `cache <Name>` capability token, name-specific like a database).
+  own `cache <Name>` capability token, name-specific like a database). (this is the problem since this is the exact word as the declaration keyword)
 
 The capability use of `cache` should be disambiguated to `cacheCap` so the term isn't
 overloaded:

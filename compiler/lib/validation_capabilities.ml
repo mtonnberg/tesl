@@ -158,7 +158,7 @@ let collect_needed_capabilities
     (* Cache forms: data-dependent token, then descend into key/value/ttl/prefix. *)
     | ECacheGet { cache_name; _ } | ECacheSet { cache_name; _ }
     | ECacheDelete { cache_name; _ } | ECacheInvalidate { cache_name; _ } ->
-      Ast_visitor.fold_children go (("cache " ^ cache_name) :: acc) e
+      Ast_visitor.fold_children go (("cacheCap " ^ cache_name) :: acc) e
     (* Purely-mechanical variants: descend into child exprs only.  This includes
        EField (non-special obj), EApp, EBinop, EUnop, EIf, ELet, ELetProof,
        ERecord, EList, EOk, EWithDatabase/EWithCapabilities/EWithTransaction,
@@ -591,8 +591,8 @@ let check_cookies_field_access (decls : top_decl list) : validation_error list =
 let build_local_cap_map (decls : top_decl list) : (string * string list) list =
   List.filter_map (function
     | DCapability c -> Some (c.name, c.implies)
-    (* Cache declarations implicitly define a "cache <Name>" capability *)
-    | DCache (c : Ast.cache_form) -> Some ("cache " ^ c.name, [])
+    (* Cache declarations implicitly define a "cacheCap <Name>" capability *)
+    | DCache (c : Ast.cache_form) -> Some ("cacheCap " ^ c.name, [])
     (* Email declarations implicitly define an "email" capability *)
     | DEmail _ -> Some ("email", [])
     | _ -> None

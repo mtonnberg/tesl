@@ -111,11 +111,11 @@ let import_rename name =
   "tesl_import_" ^ escaped
 
 (** Render a capability name as a Racket identifier.  Most capabilities are
-    plain identifiers, but the implicit cache capability is two words
-    (`cache <Name>`); collapse spaces to underscores so it becomes the
-    `cache_<Name>` identifier that `define-cache` / `define-capability` bind. *)
+    plain identifiers, but the implicit per-cache capability is two words
+    (`cacheCap <Name>`); collapse spaces to underscores so it becomes the
+    `cacheCap_<Name>` identifier that `define-cache` / `define-capability` bind. *)
 let cap_ident name =
-  if String.length name >= 6 && String.sub name 0 6 = "cache "
+  if String.length name >= 9 && String.sub name 0 9 = "cacheCap "
   then String.concat "_" (String.split_on_char ' ' name)
   else name
 let cap_list_str caps = String.concat " " (List.map cap_ident caps)
@@ -5458,7 +5458,7 @@ let emit_test ctx (t : test_form) =
   emit_line ctx (Printf.sprintf "  (test-case %S" t.description);
   let body_indent = if t.capabilities = [] then "  " else "    " in
   if t.capabilities <> [] then
-    emit_line ctx (Printf.sprintf "    (with-capabilities (%s)" (String.concat " " t.capabilities));
+    emit_line ctx (Printf.sprintf "    (with-capabilities (%s)" (cap_list_str t.capabilities));
   (* Fold through stmts accumulating in-scope locals for the Variables panel *)
   let _ = List.fold_left (fun locals stmt ->
     emit_test_stmt ~locals body_indent stmt;
@@ -5626,7 +5626,7 @@ and emit_api_test_expr ctx ~server_name ~capabilities e =
         | None -> ());
        emit ctx " #:capabilities ";
        if capabilities = [] then emit ctx "'()"
-       else emit ctx (Printf.sprintf "(list %s)" (String.concat " " capabilities));
+       else emit ctx (Printf.sprintf "(list %s)" (cap_list_str capabilities));
        emit ctx ")"
      | EVar { name = "subscribe"; _ }, path :: rest ->
        let rec scan cookie headers = function
@@ -5856,7 +5856,7 @@ let emit_api_test ctx ~(database_names : string list) (t : api_test_form) =
   emit_line ctx "          (lambda ()";
   let body_indent = if t.capabilities = [] then "            " else "              " in
   if t.capabilities <> [] then
-    emit_line ctx (Printf.sprintf "            (with-capabilities (%s)" (String.concat " " t.capabilities));
+    emit_line ctx (Printf.sprintf "            (with-capabilities (%s)" (cap_list_str t.capabilities));
   List.iter (fun seed_expr ->
     emit ctx body_indent;
     emit_api_test_expr ctx ~server_name:t.server_name ~capabilities:t.capabilities seed_expr;
@@ -5900,7 +5900,7 @@ let emit_load_test ctx ~(database_names : string list) (t : load_test_form) =
   let body_indent = if t.capabilities = [] then "            " else "              " in
   if t.capabilities <> [] then
     emit_line ctx (Printf.sprintf "            (with-capabilities (%s)"
-      (String.concat " " t.capabilities));
+      (cap_list_str t.capabilities));
   (* Seed stmts *)
   List.iter (fun seed_expr ->
     emit ctx body_indent;
@@ -6172,9 +6172,9 @@ let emit_module ctx (m : module_form) =
     | DApiTest t -> emit_api_test ctx ~database_names t
     | DLoadTest t -> emit_load_test ctx ~database_names t
     | DCache c ->
-      (* The define-cache macro references the cache capability `cache_<name>`,
+      (* The define-cache macro references the cache capability `cacheCap_<name>`,
          so bind it first (define-capability before define-cache). *)
-      emit_line ctx (Printf.sprintf "(define-capability cache_%s)" c.name);
+      emit_line ctx (Printf.sprintf "(define-capability cacheCap_%s)" c.name);
       emit ctx (Printf.sprintf "(define-cache %s #:database %s" c.name c.database);
       (match c.default_ttl with
        | Some ttl -> emit ctx (Printf.sprintf " #:default-ttl %d" ttl)
