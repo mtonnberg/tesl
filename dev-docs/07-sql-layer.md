@@ -200,7 +200,7 @@ checks at function return time.
 ## Transaction support
 
 `(call-with-queue-transaction thunk)` in `queue.rkt` wraps a database
-transaction. Inside a `with transaction { }` block:
+transaction. Inside a `transaction { }` block:
 1. `call-with-transaction conn thunk` opens a real PostgreSQL transaction
 2. Queue `enqueue!` and pub-sub `publish-event!` calls defer their `pg_notify`
    to commit time using a `deferred` box

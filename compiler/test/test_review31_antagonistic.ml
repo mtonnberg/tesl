@@ -13,7 +13,7 @@
       G37  upsert, delete, selectCount/Sum/Max/Min now documented in LANGUAGE-SPEC.md
       G38  deleteAndReturnResult must import DeleteResult from Tesl.DB (not Tesl.Prelude)
       G39  Proof arity mismatch at declaration now correctly rejected (was: silently accepted)
-      G40  Nested with transaction correctly gives P001 error
+      G40  Nested transaction correctly gives P001 error
       G41  Non-exhaustive case expression is correctly detected
       G42  Circular capability implication is correctly rejected
       G43  Polymorphic identity function works with multiple monomorphic call sites
@@ -246,15 +246,15 @@ let test_g39_proof_arity_mismatch_at_declaration () =
   (* Fixed: arity mismatch now detected at declaration with clear error *)
   should_fail "argument count mismatch\\|arity\\|expected 2.*got 1\\|Pair.*2.*argument\\|count mismatch" src
 
-(* ── G40: Nested with transaction correctly gives P001 error ─────────────── *)
+(* ── G40: Nested transaction correctly gives P001 error ─────────────── *)
 (*                                                                              *)
-(* Nesting `with transaction` inside another `with transaction` must be       *)
+(* Nesting `transaction` inside another `transaction` must be       *)
 (* rejected with P001. The spec §1823 explicitly forbids nesting.             *)
 let test_g40_nested_transaction_rejected () =
   let src = db_prelude ^
     "fn nestedTx() -> Unit requires [dbWrite] =\n" ^
-    "  with transaction {\n" ^
-    "    with transaction {\n" ^
+    "  transaction {\n" ^
+    "    transaction {\n" ^
     "      insert Product { id: \"1\", name: \"a\", price: 10 }\n" ^
     "    }\n" ^
     "  }\n" in
@@ -442,7 +442,7 @@ let () =
     "G37", [ test_case "upsert compiles correctly (now documented)" `Quick test_g37_upsert_compiles ];
     "G38", [ test_case "delete returns Unit — no need to import DeleteResult" `Quick test_g38_delete_result_needs_db_import ];
     "G39", [ test_case "proof arity mismatch at declaration now rejected" `Quick test_g39_proof_arity_mismatch_at_declaration ];
-    "G40", [ test_case "nested with transaction correctly rejected (P001)" `Quick test_g40_nested_transaction_rejected ];
+    "G40", [ test_case "nested transaction correctly rejected (P001)" `Quick test_g40_nested_transaction_rejected ];
     "G41", [ test_case "non-exhaustive case expression correctly detected" `Quick test_g41_non_exhaustive_case_detected ];
     "G42", [ test_case "circular capability implication correctly rejected" `Quick test_g42_circular_capability_rejected ];
     "G43", [ test_case "polymorphic identity works at multiple monomorphic call sites" `Quick test_g43_polymorphic_identity_multiple_sites ];

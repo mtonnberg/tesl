@@ -99,6 +99,7 @@ import Tesl.Queue exposing [queueRead, queueWrite, pubsub, FromDeadQueue]
 import Tesl.String exposing [String.length]
 import Tesl.Random exposing [random]
 import Tesl.Id exposing [generatePrefixedId]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 
 fact ValidRoomId (id: String)
 check checkRoomId(id: String) -> id: String ::: ValidRoomId id =
@@ -112,11 +113,15 @@ entity Message table "messages" primaryKey id {
   roomId: String @db(text)
 }
 
-database DB {
-  backend postgres
-  schema "chat"
-  entities [Message]
-  postgres { database env("DB") user env("U") password env("P") host env("H") port 5432 socket env("S") }
+database DB = Database {
+  schema: "chat"
+  entities: [Message]
+  backend: Postgres (PostgresConfig {
+    dbName: env "DB"
+    user: env "U"
+    password: env "P"
+    connection: TcpConnection { host: env "H"  port: 5432 }
+  })
 }
 
 |}
@@ -220,56 +225,65 @@ let base_dead = {|#lang tesl
 module BackendDeadTest exposing []
 
 import Tesl.Prelude exposing [String]
-import Tesl.Queue exposing [queueRead, pubsub, FromDeadQueue]
+import Tesl.Queue exposing [queueRead, pubsub, FromQueue, FromDeadQueue, Queue, Job, QueueRetryStrategy, Exponential]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.SSE exposing [SseChannel]
 
 record NotifyJob { senderName: String roomName: String }
 type RoomEvent = NotifyFailed senderName: String roomName: String
 
 entity Dummy table "dummy" primaryKey id { id: String }
 
-database DB {
-  backend postgres
-  schema "chat"
-  entities [Dummy]
-  postgres { database env("DB") user env("U") password env("P") host env("H") port 5432 socket env("S") }
+database DB = Database {
+  schema: "chat"
+  entities: [Dummy]
+  backend: Postgres (PostgresConfig {
+    dbName: env "DB"
+    user: env "U"
+    password: env "P"
+    connection: TcpConnection { host: env "H"  port: 5432 }
+  })
 }
 
-queue NotificationQueue {
-  database DB
-  jobs [NotifyJob]
-  retry { maxAttempts: 3 backoff: exponential initialDelay: 5 }
+sseChannel RoomMessages(roomId: String) = SseChannel {
+  database: DB
+  payload: RoomEvent
 }
 
-channel RoomMessages(roomId: String) {
-  database DB
-  payload RoomEvent
+# Normal worker for the folded queue's job list. The job type is paired with
+# this worker and the (per-test) dead-letter worker `handleDeadNotify`.
+worker handleNotify(job: NotifyJob ::: FromQueue (Id == jobId) job)
+  requires [queueRead] =
+  job
+
+# Folded queue: `jobs: [Job T worker (Something deadWorker)]` wires the dead
+# worker `handleDeadNotify` declared in each test below.
+queue NotificationQueue requires [queueRead, pubsub] = Queue {
+  database: DB
+  jobs: [Job NotifyJob handleNotify (Something handleDeadNotify)]
+  retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 5 }
 }
 
 |}
 
 let test_R59B_DW01_dead_worker_publish_no_cap () =
-  (* deadWorker that publishes without declaring pubsub capability *)
+  (* deadWorker (wired into the folded NotificationQueue) that publishes without
+     declaring pubsub capability is rejected. The capability is enforced on the
+     deadWorker function decl itself, regardless of how the queue references it. *)
   should_fail "deadWorker.*uses.*pubsub.*but does not declare" (base_dead ^ {|
 deadWorker handleDeadNotify(job: NotifyJob ::: FromDeadQueue (Id == jobId) job) =
   publish RoomMessages(job.roomName) NotifyFailed { senderName: job.senderName, roomName: job.roomName }
   job
-
-deadWorkers DeadNotificationWorkers for NotificationQueue {
-  NotifyJob = handleDeadNotify
-}
 |})
 
 let test_R59B_DW02_dead_worker_publish_with_cap_compiles () =
-  (* deadWorker that declares pubsub capability can publish *)
+  (* deadWorker (wired into the folded NotificationQueue) that declares pubsub
+     capability can publish. *)
   should_pass (base_dead ^ {|
 deadWorker handleDeadNotify(job: NotifyJob ::: FromDeadQueue (Id == jobId) job)
   requires [pubsub] =
   publish RoomMessages(job.roomName) NotifyFailed { senderName: job.senderName, roomName: job.roomName }
   job
-
-deadWorkers DeadNotificationWorkers for NotificationQueue {
-  NotifyJob = handleDeadNotify
-}
 |})
 
 let () =

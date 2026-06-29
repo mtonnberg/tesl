@@ -20,6 +20,16 @@ import Tesl.Telemetry exposing [telemetry, initTelemetry]
 import Tesl.Cli exposing [cli.args, lookupPortArgument]
 import Tesl.Id exposing [generatePrefixedId]
 import Tesl.Random exposing [random]
+import Tesl.App exposing [App]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 capability todoDbRead implies dbRead
 capability todoDbWrite implies dbWrite
 capability todoReadHttpCookie
@@ -53,18 +63,18 @@ entity Todo table "todos" primaryKey id {
   createdAt: PosixMillis
 }
 
-database TodoDatabase {
-  backend postgres
-  schema "todo_api"
-  entities [Todo]
-  postgres {
-    database env("TESL_POSTGRES_DATABASE")
-    user env("TESL_POSTGRES_USER")
-    password env("TESL_POSTGRES_PASSWORD")
-    host env("TESL_POSTGRES_HOST")
-    port envInt("TESL_POSTGRES_PORT", 5432)
-    socket env("TESL_POSTGRES_SOCKET")
-  }
+database TodoDatabase = Database {
+  schema: "todo_api"
+  entities: [Todo]
+  backend: Postgres (PostgresConfig {
+    dbName: env "TESL_POSTGRES_DATABASE"
+    user: env "TESL_POSTGRES_USER"
+    password: env "TESL_POSTGRES_PASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_POSTGRES_HOST"
+      port: envInt "TESL_POSTGRES_PORT" 5432
+    }
+  })
 }
 
 defaultExamplePort = 8086
@@ -156,7 +166,7 @@ check isTodoId(todoId: String) -> todoId: String ::: TodoId todoId =
   else
     fail 400 "Malformed todo id"
 
-capture todoIdCapture: String ::: TodoId todoId using stringCodec via isTodoId
+capturer todoIdCapture: String ::: TodoId todoId using stringCodec via isTodoId
 
 fact IsOpen (todo: Todo)
 
@@ -276,13 +286,12 @@ server TodoServer for TodoApi {
   completeTodo = completeTodo
 }
 
-main with capabilities [todoWebService] {
-  initTelemetry service "todo-api" endpoint "in-memory" console True
+main() -> App requires [todoWebService] =
+  let _ = initTelemetry service "todo-api" endpoint "in-memory" console True
   let port = resolveExamplePort cli.args (env "TESL_TODO_API_PORT") (env "PORT")
-  with database TodoDatabase {
-    with capabilities [todoWebService] {
-      seedExampleData()
-    }
-    serve TodoServer on port with capabilities [todoWebService]
+  let _ = seedExampleData()
+  App {
+    database: TodoDatabase
+    api: TodoServer
+    port: port
   }
-}

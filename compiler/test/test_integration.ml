@@ -47,11 +47,13 @@ let read_file path =
    to its basename on both sides before comparing — this keeps the exact-match
    asserting the full emission structure while tolerating the path prefix. *)
 let canonicalize_thsl_paths s =
-  let re = Str.regexp "(thsl-src! \"\\([^\"]*\\)\"" in
+  (* Matches both `(thsl-src! "..."` and `(thsl-src-control! "..."` checkpoints. *)
+  let re = Str.regexp "(\\(thsl-src-control!\\|thsl-src!\\) \"\\([^\"]*\\)\"" in
   Str.global_substitute re
     (fun whole ->
-       let path = Str.matched_group 1 whole in
-       Printf.sprintf "(thsl-src! \"%s\"" (Filename.basename path))
+       let macro = Str.matched_group 1 whole in
+       let path = Str.matched_group 2 whole in
+       Printf.sprintf "(%s \"%s\"" macro (Filename.basename path))
     s
 
 let normalize s =
@@ -925,7 +927,11 @@ fn unwrap(m: Maybe Int) -> Int =
     Something value -> value
     Nothing -> 0
 |} in
-  check_contains "case bound value raw return" src "(let ([value (hash-ref (adt-value-fields *tesl_case_0) 'value)]) *value)"
+  (* The bound payload is still extracted and returned RAW as the starred name;
+     the arm body is now wrapped in a per-arm thsl-src! checkpoint (erased in
+     release), so the raw return is the checkpoint thunk body, not the bare let. *)
+  check_contains "case bound value binding" src "(let ([value (hash-ref (adt-value-fields *tesl_case_0) 'value)])";
+  check_contains "case bound value raw return" src "(lambda () *value)"
 
 let test_constructor_payload_unwraps_named_values () =
   let src = {|#lang tesl

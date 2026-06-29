@@ -2,8 +2,12 @@
 # ─── Kanel — Background notification worker functions ──────────────────────
 #
 # Defines the worker and dead-letter worker functions for email notifications.
-# The queue and workers/deadWorkers declarations live in KanelBackend.tesl
-# because they must reference the queue by name, and the queue is declared there.
+# The queue that folds these in lives in KanelBackend.tesl: its `jobs` entry
+# pairs the job type with this normal worker and (in the dead slot) the
+# dead-letter worker, e.g.
+#   jobs: [Job KanelNotifyJob notifyWorker (Something deadNotifyWorker)]
+# Listing that queue in `App.queues` activates both workers — there is no
+# separate worker-registration declaration.
 
 module KanelNotify exposing [notifyWorker, deadNotifyWorker, notifyWorkerCap]
 

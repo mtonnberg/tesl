@@ -400,11 +400,15 @@ let test_inner_join_compiles () =
 module InnerJoinTest exposing [findMatched]
 import Tesl.Prelude exposing [Int, String, Bool(..), List]
 import Tesl.DB exposing [dbRead]
+import Tesl.Database exposing [Database, Memory]
 
 entity A table "as" primaryKey id { id: String, bId: String, val: Int }
 entity B table "bs" primaryKey id { id: String, label: String }
 
-database TestDB { backend memory  entities [A, B] }
+database TestDB = Database {
+  entities: [A, B]
+  backend: Memory
+}
 
 fn findMatched(minVal: Int) -> List A requires [dbRead] =
   with database TestDB {
@@ -421,11 +425,15 @@ let test_inner_join_with_where () =
 module IJWhere exposing [query]
 import Tesl.Prelude exposing [Int, String, Bool(..), List]
 import Tesl.DB exposing [dbRead]
+import Tesl.Database exposing [Database, Memory]
 
 entity Post table "posts" primaryKey id { id: String, userId: String, title: String }
 entity User table "users" primaryKey id { id: String, active: Bool }
 
-database IJWhereDB { backend memory  entities [Post, User] }
+database IJWhereDB = Database {
+  entities: [Post, User]
+  backend: Memory
+}
 
 fn query(userId: String) -> List Post requires [dbRead] =
   with database IJWhereDB {
@@ -442,11 +450,15 @@ let test_inner_join_order_limit () =
 module IJOrderLimit exposing [topPosts]
 import Tesl.Prelude exposing [Int, String, Bool(..), List]
 import Tesl.DB exposing [dbRead]
+import Tesl.Database exposing [Database, Memory]
 
 entity Article table "articles" primaryKey id { id: String, authorId: String, score: Int }
 entity Author table "authors" primaryKey id { id: String, name: String }
 
-database IJOrderDB { backend memory  entities [Article, Author] }
+database IJOrderDB = Database {
+  entities: [Article, Author]
+  backend: Memory
+}
 
 fn topPosts(n: Int) -> List Article requires [dbRead] =
   with database IJOrderDB {
@@ -464,11 +476,15 @@ let test_inner_join_runtime_filter () =
 module IJRuntime exposing [doQuery]
 import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit]
 import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
 
 entity Widget table "widgets" primaryKey id { id: String, thingId: String, name: String }
 entity Thing table "things" primaryKey id { id: String, label: String }
 
-database IJRuntimeDB { backend memory  entities [Widget, Thing] }
+database IJRuntimeDB = Database {
+  entities: [Widget, Thing]
+  backend: Memory
+}
 
 fn doQuery() -> List Widget requires [dbRead] =
   with database IJRuntimeDB {
@@ -484,12 +500,16 @@ let test_multiple_inner_joins () =
 module MultiJoin exposing [query]
 import Tesl.Prelude exposing [Int, String, Bool(..), List]
 import Tesl.DB exposing [dbRead]
+import Tesl.Database exposing [Database, Memory]
 
 entity Order table "orders" primaryKey id { id: String, customerId: String, productId: String }
 entity Customer table "customers" primaryKey id { id: String, name: String }
 entity Product table "products" primaryKey id { id: String, title: String }
 
-database MultiJoinDB { backend memory  entities [Order, Customer, Product] }
+database MultiJoinDB = Database {
+  entities: [Order, Customer, Product]
+  backend: Memory
+}
 
 fn query() -> List Order requires [dbRead] =
   with database MultiJoinDB {

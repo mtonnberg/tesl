@@ -14,14 +14,17 @@
   tesl/tesl/sse
   (only-in tesl/tesl/prelude String)
   (only-in tesl/tesl/queue FromQueue FromDeadQueue queueRead pubsub)
+  (only-in tesl/tesl/maybe Maybe Something Nothing)
 )
 
 
-(provide NotifWorkers DeadNotifWorkers)
+(provide NotifQueue)
 
 (define-capability notifCap (implies queueRead))
 
 (define-capability deadCap (implies queueRead pubsub))
+
+(define-capability appService (implies queueRead))
 
 (define-record SendNotif
   [userId : String]
@@ -35,7 +38,6 @@
   #:password ""
   #:server "localhost"
   #:port 5432
-  #:socket ""
   #:schema notifications
   #:entities )
 
@@ -50,18 +52,39 @@
   (notifWorker [job : SendNotif ::: (FromQueue (Id == jobId) job)])
   #:capabilities [notifCap]
   #:returns SendNotif
-  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 72 (list (cons 'job *job)) (lambda () (reject "notification service unavailable" #:http-code 500))))
-
-(define NotifWorkers
-  (list (cons NotifQueue notifWorker)))
-(register-api-test-workers! (list (list NotifQueue 'SendNotif notifWorker)))
+  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 104 (list (cons 'job *job)) (lambda () (reject "notification service unavailable" #:http-code 500))))
 
 (define/pow
   (handleDeadNotif [job : SendNotif ::: (FromDeadQueue (Id == jobId) job)])
   #:capabilities [deadCap]
   #:returns SendNotif
-  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 87 (list (cons 'job *job)) (lambda () (begin (telemetry-event! "notif.dead" #:attributes (["userId" (raw-value job.userId)])) *job))))
+  (let ([_ (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 115 (list (cons 'job *job)) (lambda () (telemetry-event! "notif.dead" #:attributes (["userId" (raw-value job.userId)]))))]) (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 117 (list (cons 'job *job)) (lambda () *job))))
 
-(define DeadNotifWorkers
+(define-handler
+  (appRoot)
+  #:returns String
+  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 126 (list) (lambda () "ok")))
+
+(define AppServer-sse-routes '())
+(define-api AppApi
+  [endpoint_0 :
+    "health"
+    :> (Get JSON String)
+    ]
+)
+
+(define-server AppServer
+  #:api AppApi
+  [endpoint_0 appRoot]
+)
+
+(module+ main
+  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 143 (list) (lambda () (with-capabilities (appService notifCap deadCap) (call-with-database FakeDb (lambda () (begin (start-workers! NotifQueueWorkers (list notifCap deadCap)) (begin (start-dead-workers! NotifQueueDeadWorkers (list notifCap deadCap)) (serve AppServer #:port 8086 #:capabilities (list appService notifCap deadCap) #:sse-routes AppServer-sse-routes)))))))))
+
+(define NotifQueueWorkers
+  (list (cons NotifQueue notifWorker)))
+(register-api-test-workers! (list (list NotifQueue 'SendNotif notifWorker)))
+
+(define NotifQueueDeadWorkers
   (list (cons NotifQueue handleDeadNotif)))
 (register-api-test-dead-workers! (list (list NotifQueue 'SendNotif handleDeadNotif)))

@@ -1,25 +1,49 @@
 #lang tesl
-module QueueApi exposing [EmailQueue, UserEvents, EmailWorkers]
+module QueueApi exposing [EmailQueue, UserEvents]
 import Tesl.Prelude exposing [Bool(..), List, String, Fact]
-import Tesl.DB        exposing [dbRead, dbWrite]
-import Tesl.Queue     exposing [deadJobs, requeue, DeadJob, FromDeadQueue, queueRead, queueWrite, pubsub]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Queue exposing [
+  deadJobs,
+  requeue,
+  DeadJob,
+  FromDeadQueue,
+  queueRead,
+  queueWrite,
+  pubsub,
+  Queue,
+  QueueRetryStrategy,
+  Exponential,
+  Fixed,
+  Job,
+]
 import Tesl.Telemetry exposing [initTelemetry]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
+import Tesl.SSE exposing [SseChannel]
+import Tesl.App exposing [App]
 
 capability emailWrite implies queueWrite
 capability appService implies dbRead, dbWrite, emailWrite, pubsub
 
-database MainDatabase {
-  backend postgres
-  schema  "app"
-  entities []
-  postgres {
-    database "app_db"
-    user     "app"
-    password ""
-    host     "localhost"
-    port     5432
-    socket   ""
-  }
+database MainDatabase = Database {
+  schema: "app"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "app_db"
+    user: "app"
+    password: ""
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
 }
 
 record SendEmail {
@@ -32,28 +56,24 @@ type UserEvent
   = ProfileUpdated bio: String
   | AccountDeleted
 
-queue EmailQueue {
-  database MainDatabase
-  jobs     [SendEmail]
-  retry {
+queue EmailQueue requires [queueRead] = Queue {
+  database: MainDatabase
+  jobs: [Job SendEmail sendEmailWorker Nothing]
+  retry: QueueRetryStrategy {
     maxAttempts: 3
-    backoff: exponential
+    backoff: Exponential
     initialDelay: 60
   }
 }
 
-channel UserEvents(userId: String) {
-  database MainDatabase
-  payload UserEvent
+sseChannel UserEvents(userId: String) = SseChannel {
+  database: MainDatabase
+  payload: UserEvent
 }
 
 worker sendEmailWorker(job: SendEmail ::: FromQueue (Id == jobId) job)
   requires [queueRead] =
   job
-
-workers EmailWorkers for EmailQueue {
-  SendEmail = sendEmailWorker
-}
 
 # Inspect all dead jobs in the email queue.
 # Dead jobs have exhausted maxAttempts and are waiting for manual intervention.
@@ -68,6 +88,23 @@ fn replayEmail(job: DeadJob ::: FromDeadQueue (Id == jobId) job) -> Bool
   requires [queueWrite] =
   requeue job
 
-main {
-  initTelemetry service "queue-api" endpoint "in-memory" console False
+handler appRoot() -> String
+  requires [] =
+  "ok"
+
+api AppApi {
+  get "/health" -> String
 }
+
+server AppServer for AppApi {
+  endpoint_0 = appRoot
+}
+
+main() -> App requires [appService, queueRead] =
+  let _ = initTelemetry service "queue-api" endpoint "in-memory" console False
+  App {
+    database: MainDatabase
+    api: AppServer
+    port: 8086
+    queues: [EmailQueue]
+  }

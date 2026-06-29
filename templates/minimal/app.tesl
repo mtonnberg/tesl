@@ -14,6 +14,8 @@ import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Dict exposing [Dict.lookup]
 import Tesl.Telemetry exposing [telemetry, initTelemetry]
 import Tesl.Env exposing [env, envInt]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.App exposing [App]
 
 # A capability is an explicit permission. A handler can only do what its
 # capabilities allow, and `main` decides which capabilities to grant.
@@ -25,6 +27,13 @@ record SessionUser {
 }
 
 defaultPort = 8088
+
+# `main() -> App` always names a `database:`. This service keeps NO persistent
+# data, so it uses the in-memory backend with no entities — swap in a `Postgres`
+# backend (see the `api` template) the moment you add an `entity`.
+database AppDatabase = Database {
+  backend: Memory
+}
 
 # ── PROOF #1 (INPUT): a fact + the check that establishes it ──────────────────
 # A `fact` is a named claim about a value. A `check` is the ONLY way to turn an
@@ -55,7 +64,7 @@ auth cookieAuth(request: HttpRequest) -> requestUser: SessionUser ::: Authentica
 
 # A `capture` wires a route parameter through a check + codec so the handler
 # receives an already-proven value (here: `Positive taskId`).
-capture positiveTaskCapture: Int ::: Positive taskId using intCodec via isPositive
+capturer positiveTaskCapture: Int ::: Positive taskId using intCodec via isPositive
 
 # ── PROOF #2 (OUTPUT): a handler that hands a proof back to the caller ────────
 # A `handler` cannot MINT a new proof — only `check`/`auth` can. What it CAN do
@@ -81,8 +90,11 @@ server AppServer for AppApi {
   getTask = getTask
 }
 
-main with capabilities [readSessionCookie] {
-  initTelemetry service "__APP_NAME__" endpoint "in-memory" console True
+main() -> App requires [readSessionCookie] =
+  let _ = initTelemetry service "__APP_NAME__" endpoint "in-memory" console True
   let port = envInt "PORT" defaultPort
-  serve AppServer on port with capabilities [readSessionCookie]
-}
+  App {
+    database: AppDatabase
+    api: AppServer
+    port: port
+  }

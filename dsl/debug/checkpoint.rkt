@@ -15,8 +15,7 @@
 ;; ── B5: one emission path, expansion-time debug gate ─────────────────────────
 ;; The OCaml emitter now ALWAYS emits the `(thsl-src! "file" line locals thunk)`
 ;; form — there is no `--debug` emitter fork.  `thsl-src!` (and the compat
-;; `thsl-src`) are MACROS whose expansion is gated at raco-compile time,
-;; mirroring the `zero-cost-proofs?` gate in dsl/private/check-runtime.rkt:
+;; `thsl-src`) are MACROS whose expansion is gated at raco-compile time:
 ;;   • debug DISABLED (default) → the macro expands to the BARE expression (the
 ;;     thunk body), with ZERO residue: no checkpoint call, no locals list, no
 ;;     thunk allocation.  This is the release build — zero overhead.
@@ -52,6 +51,9 @@
 
 (provide
  debug-enabled?
+ set-debug-active!
+ debug-active?
+ current-paused-thread
  breakpoints
  event-ch
  paused-ch
@@ -59,6 +61,7 @@
  step-next-file
  thsl-src
  thsl-src!
+ thsl-src-control!
  thsl-src!/runtime
  thsl-display-value
  safe-display
@@ -82,6 +85,29 @@
 
 ;; When #t, thsl-src checks for breakpoints before evaluating each expression.
 (define debug-enabled? (make-parameter #f))
+
+;; Thread-GLOBAL debug switch. `debug-enabled?` is a PARAMETER and therefore
+;; thread-local: the DAP server parameterizes it only in the program thread, so a
+;; checkpoint that runs in ANOTHER thread never sees it. The critical case is a
+;; `serve`d web app — the web server dispatches each request on a FRESH handler
+;; thread, which does not inherit the program thread's parameterization, so every
+;; handler/SQL breakpoint silently no-opped once the server was running ("debug
+;; dies after main / never catches breakpoints when the API is called"). This box
+;; is a process-wide override the DAP server flips on at launch so EVERY thread
+;; honors breakpoints. It is only ever set during a debug session (TESL_DEBUG=1,
+;; where checkpoints are not erased at expansion time); release/`tesl run` builds
+;; erase thsl-src! entirely and never read it.
+(define debug-active-box (box #f))
+(define (set-debug-active! on?) (set-box! debug-active-box (and on? #t)))
+(define (debug-active?) (or (unbox debug-active-box) (debug-enabled?)))
+
+;; The thread currently parked at a breakpoint (or #f when running). A `serve`d
+;; app runs each handler on its own thread, so the paused thread is NOT the
+;; program thread — the DAP server needs this to read per-thread state (e.g. the
+;; SQL capture) for the RIGHT thread instead of guessing the program thread or a
+;; stale global. Set when a checkpoint parks, cleared on resume.
+(define paused-thread-box (box #f))
+(define (current-paused-thread) (unbox paused-thread-box))
 
 ;; Maps filename (string) -> list of bp-record (see make-bp-record below).
 ;; Each record carries the 1-based line plus the optional DAP `condition` and
@@ -142,10 +168,37 @@
 ;; step-next-file: when set to a string, pause at next call in this file (step-over)
 (define step-next-file (box #f))
 
+;; The thread a pending step belongs to. A `serve`d app runs each request on its
+;; own thread, and the step flags above are process-global — without scoping, a
+;; step issued while paused in one request thread would make ANOTHER thread's
+;; checkpoint stop (e.g. the next request's capture-validation `check`), and a
+;; flag left set when the stepping handler returns would stop a future, unrelated
+;; request ("randomly breaks on a line with no breakpoint"). A step is honored
+;; only on the thread that requested it.
+(define step-thread (box #f))
+
+;; Per-thread checkpoint NESTING DEPTH. Incremented around each checkpoint thunk,
+;; so a called function's statements — which run INSIDE the caller's statement
+;; thunk — read a strictly greater depth than the caller. This yields true
+;; call-stack depth for the step logic with ZERO emitter cooperation (no function
+;; bodies to wrap, no goldens to change). Each thread starts at 0, so a request
+;; handler / worker / main is the depth-0 "top frame" of its own thread.
+(define checkpoint-depth-cell (make-thread-cell 0))
+
+;; The active step request, thread-scoped via step-thread:
+;;   'over → stop at the next checkpoint with depth <= base  (step over: skip calls)
+;;   'in   → stop at the very next checkpoint                 (step into)
+;;   'out  → stop at the next checkpoint with depth < base    (run to the caller)
+;; `step-base-depth` is the depth at which the step was issued. (step-into-next?
+;; and step-next-file above are retained only for compatibility; the decision is
+;; now depth-based.)
+(define step-mode (box #f))
+(define step-base-depth (box 0))
+
 ;; ── Expansion-time debug gate ────────────────────────────────────────────────
 ;; for-syntax predicate consulted by the thsl-src! / thsl-src macros below.
 ;; TESL_DEBUG ∈ {1,true,yes,on} (case-insensitive) enables checkpoints; anything
-;; else (including unset) erases them.  Mirrors the TESL_ZERO_COST_PROOFS gate.
+;; else (including unset) erases them.
 (begin-for-syntax
   (define (tesl-debug-checkpoints?)
     (let ([v (getenv "TESL_DEBUG")])
@@ -462,63 +515,89 @@
 ;; by the DAP server) and, when a stop is warranted, blocks until the DAP server
 ;; resumes it.  Release builds never reach here — the thsl-src! macro erases the
 ;; call entirely (see below).
-(define (thsl-src!/runtime file line locals thunk)
-  (when (debug-enabled?)
+;; Shared pause logic for both checkpoint variants. `d` is the current frame
+;; depth. Decides bp/step stops and, when warranted, freezes the world, reports
+;; the stop, and blocks until the DAP server resumes — recording the resumed
+;; step's mode + base depth.
+(define (checkpoint-pause! file line locals d)
+  (when (debug-active?)
     (let* ([line-hit?  (set-member? (file-breakpoint-lines breakpoints file) line)]
            ;; A line breakpoint fires only if its condition (if any) is truthy
            ;; against the current locals AND its hitCondition (if any) is met.
-           ;; When the stored entry is the legacy seteq form (no records), there
-           ;; is no condition/hitCondition, so a line hit fires unconditionally.
            [rec        (and line-hit? (lookup-bp-record breakpoints file line))]
            [bp-match?
             (and line-hit?
                  (cond
                    [(not rec) #t]   ; legacy seteq line, or unconditional record absent
                    [else
-                    ;; DAP semantics: when both `condition` and `hitCondition` are
-                    ;; present, the hit counter advances only on arrivals where the
-                    ;; condition is satisfied — hitCondition then gates *those*
-                    ;; hits.  So evaluate the condition first; only a satisfied
-                    ;; condition increments the counter and consults hitCondition.
                     (and (eval-bp-condition (bp-record-condition rec) locals)
                          (let ([hc (add1 (unbox (bp-record-hit-count rec)))])
                            (set-box! (bp-record-hit-count rec) hc)
                            (eval-hit-condition (bp-record-hit-condition rec) hc)))]))]
-           [step-in?   (unbox step-into-next?)]
-           [step-over? (and (unbox step-next-file)
-                            (equal? file (unbox step-next-file)))])
-      (when (or bp-match? step-in? step-over?)
-        ;; Reset step flags before pausing so they don't re-trigger immediately
-        (set-box! step-into-next? #f)
-        (set-box! step-next-file #f)
-        ;; STOP-THE-WORLD: freeze all OTHER Tesl background threads BEFORE we report
-        ;; the stop, so the queue depth / outbox / caches the user inspects cannot
-        ;; change while paused.  Fail-open (never raises).  Resumed below when this
-        ;; bp thread is released, which happens for continue / next / stepIn / stepOut
-        ;; alike (every resume routes through paused-ch).
+           ;; A pending step is honored ONLY on the thread that requested it, so a
+           ;; step never makes a different request/worker thread stop spuriously.
+           [my-step?   (let ([st (unbox step-thread)])
+                         (or (not st) (eq? (current-thread) st)))]
+           ;; Depth-based step semantics:
+           ;;   over → next checkpoint at the same-or-shallower frame (skip calls)
+           ;;   in   → the very next checkpoint (descend into the call)
+           ;;   out  → next checkpoint shallower than here (returned to the caller)
+           [step-hit?
+            (and my-step?
+                 (case (unbox step-mode)
+                   [(in)   #t]
+                   [(over) (<= d (unbox step-base-depth))]
+                   [(out)  (<  d (unbox step-base-depth))]
+                   [else   #f]))])
+      (when (or bp-match? step-hit?)
+        ;; Clear the step so it does not immediately re-trigger at this same stop.
+        (set-box! step-mode #f)
+        ;; STOP-THE-WORLD: freeze all OTHER Tesl background threads while paused so
+        ;; the queue depth / outbox / caches cannot change under inspection.
         (stop-the-world-suspend!)
-        ;; Send stopped event with locals
+        ;; Record WHICH thread is parked so the DAP server reads this thread's
+        ;; per-thread state (SQL capture, etc.).
+        (set-box! paused-thread-box (current-thread))
         (channel-put event-ch
           (hasheq 'event  "stopped"
                   'file   file
                   'line   line
                   'locals locals
-                  'reason (cond [bp-match? "breakpoint"]
-                                [step-in?  "step"]
-                                [else      "step"])))
-        ;; Block until DAP sends a resume command, then interpret it
+                  'reason (if bp-match? "breakpoint" "step")))
+        ;; Block until DAP sends a resume command, then interpret it.
         (let ([cmd (channel-get paused-ch)])
-          ;; Released: thaw exactly the threads this stop froze, BEFORE running on so
-          ;; the program and its background workers proceed together.
-          (stop-the-world-resume!)
+          (set-box! paused-thread-box #f)
+          ;; Scope any pending step to THIS (the parked) thread and record the
+          ;; frame depth the step started from. Works in any thread (handler,
+          ;; worker, main) — the depth is relative to that thread's own stack.
+          (set-box! step-thread (current-thread))
           (cond
-            [(eq? cmd 'step-in)
-             (set-box! step-into-next? #t)]
-            [(eq? cmd 'step-over)
-             (set-box! step-next-file file)]
-            [else
-             ;; 'continue or any other symbol: no step flags set
-             (void)])))))
+            [(eq? cmd 'step-in)   (set-box! step-mode 'in)   (set-box! step-base-depth d)]
+            [(eq? cmd 'step-over) (set-box! step-mode 'over) (set-box! step-base-depth d)]
+            [(eq? cmd 'step-out)  (set-box! step-mode 'out)  (set-box! step-base-depth d)]
+            [else                 (set-box! step-mode #f)])  ; continue
+          ;; Freeze the world across step-in/step-over so the stepping thread
+          ;; advances deterministically (no second worker / concurrent request can
+          ;; pre-empt it at the same breakpoint). continue and stepOut thaw it.
+          (unless (memq cmd '(step-in step-over))
+            (stop-the-world-resume!)))))))
+
+;; A normal statement checkpoint: pause, then run the statement at depth+1 so a
+;; called function's checkpoints nest one level deeper (step-over skips them).
+;; dynamic-wind restores the depth even if the statement escapes (e.g. `fail`).
+(define (thsl-src!/runtime file line locals thunk)
+  (define d (thread-cell-ref checkpoint-depth-cell))
+  (checkpoint-pause! file line locals d)
+  (dynamic-wind
+    (lambda () (thread-cell-set! checkpoint-depth-cell (add1 d)))
+    thunk
+    (lambda () (thread-cell-set! checkpoint-depth-cell d))))
+
+;; A CONTROL-FLOW checkpoint (a `case` dispatch): pause, then run the thunk at the
+;; SAME depth — its nested arm checkpoints are same-frame control flow, NOT a
+;; function call, so step-over must reach them rather than skip over them.
+(define (thsl-src-control!/runtime file line locals thunk)
+  (checkpoint-pause! file line locals (thread-cell-ref checkpoint-depth-cell))
   (thunk))
 
 ;; ── thsl-src! / thsl-src macros (expansion-time gated) ───────────────────────
@@ -536,6 +615,20 @@
     [(_ file:expr line:expr locals:expr thunk:expr)
      (if (tesl-debug-checkpoints?)
          #'(thsl-src!/runtime file line locals thunk)
+         (syntax-parse #'thunk
+           #:literals (lambda)
+           [(lambda () body:expr ...+) #'(let () body ...)]
+           [_ #'(thunk)]))]))
+
+;; thsl-src-control! — same as thsl-src! but for a CONTROL-FLOW dispatch (a `case`):
+;; it does NOT deepen the call frame, so step-over reaches the case's arm
+;; checkpoints (same frame) instead of skipping them as if they were a call.
+;; Erases identically to thsl-src! in release.
+(define-syntax (thsl-src-control! stx)
+  (syntax-parse stx
+    [(_ file:expr line:expr locals:expr thunk:expr)
+     (if (tesl-debug-checkpoints?)
+         #'(thsl-src-control!/runtime file line locals thunk)
          (syntax-parse #'thunk
            #:literals (lambda)
            [(lambda () body:expr ...+) #'(let () body ...)]
@@ -580,12 +673,12 @@
 ;;   List      → [a, b, c]
 ;;   named-val → inner-val  [Proof1, Proof2]  (proof annotations appended, if any survive)
 ;;
-;; NOTE on proofs: under unconditional erasure (zero-cost-proofs?) the runtime
-;; values reaching this function carry NO proof facts — the [Proof, ...] suffix
-;; below is therefore almost always empty.  The authoritative proof/type display
-;; is overlaid by the DAP server from compile-time --local-bindings-json (see
-;; overlay-binding-type in dap-server.rkt).  We keep the facts path for the rare
-;; case a value is inspected with TESL_ZERO_COST_PROOFS=0.
+;; NOTE on proofs: under zero-cost proof erasure the runtime values reaching this
+;; function carry NO proof facts — the [Proof, ...] suffix below is therefore
+;; almost always empty.  The authoritative proof/type display is overlaid by the
+;; DAP server from compile-time --local-bindings-json (see overlay-binding-type
+;; in dap-server.rkt).  We keep the facts path for the rare case a value still
+;; carries an explicitly attached proof.
 (define (safe-display v)
   (cond
     ;; Unwrap GDP wrappers first
@@ -598,7 +691,20 @@
     [(check-ok? v)      (safe-display (check-ok-value v))]
     ;; Format by Racket type
     [(newtype-value? v)
-     (format "~a(~a)" (newtype-value-type-name v) (safe-display (newtype-value-value v)))]
+     ;; A newtype's type-name may be a `type-ref` prefab struct (owner name); show
+     ;; just the readable NAME, not the raw `#s(type-ref /nix/store/… Name)`.
+     ;; types.rkt doesn't export type-ref?, so read the prefab structurally.
+     (let* ([tn (newtype-value-type-name v)]
+            [nm (cond
+                  [(string? tn) tn]
+                  [(symbol? tn) tn]
+                  [(and (struct? tn)
+                        (let ([k (prefab-struct-key tn)])
+                          (and k (eq? (if (pair? k) (car k) k) 'type-ref))))
+                   (let ([vec (struct->vector tn)])  ; #(struct:type-ref owner name)
+                     (if (>= (vector-length vec) 3) (vector-ref vec 2) tn))]
+                  [else tn])])
+       (format "~a(~a)" nm (safe-display (newtype-value-value v))))]
     [(record-value? v)
      (let ([fields (record-value-fields v)])
        (string-append (~a (record-value-type v)) " {"
@@ -609,6 +715,18 @@
     [(adt-value? v)     (safe-display-adt v)]
     [(list? v)
      (string-append "[" (string-join (map safe-display v) ", ") "]")]
+    ;; Raw hash (e.g. a database entity ROW returned by select — stored as a
+    ;; field->value hash, not a record-value struct). Render it like a record so
+    ;; the Variables panel shows `{id: "todo-1", title: "…", …}` with each value
+    ;; recursively unwrapped, instead of a raw `#hash((… . #(struct:newtype-value …)))`.
+    [(hash? v)
+     (string-append "{"
+       (string-join
+         (for/list ([k (in-list (sort (hash-keys v)
+                                      (lambda (a b) (string<? (format "~a" a) (format "~a" b)))))])
+           (format "~a: ~a" k (safe-display (hash-ref v k))))
+         ", ")
+       "}")]
     [(string? v)  (format "\"~a\"" v)]       ; show strings with quotes
     [(boolean? v) (if v "True" "False")]     ; Tesl capitalised booleans
     [(symbol? v)  (~a v)]                    ; strip Racket ' prefix from gensyms

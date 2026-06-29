@@ -23,11 +23,6 @@
     "increaseIndentPattern": "^\\s*(fn|proof|check|auth|handler|if|else|case|exists|main|record|entity|database|api|server|test|with)\\b.*[={]?\\s*$|^\\s*(api-test|load-test)\\b",
     "decreaseIndentPattern": "^\\s*(else|\\}|\\])\\s*$"
   },
-  "folding": {
-    "markers": {
-      "start": "^\\s*(fn|proof|check|auth|handler|record|entity|database|api|server|main|test)\\b|^\\s*(api-test|load-test)\\b",
-      "end": "^(?=\\s*(fn|proof|check|auth|handler|record|entity|database|api|server|main|test|api-test|load-test|$))"
-    }
-  },
+  "_folding_note": "Intentionally NO folding.markers. VS Code renders folding REGION markers as minimap section headers (editor.minimap.showRegionSectionHeaders, on by default), drawing the matched declaration lines as LARGE text in the scroll minimap — the 'type/entity/database/fn/auth/handler look huge in the minimap' bug. Regions are meant for user-delimited blocks (#region), not every declaration. Folding still works via indentation rules + bracket pairs.",
   "wordPattern": "[a-zA-Z_][a-zA-Z0-9_.]*"
 }

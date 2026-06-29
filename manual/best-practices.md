@@ -216,21 +216,19 @@ the guarantees you want, not around an imagined allocation budget.
 Proofs are erased even under `--debug`. A binding's proof is *compile-time* information (the static
 checker already knows `port : Int ::: ValidPort`), so the step debugger shows the raw runtime value
 and overlays the proof/type from compile-time type info — it needs no runtime struct. Breakpoints
-and stepping work normally. If you ever want the old runtime safety net back (e.g. to diagnose a
-suspected static-checker gap), set `TESL_ZERO_COST_PROOFS=0`, which restores it for regression
-comparison.
+and stepping work normally. The compiler is the sole proof contract: if a program that should be
+rejected slips through, that is a compiler bug to report — there is no runtime toggle to fall back on.
 
 ```bash
 tesl run my-api.tesl                            # proofs erased, zero overhead
 tesl run --debug my-api.tesl                    # breakpoints + raw-value inspection; proofs still erased
-TESL_ZERO_COST_PROOFS=0 tesl run my-api.tesl    # restores the runtime net (regression comparison)
 ```
 
 ### Per-feature runtime cost
 
 | Feature | Runtime cost |
 |---|---|
-| Proof annotations (`:::`) | **Zero.** Checked once at the boundary, then erased — in release and `--debug` alike. The debugger reads proof/type from compile-time info. `TESL_ZERO_COST_PROOFS=0` restores the runtime net for regression comparison. |
+| Proof annotations (`:::`) | **Zero.** Checked once at the boundary, then erased — in release and `--debug` alike. The debugger reads proof/type from compile-time info. |
 | `check` functions | The check body runs **once**, at the validation boundary. It never re-runs downstream. |
 | Capabilities (`requires [...]`) | **Zero.** A compile-time contract with no runtime representation. |
 | `ForAll` on lists | **Zero.** The list is a plain list at runtime; the annotation is erased — no per-element boxing. |
@@ -356,12 +354,12 @@ let user = selectOne user from User where user.email == email
 
 ### Transactions
 
-**✅ Do:** Use `with transaction` for multi-operation consistency:
+**✅ Do:** Use `transaction` for multi-operation consistency:
 ```tesl
 handler transferAmount(fromId: String, toId: String, amount: Int ::: Positive amount)
   -> TransferResult
   requires [db] =
-  with transaction {
+  transaction {
     let fromBalance = selectOne account from Account where account.id == fromId
     let toBalance = selectOne account from Account where account.id == toId
 
@@ -902,14 +900,27 @@ tesl test tests/*.test.tesl
 # Run with verbose output
 tesl test my-api.test.tesl  # Set TESL_VERBOSE=1 for more details
 
-# Run only API tests (filters by test type)
-tesl test my-api.test.tesl  # Currently runs all test types
+# Run a single named block
+tesl test --test-name "my test" my-api.test.tesl
+
+# Disambiguate same-named blocks of different kinds with --test-kind
+# (<kind> is one of: test | api-test | load-test | doctest). This is also
+# what lets a single api-test/load-test/doctest be run in isolation.
+tesl test --test-name "my flow" --test-kind api-test my-api.test.tesl
 
 # Check test syntax without running
 tesl check my-api.test.tesl
 ```
 
 ### Test Configuration
+
+**Tests are in-memory by default.** Test blocks run against an automatic in-memory store, so the vast majority of tests need no database setup. Add a `with database X` header clause only when a test needs a specific or real backend — it binds the named database `X` so queries in the block run against `X`'s configured backend:
+
+```tesl
+test "rejects duplicate emails" with database AppDb {
+  -- queries here hit AppDb's configured backend instead of the in-memory store
+}
+```
 
 Configure test behavior in your test files:
 

@@ -226,12 +226,17 @@ server TodoServer for TodoApi {
 }
 ```
 
-Then use `main` to serve it:
+Then `main` returns an `App` description and the runtime serves it:
 ```tesl
-main with capabilities [webService] {
-  serve TodoServer on 8080 with capabilities [webService]
-}
+main() -> App requires [webService] =
+  App {
+    database: MyDatabase
+    api: TodoServer
+    port: 8080
+  }
 ```
+
+`main` is an ordinary function returning an `App`. There is no `serve`/`with capabilities` block — the runtime starts the server (and any queues, SSE channels, or email workers listed in the `App`) from the returned description. Capabilities are granted at the App root, derived from `main`'s `requires`.
 
 ### How do I handle different HTTP methods?
 
@@ -326,17 +331,18 @@ entity User table "users" primaryKey id {
   createdAt: PosixMillis
 }
 
-database MyDatabase {
-  backend postgres
-  schema "my_app"
-  entities [User]
-  postgres {
-    database env("POSTGRES_DB")
-    user env("POSTGRES_USER")
-    password env("POSTGRES_PASSWORD")
-    host env("POSTGRES_HOST")
-    port envInt("POSTGRES_PORT", 5432)
-  }
+database MyDatabase = Database {
+  schema: "my_app"
+  entities: [User]
+  backend: Postgres (PostgresConfig {
+    dbName: env "POSTGRES_DB"
+    user: env "POSTGRES_USER"
+    password: env "POSTGRES_PASSWORD"
+    connection: TcpConnection {
+      host: env "POSTGRES_HOST"
+      port: envInt "POSTGRES_PORT" 5432
+    }
+  })
 }
 ```
 
@@ -344,13 +350,13 @@ The compiler generates the database schema from your entity declarations.
 
 ### How do I perform transactions?
 
-Use `with transaction` to wrap multiple database operations:
+Use `transaction` to wrap multiple database operations:
 
 ```tesl
 handler transferAmount(fromId: String, toId: String, amount: Int ::: Positive amount)
   -> TransferResult
   requires [db] =
-  with transaction {
+  transaction {
     update account in Account
       where account.id == fromId
       set account.balance = account.balance - amount
@@ -468,7 +474,8 @@ completely gone.
 
 Even under `--debug`, proofs stay erased — the step debugger shows the raw runtime value and
 overlays a binding's proof/type from compile-time type info (the static checker already knows it).
-Setting `TESL_ZERO_COST_PROOFS=0` restores the runtime net for regression comparison.
+Proof verification is **compile-time only**: the compiler is the sole contract for it, and there
+is no runtime re-check to fall back on.
 
 The one construct that always carries a minimal runtime token is a *free-floating* proof
 (`detachFact` / `attachFact`), because such a proof is an explicit first-class value that is

@@ -73,7 +73,7 @@
 (define-auther
   (cookieAuth [request : HttpRequest])
   #:returns (? String _entity ::: (Authenticated _entity))
-  (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 132 (list (cons 'request *request)) (lambda () (let ([tesl_case_1 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Nothing)) (reject "not logged in" #:http-code 401)] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (accept (Authenticated userId) #:value *userId))])))))
+  (thsl-src-control! "example/learn/lesson19-existential-witnesses.tesl" 132 (list (cons 'request *request)) (lambda () (let ([tesl_case_1 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Nothing)) (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 133 (list) (lambda () (reject "not logged in" #:http-code 401)))] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 134 (list (cons 'userId userId)) (lambda () (accept (Authenticated userId) #:value *userId))))])))))
 
 (define-checker
   (checkSessionCreated [session : Session] [sessionId : String] [user : String ::: (Authenticated user)])

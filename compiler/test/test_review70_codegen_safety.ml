@@ -101,9 +101,16 @@ let test_SQL01_database_select_compiles () =
 module SQL01 exposing []
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.DB exposing [dbRead]
-database AppDb {
-  backend postgres schema "app" entities [Item]
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+database AppDb = Database {
+  schema: "app"
+  entities: [Item]
+  backend: Postgres (PostgresConfig {
+    dbName: "d"
+    user: "u"
+    password: ""
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 entity Item table "items" primaryKey id { id: Int name: String }
 fn getItems() -> List Item requires [dbRead] =
@@ -117,9 +124,16 @@ module SQL02 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbWrite, dbRead]
 import Tesl.Maybe exposing [Maybe]
-database AppDb {
-  backend postgres schema "app" entities [Widget]
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+database AppDb = Database {
+  schema: "app"
+  entities: [Widget]
+  backend: Postgres (PostgresConfig {
+    dbName: "d"
+    user: "u"
+    password: ""
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 entity Widget table "widgets" primaryKey id { id: Int label: String }
 fn findWidget(label: String) -> Maybe Widget requires [dbRead] =
@@ -133,9 +147,16 @@ module SQL03 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe]
 import Tesl.DB exposing [dbRead]
-database AppDb {
-  backend postgres schema "app" entities [Task]
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+database AppDb = Database {
+  schema: "app"
+  entities: [Task]
+  backend: Postgres (PostgresConfig {
+    dbName: "d"
+    user: "u"
+    password: ""
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 entity Task table "tasks" primaryKey id { id: Int title: String }
 fn getTask(taskId: Int) -> Maybe Task requires [dbRead] =
@@ -148,9 +169,16 @@ let test_SQL04_database_update_compiles () =
 module SQL04 exposing []
 import Tesl.Prelude exposing [Int, String, Unit]
 import Tesl.DB exposing [dbWrite]
-database AppDb {
-  backend postgres schema "app" entities [Record]
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+database AppDb = Database {
+  schema: "app"
+  entities: [Record]
+  backend: Postgres (PostgresConfig {
+    dbName: "d"
+    user: "u"
+    password: ""
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 entity Record table "records" primaryKey id { id: Int value: String }
 fn updateRecord(recordId: Int, newValue: String) -> Unit requires [dbWrite] =
@@ -176,9 +204,16 @@ let test_SQL06_select_with_order_compiles () =
 module SQL06 exposing []
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.DB exposing [dbRead]
-database AppDb {
-  backend postgres schema "app" entities [Post]
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" }
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+database AppDb = Database {
+  schema: "app"
+  entities: [Post]
+  backend: Postgres (PostgresConfig {
+    dbName: "d"
+    user: "u"
+    password: ""
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 entity Post table "posts" primaryKey id { id: Int title: String score: Int }
 fn getTopPosts() -> List Post requires [dbRead] =

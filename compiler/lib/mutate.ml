@@ -159,7 +159,7 @@ let postgres_database_names (m : module_form) : (string, unit) Hashtbl.t =
 (** [true] when [e] performs an effect that needs live external infrastructure
     not available in a bare [raco test] mutant run: a Postgres-backed
     [with database], any [serve], queue [enqueue], pub/sub [publish], worker
-    start, cache op, or email send.  [with transaction] is treated as external
+    start, cache op, or email send.  [transaction] is treated as external
     because it only ever wraps a real (here, Postgres) database connection. *)
 let rec expr_touches_infra ~pg e =
   match e with
@@ -228,7 +228,7 @@ let capability_class = function
   (* External services with no in-process test fallback — always need infra. *)
   | "queueRead" | "queueWrite" | "enqueue" | "publish" | "subscribe"
   | "email" -> `ExternalService
-  | c when c = "cache" || (String.length c >= 6 && String.sub c 0 6 = "cache ") ->
+  | c when c = "cacheCap" || (String.length c >= 9 && String.sub c 0 9 = "cacheCap ") ->
     `ExternalService
   | _ -> `Local
 

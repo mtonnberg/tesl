@@ -3,7 +3,16 @@ module Lesson33SseAndQueueTests exposing [Lesson33Server]
 
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
-import Tesl.Queue exposing [FromQueue, queueRead, queueWrite, pubsub]
+import Tesl.Queue exposing [
+  FromQueue,
+  queueRead,
+  queueWrite,
+  pubsub,
+  Queue,
+  QueueRetryStrategy,
+  Exponential,
+  Fixed,
+]
 import Tesl.ApiTest exposing [
   statusOk,
   isNotEmpty,
@@ -15,24 +24,34 @@ import Tesl.ApiTest exposing [
   pendingJobCount,
   expectJobOk,
 ]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
+import Tesl.SSE exposing [SseChannel]
 
 # ── Goal ─────────────────────────────────────────────────────────────────────
 # Learn how `api-test` can drive SSE streams and workers deterministically.
 # The test opens a stream, triggers an HTTP action that enqueues a job, runs the
 # worker synchronously, and then collects the published event.
 
-database Lesson33Database {
-  backend postgres
-  schema "lesson33"
-  entities []
-  postgres {
-    database "demo"
-    user "demo"
-    password "demo"
-    host "localhost"
-    port 5432
-    socket ""
-  }
+database Lesson33Database = Database {
+  schema: "lesson33"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "demo"
+    user: "demo"
+    password: "demo"
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
 }
 
 record NotifyJob {
@@ -64,31 +83,27 @@ type NoticeEvent
 fn parseUserId(id: String) -> String =
   id
 
-capture userIdCapture: String using stringCodec via parseUserId
+capturer userIdCapture: String using stringCodec via parseUserId
 
-queue Lesson33Queue {
-  database Lesson33Database
-  jobs [NotifyJob]
-  retry {
+queue Lesson33Queue requires [queueRead, pubsub] = Queue {
+  database: Lesson33Database
+  jobs: [Job NotifyJob handleNotice Nothing]
+  retry: QueueRetryStrategy {
     maxAttempts: 2
-    backoff: linear
+    backoff: Linear
     initialDelay: 1
   }
 }
 
-channel Lesson33Events(userId: String) {
-  database Lesson33Database
-  payload NoticeEvent
+sseChannel Lesson33Events(userId: String) = SseChannel {
+  database: Lesson33Database
+  payload: NoticeEvent
 }
 
 worker handleNotice(job: NotifyJob ::: FromQueue (Id == jobId) job)
   requires [queueRead, pubsub] =
   publish Lesson33Events(job.userId) NoticeSent { message: job.message }
   job
-
-workers Lesson33Workers for Lesson33Queue {
-  NotifyJob = handleNotice
-}
 
 handler sendNotice(req: SendNoticeRequest) -> String
   requires [queueWrite] =

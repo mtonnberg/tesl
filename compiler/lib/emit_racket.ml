@@ -26,6 +26,28 @@ let test_name_filter : string option ref = ref None
 
 let set_test_name_filter v = test_name_filter := v
 
+(** When Some "kind" (one of "test" | "api-test" | "load-test" | "doctest"), restrict
+    single-test selection to that kind.  This disambiguates same-named blocks of
+    different kinds (all emit as `(test-case <description>)`).  Only meaningful together
+    with [test_name_filter]. *)
+let test_kind_filter : string option ref = ref None
+
+let set_test_kind_filter v = test_kind_filter := v
+
+(** Single-test selection used by `tesl test --test-name X [--test-kind K]`.  With no
+    name filter every block is selected (a full `tesl test` run — unchanged behaviour).
+    With a name filter, ONLY blocks whose description matches are emitted (and whose
+    kind matches, if a kind filter is set).  This is what lets a single api-test /
+    load-test be run in isolation — previously they emitted unconditionally. *)
+let test_block_selected ~(kind : string) ~(description : string) =
+  match !test_name_filter with
+  | None -> true
+  | Some name ->
+    String.equal name description
+    && (match !test_kind_filter with
+        | None -> true
+        | Some k -> String.equal k kind)
+
 (* ── Source-position map recording (A1) ──────────────────────────────────────
    Purely *observational* instrumentation: when recording is enabled we measure
    how many newlines the buffer has accumulated around each emitted form/body and
@@ -93,6 +115,9 @@ let module_path_table : (string, string) Hashtbl.t =
   add "Tesl.Channel"   "tesl/channel.rkt";
   add "Tesl.Sql"       "tesl/sql.rkt";
   add "Tesl.Sse"       "tesl/sse.rkt";
+  add "Tesl.SSE"       "tesl/sse.rkt";
+  add "Tesl.Database"  "tesl/db.rkt";
+  add "Tesl.App"       "tesl/prelude.rkt";
   add "Tesl.Logging"   "tesl/logging.rkt";
   add "Tesl.JWT"        "tesl/jwt.rkt";
   add "Tesl.HttpClient" "tesl/http-client.rkt";
@@ -107,6 +132,16 @@ let module_path_table : (string, string) Hashtbl.t =
 let import_rename name =
   let escaped = String.concat "_" (String.split_on_char '.' name) in
   "tesl_import_" ^ escaped
+
+(** Render a capability name as a Racket identifier.  Most capabilities are
+    plain identifiers, but the implicit per-cache capability is two words
+    (`cacheCap <Name>`); collapse spaces to underscores so it becomes the
+    `cacheCap_<Name>` identifier that `define-cache` / `define-capability` bind. *)
+let cap_ident name =
+  if String.length name >= 9 && String.sub name 0 9 = "cacheCap "
+  then String.concat "_" (String.split_on_char ' ' name)
+  else name
+let cap_list_str caps = String.concat " " (List.map cap_ident caps)
 
 (** Codec name mapping from Tesl codec name to Racket codec function name.
     Primitive codecs map to cons-pair functions; user-defined types are
@@ -2228,15 +2263,32 @@ let rec emit_expr ctx e =
           emit ctx "(accept ";
           emit_auth_resolved_proof proof value;
           emit ctx " #:value ";
-          (match value with
-           | EVar { name; _ } -> emit ctx ("*" ^ name)
-           | _ -> emit_expr_simple ctx value);
+          (match direct_check_call value with
+           | Some (check_fn, check_args) ->
+             emit ctx "("; emit_expr ctx check_fn;
+             List.iter (fun arg -> emit ctx " "; emit_expr_simple ctx arg) check_args;
+             emit ctx ")"
+           | None ->
+             (match value with
+              | EVar { name; _ } -> emit ctx ("*" ^ name)
+              | _ -> emit_expr_simple ctx value));
           emit ctx ")")
      | _ ->
        emit ctx "(attach-proof ";
-       (match value with
-        | EVar { name; _ } -> emit ctx (resolve_name name)
-        | _ -> emit_expr_simple ctx value);
+       (* If the value is a surface `check …` call, emit `(checkFn args)` WITHOUT the
+          `check` wrapper (which has no runtime binding) so attach-proof carries the
+          check-ok result's proof — mirrors the ELetProof handling above.  Without this
+          the EOk path (reached for `ok (check …) ::: proof` tails since the always-on
+          checkpoint change) emitted a literal unbound `check` head. *)
+       (match direct_check_call value with
+        | Some (check_fn, check_args) ->
+          emit ctx "("; emit_expr ctx check_fn;
+          List.iter (fun arg -> emit ctx " "; emit_expr_simple ctx arg) check_args;
+          emit ctx ")"
+        | None ->
+          (match value with
+           | EVar { name; _ } -> emit ctx (resolve_name name)
+           | _ -> emit_expr_simple ctx value));
        emit ctx " ";
        emit_runtime_proof ctx proof;
        emit ctx ")")
@@ -2290,7 +2342,7 @@ let rec emit_expr ctx e =
     emit ctx "))"
   | EWithCapabilities { capabilities; body; _ } ->
     emit ctx "(with-capabilities (";
-    emit ctx (String.concat " " capabilities);
+    emit ctx (cap_list_str capabilities);
     emit ctx ") ";
     emit_expr ctx body;
     emit ctx ")"
@@ -2863,14 +2915,36 @@ and emit_case_arm ctx scrut_var arm =
   emit ctx full_guard;
   emit ctx " ";
   let has_guard_with_bindings = arm.guard <> None && binding_code <> [] in
+  (* Wrap the arm BODY in its own checkpoint (at the arm's source line) so a step
+     lands on the arm the code actually takes — the macro erases in release, and
+     only the chosen arm's body runs, so exactly one fires. Empty locals keeps it
+     decoupled from the arm's raw/proof binding scheme (no `*name` references). *)
+  let emit_arm_body () =
+    let bloc = Checker.expr_loc arm.body in
+    (* Surface the pattern-bound variables (e.g. `todo` in `Something todo`) in the
+       arm checkpoint's Locals. They are bound by binding_code, which wraps this
+       checkpoint, so referencing each by its bound name is in scope. *)
+    let arm_vars = collect_bound_names arm.pattern in
+    emit ctx (Printf.sprintf "(thsl-src! %S %d "
+      bloc.Location.file (bloc.Location.start.line + 1));
+    (if arm_vars = [] then emit ctx "(list)"
+     else begin
+       emit ctx "(list";
+       List.iter (fun n -> emit ctx (Printf.sprintf " (cons '%s %s)" n n)) arm_vars;
+       emit ctx ")"
+     end);
+    emit ctx " (lambda () ";
+    emit_expr ctx arm.body;
+    emit ctx "))"
+  in
   (match binding_code with
-   | [] -> emit_expr ctx arm.body
+   | [] -> emit_arm_body ()
    | _ ->
      (* Nested single-binding lets ensure sequential deps work (e.g. nested patterns).
         Guard and body both use the same bindings when has_guard_with_bindings. *)
      ignore has_guard_with_bindings;
      List.iter (fun b -> emit ctx (Printf.sprintf "(let (%s) " b)) binding_code;
-     emit_expr ctx arm.body;
+     emit_arm_body ();
      List.iter (fun _ -> emit ctx ")") binding_code);
   emit ctx "]";
   List.iter (fun name -> Hashtbl.remove ctx.raw_locals name) raw_bound_names
@@ -3466,6 +3540,17 @@ let emit_requires ctx (m : module_form) =
         else
           expand_local_import_names m.source_file imp.module_name names
       in
+      (* Config-block types (database/queue/email/sse) are compile-time only:
+         the desugar pass consumes the config record literal and they never
+         appear in emitted Racket, so importing them must NOT emit a `require`
+         for runtime bindings that don't exist. *)
+      let config_only_names =
+        [ "Database"; "DatabaseBackend"; "Postgres"; "Memory"; "PostgresConfig";
+          "PostgresConnection"; "TcpConnection"; "SocketConnection";
+          "Queue"; "QueueRetryStrategy"; "QueueRetryConfig"; "QueueRetryBackoff";
+          "Exponential"; "Fixed"; "Linear";
+          "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job"; "Cache" ] in
+      let expanded = List.filter (fun n -> not (List.mem n config_only_names)) expanded in
       let qualified = List.filter (fun n -> String.contains n '.') expanded in
       let plain = List.filter (fun n -> not (String.contains n '.')) expanded in
       (* Register plain names from Tesl stdlib modules as stdlib functions *)
@@ -3506,7 +3591,10 @@ let emit_requires ctx (m : module_form) =
            will be emitted inline by emit_module after the main module's declarations.
            No require or lazy-import is needed. *)
         ignore (require_path, all_bindings)
-      end else begin
+      end else if all_bindings = [] then
+        (* All imported names were compile-time-only config types — no require. *)
+        ()
+      else begin
         let pairs_str = String.concat " " (List.map binding_pair_to_string all_bindings) in
         if is_absolute || use_file_syntax
         then emit_line ctx (Printf.sprintf "  (only-in (file \"%s\") %s)" require_path pairs_str)
@@ -3619,38 +3707,65 @@ let emit_func ctx (fd : func_decl) =
        thunk body in release (zero residue) and to a real checkpoint under
        TESL_DEBUG.  Wrapped in sm_region so the source-map tool still records
        the body's emitted line range. *)
-    let rec emit_main_debug e =
+    (* [locals] accumulates the names bound by enclosing `let`s so each checkpoint
+       reports the in-scope locals for the Variables panel — mirroring the
+       fn/handler path (emit_checkpoint_tail). Without this, debugging `main`
+       showed an always-empty Locals panel. `main` binds names bare (no `*`
+       prefix), so a local `port` is referenced as `port`. `_` (effect
+       statements like initTelemetry) is never a user-visible local and is
+       skipped. A let's VALUE checkpoint sees only the PRECEDING locals (the new
+       name isn't bound yet); the body checkpoints see it. *)
+    let emit_main_cp_locals locals =
+      if locals = [] then emit ctx "(list)"
+      else begin
+        emit ctx "(list";
+        List.iter (fun n -> emit ctx (Printf.sprintf " (cons '%s %s)" n n)) (List.rev locals);
+        emit ctx ")"
+      end
+    in
+    let rec emit_main_debug locals e =
       match e with
       | ELet { name; value; body; _ } ->
         let val_loc = Checker.expr_loc value in
-        emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d (list) (lambda () " name
+        emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d " name
           val_loc.Location.file (val_loc.Location.start.line + 1));
+        emit_main_cp_locals locals;
+        emit ctx " (lambda () ";
         emit_expr ctx value;
         emit ctx "))])";   (* ) closes lambda, ) closes thsl-src!, ] closes [, ) closes let bindings *)
         emit_nl ctx;
         emit ctx "  ";
-        emit_main_debug body;
+        let locals' = if name = "_" then locals else name :: locals in
+        emit_main_debug locals' body;
         emit ctx ")"
       | ELetProof { value_name; proof_name; value; body; _ } ->
         let val_loc = Checker.expr_loc value in
         let tmp = Printf.sprintf "tesl_proof_binding_%d" ctx.case_counter in
         ctx.case_counter <- ctx.case_counter + 1;
-        emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d (list) (lambda () " tmp
+        emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d " tmp
           val_loc.Location.file (val_loc.Location.start.line + 1));
+        emit_main_cp_locals locals;
+        emit ctx " (lambda () ";
         emit_expr ctx value;
         emit ctx (Printf.sprintf "))]) (let ([%s (forget-proof %s)] [%s (detach-all-proof %s)]) "
           value_name tmp proof_name tmp);
-        emit_main_debug body;
+        let locals' =
+          let add n acc = if n = "_" then acc else n :: acc in
+          add proof_name (add value_name locals)
+        in
+        emit_main_debug locals' body;
         emit ctx "))"
       | other ->
         let loc = Checker.expr_loc other in
-        emit ctx (Printf.sprintf "(thsl-src! %S %d (list) (lambda () "
+        emit ctx (Printf.sprintf "(thsl-src! %S %d "
           loc.Location.file (loc.Location.start.line + 1));
+        emit_main_cp_locals locals;
+        emit ctx " (lambda () ";
         emit_expr ctx other;
         emit ctx "))"
     in
     sm_region ctx ~form:"main block body" (Checker.expr_loc fd.body)
-      (fun () -> emit_main_debug fd.body);
+      (fun () -> emit_main_debug [] fd.body);
     ctx.func_kind <- None;
     emit_line ctx ")";
     emit_nl ctx
@@ -3669,9 +3784,15 @@ let emit_func ctx (fd : func_decl) =
   emit ctx (Printf.sprintf "  (%s" fd.name);
   emit_params ctx fd.params;
   emit_line ctx ")";
-  (if fd.capabilities <> [] then begin
+  (* Drop capability-row VARIABLES (e.g. the `c` in a higher-order function's
+     `requires ([time] ++ c)`): they are compile-time only — instantiated per call
+     site by the static checker — and have no runtime capability value.  Only
+     concrete capabilities reach `#:capabilities`. *)
+  (let bound_vars = Ast.func_bound_cap_vars fd in
+   let concrete = List.filter (fun c -> not (List.mem c bound_vars)) fd.capabilities in
+   if concrete <> [] then begin
     emit ctx "  #:capabilities [";
-    emit ctx (String.concat " " fd.capabilities);
+    emit ctx (cap_list_str concrete);
     emit_line ctx "]"
   end);
   emit ctx "  ";
@@ -4079,12 +4200,35 @@ let emit_func ctx (fd : func_decl) =
         emit ctx full_guard;
         emit ctx " ";
         let has_guard_with_bindings = arm.guard <> None && binding_code <> [] in
+        (* Per-arm checkpoint (see emit_case_arm): step lands on the taken arm, and
+           the arm's pattern-bound variables show in Locals (bound by binding_code,
+           which wraps this checkpoint). *)
+        let emit_arm_body () =
+          let bloc = Checker.expr_loc arm.body in
+          let rec collect_vars = function
+            | PVar n -> if n = "_" then [] else [n]
+            | PWild | PLit _ | PNullary _ -> []
+            | PCon { fields; _ } -> List.concat_map (fun (_, sub) -> collect_vars sub) fields
+          in
+          let arm_vars = collect_vars arm.pattern in
+          emit ctx (Printf.sprintf "(thsl-src! %S %d "
+            bloc.Location.file (bloc.Location.start.line + 1));
+          (if arm_vars = [] then emit ctx "(list)"
+           else begin
+             emit ctx "(list";
+             List.iter (fun n -> emit ctx (Printf.sprintf " (cons '%s %s)" n n)) arm_vars;
+             emit ctx ")"
+           end);
+          emit ctx " (lambda () ";
+          emit_with_raw_tail arm.body;
+          emit ctx "))"
+        in
         (match binding_code with
-         | [] -> emit_with_raw_tail arm.body
+         | [] -> emit_arm_body ()
          | _ ->
            ignore has_guard_with_bindings;
            List.iter (fun b -> emit ctx (Printf.sprintf "(let (%s) " b)) binding_code;
-           emit_with_raw_tail arm.body;
+           emit_arm_body ();
            List.iter (fun _ -> emit ctx ")") binding_code);
         emit ctx "]";
         List.iter (fun name -> Hashtbl.remove ctx.raw_locals name) raw_bound_names;
@@ -4241,12 +4385,30 @@ let emit_func ctx (fd : func_decl) =
       not is_runtime_stmt_underscore && not is_check_call && not is_sql_chain
     | _ -> false
   in
-  (* The whole body is peelable iff every binding down the chain is a plain let
-     or an ELetProof whose value is a direct check-call (the ELetProof shape the
-     peeler reproduces faithfully), and the final tail is a non-let expression. *)
+  (* A `let _ = <simple effect>` statement (telemetry/enqueue/publish/cache/email/
+     runtime-call). These lower to a bare effect via emit_expr (the same code the
+     non-peeled `(begin stmt body)` arm uses), so each can SAFELY get its own
+     checkpoint line — enabling per-statement stepping through a handler (e.g. step
+     from `telemetry` onto the SQL line). The STRUCTURAL `_`-statements (with-*,
+     serve, startWorkers/startEmailWorker) have nested blocks and stay whole. *)
+  let is_simple_effect_underscore e =
+    match e with
+    | ELet { name = "_"; value; _ } ->
+      (match value with
+       | ETelemetry _ | EEnqueue _ | EPublish _
+       | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
+       | ESendEmail _ | ERuntimeCall _ -> true
+       | _ -> false)
+    | _ -> false
+  in
+  (* The whole body is peelable iff every binding down the chain is a plain let, a
+     simple-effect `_` statement, or an ELetProof whose value is a direct
+     check-call (the ELetProof shape the peeler reproduces faithfully), and the
+     final tail is a non-let expression. *)
   let rec body_peelable e =
     match e with
-    | ELet _ -> plain_let_node e && body_peelable (match e with ELet { body; _ } -> body | _ -> e)
+    | ELet _ -> (plain_let_node e || is_simple_effect_underscore e)
+                && body_peelable (match e with ELet { body; _ } -> body | _ -> e)
     | ELetProof { value; body; _ } ->
       (match direct_check_call value with Some _ -> true | None -> false) && body_peelable body
     | _ -> true
@@ -4255,7 +4417,12 @@ let emit_func ctx (fd : func_decl) =
      (so SQL / proof / terminal forms keep exact release semantics). *)
   let emit_checkpoint_tail locals e =
     let loc = Checker.expr_loc e in
-    emit ctx (Printf.sprintf "(thsl-src! %S %d " loc.Location.file (loc.Location.start.line + 1));
+    (* A `case` is CONTROL FLOW, not a call: its arm-body checkpoints are in the
+       same frame, so use the control-flow checkpoint (which does not deepen the
+       step frame) — otherwise step-over would skip over the arm the code takes.
+       Everything else uses the normal (frame-deepening) checkpoint. *)
+    let macro = (match e with ECase _ -> "thsl-src-control!" | _ -> "thsl-src!") in
+    emit ctx (Printf.sprintf "(%s %S %d " macro loc.Location.file (loc.Location.start.line + 1));
     emit_locals_list locals;
     emit ctx " (lambda () ";
     emit_release_body e;
@@ -4263,6 +4430,20 @@ let emit_func ctx (fd : func_decl) =
   in
   let rec emit_debug_stmts ?(locals=[]) e =
     match e with
+    | ELet { value; body; _ } when is_simple_effect_underscore e ->
+      (* `let _ = <simple effect>` → its own checkpoint at the effect's line, then
+         continue peeling the rest of the body. Emit the effect with emit_expr
+         (identical to the non-peeled `(begin stmt body)` arm). `_` is not a
+         user-visible local, so it is NOT added to the locals list (and there is
+         no `*_` raw binding to reference). *)
+      let loc = Checker.expr_loc value in
+      emit ctx (Printf.sprintf "(let ([_ (thsl-src! %S %d " loc.Location.file (loc.Location.start.line + 1));
+      emit_locals_list locals;
+      emit ctx " (lambda () ";
+      emit_expr ctx value;
+      emit ctx "))]) ";
+      emit_debug_stmts ~locals body;
+      emit ctx ")"
     | ELet { name; value; body; _ } when plain_let_node e ->
       (* Replicate the plain-ELet fact / proof-carrier tracking from
          emit_with_raw_tail so downstream case-arm proof propagation is identical. *)
@@ -4620,6 +4801,15 @@ let emit_postgres_value ctx v =
        emit ctx (Printf.sprintf "(tesl-env-int-raw %S %s)" var_name def_val)
      | _ ->
        emit ctx (Printf.sprintf "(tesl-env-raw %S)" inner))
+  end else if String.length v >= 10 && String.sub v 0 10 = "envString(" then begin
+    (* envString("VAR", "default") *)
+    let inner = String.sub v 10 (String.length v - 11) in
+    (match String.split_on_char ',' inner with
+     | var :: rest ->
+       let var_name = strip_parens (String.trim var) in
+       let def_val  = strip_parens (String.trim (String.concat "," rest)) in
+       emit ctx (Printf.sprintf "(tesl-env-string-raw %S %S)" var_name def_val)
+     | _ -> emit ctx (Printf.sprintf "(tesl-env-raw %S)" inner))
   end else begin
     (* Check if value is a plain integer *)
     let is_int = String.length v > 0 && String.for_all (fun c -> c >= '0' && c <= '9') v in
@@ -5289,9 +5479,15 @@ let emit_test ctx (t : test_form) =
      All DTest blocks for a file are batched together to avoid rackunit side-effects
      from multiple (require rackunit) calls in separate submodule fragments. *)
   emit_line ctx (Printf.sprintf "  (test-case %S" t.description);
+  (* Optional `with database X` header clause binds X for the test body (queries run
+     against X's configured backend).  Absent ⇒ the default in-memory store, in which
+     case nothing extra is emitted (byte-identical to a test with no clause). *)
+  (match t.database with
+   | Some db -> emit_line ctx (Printf.sprintf "    (call-with-database %s (lambda ()" db)
+   | None -> ());
   let body_indent = if t.capabilities = [] then "  " else "    " in
   if t.capabilities <> [] then
-    emit_line ctx (Printf.sprintf "    (with-capabilities (%s)" (String.concat " " t.capabilities));
+    emit_line ctx (Printf.sprintf "    (with-capabilities (%s)" (cap_list_str t.capabilities));
   (* Fold through stmts accumulating in-scope locals for the Variables panel *)
   let _ = List.fold_left (fun locals stmt ->
     emit_test_stmt ~locals body_indent stmt;
@@ -5307,6 +5503,9 @@ let emit_test ctx (t : test_form) =
     | _ -> locals
   ) [] t.stmts in
   if t.capabilities <> [] then emit_line ctx "    )";
+  (match t.database with
+   | Some _ -> emit_line ctx "    ))"   (* close (lambda () and (call-with-database *)
+   | None -> ());
   emit_line ctx "  )"
 
 type api_test_template_part =
@@ -5459,7 +5658,7 @@ and emit_api_test_expr ctx ~server_name ~capabilities e =
         | None -> ());
        emit ctx " #:capabilities ";
        if capabilities = [] then emit ctx "'()"
-       else emit ctx (Printf.sprintf "(list %s)" (String.concat " " capabilities));
+       else emit ctx (Printf.sprintf "(list %s)" (cap_list_str capabilities));
        emit ctx ")"
      | EVar { name = "subscribe"; _ }, path :: rest ->
        let rec scan cookie headers = function
@@ -5689,7 +5888,7 @@ let emit_api_test ctx ~(database_names : string list) (t : api_test_form) =
   emit_line ctx "          (lambda ()";
   let body_indent = if t.capabilities = [] then "            " else "              " in
   if t.capabilities <> [] then
-    emit_line ctx (Printf.sprintf "            (with-capabilities (%s)" (String.concat " " t.capabilities));
+    emit_line ctx (Printf.sprintf "            (with-capabilities (%s)" (cap_list_str t.capabilities));
   List.iter (fun seed_expr ->
     emit ctx body_indent;
     emit_api_test_expr ctx ~server_name:t.server_name ~capabilities:t.capabilities seed_expr;
@@ -5733,7 +5932,7 @@ let emit_load_test ctx ~(database_names : string list) (t : load_test_form) =
   let body_indent = if t.capabilities = [] then "            " else "              " in
   if t.capabilities <> [] then
     emit_line ctx (Printf.sprintf "            (with-capabilities (%s)"
-      (String.concat " " t.capabilities));
+      (cap_list_str t.capabilities));
   (* Seed stmts *)
   List.iter (fun seed_expr ->
     emit ctx body_indent;
@@ -6002,9 +6201,16 @@ let emit_module ctx (m : module_form) =
       emit_api ctx ~server_name ~server_bindings api
     | DServer sv -> emit_server ctx sv
     | DTest _ -> ()  (* collected and emitted in one batch below *)
-    | DApiTest t -> emit_api_test ctx ~database_names t
-    | DLoadTest t -> emit_load_test ctx ~database_names t
+    | DApiTest t ->
+      if test_block_selected ~kind:"api-test" ~description:t.description then
+        emit_api_test ctx ~database_names t
+    | DLoadTest t ->
+      if test_block_selected ~kind:"load-test" ~description:t.description then
+        emit_load_test ctx ~database_names t
     | DCache c ->
+      (* The define-cache macro references the cache capability `cacheCap_<name>`,
+         so bind it first (define-capability before define-cache). *)
+      emit_line ctx (Printf.sprintf "(define-capability cacheCap_%s)" c.name);
       emit ctx (Printf.sprintf "(define-cache %s #:database %s" c.name c.database);
       (match c.default_ttl with
        | Some ttl -> emit ctx (Printf.sprintf " #:default-ttl %d" ttl)
@@ -6030,9 +6236,19 @@ let emit_module ctx (m : module_form) =
      side-effects from multiple (require rackunit) calls in separate fragments. *)
   let plain_tests =
     let all = List.filter_map (function DTest t -> Some t | _ -> None) m.decls in
-    match !test_name_filter with
-    | None      -> all
-    | Some name -> List.filter (fun (t : test_form) -> String.equal t.description name) all
+    (* A synthetic doctest block carries the "doctest: <fn>" description prefix; a
+       hand-written `test "..."` block is kind "test".  This lets `--test-kind doctest`
+       and `--test-kind test` disambiguate. *)
+    let dtest_kind (t : test_form) =
+      let p = "doctest: " in
+      if String.length t.description >= String.length p
+         && String.equal (String.sub t.description 0 (String.length p)) p
+      then "doctest" else "test"
+    in
+    List.filter
+      (fun (t : test_form) ->
+        test_block_selected ~kind:(dtest_kind t) ~description:t.description)
+      all
   in
   if plain_tests <> [] then begin
     emit_line ctx "(module+ test";

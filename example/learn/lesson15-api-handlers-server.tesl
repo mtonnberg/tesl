@@ -94,7 +94,7 @@ auth cookieAuth(request: HttpRequest) -> user: String ::: Authenticated user =
 
 # taskIdCapture: parse the ":id" URL segment as a plain String.
 # "using stringCodec" means: use the string JSON codec as the URL segment parser.
-capture taskIdCapture: id: String using stringCodec
+capturer taskIdCapture: id: String using stringCodec
 
 # ─── Handlers ─────────────────────────────────────────────────────────────────
 

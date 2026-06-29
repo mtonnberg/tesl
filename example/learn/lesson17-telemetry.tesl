@@ -20,6 +20,8 @@ module Lesson17Telemetry exposing [processRequest, processRequestWithSpan]
 import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
 import Tesl.Time exposing [nowMillis, time, Time.posixToSeconds]
 import Tesl.Telemetry exposing [initTelemetry]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.App exposing [App]
 
 # ─────────────────────────────────────────────
 # UNDERSTANDING — why it works this way
@@ -57,16 +59,32 @@ fn processRequestWithSpan(userId: String, requestCount: Int) -> String requires 
   telemetry "batch.process" { user.id = userId, count = requestCount, timestamp = Time.posixToSeconds(nowMillis()) }
   result
 
-fn foo() -> String =
-  let x = "my-service"
-  let y = 1
-  x
+# ─────────────────────────────────────────────
+# A runnable telemetry app
+# ─────────────────────────────────────────────
+# The health handler emits a span; `main` wires up the exporter with
+# `initTelemetry` before serving. Telemetry needs no capability (it is ambient),
+# so the handler's `requires []` is enough.
+handler healthCheck() -> String requires [] =
+  telemetry "health.check" { status = "ok" }
+  "ok"
 
-main {
-  let x = foo()
-  # initTelemetry sets up the OpenTelemetry exporter.
-  # "endpoint" is the OTLP endpoint URL, or "in-memory" for local testing.
-  # "console True" also prints spans to stdout.
-  initTelemetry service x endpoint "in-memory" console True
-  # now any telemetry calls in function bodies will emit spans
+api HealthApi {
+  get "/health" -> String
 }
+
+server HealthServer for HealthApi {
+  endpoint_0 = healthCheck
+}
+
+database TelemetryDb = Database {
+  backend: Memory
+}
+
+main() -> App requires [] =
+  let _ = initTelemetry service "lesson17-telemetry" endpoint "in-memory" console True
+  App {
+    database: TelemetryDb
+    api: HealthServer
+    port: 8086
+  }

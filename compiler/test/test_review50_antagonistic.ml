@@ -705,68 +705,66 @@ let r50_e01_indirect_nested_txn_rejected () =
 module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 
 entity User table "users" primaryKey id {
   id:   String
   name: String
 }
 
-database TestDB {
-  backend  postgres
-  schema   "test"
-  entities [User]
-  postgres {
-    database env("DB_NAME")
-    user     env("DB_USER")
-    password env("DB_PASS")
-    host     env("DB_HOST")
-    port     envInt("DB_PORT", 5432)
-  }
+database TestDB = Database {
+  schema: "test"
+  entities: [User]
+  backend: Postgres (PostgresConfig {
+    dbName: env "DB_NAME"
+    user: env "DB_USER"
+    password: env "DB_PASS"
+    connection: TcpConnection { host: env "DB_HOST"  port: envInt "DB_PORT" 5432 }
+  })
 }
 
 fn doInner(uid: String, n: String) -> Int
   requires [dbWrite] =
-  with transaction {
+  transaction {
     let _ = insert User { id: uid, name: n }
     1
   }
 
 fn doOuter(uid: String, n: String) -> Int
   requires [dbWrite] =
-  with transaction {
+  transaction {
     let _ = insert User { id: uid, name: n }
     doInner uid n
   }
 |})
 
-(* R50_E02 — Direct nested `with transaction` IS rejected. *)
+(* R50_E02 — Direct nested `transaction` IS rejected. *)
 let r50_e02_direct_nested_txn_rejected () =
   should_fail_src "transaction" ({|#lang tesl
 module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 
 entity User table "users" primaryKey id {
   id:   String
   name: String
 }
 
-database TestDB {
-  backend  postgres
-  schema   "test"
-  entities [User]
-  postgres {
-    database env("DB_NAME")
-    user     env("DB_USER")
-    password env("DB_PASS")
-    host     env("DB_HOST")
-    port     envInt("DB_PORT", 5432)
-  }
+database TestDB = Database {
+  schema: "test"
+  entities: [User]
+  backend: Postgres (PostgresConfig {
+    dbName: env "DB_NAME"
+    user: env "DB_USER"
+    password: env "DB_PASS"
+    connection: TcpConnection { host: env "DB_HOST"  port: envInt "DB_PORT" 5432 }
+  })
 }
 
 fn doNested(uid: String, n: String) -> Int requires [dbWrite] =
-  with transaction {
-    with transaction {
+  transaction {
+    transaction {
       let _ = insert User { id: uid, name: n }
       1
     }

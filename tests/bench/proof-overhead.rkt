@@ -18,18 +18,19 @@
 ;;     then a six-way parameterize (name/proof/evidence/type envs + check
 ;;     default/input facts) installed around the body.
 ;;
-;;     net OFF (future TESL_ZERO_COST_PROOFS erasure):  proof-annotated params
-;;        bind via tesl-establish-param-proof (exactly ONE allocation so
-;;        detachFact/decompose still work); proof-FREE params bind the raw value
-;;        (ZERO allocations); no validate-runtime-argument, no parameterize.
+;;     net OFF (the zero-cost erasure the DSL macros now always emit):
+;;        proof-annotated params bind via tesl-establish-param-proof (exactly ONE
+;;        allocation so detachFact/decompose still work); proof-FREE params bind
+;;        the raw value (ZERO allocations); no validate-runtime-argument, no
+;;        parameterize.
 ;;
 ;; Two rows are printed: {net-off, net-on}.  BOTH rows are produced in one
-;; process by exercising the two code paths directly, so the table is ready to
-;; show the delta the instant ZC-SWITCH wires TESL_ZERO_COST_PROOFS into the DSL
-;; macros.  Until then the macros ignore the env var, so a compiled .tesl run is
-;; identical with/without it — which is why we benchmark the primitives, not a
-;; recompiled module.  (The compiled proof_hot.tesl is exercised once as a smoke
-;; check that the surface program and the measured primitives agree.)
+;; process by exercising the two code paths directly, so the table shows the
+;; delta between today's erased expansion (net-off) and the historical runtime
+;; safety net (net-on).  We benchmark the primitives, not a recompiled module,
+;; so the numbers are stable across compiler revisions.  (The compiled
+;; proof_hot.tesl is exercised once as a smoke check that the surface program
+;; and the measured primitives agree.)
 ;;
 ;; METRICS
 ;; -------
@@ -47,7 +48,6 @@
 ;;   racket tests/bench/proof-overhead.rkt              # default 1e6 calls
 ;;   racket tests/bench/proof-overhead.rkt --iters 2000000
 ;;   racket tests/bench/proof-overhead.rkt --quick      # 1e5 calls (CI smoke)
-;;   TESL_ZERO_COST_PROOFS=1 racket tests/bench/proof-overhead.rkt   # same table
 ;;
 ;; Exit code is always 0 (a benchmark, not a gate) unless --check-threshold is
 ;; passed, in which case the ON-mode bytes/call must stay under
@@ -216,15 +216,11 @@
 (define (fmt-int x)   (~r x #:precision 0 #:min-width 7))
 
 (define (run)
-  (define zc-env (getenv "TESL_ZERO_COST_PROOFS"))
   (printf "\n")
   (printf "════════════════════════════════════════════════════════════════════════\n")
   (printf "  TESL proof-overhead benchmark — proof-heavy hot path (fn, 3 proof params)\n")
   (printf "════════════════════════════════════════════════════════════════════════\n")
   (printf "  calls/trial : ~a    trials : ~a\n" (iters) (trials))
-  (printf "  TESL_ZERO_COST_PROOFS = ~a~a\n"
-          (if zc-env (format "~s" zc-env) "<unset>")
-          (if zc-env "" "   (erasure not yet wired in DSL — both rows reflect current code)"))
   (printf "  racket       : ~a\n" (version))
   (printf "\n")
   (smoke-check)

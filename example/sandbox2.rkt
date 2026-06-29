@@ -63,7 +63,7 @@
 (define/pow
   (shouldWork [x : Integer] [y : Integer])
   #:returns Integer
-  (thsl-src! "example/sandbox.tesl" 10 (list (cons 'x *x) (cons 'y *y)) (lambda () (let ([tesl_case_0 (raw-value (validPort y))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([proof (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (raw-value (doSomething (attach-proof y proof))))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) *x])))))
+  (thsl-src-control! "example/sandbox.tesl" 10 (list (cons 'x *x) (cons 'y *y)) (lambda () (let ([tesl_case_0 (raw-value (validPort y))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([proof (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "example/sandbox.tesl" 11 (list (cons 'proof proof)) (lambda () (raw-value (doSomething (attach-proof y proof))))))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "example/sandbox.tesl" 12 (list) (lambda () *x))])))))
 
 (define/pow
   (shouldWork2 [x : Integer] [y : Integer ::: (ValidPort x)])

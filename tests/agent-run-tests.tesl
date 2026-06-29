@@ -1,10 +1,28 @@
 #lang tesl
-module AgentRunTests exposing [AgentRunServer, AgentRunWorkers]
+module AgentRunTests exposing [AgentRunServer]
 
 import Tesl.Prelude exposing [String, Unit]
 import Tesl.Json exposing [stringCodec]
 import Tesl.DB exposing [dbRead, dbWrite]
-import Tesl.Queue exposing [queueRead, queueWrite, pubsub]
+import Tesl.Queue exposing [
+  FromQueue,
+  queueRead,
+  queueWrite,
+  pubsub,
+  Queue,
+  QueueRetryStrategy,
+  Exponential,
+]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
+import Tesl.SSE exposing [SseChannel]
 import Tesl.String exposing [String.concat]
 import Tesl.ApiTest exposing [
   statusOk,
@@ -88,33 +106,33 @@ entity RunLog table "run_log" primaryKey id {
   id: String
 }
 
-database RunDatabase {
-  backend postgres
-  schema "agent_run"
-  entities [RunLog]
-  postgres {
-    database "agent_run"
-    user "tesl"
-    password ""
-    host "127.0.0.1"
-    port 55432
-    socket ""
-  }
+database RunDatabase = Database {
+  schema: "agent_run"
+  entities: [RunLog]
+  backend: Postgres (PostgresConfig {
+    dbName: "agent_run"
+    user: "tesl"
+    password: ""
+    connection: TcpConnection {
+      host: "127.0.0.1"
+      port: 55432
+    }
+  })
 }
 
-queue RunQueue {
-  database RunDatabase
-  jobs [RunJob]
-  retry {
+queue RunQueue requires [runWorker] = Queue {
+  database: RunDatabase
+  jobs: [Job RunJob runWorkerHandler Nothing]
+  retry: QueueRetryStrategy {
     maxAttempts: 1
-    backoff: exponential
+    backoff: Exponential
     initialDelay: 0
   }
 }
 
-channel RunSteps(runId: String) {
-  database RunDatabase
-  payload RunEvent
+sseChannel RunSteps(runId: String) = SseChannel {
+  database: RunDatabase
+  payload: RunEvent
 }
 
 # Tool validator + dispatch (the agent scripts one tool call, then final text).
@@ -135,7 +153,7 @@ handler startRun(req: RunJob)
   -> exists logId: String => RunLog ? FromDb (Id == logId)
   requires [runWrite, runQueue] =
     let logId = "run-1"
-    with transaction {
+    transaction {
       enqueue RunJob { prompt: req.prompt }
       exists logId =>
         insert RunLog { id: logId }
@@ -151,10 +169,6 @@ worker runWorkerHandler(job: RunJob ::: FromQueue (Id == jobId) job) requires [r
   let agent = withTools base [echoTool]
   let reply = agentRun agent job.prompt publishStep
   job
-
-workers AgentRunWorkers for RunQueue {
-  RunJob = runWorkerHandler
-}
 
 api AgentRunApi {
   post "/runs"

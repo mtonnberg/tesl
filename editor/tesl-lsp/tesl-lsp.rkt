@@ -149,17 +149,17 @@
     (cons "List.tail"           "fn List.tail(xs: List a) -> Maybe (List a)")
     (cons "List.last"           "fn List.last(xs: List a) -> Maybe a")
     (cons "List.nth"            "fn List.nth(xs: List a, i: Int) -> Maybe a")
-    (cons "List.map"            "fn List.map(f: a -> b, xs: List a) -> List b")
-    (cons "List.filter"         "fn List.filter(pred: a -> Bool, xs: List a) -> List a")
-    (cons "List.filterMap"      "fn List.filterMap(f: a -> Maybe b, xs: List a) -> List b")
-    (cons "List.foldl"          "fn List.foldl(f: (b, a) -> b, init: b, xs: List a) -> b")
-    (cons "List.foldr"          "fn List.foldr(f: (a, b) -> b, init: b, xs: List a) -> b")
+    (cons "List.map"            "fn List.map(f: (a -> b requires c), xs: List a) -> List b requires c")
+    (cons "List.filter"         "fn List.filter(pred: (a -> Bool requires c), xs: List a) -> List a requires c")
+    (cons "List.filterMap"      "fn List.filterMap(f: (a -> Maybe b requires c), xs: List a) -> List b requires c")
+    (cons "List.foldl"          "fn List.foldl(f: (b -> a -> b requires c), acc: b, xs: List a) -> b requires c")
+    (cons "List.foldr"          "fn List.foldr(f: (a -> b -> b requires c), acc: b, xs: List a) -> b requires c")
     (cons "List.append"         "fn List.append(xs: List a, ys: List a) -> List a")
     (cons "List.reverse"        "fn List.reverse(xs: List a) -> List a")
     (cons "List.sort"           "fn List.sort(xs: List a) -> List a ? IsSorted")
-    (cons "List.sortBy"         "fn List.sortBy(f: a -> b, xs: List a) -> List a ? IsSorted")
+    (cons "List.sortBy"         "fn List.sortBy(f: (a -> b requires c), xs: List a) -> List a ? IsSorted requires c")
     (cons "List.contains"       "fn List.contains(xs: List a, x: a) -> Bool")
-    (cons "List.find"           "fn List.find(pred: a -> Bool, xs: List a) -> Maybe a")
+    (cons "List.find"           "fn List.find(pred: (a -> Bool requires c), xs: List a) -> Maybe a requires c")
     (cons "List.take"           "fn List.take(n: Int ::: IsNonNegative n, xs: List a) -> List a")
     (cons "List.drop"           "fn List.drop(n: Int ::: IsNonNegative n, xs: List a) -> List a")
     (cons "List.zip"            "fn List.zip(xs: List a, ys: List b) -> List (Tuple2 a b)")
@@ -167,25 +167,25 @@
     (cons "List.product"        "fn List.product(xs: List Int) -> Int")
     (cons "List.maximum"        "fn List.maximum(xs: List Int) -> Maybe Int")
     (cons "List.minimum"        "fn List.minimum(xs: List Int) -> Maybe Int")
-    (cons "List.any"            "fn List.any(pred: a -> Bool, xs: List a) -> Bool")
-    (cons "List.all"            "fn List.all(pred: a -> Bool, xs: List a) -> Bool")
-    (cons "List.count"          "fn List.count(pred: a -> Bool, xs: List a) -> Int")
+    (cons "List.any"            "fn List.any(pred: (a -> Bool requires c), xs: List a) -> Bool requires c")
+    (cons "List.all"            "fn List.all(pred: (a -> Bool requires c), xs: List a) -> Bool requires c")
+    (cons "List.count"          "fn List.count(pred: (a -> Bool requires c), xs: List a) -> Int requires c")
     (cons "List.range"          "fn List.range(start: Int, end: Int) -> List Int")
     (cons "List.repeat"         "fn List.repeat(x: a, n: Int ::: IsNonNegative n) -> List a")
     (cons "List.unique"         "fn List.unique(xs: List a) -> List a")
-    (cons "List.partition"      "fn List.partition(pred: a -> Bool, xs: List a) -> List (List a)")
-    (cons "List.findIndex"      "fn List.findIndex(pred: a -> Bool, xs: List a) -> Maybe Int")
-    (cons "List.zipWith"        "fn List.zipWith(f: (a, b) -> c, xs: List a, ys: List b) -> List c")
+    (cons "List.partition"      "fn List.partition(pred: (a -> Bool requires c), xs: List a) -> List (List a) requires c")
+    (cons "List.findIndex"      "fn List.findIndex(pred: (a -> Bool requires c), xs: List a) -> Maybe Int requires c")
+    (cons "List.zipWith"        "fn List.zipWith(f: ((a, b) -> d requires c), xs: List a, ys: List b) -> List d requires c")
     (cons "List.unzip"          "fn List.unzip(pairs: List (List Any)) -> List (List Any)  — returns [firsts, seconds]")
     (cons "List.flatten"        "fn List.flatten(xss: List (List a)) -> List a")
     (cons "List.concat"         "fn List.concat(xss: List (List a)) -> List a  — flatten one level of nesting")
     (cons "List.dedupe"         "fn List.dedupe(xs: List a) -> List a  — removes consecutive duplicates")
     (cons "List.intersperse"    "fn List.intersperse(sep: a, xs: List a) -> List a")
     (cons "List.intercalate"    "fn List.intercalate(sep: List a, xss: List (List a)) -> List a")
-    (cons "List.groupBy"        "fn List.groupBy(f: a -> b, xs: List a) -> List (List a)  — groups consecutive equal-keyed elements")
+    (cons "List.groupBy"        "fn List.groupBy(f: (a -> b requires c), xs: List a) -> List (List a) requires c  — groups consecutive equal-keyed elements")
     (cons "List.filterCheck"    "fn List.filterCheck(checkFn: check a, xs: List a) -> List a\n\nFilter using a check function. Elements that pass are kept with their proof attached.")
     (cons "List.allCheck"       "fn List.allCheck(checkFn: check a, xs: List a) -> List a\n\nApply a check to every element. Fails if any element fails; returns the list with a ForAll proof.")
-    (cons "List.concatMap"      "fn List.concatMap(f: a -> List b, xs: List a) -> List b\n\nMap each element to a list, then flatten one level. Equivalent to concat (map f xs). Also known as flatMap or bind.")
+    (cons "List.concatMap"      "fn List.concatMap(f: (a -> List b requires c), xs: List a) -> List b requires c\n\nMap each element to a list, then flatten one level. Equivalent to concat (map f xs). Also known as flatMap or bind.")
     (cons "List.member"         "fn List.member(x: a, xs: List a) -> Bool\n\nReturns True if x is an element of xs, False otherwise. Uses structural equality.")
     ;; Tesl.Maybe
     (cons "Maybe"               "type Maybe a\n  = Nothing\n  | Something value: a\n\nRepresents an optional value. Use case to match on Something v or Nothing.")
@@ -249,11 +249,11 @@
     (cons "Set.fromList"        "fn Set.fromList(xs: List a) -> Set")
     (cons "Set.toList"          "fn Set.toList(s: Set) -> List a")
     (cons "Set.isSubset"        "fn Set.isSubset(s1: Set, s2: Set) -> Bool")
-    (cons "Set.map"             "fn Set.map(f: a -> b, s: Set) -> Set")
-    (cons "Set.filter"          "fn Set.filter(pred: a -> Bool, s: Set) -> Set")
+    (cons "Set.map"             "fn Set.map(f: (a -> b requires c), s: Set) -> Set requires c")
+    (cons "Set.filter"          "fn Set.filter(pred: (a -> Bool requires c), s: Set) -> Set requires c")
     (cons "Set.foldl"           "fn Set.foldl(f: (b, a) -> b, init: b, s: Set) -> b")
-    (cons "Set.any"             "fn Set.any(pred: a -> Bool, s: Set) -> Bool")
-    (cons "Set.all"             "fn Set.all(pred: a -> Bool, s: Set) -> Bool")
+    (cons "Set.any"             "fn Set.any(pred: (a -> Bool requires c), s: Set) -> Bool requires c")
+    (cons "Set.all"             "fn Set.all(pred: (a -> Bool requires c), s: Set) -> Bool requires c")
     (cons "Set.filterCheck"     "fn Set.filterCheck(checkFn: check a, s: Set) -> Set\n\nFilter using a check function. Elements that pass are kept with their proof attached.")
     (cons "Set.allCheck"        "fn Set.allCheck(checkFn: check a, s: Set) -> Set\n\nApply a check to every element. Returns with ForAll proof.")
     ;; Capabilities
@@ -279,7 +279,7 @@
     (cons "randomInt"           "fn randomInt(n: Int) -> Int  requires [random]\n\nReturns a uniformly random integer in [0, n).")
     ;; Tesl.Env
     (cons "env"                 "fn env(name: String) -> Maybe String")
-    (cons "envInt"              "fn envInt(name: String, default: Int) -> Maybe Int")
+    (cons "envInt"              "fn envInt(name: String, default: Int) -> Int\n\nReads the env var as an integer, returning `default` when it is unset or unparseable (so the result is always an `Int`, never `Maybe Int`).")
     ;; Tesl.Cli
     (cons "lookupPortArgument"  "fn lookupPortArgument(args: List String) -> Maybe String")
     ;; Fact operations (Tesl.Prelude)
@@ -1026,6 +1026,52 @@
          (let ([td (hash-ref j 'type_definition 'null)])
            (and (hash? td) td)))))
 
+(define (run-config-context compiler file-path line col)
+  ;; --config-context-json → {config_context:{block,fields:[{name,type,doc,required,present}]}|null}.
+  ;; Returns the inner context hash (with 'block and 'fields), or #f when the
+  ;; cursor is not inside a configuration block.
+  (let ([j (run-compiler-positional-json compiler "--config-context-json" file-path line col #f "config-context")])
+    (and (hash? j)
+         (let ([cc (hash-ref j 'config_context 'null)])
+           (and (hash? cc) cc)))))
+
+;; Find a config field hash by name within a config-context's field list.
+(define (config-field-lookup cc name)
+  (and cc
+       (for/or ([f (in-list (hash-ref cc 'fields '()))])
+         (and (hash? f) (equal? (hash-ref f 'name #f) name) f))))
+
+;; Markdown hover for a config-block field: `field: Type` + doc + required note.
+(define (config-field-hover-markdown block f)
+  (let ([name (hash-ref f 'name "")]
+        [type (hash-ref f 'type "")]
+        [doc  (hash-ref f 'doc "")]
+        [req  (hash-ref f 'required #f)])
+    (string-append
+     "```tesl\n" name ": " type "\n```\n\n"
+     "*field of `" block "` block" (if req " — required" "") "*"
+     (if (and (string? doc) (> (string-length doc) 0))
+         (string-append "\n\n" doc) ""))))
+
+;; LSP completion items for the not-yet-written fields of a config block.
+;; `insertText` adds the `: ` so accepting a field lands the colon for free.
+(define lsp-kind-field-config 5)
+(define (config-field-completions cc)
+  (if (not cc) '()
+      (for/list ([f (in-list (hash-ref cc 'fields '()))]
+                 #:when (and (hash? f) (not (hash-ref f 'present #f))))
+        (let ([name (hash-ref f 'name "")]
+              [type (hash-ref f 'type "")]
+              [doc  (hash-ref f 'doc "")]
+              [req  (hash-ref f 'required #f)])
+          (hash 'label name
+                'kind lsp-kind-field-config
+                'detail (string-append ": " type (if req "  (required)" ""))
+                'insertText (string-append name ": ")
+                'insertTextFormat 1
+                'sortText (string-append "0" name)
+                'documentation (hash 'kind "markdown" 'value doc))))))
+
 ;; signature {label, parameters:[{label,type}], active_parameter} → LSP SignatureHelp.
 ;; Returns the SignatureHelp hash, or #f when there is no active signature.
 (define (signature->signature-help sig)
@@ -1300,6 +1346,41 @@
   (and (> (hash-count changes) 0)
        (hash 'changes changes)))
 
+;; ── prepareRename (textDocument/prepareRename) ───────────────────────────────
+;; Decide whether the symbol under the caret is renameable, and if so, return the
+;; precise identifier RANGE (so the editor's rename box pre-selects only the token
+;; — e.g. just `somerecord`, never the trailing `.id`).  Returning `'null` makes
+;; the client refuse to open the rename popup; this is how we reject stdlib types
+;; (String), keywords (handler, requires) and the `:::` operator — for all of
+;; those `--occurrences-json` yields no occurrences (they are not user symbols).
+(define (position-in-range? line col range)
+  (let* ([start (hash-ref range 'start (hash))]
+         [end   (hash-ref range 'end (hash))]
+         [sl (hash-ref start 'line 0)] [sc (hash-ref start 'character 0)]
+         [el (hash-ref end   'line 0)] [ec (hash-ref end   'character 0)])
+    (and (or (> line sl) (and (= line sl) (>= col sc)))
+         (or (< line el) (and (= line el) (<= col ec))))))
+
+(define (occurrences->prepare-rename occurrences line col)
+  ;; Find the occurrence range that contains the caret; that token is exactly
+  ;; what will be renamed. No occurrences (keyword / operator / stdlib type) ⇒
+  ;; reject the rename.
+  (let ([ranges (filter values
+                        (map (lambda (occ)
+                               (let ([loc (location->lsp occ)])
+                                 (and loc (hash-ref loc 'range #f))))
+                             occurrences))])
+    (cond
+      [(null? ranges) 'null]
+      [else
+       (let ([hit (findf (lambda (r) (position-in-range? line col r)) ranges)])
+         (cond
+           ;; Caret sits inside a known occurrence token: select that exact span.
+           [hit (hash 'range hit)]
+           ;; Renameable symbol, but caret not inside a recovered token span
+           ;; (defensive): allow rename, let the client choose the word range.
+           [else (hash 'range (car ranges))]))])))
+
 ;; ── Document symbols (textDocument/documentSymbol) ───────────────────────────
 ;; Built from the typed snapshot (--semantic-json). We return the flat
 ;; SymbolInformation[] form (uri + location), which every LSP client accepts and
@@ -1413,26 +1494,43 @@
        (let ([toks '()])
          (define (emit! line col len type) (set! toks (cons (mk-token line col len type) toks)))
          (for ([fn (in-list (hash-ref semantic 'functions '()))])
-           (let ([loc (hash-ref fn 'loc #f)])
-             (when (hash? loc)
+           (let ([loc  (hash-ref fn 'loc #f)]
+                 [kind (hash-ref fn 'kind "fn")])
+             ;; `main` is a KEYWORD, not a user-named function: its decl `name`
+             ;; is literally "main", so name-col-in-line would anchor a "function"
+             ;; token onto the `main` keyword and override its keyword color
+             ;; (the "main is just yellow like a function" bug). Skip it and let
+             ;; the TextMate grammar scope `main` as a declaration keyword.
+             (when (and (hash? loc) (not (equal? kind "main")))
                (let* ([line (hash-ref loc 'start_line 0)]
                       ;; The decl loc starts at the keyword; the name follows it.
                       ;; Find the name's column from source for an exact span.
                       [nm   (hash-ref fn 'name "")]
                       [ncol (name-col-in-line lines line nm (hash-ref loc 'start_col 0))]
                       [len  (string-length nm)])
-                 (emit! line ncol (max 1 len) (decl-kind->token-type (hash-ref fn 'kind "fn")))))))
+                 (emit! line ncol (max 1 len) (decl-kind->token-type kind))))))
          (for ([b (in-list (hash-ref semantic 'local_bindings '()))])
            ;; semantic-json bindings carry their span under `loc` (start_line/
-           ;; start_col), unlike the flat --local-bindings-json shape.
-           (let ([loc (hash-ref b 'loc #f)])
-             (when (hash? loc)
+           ;; start_col). IMPORTANT: that loc is the binding STATEMENT start — it
+           ;; points at the `let` keyword for a `let x = …`, and at the leading
+           ;; keyword of an effect statement (telemetry/initTelemetry/with/…) that
+           ;; the checker binds to `_`. Trusting start_col paints a `variable`
+           ;; token straight onto the keyword and steals its color (the
+           ;; "let / first-letter-of-with-telemetry-initTelemetry loses keyword
+           ;; color" bug). So: skip wildcard/anonymous `_` bindings, and re-anchor
+           ;; named bindings to the NAME's column (like the decl path); if the name
+           ;; isn't on the line, skip rather than risk painting a keyword.
+           (let ([loc (hash-ref b 'loc #f)]
+                 [nm  (hash-ref b 'name "")])
+             (when (and (hash? loc)
+                        (> (string-length nm) 0)
+                        (not (string=? nm "_")))
                (let* ([line (hash-ref loc 'start_line 0)]
-                      [col  (hash-ref loc 'start_col 0)]
-                      [nm   (hash-ref b 'name "")]
-                      [len  (max 1 (min (string-length nm)
-                                        (name-length-on-line lines line col (string-length nm))))])
-                 (emit! line col len "variable")))))
+                      [ncol (name-col-in-line lines line nm -1)])
+                 (when (>= ncol 0)
+                   (let ([len (max 1 (min (string-length nm)
+                                          (name-length-on-line lines line ncol (string-length nm))))])
+                     (emit! line ncol len "variable")))))))
          ;; Sort by (line, col) — required for delta encoding.
          (sort (reverse toks)
                (lambda (a b)
@@ -1926,7 +2024,7 @@
                                    'declarationProvider #t
                                    'typeDefinitionProvider #t
                                    'referencesProvider #t
-                                   'renameProvider     #t
+                                   'renameProvider     (hash 'prepareProvider #t)
                                    'documentSymbolProvider #t
                                    'documentHighlightProvider #t
                                    'inlayHintProvider  (hash 'resolveProvider #t)
@@ -2038,11 +2136,19 @@
                     ;;   finds "check isValidPort ... -> ... ValidPort ...")
                     [owner  (and (not entry) (not stdlib) word
                                  (find-proof-owner table word))]
-                    ;; Priority 4: ask the compiler for the precise inferred type
+                    ;; Priority 4: configuration-block field (database/postgres/
+                    ;;   queue/retry/channel/cache/email/smtp). When the cursor is
+                    ;;   inside a config block and the word is one of its schema
+                    ;;   fields, show the field's type + doc from Config_schema.
+                    [cfg-cc (and word text (not entry) (not stdlib) (not owner)
+                                 (with-text-tmp text (uri->path uri) compiler
+                                   (lambda (tmp) (run-config-context compiler tmp line-num char-num))))]
+                    [cfg-field (and cfg-cc (config-field-lookup cfg-cc word))]
+                    ;; Priority 5: ask the compiler for the precise inferred type
                     ;;   (record field access via --field-at-json, otherwise the
                     ;;   expression type via --type-at-json). Covers expressions the
                     ;;   text-based heuristics above cannot resolve.
-                    [compiler-md (and (not entry) (not stdlib) (not owner) text
+                    [compiler-md (and (not entry) (not stdlib) (not owner) (not cfg-field) text
                                       (compiler-hover-markdown compiler (uri->path uri) text line-num char-num))]
                     [result
                      (cond
@@ -2060,6 +2166,10 @@
                                                          [fname (if m (cadr m) "?")]
                                                          [note  (format "*Fact predicate declared by `~a ~a`*" kw fname)])
                                                     (format-hover-entry owner note))))]
+                       [cfg-field (hash 'contents
+                                        (hash 'kind  "markdown"
+                                              'value (config-field-hover-markdown
+                                                      (hash-ref cfg-cc 'block "") cfg-field)))]
                        [compiler-md (hash 'contents
                                           (hash 'kind  "markdown"
                                                 'value compiler-md))]
@@ -2096,7 +2206,13 @@
                               (run-completions compiler tmp line-num char-num))
                             (lambda ()
                               (when (file-exists? tmp) (delete-file tmp))))))]
-                  [items (build-completions (or compiler-items '()) after-dot?)])
+                  ;; Inside a config block (and not after a dot): offer the
+                  ;; block's not-yet-written schema fields, ranked first.
+                  [cfg-cc (and text (not after-dot?)
+                               (with-text-tmp text source-path compiler
+                                 (lambda (tmp) (run-config-context compiler tmp line-num char-num))))]
+                  [items (append (config-field-completions cfg-cc)
+                                 (build-completions (or compiler-items '()) after-dot?))])
              (write-message out (hash 'jsonrpc "2.0" 'id id
                                       'result (hash 'isIncomplete #f
                                                     'items items))))
@@ -2229,6 +2345,30 @@
                                       (delete-file tmp)))))
                               (occurrences->lsp (run-occurrences compiler query-path line-num char-num) original-uri query-path))))])
              (write-message out (hash 'jsonrpc "2.0" 'id id 'result (or result '()))))
+           (loop)]
+
+          [(equal? method "textDocument/prepareRename")
+           (let* ([doc       (hash-ref params 'textDocument (hash))]
+                  [uri       (hash-ref doc 'uri "")]
+                  [pos       (hash-ref params 'position (hash))]
+                  [line-num  (hash-ref pos 'line 0)]
+                  [char-num  (hash-ref pos 'character 0)]
+                  [text      (hash-ref docs uri #f)]
+                  [source-path (uri->path uri)]
+                  [result
+                   (and text compiler
+                        (let* ([dir (or (path-only source-path) (current-directory))]
+                               [tmp (make-temporary-file "tesl-prepare-~a.tesl" #f dir)])
+                          (dynamic-wind
+                            void
+                            (lambda ()
+                              (with-output-to-file tmp #:exists 'truncate (lambda () (display text)))
+                              (occurrences->prepare-rename
+                               (run-occurrences compiler tmp line-num char-num)
+                               line-num char-num))
+                            (lambda ()
+                              (when (file-exists? tmp) (delete-file tmp))))))])
+             (write-message out (hash 'jsonrpc "2.0" 'id id 'result (or result 'null))))
            (loop)]
 
           [(equal? method "textDocument/rename")
@@ -2690,6 +2830,24 @@
     (check-equal? (hash-ref (hash-ref (first same-file-edits) 'range) 'start) (hash 'line 3 'character 2))
     (check-equal? (hash-ref (first other-file-edits) 'newText) "renamed")
     (check-false (occurrences->workspace-edit '() "renamed" original-uri tmp-path)))
+
+  ;; prepareRename: reject non-symbols (no occurrences ⇒ 'null) and otherwise
+  ;; return the precise token range the caret sits inside — never a wider span.
+  (let* ([rec-occ  (hash 'file "/tmp/p.tesl" 'line 7 'col 2  'end_line 7 'end_col 12)] ; "somerecord"
+         [read-occ (hash 'file "/tmp/p.tesl" 'line 9 'col 0  'end_line 9 'end_col 10)])
+    ;; No occurrences (keyword / ::: / stdlib type) → reject.
+    (check-equal? (occurrences->prepare-rename '() 7 4) 'null)
+    ;; Caret inside `somerecord` (col 4) → range is exactly the identifier, NOT
+    ;; including any trailing `.id` (the occurrence span ends at col 12).
+    (let ([res (occurrences->prepare-rename (list rec-occ read-occ) 7 4)])
+      (check-not-false res)
+      (check-equal? (hash-ref (hash-ref res 'range) 'start) (hash 'line 7 'character 2))
+      (check-equal? (hash-ref (hash-ref res 'range) 'end)   (hash 'line 7 'character 12)))
+    ;; Caret on the other occurrence resolves to that occurrence's span.
+    (let ([res (occurrences->prepare-rename (list rec-occ read-occ) 9 3)])
+      (check-not-false res)
+      (check-equal? (hash-ref (hash-ref res 'range) 'start) (hash 'line 9 'character 0))
+      (check-equal? (hash-ref (hash-ref res 'range) 'end)   (hash 'line 9 'character 10))))
 
   (let ([typed-entry (find-local-binding-entry "/tmp/local-lets.tesl" local-let-hover-src 5 "formatted" local-let-binding-types)]
         [inferred-entry (find-local-binding-entry "/tmp/local-lets.tesl" local-let-hover-src 8 "inferred" local-let-binding-types)]

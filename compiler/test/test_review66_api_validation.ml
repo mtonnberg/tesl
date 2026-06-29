@@ -239,10 +239,20 @@ let test_R66_RT04_sse_without_return_accepted () =
 module R66Rt04 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
-database EventDb { backend postgres schema "e" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" } }
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.SSE exposing [SseChannel]
+database EventDb = Database {
+  schema: "e"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "d"
+    user: "u"
+    password: ""
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
+}
 type Ev = EvA msg: String
-channel Events(userId: String) { database EventDb payload Ev }
+sseChannel Events(userId: String) = SseChannel { database: EventDb  payload: Ev }
 fn parseId(s: String) -> String = s
 capture userCapture: String using stringCodec via parseId
 api R66Rt04 {
@@ -257,13 +267,15 @@ let test_R66_RT05_explicit_return_accepted () =
 #lang tesl
 module R66Rt05 exposing []
 import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+capture idCapture: id: String using stringCodec
 api R66Rt05 {
   get "/health"
     -> String
   post "/items"
     -> String
   put "/items/:id"
-    capture id : String via stringCodec
+    capture id : String via idCapture
     -> String
 }
 |}
@@ -331,6 +343,8 @@ let test_R66_PH05_valid_paths_accepted () =
 #lang tesl
 module R66Ph05 exposing []
 import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+capture idCapture: id: String using stringCodec
 api R66Ph05 {
   get "/"
     -> String
@@ -339,7 +353,7 @@ api R66Ph05 {
   get "/api/v1/users"
     -> String
   get "/items/:id"
-    capture id : String via stringCodec
+    capture id : String via idCapture
     -> String
 }
 |}
@@ -349,10 +363,13 @@ let test_R66_PH06_multiple_path_params_valid () =
 #lang tesl
 module R66Ph06 exposing []
 import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+capture userIdCapture: userId: String using stringCodec
+capture postIdCapture: postId: String using stringCodec
 api R66Ph06 {
   get "/users/:userId/posts/:postId"
-    capture userId : String via stringCodec
-    capture postId : String via stringCodec
+    capture userId : String via userIdCapture
+    capture postId : String via postIdCapture
     -> String
 }
 |}
@@ -448,9 +465,11 @@ let test_R66_CA03_correct_capture_name_accepted () =
 #lang tesl
 module R66Ca03 exposing []
 import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+capture idCapture: id: String using stringCodec
 api R66Ca03 {
   get "/items/:id"
-    capture id : String via stringCodec
+    capture id : String via idCapture
     -> String
 }
 |}
@@ -473,10 +492,13 @@ let test_R66_CA05_multiple_path_params_all_captured_accepted () =
 #lang tesl
 module R66Ca05 exposing []
 import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+capture uidCapture: uid: String using stringCodec
+capture pidCapture: pid: String using stringCodec
 api R66Ca05 {
   get "/users/:uid/posts/:pid"
-    capture uid : String via stringCodec
-    capture pid : String via stringCodec
+    capture uid : String via uidCapture
+    capture pid : String via pidCapture
     -> String
 }
 |}
@@ -494,15 +516,153 @@ api R66Ca06 {
 }
 |}
 
-let test_R66_CA07_no_capture_clause_path_param_still_compiles () =
-  (* Emitter auto-generates a default capture for path params without explicit
-     capture clauses — this is intentional, not an error *)
-  should_pass {|
+let test_R66_CA07_no_capture_clause_path_param_rejected () =
+  (* A `:param` path segment with NO `capture` clause must be a compile error.
+     Previously the emitter invented a default capture named `<param>Capture`
+     that was never defined, so the endpoint type-checked but crashed at
+     `tesl run`. *)
+  should_fail "path parameter\\|has no `capture`\\|no.*capture clause" {|
 #lang tesl
 module R66Ca07 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ca07 {
   get "/items/:id"
+    -> String
+}
+|}
+
+let test_R66_CA08_bare_string_path_param_no_capture_rejected () =
+  (* Bug fix_bugs: `get "/ping/:string" -> String` — the `:string` path param
+     has no `capture` clause.  Compiled to broken Racket before, crashed at run. *)
+  should_fail "path parameter\\|has no `capture`\\|no.*capture clause" {|
+#lang tesl
+module R66Ca08 exposing []
+import Tesl.Prelude exposing [String]
+api R66Ca08 {
+  get "/ping/:string"
+      -> String
+}
+|}
+
+let test_R66_CA09_capture_via_codec_not_capture_form_rejected () =
+  (* Bug fix_bugs: `capture s: String via stringCodec` — `stringCodec` is a JSON
+     codec, not a top-level `capture` form, so the emitted route names a binding
+     that is not a `define-capture` and crashes at `tesl run`. *)
+  should_fail "not a declared `capture` form\\|via.*not.*declared.*capture\\|capture form" {|
+#lang tesl
+module R66Ca09 exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+api R66Ca09 {
+  get "/ping/:s"
+    capture s : String via stringCodec
+      -> String
+}
+|}
+
+let test_R66_CA10_capture_using_keyword_accepted () =
+  (* `capture s: String using stringCodec` inside an api block is the inline-codec
+     form (symmetric with `capturer ... using`).  This previously had to be spelled
+     with `with`; after the with→using migration `using` is the accepted spelling and
+     binds the `:s` path param's capture. *)
+  should_pass {|
+#lang tesl
+module R66Ca10 exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+api R66Ca10 {
+  get "/ping/:s"
+    capture s : String using stringCodec
+      -> String
+}
+|}
+
+let test_R66_CA11_capture_via_undefined_name_rejected () =
+  (* `via noSuchCapture` references an identifier that is neither a codec nor a
+     declared capture form — must be rejected at compile time. *)
+  should_fail "not a declared `capture` form\\|via.*not.*declared.*capture\\|capture form" {|
+#lang tesl
+module R66Ca11 exposing []
+import Tesl.Prelude exposing [String]
+api R66Ca11 {
+  get "/ping/:s"
+    capture s : String via noSuchCapture
+      -> String
+}
+|}
+
+let test_R66_CA12_capture_via_real_capture_form_accepted () =
+  (* The correct form: `via` names a top-level `capture` declaration. *)
+  should_pass {|
+#lang tesl
+module R66Ca12 exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+capture sCapture: s: String using stringCodec
+api R66Ca12 {
+  get "/ping/:s"
+    capture s : String via sCapture
+    -> String
+}
+|}
+
+let test_R66_CA13_inline_capture_accepted () =
+  (* Inline form: `capture x: T using <codec>` needs no top-level `capturer`. *)
+  should_pass {|
+#lang tesl
+module R66Ca13 exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+api R66Ca13 {
+  get "/items/:id"
+    capture id: String using stringCodec
+    -> String
+}
+|}
+
+let test_R66_CA14_inline_capture_with_check_accepted () =
+  (* Inline form with a `via <check>` proof: `capture x: T using <codec> via <fn>`. *)
+  should_pass {|
+#lang tesl
+module R66Ca14 exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+fn parseId(id: String) -> String =
+  id
+api R66Ca14 {
+  get "/items/:id"
+    capture id: String using stringCodec via parseId
+    -> String
+}
+|}
+
+let test_R66_CA15_inline_sse_capture_accepted () =
+  (* SSE endpoints accept the inline capture form too. *)
+  should_pass {|
+#lang tesl
+module R66Ca15 exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+api R66Ca15 {
+  sse "/events/:userId"
+    capture userId: String using stringCodec
+    -> String
+}
+|}
+
+let test_R66_CA16_inline_capture_with_keyword_rejected () =
+  (* The old inline `capture x: T with <codec>` spelling is no longer valid — inline
+     codecs use `using` (symmetric with `capturer ... using`).  Writing `with` here
+     leaves the path param `:id` without a usable capture clause, which validation
+     rejects. *)
+  should_fail "path parameter\\|has no `capture`\\|no.*capture clause" {|
+#lang tesl
+module R66Ca16 exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+api R66Ca16 {
+  get "/items/:id"
+    capture id: String with stringCodec
     -> String
 }
 |}
@@ -583,13 +743,14 @@ import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 fact AuthedUser (u: String)
 auth authFun(u: String) -> u: String ::: AuthedUser u = ok u ::: AuthedUser u
+capture idCapture: id: String using stringCodec
 api R66Ok02 {
   get "/health"
     -> String
 
   get "/users/:id"
     auth user : String ::: AuthedUser user via authFun
-    capture id : String via stringCodec
+    capture id : String via idCapture
     -> String
 
   post "/users"
@@ -614,6 +775,7 @@ auth sessionAuth(req: HttpRequest) -> user: String ::: Authenticated user =
   case Dict.lookup "session" req.cookies of
     Nothing -> fail 401 "not authenticated"
     Something s -> ok s ::: Authenticated user
+capture itemIdCapture: itemId: String using stringCodec
 api R66Ok03 {
   get "/whoami"
     auth user : String ::: Authenticated user via sessionAuth
@@ -626,12 +788,12 @@ api R66Ok03 {
 
   get "/items/:itemId"
     auth user : String ::: Authenticated user via sessionAuth
-    capture itemId : String via stringCodec
+    capture itemId : String via itemIdCapture
     -> String
 
   delete "/items/:itemId"
     auth user : String ::: Authenticated user via sessionAuth
-    capture itemId : String via stringCodec
+    capture itemId : String via itemIdCapture
     -> String
 }
 |}
@@ -643,10 +805,20 @@ let test_R66_OK04_sse_with_http_endpoints_accepted () =
 module R66Ok04 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
-database Db { backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" } }
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.SSE exposing [SseChannel]
+database Db = Database {
+  schema: "s"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "d"
+    user: "u"
+    password: ""
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
+}
 type Ev = EvMsg msg: String
-channel Events(uid: String) { database Db payload Ev }
+sseChannel Events(uid: String) = SseChannel { database: Db  payload: Ev }
 fn parseId(s: String) -> String = s
 capture uidCapture: String using stringCodec via parseId
 api R66Ok04 {
@@ -721,7 +893,16 @@ let () =
       test_case "R66_CA04 duplicate capture rejected" `Quick test_R66_CA04_duplicate_capture_rejected;
       test_case "R66_CA05 multiple path params captured accepted" `Quick test_R66_CA05_multiple_path_params_all_captured_accepted;
       test_case "R66_CA06 partial capture wrong name rejected" `Quick test_R66_CA06_partial_capture_missing_one_param_rejected;
-      test_case "R66_CA07 no capture clause auto-generated accepted" `Quick test_R66_CA07_no_capture_clause_path_param_still_compiles;
+      test_case "R66_CA07 no capture clause path param rejected" `Quick test_R66_CA07_no_capture_clause_path_param_rejected;
+      test_case "R66_CA08 bare :string path param no capture rejected" `Quick test_R66_CA08_bare_string_path_param_no_capture_rejected;
+      test_case "R66_CA09 capture via codec not capture form rejected" `Quick test_R66_CA09_capture_via_codec_not_capture_form_rejected;
+      test_case "R66_CA10 capture using keyword accepted" `Quick test_R66_CA10_capture_using_keyword_accepted;
+      test_case "R66_CA11 capture via undefined name rejected" `Quick test_R66_CA11_capture_via_undefined_name_rejected;
+      test_case "R66_CA12 capture via real capture form accepted" `Quick test_R66_CA12_capture_via_real_capture_form_accepted;
+      test_case "R66_CA13 inline capture accepted" `Quick test_R66_CA13_inline_capture_accepted;
+      test_case "R66_CA14 inline capture with check accepted" `Quick test_R66_CA14_inline_capture_with_check_accepted;
+      test_case "R66_CA15 inline SSE capture accepted" `Quick test_R66_CA15_inline_sse_capture_accepted;
+      test_case "R66_CA16 inline capture with keyword rejected" `Quick test_R66_CA16_inline_capture_with_keyword_rejected;
     ];
     "duplicate-endpoints", [
       test_case "R66_DU01 duplicate method+path rejected" `Quick test_R66_DU01_duplicate_method_and_path_rejected;

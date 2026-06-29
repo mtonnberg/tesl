@@ -1,14 +1,19 @@
 #lang tesl
-module Lesson28DeadLetterQueue exposing [NotifWorkers, DeadNotifWorkers]
+module Lesson28DeadLetterQueue exposing [NotifQueue]
 
 # Lesson 28 — Dead-Letter Workers
 #
 # When a worker job fails maxAttempts times in a row, it becomes "dead".
 # Dead jobs accumulate and are never retried by the normal worker loop.
 #
-# Tesl handles dead jobs via dedicated dead-letter workers declared with
-# the `deadWorker` keyword.  These run in a separate poll loop started
-# by `startDeadWorkers` in main.
+# Tesl handles dead jobs via dedicated dead-letter workers.  A queue's
+# `jobs` list pairs each job type with its normal worker and an optional
+# dead-letter worker:
+#
+#   jobs: [ Job SendNotif notifWorker (Something handleDeadNotif) ]
+#
+# The dead-letter worker runs in a separate poll loop synthesized from the
+# App's `queues` list.
 #
 # Typical dead-letter actions:
 #   - Publish a compensating event so the frontend can show an error
@@ -21,12 +26,34 @@ module Lesson28DeadLetterQueue exposing [NotifWorkers, DeadNotifWorkers]
 # dead-queue dequeue boundary, not by arbitrary user code.
 
 import Tesl.Prelude exposing [String]
-import Tesl.Queue exposing [FromQueue, FromDeadQueue, queueRead, pubsub]
+import Tesl.Queue exposing [
+  FromQueue,
+  FromDeadQueue,
+  queueRead,
+  pubsub,
+  Queue,
+  Job,
+  QueueRetryStrategy,
+  Exponential,
+  Fixed,
+]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
+import Tesl.App exposing [App]
 
 # ── Capabilities ──────────────────────────────────────────────────────────────
 
 capability notifCap implies queueRead
 capability deadCap implies queueRead, pubsub
+capability appService implies queueRead
 
 # ── Job record ────────────────────────────────────────────────────────────────
 
@@ -37,28 +64,33 @@ record SendNotif {
 
 # ── Database ──────────────────────────────────────────────────────────────────
 
-database FakeDb {
-  backend postgres
-  schema "notifications"
-  entities []
-  postgres {
-    database "notif_db"
-    user "notif"
-    password ""
-    host "localhost"
-    port 5432
-    socket ""
-  }
+database FakeDb = Database {
+  schema: "notifications"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "notif_db"
+    user: "notif"
+    password: ""
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
 }
 
 # ── Queue ─────────────────────────────────────────────────────────────────────
+#
+# The queue's `jobs` list folds each job type together with its normal
+# worker and its (optional) dead-letter worker.  Here `SendNotif` is
+# handled by `notifWorker`, with `handleDeadNotif` as the dead-letter
+# handler.  `requires` lists the capabilities the workers need.
 
-queue NotifQueue {
-  database FakeDb
-  jobs [SendNotif]
-  retry {
+queue NotifQueue requires [notifCap, deadCap] = Queue {
+  database: FakeDb
+  jobs: [Job SendNotif notifWorker (Something handleDeadNotif)]
+  retry: QueueRetryStrategy {
     maxAttempts: 3
-    backoff: exponential
+    backoff: Exponential
     initialDelay: 30
   }
 }
@@ -70,10 +102,6 @@ queue NotifQueue {
 worker notifWorker(job: SendNotif ::: FromQueue (Id == jobId) job)
   requires [notifCap] =
   fail 500 "notification service unavailable"
-
-workers NotifWorkers for NotifQueue {
-  SendNotif = notifWorker
-}
 
 # ── Dead-letter worker ────────────────────────────────────────────────────────
 
@@ -88,25 +116,41 @@ deadWorker handleDeadNotif(job: SendNotif ::: FromDeadQueue (Id == jobId) job)
   # Returning the job acknowledges and deletes it.
   job
 
-deadWorkers DeadNotifWorkers for NotifQueue {
-  SendNotif = handleDeadNotif
+# ── Minimal API ───────────────────────────────────────────────────────────────
+#
+# This lesson is about queues, but an App needs an api/server to serve.
+# A trivial health-check endpoint keeps the example a runnable App.
+
+handler appRoot() -> String
+  requires [] =
+  "ok"
+
+api AppApi {
+  get "/health" -> String
 }
 
-# ── How to start in main ──────────────────────────────────────────────────────
+server AppServer for AppApi {
+  endpoint_0 = appRoot
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
 #
-# main {
-#   with database NotifDb {
-#     with capabilities [appService] {
-#       startWorkers     NotifWorkers     with capabilities [notifCap]
-#       startDeadWorkers DeadNotifWorkers with capabilities [deadCap]
-#       serve            AppServer        on port with capabilities [appService]
-#     }
-#   }
-# }
+# Listing `NotifQueue` in the App's `queues` list activates both the normal
+# and dead-letter worker loops for it.  The dead-letter loop comes from the
+# job's dead slot (`(Something handleDeadNotif)` in the queue's `jobs`), and
+# the normal worker count comes from the queue's `numberOfWorkers` (default 1).
+
+main() -> App requires [appService, notifCap, deadCap] =
+  App {
+    database: FakeDb
+    api: AppServer
+    port: 8086
+    queues: [NotifQueue]
+  }
 
 # ── Runtime behaviour ─────────────────────────────────────────────────────────
 #
-# Normal worker loop (startWorkers):
+# Normal worker loop:
 #   1. Waits on semaphore (posted by LISTEN thread or 5s fallback poller).
 #   2. Issues FOR UPDATE SKIP LOCKED on tesl_jobs WHERE status = 'pending'.
 #   3. Runs the worker function.
@@ -114,7 +158,7 @@ deadWorkers DeadNotifWorkers for NotifQueue {
 #      - fail / exception → UPDATE status = 'failed', increment attempts.
 #        If attempts >= maxAttempts → UPDATE status = 'dead'.
 #
-# Dead-letter loop (startDeadWorkers):
+# Dead-letter loop:
 #   1. Polls every 10 seconds (no NOTIFY — dead jobs are infrequent).
 #   2. Issues FOR UPDATE SKIP LOCKED on tesl_jobs WHERE status = 'dead'.
 #   3. Runs the dead-letter worker function.

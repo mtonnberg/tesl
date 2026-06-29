@@ -436,6 +436,17 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
      emitted error stream is byte-identical.  The ?facts/facts_or_compute opt-in
      keeps standalone/test callers (no facts threaded) byte-identical too. *)
   let api_forms = (facts_or_compute ?facts ~extra_funcs decls).mf_api_forms in
+  (* Names of every top-level `capture` form (DCapture).  An API-block
+     `capture name: T via <fn>` clause must reference one of these by name —
+     `via` binds the path segment to a declared capture codec.  Referencing a
+     JSON codec (e.g. `stringCodec`) or any other identifier here type-checks
+     today but fails at `tesl run` because the emitted `(Capture <fn> ...)`
+     route names a binding that is not a `define-capture`. *)
+  let capture_form_names =
+    List.filter_map (function
+      | DCapture (cf : capture_form) -> Some cf.name
+      | _ -> None) decls
+  in
   let method_str = function
     | GET -> "get" | POST -> "post" | PUT -> "put"
     | DELETE -> "delete" | PATCH -> "patch" | SSE -> "sse"
@@ -513,6 +524,69 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
                 ep_id c.binding.name)
         ) ep.captures;
 
+        (* The remaining two checks apply only to HTTP endpoints: SSE routes
+           are emitted by [emit_sse_route], which strips `:param` segments and
+           never emits a `(Capture …)` form, so a missing/codec capture on an
+           SSE route is harmless at runtime. *)
+        if ep.method_ <> SSE then begin
+
+        (* Every `:param` path segment must have a matching `capture` clause.
+           Without one the emitter invents an undefined capture name
+           (`<param>Capture`), so the endpoint type-checks but crashes at
+           `tesl run`.  This also catches the unsupported `using <codec>`
+           spelling, which the parser silently drops (leaving the path param
+           with no capture). *)
+        List.iter (fun param ->
+          if not (List.exists (fun (c : api_capture) -> c.binding.name = param)
+                    ep.captures)
+          then
+            add_hint
+              (Printf.sprintf
+                "add a capture clause before `->`: either the inline form \
+                 `capture %s: String with stringCodec` (no separate declaration), \
+                 or `capture %s: String via %sCapture` with a top-level \
+                 `capturer %sCapture: String using stringCodec`"
+                param param param param)
+              (Printf.sprintf
+                "endpoint %s: path parameter `:%s` has no `capture` clause; \
+                 every `:param` segment must be bound by a \
+                 `capture %s: <Type> via <captureForm>` clause"
+                ep_id param param)
+        ) path_params;
+
+        (* A capture's `via <fn>` must reference a declared top-level `capture`
+           form.  Referencing a JSON codec (e.g. `stringCodec`) or any other
+           identifier type-checks but fails at `tesl run` because the emitted
+           route names a binding that is not a `define-capture`. *)
+        List.iter (fun (c : api_capture) ->
+          (* The inline form (`capture x: T with <codec> [via <check>]`) carries
+             its own codec, so it needs no top-level `capturer` reference. Only
+             the reference form (`via <capturer>`) must name a declared capturer. *)
+          if c.inline_codec = None
+             && List.mem c.binding.name path_params
+             && not (List.mem c.via_fn capture_form_names)
+          then
+            add_hint
+              (Printf.sprintf
+                "`via %s` must name a top-level `capturer`, or use the inline \
+                 form `capture %s: %s with stringCodec`; to use a capturer declare \
+                 `capturer %s: %s: String using stringCodec` and write \
+                 `capture %s: String via %s`%s"
+                c.via_fn c.binding.name c.binding.name
+                c.via_fn c.binding.name c.binding.name c.via_fn
+                (if capture_form_names = [] then ""
+                 else Printf.sprintf
+                   " (declared capturers: %s)"
+                   (String.concat ", " capture_form_names)))
+              (Printf.sprintf
+                "endpoint %s: capture `%s` uses `via %s`, but `%s` is not a \
+                 declared `capturer` (it may be a codec or undefined); use the \
+                 inline form `capture %s: %s with <codec>` or reference a `capturer`"
+                ep_id c.binding.name c.via_fn c.via_fn c.binding.name c.binding.name)
+        ) ep.captures
+
+        end;
+
         (* Duplicate capture clauses for the same parameter *)
         let seen_captures : (string * loc) list ref = ref [] in
         List.iter (fun (c : api_capture) ->
@@ -576,18 +650,18 @@ let check_queue_structure (decls : top_decl list) : validation_error list =
     List.filter_map (function DDatabase db -> Some db.name | _ -> None) decls
   in
   List.concat_map (function
-    | DQueue q ->
+    | DQueue q when q.config_expr = None ->
       let errs = ref [] in
       let add hint msg = errs := make_error q.loc ~hint msg :: !errs in
       if q.database = "" then
-        add "add `database MyDB` inside the queue block"
+        add "add `database: MyDB` inside the queue block"
           (Printf.sprintf "queue `%s` is missing a `database` clause" q.name)
       else if not (List.mem q.database known_dbs) then
         add (Printf.sprintf "declare `database %s { ... }` in this module" q.database)
           (Printf.sprintf
             "queue `%s` references unknown database `%s`" q.name q.database);
       if q.jobs = [] then
-        add "add `jobs [JobType]` listing the record types that can be enqueued"
+        add "add `jobs: [JobType]` listing the record types that can be enqueued"
           (Printf.sprintf "queue `%s` has no job types; at least one `jobs [JobType]` entry is required" q.name);
       List.rev !errs
     | _ -> []
@@ -598,11 +672,11 @@ let check_channel_structure (decls : top_decl list) : validation_error list =
     List.filter_map (function DDatabase db -> Some db.name | _ -> None) decls
   in
   List.concat_map (function
-    | DChannel ch ->
+    | DChannel ch when ch.config_expr = None ->
       let errs = ref [] in
       if ch.database = "" then
         errs := make_error ch.loc
-          ~hint:"add `database MyDB` inside the channel block"
+          ~hint:"add `database: MyDB` inside the channel block"
           (Printf.sprintf "channel `%s` is missing a `database` clause" ch.name)
           :: !errs
       else if not (List.mem ch.database known_dbs) then
@@ -661,7 +735,7 @@ let check_cache_structure (decls : top_decl list) : validation_error list =
     List.filter_map (function DDatabase db -> Some db.name | _ -> None) decls
   in
   List.concat_map (function
-    | DCache (c : Ast.cache_form) ->
+    | DCache (c : Ast.cache_form) when c.config_expr = None ->
       let errs = ref [] in
       let add hint msg = errs := make_error c.loc ~hint msg :: !errs in
       if c.database = "" then
@@ -685,7 +759,7 @@ let check_email_structure (decls : top_decl list) : validation_error list =
     List.filter_map (function DDatabase db -> Some db.name | _ -> None) decls
   in
   List.concat_map (function
-    | DEmail (e : Ast.email_form) ->
+    | DEmail (e : Ast.email_form) when e.config_expr = None ->
       let errs = ref [] in
       let add hint msg = errs := make_error e.loc ~hint msg :: !errs in
       if e.database = "" then
@@ -1278,6 +1352,296 @@ let check_imported_module_is_library (m : module_form) : validation_error list =
                 imp.module_name kind)
           ) forbidden
   ) m.imports
+
+(* ── Typed config-block validation (new `= Type { … }` syntax) ───────────────
+   The parser leaves the typed-record config as an [expr] in [config_expr]; this
+   pass validates it structurally against a per-block schema: required fields,
+   unknown fields, value shape (String/Int/Bool/env-call/ADT), and reference
+   fields (database/entities/jobs/payload must name declared things). *)
+
+type vkind =
+  | VStr            (* string literal, or env/envString call *)
+  | VInt            (* int literal, or envInt call *)
+  | VPort           (* int literal proven in 1..65535 (a port-validity obligation), or envInt *)
+  | VBool
+  | VSub of string  (* nested record, validated against the named sub-schema *)
+  | VConn           (* PostgresConnection: Tcp { host,port } | Socket { path } *)
+  | VBackend        (* DatabaseBackend: Postgres (PostgresConfig {…}) | Memory *)
+  | VBackoff        (* QueueRetryBackoff: Exponential | Fixed *)
+  | VDatabaseRef    (* UIDENT naming a declared database *)
+  | VEntityList     (* [Entity, …] naming declared entities *)
+  | VJobList        (* [JobType, …] naming declared records/entities (or Job entries) *)
+  | VRefList        (* [Name, …] naming declared components (queues/email/channels) *)
+  | VTypeRef        (* UIDENT naming a declared type/record/entity/server *)
+  | VExpr           (* any value expression (e.g. App.port, which may be a let-bound var) *)
+
+let config_block_schema = function
+  (* schema is required for the postgres backend but not for Memory; the
+     postgres-specific requirement is enforced in check_typed_config_blocks. *)
+  | "Database" -> [ "schema", VStr, false; "entities", VEntityList, false;
+                    "backend", VBackend, true ]
+  | "PostgresConfig" -> [ "dbName", VStr, true; "user", VStr, true;
+                          "password", VStr, true; "connection", VConn, true ]
+  (* The two PostgresConnection shapes — validated internally via [check_record]'s
+     "__Tcp"/"__Socket" rows; listed here so the LSP config-context query can
+     offer field completion/hover inside a `connection: TcpConnection { … }`. *)
+  | "TcpConnection" -> [ "host", VStr, true; "port", VPort, true ]
+  | "SocketConnection" -> [ "path", VStr, true ]
+  | "Queue" -> [ "database", VDatabaseRef, true; "jobs", VJobList, true;
+                 "retry", VSub "QueueRetryStrategy", false;
+                 "numberOfWorkers", VInt, false ]
+  | "QueueRetryStrategy" -> [ "maxAttempts", VInt, true; "backoff", VBackoff, true;
+                              "initialDelay", VInt, true ]
+  | "Email" -> [ "database", VDatabaseRef, true; "smtp", VSub "SmtpConfig", true ]
+  | "SmtpConfig" -> [ "host", VStr, true; "port", VPort, false; "username", VStr, false;
+                      "password", VStr, false; "tls", VBool, false ]
+  | "SseChannel" -> [ "database", VDatabaseRef, true; "payload", VTypeRef, true ]
+  | "Cache" -> [ "database", VDatabaseRef, true; "valueType", VTypeRef, true;
+                 "defaultTtl", VInt, false ]
+  (* App-pass entry point: `main() -> App = App { … }`. *)
+  | "App" -> [ "database", VDatabaseRef, true; "queues", VRefList, false;
+               "email", VRefList, false; "sseChannels", VRefList, false;
+               "api", VTypeRef, true; "port", VExpr, false;
+               "static", VStr, false ]
+  | _ -> []
+
+let cfg_fields = function
+  | ERecord { fields; _ } -> fields
+  | EApp { fn = EConstructor _; arg = ERecord { fields; _ }; _ } -> fields
+  | _ -> []
+let rec cfg_ctor = function
+  | EConstructor { name; _ } -> Some name
+  | EApp { fn; _ } -> cfg_ctor fn   (* peel nested application: `Job J fn dead` → "Job" *)
+  | _ -> None
+(* The single positional argument of `Ctor (arg)` (e.g. `Postgres (PostgresConfig {…})`). *)
+let cfg_ctor_arg = function
+  | EApp { fn = EConstructor _; arg; _ } -> Some arg
+  | _ -> None
+let is_env_call name = function
+  | EApp { fn = EVar { name = n; _ }; _ } when n = name -> true
+  | EApp { fn = EApp { fn = EVar { name = n; _ }; _ }; _ } when n = name -> true
+  | _ -> false
+let cfg_expr_loc (e : expr) : loc = match e with
+  | ELit r -> r.loc | EVar r -> r.loc | EApp r -> r.loc | EConstructor r -> r.loc
+  | ERecord r -> r.loc | EList r -> r.loc | EField r -> r.loc | _ -> dummy_loc ""
+
+let check_typed_config_blocks (decls : top_decl list) : validation_error list =
+  let names f = List.filter_map f decls in
+  let dbs = names (function DDatabase d -> Some d.name | _ -> None) in
+  let entities = names (function DEntity e -> Some e.name | _ -> None) in
+  let records = names (function DRecord r -> Some r.name | _ -> None) in
+  let types = entities @ records
+    @ names (function DType (TypeAdt { name; _ }) -> Some name
+                    | DType (TypeNewtype { name; _ }) -> Some name
+                    | DType (TypeAlias { name; _ }) -> Some name | _ -> None) in
+  let rec check_value loc fname kind v : validation_error list =
+    let err m = [ make_error (cfg_expr_loc v) m ] in
+    match kind with
+    | VStr ->
+      (match v with
+       | ELit { lit = LString _; _ } -> []
+       | _ when is_env_call "env" v || is_env_call "envString" v -> []
+       | _ -> err (Printf.sprintf "field `%s` must be a String (a literal, `env \"VAR\"` or `envString \"VAR\" \"default\"`)" fname))
+    | VInt ->
+      (match v with
+       | ELit { lit = LInt _; _ } -> []
+       | _ when is_env_call "envInt" v -> []
+       | _ -> err (Printf.sprintf "field `%s` must be an Int (a literal or `envInt \"VAR\" default`)" fname))
+    | VPort ->
+      (* A port literal carries a validity obligation: it must denote a real TCP
+         port (1..65535).  An `envInt`-provided port is resolved at runtime, so it
+         is accepted here (the obligation is discharged by the env value). *)
+      (match v with
+       | ELit { lit = LInt n; _ } when n >= 1 && n <= 65535 -> []
+       | ELit { lit = LInt n; _ } ->
+         err (Printf.sprintf "field `%s` is not a valid port: %d is outside the range 1..65535" fname n)
+       | _ when is_env_call "envInt" v -> []
+       | _ -> err (Printf.sprintf "field `%s` must be a port number (an Int literal in 1..65535 or `envInt \"VAR\" default`)" fname))
+    | VBool ->
+      (match v with ELit { lit = LBool _; _ } -> [] | _ -> err (Printf.sprintf "field `%s` must be a Bool (true/false)" fname))
+    | VSub sub -> check_record (cfg_expr_loc v) sub (cfg_fields v)
+    | VBackoff ->
+      (match cfg_ctor v with
+       | Some ("Exponential" | "Fixed" | "Linear") -> []
+       | _ -> err "`backoff` must be `Exponential`, `Fixed`, or `Linear` (from Tesl.Queue)")
+    | VConn ->
+      (match cfg_ctor v with
+       | Some "TcpConnection" -> check_record (cfg_expr_loc v) "__Tcp" (cfg_fields v)
+       | Some "SocketConnection" -> check_record (cfg_expr_loc v) "__Socket" (cfg_fields v)
+       | _ -> err "`connection` must be `TcpConnection { host, port }` or `SocketConnection { path }`")
+    | VBackend ->
+      (match cfg_ctor v with
+       | Some "Memory" -> []
+       | Some "Postgres" ->
+         (match cfg_ctor_arg v with
+          | Some arg -> check_record (cfg_expr_loc arg) "PostgresConfig" (cfg_fields arg)
+          | None -> err "`Postgres` needs a config, e.g. `Postgres (PostgresConfig { … })`")
+       | _ -> err "`backend` must be `Postgres (PostgresConfig { … })` or `Memory`")
+    (* Reference fields name databases / entities / record types that may be
+       *imported* from another module, so we validate shape (a UIDENT, or a
+       list of them) rather than local existence — local existence for these is
+       covered by the type checker / per-block reference checks. *)
+    | VDatabaseRef ->
+      (match cfg_ctor v with
+       | Some _ -> ignore (dbs); []
+       | None -> err (Printf.sprintf "field `%s` must reference a database, e.g. `MyDb`" fname))
+    | VEntityList ->
+      (match v with
+       | EList { elems; _ } ->
+         ignore (entities);
+         List.concat_map (fun e -> match cfg_ctor e with
+           | Some _ -> [] | None -> [ make_error loc "`entities` must be a list of entity types, e.g. `[Item]`" ]) elems
+       | _ -> err "`entities` must be a list of entity types, e.g. `[Item]`")
+    | VJobList ->
+      (match v with
+       | EList { elems; _ } ->
+         ignore (types);
+         List.concat_map (fun e -> match cfg_ctor e with
+           | Some _ -> [] | None -> [ make_error loc "`jobs` must be a list of job types, e.g. `[EmailJob]`" ]) elems
+       | _ -> err "`jobs` must be a list of job types, e.g. `[EmailJob]`")
+    | VRefList ->
+      (match v with
+       | EList { elems; _ } ->
+         List.concat_map (fun e -> match cfg_ctor e with
+           | Some _ -> [] | None -> [ make_error loc (Printf.sprintf "`%s` must be a list of declared component names" fname) ]) elems
+       | _ -> err (Printf.sprintf "`%s` must be a list, e.g. `[MyQueue]`" fname))
+    | VTypeRef ->
+      (match cfg_ctor v with
+       | Some _ -> []
+       | None -> err (Printf.sprintf "field `%s` must reference a type, e.g. `MyEvent`" fname))
+    | VExpr -> ignore v; []
+  and check_record loc schema_name fields : validation_error list =
+    let schema = match schema_name with
+      | "__Tcp" -> [ "host", VStr, true; "port", VPort, true ]
+      | "__Socket" -> [ "path", VStr, true ]
+      | s -> config_block_schema s in
+    if schema = [] then []  (* unknown sub-schema: don't second-guess *)
+    else begin
+      let provided = List.map fst fields in
+      let missing =
+        List.filter_map (fun (fn, _, req) ->
+          if req && not (List.mem fn provided)
+          then Some (make_error loc (Printf.sprintf "`%s` is missing required field `%s`" schema_name fn))
+          else None) schema in
+      let per_field =
+        List.concat_map (fun (fn, v) ->
+          match List.find_opt (fun (n,_,_) -> n = fn) schema with
+          | Some (_, kind, _) -> check_value loc fn kind v
+          | None -> [ make_error (cfg_expr_loc v) (Printf.sprintf "unknown field `%s` in `%s`" fn schema_name) ]
+        ) fields in
+      missing @ per_field
+    end
+  in
+  let check_decl top_schema loc = function
+    | Some e -> check_record loc top_schema (cfg_fields e)
+    | None -> []
+  in
+  List.concat_map (fun d ->
+    match d with
+    | DDatabase r ->
+      let base = check_decl "Database" r.loc r.config_expr in
+      let schema_req = match r.config_expr with
+        | Some e ->
+          let top = cfg_fields e in
+          let is_postgres = match List.assoc_opt "backend" top with
+            | Some b -> cfg_ctor b = Some "Postgres" | None -> true in
+          if is_postgres && not (List.mem_assoc "schema" top)
+          then [ make_error r.loc "`Database` (postgres backend) is missing required field `schema`" ]
+          else []
+        | None -> []
+      in
+      base @ schema_req
+    | DQueue r    -> check_decl "Queue" r.loc r.config_expr
+    | DEmail r    -> check_decl "Email" r.loc r.config_expr
+    | DChannel r  -> check_decl "SseChannel" r.loc r.config_expr
+    | DCache r    ->
+      (* schema validates shape; re-add the old-form `defaultTtl > 0` guarantee *)
+      let ttl_err = match r.config_expr with
+        | Some e ->
+          (match List.assoc_opt "defaultTtl" (cfg_fields e) with
+           | Some (ELit { lit = LInt n; _ }) when n <= 0 ->
+             [ make_error r.loc
+                 ~hint:"use a positive integer (seconds), e.g. `defaultTtl: 3600`"
+                 (Printf.sprintf "cache `%s` has invalid `defaultTtl` %d; must be > 0" r.name n) ]
+           | _ -> [])
+        | None -> [] in
+      check_decl "Cache" r.loc r.config_expr @ ttl_err
+    | DFunc fd when fd.kind = MainKind ->
+      (* Validate the `App { … }` record an App-style main returns. *)
+      let rec tail = function
+        | ELet { body; _ } | ELetProof { body; _ } -> tail body | e -> e in
+      (match tail fd.body with
+       | (ERecord { type_hint = Some "App"; _ }
+         | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord _; _ }) as e ->
+         check_record fd.loc "App" (cfg_fields e)
+       | _ -> [])
+    | _ -> []
+  ) decls
+
+(* ── App / config wiring-graph check ──────────────────────────────────────────
+   The per-block reference checks (check_queue_structure / check_channel_structure)
+   only run for OLD block syntax (config_expr = None); the typed-config-block schema
+   validation above validates ref SHAPE but deliberately not local existence (refs
+   may be imported).  But queue/channel/email database refs and the `main() -> App`
+   activation refs (database / api / queues / email / sseChannels) ARE local by
+   construction — an app wires its own declared components.  This check restores the
+   undeclared-reference guarantee for the new typed forms (and is the safety layer
+   that lets the old block syntax be removed). *)
+let check_app_wiring (decls : top_decl list) : validation_error list =
+  let names sel = List.filter_map sel decls in
+  let dbs      = names (function DDatabase d -> Some d.name | _ -> None) in
+  let servers  = names (function DServer s -> Some s.name | _ -> None) in
+  let queues   = names (function DQueue q -> Some q.name | _ -> None) in
+  let emails   = names (function DEmail e -> Some e.name | _ -> None) in
+  let channels = names (function DChannel c -> Some c.name | _ -> None) in
+  let cfg_db cexpr = match cexpr with
+    | Some e -> (match List.assoc_opt "database" (cfg_fields e) with Some v -> cfg_ctor v | None -> None)
+    | None -> None in
+  let unknown_db loc kind nm db =
+    make_error loc
+      ~hint:(Printf.sprintf "declare `database %s = Database { … }` in this module" db)
+      (Printf.sprintf "%s `%s` references unknown database `%s`" kind nm db) in
+  (* 1. new-form queue / sseChannel / email: `database:` must be declared locally *)
+  let decl_db_errs = List.filter_map (fun d -> match d with
+    | DQueue q when q.config_expr <> None ->
+      (match cfg_db q.config_expr with Some db when not (List.mem db dbs) -> Some (unknown_db q.loc "queue" q.name db) | _ -> None)
+    | DChannel c when c.config_expr <> None ->
+      (match cfg_db c.config_expr with Some db when not (List.mem db dbs) -> Some (unknown_db c.loc "sseChannel" c.name db) | _ -> None)
+    | DEmail e when e.config_expr <> None ->
+      (match cfg_db e.config_expr with Some db when not (List.mem db dbs) -> Some (unknown_db e.loc "email" e.name db) | _ -> None)
+    | DCache c when c.config_expr <> None ->
+      (match cfg_db c.config_expr with Some db when not (List.mem db dbs) -> Some (unknown_db c.loc "cache" c.name db) | _ -> None)
+    | _ -> None) decls in
+  (* 2. `main() -> App = App { … }` activation refs must resolve to declared decls *)
+  let names_of v = match v with EList { elems; _ } -> List.filter_map cfg_ctor elems | _ -> [] in
+  let app_errs = List.concat_map (fun d -> match d with
+    | DFunc fd when fd.kind = MainKind ->
+      let rec tail = function ELet { body; _ } | ELetProof { body; _ } -> tail body | e -> e in
+      (match tail fd.body with
+       | (ERecord { type_hint = Some "App"; _ }
+         | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord _; _ }) as e ->
+         let fields = cfg_fields e in
+         let loc = fd.loc in
+         let one key set kind = match List.assoc_opt key fields with
+           | Some v -> (match cfg_ctor v with
+               | Some n when not (List.mem n set) ->
+                 [ make_error loc ~hint:(Printf.sprintf "declare or import `%s`" n)
+                     (Printf.sprintf "App `%s` references unknown %s `%s`" key kind n) ]
+               | _ -> [])
+           | None -> [] in
+         let many key set kind = match List.assoc_opt key fields with
+           | Some v -> List.filter_map (fun n -> if List.mem n set then None
+               else Some (make_error loc ~hint:(Printf.sprintf "declare or import `%s`" n)
+                 (Printf.sprintf "App `%s` activates unknown %s `%s`" key kind n))) (names_of v)
+           | None -> [] in
+         one "database" dbs "database"
+         @ one "api" servers "server"
+         @ many "queues" queues "queue"
+         @ many "email" emails "email"
+         @ many "sseChannels" channels "sseChannel"
+       | _ -> [])
+    | _ -> []) decls in
+  decl_db_errs @ app_errs
 
 (* ── 2. SQL/record field name validation ─────────────────────────────────── *)
 

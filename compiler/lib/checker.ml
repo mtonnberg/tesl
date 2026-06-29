@@ -861,6 +861,44 @@ let load_imported_ctors (m : module_form) : (string * (string * scheme)) list =
           ) (exported_ctor_entries imported)
   ) m.imports
 
+(* Builtin ADTs that back the typed configuration blocks.  They are seeded into
+   the checker (like Maybe/Either) when the owning stdlib module is imported, so
+   `connection: TcpConnection { host: ..., port: ... }` and `backoff: Exponential`
+   type-check via the normal record/constructor machinery.  The surrounding
+   config records (Database/Queue/…) are validated by the dedicated config
+   checker rather than as generic record literals, because their entities/jobs/
+   payload fields reference declared types, not ordinary values. *)
+let config_stdlib_seed (m : module_form) :
+    (string * adt_def) list * (string * (string * scheme)) list =
+  let imported name = List.exists (fun (i : import_decl) -> i.module_name = name) m.imports in
+  let adt name params variants = (name, { ad_name = name; ad_params = params; ad_variants = variants }) in
+  let nullary_ctor adt_name name = (name, (adt_name, mono (TCon adt_name))) in
+  let fn_ctor adt_name name arg_tys =
+    (name, (adt_name, mono (List.fold_right (fun a acc -> TFun (a, acc)) arg_tys (TCon adt_name))))
+  in
+  let adts = ref [] and ctors = ref [] in
+  if imported "Tesl.Database" then begin
+    adts := adt "PostgresConnection" []
+      [ ("TcpConnection", [ ("host", TCon "String"); ("port", TCon "Int") ]);
+        ("SocketConnection", [ ("path", TCon "String") ]) ]
+      :: adt "DatabaseBackend" []
+      [ ("Postgres", [ ("config", TCon "PostgresConfig") ]); ("Memory", []) ] :: !adts;
+    ctors :=
+      fn_ctor "PostgresConnection" "TcpConnection" [ TCon "String"; TCon "Int" ]
+      :: fn_ctor "PostgresConnection" "SocketConnection" [ TCon "String" ]
+      :: fn_ctor "DatabaseBackend" "Postgres" [ TCon "PostgresConfig" ]
+      :: nullary_ctor "DatabaseBackend" "Memory"
+      :: !ctors
+  end;
+  if imported "Tesl.Queue" then begin
+    adts := adt "QueueRetryBackoff" [] [ ("Exponential", []); ("Fixed", []); ("Linear", []) ] :: !adts;
+    ctors :=
+      nullary_ctor "QueueRetryBackoff" "Exponential"
+      :: nullary_ctor "QueueRetryBackoff" "Fixed"
+      :: nullary_ctor "QueueRetryBackoff" "Linear" :: !ctors
+  end;
+  (!adts, !ctors)
+
 (** Add all function signatures from a module to the typing environment. *)
 let collect_func_sigs ctx (decls : top_decl list) : ctx =
   List.fold_left (fun ctx decl ->
@@ -1565,21 +1603,45 @@ let rec infer_expr ctx (e : expr) : ty =
           | None -> [])
       | None -> []
     in
-    (* Apply ctor_ty to each field value in declaration order (match by name) *)
-    let ordered_values =
+    let ret_ty =
       if named_field_tys = [] then
-        (* No metadata: fall back to source order *)
-        List.map snd fields
-      else
-        List.filter_map (fun (fname, _) ->
-          List.assoc_opt fname fields) named_field_tys
+        (* No ADT metadata: fall back to applying values in source order. *)
+        List.fold_left (fun cur_ty value_expr ->
+          let arg_ty = infer_expr ctx value_expr in
+          let next_ty = fresh () in
+          unify_at ctx loc cur_ty (TFun (arg_ty, next_ty));
+          apply !(ctx.subst) next_ty
+        ) ctor_ty (List.map snd fields)
+      else begin
+        (* Validate the named fields like a record literal: every declared field
+           must be present, no unknown fields. Then consume every declared arrow
+           (matching values by name) so the result is the ADT type even when a
+           field is missing — avoiding a confusing cascade arity error. *)
+        List.iter (fun (fname, _) ->
+          if not (List.mem_assoc fname fields) then
+            add_error ctx loc
+              (Printf.sprintf "constructor `%s` is missing required field `%s`"
+                 ctor_name fname)
+        ) named_field_tys;
+        List.iter (fun (fname, value_expr) ->
+          if not (List.mem_assoc fname named_field_tys) then begin
+            add_error ctx (expr_loc value_expr)
+              (Printf.sprintf "constructor `%s` has no field `%s`" ctor_name fname);
+            ignore (infer_expr ctx value_expr)
+          end
+        ) fields;
+        List.fold_left (fun cur_ty (fname, _decl_ty) ->
+          let next_ty = fresh () in
+          (match List.assoc_opt fname fields with
+           | Some value_expr ->
+             let arg_ty = infer_expr ctx value_expr in
+             unify_at ctx loc cur_ty (TFun (arg_ty, next_ty))
+           | None ->
+             unify_at ctx loc cur_ty (TFun (fresh (), next_ty)));
+          apply !(ctx.subst) next_ty
+        ) ctor_ty named_field_tys
+      end
     in
-    let ret_ty = List.fold_left (fun cur_ty value_expr ->
-      let arg_ty = infer_expr ctx value_expr in
-      let next_ty = fresh () in
-      unify_at ctx loc cur_ty (TFun (arg_ty, next_ty));
-      apply !(ctx.subst) next_ty
-    ) ctor_ty ordered_values in
     apply !(ctx.subst) ret_ty
 
   | EApp { fn; arg = (EList { elems = []; _ } as empty_list); loc } ->
@@ -2029,7 +2091,21 @@ let rec infer_expr ctx (e : expr) : ty =
     unify_at ctx (expr_loc message) msg_ty t_string;
     fresh ()  (* fail : any type (unreachable after this point) *)
 
-  | ETelemetry _ | EEnqueue _ | EPublish _ | EStartWorkers _ -> t_unit
+  | ETelemetry { fields; _ } ->
+    (* Telemetry itself is Unit, but the attribute VALUE expressions are real
+       expressions: infer them so their types and field accesses are recorded
+       for hover / type-at (otherwise hovering on `record.field` inside a
+       telemetry block reports the enclosing Unit). *)
+    List.iter (fun (_, v) -> ignore (infer_expr ctx v)) fields;
+    t_unit
+  | EEnqueue { payload; _ } ->
+    ignore (infer_expr ctx payload);
+    t_unit
+  | EPublish { key; payload; _ } ->
+    Option.iter (fun e -> ignore (infer_expr ctx e)) key;
+    Option.iter (fun e -> ignore (infer_expr ctx e)) payload;
+    t_unit
+  | EStartWorkers _ -> t_unit
   | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } ->
     infer_expr ctx body
   | EServe _ -> t_unit
@@ -2493,16 +2569,40 @@ and check_expr ctx (e : expr) (expected : expectation) : ty =
           | Some nft -> nft | None -> [])
       | None -> []
     in
-    let ordered_values =
-      if named_field_tys = [] then List.map snd fields
-      else List.filter_map (fun (fname, _) -> List.assoc_opt fname fields) named_field_tys
+    let ret_ty =
+      if named_field_tys = [] then
+        List.fold_left (fun cur_ty value_expr ->
+          let arg_ty = infer_expr ctx value_expr in
+          let next_ty = fresh () in
+          unify_at ctx loc cur_ty (TFun (arg_ty, next_ty));
+          apply !(ctx.subst) next_ty
+        ) ctor_ty (List.map snd fields)
+      else begin
+        List.iter (fun (fname, _) ->
+          if not (List.mem_assoc fname fields) then
+            add_error ctx loc
+              (Printf.sprintf "constructor `%s` is missing required field `%s`"
+                 ctor_name fname)
+        ) named_field_tys;
+        List.iter (fun (fname, value_expr) ->
+          if not (List.mem_assoc fname named_field_tys) then begin
+            add_error ctx (expr_loc value_expr)
+              (Printf.sprintf "constructor `%s` has no field `%s`" ctor_name fname);
+            ignore (infer_expr ctx value_expr)
+          end
+        ) fields;
+        List.fold_left (fun cur_ty (fname, _decl_ty) ->
+          let next_ty = fresh () in
+          (match List.assoc_opt fname fields with
+           | Some value_expr ->
+             let arg_ty = infer_expr ctx value_expr in
+             unify_at ctx loc cur_ty (TFun (arg_ty, next_ty))
+           | None ->
+             unify_at ctx loc cur_ty (TFun (fresh (), next_ty)));
+          apply !(ctx.subst) next_ty
+        ) ctor_ty named_field_tys
+      end
     in
-    let ret_ty = List.fold_left (fun cur_ty value_expr ->
-      let arg_ty = infer_expr ctx value_expr in
-      let next_ty = fresh () in
-      unify_at ctx loc cur_ty (TFun (arg_ty, next_ty));
-      apply !(ctx.subst) next_ty
-    ) ctor_ty ordered_values in
     let resolved = apply !(ctx.subst) ret_ty in
     unify_expected_at ctx loc resolved expected;
     apply !(ctx.subst) expected_ty
@@ -2750,6 +2850,20 @@ let check_func_decl ctx (fd : func_decl) =
     | RetMaybeAttached { binding = b; _ } -> t_maybe (ty_of_type_expr b.type_expr)
     | RetExists { body; _ } -> ret_spec_type body
   in
+  (* App-pass entry point: `main() -> App = … App { … }` is declarative
+     configuration whose fields reference declarations (databases/queues/servers)
+     by name, not as values. It is validated structurally and lowered by the
+     desugar pass, so its body is not type-checked here. *)
+  let is_app_main =
+    fd.kind = MainKind &&
+    (let rec tail = function
+       | ELet { body; _ } | ELetProof { body; _ } -> tail body
+       | ERecord { type_hint = Some "App"; _ } -> true
+       | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord _; _ } -> true
+       | _ -> false
+     in tail fd.body)
+  in
+  if is_app_main then () else
   check_stmt ctx' fd.body
     (mk_expectation ~origin:fd.loc ~role:(ReturnBody fd.name)
       ~reason:(return_reason fd.name expected) expected)
@@ -3547,7 +3661,10 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
   (* 1. Collect type definitions (records, ADTs, newtypes) *)
   let ctx = collect_type_defs ctx m.decls in
   let imported_ctors = load_imported_ctors m in
-  let ctx = { ctx with ctors = imported_ctors @ ctx.ctors } in
+  let (config_adts, config_ctors) = config_stdlib_seed m in
+  let ctx = { ctx with
+    ctors = config_ctors @ imported_ctors @ ctx.ctors;
+    adts  = config_adts @ ctx.adts } in
 
   (* 2. Add ADT constructors and record types to env *)
   let ctx = {
@@ -3572,9 +3689,26 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
 
   (* 3b. Add cache value types as synthetic env bindings "__cache_<Name>" → type *)
   let ctx =
+    (* For the new typed `cache X = Cache { valueType: T … }` form the flat
+       [value_type] field is filled by the desugar pass (which runs AFTER the
+       checker), so resolve it from [config_expr] here. *)
+    let cache_value_type (c : Ast.cache_form) : Ast.type_expr =
+      match c.config_expr with
+      | None -> c.value_type
+      | Some e ->
+        let fields = (match e with
+          | Ast.ERecord { fields; _ } -> fields
+          | Ast.EApp { fn = Ast.EConstructor _; arg = Ast.ERecord { fields; _ }; _ } -> fields
+          | _ -> []) in
+        (match List.assoc_opt "valueType" fields with
+         | Some (Ast.EConstructor { name; _ })
+         | Some (Ast.EApp { fn = Ast.EConstructor { name; _ }; _ }) ->
+           Ast.TName { name; loc = c.loc }
+         | _ -> c.value_type)
+    in
     let cache_bindings = List.filter_map (function
       | DCache (c : Ast.cache_form) ->
-        let ty = ty_of_type_expr c.value_type in
+        let ty = ty_of_type_expr (cache_value_type c) in
         Some ("__cache_" ^ c.name, mono ty)
       | _ -> None
     ) m.decls in

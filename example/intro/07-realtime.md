@@ -12,13 +12,13 @@ type RoomEvent
   | UserJoined userId: String username: String
   | NotifyFailed senderName: String
 
-channel RoomMessages(roomId: String) {
-  database ChatDatabase
-  payload  RoomEvent
+sseChannel RoomMessages(roomId: String) = SseChannel {
+  database: ChatDatabase
+  payload: RoomEvent
 }
 ```
 
-The channel is typed — you can only publish `RoomEvent` values to it. Adding a new event type means adding a variant to the ADT, and every pattern match on `RoomEvent` becomes exhaustively checked by the compiler.
+The channel is a folded record: typed — you can only publish `RoomEvent` values to it. Adding a new event type means adding a variant to the ADT, and every pattern match on `RoomEvent` becomes exhaustively checked by the compiler. Listing the channel in your App root's `sseChannels: [RoomMessages]` activates its outbox delivery — there is no separate start call.
 
 ---
 
@@ -30,7 +30,7 @@ handler postMessage(session: SessionUser ::: Authenticated session,
                     req: PostMessageRequest)
   -> Message
   requires [chatWrite, chatPubSub] =
-  with transaction {
+  transaction {
     publish RoomMessages(roomId) NewMessage {
       msgId:     generatePrefixedId "msg",
       userId:    session.id,

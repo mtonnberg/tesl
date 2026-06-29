@@ -60,7 +60,7 @@
   #:backoff exponential
   #:initial-delay 5)
 
-(define-capability cache_InspectCache)
+(define-capability cacheCap_InspectCache)
 (define-cache InspectCache #:default-ttl 60)
 
 ;; Populate live state: one pending job, one cache entry.

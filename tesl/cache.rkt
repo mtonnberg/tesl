@@ -11,7 +11,7 @@
 ;;;   - Cache.set/delete/invalidate inside withTransaction participate atomically.
 ;;;   - A background sweeper thread deletes expired rows every 60 seconds.
 ;;;
-;;; Capability: "cache_<Name>" Racket identifiers (defined by define-cache macro,
+;;; Capability: "cacheCap_<Name>" Racket identifiers (defined by define-cache macro,
 ;;; also referenced in define-capability calls emitted by the OCaml compiler).
 
 (require (only-in db query-rows query-exec)
@@ -32,7 +32,9 @@
          (only-in "../dsl/types.rkt"
                   runtime-value->jsexpr
                   jsexpr->typed-value
-                  lookup-record-spec)
+                  lookup-record-spec
+                  Nothing
+                  Something)
          (only-in "../dsl/private/domain-registry.rkt"
                   domain-registry-add!
                   register-background-thread!)
@@ -98,25 +100,25 @@
 (define (mem-get! store key codec-sym)
   (define entry (hash-ref store key #f))
   (cond
-    [(not entry) 'Nothing]
+    [(not entry) Nothing]
     [(and (vector-ref entry 1)
           (> (current-seconds) (vector-ref entry 1)))
      ;; expired
      (hash-remove! store key)
-     'Nothing]
+     Nothing]
     [else
-     (define raw-val (vector-ref entry 0))
-     (define deserialized
-       (if (string? raw-val)
-           (deserialize-value raw-val codec-sym)
-           raw-val))
-     (if deserialized
-         (list 'Something deserialized)
-         (begin (hash-remove! store key) 'Nothing))]))
+     ;; The in-memory backend stores raw runtime values (mem-set! does not
+     ;; serialize), so return the stored value directly — no JSON round-trip.
+     ;; (Deserializing here would mangle plain strings: `string->jsexpr "foo"`
+     ;; fails, which previously turned every string-cache hit into a miss.)
+     (Something (vector-ref entry 0))]))
 
 (define (mem-set! store key value ttl)
+  ;; Unwrap named-values so the stored value matches what `serialize-value`
+  ;; would persist on the PostgreSQL path (keeps the two backends consistent).
+  (define raw (if (named-value? value) (named-value-value value) value))
   (define expires-at (and ttl (+ (current-seconds) ttl)))
-  (hash-set! store key (vector value expires-at)))
+  (hash-set! store key (vector raw expires-at)))
 
 (define (mem-delete! store key)
   (hash-remove! store key))
@@ -131,26 +133,26 @@
 (define (pg-get! conn schema key codec-sym)
   (with-handlers ([exn:fail? (lambda (e)
                                (log-error "cache-get! error: ~a" (exn-message e))
-                               'Nothing)])
+                               Nothing)])
     (define rows
       (query-rows conn
         (format "SELECT value::text FROM ~a WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())"
                 (pg-table schema "tesl_cache"))
         key))
     (cond
-      [(null? rows) 'Nothing]
+      [(null? rows) Nothing]
       [else
        (define json-str (vector-ref (car rows) 0))
        (define deserialized (deserialize-value json-str codec-sym))
        (if deserialized
-           (list 'Something deserialized)
+           (Something deserialized)
            (begin
              ;; Stale/undeserializable entry — delete and return Nothing
              (query-exec conn
                (format "DELETE FROM ~a WHERE key = $1"
                        (pg-table schema "tesl_cache"))
                key)
-             'Nothing))])))
+             Nothing))])))
 
 (define (pg-set! conn schema key value ttl)
   (define json-str (serialize-value value))
@@ -255,7 +257,7 @@
 ;; ── define-cache macro ────────────────────────────────────────────────────────
 ;;
 ;; Emitted by the OCaml compiler as:
-;;   (define-capability cache_UserProfileCache)
+;;   (define-capability cacheCap_UserProfileCache)
 ;;   (define-cache UserProfileCache #:database MainDB #:default-ttl 3600)
 ;;
 ;; The define-capability call is emitted BEFORE define-cache, so the capability
@@ -269,11 +271,11 @@
         (~optional (~seq #:database _db:id) #:defaults ([_db #'#f]))
         (~optional (~seq #:default-ttl ttl:expr) #:defaults ([ttl #'#f]))
         (~optional (~seq #:codec codec:id) #:defaults ([codec #'#f])))
-     ;; Build the capability identifier: cache_<name>
+     ;; Build the capability identifier: cacheCap_<name>
      (define cap-id
        (datum->syntax stx
          (string->symbol
-           (~a "cache_" (syntax->datum #'name)))))
+           (~a "cacheCap_" (syntax->datum #'name)))))
      #`(define name
          (let ([spec (cache-spec 'name ttl 'codec
                                  ;; If the capability was defined (by the compiler-emitted

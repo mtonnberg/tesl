@@ -923,6 +923,17 @@ let () =
      | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
      | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
 
+  | ["--config-context-json"; filename; line; col] ->
+    (try
+       let source = In_channel.with_open_text filename In_channel.input_all in
+       let result = Compile.config_context_source filename source (int_of_string line) (int_of_string col) in
+       print_string (Compile.config_context_response_to_json result);
+       print_newline ();
+       exit 0
+     with
+     | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
+     | Failure msg -> Printf.eprintf "error: %s\n" msg; exit 1)
+
   | ["--completions-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
@@ -1132,10 +1143,39 @@ let () =
      | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
      | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
 
+  (* `--test-kind KIND` (test|api-test|load-test|doctest) pins single-test selection to
+     one kind, so a named api-test/load-test can be run in isolation. *)
+  | ["--test-name"; test_name; "--test-kind"; test_kind; filename] ->
+    (try
+       Emit_racket.set_test_name_filter (Some test_name);
+       Emit_racket.set_test_kind_filter (Some test_kind);
+       match Compile.compile_file ~root_path ~type_check:true filename with
+       | Compile.Success racket -> print_string racket
+       | Compile.Failure diags ->
+         List.iter print_diagnostic diags;
+         exit 1
+     with
+     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
+     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+
   | ["--debug"; "--test-name"; test_name; filename] ->
     (try
        Emit_racket.set_debug_mode true;
        Emit_racket.set_test_name_filter (Some test_name);
+       match Compile.compile_file ~root_path ~type_check:true filename with
+       | Compile.Success racket -> print_string racket
+       | Compile.Failure diags ->
+         List.iter print_diagnostic diags;
+         exit 1
+     with
+     | Failure msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1
+     | Sys_error msg -> Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)
+
+  | ["--debug"; "--test-name"; test_name; "--test-kind"; test_kind; filename] ->
+    (try
+       Emit_racket.set_debug_mode true;
+       Emit_racket.set_test_name_filter (Some test_name);
+       Emit_racket.set_test_kind_filter (Some test_kind);
        match Compile.compile_file ~root_path ~type_check:true filename with
        | Compile.Success racket -> print_string racket
        | Compile.Failure diags ->

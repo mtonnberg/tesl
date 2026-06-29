@@ -1,5 +1,5 @@
 #lang tesl
-module Lesson61StepDebugging exposing [ describeScore, computeGrade, ]
+module Lesson61StepDebugging exposing [describeScore, computeGrade]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 61 — Step Debugging with VSCode

@@ -13,7 +13,6 @@
 (struct capability-value (name implies-thunk))
 
 (define current-capabilities (make-parameter '()))
-(define current-declared-capabilities (make-parameter #f))
 
 (define (ensure-capability who value)
   (unless (capability-value? value)
@@ -48,16 +47,6 @@
 
 (define (require-capabilities! required)
   (define required-caps (ensure-capability-list 'capabilities required))
-  (define declared-context
-    (let ([caps (current-declared-capabilities)])
-      (and caps (expand-capabilities caps))))
-  (when declared-context
-    (define undeclared
-      (missing-capability-names required-caps declared-context))
-    (unless (null? undeclared)
-      (raise-user-error
-       'capabilities
-       (format "Capabilities not declared by the current DSL context: ~a" undeclared))))
   (define available (expand-capabilities (current-capabilities)))
   (define missing
     (missing-capability-names required-caps available))
@@ -71,8 +60,7 @@
     (raise-user-error 'capabilities "expected a thunk procedure, got ~a" thunk))
   (define declared-caps (expand-capabilities declared))
   (require-capabilities! declared-caps)
-  (parameterize ([current-declared-capabilities declared-caps])
-    (thunk)))
+  (thunk))
 
 (define-syntax (define-capability stx)
   (syntax-parse stx

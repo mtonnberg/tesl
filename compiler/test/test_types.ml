@@ -547,17 +547,29 @@ fn verifyPositiveSmall(xs: List Int)
 
 let test_module_queue_runtime_statements () =
   assert_no_errors {|#lang tesl
-module Foo exposing [W, DW, S]
+module Foo exposing [S]
 import Tesl.Prelude exposing [String]
-import Tesl.Queue exposing [queueRead, queueWrite, FromQueue, FromDeadQueue]
+import Tesl.Queue exposing [queueRead, queueWrite, FromQueue, FromDeadQueue, Queue]
+import Tesl.Maybe exposing [Maybe, Nothing, Something]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.App exposing [App]
 import Tesl.Http exposing [HttpRequest]
 capability workerCap implies queueRead
 capability enqueueCap implies queueWrite
 record Job {
   id: String
 }
-queue Q {
-  Job
+database FooDb = Database {
+  schema: "public"
+  backend: Postgres (PostgresConfig {
+    dbName: "d"
+    user: "u"
+    password: ""
+    connection: TcpConnection {
+      host: "h"
+      port: 5432
+    }
+  })
 }
 worker process(job: Job::: FromQueue (Id == jobId) job)
   requires [workerCap] =
@@ -565,11 +577,10 @@ worker process(job: Job::: FromQueue (Id == jobId) job)
 deadWorker handleDead(job: Job::: FromDeadQueue (Id == jobId) job)
   requires [workerCap] =
   job
-workers W for Q {
-  Job = process
-}
-deadWorkers DW for Q {
-  Job = handleDead
+queue Q requires [workerCap] = Queue {
+  database: FooDb
+  jobs: [Job Job process (Something handleDead)]
+  numberOfWorkers: 2
 }
 handler trigger() -> String requires [enqueueCap] =
   enqueue Job { id: "j-1" }
@@ -580,11 +591,13 @@ api A {
 server S for A {
   trigger = trigger
 }
-main with capabilities [workerCap, enqueueCap] {
-  startWorkers 2 W with capabilities [workerCap]
-  startDeadWorkers DW with capabilities [workerCap]
-  serve S on 8080 with capabilities [enqueueCap]
-}
+main() -> App requires [workerCap, enqueueCap] =
+  App {
+    database: FooDb
+    api: A
+    port: 8080
+    queues: [Q]
+  }
 |}
 
 (* ── 7. Type error detection tests ──────────────────────────────────────── *)

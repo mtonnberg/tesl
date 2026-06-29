@@ -1,15 +1,33 @@
 (** test_email_integration.ml — Runtime integration tests for the Email module.
 
-    These tests compile real Tesl programs with email blocks, run the generated
-    Racket code, and verify the runtime behaviour:
+    These tests verify the runtime behaviour of the Email module under the modern
+    Tesl language, which has no script-style `main() -> Unit` and no
+    `with capabilities [...]` blocks.  Capabilities flow only from a declaration's
+    `requires` plus the `main() -> App` entry point's auto-grant: the App desugar
+    wraps server startup in the capability + database scope derived from
+    `main.requires`.
 
-    - The email module loads at runtime without unbound-identifier errors
-    - Email.send stores messages in the in-memory outbox
-    - The email capability gate is enforced at compile time
-    - Direct SMTP delivery to a live MailHog SMTP server works
+    What is verified:
 
-    MailHog binary: /nix/store/b5jwbxli7mn2w0gx7l6bvqkyvxg07z10-MailHog-1.0.1/bin/MailHog
+    - The email module loads at runtime without unbound-identifier errors, by
+      starting a real Tesl App that declares an `email` block and serving it.
+    - Email.send runs inside the App's auto-granted `[email]` scope (no
+      `with capabilities`) — exercised by hitting an App endpoint whose handler
+      calls Email.send (TextBody / HtmlBody / RichBody variants).
+    - The email capability gate is enforced at compile time (a fn calling
+      Email.send without `requires [email]` is rejected by --check).
+    - Direct SMTP delivery to a live MailHog SMTP server works, and MailHog
+      records the correct subject and recipient.
+
+    MailHog binary is discovered via the MAILHOG env var, PATH, then nix store.
     Tests skip gracefully when racket or MailHog are not available.
+
+    NOTE on Email.send → MailHog under the App model: Email.send is non-blocking
+    (it queues to the outbox / in-memory store); a background worker delivers via
+    SMTP.  The App tests assert that Email.send *runs* (the endpoint returns its
+    marker); end-to-end SMTP→MailHog delivery is verified separately via the
+    direct-SMTP MailHog tests below, which drive net/smtp exactly as the runtime
+    delivery path does.
 *)
 
 (* ── Utilities ──────────────────────────────────────────────────────────────── *)
@@ -155,8 +173,8 @@ let compile_tesl_check_fails ~module_name src =
 let run_racket rkt_file =
   run_cmd ~timeout_secs:25 "racket" [|rkt_file|]
 
-let curl_get url =
-  let (out, _, _) = run_cmd ~timeout_secs:10 curl_binary [|"-s"; url|] in
+let curl_get ?(timeout_secs=10) url =
+  let (out, _, _) = run_cmd ~timeout_secs curl_binary [|"-s"; "-m"; string_of_int timeout_secs; url|] in
   out
 
 (* ── Tooling availability ───────────────────────────────────────────────────── *)
@@ -184,156 +202,199 @@ let guarded_mailhog_test name f () =
   else
     f ()
 
-(* ── Tesl email source templates ─────────────────────────────────────────────── *)
+(* ── Tesl email App templates ────────────────────────────────────────────────── *)
 
-(** Common DB block template, shared by all email tests. *)
-let db_block = {|database AppDB {
-  backend postgres
-  schema "testschema"
-  entities []
-  postgres {
-    database env("TESL_EMAIL_TEST_DB")
-    user env("TESL_EMAIL_TEST_USER")
-    password env("TESL_EMAIL_TEST_PASS")
-    host "localhost"
-    port envInt("TESL_EMAIL_TEST_PORT", 5432)
-    socket env("TESL_EMAIL_TEST_SOCK")
-  }
-}|}
+(** Common module header + database + email block, shared by the App tests.
 
-(** Email block template. *)
-let email_block smtp_port = Printf.sprintf {|email AppEmail {
-  database: AppDB
-  smtp {
+    An in-memory database backs the email outbox so the tests need no Postgres.
+    The email block points at [smtp_port] (used only by the background delivery
+    worker; the App tests assert that Email.send *runs*, not delivery).  *)
+let app_prelude ~module_name smtp_port = Printf.sprintf {|#lang tesl
+module %s exposing [EmailTestServer]
+
+import Tesl.Prelude exposing [String, Unit, Bool(..)]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.Email exposing [Email, SmtpConfig]
+import Tesl.App exposing [App]
+
+# In-memory database backs the email outbox — no Postgres required.
+database EmailTestDb = Database {
+  schema: "email_test"
+  entities: []
+  backend: Memory
+}
+
+email EmailTestMail = Email {
+  database: EmailTestDb
+  smtp: SmtpConfig {
     host: "127.0.0.1"
     port: %d
     username: ""
     password: ""
     tls: false
   }
-}|} smtp_port
+}|} module_name smtp_port
 
-(** Tesl source with an email block + load only. *)
-let tesl_email_load_src ~module_name smtp_port =
-  Printf.sprintf {|#lang tesl
-module %s exposing []
-
-import Tesl.Prelude exposing [String, Unit, Bool(..)]
-
+(** Trailing api/server/main for the App tests.  [endpoints] is a list of
+    (endpoint-name, path) and the api lists one `get` route per endpoint. *)
+let app_tail ~endpoints app_port =
+  let api_routes =
+    String.concat "\n"
+      (List.map (fun (_, path) -> Printf.sprintf "  get \"%s\" -> String" path) endpoints) in
+  let server_bindings =
+    String.concat "\n"
+      (List.mapi (fun i (name, _) -> Printf.sprintf "  endpoint_%d = %s" i name) endpoints) in
+  Printf.sprintf {|
+api EmailTestApi {
 %s
-
-%s
-
-main {
-  let _ = print "EMAIL-MODULE-LOADED"
-  Unit
 }
-|} module_name db_block (email_block smtp_port)
 
-(** Tesl source that sends an email via Email.send (in-memory fallback). *)
-let tesl_email_send_src ~module_name smtp_port recipient =
-  Printf.sprintf {|#lang tesl
-module %s exposing []
-
-import Tesl.Prelude exposing [String, Unit, Bool(..)]
-
+server EmailTestServer for EmailTestApi {
 %s
+}
 
-%s
+main() -> App requires [email] =
+  App {
+    database: EmailTestDb
+    email: [EmailTestMail]
+    api: EmailTestServer
+    port: %d
+  }
+|} api_routes server_bindings app_port
 
-fn queueEmail(addr: String) -> Unit requires [email] =
-  Email.send AppEmail {
-    to: addr
+(** App that simply loads the email module and serves a health endpoint — proves
+    the email block loads at runtime with no unbound-identifier errors. *)
+let tesl_email_load_app ~module_name smtp_port app_port =
+  Printf.sprintf {|%s
+
+handler emailLoaded() -> String requires [] =
+  "EMAIL-MODULE-LOADED"
+%s|}
+    (app_prelude ~module_name smtp_port)
+    (app_tail ~endpoints:[("emailLoaded", "/loaded")] app_port)
+
+(** App whose endpoint sends a TextBody email via Email.send (auto-granted
+    [email] capability) and returns a marker. *)
+let tesl_email_send_app ~module_name smtp_port app_port recipient =
+  Printf.sprintf {|%s
+
+handler queueEmail() -> String requires [email] =
+  let _ = Email.send EmailTestMail {
+    to: "%s"
     subject: "Integration Test Subject"
     body: TextBody "Hello from Tesl integration test"
   }
+  "EMAIL-QUEUED"
+%s|}
+    (app_prelude ~module_name smtp_port)
+    recipient
+    (app_tail ~endpoints:[("queueEmail", "/send")] app_port)
 
-main {
-  with capabilities [email] {
-    let _ = queueEmail "%s"
-    let _ = print "EMAIL-QUEUED"
-    Unit
-  }
-}
-|} module_name db_block (email_block smtp_port) recipient
+(** App whose endpoint sends an HtmlBody email. *)
+let tesl_email_html_app ~module_name smtp_port app_port =
+  Printf.sprintf {|%s
 
-(** Tesl source that uses HtmlBody. *)
-let tesl_email_html_src ~module_name smtp_port =
-  Printf.sprintf {|#lang tesl
-module %s exposing []
-
-import Tesl.Prelude exposing [String, Unit, Bool(..)]
-
-%s
-
-%s
-
-fn sendHtml(addr: String) -> Unit requires [email] =
-  Email.send AppEmail {
-    to: addr
+handler sendHtml() -> String requires [email] =
+  let _ = Email.send EmailTestMail {
+    to: "html@example.com"
     subject: "HTML Email Test"
     body: HtmlBody "<h1>Hello</h1><p>HTML email test</p>"
   }
+  "HTML-EMAIL-QUEUED"
+%s|}
+    (app_prelude ~module_name smtp_port)
+    (app_tail ~endpoints:[("sendHtml", "/html")] app_port)
 
-main {
-  with capabilities [email] {
-    let _ = sendHtml "html@example.com"
-    let _ = print "HTML-EMAIL-QUEUED"
-    Unit
-  }
-}
-|} module_name db_block (email_block smtp_port)
+(** App whose endpoint sends a RichBody email. *)
+let tesl_email_rich_app ~module_name smtp_port app_port =
+  Printf.sprintf {|%s
 
-(** Tesl source that uses RichBody. *)
-let tesl_email_rich_src ~module_name smtp_port =
-  Printf.sprintf {|#lang tesl
-module %s exposing []
-
-import Tesl.Prelude exposing [String, Unit, Bool(..)]
-
-%s
-
-%s
-
-fn sendRich(addr: String) -> Unit requires [email] =
-  Email.send AppEmail {
-    to: addr
+handler sendRich() -> String requires [email] =
+  let _ = Email.send EmailTestMail {
+    to: "rich@example.com"
     subject: "Rich Email Test"
     body: RichBody "Plain text fallback" "<h1>HTML version</h1>"
   }
+  "RICH-EMAIL-QUEUED"
+%s|}
+    (app_prelude ~module_name smtp_port)
+    (app_tail ~endpoints:[("sendRich", "/rich")] app_port)
 
-main {
-  with capabilities [email] {
-    let _ = sendRich "rich@example.com"
-    let _ = print "RICH-EMAIL-QUEUED"
-    Unit
-  }
-}
-|} module_name db_block (email_block smtp_port)
-
-(** Build module name + source for a Tesl program without requires [email]. *)
+(** Build module name + source for a Tesl program where a fn calls Email.send
+    WITHOUT `requires [email]`.  No main is needed — the point is that the
+    compiler rejects the missing-capability call. *)
 let tesl_email_no_cap_src module_name =
   (module_name, Printf.sprintf {|#lang tesl
 module %s exposing []
 
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.Email exposing [Email, SmtpConfig]
 
-%s
+database EmailTestDb = Database {
+  schema: "email_test"
+  entities: []
+  backend: Memory
+}
 
-%s
+email EmailTestMail = Email {
+  database: EmailTestDb
+  smtp: SmtpConfig {
+    host: "127.0.0.1"
+    port: 2525
+    username: ""
+    password: ""
+    tls: false
+  }
+}
 
 fn badSend(addr: String) -> Unit =
-  Email.send AppEmail {
+  Email.send EmailTestMail {
     to: addr
     subject: "No cap"
     body: TextBody "This should fail capability check"
   }
+|} module_name)
 
-main {
-  let _ = badSend "test@example.com"
-  Unit
-}
-|} module_name db_block (email_block 2525))
+(* ── Tesl App server runner ─────────────────────────────────────────────────── *)
+
+(** Start the compiled Tesl App as a racket subprocess.  Returns (pid, err_file). *)
+let start_tesl_app rkt_file =
+  let devnull_out = Unix.openfile "/dev/null" [Unix.O_WRONLY] 0 in
+  let err_file = Filename.temp_file "tesl_email_app_err" ".txt" in
+  let fd_err = Unix.openfile err_file [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o600 in
+  let pid = Unix.create_process "racket"
+    [|"racket"; rkt_file|]
+    Unix.stdin devnull_out fd_err
+  in
+  Unix.close devnull_out;
+  Unix.close fd_err;
+  (pid, err_file)
+
+let stop_tesl_app pid err_file =
+  (try Unix.kill pid Sys.sigterm with _ -> ());
+  (try ignore (Unix.waitpid [Unix.WNOHANG] pid) with _ -> ());
+  Unix.sleepf 0.1;
+  (try Unix.kill pid Sys.sigkill with _ -> ());
+  (try ignore (Unix.waitpid [] pid) with _ -> ());
+  (try Sys.remove err_file with _ -> ())
+
+(** Compile [src] (an App returning [app_port]), start the server, run
+    [f endpoint_url], then tear down.  [endpoint_url] maps an endpoint path
+    (e.g. "/send") to a full URL on the running App. *)
+let with_email_app ~module_name ~app_port src f =
+  let rkt = compile_tesl_src ~module_name src in
+  Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
+    let (app_pid, err_file) = start_tesl_app rkt in
+    Fun.protect ~finally:(fun () -> stop_tesl_app app_pid err_file) (fun () ->
+      if not (wait_for_port "127.0.0.1" app_port ~timeout_secs:20) then begin
+        let err = try In_channel.(with_open_text err_file input_all) with _ -> "" in
+        Alcotest.failf "Tesl email App failed to start on port %d; stderr: %s" app_port err
+      end;
+      let endpoint_url path = Printf.sprintf "http://127.0.0.1:%d%s" app_port path in
+      f endpoint_url
+    )
+  )
 
 (* ── MailHog helpers ─────────────────────────────────────────────────────────── *)
 
@@ -375,8 +436,9 @@ let mailhog_message_count api_port =
     int_of_string (String.trim (String.sub json start (stop - start)))
   with _ -> -1
 
-(** Write a Racket script that sends an email via net/smtp directly (correct API),
-    bypassing the email.rkt deliver-email! call.  Returns path to the script. *)
+(** Write a Racket script that sends an email via net/smtp directly, exactly as
+    the Tesl runtime email-delivery worker does (header string + (list body)).
+    Returns path to the script. *)
 let write_direct_smtp_rkt smtp_port recipient subject body_text =
   let path = Filename.temp_file "tesl_email_smtp" ".rkt" in
   let src = Printf.sprintf {|#lang racket
@@ -409,56 +471,53 @@ let write_direct_smtp_rkt smtp_port recipient subject body_text =
 
 (* ── Tests ───────────────────────────────────────────────────────────────────── *)
 
-(** Test 1: Email module loads at runtime — no unbound identifier errors. *)
+(** Test 1: Email module loads at runtime — a Tesl App declaring an email block
+    starts and serves without unbound-identifier errors. *)
 let test_email_module_loads () =
   let mn = fresh_module_name "TeslEmailLoad" in
-  let src = tesl_email_load_src ~module_name:mn 2525 in
-  let rkt = compile_tesl_src ~module_name:mn src in
-  Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
-    let (out, err, code) = run_racket rkt in
-    if code <> 0 then
-      Alcotest.failf "Email module load: racket exited %d; stderr: %s" code err;
+  let app_port = pick_free_port () in
+  let smtp_port = pick_free_port () in
+  let src = tesl_email_load_app ~module_name:mn smtp_port app_port in
+  with_email_app ~module_name:mn ~app_port src (fun endpoint_url ->
+    let out = curl_get (endpoint_url "/loaded") in
     if not (contains "EMAIL-MODULE-LOADED" out) then
-      Alcotest.failf "Email module load: expected 'EMAIL-MODULE-LOADED' in output, got: %S" out
+      Alcotest.failf "Email module load: expected 'EMAIL-MODULE-LOADED' in response, got: %S" out
   )
 
-(** Test 2: Email.send queues a message to in-memory store without error. *)
+(** Test 2: Email.send runs inside the App's auto-granted [email] scope. *)
 let test_email_send_queues () =
   let mn = fresh_module_name "TeslEmailSend" in
-  let src = tesl_email_send_src ~module_name:mn 2525 "recipient@example.com" in
-  let rkt = compile_tesl_src ~module_name:mn src in
-  Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
-    let (out, err, code) = run_racket rkt in
-    if code <> 0 then
-      Alcotest.failf "Email.send queue: racket exited %d; stderr: %s" code err;
+  let app_port = pick_free_port () in
+  let smtp_port = pick_free_port () in
+  let src = tesl_email_send_app ~module_name:mn smtp_port app_port "recipient@example.com" in
+  with_email_app ~module_name:mn ~app_port src (fun endpoint_url ->
+    let out = curl_get (endpoint_url "/send") in
     if not (contains "EMAIL-QUEUED" out) then
-      Alcotest.failf "Email.send queue: expected 'EMAIL-QUEUED' in output, got: %S" out
+      Alcotest.failf "Email.send queue: expected 'EMAIL-QUEUED' in response, got: %S" out
   )
 
-(** Test 3: HtmlBody variant compiles and runs without error. *)
+(** Test 3: HtmlBody variant compiles and runs (Email.send via App endpoint). *)
 let test_email_html_body () =
   let mn = fresh_module_name "TeslEmailHtml" in
-  let src = tesl_email_html_src ~module_name:mn 2525 in
-  let rkt = compile_tesl_src ~module_name:mn src in
-  Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
-    let (out, err, code) = run_racket rkt in
-    if code <> 0 then
-      Alcotest.failf "HtmlBody: racket exited %d; stderr: %s" code err;
+  let app_port = pick_free_port () in
+  let smtp_port = pick_free_port () in
+  let src = tesl_email_html_app ~module_name:mn smtp_port app_port in
+  with_email_app ~module_name:mn ~app_port src (fun endpoint_url ->
+    let out = curl_get (endpoint_url "/html") in
     if not (contains "HTML-EMAIL-QUEUED" out) then
-      Alcotest.failf "HtmlBody: expected 'HTML-EMAIL-QUEUED' in output, got: %S" out
+      Alcotest.failf "HtmlBody: expected 'HTML-EMAIL-QUEUED' in response, got: %S" out
   )
 
-(** Test 4: RichBody variant compiles and runs without error. *)
+(** Test 4: RichBody variant compiles and runs (Email.send via App endpoint). *)
 let test_email_rich_body () =
   let mn = fresh_module_name "TeslEmailRich" in
-  let src = tesl_email_rich_src ~module_name:mn 2525 in
-  let rkt = compile_tesl_src ~module_name:mn src in
-  Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
-    let (out, err, code) = run_racket rkt in
-    if code <> 0 then
-      Alcotest.failf "RichBody: racket exited %d; stderr: %s" code err;
+  let app_port = pick_free_port () in
+  let smtp_port = pick_free_port () in
+  let src = tesl_email_rich_app ~module_name:mn smtp_port app_port in
+  with_email_app ~module_name:mn ~app_port src (fun endpoint_url ->
+    let out = curl_get (endpoint_url "/rich") in
     if not (contains "RICH-EMAIL-QUEUED" out) then
-      Alcotest.failf "RichBody: expected 'RICH-EMAIL-QUEUED' in output, got: %S" out
+      Alcotest.failf "RichBody: expected 'RICH-EMAIL-QUEUED' in response, got: %S" out
   )
 
 (** Test 5: Capability gate — Email.send without requires [email] fails compile. *)
@@ -468,19 +527,22 @@ let test_email_capability_gate () =
   if not (compile_tesl_check_fails ~module_name src) then
     Alcotest.failf "Expected --check to fail for Email.send without requires [email]"
 
-(** Test 6: Multiple email sends run without error (tests the outbox handles >1). *)
+(** Test 6: Multiple Email.send calls run without error — the App endpoint can be
+    hit repeatedly and Email.send keeps succeeding (the outbox handles >1). *)
 let test_multiple_emails_queued () =
-  (* Compile once and run twice — the in-memory store is fresh each run. *)
   let mn = fresh_module_name "TeslEmailMulti" in
-  let src = tesl_email_send_src ~module_name:mn 2525 "user1@example.com" in
-  let rkt = compile_tesl_src ~module_name:mn src in
-  Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
-    let (out1, _err1, code1) = run_racket rkt in
-    let (out2, _err2, code2) = run_racket rkt in
-    if code1 <> 0 || code2 <> 0 then
-      Alcotest.failf "Multiple emails: expected exit 0 for both runs (got %d, %d)" code1 code2;
-    if not (contains "EMAIL-QUEUED" out1 && contains "EMAIL-QUEUED" out2) then
-      Alcotest.failf "Multiple emails: expected 'EMAIL-QUEUED' in both runs"
+  let app_port = pick_free_port () in
+  let smtp_port = pick_free_port () in
+  let src = tesl_email_send_app ~module_name:mn smtp_port app_port "user1@example.com" in
+  with_email_app ~module_name:mn ~app_port src (fun endpoint_url ->
+    let out1 = curl_get (endpoint_url "/send") in
+    let out2 = curl_get (endpoint_url "/send") in
+    let out3 = curl_get (endpoint_url "/send") in
+    if not (contains "EMAIL-QUEUED" out1
+            && contains "EMAIL-QUEUED" out2
+            && contains "EMAIL-QUEUED" out3) then
+      Alcotest.failf "Multiple emails: expected 'EMAIL-QUEUED' from all three sends (got %S / %S / %S)"
+        out1 out2 out3
   )
 
 (** Test 7: Racket email module loads (define-email macro is bound at runtime). *)
@@ -513,6 +575,7 @@ let test_define_email_bound () =
   )
 
 (** Test 8: Direct SMTP delivery via Racket net/smtp to MailHog.
+    Drives net/smtp exactly as the runtime email-delivery worker does.
     Starts MailHog, sends an email via a Racket script, checks MailHog API. *)
 let test_smtp_delivery_to_mailhog () =
   let (mh_pid, smtp_port, api_port, _ui_port) = start_mailhog () in
@@ -593,16 +656,16 @@ let test_smtp_recipient_in_mailhog () =
 let () =
   Random.self_init ();
   Alcotest.run "Email-Integration" [
-    "tesl-compilation", [
-      Alcotest.test_case "email module loads at runtime"         `Slow
+    "tesl-app", [
+      Alcotest.test_case "email module loads in a running App"   `Slow
         (guarded_test "email-module-loads"   test_email_module_loads);
-      Alcotest.test_case "Email.send queues to in-memory store"  `Slow
+      Alcotest.test_case "Email.send runs in App [email] scope"  `Slow
         (guarded_test "email-send-queues"    test_email_send_queues);
       Alcotest.test_case "HtmlBody compiles and runs"            `Slow
         (guarded_test "html-body"            test_email_html_body);
       Alcotest.test_case "RichBody compiles and runs"            `Slow
         (guarded_test "rich-body"            test_email_rich_body);
-      Alcotest.test_case "multiple emails queued without error"  `Slow
+      Alcotest.test_case "multiple Email.send calls succeed"     `Slow
         (guarded_test "multi-queue"          test_multiple_emails_queued);
     ];
     "capability", [

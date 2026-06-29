@@ -1,10 +1,10 @@
 # Lesson 23: Queues and Workers
 
-> **Implemented — including horizontal scaling via LISTEN/NOTIFY.** When a `call-with-database` context is active, all queue operations go through PostgreSQL automatically. Workers in **multiple OS processes** all receive wakeup signals via `NOTIFY` and compete safely via `FOR UPDATE SKIP LOCKED` — no duplicate processing. No code changes are needed; the runtime detects the database context at call time.
+> **Implemented — including horizontal scaling via LISTEN/NOTIFY.** When a `with database` context is active, all queue operations go through PostgreSQL automatically. Workers in **multiple OS processes** all receive wakeup signals via `NOTIFY` and compete safely via `FOR UPDATE SKIP LOCKED` — no duplicate processing. No code changes are needed; the runtime detects the database context at call time.
 >
 > An in-memory fallback is active when no database context is present (unit tests, REPL exploration).
 >
-> See `example/chat/backend.thsl` for a complete working example. Design in `future-roadmap/completed/well_designed_reactivity_design.md`.
+> See `example/chat/chat-backend.tesl` and `example/learn/lesson28-dead-letter-queue.tesl` for complete working examples.
 
 ---
 
@@ -31,23 +31,26 @@ The field-level `via` annotation works exactly like `check` function binding: wh
 
 ### 2. Declare a queue
 
-A `queue` declaration ties job types to a database and configures retry behaviour.
+A `queue` declaration is a folded record: it ties each job type to its worker (and optional dead-letter worker) in a single `jobs` list, names the backing database, and configures retry behaviour and worker concurrency. Capabilities the workers need are listed in the queue's `requires`.
 
 ```tesl
-queue EmailQueue {
-  database MainDatabase
-  jobs     [SendEmail, GeneratePDF]
-  retry {
-    maxAttempts:  3
-    backoff:      exponential
+queue EmailQueue requires [emailCap] = Queue {
+  database: MainDatabase
+  jobs: [Job SendEmail sendEmailWorker (Nothing)]
+  retry: QueueRetryStrategy {
+    maxAttempts: 3
+    backoff: Exponential
     initialDelay: 60
   }
+  numberOfWorkers: 1
 }
 ```
 
 - `database` — which Postgres database stores the jobs. The compiler creates the `tesl_jobs` table automatically.
-- `jobs` — the record types that can be submitted to this queue. Each job type belongs to exactly one queue.
-- `retry` — what happens when a worker fails. With `backoff: exponential` and `initialDelay: 60`, failures are retried after 60 s, 120 s, 240 s. After `maxAttempts` the job is dead.
+- `jobs` — a list of `Job <JobType> <workerFn> (<deadSlot>)` entries. Each entry folds a record type together with its normal worker function and an optional dead-letter worker: `(Something deadFn)` to wire one, or `(Nothing)` if there is none. Each job type belongs to exactly one queue.
+- `retry` — a `QueueRetryStrategy` describing what happens when a worker fails. With `backoff: Exponential` and `initialDelay: 60`, failures are retried after 60 s, 120 s, 240 s. After `maxAttempts` the job is dead.
+- `numberOfWorkers` — how many parallel normal-worker threads to run (default 1). Listing the queue in `App.queues` activates these workers; there is no explicit start call.
+- `requires` — the capabilities the queue's worker functions need; capabilities flow from here, granted at the App root.
 
 ### 3. Submit a job with `enqueue`
 
@@ -59,10 +62,10 @@ enqueue SendEmail { to: req.email, subject: "Welcome!", body: welcomeText }
 
 The job type (`SendEmail`) tells the compiler which queue to use. You never name the queue directly in `enqueue`.
 
-For guaranteed, atomic delivery — where the job only enters the queue if your database writes also succeed — wrap everything in `with transaction`:
+For guaranteed, atomic delivery — where the job only enters the queue if your database writes also succeed — wrap everything in `transaction`:
 
 ```tesl
-with transaction {
+transaction {
   let user = insert User { id: newId, email: req.email }
   enqueue SendEmail { to: req.email, subject: "Welcome!" }
   user
@@ -83,38 +86,42 @@ worker sendEmailWorker(job: SendEmail ::: FromQueue (Id == jobId) job)
 
 The `FromQueue (Id == jobId) job` proof confirms this value came through the trusted dequeue boundary — it was not constructed by user code. This is the same guarantee as `FromDb (Id == pk) entity` for database-fetched records.
 
-### 5. Wire workers to job types with `workers`
+### 5. Workers are wired inside the queue's `jobs` list
 
-A `workers` declaration maps job types to worker functions, mirroring how `server` maps routes to handlers.
+There is no separate `workers` declaration. Each job type is paired with its worker function directly in the folded queue's `jobs` list:
 
 ```tesl
-workers EmailWorkers for EmailQueue {
-  SendEmail   = sendEmailWorker
-  GeneratePDF = generatePdfWorker
+queue EmailQueue requires [smtpSend] = Queue {
+  database: MainDatabase
+  jobs: [
+    Job SendEmail   sendEmailWorker  (Nothing)
+    Job GeneratePDF generatePdfWorker (Nothing)
+  ]
+  retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 }
+  numberOfWorkers: 1
 }
 ```
 
-Every job type listed in the queue must appear exactly once in the `workers` declaration. The compiler enforces completeness.
+Every job type the queue handles appears exactly once as a `Job <JobType> <workerFn> (<deadSlot>)` entry. The dead slot is `(Something deadFn)` to attach a dead-letter worker, or `(Nothing)` when there is none.
 
-### 6. Start the background processing in `main`
+### 6. Start the background processing from `main`
+
+`main` is an ordinary function that returns an `App` description; the runtime starts everything from it. Listing a queue in `App.queues` activates its workers — the `numberOfWorkers` normal workers plus, if the job has a dead slot, the single dead-letter worker. There is no explicit `startWorkers`/`serve` call; the App root does it. Capabilities are granted at the App root, derived from `main.requires`.
 
 ```tesl
-main {
-  with database MainDatabase {
-    with capabilities [appService] {
-      serve        MyServer     on port          with capabilities [appService]
-      startWorkers EmailWorkers                  with capabilities [smtpSend]
-    }
+main() -> App requires [appService, smtpSend] =
+  App {
+    database: MainDatabase
+    api: MyServer
+    port: 8080
+    queues: [EmailQueue]
   }
-}
 ```
 
-`startWorkers [N] WorkersName with capabilities [...]` launches N SKIP LOCKED worker threads + one fallback-poller + one LISTEN connection per queue/handler pair. N defaults to 1.
-
-- All N workers compete via `FOR UPDATE SKIP LOCKED` — no duplicate processing.
-- The LISTEN connection wakes workers in the same process AND in other processes (horizontal scaling) via PostgreSQL NOTIFY.
+- All `numberOfWorkers` workers per queue compete via `FOR UPDATE SKIP LOCKED` — no duplicate processing.
+- A LISTEN connection wakes workers in the same process AND in other processes (horizontal scaling) via PostgreSQL NOTIFY.
 - A stuck-job sweeper resets jobs stuck in `processing` for > 10 minutes (handles crashed workers).
-- **Order matters:** call `startWorkers` (and `startWebSocket`) before `serve`.
+- SSE pub/sub LISTEN starts automatically — no separate start call is needed.
 
 ---
 
@@ -124,7 +131,7 @@ main {
 
 In a typical web service with a separate queue (Redis, RabbitMQ), you face a fundamental reliability problem: after the database write succeeds but before the queue write happens, the process can crash. You end up with a committed user record and no welcome email — or a sent email and no user.
 
-Postgres's native `LISTEN/NOTIFY` and `FOR UPDATE SKIP LOCKED` eliminate this entirely. When `enqueue` runs inside `with transaction`:
+Postgres's native `LISTEN/NOTIFY` and `FOR UPDATE SKIP LOCKED` eliminate this entirely. When `enqueue` runs inside `transaction`:
 
 1. The job row is inserted into `tesl_jobs` as part of the database transaction.
 2. A `NOTIFY` is issued on the same transaction connection.
@@ -148,7 +155,7 @@ This means you can write worker functions that accept further proof-bearing argu
 
 Multiple workers (threads within one process, or multiple processes) can safely contend on the same queue because the dequeue query uses `FOR UPDATE SKIP LOCKED`. Each worker atomically claims exactly one job row. If another worker has already locked that row, `SKIP LOCKED` skips it and tries the next one — no deadlocks, no duplicate processing.
 
-Scaling up means calling `startWorkers` multiple times in `main` (for more threads) or running the compiled Tesl binary on multiple machines. The queue handles the contention correctly in all cases.
+Scaling up means raising the queue's `numberOfWorkers` (for more threads in one process) or running the compiled Tesl binary on multiple machines. The queue handles the contention correctly in all cases.
 
 ### Retry policy: preventing thundering-herd
 
@@ -179,7 +186,7 @@ before the insert. Invalid email addresses are rejected at submission time. The 
 
 ### The multi-thread runtime model
 
-Each `startWorkers [N]` call spawns N+2 Racket threads (PostgreSQL mode):
+Activating a queue (by listing it in `App.queues`) spawns N+2 Racket threads, where N is the queue's `numberOfWorkers` (PostgreSQL mode):
 
 **Thread 1 — Fallback Poller.** Sleeps for 5 seconds, then posts to a shared semaphore. Ensures no job is ever stranded, regardless of whether a NOTIFY was dropped.
 
@@ -251,14 +258,15 @@ record SendEmail {
   body:    String
 }
 
-queue EmailQueue {
-  database MainDatabase
-  jobs     [SendEmail]
-  retry {
-    maxAttempts:  3
-    backoff:      exponential
+queue EmailQueue requires [smtpSend] = Queue {
+  database: MainDatabase
+  jobs: [Job SendEmail sendEmailWorker (Nothing)]
+  retry: QueueRetryStrategy {
+    maxAttempts: 3
+    backoff: Exponential
     initialDelay: 30
   }
+  numberOfWorkers: 1
 }
 ```
 
@@ -267,7 +275,7 @@ queue EmailQueue {
 ```tesl
 handler registerUser(req: RegistrationRequest ::: ValidRequest req)
   requires [dbWrite, queueWrite] =
-  with transaction {
+  transaction {
     let userId = generateId "usr_"
     let user   = insert User {
       id:    userId,
@@ -283,7 +291,7 @@ handler registerUser(req: RegistrationRequest ::: ValidRequest req)
   }
 ```
 
-The `with transaction` block guarantees:
+The `transaction` block guarantees:
 - If the `insert` fails (e.g., duplicate email), `enqueue` is rolled back — no orphan job.
 - If `enqueue` fails (e.g., `checkValidEmail` rejects the address), `insert` is rolled back — no user without a valid email.
 - If the process crashes between the transaction start and commit, both are rolled back.
@@ -317,19 +325,16 @@ From the developer's perspective:
 
 ### Wiring and starting
 
-```tesl
-workers EmailWorkers for EmailQueue {
-  SendEmail = sendEmailWorker
-}
+The worker is already wired to `SendEmail` inside the queue's `jobs` list (above). To start everything, return an `App` from `main` and list the queue in `App.queues`:
 
-main {
-  with database MainDatabase {
-    with capabilities [appService] {
-      serve        AppServer    on port            with capabilities [appService]
-      startWorkers EmailWorkers                    with capabilities [smtpSend]
-    }
+```tesl
+main() -> App requires [appService, smtpSend] =
+  App {
+    database: MainDatabase
+    api: AppServer
+    port: 8080
+    queues: [EmailQueue]
   }
-}
 ```
 
 ---
@@ -361,4 +366,4 @@ This design lets you express application-level intent (`emailWrite` = "this code
 
 ---
 
-See `example/queue-api.thsl` for a complete annotated stub file, and `example/learn/lesson24-pubsub-sse.md` for pub/sub channels and SSE endpoints.
+See `example/queue-api.tesl` and `example/learn/lesson28-dead-letter-queue.tesl` for complete annotated examples, `example/learn/lesson31-worker-concurrency.tesl` for `numberOfWorkers`, and `example/learn/lesson24-pubsub-sse.md` for pub/sub channels and SSE endpoints.

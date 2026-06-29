@@ -40,6 +40,15 @@ module Lesson48SqlInnerJoin exposing [
 
 import Tesl.Prelude exposing [Bool(..), Int, String, List]
 import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 
 # ─────────────────────────────────────────────
 # UNDERSTANDING — the inner join model
@@ -93,9 +102,9 @@ entity OrderItem table "order_items" primaryKey id {
 
 # ─── Database configuration ───────────────────────────────────────────────────
 
-database JoinDatabase {
-  backend memory
-  entities [Customer, Order, OrderItem]
+database JoinDatabase = Database {
+  entities: [Customer, Order, OrderItem]
+  backend: Memory
 }
 
 # ─── Functions ────────────────────────────────────────────────────────────────

@@ -71,7 +71,7 @@ module CriticalReview35Tests exposing [
   # T22 — Check that forgetFact truly removes proof # T23 — Empty and singleton edge cases # T24 — Property: addition is commutative and associative # T25 — Property: List.reverse . List.reverse = id,
 ]
 
-import Tesl.Prelude exposing [ Bool(..), Int, String, List, Fact, forgetFact, ]
+import Tesl.Prelude exposing [Bool(..), Int, String, List, Fact, forgetFact]
 import Tesl.String exposing [
   String.length,
   String.isEmpty,

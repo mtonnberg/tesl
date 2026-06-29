@@ -47,11 +47,13 @@ No surprises in production. The mistake is caught at build time.
 
 ---
 
-## Zero runtime cost
+## Compile-time checking, no per-call cost
 
-Capabilities are a **compile-time concept only**. They have no runtime representation and no runtime overhead. By the time your code runs, capabilities are completely erased — the compiler verified them at build time.
+Capability **checking** is a compile-time concept. The compiler verifies, at build time, that every call's `requires` is satisfied — there is no per-call runtime overhead and no proof-style wrapper carried through your code.
 
-This is unlike dependency injection frameworks or ZIO environments: there is no container, no wiring step, no `resolve()` call. It's just the compiler checking names.
+Capabilities are **granted once at the App root**, derived from `main`'s `requires` list (see the queues and real-time pages for `main() -> App requires [...]`). The runtime keeps a single ambient grant check so that if a required capability was never granted at the root, the request fails fast with a "Missing capabilities" error rather than silently doing the wrong thing. This is the only place capabilities touch the runtime — there is no per-call resolution.
+
+This is unlike dependency injection frameworks or ZIO environments: there is no container, no manual wiring step, no `resolve()` call threaded through your functions. The compiler checks the names, and the App root grants them in one place.
 
 ---
 

@@ -37,7 +37,7 @@ check isValidTitle(title: String) -> title: String ::: ValidTitle title =
 
 **The "(almost)":** A few things deliberately keep a minimal runtime representation. Free-floating proofs (`detachFact`, `attachFact`) are first-class values explicitly passed around, so they carry a small token; a proof-*annotated* parameter keeps a single allocation so `detachFact`/decomposition still work on it; and `establish`/`Fact`, existential `pack`/`unpack`, newtype nominal wrappers, and DB-sourced (`FromDb`) proofs retain their carriers.
 
-**Even debug builds erase.** Proofs are erased under `--debug` too. The debugger's Variables panel shows the raw runtime value, and a binding's proof/type is *compile-time* information (exactly what hover / `--type-at` report), so the debugger overlays it from there rather than from runtime structs. Breakpoints and stepping (`thsl-src!` checkpoints) are emitted separately and unaffected. `TESL_ZERO_COST_PROOFS=0` restores the runtime net for regression comparison only.
+**Even debug builds erase.** Proofs are erased under `--debug` too. The debugger's Variables panel shows the raw runtime value, and a binding's proof/type is *compile-time* information (exactly what hover / `--type-at` report), so the debugger overlays it from there rather than from runtime structs. Breakpoints and stepping (`thsl-src!` checkpoints) are emitted separately and unaffected.
 
 **mutation testing** Since the check function is where crititical bugs can creep in Tesl has built in mutation testing for all check, establish and auth functions.
 
@@ -190,18 +190,18 @@ update todo in Todo
 
 There is no query builder, no expression tree, no reflection. The generated SQL is always parameterised (`WHERE owner_id = $1`) — SQL injection is structurally impossible because user data never appears as literal SQL text.
 
-**Atomic writes with `with transaction`**
+**Atomic writes with `transaction`**
 
-When two or more writes must either all succeed or all fail, wrap them in `with transaction`:
+When two or more writes must either all succeed or all fail, wrap them in `transaction`:
 
 ```tesl
-with transaction {
+transaction {
   let _ = insert User { id: userId, name: name }
   insert Profile { userId: userId, bio: "" }
 }
 ```
 
-The block returns the value of its last expression. Any exception inside rolls back everything. Transactions cannot be nested — a `with transaction` inside another `with transaction` is a compile error, caught before you run a line. Note that adding items to a queue can also be in a transaction with an insert for instance.
+The block returns the value of its last expression. Any exception inside rolls back everything. Transactions cannot be nested — a `transaction` inside another `transaction` is a compile error, caught before you run a line. Note that adding items to a queue can also be in a transaction with an insert for instance.
 
 Column type mapping is automatic for all common types — you rarely need to annotate anything:
 
@@ -357,7 +357,7 @@ channel RoomMessages(roomId: String) {
 }
 
 # Publish from inside a transaction — atomically with your DB writes:
-with transaction {
+transaction {
   publish RoomMessages(roomId) NewMessage { content: req.content, ... }
   insert Message { ... }
 }
@@ -510,7 +510,7 @@ Most of Tesl's safety guarantees are *compile-time only* and disappear before yo
 
 | Feature | Runtime cost |
 |---|---|
-| Proof annotations (`:::`) | **Zero by default.** Proof checking runs once at the validation boundary; the proof itself is a compile-time fact. In release builds the `named-value` struct, argument re-validation, and proof-env threading are **erased during expansion** — no wrapper, no allocation — for standard `check`/`fn`/`handler` paths (verified behavior-identical across the corpus). The "(almost)": free-floating proofs (`detachFact`/`attachFact`) carry a small token, a proof-annotated parameter keeps one allocation, and `establish`/existential/newtype/`FromDb` carriers are retained. Erased under `--debug` too; `TESL_ZERO_COST_PROOFS=0` restores the net for regression comparison. |
+| Proof annotations (`:::`) | **Zero by default.** Proof checking runs once at the validation boundary; the proof itself is a compile-time fact. In release builds the `named-value` struct, argument re-validation, and proof-env threading are **erased during expansion** — no wrapper, no allocation — for standard `check`/`fn`/`handler` paths (verified behavior-identical across the corpus). The "(almost)": free-floating proofs (`detachFact`/`attachFact`) carry a small token, a proof-annotated parameter keeps one allocation, and `establish`/existential/newtype/`FromDb` carriers are retained. Erased under `--debug` too. |
 | `check` functions | Runs **once**, at the validation boundary. Never re-runs downstream. |
 | Capabilities (`requires [...]`) | **Zero.** A compile-time contract with no runtime representation. |
 | `ForAll` on lists | **Zero.** The list is a plain list at runtime; the annotation is erased. |
@@ -621,7 +621,7 @@ Tesl compiles to [Racket](https://racket-lang.org/), a Lisp dialect with a stron
 
 - The generated code is readable and debuggable
 - The Racket ecosystem (libraries, tooling, REPL) is available for advanced use cases
-- Proof annotations drive the static-checking pass; the proof is then erased (see the cost table above) and exists only at compile time (`TESL_ZERO_COST_PROOFS=0` restores a lightweight runtime evidence record for regression comparison)
+- Proof annotations drive the static-checking pass; the proof is then erased (see the cost table above) and exists only at compile time
 
 The compiler runs two orthogonal static-checking passes:
 

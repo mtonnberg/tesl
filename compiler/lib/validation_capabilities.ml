@@ -4,9 +4,25 @@ open Validation_common
 
 let build_func_capability_map (decls : top_decl list) : (string * string list) list =
   List.filter_map (function
-    | DFunc fd -> Some (fd.name, fd.capabilities)
+    | DFunc fd ->
+      (* Drop this function's capability-ROW variables: when the function is
+         CALLED, its row variables are instantiated by the actual callback
+         arguments (which the caller's body walks separately, collecting their
+         caps).  Only its CONCRETE capabilities propagate to callers. *)
+      let bound = Ast.func_bound_cap_vars fd in
+      Some (fd.name, List.filter (fun c -> not (List.mem c bound)) fd.capabilities)
     | _ -> None
   ) decls
+
+(** Capability rows introduced by a function's function-typed parameters:
+    `f: (A -> B requires c)` ⇒ `("f", ["c"])`.  Calling such a parameter in the
+    body requires its row variable(s), which the enclosing function must declare. *)
+let build_param_capability_map (fd : func_decl) : (string * string list) list =
+  List.filter_map (fun (b : binding) ->
+    match func_bound_cap_vars_of_params [b] with
+    | [] -> None
+    | caps -> Some (b.name, caps)
+  ) fd.params
 
 (** Capability ENFORCEMENT table for the runtime/effect expression forms.
 
@@ -65,12 +81,19 @@ let effect_caps key =
     sort_uniq the result. *)
 let collect_needed_capabilities
     ?(func_caps : (string * string list) list = [])
+    ?(param_caps : (string * string list) list = [])
     (e : expr)
     : string list =
   let sql_read_names = ["select"; "selectOne"; "selectCount"; "selectSum"; "selectMax"; "selectMin"] in
   let sql_write_names = ["insert"; "update"; "delete"; "upsert"] in
   (* var_caps: the capability(ies) a bare referenced name introduces. *)
   let var_caps name =
+    (* A function-typed PARAMETER (`f: (A -> B requires c)`) shadows everything:
+       calling it requires its capability-row variable(s), which the enclosing
+       function declares in its own `requires`. *)
+    if List.mem_assoc name param_caps then
+      (match List.assoc_opt name param_caps with Some caps -> caps | None -> [])
+    else
     (* BUG-1 fix: Check user-defined functions FIRST.
        A user function named `insert`, `select`, `update`, or `delete` must NOT be
        treated as a SQL operation. `List.mem_assoc` returns true even for functions
@@ -140,7 +163,7 @@ let collect_needed_capabilities
     (* Cache forms: data-dependent token, then descend into key/value/ttl/prefix. *)
     | ECacheGet { cache_name; _ } | ECacheSet { cache_name; _ }
     | ECacheDelete { cache_name; _ } | ECacheInvalidate { cache_name; _ } ->
-      Ast_visitor.fold_children go (("cache " ^ cache_name) :: acc) e
+      Ast_visitor.fold_children go (("cacheCap " ^ cache_name) :: acc) e
     (* Purely-mechanical variants: descend into child exprs only.  This includes
        EField (non-special obj), EApp, EBinop, EUnop, EIf, ELet, ELetProof,
        ERecord, EList, EOk, EWithDatabase/EWithCapabilities/EWithTransaction,
@@ -177,7 +200,8 @@ let check_handler_capabilities ?(cap_map=[]) (decls : top_decl list) : validatio
   let errors = ref [] in
   List.iter (function
     | DFunc fd when fd.kind = HandlerKind ->
-      let needed = collect_needed_capabilities ~func_caps fd.body |> List.sort_uniq String.compare in
+      let param_caps = build_param_capability_map fd in
+      let needed = collect_needed_capabilities ~func_caps ~param_caps fd.body |> List.sort_uniq String.compare in
       let declared = fd.capabilities in
       let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
       if missing <> [] then
@@ -188,7 +212,8 @@ let check_handler_capabilities ?(cap_map=[]) (decls : top_decl list) : validatio
              fd.name (String.concat ", " missing))
           :: !errors
     | DFunc fd when fd.kind = WorkerKind ->
-      let needed = collect_needed_capabilities ~func_caps fd.body |> List.sort_uniq String.compare in
+      let param_caps = build_param_capability_map fd in
+      let needed = collect_needed_capabilities ~func_caps ~param_caps fd.body |> List.sort_uniq String.compare in
       let declared = fd.capabilities in
       let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
       if missing <> [] then
@@ -199,7 +224,8 @@ let check_handler_capabilities ?(cap_map=[]) (decls : top_decl list) : validatio
              fd.name (String.concat ", " missing))
           :: !errors
     | DFunc fd when fd.kind = FnKind ->
-      let needed = collect_needed_capabilities ~func_caps fd.body |> List.sort_uniq String.compare in
+      let param_caps = build_param_capability_map fd in
+      let needed = collect_needed_capabilities ~func_caps ~param_caps fd.body |> List.sort_uniq String.compare in
       let declared = fd.capabilities in
       let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
       if missing <> [] then
@@ -210,7 +236,8 @@ let check_handler_capabilities ?(cap_map=[]) (decls : top_decl list) : validatio
              fd.name (String.concat ", " missing))
           :: !errors
     | DFunc fd when fd.kind = DeadWorkerKind ->
-      let needed = collect_needed_capabilities ~func_caps fd.body |> List.sort_uniq String.compare in
+      let param_caps = build_param_capability_map fd in
+      let needed = collect_needed_capabilities ~func_caps ~param_caps fd.body |> List.sort_uniq String.compare in
       let declared = fd.capabilities in
       let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
       if missing <> [] then
@@ -569,8 +596,8 @@ let check_cookies_field_access (decls : top_decl list) : validation_error list =
 let build_local_cap_map (decls : top_decl list) : (string * string list) list =
   List.filter_map (function
     | DCapability c -> Some (c.name, c.implies)
-    (* Cache declarations implicitly define a "cache <Name>" capability *)
-    | DCache (c : Ast.cache_form) -> Some ("cache " ^ c.name, [])
+    (* Cache declarations implicitly define a "cacheCap <Name>" capability *)
+    | DCache (c : Ast.cache_form) -> Some ("cacheCap " ^ c.name, [])
     (* Email declarations implicitly define an "email" capability *)
     | DEmail _ -> Some ("email", [])
     | _ -> None

@@ -44,7 +44,7 @@ handler postMessage(
   -> exists msgId: String => Message ? FromDb (Id == msgId)
   requires [chatWrite, chatPubSub, chatQueue] =
   let msgId = generatePrefixedId "msg"
-  with transaction {
+  transaction {
     publish RoomMessages(roomId) NewMessage {
       msgId: msgId, userId: session.id,
       content: req.content, createdAt: nowMillis()

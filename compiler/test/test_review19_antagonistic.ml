@@ -196,6 +196,7 @@ module T exposing []
 import Tesl.Prelude exposing [Int, String, List, Bool(..)]
 import Tesl.Time exposing [PosixMillis]
 import Tesl.DB exposing [dbRead]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 
 type Status
   = Open
@@ -208,11 +209,15 @@ entity Todo table "todos" primaryKey id {
   createdAt: PosixMillis
 }
 
-database Db {
-  backend postgres
-  schema "todo"
-  entities [Todo]
-  postgres { database "db" user "u" password "" host "localhost" port 5432 }
+database Db = Database {
+  schema: "todo"
+  entities: [Todo]
+  backend: Postgres (PostgresConfig {
+    dbName: "db"
+    user: "u"
+    password: ""
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 
 fact IsOpen (t: Todo)
@@ -365,6 +370,7 @@ module T exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Time exposing [PosixMillis]
 import Tesl.DB exposing [dbRead]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 
 capability readOnly implies dbRead
 
@@ -374,11 +380,15 @@ entity Note table "notes" primaryKey id {
   createdAt: PosixMillis
 }
 
-database NoteDb {
-  backend postgres
-  schema "notes"
-  entities [Note]
-  postgres { database "db" user "u" password "" host "localhost" port 5432 }
+database NoteDb = Database {
+  schema: "notes"
+  entities: [Note]
+  backend: Postgres (PostgresConfig {
+    dbName: "db"
+    user: "u"
+    password: ""
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 
 fn tryWriteWithoutCap(id: String, content: String) -> Int

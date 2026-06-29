@@ -27,7 +27,6 @@
   #:password "demo"
   #:server "localhost"
   #:port 5432
-  #:socket ""
   #:schema lesson33
   #:entities )
 
@@ -64,7 +63,7 @@
 (define/pow
   (parseUserId [id : String])
   #:returns String
-  (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 65 (list (cons 'id *id)) (lambda () *id)))
+  (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 84 (list (cons 'id *id)) (lambda () *id)))
 
 (define-capture userIdCapture
   [userIdCapture : String]
@@ -83,17 +82,13 @@
   (handleNotice [job : NotifyJob ::: (FromQueue (Id == jobId) job)])
   #:capabilities [queueRead pubsub]
   #:returns NotifyJob
-  (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 86 (list (cons 'job *job)) (lambda () (begin (publish-event! Lesson33Events (format "~a" (raw-value job.userId)) (NoticeSent (raw-value job.message))) *job))))
-
-(define Lesson33Workers
-  (list (cons Lesson33Queue handleNotice)))
-(register-api-test-workers! (list (list Lesson33Queue 'NotifyJob handleNotice)))
+  (let ([_ (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 105 (list (cons 'job *job)) (lambda () (publish-event! Lesson33Events (format "~a" (raw-value job.userId)) (NoticeSent (raw-value job.message)))))]) (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 106 (list (cons 'job *job)) (lambda () *job))))
 
 (define-handler
   (sendNotice [req : SendNoticeRequest])
   #:capabilities [queueWrite]
   #:returns String
-  (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 95 (list (cons 'req *req)) (lambda () (begin (enqueue! Lesson33Queue (NotifyJob #:userId (raw-value req.userId) #:message (raw-value req.message))) "queued"))))
+  (let ([_ (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 110 (list (cons 'req *req)) (lambda () (enqueue! Lesson33Queue (NotifyJob #:userId (raw-value req.userId) #:message (raw-value req.message)))))]) (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 111 (list (cons 'req *req)) (lambda () "queued"))))
 
 (define Lesson33Server-sse-routes
   (list (list (list "events") #f Lesson33Events)))
@@ -134,3 +129,7 @@
       ))
   )
 )
+
+(define Lesson33QueueWorkers
+  (list (cons Lesson33Queue handleNotice)))
+(register-api-test-workers! (list (list Lesson33Queue 'NotifyJob handleNotice)))

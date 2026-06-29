@@ -1,10 +1,19 @@
 let () =
   let src = {|#lang tesl
 module Foo exposing []
-database DB {
-  postgres {
-    database "mydb"
-  }
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+database DB = Database {
+  schema: "s"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "mydb"
+    user: "u"
+    password: ""
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
 }
 |} in
   let toks = Lexer.tokenize "<test>" src in

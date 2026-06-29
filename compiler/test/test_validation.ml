@@ -96,12 +96,15 @@ let test_server_bindings_ok () =
   assert_no_errors {|#lang tesl
 module Foo exposing [S]
 import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+capture idCapture: id: String using stringCodec
 handler createTask(x: String) -> String requires [] = x
 handler getTask(x: String) -> String requires [] = x
 api TaskApi {
   post "/tasks"
     -> String
   get "/tasks/:id"
+    capture id: String via idCapture
     -> String
 }
 server S for TaskApi {
@@ -127,11 +130,14 @@ let test_server_missing_endpoint_binding () =
   assert_validation_error {|#lang tesl
 module Foo exposing [S]
 import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+capture idCapture: id: String using stringCodec
 handler createTask(x: String) -> String requires [] = x
 api TaskApi {
   post "/tasks"
     -> String
   get "/tasks/:id"
+    capture id: String via idCapture
     -> String
 }
 server S for TaskApi {
@@ -144,27 +150,26 @@ let test_server_sse_endpoint_does_not_require_binding () =
 module Foo exposing [S]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
-database EventDatabase {
-  backend postgres
-  schema  "events"
-  entities []
-  postgres {
-    database "demo"
-    user     "demo"
-    password "demo"
-    host     "localhost"
-    port     5432
-    socket   ""
-  }
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.SSE exposing [SseChannel]
+database EventDatabase = Database {
+  schema: "events"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "demo"
+    user: "demo"
+    password: "demo"
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 type NoticeEvent
   = NoticeSent message:String
 fn parseUserId(id: String) -> String =
   id
 capture userIdCapture: String using stringCodec via parseUserId
-channel NoticeEvents(userId: String) {
-  database EventDatabase
-  payload NoticeEvent
+sseChannel NoticeEvents(userId: String) = SseChannel {
+  database: EventDatabase
+  payload: NoticeEvent
 }
 handler sendNotice() -> String requires [] =
   "queued"
@@ -186,24 +191,23 @@ let test_sse_endpoint_does_not_swallow_following_http_endpoint () =
 module Foo exposing [S]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
-database EventDatabase {
-  backend postgres
-  schema  "events"
-  entities []
-  postgres {
-    database "demo"
-    user     "demo"
-    password "demo"
-    host     "localhost"
-    port     5432
-    socket   ""
-  }
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.SSE exposing [SseChannel]
+database EventDatabase = Database {
+  schema: "events"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "demo"
+    user: "demo"
+    password: "demo"
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
 }
 type NoticeEvent
   = Notice text:String
-channel Notices(userId: String) {
-  database EventDatabase
-  payload  NoticeEvent
+sseChannel Notices(userId: String) = SseChannel {
+  database: EventDatabase
+  payload: NoticeEvent
 }
 handler getValue() -> String requires [] = "ok"
 api DemoApi {
@@ -845,12 +849,34 @@ fn bad(t: Task) -> String = t.missing
 
 let test_init_telemetry_keywords_typecheck () =
   assert_no_compile_diagnostics {|#lang tesl
-module Foo exposing []
-import Tesl.Prelude exposing [Bool(..)]
+module Foo exposing [S]
+import Tesl.Prelude exposing [Bool(..), Int]
 import Tesl.Telemetry exposing [initTelemetry]
-main {
-  initTelemetry service "my-service" endpoint "in-memory" console True
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.App exposing [App]
+database AppDb = Database {
+  schema: "app"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "d" user: "u" password: ""
+    connection: TcpConnection { host: "h" port: 5432 }
+  })
 }
+handler getValue() -> Int requires [] = 1
+api TaskApi {
+  get "/value"
+    -> Int
+}
+server S for TaskApi {
+  getValue = getValue
+}
+main() -> App requires [] =
+  let _ = initTelemetry service "my-service" endpoint "in-memory" console True
+  App {
+    database: AppDb
+    api: S
+    port: 8080
+  }
 |}
 
 let test_with_transaction_returns_body_type () =
@@ -858,7 +884,7 @@ let test_with_transaction_returns_body_type () =
 module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn wrap(n: Int) -> Int =
-  with transaction {
+  transaction {
     n
   }
 |}
@@ -894,7 +920,7 @@ entity Thing table "things" primaryKey id {
   parentId: String
 }
 fn relink(id: String, parentId: String) -> String requires [dbWrite] =
-  with transaction {
+  transaction {
     update t in Thing
       where t.id == id
       set t.parentId = parentId
@@ -917,7 +943,7 @@ handler demo(
   -> String
   requires [] =
   let adminUserId = authorize session.userId orgId
-  with transaction {
+  transaction {
     orgId
   }
 |}
@@ -945,6 +971,16 @@ let test_serve_static_clause_typechecks () =
   assert_no_compile_diagnostics {|#lang tesl
 module Foo exposing [S]
 import Tesl.Prelude exposing [Int]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.App exposing [App]
+database AppDb = Database {
+  schema: "app"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "d" user: "u" password: ""
+    connection: TcpConnection { host: "h" port: 5432 }
+  })
+}
 handler getValue() -> Int requires [] = 1
 api TaskApi {
   get "/value"
@@ -953,9 +989,13 @@ api TaskApi {
 server S for TaskApi {
   getValue = getValue
 }
-main {
-  serve S on 8080 with capabilities [] static "public"
-}
+main() -> App requires [] =
+  App {
+    database: AppDb
+    api: S
+    port: 8080
+    static: "public"
+  }
 |}
 
 let test_sql_reference_queries_typecheck () =
@@ -1711,10 +1751,10 @@ let () =
     "integration", [
       Alcotest.test_case "validation wired into compile diagnostics" `Quick test_validation_is_wired_into_top_level_diagnostics;
       Alcotest.test_case "initTelemetry keywords typecheck" `Quick test_init_telemetry_keywords_typecheck;
-      Alcotest.test_case "with transaction returns body type" `Quick test_with_transaction_returns_body_type;
+      Alcotest.test_case "transaction returns body type" `Quick test_with_transaction_returns_body_type;
       Alcotest.test_case "keyword type arg from keyword token typechecks" `Quick test_keyword_type_argument_from_keyword_token_typechecks;
       Alcotest.test_case "let underscore binding typechecks" `Quick test_let_underscore_binding_typechecks;
-      Alcotest.test_case "with transaction multiline update sequence typechecks" `Quick test_with_transaction_multiline_update_sequence_typechecks;
+      Alcotest.test_case "transaction multiline update sequence typechecks" `Quick test_with_transaction_multiline_update_sequence_typechecks;
       Alcotest.test_case "call before with block typechecks" `Quick test_call_before_with_block_typechecks;
       Alcotest.test_case "stacked case labels typecheck" `Quick test_stacked_case_labels_typecheck;
       Alcotest.test_case "serve static clause typechecks" `Quick test_serve_static_clause_typechecks;

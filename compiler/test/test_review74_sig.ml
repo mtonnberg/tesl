@@ -458,26 +458,46 @@ let test_LB03_library_with_main_rejected () =
 #lang tesl
 library Lb03 exposing []
 import Tesl.Prelude exposing [Int]
+import Tesl.App exposing [App]
 fn add(a: Int, b: Int) -> Int = a + b
-main {
-  with capabilities [] {
-    add 1 2
+main() -> App requires [] =
+  let _ = add 1 2
+  App {
+    port: 8080
   }
-}
 |}
 
-(* LB04: library with `workers` wiring — not allowed *)
+(* LB04: library with worker/queue infrastructure — not allowed.
+   In the new syntax the old `workers ... for Q { JobType = handlerFn }` wiring
+   block folds into the queue's `jobs` list, so worker wiring is no longer a
+   standalone declaration.  A folded `queue` necessarily owns a `database`
+   (its required field), and a library cannot own application infrastructure
+   such as a database/queue — so the library boundary check rejects it. *)
 let test_LB04_library_with_workers_wiring_rejected () =
-  should_fail "not allowed in library\\|library.*workers\\|workers.*library" {|
+  should_fail "not allowed in library\\|cannot own application infrastructure\\|library.*database\\|library.*workers\\|workers.*library" {|
 #lang tesl
 library Lb04 exposing []
 import Tesl.Prelude exposing [String]
-database Lb04Db { backend postgres schema "s" entities []
-  postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" } }
-queue Lb04Q { database Lb04Db jobs [Lb04Job] }
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.Queue exposing [Queue, Job, QueueRetryStrategy, Exponential]
+import Tesl.Maybe exposing [Maybe(..)]
+database Lb04Db = Database {
+  schema: "s"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "d"
+    user: "u"
+    password: ""
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
+}
 record Lb04Job { msg: String }
 worker doLb04Job(j: Lb04Job) requires [] = j
-workers Lb04Workers for Lb04Q { Lb04Job = doLb04Job }
+queue Lb04Q = Queue {
+  database: Lb04Db
+  jobs: [Job Lb04Job doLb04Job (Nothing)]
+  retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 }
+}
 |}
 
 (* LB05: library with `database` block.
@@ -489,8 +509,17 @@ let test_LB05_library_with_database_rejected () =
   should_fail "not allowed in library\\|library.*database\\|database.*library\\|infrastructure\\|V00" {|
 #lang tesl
 library Lb05 exposing []
-database Lb05Db { backend postgres schema "s" entities []
-  postgres { database "mydb" user "u" password "" host "localhost" port 5432 socket "" } }
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+database Lb05Db = Database {
+  schema: "s"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "mydb"
+    user: "u"
+    password: ""
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
+}
 |}
 
 (* LB06: library with `entity` block — entities are infrastructure, not allowed *)

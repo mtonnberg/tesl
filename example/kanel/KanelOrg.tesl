@@ -135,7 +135,7 @@ codec RegisterRequest {
   fromJson [
     {
       email <- "email" with_codec stringCodec
-      password <- "password" with_codec stringCodec
+      password: <- "password" with_codec stringCodec
       displayName <- "displayName" with_codec stringCodec
     }
   ]
@@ -151,7 +151,7 @@ codec LoginRequest {
   fromJson [
     {
       email <- "email" with_codec stringCodec
-      password <- "password" with_codec stringCodec
+      password: <- "password" with_codec stringCodec
     }
   ]
 }
@@ -209,7 +209,7 @@ handler createOrgHandler(
     Nothing ->
       let orgId = generatePrefixedId "org"
       let memberId = generatePrefixedId "mem"
-      with transaction {
+      transaction {
         # Insert membership first (orgId already bound above — no FK constraint in Tesl schema).
         # The existential pack must be the LAST expression in the block since it is the return value.
         insert OrgMembership {

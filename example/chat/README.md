@@ -47,7 +47,7 @@ GET  /rooms              ──►  listRooms handler    ──►  SELECT Room
 POST /rooms              ──►  createRoom handler   ──►  INSERT Room
 
 POST /rooms/:id/messages ──►  postMessage handler
-                                ├─ with transaction ─►  INSERT Message
+                                ├─ transaction ─►  INSERT Message
                                 ├─ publish           ──►  NOTIFY (outbox)
                                 └─ enqueue           ──►  INSERT tesl_jobs
 
@@ -70,7 +70,7 @@ operations commit together or roll back together.
 | REST endpoints (GET/POST) | `api ChatApi { ... }` |
 | Cookie authentication | `auth cookieAuth` — reads `chatUserId` cookie |
 | URL capture with validation | `capture roomIdCapture` |
-| Atomic transaction | `with transaction { ... }` in `postMessage` |
+| Atomic transaction | `transaction { ... }` in `postMessage` |
 | Pub/sub event | `publish RoomMessages(roomId) NewMessage { ... }` |
 | Background queue | `enqueue NotifyJob { ... }` |
 | SSE subscription | `sse "/events/rooms/:roomId" subscribe RoomMessages(roomId)` |
@@ -79,7 +79,7 @@ operations commit together or roll back together.
 | Named DB result | `-> Room ? FromDb (Id == roomId)` — entity subject bound at callsite |
 | Horizontal scaling | workers use `FOR UPDATE SKIP LOCKED`; pub/sub uses outbox + `NOTIFY` fan-out to all backends |
 | LISTEN/NOTIFY | worker LISTEN thread wakes on commit; SSE LISTEN delivers to all connected clients |
-| Outbox pattern | `publish` inside `with transaction` writes to `tesl_pubsub_outbox` atomically; TTL cleanup after 30 s |
+| Outbox pattern | `publish` inside `transaction` writes to `tesl_pubsub_outbox` atomically; TTL cleanup after 30 s |
 | Stuck-job recovery | fallback poller resets `processing` jobs older than 10 min (handles crashed workers) |
 
 ---
@@ -91,7 +91,7 @@ The chat backend is designed to run as multiple identical processes behind a loa
 - **Messages** are handled by whichever backend receives the HTTP request.
 - **SSE clients** connect to one backend process each.
 - **Pub/sub fan-out**: when a message is posted, `publish RoomMessages(roomId)` writes to `tesl_pubsub_outbox`. PostgreSQL sends `NOTIFY tesl_pubsub` to ALL backend processes simultaneously. Each process's LISTEN thread reads the same outbox row (SELECT, not DELETE) and delivers to its locally connected SSE clients. **All users receive every message regardless of which backend they're connected to.**
-- **Notification workers**: `enqueue NotifyJob` writes to `tesl_jobs`. All workers compete via `FOR UPDATE SKIP LOCKED` — each job is processed exactly once. Scale worker throughput with `startWorkers N NotificationWorkers with capabilities [notifyCap]`.
+- **Notification workers**: `enqueue NotifyJob` writes to `tesl_jobs`. All workers compete via `FOR UPDATE SKIP LOCKED` — each job is processed exactly once.
 - **Outbox cleanup**: rows older than 30 seconds are deleted automatically. All processes have delivered them well before that.
 
 ### One-command cluster (3 instances + nginx load balancer)

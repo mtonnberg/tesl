@@ -23,7 +23,7 @@
       H17  Record field with proof annotation: reading the field does not carry proof
       H18  Pattern matching on parameterized ADT with phantom param compiles
       H19  Mutual recursion across two `fn` declarations compiles correctly
-      H20  Nested `with transaction` is rejected at compile time
+      H20  Nested `transaction` is rejected at compile time
       H21  `case` expression with string literal patterns requires catch-all
       H22  `select` in a `fn` body with proper capability compiles
       H23  Proof forgery via raw `:::` in `handler` body is rejected
@@ -343,21 +343,29 @@ let test_h08_fn_proof_return_dropped_in_emitter () =
   end;
   check bool "H08 passes (gap documented)" false false
 
-(* ── H09: Nested `with transaction` is a compile error ─────────────────────── *)
+(* ── H09: Nested `transaction` is a compile error ─────────────────────── *)
 (*                                                                               *)
-(* Transactions cannot be nested. A `with transaction` inside another must be   *)
+(* Transactions cannot be nested. A `transaction` inside another must be   *)
 (* rejected at compile time.                                                    *)
 let test_h09_nested_transaction_rejected () =
   let src = prelude ^
+    "import Tesl.Env exposing [env, envInt]\n" ^
+    "import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\n" ^
     "import Tesl.DB exposing [dbRead, dbWrite]\n" ^
     "entity Item table \"items\" primaryKey id { id: String name: String }\n" ^
-    "database MyDb {\n" ^
-    "  backend postgres schema \"s\" entities [Item]\n" ^
-    "  postgres { database env(\"DB\") user env(\"U\") password env(\"P\") host env(\"H\") port envInt(\"PORT\", 5432) socket env(\"SOCK\") }\n" ^
+    "database MyDb = Database {\n" ^
+    "  schema: \"s\"\n" ^
+    "  entities: [Item]\n" ^
+    "  backend: Postgres (PostgresConfig {\n" ^
+    "    dbName: env \"DB\"\n" ^
+    "    user: env \"U\"\n" ^
+    "    password: env \"P\"\n" ^
+    "    connection: TcpConnection { host: env \"H\"  port: envInt \"PORT\" 5432 }\n" ^
+    "  })\n" ^
     "}\n" ^
     "fn test() -> String requires [dbWrite] =\n" ^
-    "  with transaction {\n" ^
-    "    with transaction {\n" ^
+    "  transaction {\n" ^
+    "    transaction {\n" ^
     "      insert Item { id: \"1\", name: \"foo\" }\n" ^
     "    }\n" ^
     "    \"done\"\n" ^
@@ -621,11 +629,19 @@ let test_h22_record_construction_without_proof_rejected () =
 (* must produce a capability error.                                             *)
 let test_h23_select_without_capability_rejected () =
   let src = prelude ^
+    "import Tesl.Env exposing [env, envInt]\n" ^
+    "import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\n" ^
     "import Tesl.DB exposing [dbRead, dbWrite]\n" ^
     "entity Item table \"items\" primaryKey id { id: String name: String }\n" ^
-    "database MyDb {\n" ^
-    "  backend postgres schema \"s\" entities [Item]\n" ^
-    "  postgres { database env(\"DB\") user env(\"U\") password env(\"P\") host env(\"H\") port envInt(\"PORT\", 5432) socket env(\"SOCK\") }\n" ^
+    "database MyDb = Database {\n" ^
+    "  schema: \"s\"\n" ^
+    "  entities: [Item]\n" ^
+    "  backend: Postgres (PostgresConfig {\n" ^
+    "    dbName: env \"DB\"\n" ^
+    "    user: env \"U\"\n" ^
+    "    password: env \"P\"\n" ^
+    "    connection: TcpConnection { host: env \"H\"  port: envInt \"PORT\" 5432 }\n" ^
+    "  })\n" ^
     "}\n" ^
     "fn missingCap() -> String =\n" ^
     "  let items = select item from Item\n" ^
@@ -638,11 +654,19 @@ let test_h23_select_without_capability_rejected () =
 (* A `fn` that declares `requires [dbRead]` and uses `select` must compile.   *)
 let test_h24_select_with_capability_compiles () =
   let src = prelude ^
+    "import Tesl.Env exposing [env, envInt]\n" ^
+    "import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\n" ^
     "import Tesl.DB exposing [dbRead, dbWrite]\n" ^
     "entity Item table \"items\" primaryKey id { id: String name: String }\n" ^
-    "database MyDb {\n" ^
-    "  backend postgres schema \"s\" entities [Item]\n" ^
-    "  postgres { database env(\"DB\") user env(\"U\") password env(\"P\") host env(\"H\") port envInt(\"PORT\", 5432) socket env(\"SOCK\") }\n" ^
+    "database MyDb = Database {\n" ^
+    "  schema: \"s\"\n" ^
+    "  entities: [Item]\n" ^
+    "  backend: Postgres (PostgresConfig {\n" ^
+    "    dbName: env \"DB\"\n" ^
+    "    user: env \"U\"\n" ^
+    "    password: env \"P\"\n" ^
+    "    connection: TcpConnection { host: env \"H\"  port: envInt \"PORT\" 5432 }\n" ^
+    "  })\n" ^
     "}\n" ^
     "fn withCap() -> List Item requires [dbRead] =\n" ^
     "  select item from Item\n"
@@ -705,7 +729,7 @@ let () =
                `Quick test_h07_single_line_adt_needs_separate_lines ];
     "H08", [ test_case "fn proof return type is dropped by emitter (gap)"
                `Quick test_h08_fn_proof_return_dropped_in_emitter ];
-    "H09", [ test_case "nested `with transaction` is rejected at compile time"
+    "H09", [ test_case "nested `transaction` is rejected at compile time"
                `Quick test_h09_nested_transaction_rejected ];
     "H10", [ test_case "zero-arg lambda fn() -> 42 compiles"
                `Quick test_h10_zero_arg_lambda_compiles ];

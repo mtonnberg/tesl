@@ -52,6 +52,15 @@ import Tesl.String exposing [String.length]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Random exposing [random]
 import Tesl.Id exposing [generatePrefixedId]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 
 # ─────────────────────────────────────────────
 # UNDERSTANDING — why it works this way
@@ -112,18 +121,18 @@ entity Note table "notes" primaryKey id {
   pinned: String @db(text)
 }
 
-database NoteDatabase {
-  backend postgres
-  schema "notes_lesson29"
-  entities [Note]
-  postgres {
-    database env("NOTES_DB_NAME")
-    user env("NOTES_DB_USER")
-    password env("NOTES_DB_PASSWORD")
-    host env("NOTES_DB_HOST")
-    port 5432
-    socket env("NOTES_DB_SOCKET")
-  }
+database NoteDatabase = Database {
+  schema: "notes_lesson29"
+  entities: [Note]
+  backend: Postgres (PostgresConfig {
+    dbName: env "NOTES_DB_NAME"
+    user: env "NOTES_DB_USER"
+    password: env "NOTES_DB_PASSWORD"
+    connection: TcpConnection {
+      host: env "NOTES_DB_HOST"
+      port: 5432
+    }
+  })
 }
 
 # ─── Validation / Check functions ─────────────────────────────────────────────
@@ -159,7 +168,7 @@ check checkNoteId(s: String) -> s: String ::: ValidNoteId s =
   else
     fail 400 "invalid note id"
 
-capture noteIdCapture: String ::: ValidNoteId noteId using stringCodec via checkNoteId
+capturer noteIdCapture: String ::: ValidNoteId noteId using stringCodec via checkNoteId
 
 # Check functions for ForAll filtering:
 

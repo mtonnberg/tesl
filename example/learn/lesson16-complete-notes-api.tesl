@@ -114,7 +114,7 @@ auth userAuth(request: HttpRequest) -> String ? Authenticated
 # ─── URL captures ─────────────────────────────────────────────────────────────
 
 # noteIdCapture: parse the ":noteId" URL segment as a plain String.
-capture noteIdCapture: noteId: String using stringCodec
+capturer noteIdCapture: noteId: String using stringCodec
 
 # ─── Handlers ─────────────────────────────────────────────────────────────────
 

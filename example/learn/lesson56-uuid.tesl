@@ -69,7 +69,7 @@ module Lesson56Uuid exposing [
 # ─────────────────────────────────────────────────────────────────────────────
 
 import Tesl.Prelude exposing [String, Bool(..), Int]
-import Tesl.UUID exposing [ IsUuid, UUID.validate, ]
+import Tesl.UUID exposing [IsUuid, UUID.validate]
 import Tesl.String exposing [String.length, String.slice]
 
 # ── Validating UUIDs at the API boundary ─────────────────────────────────────

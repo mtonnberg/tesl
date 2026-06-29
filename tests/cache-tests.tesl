@@ -3,71 +3,89 @@ module Cache_tests exposing []
 
 import Tesl.Prelude exposing [Int, String, Bool, List, Unit]
 import Tesl.Maybe exposing [Maybe, Nothing, Something]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
+import Tesl.Cache exposing [Cache]
 
-database TestDB {
-  schema: public
-  backend: postgres {}
+database TestDB = Database {
+  schema: "public"
+  backend: Postgres (PostgresConfig {
+    dbName: ""
+    user: ""
+    password: ""
+    connection: TcpConnection {
+      host: ""
+      port: 5432
+    }
+  })
 }
 
 # ── Cache declarations ─────────────────────────────────────────────────────
 
-cache StringCache {
+cache StringCache = Cache {
   database: TestDB
   defaultTtl: 3600
   valueType: String
 }
 
-cache IntCache {
+cache IntCache = Cache {
   database: TestDB
   defaultTtl: 60
   valueType: Int
 }
 
-cache NoTtlCache {
+cache NoTtlCache = Cache {
   database: TestDB
   valueType: String
 }
 
 # ── Helper functions ───────────────────────────────────────────────────────
 
-fn getCached(k: String) -> Maybe String requires [cache StringCache] =
+fn getCached(k: String) -> Maybe String requires [cacheCap StringCache] =
   Cache.get StringCache (k)
 
-fn setCached(k: String, v: String) -> Unit requires [cache StringCache] =
+fn setCached(k: String, v: String) -> Unit requires [cacheCap StringCache] =
   Cache.set StringCache (k) v
 
-fn setCachedTtl(k: String, v: String) -> Unit requires [cache StringCache] =
+fn setCachedTtl(k: String, v: String) -> Unit requires [cacheCap StringCache] =
   Cache.set StringCache (k) v 300
 
-fn deleteCached(k: String) -> Unit requires [cache StringCache] =
+fn deleteCached(k: String) -> Unit requires [cacheCap StringCache] =
   Cache.delete StringCache (k)
 
-fn invalidatePrefix(prefix: String) -> Unit requires [cache StringCache] =
+fn invalidatePrefix(prefix: String) -> Unit requires [cacheCap StringCache] =
   Cache.invalidate StringCache (prefix)
 
-fn getInt(k: String) -> Maybe Int requires [cache IntCache] =
+fn getInt(k: String) -> Maybe Int requires [cacheCap IntCache] =
   Cache.get IntCache (k)
 
-fn setInt(k: String, v: Int) -> Unit requires [cache IntCache] =
+fn setInt(k: String, v: Int) -> Unit requires [cacheCap IntCache] =
   Cache.set IntCache (k) v
 
-fn deleteInt(k: String) -> Unit requires [cache IntCache] =
+fn deleteInt(k: String) -> Unit requires [cacheCap IntCache] =
   Cache.delete IntCache (k)
 
-fn getOrDefault(k: String, def: String) -> String requires [cache StringCache] =
+fn getOrDefault(k: String, def: String) -> String requires [cacheCap StringCache] =
   case Cache.get StringCache (k) of
     Something v -> v
     Nothing -> def
 
-fn cacheAndReturn(k: String, v: String) -> Maybe String requires [cache StringCache] =
+fn cacheAndReturn(k: String, v: String) -> Maybe String requires [cacheCap StringCache] =
   let _ = Cache.set StringCache (k) v
   Cache.get StringCache (k)
 
-fn setMultiple(k1: String, v1: String, k2: String, v2: String) -> Unit requires [cache StringCache] =
+fn setMultiple(k1: String, v1: String, k2: String, v2: String) -> Unit requires [cacheCap StringCache] =
   let _ = Cache.set StringCache (k1) v1
   Cache.set StringCache (k2) v2
 
-fn getMultiple(k1: String, k2: String) -> List (Maybe String) requires [cache StringCache] =
+fn getMultiple(k1: String, k2: String) -> List (Maybe String) requires [cacheCap StringCache] =
   [Cache.get StringCache (k1), Cache.get StringCache (k2)]
 
 # ── Tests ──────────────────────────────────────────────────────────────────
@@ -76,18 +94,18 @@ test "cache block parses and compiles" {
   expect True == True
 }
 
-test "Cache.get returns Maybe" {
+test "Cache.get returns Maybe" requires [cacheCap StringCache] {
   let result = getCached ("test-key")
   expect result == Nothing
 }
 
-test "Cache.set and get roundtrip" {
+test "Cache.set and get roundtrip" requires [cacheCap StringCache] {
   let _ = setCached ("hello-key") "hello"
   let result = getCached ("hello-key")
   expect result == Something "hello"
 }
 
-test "Cache.delete removes value" {
+test "Cache.delete removes value" requires [cacheCap StringCache] {
   let _ = setCached ("delete-me") "gone"
   let before = getCached ("delete-me")
   let _ = deleteCached ("delete-me")
@@ -95,37 +113,37 @@ test "Cache.delete removes value" {
   expect before == Something "gone"
 }
 
-test "getOrDefault returns default on miss" {
+test "getOrDefault returns default on miss" requires [cacheCap StringCache] {
   let result = getOrDefault ("miss") "default"
   expect result == "default"
 }
 
-test "getOrDefault returns cached value on hit" {
+test "getOrDefault returns cached value on hit" requires [cacheCap StringCache] {
   let _ = setCached ("my-key") "my-value"
   let result = getOrDefault ("my-key") "default"
   expect result == "my-value"
 }
 
-test "Cache.set with explicit TTL" {
+test "Cache.set with explicit TTL" requires [cacheCap StringCache] {
   let _ = setCachedTtl ("ttl-key") "ttl-value"
   let result = getCached ("ttl-key")
   expect result == Something "ttl-value"
 }
 
-test "Int cache get and set" {
+test "Int cache get and set" requires [cacheCap IntCache] {
   let _ = setInt ("count") 42
   let result = getInt ("count")
   expect result == Something 42
 }
 
-test "Int cache delete" {
+test "Int cache delete" requires [cacheCap IntCache] {
   let _ = setInt ("del-int") 100
   let _ = deleteInt ("del-int")
   let result = getInt ("del-int")
   expect result == Nothing
 }
 
-test "Cache.invalidate removes matching keys" {
+test "Cache.invalidate removes matching keys" requires [cacheCap StringCache] {
   let _ = setCached ("user_1") "alice"
   let _ = setCached ("user_2") "bob"
   let _ = invalidatePrefix ("user_")
@@ -134,35 +152,35 @@ test "Cache.invalidate removes matching keys" {
   expect r1 == Nothing
 }
 
-test "cacheAndReturn returns set value" {
+test "cacheAndReturn returns set value" requires [cacheCap StringCache] {
   let result = cacheAndReturn ("k") "v"
   expect result == Something "v"
 }
 
-test "Cache with no defaultTtl compiles" {
+test "Cache with no defaultTtl compiles" requires [cacheCap NoTtlCache] {
   let result = Cache.get NoTtlCache ("any-key")
   expect result == Nothing
 }
 
-test "Cache.get on fresh cache returns Nothing" {
+test "Cache.get on fresh cache returns Nothing" requires [cacheCap StringCache] {
   let r = getCached ("brand-new-key-xyz")
   expect r == Nothing
 }
 
-test "Multiple set and get" {
+test "Multiple set and get" requires [cacheCap StringCache] {
   let _ = setMultiple ("a") "1" ("b") "2"
   let results = getMultiple ("a") ("b")
   expect results == [Something "1", Something "2"]
 }
 
-test "Cache.set overwrites previous value" {
+test "Cache.set overwrites previous value" requires [cacheCap StringCache] {
   let _ = setCached ("overwrite") "first"
   let _ = setCached ("overwrite") "second"
   let result = getCached ("overwrite")
   expect result == Something "second"
 }
 
-test "Cache operations in sequence" {
+test "Cache operations in sequence" requires [cacheCap StringCache] {
   let _ = setCached ("seq-key") "v1"
   let r1 = getCached ("seq-key")
   let _ = setCached ("seq-key") "v2"
@@ -172,7 +190,7 @@ test "Cache operations in sequence" {
   expect r1 == Something "v1"
 }
 
-test "Cache with concatenated key" {
+test "Cache with concatenated key" requires [cacheCap StringCache] {
   let prefix = "profile_"
   let id = "user123"
   let key = prefix ++ id
@@ -181,7 +199,7 @@ test "Cache with concatenated key" {
   expect result == Something "profile-data"
 }
 
-test "Cache invalidate prefix" {
+test "Cache invalidate prefix" requires [cacheCap StringCache] {
   let _ = setCached ("sess_1") "s1"
   let _ = setCached ("sess_2") "s2"
   let _ = setCached ("data_1") "d1"
@@ -191,12 +209,12 @@ test "Cache invalidate prefix" {
   expect r2 == Something "d1"
 }
 
-test "Cache get in if-then-else" {
+test "Cache get in if-then-else" requires [cacheCap StringCache] {
   let cached = getCached ("if-key")
   expect cached == Nothing
 }
 
-test "Int cache operations" {
+test "Int cache operations" requires [cacheCap IntCache] {
   let _ = setInt ("num") 99
   let r = getInt ("num")
   expect r == Something 99
@@ -210,13 +228,13 @@ test "IntCache default TTL is 60" {
   expect True == True
 }
 
-test "Cache with empty key" {
+test "Cache with empty key" requires [cacheCap StringCache] {
   let _ = setCached ("") "empty-key-val"
   let result = getCached ("")
   expect result == Something "empty-key-val"
 }
 
-test "Cache delete is idempotent" {
+test "Cache delete is idempotent" requires [cacheCap StringCache] {
   let _ = setCached ("idem") "v"
   let _ = deleteCached ("idem")
   let _ = deleteCached ("idem")
@@ -224,14 +242,14 @@ test "Cache delete is idempotent" {
   expect r == Nothing
 }
 
-test "Cache set with long key" {
+test "Cache set with long key" requires [cacheCap StringCache] {
   let k = "very_long_key_that_is_quite_long_for_testing_purposes_xyz_abc_def"
   let _ = setCached (k) "long-key-val"
   let result = getCached (k)
   expect result == Something "long-key-val"
 }
 
-test "Multiple caches are independent" {
+test "Multiple caches are independent" requires [cacheCap StringCache, cacheCap IntCache] {
   let _ = setCached ("shared") "string-val"
   let _ = Cache.set IntCache ("shared") 999
   let r1 = getCached ("shared")
@@ -239,7 +257,7 @@ test "Multiple caches are independent" {
   expect r1 == Something "string-val"
 }
 
-test "Cache invalidate all via empty prefix" {
+test "Cache invalidate all via empty prefix" requires [cacheCap StringCache] {
   let _ = setCached ("x1") "v1"
   let _ = setCached ("x2") "v2"
   let _ = invalidatePrefix ("")
@@ -248,12 +266,12 @@ test "Cache invalidate all via empty prefix" {
   expect r1 == Nothing
 }
 
-test "Cache.get in case pattern" {
+test "Cache.get in case pattern" requires [cacheCap StringCache] {
   let r = getCached ("pattern-key")
   expect r == Nothing
 }
 
-test "NoTtlCache compiles and operates" {
+test "NoTtlCache compiles and operates" requires [cacheCap NoTtlCache] {
   let _ = Cache.set NoTtlCache ("ntk") "ntv"
   let r = Cache.get NoTtlCache ("ntk")
   expect r == Something "ntv"

@@ -91,7 +91,7 @@ module CriticalReview33Tests exposing [
   # T25 — Either partition semantics partitionEithers33,
 ]
 
-import Tesl.Prelude exposing [ Bool(..), Int, List, String, Fact, forgetFact, ]
+import Tesl.Prelude exposing [Bool(..), Int, List, String, Fact, forgetFact]
 import Tesl.String exposing [
   String.length,
   String.trim,
@@ -141,7 +141,7 @@ import Tesl.Dict exposing [
   Dict.member,
   HasKey,
 ]
-import Tesl.Set exposing [ Set.insert, Set.member, Set.fromList, Set.toList, ]
+import Tesl.Set exposing [Set.insert, Set.member, Set.fromList, Set.toList]
 import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
 
 # ═══════════════════════════════════════════════════════════════════════════════

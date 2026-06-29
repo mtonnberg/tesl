@@ -461,13 +461,19 @@ run_tesl_batch_runner() {
 run_racket_test_suite() {
     # TESL_RACKET_SUITE_TIMEOUT caps the Racket aggregate test run.
     # tests/all.rkt starts its own PostgreSQL; on WSL2 that pg_ctl -w can
-    # block indefinitely.  Default 240 s — long enough for a normal run,
-    # short enough to surface hangs quickly.  Set to 0 to disable.
+    # block indefinitely.  Default 600 s — long enough for a normal run,
+    # short enough to surface hangs.  Set to 0 to disable.
+    #
+    # The internal regression suite compiles its evidence-bearing (non-zero-cost)
+    # tests in-memory (tests/run-nzc.rkt, ~80 s of shared-dep compilation) on top
+    # of the postgres-backed tests, so the cap is higher than a pure-runtime run
+    # would need.  See roadmap/next/nonzero_cost_test_harness.md (a cached
+    # non-zero-cost bytecode root would remove that recurring cost).
     #
     # NOTE: `timeout` cannot wrap bash functions — it only works with real
     # executables.  We apply it directly to the `racket` or `nix-shell`
     # command rather than passing run_with_optional_nix_shell as the argument.
-    local timeout_secs="${TESL_RACKET_SUITE_TIMEOUT:-240}"
+    local timeout_secs="${TESL_RACKET_SUITE_TIMEOUT:-600}"
     local use_timeout=0
     if [ "${timeout_secs:-0}" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
         use_timeout=1

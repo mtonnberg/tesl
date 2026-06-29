@@ -30,22 +30,22 @@
 (define/pow
   (safeDivideOrDefault [a : Integer] [b : Integer] [fallback : Integer])
   #:returns Integer
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 69 (list (cons 'a *a) (cons 'b *b) (cons 'fallback *fallback)) (lambda () (let ([tesl_case_1 (raw-value (divide a b))]) (cond [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl_case_1) 'value)]) *n)] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Err)) *fallback])))))
+  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 69 (list (cons 'a *a) (cons 'b *b) (cons 'fallback *fallback)) (lambda () (let ([tesl_case_1 (raw-value (divide a b))]) (cond [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 70 (list (cons 'n n)) (lambda () *n)))] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Err)) (thsl-src! "example/learn/lesson46-result-type.tesl" 71 (list) (lambda () *fallback))])))))
 
 (define/pow
   (okOrDefault [r : (Result Integer String)] [default : Integer])
   #:returns Integer
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 75 (list (cons 'r *r) (cons 'default *default)) (lambda () (let ([tesl_case_2 *r]) (cond [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl_case_2) 'value)]) *n)] [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Err)) *default])))))
+  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 75 (list (cons 'r *r) (cons 'default *default)) (lambda () (let ([tesl_case_2 *r]) (cond [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl_case_2) 'value)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 76 (list (cons 'n n)) (lambda () *n)))] [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Err)) (thsl-src! "example/learn/lesson46-result-type.tesl" 77 (list) (lambda () *default))])))))
 
 (define/pow
   (isErr [r : (Result Integer String)])
   #:returns Boolean
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 81 (list (cons 'r *r)) (lambda () (let ([tesl_case_3 *r]) (cond [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Ok)) (raw-value #f)] [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Err)) (raw-value #t)])))))
+  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 81 (list (cons 'r *r)) (lambda () (let ([tesl_case_3 *r]) (cond [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Ok)) (thsl-src! "example/learn/lesson46-result-type.tesl" 82 (list) (lambda () (raw-value #f)))] [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Err)) (thsl-src! "example/learn/lesson46-result-type.tesl" 83 (list) (lambda () (raw-value #t)))])))))
 
 (define/pow
   (parseInt [raw : String])
   #:returns (Result Integer String)
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 89 (list (cons 'raw *raw)) (lambda () (if (tesl_import_String_isEmpty *raw) (raw-value (raw-value (Err "input is empty"))) (let ([tesl_case_4 (raw-value (tesl_import_String_toInt *raw))]) (cond [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Nothing)) (raw-value (raw-value (Err "not a valid integer")))] [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl_case_4) 'value)]) (raw-value (raw-value (Ok *n))))]))))))
+  (thsl-src! "example/learn/lesson46-result-type.tesl" 89 (list (cons 'raw *raw)) (lambda () (if (tesl_import_String_isEmpty *raw) (raw-value (raw-value (Err "input is empty"))) (let ([tesl_case_4 (raw-value (tesl_import_String_toInt *raw))]) (cond [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Nothing)) (thsl-src! "example/learn/lesson46-result-type.tesl" 93 (list) (lambda () (raw-value (raw-value (Err "not a valid integer")))))] [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl_case_4) 'value)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 94 (list (cons 'n n)) (lambda () (raw-value (raw-value (Ok *n))))))]))))))
 
 (define/pow
   (validateAge [n : Integer])
@@ -55,7 +55,7 @@
 (define/pow
   (processAge [raw : String])
   #:returns (Result Integer String)
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 111 (list (cons 'raw *raw)) (lambda () (let ([tesl_case_5 (raw-value (parseInt raw))]) (cond [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Err)) (let ([e (hash-ref (adt-value-fields *tesl_case_5) 'error)]) (raw-value (raw-value (Err *e))))] [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl_case_5) 'value)]) (raw-value (validateAge *n)))])))))
+  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 111 (list (cons 'raw *raw)) (lambda () (let ([tesl_case_5 (raw-value (parseInt raw))]) (cond [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Err)) (let ([e (hash-ref (adt-value-fields *tesl_case_5) 'error)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 112 (list (cons 'e e)) (lambda () (raw-value (raw-value (Err *e))))))] [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl_case_5) 'value)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 113 (list (cons 'n n)) (lambda () (raw-value (validateAge *n)))))])))))
 
 (define-adt UserError
   [NotFound [id : String]]
@@ -71,37 +71,37 @@
 (define/pow
   (describeError [err : UserError])
   #:returns String
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 136 (list (cons 'err *err)) (lambda () (let ([tesl_case_6 *err]) (cond [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'NotFound)) (let ([id (hash-ref (adt-value-fields *tesl_case_6) 'id)]) (raw-value (format "no user with id ~a" (tesl-display-val *id))))] [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Forbidden)) (let ([user (hash-ref (adt-value-fields *tesl_case_6) 'user)]) (raw-value (format "user ~a is not allowed to do this" (tesl-display-val *user))))] [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'InvalidInput)) (let ([msg (hash-ref (adt-value-fields *tesl_case_6) 'message)]) (raw-value (format "bad input: ~a" (tesl-display-val *msg))))])))))
+  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 136 (list (cons 'err *err)) (lambda () (let ([tesl_case_6 *err]) (cond [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'NotFound)) (let ([id (hash-ref (adt-value-fields *tesl_case_6) 'id)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 137 (list (cons 'id id)) (lambda () (raw-value (format "no user with id ~a" (tesl-display-val *id))))))] [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Forbidden)) (let ([user (hash-ref (adt-value-fields *tesl_case_6) 'user)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 138 (list (cons 'user user)) (lambda () (raw-value (format "user ~a is not allowed to do this" (tesl-display-val *user))))))] [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'InvalidInput)) (let ([msg (hash-ref (adt-value-fields *tesl_case_6) 'message)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 139 (list (cons 'msg msg)) (lambda () (raw-value (format "bad input: ~a" (tesl-display-val *msg))))))])))))
 
 (define/pow
   (runPipeline [rawAge : String] [rawId : String])
   #:returns (Result String String)
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 146 (list (cons 'rawAge *rawAge) (cons 'rawId *rawId)) (lambda () (let ([tesl_case_7 (raw-value (processAge rawAge))]) (cond [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Err)) (let ([e (hash-ref (adt-value-fields *tesl_case_7) 'error)]) (raw-value (raw-value (Err *e))))] [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Ok)) (let ([age (hash-ref (adt-value-fields *tesl_case_7) 'value)]) (if (< *age 18) (raw-value (raw-value (Err "must be 18 or older"))) (if (tesl_import_String_isEmpty *rawId) (raw-value (raw-value (Err "id is required"))) (raw-value (raw-value (Ok (format "user ~a (age ~a) is valid" (tesl-display-val *rawId) (tesl-display-val (raw-value (tesl_import_Int_toString *age))))))))))])))))
+  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 146 (list (cons 'rawAge *rawAge) (cons 'rawId *rawId)) (lambda () (let ([tesl_case_7 (raw-value (processAge rawAge))]) (cond [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Err)) (let ([e (hash-ref (adt-value-fields *tesl_case_7) 'error)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 147 (list (cons 'e e)) (lambda () (raw-value (raw-value (Err *e))))))] [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Ok)) (let ([age (hash-ref (adt-value-fields *tesl_case_7) 'value)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 149 (list (cons 'age age)) (lambda () (if (< *age 18) (raw-value (raw-value (Err "must be 18 or older"))) (if (tesl_import_String_isEmpty *rawId) (raw-value (raw-value (Err "id is required"))) (raw-value (raw-value (Ok (format "user ~a (age ~a) is valid" (tesl-display-val *rawId) (tesl-display-val (raw-value (tesl_import_Int_toString *age))))))))))))])))))
 
 (define/pow
   (okIntOrDefault [r : (Result Integer String)] [d : Integer])
   #:returns Integer
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 161 (list (cons 'r *r) (cons 'd *d)) (lambda () (let ([tesl_case_8 *r]) (cond [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl_case_8) 'value)]) *n)] [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Err)) *d])))))
+  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 161 (list (cons 'r *r) (cons 'd *d)) (lambda () (let ([tesl_case_8 *r]) (cond [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl_case_8) 'value)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 162 (list (cons 'n n)) (lambda () *n)))] [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Err)) (thsl-src! "example/learn/lesson46-result-type.tesl" 163 (list) (lambda () *d))])))))
 
 (define/pow
   (errMsgOrEmpty [r : (Result Integer String)])
   #:returns String
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 166 (list (cons 'r *r)) (lambda () (let ([tesl_case_9 *r]) (cond [(and (adt-value? *tesl_case_9) (eq? (adt-value-variant *tesl_case_9) 'Ok)) (raw-value "")] [(and (adt-value? *tesl_case_9) (eq? (adt-value-variant *tesl_case_9) 'Err)) (let ([e (hash-ref (adt-value-fields *tesl_case_9) 'error)]) *e)])))))
+  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 166 (list (cons 'r *r)) (lambda () (let ([tesl_case_9 *r]) (cond [(and (adt-value? *tesl_case_9) (eq? (adt-value-variant *tesl_case_9) 'Ok)) (thsl-src! "example/learn/lesson46-result-type.tesl" 167 (list) (lambda () (raw-value "")))] [(and (adt-value? *tesl_case_9) (eq? (adt-value-variant *tesl_case_9) 'Err)) (let ([e (hash-ref (adt-value-fields *tesl_case_9) 'error)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 168 (list (cons 'e e)) (lambda () *e)))])))))
 
 (define/pow
   (isOkResult [r : (Result Integer String)])
   #:returns Boolean
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 171 (list (cons 'r *r)) (lambda () (let ([tesl_case_10 *r]) (cond [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'Ok)) (raw-value #t)] [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'Err)) (raw-value #f)])))))
+  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 171 (list (cons 'r *r)) (lambda () (let ([tesl_case_10 *r]) (cond [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'Ok)) (thsl-src! "example/learn/lesson46-result-type.tesl" 172 (list) (lambda () (raw-value #t)))] [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'Err)) (thsl-src! "example/learn/lesson46-result-type.tesl" 173 (list) (lambda () (raw-value #f)))])))))
 
 (define/pow
   (isErrUserResult [r : (Result String UserError)])
   #:returns Boolean
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 176 (list (cons 'r *r)) (lambda () (let ([tesl_case_11 *r]) (cond [(and (adt-value? *tesl_case_11) (eq? (adt-value-variant *tesl_case_11) 'Ok)) (raw-value #f)] [(and (adt-value? *tesl_case_11) (eq? (adt-value-variant *tesl_case_11) 'Err)) (raw-value #t)])))))
+  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 176 (list (cons 'r *r)) (lambda () (let ([tesl_case_11 *r]) (cond [(and (adt-value? *tesl_case_11) (eq? (adt-value-variant *tesl_case_11) 'Ok)) (thsl-src! "example/learn/lesson46-result-type.tesl" 177 (list) (lambda () (raw-value #f)))] [(and (adt-value? *tesl_case_11) (eq? (adt-value-variant *tesl_case_11) 'Err)) (thsl-src! "example/learn/lesson46-result-type.tesl" 178 (list) (lambda () (raw-value #t)))])))))
 
 (define/pow
   (isErrStrResult [r : (Result String String)])
   #:returns Boolean
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 181 (list (cons 'r *r)) (lambda () (let ([tesl_case_12 *r]) (cond [(and (adt-value? *tesl_case_12) (eq? (adt-value-variant *tesl_case_12) 'Ok)) (raw-value #f)] [(and (adt-value? *tesl_case_12) (eq? (adt-value-variant *tesl_case_12) 'Err)) (raw-value #t)])))))
+  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 181 (list (cons 'r *r)) (lambda () (let ([tesl_case_12 *r]) (cond [(and (adt-value? *tesl_case_12) (eq? (adt-value-variant *tesl_case_12) 'Ok)) (thsl-src! "example/learn/lesson46-result-type.tesl" 182 (list) (lambda () (raw-value #f)))] [(and (adt-value? *tesl_case_12) (eq? (adt-value-variant *tesl_case_12) 'Err)) (thsl-src! "example/learn/lesson46-result-type.tesl" 183 (list) (lambda () (raw-value #t)))])))))
 
 (module+ test
   (require rackunit)

@@ -26,8 +26,8 @@ module JwtTests exposing [
   tokenLength,
 ]
 
-import Tesl.Prelude exposing [ Bool(..), Int, String, List, Unit, ]
-import Tesl.String exposing [ String.length, String.startsWith, ]
+import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
+import Tesl.String exposing [String.length, String.startsWith]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.JWT exposing [
   jwt,

@@ -2066,8 +2066,8 @@ let rec apply_type_subst (subst : (string * type_expr) list) (ty : type_expr) : 
   | TVar { name; _ } -> Option.value (List.assoc_opt name subst) ~default:ty
   | TApp { head; arg; loc } ->
     TApp { head = apply_type_subst subst head; arg = apply_type_subst subst arg; loc }
-  | TFun { dom; cod; loc } ->
-    TFun { dom = apply_type_subst subst dom; cod = apply_type_subst subst cod; loc }
+  | TFun { dom; cod; caps; loc } ->
+    TFun { dom = apply_type_subst subst dom; cod = apply_type_subst subst cod; caps; loc }
   | TTuple { elems; loc } ->
     TTuple { elems = List.map (apply_type_subst subst) elems; loc }
   | TName _ -> ty

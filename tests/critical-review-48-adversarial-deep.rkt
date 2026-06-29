@@ -8,6 +8,7 @@
   tesl/dsl/sql
   tesl/dsl/web
   tesl/dsl/test-support
+  tesl/dsl/debug/checkpoint
   tesl/tesl/private/runtime
   tesl/tesl/queue
   tesl/tesl/sse
@@ -35,17 +36,17 @@
 (define-checker
   (checkValidated [n : Integer])
   #:returns [n : Integer ::: (Validated n)]
-  (if (> *n 0) (accept (Validated n) #:value *n) (reject "not validated" #:http-code 400)))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 32 (list (cons 'n *n)) (lambda () (if (> *n 0) (accept (Validated n) #:value *n) (reject "not validated" #:http-code 400)))))
 
 (define-checker
   (checkInBounds [n : Integer])
   #:returns [n : Integer ::: (InBounds n)]
-  (if (and (>= *n 1) (<= *n 1000)) (accept (InBounds n) #:value *n) (reject "out of bounds" #:http-code 400)))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 38 (list (cons 'n *n)) (lambda () (if (and (>= *n 1) (<= *n 1000)) (accept (InBounds n) #:value *n) (reject "out of bounds" #:http-code 400)))))
 
 (define-checker
   (checkBoth [n : Integer])
   #:returns [n : Integer ::: ((Validated n) && (InBounds n))]
-  ((check-and checkValidated checkInBounds) n))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 44 (list (cons 'n *n)) (lambda () ((check-and checkValidated checkInBounds) n))))
 
 (define-record Fix1NumResponse
   [result : Integer]
@@ -58,7 +59,7 @@
             [(check-ok? v) (loop (check-ok-value v))]
             [else v])))
   (define _fields (record-value-fields _raw))
-  (hash 'result (tesl-codec-encode-field (raw-value (hash-ref _fields 'result)) tesl-json-int-codec)
+  (hash 'result (tesl-encode-prim-int (raw-value (hash-ref _fields 'result)))
   ))
 (register-type-codec! 'Fix1NumResponse tesl-codec-encode-Fix1NumResponse (list ))
 
@@ -69,34 +70,34 @@
 (define (tesl-codec-encode-ValueBody _v)
   (error "toJson is forbidden for type ValueBody: this type cannot be JSON-encoded"))
 (define (tesl-codec-decode-ValueBody-0 _j)
-  (define _f_value (tesl-codec-decode-field _j "value" tesl-json-int-codec))
+  (define _f_value (tesl-decode-prim-field _j "value" tesl-decode-prim-int))
   (record-value 'ValueBody (hash 'value _f_value)))
 (register-type-codec! 'ValueBody tesl-codec-encode-ValueBody (list tesl-codec-decode-ValueBody-0))
 
 (define-handler
   (fix1SingleCheck [req : ValueBody])
   #:returns Fix1NumResponse
-  (let/check ([tesl_checked_0 (checkValidated (raw-value req.value))]) (let ([v tesl_checked_0]) (Fix1NumResponse #:result (+ (* (raw-value v) 10) 1)))))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 60 (list (cons 'req *req)) (lambda () (let/check ([tesl_checked_0 (checkValidated (raw-value req.value))]) (let ([v tesl_checked_0]) (Fix1NumResponse #:result (+ (* (raw-value v) 10) 1)))))))
 
 (define-handler
   (fix1ConjCheck [req : ValueBody])
   #:returns Fix1NumResponse
-  (let/check ([tesl_checked_1 (checkBoth (raw-value req.value))]) (let ([v tesl_checked_1]) (Fix1NumResponse #:result (+ (raw-value v) 999)))))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 65 (list (cons 'req *req)) (lambda () (let/check ([tesl_checked_1 (checkBoth (raw-value req.value))]) (let ([v tesl_checked_1]) (Fix1NumResponse #:result (+ (raw-value v) 999)))))))
 
 (define-handler
   (fix1InlineConj [req : ValueBody])
   #:returns Fix1NumResponse
-  (let/check ([tesl_checked_2 ((check-and checkValidated checkInBounds) (raw-value req.value))]) (let ([v tesl_checked_2]) (Fix1NumResponse #:result (* (raw-value v) 2)))))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 70 (list (cons 'req *req)) (lambda () (let/check ([tesl_checked_2 ((check-and checkValidated checkInBounds) (raw-value req.value))]) (let ([v tesl_checked_2]) (Fix1NumResponse #:result (* (raw-value v) 2)))))))
 
 (define/pow
   (fix1FnCheck [n : Integer])
   #:returns Integer
-  (let/check ([tesl_checked_3 (checkValidated n)]) (let ([v tesl_checked_3]) (+ (raw-value v) 100))))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 75 (list (cons 'n *n)) (lambda () (let/check ([tesl_checked_3 (checkValidated n)]) (let ([v tesl_checked_3]) (+ (raw-value v) 100))))))
 
 (define-handler
   (fix1FnProxy [req : ValueBody])
   #:returns Fix1NumResponse
-  (Fix1NumResponse #:result (fix1FnCheck (raw-value req.value))))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 79 (list (cons 'req *req)) (lambda () (Fix1NumResponse #:result (fix1FnCheck (raw-value req.value))))))
 
 (define Fix1Server-sse-routes '())
 (define-api Fix1Api
@@ -272,64 +273,64 @@
             [(check-ok? v) (loop (check-ok-value v))]
             [else v])))
   (define _fields (record-value-fields _raw))
-  (hash 'userId (tesl-codec-encode-field (raw-value (hash-ref _fields 'userId)) tesl-json-string-codec)
+  (hash 'userId (tesl-encode-prim-string (raw-value (hash-ref _fields 'userId)))
   ))
 (register-type-codec! 'AuthInfoResponse tesl-codec-encode-AuthInfoResponse (list ))
 
 (define-auther
   (simpleSubstAuth [request : HttpRequest])
   #:returns [user : String ::: (Authenticated user)]
-  (let ([tesl_case_4 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_4) 'value)]) (accept (Authenticated userId) #:value *userId))])))
+  (thsl-src-control! "tests/critical-review-48-adversarial-deep.tesl" 171 (list (cons 'request *request)) (lambda () (let ([tesl_case_4 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Nothing)) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 172 (list) (lambda () (reject "no user" #:http-code 401)))] [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_4) 'value)]) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 174 (list (cons 'userId userId)) (lambda () (accept (Authenticated userId) #:value *userId))))])))))
 
 (define-auther
   (identityAuth [request : HttpRequest])
   #:returns [user : String ::: (Authenticated user)]
-  (let ([tesl_case_5 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Something)) (let ([user (hash-ref (adt-value-fields *tesl_case_5) 'value)]) (accept (Authenticated user) #:value *user))])))
+  (thsl-src-control! "tests/critical-review-48-adversarial-deep.tesl" 178 (list (cons 'request *request)) (lambda () (let ([tesl_case_5 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Nothing)) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 179 (list) (lambda () (reject "no user" #:http-code 401)))] [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Something)) (let ([user (hash-ref (adt-value-fields *tesl_case_5) 'value)]) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 181 (list (cons 'user user)) (lambda () (accept (Authenticated user) #:value *user))))])))))
 
 (define-auther
   (conjSubstAuth [request : HttpRequest])
   #:returns [user : String ::: ((Authenticated user) && (HasValidSession user))]
-  (let ([tesl_case_6 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_6) 'value)]) (let ([tesl_case_7 (raw-value (tesl_import_Dict_lookup "session" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Nothing)) (reject "no session" #:http-code 401)] [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Something)) (accept ((Authenticated userId) && (HasValidSession userId)) #:value *userId)])))])))
+  (thsl-src-control! "tests/critical-review-48-adversarial-deep.tesl" 186 (list (cons 'request *request)) (lambda () (let ([tesl_case_6 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Nothing)) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 187 (list) (lambda () (reject "no user" #:http-code 401)))] [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_6) 'value)]) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 189 (list (cons 'userId userId)) (lambda () (let ([tesl_case_7 (raw-value (tesl_import_Dict_lookup "session" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Nothing)) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 190 (list) (lambda () (reject "no session" #:http-code 401)))] [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Something)) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 192 (list) (lambda () (accept ((Authenticated userId) && (HasValidSession userId)) #:value *userId)))])))))])))))
 
 (define-checker
   (checkIsAdmin [userId : String])
   #:returns [userId : String ::: (IsAdmin userId)]
-  (if (tesl_import_String_startsWith *userId "admin") (accept (IsAdmin userId) #:value *userId) (reject "not admin" #:http-code 403)))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 196 (list (cons 'userId *userId)) (lambda () (if (tesl_import_String_startsWith *userId "admin") (accept (IsAdmin userId) #:value *userId) (reject "not admin" #:http-code 403)))))
 
 (define-auther
   (delegatedConjAuth [request : HttpRequest])
   #:returns [user : String ::: ((IsAdmin user) && (Authenticated user))]
-  (let ([tesl_case_8 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_8) 'value)]) (let ([tesl_proof_binding_9 (checkIsAdmin userId)]) (let ([admin (forget-proof tesl_proof_binding_9)] [p (detach-all-proof tesl_proof_binding_9)]) (accept (p && (Authenticated admin)) #:value *admin))))])))
+  (thsl-src-control! "tests/critical-review-48-adversarial-deep.tesl" 203 (list (cons 'request *request)) (lambda () (let ([tesl_case_8 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Nothing)) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 204 (list) (lambda () (reject "no user" #:http-code 401)))] [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_8) 'value)]) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 206 (list (cons 'userId userId)) (lambda () (let ([tesl_proof_binding_9 (checkIsAdmin userId)]) (let ([admin (forget-proof tesl_proof_binding_9)] [p (detach-all-proof tesl_proof_binding_9)]) (accept (p && (Authenticated admin)) #:value *admin))))))])))))
 
 (define-auther
   (doubleDelegatedAuth [request : HttpRequest])
   #:returns [user : String ::: ((Authenticated user) && (HasValidSession user))]
-  (let ([tesl_case_10 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_10) 'value)]) (let/check ([tesl_checked_11 (tesl_import_String_requireNonEmpty userId)]) (let ([validId tesl_checked_11]) (accept ((Authenticated validId) && (HasValidSession validId)) #:value *validId))))])))
+  (thsl-src-control! "tests/critical-review-48-adversarial-deep.tesl" 212 (list (cons 'request *request)) (lambda () (let ([tesl_case_10 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'Nothing)) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 213 (list) (lambda () (reject "no user" #:http-code 401)))] [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_10) 'value)]) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 215 (list (cons 'userId userId)) (lambda () (let/check ([tesl_checked_11 (tesl_import_String_requireNonEmpty userId)]) (let ([validId tesl_checked_11]) (accept ((Authenticated validId) && (HasValidSession validId)) #:value *validId))))))])))))
 
 (define-handler
   (whoamiSimple [user : String ::: (Authenticated user)])
   #:returns AuthInfoResponse
-  (AuthInfoResponse #:userId *user))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 219 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define-handler
   (whoamiIdentity [user : String ::: (Authenticated user)])
   #:returns AuthInfoResponse
-  (AuthInfoResponse #:userId *user))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 222 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define-handler
   (whoamiConj [user : String ::: ((Authenticated user) && (HasValidSession user))])
   #:returns AuthInfoResponse
-  (AuthInfoResponse #:userId *user))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 226 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define-handler
   (whoamiAdmin [user : String ::: ((IsAdmin user) && (Authenticated user))])
   #:returns AuthInfoResponse
-  (AuthInfoResponse #:userId *user))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 230 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define-handler
   (whoamiDouble [user : String ::: ((Authenticated user) && (HasValidSession user))])
   #:returns AuthInfoResponse
-  (AuthInfoResponse #:userId *user))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 234 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define Fix2MultiArgServer-sse-routes '())
 (define-api Fix2MultiArgApi
@@ -503,42 +504,42 @@
 (define-checker
   (checkVerified [userId : String])
   #:returns [userId : String ::: (Verified userId)]
-  (if (tesl_import_String_startsWith *userId "v") (accept (Verified userId) #:value *userId) (reject "not verified" #:http-code 403)))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 330 (list (cons 'userId *userId)) (lambda () (if (tesl_import_String_startsWith *userId "v") (accept (Verified userId) #:value *userId) (reject "not verified" #:http-code 403)))))
 
 (define-checker
   (checkActive [input : String])
   #:returns [result : String ::: (Active result)]
-  (let/check ([tesl_checked_12 (tesl_import_String_requireNonEmpty input)]) (let ([result tesl_checked_12]) (accept (Active result) #:value *result))))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 336 (list (cons 'input *input)) (lambda () (let/check ([tesl_checked_12 (tesl_import_String_requireNonEmpty input)]) (let ([result tesl_checked_12]) (accept (Active result) #:value *result))))))
 
 (define-auther
   (proofVarSingle [request : HttpRequest])
   #:returns [user : String ::: (Verified user)]
-  (let ([tesl_case_13 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_13) (eq? (adt-value-variant *tesl_case_13) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_13) (eq? (adt-value-variant *tesl_case_13) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_13) 'value)]) (let ([tesl_proof_binding_14 (checkVerified userId)]) (let ([checked (forget-proof tesl_proof_binding_14)] [p (detach-all-proof tesl_proof_binding_14)]) (accept p #:value *checked))))])))
+  (thsl-src-control! "tests/critical-review-48-adversarial-deep.tesl" 342 (list (cons 'request *request)) (lambda () (let ([tesl_case_13 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_13) (eq? (adt-value-variant *tesl_case_13) 'Nothing)) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 343 (list) (lambda () (reject "no user" #:http-code 401)))] [(and (adt-value? *tesl_case_13) (eq? (adt-value-variant *tesl_case_13) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_13) 'value)]) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 345 (list (cons 'userId userId)) (lambda () (let ([tesl_proof_binding_14 (checkVerified userId)]) (let ([checked (forget-proof tesl_proof_binding_14)] [p (detach-all-proof tesl_proof_binding_14)]) (accept p #:value *checked))))))])))))
 
 (define-auther
   (proofVarMixed [request : HttpRequest])
   #:returns [user : String ::: ((Verified user) && (Authenticated user))]
-  (let ([tesl_case_15 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_15) (eq? (adt-value-variant *tesl_case_15) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_15) (eq? (adt-value-variant *tesl_case_15) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_15) 'value)]) (let ([tesl_proof_binding_16 (checkVerified userId)]) (let ([checked (forget-proof tesl_proof_binding_16)] [p (detach-all-proof tesl_proof_binding_16)]) (accept (p && (Authenticated checked)) #:value *checked))))])))
+  (thsl-src-control! "tests/critical-review-48-adversarial-deep.tesl" 351 (list (cons 'request *request)) (lambda () (let ([tesl_case_15 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_15) (eq? (adt-value-variant *tesl_case_15) 'Nothing)) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 352 (list) (lambda () (reject "no user" #:http-code 401)))] [(and (adt-value? *tesl_case_15) (eq? (adt-value-variant *tesl_case_15) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_15) 'value)]) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 354 (list (cons 'userId userId)) (lambda () (let ([tesl_proof_binding_16 (checkVerified userId)]) (let ([checked (forget-proof tesl_proof_binding_16)] [p (detach-all-proof tesl_proof_binding_16)]) (accept (p && (Authenticated checked)) #:value *checked))))))])))))
 
 (define-auther
   (proofVarNested [request : HttpRequest])
   #:returns [user : String ::: ((Verified user) && (Active user))]
-  (let ([tesl_case_17 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_17) (eq? (adt-value-variant *tesl_case_17) 'Nothing)) (reject "no user" #:http-code 401)] [(and (adt-value? *tesl_case_17) (eq? (adt-value-variant *tesl_case_17) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_17) 'value)]) (let/check ([tesl_checked_18 (tesl_import_String_requireNonEmpty userId)]) (let ([validId tesl_checked_18]) (let ([tesl_proof_binding_19 (checkVerified validId)]) (let ([checked (forget-proof tesl_proof_binding_19)] [p (detach-all-proof tesl_proof_binding_19)]) (accept (p && (Active checked)) #:value *checked))))))])))
+  (thsl-src-control! "tests/critical-review-48-adversarial-deep.tesl" 360 (list (cons 'request *request)) (lambda () (let ([tesl_case_17 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_17) (eq? (adt-value-variant *tesl_case_17) 'Nothing)) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 361 (list) (lambda () (reject "no user" #:http-code 401)))] [(and (adt-value? *tesl_case_17) (eq? (adt-value-variant *tesl_case_17) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_17) 'value)]) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 363 (list (cons 'userId userId)) (lambda () (let/check ([tesl_checked_18 (tesl_import_String_requireNonEmpty userId)]) (let ([validId tesl_checked_18]) (let ([tesl_proof_binding_19 (checkVerified validId)]) (let ([checked (forget-proof tesl_proof_binding_19)] [p (detach-all-proof tesl_proof_binding_19)]) (accept (p && (Active checked)) #:value *checked))))))))])))))
 
 (define-handler
   (whoamiVerified [user : String ::: (Verified user)])
   #:returns AuthInfoResponse
-  (AuthInfoResponse #:userId *user))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 368 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define-handler
   (whoamiMixed [user : String ::: ((Verified user) && (Authenticated user))])
   #:returns AuthInfoResponse
-  (AuthInfoResponse #:userId *user))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 372 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define-handler
   (whoamiNested [user : String ::: ((Verified user) && (Active user))])
   #:returns AuthInfoResponse
-  (AuthInfoResponse #:userId *user))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 376 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define Fix3ProofVarServer-sse-routes '())
 (define-api Fix3ProofVarApi
@@ -670,22 +671,22 @@
 (define-checker
   (checkBothFacts [n : Integer])
   #:returns [n : Integer ::: ((Validated n) && (InBounds n))]
-  ((check-and checkValidated checkInBounds) n))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 438 (list (cons 'n *n)) (lambda () ((check-and checkValidated checkInBounds) n))))
 
 (define/pow
   (useBothFacts [n : Integer])
   #:returns Integer
-  (let/check ([tesl_checked_20 (checkBothFacts n)]) (let ([v tesl_checked_20]) (+ (raw-value v) 1))))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 441 (list (cons 'n *n)) (lambda () (let/check ([tesl_checked_20 (checkBothFacts n)]) (let ([v tesl_checked_20]) (+ (raw-value v) 1))))))
 
 (define-auther
   (itemCookieAuth [request : HttpRequest])
   #:returns [user : String ::: (ItemAuth user)]
-  (let ([tesl_case_21 (raw-value (tesl_import_Dict_lookup "item-token" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_21) (eq? (adt-value-variant *tesl_case_21) 'Nothing)) (reject "no item token" #:http-code 401)] [(and (adt-value? *tesl_case_21) (eq? (adt-value-variant *tesl_case_21) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_21) 'value)]) (accept (ItemAuth userId) #:value *userId))])))
+  (thsl-src-control! "tests/critical-review-48-adversarial-deep.tesl" 459 (list (cons 'request *request)) (lambda () (let ([tesl_case_21 (raw-value (tesl_import_Dict_lookup "item-token" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_21) (eq? (adt-value-variant *tesl_case_21) 'Nothing)) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 460 (list) (lambda () (reject "no item token" #:http-code 401)))] [(and (adt-value? *tesl_case_21) (eq? (adt-value-variant *tesl_case_21) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_21) 'value)]) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 461 (list (cons 'userId userId)) (lambda () (accept (ItemAuth userId) #:value *userId))))])))))
 
 (define-auther
   (userCookieAuth [request : HttpRequest])
   #:returns [user : String ::: (UserAuth user)]
-  (let ([tesl_case_22 (raw-value (tesl_import_Dict_lookup "user-token" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_22) (eq? (adt-value-variant *tesl_case_22) 'Nothing)) (reject "no user token" #:http-code 401)] [(and (adt-value? *tesl_case_22) (eq? (adt-value-variant *tesl_case_22) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_22) 'value)]) (accept (UserAuth userId) #:value *userId))])))
+  (thsl-src-control! "tests/critical-review-48-adversarial-deep.tesl" 464 (list (cons 'request *request)) (lambda () (let ([tesl_case_22 (raw-value (tesl_import_Dict_lookup "user-token" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_22) (eq? (adt-value-variant *tesl_case_22) 'Nothing)) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 465 (list) (lambda () (reject "no user token" #:http-code 401)))] [(and (adt-value? *tesl_case_22) (eq? (adt-value-variant *tesl_case_22) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl_case_22) 'value)]) (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 466 (list (cons 'userId userId)) (lambda () (accept (UserAuth userId) #:value *userId))))])))))
 
 (define-capture itemIdCapture
   [itemIdCapture : String]
@@ -707,8 +708,8 @@
             [(check-ok? v) (loop (check-ok-value v))]
             [else v])))
   (define _fields (record-value-fields _raw))
-  (hash 'itemId (tesl-codec-encode-field (raw-value (hash-ref _fields 'itemId)) tesl-json-string-codec)
-        'fetchedBy (tesl-codec-encode-field (raw-value (hash-ref _fields 'fetchedBy)) tesl-json-string-codec)
+  (hash 'itemId (tesl-encode-prim-string (raw-value (hash-ref _fields 'itemId)))
+        'fetchedBy (tesl-encode-prim-string (raw-value (hash-ref _fields 'fetchedBy)))
   ))
 (register-type-codec! 'ItemResponse tesl-codec-encode-ItemResponse (list ))
 
@@ -724,20 +725,20 @@
             [(check-ok? v) (loop (check-ok-value v))]
             [else v])))
   (define _fields (record-value-fields _raw))
-  (hash 'uid (tesl-codec-encode-field (raw-value (hash-ref _fields 'uid)) tesl-json-string-codec)
-        'fetchedBy (tesl-codec-encode-field (raw-value (hash-ref _fields 'fetchedBy)) tesl-json-string-codec)
+  (hash 'uid (tesl-encode-prim-string (raw-value (hash-ref _fields 'uid)))
+        'fetchedBy (tesl-encode-prim-string (raw-value (hash-ref _fields 'fetchedBy)))
   ))
 (register-type-codec! 'UserResponse tesl-codec-encode-UserResponse (list ))
 
 (define-handler
   (getItem [user : String ::: (ItemAuth user)] [itemId : String])
   #:returns ItemResponse
-  (ItemResponse #:itemId *itemId #:fetchedBy *user))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 490 (list (cons 'user *user) (cons 'itemId *itemId)) (lambda () (ItemResponse #:itemId *itemId #:fetchedBy *user))))
 
 (define-handler
   (getUser [user : String ::: (UserAuth user)] [uid : String])
   #:returns UserResponse
-  (UserResponse #:uid *uid #:fetchedBy *user))
+  (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 493 (list (cons 'user *user) (cons 'uid *uid)) (lambda () (UserResponse #:uid *uid #:fetchedBy *user))))
 
 (define Fix4RoutingCaptureServer-sse-routes '())
 (define-api Fix4CaptureApi
@@ -882,7 +883,7 @@
 (module+ test
   (require rackunit)
   (test-case "C4: conjunction combinator delegation"
-  (check-equal? (raw-value (useBothFacts 50)) 51)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 445 (list) (lambda () (useBothFacts 50)))) 51)
   )
 
 )

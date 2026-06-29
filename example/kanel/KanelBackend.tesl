@@ -130,21 +130,33 @@ import KanelBilling exposing [
   markSentHandler,
   markPaidHandler,
 ]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, Fixed, Job]
+import Tesl.SSE exposing [SseChannel]
+import Tesl.App exposing [App]
 
 # ── Database ─────────────────────────────────────────────────────────────────
 
-database KanelDatabase {
-  backend postgres
-  schema "kanel"
-  entities [KanelUser, Org, OrgMembership, Project, ProjectMembership, Issue, IssueComment, TimeEntry, Invoice]
-  postgres {
-    database env("KANEL_DB")
-    user env("TESL_POSTGRES_USER")
-    password env("TESL_POSTGRES_PASSWORD")
-    host env("TESL_POSTGRES_HOST")
-    port envInt("TESL_POSTGRES_PORT", 5432)
-    socket env("TESL_POSTGRES_SOCKET")
-  }
+database KanelDatabase = Database {
+  schema: "kanel"
+  entities: [KanelUser, Org, OrgMembership, Project, ProjectMembership, Issue, IssueComment, TimeEntry, Invoice]
+  backend: Postgres (PostgresConfig {
+    dbName: env "KANEL_DB"
+    user: env "TESL_POSTGRES_USER"
+    password: env "TESL_POSTGRES_PASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_POSTGRES_HOST"
+      port: envInt "TESL_POSTGRES_PORT" 5432
+    }
+  })
 }
 
 # ── Notification queue ────────────────────────────────────────────────────────
@@ -156,14 +168,15 @@ record KanelNotifyJob {
   body: String
 }
 
-queue KanelNotifyQueue {
-  database KanelDatabase
-  jobs [KanelNotifyJob]
-  retry {
+queue KanelNotifyQueue requires [notifyWorkerCap, kanelPubSub] = Queue {
+  database: KanelDatabase
+  jobs: [Job KanelNotifyJob notifyWorker (Something deadNotifyWorker)]
+  retry: QueueRetryStrategy {
     maxAttempts: 3
-    backoff: exponential
+    backoff: Exponential
     initialDelay: 30
   }
+  numberOfWorkers: 2
 }
 
 capability notifyWorkerCap implies queueRead
@@ -172,9 +185,9 @@ type UserNotificationEvent
   = NotificationDelivered recipientEmail: String subject: String
   | NotificationFailed recipientEmail: String subject: String
 
-channel UserNotifications(userId: String) {
-  database KanelDatabase
-  payload UserNotificationEvent
+sseChannel UserNotifications(userId: String) = SseChannel {
+  database: KanelDatabase
+  payload: UserNotificationEvent
 }
 
 worker notifyWorker(job: KanelNotifyJob ::: FromQueue (Id == jobId) job)
@@ -195,12 +208,12 @@ deadWorker deadNotifyWorker(job: KanelNotifyJob ::: FromDeadQueue (Id == jobId) 
 # Each capture validates the URL parameter and stamps it with a proof.
 # Endpoints reference the capture declaration by name.
 
-capture orgCapture: String ::: ValidOrgId orgId using stringCodec via checkOrgId
-capture projectCapture: String ::: ValidProjectId projectId using stringCodec via checkProjectId
-capture issueCapture: String ::: ValidIssueId issueId using stringCodec via checkIssueId
-capture invoiceCapture: String ::: ValidInvoiceId invoiceId using stringCodec via checkInvoiceId
-capture userCapture: String ::: ValidUserId userId using stringCodec via checkUserId
-capture targetUserCapture: String ::: ValidUserId targetUserId using stringCodec via checkTargetUserId
+capturer orgCapture: String ::: ValidOrgId orgId using stringCodec via checkOrgId
+capturer projectCapture: String ::: ValidProjectId projectId using stringCodec via checkProjectId
+capturer issueCapture: String ::: ValidIssueId issueId using stringCodec via checkIssueId
+capturer invoiceCapture: String ::: ValidInvoiceId invoiceId using stringCodec via checkInvoiceId
+capturer userCapture: String ::: ValidUserId userId using stringCodec via checkUserId
+capturer targetUserCapture: String ::: ValidUserId targetUserId using stringCodec via checkTargetUserId
 
 # ── API ───────────────────────────────────────────────────────────────────────
 
@@ -401,7 +414,7 @@ handler addCommentAndNotifyHandler(
       case reporter of
         Nothing -> fail 404 "issue reporter not found"
         Something targetUser ->
-          with transaction {
+          transaction {
             enqueue KanelNotifyJob { recipientUserId: targetUser.id, recipientEmail: targetUser.email, subject: "New comment on issue {issueId}", body: "Comment from {session.displayName}: {commentBody}" }
             exists commentId =>
               insertCommentBody commentId userId orgId notDoneId commentBody
@@ -812,26 +825,14 @@ api-test "issue status can be updated through valid transitions" for KanelServer
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
-main with capabilities [kanelDbRead, kanelDbWrite, kanelQueue, kanelPubSub, random, time, notifyWorkerCap] {
+main() -> App
+  requires [kanelDbRead, kanelDbWrite, kanelQueue, kanelPubSub, random, time, notifyWorkerCap] =
   let port = envInt "KANEL_PORT" 8080
-  with database KanelDatabase {
-    # The compiler verifies at compile time that serve/startWorkers only reference
-    # capabilities declared on main — adding a new handler that requires a new
-    # capability will produce a compile error if it is missing from this declaration.
-    with capabilities [kanelDbRead, kanelDbWrite, kanelQueue, kanelPubSub, random, time, notifyWorkerCap] {
-      startWorkers 2 KanelNotifyWorkers with capabilities [notifyWorkerCap, kanelPubSub]
-      startDeadWorkers KanelDeadNotifyWorkers with capabilities [notifyWorkerCap, kanelPubSub]
-      serve KanelServer on port with capabilities [kanelDbRead, kanelDbWrite, kanelQueue, kanelPubSub, random, time] static "example/kanel/frontend"
-    }
+  App {
+    database: KanelDatabase
+    api: KanelServer
+    port: port
+    queues: [KanelNotifyQueue]
+    sseChannels: [UserNotifications]
+    static: "example/kanel/frontend"
   }
-}
-
-# ── Worker group declarations (must co-locate with queue declaration) ─────────
-
-workers KanelNotifyWorkers for KanelNotifyQueue {
-  KanelNotifyJob = notifyWorker
-}
-
-deadWorkers KanelDeadNotifyWorkers for KanelNotifyQueue {
-  KanelNotifyJob = deadNotifyWorker
-}

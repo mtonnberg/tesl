@@ -207,12 +207,16 @@
             (~a "Content-Type: text/html; charset=utf-8\r\n")
             (~a "Content-Type: text/plain; charset=utf-8\r\n"))))
   (define body (or html-str text-str ""))
-  ;; smtp-send-message handles STARTTLS if tls? is #t
+  ;; smtp-send-message handles STARTTLS if tls? is #t.  net/smtp wants the
+  ;; header as a string and the message body as a (listof (or/c string? bytes?))
+  ;; — NOT a single combined bytes blob (that fails the arity match and the
+  ;; worker silently swallows the exn, so nothing is ever delivered).
   (smtp-send-message
    host
    username
    (list to-str)
-   (string->bytes/utf-8 (string-append header "\r\n" body))
+   header
+   (list body)
    #:port-no port
    #:auth-user username
    #:auth-passwd password

@@ -169,16 +169,38 @@ let test_LB_NEG03_import_main_rejected () =
   let lib_src = {|#lang tesl
 module LbLib03 exposing []
 import Tesl.Prelude exposing [String]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, PostgresConfig, TcpConnection]
+import Tesl.App exposing [App]
 fn helper() -> String = "hi"
-main {
-  let _ = helper()
+database LbLib03Db = Database {
+  schema: "s"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "d"
+    user: "u"
+    password: ""
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
 }
+api LbLib03Api { get "/ping" -> String }
+handler pingH() -> String requires [] = "pong"
+server LbLib03Server for LbLib03Api { ping = pingH }
+main() -> App requires [] =
+  App {
+    database: LbLib03Db
+    api: LbLib03Server
+    port: 8080
+    queues: []
+  }
 |} in
   let app_src = {|#lang tesl
 module LbApp03 exposing []
 import LbLib03 exposing [helper]
 |} in
-  should_fail_two "main.*not allowed in library\\|library.*main\\|main.*library" lib_src app_src
+  should_fail_two "main.*not allowed in library\\|library.*main\\|main.*library\\|server.*library\\|api.*library\\|not allowed in library" lib_src app_src
 
 (* LB_NEG04: multiple imports, only one has server → error for that import *)
 let test_LB_NEG04_one_of_two_imports_has_server () =
@@ -518,10 +540,20 @@ entity Product table "products" primaryKey id {
   let app_src = {|#lang tesl
 module LbApp14Pos exposing []
 import Tesl.Prelude exposing [String, Int]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, PostgresConfig, TcpConnection]
 import LbSchema14 exposing [Product]
-database LbApp14Db {
-  backend postgres schema "shop" entities [Product]
-  postgres { database "shop" user "u" password "" host "localhost" port 5432 socket "" }
+database LbApp14Db = Database {
+  schema: "shop"
+  entities: [Product]
+  backend: Postgres (PostgresConfig {
+    dbName: "shop"
+    user: "u"
+    password: ""
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
 }
 |} in
   should_pass_two lib_src app_src
@@ -531,12 +563,31 @@ let test_LB_POS15_queue_declarations_ok_in_phase1 () =
   let lib_src = {|#lang tesl
 module LbQueues15 exposing []
 import Tesl.Prelude exposing [String]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, PostgresConfig, TcpConnection]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
 record NotifyJob { msg: String }
-database LbQueues15Db {
-  backend postgres schema "q" entities []
-  postgres { database "q" user "u" password "" host "localhost" port 5432 socket "" }
+database LbQueues15Db = Database {
+  schema: "q"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "q"
+    user: "u"
+    password: ""
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
 }
-queue NotifyQueue { database LbQueues15Db jobs [NotifyJob] }
+queue NotifyQueue = Queue {
+  database: LbQueues15Db
+  jobs: [NotifyJob]
+  retry: QueueRetryStrategy {
+    maxAttempts: 3
+    backoff: Exponential
+    initialDelay: 60
+  }
+}
 |} in
   let app_src = {|#lang tesl
 module LbApp15Pos exposing []
@@ -578,8 +629,33 @@ import LbMsgLib02
 let test_LB_MSG03_error_names_main_kind () =
   let lib_src = {|#lang tesl
 module LbMsgLib03 exposing []
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Database exposing [Database, DatabaseBackend, Postgres, PostgresConfig, TcpConnection]
+import Tesl.App exposing [App]
 fn helper() -> Int = 42
-main { let _ = helper() }
+database LbMsgLib03Db = Database {
+  schema: "s"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "d"
+    user: "u"
+    password: ""
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
+}
+api LbMsgLib03Api { get "/ping" -> String }
+handler pingH() -> String requires [] = "pong"
+server LbMsgLib03Server for LbMsgLib03Api { ping = pingH }
+main() -> App requires [] =
+  App {
+    database: LbMsgLib03Db
+    api: LbMsgLib03Server
+    port: 8080
+    queues: []
+  }
 |} in
   let app_src = {|#lang tesl
 module LbMsgApp03 exposing []

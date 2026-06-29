@@ -8,6 +8,7 @@
   tesl/dsl/sql
   tesl/dsl/web
   tesl/dsl/test-support
+  tesl/dsl/debug/checkpoint
   tesl/tesl/private/runtime
   tesl/tesl/queue
   tesl/tesl/sse
@@ -22,19 +23,19 @@
 (define-checker
   (checkBound [n : Integer])
   #:returns [n : Integer ::: (Bounded n)]
-  (if (and (>= *n 0) (<= *n 1000000)) (accept (Bounded n) #:value *n) (reject "out of bounds" #:http-code 400)))
+  (thsl-src! "tests/bench/proof_hot.tesl" 23 (list (cons 'n *n)) (lambda () (if (and (>= *n 0) (<= *n 1000000)) (accept (Bounded n) #:value *n) (reject "out of bounds" #:http-code 400)))))
 
 (define/pow
   (hotPath [a : Integer ::: (Bounded a)] [b : Integer ::: (Bounded b)] [c : Integer ::: (Bounded c)])
   #:returns Integer
-  (+ (+ *a *b) *c))
+  (thsl-src! "tests/bench/proof_hot.tesl" 29 (list (cons 'a *a) (cons 'b *b) (cons 'c *c)) (lambda () (+ (+ *a *b) *c))))
 
 (module+ test
   (require rackunit)
   (test-case "hot path sums three bounded values"
-  (define one 1)
-  (define two 2)
-  (define three 3)
+  (define one (thsl-src! "tests/bench/proof_hot.tesl" 32 (list) (lambda () 1)))
+  (define two (thsl-src! "tests/bench/proof_hot.tesl" 33 (list (cons 'one one)) (lambda () 2)))
+  (define three (thsl-src! "tests/bench/proof_hot.tesl" 34 (list (cons 'two two) (cons 'one one)) (lambda () 3)))
   (define tesl_checked_0 (checkBound one))
   (when (check-fail? tesl_checked_0)
     (raise-user-error 'tesl-test "unexpected failure in let a: ~a" (check-fail-message tesl_checked_0)))
@@ -47,7 +48,7 @@
   (when (check-fail? tesl_checked_2)
     (raise-user-error 'tesl-test "unexpected failure in let c: ~a" (check-fail-message tesl_checked_2)))
   (define c tesl_checked_2)
-  (check-equal? (raw-value (hotPath a b c)) 6)
+  (check-equal? (raw-value (thsl-src! "tests/bench/proof_hot.tesl" 38 (list (cons 'c c) (cons 'b b) (cons 'a a) (cons 'three three) (cons 'two two) (cons 'one one)) (lambda () (hotPath a b c)))) 6)
   )
 
 )

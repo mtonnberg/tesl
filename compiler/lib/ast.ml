@@ -26,7 +26,11 @@ type type_expr =
   | TName   of uident                        (** Int, String, Bool, UserId … *)
   | TVar    of ident                         (** type variable: a, b … *)
   | TApp    of { head : type_expr; arg : type_expr; loc : loc } (** List Int, Maybe T *)
-  | TFun    of { dom : type_expr; cod : type_expr; loc : loc }  (** a -> b *)
+  | TFun    of { dom : type_expr; cod : type_expr;
+                 caps : string list;  (** capability row on the arrow: `(a -> b requires c)`;
+                                          names are row variables (bound by this occurrence)
+                                          or concrete capabilities. Empty for a plain `a -> b`. *)
+                 loc : loc }  (** a -> b [requires c] *)
   | TTuple  of { elems : type_expr list; loc : loc }
 
 (* ─── Proof expressions ──────────────────────────────────────────────────── *)
@@ -306,23 +310,28 @@ type codec_form = {
 (* ─── Database form ──────────────────────────────────────────────────────── *)
 
 type database_form = {
-  name     : string;
-  schema   : string;
-  entities : string list;
-  postgres : (string * string) list;  (** key-value connection params *)
-  loc      : loc;
+  name       : string;
+  backend    : string;                   (** e.g. "postgres" | "memory" ("" = default postgres) *)
+  schema     : string;
+  entities   : string list;
+  postgres   : (string * string) list;  (** key-value connection params *)
+  config_expr : expr option;             (** typed-record syntax: `= Database { … }` (desugar fills the fields above) *)
+  loc        : loc;
 }
 
 (* ─── Queue / channel / workers ─────────────────────────────────────────── *)
 
 type queue_form = {
-  name          : string;
-  database      : string;
-  jobs          : string list;
-  max_attempts  : int option;
-  backoff       : string option;
-  initial_delay : int option;
-  loc           : loc;
+  name             : string;
+  database         : string;
+  jobs             : string list;
+  max_attempts     : int option;
+  backoff          : string option;
+  initial_delay    : int option;
+  capabilities     : string list;     (** `requires [...]` for the folded workers (App pass) *)
+  number_of_workers : int option;     (** `numberOfWorkers: N` (App pass); workers started on App activation *)
+  config_expr      : expr option;
+  loc              : loc;
 }
 
 type channel_form = {
@@ -330,6 +339,7 @@ type channel_form = {
   key_params : binding list;
   database   : string;
   payload    : type_expr;
+  config_expr : expr option;
   loc        : loc;
 }
 
@@ -338,6 +348,7 @@ type cache_form = {
   database    : string;
   value_type  : type_expr;
   default_ttl : int option;
+  config_expr : expr option;        (** typed-record syntax: = Cache { … } *)
   loc         : loc;
 }
 
@@ -350,10 +361,11 @@ type smtp_config = {
 }
 
 type email_form = {
-  name     : string;
-  database : string;
-  smtp     : smtp_config;
-  loc      : loc;
+  name       : string;
+  database   : string;
+  smtp       : smtp_config;
+  config_expr : expr option;
+  loc        : loc;
 }
 
 type workers_form = {
@@ -384,8 +396,10 @@ type api_auth = {
 }
 
 type api_capture = {
-  binding : binding;
-  via_fn  : string;
+  binding      : binding;
+  via_fn       : string;          (** references a top-level `capturer` (empty for inline) *)
+  inline_codec : string option;   (** inline form: `capture x: T with <codec> [via <check>]` *)
+  inline_check : string option;   (** optional `via <check>` of the inline form (mints a proof) *)
 }
 
 type api_endpoint = {
@@ -457,6 +471,10 @@ type test_form = {
   stmts        : test_stmt list;
   runs         : int option;
   capabilities : string list;
+  (* Optional `with database X` header clause: binds the named database for the test
+     body (so queries run against X's configured backend).  [None] ⇒ the default
+     in-memory store, which is what the vast majority of tests use. *)
+  database     : string option;
   loc          : loc;
 }
 
@@ -550,6 +568,29 @@ type module_form = {
   decls       : top_decl list;
   source_file : string;
 }
+
+(* ─── Capability-row helpers ──────────────────────────────────────────────── *)
+
+(** Capability-row variables bound by a function's parameters: the union of the
+    capability rows annotated on any arrow (`TFun`) type inside a parameter's
+    type, e.g. the [c] in [f: (Int -> Int requires c)].  Within the function's
+    own [requires] clause, names in this set are row *variables* (instantiated at
+    each call site); all other names are concrete capabilities.  Shared by the
+    capability checker (P001 + the needs⊆declares check) and the emitter (which
+    drops row variables from the emitted `#:capabilities`). *)
+let func_bound_cap_vars_of_params (params : binding list) : string list =
+  let rec from_type acc (t : type_expr) =
+    match t with
+    | TFun { dom; cod; caps; _ } -> from_type (from_type (caps @ acc) dom) cod
+    | TApp { head; arg; _ } -> from_type (from_type acc head) arg
+    | TTuple { elems; _ } -> List.fold_left from_type acc elems
+    | TName _ | TVar _ -> acc
+  in
+  List.fold_left (fun acc (b : binding) -> from_type acc b.type_expr) [] params
+  |> List.sort_uniq String.compare
+
+let func_bound_cap_vars (fd : func_decl) : string list =
+  func_bound_cap_vars_of_params fd.params
 
 (* ─── Proof/type conversion helper ────────────────────────────────────────── *)
 

@@ -82,7 +82,7 @@ module Lesson21SqlReference exposing [
 #   The ID is hidden from callers; they get the proof without direct access to pid.
 #
 # Transactions (atomic multi-write):
-#   with transaction { ... }
+#   transaction { ... }
 #   -- Wraps multiple inserts/updates/deletes in a single atomic transaction.
 #   -- Either all operations succeed, or none are committed (all-or-nothing).
 #   -- Cannot be nested. Use inside a function body or handler.
@@ -124,9 +124,9 @@ import Tesl.DB exposing [dbRead, dbWrite, DeleteResult(..)]
 #
 # "insertMany list in Entity" inserts all rows in the list, returns Unit.
 #
-# "with transaction { ... }" wraps multiple writes in one atomic transaction.
+# "transaction { ... }" wraps multiple writes in one atomic transaction.
 # If any operation inside raises an error, the entire transaction is rolled back.
-# Transactions cannot be nested — a second `with transaction` inside an existing
+# Transactions cannot be nested — a second `transaction` inside an existing
 # one is a compile-time error.
 
 # ─────────────────────────────────────────────
@@ -378,9 +378,9 @@ fn findProductsWithCategory(minAllowedPrice: Int) -> List Product requires [dbRe
   innerJoin Category on p.category Category.id
   where p.price >= minAllowedPrice
 
-# ─── 18. with transaction — atomic multi-write ────────────────────────────────
+# ─── 18. transaction — atomic multi-write ────────────────────────────────
 
-# "with transaction { ... }" groups multiple writes into a single atomic unit.
+# "transaction { ... }" groups multiple writes into a single atomic unit.
 # All operations inside either all commit, or all roll back if any error occurs.
 # The block returns the value of its last expression.
 #
@@ -389,10 +389,10 @@ fn findProductsWithCategory(minAllowedPrice: Int) -> List Product requires [dbRe
 #   - An update and a related insert must be atomic.
 #   - Any partial write would leave the database in an inconsistent state.
 #
-# Constraint: transactions CANNOT be nested. A `with transaction` inside another
-# `with transaction` is a compile-time error.
+# Constraint: transactions CANNOT be nested. A `transaction` inside another
+# `transaction` is a compile-time error.
 #
-# The return type of `with transaction { body }` is the type of `body`.
+# The return type of `transaction { body }` is the type of `body`.
 # Capabilities required inside the block must be declared in the `requires` clause.
 
 # Create a product and its category record atomically.
@@ -405,7 +405,7 @@ fn createProductWithCategory(
     catLabel: String)
   -> Product
   requires [dbRead, dbWrite] =
-  with transaction {
+  transaction {
     let _ = insert Category { id: catId, label: catLabel, active: True }
     insert Product { id: id, name: name, price: price, category: catId, inStock: True }
   }
@@ -413,7 +413,7 @@ fn createProductWithCategory(
 # Transfer stock: mark one product out-of-stock and another in-stock atomically.
 # Both updates must succeed — either both happen or neither.
 fn swapStock(outId: String, inId: String) -> Unit requires [dbWrite] =
-  with transaction {
+  transaction {
     let _ = update p in Product
       where p.id == outId
       set p.inStock = False

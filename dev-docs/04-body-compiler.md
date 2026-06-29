@@ -90,8 +90,7 @@ Dispatches on the statement's text:
 | `case ... of` | exhaustive case expression |
 | `exists name =>` | existential packing |
 | `with database X {` | `(call-with-database ...)` |
-| `with capabilities [...] {` | `(with-capabilities ...)` |
-| `with transaction {` | `(call-with-queue-transaction ...)` |
+| `transaction {` | `(call-with-queue-transaction ...)` |
 | `ok expr` | `(accept ...)` / inline terminal |
 | `fail code msg` | `(reject msg #:http-code code)` |
 | `enqueue Job { ... }` | `(enqueue! ...)` |

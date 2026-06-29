@@ -21,6 +21,7 @@ let keywords : (string, Token.t) Hashtbl.t =
     "check",       CHECK;
     "auth",        AUTH;
     "capture",     CAPTURE;
+    "capturer",    CAPTURER;
     "establish",   ESTABLISH;
     "fact",        FACT;
     "type",        TYPE;
@@ -37,6 +38,7 @@ let keywords : (string, Token.t) Hashtbl.t =
     "for",         FOR;
     "queue",       QUEUE;
     "channel",     CHANNEL;
+    "sseChannel",  CHANNEL;
     "cache",       CACHE;
     "email",       EMAIL;
     "smtp",        SMTP;

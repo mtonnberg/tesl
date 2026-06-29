@@ -477,8 +477,9 @@ let stdlib_env : (string * scheme) list = [
   "newId",               mono t_string;
 
   (* ── Env ─────────────────────────────────────────────────────────────── *)
-  "env",    mono (t_fun [t_string] (t_maybe t_string));
-  "envInt", mono (t_fun [t_string; t_int] t_int);
+  "env",       mono (t_fun [t_string] (t_maybe t_string));
+  "envInt",    mono (t_fun [t_string; t_int] t_int);
+  "envString", mono (t_fun [t_string; t_string] t_string);
 
   (* ── HTTP ────────────────────────────────────────────────────────────── *)
   "statusOk",          mono t_int;
@@ -708,7 +709,7 @@ let tesl_module_exports : (string * string list) list = [
     [ "IsUuid"; "uuid"; "UUID.v4"; "UUID.v7"; "UUID.validate";
       "uuidV4Codec"; "uuidV7Codec" ] );
   ( "Tesl.Env",
-    [ "env"; "envInt" ] );
+    [ "env"; "envInt"; "envString" ] );
   ( "Tesl.Json",
     [ "stringCodec"; "intCodec"; "boolCodec"; "floatCodec"; "posixMillisCodec";
       "listCodec"; "dictCodec"; "setCodec" ] );
@@ -725,10 +726,25 @@ let tesl_module_exports : (string * string list) list = [
   ( "Tesl.JWT",
     [ "jwt"; "JwtToken"; "JwtSecret"; "JWT.sign"; "JWT.verify"; "JWT.decode" ] );
   ( "Tesl.Cache",
-    [ "cache"; "Cache.get"; "Cache.set"; "Cache.delete"; "Cache.invalidate" ] );
+    [ "cache"; "Cache.get"; "Cache.set"; "Cache.delete"; "Cache.invalidate";
+      (* config-block type (typed config block) *)
+      "Cache" ] );
   ( "Tesl.Email",
     [ "email"; "EmailBody"; "TextBody"; "HtmlBody"; "RichBody";
-      "Email.send"; "startEmailWorker" ] );
+      "Email.send"; "startEmailWorker";
+      (* config-block types (typed config blocks) *)
+      "Email"; "SmtpConfig" ] );
+  ( "Tesl.Database",
+    [ "Database"; "DatabaseBackend"; "Postgres"; "Memory";
+      "PostgresConfig"; "PostgresConnection";
+      "TcpConnection"; "SocketConnection" ] );
+  (* App-simplification (roadmap/next/app_simplification.md): `main : () -> App`
+     returning a typed App record; `Job` pairs a job type with its handler +
+     optional dead-letter handler inside a folded `queue`. *)
+  ( "Tesl.App",
+    [ "App" ] );
+  ( "Tesl.SSE",
+    [ "SseChannel" ] );
   ( "Tesl.HttpClient",
     [ "httpClient"; "HttpResponse"; "HttpResponse?";
       "HttpClient.get"; "HttpClient.post"; "HttpClient.put"; "HttpClient.delete" ] );
@@ -765,7 +781,7 @@ let tesl_known_module_names : string list = [
   "Tesl.Uuid"; "Tesl.UUID"; "Tesl.Crypto"; "Tesl.Set"; "Tesl.Map"; "Tesl.Env";
   "Tesl.Telemetry"; "Tesl.Cli"; "Tesl.ApiTest"; "Tesl.Tuple"; "Tesl.Id";
   "Tesl.Queue"; "Tesl.Channel"; "Tesl.Sql"; "Tesl.Sse"; "Tesl.Logging";
-  "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Agent";
+  "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database"; "Tesl.SSE"; "Tesl.App"; "Tesl.Agent";
 ]
 
 (** Returns [true] when [name] is a known Tesl.* stdlib module. *)

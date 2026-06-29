@@ -64,7 +64,7 @@
   #:backoff exponential
   #:initial-delay 5)
 
-(define-capability cache_SmokeCache)
+(define-capability cacheCap_SmokeCache)
 (define-cache SmokeCache #:default-ttl 60)
 
 (define-channel SmokeUpdates)

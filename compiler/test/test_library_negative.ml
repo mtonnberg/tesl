@@ -120,26 +120,34 @@ let test_LKWN03_library_with_main_rejected () =
 #lang tesl
 library BadLib03 exposing []
 import Tesl.Prelude exposing [Int]
+import Tesl.App exposing [App]
 fn add(a: Int, b: Int) -> Int = a + b
-main {
-  with capabilities [] {
-    add 1 2
+main() -> App requires [] =
+  App {
+    database: Db
+    api: Srv
+    port: 8080
+    queues: []
   }
-}
 |}
 
-let test_LKWN04_library_with_workers_wiring_rejected () =
-  (* workers block is infrastructure wiring — not allowed in a library *)
-  should_fail "library module.*workers\\|workers.*library\\|not allowed in library" {|
+let test_LKWN04_library_with_queue_infra_rejected () =
+  (* A folded queue is application infrastructure: it requires a `database`
+     declaration, and library modules cannot own a `database` (V001). This
+     preserves the original intent — queue/worker infrastructure wiring is not
+     allowed in a library — under the folded-queue model (which has no `workers`
+     mapping keyword). The `database` declaration the queue depends on is the
+     decl the library-boundary check rejects. *)
+  should_fail "cannot own application infrastructure\\|database.*library\\|not allowed in library" {|
 #lang tesl
 library BadLib04 exposing []
 import Tesl.Prelude exposing [String]
-import Tesl.Queue exposing [queueRead]
-database Db { backend postgres schema "s" entities [] postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" } }
-queue MyQ { database Db jobs [JobRec] }
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Queue exposing [Queue, Job]
+database Db = Database { schema: "public"  entities: []  backend: Memory }
 record JobRec { msg: String }
 worker doJob(j: JobRec) requires [] = j
-workers MyWorkers for MyQ { JobRec = doJob }
+queue MyQ = Queue { database: Db  jobs: [Job JobRec doJob (Nothing)]  numberOfWorkers: 1 }
 |}
 
 let test_LKWN05_library_with_both_api_and_server_rejected () =
@@ -421,29 +429,47 @@ let test_LIMN03_importing_module_with_main_rejected () =
 #lang tesl
 module AppWithMain exposing []
 import Tesl.Prelude exposing [Int]
+import Tesl.App exposing [App]
 fn add(a: Int, b: Int) -> Int = a + b
-main {
-  with capabilities [] { add 1 2 }
-}
+main() -> App requires [] =
+  App {
+    database: Db
+    api: Srv
+    port: 8080
+    queues: []
+  }
 |} "ImporterOfMain" {|
 #lang tesl
 module ImporterOfMain exposing []
 import AppWithMain exposing []
 |}
 
-let test_LIMN04_importing_module_with_workers_block_rejected () =
-  (* workers wiring block = app infrastructure; importing such a module is rejected *)
+let test_LIMN04_importing_module_with_queue_app_rejected () =
+  (* A queue-bearing app wires its folded queue into an `App` via `main` — that
+     `main` (app entry-point infrastructure) is not allowed to be imported as a
+     library. In the folded-queue model there is no `workers` wiring block; the
+     queue infrastructure is carried by an App module whose `main` triggers the
+     importer-level library-boundary rejection. *)
   two_files_should_fail
-    "not allowed in library\\|workers.*library\\|library.*workers"
+    "not allowed in library\\|main.*library\\|library.*main"
     "AppWithWorkers" {|
 #lang tesl
 module AppWithWorkers exposing []
 import Tesl.Prelude exposing [String]
-database Db { backend postgres schema "s" entities [] postgres { database "d" user "u" password "" host "localhost" port 5432 socket "" } }
-queue Q { database Db jobs [Job] }
-record Job { msg: String }
-worker handleJob(j: Job) requires [] = j
-workers Wiring for Q { Job = handleJob }
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Queue exposing [Queue, Job]
+import Tesl.App exposing [App]
+database Db = Database { schema: "public"  entities: []  backend: Memory }
+record JobRec { msg: String }
+worker handleJob(j: JobRec) requires [] = j
+queue Q = Queue { database: Db  jobs: [Job JobRec handleJob (Nothing)]  numberOfWorkers: 1 }
+main() -> App requires [] =
+  App {
+    database: Db
+    api: Srv
+    port: 8080
+    queues: [Q]
+  }
 |} "ImporterOfWorkers" {|
 #lang tesl
 module ImporterOfWorkers exposing []
@@ -891,7 +917,7 @@ let () =
       test_case "LKWN01 library+server rejected" `Quick test_LKWN01_library_with_server_rejected;
       test_case "LKWN02 library+api rejected" `Quick test_LKWN02_library_with_api_rejected;
       test_case "LKWN03 library+main rejected" `Quick test_LKWN03_library_with_main_rejected;
-      test_case "LKWN04 library+workers wiring rejected" `Quick test_LKWN04_library_with_workers_wiring_rejected;
+      test_case "LKWN04 library+queue infra rejected" `Quick test_LKWN04_library_with_queue_infra_rejected;
       test_case "LKWN05 library+api+server both rejected" `Quick test_LKWN05_library_with_both_api_and_server_rejected;
       test_case "LKWN06 error message mentions library" `Quick test_LKWN06_library_error_mentions_library_keyword;
       test_case "LKWN07 error hint suggests module keyword" `Quick test_LKWN07_library_error_hint_suggests_module;
@@ -917,7 +943,7 @@ let () =
       test_case "LIMN01 import module-with-server rejected" `Quick test_LIMN01_importing_module_with_server_rejected;
       test_case "LIMN02 import module-with-api rejected" `Quick test_LIMN02_importing_module_with_api_rejected;
       test_case "LIMN03 import module-with-main rejected" `Quick test_LIMN03_importing_module_with_main_rejected;
-      test_case "LIMN04 import module-with-workers rejected" `Quick test_LIMN04_importing_module_with_workers_block_rejected;
+      test_case "LIMN04 import module-with-queue-app rejected" `Quick test_LIMN04_importing_module_with_queue_app_rejected;
       test_case "LIMN05 error names the bad module" `Quick test_LIMN05_clear_error_message_names_the_module;
       test_case "LIMN06 clean library import still works (positive)" `Quick test_LIMN06_clean_library_import_still_compiles;
     ];

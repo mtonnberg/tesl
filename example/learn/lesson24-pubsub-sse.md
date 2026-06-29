@@ -1,13 +1,13 @@
 # Lesson 24: Pub/Sub Channels and SSE Endpoints
 
 > **Implemented — including horizontal scaling via LISTEN/NOTIFY.**
-> - `publish` inside `with transaction` writes to `tesl_pubsub_outbox` atomically and issues `NOTIFY tesl_pubsub` with the row ID (deferred to commit).
+> - `publish` inside `transaction` writes to `tesl_pubsub_outbox` atomically and issues `NOTIFY tesl_pubsub` with the row ID (deferred to commit).
 > - SSE connections receive events via the same in-memory listener mechanism. No separate port or nginx WebSocket proxy needed.
 > - SSE clients in **any process** receive events published by any other process (via PostgreSQL LISTEN/NOTIFY + outbox).
 > - `publish` outside a transaction calls listeners directly (at-most-once).
 > - The in-memory fallback is active when no PostgreSQL context is present (unit tests).
 >
-> See `example/chat/backend.thsl` for a complete working example.
+> See `example/chat/chat-backend.tesl` and `example/learn/lesson33-sse-and-queue-tests.tesl` for complete working examples.
 
 ---
 
@@ -30,7 +30,7 @@ Tesl channels are **server→client only**: the server publishes events, clients
 
 ### 1. Declare the event ADT first, then the channel
 
-Events are typed — the `channel` declaration's `payload` must be an ADT.
+Events are typed — the `sseChannel` declaration's `payload` must be an ADT. The declaration is a folded record: `sseChannel Name(key) = SseChannel { database: D  payload: T }`.
 
 ```tesl
 type UserEvent
@@ -38,20 +38,20 @@ type UserEvent
   | AvatarChanged  url: String
   | AccountDeleted
 
-channel UserEvents(userId: String ::: UserId userId) {
-  database MainDatabase
-  payload  UserEvent
+sseChannel UserEvents(userId: String ::: UserId userId) = SseChannel {
+  database: MainDatabase
+  payload: UserEvent
 }
 ```
 
 ### 2. Publish events inside a handler
 
-Use `publish ChannelName(key) VariantConstructor { fields }` to send an event. Use `with transaction` for guaranteed delivery:
+Use `publish ChannelName(key) VariantConstructor { fields }` to send an event. Use `transaction` for guaranteed delivery:
 
 ```tesl
 handler updateProfile(userId: String ::: UserId userId, req: ProfileUpdateRequest)
   requires [dbWrite, pubsub] =
-  with transaction {
+  transaction {
     update User in MainDatabase where Id == userId set { bio: req.bio }
     publish UserEvents(userId) ProfileUpdated { bio: req.bio }
   }
@@ -75,24 +75,26 @@ The `auth` line works exactly like HTTP endpoints. The `ChannelOwner session use
 
 **No `server` binding needed** — SSE endpoints are automatically handled by the runtime.
 
-### 4. `serve` starts pub/sub automatically
+### 4. The App root starts pub/sub automatically
 
-No `startWebSocket ... on PORT` needed. Something call `serve` as normal:
+No `startWebSocket ... on PORT` needed, and no explicit start call at all. Return an `App` from `main` and list your SSE channels in `App.sseChannels`:
 
 ```tesl
-main {
-  with database MainDatabase {
-    with capabilities [appService] {
-      startWorkers EmailWorkers with capabilities [emailSend]
-      serve        MyServer     on port  with capabilities [appService]
-    }
+main() -> App requires [appService] =
+  App {
+    database: MainDatabase
+    api: MyServer
+    port: 8080
+    queues: [EmailQueue]
+    sseChannels: [UserEvents]
   }
-}
 ```
 
-When `serve` starts and SSE endpoints are registered, it automatically:
+When the App starts and SSE endpoints are registered, the runtime automatically:
 1. Starts a PostgreSQL `LISTEN tesl_pubsub` connection for cross-process delivery.
 2. Routes `GET /events/user/:userId` requests to the SSE handler.
+
+Listing a channel in `App.sseChannels` activates its outbox delivery; listing a queue in `App.queues` activates its workers. Capabilities are granted at the App root, derived from `main.requires`.
 
 ### 5. Connect from the browser
 
@@ -147,7 +149,7 @@ Every 10 seconds a `: heartbeat` comment line is sent to keep the connection ali
 
 ### The outbox pattern: durable event delivery
 
-When `publish` runs inside `with transaction`:
+When `publish` runs inside `transaction`:
 
 1. The event payload is serialized to JSON and inserted into `tesl_pubsub_outbox`.
 2. `SELECT pg_notify('tesl_pubsub', row_id)` is issued. PostgreSQL defers this NOTIFY to commit.
@@ -231,4 +233,4 @@ capability userEvents implies pubsub
 
 ---
 
-See `example/learn/lesson23-queues-and-workers.md` for background job queues, and `example/chat/backend.thsl` for a complete working example.
+See `example/learn/lesson23-queues-and-workers.md` for background job queues, and `example/chat/chat-backend.tesl` and `example/learn/lesson33-sse-and-queue-tests.tesl` for complete working examples.

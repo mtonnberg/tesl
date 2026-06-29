@@ -195,7 +195,7 @@ auth cookieAuth(request: HttpRequest) -> session: SessionUser::: Authenticated s
 |} in
   let racket = compile_ok src "auth_record_return_emit" in
   assert_contains ~name:"typed SessionUser constructor" racket "(SessionUser #:id \"u1\" #:username \"alice\")";
-  assert_not_contains ~name:"raw hash auth return" racket "(hash 'id \"u1\" 'username \"alice\")"
+  assert_not_contains ~name:"raw hash auth return" racket "(hash 'id \"u1\" 'username: \"alice\")"
 
 let test_handler_emit () =
   let src = {|#lang tesl
@@ -520,9 +520,9 @@ capability chatPubSub implies pubsub
 
 type RoomEvent = NewMessage roomId: String
 
-channel RoomMessages(roomId: String) {
-  database MainDatabase
-  payload RoomEvent
+channel RoomMessages(roomId: String) = SseChannel {
+  database: MainDatabase
+  payload: RoomEvent
 }
 
 handler postMessage(roomId: String) -> String
@@ -546,9 +546,9 @@ record NotifyJob {
 
 type RoomEvent = NotifyFailed roomName: String
 
-channel RoomMessages(roomId: String) {
-  database MainDatabase
-  payload RoomEvent
+channel RoomMessages(roomId: String) = SseChannel {
+  database: MainDatabase
+  payload: RoomEvent
 }
 
 deadWorker handleDeadNotify(job: NotifyJob) -> NotifyJob
@@ -837,6 +837,172 @@ test "task" {
   let racket = compile_ok src "prop_unknown_proof" in
   assert_not_contains ~name:"no tesl-test-proof-field for unknown pred" racket "tesl-test-proof-field"
 
+(* ── Codec field-mapping regression ──────────────────────────────────────── *)
+
+(* A stray `:` after a codec field name (`name: <- "name"`, a config-block habit)
+   used to fall through the parser's "skip unknown" arm, silently dropping the
+   ENTIRE field mapping and emitting an empty decoder — a runtime body-validation
+   400 with no compile-time signal.  The field must still be decoded. *)
+let test_codec_field_stray_colon () =
+  let src = {|#lang tesl
+module ColonCodec exposing [Req]
+record Req {
+  name: String
+}
+codec Req {
+  toJson_forbidden
+  fromJson [
+    {
+      name: <- "name" with_codec stringCodec
+    }
+  ]
+}
+|} in
+  let racket = compile_ok src "colon_codec" in
+  assert_contains ~name:"codec decodes the field despite the stray colon"
+    racket "(tesl-decode-prim-field _j \"name\"";
+  assert_not_contains ~name:"decoder is not empty (field not dropped)"
+    racket "(record-value 'Req (hash ))"
+
+(* ── EOk attach-proof: strip surface `check` wrapper ─────────────────────────
+   `ok (check (checkA && checkB)) n ::: p` (a proof-sidecar fn tail) reaches the
+   EOk attach-proof emit since the always-on-checkpoint change. It must emit
+   `(attach-proof ((check-and checkA checkB) n) p)` — NOT `(check (check-and …) n)`
+   with an unbound `check` head (which failed Racket expansion). *)
+let test_eok_check_value_strips_check_wrapper () =
+  let src = {|#lang tesl
+module SidecarEmit exposing [sc]
+import Tesl.Prelude exposing [Int]
+fact Positive (n: Int)
+fact Small (n: Int)
+check checkPositive(n: Int) -> n: Int ::: Positive n =
+  if n > 0 then
+    ok n ::: Positive n
+  else
+    fail 400 "must be positive"
+check checkSmall(n: Int) -> n: Int ::: Small n =
+  if n < 100 then
+    ok n ::: Small n
+  else
+    fail 400 "must be small"
+fn sc(n: Int, m: Int) -> (Int ? Positive && Small) ::: Positive m =
+  let (_ ::: p) = check checkPositive m
+  (check (checkPositive && checkSmall)) n ::: p
+|} in
+  let racket = compile_ok src "eok_check_value" in
+  assert_contains ~name:"EOk strips the surface check wrapper into a direct check-and call"
+    racket "(attach-proof ((check-and checkPositive checkSmall) n)";
+  assert_not_contains ~name:"no unbound (check (check-and ...) head"
+    racket "(check (check-and"
+
+(* Guard against over-eager matching: a USER function whose name merely contains
+   "check" (e.g. `checkout`) is NOT the `check` keyword and must NOT be stripped. *)
+let test_eok_checkout_not_stripped () =
+  let src = {|#lang tesl
+module CheckoutEmit exposing [sc]
+import Tesl.Prelude exposing [Int]
+fact P (n: Int)
+fn checkout(n: Int) -> Int =
+  n
+fn sc(n: Int ::: P n) -> Int ::: P n =
+  ok (checkout n) ::: P n
+|} in
+  let racket = compile_ok src "eok_checkout" in
+  assert_contains ~name:"checkout call preserved inside attach-proof"
+    racket "(attach-proof (checkout n)";
+  assert_not_contains ~name:"checkout is not treated as the check keyword"
+    racket "(check-and"
+
+(* ── Test-header `with database X` clause (with_cleanup change C) ──────────── *)
+
+let test_db_clause_src body = {|#lang tesl
+module Tdbc exposing []
+import Tesl.Prelude exposing [String, Int]
+
+entity Item table "items" primaryKey id {
+  id: String
+  amount: Int
+}
+
+database TestDB = Database {
+  entities: [Item]
+  backend: Memory
+}
+
+|} ^ body
+
+let test_with_database_clause_wraps_test_body () =
+  (* `test "..." with database X { ... }` binds X for the body by wrapping it in
+     the same `call-with-database` primitive that the `with database X { }` block uses. *)
+  let src = test_db_clause_src
+    {|test "binds a database for the body" with database TestDB {
+  expect 1 == 1
+}|} in
+  let racket = compile_ok src "with_database_clause" in
+  assert_contains ~name:"test body wrapped in call-with-database"
+    racket "(call-with-database TestDB (lambda ()";
+  assert_contains ~name:"database is defined" racket "(define-database TestDB"
+
+let test_plain_test_has_no_database_wrapper () =
+  (* A test with no `with database` clause emits no wrapper — the default in-memory
+     store is used, byte-identical to today's plain tests. *)
+  let src = test_db_clause_src
+    {|test "plain in-memory test" {
+  expect 2 == 2
+}|} in
+  let racket = compile_ok src "plain_test_no_db" in
+  assert_contains ~name:"plain test still emitted" racket "(test-case \"plain in-memory test\"";
+  assert_not_contains ~name:"no call-with-database for a clause-less test"
+    racket "call-with-database"
+
+let test_with_database_clause_combines_with_requires () =
+  (* The clause coexists with `requires [...]` in any order before the body `{`. *)
+  let src = test_db_clause_src
+    {|test "db plus caps" requires [dbRead] with database TestDB {
+  expect 3 == 3
+}|} in
+  let racket = compile_ok src "db_plus_caps" in
+  assert_contains ~name:"call-with-database present" racket "(call-with-database TestDB (lambda ()";
+  assert_contains ~name:"with-capabilities present" racket "(with-capabilities ("
+
+(* ── Single-test selection by name + kind (test_debug_for_all_tests) ───────── *)
+
+let test_kind_filter_selects_and_suppresses () =
+  let src = {|#lang tesl
+module Foo exposing []
+import Tesl.Prelude exposing [Int]
+test "unit thing" {
+  expect 1 == 1
+}
+api-test "request templates" for ChatServer {
+  let room = post "/rooms/{roomId}"
+              cookie "chatUserId={userId}"
+              body { "content": "hello {roomName}" }
+}
+|} in
+  Fun.protect
+    ~finally:(fun () ->
+      Emit_racket.set_test_name_filter None;
+      Emit_racket.set_test_kind_filter None)
+    (fun () ->
+      (* No filter: both the plain test and the api-test emit (unchanged behaviour). *)
+      let all = compile_ok src "kind_filter_none" in
+      assert_contains ~name:"plain test present" all "(test-case \"unit thing\"";
+      assert_contains ~name:"api-test present" all "(test-case \"request templates\"";
+      (* --test-name + --test-kind api-test: only the api-test, plain test suppressed. *)
+      Emit_racket.set_test_name_filter (Some "request templates");
+      Emit_racket.set_test_kind_filter (Some "api-test");
+      let only_api = compile_ok src "kind_filter_api" in
+      assert_contains ~name:"selected api-test present" only_api "(test-case \"request templates\"";
+      assert_not_contains ~name:"plain test suppressed" only_api "(test-case \"unit thing\"";
+      (* --test-name + --test-kind test: only the plain test, api-test suppressed
+         (api-tests previously emitted unconditionally — this is the key fix). *)
+      Emit_racket.set_test_name_filter (Some "unit thing");
+      Emit_racket.set_test_kind_filter (Some "test");
+      let only_plain = compile_ok src "kind_filter_plain" in
+      assert_contains ~name:"selected plain test present" only_plain "(test-case \"unit thing\"";
+      assert_not_contains ~name:"api-test suppressed" only_plain "(test-case \"request templates\"")
+
 (* ── Suite ───────────────────────────────────────────────────────────────── *)
 
 let () =
@@ -924,5 +1090,20 @@ let () =
     "property-tests", [
       Alcotest.test_case "known proof uses tesl-test-proof-field" `Quick test_property_known_proof_uses_proof_field;
       Alcotest.test_case "unknown proof no fabrication" `Quick test_property_unknown_proof_no_fabrication;
+    ];
+    "codec", [
+      Alcotest.test_case "stray colon after codec field name still decodes" `Quick test_codec_field_stray_colon;
+    ];
+    "test-db-clause", [
+      Alcotest.test_case "with database clause wraps test body" `Quick test_with_database_clause_wraps_test_body;
+      Alcotest.test_case "plain test has no database wrapper" `Quick test_plain_test_has_no_database_wrapper;
+      Alcotest.test_case "with database combines with requires" `Quick test_with_database_clause_combines_with_requires;
+    ];
+    "test-kind-filter", [
+      Alcotest.test_case "name+kind selects one test and suppresses others" `Quick test_kind_filter_selects_and_suppresses;
+    ];
+    "eok-proof", [
+      Alcotest.test_case "EOk check-value strips check wrapper" `Quick test_eok_check_value_strips_check_wrapper;
+      Alcotest.test_case "checkout (user fn) not treated as check keyword" `Quick test_eok_checkout_not_stripped;
     ];
   ]

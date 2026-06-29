@@ -39,6 +39,11 @@ curl -b 'user=alice' localhost:8086/todos/todo-1
 
 ```sh
 tesl test         # runs the `test "..."` blocks in app.tesl
+
+# Run a single block by name; add --test-kind to disambiguate same-named
+# blocks of different kinds (test | api-test | load-test | doctest):
+tesl test --test-name "creates a todo" app.tesl
+tesl test --test-name "POST /todos" --test-kind api-test app.tesl
 ```
 
 To point at an existing database instead of the managed one, set

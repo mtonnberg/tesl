@@ -66,6 +66,15 @@ import Tesl.Random exposing [random]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Id exposing [generatePrefixedId]
 import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
 
 # ─── Capabilities ─────────────────────────────────────────────────────────────
 capability timedRead implies dbRead
@@ -104,18 +113,18 @@ codec CreateEventRequest {
 }
 
 # ─── Database ─────────────────────────────────────────────────────────────────
-database TimedDatabase {
-  backend postgres
-  schema "timed_app"
-  entities [Event]
-  postgres {
-    database env("TIMED_DB_NAME")
-    user env("TIMED_DB_USER")
-    password env("TIMED_DB_PASSWORD")
-    host env("TIMED_DB_HOST")
-    port envInt("TIMED_DB_PORT", 5432)
-    socket env("TIMED_DB_SOCKET")
-  }
+database TimedDatabase = Database {
+  schema: "timed_app"
+  entities: [Event]
+  backend: Postgres (PostgresConfig {
+    dbName: env "TIMED_DB_NAME"
+    user: env "TIMED_DB_USER"
+    password: env "TIMED_DB_PASSWORD"
+    connection: TcpConnection {
+      host: env "TIMED_DB_HOST"
+      port: envInt "TIMED_DB_PORT" 5432
+    }
+  })
 }
 
 fact Authenticated (user: String)

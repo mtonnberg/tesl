@@ -73,7 +73,7 @@ import Tesl.ListPrim exposing [ListPrim.head, ListPrim.tail, ListPrim.append]
 
 # ── TRANSFORM ────────────────────────────────────────────────────────────────
 
-fn map(f: a -> b, xs: List a) -> List b =
+fn map(f: (a -> b requires c), xs: List a) -> List b requires c =
   case ListPrim.head xs of
     Nothing -> []
     Something first ->
@@ -81,7 +81,7 @@ fn map(f: a -> b, xs: List a) -> List b =
         Nothing -> [f first]
         Something rest -> ListPrim.append [f first] (map f rest)
 
-fn filter(pred: a -> Bool, xs: List a) -> List a =
+fn filter(pred: (a -> Bool requires c), xs: List a) -> List a requires c =
   case ListPrim.head xs of
     Nothing -> []
     Something first ->
@@ -97,7 +97,7 @@ fn filter(pred: a -> Bool, xs: List a) -> List a =
           else
             filter pred rest
 
-fn concatMap(f: a -> List b, xs: List a) -> List b =
+fn concatMap(f: (a -> List b requires c), xs: List a) -> List b requires c =
   concat (map f xs)
 
 fn reverse(xs: List a) -> List a =
@@ -144,7 +144,7 @@ fn tail(xs: List a) -> Maybe (List a) =
     True -> Nothing
     False -> Something xs
 
-fn any(pred: a -> Bool, xs: List a) -> Bool =
+fn any(pred: (a -> Bool requires c), xs: List a) -> Bool requires c =
   case ListPrim.head xs of
     Nothing -> False
     Something first ->
@@ -155,7 +155,7 @@ fn any(pred: a -> Bool, xs: List a) -> Bool =
           Nothing -> False
           Something rest -> any pred rest
 
-fn all(pred: a -> Bool, xs: List a) -> Bool =
+fn all(pred: (a -> Bool requires c), xs: List a) -> Bool requires c =
   case ListPrim.head xs of
     Nothing -> True
     Something first ->
@@ -166,7 +166,7 @@ fn all(pred: a -> Bool, xs: List a) -> Bool =
       else
         False
 
-fn find(pred: a -> Bool, xs: List a) -> Maybe a =
+fn find(pred: (a -> Bool requires c), xs: List a) -> Maybe a requires c =
   case ListPrim.head xs of
     Nothing -> Nothing
     Something first ->
@@ -256,7 +256,7 @@ fn repeat(x: a, n: Int) -> List a =
 
 # ── FOLD ─────────────────────────────────────────────────────────────────────
 
-fn foldl(f: b -> a -> b, acc: b, xs: List a) -> b =
+fn foldl(f: (b -> a -> b requires c), acc: b, xs: List a) -> b requires c =
   case ListPrim.head xs of
     Nothing -> acc
     Something first ->
@@ -264,7 +264,7 @@ fn foldl(f: b -> a -> b, acc: b, xs: List a) -> b =
         Nothing -> f acc first
         Something rest -> foldl f (f acc first) rest
 
-fn foldr(f: a -> b -> b, acc: b, xs: List a) -> b =
+fn foldr(f: (a -> b -> b requires c), acc: b, xs: List a) -> b requires c =
   case ListPrim.head xs of
     Nothing -> acc
     Something first ->

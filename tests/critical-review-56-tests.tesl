@@ -11,7 +11,7 @@
 
 module CriticalReview56Tests exposing []
 
-import Tesl.Prelude exposing [ Int, Bool(..), String, List, Fact, detachFact, ]
+import Tesl.Prelude exposing [Int, Bool(..), String, List, Fact, detachFact]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.List exposing [List.length, List.filterCheck]
 

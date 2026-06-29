@@ -1,7 +1,7 @@
 (** Linter rule tests (WS5 — linting improvements).
 
     These exercise {!Linter.lint_file} directly on temp files. The linter is
-    pure static OCaml analysis — no Racket backend is involved — so these tests
+    pure static OCaml analysis — no Racket backend: is involved — so these tests
     run entirely in-process via the library.
 
     Coverage:

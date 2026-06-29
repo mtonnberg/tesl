@@ -24,6 +24,16 @@ import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Telemetry exposing [telemetry, initTelemetry]
 import Tesl.Id exposing [generatePrefixedId]
 import Tesl.Random exposing [random]
+import Tesl.Database exposing [
+  Database,
+  DatabaseBackend,
+  Postgres,
+  Memory,
+  PostgresConfig,
+  TcpConnection,
+  SocketConnection,
+]
+import Tesl.App exposing [App]
 
 # Capabilities are explicit permissions. `appWebService` bundles everything the
 # server needs; a handler can only do what its declared capabilities allow.
@@ -53,18 +63,18 @@ entity Todo table "todos" primaryKey id {
   createdAt: PosixMillis
 }
 
-database AppDatabase {
-  backend postgres
-  schema "app"
-  entities [Todo]
-  postgres {
-    database env("TESL_POSTGRES_DATABASE")
-    user env("TESL_POSTGRES_USER")
-    password env("TESL_POSTGRES_PASSWORD")
-    host env("TESL_POSTGRES_HOST")
-    port envInt("TESL_POSTGRES_PORT", 5432)
-    socket env("TESL_POSTGRES_SOCKET")
-  }
+database AppDatabase = Database {
+  schema: "app"
+  entities: [Todo]
+  backend: Postgres (PostgresConfig {
+    dbName: env "TESL_POSTGRES_DATABASE"
+    user: env "TESL_POSTGRES_USER"
+    password: env "TESL_POSTGRES_PASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_POSTGRES_HOST"
+      port: envInt "TESL_POSTGRES_PORT" 5432
+    }
+  })
 }
 
 defaultPort = 8086
@@ -116,7 +126,7 @@ check isTodoId(todoId: String) -> todoId: String ::: TodoId todoId =
   else
     fail 400 "Malformed todo id"
 
-capture todoIdCapture: String ::: TodoId todoId using stringCodec via isTodoId
+capturer todoIdCapture: String ::: TodoId todoId using stringCodec via isTodoId
 
 fn seedExampleData() -> Int
   requires [appDbRead, appDbWrite, time] =
@@ -190,13 +200,12 @@ test "todo id shape" {
   expect String.length "x" <= 5
 }
 
-main with capabilities [appWebService] {
-  initTelemetry service "__APP_NAME__" endpoint "in-memory" console True
+main() -> App requires [appWebService] =
+  let _ = initTelemetry service "__APP_NAME__" endpoint "in-memory" console True
   let port = envInt "PORT" defaultPort
-  with database AppDatabase {
-    with capabilities [appWebService] {
-      seedExampleData()
-    }
-    serve AppServer on port with capabilities [appWebService]
+  let _ = seedExampleData()
+  App {
+    database: AppDatabase
+    api: AppServer
+    port: port
   }
-}

@@ -64,8 +64,8 @@ let normalize_conj (p : proof_expr) : string =
 let build_cap_map (decls : top_decl list) : (string * string list) list =
   List.filter_map (function
     | DCapability c -> Some (c.name, c.implies)
-    (* Cache declarations implicitly define a "cache <Name>" capability *)
-    | DCache (c : Ast.cache_form) -> Some ("cache " ^ c.name, [])
+    (* Cache declarations implicitly define a "cacheCap <Name>" capability *)
+    | DCache (c : Ast.cache_form) -> Some ("cacheCap " ^ c.name, [])
     (* Email declarations implicitly define an "email" capability *)
     | DEmail _ -> Some ("email", [])
     | _ -> None
@@ -943,9 +943,12 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
           } :: !errors
       ) c.implies
     | DFunc fd ->
-      (* Check requires: all listed caps must be declared *)
+      (* Check requires: every listed name must be either a declared capability or
+         a capability-row variable bound by one of this function's parameters
+         (`f: (A -> B requires c)` binds the row variable `c`). *)
+      let bound_vars = Ast.func_bound_cap_vars fd in
       List.iter (fun cap ->
-        if not (List.mem cap declared_caps) then
+        if not (List.mem cap declared_caps) && not (List.mem cap bound_vars) then
           errors := { loc = fd.loc;
             message = Printf.sprintf
               "function '%s' requires undeclared capability '%s'" fd.name cap
@@ -1529,7 +1532,7 @@ supplies the wrong literal arguments (%s); the body must return the declared fac
       let rec check_nested_txn in_txn (e : Ast.expr) =
         match e with
         | EWithTransaction { body; loc } when in_txn ->
-          errors := { loc; message = "nested `with transaction` is not allowed; transactions cannot be nested" }
+          errors := { loc; message = "nested `transaction` is not allowed; transactions cannot be nested" }
             :: !errors;
           check_nested_txn true body
         | EWithTransaction { body; _ } ->
@@ -1543,7 +1546,7 @@ supplies the wrong literal arguments (%s); the body must return the declared fac
              errors := {
                loc;
                message = Printf.sprintf
-                 "call to `%s` is not allowed inside `with transaction` because it can open its own transaction"
+                 "call to `%s` is not allowed inside `transaction` because it can open its own transaction"
                  fn_name;
              } :: !errors
            | _ -> ());

@@ -60,10 +60,10 @@ let corpus = [
   "type UserEvent\n= ProfileUpdated bio:String\n| AccountDeleted\n";
 
   "database_block",
-  "database D {\n  backend postgres\n  schema  \"app\"\n  user     \"u\"\n  port     5432\n}\n";
+  "database D = Database {\n  schema: \"app\"\n  entities: []\n  backend: Postgres (PostgresConfig {\n    dbName: \"d\"\n    user: \"u\"\n    password: \"\"\n    connection: TcpConnection {\n      host: \"localhost\"\n      port: 5432\n    }\n  })\n}\n";
 
   "queue_nested_blocks",
-  "queue EmailQueue {\n  jobs     [SendEmail]\n  retry {\n    maxAttempts: 3\n    backoff: exponential\n  }\n}\n";
+  "queue EmailQueue requires [queueRead] = Queue {\n  database: D\n  jobs: [Job SendEmail sendEmailWorker]\n  numberOfWorkers: 2\n  retry: QueueRetryStrategy {\n    maxAttempts: 3\n    backoff: Exponential\n  }\n}\n";
 
   "worker_with_proof",
   "worker sendEmailWorker(job: SendEmail ::: FromQueue (Id == jobId) job)\n  requires [queueRead] =\n  job\n";

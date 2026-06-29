@@ -177,6 +177,10 @@ tesl validate example/sandbox.tesl
 # Run test blocks inside a file:
 tesl test example/sandbox2.test.tesl
 
+# Run a single block by name; --test-kind (test | api-test | load-test | doctest)
+# disambiguates same-named blocks and runs one api-test/load-test/doctest alone:
+tesl test --test-name "my test" --test-kind api-test example/sandbox2.test.tesl
+
 # Fast compiler checks (OCaml tests + verify all .tesl files compile):
 bash compiler/ci.sh
 

@@ -176,7 +176,7 @@ let map_result f = function Ok x -> Ok (f x) | Err e -> Err e
 let token_as_ident = function
   | IDENT n | UIDENT n -> Some n
   | FN -> Some "fn" | HANDLER -> Some "handler" | CHECK -> Some "check"
-  | AUTH -> Some "auth" | CAPTURE -> Some "capture" | TYPE -> Some "type"
+  | AUTH -> Some "auth" | CAPTURE -> Some "capture" | CAPTURER -> Some "capturer" | TYPE -> Some "type"
   | FACT -> Some "fact" | RECORD -> Some "record" | ENTITY -> Some "entity" | TABLE -> Some "table"
   | DATABASE -> Some "database" | API -> Some "api" | SERVER -> Some "server"
   | QUEUE -> Some "queue" | CHANNEL -> Some "channel" | WORKERS -> Some "workers" | CACHE -> Some "cache"
@@ -235,6 +235,57 @@ let parse_parenthesized_list parse_item s =
   let* _ = loop () in
   let* _ = expect s RPAREN in
   return (List.rev !items)
+
+(* ── Capability rows ──────────────────────────────────────────────────────
+   A capability row is the `requires` payload: `[a, b]`, a bare `c`, or a
+   parenthesized concatenation `([time] ++ c ++ c2)`.  It flattens to a plain
+   name list; whether a name is a row *variable* or a concrete capability is
+   decided later by the checker (a name is a variable iff it is bound by a
+   parameter's arrow-type `requires`).  `cacheCap X` / `email` keep their special
+   spellings, matching the bracketed form.  The per-cache capability is spelled
+   `cacheCap <Name>` (NOT `cache <Name>`) so it doesn't collide with the `cache`
+   declaration keyword — `cacheCap` is an ordinary identifier here. *)
+let parse_cap_name s =
+  match peek s with
+  | IDENT "cacheCap" ->
+    advance s;
+    (match peek s with
+     | UIDENT cache_name -> advance s; return ("cacheCap " ^ cache_name)
+     | _ -> return "cacheCap")
+  | IDENT n -> advance s; return n
+  | EMAIL -> advance s; return "email"
+  | t -> err s (Printf.sprintf "expected capability name, got %s" (tok_to_string t))
+
+let rec parse_cap_term s =
+  match peek s with
+  | LBRACKET -> parse_bracketed_list parse_cap_name s
+  | LPAREN ->
+    advance s;
+    let* r = parse_cap_row s in
+    let* _ = expect s RPAREN in
+    return r
+  | _ -> let* n = parse_cap_name s in return [n]
+and parse_cap_row s =
+  let* first = parse_cap_term s in
+  let rec loop acc =
+    if peek s = PLUS_PLUS then begin
+      advance s;
+      let* more = parse_cap_term s in
+      loop (acc @ more)
+    end else
+      return acc
+  in
+  loop first
+
+(** `requires <cap-row>`, or [] when absent.  Used both for declaration
+    `requires` clauses and for capability rows on parenthesized function types
+    `(A -> B requires c)`. *)
+let parse_requires s =
+  if peek s = REQUIRES then begin
+    advance s;
+    parse_cap_row s
+  end else
+    return []
 
 (** Try to parse something; backtrack on failure. *)
 let try_parse s f =
@@ -416,7 +467,7 @@ let rec parse_type_expr s =
     advance s;
     let* right = parse_type_expr s in
     let loc = span (type_loc left) (type_loc right) in
-    return (TFun { dom = left; cod = right; loc })
+    return (TFun { dom = left; cod = right; caps = []; loc })
   end else
     return left
 
@@ -439,6 +490,10 @@ and parse_type_app s =
       (* Type-level application: List Int, Maybe T — only uppercase names *)
       continue_with_type_arg ()
     | IDENT "where" ->
+      (* `where` ends a type (proof refinement: `T where P`) and so must terminate
+         type application.  (Captures use the `using`/`via` keyword tokens, which the
+         type parser already stops on; `with` no longer follows a type since inline
+         capture codecs moved to `using`.) *)
       return head
     | IDENT _ ->
       (* Lowercase: only a type arg if NOT followed by ':' (field label check) *)
@@ -486,6 +541,17 @@ and parse_type_atom s =
     (match parse_type_expr s with
      | Ok ty ->
        skip_erased_type_pack_suffix s;
+       (* Capability row on a parenthesized function type: `(A -> B requires c)`.
+          Only recognized inside parens, so it never collides with a declaration's
+          own `requires` clause. *)
+       let* ty =
+         if peek s = REQUIRES then
+           let* caps = parse_requires s in
+           return (match ty with
+                   | TFun r -> TFun { r with caps = r.caps @ caps }
+                   | _ -> ty)
+         else return ty
+       in
        (match peek s with
         | RPAREN ->
           advance s;  (* consume ) *)
@@ -1005,28 +1071,10 @@ and parse_type_app_ret s =
   (* For use after "Maybe " — parse the next type atom *)
   parse_type_atom s
 
-(* ── Capabilities ────────────────────────────────────────────────────────── *)
-
-let parse_requires s =
-  if peek s = REQUIRES then begin
-    advance s;
-    let* caps = parse_bracketed_list (fun s ->
-      match peek s with
-      | IDENT n -> advance s; Ok n
-      | CACHE ->
-        (* "cache CacheName" — named cache capability *)
-        advance s;
-        (match peek s with
-         | UIDENT cache_name -> advance s; Ok ("cache " ^ cache_name)
-         | _ -> Ok "cache")
-      | EMAIL ->
-        (* "email" — email capability (flat, not name-specific) *)
-        advance s; Ok "email"
-      | t -> err s (Printf.sprintf "expected capability name, got %s" (tok_to_string t))
-    ) s in
-    return caps
-  end else
-    return []
+(* ── Capabilities ──────────────────────────────────────────────────────────
+   `parse_requires` and the capability-row grammar are defined earlier (before
+   the type parser) so parenthesized function types `(A -> B requires c)` can
+   reuse them. *)
 
 let is_statement_starter_ident = function
   | "with" | "exists" | "publish" | "enqueue"
@@ -2170,10 +2218,14 @@ and parse_record_literal s =
           | Err _ -> continue_ := false
         end else continue_ := false
       | IDENT _
-      (* Allow keyword tokens as record field names (e.g. email, smtp) *)
-      | EMAIL | SMTP ->
+      (* Allow keyword tokens as record field names (e.g. email, smtp, and the
+         config-block field keywords schema/database/backend/api). *)
+      | EMAIL | SMTP | SCHEMA | DATABASE | BACKEND | API ->
         let fname = match peek s with
-          | IDENT n -> n | EMAIL -> "email" | SMTP -> "smtp" | _ -> "_"
+          | IDENT n -> n | EMAIL -> "email" | SMTP -> "smtp"
+          | SCHEMA -> "schema" | DATABASE -> "database" | BACKEND -> "backend"
+          | API -> "api"
+          | _ -> "_"
         in
         advance s;
         (* Field separator: either ':' (new record) or '=' (record update) *)
@@ -2315,22 +2367,6 @@ and hint_expr_type type_name = function
     ERecord { fields; type_hint = Some type_name; loc }
   | other -> other
 
-and parse_capability_names s =
-  parse_bracketed_list (fun s ->
-    match peek s with
-    | IDENT n -> advance s; Ok n
-    | CACHE ->
-      (* "cache CacheName" — named cache capability in startWorkers/serve *)
-      advance s;
-      (match peek s with
-       | UIDENT cache_name -> advance s; Ok ("cache " ^ cache_name)
-       | _ -> Ok "cache")
-    | EMAIL ->
-      (* "email" — email capability *)
-      advance s; Ok "email"
-    | t -> err s (Printf.sprintf "expected capability name, got %s" (tok_to_string t))
-  ) s
-
 and parse_publish_stmt s =
   let loc0 = current_loc s in
   let* _ =
@@ -2370,36 +2406,6 @@ and parse_enqueue_stmt s =
   let loc = span loc0 (current_loc s) in
   return (EEnqueue { job_type; payload = hint_expr_type job_type payload; loc })
 
-and parse_start_workers_stmt s ~is_dead =
-  let loc0 = current_loc s in
-  let keyword = if is_dead then "startDeadWorkers" else "startWorkers" in
-  let* _ =
-    match peek s with
-    | IDENT name when name = keyword -> advance s; return ()
-    | t -> err s (Printf.sprintf "expected %s statement, got %s" keyword (tok_to_string t))
-  in
-  let* concurrency =
-    if not is_dead && (match peek s with INT _ -> true | _ -> false) then
-      let* n = expect_int s in
-      return (Some n)
-    else
-      return None
-  in
-  let* workers_name = expect_uident s in
-  let* _ =
-    match peek s with
-    | IDENT "with" -> advance s; return ()
-    | t -> err s (Printf.sprintf "expected `with` after %s, got %s" keyword (tok_to_string t))
-  in
-  let* _ =
-    match peek s with
-    | IDENT "capabilities" -> advance s; return ()
-    | t -> err s (Printf.sprintf "expected `capabilities` after %s, got %s" keyword (tok_to_string t))
-  in
-  let* capabilities = parse_capability_names s in
-  let loc = span loc0 (current_loc s) in
-  return (EStartWorkers { workers_name; capabilities; concurrency; is_dead; loc })
-
 and parse_start_email_worker_stmt s =
   let loc0 = current_loc s in
   let* _ =
@@ -2411,42 +2417,11 @@ and parse_start_email_worker_stmt s =
   let loc = span loc0 (current_loc s) in
   return (EStartEmailWorker { email_name; loc })
 
-and parse_serve_stmt s =
-  let loc0 = current_loc s in
-  let* _ =
-    match peek s with
-    | IDENT "serve" -> advance s; return ()
-    | t -> err s (Printf.sprintf "expected serve statement, got %s" (tok_to_string t))
-  in
-  let* server_name = expect_uident s in
-  let* _ =
-    match peek s with
-    | IDENT "on" -> advance s; return ()
-    | t -> err s (Printf.sprintf "expected `on` after serve target, got %s" (tok_to_string t))
-  in
-  let* port = parse_postfix s in
-  let* _ =
-    match peek s with
-    | IDENT "with" -> advance s; return ()
-    | t -> err s (Printf.sprintf "expected `with` after serve port, got %s" (tok_to_string t))
-  in
-  let* _ =
-    match peek s with
-    | IDENT "capabilities" -> advance s; return ()
-    | t -> err s (Printf.sprintf "expected `capabilities` after serve, got %s" (tok_to_string t))
-  in
-  let* capabilities = parse_capability_names s in
-  let static_dir = ref None in
-  if peek s = IDENT "static" then begin
-    advance s;
-    match expect_string s with
-    | Ok dir -> static_dir := Some dir
-    | Err _ -> ()
-  end;
-  let loc = span loc0 (current_loc s) in
-  return (EServe { server_name; port; capabilities; static_dir = !static_dir; loc })
-
 and parse_with_stmt s =
+  (* `with database X { … }` — bind a named database for the block body.  (The
+     `database` keyword is intentionally retained here: dropping it would collide with
+     the `database X = Database { … }` declaration keyword.  `with transaction` was
+     migrated to the bare `transaction { … }` form — see [parse_transaction_block].) *)
   let loc0 = current_loc s in
   let* _ =
     match peek s with
@@ -2465,37 +2440,26 @@ and parse_with_stmt s =
     let* _ = expect s RBRACE in
     let loc = span loc0 (current_loc s) in
     return (EWithDatabase { database_name; body; loc })
-  | IDENT "capabilities" ->
-    advance s;
-    let* capabilities = parse_capability_names s in
-    let* _ = expect s LBRACE in
-    skip_newlines s;
-    if peek s = INDENT then advance s;
-    let* body = parse_stmt_seq s in
-    skip_layout s;
-    let* _ = expect s RBRACE in
-    let loc = span loc0 (current_loc s) in
-    return (EWithCapabilities { capabilities; body; loc })
-  | IDENT "transaction" ->
-    advance s;
-    let* _ = expect s LBRACE in
-    skip_newlines s;
-    if peek s = INDENT then advance s;
-    let* body = parse_stmt_seq s in
-    skip_layout s;
-    let* _ = expect s RBRACE in
-    let loc = span loc0 (current_loc s) in
-    return (EWithTransaction { body; loc })
-  | _ ->
-    while peek s <> LBRACE && peek s <> EOF && peek s <> NEWLINE do advance s done;
-    if peek s = LBRACE then begin
-      advance s; skip_layout s;
-      let* body = parse_stmt_seq s in
-      skip_layout s;
-      let* _ = expect s RBRACE in
-      return body
-    end else
-      parse_stmt_seq s
+  | t -> err s (Printf.sprintf "expected `database` after `with`, got %s" (tok_to_string t))
+
+and parse_transaction_block s =
+  (* `transaction { … }` — wrap multiple writes in one atomic transaction.  (Formerly
+     spelled `with transaction { … }`; the `with` was dropped in the with-keyword
+     cleanup since `transaction` is unambiguous on its own.) *)
+  let loc0 = current_loc s in
+  let* _ =
+    match peek s with
+    | IDENT "transaction" -> advance s; return ()
+    | t -> err s (Printf.sprintf "expected transaction block, got %s" (tok_to_string t))
+  in
+  let* _ = expect s LBRACE in
+  skip_newlines s;
+  if peek s = INDENT then advance s;
+  let* body = parse_stmt_seq s in
+  skip_layout s;
+  let* _ = expect s RBRACE in
+  let loc = span loc0 (current_loc s) in
+  return (EWithTransaction { body; loc })
 
 and continue_stmt_seq s e =
   skip_newlines s;
@@ -2598,19 +2562,13 @@ and parse_stmt_seq s =
   | IDENT "enqueue" ->
     let* e = parse_enqueue_stmt s in
     continue_stmt_seq s e
-  | IDENT "startWorkers" ->
-    let* e = parse_start_workers_stmt s ~is_dead:false in
-    continue_stmt_seq s e
-  | IDENT "startDeadWorkers" ->
-    let* e = parse_start_workers_stmt s ~is_dead:true in
-    continue_stmt_seq s e
   | IDENT "startEmailWorker" ->
     let* e = parse_start_email_worker_stmt s in
     continue_stmt_seq s e
-  | IDENT "serve" ->
-    let* e = parse_serve_stmt s in
+  | IDENT "transaction" when peek2 s = LBRACE ->
+    let* e = parse_transaction_block s in
     continue_stmt_seq s e
-  | IDENT "with" when (match peek2 s with DATABASE | IDENT "capabilities" | IDENT "transaction" -> true | _ -> false) ->
+  | IDENT "with" when peek2 s = DATABASE ->
     let* e = parse_with_stmt s in
     continue_stmt_seq s e
   | IDENT "set" ->
@@ -2825,6 +2783,10 @@ let parse_func_body s =
         | PUBLISH | IDENT "publish"
         | IDENT "enqueue" | IDENT "startWorkers" | IDENT "startDeadWorkers"
         | IDENT "serve" | IDENT "with" | IDENT "startEmailWorker" -> true
+        (* A bare `transaction { … }` body (formerly `with transaction`) must route to
+           the statement-sequence parser too — otherwise an un-indented body (e.g. after
+           a multi-line handler header) is mis-parsed as a plain expression. *)
+        | IDENT "transaction" -> peek2 s = LBRACE
         | _ -> false) then
       parse_stmt_seq s
     else
@@ -2859,10 +2821,7 @@ let parse_func_body s =
   end
 
 (** Parse [fn name(params) -> RetSpec = body]. *)
-let parse_fn_decl kind s =
-  let loc0 = current_loc s in
-  (* keyword already consumed by caller *)
-  let* name = expect_ident s in
+let parse_fn_decl_named kind name loc0 s =
   let* params = parse_params s in
   (* optional 'requires [...]' — for handlers, before or after return type *)
   let* caps_before = parse_requires s in
@@ -2964,6 +2923,14 @@ let parse_fn_decl kind s =
   let loc = span loc0 (current_loc s) in
   return { kind; name; params; return_spec; capabilities; body = body'; loc;
            desugared_from = None }
+
+(* Read the function name, then parse the rest of the declaration. The decl's
+   loc must start at the name (callers consumed the keyword), matching the
+   pre-refactor behaviour relied on by go-to-definition / occurrences. *)
+let parse_fn_decl kind s =
+  let loc0 = current_loc s in
+  let* name = expect_ident s in
+  parse_fn_decl_named kind name loc0 s
 
 let parse_field_defs s =
   let* _ = expect s LBRACE in
@@ -3541,6 +3508,13 @@ let parse_codec_form s name type_name =
                    let saved = s.pos in
                    (match expect_ident s with
                     | Ok fname ->
+                      (* Tolerate a stray `:` after the field name (a config-block
+                         habit: `username: <- "username"`).  The codec mapping syntax
+                         is `field <- "key"`; without this the `:` fell through to the
+                         "skip unknown" arm below, silently dropping the ENTIRE mapping
+                         and emitting an empty decoder — i.e. a runtime body-validation
+                         400 with no compile-time signal. *)
+                      (if peek s = COLON then advance s);
                       (match peek s with
                        | BACKARROW ->
                          advance s;
@@ -3608,194 +3582,35 @@ let parse_codec_form s name type_name =
   let loc = span loc0 (current_loc s) in
   return { name; type_name; to_json = !to_json; from_json = !from_json; loc }
 
-(** Parse a database block. *)
+(** Parse a database declaration: `database NAME = Database { … }`. *)
 let parse_database_form s =
   let loc0 = current_loc s in
   let* name = expect_uident s in
-  let* _ = expect s LBRACE in
-  skip_layout s;
-  let schema = ref "" in
-  let entities = ref [] in
-  let postgres = ref [] in
-  while peek s <> RBRACE && peek s <> EOF do
-    skip_layout s;
-    (match peek s with
-     | BACKEND -> advance s; skip_layout s; advance s (* consume "postgres" or similar *)
-     | SCHEMA ->
-       advance s;
-       (match expect_string s with
-        | Ok s_ -> schema := s_
-        | Err _ -> ())
-     | ENTITY ->
-       advance s;
-       let ents = ref [] in
-       if peek s = LBRACKET then begin
-         advance s;
-         while peek s <> RBRACKET && peek s <> EOF do
-           (match peek s with
-            | UIDENT n -> advance s; ents := n :: !ents
-            | COMMA -> advance s
-            | _ -> advance s);
-         done;
-         if peek s = RBRACKET then advance s
-       end;
-       entities := List.rev !ents @ !entities
-     | IDENT key ->
-       (* postgres { key value ... } or key "value" *)
-       advance s;
-       (match peek s with
-        | LBRACE ->
-          (* postgres { key value ... } block *)
-          advance s; skip_layout s;
-          let parse_pg_value s func_name =
-            (* Parse env("VAR") or envInt("VAR",default) or plain func_name *)
-            if peek s = LPAREN then begin
-              advance s;
-              let buf = Buffer.create 32 in
-              Buffer.add_string buf (func_name ^ "(");
-              let depth = ref 1 in
-              while !depth > 0 && peek s <> EOF do
-                (match peek s with
-                 | LPAREN -> incr depth; Buffer.add_char buf '('
-                 | RPAREN ->
-                   decr depth;
-                   if !depth > 0 then Buffer.add_char buf ')'
-                 | COMMA -> Buffer.add_char buf ','
-                 | STRING v -> Buffer.add_char buf '"'; Buffer.add_string buf v; Buffer.add_char buf '"'
-                 | INT n -> Buffer.add_string buf (string_of_int n)
-                 | IDENT i -> Buffer.add_string buf i
-                 | _ -> ());
-                if !depth > 0 then advance s else ()
-              done;
-              if peek s = RPAREN then advance s;
-              Buffer.add_char buf ')';
-              Buffer.contents buf
-            end else func_name
-          in
-          while peek s <> RBRACE && peek s <> EOF do
-            skip_layout s;
-            if peek s = RBRACE || peek s = EOF then ()
-            else begin
-              (* Key can be an IDENT or a keyword like DATABASE *)
-              let k_opt = match peek s with
-                | IDENT k -> advance s; Some k
-                | DATABASE -> advance s; Some "database"
-                | _ -> None
-              in
-              (match k_opt with
-               | Some k ->
-                 (match peek s with
-                  | STRING v -> advance s; postgres := (k, v) :: !postgres
-                  | INT n -> advance s; postgres := (k, string_of_int n) :: !postgres
-                  | IDENT func_name ->
-                    advance s;
-                    postgres := (k, parse_pg_value s func_name) :: !postgres
-                  | _ -> ())
-               | None -> advance s)
-            end
-          done;
-          if peek s = RBRACE then advance s
-        | STRING v -> advance s; postgres := (key, v) :: !postgres
-        | LBRACKET when key = "entities" ->
-          (* entities [E1, E2, ...] *)
-          advance s;
-          while peek s <> RBRACKET && peek s <> EOF do
-            (match peek s with
-             | UIDENT n -> advance s; entities := n :: !entities
-             | COMMA -> advance s
-             | _ -> advance s)
-          done;
-          if peek s = RBRACKET then advance s
-        | _ -> ())
-     | RBRACE | EOF -> () | _ -> advance s (* skip *)
-    );
-    skip_layout s;
-  done;
-  let* _ = expect s RBRACE in
+  (* Typed-record syntax: `database NAME = Database { … }`. The RHS is an
+     ordinary record-construction expression; the config checker validates it
+     and the desugar pass fills the structured fields below. *)
+  let* _ = expect s EQ in
+  let* type_name = expect_uident s in
+  let* body = parse_record_literal s in
   let loc = span loc0 (current_loc s) in
-  return { name; schema = !schema; entities = List.rev !entities; postgres = List.rev !postgres; loc }
+  return { name; backend = ""; schema = ""; entities = []; postgres = [];
+           config_expr = Some (hint_expr_type type_name body); loc }
 
 (** Parse a queue block. *)
 let parse_queue_form s =
   let loc0 = current_loc s in
   let* name = expect_uident s in
-  let* _ = expect s LBRACE in
-  skip_layout s;
-  let database_ = ref "" in
-  let jobs = ref [] in
-  let max_attempts = ref None in
-  let backoff = ref None in
-  let initial_delay = ref None in
-  while peek s <> RBRACE && peek s <> EOF do
-    skip_layout s;
-    (match peek s with
-     | DATABASE ->
-       advance s;
-       (match expect_uident s with Ok n -> database_ := n | Err _ -> ())
-     | IDENT "jobs" ->
-       advance s;
-       if peek s = LBRACKET then begin
-         advance s;
-         while peek s <> RBRACKET && peek s <> EOF do
-           (match peek s with
-            | UIDENT n -> advance s; jobs := n :: !jobs
-            | COMMA -> advance s
-            | _ -> advance s);
-         done;
-         if peek s = RBRACKET then advance s
-       end
-     | IDENT "maxAttempts" ->
-       advance s;
-       if peek s = COLON then advance s;  (* consume : *)
-       (match expect_int s with Ok n -> max_attempts := Some n | Err _ -> ())
-     | IDENT "backoff" ->
-       advance s;
-       if peek s = COLON then advance s;
-       (match peek s with
-        | STRING s_ -> advance s; backoff := Some s_
-        | IDENT s_ -> advance s; backoff := Some s_
-        | _ -> ())
-     | IDENT "initialDelay" ->
-       advance s;
-       if peek s = COLON then advance s;
-       (match expect_int s with Ok n -> initial_delay := Some n | Err _ -> ())
-     | IDENT "retry" ->
-       (* Retry block: retry { maxAttempts: N, backoff: X, initialDelay: N } *)
-       advance s;
-       if peek s = LBRACE then begin
-         advance s; skip_layout s;
-         while peek s <> RBRACE && peek s <> EOF do
-           skip_layout s;
-           (match peek s with
-            | IDENT "maxAttempts" ->
-              advance s;
-              if peek s = COLON then advance s;
-              (match expect_int s with Ok n -> max_attempts := Some n | Err _ -> ())
-            | IDENT "backoff" ->
-              advance s;
-              if peek s = COLON then advance s;
-              (match peek s with
-               | STRING s_ -> advance s; backoff := Some s_
-               | IDENT s_ -> advance s; backoff := Some s_
-               | _ -> ())
-            | IDENT "initialDelay" ->
-              advance s;
-              if peek s = COLON then advance s;
-              (match expect_int s with Ok n -> initial_delay := Some n | Err _ -> ())
-            | RBRACE | EOF -> () | _ -> advance s);
-           skip_layout s
-         done;
-         if peek s = RBRACE then advance s
-       end
-     | RBRACE | EOF -> () | _ -> advance s
-    );
-    skip_layout s
-  done;
-  let* _ = expect s RBRACE in
+  (* App pass: `queue NAME requires [caps] = Queue { … }` — the workers folded
+     into the queue inherit these capabilities. *)
+  let* reqs = parse_requires s in
+  let* _ = expect s EQ in
+  let* type_name = expect_uident s in
+  let* body = parse_record_literal s in
   let loc = span loc0 (current_loc s) in
-  return { name; database = !database_; jobs = List.rev !jobs;
-           max_attempts = !max_attempts; backoff = !backoff;
-           initial_delay = !initial_delay; loc }
+  return { name; database = ""; jobs = []; max_attempts = None;
+           backoff = None; initial_delay = None;
+           capabilities = reqs; number_of_workers = None;
+           config_expr = Some (hint_expr_type type_name body); loc }
 
 (** Parse a cache block:
       cache UserProfileCache {
@@ -3806,139 +3621,31 @@ let parse_queue_form s =
 let parse_cache_form s =
   let loc0 = current_loc s in
   let* name = expect_uident s in
-  let* _ = expect s LBRACE in
-  skip_layout s;
-  let database_ = ref "" in
-  let default_ttl = ref None in
-  let value_type : type_expr ref = ref (TName { name = "Unit"; loc = dummy_loc "" }) in
-  while peek s <> RBRACE && peek s <> EOF do
-    skip_layout s;
-    (match peek s with
-     | DATABASE ->
-       advance s;
-       if peek s = COLON then advance s;
-       (match expect_uident s with Ok n -> database_ := n | Err _ -> ())
-     | IDENT "defaultTtl" ->
-       advance s;
-       if peek s = COLON then advance s;
-       (match expect_int s with Ok n -> default_ttl := Some n | Err _ -> ())
-     | IDENT "valueType" ->
-       advance s;
-       if peek s = COLON then advance s;
-       (match parse_type_expr s with Ok t -> value_type := t | Err _ -> ())
-     | RBRACE | EOF -> () | _ -> advance s
-    );
-    skip_layout s
-  done;
-  let* _ = expect s RBRACE in
+  (* Typed-record syntax: `cache NAME = Cache { … }`. *)
+  let* _ = expect s EQ in
+  let* type_name = expect_uident s in
+  let* body = parse_record_literal s in
   let loc = span loc0 (current_loc s) in
-  return { name; database = !database_; value_type = !value_type;
-           default_ttl = !default_ttl; loc }
+  return { name; database = ""; value_type = TName { name = "Unit"; loc = dummy_loc "" };
+           default_ttl = None;
+           config_expr = Some (hint_expr_type type_name body); loc }
 
-(** Parse an email block:
-      email AppEmail {
+(** Parse an email declaration:
+      email AppEmail = Email {
         database: MainDB
-        smtp {
-          host: env("SMTP_HOST")
-          port: 587
-          username: env("SMTP_USER")
-          password: env("SMTP_PASS")
-          tls: true
-        }
+        smtp: SmtpConfig { host: env "SMTP_HOST", port: 587, ... }
       } *)
 let parse_email_form s =
   let loc0 = current_loc s in
   let* name = expect_uident s in
-  let* _ = expect s LBRACE in
-  skip_layout s;
-  let database_ = ref "" in
-  let smtp_host = ref "" in
-  let smtp_port = ref 587 in
-  let smtp_username = ref "" in
-  let smtp_password = ref "" in
-  let smtp_tls = ref true in
-  while peek s <> RBRACE && peek s <> EOF do
-    skip_layout s;
-    (match peek s with
-     | DATABASE ->
-       advance s;
-       if peek s = COLON then advance s;
-       (match expect_uident s with Ok n -> database_ := n | Err _ -> ())
-     | SMTP ->
-       advance s;
-       (* Parse smtp block: smtp { host: ... port: ... username: ... password: ... tls: ... } *)
-       if peek s = LBRACE then begin
-         advance s;
-         skip_layout s;
-         while peek s <> RBRACE && peek s <> EOF do
-           skip_layout s;
-           (match peek s with
-            | IDENT "host" ->
-              advance s;
-              if peek s = COLON then advance s;
-              (* Read a value: env("X"), a plain string, or number *)
-              (match peek s with
-               | STRING str -> advance s; smtp_host := str
-               | IDENT fn_name when (match peek2 s with LPAREN -> true | _ -> false) ->
-                 (* env("VAR") — read fn_name + ( + "str" + ) *)
-                 advance s; (* fn_name *)
-                 advance s; (* LPAREN *)
-                 (match peek s with
-                  | STRING arg -> advance s; smtp_host := fn_name ^ "(\"" ^ arg ^ "\")"
-                  | _ -> ());
-                 (match peek s with RPAREN -> advance s | _ -> ())
-               | _ -> ())
-            | IDENT "port" ->
-              advance s;
-              if peek s = COLON then advance s;
-              (match expect_int s with Ok n -> smtp_port := n | Err _ -> ())
-            | IDENT "username" ->
-              advance s;
-              if peek s = COLON then advance s;
-              (match peek s with
-               | STRING str -> advance s; smtp_username := str
-               | IDENT fn_name when (match peek2 s with LPAREN -> true | _ -> false) ->
-                 advance s; advance s;
-                 (match peek s with
-                  | STRING arg -> advance s; smtp_username := fn_name ^ "(\"" ^ arg ^ "\")"
-                  | _ -> ());
-                 (match peek s with RPAREN -> advance s | _ -> ())
-               | _ -> ())
-            | IDENT "password" ->
-              advance s;
-              if peek s = COLON then advance s;
-              (match peek s with
-               | STRING str -> advance s; smtp_password := str
-               | IDENT fn_name when (match peek2 s with LPAREN -> true | _ -> false) ->
-                 advance s; advance s;
-                 (match peek s with
-                  | STRING arg -> advance s; smtp_password := fn_name ^ "(\"" ^ arg ^ "\")"
-                  | _ -> ());
-                 (match peek s with RPAREN -> advance s | _ -> ())
-               | _ -> ())
-            | IDENT "tls" ->
-              advance s;
-              if peek s = COLON then advance s;
-              (match peek s with
-               | TRUE -> advance s; smtp_tls := true
-               | FALSE -> advance s; smtp_tls := false
-               | _ -> ())
-            | RBRACE | EOF -> () | _ -> advance s
-           );
-           skip_layout s
-         done;
-         if peek s = RBRACE then advance s
-       end
-     | RBRACE | EOF -> () | _ -> advance s
-    );
-    skip_layout s
-  done;
-  let* _ = expect s RBRACE in
+  let* _ = expect s EQ in
+  let* type_name = expect_uident s in
+  let* body = parse_record_literal s in
   let loc = span loc0 (current_loc s) in
-  let smtp = { Ast.host = !smtp_host; port = !smtp_port;
-               username = !smtp_username; password = !smtp_password;
-               tls = !smtp_tls } in
-  return ({ Ast.name; database = !database_; smtp; loc } : Ast.email_form)
+  return ({ Ast.name; database = "";
+            smtp = { Ast.host = ""; port = 587; username = ""; password = ""; tls = true };
+            config_expr = Some (hint_expr_type type_name body); loc }
+          : Ast.email_form)
 
 (** Parse a channel block. *)
 let parse_channel_form s =
@@ -3952,33 +3659,13 @@ let parse_channel_form s =
       | Err _ -> []
     end else []
   in
-  let* _ = expect s LBRACE in
-  skip_layout s;
-  let key_params = ref key_params_from_decl in
-  let database_ = ref "" in
-  let payload = ref (TName { name = "String"; loc = loc0 }) in
-  while peek s <> RBRACE && peek s <> EOF do
-    skip_layout s;
-    (match peek s with
-     | IDENT "key" | IDENT "keyParams" ->
-       advance s;
-       (match try_parse s parse_params with
-        | Ok (Some ps) -> key_params := ps
-        | _ -> ())
-     | DATABASE ->
-       advance s;
-       (match expect_uident s with Ok n -> database_ := n | Err _ -> ())
-     | IDENT "payload" ->
-       advance s;
-       (match parse_type_expr s with Ok t -> payload := t | Err _ -> ())
-     | RBRACE | EOF -> () | _ -> advance s
-    );
-    skip_layout s
-  done;
-  let* _ = expect s RBRACE in
+  let* _ = expect s EQ in
+  let* type_name = expect_uident s in
+  let* body = parse_record_literal s in
   let loc = span loc0 (current_loc s) in
-  return { name; key_params = !key_params; database = !database_;
-           payload = !payload; loc }
+  return { name; key_params = key_params_from_decl; database = "";
+           payload = TName { name = "String"; loc = loc0 };
+           config_expr = Some (hint_expr_type type_name body); loc }
 
 (** Parse capture declaration. *)
 let parse_capture_form s =
@@ -4147,12 +3834,31 @@ let parse_api_form s =
                advance s;
                (match parse_binding s with
                 | Ok b ->
-                  (match expect s VIA with
-                   | Ok () ->
+                  (match peek s with
+                   (* Inline form: `capture x: T using <codec> [via <check>]` — no
+                      separate `capturer` declaration needed. (`using`/`via` are real
+                      keyword tokens, so the type parser terminates on them naturally.) *)
+                   | USING ->
+                     advance s;
                      (match expect_ident s with
-                      | Ok vfn -> captures := !captures @ [{ binding = b; via_fn = vfn }]
+                      | Ok codec ->
+                        let chk =
+                          if peek s = VIA then begin
+                            advance s;
+                            (match expect_ident s with Ok c -> Some c | Err _ -> None)
+                          end else None
+                        in
+                        captures := !captures @
+                          [{ binding = b; via_fn = ""; inline_codec = Some codec; inline_check = chk }]
                       | Err _ -> ())
-                   | Err _ -> ())
+                   (* Reference form: `capture x: T via <capturer>`. *)
+                   | VIA ->
+                     advance s;
+                     (match expect_ident s with
+                      | Ok vfn -> captures := !captures @
+                          [{ binding = b; via_fn = vfn; inline_codec = None; inline_check = None }]
+                      | Err _ -> ())
+                   | _ -> ())
                 | Err _ -> ())
              | SUBSCRIBE ->
                 advance s;
@@ -4231,36 +3937,6 @@ let parse_server_form s =
   return { name; api_name; bindings = List.rev !bindings; loc }
 
 (** Parse workers block. *)
-let parse_workers_form is_dead s =
-  let loc0 = current_loc s in
-  let* name = expect_uident s in
-  let* _ = expect s FOR in
-  let* queue_name = expect_uident s in
-  let* _ = expect s LBRACE in
-  skip_layout s;
-  let bindings = ref [] in
-  while peek s <> RBRACE && peek s <> EOF do
-    skip_layout s;
-    if peek s = RBRACE then ()
-    else begin
-      match peek s with
-      | UIDENT job_type ->
-        advance s;
-        (match expect s EQ with
-         | Ok () ->
-           (match expect_ident s with
-            | Ok worker_fn ->
-              bindings := (job_type, worker_fn) :: !bindings;
-              skip_layout s
-            | Err _ -> ())
-         | Err _ -> ())
-      | _ -> advance s
-    end
-  done;
-  let* _ = expect s RBRACE in
-  let loc = span loc0 (current_loc s) in
-  return { name; queue_name; bindings = List.rev !bindings; is_dead; loc }
-
 (** Parse a test body: sequence of let/expect/expectFail statements. *)
 let parse_property_param s =
   let loc0 = current_loc s in
@@ -4598,23 +4274,40 @@ and parse_test_body s =
 let parse_test_form s =
   let loc0 = current_loc s in
   let* desc = expect_string s in
-  (* optional "with N runs" or "runs N" syntax *)
+  (* Optional test-header clauses, accepted in any order until the body `{`:
+       with N runs / runs N   — property-test repetition count
+       with database X        — bind a named database for the test body (else in-memory)
+       requires [..]          — capabilities the test runs with *)
   let runs = ref None in
-  if peek s = IDENT "with" then begin
-    advance s;  (* consume 'with' *)
-    (match expect_int s with Ok n -> runs := Some n | Err _ -> ());
-    if peek s = IDENT "runs" then advance s  (* consume 'runs' *)
-  end else if peek s = IDENT "runs" then begin
-    advance s;
-    (match expect_int s with Ok n -> runs := Some n | Err _ -> ())
-  end;
-  let* caps = parse_requires s in
+  let test_db = ref None in
+  let caps = ref [] in
+  let continue_header = ref true in
+  while !continue_header do
+    begin match peek s with
+    | IDENT "with" when peek2 s = DATABASE ->
+      advance s; advance s;  (* `with database` *)
+      (match expect_uident s with Ok db -> test_db := Some db | Err _ -> ())
+    | IDENT "with" ->
+      advance s;  (* `with N runs` *)
+      (match expect_int s with Ok n -> runs := Some n | Err _ -> ());
+      if peek s = IDENT "runs" then advance s
+    | IDENT "runs" ->
+      advance s;  (* `runs N` *)
+      (match expect_int s with Ok n -> runs := Some n | Err _ -> ())
+    | REQUIRES ->
+      (match parse_requires s with
+       | Ok cs -> caps := !caps @ cs
+       | Err _ -> continue_header := false)
+    | _ -> continue_header := false
+    end
+  done;
   let* _ = expect s LBRACE in
   skip_layout s;
   let* stmts = parse_test_body s in
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
-  return { description = desc; stmts; runs = !runs; capabilities = caps; loc }
+  return { description = desc; stmts; runs = !runs; capabilities = !caps;
+           database = !test_db; loc }
 
 let parse_api_test_form s =
   let loc0 = current_loc s in
@@ -4949,58 +4642,12 @@ and parse_top_decl s =
     let* fd = parse_fn_decl DeadWorkerKind s in
     return (DFunc fd)
   | MAIN ->
+    let main_loc = current_loc s in
     advance s;
-    (* main { ... } or main requires [...] { ... } or main with capabilities [...] { ... } *)
-    if peek s = LBRACE || peek s = REQUIRES ||
-       (match peek s with IDENT "with" -> true | _ -> false) then begin
-      (* Skip 'with' keyword if present *)
-      if (match peek s with IDENT "with" -> true | _ -> false) then advance s;
-      let loc0 = current_loc s in
-      (* Handle 'capabilities [...]' as an alternative to 'requires [...]' *)
-      let* caps =
-        if (match peek s with IDENT "capabilities" -> true | _ -> false) then begin
-          advance s;
-          (match parse_bracketed_list (fun s ->
-             match peek s with
-             | IDENT n -> advance s; return n
-             | t -> err s (Printf.sprintf "expected cap name, got %s" (tok_to_string t))
-           ) s with
-           | Ok caps -> return caps
-           | Err _ -> return [])
-        end else
-          parse_requires s
-      in
-      let* _ = expect s LBRACE in
-      skip_layout s;
-      (match parse_stmt_seq s with
-       | Ok stmts ->
-         skip_layout s;
-         let* _ = expect s RBRACE in
-         let loc = span loc0 (current_loc s) in
-         let fd = {
-           Ast.kind = Ast.MainKind; name = "main"; params = [];
-           return_spec = RetPlain { ty = TName { name = "Unit"; loc }; loc };
-           capabilities = caps; body = stmts; loc;
-           desugared_from = None;
-         } in
-         return (DFunc fd)
-       | Err _ ->
-         skip_layout s;
-         let* _ = expect s RBRACE in
-         let loc = span loc0 (current_loc s) in
-         let fd = {
-           Ast.kind = Ast.MainKind; name = "main"; params = [];
-           return_spec = RetPlain { ty = TName { name = "Unit"; loc }; loc };
-           capabilities = caps;
-           body = ELit { lit = LInt 0; loc };
-           loc;
-           desugared_from = None;
-         } in
-         return (DFunc fd))
-    end else begin
-      let* fd = parse_fn_decl MainKind s in
-      return (DFunc fd)
-    end
+    (* App-style entry point: `main() -> App requires [...] = App { … }`.
+       `main` is already consumed, so parse the rest with the name pre-set. *)
+    let* fd = parse_fn_decl_named MainKind "main" main_loc s in
+    return (DFunc fd)
   | RECORD ->
     advance s;
     let* r = parse_record_form s in
@@ -5048,15 +4695,10 @@ and parse_top_decl s =
     advance s;
     let* c = parse_channel_form s in
     return (DChannel c)
-  | WORKERS ->
-    advance s;
-    let* w = parse_workers_form false s in
-    return (DWorkers w)
-  | DEAD_WORKERS ->
-    advance s;
-    let* w = parse_workers_form true s in
-    return (DWorkers w)
-  | CAPTURE ->
+  (* A top-level capture declaration is spelled `capturer` (the `capture` keyword
+     is reserved for the API-endpoint clause, avoiding the overloaded term).
+     `capture` is still accepted here for back-compat. *)
+  | CAPTURE | CAPTURER ->
     advance s;
     let* c = parse_capture_form s in
     return (DCapture c)
@@ -5099,8 +4741,8 @@ and parse_top_decl s =
           let rec skip_to_top () =
             match peek s with
             | FN | HANDLER | CHECK | AUTH | RECORD | ENTITY | TYPE | CODEC
-            | DATABASE | CAPABILITY | FACT | CONST | QUEUE | CHANNEL | WORKERS
-            | DEAD_WORKERS | CAPTURE | API | SERVER | TEST | API_TEST | LOAD_TEST | CACHE | EMAIL
+            | DATABASE | CAPABILITY | FACT | CONST | QUEUE | CHANNEL
+            | CAPTURE | CAPTURER | API | SERVER | TEST | API_TEST | LOAD_TEST | CACHE | EMAIL
             | PROPERTY | MAIN | WORKER | DEAD_WORKER | ESTABLISH | EOF -> ()
             | _ -> advance s; skip_to_top ()
           in
@@ -5164,6 +4806,7 @@ let extract_doctest_decls filename source =
         stmts;
         runs = None;
         capabilities = [];
+        database = None;
         loc = dummy_loc filename;
       } :: !decls
   in
@@ -5237,8 +4880,8 @@ and parse_module_header_body s =
     one of these so the next declaration can be attempted. *)
 let starts_top_decl = function
   | FN | HANDLER | CHECK | AUTH | RECORD | ENTITY | TYPE | CODEC
-  | DATABASE | CAPABILITY | FACT | CONST | QUEUE | CHANNEL | WORKERS
-  | DEAD_WORKERS | CAPTURE | API | SERVER | TEST | API_TEST | LOAD_TEST | CACHE | EMAIL
+  | DATABASE | CAPABILITY | FACT | CONST | QUEUE | CHANNEL
+  | CAPTURE | CAPTURER | API | SERVER | TEST | API_TEST | LOAD_TEST | CACHE | EMAIL
   | PROPERTY | MAIN | WORKER | DEAD_WORKER | ESTABLISH -> true
   | _ -> false
 

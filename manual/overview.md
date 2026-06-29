@@ -173,8 +173,8 @@ Tesl's architecture is designed for simplicity and reliability:
 erased after type-checking — there is no wrapper, no struct, and no allocation; the proof exists
 only in the compiler's static checker. Even under `--debug` they are erased: the step debugger
 shows the raw runtime value and overlays a binding's proof/type from compile-time type info, so it
-needs no runtime struct. `TESL_ZERO_COST_PROOFS=0` restores the runtime net for regression
-comparison. See [proof cost model](best-practices.md#proof-cost-model) and the
+needs no runtime struct. The compiler's static checker is the sole proof contract — there is no
+runtime net. See [proof cost model](best-practices.md#proof-cost-model) and the
 [FAQ](FAQ.md#is-there-runtime-overhead-for-proofs).
 
 ---
@@ -186,7 +186,7 @@ comparison. See [proof cost model](best-practices.md#proof-cost-model) and the
 - [x] `.tesl` surface language with clean syntax
 - [x] Working compiler (OCaml) with type checking
 - [x] GDP-style proof system with compile-time verification
-- [x] Zero-cost proofs — erased unconditionally (release and `--debug`); runtime net only via `TESL_ZERO_COST_PROOFS=0` for regression
+- [x] Zero-cost proofs — erased unconditionally (release and `--debug`); the static checker is the sole proof contract
 - [x] CLI with validation, compilation, and execution
 - [x] Built-in linter and formatter
 - [x] Typed SQL database access
