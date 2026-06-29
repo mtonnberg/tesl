@@ -376,7 +376,7 @@ The module header must still appear explicitly inside the file.
 Tesl uses two structural mechanisms:
 
 - indentation for function bodies and nested body constructs such as `if`, `case`, and existential packing bodies;
-- braces for top-level blocks such as `record`, `entity`, `database`, `api`, `server`, the `App { ... }` record returned by `main`, and for body blocks such as `with database { ... }` and `with transaction { ... }`.
+- braces for top-level blocks such as `record`, `entity`, `database`, `api`, `server`, the `App { ... }` record returned by `main`, and for body blocks such as `with database { ... }` and `transaction { ... }`.
 
 Unexpected indentation is a parse error.
 
@@ -842,7 +842,9 @@ Consumers import only from `UserLib` and see a single, stable API. The internal 
 **Accepted design, Implemented.**
 
 ```text
-<test-block> ::= "test" <string> [ "with" <integer> "runs" ] "{" { <test-statement> } "}"
+<test-block> ::= "test" <string> [ "requires" "[" <capability-list> "]" ]
+                 [ "with" <integer> "runs" ] [ "with" "database" <identifier> ]
+                 "{" { <test-statement> } "}"
 
 <test-statement> ::= "expect" <expr> <comparison-op> <expr>
                    | "expect" <expr>
@@ -884,6 +886,14 @@ test "add is commutative" with 50 runs {
   expectFail positive(-5)
   property "commutative" (x: Int, y: Int) { add x y == add y x }
   property "positive > 0" (n: Int where n > 0 && n < 10000) { n > 0 }
+}
+```
+
+**Test databases.** Tests run against an automatic in-memory store by default — the case the vast majority of tests use, and which needs no configuration. To run a test body against a specific configured backend, add an optional `with database X` header clause; it binds the named database `X` so that queries inside the block run against `X`'s configured backend:
+
+```tesl
+test "rejects duplicate emails" with database AppDb {
+  -- queries here run against AppDb's configured backend
 }
 ```
 
@@ -1072,7 +1082,7 @@ sseChannel UserEvents(userId: String ::: UserId userId) = SseChannel {
 }
 ```
 
-The `tesl_pubsub_outbox` table is created automatically alongside entity tables. Events published inside `with transaction` are written to the outbox atomically, and in-memory listeners are called after commit. Events published outside a transaction call listeners directly (at-most-once; a linter warning is planned).
+The `tesl_pubsub_outbox` table is created automatically alongside entity tables. Events published inside `transaction` are written to the outbox atomically, and in-memory listeners are called after commit. Events published outside a transaction call listeners directly (at-most-once; a linter warning is planned).
 
 The SSE fan-out is driven by in-memory listener callbacks. A PostgreSQL LISTEN connection for multi-process fan-out runs automatically when the runtime detects SSE endpoints and a PostgreSQL database is active. Listing the channel in `App.sseChannels` activates its outbox delivery.
 
@@ -2089,7 +2099,7 @@ Inserts a job of the named record type into the associated queue. The job type d
 enqueue SendEmail { to: req.email, subject: "Welcome!", body: "..." }
 ```
 
-Inside a `with transaction` block, the job is inserted atomically — it only becomes visible to workers if the transaction commits. Outside a transaction, delivery is at-most-once (lint warning emitted).
+Inside a `transaction` block, the job is inserted atomically — it only becomes visible to workers if the transaction commits. Outside a transaction, delivery is at-most-once (lint warning emitted).
 
 #### `publish`
 **Accepted design, Implemented.**
@@ -2104,19 +2114,19 @@ Publishes an event to the named channel, parameterised by the channel key. The s
 publish UserEvents(userId) ProfileUpdated { bio: newBio }
 ```
 
-Inside `with transaction` with a PostgreSQL database active: writes the event to `tesl_pubsub_outbox` as part of the same transaction; in-memory listeners are called after commit. If the transaction rolls back, neither the outbox row nor the listener call happens. Outside a transaction: calls in-memory listeners directly (at-most-once semantics).
+Inside `transaction` with a PostgreSQL database active: writes the event to `tesl_pubsub_outbox` as part of the same transaction; in-memory listeners are called after commit. If the transaction rolls back, neither the outbox row nor the listener call happens. Outside a transaction: calls in-memory listeners directly (at-most-once semantics).
 
-#### `with transaction`
+#### `transaction`
 **Accepted design, Implemented.**
 
 ```text
 <with-transaction-statement> ::= "with" "transaction" "{" <body> "}"
 ```
 
-Wraps all enclosed database operations (`insert`, `update`, `delete`, `enqueue`, `publish`) in a single Postgres transaction. The block returns its last expression. On any exception, the transaction rolls back and no jobs or notifications escape. Nesting `with transaction` inside another `with transaction` is a compile error.
+Wraps all enclosed database operations (`insert`, `update`, `delete`, `enqueue`, `publish`) in a single Postgres transaction. The block returns its last expression. On any exception, the transaction rolls back and no jobs or notifications escape. Nesting `transaction` inside another `transaction` is a compile error.
 
 ```tesl
-with transaction {
+transaction {
   let user = insert User { id: userId, email: req.email }
   enqueue SendEmail { to: req.email, subject: "Welcome!" }
   user   # returned value
@@ -2962,7 +2972,7 @@ All constructs are fully implemented with the PostgreSQL backend. The chat examp
 
 **Queue** (`tesl_jobs` table): `enqueue!` inserts within the current transaction and issues `NOTIFY tesl_queue_<name>` (deferred to commit); the three-thread worker model (fallback poller + LISTEN connection + SKIP LOCKED worker) handles both single-process and multi-process deployments. Failed jobs are retried with exponential or fixed backoff; exhausted jobs become `dead`. Dead jobs are handled by a `deadWorker` folded into the queue's job dead slot (`(Something deadFn)`) — a separate poll loop that runs dead-letter handlers which can publish compensating events, send alerts, or acknowledge the failure.
 
-**Pub/sub** (`tesl_pubsub_outbox` table): `publish` inside `with transaction` writes to the outbox atomically and issues `NOTIFY tesl_pubsub` with the row ID (deferred to commit); the runtime automatically starts a LISTEN thread (when SSE endpoints and PostgreSQL are active) that fetches and delivers outbox rows to connected SSE clients, with a 5-second fallback poller for missed notifications.
+**Pub/sub** (`tesl_pubsub_outbox` table): `publish` inside `transaction` writes to the outbox atomically and issues `NOTIFY tesl_pubsub` with the row ID (deferred to commit); the runtime automatically starts a LISTEN thread (when SSE endpoints and PostgreSQL are active) that fetches and delivers outbox rows to connected SSE clients, with a 5-second fallback poller for missed notifications.
 
 **In-memory fallback**: when no PostgreSQL context is active (unit tests), all operations use the in-memory store — no database required. Design archived in `future-roadmap/completed/well_designed_reactivity_design.md`.
 
@@ -3152,13 +3162,13 @@ If a stored value cannot be deserialized (for example because the application wa
 
 ### 19.5 Transactional cache writes
 
-`Cache.set`, `Cache.delete`, and `Cache.invalidate` inside a `with transaction` block participate in the surrounding PostgreSQL transaction atomically. This eliminates the dual-write problem that arises when a separate Redis cache is used alongside PostgreSQL: if the transaction rolls back, no cache mutation is committed.
+`Cache.set`, `Cache.delete`, and `Cache.invalidate` inside a `transaction` block participate in the surrounding PostgreSQL transaction atomically. This eliminates the dual-write problem that arises when a separate Redis cache is used alongside PostgreSQL: if the transaction rolls back, no cache mutation is committed.
 
 ```tesl
 handler updateProfile(userId: String, req: UpdateProfileRequest)
   -> UserProfile
   requires [dbWrite, cacheCap UserProfileCache] =
-  with transaction {
+  transaction {
     let updated = update ... in User ...
     Cache.delete UserProfileCache ("profile_" ++ userId)
     updated
@@ -3289,11 +3299,11 @@ After 5 failed attempts a row is marked `dead` and is no longer retried. Dead ro
 
 ### 20.5 Transactional atomicity
 
-`Email.send` inside a `with transaction` block is part of the same database transaction. If the transaction rolls back, the row is never inserted and the email is never sent. This prevents sending notifications for events that did not actually persist.
+`Email.send` inside a `transaction` block is part of the same database transaction. If the transaction rolls back, the row is never inserted and the email is never sent. This prevents sending notifications for events that did not actually persist.
 
 ```tesl
 handler registerUser(req: RegistrationRequest) -> User requires [dbWrite, email] =
-  with transaction {
+  transaction {
     let user = insert User { id: newId, email: req.email }
     Email.send AppEmail {
       to: req.email

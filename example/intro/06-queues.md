@@ -57,7 +57,7 @@ Workers are typed and capability-governed — exactly like handlers. The `FromQu
 handler postComment(user: User ::: Authenticated user, body: CommentBody)
   -> Comment
   requires [dbWrite, queueWrite] =
-  with transaction {
+  transaction {
     let c = insert Comment { content: body.content, authorId: user.id, ... }
     enqueue NotifyJob { userId: body.targetUserId, message: "New comment" }
     c

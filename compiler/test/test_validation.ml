@@ -884,7 +884,7 @@ let test_with_transaction_returns_body_type () =
 module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn wrap(n: Int) -> Int =
-  with transaction {
+  transaction {
     n
   }
 |}
@@ -920,7 +920,7 @@ entity Thing table "things" primaryKey id {
   parentId: String
 }
 fn relink(id: String, parentId: String) -> String requires [dbWrite] =
-  with transaction {
+  transaction {
     update t in Thing
       where t.id == id
       set t.parentId = parentId
@@ -943,7 +943,7 @@ handler demo(
   -> String
   requires [] =
   let adminUserId = authorize session.userId orgId
-  with transaction {
+  transaction {
     orgId
   }
 |}
@@ -1751,10 +1751,10 @@ let () =
     "integration", [
       Alcotest.test_case "validation wired into compile diagnostics" `Quick test_validation_is_wired_into_top_level_diagnostics;
       Alcotest.test_case "initTelemetry keywords typecheck" `Quick test_init_telemetry_keywords_typecheck;
-      Alcotest.test_case "with transaction returns body type" `Quick test_with_transaction_returns_body_type;
+      Alcotest.test_case "transaction returns body type" `Quick test_with_transaction_returns_body_type;
       Alcotest.test_case "keyword type arg from keyword token typechecks" `Quick test_keyword_type_argument_from_keyword_token_typechecks;
       Alcotest.test_case "let underscore binding typechecks" `Quick test_let_underscore_binding_typechecks;
-      Alcotest.test_case "with transaction multiline update sequence typechecks" `Quick test_with_transaction_multiline_update_sequence_typechecks;
+      Alcotest.test_case "transaction multiline update sequence typechecks" `Quick test_with_transaction_multiline_update_sequence_typechecks;
       Alcotest.test_case "call before with block typechecks" `Quick test_call_before_with_block_typechecks;
       Alcotest.test_case "stacked case labels typecheck" `Quick test_stacked_case_labels_typecheck;
       Alcotest.test_case "serve static clause typechecks" `Quick test_serve_static_clause_typechecks;

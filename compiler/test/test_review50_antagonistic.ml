@@ -725,20 +725,20 @@ database TestDB = Database {
 
 fn doInner(uid: String, n: String) -> Int
   requires [dbWrite] =
-  with transaction {
+  transaction {
     let _ = insert User { id: uid, name: n }
     1
   }
 
 fn doOuter(uid: String, n: String) -> Int
   requires [dbWrite] =
-  with transaction {
+  transaction {
     let _ = insert User { id: uid, name: n }
     doInner uid n
   }
 |})
 
-(* R50_E02 — Direct nested `with transaction` IS rejected. *)
+(* R50_E02 — Direct nested `transaction` IS rejected. *)
 let r50_e02_direct_nested_txn_rejected () =
   should_fail_src "transaction" ({|#lang tesl
 module Test exposing []
@@ -763,8 +763,8 @@ database TestDB = Database {
 }
 
 fn doNested(uid: String, n: String) -> Int requires [dbWrite] =
-  with transaction {
-    with transaction {
+  transaction {
+    transaction {
       let _ = insert User { id: uid, name: n }
       1
     }

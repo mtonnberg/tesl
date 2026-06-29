@@ -159,7 +159,7 @@ let postgres_database_names (m : module_form) : (string, unit) Hashtbl.t =
 (** [true] when [e] performs an effect that needs live external infrastructure
     not available in a bare [raco test] mutant run: a Postgres-backed
     [with database], any [serve], queue [enqueue], pub/sub [publish], worker
-    start, cache op, or email send.  [with transaction] is treated as external
+    start, cache op, or email send.  [transaction] is treated as external
     because it only ever wraps a real (here, Postgres) database connection. *)
 let rec expr_touches_infra ~pg e =
   match e with

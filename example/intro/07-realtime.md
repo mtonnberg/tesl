@@ -30,7 +30,7 @@ handler postMessage(session: SessionUser ::: Authenticated session,
                     req: PostMessageRequest)
   -> Message
   requires [chatWrite, chatPubSub] =
-  with transaction {
+  transaction {
     publish RoomMessages(roomId) NewMessage {
       msgId:     generatePrefixedId "msg",
       userId:    session.id,

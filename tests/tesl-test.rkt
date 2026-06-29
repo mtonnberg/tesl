@@ -3503,7 +3503,7 @@
       "  k\n")))
   (check-true (path? q08-path) "Q08: publish in function body compiles"))
 
-; Q09: with transaction block compiles
+; Q09: transaction block compiles
 (let ()
   (define q09-path
     (compile-tesl-source
@@ -3520,11 +3520,11 @@
       "  jobs: [Q09Job]\n"
       "}\n"
       "fn doTxn(v: String) -> String requires [queueWrite] =\n"
-      "  with transaction {\n"
+      "  transaction {\n"
       "    enqueue Q09Job { v: v }\n"
       "    v\n"
       "  }\n")))
-  (check-true (path? q09-path) "Q09: with transaction block compiles"))
+  (check-true (path? q09-path) "Q09: transaction block compiles"))
 
 ; Q10: queue workers in App compile
 (let ()
@@ -3591,7 +3591,7 @@
       "}\n")))
   (check-true (path? q11-path) "Q11: websocket endpoint in api compiles"))
 
-; Q12: nested with transaction is a compile error
+; Q12: nested transaction is a compile error
 (let ([err (compile-tesl-error
             (string-append
              "#lang tesl\n"
@@ -3606,8 +3606,8 @@
              "  jobs: [Q12Job]\n"
              "}\n"
              "fn doNested(v: String) -> String requires [queueWrite] =\n"
-             "  with transaction {\n"
-             "    with transaction {\n"
+             "  transaction {\n"
+             "    transaction {\n"
              "      enqueue Q12Job { v: v }\n"
              "      v\n"
              "    }\n"
@@ -3771,7 +3771,7 @@
   (check-equal? (hash-count (queue-spec-store q24-queue)) 1
                 "Q24: enqueue statement adds job to queue"))
 
-; Q25: with transaction compiled and callable
+; Q25: transaction compiled and callable
 (let ()
   (define q25-path
     (compile-tesl-source
@@ -3788,7 +3788,7 @@
       "  jobs: [Q25Job]\n"
       "}\n"
       "fn runTxn(v: String) -> String requires [queueWrite] =\n"
-      "  with transaction {\n"
+      "  transaction {\n"
       "    enqueue Q25Job { v: v }\n"
       "    v\n"
       "  }\n")))
@@ -3796,7 +3796,7 @@
   (define result
     (parameterize ([current-capabilities (list queueWrite)])
       (runTxn "txn-value")))
-  (check-equal? result "txn-value" "Q25: with transaction returns body result"))
+  (check-equal? result "txn-value" "Q25: transaction returns body result"))
 
 ;; ── Routing: shared path-prefix dispatch fix ─────────────────────────────────
 ;; Two POST routes share the "/items" prefix.  One is "POST /items" (body: name)
@@ -4124,7 +4124,7 @@
           "  enqueue MsgJob { text: q }\n"
           "  q\n"
           "fn enqueueMsgs(a: String, b: String) -> String requires [queueWrite, pubsub] =\n"
-          "  with transaction {\n"
+          "  transaction {\n"
           "    enqueue MsgJob { text: a }\n"
           "    publish MsgChannel(a) NewMsg { text: b }\n"
           "    a\n"

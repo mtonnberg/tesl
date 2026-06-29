@@ -294,7 +294,7 @@ handler createProjectHandler(
   let projDesc = check checkDescription req.description
   let memberId = generatePrefixedId "pmem"
   let projectId = generatePrefixedId "proj"
-  with transaction {
+  transaction {
     insert ProjectMembership {
       id: memberId,
       projectId: projectId,
@@ -455,7 +455,7 @@ handler updateIssueStatusHandler(
         Done ->
           # Only assignee or admin can close — enforce with CanClose proof
           let _closerId = check checkCanClose session.userId issueId orgId
-          with transaction {
+          transaction {
             update i in Issue
               where i.id == issueId
               set i.status = newStatus

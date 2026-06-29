@@ -26,7 +26,12 @@ The extension contributes a `tesl` debug type. To debug a `.tesl` file:
 
 - Open the file, set breakpoints in the gutter, and press **F5**, or
 - Right-click the file → **Debug Tesl Program** / **Debug Tesl Tests**, or
-- Click the **🐛 Debug test** CodeLens above any `test "…" { … }` block.
+- Click the **▶ Run** / **🐛 Debug** CodeLens above any test block.
+
+CodeLens **Run** is offered for `test`, `api-test`, `load-test`, and `doctest`
+blocks; **Debug** is offered for `test`, `api-test`, and `doctest` blocks.
+A `load-test` is run-only — it is a throughput benchmark, so stepping through it
+is not meaningful.
 
 Behind the scenes the adapter compiles the file with `tesl --debug`, runs the
 chosen `main` (program mode) or `test` blocks (test mode), and pauses at your

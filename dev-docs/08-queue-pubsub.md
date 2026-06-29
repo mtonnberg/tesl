@@ -185,7 +185,7 @@ analogous to the `FromQueue` boundary in normal workers.
 
 ## Pub/sub outbox pattern (`publish-event!`)
 
-Inside a `with transaction {}` block, `publish` compiles to `publish-event!`:
+Inside a `transaction {}` block, `publish` compiles to `publish-event!`:
 
 ```racket
 (define (publish-event! channel-s key-str event-value)

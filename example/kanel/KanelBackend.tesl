@@ -414,7 +414,7 @@ handler addCommentAndNotifyHandler(
       case reporter of
         Nothing -> fail 404 "issue reporter not found"
         Something targetUser ->
-          with transaction {
+          transaction {
             enqueue KanelNotifyJob { recipientUserId: targetUser.id, recipientEmail: targetUser.email, subject: "New comment on issue {issueId}", body: "Comment from {session.displayName}: {commentBody}" }
             exists commentId =>
               insertCommentBody commentId userId orgId notDoneId commentBody

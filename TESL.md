@@ -190,18 +190,18 @@ update todo in Todo
 
 There is no query builder, no expression tree, no reflection. The generated SQL is always parameterised (`WHERE owner_id = $1`) — SQL injection is structurally impossible because user data never appears as literal SQL text.
 
-**Atomic writes with `with transaction`**
+**Atomic writes with `transaction`**
 
-When two or more writes must either all succeed or all fail, wrap them in `with transaction`:
+When two or more writes must either all succeed or all fail, wrap them in `transaction`:
 
 ```tesl
-with transaction {
+transaction {
   let _ = insert User { id: userId, name: name }
   insert Profile { userId: userId, bio: "" }
 }
 ```
 
-The block returns the value of its last expression. Any exception inside rolls back everything. Transactions cannot be nested — a `with transaction` inside another `with transaction` is a compile error, caught before you run a line. Note that adding items to a queue can also be in a transaction with an insert for instance.
+The block returns the value of its last expression. Any exception inside rolls back everything. Transactions cannot be nested — a `transaction` inside another `transaction` is a compile error, caught before you run a line. Note that adding items to a queue can also be in a transaction with an insert for instance.
 
 Column type mapping is automatic for all common types — you rarely need to annotate anything:
 
@@ -357,7 +357,7 @@ channel RoomMessages(roomId: String) {
 }
 
 # Publish from inside a transaction — atomically with your DB writes:
-with transaction {
+transaction {
   publish RoomMessages(roomId) NewMessage { content: req.content, ... }
   insert Message { ... }
 }

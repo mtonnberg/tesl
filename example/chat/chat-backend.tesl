@@ -273,7 +273,7 @@ handler postMessage(session: SessionUser ::: Authenticated session,
   -> exists msgId: String => Message ? FromDb (Id == msgId)
   requires [chatWrite, chatPubSub, chatQueue] =
     let msgId = generatePrefixedId "msg"
-    with transaction {
+    transaction {
       publish RoomMessages(roomId) NewMessage { msgId: msgId, userId: session.id, username: session.username, content: req.content, createdAt: nowMillis() }
       enqueue NotifyJob { senderName: session.username, roomName: roomId, content: req.content }
       exists msgId =>

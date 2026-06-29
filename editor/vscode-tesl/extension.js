@@ -267,8 +267,13 @@ function activate(context) {
   }
 
   // ── Test discovery (shared by CodeLens + Test Explorer) ───────────────────────
-  // Regex that matches 'test "name"' at any indentation level.
+  // Regexes for each test kind. api-test/load-test are checked BEFORE the plain
+  // `test` regex (their lines start with "api-"/"load-", so they never match TEST_RE,
+  // but the explicit ordering keeps the intent clear). Each kind maps to the compiler
+  // `--test-kind` value of the same name.
   const TEST_RE = /^\s*test\s+"([^"]+)"/;
+  const API_TEST_RE = /^\s*api-test\s+"([^"]+)"/;
+  const LOAD_TEST_RE = /^\s*load-test\s+"([^"]+)"/;
   // A doctest example line: '#> <expr>'. The runnable unit is the whole doctest
   // block for the fn that follows; the compiler names that test "doctest: <fn>"
   // (see parser.ml extract_doctest_decls). We surface a lens on the FIRST '#>'
@@ -276,12 +281,19 @@ function activate(context) {
   const DOCTEST_RE = /^\s*#>\s*\S/;
   const FN_RE = /^\s*fn\s+([A-Za-z_][A-Za-z0-9_]*)/;
 
-  // Returns { tests: [{name, line}], doctests: [{fnName, line}], hasAny }.
+  // Returns { tests, apiTests, loadTests, doctests, hasAny }, where tests/apiTests/
+  // loadTests are [{name, line}] and doctests are [{fnName, line}].
   function discoverTests(text) {
     const lines = text.split("\n");
     const tests = [];
+    const apiTests = [];
+    const loadTests = [];
     const doctests = [];
     for (let i = 0; i < lines.length; i++) {
+      const am = API_TEST_RE.exec(lines[i]);
+      if (am) { apiTests.push({ name: am[1], line: i }); continue; }
+      const lm = LOAD_TEST_RE.exec(lines[i]);
+      if (lm) { loadTests.push({ name: lm[1], line: i }); continue; }
       const tm = TEST_RE.exec(lines[i]);
       if (tm) { tests.push({ name: tm[1], line: i }); continue; }
       if (DOCTEST_RE.test(lines[i])) {
@@ -300,7 +312,11 @@ function activate(context) {
         if (fnName) doctests.push({ fnName, line: i });
       }
     }
-    return { tests, doctests, hasAny: tests.length > 0 || doctests.length > 0 };
+    return {
+      tests, apiTests, loadTests, doctests,
+      hasAny: tests.length > 0 || apiTests.length > 0
+        || loadTests.length > 0 || doctests.length > 0,
+    };
   }
 
   // ── CodeLens: per-test run/debug + per-doctest run + run-all-in-file ───────────
@@ -308,13 +324,13 @@ function activate(context) {
     provideCodeLenses(document) {
       if (!document.fileName.endsWith(".tesl")) return [];
       const file = document.uri.fsPath;
-      const { tests, doctests, hasAny } = discoverTests(document.getText());
+      const { tests, apiTests, loadTests, doctests, hasAny } = discoverTests(document.getText());
       const lenses = [];
 
       // File-level "run all tests" lens at the first test/doctest block.
       if (hasAny) {
         const firstLine = Math.min(
-          ...[...tests, ...doctests].map((t) => t.line)
+          ...[...tests, ...apiTests, ...loadTests, ...doctests].map((t) => t.line)
         );
         const headRange = new vscode.Range(firstLine, 0, firstLine, 0);
         lenses.push(new vscode.CodeLens(headRange, {
@@ -334,12 +350,38 @@ function activate(context) {
         lenses.push(new vscode.CodeLens(range, {
           title: "▶ Run test",
           command: "tesl.runSingleTest",
-          arguments: [file, t.name],
+          arguments: [file, t.name, "test"],
         }));
         lenses.push(new vscode.CodeLens(range, {
           title: "🐛 Debug test",
           command: "tesl.debugSingleTest",
-          arguments: [file, t.name],
+          arguments: [file, t.name, "test"],
+        }));
+      }
+
+      // api-tests: Run + Debug (a request scenario is steppable under the DAP).
+      for (const t of apiTests) {
+        const range = new vscode.Range(t.line, 0, t.line, 0);
+        lenses.push(new vscode.CodeLens(range, {
+          title: "▶ Run api-test",
+          command: "tesl.runSingleTest",
+          arguments: [file, t.name, "api-test"],
+        }));
+        lenses.push(new vscode.CodeLens(range, {
+          title: "🐛 Debug api-test",
+          command: "tesl.debugSingleTest",
+          arguments: [file, t.name, "api-test"],
+        }));
+      }
+
+      // load-tests: Run only — a throughput/latency benchmark isn't a steppable
+      // scenario, so no Debug lens.
+      for (const t of loadTests) {
+        const range = new vscode.Range(t.line, 0, t.line, 0);
+        lenses.push(new vscode.CodeLens(range, {
+          title: "▶ Run load-test",
+          command: "tesl.runSingleTest",
+          arguments: [file, t.name, "load-test"],
         }));
       }
 
@@ -350,7 +392,12 @@ function activate(context) {
         lenses.push(new vscode.CodeLens(range, {
           title: "▶ Run doctest",
           command: "tesl.runSingleTest",
-          arguments: [file, testName],
+          arguments: [file, testName, "doctest"],
+        }));
+        lenses.push(new vscode.CodeLens(range, {
+          title: "🐛 Debug doctest",
+          command: "tesl.debugSingleTest",
+          arguments: [file, testName, "doctest"],
         }));
       }
 
@@ -381,23 +428,26 @@ function activate(context) {
     }
     return "tesl";
   }
-  function runNamedTestInTerminal(file, testName, terminalName) {
+  function runNamedTestInTerminal(file, testName, terminalName, kind) {
     const tesl = findTeslWrapper();
     const terminal = vscode.window.createTerminal({ name: terminalName || `Tesl: ${testName}` });
     terminal.show(true);
-    terminal.sendText(`"${tesl}" test --test-name "${testName}" "${file}"`);
+    // `--test-kind` disambiguates same-named blocks of different kinds and is what
+    // lets a single api-test/load-test/doctest run in isolation.
+    const kindArg = kind ? ` --test-kind ${kind}` : "";
+    terminal.sendText(`"${tesl}" test --test-name "${testName}"${kindArg} "${file}"`);
     return terminal;
   }
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("tesl.runSingleTest", (file, testName) => {
-      runNamedTestInTerminal(file, testName);
+    vscode.commands.registerCommand("tesl.runSingleTest", (file, testName, kind) => {
+      runNamedTestInTerminal(file, testName, undefined, kind);
     })
   );
 
   // "Debug test" — compile only the named test, then start a debug session.
   context.subscriptions.push(
-    vscode.commands.registerCommand("tesl.debugSingleTest", (file, testName) => {
+    vscode.commands.registerCommand("tesl.debugSingleTest", (file, testName, kind) => {
       const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
       vscode.debug.startDebugging(folder, {
         type: "tesl", request: "launch",
@@ -405,6 +455,7 @@ function activate(context) {
         program: file,
         mode: "test",
         testName,          // passed as args.testName → DAP server → --test-name flag
+        testKind: kind,    // passed as args.testKind → DAP server → --test-kind flag
       });
     })
   );
@@ -542,7 +593,7 @@ function activate(context) {
     function refreshFile(document) {
       if (!document.fileName.endsWith(".tesl")) return;
       const uri = document.uri;
-      const { tests, doctests, hasAny } = discoverTests(document.getText());
+      const { tests, apiTests, loadTests, doctests, hasAny } = discoverTests(document.getText());
       if (!hasAny) { ctrl.items.delete(uri.toString()); return; }
 
       let fileItem = ctrl.items.get(uri.toString());
@@ -558,6 +609,18 @@ function activate(context) {
         item.range = new vscode.Range(t.line, 0, t.line, 0);
         fileItem.children.add(item);
       }
+      for (const t of apiTests) {
+        const id = `${uri.fsPath}::api-test::${t.name}`;
+        const item = ctrl.createTestItem(id, `api-test: ${t.name}`, uri);
+        item.range = new vscode.Range(t.line, 0, t.line, 0);
+        fileItem.children.add(item);
+      }
+      for (const t of loadTests) {
+        const id = `${uri.fsPath}::load-test::${t.name}`;
+        const item = ctrl.createTestItem(id, `load-test: ${t.name}`, uri);
+        item.range = new vscode.Range(t.line, 0, t.line, 0);
+        fileItem.children.add(item);
+      }
       for (const d of doctests) {
         const id = `${uri.fsPath}::doctest::${d.fnName}`;
         const item = ctrl.createTestItem(id, `doctest: ${d.fnName}`, uri);
@@ -566,13 +629,18 @@ function activate(context) {
       }
     }
 
-    // Map a TestItem back to (file, compilerTestName) for --test-name targeting.
+    // Map a TestItem back to (file, compilerTestName, kind) for --test-name/--test-kind
+    // targeting. api-test/load-test/doctest are matched before the plain `test` form.
     function targetOf(item) {
       const id = item.id;
-      let m = /^(.*)::test::(.*)$/.exec(id);
-      if (m) return { file: m[1], testName: m[2] };
+      let m = /^(.*)::api-test::(.*)$/.exec(id);
+      if (m) return { file: m[1], testName: m[2], kind: "api-test" };
+      m = /^(.*)::load-test::(.*)$/.exec(id);
+      if (m) return { file: m[1], testName: m[2], kind: "load-test" };
       m = /^(.*)::doctest::(.*)$/.exec(id);
-      if (m) return { file: m[1], testName: `doctest: ${m[2]}` };
+      if (m) return { file: m[1], testName: `doctest: ${m[2]}`, kind: "doctest" };
+      m = /^(.*)::test::(.*)$/.exec(id);
+      if (m) return { file: m[1], testName: m[2], kind: "test" };
       return null; // file-level node
     }
 
@@ -596,7 +664,7 @@ function activate(context) {
         const tgt = targetOf(item);
         if (!tgt) continue;
         run.started(item);
-        runNamedTestInTerminal(tgt.file, tgt.testName, `Tesl: ${item.label}`);
+        runNamedTestInTerminal(tgt.file, tgt.testName, `Tesl: ${item.label}`, tgt.kind);
         // Terminal-based execution: we can't observe pass/fail programmatically
         // without parsing raco output, so we mark the item enqueued/skipped to
         // avoid reporting a false pass. The terminal shows the authoritative result.
@@ -611,12 +679,15 @@ function activate(context) {
       for (const item of collectLeaves(request)) {
         const tgt = targetOf(item);
         if (!tgt) continue;
+        // Load-tests are throughput benchmarks, not steppable scenarios — skip them
+        // in the Debug profile (they remain runnable via the Run profile).
+        if (tgt.kind === "load-test") { run.skipped(item); continue; }
         run.started(item);
         const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(tgt.file));
         vscode.debug.startDebugging(folder, {
           type: "tesl", request: "launch",
           name: `Debug: ${item.label}`,
-          program: tgt.file, mode: "test", testName: tgt.testName,
+          program: tgt.file, mode: "test", testName: tgt.testName, testKind: tgt.kind,
         });
         run.skipped(item);
       }

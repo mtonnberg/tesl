@@ -471,6 +471,10 @@ type test_form = {
   stmts        : test_stmt list;
   runs         : int option;
   capabilities : string list;
+  (* Optional `with database X` header clause: binds the named database for the test
+     body (so queries run against X's configured backend).  [None] ⇒ the default
+     in-memory store, which is what the vast majority of tests use. *)
+  database     : string option;
   loc          : loc;
 }
 

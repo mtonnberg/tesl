@@ -272,18 +272,24 @@
       #f))
 
 ;; Compile a .tesl file with --debug, write output to a temp .rkt, return the path.
-(define (compile-debug program-path #:test-name [test-name #f])
+(define (compile-debug program-path #:test-name [test-name #f] #:test-kind [test-kind #f])
   (define tesl (find-tesl-binary))
   (unless tesl
     (error "tesl binary not found; set TESL_COMPILER env var or install via nix"))
   ;; Ensure absolute path so thsl-src file strings match VSCode's setBreakpoints paths.
   (define abs-path (path->string (path->complete-path (string->path program-path))))
   (define temp-rkt (path->string (make-temporary-file "tesl-debug-~a.rkt")))
-  ;; Run: tesl --debug [--test-name NAME] <abs-path>  → stdout = compiled Racket
+  ;; Run: tesl --debug [--test-name NAME [--test-kind KIND]] <abs-path>  → stdout = Racket.
+  ;; --test-kind disambiguates a named api-test/load-test/doctest from a same-named
+  ;; plain test so debugging targets exactly the selected block.
   (define-values (proc stdout stdin stderr)
-    (if test-name
-        (subprocess #f #f #f tesl "--debug" "--test-name" test-name abs-path)
-        (subprocess #f #f #f tesl "--debug" abs-path)))
+    (cond
+      [(and test-name test-kind)
+       (subprocess #f #f #f tesl "--debug" "--test-name" test-name "--test-kind" test-kind abs-path)]
+      [test-name
+       (subprocess #f #f #f tesl "--debug" "--test-name" test-name abs-path)]
+      [else
+       (subprocess #f #f #f tesl "--debug" abs-path)]))
   (define racket-src (port->string stdout))
   (define err-str (port->string stderr))
   (subprocess-wait proc)
@@ -862,7 +868,8 @@
   (let* ([args      (hash-ref req 'arguments (hasheq))]
          [program   (hash-ref args 'program "")]
          [mode      (hash-ref args 'mode "program")]
-         [test-name (hash-ref args 'testName #f)])
+         [test-name (hash-ref args 'testName #f)]
+         [test-kind (hash-ref args 'testKind #f)])
     (dap-response req #t (hasheq))
 
     ;; Apply the launch config's `env` to THIS process. The debuggee runs
@@ -925,7 +932,7 @@
 
       (dap-event "output" (hasheq 'category "console"
         'output (format "[dbg] Running: tesl --debug~a ...\n" (if test-name (format " --test-name ~s" test-name) ""))))
-      (define compiled (compile-debug program #:test-name test-name))
+      (define compiled (compile-debug program #:test-name test-name #:test-kind test-kind))
       (dap-event "output" (hasheq 'category "console"
         'output (format "[dbg] Compiled OK → ~a\n[dbg] Waiting for breakpoints...\n" compiled)))
 

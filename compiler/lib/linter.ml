@@ -402,7 +402,7 @@ let lint_lambda_in_arg_position (file : string) (lines : string array) (out : li
     matched explicitly.  Each of those still recurses into its child exprs via
     {!Ast_visitor.fold_children}, the single shared structural traversal, and
     the purely-mechanical variants (application, operators, conditionals,
-    lists, [fail], [with database]/[with transaction], plain/interpolated
+    lists, [fail], [with database]/[transaction], plain/interpolated
     literals) fall through to it directly.  Sharing one traversal means a new
     {!Ast.expr} variant cannot silently escape unused-name analysis.
 

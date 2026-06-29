@@ -913,6 +913,96 @@ fn sc(n: Int ::: P n) -> Int ::: P n =
   assert_not_contains ~name:"checkout is not treated as the check keyword"
     racket "(check-and"
 
+(* ── Test-header `with database X` clause (with_cleanup change C) ──────────── *)
+
+let test_db_clause_src body = {|#lang tesl
+module Tdbc exposing []
+import Tesl.Prelude exposing [String, Int]
+
+entity Item table "items" primaryKey id {
+  id: String
+  amount: Int
+}
+
+database TestDB = Database {
+  entities: [Item]
+  backend: Memory
+}
+
+|} ^ body
+
+let test_with_database_clause_wraps_test_body () =
+  (* `test "..." with database X { ... }` binds X for the body by wrapping it in
+     the same `call-with-database` primitive that the `with database X { }` block uses. *)
+  let src = test_db_clause_src
+    {|test "binds a database for the body" with database TestDB {
+  expect 1 == 1
+}|} in
+  let racket = compile_ok src "with_database_clause" in
+  assert_contains ~name:"test body wrapped in call-with-database"
+    racket "(call-with-database TestDB (lambda ()";
+  assert_contains ~name:"database is defined" racket "(define-database TestDB"
+
+let test_plain_test_has_no_database_wrapper () =
+  (* A test with no `with database` clause emits no wrapper — the default in-memory
+     store is used, byte-identical to today's plain tests. *)
+  let src = test_db_clause_src
+    {|test "plain in-memory test" {
+  expect 2 == 2
+}|} in
+  let racket = compile_ok src "plain_test_no_db" in
+  assert_contains ~name:"plain test still emitted" racket "(test-case \"plain in-memory test\"";
+  assert_not_contains ~name:"no call-with-database for a clause-less test"
+    racket "call-with-database"
+
+let test_with_database_clause_combines_with_requires () =
+  (* The clause coexists with `requires [...]` in any order before the body `{`. *)
+  let src = test_db_clause_src
+    {|test "db plus caps" requires [dbRead] with database TestDB {
+  expect 3 == 3
+}|} in
+  let racket = compile_ok src "db_plus_caps" in
+  assert_contains ~name:"call-with-database present" racket "(call-with-database TestDB (lambda ()";
+  assert_contains ~name:"with-capabilities present" racket "(with-capabilities ("
+
+(* ── Single-test selection by name + kind (test_debug_for_all_tests) ───────── *)
+
+let test_kind_filter_selects_and_suppresses () =
+  let src = {|#lang tesl
+module Foo exposing []
+import Tesl.Prelude exposing [Int]
+test "unit thing" {
+  expect 1 == 1
+}
+api-test "request templates" for ChatServer {
+  let room = post "/rooms/{roomId}"
+              cookie "chatUserId={userId}"
+              body { "content": "hello {roomName}" }
+}
+|} in
+  Fun.protect
+    ~finally:(fun () ->
+      Emit_racket.set_test_name_filter None;
+      Emit_racket.set_test_kind_filter None)
+    (fun () ->
+      (* No filter: both the plain test and the api-test emit (unchanged behaviour). *)
+      let all = compile_ok src "kind_filter_none" in
+      assert_contains ~name:"plain test present" all "(test-case \"unit thing\"";
+      assert_contains ~name:"api-test present" all "(test-case \"request templates\"";
+      (* --test-name + --test-kind api-test: only the api-test, plain test suppressed. *)
+      Emit_racket.set_test_name_filter (Some "request templates");
+      Emit_racket.set_test_kind_filter (Some "api-test");
+      let only_api = compile_ok src "kind_filter_api" in
+      assert_contains ~name:"selected api-test present" only_api "(test-case \"request templates\"";
+      assert_not_contains ~name:"plain test suppressed" only_api "(test-case \"unit thing\"";
+      (* --test-name + --test-kind test: only the plain test, api-test suppressed
+         (api-tests previously emitted unconditionally — this is the key fix). *)
+      Emit_racket.set_test_name_filter (Some "unit thing");
+      Emit_racket.set_test_kind_filter (Some "test");
+      let only_plain = compile_ok src "kind_filter_plain" in
+      assert_contains ~name:"selected plain test present" only_plain "(test-case \"unit thing\"";
+      assert_not_contains ~name:"api-test suppressed" only_plain "(test-case \"request templates\"")
+
 (* ── Suite ───────────────────────────────────────────────────────────────── *)
 
 let () =
@@ -1003,6 +1093,14 @@ let () =
     ];
     "codec", [
       Alcotest.test_case "stray colon after codec field name still decodes" `Quick test_codec_field_stray_colon;
+    ];
+    "test-db-clause", [
+      Alcotest.test_case "with database clause wraps test body" `Quick test_with_database_clause_wraps_test_body;
+      Alcotest.test_case "plain test has no database wrapper" `Quick test_plain_test_has_no_database_wrapper;
+      Alcotest.test_case "with database combines with requires" `Quick test_with_database_clause_combines_with_requires;
+    ];
+    "test-kind-filter", [
+      Alcotest.test_case "name+kind selects one test and suppresses others" `Quick test_kind_filter_selects_and_suppresses;
     ];
     "eok-proof", [
       Alcotest.test_case "EOk check-value strips check wrapper" `Quick test_eok_check_value_strips_check_wrapper;

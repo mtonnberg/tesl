@@ -354,12 +354,12 @@ let user = selectOne user from User where user.email == email
 
 ### Transactions
 
-**✅ Do:** Use `with transaction` for multi-operation consistency:
+**✅ Do:** Use `transaction` for multi-operation consistency:
 ```tesl
 handler transferAmount(fromId: String, toId: String, amount: Int ::: Positive amount)
   -> TransferResult
   requires [db] =
-  with transaction {
+  transaction {
     let fromBalance = selectOne account from Account where account.id == fromId
     let toBalance = selectOne account from Account where account.id == toId
 
@@ -900,14 +900,27 @@ tesl test tests/*.test.tesl
 # Run with verbose output
 tesl test my-api.test.tesl  # Set TESL_VERBOSE=1 for more details
 
-# Run only API tests (filters by test type)
-tesl test my-api.test.tesl  # Currently runs all test types
+# Run a single named block
+tesl test --test-name "my test" my-api.test.tesl
+
+# Disambiguate same-named blocks of different kinds with --test-kind
+# (<kind> is one of: test | api-test | load-test | doctest). This is also
+# what lets a single api-test/load-test/doctest be run in isolation.
+tesl test --test-name "my flow" --test-kind api-test my-api.test.tesl
 
 # Check test syntax without running
 tesl check my-api.test.tesl
 ```
 
 ### Test Configuration
+
+**Tests are in-memory by default.** Test blocks run against an automatic in-memory store, so the vast majority of tests need no database setup. Add a `with database X` header clause only when a test needs a specific or real backend — it binds the named database `X` so queries in the block run against `X`'s configured backend:
+
+```tesl
+test "rejects duplicate emails" with database AppDb {
+  -- queries here hit AppDb's configured backend instead of the in-memory store
+}
+```
 
 Configure test behavior in your test files:
 

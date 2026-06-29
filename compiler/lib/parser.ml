@@ -489,13 +489,11 @@ and parse_type_app s =
     | UIDENT _ ->
       (* Type-level application: List Int, Maybe T — only uppercase names *)
       continue_with_type_arg ()
-    | IDENT ("where" | "with") ->
-      (* `where` ends a type (proof refinement: `T where P`); `with` is never a
-         type argument — it follows a type to introduce an INLINE capture codec
-         (`capture id: T with <codec>`) or a `with database` / `with transaction`
-         block — so either keyword must terminate type application.  (The OTHER
-         capture form, `capture id: T via <capturer>`, uses the `via`/`using`
-         tokens, not `with`.  `with capabilities` no longer exists.) *)
+    | IDENT "where" ->
+      (* `where` ends a type (proof refinement: `T where P`) and so must terminate
+         type application.  (Captures use the `using`/`via` keyword tokens, which the
+         type parser already stops on; `with` no longer follows a type since inline
+         capture codecs moved to `using`.) *)
       return head
     | IDENT _ ->
       (* Lowercase: only a type arg if NOT followed by ':' (field label check) *)
@@ -2420,6 +2418,10 @@ and parse_start_email_worker_stmt s =
   return (EStartEmailWorker { email_name; loc })
 
 and parse_with_stmt s =
+  (* `with database X { … }` — bind a named database for the block body.  (The
+     `database` keyword is intentionally retained here: dropping it would collide with
+     the `database X = Database { … }` declaration keyword.  `with transaction` was
+     migrated to the bare `transaction { … }` form — see [parse_transaction_block].) *)
   let loc0 = current_loc s in
   let* _ =
     match peek s with
@@ -2438,26 +2440,26 @@ and parse_with_stmt s =
     let* _ = expect s RBRACE in
     let loc = span loc0 (current_loc s) in
     return (EWithDatabase { database_name; body; loc })
-  | IDENT "transaction" ->
-    advance s;
-    let* _ = expect s LBRACE in
-    skip_newlines s;
-    if peek s = INDENT then advance s;
-    let* body = parse_stmt_seq s in
-    skip_layout s;
-    let* _ = expect s RBRACE in
-    let loc = span loc0 (current_loc s) in
-    return (EWithTransaction { body; loc })
-  | _ ->
-    while peek s <> LBRACE && peek s <> EOF && peek s <> NEWLINE do advance s done;
-    if peek s = LBRACE then begin
-      advance s; skip_layout s;
-      let* body = parse_stmt_seq s in
-      skip_layout s;
-      let* _ = expect s RBRACE in
-      return body
-    end else
-      parse_stmt_seq s
+  | t -> err s (Printf.sprintf "expected `database` after `with`, got %s" (tok_to_string t))
+
+and parse_transaction_block s =
+  (* `transaction { … }` — wrap multiple writes in one atomic transaction.  (Formerly
+     spelled `with transaction { … }`; the `with` was dropped in the with-keyword
+     cleanup since `transaction` is unambiguous on its own.) *)
+  let loc0 = current_loc s in
+  let* _ =
+    match peek s with
+    | IDENT "transaction" -> advance s; return ()
+    | t -> err s (Printf.sprintf "expected transaction block, got %s" (tok_to_string t))
+  in
+  let* _ = expect s LBRACE in
+  skip_newlines s;
+  if peek s = INDENT then advance s;
+  let* body = parse_stmt_seq s in
+  skip_layout s;
+  let* _ = expect s RBRACE in
+  let loc = span loc0 (current_loc s) in
+  return (EWithTransaction { body; loc })
 
 and continue_stmt_seq s e =
   skip_newlines s;
@@ -2563,7 +2565,10 @@ and parse_stmt_seq s =
   | IDENT "startEmailWorker" ->
     let* e = parse_start_email_worker_stmt s in
     continue_stmt_seq s e
-  | IDENT "with" when (match peek2 s with DATABASE | IDENT "transaction" -> true | _ -> false) ->
+  | IDENT "transaction" when peek2 s = LBRACE ->
+    let* e = parse_transaction_block s in
+    continue_stmt_seq s e
+  | IDENT "with" when peek2 s = DATABASE ->
     let* e = parse_with_stmt s in
     continue_stmt_seq s e
   | IDENT "set" ->
@@ -2778,6 +2783,10 @@ let parse_func_body s =
         | PUBLISH | IDENT "publish"
         | IDENT "enqueue" | IDENT "startWorkers" | IDENT "startDeadWorkers"
         | IDENT "serve" | IDENT "with" | IDENT "startEmailWorker" -> true
+        (* A bare `transaction { … }` body (formerly `with transaction`) must route to
+           the statement-sequence parser too — otherwise an un-indented body (e.g. after
+           a multi-line handler header) is mis-parsed as a plain expression. *)
+        | IDENT "transaction" -> peek2 s = LBRACE
         | _ -> false) then
       parse_stmt_seq s
     else
@@ -3826,10 +3835,10 @@ let parse_api_form s =
                (match parse_binding s with
                 | Ok b ->
                   (match peek s with
-                   (* Inline form: `capture x: T with <codec> [via <check>]` — no
-                      separate `capturer` declaration needed. (`with` is a bare
-                      identifier, not a keyword.) *)
-                   | IDENT "with" ->
+                   (* Inline form: `capture x: T using <codec> [via <check>]` — no
+                      separate `capturer` declaration needed. (`using`/`via` are real
+                      keyword tokens, so the type parser terminates on them naturally.) *)
+                   | USING ->
                      advance s;
                      (match expect_ident s with
                       | Ok codec ->
@@ -4265,23 +4274,40 @@ and parse_test_body s =
 let parse_test_form s =
   let loc0 = current_loc s in
   let* desc = expect_string s in
-  (* optional "with N runs" or "runs N" syntax *)
+  (* Optional test-header clauses, accepted in any order until the body `{`:
+       with N runs / runs N   — property-test repetition count
+       with database X        — bind a named database for the test body (else in-memory)
+       requires [..]          — capabilities the test runs with *)
   let runs = ref None in
-  if peek s = IDENT "with" then begin
-    advance s;  (* consume 'with' *)
-    (match expect_int s with Ok n -> runs := Some n | Err _ -> ());
-    if peek s = IDENT "runs" then advance s  (* consume 'runs' *)
-  end else if peek s = IDENT "runs" then begin
-    advance s;
-    (match expect_int s with Ok n -> runs := Some n | Err _ -> ())
-  end;
-  let* caps = parse_requires s in
+  let test_db = ref None in
+  let caps = ref [] in
+  let continue_header = ref true in
+  while !continue_header do
+    begin match peek s with
+    | IDENT "with" when peek2 s = DATABASE ->
+      advance s; advance s;  (* `with database` *)
+      (match expect_uident s with Ok db -> test_db := Some db | Err _ -> ())
+    | IDENT "with" ->
+      advance s;  (* `with N runs` *)
+      (match expect_int s with Ok n -> runs := Some n | Err _ -> ());
+      if peek s = IDENT "runs" then advance s
+    | IDENT "runs" ->
+      advance s;  (* `runs N` *)
+      (match expect_int s with Ok n -> runs := Some n | Err _ -> ())
+    | REQUIRES ->
+      (match parse_requires s with
+       | Ok cs -> caps := !caps @ cs
+       | Err _ -> continue_header := false)
+    | _ -> continue_header := false
+    end
+  done;
   let* _ = expect s LBRACE in
   skip_layout s;
   let* stmts = parse_test_body s in
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
-  return { description = desc; stmts; runs = !runs; capabilities = caps; loc }
+  return { description = desc; stmts; runs = !runs; capabilities = !caps;
+           database = !test_db; loc }
 
 let parse_api_test_form s =
   let loc0 = current_loc s in
@@ -4780,6 +4806,7 @@ let extract_doctest_decls filename source =
         stmts;
         runs = None;
         capabilities = [];
+        database = None;
         loc = dummy_loc filename;
       } :: !decls
   in

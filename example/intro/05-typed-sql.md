@@ -60,7 +60,7 @@ There is no query builder, no string concatenation, no escape function to forget
 ## Transactions
 
 ```tesl
-with transaction {
+transaction {
   let _ = insert User { id: userId, name: name }
   insert Profile { userId: userId, bio: "" }
 }

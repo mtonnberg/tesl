@@ -78,7 +78,7 @@ handler createInvoiceHandler(
   else
     let totalMinutes = selectSum te.minutes from TimeEntry where te.orgId == orgId && te.invoiceId == ""
     let invoiceId = generatePrefixedId "inv"
-    with transaction {
+    transaction {
       # Mark all these entries as belonging to the new invoice
       update te in TimeEntry
         where te.orgId == orgId && te.invoiceId == ""

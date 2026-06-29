@@ -26,6 +26,28 @@ let test_name_filter : string option ref = ref None
 
 let set_test_name_filter v = test_name_filter := v
 
+(** When Some "kind" (one of "test" | "api-test" | "load-test" | "doctest"), restrict
+    single-test selection to that kind.  This disambiguates same-named blocks of
+    different kinds (all emit as `(test-case <description>)`).  Only meaningful together
+    with [test_name_filter]. *)
+let test_kind_filter : string option ref = ref None
+
+let set_test_kind_filter v = test_kind_filter := v
+
+(** Single-test selection used by `tesl test --test-name X [--test-kind K]`.  With no
+    name filter every block is selected (a full `tesl test` run — unchanged behaviour).
+    With a name filter, ONLY blocks whose description matches are emitted (and whose
+    kind matches, if a kind filter is set).  This is what lets a single api-test /
+    load-test be run in isolation — previously they emitted unconditionally. *)
+let test_block_selected ~(kind : string) ~(description : string) =
+  match !test_name_filter with
+  | None -> true
+  | Some name ->
+    String.equal name description
+    && (match !test_kind_filter with
+        | None -> true
+        | Some k -> String.equal k kind)
+
 (* ── Source-position map recording (A1) ──────────────────────────────────────
    Purely *observational* instrumentation: when recording is enabled we measure
    how many newlines the buffer has accumulated around each emitted form/body and
@@ -5456,6 +5478,12 @@ let emit_test ctx (t : test_form) =
      All DTest blocks for a file are batched together to avoid rackunit side-effects
      from multiple (require rackunit) calls in separate submodule fragments. *)
   emit_line ctx (Printf.sprintf "  (test-case %S" t.description);
+  (* Optional `with database X` header clause binds X for the test body (queries run
+     against X's configured backend).  Absent ⇒ the default in-memory store, in which
+     case nothing extra is emitted (byte-identical to a test with no clause). *)
+  (match t.database with
+   | Some db -> emit_line ctx (Printf.sprintf "    (call-with-database %s (lambda ()" db)
+   | None -> ());
   let body_indent = if t.capabilities = [] then "  " else "    " in
   if t.capabilities <> [] then
     emit_line ctx (Printf.sprintf "    (with-capabilities (%s)" (cap_list_str t.capabilities));
@@ -5474,6 +5502,9 @@ let emit_test ctx (t : test_form) =
     | _ -> locals
   ) [] t.stmts in
   if t.capabilities <> [] then emit_line ctx "    )";
+  (match t.database with
+   | Some _ -> emit_line ctx "    ))"   (* close (lambda () and (call-with-database *)
+   | None -> ());
   emit_line ctx "  )"
 
 type api_test_template_part =
@@ -6169,8 +6200,12 @@ let emit_module ctx (m : module_form) =
       emit_api ctx ~server_name ~server_bindings api
     | DServer sv -> emit_server ctx sv
     | DTest _ -> ()  (* collected and emitted in one batch below *)
-    | DApiTest t -> emit_api_test ctx ~database_names t
-    | DLoadTest t -> emit_load_test ctx ~database_names t
+    | DApiTest t ->
+      if test_block_selected ~kind:"api-test" ~description:t.description then
+        emit_api_test ctx ~database_names t
+    | DLoadTest t ->
+      if test_block_selected ~kind:"load-test" ~description:t.description then
+        emit_load_test ctx ~database_names t
     | DCache c ->
       (* The define-cache macro references the cache capability `cacheCap_<name>`,
          so bind it first (define-capability before define-cache). *)
@@ -6200,9 +6235,19 @@ let emit_module ctx (m : module_form) =
      side-effects from multiple (require rackunit) calls in separate fragments. *)
   let plain_tests =
     let all = List.filter_map (function DTest t -> Some t | _ -> None) m.decls in
-    match !test_name_filter with
-    | None      -> all
-    | Some name -> List.filter (fun (t : test_form) -> String.equal t.description name) all
+    (* A synthetic doctest block carries the "doctest: <fn>" description prefix; a
+       hand-written `test "..."` block is kind "test".  This lets `--test-kind doctest`
+       and `--test-kind test` disambiguate. *)
+    let dtest_kind (t : test_form) =
+      let p = "doctest: " in
+      if String.length t.description >= String.length p
+         && String.equal (String.sub t.description 0 (String.length p)) p
+      then "doctest" else "test"
+    in
+    List.filter
+      (fun (t : test_form) ->
+        test_block_selected ~kind:(dtest_kind t) ~description:t.description)
+      all
   in
   if plain_tests <> [] then begin
     emit_line ctx "(module+ test";

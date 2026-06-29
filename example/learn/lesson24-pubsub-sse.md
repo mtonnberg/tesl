@@ -1,7 +1,7 @@
 # Lesson 24: Pub/Sub Channels and SSE Endpoints
 
 > **Implemented — including horizontal scaling via LISTEN/NOTIFY.**
-> - `publish` inside `with transaction` writes to `tesl_pubsub_outbox` atomically and issues `NOTIFY tesl_pubsub` with the row ID (deferred to commit).
+> - `publish` inside `transaction` writes to `tesl_pubsub_outbox` atomically and issues `NOTIFY tesl_pubsub` with the row ID (deferred to commit).
 > - SSE connections receive events via the same in-memory listener mechanism. No separate port or nginx WebSocket proxy needed.
 > - SSE clients in **any process** receive events published by any other process (via PostgreSQL LISTEN/NOTIFY + outbox).
 > - `publish` outside a transaction calls listeners directly (at-most-once).
@@ -46,12 +46,12 @@ sseChannel UserEvents(userId: String ::: UserId userId) = SseChannel {
 
 ### 2. Publish events inside a handler
 
-Use `publish ChannelName(key) VariantConstructor { fields }` to send an event. Use `with transaction` for guaranteed delivery:
+Use `publish ChannelName(key) VariantConstructor { fields }` to send an event. Use `transaction` for guaranteed delivery:
 
 ```tesl
 handler updateProfile(userId: String ::: UserId userId, req: ProfileUpdateRequest)
   requires [dbWrite, pubsub] =
-  with transaction {
+  transaction {
     update User in MainDatabase where Id == userId set { bio: req.bio }
     publish UserEvents(userId) ProfileUpdated { bio: req.bio }
   }
@@ -149,7 +149,7 @@ Every 10 seconds a `: heartbeat` comment line is sent to keep the connection ali
 
 ### The outbox pattern: durable event delivery
 
-When `publish` runs inside `with transaction`:
+When `publish` runs inside `transaction`:
 
 1. The event payload is serialized to JSON and inserted into `tesl_pubsub_outbox`.
 2. `SELECT pg_notify('tesl_pubsub', row_id)` is issued. PostgreSQL defers this NOTIFY to commit.

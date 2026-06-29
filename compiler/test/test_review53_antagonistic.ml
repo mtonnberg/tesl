@@ -468,7 +468,7 @@ handler badHandler(n: Int) -> n: Int ::: IsPositive n =
    R53_T — Transaction nesting
    ═══════════════════════════════════════════════════════════════════════════ *)
 
-(* R53_T01 — Nesting `with transaction` inside another must be rejected. *)
+(* R53_T01 — Nesting `transaction` inside another must be rejected. *)
 let r53_t01_nested_transaction_rejected () =
   should_fail_src "nested.*transaction\\|transaction.*nested\\|inside.*transaction" (base_header ^ {|
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -493,8 +493,8 @@ database NoteDb = Database {
 handler badHandler(noteId: String)
   -> Note
   requires [dbWrite] =
-  with transaction {
-    with transaction {
+  transaction {
+    transaction {
       insert Note { id: noteId, body: "hello" }
     }
   }

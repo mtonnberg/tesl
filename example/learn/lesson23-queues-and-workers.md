@@ -62,10 +62,10 @@ enqueue SendEmail { to: req.email, subject: "Welcome!", body: welcomeText }
 
 The job type (`SendEmail`) tells the compiler which queue to use. You never name the queue directly in `enqueue`.
 
-For guaranteed, atomic delivery — where the job only enters the queue if your database writes also succeed — wrap everything in `with transaction`:
+For guaranteed, atomic delivery — where the job only enters the queue if your database writes also succeed — wrap everything in `transaction`:
 
 ```tesl
-with transaction {
+transaction {
   let user = insert User { id: newId, email: req.email }
   enqueue SendEmail { to: req.email, subject: "Welcome!" }
   user
@@ -131,7 +131,7 @@ main() -> App requires [appService, smtpSend] =
 
 In a typical web service with a separate queue (Redis, RabbitMQ), you face a fundamental reliability problem: after the database write succeeds but before the queue write happens, the process can crash. You end up with a committed user record and no welcome email — or a sent email and no user.
 
-Postgres's native `LISTEN/NOTIFY` and `FOR UPDATE SKIP LOCKED` eliminate this entirely. When `enqueue` runs inside `with transaction`:
+Postgres's native `LISTEN/NOTIFY` and `FOR UPDATE SKIP LOCKED` eliminate this entirely. When `enqueue` runs inside `transaction`:
 
 1. The job row is inserted into `tesl_jobs` as part of the database transaction.
 2. A `NOTIFY` is issued on the same transaction connection.
@@ -275,7 +275,7 @@ queue EmailQueue requires [smtpSend] = Queue {
 ```tesl
 handler registerUser(req: RegistrationRequest ::: ValidRequest req)
   requires [dbWrite, queueWrite] =
-  with transaction {
+  transaction {
     let userId = generateId "usr_"
     let user   = insert User {
       id:    userId,
@@ -291,7 +291,7 @@ handler registerUser(req: RegistrationRequest ::: ValidRequest req)
   }
 ```
 
-The `with transaction` block guarantees:
+The `transaction` block guarantees:
 - If the `insert` fails (e.g., duplicate email), `enqueue` is rolled back — no orphan job.
 - If `enqueue` fails (e.g., `checkValidEmail` rejects the address), `insert` is rolled back — no user without a valid email.
 - If the process crashes between the transaction start and commit, both are rolled back.

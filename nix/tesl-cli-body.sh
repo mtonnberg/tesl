@@ -851,15 +851,15 @@ shift || true
 
 case "$CMD" in
   --test-name)
-    # Top-level passthrough: `tesl --test-name "NAME" file.tesl` emits a .rkt to
-    # stdout containing ONLY the named test block. The vscodium codelens invokes
-    # the `tesl` binary this way (then pipes to `raco test`), so the wrapper must
-    # forward it to the compiler rather than reporting "unknown command".
-    [ $# -ge 2 ] || { echo "Usage: tesl --test-name <name> <file.tesl>" >&2; exit 1; }
-    TEST_NAME="$1"; shift
-    FILE="$1"; shift
+    # Top-level passthrough: `tesl --test-name "NAME" [--test-kind KIND] file.tesl`
+    # emits a .rkt to stdout containing ONLY the named test block. The vscodium
+    # codelens invokes the `tesl` binary this way (then pipes to `raco test`), so the
+    # wrapper must forward it to the compiler rather than reporting "unknown command".
+    # Remaining args are forwarded verbatim so the optional `--test-kind KIND`
+    # disambiguator (test|api-test|load-test|doctest) reaches the compiler unchanged.
+    [ $# -ge 2 ] || { echo "Usage: tesl --test-name <name> [--test-kind <kind>] <file.tesl>" >&2; exit 1; }
     _tesl_require_compiler
-    exec "$TESL_OCAML_COMPILER" --test-name "$TEST_NAME" "$FILE"
+    exec "$TESL_OCAML_COMPILER" --test-name "$@"
     ;;
   --debug)
     # Top-level passthrough for the DAP debug adapter, which invokes the resolved
@@ -1010,19 +1010,28 @@ case "$CMD" in
     exit "$RET"
     ;;
   test)
-    # Optional: --test-name "name" runs only the named test case.
+    # Optional: --test-name "name"  runs only the named test case.
+    #           --test-kind KIND    (test|api-test|load-test|doctest) disambiguates
+    #           same-named blocks of different kinds — required to run a single
+    #           api-test / load-test / doctest in isolation.
     TEST_NAME=""
-    if [ "${1:-}" = "--test-name" ]; then
-      TEST_NAME="${2:?--test-name requires a test name argument}"
-      shift 2
-    fi
-    [ $# -gt 0 ] || { echo "Usage: tesl test [--test-name <name>] <file.tesl> [more.tesl ...]" >&2; exit 1; }
+    TEST_KIND=""
+    while true; do
+      case "${1:-}" in
+        --test-name) TEST_NAME="${2:?--test-name requires a test name argument}"; shift 2 ;;
+        --test-kind) TEST_KIND="${2:?--test-kind requires a kind argument}"; shift 2 ;;
+        *) break ;;
+      esac
+    done
+    [ $# -gt 0 ] || { echo "Usage: tesl test [--test-name <name>] [--test-kind <kind>] <file.tesl> [more.tesl ...]" >&2; exit 1; }
     RET=0
     for FILE in "$@"; do
       OUT="${FILE%.tesl}.rkt"
       OUT_TMP="$(mktemp --suffix=.rkt)"
       _tesl_require_compiler
-      if [ -n "$TEST_NAME" ]; then
+      if [ -n "$TEST_NAME" ] && [ -n "$TEST_KIND" ]; then
+        "$TESL_OCAML_COMPILER" --test-name "$TEST_NAME" --test-kind "$TEST_KIND" "$FILE" > "$OUT_TMP"
+      elif [ -n "$TEST_NAME" ]; then
         "$TESL_OCAML_COMPILER" --test-name "$TEST_NAME" "$FILE" > "$OUT_TMP"
       else
         _tesl_compile_to_stdout "$FILE" > "$OUT_TMP"

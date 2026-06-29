@@ -1531,7 +1531,7 @@ supplies the wrong literal arguments (%s); the body must return the declared fac
       let rec check_nested_txn in_txn (e : Ast.expr) =
         match e with
         | EWithTransaction { body; loc } when in_txn ->
-          errors := { loc; message = "nested `with transaction` is not allowed; transactions cannot be nested" }
+          errors := { loc; message = "nested `transaction` is not allowed; transactions cannot be nested" }
             :: !errors;
           check_nested_txn true body
         | EWithTransaction { body; _ } ->
@@ -1545,7 +1545,7 @@ supplies the wrong literal arguments (%s); the body must return the declared fac
              errors := {
                loc;
                message = Printf.sprintf
-                 "call to `%s` is not allowed inside `with transaction` because it can open its own transaction"
+                 "call to `%s` is not allowed inside `transaction` because it can open its own transaction"
                  fn_name;
              } :: !errors
            | _ -> ());

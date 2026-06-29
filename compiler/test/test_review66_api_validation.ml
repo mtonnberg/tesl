@@ -560,11 +560,12 @@ api R66Ca09 {
 }
 |}
 
-let test_R66_CA10_capture_using_keyword_rejected () =
-  (* Bug fix_bugs: `capture s: String using stringCodec` inside an api block —
-     `using` is not supported here; the parser silently dropped it, leaving the
-     `:s` path param with no capture, which crashed at `tesl run`. *)
-  should_fail "path parameter\\|has no `capture`\\|no.*capture clause" {|
+let test_R66_CA10_capture_using_keyword_accepted () =
+  (* `capture s: String using stringCodec` inside an api block is the inline-codec
+     form (symmetric with `capturer ... using`).  This previously had to be spelled
+     with `with`; after the with→using migration `using` is the accepted spelling and
+     binds the `:s` path param's capture. *)
+  should_pass {|
 #lang tesl
 module R66Ca10 exposing []
 import Tesl.Prelude exposing [String]
@@ -606,7 +607,7 @@ api R66Ca12 {
 |}
 
 let test_R66_CA13_inline_capture_accepted () =
-  (* Inline form: `capture x: T with <codec>` needs no top-level `capturer`. *)
+  (* Inline form: `capture x: T using <codec>` needs no top-level `capturer`. *)
   should_pass {|
 #lang tesl
 module R66Ca13 exposing []
@@ -614,13 +615,13 @@ import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 api R66Ca13 {
   get "/items/:id"
-    capture id: String with stringCodec
+    capture id: String using stringCodec
     -> String
 }
 |}
 
 let test_R66_CA14_inline_capture_with_check_accepted () =
-  (* Inline form with a `via <check>` proof: `capture x: T with <codec> via <fn>`. *)
+  (* Inline form with a `via <check>` proof: `capture x: T using <codec> via <fn>`. *)
   should_pass {|
 #lang tesl
 module R66Ca14 exposing []
@@ -630,7 +631,7 @@ fn parseId(id: String) -> String =
   id
 api R66Ca14 {
   get "/items/:id"
-    capture id: String with stringCodec via parseId
+    capture id: String using stringCodec via parseId
     -> String
 }
 |}
@@ -644,7 +645,24 @@ import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 api R66Ca15 {
   sse "/events/:userId"
-    capture userId: String with stringCodec
+    capture userId: String using stringCodec
+    -> String
+}
+|}
+
+let test_R66_CA16_inline_capture_with_keyword_rejected () =
+  (* The old inline `capture x: T with <codec>` spelling is no longer valid — inline
+     codecs use `using` (symmetric with `capturer ... using`).  Writing `with` here
+     leaves the path param `:id` without a usable capture clause, which validation
+     rejects. *)
+  should_fail "path parameter\\|has no `capture`\\|no.*capture clause" {|
+#lang tesl
+module R66Ca16 exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+api R66Ca16 {
+  get "/items/:id"
+    capture id: String with stringCodec
     -> String
 }
 |}
@@ -878,12 +896,13 @@ let () =
       test_case "R66_CA07 no capture clause path param rejected" `Quick test_R66_CA07_no_capture_clause_path_param_rejected;
       test_case "R66_CA08 bare :string path param no capture rejected" `Quick test_R66_CA08_bare_string_path_param_no_capture_rejected;
       test_case "R66_CA09 capture via codec not capture form rejected" `Quick test_R66_CA09_capture_via_codec_not_capture_form_rejected;
-      test_case "R66_CA10 capture using keyword rejected" `Quick test_R66_CA10_capture_using_keyword_rejected;
+      test_case "R66_CA10 capture using keyword accepted" `Quick test_R66_CA10_capture_using_keyword_accepted;
       test_case "R66_CA11 capture via undefined name rejected" `Quick test_R66_CA11_capture_via_undefined_name_rejected;
       test_case "R66_CA12 capture via real capture form accepted" `Quick test_R66_CA12_capture_via_real_capture_form_accepted;
       test_case "R66_CA13 inline capture accepted" `Quick test_R66_CA13_inline_capture_accepted;
       test_case "R66_CA14 inline capture with check accepted" `Quick test_R66_CA14_inline_capture_with_check_accepted;
       test_case "R66_CA15 inline SSE capture accepted" `Quick test_R66_CA15_inline_sse_capture_accepted;
+      test_case "R66_CA16 inline capture with keyword rejected" `Quick test_R66_CA16_inline_capture_with_keyword_rejected;
     ];
     "duplicate-endpoints", [
       test_case "R66_DU01 duplicate method+path rejected" `Quick test_R66_DU01_duplicate_method_and_path_rejected;

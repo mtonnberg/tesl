@@ -350,13 +350,13 @@ The compiler generates the database schema from your entity declarations.
 
 ### How do I perform transactions?
 
-Use `with transaction` to wrap multiple database operations:
+Use `transaction` to wrap multiple database operations:
 
 ```tesl
 handler transferAmount(fromId: String, toId: String, amount: Int ::: Positive amount)
   -> TransferResult
   requires [db] =
-  with transaction {
+  transaction {
     update account in Account
       where account.id == fromId
       set account.balance = account.balance - amount

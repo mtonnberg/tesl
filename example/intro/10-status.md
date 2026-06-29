@@ -22,7 +22,7 @@ Tesl is alpha. That's worth being direct about.
 | Proof annotations (`:::`) — `check`, `auth`, `establish` | Working |
 | Capabilities (`requires [...]`) | Working |
 | Typed SQL — `select`, `selectOne`, `insert`, `update` | Working |
-| Transactions (`with transaction`) | Working |
+| Transactions (`transaction`) | Working |
 | Background job queues + workers + dead-letter | Working |
 | Real-time SSE channels (`channel`, `publish`, `subscribe`) | Working |
 | `api-test` blocks | Working |
