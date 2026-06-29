@@ -215,6 +215,10 @@ type func_decl = {
   desugared_from : provenance option;
                 (** [None] when parsed from source; [Some p] when synthesised by
                     a desugaring pass, recording the original surface location. *)
+  doc         : string option;
+                (** The contiguous leading `#` comment block above the declaration,
+                    harvested post-parse. Used as the description for a function
+                    exposed as an agent/MCP tool. [None] when undocumented. *)
 }
 
 type adt_variant = {

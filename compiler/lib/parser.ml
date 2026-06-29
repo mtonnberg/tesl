@@ -2922,7 +2922,7 @@ let parse_fn_decl_named kind name loc0 s =
   if (consumed_decl_indent || indent_before_return) && peek s = DEDENT then advance s;
   let loc = span loc0 (current_loc s) in
   return { kind; name; params; return_spec; capabilities; body = body'; loc;
-           desugared_from = None }
+           desugared_from = None; doc = None }
 
 (* Read the function name, then parse the rest of the declaration. The decl's
    loc must start at the name (callers consumed the keyword), matching the
@@ -4858,6 +4858,39 @@ let extract_doctest_decls filename source =
   ) lines;
   List.rev !decls
 
+(* Harvest the contiguous leading `#` comment block directly above each top-level
+   `fn`/`handler` and attach it as that declaration's [doc] — the description used
+   when the function is exposed as an agent/MCP tool.  A blank line (or any
+   non-comment) between the comment and the declaration detaches it, and doctest
+   marker lines (`#>` / `#=`) are not prose, so they act as a boundary. *)
+let attach_doc_comments source decls =
+  let lines = Array.of_list (String.split_on_char '\n' source) in
+  let n = Array.length lines in
+  let trimmed i = if i >= 0 && i < n then String.trim lines.(i) else "" in
+  let body i =
+    let t = trimmed i in
+    if String.length t >= 1 && t.[0] = '#'
+    then String.trim (String.sub t 1 (String.length t - 1)) else "" in
+  let is_doc_comment i =
+    let t = trimmed i in
+    String.length t > 0 && t.[0] = '#'
+    && (let b = body i in not (String.length b > 0 && (b.[0] = '>' || b.[0] = '=')))
+    && body i <> "lang tesl" in
+  (* A declaration's reported [loc.start.line] anchors to the line just above the
+     `fn`/`handler` keyword, so the contiguous comment block ends at index
+     [start_line - 1] (0-based). *)
+  let doc_above start_line =
+    let rec gather i acc =
+      if i >= 0 && is_doc_comment i then gather (i - 1) (body i :: acc) else acc in
+    match gather (start_line - 1) [] |> List.filter (fun s -> s <> "") with
+    | [] -> None
+    | parts -> Some (String.concat " " parts)
+  in
+  List.map (function
+    | DFunc (fd : func_decl) when fd.doc = None ->
+      DFunc { fd with doc = doc_above fd.loc.start.line }
+    | d -> d) decls
+
 let rec parse_module filename source =
   let tokens = Lexer.tokenize filename source in
   let s = make_stream filename tokens in
@@ -4876,6 +4909,7 @@ let rec parse_module filename source =
   let* imports = parse_imports s [] in
   let* decls = parse_top_decls s [] in
   let doctest_decls = extract_doctest_decls filename source in
+  let decls = attach_doc_comments source decls in
 
   return { module_name; is_library; exports; imports; decls = decls @ doctest_decls; source_file = filename }
 

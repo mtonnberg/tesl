@@ -110,7 +110,7 @@ let sample_func : func_decl = {
   kind = FnKind; name = "f"; params = [ dummy_binding "x" 100 ];
   return_spec = RetPlain { ty = TName { name = "Int"; loc = loc_at 101 }; loc = loc_at 102 };
   capabilities = []; body = sample_expr; loc = loc_at 103;
-  desugared_from = None;
+  desugared_from = None; doc = None;
 }
 
 let sample_const : const_form = { name = "K"; value = int_ 110 7; loc = loc_at 111 }

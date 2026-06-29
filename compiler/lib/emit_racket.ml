@@ -5154,7 +5154,8 @@ let emit_agent ctx (decls : Ast.top_decl list) (a : Ast.agent_form) =
     | None -> ()  (* validation has already reported the missing tool *)
     | Some fd ->
       let schema = agent_tool_schema_json fd.params in
-      let desc = tool_name in  (* TODO(doc-harvest): use the fn's doc-comment *)
+      (* The tool description is the fn's harvested doc-comment, else its name. *)
+      let desc = match fd.doc with Some d when String.trim d <> "" -> d | _ -> tool_name in
       emit_nl ctx;
       emit ctx (Printf.sprintf "      (__tart_tool %S %S %S" tool_name desc schema);
       emit_nl ctx;
