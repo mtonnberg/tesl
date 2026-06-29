@@ -467,6 +467,89 @@ database R67Db06 = Database {
 }
 |}
 
+(* ── R67_AG — declarative agent block schema ─────────────────────────────── *)
+
+let test_R67_AG01_anthropic_agent_missing_apikey_rejected () =
+  (* A cloud provider authenticates with an apiKey; omitting it is rejected. *)
+  should_fail "missing required field `apiKey`\\|apiKey" {|
+#lang tesl
+module R67Ag01 exposing []
+import Tesl.Agent exposing [aiProvider]
+capability ai implies aiProvider
+agent A requires [ai] = Agent {
+  provider: anthropic
+  model: "m"
+  systemPrompt: "s"
+  tools: []
+  maxTokens: 256
+}
+|}
+
+let test_R67_AG02_agent_missing_maxtokens_rejected () =
+  should_fail "missing required field `maxTokens`\\|maxTokens" {|
+#lang tesl
+module R67Ag02 exposing []
+import Tesl.Agent exposing [aiProvider]
+capability ai implies aiProvider
+agent A requires [ai] = Agent {
+  provider: anthropic
+  model: "m"
+  apiKey: "k"
+  systemPrompt: "s"
+  tools: []
+}
+|}
+
+let test_R67_AG03_local_agent_missing_endpoint_rejected () =
+  (* The `local` provider is a self-hosted endpoint and takes no key — it needs
+     `endpoint`, not `apiKey`. *)
+  should_fail "missing required field `endpoint`\\|endpoint" {|
+#lang tesl
+module R67Ag03 exposing []
+import Tesl.Agent exposing [aiProvider]
+capability ai implies aiProvider
+agent A requires [ai] = Agent {
+  provider: local
+  model: "m"
+  systemPrompt: "s"
+  tools: []
+  maxTokens: 256
+}
+|}
+
+let test_R67_AG04_anthropic_agent_complete_accepted () =
+  should_pass {|
+#lang tesl
+module R67Ag04 exposing []
+import Tesl.Agent exposing [aiProvider]
+capability ai implies aiProvider
+agent A requires [ai] = Agent {
+  provider: anthropic
+  model: "m"
+  apiKey: "k"
+  systemPrompt: "s"
+  tools: []
+  maxTokens: 256
+}
+|}
+
+let test_R67_AG05_local_agent_with_endpoint_accepted () =
+  (* `local` + endpoint, no apiKey — accepted. *)
+  should_pass {|
+#lang tesl
+module R67Ag05 exposing []
+import Tesl.Agent exposing [aiProvider]
+capability ai implies aiProvider
+agent A requires [ai] = Agent {
+  provider: local
+  model: "m"
+  endpoint: "http://localhost:11434/v1/chat/completions"
+  systemPrompt: "s"
+  tools: []
+  maxTokens: 256
+}
+|}
+
 (* ── R67_AT — api-test structure ─────────────────────────────────────────── *)
 
 let test_R67_AT01_api_test_undefined_server_rejected () =
@@ -1022,6 +1105,13 @@ let () =
       test_case "R67_OK02 channel pipeline accepted" `Quick test_R67_OK02_channel_pipeline_accepted;
       test_case "R67_OK03 database with entities accepted" `Quick test_R67_OK03_database_with_entities_accepted;
       test_case "R67_OK04 multiple test blocks accepted" `Quick test_R67_OK04_multiple_test_blocks_accepted;
+    ];
+    "agent-block-schema", [
+      test_case "R67_AG01 anthropic agent missing apiKey rejected" `Quick test_R67_AG01_anthropic_agent_missing_apikey_rejected;
+      test_case "R67_AG02 agent missing maxTokens rejected" `Quick test_R67_AG02_agent_missing_maxtokens_rejected;
+      test_case "R67_AG03 local agent missing endpoint rejected" `Quick test_R67_AG03_local_agent_missing_endpoint_rejected;
+      test_case "R67_AG04 complete anthropic agent accepted" `Quick test_R67_AG04_anthropic_agent_complete_accepted;
+      test_case "R67_AG05 local agent with endpoint accepted" `Quick test_R67_AG05_local_agent_with_endpoint_accepted;
     ];
     "config-field-schema", [
       test_case "R67_CF01 missing colon rejected" `Quick test_R67_CF01_missing_colon_rejected;

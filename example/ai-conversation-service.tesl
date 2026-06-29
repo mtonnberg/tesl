@@ -21,6 +21,9 @@ import Tesl.Agent exposing [
   aiProvider,
   Agent,
   Conversation,
+  anthropic,
+  withTools,
+  toolFrom,
   mockProvider,
   mockToolProvider,
   toolUseStep,
@@ -63,22 +66,37 @@ capability convPubSub implies pubsub
 capability httpAuth
 capability convService implies convAi, convRead, convWrite, convPubSub, httpAuth
 
-# A consumer carries an opaque id and a provider preference (here from cookies; for
-# programmatic clients swap in a bearer-token auther).
+# A consumer carries an opaque id, a provider preference, and — for the BYOK
+# (bring-your-own-key) Claude path — their own LLM api-key. The key is read from a
+# request header, so every Claude consumer authenticates the model with their OWN
+# credentials; two consumers on the same backend never share a key. The Mistral
+# path ignores it and uses the server-side key (see agentFor).
 record Consumer {
   id: String
   provider: String
+  apiKey: String
 }
 
 fact Authenticated (req: Consumer)
+
+# Default to "claude" when the consumer states no provider preference.
+fn providerOf(request: HttpRequest) -> String =
+  case Dict.lookup "provider" request.cookies of
+    Something p -> p
+    Nothing -> "claude"
+
+# The consumer's own LLM key, supplied per request in the `x-llm-key` header
+# (absent for the server-keyed Mistral path).
+fn keyOf(request: HttpRequest) -> String =
+  case Dict.lookup "x-llm-key" request.headers of
+    Something k -> k
+    Nothing -> ""
 
 auth consumerAuth(request: HttpRequest) -> requestUser: Consumer ::: Authenticated requestUser
   requires [httpAuth] =
   case Dict.lookup "consumerId" request.cookies of
     Something cid ->
-      case Dict.lookup "provider" request.cookies of
-        Something p -> ok (Consumer { id: cid, provider: p }) ::: Authenticated requestUser
-        Nothing -> ok (Consumer { id: cid, provider: "claude" }) ::: Authenticated requestUser
+      ok (Consumer { id: cid, provider: providerOf request, apiKey: keyOf request }) ::: Authenticated requestUser
     Nothing -> fail 401 "Missing consumer identity"
 
 # ── Domain + persistence entities ─────────────────────────────────────────────
@@ -132,16 +150,11 @@ fn lookupOrderStatus(orderId: String) -> String
       Something o -> o.status
       Nothing -> "no such order"
 
-# ── Two agents: same tools + behaviour, different model ────────────────────────
-agent ClaudeAgent requires [convAi] = Agent {
-  provider: anthropic
-  model: "claude-opus-4-8"
-  apiKey: env "ANTHROPIC_API_KEY"
-  systemPrompt: "You are a concise support assistant. Use lookupOrderStatus for order questions."
-  tools: [lookupOrderStatus]
-  maxTokens: 512
-}
+# ── Two agents: same tools + behaviour, different provider + key model ──────────
 
+# Mistral uses a SERVER-SIDE key from the environment — a declarative `agent` block
+# bakes the provider, key, and tools once. (The block requires `apiKey` because the
+# provider is a cloud provider; the compiler enforces that.)
 agent MistralAgent requires [convAi] = Agent {
   provider: mistral
   model: "mistral-large-latest"
@@ -151,13 +164,24 @@ agent MistralAgent requires [convAi] = Agent {
   maxTokens: 512
 }
 
-# Pick the consumer's model. Behaviour (tools, capabilities) is identical; only the
-# provider binding differs, so swapping models never widens what the agent can do.
-fn agentFor(c: Consumer) -> Agent =
+# Claude is BRING-YOUR-OWN-KEY: there is no server-side Claude key and no `agent`
+# block — the agent is built per request from the CONSUMER's key (function-first,
+# using the same provider/defineAgent/withTools primitives the block lowers to). So
+# two Claude consumers on the same backend authenticate with different keys, and the
+# backend never holds a shared Claude credential.
+fn claudeAgentFor(c: Consumer) -> Agent
+  requires [convAi, convRead] =
+  let base = defineAgent (anthropic c.apiKey "claude-opus-4-8") "You are a concise support assistant. Use lookupOrderStatus for order questions." 512
+  withTools base [toolFrom lookupOrderStatus]
+
+# Pick the consumer's agent. Tools + behaviour are identical; only the provider and
+# (for Claude) the per-consumer key differ, so the choice never widens capability.
+fn agentFor(c: Consumer) -> Agent
+  requires [convAi, convRead] =
   if c.provider == "mistral" then
     MistralAgent
   else
-    ClaudeAgent
+    claudeAgentFor c
 
 # ── Conversation persistence — owner-scoped, cross-instance ────────────────────
 
@@ -288,7 +312,7 @@ test "a streamed turn calls the DB tool and returns the reply" requires [convSer
   let call = toolUseStep "lookupOrderStatus" "c1" "{\"orderId\":\"ord-2\"}"
   let final = textStep "Order ord-2 has been delivered."
   let agent = defineAgent (mockToolProvider [call, final]) "sys" 256
-  let reply = replyTurn agent (Consumer { id: "alice", provider: "claude" }) "conv-tool" "where is ord-2?"
+  let reply = replyTurn agent (Consumer { id: "alice", provider: "claude", apiKey: "test-key" }) "conv-tool" "where is ord-2?"
   expect reply == "Order ord-2 has been delivered."
 }
 
@@ -296,7 +320,7 @@ test "a streamed turn calls the DB tool and returns the reply" requires [convSer
 # the persisted transcript, exactly as a different backend instance would.
 test "a consumer resumes their own conversation across calls (cross-instance)" requires [convService] {
   let agent = defineAgent (mockProvider ["Hi Alice.", "Sure — more."]) "sys" 256
-  let alice = Consumer { id: "alice", provider: "claude" }
+  let alice = Consumer { id: "alice", provider: "claude", apiKey: "test-key" }
   let r1 = replyTurn agent alice "conv-1" "hello"
   expect r1 == "Hi Alice."
   let r2 = replyTurn agent alice "conv-1" "tell me more"
@@ -307,8 +331,8 @@ test "a consumer resumes their own conversation across calls (cross-instance)" r
 # never Alice's transcript (the owner-scoped load returns nothing).
 test "a consumer cannot access another consumer's conversation (isolation)" requires [convService] {
   let agent = defineAgent (mockProvider ["secret for alice"]) "sys" 256
-  let alice = Consumer { id: "alice", provider: "claude" }
-  let bob = Consumer { id: "bob", provider: "mistral" }
+  let alice = Consumer { id: "alice", provider: "claude", apiKey: "test-key" }
+  let bob = Consumer { id: "bob", provider: "mistral", apiKey: "test-key" }
   let _ = replyTurn agent alice "shared-id" "remember my secret"
   let bobConv = loadConversation agent bob "shared-id"
   expect conversationLength bobConv == 0
@@ -316,20 +340,30 @@ test "a consumer cannot access another consumer's conversation (isolation)" requ
 
 # ──────────────────────────────────────────────────────────────────────────────
 # HOW TO RUN (live: real models, real cross-instance, real streaming):
-#   export ANTHROPIC_API_KEY=sk-ant-...   MISTRAL_API_KEY=...
+#   # NOTE: there is NO server-side Claude key — Claude consumers BRING THEIR OWN
+#   # (the `x-llm-key` header). Only Mistral uses a server-side key.
+#   export MISTRAL_API_KEY=...
 #   export TESL_POSTGRES_DATABASE=... TESL_POSTGRES_USER=... TESL_POSTGRES_PASSWORD=...
 #   export TESL_POSTGRES_HOST=localhost TESL_POSTGRES_PORT=5432
 #   PORT=8089 tesl run example/ai-conversation-service.tesl    # instance A
 #   PORT=8090 tesl run example/ai-conversation-service.tesl    # instance B (same DB)
 #
-#   # alice talks to CLAUDE; bob talks to MISTRAL — same tools, different model:
+#   # alice talks to CLAUDE with HER OWN key (x-llm-key); bob talks to MISTRAL with
+#   # the server key — same tools, different model + key source:
 #   curl -s localhost:8089/chat/alice-1 -b 'consumerId=alice;provider=claude' \
+#        -H 'x-llm-key: sk-ant-ALICES-OWN-KEY' \
 #        -d '{"message":"What is the status of order ord-1?"}'
 #   curl -s localhost:8090/chat/bob-1   -b 'consumerId=bob;provider=mistral' \
 #        -d '{"message":"What is the status of order ord-1?"}'
 #
+#   # a SECOND Claude consumer uses a DIFFERENT key — keys are never shared:
+#   curl -s localhost:8089/chat/carol-1 -b 'consumerId=carol;provider=claude' \
+#        -H 'x-llm-key: sk-ant-CAROLS-OWN-KEY' \
+#        -d '{"message":"Where is order ord-1?"}'
+#
 #   # alice continues the SAME conversation on instance B — resumes from PostgreSQL:
 #   curl -s localhost:8090/chat/alice-1 -b 'consumerId=alice;provider=claude' \
+#        -H 'x-llm-key: sk-ant-ALICES-OWN-KEY' \
 #        -d '{"message":"And remind me what I just asked?"}'
 #
 #   # bob CANNOT reach alice's conversation (owner-scoped) — fresh conversation:

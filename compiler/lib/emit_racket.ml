@@ -261,6 +261,10 @@ type ctx = {
     (** set of user-defined function names — these are not GDP named values *)
   fn_arities : (string, int) Hashtbl.t;
     (** known function arities for local/imported functions, used for partial application lowering *)
+  fn_tool_decls : (string, Ast.func_decl) Hashtbl.t;
+    (** declared-function name → its decl — for `toolFrom fn`, which derives a Tool's
+        JSON schema + arg decode from the function's parameter types (the same wrapping
+        the declarative `agent` block applies to its `tools:` list). *)
   mutable preserve_case_payload_names : bool;
     (** when true, constructor case payload bindings should remain named values instead of raw payloads *)
   proof_locals : (string, unit) Hashtbl.t;
@@ -312,6 +316,7 @@ let default_root_path () =
 let mk_ctx ?(root_path=default_root_path ()) ?(record_fields=[]) ?(record_meta=[]) () =
   { buf = Buffer.create 4096; case_counter = 0; root_path; record_fields; record_meta; func_kind = None; func_return_spec = None;
     fn_names = Hashtbl.create 16; fn_arities = Hashtbl.create 16;
+    fn_tool_decls = Hashtbl.create 8;
     preserve_case_payload_names = false;
     proof_locals = Hashtbl.create 16; raw_locals = Hashtbl.create 16;
     fact_locals = Hashtbl.create 8; ctor_fields = Hashtbl.create 8;
@@ -1188,6 +1193,52 @@ let extract_delete e =
      | _ -> None)
   | _ -> None
 
+(* ── Typed-function → LLM tool wrapping ─────────────────────────────────────
+   A tool is a typed Tesl function: its JSON Schema is DERIVED from the parameter
+   types and the model's tool-call arguments are decoded into the function's
+   positional parameters under the hood.  Used both by the declarative `agent`
+   block's `tools:` list and by the function-first `toolFrom fn` form. *)
+
+(* base type -> the type tag tesl-agent-decode-args understands (None = unsupported) *)
+let agent_arg_type_tag (t : Ast.type_expr) : string option =
+  match t with
+  | TName { name = "String"; _ }      -> Some "string"
+  | TName { name = "Int"; _ }         -> Some "int"
+  | TName { name = "PosixMillis"; _ } -> Some "int"
+  | TName { name = "Float"; _ }       -> Some "float"
+  | TName { name = "Bool"; _ }        -> Some "bool"
+  | _                                 -> None
+
+(* base type -> JSON Schema property fragment *)
+let agent_arg_schema_prop (t : Ast.type_expr) : string =
+  match t with
+  | TName { name = "Int"; _ } | TName { name = "PosixMillis"; _ } -> {|{"type":"integer"}|}
+  | TName { name = "Float"; _ } -> {|{"type":"number"}|}
+  | TName { name = "Bool"; _ }  -> {|{"type":"boolean"}|}
+  | _ -> {|{"type":"string"}|}
+
+(* JSON Schema object string derived from a tool function's parameter list *)
+let agent_tool_schema_json (params : Ast.binding list) : string =
+  let props = List.map (fun (b : Ast.binding) ->
+    Printf.sprintf "%S:%s" b.name (agent_arg_schema_prop b.type_expr)) params in
+  let required = List.map (fun (b : Ast.binding) -> Printf.sprintf "%S" b.name) params in
+  Printf.sprintf {|{"type":"object","properties":{%s},"required":[%s]}|}
+    (String.concat "," props) (String.concat "," required)
+
+(* Emit `(__tart_tool name desc schema validator dispatch)` for a tool function.
+   description = the fn's harvested doc-comment, else its name. *)
+let emit_tool_from_fd ctx (fd : Ast.func_decl) =
+  let schema = agent_tool_schema_json fd.params in
+  let desc = match fd.doc with Some d when String.trim d <> "" -> d | _ -> fd.name in
+  emit ctx (Printf.sprintf "(__tart_tool %S %S %S" fd.name desc schema);
+  emit ctx " (lambda (_args) (__tart_tesl-agent-decode-args _args (list";
+  List.iter (fun (b : Ast.binding) ->
+    match agent_arg_type_tag b.type_expr with
+    | Some tag -> emit ctx (Printf.sprintf " (cons %S '%s)" b.name tag)
+    | None -> ()) fd.params;
+  emit ctx ")))";
+  emit ctx (Printf.sprintf " (lambda (_decoded) (apply %s _decoded)))" fd.name)
+
 let rec emit_expr ctx e =
   let sql_op_name = function
     | BEq -> "==." | BNeq -> "!=" ^ "." | BLt -> "<." | BLe -> "<=."
@@ -1477,6 +1528,16 @@ let rec emit_expr ctx e =
     (match parse_upsert_expr app with
      | Some upsert -> emit_sql_upsert upsert
      | None -> failwith "emit_racket: parse_upsert_expr guard passed but returned None — compiler invariant violation; please report this bug")
+  | EApp _ as app when (match flatten_app_expr [] app with
+                        | EVar { name = "toolFrom"; _ }, [EVar { name; _ }] -> Hashtbl.mem ctx.fn_tool_decls name
+                        | _ -> false) ->
+    (* `toolFrom fn` — wrap a typed Tesl function as an LLM tool (schema derived
+       from its parameter types), the function-first counterpart to the agent
+       block's `tools:` list. *)
+    (match flatten_app_expr [] app with
+     | EVar { name = "toolFrom"; _ }, [EVar { name; _ }] ->
+       emit_tool_from_fd ctx (Hashtbl.find ctx.fn_tool_decls name)
+     | _ -> failwith "emit_racket: toolFrom guard passed but returned None — compiler invariant violation; please report this bug")
   | EApp _ as app when (match parse_insert_many_expr app with Some _ -> true | None -> false) ->
     (match parse_insert_many_expr app with
      | Some (list_var, entity) -> emit_sql_insert_many list_var entity
@@ -2590,7 +2651,12 @@ and emit_expr_simple ctx e =
       | EApp { fn = EConstructor { args = []; _ }; arg = ERecord _; _ } -> true
       | _ -> false
     in
+    let is_tool_from = match flatten_app_expr [] app with
+      | EVar { name = "toolFrom"; _ }, [EVar { name; _ }] -> Hashtbl.mem ctx.fn_tool_decls name
+      | _ -> false
+    in
     if is_typename_record
+       || is_tool_from
        || (match extract_select_query app with Some _ -> true | None -> false)
        || (match parse_insert_expr app with Some _ -> true | None -> false)
        || (match parse_insert_many_expr app with Some _ -> true | None -> false)
@@ -3476,12 +3542,25 @@ let emit_requires ctx (m : module_form) =
   let has_cache = List.exists (function Ast.DCache _ -> true | _ -> false) m.decls in
   let has_email = List.exists (function Ast.DEmail _ -> true | _ -> false) m.decls in
   let has_agent = List.exists (function Ast.DAgent _ -> true | _ -> false) m.decls in
+  (* `toolFrom fn` lowers to the same `__tart_tool`/`__tart_tesl-agent-decode-args`
+     helpers a block uses, so a module that uses it needs the prefixed require even
+     without a declarative `agent` block.  It is compile-time-only and must be
+     imported to be referenced (it lives in Tesl.Agent's export list), so a name in
+     any exposing-list is the reliable signal — it works wherever `toolFrom` appears
+     (fn body, handler, test body, …). *)
+  let has_toolfrom =
+    List.exists (fun (imp : Ast.import_decl) ->
+      match imp.names with
+      | Ast.ImportExposing ns -> List.mem "toolFrom" ns
+      | Ast.ImportAll -> false) m.imports
+  in
   if has_cache then emit_line ctx "  tesl/tesl/cache";
   if has_email then emit_line ctx "  tesl/tesl/email";
-  (* A declarative `agent { … }` block lowers to the Tesl.Agent library constructors.
-     Require them under a private prefix so the lowering works regardless of what the
-     module chose to `expose`-import, and never collides with a user's own imports. *)
-  if has_agent then
+  (* A declarative `agent { … }` block (or a `toolFrom fn`) lowers to the Tesl.Agent
+     library constructors.  Require them under a private prefix so the lowering works
+     regardless of what the module chose to `expose`-import, and never collides with
+     a user's own imports. *)
+  if has_agent || has_toolfrom then
     emit_line ctx "  (prefix-in __tart_ (only-in tesl/tesl/agent defineAgent withTools tool anthropic openai mistral local tesl-agent-decode-args))";
   if needs_runtime_path then
     emit_line ctx "  racket/runtime-path";
@@ -3582,7 +3661,10 @@ let emit_requires ctx (m : module_form) =
           "PostgresConnection"; "TcpConnection"; "SocketConnection";
           "Queue"; "QueueRetryStrategy"; "QueueRetryConfig"; "QueueRetryBackoff";
           "Exponential"; "Fixed"; "Linear";
-          "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job"; "Cache" ] in
+          "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job"; "Cache";
+          (* `toolFrom fn` is a compile-time form: it lowers to `__tart_tool …`
+             (schema derived from the fn's types) and has no runtime binding. *)
+          "toolFrom" ] in
       let expanded = List.filter (fun n -> not (List.mem n config_only_names)) expanded in
       let qualified = List.filter (fun n -> String.contains n '.') expanded in
       let plain = List.filter (fun n -> not (String.contains n '.')) expanded in
@@ -5127,33 +5209,9 @@ let emit_server ctx (sv : server_form) =
    Tesl.Agent library constructors (defineAgent + withTools + tool).  Each tool is a
    typed Tesl function: its JSON Schema is DERIVED from the parameter types, and the
    model's tool-call arguments are decoded into the function's positional parameters
-   under the hood — no hand-written schema string or validator. *)
-
-(* base type -> the type tag tesl-agent-decode-args understands (None = unsupported) *)
-let agent_arg_type_tag (t : Ast.type_expr) : string option =
-  match t with
-  | TName { name = "String"; _ }      -> Some "string"
-  | TName { name = "Int"; _ }         -> Some "int"
-  | TName { name = "PosixMillis"; _ } -> Some "int"
-  | TName { name = "Float"; _ }       -> Some "float"
-  | TName { name = "Bool"; _ }        -> Some "bool"
-  | _                                 -> None
-
-(* base type -> JSON Schema property fragment *)
-let agent_arg_schema_prop (t : Ast.type_expr) : string =
-  match t with
-  | TName { name = "Int"; _ } | TName { name = "PosixMillis"; _ } -> {|{"type":"integer"}|}
-  | TName { name = "Float"; _ } -> {|{"type":"number"}|}
-  | TName { name = "Bool"; _ }  -> {|{"type":"boolean"}|}
-  | _ -> {|{"type":"string"}|}
-
-(* JSON Schema object string derived from a tool function's parameter list *)
-let agent_tool_schema_json (params : Ast.binding list) : string =
-  let props = List.map (fun (b : Ast.binding) ->
-    Printf.sprintf "%S:%s" b.name (agent_arg_schema_prop b.type_expr)) params in
-  let required = List.map (fun (b : Ast.binding) -> Printf.sprintf "%S" b.name) params in
-  Printf.sprintf {|{"type":"object","properties":{%s},"required":[%s]}|}
-    (String.concat "," props) (String.concat "," required)
+   under the hood — no hand-written schema string or validator.  The per-tool
+   wrapping (schema helpers + emit_tool_from_fd) lives above emit_expr so the
+   function-first `toolFrom fn` form can reuse it. *)
 
 let emit_agent ctx (decls : Ast.top_decl list) (a : Ast.agent_form) =
   let find_fn name =
@@ -5184,22 +5242,9 @@ let emit_agent ctx (decls : Ast.top_decl list) (a : Ast.agent_form) =
     match find_fn tool_name with
     | None -> ()  (* validation has already reported the missing tool *)
     | Some fd ->
-      let schema = agent_tool_schema_json fd.params in
-      (* The tool description is the fn's harvested doc-comment, else its name. *)
-      let desc = match fd.doc with Some d when String.trim d <> "" -> d | _ -> tool_name in
       emit_nl ctx;
-      emit ctx (Printf.sprintf "      (__tart_tool %S %S %S" tool_name desc schema);
-      emit_nl ctx;
-      (* validator: decode the model's args JSON into the fn's positional params *)
-      emit ctx "        (lambda (_args) (__tart_tesl-agent-decode-args _args (list";
-      List.iter (fun (b : Ast.binding) ->
-        match agent_arg_type_tag b.type_expr with
-        | Some tag -> emit ctx (Printf.sprintf " (cons %S '%s)" b.name tag)
-        | None -> ()) fd.params;
-      emit ctx ")))";
-      emit_nl ctx;
-      (* dispatch: apply the typed Tesl function; the loop stringifies the result *)
-      emit ctx (Printf.sprintf "        (lambda (_decoded) (apply %s _decoded)))" tool_name)
+      emit ctx "      ";
+      emit_tool_from_fd ctx fd
   ) a.tools;
   emit_line ctx ")))";
   emit_nl ctx
@@ -6223,6 +6268,7 @@ let emit_module ctx (m : module_form) =
     | DFunc fd ->
       Hashtbl.replace ctx.fn_names fd.name ();
       Hashtbl.replace ctx.fn_arities fd.name (List.length fd.params);
+      Hashtbl.replace ctx.fn_tool_decls fd.name fd;
       Hashtbl.replace ctx.fn_return_specs fd.name fd.return_spec
     | _ -> ()
   ) m.decls;

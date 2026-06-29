@@ -526,6 +526,11 @@ let stdlib_env : (string * scheme) list = [
                                   t_fun [t_string] _a; t_fun [_a] t_string] t_tool };
   (* withTools: attach a list of tools to an agent. *)
   "withTools",    mono (t_fun [t_agent; t_list t_tool] t_agent);
+  (* toolFrom: wrap a typed Tesl function as a Tool, deriving the JSON schema from
+     its parameter types (the function-first counterpart to an agent block's
+     `tools:` list).  The argument is a function reference; its concrete type is
+     irrelevant to the result, so it is polymorphic in the argument. *)
+  "toolFrom",     { vars = _r1_a; mono = t_fun [_a] t_tool };
 
   (* askReply / askWith: full tool-calling loop returning an AgentReply.
      askWith takes a BYOK LlmProvider override as its last argument. *)
@@ -755,7 +760,7 @@ let tesl_module_exports : (string * string list) list = [
       "mockProvider"; "defineAgent"; "ask";
       "mockToolProvider"; "toolUseStep"; "textStep";
       "anthropic"; "openai"; "mistral"; "local";
-      "tool"; "withTools";
+      "tool"; "toolFrom"; "withTools";
       "askReply"; "askWith"; "replyText"; "replyTokens"; "replyToolCalls";
       "decodeAs"; "askFor";
       "Conversation"; "Conversation?"; "ConversationTurn"; "ConversationTurn?";

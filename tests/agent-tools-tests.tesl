@@ -18,6 +18,7 @@ import Tesl.Agent exposing [
   defineAgent,
   withTools,
   tool,
+  toolFrom,
   ask,
   askReply,
   askWith,
@@ -87,6 +88,12 @@ fn dispatchWeather(args: WeatherArgs) -> String =
 fn decodeSummary(j: String) -> Summary =
   decodeAs "Summary" j
 
+# A plain typed tool function for `toolFrom`: no hand-written schema/validator —
+# the JSON schema is derived from the parameter type and the model's args are
+# decoded into `city` under the hood.
+fn lookupWeather(city: String) -> String =
+  String.concat "weather in " city
+
 # ────────────────────────────────────────────────────────────────────────────
 # (a) Full tool-calling loop: provider asks for a tool, args are validated, the
 #     tool is dispatched with the VALIDATED value, the tool_result loops back,
@@ -104,6 +111,20 @@ test "tool-calling loop dispatches the tool with validated args and returns fina
   let step2 = textStep "It is sunny."
   let base = defineAgent (mockToolProvider [step1, step2]) "You are a weather bot." 256
   let agent = withTools base [weatherTool]
+  let reply = askReply agent "What is the weather in Malmo?"
+  expect (replyText reply) == "It is sunny."
+  expect (replyToolCalls reply) == 1
+}
+
+# Same loop, but the tool is attached via `toolFrom lookupWeather` — the schema is
+# derived from the fn's parameter types and the args are decoded + dispatched
+# automatically (no hand-written schema/validator). Proves function-first tool
+# wrapping dispatches the typed function.
+test "toolFrom wraps a typed fn: schema derived, args decoded + dispatched" requires [supportBot] {
+  let step1 = toolUseStep "lookupWeather" "call_1" "{\"city\":\"Malmo\"}"
+  let step2 = textStep "It is sunny."
+  let base = defineAgent (mockToolProvider [step1, step2]) "You are a weather bot." 256
+  let agent = withTools base [toolFrom lookupWeather]
   let reply = askReply agent "What is the weather in Malmo?"
   expect (replyText reply) == "It is sunny."
   expect (replyToolCalls reply) == 1
