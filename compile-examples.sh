@@ -500,24 +500,28 @@ run_racket_test_suite() {
     fi
 }
 
-LEARN_FILES=( "$(pwd)"/example/learn/*.tesl )
-KANEL_FILES=( "$(pwd)"/example/kanel/*.tesl )
+# Relative paths (we `cd "$SCRIPT_DIR"` above): the compiler embeds the path it is
+# given into each emitted .rkt's source map, so relative paths keep the committed
+# .rkt snapshots machine-independent (an absolute "$(pwd)/…" would rewrite every
+# snapshot to this checkout's path on each run).
+LEARN_FILES=( example/learn/*.tesl )
+KANEL_FILES=( example/kanel/*.tesl )
 
 EXAMPLE_FILES=(
-    "$(pwd)/example/sandbox.tesl"
-    "$(pwd)/example/sandbox2.tesl"
-    "$(pwd)/example/sandbox2.test.tesl"
-    "$(pwd)/example/sandbox3.tesl"
-    "$(pwd)/example/admin-task-api.tesl"
-    "$(pwd)/example/todo-api.tesl"
-    "$(pwd)/example/chat/chat-backend.tesl"
-    "$(pwd)/example/support-assistant.tesl"
-    "$(pwd)/example/ai-live-check.tesl"
-    "$(pwd)/example/ai-conversation-service.tesl"
+    example/sandbox.tesl
+    example/sandbox2.tesl
+    example/sandbox2.test.tesl
+    example/sandbox3.tesl
+    example/admin-task-api.tesl
+    example/todo-api.tesl
+    example/chat/chat-backend.tesl
+    example/support-assistant.tesl
+    example/ai-live-check.tesl
+    example/ai-conversation-service.tesl
     "${KANEL_FILES[@]}"
 )
 
-TEST_FILES=( "$(pwd)"/tests/*.tesl )
+TEST_FILES=( tests/*.tesl )
 
 ALL_FILES=( "${LEARN_FILES[@]}" "${EXAMPLE_FILES[@]}" "${TEST_FILES[@]}" )
 
