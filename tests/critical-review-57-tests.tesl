@@ -162,7 +162,10 @@ fn decomposeReattach(n: Int) -> Int =
 
 test "R57_DA: complex detach-attach" {
   expect complexDetachAttach 5 == 5
-  expect complexDetachAttach 0 == 0
+  # 0 passes checkValidated (n >= 0) but the final `check checkPos` (n > 0) must
+  # reject it — so this fails, exactly like `decomposeReattach 0` below. (It only
+  # "passed" as `== 0` on older Racket via an unsound check short-circuit.)
+  expectFail complexDetachAttach 0
   expectFail complexDetachAttach (-1)
 
   expect decomposeReattach 5 == 5

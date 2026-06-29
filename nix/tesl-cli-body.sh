@@ -661,7 +661,7 @@ _tesl_build() {
   fi
   [ -z "$TAG" ] && TAG="$NAME"
 
-  local RACKET_BASE="${TESL_RACKET_BASE:-racket/racket:8.18-full}"
+  local RACKET_BASE="${TESL_RACKET_BASE:-racket/racket:9.2-full}"
   local APP_RKT="app.rkt"
 
   local CTX

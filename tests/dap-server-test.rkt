@@ -16,12 +16,19 @@
 
 ;; ── Constants ─────────────────────────────────────────────────────────────────
 
-(define REPO-ROOT "/home/mikael/repos_wsl/tesl-github/tesl")
-(define RACKET-BIN "/nix/store/fjgarzs4s5s7pm29spgpabhnsz5wkh42-racket-8.18/bin/racket")
+(define REPO-ROOT (or (getenv "TESL_REPO_ROOT") "/home/mikael/repos_wsl/tesl-github/tesl"))
+;; Use the racket running this test (NOT a hardcoded store path, which pins a racket
+;; version and breaks on upgrade).
+(define RACKET-BIN
+  (let ([e (find-system-path 'exec-file)])
+    (path->string (or (find-executable-path e) e))))
 (define DAP-SERVER-PATH (build-path REPO-ROOT "dsl/debug/dap-server.rkt"))
+;; Inherit PLTCOLLECTS from the environment (set by the dev shell / nix wrapper to the
+;; running racket's collects + the tesl collections); prepend the repo's collection root.
 (define PLTCOLLECTS
-  (string-append REPO-ROOT "/.tesl-collections:"
-                 "/nix/store/fjgarzs4s5s7pm29spgpabhnsz5wkh42-racket-8.18/share/racket/collects"))
+  (string-append REPO-ROOT "/.tesl-collections"
+                 (let ([pc (getenv "PLTCOLLECTS")]) (if (and pc (> (string-length pc) 0))
+                                                        (string-append ":" pc) ""))))
 
 ;; A real .tesl file we can use for source tests
 (define TEST-TESL-FILE

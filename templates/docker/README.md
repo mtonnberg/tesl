@@ -51,7 +51,7 @@ occurrences (e.g. with `sed`) in both the `.tmpl` Dockerfile and
 
 | Placeholder | Meaning | Example |
 |---|---|---|
-| `__RACKET_BASE__` | official Racket base image tag (Debian-based, CS variant). Match the Racket version used to compile. | `racket/racket:8.18-full` |
+| `__RACKET_BASE__` | official Racket base image tag (Debian-based, CS variant). Match the Racket version used to compile. | `racket/racket:9.2-full` |
 | `__APP_NAME__` | human-readable app name (OCI label only) | `todo-api` |
 | `__APP_RKT__` | path of the compiled entrypoint `.rkt`, **relative to the build context** | `app.rkt` |
 | `__PORT__` | TCP port the Tesl web server binds (the `serve … on <port>` value / `PORT` env the app honors) | `8086` |
@@ -145,7 +145,7 @@ docker run -p 8088:8088 myorg/admin-task-api:app
 ## Proven
 
 Both templates were instantiated and built with the local Docker (v28.4) against
-`racket/racket:8.18-full` (Debian 13, racket 8.18 CS):
+`racket/racket:9.2-full` (Debian 13, racket 9.2 CS):
 
 - **app-only** with `example/admin-task-api.tesl` (no DB): built, ran, and
   `GET /tasks/admin/2` (admin cookie) returned `200` with the task JSON;

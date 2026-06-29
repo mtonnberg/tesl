@@ -1,4 +1,15 @@
-{ pkgs ? import <nixpkgs> {} }:
+# Pin nixpkgs to the SAME revision the flake locks (flake.lock), so the dev shell
+# (direnv `use nix`) and the flake-installed `tesl` share one racket/ocaml toolchain.
+# Previously this used `import <nixpkgs>` (the ambient channel), which drifted from
+# the flake — the dev shell shipped racket 8.18 while `nix profile` shipped 9.2,
+# causing a compiled-collection version mismatch in the debugger. We read the rev
+# straight out of flake.lock and fetchTree it (no copy of the working tree, so a
+# running .tesl-postgres socket can't break evaluation).
+{ system ? builtins.currentSystem
+, pkgs ? import
+    (builtins.fetchTree
+      (builtins.fromJSON (builtins.readFile ./flake.lock)).nodes.nixpkgs.locked)
+    { inherit system; } }:
 let
   # The CLI verb body is the single source of truth shared with flake.nix
   # (nix/tesl-cli-body.sh).  Here we prepend the DEV preamble: it points the
