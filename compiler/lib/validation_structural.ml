@@ -1378,7 +1378,7 @@ type vkind =
 let config_block_schema = function
   (* schema is required for the postgres backend but not for Memory; the
      postgres-specific requirement is enforced in check_typed_config_blocks. *)
-  | "Database" -> [ "schema", VStr, false; "entities", VEntityList, false;
+  | "Database" -> [ "schema", VStr, false; "entities", VEntityList, true;
                     "backend", VBackend, true ]
   | "PostgresConfig" -> [ "dbName", VStr, true; "user", VStr, true;
                           "password", VStr, true; "connection", VConn, true ]
@@ -1403,6 +1403,14 @@ let config_block_schema = function
                "email", VRefList, false; "sseChannels", VRefList, false;
                "api", VTypeRef, true; "port", VExpr, false;
                "static", VStr, false ]
+  (* Declarative AI agent.  provider/model/systemPrompt/tools must be given;
+     apiKey/endpoint are provider-dependent and maxTokens has a default, so they
+     are optional.  The tool list's referents are checked separately (each must be
+     a declared fn) — here we only require the field's presence. *)
+  | "Agent" -> [ "provider", VExpr, true; "model", VStr, true;
+                 "apiKey", VStr, false; "endpoint", VStr, false;
+                 "systemPrompt", VStr, true; "tools", VExpr, true;
+                 "maxTokens", VInt, false ]
   | _ -> []
 
 let cfg_fields = function
@@ -1575,6 +1583,7 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
          | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord _; _ }) as e ->
          check_record fd.loc "App" (cfg_fields e)
        | _ -> [])
+    | DAgent r -> check_decl "Agent" r.loc r.config_expr
     | _ -> []
   ) decls
 

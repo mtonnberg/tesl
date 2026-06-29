@@ -57,4 +57,4 @@
   #:entities )
 
 (module+ main
-  (thsl-src! "example/learn/lesson17-telemetry.tesl" 84 (list) (lambda () (with-capabilities () (call-with-database TelemetryDb (lambda () (let ([_ (init-opentelemetry! #:service-name "lesson17-telemetry" #:endpoint "in-memory" #:console? #t)]) (serve HealthServer #:port 8086 #:capabilities (list) #:sse-routes HealthServer-sse-routes))))))))
+  (thsl-src! "example/learn/lesson17-telemetry.tesl" 85 (list) (lambda () (with-capabilities () (call-with-database TelemetryDb (lambda () (let ([_ (init-opentelemetry! #:service-name "lesson17-telemetry" #:endpoint "in-memory" #:console? #t)]) (serve HealthServer #:port 8086 #:capabilities (list) #:sse-routes HealthServer-sse-routes))))))))

@@ -16,6 +16,7 @@ import Tesl.Cache exposing [Cache]
 
 database TestDB = Database {
   schema: "public"
+  entities: []
   backend: Postgres (PostgresConfig {
     dbName: ""
     user: ""

@@ -78,6 +78,7 @@ server HealthServer for HealthApi {
 }
 
 database TelemetryDb = Database {
+  entities: []
   backend: Memory
 }
 
