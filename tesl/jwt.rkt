@@ -113,14 +113,24 @@
          (values (car pair) (raw-value (cdr pair))))]
       [else
        (raise-user-error 'JWT "JWT claims must be a hash/dict, got ~a" raw)]))
-  ;; Convert any wrapped values to plain Racket values for JSON serialisation
+  ;; Convert to a jsexpr: JSON object keys must be SYMBOLS for `jsexpr->string`,
+  ;; but Tesl Dict keys are STRINGS — coerce them. Unwrap any GDP-named values.
   (define plain-h
     (for/hash ([(k v) (in-hash h)])
-      (values k (raw-value v))))
+      (values (if (string? k) (string->symbol k) k) (raw-value v))))
   (string->bytes/utf-8 (jsexpr->string plain-h)))
 
 (define (compute-signature secret-bytes signing-input)
   (hmac-sha256-bytes secret-bytes (string->bytes/utf-8 signing-input)))
+
+;; `string->jsexpr` decodes JSON object keys as SYMBOLS, but the Tesl Dict API
+;; (Dict.lookup, Dict.member, …) keys by STRING. Re-key the decoded claims so a
+;; verified/decoded payload behaves as a `Dict String v` on the Tesl surface.
+(define (jwt-claims->string-keyed claims)
+  (if (hash? claims)
+      (for/hash ([(k v) (in-hash claims)])
+        (values (if (symbol? k) (symbol->string k) k) v))
+      claims))
 
 ;; ── Public API ───────────────────────────────────────────────────────────────
 
@@ -196,7 +206,7 @@
                      (< (hash-ref claims 'exp)
                         (inexact->exact (floor (current-inexact-milliseconds)))))
                 (check-fail "JWT token has expired" 401 '())
-                claims)))))
+                (jwt-claims->string-keyed claims))))))
 
 ;; JWT.decode : ∀a. JwtToken → a
 ;;
@@ -218,4 +228,5 @@
   (define payload-bytes (base64url-decode payload-b64))
   (with-handlers ([exn:fail? (lambda (_)
                                (raise-user-error 'JWT.decode "malformed JWT payload"))])
-    (string->jsexpr (bytes->string/utf-8 payload-bytes))))
+    (jwt-claims->string-keyed
+     (string->jsexpr (bytes->string/utf-8 payload-bytes)))))

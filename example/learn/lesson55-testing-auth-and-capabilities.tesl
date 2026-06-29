@@ -62,19 +62,19 @@ server AuthServer for AuthApi {
 # Test 1: Public endpoint works without authentication
 api-test "health endpoint is accessible without auth" for AuthServer {
   let resp = get "/health"
-  expect statusOk resp
+  expect statusOk resp.status
 }
 
 # Test 2: Protected endpoint requires authentication
 api-test "profile endpoint returns 401 without cookie" for AuthServer {
   let resp = get "/profile"
-  expect statusClientError resp
+  expect statusClientError resp.status
 }
 
 # Test 3: Protected endpoint works with valid session cookie
 api-test "profile endpoint works with session cookie" for AuthServer {
   let resp = get "/profile" cookie { "session": "alice" }
-  expect statusOk resp
+  expect statusOk resp.status
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

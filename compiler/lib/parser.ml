@@ -3434,11 +3434,18 @@ let parse_codec_form s name type_name =
   skip_layout s;
   let to_json = ref ToJsonForbidden in
   let from_json = ref FromJsonForbidden in
+  (* Track which JSON directions were stated EXPLICITLY.  Omitting a direction
+     used to silently default to *_forbidden, which masked real bugs (e.g. a
+     response type with only `toJson` would still be treated as decode-forbidden,
+     and a type with neither was silently non-serializable).  Require both. *)
+  let to_set = ref false in
+  let from_set = ref false in
   while peek s <> RBRACE && peek s <> EOF do
     skip_layout s;
     (match peek s with
      | TO_JSON ->
        advance s;
+       to_set := true;
        if peek s = LBRACE then begin
          advance s; skip_layout s;
          let entries = ref [] in
@@ -3474,9 +3481,11 @@ let parse_codec_form s name type_name =
        end
      | TO_JSON_FORBIDDEN ->
        advance s;
+       to_set := true;
        to_json := ToJsonForbidden
      | FROM_JSON ->
        advance s;
+       from_set := true;
        (* fromJson [ { field <- "key" with_codec c via checker, ... }, ... ] *)
        if peek s = LBRACKET then begin
          advance s; skip_layout s;
@@ -3572,9 +3581,12 @@ let parse_codec_form s name type_name =
        end
      | FROM_JSON_FORBIDDEN ->
        advance s;
+       from_set := true;
        from_json := FromJsonForbidden
      | ADT_JSON ->
        advance s;
+       to_set := true;
+       from_set := true;
        to_json := ToJsonAdt;
        from_json := FromJsonAdt
      | NEWLINE -> advance s
@@ -3584,7 +3596,22 @@ let parse_codec_form s name type_name =
   done;
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
-  return { name; type_name; to_json = !to_json; from_json = !from_json; loc }
+  if not !to_set || not !from_set then
+    let missing =
+      match !to_set, !from_set with
+      | false, false -> "both toJson and fromJson"
+      | false, _     -> "toJson"
+      | _, false     -> "fromJson"
+      | _            -> ""
+    in
+    Err { msg = Printf.sprintf
+            "codec `%s` must declare both JSON directions explicitly; missing %s. \
+             Add `toJson { … }` or `toJson_forbidden`, and `fromJson [ … ]` or \
+             `fromJson_forbidden` (or use `adtJson` for an ADT type)."
+            name missing;
+          loc = loc0 }
+  else
+    return { name; type_name; to_json = !to_json; from_json = !from_json; loc }
 
 (** Parse a database declaration: `database NAME = Database { … }`. *)
 let parse_database_form s =

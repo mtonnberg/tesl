@@ -1936,9 +1936,14 @@
    #:connection-close? #f))
 
 ;; Register HttpRequest as a runtime type with field access for its fields.
-;; This enables dot-access on HttpRequest values: request.cookies returns the
-;; pre-parsed Dict of cookie key→value pairs.
+;; This enables dot-access on HttpRequest values:
+;;   request.cookies  → pre-parsed Dict of cookie key→value pairs
+;;   request.headers  → Dict of header name→value (names lowercased)
+;; (request.queryParameters is not yet exposed — see roadmap/next.)
 (register-runtime-type/runtime! 'HttpRequest dsl-request?)
 (register-field-access! 'HttpRequest
-                        '(cookies)
-                        (lambda (value _field-name) (dsl-request-cookies value)))
+                        '(cookies headers)
+                        (lambda (value field-name)
+                          (case field-name
+                            [(headers) (dsl-request-headers value)]
+                            [else      (dsl-request-cookies value)])))
