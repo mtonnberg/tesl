@@ -341,7 +341,7 @@ test "tool loop with no tool calls (text only) reports zero" requires [supportBo
   expect (replyToolCalls reply) == 0
 }
 
-test "withTools attaching multiple tools still resolves the called one" requires [supportBot] {
+test "an agent with multiple tools still resolves the called one" requires [supportBot] {
   let weatherTool = tool "get_weather" "weather" "{}" validateWeather dispatchWeather
   let addTool = tool "add" "add" "{}" validateAdd dispatchAdd
   let step1 = toolUseStep "add" "call_1" "{\"a\":0,\"b\":0}"
@@ -684,7 +684,7 @@ test "converse reply feeds a downstream structured decode of the same shape" req
   expect s.label == "happy"
 }
 
-test "withTools is idempotent in resolution when re-applied" requires [supportBot] {
+test "a listed tool the model never calls leaves the reply unchanged" requires [supportBot] {
   let weatherTool = tool "get_weather" "weather" "{}" validateWeather dispatchWeather
   let agent = Agent { provider: mockToolProvider [textStep "no call"], systemPrompt: "x", maxTokens: 64, tools: [weatherTool] }
   expect (replyText (askReply agent "hi")) == "no call"
