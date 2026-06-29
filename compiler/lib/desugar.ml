@@ -425,8 +425,12 @@ let desugar_agent_config (a : agent_form) : agent_form =
           | EVar { name; _ } -> Some name
           | el -> config_ctor_name el) elems
       | _ -> [] in
+    (* Keep [config_expr] so {!Emit_racket.emit_agent} can lower the unified
+       `Agent { … }` constructor through the shared expression arm (the block is
+       just a top-level binding of that expression). The lifted fields below are
+       still populated for any consumer that reads the structured view. *)
     { a with provider; model; api_key; endpoint; system_prompt;
-             max_tokens; tools; config_expr = None }
+             max_tokens; tools; config_expr = Some e }
 
 let desugar_decl (queues : (string, string) Hashtbl.t) (d : top_decl) : top_decl =
   match d with

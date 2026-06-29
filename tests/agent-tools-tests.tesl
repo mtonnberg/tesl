@@ -15,10 +15,8 @@ import Tesl.Agent exposing [
   mockToolProvider,
   toolUseStep,
   textStep,
-  defineAgent,
-  withTools,
   tool,
-  toolFrom,
+  asTool,
   ask,
   askReply,
   askWith,
@@ -88,7 +86,7 @@ fn dispatchWeather(args: WeatherArgs) -> String =
 fn decodeSummary(j: String) -> Summary =
   decodeAs "Summary" j
 
-# A plain typed tool function for `toolFrom`: no hand-written schema/validator —
+# A plain typed tool function for `asTool`: no hand-written schema/validator —
 # the JSON schema is derived from the parameter type and the model's args are
 # decoded into `city` under the hood.
 fn lookupWeather(city: String) -> String =
@@ -109,22 +107,20 @@ test "tool-calling loop dispatches the tool with validated args and returns fina
     dispatchWeather
   let step1 = toolUseStep "get_weather" "call_1" "{\"city\":\"Malmo\"}"
   let step2 = textStep "It is sunny."
-  let base = defineAgent (mockToolProvider [step1, step2]) "You are a weather bot." 256
-  let agent = withTools base [weatherTool]
+  let agent = Agent { provider: (mockToolProvider [step1, step2]), systemPrompt: "You are a weather bot.", maxTokens: 256, tools: [weatherTool] }
   let reply = askReply agent "What is the weather in Malmo?"
   expect (replyText reply) == "It is sunny."
   expect (replyToolCalls reply) == 1
 }
 
-# Same loop, but the tool is attached via `toolFrom lookupWeather` — the schema is
+# Same loop, but the tool is attached via `asTool lookupWeather` — the schema is
 # derived from the fn's parameter types and the args are decoded + dispatched
 # automatically (no hand-written schema/validator). Proves function-first tool
 # wrapping dispatches the typed function.
-test "toolFrom wraps a typed fn: schema derived, args decoded + dispatched" requires [supportBot] {
+test "asTool wraps a typed fn: schema derived, args decoded + dispatched" requires [supportBot] {
   let step1 = toolUseStep "lookupWeather" "call_1" "{\"city\":\"Malmo\"}"
   let step2 = textStep "It is sunny."
-  let base = defineAgent (mockToolProvider [step1, step2]) "You are a weather bot." 256
-  let agent = withTools base [toolFrom lookupWeather]
+  let agent = Agent { provider: (mockToolProvider [step1, step2]), systemPrompt: "You are a weather bot.", maxTokens: 256, tools: [asTool lookupWeather] }
   let reply = askReply agent "What is the weather in Malmo?"
   expect (replyText reply) == "It is sunny."
   expect (replyToolCalls reply) == 1
@@ -148,8 +144,7 @@ test "malformed tool args are rejected as is_error and the loop continues" requi
   # validateWeather's decodeAs raises -> is_error tool_result -> loop continues.
   let step1 = toolUseStep "get_weather" "call_1" "{\"wrong\":\"field\"}"
   let step2 = textStep "Sorry, I could not look that up."
-  let base = defineAgent (mockToolProvider [step1, step2]) "You are a weather bot." 256
-  let agent = withTools base [weatherTool]
+  let agent = Agent { provider: (mockToolProvider [step1, step2]), systemPrompt: "You are a weather bot.", maxTokens: 256, tools: [weatherTool] }
   let reply = askReply agent "weather?"
   expect (replyText reply) == "Sorry, I could not look that up."
   expect (replyToolCalls reply) == 1
@@ -160,7 +155,7 @@ test "malformed tool args are rejected as is_error and the loop continues" requi
 # ────────────────────────────────────────────────────────────────────────────
 
 test "askFor decodes a typed structured-output value on first reply" requires [supportBot] {
-  let agent = defineAgent (mockProvider ["{\"title\":\"All good\",\"score\":42}"]) "Reply with JSON." 128
+  let agent = Agent { provider: (mockProvider ["{\"title\":\"All good\",\"score\":42}"]), systemPrompt: "Reply with JSON.", maxTokens: 128, tools: [] }
   let summary = askFor agent "summarize" decodeSummary 2
   expect summary.title == "All good"
   expect summary.score == 42
@@ -173,7 +168,7 @@ test "askFor decodes a typed structured-output value on first reply" requires [s
 # ────────────────────────────────────────────────────────────────────────────
 
 test "askFor retries after a decode failure then succeeds" requires [supportBot] {
-  let agent = defineAgent (mockProvider ["not json at all", "{\"title\":\"Recovered\",\"score\":7}"]) "Reply with JSON." 128
+  let agent = Agent { provider: (mockProvider ["not json at all", "{\"title\":\"Recovered\",\"score\":7}"]), systemPrompt: "Reply with JSON.", maxTokens: 128, tools: [] }
   let summary = askFor agent "summarize" decodeSummary 2
   expect summary.title == "Recovered"
   expect summary.score == 7
@@ -186,7 +181,7 @@ test "askFor retries after a decode failure then succeeds" requires [supportBot]
 # ────────────────────────────────────────────────────────────────────────────
 
 test "askWith uses the BYOK provider override, not the agent default" requires [supportBot] {
-  let agent = defineAgent (mockProvider ["default reply"]) "x" 64
+  let agent = Agent { provider: (mockProvider ["default reply"]), systemPrompt: "x", maxTokens: 64, tools: [] }
   let byok = mockProvider ["override reply"]
   let reply = askWith agent "hi" byok
   expect (replyText reply) == "override reply"
@@ -194,6 +189,6 @@ test "askWith uses the BYOK provider override, not the agent default" requires [
 
 # A one-shot ask still works through the loop machinery (compat).
 test "ask still returns plain text through the loop" requires [supportBot] {
-  let agent = defineAgent (mockProvider ["plain text"]) "x" 64
+  let agent = Agent { provider: (mockProvider ["plain text"]), systemPrompt: "x", maxTokens: 64, tools: [] }
   expect (ask agent "hi") == "plain text"
 }

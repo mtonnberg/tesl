@@ -10,7 +10,7 @@ module AiConversationService exposing [
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Json exposing [stringCodec]
-import Tesl.Env exposing [envInt]
+import Tesl.Env exposing [envInt, requireEnv]
 import Tesl.Telemetry exposing [initTelemetry]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Dict exposing [Dict.lookup]
@@ -22,13 +22,12 @@ import Tesl.Agent exposing [
   Agent,
   Conversation,
   anthropic,
-  withTools,
-  toolFrom,
+  mistral,
+  asTool,
   mockProvider,
   mockToolProvider,
   toolUseStep,
   textStep,
-  defineAgent,
   newConversation,
   conversationFrom,
   conversationJson,
@@ -156,23 +155,25 @@ fn lookupOrderStatus(orderId: String) -> String
 # bakes the provider, key, and tools once. (The block requires `apiKey` because the
 # provider is a cloud provider; the compiler enforces that.)
 agent MistralAgent requires [convAi] = Agent {
-  provider: mistral
-  model: "mistral-large-latest"
-  apiKey: env "MISTRAL_API_KEY"
+  provider: mistral (requireEnv "MISTRAL_API_KEY") "mistral-large-latest"
   systemPrompt: "You are a concise support assistant. Use lookupOrderStatus for order questions."
-  tools: [lookupOrderStatus]
+  tools: [asTool lookupOrderStatus]
   maxTokens: 512
 }
 
 # Claude is BRING-YOUR-OWN-KEY: there is no server-side Claude key and no `agent`
 # block — the agent is built per request from the CONSUMER's key (function-first,
-# using the same provider/defineAgent/withTools primitives the block lowers to). So
-# two Claude consumers on the same backend authenticate with different keys, and the
-# backend never holds a shared Claude credential.
+# using the same Agent constructor the block lowers to). So two Claude consumers on
+# the same backend authenticate with different keys, and the backend never holds a
+# shared Claude credential.
 fn claudeAgentFor(c: Consumer) -> Agent
   requires [convAi, convRead] =
-  let base = defineAgent (anthropic c.apiKey "claude-opus-4-8") "You are a concise support assistant. Use lookupOrderStatus for order questions." 512
-  withTools base [toolFrom lookupOrderStatus]
+  Agent {
+    provider: anthropic c.apiKey "claude-opus-4-8"
+    systemPrompt: "You are a concise support assistant. Use lookupOrderStatus for order questions."
+    tools: [asTool lookupOrderStatus]
+    maxTokens: 512
+  }
 
 # Pick the consumer's agent. Tools + behaviour are identical; only the provider and
 # (for Claude) the per-consumer key differ, so the choice never widens capability.
@@ -311,7 +312,7 @@ test "a streamed turn calls the DB tool and returns the reply" requires [convSer
   insertMany seed in Order
   let call = toolUseStep "lookupOrderStatus" "c1" "{\"orderId\":\"ord-2\"}"
   let final = textStep "Order ord-2 has been delivered."
-  let agent = defineAgent (mockToolProvider [call, final]) "sys" 256
+  let agent = Agent { provider: mockToolProvider [call, final], systemPrompt: "sys", maxTokens: 256, tools: [] }
   let reply = replyTurn agent (Consumer { id: "alice", provider: "claude", apiKey: "test-key" }) "conv-tool" "where is ord-2?"
   expect reply == "Order ord-2 has been delivered."
 }
@@ -319,7 +320,7 @@ test "a streamed turn calls the DB tool and returns the reply" requires [convSer
 # A consumer resumes their OWN conversation across calls — the second call reloads
 # the persisted transcript, exactly as a different backend instance would.
 test "a consumer resumes their own conversation across calls (cross-instance)" requires [convService] {
-  let agent = defineAgent (mockProvider ["Hi Alice.", "Sure — more."]) "sys" 256
+  let agent = Agent { provider: mockProvider ["Hi Alice.", "Sure — more."], systemPrompt: "sys", maxTokens: 256, tools: [] }
   let alice = Consumer { id: "alice", provider: "claude", apiKey: "test-key" }
   let r1 = replyTurn agent alice "conv-1" "hello"
   expect r1 == "Hi Alice."
@@ -330,7 +331,7 @@ test "a consumer resumes their own conversation across calls (cross-instance)" r
 # Isolation: Bob asking under Alice's conversation id gets a FRESH conversation,
 # never Alice's transcript (the owner-scoped load returns nothing).
 test "a consumer cannot access another consumer's conversation (isolation)" requires [convService] {
-  let agent = defineAgent (mockProvider ["secret for alice"]) "sys" 256
+  let agent = Agent { provider: mockProvider ["secret for alice"], systemPrompt: "sys", maxTokens: 256, tools: [] }
   let alice = Consumer { id: "alice", provider: "claude", apiKey: "test-key" }
   let bob = Consumer { id: "bob", provider: "mistral", apiKey: "test-key" }
   let _ = replyTurn agent alice "shared-id" "remember my secret"

@@ -1403,16 +1403,9 @@ let config_block_schema = function
                "email", VRefList, false; "sseChannels", VRefList, false;
                "api", VTypeRef, true; "port", VExpr, false;
                "static", VStr, false ]
-  (* Declarative AI agent.  provider/model/systemPrompt/tools/maxTokens must be
-     given.  apiKey vs endpoint is PROVIDER-DEPENDENT (apiKey for
-     anthropic/openai/mistral, endpoint for local) and is enforced in the DAgent
-     case below — here they stay optional so the flat presence check doesn't demand
-     both.  The tool list's referents are checked separately (each must be a
-     declared fn) — here we only require the field's presence. *)
-  | "Agent" -> [ "provider", VExpr, true; "model", VStr, true;
-                 "apiKey", VStr, false; "endpoint", VStr, false;
-                 "systemPrompt", VStr, true; "tools", VExpr, true;
-                 "maxTokens", VInt, true ]
+  (* Agent { provider, systemPrompt, maxTokens, tools } is a typed-record constructor
+     validated by the type checker (registered record fields), so it needs no
+     structural schema here. *)
   | _ -> []
 
 let cfg_fields = function
@@ -1585,31 +1578,7 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
          | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord _; _ }) as e ->
          check_record fd.loc "App" (cfg_fields e)
        | _ -> [])
-    | DAgent r ->
-      let base = check_decl "Agent" r.loc r.config_expr in
-      (* apiKey vs endpoint depends on the provider: the cloud providers
-         (anthropic/openai/mistral) authenticate with an apiKey; `local` is a
-         self-hosted endpoint and takes no key.  Enforce the right one here (the
-         flat schema can't express a provider-conditional requirement). *)
-      let provider_req = match r.config_expr with
-        | Some e ->
-          let top = cfg_fields e in
-          let provider_kind = match List.assoc_opt "provider" top with
-            | Some (EVar { name; _ } | EConstructor { name; _ }) -> Some name
-            | _ -> None in
-          (match provider_kind with
-           | Some (("anthropic" | "openai" | "mistral") as p) when not (List.mem_assoc "apiKey" top) ->
-             [ make_error r.loc
-                 ~hint:"e.g. `apiKey: env \"ANTHROPIC_API_KEY\"` (or build the agent in a function for bring-your-own-key)"
-                 (Printf.sprintf "`Agent` (provider `%s`) is missing required field `apiKey`" p) ]
-           | Some "local" when not (List.mem_assoc "endpoint" top) ->
-             [ make_error r.loc
-                 ~hint:"e.g. `endpoint: \"http://localhost:11434/v1/chat/completions\"`"
-                 "`Agent` (provider `local`) is missing required field `endpoint`" ]
-           | _ -> [])
-        | None -> []
-      in
-      base @ provider_req
+    | DAgent r -> check_decl "Agent" r.loc r.config_expr
     | _ -> []
   ) decls
 

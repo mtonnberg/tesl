@@ -345,6 +345,21 @@ let build_adt_def (name : string) (params : string list) (variants : adt_variant
 
 (** Add all type definitions from a module to the context. *)
 let collect_type_defs ctx (decls : top_decl list) : ctx =
+  (* Built-in `Agent` record: an agent is constructed with the normal typed-record
+     constructor `Agent { provider, systemPrompt, maxTokens, tools }`, used both as a
+     top-level `agent X = Agent { … }` block and as a plain expression (e.g. building
+     a per-request BYOK agent in a function). Registering its fields here lets the
+     standard record-construction type-checking validate it. *)
+  let agent_record = {
+    rd_name = "Agent";
+    rd_fields = [
+      ("provider", TCon "LlmProvider");
+      ("systemPrompt", TCon "String");
+      ("maxTokens", TCon "Int");
+      ("tools", TApp (TCon "List", TCon "Tool"));
+    ];
+  } in
+  let ctx = { ctx with records = ("Agent", agent_record) :: ctx.records } in
   List.fold_left (fun ctx decl ->
     match decl with
     | DRecord r ->
@@ -3731,6 +3746,10 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
      them from there. *)
   List.iter (function
     | DAgent (a : Ast.agent_form) ->
+      (* Type-check the `Agent { … }` record (provider: LlmProvider, systemPrompt,
+         maxTokens, tools: List Tool) — same path as an expression-position
+         `Agent { … }`. *)
+      (match a.config_expr with Some e -> ignore (infer_expr ctx e) | None -> ());
       let tool_refs =
         match a.config_expr with
         | Some e ->
@@ -3740,7 +3759,10 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
             | _ -> []) in
           (match List.assoc_opt "tools" fields with
            | Some (Ast.EList { elems; _ }) ->
-             List.filter_map (function Ast.EVar { name; loc } -> Some (name, loc) | _ -> None) elems
+             (* Each tool is `asTool <fn>`; recover the wrapped function name. *)
+             List.filter_map (function
+               | Ast.EApp { fn = Ast.EVar { name = "asTool"; _ }; arg = Ast.EVar { name; loc }; _ } -> Some (name, loc)
+               | _ -> None) elems
            | _ -> [])
         | None -> List.map (fun n -> (n, a.loc)) a.tools
       in

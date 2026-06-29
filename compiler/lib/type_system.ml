@@ -480,6 +480,10 @@ let stdlib_env : (string * scheme) list = [
   "env",       mono (t_fun [t_string] (t_maybe t_string));
   "envInt",    mono (t_fun [t_string; t_int] t_int);
   "envString", mono (t_fun [t_string; t_string] t_string);
+  (* requireEnv: read an env var as a String, failing at startup if unset.  The
+     String-returning counterpart to `env` (which returns Maybe), for places that
+     need a value directly, e.g. `anthropic (requireEnv "ANTHROPIC_API_KEY") model`. *)
+  "requireEnv", mono (t_fun [t_string] t_string);
 
   (* ── HTTP ────────────────────────────────────────────────────────────── *)
   "statusOk",          mono t_int;
@@ -496,11 +500,6 @@ let stdlib_env : (string * scheme) list = [
   (* ── Agent (AI Tier-0) ──────────────────────────────────────────────── *)
   (* mockProvider: list of scripted reply strings → an opaque LlmProvider. *)
   "mockProvider", mono (t_fun [t_list t_string] t_llm_provider);
-  (* defineAgent: provider, systemPrompt, maxTokens → an opaque Agent value.
-     Positional args (Tesl forbids bare record literals, and a named stdlib
-     config record would need field metadata the compiler doesn't track for
-     hand-written modules; positional is the robust Tier-0 surface). *)
-  "defineAgent",  mono (t_fun [t_llm_provider; t_string; t_int] t_agent);
   (* ask: one-shot inference — Agent → prompt String → assistant text String.
      Requires the aiProvider capability (enforced in validation_capabilities). *)
   "ask",          mono (t_fun [t_agent; t_string] t_string);
@@ -524,13 +523,12 @@ let stdlib_env : (string * scheme) list = [
   "tool",         { vars = _r1_a;
                     mono = t_fun [t_string; t_string; t_string;
                                   t_fun [t_string] _a; t_fun [_a] t_string] t_tool };
-  (* withTools: attach a list of tools to an agent. *)
-  "withTools",    mono (t_fun [t_agent; t_list t_tool] t_agent);
-  (* toolFrom: wrap a typed Tesl function as a Tool, deriving the JSON schema from
-     its parameter types (the function-first counterpart to an agent block's
-     `tools:` list).  The argument is a function reference; its concrete type is
-     irrelevant to the result, so it is polymorphic in the argument. *)
-  "toolFrom",     { vars = _r1_a; mono = t_fun [_a] t_tool };
+  (* asTool: wrap a typed Tesl function as a Tool, deriving the JSON schema from its
+     parameter types and decoding/dispatching the model's args under the hood.  Used
+     in the Agent { tools: [...] } field (block and expression alike).  The argument
+     is a function reference; its concrete type is irrelevant to the result, so it is
+     polymorphic in the argument. *)
+  "asTool",       { vars = _r1_a; mono = t_fun [_a] t_tool };
 
   (* askReply / askWith: full tool-calling loop returning an AgentReply.
      askWith takes a BYOK LlmProvider override as its last argument. *)
@@ -716,7 +714,7 @@ let tesl_module_exports : (string * string list) list = [
     [ "IsUuid"; "uuid"; "UUID.v4"; "UUID.v7"; "UUID.validate";
       "uuidV4Codec"; "uuidV7Codec" ] );
   ( "Tesl.Env",
-    [ "env"; "envInt"; "envString" ] );
+    [ "env"; "envInt"; "envString"; "requireEnv" ] );
   ( "Tesl.Json",
     [ "stringCodec"; "intCodec"; "boolCodec"; "floatCodec"; "posixMillisCodec";
       "listCodec"; "dictCodec"; "setCodec" ] );
@@ -757,10 +755,10 @@ let tesl_module_exports : (string * string list) list = [
       "HttpClient.get"; "HttpClient.post"; "HttpClient.put"; "HttpClient.delete" ] );
   ( "Tesl.Agent",
     [ "aiProvider"; "Agent"; "LlmProvider"; "AgentReply"; "AgentReply?"; "Tool"; "ToolStep";
-      "mockProvider"; "defineAgent"; "ask";
+      "mockProvider"; "ask";
       "mockToolProvider"; "toolUseStep"; "textStep";
       "anthropic"; "openai"; "mistral"; "local";
-      "tool"; "toolFrom"; "withTools";
+      "tool"; "asTool";
       "askReply"; "askWith"; "replyText"; "replyTokens"; "replyToolCalls";
       "decodeAs"; "askFor";
       "Conversation"; "Conversation?"; "ConversationTurn"; "ConversationTurn?";

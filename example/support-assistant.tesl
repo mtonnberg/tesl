@@ -4,14 +4,17 @@ module SupportAssistant exposing [SupportAgent, classifyTicket, Triage]
 import Tesl.Prelude exposing [Int, String, Bool]
 import Tesl.Json exposing [stringCodec, intCodec]
 import Tesl.String exposing [String.concat]
+import Tesl.Env exposing [requireEnv]
 import Tesl.Agent exposing [
   aiProvider,
   LlmProvider,
+  Agent,
+  anthropic,
+  asTool,
   mockProvider,
   mockToolProvider,
   toolUseStep,
   textStep,
-  defineAgent,
   ask,
   askWith,
   askFor,
@@ -64,11 +67,9 @@ fn refundOrder(orderId: String, confirmed: Bool) -> String =
 # by name. Tests override the provider per call with a mock, so the agent value
 # itself is identical in production and under test.
 agent SupportAgent requires [supportBot] = Agent {
-  provider: anthropic
-  model: "claude-opus-4-8"
-  apiKey: env "ANTHROPIC_API_KEY"
+  provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
   systemPrompt: "You are a concise customer-support assistant. Never invent order ids."
-  tools: [lookupOrder, refundOrder]
+  tools: [asTool lookupOrder, asTool refundOrder]
   maxTokens: 512
 }
 
@@ -99,7 +100,7 @@ fn decodeTriage(j: String) -> Triage =
   decodeAs "Triage" j
 
 fn classifyTicket(provider: LlmProvider, ticket: String) -> Triage requires [supportBot] =
-  let agent = defineAgent provider "Classify the support ticket as JSON." 256
+  let agent = Agent { provider: provider, systemPrompt: "Classify the support ticket as JSON.", maxTokens: 256, tools: [] }
   askFor agent ticket decodeTriage 2
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -189,7 +190,7 @@ test "structured output: classifyTicket retries past a bad reply then decodes" r
 
 # (8) A plain one-shot ask (no tools) still works through the same machinery.
 test "plain ask returns the scripted reply" requires [supportBot] {
-  let agent = defineAgent (mockProvider ["Hi! How can I help?"]) "x" 64
+  let agent = Agent { provider: mockProvider ["Hi! How can I help?"], systemPrompt: "x", maxTokens: 64, tools: [] }
   expect (ask agent "hello") == "Hi! How can I help?"
 }
 
@@ -200,7 +201,7 @@ test "plain ask returns the scripted reply" requires [supportBot] {
 # — V001. For example, this fn would FAIL `tesl --check`:
 #
 #   fn unguarded(p: String) -> String =
-#     let agent = defineAgent (mockProvider ["x"]) "x" 10
+#     let agent = Agent { provider: mockProvider ["x"], systemPrompt: "x", maxTokens: 10, tools: [] }
 #     ask agent p          # error[V001]: uses callees requiring [aiProvider]
 #                          # Hint: add `requires [aiProvider]`
 #

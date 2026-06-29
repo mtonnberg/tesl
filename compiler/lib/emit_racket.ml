@@ -262,7 +262,7 @@ type ctx = {
   fn_arities : (string, int) Hashtbl.t;
     (** known function arities for local/imported functions, used for partial application lowering *)
   fn_tool_decls : (string, Ast.func_decl) Hashtbl.t;
-    (** declared-function name → its decl — for `toolFrom fn`, which derives a Tool's
+    (** declared-function name → its decl — for `asTool fn`, which derives a Tool's
         JSON schema + arg decode from the function's parameter types (the same wrapping
         the declarative `agent` block applies to its `tools:` list). *)
   mutable preserve_case_payload_names : bool;
@@ -1197,7 +1197,7 @@ let extract_delete e =
    A tool is a typed Tesl function: its JSON Schema is DERIVED from the parameter
    types and the model's tool-call arguments are decoded into the function's
    positional parameters under the hood.  Used both by the declarative `agent`
-   block's `tools:` list and by the function-first `toolFrom fn` form. *)
+   block's `tools:` list and by the function-first `asTool fn` form. *)
 
 (* base type -> the type tag tesl-agent-decode-args understands (None = unsupported) *)
 let agent_arg_type_tag (t : Ast.type_expr) : string option =
@@ -1529,15 +1529,15 @@ let rec emit_expr ctx e =
      | Some upsert -> emit_sql_upsert upsert
      | None -> failwith "emit_racket: parse_upsert_expr guard passed but returned None — compiler invariant violation; please report this bug")
   | EApp _ as app when (match flatten_app_expr [] app with
-                        | EVar { name = "toolFrom"; _ }, [EVar { name; _ }] -> Hashtbl.mem ctx.fn_tool_decls name
+                        | EVar { name = "asTool"; _ }, [EVar { name; _ }] -> Hashtbl.mem ctx.fn_tool_decls name
                         | _ -> false) ->
-    (* `toolFrom fn` — wrap a typed Tesl function as an LLM tool (schema derived
+    (* `asTool fn` — wrap a typed Tesl function as an LLM tool (schema derived
        from its parameter types), the function-first counterpart to the agent
        block's `tools:` list. *)
     (match flatten_app_expr [] app with
-     | EVar { name = "toolFrom"; _ }, [EVar { name; _ }] ->
+     | EVar { name = "asTool"; _ }, [EVar { name; _ }] ->
        emit_tool_from_fd ctx (Hashtbl.find ctx.fn_tool_decls name)
-     | _ -> failwith "emit_racket: toolFrom guard passed but returned None — compiler invariant violation; please report this bug")
+     | _ -> failwith "emit_racket: asTool guard passed but returned None — compiler invariant violation; please report this bug")
   | EApp _ as app when (match parse_insert_many_expr app with Some _ -> true | None -> false) ->
     (match parse_insert_many_expr app with
      | Some (list_var, entity) -> emit_sql_insert_many list_var entity
@@ -1596,6 +1596,30 @@ let rec emit_expr ctx e =
        ) other_fields;
        emit ctx "))"
      | None -> emit ctx "()"  (* should not happen *))
+  (* Agent { provider, systemPrompt, maxTokens, tools } — the agent constructor,
+     usable as a top-level `agent X = Agent { … }` block AND as a plain expression
+     (e.g. a per-request BYOK agent). Lowers to the runtime defineAgent + withTools
+     primitives. `provider` is a full LlmProvider expression; `tools` is a `List Tool`
+     whose `asTool fn` elements lower to wrapped tools. *)
+  | EApp {
+      fn = EConstructor { name = "Agent"; args = []; _ };
+      arg = ERecord { fields; loc = rloc; _ };
+      _;
+    } ->
+    let field name fallback = match List.assoc_opt name fields with Some e -> e | None -> fallback in
+    let provider = field "provider" (EList { elems = []; loc = rloc }) in
+    let system   = field "systemPrompt" (ELit { lit = LString ""; loc = rloc }) in
+    let maxtok   = field "maxTokens" (ELit { lit = LInt 1024; loc = rloc }) in
+    let tools    = field "tools" (EList { elems = []; loc = rloc }) in
+    emit ctx "(__tart_withTools (__tart_defineAgent ";
+    emit_raw_value ctx provider;
+    emit ctx " ";
+    emit_raw_value ctx system;
+    emit ctx " ";
+    emit_raw_value ctx maxtok;
+    emit ctx ") ";
+    emit_expr ctx tools;
+    emit ctx ")"
   (* TypeName { field: val } — record or entity construction with explicit type name *)
   | EApp {
       fn = EConstructor { name = rname; args = []; _ };
@@ -2652,7 +2676,7 @@ and emit_expr_simple ctx e =
       | _ -> false
     in
     let is_tool_from = match flatten_app_expr [] app with
-      | EVar { name = "toolFrom"; _ }, [EVar { name; _ }] -> Hashtbl.mem ctx.fn_tool_decls name
+      | EVar { name = "asTool"; _ }, [EVar { name; _ }] -> Hashtbl.mem ctx.fn_tool_decls name
       | _ -> false
     in
     if is_typename_record
@@ -3542,25 +3566,25 @@ let emit_requires ctx (m : module_form) =
   let has_cache = List.exists (function Ast.DCache _ -> true | _ -> false) m.decls in
   let has_email = List.exists (function Ast.DEmail _ -> true | _ -> false) m.decls in
   let has_agent = List.exists (function Ast.DAgent _ -> true | _ -> false) m.decls in
-  (* `toolFrom fn` lowers to the same `__tart_tool`/`__tart_tesl-agent-decode-args`
-     helpers a block uses, so a module that uses it needs the prefixed require even
-     without a declarative `agent` block.  It is compile-time-only and must be
-     imported to be referenced (it lives in Tesl.Agent's export list), so a name in
-     any exposing-list is the reliable signal — it works wherever `toolFrom` appears
-     (fn body, handler, test body, …). *)
-  let has_toolfrom =
+  (* `Agent { … }` (block or expression) and `asTool fn` both lower to the Tesl.Agent
+     library constructors (`__tart_withTools`/`__tart_defineAgent`/`__tart_tool` …).
+     Both are compile-time forms that must import `Agent`/`asTool` to be referenced,
+     so a name in any exposing-list is the reliable signal (it works wherever the form
+     appears — block, fn body, handler, test body). *)
+  let imports_any names =
     List.exists (fun (imp : Ast.import_decl) ->
       match imp.names with
-      | Ast.ImportExposing ns -> List.mem "toolFrom" ns
+      | Ast.ImportExposing ns -> List.exists (fun n -> List.mem n ns) names
       | Ast.ImportAll -> false) m.imports
   in
+  let uses_agent_constructors = imports_any ["Agent"; "asTool"] in
   if has_cache then emit_line ctx "  tesl/tesl/cache";
   if has_email then emit_line ctx "  tesl/tesl/email";
-  (* A declarative `agent { … }` block (or a `toolFrom fn`) lowers to the Tesl.Agent
-     library constructors.  Require them under a private prefix so the lowering works
-     regardless of what the module chose to `expose`-import, and never collides with
-     a user's own imports. *)
-  if has_agent || has_toolfrom then
+  (* A declarative `agent { … }` block or an `Agent { … }`/`asTool` expression lowers
+     to the Tesl.Agent library constructors.  Require them under a private prefix so
+     the lowering works regardless of what the module chose to `expose`-import, and
+     never collides with a user's own imports. *)
+  if has_agent || uses_agent_constructors then
     emit_line ctx "  (prefix-in __tart_ (only-in tesl/tesl/agent defineAgent withTools tool anthropic openai mistral local tesl-agent-decode-args))";
   if needs_runtime_path then
     emit_line ctx "  racket/runtime-path";
@@ -3662,9 +3686,9 @@ let emit_requires ctx (m : module_form) =
           "Queue"; "QueueRetryStrategy"; "QueueRetryConfig"; "QueueRetryBackoff";
           "Exponential"; "Fixed"; "Linear";
           "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job"; "Cache";
-          (* `toolFrom fn` is a compile-time form: it lowers to `__tart_tool …`
+          (* `asTool fn` is a compile-time form: it lowers to `__tart_tool …`
              (schema derived from the fn's types) and has no runtime binding. *)
-          "toolFrom" ] in
+          "asTool" ] in
       let expanded = List.filter (fun n -> not (List.mem n config_only_names)) expanded in
       let qualified = List.filter (fun n -> String.contains n '.') expanded in
       let plain = List.filter (fun n -> not (String.contains n '.')) expanded in
@@ -5211,42 +5235,35 @@ let emit_server ctx (sv : server_form) =
    model's tool-call arguments are decoded into the function's positional parameters
    under the hood — no hand-written schema string or validator.  The per-tool
    wrapping (schema helpers + emit_tool_from_fd) lives above emit_expr so the
-   function-first `toolFrom fn` form can reuse it. *)
+   function-first `asTool fn` form can reuse it. *)
 
-let emit_agent ctx (decls : Ast.top_decl list) (a : Ast.agent_form) =
-  let find_fn name =
-    List.find_map (function Ast.DFunc fd when fd.name = name -> Some fd | _ -> None) decls in
-  let emit_provider () =
-    let kind = if a.provider = "" then "anthropic" else a.provider in
-    match kind with
-    | "local" ->
-      emit ctx "(__tart_local "; emit_postgres_value ctx a.endpoint;
-      emit ctx " "; emit_postgres_value ctx a.model; emit ctx ")"
-    | "openai" ->
-      emit ctx "(__tart_openai "; emit_postgres_value ctx a.api_key;
-      emit ctx " "; emit_postgres_value ctx a.model; emit ctx ")"
-    | "mistral" ->
-      emit ctx "(__tart_mistral "; emit_postgres_value ctx a.api_key;
-      emit ctx " "; emit_postgres_value ctx a.model; emit ctx ")"
-    | _ ->
-      emit ctx "(__tart_anthropic "; emit_postgres_value ctx a.api_key;
-      emit ctx " "; emit_postgres_value ctx a.model; emit ctx ")"
+(* A declarative `agent X requires [...] = Agent { … }` block binds [X] to the agent
+   value the `Agent { … }` constructor produces. The construction itself is lowered
+   by emit_expr's `Agent { … }` arm (shared with expression-position use), so the
+   block is just a top-level binding of that expression. *)
+let emit_agent ctx (_decls : Ast.top_decl list) (a : Ast.agent_form) =
+  (* The parser stores the block's `Agent { … }` RHS as a type-hinted record
+     (ERecord { type_hint = Some "Agent" }), but the dedicated agent-lowering arm
+     of emit_expr matches the constructor-application shape
+     (EApp { EConstructor "Agent"; ERecord }) shared with expression-position use.
+     Normalise to that shape so the block reuses the SAME lowering — otherwise the
+     record would fall through to the generic typed-record path and emit a bogus
+     `(Agent #:provider …)` keyword call against the runtime `agent?` predicate. *)
+  let config = match a.config_expr with
+    | Some (Ast.ERecord { type_hint = Some "Agent"; fields; loc }) ->
+      Some (Ast.EApp {
+        fn = Ast.EConstructor { name = "Agent"; args = []; loc };
+        arg = Ast.ERecord { fields; type_hint = None; loc };
+        loc;
+      })
+    | other -> other
   in
   emit_line ctx (Printf.sprintf "(define %s" a.name);
-  emit ctx "  (__tart_withTools (__tart_defineAgent ";
-  emit_provider ();
-  emit ctx (Printf.sprintf " %S %d)" a.system_prompt a.max_tokens);
-  emit_nl ctx;
-  emit ctx "    (list";
-  List.iter (fun tool_name ->
-    match find_fn tool_name with
-    | None -> ()  (* validation has already reported the missing tool *)
-    | Some fd ->
-      emit_nl ctx;
-      emit ctx "      ";
-      emit_tool_from_fd ctx fd
-  ) a.tools;
-  emit_line ctx ")))";
+  emit ctx "  ";
+  (match config with
+   | Some e -> emit_expr ctx e
+   | None -> emit ctx "(void)");
+  emit_line ctx ")";
   emit_nl ctx
 
 let emit_test ctx (t : test_form) =

@@ -42,8 +42,7 @@ import Tesl.Agent exposing [
   mockToolProvider,
   toolUseStep,
   textStep,
-  defineAgent,
-  withTools,
+  Agent,
   tool,
   decodeAs,
   agentRun,
@@ -165,8 +164,7 @@ handler startRun(req: RunJob)
 worker runWorkerHandler(job: RunJob ::: FromQueue (Id == jobId) job) requires [runWorker] =
   let echoTool = tool "echo" "Echo back some text" "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}" validateEcho dispatchEcho
   let steps = [toolUseStep "echo" "call_1" "{\"text\":\"hi\"}", textStep "All done."]
-  let base = defineAgent (mockToolProvider steps) "You are a runner." 256
-  let agent = withTools base [echoTool]
+  let agent = Agent { provider: mockToolProvider steps, systemPrompt: "You are a runner.", maxTokens: 256, tools: [echoTool] }
   let reply = agentRun agent job.prompt publishStep
   job
 
