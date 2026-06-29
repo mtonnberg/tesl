@@ -373,6 +373,38 @@ sse "/events/rooms/:roomId"
 
 Horizontal scaling uses PostgreSQL `LISTEN/NOTIFY`. No separate message broker.
 
+### AI agents — typed tools, no schema strings
+
+An agent is one typed-record constructor, `Agent { … }` — usable as a top-level
+declaration or a plain expression (so a bring-your-own-key agent is just `Agent { … }`
+built per request). `provider` is a full LLM provider value (the type checker enforces
+the model + key); `tools` are ordinary typed Tesl functions wrapped with `asTool`, which
+derives the JSON Schema from the parameter types and decodes the model's tool-call
+arguments for you — no hand-written schema or validator.
+
+```tesl
+fn lookupOrderStatus(orderId: String) -> String requires [dbRead] =
+  case selectOne o from Order where o.id == orderId of
+    Something o -> o.status
+    Nothing -> "no such order"
+
+agent SupportAgent requires [supportAi] = Agent {
+  provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
+  systemPrompt: "You are a concise support assistant."
+  tools: [asTool lookupOrderStatus]
+  maxTokens: 512
+}
+
+# one-shot, or a full multi-turn conversation you persist yourself:
+let answer = ask SupportAgent "Where is order ord-42?"
+```
+
+A tool that reads the database does so through the same proof-carrying SQL boundary as
+the rest of your code, so a tool answer is grounded in real rows, never fabricated.
+Tests run against a deterministic `mockProvider` / `mockToolProvider` — no key, no
+network. Real providers (`anthropic` / `openai` / `mistral` / `local`) require the
+`aiProvider` capability.
+
 ### Type-safe list filtering (ForAll proofs)
 
 When a `select` query runs, Tesl annotates the result list with proof of its origin. Filter the list and the proof expands rather than disappears — similar to how F# `Seq.filter` preserves the element type, except here it also preserves the proof.
@@ -539,6 +571,7 @@ The short version: if it's a proof or a capability, the static cost is zero. If 
 | Schema from entity declarations | Tables created from `entity` blocks; missing columns flagged at startup |
 | Background jobs, no Redis | `queue` + `worker` declarative syntax, backed by PostgreSQL |
 | Real-time push, one port | `sse` + `sseChannel` on standard HTTP; browser `EventSource` reconnects automatically |
+| AI agents with typed tools | `Agent { … }` constructor; `asTool fn` derives the tool's JSON Schema from the function's parameter types |
 | Dead-letter queues built in | `deadWorker` handles exhausted retries declaratively |
 | Property-based tests | `property` blocks built into the language, no library needed |
 

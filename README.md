@@ -74,6 +74,7 @@ In practical terms, that means:
 - auth should not be something you merely remember to wire up
 - effects should be declared and checked
 - typed database access, queues, pub/sub, and telemetry should fit into one coherent programming model
+- AI agents should use ordinary typed functions as tools — `Agent { … }` with `asTool fn`, no hand-written JSON schemas
 - refactoring should preserve guarantees instead of silently eroding them
 
 The intended long-term shape is a language that is small, opinionated, explicit, and boringly reliable for API work that people who just want things done will choose since it is the easiest way to a working and stable product.

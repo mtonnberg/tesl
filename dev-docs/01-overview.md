@@ -33,6 +33,9 @@ tesl/
 │   ├── prelude.rkt, string.rkt, list.rkt, int.rkt, ...
 │   ├── time.rkt                      # PosixMillis, nowMillis, formatTime
 │   ├── queue.rkt                     # Queue/pub-sub runtime
+│   ├── agent.rkt                      # AI agent runtime (providers, tool loop, conversations)
+│   ├── agent-provider.rkt             # Real LLM provider transports (Anthropic / OpenAI-wire)
+│   ├── env.rkt                        # env / envString / requireEnv
 │   └── websocket.rkt                 # RFC 6455 WebSocket server
 ├── tests/
 │   ├── tesl-test.rkt                 # Main Racket test suite (657+ tests)

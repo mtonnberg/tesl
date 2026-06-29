@@ -832,6 +832,7 @@ Consumers import only from `UserLib` and see a single, stable API. The internal 
                    | <sseChannel-decl>
                    | <cache-decl>
                    | <email-decl>
+                   | <agent-decl>
 ```
 
 `main` is an ordinary `<function-decl>` returning an `App` (§11.13); `<main-decl>` is called out separately only because it is the application entry point. There is no `workers`/`deadWorkers` declaration — workers are folded into the queue's `jobs` list (§11.15, §11.17).
@@ -1122,6 +1123,81 @@ queue EmailQueue requires [smtpSend, alertCap] = Queue {
   retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 }
 }
 ```
+
+### 11.18 AI agents
+**Accepted design, Implemented.**
+
+An agent is built with a single typed-record constructor, `Agent { … }`. It can be
+declared at the top level as an `agent` binding **or** written as a plain expression
+(e.g. to build a per-request, bring-your-own-key agent inside a function):
+
+```text
+<agent-decl> ::= "agent" <identifier> [ "requires" "[" <capability> { "," <capability> } "]" ] "=" <agent-ctor>
+<agent-ctor> ::= "Agent" "{"
+                   "provider"     ":" <expr>        -- an LlmProvider value
+                   "systemPrompt" ":" <expr>        -- String
+                   "maxTokens"    ":" <expr>        -- Int
+                   "tools"        ":" <expr>        -- List Tool
+                 "}"
+```
+
+`provider` is a full `LlmProvider` value built by one of the provider constructors —
+`anthropic key model`, `openai key model`, `mistral key model`, `local endpoint model`,
+or the deterministic `mockProvider [replies]` / `mockToolProvider [steps]` used in
+tests. The model and key are arguments to the provider, so the type checker enforces
+them (`anthropic : String -> String -> LlmProvider`). Read a server-side key with
+`requireEnv "VAR"` (`String`; fails fast if unset), the String counterpart to
+`env : String -> Maybe String`.
+
+`tools` is a `List Tool`. Wrap a typed Tesl function as a tool with `asTool`: the
+JSON Schema is derived from the function's parameter types and the model's tool-call
+arguments are decoded into those parameters under the hood — no hand-written schema or
+validator. (For full manual control the lower-level `tool name desc schema validate
+dispatch` constructor is still available.) Tool functions take only `String`, `Int`,
+`Float`, `Bool`, or `PosixMillis` parameters.
+
+```tesl
+fn lookupOrderStatus(orderId: String) -> String requires [dbRead] =
+  case selectOne o from Order where o.id == orderId of
+    Something o -> o.status
+    Nothing -> "no such order"
+
+# server-keyed agent (top-level block)
+agent SupportAgent requires [supportAi] = Agent {
+  provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
+  systemPrompt: "You are a concise support assistant."
+  tools: [asTool lookupOrderStatus]
+  maxTokens: 512
+}
+
+# bring-your-own-key agent (the SAME constructor, built per request)
+fn agentForConsumer(c: Consumer) -> Agent requires [supportAi] =
+  Agent {
+    provider: anthropic c.apiKey "claude-opus-4-8"
+    systemPrompt: "You are a concise support assistant."
+    tools: [asTool lookupOrderStatus]
+    maxTokens: 512
+  }
+```
+
+Running inference requires the `aiProvider` capability (from `Tesl.Agent`; it implies
+`httpClient` because real providers perform outbound HTTP). The agent API:
+
+- `ask agent prompt -> String` — one-shot; runs the tool-calling loop, returns the text.
+- `askReply agent prompt -> AgentReply` — like `ask`, plus token usage + tool-call count
+  (`replyText` / `replyTokens` / `replyToolCalls`).
+- `askWith agent prompt provider -> AgentReply` — a per-call provider override (BYOK).
+- `askFor agent prompt decoder maxRetries -> a` — ask for a typed value; the developer's
+  `String -> a` decoder is retried up to `maxRetries` on a decode failure.
+- Multi-turn conversation (the developer owns persistence): `newConversation` /
+  `conversationFrom` build a `Conversation`; `converse` / `converseStreaming` advance it,
+  returning a turn (`turnReply` / `turnConversation`); `conversationJson` /
+  `conversationLength` inspect it. `converseStreaming conv prompt publish` calls `publish`
+  with each tool-use / thought / reply step as it streams.
+
+`Agent`, `LlmProvider`, `Tool`, `AgentReply`, `Conversation` are opaque types. There is
+no separate `defineAgent`/`withTools` — the `Agent { … }` constructor is the only way to
+build an agent.
 
 ### 11.2 Top-level immutable bindings
 **Accepted design.**
