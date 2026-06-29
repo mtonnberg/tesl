@@ -1,7 +1,5 @@
 #lang tesl
-module AgentTests exposing [
-  askMock,
-]
+module AgentTests exposing [askMock]
 
 import Tesl.Prelude exposing [Int, String, Bool, List, Unit]
 import Tesl.Agent exposing [

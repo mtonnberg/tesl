@@ -27,14 +27,6 @@ stdlib combinator BODIES into Tesl source compiled to Racket.
 3. **Maybe / Result** — **nothing to lift**: `tesl/maybe.rkt` / `tesl/result.rkt`
    are ~7-line ADT-constant re-exports with zero combinators and zero `stdlib_env`
    rows (constructors live in `dsl/types.rkt`). No action.
-4. **`foreign fn` declaration form (Phase 2)** — new surface syntax
-   `foreign fn name(params) -> T = racket "builtin"` requiring
-   lexer+parser+ast+checker+emitter+linter+formatter changes. Its core-shrink
-   purpose is **largely superseded** by body-lifting; remaining value = giving leaf
-   primitives Tesl-level types (shrinking `stdlib_env` further). High blast radius
-   against the byte-exact + diagnostic invariants. Plan: emit a direct
-   `(define (name …) (builtin …))` wrapper, give the leaf a Tesl type, with
-   positive+negative parser/checker tests and a deliberate byte-exact re-baseline.
 
 ## Verification bar
 Per module: `test_integration` 58-lesson byte-exact 0-differ, `gen-stdlib-rkt.sh

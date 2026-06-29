@@ -60,10 +60,10 @@ import Tesl.Agent exposing [
 #   - a `subscribe` SSE route streams those events; the api-test `collect`s them.
 # ────────────────────────────────────────────────────────────────────────────
 
-capability runRead   implies dbRead
-capability runWrite  implies dbWrite
+capability runRead implies dbRead
+capability runWrite implies dbWrite
 capability runPubSub implies pubsub
-capability runQueue  implies queueWrite
+capability runQueue implies queueWrite
 capability runWorker implies queueRead, runPubSub, aiProvider
 capability runService implies runRead, runWrite, runPubSub, runQueue
 
@@ -120,7 +120,7 @@ database RunDatabase = Database {
   })
 }
 
-queue RunQueue requires [runWorker] = Queue {
+queue RunQueue requires [] = Queue {
   database: RunDatabase
   jobs: [Job RunJob runWorkerHandler Nothing]
   retry: QueueRetryStrategy {
