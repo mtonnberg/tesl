@@ -1992,8 +1992,12 @@ and parse_app s =
     | IDENT name when is_statement_starter_ident name ->
       return fn
     | IDENT _ | UIDENT _
-    (* Allow keyword-as-identifier tokens as function application arguments *)
-    | EMAIL | SMTP ->
+    (* Allow keyword-as-identifier tokens as function application arguments.
+       These are contextual/block keywords that are also natural local-variable
+       names (e.g. `seed` for seed rows, `table`/`schema` in DB code); without
+       this, `insertMany seed in Order` would stop consuming args at `seed`,
+       leaving `insertMany` bare ("unknown name: insertMany"). *)
+    | EMAIL | SMTP | SEED | TABLE | SCHEMA | BACKEND ->
       (* Don't consume if it looks like it starts a new statement / operator *)
       (match try_parse s (fun s ->
          let saved = s.pos in
@@ -4267,6 +4271,37 @@ and parse_test_stmt_items s =
       return nested
     end else
       return []
+  (* SQL write statements (`update`/`delete`) carry indented `where … set … = …`
+     continuation clauses.  The test-body expression parser runs with
+     `allow_test_multiline_request_continuations` on (for api-test request
+     modifiers like `.cookie`/`.headers`), which mis-consumes those indented SQL
+     clauses and chokes on the `=`.  Parse these statements the same way function
+     bodies do instead: head with the flag OFF, then the indented continuation
+     block as a `parse_stmt_seq` (mirrors parse_stmt_seq's INDENT arm). *)
+  | IDENT ("update" | "delete") ->
+    let saved = s.allow_test_multiline_request_continuations in
+    s.allow_test_multiline_request_continuations <- false;
+    let result =
+      match parse_expr s with
+      | Ok e ->
+        skip_newlines s;
+        (match peek s with
+         | INDENT ->
+           advance s;
+           (match parse_stmt_seq s with
+            | Ok body ->
+              skip_newlines s;
+              if peek s = DEDENT then advance s;
+              let combined = ELet { name = "_"; declared_type = None;
+                                    declared_proof = None; value = e; body;
+                                    loc = expr_loc e } in
+              return [TsExpr { e = combined; loc = expr_loc combined }]
+            | Err _ -> return [TsExpr { e; loc = expr_loc e }])
+         | _ -> return [TsExpr { e; loc = expr_loc e }])
+      | Err _ -> return []
+    in
+    s.allow_test_multiline_request_continuations <- saved;
+    result
   | _ ->
     (match parse_test_expr_with_indented_args s with
      | Ok e -> return [TsExpr { e; loc = expr_loc e }]

@@ -36,7 +36,7 @@ Caveat: lesson 54 still teaches `detachFact`/`attachFact` correctly but the bigg
 
 ### 1.4 Validation improvements ✓ (many, meaningful)
 
-API endpoint structure, queue/channel database references, entity primary key, worker binding, fact parameter types, capture binding types — all now caught at compile time. These collectively address the "newcomer feedback" class of bugs. **Grade: A-.**
+API endpoint structure, queue/sseChannel database references, entity primary key, worker binding, fact parameter types, capture binding types — all now caught at compile time. These collectively address the "newcomer feedback" class of bugs. **Grade: A-.**
 
 ### 1.5 documentation.ml one-liner validation.mli (minimal)
 

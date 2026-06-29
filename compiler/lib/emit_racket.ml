@@ -3455,7 +3455,7 @@ let emit_requires ctx (m : module_form) =
      Require them under a private prefix so the lowering works regardless of what the
      module chose to `expose`-import, and never collides with a user's own imports. *)
   if has_agent then
-    emit_line ctx "  (prefix-in __tart_ (only-in tesl/tesl/agent defineAgent withTools tool anthropic openai local tesl-agent-decode-args))";
+    emit_line ctx "  (prefix-in __tart_ (only-in tesl/tesl/agent defineAgent withTools tool anthropic openai mistral local tesl-agent-decode-args))";
   if needs_runtime_path then
     emit_line ctx "  racket/runtime-path";
 
@@ -5138,6 +5138,9 @@ let emit_agent ctx (decls : Ast.top_decl list) (a : Ast.agent_form) =
       emit ctx " "; emit_postgres_value ctx a.model; emit ctx ")"
     | "openai" ->
       emit ctx "(__tart_openai "; emit_postgres_value ctx a.api_key;
+      emit ctx " "; emit_postgres_value ctx a.model; emit ctx ")"
+    | "mistral" ->
+      emit ctx "(__tart_mistral "; emit_postgres_value ctx a.api_key;
       emit ctx " "; emit_postgres_value ctx a.model; emit ctx ")"
     | _ ->
       emit ctx "(__tart_anthropic "; emit_postgres_value ctx a.api_key;

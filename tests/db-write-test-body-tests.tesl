@@ -1,0 +1,60 @@
+#lang tesl
+module Db_write_test_body_tests exposing []
+
+import Tesl.Prelude exposing [String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+
+# Regression coverage for DB write statements used directly in `test { }` bodies.
+# Two bugs are pinned here:
+#
+#   1. A local bound to a contextual-keyword name (e.g. `seed`) could not be
+#      referenced in expression-argument position, so `insertMany seed in Order`
+#      stopped consuming args at `seed` and reported "unknown name: insertMany".
+#
+#   2. A multi-line `update X where P set f = v` in a test body had its indented
+#      `where`/`set` clauses mis-consumed by the api-test request-modifier
+#      continuation logic and choked on the `=`.
+#
+# Both now work in a test body exactly as they do in a function body.
+
+entity Order table "orders" primaryKey id {
+  id: String
+  status: String
+}
+
+database OrderDb = Database {
+  schema: "orders"
+  entities: [Order]
+  backend: Memory
+}
+
+fn statusOf(orderId: String) -> String
+  requires [dbRead] =
+  case selectOne o from Order where o.id == orderId of
+    Something o -> o.status
+    Nothing -> "no such order"
+
+test "insertMany works in a test body with a `seed`-named local" requires [dbRead, dbWrite] {
+  let seed = [Order { id: "o1", status: "new" }]
+  insertMany seed in Order
+  expect statusOf "o1" == "new"
+}
+
+test "multi-line update runs in a test body" requires [dbRead, dbWrite] {
+  let rows = [Order { id: "o3", status: "new" }]
+  insertMany rows in Order
+  expect statusOf "o3" == "new"
+  update o in Order
+    where o.id == "o3"
+    set o.status = "shipped"
+  expect statusOf "o3" == "shipped"
+}
+
+test "single-line delete runs in a test body" requires [dbRead, dbWrite] {
+  let rows = [Order { id: "o4", status: "new" }]
+  insertMany rows in Order
+  expect statusOf "o4" == "new"
+  delete o from Order where o.id == "o4"
+  expect statusOf "o4" == "no such order"
+}

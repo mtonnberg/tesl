@@ -120,7 +120,7 @@ let collect_needed_capabilities
        tool-calling loop, BYOK, and structured-output askFor) performs inference
        and requires the aiProvider capability. Pure constructors/accessors do not. *)
     else if List.mem name ["ask"; "askReply"; "askWith"; "askFor";
-                           "converse"; "agentRun"] then ["aiProvider"]
+                           "converse"; "converseStreaming"; "agentRun"] then ["aiProvider"]
     else []
   in
   (* acc is threaded left-to-right; result order is irrelevant (caller sort_uniqs). *)

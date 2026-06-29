@@ -513,6 +513,7 @@ let stdlib_env : (string * scheme) list = [
   "textStep",     mono (t_fun [t_string] t_tool_step);
   "anthropic",    mono (t_fun [t_string; t_string] t_llm_provider);
   "openai",       mono (t_fun [t_string; t_string] t_llm_provider);
+  "mistral",      mono (t_fun [t_string; t_string] t_llm_provider);
   "local",        mono (t_fun [t_string; t_string] t_llm_provider);
 
   (* tool: name, description, JSON-schema string, validator (args-JSON String → a),
@@ -549,6 +550,7 @@ let stdlib_env : (string * scheme) list = [
   "newConversation",  mono (t_fun [t_agent] t_conversation);
   "conversationFrom", mono (t_fun [t_agent; t_string] t_conversation);
   "converse",         mono (t_fun [t_conversation; t_string] t_conversation_turn);
+  "converseStreaming", mono (t_fun [t_conversation; t_string; t_fun [t_string] t_unit] t_conversation_turn);
   "turnReply",        mono (t_fun [t_conversation_turn] t_agent_reply);
   "turnConversation", mono (t_fun [t_conversation_turn] t_conversation);
   "conversationJson",   mono (t_fun [t_conversation] t_string);
@@ -752,12 +754,12 @@ let tesl_module_exports : (string * string list) list = [
     [ "aiProvider"; "Agent"; "LlmProvider"; "AgentReply"; "AgentReply?"; "Tool"; "ToolStep";
       "mockProvider"; "defineAgent"; "ask";
       "mockToolProvider"; "toolUseStep"; "textStep";
-      "anthropic"; "openai"; "local";
+      "anthropic"; "openai"; "mistral"; "local";
       "tool"; "withTools";
       "askReply"; "askWith"; "replyText"; "replyTokens"; "replyToolCalls";
       "decodeAs"; "askFor";
       "Conversation"; "Conversation?"; "ConversationTurn"; "ConversationTurn?";
-      "newConversation"; "conversationFrom"; "converse"; "turnReply";
+      "newConversation"; "conversationFrom"; "converse"; "converseStreaming"; "turnReply";
       "turnConversation"; "conversationJson"; "conversationLength"; "agentRun" ] );
   (* Tesl.Http, Tesl.DB, Tesl.Bool, Tesl.Uuid, Tesl.Crypto, Tesl.Map, Tesl.Logging,
      Tesl.Queue, Tesl.Channel, Tesl.Sse —

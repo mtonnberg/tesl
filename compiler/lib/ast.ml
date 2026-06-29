@@ -323,7 +323,7 @@ type database_form = {
   loc        : loc;
 }
 
-(* ─── Queue / channel / workers ─────────────────────────────────────────── *)
+(* ─── Queue / sseChannel / workers ─────────────────────────────────────────── *)
 
 type queue_form = {
   name             : string;

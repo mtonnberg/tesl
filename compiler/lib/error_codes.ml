@@ -292,7 +292,7 @@ let manual_for ~(code : string) ~(message : string) : string option =
     if has "capabilit" || has "requires [" || has "privileged" then
       Some "best-practices#api-design"
     else if has "database" || has "entity" || has "table" || has "selectone"
-            || has "select " || has "channel" then
+            || has "select " || has "sseChannel" then
       Some "best-practices#database-access"
     else if has "proof" || has "fact" || has "::: " || has "witness"
             || has "detachfact" then

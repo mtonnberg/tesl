@@ -121,6 +121,7 @@
          textStep
          anthropic
          openai
+         mistral
          local
          defineAgent
          withTools
@@ -143,6 +144,7 @@
          newConversation
          conversationFrom
          converse
+         converseStreaming
          turnReply
          turnConversation
          conversationJson
@@ -233,6 +235,11 @@
   (make-anthropic-provider (raw-value api-key) (raw-value model)))
 (define (openai api-key model)
   (make-openai-provider (raw-value api-key) (raw-value model)))
+;; Mistral speaks the OpenAI chat-completions wire format (Bearer auth), so it
+;; reuses the OpenAI provider pointed at Mistral's endpoint.
+(define (mistral api-key model)
+  (make-openai-provider (raw-value api-key) (raw-value model)
+                        "https://api.mistral.ai/v1/chat/completions"))
 (define (local endpoint model)
   (make-local-provider (raw-value endpoint) (raw-value model)))
 
@@ -563,6 +570,25 @@
   (define a (conversation-agent c))
   (define-values (reply transcript)
     (run-the-loop/transcript a prompt #f (conversation-messages c) #f))
+  (conv-turn reply (conversation a transcript)))
+
+;;; converseStreaming : Conversation -> String -> (String -> Unit) -> ConversationTurn
+;;; Like converse, but calls `publish` once per loop step with a step-event String
+;;; ("tool: <name>" as each tool is invoked, "text: <reply>" for the final assistant
+;;; text), so a handler can stream the tool-use / thought process / reply over SSE
+;;; while still threading the full conversation history into the turn.
+(define (converseStreaming conv prompt publish)
+  (require-capabilities! (list aiProvider))
+  (define c (raw-value conv))
+  (unless (conversation? c)
+    (raise-user-error 'converseStreaming "first argument is not a Conversation: ~e" c))
+  (define pub (raw-value publish))
+  (unless (procedure? pub)
+    (raise-user-error 'converseStreaming
+                      "third argument must be a function String -> Unit, got ~e" pub))
+  (define a (conversation-agent c))
+  (define-values (reply transcript)
+    (run-the-loop/transcript a prompt #f (conversation-messages c) (lambda (s) (pub s))))
   (conv-turn reply (conversation a transcript)))
 
 ;;; turnReply : ConversationTurn -> AgentReply

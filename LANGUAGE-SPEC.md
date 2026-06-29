@@ -829,7 +829,7 @@ Consumers import only from `UserLib` and see a single, stable API. The internal 
                    | <main-decl>
                    | <test-block>
                    | <queue-decl>
-                   | <channel-decl>
+                   | <sseChannel-decl>
                    | <cache-decl>
                    | <email-decl>
 ```

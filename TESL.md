@@ -538,7 +538,7 @@ The short version: if it's a proof or a capability, the static cost is zero. If 
 | Type-safe DB results | Every `select` and `insert` auto-annotates with `FromDb` origin proof |
 | Schema from entity declarations | Tables created from `entity` blocks; missing columns flagged at startup |
 | Background jobs, no Redis | `queue` + `worker` declarative syntax, backed by PostgreSQL |
-| Real-time push, one port | `sse` + `channel` on standard HTTP; browser `EventSource` reconnects automatically |
+| Real-time push, one port | `sse` + `sseChannel` on standard HTTP; browser `EventSource` reconnects automatically |
 | Dead-letter queues built in | `deadWorker` handles exhausted retries declaratively |
 | Property-based tests | `property` blocks built into the language, no library needed |
 
