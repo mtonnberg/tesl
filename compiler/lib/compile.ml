@@ -870,7 +870,8 @@ let definition_in_top_decl env line col (decl : Ast.top_decl) =
          | Some _ as result -> result
          | None -> None)
   | Ast.DDatabase _ | Ast.DCapability _ | Ast.DQueue _
-  | Ast.DWorkers _ | Ast.DServer _ | Ast.DFact _ | Ast.DCache _ | Ast.DEmail _ -> None
+  | Ast.DWorkers _ | Ast.DServer _ | Ast.DFact _ | Ast.DCache _ | Ast.DEmail _
+  | Ast.DAgent _ -> None
 
 let collect_definition_env (m : Ast.module_form) =
   List.fold_left (fun env decl ->
@@ -902,6 +903,7 @@ let collect_definition_env (m : Ast.module_form) =
       add_type_def env f.name (precise_name_loc f.loc f.name)
     | Ast.DCache c -> add_term_def env c.name (precise_name_loc c.loc c.name)
     | Ast.DEmail e -> add_term_def env e.name (precise_name_loc e.loc e.name)
+    | Ast.DAgent a -> add_term_def env a.name (precise_name_loc a.loc a.name)
   ) empty_definition_env m.decls
 
 let definition_source filename source line col =
@@ -1396,6 +1398,7 @@ let resolve_symbol_in_top_decl env line col (decl : Ast.top_decl) =
   | Ast.DFact f -> let name_loc = precise_name_loc f.loc f.name in if loc_contains_position name_loc line col then Some (type_symbol f.name name_loc) else None
   | Ast.DCache c -> let name_loc = precise_name_loc c.loc c.name in if loc_contains_position name_loc line col then Some (term_symbol c.name name_loc) else None
   | Ast.DEmail e -> let name_loc = precise_name_loc e.loc e.name in if loc_contains_position name_loc line col then Some (term_symbol e.name name_loc) else None
+  | Ast.DAgent a -> let name_loc = precise_name_loc a.loc a.name in if loc_contains_position name_loc line col then Some (term_symbol a.name name_loc) else None
 
 let rec collect_occurrences_in_type_expr env target (te : Ast.type_expr) =
   match te with
@@ -1735,6 +1738,7 @@ let rec collect_occurrences_in_top_decl env target (decl : Ast.top_decl) =
   | Ast.DFact f -> let name_loc = precise_name_loc f.loc f.name in if symbol_equal (type_symbol f.name name_loc) target then [name_loc] else []
   | Ast.DCache c -> let name_loc = precise_name_loc c.loc c.name in if symbol_equal (term_symbol c.name name_loc) target then [name_loc] else []
   | Ast.DEmail e -> let name_loc = precise_name_loc e.loc e.name in if symbol_equal (term_symbol e.name name_loc) target then [name_loc] else []
+  | Ast.DAgent a -> let name_loc = precise_name_loc a.loc a.name in if symbol_equal (term_symbol a.name name_loc) target then [name_loc] else []
 
 and collect_occurrences_in_return_spec ?(locals = []) env target ret =
   let in_proof = collect_occurrences_in_proof env locals target in
@@ -1864,6 +1868,7 @@ let top_decl_loc (decl : Ast.top_decl) : Location.loc =
   | Ast.DWorkers w -> w.loc
   | Ast.DCache c -> c.loc
   | Ast.DEmail e -> e.loc
+  | Ast.DAgent a -> a.loc
   | Ast.DCapture c -> c.loc
   | Ast.DApi a -> a.loc
   | Ast.DServer s -> s.loc
@@ -1916,6 +1921,7 @@ let config_decl_expr (d : Ast.top_decl) : Ast.expr option =
   | Ast.DChannel r  -> r.config_expr
   | Ast.DCache r    -> r.config_expr
   | Ast.DEmail r    -> r.config_expr
+  | Ast.DAgent r    -> r.config_expr
   | _ -> None
 
 (* Type name a typed-config record was hinted with (`Database`, `SmtpConfig`,

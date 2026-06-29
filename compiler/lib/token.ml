@@ -47,6 +47,7 @@ type t =
   | WORKERS
   | DEAD_WORKERS         (** deadWorkers *)
   | CACHE                (** cache *)
+  | AGENT                (** agent *)
   | EMAIL                (** email *)
   | SMTP                 (** smtp *)
   | CAPABILITY
@@ -152,7 +153,7 @@ let pp fmt t =
     | SCHEMA -> "schema" | API -> "api" | SERVER -> "server"
     | FOR -> "for" | QUEUE -> "queue" | CHANNEL -> "channel"
     | WORKERS -> "workers" | DEAD_WORKERS -> "deadWorkers" | CACHE -> "cache"
-    | EMAIL -> "email" | SMTP -> "smtp"
+    | EMAIL -> "email" | SMTP -> "smtp" | AGENT -> "agent"
     | CAPABILITY -> "capability" | IMPLIES -> "implies"
     | CASE -> "case" | OF -> "of" | LET -> "let" | IF -> "if"
     | THEN -> "then" | ELSE -> "else" | OK -> "ok" | FAIL -> "fail"

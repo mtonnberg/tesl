@@ -133,6 +133,8 @@
          replyToolCalls
          decodeAs
          askFor
+         ;; Declarative `agent { tools: [fn...] }` lowering helper
+         tesl-agent-decode-args
          ;; Wave 2b — conversation
          Conversation
          Conversation?
@@ -253,6 +255,40 @@
   (unless (procedure? d)
     (raise-user-error 'tool "dispatch must be a function a -> String, got ~e" d))
   (tool-spec (raw-value name) (raw-value description) (raw-value schema) v d))
+
+;;; tesl-agent-decode-args : args-json-string × (listof (cons key type-tag)) -> (listof value)
+;;; The validator the declarative `agent { tools: [fn...] }` lowering installs for a
+;;; tool: decode the model's tool-call arguments JSON into the tool function's
+;;; positional parameters, type-checking each value against the parameter's base
+;;; type.  A non-object payload, a missing field, or a type mismatch RAISES — the
+;;; tool-call loop turns that into an is_error tool_result so the model can retry.
+;;; Self-contained (only `json` + raw-value), so no codec-registry entry is needed
+;;; for a primitive-typed tool parameter.
+(define (tesl-agent-decode-args args-json specs)
+  (define j
+    (with-handlers ([exn:fail?
+                     (lambda (e)
+                       (raise-user-error 'tool "arguments were not valid JSON: ~a"
+                                         (exn-message e)))])
+      (string->jsexpr (raw-value args-json))))
+  (unless (hash? j)
+    (raise-user-error 'tool "expected a JSON object of arguments, got ~e" j))
+  (for/list ([s (in-list specs)])
+    (define key (car s))
+    (define tag (cdr s))
+    (define v (hash-ref j (string->symbol key)
+                        (lambda ()
+                          (raise-user-error 'tool "missing required argument: ~a" key))))
+    (case tag
+      [(string) (if (string? v) v
+                    (raise-user-error 'tool "argument ~a must be a string" key))]
+      [(int)    (if (exact-integer? v) v
+                    (raise-user-error 'tool "argument ~a must be an integer" key))]
+      [(float)  (if (real? v) (exact->inexact v)
+                    (raise-user-error 'tool "argument ~a must be a number" key))]
+      [(bool)   (if (boolean? v) v
+                    (raise-user-error 'tool "argument ~a must be a boolean" key))]
+      [else     (raise-user-error 'tool "unsupported argument type for ~a" key)])))
 
 ;;; withTools : Agent -> List Tool -> Agent
 (define (withTools the-agent tools)

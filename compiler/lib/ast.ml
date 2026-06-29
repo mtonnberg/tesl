@@ -352,6 +352,31 @@ type cache_form = {
   loc         : loc;
 }
 
+(** A declarative AI agent:
+      agent SupportAgent requires [supportAi] = Agent {
+        provider:     anthropic            -- anthropic | openai | local
+        model:        "claude-opus-4-8"
+        apiKey:       env "ANTHROPIC_API_KEY"
+        systemPrompt: "You are a concise support agent."
+        tools:        [lookupOrder, refundOrder]
+        maxTokens:    1500
+      }
+    The parser leaves everything in [config_expr]; {!Desugar.desugar_agent_config}
+    extracts the structured fields the emitter reads (same pattern as queue/cache). *)
+type agent_form = {
+  name          : string;
+  capabilities  : string list;      (** from `requires [...]` — bounds the tools' authority *)
+  provider      : string;           (** "anthropic" | "openai" | "local" (desugar fills) *)
+  model         : string;           (** rendered config value: literal or env("X") *)
+  api_key       : string;           (** rendered config value: literal or env("X") *)
+  endpoint      : string;           (** rendered; used when provider = local *)
+  system_prompt : string;           (** rendered config value *)
+  max_tokens    : int;              (** desugar fills; default 1024 *)
+  tools         : string list;      (** tool function names (referenced like server handlers) *)
+  config_expr   : expr option;      (** `= Agent { … }` RHS; desugar lifts the fields above *)
+  loc           : loc;
+}
+
 type smtp_config = {
   host     : string;
   port     : int;
@@ -550,6 +575,7 @@ type top_decl =
   | DChannel    of channel_form
   | DWorkers    of workers_form
   | DCache      of cache_form
+  | DAgent      of agent_form
   | DEmail      of email_form
   | DCapture    of capture_form
   | DApi        of api_form

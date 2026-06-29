@@ -3448,8 +3448,14 @@ let emit_requires ctx (m : module_form) =
      runtime eagerly. *)
   let has_cache = List.exists (function Ast.DCache _ -> true | _ -> false) m.decls in
   let has_email = List.exists (function Ast.DEmail _ -> true | _ -> false) m.decls in
+  let has_agent = List.exists (function Ast.DAgent _ -> true | _ -> false) m.decls in
   if has_cache then emit_line ctx "  tesl/tesl/cache";
   if has_email then emit_line ctx "  tesl/tesl/email";
+  (* A declarative `agent { … }` block lowers to the Tesl.Agent library constructors.
+     Require them under a private prefix so the lowering works regardless of what the
+     module chose to `expose`-import, and never collides with a user's own imports. *)
+  if has_agent then
+    emit_line ctx "  (prefix-in __tart_ (only-in tesl/tesl/agent defineAgent withTools tool anthropic openai local tesl-agent-decode-args))";
   if needs_runtime_path then
     emit_line ctx "  racket/runtime-path";
 
@@ -5087,6 +5093,85 @@ let emit_server ctx (sv : server_form) =
   emit_line ctx ")";
   emit_nl ctx
 
+(* ── Declarative agent block ────────────────────────────────────────────────
+   Lowers `agent X requires [...] = Agent { provider, model, apiKey, systemPrompt,
+   tools: [fn...], maxTokens }` to a runtime agent value built from the existing
+   Tesl.Agent library constructors (defineAgent + withTools + tool).  Each tool is a
+   typed Tesl function: its JSON Schema is DERIVED from the parameter types, and the
+   model's tool-call arguments are decoded into the function's positional parameters
+   under the hood — no hand-written schema string or validator. *)
+
+(* base type -> the type tag tesl-agent-decode-args understands (None = unsupported) *)
+let agent_arg_type_tag (t : Ast.type_expr) : string option =
+  match t with
+  | TName { name = "String"; _ }      -> Some "string"
+  | TName { name = "Int"; _ }         -> Some "int"
+  | TName { name = "PosixMillis"; _ } -> Some "int"
+  | TName { name = "Float"; _ }       -> Some "float"
+  | TName { name = "Bool"; _ }        -> Some "bool"
+  | _                                 -> None
+
+(* base type -> JSON Schema property fragment *)
+let agent_arg_schema_prop (t : Ast.type_expr) : string =
+  match t with
+  | TName { name = "Int"; _ } | TName { name = "PosixMillis"; _ } -> {|{"type":"integer"}|}
+  | TName { name = "Float"; _ } -> {|{"type":"number"}|}
+  | TName { name = "Bool"; _ }  -> {|{"type":"boolean"}|}
+  | _ -> {|{"type":"string"}|}
+
+(* JSON Schema object string derived from a tool function's parameter list *)
+let agent_tool_schema_json (params : Ast.binding list) : string =
+  let props = List.map (fun (b : Ast.binding) ->
+    Printf.sprintf "%S:%s" b.name (agent_arg_schema_prop b.type_expr)) params in
+  let required = List.map (fun (b : Ast.binding) -> Printf.sprintf "%S" b.name) params in
+  Printf.sprintf {|{"type":"object","properties":{%s},"required":[%s]}|}
+    (String.concat "," props) (String.concat "," required)
+
+let emit_agent ctx (decls : Ast.top_decl list) (a : Ast.agent_form) =
+  let find_fn name =
+    List.find_map (function Ast.DFunc fd when fd.name = name -> Some fd | _ -> None) decls in
+  let emit_provider () =
+    let kind = if a.provider = "" then "anthropic" else a.provider in
+    match kind with
+    | "local" ->
+      emit ctx "(__tart_local "; emit_postgres_value ctx a.endpoint;
+      emit ctx " "; emit_postgres_value ctx a.model; emit ctx ")"
+    | "openai" ->
+      emit ctx "(__tart_openai "; emit_postgres_value ctx a.api_key;
+      emit ctx " "; emit_postgres_value ctx a.model; emit ctx ")"
+    | _ ->
+      emit ctx "(__tart_anthropic "; emit_postgres_value ctx a.api_key;
+      emit ctx " "; emit_postgres_value ctx a.model; emit ctx ")"
+  in
+  emit_line ctx (Printf.sprintf "(define %s" a.name);
+  emit ctx "  (__tart_withTools (__tart_defineAgent ";
+  emit_provider ();
+  emit ctx (Printf.sprintf " %S %d)" a.system_prompt a.max_tokens);
+  emit_nl ctx;
+  emit ctx "    (list";
+  List.iter (fun tool_name ->
+    match find_fn tool_name with
+    | None -> ()  (* validation has already reported the missing tool *)
+    | Some fd ->
+      let schema = agent_tool_schema_json fd.params in
+      let desc = tool_name in  (* TODO(doc-harvest): use the fn's doc-comment *)
+      emit_nl ctx;
+      emit ctx (Printf.sprintf "      (__tart_tool %S %S %S" tool_name desc schema);
+      emit_nl ctx;
+      (* validator: decode the model's args JSON into the fn's positional params *)
+      emit ctx "        (lambda (_args) (__tart_tesl-agent-decode-args _args (list";
+      List.iter (fun (b : Ast.binding) ->
+        match agent_arg_type_tag b.type_expr with
+        | Some tag -> emit ctx (Printf.sprintf " (cons %S '%s)" b.name tag)
+        | None -> ()) fd.params;
+      emit ctx ")))";
+      emit_nl ctx;
+      (* dispatch: apply the typed Tesl function; the loop stringifies the result *)
+      emit ctx (Printf.sprintf "        (lambda (_decoded) (apply %s _decoded)))" tool_name)
+  ) a.tools;
+  emit_line ctx ")))";
+  emit_nl ctx
+
 let emit_test ctx (t : test_form) =
   Hashtbl.clear ctx.proof_locals;
   let property_runs = match t.runs with Some n -> n | None -> 200 in
@@ -6012,6 +6097,7 @@ let top_decl_loc_label (d : top_decl) : Location.loc * string =
   | DChannel c    -> c.loc, Printf.sprintf "channel %s" c.name
   | DWorkers w    -> w.loc, Printf.sprintf "workers %s" w.name
   | DCache c      -> c.loc, Printf.sprintf "cache %s" c.name
+  | DAgent a      -> a.loc, Printf.sprintf "agent %s" a.name
   | DEmail e      -> e.loc, Printf.sprintf "email %s" e.name
   | DCapture c    -> c.loc, Printf.sprintf "capture %s" c.name
   | DApi a        -> a.loc, Printf.sprintf "api %s" a.name
@@ -6217,6 +6303,7 @@ let emit_module ctx (m : module_form) =
        | None -> ());
       emit_line ctx ")";
       emit_nl ctx
+    | DAgent a -> emit_agent ctx m.decls a
     | DEmail e ->
       emit ctx (Printf.sprintf "(define-email %s #:database %s" e.name e.database);
       emit ctx " #:smtp-host ";

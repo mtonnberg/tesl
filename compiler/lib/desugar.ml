@@ -395,6 +395,39 @@ let desugar_cache_config (c : cache_form) : cache_form =
       | None -> c.value_type in
     { c with database; default_ttl; value_type; config_expr = None }
 
+(* Lift the `= Agent { … }` record into the structured fields the emitter reads.
+   `provider:` is a bare identifier (anthropic|openai|local); `tools:` is a list of
+   bare function names (like a server's handler bindings); `apiKey`/`model`/
+   `endpoint`/`systemPrompt` render to the emitter's intermediate strings (literal
+   or env("X")). *)
+let desugar_agent_config (a : agent_form) : agent_form =
+  match a.config_expr with
+  | None -> a
+  | Some e ->
+    let top = config_record_fields e in
+    let provider = match List.assoc_opt "provider" top with
+      | Some (EVar { name; _ }) -> String.lowercase_ascii name
+      | Some v -> (match config_ctor_name v with
+          | Some n -> String.lowercase_ascii n
+          | None -> Option.value ~default:"anthropic" (string_value v))
+      | None -> "anthropic" in
+    let render key = match List.assoc_opt key top with
+      | Some v -> render_config_value v | None -> "" in
+    let model = render "model" in
+    let api_key = render "apiKey" in
+    let endpoint = render "endpoint" in
+    let system_prompt = render "systemPrompt" in
+    let max_tokens = match List.assoc_opt "maxTokens" top with
+      | Some v -> Option.value ~default:1024 (int_value v) | None -> 1024 in
+    let tools = match List.assoc_opt "tools" top with
+      | Some (EList { elems; _ }) ->
+        List.filter_map (function
+          | EVar { name; _ } -> Some name
+          | el -> config_ctor_name el) elems
+      | _ -> [] in
+    { a with provider; model; api_key; endpoint; system_prompt;
+             max_tokens; tools; config_expr = None }
+
 let desugar_decl (queues : (string, string) Hashtbl.t) (d : top_decl) : top_decl =
   match d with
   | DFunc fd -> DFunc { fd with body = desugar_expr queues fd.body }
@@ -404,6 +437,7 @@ let desugar_decl (queues : (string, string) Hashtbl.t) (d : top_decl) : top_decl
   | DEmail em -> DEmail (desugar_email_config em)
   | DChannel c -> DChannel (desugar_channel_config c)
   | DCache c -> DCache (desugar_cache_config c)
+  | DAgent a -> DAgent (desugar_agent_config a)
   | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _
   | DCapability _ | DWorkers _
   | DCapture _ | DApi _ | DServer _ | DTest _ | DApiTest _

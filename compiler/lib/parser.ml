@@ -180,7 +180,7 @@ let token_as_ident = function
   | FACT -> Some "fact" | RECORD -> Some "record" | ENTITY -> Some "entity" | TABLE -> Some "table"
   | DATABASE -> Some "database" | API -> Some "api" | SERVER -> Some "server"
   | QUEUE -> Some "queue" | CHANNEL -> Some "channel" | WORKERS -> Some "workers" | CACHE -> Some "cache"
-  | EMAIL -> Some "email" | SMTP -> Some "smtp"
+  | EMAIL -> Some "email" | SMTP -> Some "smtp" | AGENT -> Some "agent"
   | CAPABILITY -> Some "capability" | CASE -> Some "case" | OF -> Some "of"
   | LET -> Some "let" | IF -> Some "if" | THEN -> Some "then" | ELSE -> Some "else"
   | OK -> Some "ok" | FAIL -> Some "fail" | REQUIRES -> Some "requires"
@@ -3630,6 +3630,30 @@ let parse_cache_form s =
            default_ttl = None;
            config_expr = Some (hint_expr_type type_name body); loc }
 
+(** Parse an agent block:
+      agent SupportAgent requires [supportAi] = Agent {
+        provider:     anthropic
+        model:        "claude-opus-4-8"
+        apiKey:       env "ANTHROPIC_API_KEY"
+        systemPrompt: "You are a concise support agent."
+        tools:        [lookupOrder, refundOrder]
+        maxTokens:    1500
+      }
+    Everything is left in [config_expr]; {!Desugar.desugar_agent_config} lifts the
+    structured fields the emitter reads (same pattern as queue/cache/email). *)
+let parse_agent_form s =
+  let loc0 = current_loc s in
+  let* name = expect_uident s in
+  let* reqs = parse_requires s in
+  let* _ = expect s EQ in
+  let* type_name = expect_uident s in
+  let* body = parse_record_literal s in
+  let loc = span loc0 (current_loc s) in
+  return { Ast.name; capabilities = reqs;
+           provider = ""; model = ""; api_key = ""; endpoint = "";
+           system_prompt = ""; max_tokens = 0; tools = [];
+           config_expr = Some (hint_expr_type type_name body); loc }
+
 (** Parse an email declaration:
       email AppEmail = Email {
         database: MainDB
@@ -4683,6 +4707,13 @@ and parse_top_decl s =
     advance s;
     let* c = parse_cache_form s in
     return (DCache c)
+  | IDENT "agent" when (match peek2 s with UIDENT _ -> true | _ -> false) ->
+    (* `agent` is a CONTEXTUAL keyword: a block-starter only when a top-level
+       declaration begins `agent <Name>`.  Everywhere else it is an ordinary
+       identifier, so the AI library can bind `let agent = …` freely. *)
+    advance s;
+    let* a = parse_agent_form s in
+    return (DAgent a)
   | EMAIL ->
     advance s;
     let* e = parse_email_form s in

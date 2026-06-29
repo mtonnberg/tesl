@@ -3008,7 +3008,8 @@ let collect_in_scope_type_names (m : module_form) : string list =
     | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
     | DType (TypeAlias { name; _ }) | DRecord { name; _ }
     | DEntity { name; _ } | DFact { name; _ }
-    | DQueue { name; _ } | DChannel { name; _ } | DCache { name; _ } -> Some name
+    | DQueue { name; _ } | DChannel { name; _ } | DCache { name; _ }
+    | DAgent { name; _ } -> Some name
     | _ -> None
   ) m.decls in
   let imported = List.concat_map (fun (imp : import_decl) ->
@@ -3434,7 +3435,7 @@ let check_api_test_scope ctx (m : module_form) seed_stmts stmts =
   let decl_type_names = List.filter_map (function
     | DQueue { name; _ } | DChannel { name; _ } | DFact { name; _ }
     | DCapability { name; _ } | DServer { name; _ } | DCache { name; _ }
-    | DEmail { name; _ } -> Some name
+    | DEmail { name; _ } | DAgent { name; _ } -> Some name
     | _ -> None
   ) m.decls in
   (* Names explicitly imported from Tesl.* stdlib modules via `exposing [...]`.
@@ -3712,8 +3713,54 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
         Some ("__cache_" ^ c.name, mono ty)
       | _ -> None
     ) m.decls in
-    { ctx with env = cache_bindings @ ctx.env }
+    (* A declarative `agent X = Agent { … }` binds the bare name [X] to type
+       [Agent], so it resolves as a value where `ask`/`askReply`/`askWith` expect
+       one (mirroring how a server name is a value). *)
+    let agent_bindings = List.filter_map (function
+      | DAgent (a : Ast.agent_form) ->
+        Some (a.name, mono (ty_of_type_expr (Ast.TName { name = "Agent"; loc = a.loc })))
+      | _ -> None
+    ) m.decls in
+    { ctx with env = agent_bindings @ cache_bindings @ ctx.env }
   in
+
+  (* 3c. Validate declarative agent blocks: every tool must resolve to a local
+     `fn` whose parameters are JSON-decodable primitives (the model's tool-call
+     arguments are decoded from JSON through the codec path).  The agent's tools
+     live in [config_expr] until the desugar pass runs (after the checker), so read
+     them from there. *)
+  List.iter (function
+    | DAgent (a : Ast.agent_form) ->
+      let tool_refs =
+        match a.config_expr with
+        | Some e ->
+          let fields = (match e with
+            | Ast.ERecord { fields; _ } -> fields
+            | Ast.EApp { fn = Ast.EConstructor _; arg = Ast.ERecord { fields; _ }; _ } -> fields
+            | _ -> []) in
+          (match List.assoc_opt "tools" fields with
+           | Some (Ast.EList { elems; _ }) ->
+             List.filter_map (function Ast.EVar { name; loc } -> Some (name, loc) | _ -> None) elems
+           | _ -> [])
+        | None -> List.map (fun n -> (n, a.loc)) a.tools
+      in
+      List.iter (fun (tn, tloc) ->
+        match List.find_opt (function DFunc fd -> fd.name = tn | _ -> false) m.decls with
+        | Some (DFunc fd) ->
+          List.iter (fun (b : Ast.binding) ->
+            let ok = match b.type_expr with
+              | Ast.TName { name = ("String" | "Int" | "Float" | "Bool" | "PosixMillis"); _ } -> true
+              | _ -> false in
+            if not ok then
+              add_error ctx b.loc (Printf.sprintf
+                "agent '%s': tool '%s' parameter '%s' must be String, Int, Float, Bool, or PosixMillis — agent tool arguments are decoded from the model's JSON"
+                a.name tn b.name)
+          ) fd.params
+        | _ ->
+          add_error ctx tloc (Printf.sprintf
+            "agent '%s': tool '%s' is not a function declared in this module" a.name tn)
+      ) tool_refs
+    | _ -> ()) m.decls;
 
   (* 4. Type-check each declaration *)
   List.iter (fun decl ->
@@ -3862,6 +3909,7 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
     | DDatabase db -> [db.name]
     | DApi api -> [api.name]
     | DServer srv -> [srv.name]
+    | DAgent a -> [a.name]
     | DQueue q -> [q.name]
     | DChannel ch -> [ch.name]
     | DCapability cap -> [cap.name]

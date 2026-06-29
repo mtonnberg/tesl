@@ -653,7 +653,7 @@ let collect_decl_names acc (d : Ast.top_decl) =
       | _ -> a
     ) acc df.postgres
   | DConst _ | DQueue _ | DChannel _
-  | DWorkers _ | DCache _ | DEmail _ -> acc
+  | DWorkers _ | DCache _ | DEmail _ | DAgent _ -> acc
   | DCapability cf ->
     List.fold_left (fun a c -> c :: a) acc cf.implies
 
