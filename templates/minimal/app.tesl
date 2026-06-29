@@ -32,6 +32,7 @@ defaultPort = 8088
 # data, so it uses the in-memory backend with no entities — swap in a `Postgres`
 # backend (see the `api` template) the moment you add an `entity`.
 database AppDatabase = Database {
+  entities: []
   backend: Memory
 }
 
