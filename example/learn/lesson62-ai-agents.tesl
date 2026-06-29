@@ -1,0 +1,121 @@
+#lang tesl
+module Lesson62AiAgents exposing [WeatherAgent, getWeather, bookTable]
+
+import Tesl.Prelude exposing [Int, String]
+import Tesl.String exposing [String.concat]
+import Tesl.Agent exposing [
+  aiProvider,
+  mockToolProvider,
+  toolUseStep,
+  textStep,
+  askWith,
+  replyText,
+  replyToolCalls,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 62 — AI agents and typed-function tools
+#
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# An AI agent is a declarative block. You give it a provider, a system prompt, and
+# a list of `tools` — which are ORDINARY typed Tesl functions referenced by name:
+#
+#   agent MyAgent requires [myAi] = Agent {
+#     provider:     anthropic            -- anthropic | openai | local
+#     model:        "claude-opus-4-8"
+#     apiKey:       env "ANTHROPIC_API_KEY"
+#     systemPrompt: "..."
+#     tools:        [toolFnA, toolFnB]
+#     maxTokens:    512
+#   }
+#
+# What the compiler does for you, under the hood:
+#   * derives each tool's JSON Schema from the function's PARAMETER TYPES;
+#   * decodes the model's tool-call arguments into those typed parameters through
+#     the same codec path an HTTP body uses (a missing/ill-typed argument becomes a
+#     retryable tool error, never an ill-typed call into your function);
+#   * uses the function's doc-comment as the tool's description.
+# You write no JSON schema and no argument-parsing glue.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# THE AI BOUNDARY IS A CAPABILITY
+# ─────────────────────────────────────────────────────────────────────────────
+# A real provider performs outbound HTTP, so running inference requires the
+# `aiProvider` capability. Declare a domain capability that implies it:
+
+capability myAi implies aiProvider
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TOOLS ARE TYPED FUNCTIONS
+# ─────────────────────────────────────────────────────────────────────────────
+# Each tool is a normal function. Its parameters must be JSON-decodable primitives
+# (String / Int / Float / Bool / PosixMillis). The leading doc-comment becomes the
+# tool description the model reads when choosing a tool.
+
+# Look up the current weather for a city.
+fn getWeather(city: String) -> String =
+  String.concat "It is sunny in " city
+
+# Book a table for a number of guests at a restaurant.
+fn bookTable(restaurant: String, guests: Int) -> String =
+  if guests > 0 then
+    String.concat "Booked a table at " restaurant
+  else
+    "Need at least one guest to book a table"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE AGENT
+# ─────────────────────────────────────────────────────────────────────────────
+# provider/model/apiKey are the static production default. Tests override the
+# provider per call with a scripted mock, so the agent value is identical in
+# production and under test.
+
+agent WeatherAgent requires [myAi] = Agent {
+  provider: anthropic
+  model: "claude-opus-4-8"
+  apiKey: env "ANTHROPIC_API_KEY"
+  systemPrompt: "You are a helpful concierge. Use the tools to answer."
+  tools: [getWeather, bookTable]
+  maxTokens: 512
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DETERMINISTIC TESTS — no API key, no network, no cost
+# ─────────────────────────────────────────────────────────────────────────────
+# `mockToolProvider` scripts exactly what the model "says": a `toolUseStep` is the
+# model requesting a tool call (with the raw arguments JSON it produced); a
+# `textStep` is the model's final reply. `askWith` runs the agent against the mock.
+# The tool's NAME is its function name, so the model calls `getWeather`.
+
+test "the model calls a typed tool; its String arg is decoded and dispatched" requires [myAi] {
+  let call = toolUseStep "getWeather" "c1" "{\"city\":\"Paris\"}"
+  let final = textStep "It is sunny in Paris right now."
+  let mock = mockToolProvider [call, final]
+  let reply = askWith WeatherAgent "What is the weather in Paris?" mock
+  expect (replyText reply) == "It is sunny in Paris right now."
+  expect (replyToolCalls reply) == 1
+}
+
+# A multi-parameter tool: the model supplies a JSON object; each field is decoded
+# into the corresponding typed parameter (String + Int).
+test "a multi-parameter tool decodes each argument by type" requires [myAi] {
+  let call = toolUseStep "bookTable" "c1" "{\"restaurant\":\"Chez Tesl\",\"guests\":4}"
+  let final = textStep "All set!"
+  let mock = mockToolProvider [call, final]
+  let reply = askWith WeatherAgent "Book Chez Tesl for 4" mock
+  expect (replyText reply) == "All set!"
+  expect (replyToolCalls reply) == 1
+}
+
+# Malformed arguments (a missing required field) become a retryable tool error, not
+# an ill-typed call and not a crash: the loop continues and the model still replies.
+test "malformed tool arguments do not reach the function and do not crash the run" requires [myAi] {
+  let call = toolUseStep "getWeather" "c1" "{\"wrong\":\"field\"}"
+  let final = textStep "I could not look that up."
+  let mock = mockToolProvider [call, final]
+  let reply = askWith WeatherAgent "weather?" mock
+  expect (replyText reply) == "I could not look that up."
+  expect (replyToolCalls reply) == 1
+}

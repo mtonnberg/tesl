@@ -7,10 +7,11 @@ you script exactly what the model "says" — its text replies *and* its tool-use
 requests — and then assert on the structured outcome in ordinary `test "..."`
 blocks. No API keys, no network, no cost, no flakiness, fully reproducible in CI.
 
-The agent code under test is **identical** whether it runs against a real provider
-or a mock. You build the agent once (parameterised over its `LlmProvider`), pass a
-real `aiProvider ...` in production and a `mockProvider`/`mockToolProvider` in
-tests. Nothing about the agent changes — only what feeds it.
+The agent under test is **identical** whether it runs against a real provider or a
+mock. You declare the agent once with the `agent { … }` block; its provider/model/
+key are the production default, and tests override the provider per call with a
+`mockProvider`/`mockToolProvider` via `askWith`. Nothing about the agent changes —
+only what feeds it.
 
 The complete, runnable showcase is
 [`example/support-assistant.tesl`](../example/support-assistant.tesl): a
@@ -51,7 +52,8 @@ inspect:
 - `replyTokens reply` — the token usage reported by the (mock) provider.
 - `decodeAs "T" json` — decode a JSON string into a typed value `T` through the
   same proof-carrying codec path an HTTP request body uses. Raises on malformed
-  input. This is the foundation of both tool-arg validation and structured output.
+  input. It is the foundation of structured output; tool arguments are decoded
+  through the same codec path, derived from each tool function's parameter types.
 - `askFor agent prompt decoder maxRetries` — ask for **structured output**: run
   inference, decode the reply with `decoder`, and retry (up to `maxRetries`) if
   the decode fails. Returns the typed value; only a well-typed value escapes.
@@ -64,20 +66,20 @@ with `conversationLength` and `conversationJson` (which also lets you persist an
 
 ## Asserting tool dispatch and validated arguments
 
-A tool is built with `tool name desc schemaJson validateFn dispatchFn` and attached
-with `withTools agent [t1, t2]`. The model's raw arguments JSON is fed through
-`validateFn` (typically `decodeAs "Args" argsJson`) **before** `dispatchFn` ever
-runs, so dispatch only ever sees a validated, typed value — never raw JSON. Because
-dispatch reads typed fields, asserting on the final reply proves validation
+Tools are ordinary typed Tesl functions listed in the agent's `tools: [ … ]`. The
+compiler **derives** each tool's JSON schema from the function's parameter types and
+decodes the model's tool-call arguments into those typed parameters under the hood —
+there is no hand-written schema and no validator function. A tool's **name is its
+function name**, so the model "calls" `lookupOrder`. Because the function only ever
+receives decoded, typed arguments, asserting on the final reply proves the decode
 happened.
 
 ```tesl
-test "lookup tool: validated args reach dispatch and the loop returns a final reply" requires [supportBot] {
-  let call = toolUseStep "lookup_order" "call_1" "{\"orderId\":\"A-100\"}"
+test "lookup tool: derived-schema args reach the typed fn and the loop returns a reply" requires [supportBot] {
+  let call = toolUseStep "lookupOrder" "call_1" "{\"orderId\":\"A-100\"}"
   let final = textStep "Your order A-100 has shipped."
   let mock = mockToolProvider [call, final]
-  let agent = supportAgent mock
-  let reply = askReply agent "Where is my order A-100?"
+  let reply = askWith SupportAgent "Where is my order A-100?" mock
   expect (replyText reply) == "Your order A-100 has shipped."
   expect (replyToolCalls reply) == 1
 }
@@ -86,7 +88,7 @@ test "lookup tool: validated args reach dispatch and the loop returns a final re
 ### Malformed model output can't reach your code — and can't crash the run
 
 If the model sends arguments that don't validate (e.g. a missing required field),
-`validateFn`'s `decodeAs` raises, and the agent loop turns that into a
+the derived argument decoder raises, and the agent loop turns that into a
 `tool_result` flagged `is_error` and **keeps going** — the model gets the error
 back and can recover. The run does not throw. You assert this deterministically by
 scripting bad args followed by a recovery text reply, then checking you still got a

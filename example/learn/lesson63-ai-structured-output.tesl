@@ -1,0 +1,111 @@
+#lang tesl
+module Lesson63AiStructuredOutput exposing [
+  Assistant,
+  classifyPriority,
+  Priority,
+]
+
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Json exposing [stringCodec, intCodec]
+import Tesl.Agent exposing [
+  aiProvider,
+  LlmProvider,
+  mockProvider,
+  defineAgent,
+  askWith,
+  askFor,
+  decodeAs,
+  replyText,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 63 — Structured output, and bring-your-own-key (BYOK)
+#
+# Two patterns that pair with the declarative agent block from lesson 62:
+#   1. STRUCTURED OUTPUT — fuzzy text in, a typed proof-carrying value out.
+#   2. PER-USER PROVIDERS (BYOK) — the same agent, different credentials per call.
+# ─────────────────────────────────────────────────────────────────────────────
+
+capability assistantAi implies aiProvider
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. STRUCTURED OUTPUT
+# ─────────────────────────────────────────────────────────────────────────────
+# `askFor` runs inference, decodes the model's reply into a typed value with a
+# codec, and RETRIES (up to a bound) if the decode fails — so a flaky or malformed
+# model reply can never smuggle an invalid value past the type boundary. Only a
+# well-typed value escapes.
+
+record Priority {
+  level: Int
+  reason: String
+}
+
+codec Priority {
+  toJson_forbidden
+  fromJson [
+    {
+      level <- "level" with_codec intCodec
+      reason <- "reason" with_codec stringCodec
+    }
+  ]
+}
+
+fn decodePriority(j: String) -> Priority =
+  decodeAs "Priority" j
+
+# One-shot typed extraction. Parameterised over the provider so the SAME code runs
+# against a real model in production and a scripted mock in tests.
+fn classifyPriority(provider: LlmProvider, ticket: String) -> Priority
+  requires [assistantAi] =
+  let agent = defineAgent provider "Classify the ticket's priority as JSON." 256
+  askFor agent ticket decodePriority 2
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. THE AGENT (static behaviour) + BYOK (per-call provider)
+# ─────────────────────────────────────────────────────────────────────────────
+# The agent declares the static behaviour (system prompt, tools, capabilities, the
+# DEFAULT provider). Different users can supply different credentials/providers at
+# the call site with `askWith` — the agent's behaviour never changes with whose key
+# is used; only who pays and which model answers.
+
+agent Assistant requires [assistantAi] = Assistant {
+  provider: anthropic
+  model: "claude-opus-4-8"
+  apiKey: env "ANTHROPIC_API_KEY"
+  systemPrompt: "You are a helpful assistant. Be concise."
+  tools: []
+  maxTokens: 256
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DETERMINISTIC TESTS — no API key, no network, no cost
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Structured output on the first reply: the typed fields are asserted directly.
+test "askFor decodes a typed Priority from the model's JSON" requires [assistantAi] {
+  let mock = mockProvider ["{\"level\":1,\"reason\":\"production outage\"}"]
+  let p = classifyPriority mock "the site is down"
+  expect p.level == 1
+  expect p.reason == "production outage"
+}
+
+# Bounded retry: the model first returns junk, then valid JSON. askFor (bound 2)
+# consumes BOTH and returns the recovered typed value — proving the retry fired.
+test "askFor retries past a malformed reply, then decodes" requires [assistantAi] {
+  let mock = mockProvider ["not json", "{\"level\":3,\"reason\":\"cosmetic typo\"}"]
+  let p = classifyPriority mock "there's a small typo on the about page"
+  expect p.level == 3
+  expect p.reason == "cosmetic typo"
+}
+
+# BYOK: the SAME agent answers two different users, each with their own provider.
+# The agent's behaviour is fixed; only the per-call provider differs.
+test "the same agent runs against different per-user providers (BYOK)" requires [assistantAi] {
+  let alice = mockProvider ["Hello Alice!"]
+  let bob = mockProvider ["Hello Bob!"]
+  let replyA = askWith Assistant "hi" alice
+  let replyB = askWith Assistant "hi" bob
+  expect (replyText replyA) == "Hello Alice!"
+  expect (replyText replyB) == "Hello Bob!"
+}

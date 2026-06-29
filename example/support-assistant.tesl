@@ -1,129 +1,83 @@
 #lang tesl
-module SupportAssistant exposing [supportAgent, classifyTicket]
+module SupportAssistant exposing [SupportAgent, classifyTicket, Triage]
 
-import Tesl.Prelude exposing [Int, String, Bool, List, Unit]
-import Tesl.Json exposing [stringCodec, intCodec, boolCodec]
+import Tesl.Prelude exposing [Int, String, Bool]
+import Tesl.Json exposing [stringCodec, intCodec]
 import Tesl.String exposing [String.concat]
 import Tesl.Agent exposing [
   aiProvider,
-  Agent,
   LlmProvider,
-  AgentReply,
-  Tool,
-  ToolStep,
   mockProvider,
   mockToolProvider,
   toolUseStep,
   textStep,
   defineAgent,
-  withTools,
-  tool,
   ask,
-  askReply,
+  askWith,
   askFor,
+  decodeAs,
   replyText,
   replyToolCalls,
-  decodeAs,
 ]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # A WORKED EXAMPLE: a capability-bounded support assistant you can test with
 # ZERO API keys, ZERO network, and ZERO cost.
 #
-# This file is the developer-facing showcase for Tesl's headline AI feature:
-# AI behaviour is DETERMINISTICALLY TESTABLE. The mock provider is a first-class
-# testing primitive — you script exactly what the model "says" (text replies and
-# tool-use requests), then assert on the structured outcome: which tool ran, the
-# VALIDATED typed arguments it received, the exact tool-call sequence, the decoded
-# structured output, and bounded retries — all in plain `test "..."` blocks that
-# run under `tesl test`.
+# The headline AI feature is the DECLARATIVE `agent { ... }` block: you list the
+# provider, the system prompt, and the typed Tesl functions the model may call as
+# `tools`. The compiler DERIVES each tool's JSON schema from the function's
+# parameter types and decodes the model's tool-call arguments into those typed
+# parameters through the same codec path an HTTP body uses — there is no
+# hand-written schema string and no argument-validation boilerplate. The tool's
+# description is harvested from the function's doc-comment.
 #
-# Everything below uses ONLY today's function-first syntax: providers, agents and
-# tools are built by calling functions and passing POSITIONAL config. There is no
-# `agent { ... }` block, and bare records are positional-only (T001).
-#
-# See manual/ai-testing.md ("Testing AI features deterministically") for the
-# narrative walkthrough of the primitives used here.
+# AI behaviour is DETERMINISTICALLY TESTABLE: the agent value is the same in
+# production and in tests; tests override the provider per call with a scripted
+# `mockToolProvider` via `askWith`, then assert on the structured outcome — which
+# tool ran, the validated arguments it received, the exact tool-call sequence, and
+# bounded structured-output retries — all in plain `test "..."` blocks under
+# `tesl test`. See manual/ai-testing.md for the narrative walkthrough.
 # ══════════════════════════════════════════════════════════════════════════════
 
-# A real LlmProvider performs outbound HTTP, so anything that runs inference
-# (`ask` / `askReply` / `askFor`) requires the `aiProvider` capability. We name a
-# domain capability that implies it and grant it where inference happens. A
-# caller that does NOT declare it is a COMPILE error (V001) — see the note at the
-# bottom of this file.
+# A real provider performs outbound HTTP, so anything that runs inference
+# (`ask` / `askReply` / `askWith` / `askFor`) requires the `aiProvider` capability.
+# We name a domain capability that implies it and grant it where inference happens.
+# A caller that omits it is a COMPILE error (V001) — see the note at the bottom.
 capability supportBot implies aiProvider
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Tool 1 (read-only lookup): order status by id.
-#
-# A tool is a function the model may CALL. Its arguments arrive as a JSON string
-# the model produced; we feed that through the SAME proof-carrying decode path an
-# HTTP request body uses (a codec + decodeAs), so the dispatch function only ever
-# sees a VALIDATED typed value — never raw, unchecked JSON. If the model sends
-# malformed args, decodeAs raises, the agent loop turns that into a tool_result
-# is_error, and the loop continues (the model gets to try again or apologise).
-# ──────────────────────────────────────────────────────────────────────────────
+# Look up the shipping status of an order by its id.
+fn lookupOrder(orderId: String) -> String =
+  String.concat (String.concat "order " orderId) " is: shipped"
 
-record LookupArgs {
-  orderId: String
-}
-
-codec LookupArgs {
-  toJson_forbidden
-  fromJson [
-    {
-      orderId <- "orderId" with_codec stringCodec
-    }
-  ]
-}
-
-fn validateLookup(argsJson: String) -> LookupArgs =
-  decodeAs "LookupArgs" argsJson
-
-# Dispatch reads the TYPED field (proving validation already happened) and
-# returns the tool_result text fed back to the model.
-fn dispatchLookup(args: LookupArgs) -> String =
-  String.concat "order " (String.concat args.orderId " is: shipped")
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Tool 2 (guarded mutating action): issue a refund.
-#
-# The argument type carries the guard INSIDE the validated value: the model must
-# pass `confirmed: true`. If it is false (or missing), validation still produces a
-# typed value, but dispatch refuses to mutate and returns a refusal string — so
-# the "did we actually perform the side effect?" question is answerable purely by
-# asserting on the tool_result, deterministically, in a test.
-# ──────────────────────────────────────────────────────────────────────────────
-
-record RefundArgs {
-  orderId: String
-  confirmed: Bool
-}
-
-codec RefundArgs {
-  toJson_forbidden
-  fromJson [
-    {
-      orderId <- "orderId" with_codec stringCodec
-      confirmed <- "confirmed" with_codec boolCodec
-    }
-  ]
-}
-
-fn validateRefund(argsJson: String) -> RefundArgs =
-  decodeAs "RefundArgs" argsJson
-
-fn dispatchRefund(args: RefundArgs) -> String =
-  if args.confirmed then
-    String.concat "refund issued for order " args.orderId
+# Issue a refund for an order. The model must pass confirmed: true; the guard lives
+# inside the typed value, so "did the mutation actually happen?" is answerable by
+# asserting on the tool result, deterministically.
+fn refundOrder(orderId: String, confirmed: Bool) -> String =
+  if confirmed then
+    String.concat "refund issued for order " orderId
   else
     "refund refused: not confirmed"
 
+# The capability-bounded support agent. provider/model/apiKey are the STATIC
+# default (the production binding); the tools are typed Tesl functions referenced
+# by name. Tests override the provider per call with a mock, so the agent value
+# itself is identical in production and under test.
+agent SupportAgent requires [supportBot] = Agent {
+  provider: anthropic
+  model: "claude-opus-4-8"
+  apiKey: env "ANTHROPIC_API_KEY"
+  systemPrompt: "You are a concise customer-support assistant. Never invent order ids."
+  tools: [lookupOrder, refundOrder]
+  maxTokens: 512
+}
+
 # ──────────────────────────────────────────────────────────────────────────────
-# A structured-output target: a triaged ticket classification. `askFor` asks the
-# model for JSON, decodes it into this typed value, and RETRIES (up to a bound) if
-# the decode fails — so a flaky model reply can't smuggle an invalid value past
-# the type boundary.
+# Structured output (one-shot typed extraction). This is NOT an agent loop — it is
+# a single typed call that decodes the model's JSON into a proof-carrying value and
+# RETRIES (bounded) if the decode fails, so a flaky reply can't smuggle an invalid
+# value past the type boundary. It stays a plain function parameterised over the
+# provider (the minimal one-shot primitive alongside the declarative agent block).
 # ──────────────────────────────────────────────────────────────────────────────
 
 record Triage {
@@ -144,107 +98,73 @@ codec Triage {
 fn decodeTriage(j: String) -> Triage =
   decodeAs "Triage" j
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Building the agent (function-first, positional config). `defineAgent` takes the
-# provider, the system prompt, and a maxTokens budget. `withTools` attaches the
-# typed tools. In production you'd pass a real `aiProvider ...`; in tests you pass
-# a mock — the agent code is IDENTICAL either way, which is the whole point.
-#
-# `supportAgent` is parameterised over the provider so the SAME wiring is reused
-# by production callers and by the deterministic tests below.
-# ──────────────────────────────────────────────────────────────────────────────
-
-fn lookupTool() -> Tool =
-  tool "lookup_order" "Look up the shipping status of an order by its id" "{\"type\":\"object\",\"properties\":{\"orderId\":{\"type\":\"string\"}},\"required\":[\"orderId\"]}" validateLookup dispatchLookup
-
-fn refundTool() -> Tool =
-  tool "issue_refund" "Issue a refund for an order; requires explicit confirmation" "{\"type\":\"object\",\"properties\":{\"orderId\":{\"type\":\"string\"},\"confirmed\":{\"type\":\"boolean\"}},\"required\":[\"orderId\",\"confirmed\"]}" validateRefund dispatchRefund
-
-fn supportAgent(provider: LlmProvider) -> Agent =
-  let base = defineAgent provider "You are a concise customer-support assistant." 512
-  withTools base [lookupTool (), refundTool ()]
-
-# A handler-style helper that triages a ticket into a typed value. It runs
-# inference, so it must declare the capability — the type system forces the AI
-# boundary to be explicit. Callers without the capability won't compile.
 fn classifyTicket(provider: LlmProvider, ticket: String) -> Triage requires [supportBot] =
   let agent = defineAgent provider "Classify the support ticket as JSON." 256
   askFor agent ticket decodeTriage 2
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DEVELOPER-WRITTEN DETERMINISTIC TESTS
-#
-# Each test scripts the model with a mock provider, then asserts on the exact,
-# reproducible outcome. No keys, no network, no flakiness, no cost.
+# Each scripts the model with a mock provider, then asserts on the exact,
+# reproducible outcome. No keys, no network, no flakiness, no cost. A tool's name
+# is its function name, so the model "calls" `lookupOrder` / `refundOrder`.
 # ══════════════════════════════════════════════════════════════════════════════
 
-# (1) The read-only tool path: the model asks to call `lookup_order`, the args are
-# validated into a typed LookupArgs, dispatch runs with that VALIDATED value, the
-# tool_result loops back, and the model's final text is returned. We assert the
-# final reply AND that exactly one tool round-trip happened.
-test "lookup tool: validated args reach dispatch and the loop returns a final reply" requires [supportBot] {
-  let call = toolUseStep "lookup_order" "call_1" "{\"orderId\":\"A-100\"}"
+# (1) Read-only tool: the model calls `lookupOrder`, its String argument is decoded
+# from the model's JSON and passed to the typed function, the tool_result loops
+# back, and the model's final text is returned. Exactly one tool round-trip.
+test "lookup tool: derived-schema args reach the typed fn and the loop returns a reply" requires [supportBot] {
+  let call = toolUseStep "lookupOrder" "call_1" "{\"orderId\":\"A-100\"}"
   let final = textStep "Your order A-100 has shipped."
   let mock = mockToolProvider [call, final]
-  let agent = supportAgent mock
-  let reply = askReply agent "Where is my order A-100?"
+  let reply = askWith SupportAgent "Where is my order A-100?" mock
   expect (replyText reply) == "Your order A-100 has shipped."
   expect (replyToolCalls reply) == 1
 }
 
-# (2) The guarded mutating tool, CONFIRMED: dispatch performs the action and the
-# tool_result reflects that the refund was issued. This is how you assert a side
-# effect happened — by scripting the confirmed call and reading the outcome.
+# (2) Guarded mutating tool, CONFIRMED: the action runs and the tool_result reflects
+# it — how you assert a side effect happened.
 test "refund tool: confirmed=true issues the refund" requires [supportBot] {
-  let call = toolUseStep "issue_refund" "call_1" "{\"orderId\":\"A-200\",\"confirmed\":true}"
+  let call = toolUseStep "refundOrder" "call_1" "{\"orderId\":\"A-200\",\"confirmed\":true}"
   let final = textStep "Done — your refund is on its way."
   let mock = mockToolProvider [call, final]
-  let agent = supportAgent mock
-  let reply = askReply agent "Please refund order A-200, I confirm."
+  let reply = askWith SupportAgent "Please refund order A-200, I confirm." mock
   expect (replyText reply) == "Done — your refund is on its way."
   expect (replyToolCalls reply) == 1
 }
 
-# (3) The guarded mutating tool, NOT confirmed: validation still succeeds (the
-# value is well-typed), but the dispatch guard refuses the side effect. The tool
-# still ran (one round-trip), proving the guard — not a crash — blocked the
-# mutation.
+# (3) Guarded mutating tool, NOT confirmed: the args are well-typed, but the guard
+# refuses the side effect. The tool still ran (one round-trip), proving the guard —
+# not a crash — blocked the mutation.
 test "refund tool: confirmed=false refuses the mutation but the loop continues" requires [supportBot] {
-  let call = toolUseStep "issue_refund" "call_1" "{\"orderId\":\"A-300\",\"confirmed\":false}"
+  let call = toolUseStep "refundOrder" "call_1" "{\"orderId\":\"A-300\",\"confirmed\":false}"
   let final = textStep "I can't refund without confirmation."
   let mock = mockToolProvider [call, final]
-  let agent = supportAgent mock
-  let reply = askReply agent "Maybe refund A-300?"
+  let reply = askWith SupportAgent "Maybe refund A-300?" mock
   expect (replyText reply) == "I can't refund without confirmation."
   expect (replyToolCalls reply) == 1
 }
 
-# (4) The EXACT tool-call SEQUENCE: the model first looks up the order, sees it
-# shipped, then issues a confirmed refund — two tool round-trips before the final
-# text. `replyToolCalls` lets us assert the model took exactly the steps we
-# expect, not more and not fewer.
+# (4) The EXACT tool-call SEQUENCE: look up, then issue a confirmed refund — two
+# tool round-trips before the final text.
 test "multi-step: lookup then refund is exactly two tool round-trips" requires [supportBot] {
-  let lookup = toolUseStep "lookup_order" "call_1" "{\"orderId\":\"A-400\"}"
-  let refund = toolUseStep "issue_refund" "call_2" "{\"orderId\":\"A-400\",\"confirmed\":true}"
+  let lookup = toolUseStep "lookupOrder" "call_1" "{\"orderId\":\"A-400\"}"
+  let refund = toolUseStep "refundOrder" "call_2" "{\"orderId\":\"A-400\",\"confirmed\":true}"
   let final = textStep "Looked it up and refunded order A-400."
   let mock = mockToolProvider [lookup, refund, final]
-  let agent = supportAgent mock
-  let reply = askReply agent "Refund A-400 if it already shipped."
+  let reply = askWith SupportAgent "Refund A-400 if it already shipped." mock
   expect (replyText reply) == "Looked it up and refunded order A-400."
   expect (replyToolCalls reply) == 2
 }
 
-# (5) MALFORMED tool args are rejected at the type boundary: the model omits the
-# required "orderId", validateLookup's decodeAs raises, and the agent loop turns
-# that into a tool_result is_error WITHOUT throwing. The loop continues and the
-# model still produces a final reply — proving invalid model output can't reach
-# the dispatch body, yet doesn't crash the run.
+# (5) MALFORMED tool args are rejected at the boundary: the model omits the required
+# "orderId", the derived arg-decoder raises, and the agent loop turns that into a
+# tool_result is_error WITHOUT throwing. The loop continues and the model still
+# produces a final reply — invalid model output can't reach the typed function body.
 test "malformed tool args become an is_error tool_result, not an exception" requires [supportBot] {
-  let call = toolUseStep "lookup_order" "call_1" "{\"wrong\":\"shape\"}"
+  let call = toolUseStep "lookupOrder" "call_1" "{\"wrong\":\"shape\"}"
   let final = textStep "Sorry, I couldn't find that order."
   let mock = mockToolProvider [call, final]
-  let agent = supportAgent mock
-  let reply = askReply agent "status?"
+  let reply = askWith SupportAgent "status?" mock
   expect (replyText reply) == "Sorry, I couldn't find that order."
   expect (replyToolCalls reply) == 1
 }
@@ -259,8 +179,7 @@ test "structured output: classifyTicket decodes a typed Triage on the first repl
 }
 
 # (7) RETRY: the model first returns junk that fails to decode, then valid JSON.
-# askFor (bound 2) consumes BOTH replies and returns the recovered typed value —
-# proving the bounded retry fired and that only a well-typed value escapes.
+# askFor (bound 2) consumes BOTH replies and returns the recovered typed value.
 test "structured output: classifyTicket retries past a bad reply then decodes" requires [supportBot] {
   let mock = mockProvider ["not json at all", "{\"category\":\"shipping\",\"priority\":1}"]
   let triage = classifyTicket mock "Where is my package?"
@@ -275,18 +194,17 @@ test "plain ask returns the scripted reply" requires [supportBot] {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# COMPILE-ERROR companion note (cannot live in a PASSING test, so it's documented
-# here). A function that runs inference but does NOT declare the `aiProvider`
-# capability (directly or via an implying capability such as `supportBot`) is a
-# COMPILE error — V001. For example, this fn would FAIL `tesl --check`:
+# COMPILE-ERROR companion note (cannot live in a PASSING test, so documented here).
+# A function that runs inference but does NOT declare the `aiProvider` capability
+# (directly or via an implying capability such as `supportBot`) is a COMPILE error
+# — V001. For example, this fn would FAIL `tesl --check`:
 #
 #   fn unguarded(p: String) -> String =
 #     let agent = defineAgent (mockProvider ["x"]) "x" 10
 #     ask agent p          # error[V001]: uses callees requiring [aiProvider]
 #                          # Hint: add `requires [aiProvider]`
 #
-# The fix is to declare the capability, exactly as `classifyTicket` above does.
-# The type system makes the AI boundary impossible to cross by accident — even a
-# mock-backed call is gated, because in production the same code reaches the
-# network. This is the deterministic-testing guarantee extended to capabilities.
+# The fix is to declare the capability, exactly as `classifyTicket` does. The type
+# system makes the AI boundary impossible to cross by accident — even a mock-backed
+# call is gated, because in production the same code reaches the network.
 # ──────────────────────────────────────────────────────────────────────────────
