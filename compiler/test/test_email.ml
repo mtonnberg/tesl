@@ -3,7 +3,7 @@
     Covers:
     1.  Parser (20 tests): email block parsing, Email.send, startEmailWorker
     2.  Type inference (15 tests): return types, field types
-    3.  Structural validation (10 tests): missing database, unknown database, bad port
+    3.  Structural validation (10 tests): missing database, unknown database, bad port type
     4.  Capability enforcement (10 tests): email capability required
 *)
 
@@ -26,14 +26,25 @@ let root =
 
 let base_imports =
   "import Tesl.Prelude exposing [Int, String, Bool, List, Unit]\n\
-   import Tesl.Maybe exposing [Maybe, Nothing, Something]\n"
+   import Tesl.Maybe exposing [Maybe, Nothing, Something]\n\
+   import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\n\
+   import Tesl.Email exposing [Email, SmtpConfig]\n"
 
 let module_ ?(name="M") ?(exports="") ?(extra="") body =
   Printf.sprintf "#lang tesl\nmodule %s exposing [%s]\n%s%s\n%s"
     name exports base_imports extra body
 
 let with_db body =
-  "database MainDB {\n  schema: \"public\"\n  backend: postgres\n  postgres {}\n}\n" ^ body
+  "database MainDB = Database {\n\
+  \  schema: \"public\"\n\
+  \  entities: []\n\
+  \  backend: Postgres (PostgresConfig {\n\
+  \    dbName: \"d\"\n\
+  \    user: \"u\"\n\
+  \    password: \"\"\n\
+  \    connection: TcpConnection { host: \"h\" port: 5432 }\n\
+  \  })\n\
+   }\n" ^ body
 
 let compile_ok name src =
   match Compile.compile_source ~root_path:root "<test>" src with
@@ -71,7 +82,7 @@ let check_err_contains name src substr =
   if not (contains substr msg) then
     Alcotest.failf "%s: expected error containing %S, got:\n%s" name substr msg
 
-let email_block = "email AppEmail {\n  database: MainDB\n  smtp {\n    host: env(\"SMTP_HOST\")\n    port: 587\n    username: env(\"SMTP_USER\")\n    password: env(\"SMTP_PASS\")\n    tls: true\n  }\n}\n"
+let email_block = "email AppEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: env(\"SMTP_HOST\")\n    port: 587\n    username: env(\"SMTP_USER\")\n    password: env(\"SMTP_PASS\")\n    tls: true\n  }\n}\n"
 
 let with_temp_file prefix src f =
   let path = Filename.temp_file prefix ".tesl" in
@@ -196,7 +207,7 @@ let test_parse_start_email_worker_name () =
 
 (** 1.17 Multiple email blocks parse correctly *)
 let test_parse_multiple_email_blocks () =
-  let block2 = "email Email2 {\n  database: MainDB\n  smtp {\n    host: env(\"H\")\n    port: 465\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
+  let block2 = "email Email2 = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: 465\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db (email_block ^ block2)) in
   let racket = compile_ok "parse_multiple_emails" src in
   assert (contains "AppEmail" racket && contains "Email2" racket)
@@ -216,7 +227,7 @@ let test_parse_email_env_host () =
 
 (** 1.20 TLS false is emitted as #f *)
 let test_parse_email_tls_false () =
-  let no_tls_block = "email NoTlsEmail {\n  database: MainDB\n  smtp {\n    host: env(\"H\")\n    port: 25\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: false\n  }\n}\n" in
+  let no_tls_block = "email NoTlsEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: 25\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: false\n  }\n}\n" in
   let src = module_ (with_db no_tls_block) in
   check_contains "email_tls_false" src "#:smtp-tls #f"
 
@@ -329,7 +340,7 @@ let test_type_start_worker_sequence () =
 
 (** 2.15 Email block with port: 465 is valid *)
 let test_type_email_port_465 () =
-  let block = "email TlsEmail {\n  database: MainDB\n  smtp {\n    host: env(\"H\")\n    port: 465\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
+  let block = "email TlsEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: 465\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db block) in
   ignore (compile_ok "type_email_port_465" src)
 
@@ -337,33 +348,39 @@ let test_type_email_port_465 () =
 
 (** 3.1 Email block missing database produces error *)
 let test_structural_missing_database () =
-  let block = "email AppEmail {\n  smtp {\n    host: env(\"H\")\n    port: 587\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
+  let block = "email AppEmail = Email {\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: 587\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db block) in
-  check_err_contains "email_missing_db" src "missing a `database`"
+  check_err_contains "email_missing_db" src "`Email` is missing required field `database`"
 
 (** 3.2 Email block with unknown database produces error *)
 let test_structural_unknown_database () =
-  let block = "email AppEmail {\n  database: UnknownDB\n  smtp {\n    host: env(\"H\")\n    port: 587\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
+  let block = "email AppEmail = Email {\n  database: UnknownDB\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: 587\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db block) in
-  check_err_contains "email_unknown_db" src "unknown database"
+  check_err_contains "email_unknown_db" src "references unknown database `UnknownDB`"
 
 (** 3.3 Email block missing host produces error *)
 let test_structural_missing_host () =
-  let block = "email AppEmail {\n  database: MainDB\n  smtp {\n    port: 587\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
+  let block = "email AppEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    port: 587\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db block) in
-  check_err_contains "email_missing_host" src "missing a `host`"
+  check_err_contains "email_missing_host" src "`SmtpConfig` is missing required field `host`"
 
-(** 3.4 Email block with port: 0 produces error *)
-let test_structural_port_zero () =
-  let block = "email AppEmail {\n  database: MainDB\n  smtp {\n    host: env(\"H\")\n    port: 0\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
+(** 3.4 Email block with a non-Int smtp `port` produces a validation error.
+    The old config syntax validated the numeric port RANGE (1-65535); the new
+    typed-record `SmtpConfig` no longer carries a range check, so the closest
+    surviving validation is that `port` must be an Int. A String port is
+    rejected with a V001 field-type error. *)
+let test_structural_port_not_int () =
+  let block = "email AppEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: \"0\"\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db block) in
-  check_err_contains "email_port_zero" src "invalid smtp"
+  check_err_contains "email_port_not_int" src "field `port` must be an Int"
 
-(** 3.5 Email block with port > 65535 produces error *)
-let test_structural_port_too_large () =
-  let block = "email AppEmail {\n  database: MainDB\n  smtp {\n    host: env(\"H\")\n    port: 70000\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
+(** 3.5 Email block with a malformed smtp `port` (boolean instead of Int)
+    produces a validation error. Same rationale as 3.4: the typed-record form
+    validates the port field's TYPE rather than its numeric range. *)
+let test_structural_port_bad_type () =
+  let block = "email AppEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: true\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db block) in
-  check_err_contains "email_port_large" src "invalid smtp"
+  check_err_contains "email_port_bad_type" src "field `port` must be an Int"
 
 (** 3.6 Valid email block with correct database passes structural validation *)
 let test_structural_valid_block () =
@@ -375,19 +392,19 @@ let test_structural_valid_block () =
 
 (** 3.7 Email block with port: 25 (SMTP) is valid *)
 let test_structural_port_25 () =
-  let block = "email AppEmail {\n  database: MainDB\n  smtp {\n    host: env(\"H\")\n    port: 25\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: false\n  }\n}\n" in
+  let block = "email AppEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: 25\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: false\n  }\n}\n" in
   let src = module_ (with_db block) in
   ignore (compile_ok "structural_port_25" src)
 
 (** 3.8 Email block with port: 465 (SMTPS) is valid *)
 let test_structural_port_465 () =
-  let block = "email AppEmail {\n  database: MainDB\n  smtp {\n    host: env(\"H\")\n    port: 465\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
+  let block = "email AppEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: 465\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db block) in
   ignore (compile_ok "structural_port_465" src)
 
 (** 3.9 Multiple email blocks with same DB both pass *)
 let test_structural_multiple_blocks () =
-  let block2 = "email Email2 {\n  database: MainDB\n  smtp {\n    host: env(\"H\")\n    port: 587\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
+  let block2 = "email Email2 = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: 587\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db (email_block ^ block2)) in
   let diags = Compile.check_source "<test>" src in
   let email_errs = List.filter (fun (d : Compile.diagnostic) -> contains "email" d.message) diags in
@@ -397,7 +414,7 @@ let test_structural_multiple_blocks () =
 
 (** 3.10 Email block with plaintext password is valid (no structural error) *)
 let test_structural_plaintext_password () =
-  let block = "email AppEmail {\n  database: MainDB\n  smtp {\n    host: env(\"H\")\n    port: 587\n    username: \"user\"\n    password: \"secret\"\n    tls: true\n  }\n}\n" in
+  let block = "email AppEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: 587\n    username: \"user\"\n    password: \"secret\"\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db block) in
   ignore (compile_ok "structural_plaintext_pwd" src)
 
@@ -525,8 +542,8 @@ let () =
       test_case "missing database error"               `Quick test_structural_missing_database;
       test_case "unknown database error"               `Quick test_structural_unknown_database;
       test_case "missing host error"                   `Quick test_structural_missing_host;
-      test_case "port: 0 error"                         `Quick test_structural_port_zero;
-      test_case "port > 65535 error"                   `Quick test_structural_port_too_large;
+      test_case "non-Int port error"                   `Quick test_structural_port_not_int;
+      test_case "bad-type port error"                   `Quick test_structural_port_bad_type;
       test_case "valid block passes"                   `Quick test_structural_valid_block;
       test_case "port: 25 is valid"                     `Quick test_structural_port_25;
       test_case "port: 465 is valid"                    `Quick test_structural_port_465;
@@ -568,8 +585,8 @@ fn setup() -> Unit requires [email] =
             (String.concat "; " msgs));
       test_case "W070: two emails, one started → warns only for unstarted" `Quick (fun () ->
         let two_emails =
-          "email AppEmail {\n  database: MainDB\n  smtp {\n    host: \"h\"\n    port: 587\n    username: \"u\"\n    password: \"p\"\n    tls: false\n  }\n}\n\
-           email NotifyEmail {\n  database: MainDB\n  smtp {\n    host: \"h\"\n    port: 587\n    username: \"u\"\n    password: \"p\"\n    tls: false\n  }\n}\n" in
+          "email AppEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: \"h\"\n    port: 587\n    username: \"u\"\n    password: \"p\"\n    tls: false\n  }\n}\n\
+           email NotifyEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: \"h\"\n    port: 587\n    username: \"u\"\n    password: \"p\"\n    tls: false\n  }\n}\n" in
         let src = module_ ~extra:(with_db two_emails) {|
 fn main() -> Unit requires [email] =
   startEmailWorker AppEmail

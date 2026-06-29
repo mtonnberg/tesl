@@ -14,11 +14,17 @@
 
     NOTE (config-syntax migration): the config/application surface moved to the
     typed forms `database X = Database { … }`, `queue X = Queue { … }`,
-    `sseChannel X = SseChannel { … }`, etc.  Two old behaviours no longer exist
+    `sseChannel X = SseChannel { … }`, etc.  Worker wiring moved from the old
+    `workers W for Q { JobType = fn }` / `deadWorkers DW for Q { … }` mapping
+    blocks into the typed queue's folded `jobs` field
+    (`jobs: [ Job J w (Something dw) ]`).  Several old behaviours no longer exist
     under the typed forms and their tests were deleted:
-      - queue empty `jobs: []` is now accepted (was QU02);
+      - queue empty `jobs: []` is now accepted (was QU02, also WK02);
       - the typed `Database.entities:` field is only checked to be a list of
-        type names, not that each entity is declared (was DB01/DB02/DB05).
+        type names, not that each entity is declared (was DB01/DB02/DB05);
+      - the folded `jobs:` field is validated for SHAPE + queue/App wiring only;
+        it no longer kind-checks the handler (was WK03/WK05/WK09).  See the
+        R67_WK migration note below for the per-test disposition.
 
     Test groups:
       QU — queue structure
@@ -233,67 +239,68 @@ type EvD = EvDA msg: String
 sseChannel R67Ch04(userId: String) = SseChannel { database: R67Ch04Db payload: EvD }
 |}
 
-(* ── R67_WK — Workers structure ──────────────────────────────────────────── *)
+(* ── R67_WK — Workers structure (folded-queue wiring) ────────────────────────
 
-let test_R67_WK01_workers_undefined_queue_rejected () =
-  should_fail "unknown queue\\|references unknown" {|
+   MIGRATION NOTE: the old `workers W for Q { JobType = fn }` /
+   `deadWorkers DW for Q { JobType = fn }` mapping blocks are gone.  Worker
+   wiring now folds into the typed queue's `jobs` field:
+       jobs: [ Job <JobType> <worker> (Something <deadWorker>) ]   # dead-letter
+       jobs: [ Job <JobType> <worker> Nothing ]                    # no dead-letter
+   The new typed `jobs:` field is validated only for SHAPE (each element is a
+   constructor form) plus the queue→database / App→queue wiring graph.  It does
+   NOT re-check that the folded handler is declared as a `worker`/`deadWorker`
+   (verified against the compiler: a folded `Job J plainFn Nothing` and even a
+   `Job J undefinedName Nothing` compile successfully).  Consequently the old
+   worker-binding assertions that have no folded equivalent were either rewritten
+   to the nearest still-existing wiring rejection or deleted:
+
+     - R67_WK01 (workers→undefined queue): rewritten — a folded worker pipeline
+       whose queue references an undefined DATABASE is rejected.
+     - R67_WK02 (workers empty bindings): DELETED — a folded `jobs: []` is now
+       accepted (same reason QU02 was deleted: empty job list is legal).
+     - R67_WK03 (workers→undefined handler fn): DELETED — the folded `jobs:`
+       field does not verify handler existence/kind.
+     - R67_WK05 (plain `fn` used as worker): DELETED — the folded `jobs:` field
+       does not kind-check the handler.
+     - R67_WK06 (deadWorkers→undefined queue): rewritten — a folded dead-letter
+       pipeline (`Something dw`) whose queue references an undefined DATABASE is
+       rejected (the deadWorkers-mapping-block / undefined-queue concept is gone).
+     - R67_WK09 (HTTP `handler` used as worker): DELETED — the folded `jobs:`
+       field does not kind-check the handler.
+
+   The acceptance tests (WK04, WK07, WK08) keep their intent — valid worker /
+   dead-letter / multi-job wiring is accepted — now expressed in folded form. *)
+
+let test_R67_WK01_folded_queue_undefined_database_rejected () =
+  (* was: `workers W for NonExistentQueue {}`.  A folded worker pipeline whose
+     queue references an undefined database is rejected. *)
+  should_fail "references unknown database\\|unknown database" {|
 #lang tesl
 module R67Wk01 exposing []
-workers R67Wk01 for NonExistentQueue { }
-|}
-
-let test_R67_WK02_workers_empty_bindings_rejected () =
-  should_fail "no job bindings\\|at least one.*JobType\\|job.*bindings" {|
-#lang tesl
-module R67Wk02 exposing []
-import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
-import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
-database R67Wk02Db = Database {
-  schema: "s"
-  entities: []
-  backend: Postgres (PostgresConfig {
-    dbName: "d"  user: "u"  password: ""
-    connection: TcpConnection { host: "localhost"  port: 5432 }
-  })
-}
-queue R67Wk02Q = Queue {
-  database: R67Wk02Db
-  jobs: [MyJob]
-  retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 }
-}
-workers R67Wk02 for R67Wk02Q { }
-|}
-
-let test_R67_WK03_workers_undefined_handler_rejected () =
-  should_fail "not declared as a.*worker\\|unknown.*worker\\|not a `worker`" {|
-#lang tesl
-module R67Wk03 exposing []
 import Tesl.Prelude exposing [String]
-import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
-import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
-database R67Wk03Db = Database {
-  schema: "s"
-  entities: []
-  backend: Postgres (PostgresConfig {
-    dbName: "d"  user: "u"  password: ""
-    connection: TcpConnection { host: "localhost"  port: 5432 }
-  })
+import Tesl.Queue exposing [Queue, Job]
+record MyJob { msg: String }
+worker myWorker(job: MyJob) -> String requires [] = job.msg
+queue R67Wk01Q = Queue {
+  database: NonExistentQueueDb
+  jobs: [Job MyJob myWorker Nothing]
 }
-queue R67Wk03Q = Queue {
-  database: R67Wk03Db
-  jobs: [MyJob]
-  retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 }
-}
-workers R67Wk03 for R67Wk03Q { MyJob = undefinedWorkerFn }
 |}
 
-let test_R67_WK04_workers_with_valid_worker_accepted () =
+(* R67_WK02 (workers empty bindings rejected) DELETED: in the folded typed
+   `Queue` form an empty `jobs: []` is accepted (same reason QU02 was deleted). *)
+
+(* R67_WK03 (workers undefined handler rejected) DELETED: the folded `jobs:`
+   field is validated only for shape; it does not verify that the handler in
+   `Job J handler ...` exists. *)
+
+let test_R67_WK04_folded_queue_with_valid_worker_accepted () =
   should_pass {|
 #lang tesl
 module R67Wk04 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
-import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, Job]
 database R67Wk04Db = Database {
   schema: "s"
   entities: []
@@ -303,56 +310,45 @@ database R67Wk04Db = Database {
   })
 }
 record MyJob { msg: String }
+worker processMyJob(job: MyJob) -> String requires [] = job.msg
 queue R67Wk04Q = Queue {
   database: R67Wk04Db
-  jobs: [MyJob]
+  jobs: [Job MyJob processMyJob Nothing]
   retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 }
 }
-worker processMyJob(job: MyJob) -> String requires [] = job.msg
-workers R67Wk04 for R67Wk04Q { MyJob = processMyJob }
 |}
 
-let test_R67_WK05_workers_fn_instead_of_worker_rejected () =
-  should_fail "not declared as a.*worker\\|not a `worker`" {|
-#lang tesl
-module R67Wk05 exposing []
-import Tesl.Prelude exposing [String]
-import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
-import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
-database R67Wk05Db = Database {
-  schema: "s"
-  entities: []
-  backend: Postgres (PostgresConfig {
-    dbName: "d"  user: "u"  password: ""
-    connection: TcpConnection { host: "localhost"  port: 5432 }
-  })
-}
-record MyJob { msg: String }
-queue R67Wk05Q = Queue {
-  database: R67Wk05Db
-  jobs: [MyJob]
-  retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 }
-}
-fn notAWorker(job: MyJob) -> String requires [] = job.msg
-workers R67Wk05 for R67Wk05Q { MyJob = notAWorker }
-|}
+(* R67_WK05 (plain `fn` used where a worker is needed) DELETED: the folded
+   `jobs:` field does not kind-check the handler function. *)
 
-let test_R67_WK06_dead_workers_undefined_queue_rejected () =
-  should_fail "unknown queue\\|references unknown" {|
+let test_R67_WK06_folded_dead_queue_undefined_database_rejected () =
+  (* was: `deadWorkers DW for GhostQueue {}`.  The deadWorkers-mapping block is
+     gone; a dead-letter handler now folds into `Job J w (Something dw)`.  A
+     folded dead-letter pipeline whose queue references an undefined database is
+     rejected (the nearest surviving wiring rejection). *)
+  should_fail "references unknown database\\|unknown database" {|
 #lang tesl
 module R67Wk06 exposing []
-deadWorkers R67Wk06 for GhostQueue { }
+import Tesl.Prelude exposing [String]
+import Tesl.Queue exposing [Queue, Job]
+record DeadJob { msg: String }
+worker procDeadJob(job: DeadJob) -> String requires [] = job.msg
+deadWorker handleGhost(job: DeadJob) -> String requires [] = job.msg
+queue R67Wk06Q = Queue {
+  database: GhostQueueDb
+  jobs: [Job DeadJob procDeadJob (Something handleGhost)]
+}
 |}
 
-let test_R67_WK07_dead_workers_valid_accepted () =
-  (* dead workers (processing the dead-letter queue) should compile when the
-     queue exists and the handler is declared as `deadWorker` *)
+let test_R67_WK07_folded_dead_worker_valid_accepted () =
+  (* dead-letter workers should compile when the queue exists and the dead
+     handler is folded in via `(Something deadWorkerFn)`. *)
   should_pass {|
 #lang tesl
 module R67Wk07 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
-import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, Job]
 database R67Wk07Db = Database {
   schema: "s"
   entities: []
@@ -362,23 +358,23 @@ database R67Wk07Db = Database {
   })
 }
 record DeadJob { msg: String }
+worker processDeadJob(job: DeadJob) -> String requires [] = job.msg
+deadWorker handleDeadDeadJob(job: DeadJob) -> String requires [] = job.msg
 queue R67Wk07Q = Queue {
   database: R67Wk07Db
-  jobs: [DeadJob]
+  jobs: [Job DeadJob processDeadJob (Something handleDeadDeadJob)]
   retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 }
 }
-deadWorker handleDeadDeadJob(job: DeadJob) -> String requires [] = job.msg
-deadWorkers R67Wk07 for R67Wk07Q { DeadJob = handleDeadDeadJob }
 |}
 
-let test_R67_WK08_workers_multiple_job_types_accepted () =
-  (* workers block with multiple job type → handler bindings *)
+let test_R67_WK08_folded_queue_multiple_job_types_accepted () =
+  (* folded queue with multiple job → worker entries *)
   should_pass {|
 #lang tesl
 module R67Wk08 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
-import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, Job]
 database R67Wk08Db = Database {
   schema: "s"
   entities: []
@@ -389,41 +385,17 @@ database R67Wk08Db = Database {
 }
 record JobA { name: String }
 record JobB { count: Int }
-queue R67Wk08Q = Queue {
-  database: R67Wk08Db
-  jobs: [JobA, JobB]
-  retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 }
-}
 worker handleJobA(job: JobA) -> String requires [] = job.name
 worker handleJobB(job: JobB) -> Int requires [] = job.count
-workers R67Wk08 for R67Wk08Q { JobA = handleJobA JobB = handleJobB }
-|}
-
-let test_R67_WK09_handler_kind_instead_of_worker_rejected () =
-  (* using a `handler` function (HTTP handler kind) where a `worker` is needed *)
-  should_fail "not declared as a.*worker\\|not a `worker`" {|
-#lang tesl
-module R67Wk09 exposing []
-import Tesl.Prelude exposing [String]
-import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
-import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
-database R67Wk09Db = Database {
-  schema: "s"
-  entities: []
-  backend: Postgres (PostgresConfig {
-    dbName: "d"  user: "u"  password: ""
-    connection: TcpConnection { host: "localhost"  port: 5432 }
-  })
-}
-record MyJob { msg: String }
-queue R67Wk09Q = Queue {
-  database: R67Wk09Db
-  jobs: [MyJob]
+queue R67Wk08Q = Queue {
+  database: R67Wk08Db
+  jobs: [Job JobA handleJobA Nothing, Job JobB handleJobB Nothing]
   retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 }
 }
-handler httpHandler() -> String requires [] = "response"
-workers R67Wk09 for R67Wk09Q { MyJob = httpHandler }
 |}
+
+(* R67_WK09 (HTTP `handler` used where a worker is needed) DELETED: the folded
+   `jobs:` field does not kind-check the handler function. *)
 
 (* ── R67_DB — Database entity references ────────────────────────────────── *)
 
@@ -655,7 +627,7 @@ let test_R67_OK01_full_queue_worker_pipeline_accepted () =
 module R67Ok01 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
-import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
+import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, Job]
 database R67Ok01Db = Database {
   schema: "myapp"
   entities: []
@@ -665,14 +637,13 @@ database R67Ok01Db = Database {
   })
 }
 record NotifyJob { userId: String message: String }
-queue NotifyQueue = Queue {
-  database: R67Ok01Db
-  jobs: [NotifyJob]
-  retry: QueueRetryStrategy { maxAttempts: 3 backoff: Exponential initialDelay: 1000 }
-}
 worker sendNotification(job: NotifyJob) -> String requires [] =
   job.message
-workers NotifyWorkers for NotifyQueue { NotifyJob = sendNotification }
+queue NotifyQueue = Queue {
+  database: R67Ok01Db
+  jobs: [Job NotifyJob sendNotification Nothing]
+  retry: QueueRetryStrategy { maxAttempts: 3 backoff: Exponential initialDelay: 1000 }
+}
 |}
 
 let test_R67_OK02_channel_pipeline_accepted () =
@@ -1014,15 +985,15 @@ let () =
       test_case "R67_CH04 channel with key params accepted" `Quick test_R67_CH04_channel_with_key_params_accepted;
     ];
     "workers-structure", [
-      test_case "R67_WK01 workers undefined queue rejected" `Quick test_R67_WK01_workers_undefined_queue_rejected;
-      test_case "R67_WK02 workers empty bindings rejected" `Quick test_R67_WK02_workers_empty_bindings_rejected;
-      test_case "R67_WK03 workers undefined handler rejected" `Quick test_R67_WK03_workers_undefined_handler_rejected;
-      test_case "R67_WK04 workers with valid worker accepted" `Quick test_R67_WK04_workers_with_valid_worker_accepted;
-      test_case "R67_WK05 workers fn instead of worker rejected" `Quick test_R67_WK05_workers_fn_instead_of_worker_rejected;
-      test_case "R67_WK06 dead-workers undefined queue rejected" `Quick test_R67_WK06_dead_workers_undefined_queue_rejected;
-      test_case "R67_WK07 dead-workers valid accepted" `Quick test_R67_WK07_dead_workers_valid_accepted;
-      test_case "R67_WK08 workers multiple job types accepted" `Quick test_R67_WK08_workers_multiple_job_types_accepted;
-      test_case "R67_WK09 handler kind instead of worker rejected" `Quick test_R67_WK09_handler_kind_instead_of_worker_rejected;
+      test_case "R67_WK01 folded queue undefined database rejected" `Quick test_R67_WK01_folded_queue_undefined_database_rejected;
+      (* R67_WK02 (workers empty bindings) deleted: folded `jobs: []` is accepted. *)
+      (* R67_WK03 (workers undefined handler) deleted: folded `jobs:` is shape-only. *)
+      test_case "R67_WK04 folded queue with valid worker accepted" `Quick test_R67_WK04_folded_queue_with_valid_worker_accepted;
+      (* R67_WK05 (plain fn used as worker) deleted: folded `jobs:` is not kind-checked. *)
+      test_case "R67_WK06 folded dead-letter queue undefined database rejected" `Quick test_R67_WK06_folded_dead_queue_undefined_database_rejected;
+      test_case "R67_WK07 folded dead-worker valid accepted" `Quick test_R67_WK07_folded_dead_worker_valid_accepted;
+      test_case "R67_WK08 folded queue multiple job types accepted" `Quick test_R67_WK08_folded_queue_multiple_job_types_accepted;
+      (* R67_WK09 (HTTP handler used as worker) deleted: folded `jobs:` is not kind-checked. *)
     ];
     "database-entities", [
       (* R67_DB01/DB02/DB05 (undefined-entity rejection) deleted: the new typed

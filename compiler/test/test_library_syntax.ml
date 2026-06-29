@@ -295,13 +295,15 @@ let test_LIBKW08_library_cannot_have_main_block () =
 #lang tesl
 library BadLib3 exposing []
 import Tesl.Prelude exposing [Int]
+import Tesl.App exposing [App]
 fn add(a: Int, b: Int) -> Int = a + b
-main {
-  with capabilities [] {
-    let result = add 1 2
-    result
+main() -> App requires [] =
+  App {
+    database: AppDb
+    api: AppServer
+    port: 8080
+    queues: []
   }
-}
 |}
 
 let test_LIBKW09_library_can_be_imported_by_app () =

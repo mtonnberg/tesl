@@ -384,7 +384,8 @@ let api_test_sse_collect_with_timeout_compiles () =
 module Main exposing [Server]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
-import Tesl.Queue exposing [FromQueue, queueRead, queueWrite, pubsub, Queue, QueueRetryStrategy, Linear]
+import Tesl.Queue exposing [FromQueue, queueRead, queueWrite, pubsub, Queue, Job, QueueRetryStrategy, Linear]
+import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 import Tesl.SSE exposing [SseChannel]
 import Tesl.ApiTest exposing [
@@ -443,7 +444,7 @@ capture userIdCapture: String using stringCodec via parseUserId
 
 queue MainQueue = Queue {
   database: MainDatabase
-  jobs: [NotifyJob]
+  jobs: [Job NotifyJob handleNotice (Nothing)]
   retry: QueueRetryStrategy {
     maxAttempts: 2
     backoff: Linear
@@ -460,10 +461,6 @@ worker handleNotice(job: NotifyJob ::: FromQueue (Id == jobId) job)
   requires [queueRead, pubsub] =
   publish MainEvents(job.userId) NoticeSent { message: job.message }
   job
-
-workers MainWorkers for MainQueue {
-  NotifyJob = handleNotice
-}
 
 handler sendNotice(req: SendNoticeRequest) -> String
   requires [queueWrite] =

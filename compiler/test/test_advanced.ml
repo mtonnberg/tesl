@@ -249,8 +249,29 @@ fn f(x: Int) -> Int =
 let test_main_block () =
   let src = {|#lang tesl
 module Foo exposing []
-main {
-  0
+import Tesl.App exposing [App]
+import Tesl.Prelude exposing [String]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+main() -> App =
+  App {
+    database: D
+    api: S
+    port: 8080
+  }
+database D = Database {
+  schema: "s"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "d" user: "u" password: ""
+    connection: TcpConnection { host: "h" port: 5432 }
+  })
+}
+handler root() -> String requires [] = "ok"
+api SomeApi {
+  get "/health" -> String
+}
+server S for SomeApi {
+  endpoint_0 = root
 }
 |} in
   assert_ok src (fun m ->
@@ -263,8 +284,29 @@ main {
 let test_main_with_requires () =
   let src = {|#lang tesl
 module Foo exposing []
-main requires [time] {
-  0
+import Tesl.App exposing [App]
+import Tesl.Prelude exposing [String]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+main() -> App requires [time] =
+  App {
+    database: D
+    api: S
+    port: 8080
+  }
+database D = Database {
+  schema: "s"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "d" user: "u" password: ""
+    connection: TcpConnection { host: "h" port: 5432 }
+  })
+}
+handler root() -> String requires [] = "ok"
+api SomeApi {
+  get "/health" -> String
+}
+server S for SomeApi {
+  endpoint_0 = root
 }
 |} in
   assert_ok src (fun m ->

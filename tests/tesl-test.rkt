@@ -3438,29 +3438,27 @@
       "  job\n")))
   (check-true (path? q03-path) "Q03: worker function compiles"))
 
-; Q04: Workers declaration compiles
+; Q04: Folded queue with worker wiring compiles
 (let ()
   (define q04-path
     (compile-tesl-source
      (string-append
       "#lang tesl\n"
-      "module Q04 exposing [MyWorkers]\n"
+      "module Q04 exposing [MyQueue4]\n"
       "import Tesl.Prelude exposing [String]\n"
-      "import Tesl.Queue exposing [queueRead, queueWrite, Queue]\n"
+      "import Tesl.Queue exposing [queueRead, queueWrite, Queue, Job]\n"
+      "import Tesl.Maybe exposing [Maybe, Nothing, Something]\n"
       "import Tesl.Database exposing [Database, Memory]\n"
       "record MyJob4 {\n  value: String\n}\n"
       "database FakeDb = Database {\n  backend: Memory\n}\n"
-      "queue MyQueue4 = Queue {\n"
+      "queue MyQueue4 requires [queueRead] = Queue {\n"
       "  database: FakeDb\n"
-      "  jobs: [MyJob4]\n"
+      "  jobs: [Job MyJob4 myWorker4 (Nothing)]\n"
       "}\n"
       "worker myWorker4(job: MyJob4::: FromQueue (Id == jobId) job)\n"
       "  requires [queueRead] =\n"
-      "  job\n"
-      "workers MyWorkers for MyQueue4 {\n"
-      "  MyJob4 = myWorker4\n"
-      "}\n")))
-  (check-true (path? q04-path) "Q04: workers declaration compiles"))
+      "  job\n")))
+  (check-true (path? q04-path) "Q04: folded queue with worker wiring compiles"))
 
 ; Q05: Queue with retry config compiles
 (let ()
@@ -3570,7 +3568,7 @@
       "  }\n")))
   (check-true (path? q09-path) "Q09: with transaction block compiles"))
 
-; Q10: startWorkers in main compiles
+; Q10: queue workers in App compile
 (let ()
   (define q10-path
     (compile-tesl-source
@@ -3578,24 +3576,35 @@
       "#lang tesl\n"
       "module Q10 exposing []\n"
       "import Tesl.Prelude exposing [String]\n"
-      "import Tesl.Queue exposing [queueRead, queueWrite, Queue]\n"
+      "import Tesl.Queue exposing [queueRead, queueWrite, Queue, Job]\n"
+      "import Tesl.Maybe exposing [Maybe, Nothing, Something]\n"
       "import Tesl.Database exposing [Database, Memory]\n"
+      "import Tesl.App exposing [App]\n"
       "record Q10Job {\n  v: String\n}\n"
       "database FakeDb = Database {\n  backend: Memory\n}\n"
-      "queue Q10Queue = Queue {\n"
+      "queue Q10Queue requires [queueRead] = Queue {\n"
       "  database: FakeDb\n"
-      "  jobs: [Q10Job]\n"
+      "  jobs: [Job Q10Job q10Worker (Nothing)]\n"
       "}\n"
       "worker q10Worker(job: Q10Job::: FromQueue (Id == jid) job)\n"
       "  requires [queueRead] =\n"
       "  job\n"
-      "workers Q10Workers for Q10Queue {\n"
-      "  Q10Job = q10Worker\n"
+      "handler q10Root() -> String requires [] =\n"
+      "  \"ok\"\n"
+      "api Q10Api {\n"
+      "  get \"/health\" -> String\n"
       "}\n"
-      "main with capabilities [queueRead] {\n"
-      "  startWorkers Q10Workers with capabilities [queueRead]\n"
-      "}\n")))
-  (check-true (path? q10-path) "Q10: startWorkers in main compiles"))
+      "server Q10Server for Q10Api {\n"
+      "  endpoint_0 = q10Root\n"
+      "}\n"
+      "main() -> App requires [queueRead] =\n"
+      "  App {\n"
+      "    database: FakeDb\n"
+      "    api: Q10Server\n"
+      "    port: 8080\n"
+      "    queues: [Q10Queue]\n"
+      "  }\n")))
+  (check-true (path? q10-path) "Q10: queue workers in App compile"))
 
 ; Q11: websocket endpoint in api compiles
 (let ()
@@ -3930,15 +3939,15 @@
     "#lang tesl\n"
     "module WorkerProof exposing [PingQueue, pingWorker, enqueuePing]\n"
     "import Tesl.Prelude exposing [String]\n"
-    "import Tesl.Queue  exposing [queueWrite, queueRead, Queue]\n"
+    "import Tesl.Queue  exposing [queueWrite, queueRead, Queue, Job]\n"
+    "import Tesl.Maybe exposing [Maybe, Nothing, Something]\n"
     "import Tesl.Database exposing [Database, Memory]\n"
     "record PingJob {\n  msg: String\n}\n"
     "database FakeDb = Database {\n  backend: Memory\n}\n"
-    "queue PingQueue = Queue {\n  database: FakeDb\n  jobs: [PingJob]\n}\n"
+    "queue PingQueue requires [queueRead] = Queue {\n  database: FakeDb\n  jobs: [Job PingJob pingWorker (Nothing)]\n}\n"
     "worker pingWorker(job: PingJob ::: FromQueue (Id == jobId) job)\n"
     "  requires [queueRead] =\n"
     "  job\n"
-    "workers PingWorkers for PingQueue {\n  PingJob = pingWorker\n}\n"
     "fn enqueuePing(v: String) -> String requires [queueWrite] =\n"
     "  enqueue PingJob { msg: v }\n"
     "  v\n")))
@@ -4114,10 +4123,11 @@
          (string-append
           "#lang tesl\n"
           "module PgQueueTest exposing"
-          " [PgDb, MsgQueue, MsgChannel, MsgWorkers, enqueueMsgs, pingWorker, echoWorker]\n"
+          " [PgDb, MsgQueue, MsgChannel, enqueueMsgs, pingWorker, echoWorker]\n"
           "import Tesl.Prelude  exposing [String]\n"
           "import Tesl.DB       exposing [dbRead, dbWrite]\n"
-          "import Tesl.Queue    exposing [queueWrite, queueRead, pubsub, Queue, QueueRetryStrategy, Fixed]\n"
+          "import Tesl.Queue    exposing [queueWrite, queueRead, pubsub, Queue, QueueRetryStrategy, Fixed, Job]\n"
+          "import Tesl.Maybe    exposing [Maybe, Nothing, Something]\n"
           "import Tesl.SSE      exposing [SseChannel]\n"
           "import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection, Memory]\n"
           "import Tesl.Env      exposing [env, envInt]\n"
@@ -4136,9 +4146,9 @@
           "    }\n"
           "  })\n"
           "}\n"
-          "queue MsgQueue = Queue {\n"
+          "queue MsgQueue requires [queueRead] = Queue {\n"
           "  database: PgDb\n"
-          "  jobs:     [MsgJob]\n"
+          "  jobs:     [Job MsgJob echoWorker (Nothing)]\n"
           "  retry: QueueRetryStrategy {\n"
           "    maxAttempts:  2\n"
           "    backoff:      Fixed\n"
@@ -4152,9 +4162,6 @@
           "worker echoWorker(job: MsgJob ::: FromQueue (Id == jobId) job)\n"
           "  requires [queueRead] =\n"
           "  job\n"
-          "workers MsgWorkers for MsgQueue {\n"
-          "  MsgJob = echoWorker\n"
-          "}\n"
           "fn pingWorker(q: String) -> String requires [queueWrite] =\n"
           "  enqueue MsgJob { text: q }\n"
           "  q\n"
@@ -4168,7 +4175,6 @@
       (define PgDb       (tesl-module-value pg-queue-path 'PgDb))
       (define MsgQueue   (tesl-module-value pg-queue-path 'MsgQueue))
       (define MsgChannel (tesl-module-value pg-queue-path 'MsgChannel))
-      (define MsgWorkers (tesl-module-value pg-queue-path 'MsgWorkers))
       (define echoWorker (tesl-module-value pg-queue-path 'echoWorker))
       (define pingWorker (tesl-module-value pg-queue-path 'pingWorker))
       (define enqueueMsgs (tesl-module-value pg-queue-path 'enqueueMsgs))
@@ -4335,7 +4341,8 @@
           "#lang tesl\n"
           "module LnTest exposing [LnDb, LnQueue, lnWorker, lnEnqueue]\n"
           "import Tesl.Prelude  exposing [String]\n"
-          "import Tesl.Queue    exposing [queueWrite, queueRead, Queue, QueueRetryStrategy, Fixed]\n"
+          "import Tesl.Queue    exposing [queueWrite, queueRead, Queue, QueueRetryStrategy, Fixed, Job]\n"
+          "import Tesl.Maybe    exposing [Maybe, Nothing, Something]\n"
           "import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection, Memory]\n"
           "import Tesl.Env      exposing [env, envInt]\n"
           "record LnJob {\n  msg: String\n}\n"
@@ -4352,17 +4359,14 @@
           "    }\n"
           "  })\n"
           "}\n"
-          "queue LnQueue = Queue {\n"
+          "queue LnQueue requires [queueRead] = Queue {\n"
           "  database: LnDb\n"
-          "  jobs:     [LnJob]\n"
+          "  jobs:     [Job LnJob lnWorker (Nothing)]\n"
           "  retry: QueueRetryStrategy {\n    maxAttempts:  1\n    backoff:      Fixed\n    initialDelay: 0\n  }\n"
           "}\n"
           "worker lnWorker(job: LnJob ::: FromQueue (Id == jobId) job)\n"
           "  requires [queueRead] =\n"
           "  job\n"
-          "workers LnWorkers for LnQueue {\n"
-          "  LnJob = lnWorker\n"
-          "}\n"
           "fn lnEnqueue(msg: String) -> String requires [queueWrite] =\n"
           "  enqueue LnJob { msg: msg }\n"
           "  msg\n")))

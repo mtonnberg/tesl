@@ -226,10 +226,9 @@ import Tesl.Email exposing [Email, SmtpConfig]
 
 %s
 
-main {
+main() -> Unit requires [] =
   let _ = print "EMAIL-MODULE-LOADED"
   Unit
-}
 |} module_name db_block (email_block smtp_port)
 
 (** Tesl source that sends an email via Email.send (in-memory fallback). *)
@@ -252,13 +251,12 @@ fn queueEmail(addr: String) -> Unit requires [email] =
     body: TextBody "Hello from Tesl integration test"
   }
 
-main {
+main() -> Unit requires [] =
   with capabilities [email] {
     let _ = queueEmail "%s"
     let _ = print "EMAIL-QUEUED"
     Unit
   }
-}
 |} module_name db_block (email_block smtp_port) recipient
 
 (** Tesl source that uses HtmlBody. *)
@@ -281,13 +279,12 @@ fn sendHtml(addr: String) -> Unit requires [email] =
     body: HtmlBody "<h1>Hello</h1><p>HTML email test</p>"
   }
 
-main {
+main() -> Unit requires [] =
   with capabilities [email] {
     let _ = sendHtml "html@example.com"
     let _ = print "HTML-EMAIL-QUEUED"
     Unit
   }
-}
 |} module_name db_block (email_block smtp_port)
 
 (** Tesl source that uses RichBody. *)
@@ -310,13 +307,12 @@ fn sendRich(addr: String) -> Unit requires [email] =
     body: RichBody "Plain text fallback" "<h1>HTML version</h1>"
   }
 
-main {
+main() -> Unit requires [] =
   with capabilities [email] {
     let _ = sendRich "rich@example.com"
     let _ = print "RICH-EMAIL-QUEUED"
     Unit
   }
-}
 |} module_name db_block (email_block smtp_port)
 
 (** Build module name + source for a Tesl program without requires [email]. *)
@@ -339,10 +335,9 @@ fn badSend(addr: String) -> Unit =
     body: TextBody "This should fail capability check"
   }
 
-main {
+main() -> Unit requires [] =
   let _ = badSend "test@example.com"
   Unit
-}
 |} module_name db_block (email_block 2525))
 
 (* ── MailHog helpers ─────────────────────────────────────────────────────────── *)

@@ -225,7 +225,7 @@ let base_dead = {|#lang tesl
 module BackendDeadTest exposing []
 
 import Tesl.Prelude exposing [String]
-import Tesl.Queue exposing [queueRead, pubsub, FromDeadQueue, Queue, QueueRetryStrategy, Exponential]
+import Tesl.Queue exposing [queueRead, pubsub, FromQueue, FromDeadQueue, Queue, Job, QueueRetryStrategy, Exponential]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 import Tesl.SSE exposing [SseChannel]
 
@@ -245,42 +245,45 @@ database DB = Database {
   })
 }
 
-queue NotificationQueue = Queue {
-  database: DB
-  jobs: [NotifyJob]
-  retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 5 }
-}
-
 sseChannel RoomMessages(roomId: String) = SseChannel {
   database: DB
   payload: RoomEvent
 }
 
+# Normal worker for the folded queue's job list. The job type is paired with
+# this worker and the (per-test) dead-letter worker `handleDeadNotify`.
+worker handleNotify(job: NotifyJob ::: FromQueue (Id == jobId) job)
+  requires [queueRead] =
+  job
+
+# Folded queue: `jobs: [Job T worker (Something deadWorker)]` wires the dead
+# worker `handleDeadNotify` declared in each test below.
+queue NotificationQueue requires [queueRead, pubsub] = Queue {
+  database: DB
+  jobs: [Job NotifyJob handleNotify (Something handleDeadNotify)]
+  retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 5 }
+}
+
 |}
 
 let test_R59B_DW01_dead_worker_publish_no_cap () =
-  (* deadWorker that publishes without declaring pubsub capability *)
+  (* deadWorker (wired into the folded NotificationQueue) that publishes without
+     declaring pubsub capability is rejected. The capability is enforced on the
+     deadWorker function decl itself, regardless of how the queue references it. *)
   should_fail "deadWorker.*uses.*pubsub.*but does not declare" (base_dead ^ {|
 deadWorker handleDeadNotify(job: NotifyJob ::: FromDeadQueue (Id == jobId) job) =
   publish RoomMessages(job.roomName) NotifyFailed { senderName: job.senderName, roomName: job.roomName }
   job
-
-deadWorkers DeadNotificationWorkers for NotificationQueue {
-  NotifyJob = handleDeadNotify
-}
 |})
 
 let test_R59B_DW02_dead_worker_publish_with_cap_compiles () =
-  (* deadWorker that declares pubsub capability can publish *)
+  (* deadWorker (wired into the folded NotificationQueue) that declares pubsub
+     capability can publish. *)
   should_pass (base_dead ^ {|
 deadWorker handleDeadNotify(job: NotifyJob ::: FromDeadQueue (Id == jobId) job)
   requires [pubsub] =
   publish RoomMessages(job.roomName) NotifyFailed { senderName: job.senderName, roomName: job.roomName }
   job
-
-deadWorkers DeadNotificationWorkers for NotificationQueue {
-  NotifyJob = handleDeadNotify
-}
 |})
 
 let () =

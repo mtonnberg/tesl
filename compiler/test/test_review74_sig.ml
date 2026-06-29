@@ -467,14 +467,20 @@ main() -> App requires [] =
   }
 |}
 
-(* LB04: library with `workers` wiring — not allowed *)
+(* LB04: library with worker/queue infrastructure — not allowed.
+   In the new syntax the old `workers ... for Q { JobType = handlerFn }` wiring
+   block folds into the queue's `jobs` list, so worker wiring is no longer a
+   standalone declaration.  A folded `queue` necessarily owns a `database`
+   (its required field), and a library cannot own application infrastructure
+   such as a database/queue — so the library boundary check rejects it. *)
 let test_LB04_library_with_workers_wiring_rejected () =
-  should_fail "not allowed in library\\|library.*workers\\|workers.*library" {|
+  should_fail "not allowed in library\\|cannot own application infrastructure\\|library.*database\\|library.*workers\\|workers.*library" {|
 #lang tesl
 library Lb04 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
-import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
+import Tesl.Queue exposing [Queue, Job, QueueRetryStrategy, Exponential]
+import Tesl.Maybe exposing [Maybe(..)]
 database Lb04Db = Database {
   schema: "s"
   entities: []
@@ -489,10 +495,9 @@ record Lb04Job { msg: String }
 worker doLb04Job(j: Lb04Job) requires [] = j
 queue Lb04Q = Queue {
   database: Lb04Db
-  jobs: [Lb04Job]
+  jobs: [Job Lb04Job doLb04Job (Nothing)]
   retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 }
 }
-workers Lb04Workers for Lb04Q { Lb04Job = doLb04Job }
 |}
 
 (* LB05: library with `database` block.

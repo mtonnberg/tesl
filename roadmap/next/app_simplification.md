@@ -1,11 +1,112 @@
 # App simplification: `main : () -> App`, queue/worker folding, capability rewiring
 
-**Status:** MIGRATION + WIRING-CHECK + TEST-FIXTURE MIGRATION + CACHE config-type all
-DONE (committed; example batch 113/113, OCaml dune green, racket suite all-pass).
-ONLY REMAINING: deleting the old parser/config-block code (Phase D below) — the new
-typed `= Type{}` forms are accepted everywhere and nothing uses the old block syntax,
-so the old branches can be removed (make each `parse_*_form` require `= Type{}`, drop
-the old-block else-branches + `parse_pg_value`; config_schema/raw_fields cleanup).
+**Status:** USER-FACING `.tesl` MIGRATION + WIRING-CHECK + CACHE config-type DONE
+(committed; example batch 113/113, OCaml dune green, racket suite all-pass). The parser
+still accepts BOTH old and new syntax, so the tree is green.
+
+## Phase C UPDATE (2026-06-29, second pass — findings)
+
+Migrated ~16 `.ml` test fixtures to new syntax (test_types by hand; the rest via 3
+verification-gated workflows). After this pass, **all config-block old syntax is gone**:
+`grep` for `postgres {` / `smtp {` / bare `database|queue|channel|email NAME {` across
+`compiler/test/*.ml` + `tests/*.rkt` returns NOTHING. Aggregate `dune test` is green.
+
+REMAINING Phase C (the ONLY deletable-old-construct usages left — verified by grep):
+- `workers X for Q {}` / `deadWorkers X for Q {}` MAPPING blocks: test_review39_antagonistic,
+  test_review74_sig, test_review67_block_validation, test_library_negative (LKWN04/LIMN04),
+  `tests/tesl-test.rkt`. → fold into `Queue.jobs`. (5 `.ml` in flight via workflow wf_9da8639f;
+  tesl-test.rkt is Racket — migrate by hand.)
+- old `main {}` block: test_proofsuite_identity, `tests/tesl-test.rkt`.
+- `startWorkers`/`serve … on` statements: `tests/tesl-test.rkt` only.
+
+### TWO findings that change Phase D
+
+1. **`with capabilities [...] { … }` must be KEPT** (revise landmine list). It is a
+   general RUNTIME capability-grant block, still needed by SCRIPT-style mains
+   (`main() -> Unit requires [] = with capabilities [email] { … }`) — the integration
+   tests (test_email_integration, test_httpclient_integration) rely on it because a
+   non-App `main` does NOT auto-grant its `requires`. Only `main() -> App` auto-grants
+   (via the desugar). So Phase D KEEPS all of `parse_with_stmt` (both `with database`
+   AND `with capabilities` arms). The design-doc goal "remove `with capabilities`" is in
+   tension with script-mains — DECISION NEEDED before removing it (recommend KEEP).
+2. **smtp port-range validation REGRESSED** (pre-existing, surfaced now). The old
+   `email X { smtp {} }` validator checked `port` ∈ 1..65535 (validation_structural.ml
+   ~775, guarded `when config_expr = None` so now bypassed). The new typed-record
+   `SmtpConfig` path validates `port` is an Int but NOT its range — `port: 70000` and
+   `port: 0` now compile clean. test_email's 2 port-range tests were rewritten to Int-type
+   checks. FOLLOW-UP: re-add a port-range check to the typed-config path (check_typed_config_blocks).
+
+### Revised Phase D deletion targets (after keeping `with capabilities`)
+DELETE: old `main {}` block parse path; `parse_start_workers_stmt`/`parse_serve_stmt`;
+`workers X for Q`/`deadWorkers X for Q` MAPPING-block parsers; old config-block parsers +
+`parse_pg_value` + `postgres{}`/`smtp{}` sub-blocks; `config_schema.ml` + `raw_fields`
+(reconcile LSP `--config-context-json` first). KEEP: ALL of `parse_with_stmt`
+(`with database` + `with capabilities`), `worker`/`deadWorker` fn decls,
+`EWith*`/`EStartWorkers`/`EServe` AST nodes, `channel` lexer token.
+
+⚠️ **CORRECTION (2026-06-29):** the previous status claimed TEST-FIXTURE MIGRATION was
+DONE — it is NOT. Phase C (migrating the ~15 `.ml` test fixtures that still embed OLD
+config/startup syntax, + the tesl-test.rkt Q01 fixtures) is the real remaining blocker
+before Phase D (deleting the old parser branches) can land. Because the parser accepts
+both syntaxes, Phase C can be done incrementally with the tree green throughout; the
+DELETION (Phase D) must be the LAST step, after no test uses old syntax.
+
+### Phase C progress (this pass)
+- ✅ `compiler/test/test_types.ml` `test_module_queue_runtime_statements` migrated +
+  verified (`dune exec test/test_types.exe` green). Proven end-to-end pattern (folded
+  Queue + `main() -> App`) — use it as the template.
+
+### Phase C remaining — per-file migration list
+MECHANICAL (embedded Tesl is incidental setup → migrate to new syntax):
+- `debug_db.ml` (db block; executable harness), `test_formatter.ml` (db+queue blocks —
+  ⚠️ asserts EXACT formatted output, so migrate input AND regen expected via `tesl --fmt`),
+  `test_review26_antagonistic.ml` (db blocks + `with database` in handlers — `with
+  database` STAYS, only `database X {}` → `= Database {}`), `test_debug.ml`,
+  `test_email_integration.ml` + `test_httpclient_integration.ml` (⚠️ need MailHog/python3/
+  racket — available in the compile-examples.sh env), `test_library_boundary.ml` /
+  `test_library_negative.ml` / `test_library_syntax.ml` (`main {}` boilerplate →
+  `main() -> App`), `test_validation.ml`.
+- `test_advanced.ml` `test_main_block`: asserts `main { 0 }` parses to `MainKind` — this
+  tests the OLD main-block being DELETED. Rewrite to `main() -> App = App {…}` (still
+  `MainKind`).
+PREMISE (assertion IS about old-config validation → rewrite to target NEW validation):
+- `test_email.ml` (~55 tests: parser/type/structural-validation/capability for the OLD
+  `email X { smtp {} }` block + `with_db` helper building `database MainDB { postgres {} }`).
+  Rewrite to `= Email { database:, smtp: SmtpConfig {…} }`. NEW error strings (verified):
+  missing db → `` `Email` is missing required field `database` ``; unknown db →
+  `` email `X` references unknown database `Y` ``.
+- `test_review59_antagonistic_backend.ml` + `test_review67_block_validation.ml`:
+  `deadWorkers X for Q {}` MAPPING blocks (PREMISE) → fold into `Queue.jobs` + `App.queues`.
+- `tests/tesl-test.rkt` Q01-class fixtures embedding old config syntax.
+
+### CRITICAL Phase-D landmines (discovered 2026-06-29 — read before deleting)
+1. **`with database X { … }` is KEPT** — still used in HANDLER bodies for SQL context
+   (e.g. `example/learn/lesson48-sql-inner-join.tesl`, 8+ uses). `parse_with_stmt` must
+   keep its `DATABASE` arm; only the `with capabilities [...]` arm is deleted.
+2. **`worker` / `deadWorker` function decls are KEPT**; the `workers X for Q {}` /
+   `deadWorkers X for Q {}` MAPPING blocks + `startWorkers`/`startDeadWorkers`/`serve … on`
+   statements are what get DELETED (replaced by `Queue.jobs` folding + `App.queues`).
+3. **Folded `Queue {}` REQUIRES `database`; `App {}` REQUIRES `database` + `api`** — so
+   migrated queue/main fixtures must add real `database`/`server` decls.
+4. **`config_schema.ml` + `raw_fields` feed the LSP `--config-context-json`** (hover +
+   completion for config-block fields). Deleting them requires the LSP to source field
+   info for the NEW typed blocks elsewhere, or config-field hover/completion regresses.
+   Reconcile before deleting config_schema.
+5. Deletion targets once Phase C is clear: old `main {…}` path, `parse_start_workers_stmt`,
+   `parse_serve_stmt`, the `with capabilities` arm of `parse_with_stmt`, `parse_pg_value` +
+   old `postgres {}`/`smtp {}` sub-blocks, the old `database`/`queue`/`channel`/`email`
+   block-form parsers, `config_schema.ml`, `raw_fields`. KEEP: `with database` arm,
+   `worker`/`deadWorker`, `EWith*`/`EStartWorkers`/`EServe` AST nodes (App desugar
+   synthesizes them), the `channel` lexer token.
+
+### Proven new-syntax templates (from the green corpus)
+- Queue (folded): `queue Q requires [cap] = Queue { database: D, jobs: [Job <JobType>
+  <workerFn> (Something <deadFn>)], retry: QueueRetryStrategy {…}, numberOfWorkers: N }`
+  (see `example/learn/lesson28-dead-letter-queue.tesl`).
+- Email: `email E = Email { database: D, smtp: SmtpConfig { host, port, username,
+  password, tls } }` (see `example/learn/lesson60-email.tesl`).
+- App/main: `main() -> App requires [...] = <lets> App { database: D, api: S, port: P,
+  queues: [...], email: [...], sseChannels: [...] }` (see lesson28 / user-service-api).
 
 Progress (this pass):
 - Phase A — `App.static` schema field + `lower_main_app` now wraps the WHOLE main

@@ -1179,15 +1179,42 @@ check isLarge(n: Int) -> n: Int ::: Large n =
    Phase 2 bug: main blocks and test stmts emitted 3-arg calls which crashed
    at runtime because Racket's thsl-src! requires exactly 4 arguments. *)
 
-let src_with_main = module_ ~extra:"" {|
+let src_with_main = module_
+  ~extra:"import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\nimport Tesl.App exposing [App]\n" {|
+database AppDb = Database {
+  schema: "app"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "d" user: "u" password: ""
+    connection: TcpConnection { host: "h" port: 5432 }
+  })
+}
+
 fn double(x: Int) -> Int =
   let result = x
   result
 
-main {
+handler appRoot() -> String
+  requires [] =
+  "ok"
+
+api AppApi {
+  get "/health" -> String
+}
+
+server AppServer for AppApi {
+  endpoint_0 = appRoot
+}
+
+main() -> App requires [] =
   let y = double 5
   telemetry "done" {}
-}
+  App {
+    database: AppDb
+    api: AppServer
+    port: 8080
+    queues: []
+  }
 |}
 
 let src_fn_only = module_ ~exports:"f" {|

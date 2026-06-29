@@ -849,12 +849,34 @@ fn bad(t: Task) -> String = t.missing
 
 let test_init_telemetry_keywords_typecheck () =
   assert_no_compile_diagnostics {|#lang tesl
-module Foo exposing []
-import Tesl.Prelude exposing [Bool(..)]
+module Foo exposing [S]
+import Tesl.Prelude exposing [Bool(..), Int]
 import Tesl.Telemetry exposing [initTelemetry]
-main {
-  initTelemetry service "my-service" endpoint "in-memory" console True
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.App exposing [App]
+database AppDb = Database {
+  schema: "app"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "d" user: "u" password: ""
+    connection: TcpConnection { host: "h" port: 5432 }
+  })
 }
+handler getValue() -> Int requires [] = 1
+api TaskApi {
+  get "/value"
+    -> Int
+}
+server S for TaskApi {
+  getValue = getValue
+}
+main() -> App requires [] =
+  let _ = initTelemetry service "my-service" endpoint "in-memory" console True
+  App {
+    database: AppDb
+    api: S
+    port: 8080
+  }
 |}
 
 let test_with_transaction_returns_body_type () =
@@ -949,6 +971,16 @@ let test_serve_static_clause_typechecks () =
   assert_no_compile_diagnostics {|#lang tesl
 module Foo exposing [S]
 import Tesl.Prelude exposing [Int]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.App exposing [App]
+database AppDb = Database {
+  schema: "app"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "d" user: "u" password: ""
+    connection: TcpConnection { host: "h" port: 5432 }
+  })
+}
 handler getValue() -> Int requires [] = 1
 api TaskApi {
   get "/value"
@@ -957,9 +989,13 @@ api TaskApi {
 server S for TaskApi {
   getValue = getValue
 }
-main {
-  serve S on 8080 with capabilities [] static "public"
-}
+main() -> App requires [] =
+  App {
+    database: AppDb
+    api: S
+    port: 8080
+    static: "public"
+  }
 |}
 
 let test_sql_reference_queries_typecheck () =

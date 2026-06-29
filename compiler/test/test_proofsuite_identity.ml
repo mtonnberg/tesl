@@ -215,7 +215,7 @@ let fab_worker () =
 (* main kind *)
 let fab_main () =
   Printf.sprintf
-    "#lang tesl\nmodule FabMain exposing []\nimport Tesl.Prelude exposing [Int]\n%smain {\n  with capabilities [] {\n    let p = 5 ::: Pos 5\n    needsPos p\n  }\n}\n"
+    "#lang tesl\nmodule FabMain exposing []\nimport Tesl.Prelude exposing [Int]\n%smain() -> Unit requires [] =\n  with capabilities [] {\n    let p = 5 ::: Pos 5\n    needsPos p\n  }\n"
     fab_scaffold
 
 let j_fab_fn_matrix () =
