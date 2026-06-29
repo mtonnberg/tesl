@@ -86,10 +86,11 @@ fn readAndWrite(key: String) -> String requires [appCapability] =
 # This reduces annotation noise in real applications: declare todoWebService once
 # and everything in that service's scope has the needed permissions.
 #
-# The serve/main/with-capabilities blocks are where capabilities are granted.
-# Only there can you say "I vouch that this scope has [dbWrite]".
-# Functions inside those blocks can use the capabilities.
-# Functions outside cannot, regardless of their declarations.
+# The App root (`main() -> App requires [...]`) is where capabilities are
+# granted. The grant set is derived from main's own `requires` list — that
+# is the single place you say "I vouch that this application has [dbWrite]".
+# Every declaration's effects flow up through `requires` to this root, and
+# the root must cover them all.
 
 # ─────────────────────────────────────────────
 # THEORY — the full model
@@ -112,6 +113,8 @@ fn readAndWrite(key: String) -> String requires [appCapability] =
 # allowed without a capability declaration. This is an intentional design choice —
 # observability is considered part of the platform foundation, not a user-defined effect.
 #
-# At runtime, capabilities are checked when entering "with capabilities [...]" blocks.
-# The runtime verifies that the declared capabilities are actually available in the
-# current execution context (e.g., a database connection is open for dbRead/dbWrite).
+# Capability checking is fully STATIC: the compiler verifies, at each call
+# site, that the caller's `requires [...]` covers the callee's requirements,
+# all the way up to the App root, whose grant set is derived from main's
+# `requires`. There is no separate "with capabilities [...]" runtime block;
+# the App root is the single grant point and the check happens at compile time.

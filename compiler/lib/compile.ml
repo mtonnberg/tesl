@@ -1872,11 +1872,12 @@ let top_decl_loc (decl : Ast.top_decl) : Location.loc =
   | Ast.DLoadTest t -> t.loc
 
 (* ── Config-block context (LSP hover + completion for config fields) ─────────
-   Given a cursor position, return the most-specific configuration block schema
-   enclosing it (database / postgres / queue / retry / channel / cache / email /
-   smtp) together with each schema field and whether the user already wrote it.
-   Drives the editor's field completion + hover from {!Config_schema} so there
-   is one source of truth. *)
+   Given a cursor position, return the most-specific typed configuration block
+   enclosing it (Database / PostgresConfig / Queue / QueueRetryStrategy /
+   SseChannel / Cache / Email / SmtpConfig) together with each schema field and
+   whether the user already wrote it.  Drives the editor's field completion +
+   hover from {!Validation_structural.config_block_schema} so there is one
+   source of truth. *)
 type config_field_info = {
   cfi_name     : string;
   cfi_type     : string;
@@ -1886,59 +1887,123 @@ type config_field_info = {
 }
 type config_context = { cc_block : string; cc_fields : config_field_info list }
 
-let config_field_type_label (f : Config_schema.field) : string =
-  match f.kind with
-  | Config_schema.Scalar lbl -> lbl
-  | Config_schema.Block sub  -> sub ^ " { … }"
-  | Config_schema.Params     -> "(…)"
+(* A short, human label for a typed-config field's value shape, for the LSP
+   hover/completion query.  Sourced from the typed-block schema in
+   {!Validation_structural.config_block_schema}. *)
+let config_field_type_label (k : Validation_structural.vkind) : string =
+  match k with
+  | Validation_structural.VStr         -> "String"
+  | Validation_structural.VInt         -> "Int"
+  | Validation_structural.VPort        -> "Int (port 1..65535)"
+  | Validation_structural.VBool        -> "Bool"
+  | Validation_structural.VSub sub     -> sub ^ " { … }"
+  | Validation_structural.VConn        -> "TcpConnection { … } | SocketConnection { … }"
+  | Validation_structural.VBackend     -> "Postgres (PostgresConfig { … }) | Memory"
+  | Validation_structural.VBackoff     -> "Exponential | Fixed | Linear"
+  | Validation_structural.VDatabaseRef -> "Database"
+  | Validation_structural.VEntityList  -> "[Entity]"
+  | Validation_structural.VJobList     -> "[JobType]"
+  | Validation_structural.VRefList     -> "[Name]"
+  | Validation_structural.VTypeRef     -> "Type"
+  | Validation_structural.VExpr        -> "expression"
 
+(* The typed-config-record [expr] carried by a config declaration's
+   [config_expr] (the `= Database { … }` / `= Email { … }` RHS), if any. *)
+let config_decl_expr (d : Ast.top_decl) : Ast.expr option =
+  match d with
+  | Ast.DDatabase r -> r.config_expr
+  | Ast.DQueue r    -> r.config_expr
+  | Ast.DChannel r  -> r.config_expr
+  | Ast.DCache r    -> r.config_expr
+  | Ast.DEmail r    -> r.config_expr
+  | _ -> None
+
+(* Type name a typed-config record was hinted with (`Database`, `SmtpConfig`,
+   …), peeling a constructor application (`Postgres (PostgresConfig { … })`). *)
+let rec config_record_type_name (e : Ast.expr) : string option =
+  match e with
+  | Ast.ERecord { type_hint = Some t; _ } -> Some t
+  | Ast.EApp { fn = Ast.EConstructor { name; _ }; arg = Ast.ERecord _; _ } -> Some name
+  | Ast.EApp { fn; _ } -> config_record_type_name fn
+  | _ -> None
+
+let config_record_fields (e : Ast.expr) : (string * Ast.expr) list =
+  match e with
+  | Ast.ERecord { fields; _ } -> fields
+  | Ast.EApp { arg = Ast.ERecord { fields; _ }; _ } -> fields
+  | _ -> []
+
+(* Re-points the LSP `--config-context-json` query to the typed-block schema
+   ({!Validation_structural.config_block_schema}).  Finds the config declaration
+   under the cursor, descends to the innermost typed record `Type { … }` that
+   contains the cursor (so a nested `smtp: SmtpConfig { … }` reports SmtpConfig's
+   fields), and lists that block type's fields, marking which are present. *)
 let config_context_source filename source line col : config_context option =
   match parse_module filename source with
   | Err _ -> None
   | Ok m ->
-    (match List.find_opt (fun d ->
-       Config_schema.top_schema_of_decl d <> None
-       && loc_contains_position (top_decl_loc d) line col) m.decls with
+    let under_cursor d =
+      config_decl_expr d <> None
+      && loc_contains_position (top_decl_loc d) line col
+    in
+    (match List.find_opt under_cursor m.decls with
      | None -> None
      | Some d ->
-       let (top_sch, raw) = Option.get (Config_schema.top_schema_of_decl d) in
-       let decl_stop = (top_decl_loc d).stop in
-       (* Is the cursor inside a nested sub-block (postgres / retry / smtp)?
-          A block field's region runs from the line below its key to the next
-          sibling field's key (or the decl end). *)
-       let rec find_nested = function
-         | (cf : Ast.config_field) :: rest ->
-           (match Config_schema.field_in top_sch cf.cf_key with
-            | Some { kind = Config_schema.Block sub; _ } ->
-              let region_stop = match rest with
-                | (n : Ast.config_field) :: _ -> (n.cf_key_loc.start.line, n.cf_key_loc.start.col)
-                | [] -> (decl_stop.line, decl_stop.col)
-              in
-              if line > cf.cf_key_loc.start.line
-                 && position_lt (line, col) region_stop
-              then Some (sub, cf.cf_block)
-              else find_nested rest
-            | _ -> find_nested rest)
-         | [] -> None
+       let top_expr = Option.get (config_decl_expr d) in
+       (* A typed-config block is either an `ERecord` carrying a type_hint (the
+          top-level `= Database { … }` RHS) or a constructor applied to a record
+          (`SmtpConfig { … }`, `Postgres (PostgresConfig { … })`).  Collect every
+          such block whose record body encloses the cursor, then pick the one with
+          the smallest span — the most specific (innermost) block. *)
+       let record_loc (e : Ast.expr) : Location.loc option =
+         match e with
+         | Ast.ERecord { loc; _ } -> Some loc
+         | Ast.EApp { arg = Ast.ERecord { loc; _ }; _ } -> Some loc
+         | _ -> None
        in
-       let (sch, present_raw) =
-         match find_nested raw with
-         | Some (sub, subraw) ->
-           (match Config_schema.schema_for sub with
-            | Some s -> (s, subraw) | None -> (top_sch, raw))
-         | None -> (top_sch, raw)
+       let span_lines (loc : Location.loc) =
+         (loc.stop.line - loc.start.line, loc.stop.col - loc.start.col)
        in
-       let present = List.map (fun (cf : Ast.config_field) -> cf.cf_key) present_raw in
-       let fields =
-         List.map (fun (f : Config_schema.field) -> {
-           cfi_name     = f.fname;
-           cfi_type     = config_field_type_label f;
-           cfi_doc      = f.doc;
-           cfi_required = f.required;
-           cfi_present  = List.mem f.fname present;
-         }) sch.fields
+       let candidates = ref [] in
+       let rec collect (e : Ast.expr) =
+         (match config_record_type_name e, record_loc e with
+          | Some t, Some loc when loc_contains_position loc line col ->
+            candidates := (t, e, loc) :: !candidates
+          | _ -> ());
+         (match e with
+          | Ast.ERecord { fields; _ } -> List.iter (fun (_, v) -> collect v) fields
+          | Ast.EApp { fn; arg; _ } -> collect fn; collect arg
+          | Ast.EList { elems; _ } -> List.iter collect elems
+          | _ -> ())
        in
-       Some { cc_block = sch.sname; cc_fields = fields })
+       collect top_expr;
+       (* The top-level config record always encloses the cursor (the decl loc
+          check above guarantees it), so [candidates] is non-empty.  Pick the
+          tightest span. *)
+       let target =
+         match List.sort (fun (_, _, a) (_, _, b) ->
+           compare (span_lines a) (span_lines b)) !candidates with
+         | (_, e, _) :: _ -> e
+         | [] -> top_expr
+       in
+       (match config_record_type_name target with
+        | None -> None
+        | Some block_type ->
+          (match Validation_structural.config_block_schema block_type with
+           | [] -> None
+           | schema_fields ->
+             let present =
+               List.map fst (config_record_fields target) in
+             let fields =
+               List.map (fun (fname, kind, required) -> {
+                 cfi_name     = fname;
+                 cfi_type     = config_field_type_label kind;
+                 cfi_doc      = "";
+                 cfi_required = required;
+                 cfi_present  = List.mem fname present;
+               }) schema_fields
+             in
+             Some { cc_block = block_type; cc_fields = fields })))
 
 let config_context_response_to_json (cc : config_context option) : string =
   match cc with

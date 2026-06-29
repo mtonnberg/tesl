@@ -215,7 +215,7 @@ let fab_worker () =
 (* main kind *)
 let fab_main () =
   Printf.sprintf
-    "#lang tesl\nmodule FabMain exposing []\nimport Tesl.Prelude exposing [Int]\n%smain() -> Unit requires [] =\n  with capabilities [] {\n    let p = 5 ::: Pos 5\n    needsPos p\n  }\n"
+    "#lang tesl\nmodule FabMain exposing []\nimport Tesl.Prelude exposing [Int]\nimport Tesl.App exposing [App]\nimport Tesl.Database exposing [Database, Memory]\n%shandler fabRoot() -> Int requires [] =\n  0\napi FabApi {\n  get \"/\" -> Int\n}\nserver FabServer for FabApi {\n  endpoint_0 = fabRoot\n}\ndatabase FabDb = Database {\n  schema: \"public\"\n  entities: []\n  backend: Memory\n}\nmain() -> App requires [] =\n  let p = 5 ::: Pos 5\n  let used = needsPos p\n  App {\n    database: FabDb\n    api: FabServer\n    port: 8080\n  }\n"
     fab_scaffold
 
 let j_fab_fn_matrix () =

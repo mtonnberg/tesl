@@ -411,7 +411,7 @@
   (unless submod-present?
     (define hint (if (equal? mode "test")
                      "No test blocks found — add 'test \"name\" { ... }' blocks."
-                     "No main block found — add 'main with capabilities [...] { ... }' or switch to test mode."))
+                     "No main found — add a 'main() -> App = App { ... }' entry point or switch to test mode."))
     (dap-event "output" (hasheq 'category "stderr" 'output (format "~a\n" hint)))
     (dap-event "exited" (hasheq 'exitCode 0))
     (dap-event "terminated" (hasheq)))

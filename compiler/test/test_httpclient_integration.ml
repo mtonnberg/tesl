@@ -1,8 +1,30 @@
 (** test_httpclient_integration.ml — Runtime integration tests for HttpClient.
 
-    These tests compile real Tesl programs that use HttpClient.get/post/put/delete,
-    run the generated Racket code against a live Python mock HTTP server, and
-    verify the actual runtime output.
+    These tests compile real Tesl programs that use HttpClient.get/post/put/delete
+    and run the generated Racket code as a *real Tesl App server*, then exercise
+    the outbound HTTP calls by hitting the server's endpoints over HTTP.
+
+    The modern Tesl language has no script-style `main() -> Unit` and no
+    `with capabilities [...]` blocks.  Capabilities flow only from a declaration's
+    `requires` plus the `main() -> App` entry point's auto-grant: the App desugar
+    wraps server startup in the capability + database scope derived from
+    `main.requires`.  So a program that needs `httpClient` must:
+
+      - declare a `handler` with `requires [httpClient]` that performs the call,
+      - expose it through an `api` + `server`,
+      - return an `App` from `main() -> App requires [httpClient]`.
+
+    Each test therefore:
+      1. starts a Python mock HTTP server (the *upstream* the handler calls),
+      2. compiles a Tesl App whose handlers call HttpClient.{get,post,put,delete}
+         against that mock and return the status code / body,
+      3. starts the compiled Tesl App server on a free port (racket <file>.rkt
+         runs the App's `(module+ main … serve …)`),
+      4. GETs the App endpoint, which triggers the outbound HttpClient call,
+      5. asserts on the HTTP response (the echoed status / body).
+
+    The capability-gate test stays a `--check` compile-failure test (it has no
+    runnable behaviour — the point is that the compiler rejects it).
 
     Tests skip gracefully if racket or python3 are unavailable.
 *)
@@ -135,21 +157,17 @@ let compile_tesl_check_fails ~module_name src =
   (try Sys.remove tesl_tmp with _ -> ());
   code <> 0
 
-(** Run a .rkt file with racket and return (stdout, stderr, exit_code). *)
-let run_racket rkt_file =
-  run_cmd ~timeout_secs:20 "racket" [|rkt_file|]
-
 (** Find curl via PATH. *)
 let curl_binary =
   let (out, _, code) = run_cmd ~timeout_secs:3 "which" [|"curl"|] in
   if code = 0 then String.trim out else "curl"
 
 (** HTTP GET using curl.  Returns body string. *)
-let curl_get url =
-  let (out, _, _) = run_cmd ~timeout_secs:10 curl_binary [|"-s"; url|] in
+let curl_get ?(timeout_secs=10) url =
+  let (out, _, _) = run_cmd ~timeout_secs curl_binary [|"-s"; "-m"; string_of_int timeout_secs; url|] in
   out
 
-(* ── Python mock HTTP server script ────────────────────────────────────────── *)
+(* ── Python mock HTTP server script (the upstream the Tesl handlers call) ───── *)
 
 let mock_server_script = {|
 import sys, json
@@ -233,124 +251,160 @@ let stop_mock_server pid script =
   (try ignore (Unix.waitpid [Unix.WNOHANG] pid) with _ -> ());
   (try Sys.remove script with _ -> ())
 
-(* ── Tesl source templates ──────────────────────────────────────────────────── *)
+(* ── Tesl App server (the program under test) ───────────────────────────────── *)
 
-(** Build a Tesl program that calls a single HTTP method and prints the status code. *)
-let tesl_get_status ~module_name port path =
-  let url = Printf.sprintf "http://127.0.0.1:%d%s" port path in
+(** A single Tesl App exposing one GET endpoint per HTTP method we want to
+    exercise.  Each handler performs an *outbound* HttpClient call to [mock_port]
+    (the Python mock) and returns either the upstream status code (as a string)
+    or the upstream response body.
+
+    Capabilities flow only via `requires [httpClient]` on each handler + the
+    `main() -> App requires [httpClient]` auto-grant — no `with capabilities`,
+    no script-style main. *)
+let tesl_app_src ~module_name ~mock_port ~app_port =
+  let url p = Printf.sprintf "http://127.0.0.1:%d%s" mock_port p in
   Printf.sprintf {|#lang tesl
-module %s exposing []
+module %s exposing [HttpClientTestServer]
 
 import Tesl.Prelude exposing [Int, String, Bool(..), Unit]
-import Tesl.HttpClient exposing [httpClient, HttpResponse, HttpClient.get]
+import Tesl.HttpClient exposing [httpClient, HttpResponse, HttpClient.get, HttpClient.post, HttpClient.put, HttpClient.delete]
 import Tesl.Int exposing [Int.toString]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.App exposing [App]
 
-fn getStatus(url: String) -> String requires [httpClient] =
-  let resp = HttpClient.get url []
+# In-memory database backs the App; the HttpClient tests do not touch it,
+# but `main() -> App` requires a database in the App record.
+database HttpClientTestDb = Database {
+  schema: "httpclient_test"
+  entities: []
+  backend: Memory
+}
+
+# Each handler performs one outbound HttpClient call and returns the upstream
+# status code (or body).  `requires [httpClient]` declares the capability; the
+# App entry point auto-grants it at startup.
+
+handler getStatus() -> String requires [httpClient] =
+  let resp = HttpClient.get "%s" []
   Int.toString resp.status
 
-main {
-  with capabilities [httpClient] {
-    let result = getStatus "%s"
-    let _ = print result
-    Unit
-  }
-}
-|} module_name url
-
-(** Build a Tesl program that calls GET and prints the body. *)
-let tesl_get_body ~module_name port path =
-  let url = Printf.sprintf "http://127.0.0.1:%d%s" port path in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
-
-import Tesl.Prelude exposing [Int, String, Bool(..), Unit]
-import Tesl.HttpClient exposing [httpClient, HttpResponse, HttpClient.get]
-
-fn getBody(url: String) -> String requires [httpClient] =
-  let resp = HttpClient.get url []
+handler getBody() -> String requires [httpClient] =
+  let resp = HttpClient.get "%s" []
   resp.body
 
-main {
-  with capabilities [httpClient] {
-    let result = getBody "%s"
-    let _ = print result
-    Unit
-  }
-}
-|} module_name url
+handler getUsersBody() -> String requires [httpClient] =
+  let resp = HttpClient.get "%s" []
+  resp.body
 
-(** Build a Tesl program that POSTs and prints the status code. *)
-let tesl_post_status ~module_name port path body_str =
-  let url = Printf.sprintf "http://127.0.0.1:%d%s" port path in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
-
-import Tesl.Prelude exposing [Int, String, Bool(..), Unit]
-import Tesl.HttpClient exposing [httpClient, HttpResponse, HttpClient.post]
-import Tesl.Int exposing [Int.toString]
-
-fn postStatus(url: String, body: String) -> String requires [httpClient] =
-  let resp = HttpClient.post url [] body
+handler getErrorStatus() -> String requires [httpClient] =
+  let resp = HttpClient.get "%s" []
   Int.toString resp.status
 
-main {
-  with capabilities [httpClient] {
-    let result = postStatus "%s" "%s"
-    let _ = print result
-    Unit
-  }
-}
-|} module_name url body_str
-
-(** Build a Tesl program that PUTs and prints the status code. *)
-let tesl_put_status ~module_name port path body_str =
-  let url = Printf.sprintf "http://127.0.0.1:%d%s" port path in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
-
-import Tesl.Prelude exposing [Int, String, Bool(..), Unit]
-import Tesl.HttpClient exposing [httpClient, HttpResponse, HttpClient.put]
-import Tesl.Int exposing [Int.toString]
-
-fn putStatus(url: String, body: String) -> String requires [httpClient] =
-  let resp = HttpClient.put url [] body
+handler postEchoStatus() -> String requires [httpClient] =
+  let resp = HttpClient.post "%s" [] "integration-test-payload"
   Int.toString resp.status
 
-main {
-  with capabilities [httpClient] {
-    let result = putStatus "%s" "%s"
-    let _ = print result
-    Unit
-  }
-}
-|} module_name url body_str
+handler postEchoBody() -> String requires [httpClient] =
+  let resp = HttpClient.post "%s" [] "integration-test-payload"
+  resp.body
 
-(** Build a Tesl program that DELETEs and prints the status code. *)
-let tesl_delete_status ~module_name port path =
-  let url = Printf.sprintf "http://127.0.0.1:%d%s" port path in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
-
-import Tesl.Prelude exposing [Int, String, Bool(..), Unit]
-import Tesl.HttpClient exposing [httpClient, HttpResponse, HttpClient.delete]
-import Tesl.Int exposing [Int.toString]
-
-fn deleteStatus(url: String) -> String requires [httpClient] =
-  let resp = HttpClient.delete url []
+handler putStatus() -> String requires [httpClient] =
+  let resp = HttpClient.put "%s" [] "payload"
   Int.toString resp.status
 
-main {
-  with capabilities [httpClient] {
-    let result = deleteStatus "%s"
-    let _ = print result
-    Unit
-  }
+handler deleteStatus() -> String requires [httpClient] =
+  let resp = HttpClient.delete "%s" []
+  Int.toString resp.status
+
+api HttpClientTestApi {
+  get "/getStatus"     -> String
+  get "/getBody"       -> String
+  get "/getUsersBody"  -> String
+  get "/getErrorStatus" -> String
+  get "/postEchoStatus" -> String
+  get "/postEchoBody"  -> String
+  get "/putStatus"     -> String
+  get "/deleteStatus"  -> String
 }
-|} module_name url
+
+server HttpClientTestServer for HttpClientTestApi {
+  endpoint_0 = getStatus
+  endpoint_1 = getBody
+  endpoint_2 = getUsersBody
+  endpoint_3 = getErrorStatus
+  endpoint_4 = postEchoStatus
+  endpoint_5 = postEchoBody
+  endpoint_6 = putStatus
+  endpoint_7 = deleteStatus
+}
+
+main() -> App requires [httpClient] =
+  App {
+    database: HttpClientTestDb
+    api: HttpClientTestServer
+    port: %d
+  }
+|}
+    module_name
+    (url "/ping")        (* getStatus *)
+    (url "/ping")        (* getBody *)
+    (url "/users/42")    (* getUsersBody *)
+    (url "/error")       (* getErrorStatus *)
+    (url "/echo")        (* postEchoStatus *)
+    (url "/echo")        (* postEchoBody *)
+    (url "/update/1")    (* putStatus *)
+    (url "/items/5")     (* deleteStatus *)
+    app_port
+
+(** Start the compiled Tesl App as a racket subprocess.  Returns (pid). *)
+let start_tesl_app rkt_file =
+  let devnull_out = Unix.openfile "/dev/null" [Unix.O_WRONLY] 0 in
+  let err_file = Filename.temp_file "tesl_app_err" ".txt" in
+  let fd_err = Unix.openfile err_file [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o600 in
+  let pid = Unix.create_process "racket"
+    [|"racket"; rkt_file|]
+    Unix.stdin devnull_out fd_err
+  in
+  Unix.close devnull_out;
+  Unix.close fd_err;
+  (pid, err_file)
+
+let stop_tesl_app pid err_file =
+  (try Unix.kill pid Sys.sigterm with _ -> ());
+  (try ignore (Unix.waitpid [Unix.WNOHANG] pid) with _ -> ());
+  (* Give it a moment, then SIGKILL if still alive. *)
+  Unix.sleepf 0.1;
+  (try Unix.kill pid Sys.sigkill with _ -> ());
+  (try ignore (Unix.waitpid [] pid) with _ -> ());
+  (try Sys.remove err_file with _ -> ())
+
+(** Build the App, start the Python mock + the Tesl App server, run [f endpoint_url]
+    where [endpoint_url base] yields a full URL for a given endpoint path, then
+    tear everything down.  [f] receives a function that maps an endpoint name to a
+    full URL on the running Tesl App. *)
+let with_app_server f =
+  let (mock_pid, mock_port, script) = start_mock_server () in
+  Fun.protect ~finally:(fun () -> stop_mock_server mock_pid script) (fun () ->
+    let app_port = pick_free_port () in
+    let mn = fresh_module_name "HttpClientApp" in
+    let src = tesl_app_src ~module_name:mn ~mock_port ~app_port in
+    let rkt = compile_tesl_src ~module_name:mn src in
+    Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
+      let (app_pid, err_file) = start_tesl_app rkt in
+      Fun.protect ~finally:(fun () -> stop_tesl_app app_pid err_file) (fun () ->
+        if not (wait_for_port "127.0.0.1" app_port ~timeout_secs:20) then begin
+          let err = try In_channel.(with_open_text err_file input_all) with _ -> "" in
+          Alcotest.failf "Tesl App server failed to start on port %d; stderr: %s" app_port err
+        end;
+        let endpoint name = Printf.sprintf "http://127.0.0.1:%d/%s" app_port name in
+        f endpoint
+      )
+    )
+  )
 
 (** Build source + module name for a Tesl program without requires [httpClient].
-    Used to verify the capability gate. *)
+    Used to verify the capability gate.  No main is needed — the point is that
+    the compiler rejects an HttpClient.get call in a fn lacking the capability. *)
 let tesl_no_capability_src module_name =
   (module_name, Printf.sprintf {|#lang tesl
 module %s exposing []
@@ -362,11 +416,6 @@ import Tesl.Int exposing [Int.toString]
 fn badFetch(url: String) -> String =
   let resp = HttpClient.get url []
   Int.toString resp.status
-
-main {
-  let _ = badFetch "http://127.0.0.1:9999/ping"
-  Unit
-}
 |} module_name)
 
 (* ── Test setup: skip if tools missing ─────────────────────────────────────── *)
@@ -390,102 +439,60 @@ let guarded_test name f () =
 
 (* ── Individual tests ───────────────────────────────────────────────────────── *)
 
-(** Test 1: GET /ping returns status 200 *)
+(** Test 1: GET /ping (via the App's getStatus endpoint) returns status 200 *)
 let test_get_status_200 () =
-  let (mock_pid, port, script) = start_mock_server () in
-  Fun.protect ~finally:(fun () -> stop_mock_server mock_pid script) (fun () ->
-    let mn = fresh_module_name "TeslHttpGetStatus" in
-    let src = tesl_get_status ~module_name:mn port "/ping" in
-    let rkt = compile_tesl_src ~module_name:mn src in
-    Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
-      let (out, _err, _code) = run_racket rkt in
-      if not (contains "200" out) then
-        Alcotest.failf "GET /ping: expected status 200 in output, got: %S" out
-    )
+  with_app_server (fun endpoint ->
+    let out = curl_get (endpoint "getStatus") in
+    if not (contains "200" out) then
+      Alcotest.failf "GET /ping: expected status 200 in response, got: %S" out
   )
 
 (** Test 2: GET /ping body contains "pong" *)
 let test_get_body_contains_pong () =
-  let (mock_pid, port, script) = start_mock_server () in
-  Fun.protect ~finally:(fun () -> stop_mock_server mock_pid script) (fun () ->
-    let mn = fresh_module_name "TeslHttpGetBody" in
-    let src = tesl_get_body ~module_name:mn port "/ping" in
-    let rkt = compile_tesl_src ~module_name:mn src in
-    Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
-      let (out, _err, _code) = run_racket rkt in
-      if not (contains "pong" out) then
-        Alcotest.failf "GET /ping body: expected 'pong' in output, got: %S" out
-    )
+  with_app_server (fun endpoint ->
+    let out = curl_get (endpoint "getBody") in
+    if not (contains "pong" out) then
+      Alcotest.failf "GET /ping body: expected 'pong' in response, got: %S" out
   )
 
 (** Test 3: POST /echo returns status 201 *)
 let test_post_status_201 () =
-  let (mock_pid, port, script) = start_mock_server () in
-  Fun.protect ~finally:(fun () -> stop_mock_server mock_pid script) (fun () ->
-    let mn = fresh_module_name "TeslHttpPost" in
-    let src = tesl_post_status ~module_name:mn port "/echo" "hello-from-tesl" in
-    let rkt = compile_tesl_src ~module_name:mn src in
-    Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
-      let (out, _err, _code) = run_racket rkt in
-      if not (contains "201" out) then
-        Alcotest.failf "POST /echo: expected status 201 in output, got: %S" out
-    )
+  with_app_server (fun endpoint ->
+    let out = curl_get (endpoint "postEchoStatus") in
+    if not (contains "201" out) then
+      Alcotest.failf "POST /echo: expected status 201 in response, got: %S" out
   )
 
 (** Test 4: PUT /update/1 returns status 200 *)
 let test_put_status_200 () =
-  let (mock_pid, port, script) = start_mock_server () in
-  Fun.protect ~finally:(fun () -> stop_mock_server mock_pid script) (fun () ->
-    let mn = fresh_module_name "TeslHttpPut" in
-    let src = tesl_put_status ~module_name:mn port "/update/1" "payload" in
-    let rkt = compile_tesl_src ~module_name:mn src in
-    Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
-      let (out, _err, _code) = run_racket rkt in
-      if not (contains "200" out) then
-        Alcotest.failf "PUT /update/1: expected status 200 in output, got: %S" out
-    )
+  with_app_server (fun endpoint ->
+    let out = curl_get (endpoint "putStatus") in
+    if not (contains "200" out) then
+      Alcotest.failf "PUT /update/1: expected status 200 in response, got: %S" out
   )
 
 (** Test 5: DELETE /items/5 returns status 200 *)
 let test_delete_status_200 () =
-  let (mock_pid, port, script) = start_mock_server () in
-  Fun.protect ~finally:(fun () -> stop_mock_server mock_pid script) (fun () ->
-    let mn = fresh_module_name "TeslHttpDelete" in
-    let src = tesl_delete_status ~module_name:mn port "/items/5" in
-    let rkt = compile_tesl_src ~module_name:mn src in
-    Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
-      let (out, _err, _code) = run_racket rkt in
-      if not (contains "200" out) then
-        Alcotest.failf "DELETE /items/5: expected status 200 in output, got: %S" out
-    )
+  with_app_server (fun endpoint ->
+    let out = curl_get (endpoint "deleteStatus") in
+    if not (contains "200" out) then
+      Alcotest.failf "DELETE /items/5: expected status 200 in response, got: %S" out
   )
 
 (** Test 6: GET /error returns status 500 *)
 let test_server_error_returns_500 () =
-  let (mock_pid, port, script) = start_mock_server () in
-  Fun.protect ~finally:(fun () -> stop_mock_server mock_pid script) (fun () ->
-    let mn = fresh_module_name "TeslHttpGetError" in
-    let src = tesl_get_status ~module_name:mn port "/error" in
-    let rkt = compile_tesl_src ~module_name:mn src in
-    Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
-      let (out, _err, _code) = run_racket rkt in
-      if not (contains "500" out) then
-        Alcotest.failf "GET /error: expected status 500 in output, got: %S" out
-    )
+  with_app_server (fun endpoint ->
+    let out = curl_get (endpoint "getErrorStatus") in
+    if not (contains "500" out) then
+      Alcotest.failf "GET /error: expected status 500 in response, got: %S" out
   )
 
 (** Test 7: GET /users/42 body contains "Alice" *)
 let test_get_users_body_contains_alice () =
-  let (mock_pid, port, script) = start_mock_server () in
-  Fun.protect ~finally:(fun () -> stop_mock_server mock_pid script) (fun () ->
-    let mn = fresh_module_name "TeslHttpGetUsers" in
-    let src = tesl_get_body ~module_name:mn port "/users/42" in
-    let rkt = compile_tesl_src ~module_name:mn src in
-    Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
-      let (out, _err, _code) = run_racket rkt in
-      if not (contains "Alice" out) then
-        Alcotest.failf "GET /users/42 body: expected 'Alice' in output, got: %S" out
-    )
+  with_app_server (fun endpoint ->
+    let out = curl_get (endpoint "getUsersBody") in
+    if not (contains "Alice" out) then
+      Alcotest.failf "GET /users/42 body: expected 'Alice' in response, got: %S" out
   )
 
 (** Test 8: Capability gate — missing requires [httpClient] causes compile error *)
@@ -495,40 +502,20 @@ let test_capability_gate_compile_error () =
   if not (compile_tesl_check_fails ~module_name src) then
     Alcotest.failf "Expected --check to fail for HttpClient.get without requires [httpClient]"
 
-(** Test 9: GET /ping Racket runs without error (exit code 0) *)
-let test_get_racket_exit_zero () =
-  let (mock_pid, port, script) = start_mock_server () in
-  Fun.protect ~finally:(fun () -> stop_mock_server mock_pid script) (fun () ->
-    let mn = fresh_module_name "TeslHttpGetExit" in
-    let src = tesl_get_status ~module_name:mn port "/ping" in
-    let rkt = compile_tesl_src ~module_name:mn src in
-    Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
-      let (_out, err, code) = run_racket rkt in
-      if code <> 0 then
-        Alcotest.failf "GET /ping Racket: expected exit 0, got %d; stderr: %s" code err
-    )
+(** Test 9: the App server endpoint responds successfully (a non-empty status). *)
+let test_get_endpoint_responds () =
+  with_app_server (fun endpoint ->
+    let out = curl_get (endpoint "getStatus") in
+    if String.length (String.trim out) = 0 then
+      Alcotest.failf "GET endpoint: expected a non-empty response from the Tesl App"
   )
 
-(** Test 10: POST body is sent: mock echoes it back, response body contains our payload *)
+(** Test 10: POST body is sent: mock echoes it back in the response body. *)
 let test_post_body_echoed () =
-  let (mock_pid, port, script) = start_mock_server () in
-  Fun.protect ~finally:(fun () -> stop_mock_server mock_pid script) (fun () ->
-    (* We verify the server received and echoed back our body string by reading the
-       response body which the mock puts in the JSON "received" field. *)
-    (* Use curl to make the same request and verify the mock echoes correctly *)
-    let url = Printf.sprintf "http://127.0.0.1:%d/echo" port in
-    let result = curl_get url in
-    (* curl does a GET but /echo only handles POST; expect 404 or we use curl POST *)
-    ignore result;
-    (* Just verify POST status is 201 which confirms the body was accepted *)
-    let mn = fresh_module_name "TeslHttpPostEcho" in
-    let src = tesl_post_status ~module_name:mn port "/echo" "integration-test-payload" in
-    let rkt = compile_tesl_src ~module_name:mn src in
-    Fun.protect ~finally:(fun () -> try Sys.remove rkt with _ -> ()) (fun () ->
-      let (out, _err, _code) = run_racket rkt in
-      if not (contains "201" out) then
-        Alcotest.failf "POST echo test: expected status 201 in output, got: %S" out
-    )
+  with_app_server (fun endpoint ->
+    let out = curl_get (endpoint "postEchoBody") in
+    if not (contains "integration-test-payload" out) then
+      Alcotest.failf "POST echo body: expected the payload echoed back, got: %S" out
   )
 
 (* ── Main ───────────────────────────────────────────────────────────────────── *)
@@ -545,8 +532,8 @@ let () =
         (guarded_test "get-users-alice"    test_get_users_body_contains_alice);
       Alcotest.test_case "GET /error returns status 500"    `Slow
         (guarded_test "get-error-500"      test_server_error_returns_500);
-      Alcotest.test_case "GET /ping Racket exit code 0"     `Slow
-        (guarded_test "get-exit-zero"      test_get_racket_exit_zero);
+      Alcotest.test_case "GET endpoint responds over HTTP"  `Slow
+        (guarded_test "get-responds"       test_get_endpoint_responds);
     ];
     "post-put-delete", [
       Alcotest.test_case "POST /echo returns status 201"    `Slow

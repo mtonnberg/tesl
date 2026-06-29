@@ -289,10 +289,12 @@ handler postMessage(session: SessionUser ::: Authenticated session,
 
 # ─── Workers ─────────────────────────────────────────────────────────────────
 #
-# Worker concurrency — syntax:
+# Worker concurrency — set `numberOfWorkers: N` inside the folded `Queue`:
 #
-#   startWorkers WorkersName with capabilities [...]      # 1 worker thread (default)
-#   startWorkers N WorkersName with capabilities [...]    # N concurrent worker threads
+#   numberOfWorkers: 1    # 1 worker thread (default if omitted)
+#   numberOfWorkers: N    # N concurrent worker threads
+#
+# (NotificationQueue above uses numberOfWorkers: 3.)
 #
 # How it works:
 #   Tesl uses PostgreSQL's `SELECT ... FOR UPDATE SKIP LOCKED` to dequeue jobs safely.
@@ -305,13 +307,15 @@ handler postMessage(session: SessionUser ::: Authenticated session,
 #   - CPU-bound work: N ≈ number of CPU cores
 #   - I/O-bound work (HTTP, DB): N can be higher, e.g. 4–8
 #   - Conservative starting point: 2–4, then increase based on monitoring
-#   - For dead workers (deadWorkers / startDeadWorkers): always 1 (single-threaded)
-#     Dead workers handle failure compensation — they should run serially to
-#     avoid duplicate compensating actions on the same job.
+#   - The dead-letter worker is always single-threaded — there is no
+#     numberOfWorkers knob for it.  It is folded into the job's dead slot
+#     (the `(Something handleDeadNotify)` in the queue's `jobs` list) and runs
+#     serially so failure compensation isn't duplicated on the same job.
 #
-# This example starts 3 parallel notification workers.
-# Each worker handles one NotifyJob at a time; with 3 workers, up to 3 notifications
-# can be delivered concurrently.
+# Listing NotificationQueue in `App.queues` activates these workers (the 3
+# normal workers plus the single dead-letter worker) — no explicit start call.
+# Each normal worker handles one NotifyJob at a time; with 3 workers, up to 3
+# notifications can be delivered concurrently.
 
 worker notifyWorker(job: NotifyJob ::: FromQueue (Id == jobId) job)
   =

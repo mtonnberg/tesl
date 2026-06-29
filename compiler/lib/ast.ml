@@ -307,24 +307,6 @@ type codec_form = {
   loc        : loc;
 }
 
-(* ─── Config-block field metadata ───────────────────────────────────────── *)
-
-(** One [key[: value]] line as actually written in a configuration block
-    (database / queue / channel / cache / email and their nested sub-blocks),
-    captured generically by the parser in source order — INCLUDING keys that are
-    not recognised fields.  This is the raw surface record the config-schema
-    validation pass ({!Validation_config}) and the LSP [--config-context-json]
-    query read; the typed fields on each [*_form] record carry the decoded
-    values for the emitter.  [cf_block] is the nested block's own fields (e.g.
-    the [postgres {...}] / [retry {...}] / [smtp {...}] sub-block), empty for a
-    scalar field. *)
-type config_field = {
-  cf_key     : string;
-  cf_key_loc : loc;
-  cf_colon   : bool;              (** whether a [:] immediately followed the key *)
-  cf_block   : config_field list; (** nested sub-block fields, [] when scalar *)
-}
-
 (* ─── Database form ──────────────────────────────────────────────────────── *)
 
 type database_form = {
@@ -333,8 +315,7 @@ type database_form = {
   schema     : string;
   entities   : string list;
   postgres   : (string * string) list;  (** key-value connection params *)
-  raw_fields : config_field list;        (** surface fields for schema validation *)
-  config_expr : expr option;             (** new typed-record syntax: `= Database { … }` (desugar fills the fields above) *)
+  config_expr : expr option;             (** typed-record syntax: `= Database { … }` (desugar fills the fields above) *)
   loc        : loc;
 }
 
@@ -349,7 +330,6 @@ type queue_form = {
   initial_delay    : int option;
   capabilities     : string list;     (** `requires [...]` for the folded workers (App pass) *)
   number_of_workers : int option;     (** `numberOfWorkers: N` (App pass); workers started on App activation *)
-  raw_fields       : config_field list;
   config_expr      : expr option;
   loc              : loc;
 }
@@ -359,7 +339,6 @@ type channel_form = {
   key_params : binding list;
   database   : string;
   payload    : type_expr;
-  raw_fields : config_field list;
   config_expr : expr option;
   loc        : loc;
 }
@@ -369,8 +348,7 @@ type cache_form = {
   database    : string;
   value_type  : type_expr;
   default_ttl : int option;
-  raw_fields  : config_field list;
-  config_expr : expr option;        (** new typed-record syntax: = Cache { … } *)
+  config_expr : expr option;        (** typed-record syntax: = Cache { … } *)
   loc         : loc;
 }
 
@@ -386,7 +364,6 @@ type email_form = {
   name       : string;
   database   : string;
   smtp       : smtp_config;
-  raw_fields : config_field list;
   config_expr : expr option;
   loc        : loc;
 }

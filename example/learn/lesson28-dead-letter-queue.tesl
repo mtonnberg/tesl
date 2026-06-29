@@ -135,8 +135,10 @@ server AppServer for AppApi {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 #
-# The App's `queues` list wires up both the normal and dead-letter worker
-# loops for NotifQueue.  No explicit startWorkers / startDeadWorkers needed.
+# Listing `NotifQueue` in the App's `queues` list activates both the normal
+# and dead-letter worker loops for it.  The dead-letter loop comes from the
+# job's dead slot (`(Something handleDeadNotif)` in the queue's `jobs`), and
+# the normal worker count comes from the queue's `numberOfWorkers` (default 1).
 
 main() -> App requires [appService, notifCap, deadCap] =
   App {

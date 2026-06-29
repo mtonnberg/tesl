@@ -336,7 +336,7 @@ let test_channel_with_params () =
   let src = {|#lang tesl
 module Foo exposing []
 import Tesl.Prelude exposing [String]
-channel UserEvents(userId: String) {
+channel UserEvents(userId: String) = SseChannel {
   database: MainDb
   payload: String
 }

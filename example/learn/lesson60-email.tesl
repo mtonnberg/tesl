@@ -17,8 +17,8 @@ module Lesson60Email exposing [
 # Step 1: Declare an `email` block with database and SMTP config.
 # Step 2: Call `Email.send EmailName { to: ... subject: ... }` in any
 #         function that requires [email].
-# Step 3: Call `startEmailWorker EmailName` in your `main` to start the
-#         background delivery thread.
+# Step 3: List the email block in your App root's `email: [EmailName]`
+#         field to activate the background delivery thread.
 #
 # Email.send is NON-BLOCKING: it writes to a `tesl_email_outbox` table
 # inside the current database transaction (the outbox pattern). The call
@@ -168,20 +168,23 @@ fn sendHtmlNewsletter(addr: String, htmlContent: String) -> Unit
 #   - Retry on SMTP failure with backoff
 #   - No lost emails on server restart or crash
 #
-# WHY startEmailWorker IN main?
+# HOW THE DELIVERY WORKER IS ACTIVATED
 #
-# The background delivery thread must be started explicitly so you control
-# its lifetime. In tests or batch jobs, you may not want it running at all.
-# In production, call startEmailWorker AppEmail inside your main block:
+# The background delivery thread is activated by listing the email block in
+# your application root's `email:` field. In production, an App looks like:
 #
-#   main with capabilities [email] {
-#     with database AppDB {
-#       startEmailWorker AppEmail
-#       serve MyServer on 8080 with capabilities [myService]
+#   main() -> App requires [email, myService] =
+#     App {
+#       database: AppDB
+#       api: MyServer
+#       port: 8080
+#       email: [AppEmail]
 #     }
-#   }
 #
-# The worker runs as a daemon thread (does not block server exit).
+# Listing AppEmail in `App.email` starts its delivery worker — no explicit
+# start call is needed. Capabilities flow from each declaration's `requires`
+# and are granted at the App root (derived from main's `requires`). The
+# worker runs as a daemon thread (does not block server exit).
 #
 # WHY NOT A SEPARATE QUEUE SERVICE?
 #
@@ -242,8 +245,12 @@ test "email with special characters in body" {
 # ─────────────────────────────────────────────────────────────────────────────
 # START THE WORKER
 #
-# Call startEmailWorker in your main function or server setup.
-# Without this, emails are queued but never sent.
+# In a real application, list the email block in your App root's
+# `email: [AppEmail]` field — that activates the delivery worker.
+# Without activation, emails are queued but never sent.
+#
+# The helper below shows the underlying primitive (`startEmailWorker`) that
+# the App root lowers to; you normally don't call it directly.
 # ─────────────────────────────────────────────────────────────────────────────
 
 fn startEmailDelivery() -> Unit requires [email] =

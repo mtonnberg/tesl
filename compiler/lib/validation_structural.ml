@@ -1353,101 +1353,6 @@ let check_imported_module_is_library (m : module_form) : validation_error list =
           ) forbidden
   ) m.imports
 
-(* ── Config-block field schema (colon-required + unknown-field) ──────────────
-   Every configuration block (database / queue / channel / cache / email and
-   their nested postgres / retry / smtp sub-blocks) is described once in
-   {!Config_schema}.  Here we walk the [raw_fields] the parser captured and:
-     - flag any field key not in the block's schema (catches typos that the
-       permissive parser would otherwise silently drop), and
-     - require a `:` after every scalar field (block/param fields like
-       `postgres { … }` / `key(…)` are written without one).
-   Value-type checks for the critical fields stay in the per-block checks above
-   (check_queue_structure / check_email_structure / …).  Those checks ALSO flag
-   a handful of missing fields (queue database/jobs, email database + smtp host,
-   cache/channel database); [covered_elsewhere] lists them so this pass does not
-   double-report — every other required field's absence IS reported here. *)
-let check_config_field_schema (decls : top_decl list) : validation_error list =
-  (* (block, field) presence already validated by the legacy per-block checks. *)
-  let covered_elsewhere =
-    [ "queue","database"; "queue","jobs"; "email","database"; "email","smtp";
-      "cache","database"; "channel","database"; "smtp","host" ]
-  in
-  let decl_loc (d : top_decl) : loc =
-    match d with
-    | DDatabase r -> r.loc | DQueue r -> r.loc | DChannel r -> r.loc
-    | DCache r -> r.loc | DEmail r -> r.loc | _ -> dummy_loc ""
-  in
-  (* Per-declaration extra skips for missing-required: a non-postgres backend
-     (e.g. an in-memory test database) needs neither `schema` nor `postgres`. *)
-  let extra_skip (d : top_decl) : (string * string) list =
-    match d with
-    | DDatabase r when r.backend <> "" && r.backend <> "postgres" ->
-      [ "database", "schema"; "database", "postgres" ]
-    | _ -> []
-  in
-  let rec walk (skip : (string * string) list) (sch : Config_schema.schema)
-      (fields : config_field list) (block_loc : loc) : validation_error list =
-    let is_covered (sch : Config_schema.schema) fname =
-      List.mem (sch.sname, fname) covered_elsewhere
-      || List.mem (sch.sname, fname) skip
-    in
-    let present = List.map (fun (cf : config_field) -> cf.cf_key) fields in
-    (* (a) per-field: unknown-field, missing colon, and recurse into sub-blocks. *)
-    let per_field =
-      List.concat_map (fun (cf : config_field) ->
-        match Config_schema.field_in sch cf.cf_key with
-        | None ->
-          let valid =
-            String.concat ", "
-              (List.map (fun (f : Config_schema.field) -> f.fname) sch.fields)
-          in
-          [ make_error cf.cf_key_loc
-              ~hint:(Printf.sprintf "valid fields in a `%s` block: %s" sch.sname valid)
-              (Printf.sprintf "unknown field `%s` in `%s` block" cf.cf_key sch.sname) ]
-        | Some fld ->
-          let colon_err =
-            if Config_schema.is_colon_required fld && not cf.cf_colon then
-              [ make_error cf.cf_key_loc
-                  ~hint:(Printf.sprintf
-                    "write `%s: <value>` — every configuration field uses a colon"
-                    cf.cf_key)
-                  (Printf.sprintf
-                    "config field `%s` is missing its `:` — write `%s: <value>`"
-                    cf.cf_key cf.cf_key) ]
-            else []
-          in
-          let sub_err =
-            match fld.kind with
-            | Config_schema.Block sub ->
-              (match Config_schema.schema_for sub with
-               | Some subsch -> walk skip subsch cf.cf_block cf.cf_key_loc
-               | None -> [])
-            | _ -> []
-          in
-          colon_err @ sub_err
-      ) fields
-    in
-    (* (b) missing required fields (skip those reported by legacy checks). *)
-    let missing =
-      List.filter_map (fun (f : Config_schema.field) ->
-        if f.required && not (List.mem f.fname present) && not (is_covered sch f.fname)
-        then
-          Some (make_error block_loc
-            ~hint:(Printf.sprintf "add `%s: <%s>` to the `%s` block"
-                     f.fname (Config_schema.kind_label f) sch.sname)
-            (Printf.sprintf "`%s` block is missing required field `%s`"
-               sch.sname f.fname))
-        else None
-      ) sch.fields
-    in
-    per_field @ missing
-  in
-  List.concat_map (fun d ->
-    match Config_schema.top_schema_of_decl d with
-    | Some (sch, fields) -> walk (extra_skip d) sch fields (decl_loc d)
-    | None -> []
-  ) decls
-
 (* ── Typed config-block validation (new `= Type { … }` syntax) ───────────────
    The parser leaves the typed-record config as an [expr] in [config_expr]; this
    pass validates it structurally against a per-block schema: required fields,
@@ -1457,6 +1362,7 @@ let check_config_field_schema (decls : top_decl list) : validation_error list =
 type vkind =
   | VStr            (* string literal, or env/envString call *)
   | VInt            (* int literal, or envInt call *)
+  | VPort           (* int literal proven in 1..65535 (a port-validity obligation), or envInt *)
   | VBool
   | VSub of string  (* nested record, validated against the named sub-schema *)
   | VConn           (* PostgresConnection: Tcp { host,port } | Socket { path } *)
@@ -1476,13 +1382,18 @@ let config_block_schema = function
                     "backend", VBackend, true ]
   | "PostgresConfig" -> [ "dbName", VStr, true; "user", VStr, true;
                           "password", VStr, true; "connection", VConn, true ]
+  (* The two PostgresConnection shapes — validated internally via [check_record]'s
+     "__Tcp"/"__Socket" rows; listed here so the LSP config-context query can
+     offer field completion/hover inside a `connection: TcpConnection { … }`. *)
+  | "TcpConnection" -> [ "host", VStr, true; "port", VPort, true ]
+  | "SocketConnection" -> [ "path", VStr, true ]
   | "Queue" -> [ "database", VDatabaseRef, true; "jobs", VJobList, true;
                  "retry", VSub "QueueRetryStrategy", false;
                  "numberOfWorkers", VInt, false ]
   | "QueueRetryStrategy" -> [ "maxAttempts", VInt, true; "backoff", VBackoff, true;
                               "initialDelay", VInt, true ]
   | "Email" -> [ "database", VDatabaseRef, true; "smtp", VSub "SmtpConfig", true ]
-  | "SmtpConfig" -> [ "host", VStr, true; "port", VInt, false; "username", VStr, false;
+  | "SmtpConfig" -> [ "host", VStr, true; "port", VPort, false; "username", VStr, false;
                       "password", VStr, false; "tls", VBool, false ]
   | "SseChannel" -> [ "database", VDatabaseRef, true; "payload", VTypeRef, true ]
   | "Cache" -> [ "database", VDatabaseRef, true; "valueType", VTypeRef, true;
@@ -1536,6 +1447,16 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
        | ELit { lit = LInt _; _ } -> []
        | _ when is_env_call "envInt" v -> []
        | _ -> err (Printf.sprintf "field `%s` must be an Int (a literal or `envInt \"VAR\" default`)" fname))
+    | VPort ->
+      (* A port literal carries a validity obligation: it must denote a real TCP
+         port (1..65535).  An `envInt`-provided port is resolved at runtime, so it
+         is accepted here (the obligation is discharged by the env value). *)
+      (match v with
+       | ELit { lit = LInt n; _ } when n >= 1 && n <= 65535 -> []
+       | ELit { lit = LInt n; _ } ->
+         err (Printf.sprintf "field `%s` is not a valid port: %d is outside the range 1..65535" fname n)
+       | _ when is_env_call "envInt" v -> []
+       | _ -> err (Printf.sprintf "field `%s` must be a port number (an Int literal in 1..65535 or `envInt \"VAR\" default`)" fname))
     | VBool ->
       (match v with ELit { lit = LBool _; _ } -> [] | _ -> err (Printf.sprintf "field `%s` must be a Bool (true/false)" fname))
     | VSub sub -> check_record (cfg_expr_loc v) sub (cfg_fields v)
@@ -1591,7 +1512,7 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
     | VExpr -> ignore v; []
   and check_record loc schema_name fields : validation_error list =
     let schema = match schema_name with
-      | "__Tcp" -> [ "host", VStr, true; "port", VInt, true ]
+      | "__Tcp" -> [ "host", VStr, true; "port", VPort, true ]
       | "__Socket" -> [ "path", VStr, true ]
       | s -> config_block_schema s in
     if schema = [] then []  (* unknown sub-schema: don't second-guess *)

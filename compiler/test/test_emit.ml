@@ -520,7 +520,7 @@ capability chatPubSub implies pubsub
 
 type RoomEvent = NewMessage roomId: String
 
-channel RoomMessages(roomId: String) {
+channel RoomMessages(roomId: String) = SseChannel {
   database: MainDatabase
   payload: RoomEvent
 }
@@ -546,7 +546,7 @@ record NotifyJob {
 
 type RoomEvent = NotifyFailed roomName: String
 
-channel RoomMessages(roomId: String) {
+channel RoomMessages(roomId: String) = SseChannel {
   database: MainDatabase
   payload: RoomEvent
 }

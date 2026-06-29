@@ -367,20 +367,20 @@ let test_structural_missing_host () =
 (** 3.4 Email block with a non-Int smtp `port` produces a validation error.
     The old config syntax validated the numeric port RANGE (1-65535); the new
     typed-record `SmtpConfig` no longer carries a range check, so the closest
-    surviving validation is that `port` must be an Int. A String port is
-    rejected with a V001 field-type error. *)
+    `port` carries a port-validity obligation: a non-Int value (here a String)
+    is rejected with a V001 field error. *)
 let test_structural_port_not_int () =
   let block = "email AppEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: \"0\"\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db block) in
-  check_err_contains "email_port_not_int" src "field `port` must be an Int"
+  check_err_contains "email_port_not_int" src "field `port` must be a port number"
 
-(** 3.5 Email block with a malformed smtp `port` (boolean instead of Int)
-    produces a validation error. Same rationale as 3.4: the typed-record form
-    validates the port field's TYPE rather than its numeric range. *)
-let test_structural_port_bad_type () =
-  let block = "email AppEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: true\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
+(** 3.5 Email block whose smtp `port` is an Int literal OUTSIDE the valid range
+    (1..65535) fails the port-validity obligation at compile time. This is the
+    proof-style range check on the typed SmtpConfig.port field. *)
+let test_structural_port_out_of_range () =
+  let block = "email AppEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: env(\"H\")\n    port: 70000\n    username: env(\"U\")\n    password: env(\"P\")\n    tls: true\n  }\n}\n" in
   let src = module_ (with_db block) in
-  check_err_contains "email_port_bad_type" src "field `port` must be an Int"
+  check_err_contains "email_port_out_of_range" src "is not a valid port: 70000 is outside the range 1..65535"
 
 (** 3.6 Valid email block with correct database passes structural validation *)
 let test_structural_valid_block () =
@@ -543,7 +543,7 @@ let () =
       test_case "unknown database error"               `Quick test_structural_unknown_database;
       test_case "missing host error"                   `Quick test_structural_missing_host;
       test_case "non-Int port error"                   `Quick test_structural_port_not_int;
-      test_case "bad-type port error"                   `Quick test_structural_port_bad_type;
+      test_case "out-of-range port error"               `Quick test_structural_port_out_of_range;
       test_case "valid block passes"                   `Quick test_structural_valid_block;
       test_case "port: 25 is valid"                     `Quick test_structural_port_25;
       test_case "port: 465 is valid"                    `Quick test_structural_port_465;

@@ -1,5 +1,37 @@
 # App simplification: `main : () -> App`, queue/worker folding, capability rewiring
 
+**Status:** ✅ COMPLETE & VERIFIED. Full batch green ("All good!": examples 113/113,
+Tesl tests 113/113, mutation 100%, integration green, Racket all-pass; OCaml dune green).
+Old syntax is REJECTED; the Phase D changes are uncommitted-but-green (cacheCap + Phase C
+already committed at 75d6661 / 4bf7453). Phase C
+(fixture migration) + Phase D (deletion + redesign per user direction) are done and
+independently verified: old syntax is now REJECTED, `dune test` green, `config_schema.ml`
+deleted. The redesign per the user's direction landed in full:
+- **No non-App main**: the only `main` form is `main() -> App`; the script-style
+  `main() -> Unit` + old `main { … }` block are gone (parser path deleted). Integration
+  tests restructured to the App-server model; test_proofsuite_identity `fab_main` → App.
+- **`with capabilities` removed**: the surface statement + its `parse_with_stmt` arm are
+  deleted (the `with database` arm stays for handler SQL; the `EWithCapabilities` AST node
+  stays — the App desugar emits it from `main.requires`). It was a static no-op anyway, so
+  callers now propagate via `requires` (e.g. tesl-test MissingPropagation).
+- **smtp port via proof**: new `VPort` value-kind — a port literal carries a port-validity
+  obligation (Int in 1..65535, or `envInt`); out-of-range → compile error `V001 … is not a
+  valid port: N is outside the range 1..65535`. Applied to `SmtpConfig.port` +
+  `TcpConnection.port`. (A heavier GDP refined-type `Port` is a possible future elevation.)
+- Also fixed a real `tesl/email.rkt` SMTP bug (`smtp-send-message` arg shape) so App-driven
+  `Email.send` actually delivers.
+Deleted: `with capabilities`/old-`main{}`/`startWorkers`/`serve`/worker-mapping parsers,
+old config-block bare-branches + `parse_pg_value` + `postgres{}`/`smtp{}`/`retry{}`
+sub-blocks, `config_schema.ml` + `raw_fields` + `config_field` + `check_config_field_schema`.
+LSP `--config-context-json` re-pointed to `Validation_structural.config_block_schema`.
+
+Tutorial PROSE refreshed too (lesson31-worker-concurrency, lesson60-email, lesson28,
+lesson11-capabilities, chat-backend, KanelNotify): comments now teach `numberOfWorkers:`
++ `App.queues`/`App.email` activation + the App-root capability grant model (no
+`startWorkers`/`with capabilities`). All 6 still `--check` + `--fmt-check` clean.
+
+---
+## (historical) earlier status
 **Status:** USER-FACING `.tesl` MIGRATION + WIRING-CHECK + CACHE config-type DONE
 (committed; example batch 113/113, OCaml dune green, racket suite all-pass). The parser
 still accepts BOTH old and new syntax, so the tree is green.
@@ -36,13 +68,53 @@ REMAINING Phase C (the ONLY deletable-old-construct usages left — verified by 
    `port: 0` now compile clean. test_email's 2 port-range tests were rewritten to Int-type
    checks. FOLLOW-UP: re-add a port-range check to the typed-config path (check_typed_config_blocks).
 
-### Revised Phase D deletion targets (after keeping `with capabilities`)
+## USER DIRECTION (2026-06-29) — Phase D is a REDESIGN, not just deletion
+
+The user resolved the two open questions decisively, EXPANDING the scope:
+1. **No "non-App main" — it should all go.** Every `main` must be `main() -> App`. The
+   script-style `main() -> Unit requires [] = with capabilities […] { … }` form that the
+   integration tests + test_proofsuite_identity now use is NOT acceptable and must be
+   restructured.
+2. **Remove `with capabilities` entirely** (parser + AST surface + all usages).
+3. **smtp port validation → a PROOF**, not a runtime range check. The `SmtpConfig.port`
+   (and likely `TcpConnection.port`) field should carry a port-validity proof/refinement
+   (e.g. `ValidPort`) so an out-of-range port is a COMPILE-time proof failure.
+
+### Implications / key design points to resolve while executing
+- **Integration tests** (`test_email_integration.ml`, `test_httpclient_integration.ml`)
+  currently compile + RUN a script `main` that prints/exits and assert on stdout / MailHog.
+  With only `main() -> App` (a blocking server) and no `with capabilities`, these must be
+  restructured. Likely cleanest: move the email/httpClient exercise into a `test "…"
+  requires [email|httpClient] { … }` block (test blocks grant caps via `requires`, like the
+  cache tests) and have the integration harness compile the .tesl + run its test submodule
+  (raco test) + assert MailHog/HTTP — OR an App with an endpoint that the harness starts,
+  hits over HTTP, and checks. DECISION needed; the test-block route avoids a live server.
+- **`test_proofsuite_identity`** script main → a `test`/`fn` form (no main needed for a
+  proof-identity check).
+- **smtp port proof** — confirm config-type record fields can carry a proof refinement
+  (`port: Int ::: ValidPort port`); if not yet supported, that's a prerequisite language
+  feature. Define `ValidPort` (1..65535) and apply to `SmtpConfig.port` (+ `TcpConnection.port`).
+
+### Sequenced plan
+1. Commit the green Phase-C-complete state (recommended checkpoint).
+2. smtp port proof (self-contained): define `ValidPort` + refine the port fields; replace
+   test_email's Int-type port tests with proof-failure tests.
+3. Restructure the non-App mains (integration tests + test_proofsuite_identity) off
+   `with capabilities` / script-main → test blocks or App.
+4. Remove `with capabilities` (parser arm + any AST/emit handling) once no usage remains.
+5. Delete old parser/config code (below) + `config_schema`/`raw_fields` (reconcile LSP).
+6. Full batch verify.
+
+### Phase D deletion targets (with-capabilities NOW INCLUDED per user direction)
 DELETE: old `main {}` block parse path; `parse_start_workers_stmt`/`parse_serve_stmt`;
+`with capabilities [...] { … }` (the capabilities arm of `parse_with_stmt`);
 `workers X for Q`/`deadWorkers X for Q` MAPPING-block parsers; old config-block parsers +
 `parse_pg_value` + `postgres{}`/`smtp{}` sub-blocks; `config_schema.ml` + `raw_fields`
-(reconcile LSP `--config-context-json` first). KEEP: ALL of `parse_with_stmt`
-(`with database` + `with capabilities`), `worker`/`deadWorker` fn decls,
-`EWith*`/`EStartWorkers`/`EServe` AST nodes, `channel` lexer token.
+(reconcile LSP `--config-context-json` first). KEEP: the `with database X { … }` arm of
+`parse_with_stmt` (handler SQL context — still used, e.g. lesson48); `worker`/`deadWorker`
+fn decls; `EWith*`/`EStartWorkers`/`EServe` AST nodes (the App desugar synthesizes them);
+`channel` lexer token. NOTE: `EWithCapabilities` AST node stays (App desugar emits it from
+`main.requires`); only the SURFACE `with capabilities` statement is removed.
 
 ⚠️ **CORRECTION (2026-06-29):** the previous status claimed TEST-FIXTURE MIGRATION was
 DONE — it is NOT. Phase C (migrating the ~15 `.ml` test fixtures that still embed OLD

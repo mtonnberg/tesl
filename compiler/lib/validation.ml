@@ -54,7 +54,6 @@ let check_module (m : module_form) : validation_error list =
   @ check_workers_structure ~extra_funcs:imported_funcs decls
   @ check_cache_structure decls
   @ check_email_structure decls
-  @ check_config_field_schema decls
   @ check_typed_config_blocks decls
   @ check_app_wiring decls
   @ check_database_entities m

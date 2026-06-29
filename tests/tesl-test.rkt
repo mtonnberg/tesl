@@ -1947,11 +1947,7 @@
 "
      "fn runNeedsShared() -> Int =
 "
-     "  with capabilities [sharedRead] {
-"
-     "    needsShared()
-"
-     "  }
+     "  needsShared()
 "))
    (write-file
     shadowed-consumer-path
