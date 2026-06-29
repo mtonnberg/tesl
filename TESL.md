@@ -296,17 +296,18 @@ The mental model is closer to **Doobie** (Scala) or **SqlCommand with typed para
 Tesl derives the database schema directly from your `entity` and `database` declarations. On first run it creates any missing tables automatically — no separate migration file needed to get started:
 
 ```tesl
-database TodoDatabase {
-  backend  postgres
-  schema   "todo_api"
-  entities [Todo, User]
-  postgres {
-    database env("POSTGRES_DB")
-    user     env("POSTGRES_USER")
-    password env("POSTGRES_PASSWORD")
-    host     env("POSTGRES_HOST")
-    port     envInt("POSTGRES_PORT", 5432)
-  }
+database TodoDatabase = Database {
+  schema: "todo_api"
+  entities: [Todo, User]
+  backend: Postgres (PostgresConfig {
+    dbName: env "TESL_POSTGRES_DATABASE"
+    user: env "TESL_POSTGRES_USER"
+    password: env "TESL_POSTGRES_PASSWORD"
+    connection: TcpConnection {
+      host: env "TESL_POSTGRES_HOST"
+      port: envInt "TESL_POSTGRES_PORT" 5432
+    }
+  })
 }
 ```
 
@@ -324,12 +325,12 @@ record NotifyJob {
   message: String
 }
 
-queue NotificationQueue {
-  database AppDatabase
-  jobs     [NotifyJob]
-  retry {
+queue NotificationQueue requires [notifyCap] = Queue {
+  database: AppDatabase
+  jobs:     [Job NotifyJob notifyWorker Nothing]
+  retry:    QueueRetryStrategy {
     maxAttempts:  3
-    backoff:      exponential
+    backoff:      Exponential
     initialDelay: 5
   }
 }
@@ -338,11 +339,12 @@ worker notifyWorker(job: NotifyJob ::: FromQueue (Id == jobId) job)
   requires [notifyCap] =
   # send the notification
   job
-
-workers NotificationWorkers for NotificationQueue {
-  NotifyJob = notifyWorker
-}
 ```
+
+The worker is wired to its job type directly in the queue's `jobs` list
+(`Job <JobType> <workerFn> <deadLetterSlot>`) — there is no separate `workers`
+declaration. Use `Nothing` for no dead-letter handler, or `(Something deadFn)` to
+attach one.
 
 Jobs are stored in PostgreSQL using `FOR UPDATE SKIP LOCKED` for safe concurrent dequeue. No Redis. No separate service. Retry with exponential backoff is declarative. Dead-letter queues for failed jobs are a built-in `deadWorker` declaration.
 
@@ -351,9 +353,9 @@ Jobs are stored in PostgreSQL using `FOR UPDATE SKIP LOCKED` for safe concurrent
 SSE (Server-Sent Events) runs on the same HTTP port as your REST endpoints. No separate WebSocket server, no nginx config, no reconnection logic — the browser's native `EventSource` handles it.
 
 ```tesl
-channel RoomMessages(roomId: String) {
-  database ChatDatabase
-  payload  RoomEvent
+sseChannel RoomMessages(roomId: String) = SseChannel {
+  database: ChatDatabase
+  payload: RoomEvent
 }
 
 # Publish from inside a transaction — atomically with your DB writes:

@@ -232,8 +232,11 @@ elif ! command -v raco >/dev/null 2>&1; then
 else
   ai_fail=0
   ai_tmp="$(mktemp -d)"
-  AI_TESL=( "tests/agent-feature-tests.tesl" "example/support-assistant.tesl" )
-  AI_RKT=( "tests/agent-provider-norm-test.rkt" "tests/agent-runtime-tests.rkt" )
+  AI_TESL=( "tests/agent-feature-tests.tesl" "tests/agent-tests.tesl" \
+            "tests/agent-tools-tests.tesl" "tests/agent-conversation-tests.tesl" \
+            "tests/agent-run-tests.tesl" "example/support-assistant.tesl" )
+  AI_RKT=( "tests/agent-provider-norm-test.rkt" "tests/agent-runtime-tests.rkt" \
+           "tests/agent-conversation-pg-test.rkt" )
   for f in "${AI_TESL[@]}"; do
     [ -f "$REPO_ROOT/$f" ] || { echo "  ⚠  $f (missing — skipped)"; continue; }
     out="$ai_tmp/$(basename "$f" .tesl).rkt"
