@@ -1,0 +1,87 @@
+#lang tesl
+module AiLiveCheck exposing [AiServer, askClaude, AskRequest]
+
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Env exposing [envInt]
+import Tesl.Telemetry exposing [initTelemetry]
+import Tesl.App exposing [App]
+import Tesl.Agent exposing [aiProvider, askReply, replyText]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LIVE real-provider smoke check — talks to the REAL Anthropic API.
+#
+# Everything else in example/ and the lessons is tested with the deterministic
+# MOCK provider (no key, no network). This file is the opposite: it has NO test
+# blocks and is meant to be RUN against the real API to confirm the provider
+# transport actually works end to end.
+#
+# HOW TO RUN:
+#   export ANTHROPIC_API_KEY=sk-ant-...
+#   tesl run example/ai-live-check.tesl            # serves on PORT (default 8088)
+#   curl -s localhost:8088/ask -d '{"prompt":"Say hello in one short sentence."}'
+#
+# A real Claude reply means the provider path (POST https://api.anthropic.com/v1/
+# messages, x-api-key + anthropic-version headers, response parsing) works. Without
+# the key set, the request fails at call time (the agent value still builds — the
+# key is only read when inference actually runs).
+# ══════════════════════════════════════════════════════════════════════════════
+
+capability liveAi implies aiProvider
+
+# The agent's provider/model/apiKey are the live production binding. `apiKey` is
+# read from the environment when inference runs.
+agent Assistant requires [liveAi] = Agent {
+  provider: anthropic
+  model: "claude-opus-4-8"
+  apiKey: env "ANTHROPIC_API_KEY"
+  systemPrompt: "You are a helpful assistant. Answer in one short sentence."
+  tools: []
+  maxTokens: 256
+}
+
+record AskRequest {
+  prompt: String
+}
+
+codec AskRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      prompt <- "prompt" with_codec stringCodec
+    }
+  ]
+}
+
+# Calls the REAL model (askReply requires the aiProvider capability) and returns
+# the assistant's text. There is intentionally no mock here — this is the live path.
+handler askClaude(req: AskRequest) -> String
+  requires [liveAi] =
+  replyText (askReply Assistant req.prompt)
+
+api AiApi {
+  post "/ask"
+    body req: AskRequest
+    -> String
+}
+
+server AiServer for AiApi {
+  askClaude = askClaude
+}
+
+# An in-memory database keeps this runnable with only the API key set — no
+# PostgreSQL required for the smoke check.
+database LiveDb = Database {
+  schema: "ai_live"
+  entities: []
+  backend: Memory
+}
+
+main() -> App requires [liveAi] =
+  let _ = initTelemetry service "ai-live-check" endpoint "in-memory" console True
+  let port = envInt "PORT" 8088
+  App {
+    database: LiveDb
+    api: AiServer
+    port: port
+  }

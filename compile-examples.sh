@@ -512,6 +512,8 @@ EXAMPLE_FILES=(
     "$(pwd)/example/todo-api.tesl"
     "$(pwd)/example/chat/chat-backend.tesl"
     "$(pwd)/example/support-assistant.tesl"
+    "$(pwd)/example/ai-live-check.tesl"
+    "$(pwd)/example/ai-conversation-service.tesl"
     "${KANEL_FILES[@]}"
 )
 
