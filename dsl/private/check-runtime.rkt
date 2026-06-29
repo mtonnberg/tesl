@@ -892,28 +892,18 @@
 ;; standalone.  Given the semantic divergence, the duplication is intentional
 ;; and should be maintained in sync rather than mechanically merged.
 (begin-for-syntax
-  ;; ── Zero-cost-proofs erasure gate (roadmap A) ──────────────────────────────
-  ;; DEFAULT-ON and UNCONDITIONAL.  The differential audit proved the erased
-  ;; expansion ≡ the runtime safety net across the full corpus (byte-identical
-  ;; emission, 80/80 behavioral parity), and for a SOUND static checker the
-  ;; runtime proof structs are pure redundancy: the proof carried by a binding is
-  ;; type-level information known at compile time (exactly what --type-at / hover
-  ;; report).  So the param-binding macros below ALWAYS generate the ERASED
-  ;; expansion — no runtime-bind+evidence, no validate-runtime-argument, no
-  ;; six-way parameterize — INCLUDING under `--debug`.  TESL_ZERO_COST_PROOFS=0
-  ;; (0/false/no/off, case-insensitive) restores the net, for regression
-  ;; comparison only.  Read at PHASE 1 so the erased path emits *less code*.
+  ;; ── Zero-cost proofs ───────────────────────────────────────────────────────
+  ;; The param-binding macros below generate the ERASED expansion — no
+  ;; runtime-bind+evidence, no validate-runtime-argument, no env parameterize.
+  ;; For a SOUND static checker the runtime proof structs are pure redundancy:
+  ;; the proof carried by a binding is type-level information known at compile
+  ;; time (exactly what --type-at / hover report).  The static checker is the
+  ;; sole guarantor of the declared proofs.
   ;;
   ;; The debugger needs no runtime structs: its Variables panel shows the RAW
   ;; value (the *x binding), and proof/type display is sourced from compile-time
   ;; type information.  Breakpoint checkpoints (thsl-src!) are emitted separately
   ;; by the OCaml emitter and are unaffected by erasure.
-  (define zero-cost-proofs?
-    (let ([v (getenv "TESL_ZERO_COST_PROOFS")])
-      (cond [(not v) #t]
-            [(member (string-downcase v) '("0" "false" "no" "off")) #f]
-            [(member (string-downcase v) '("1" "true" "yes" "on")) #t]
-            [else #t])))
 
   (define-syntax-class typed-binding
     (pattern [name:id (~datum :) type:expr (~datum :::) proof:expr])
@@ -1059,18 +1049,18 @@
 
   ;; wrap-runtime-named-binding binds a GDP let/lambda local: *x (raw value) and
   ;; x (the proof-carrying value, or raw if none).  #:erasable? (default #t)
-  ;; controls whether the zero-cost-proofs? mode drops the wrap/validate/
-  ;; parameterize machinery.  pack/unpack witness binders pass #:erasable? #f
-  ;; because their values ARE the proof carrier (a packed witness) that later
-  ;; code structurally depends on — see callers at the pack/unpack sites.
+  ;; controls whether the binding drops the wrap/parameterize machinery.
+  ;; pack/unpack witness binders pass #:erasable? #f because their values ARE the
+  ;; proof carrier (a packed witness) that later code structurally depends on —
+  ;; see callers at the pack/unpack sites.
   (define (wrap-runtime-named-binding name-id expr-stx body-stx #:erasable? [erasable? #t])
     (define star-name-id (star-id name-id))
     (define value-id (format-id name-id "~a-runtime-value" (syntax-e name-id)))
     (define evidence-id (format-id name-id "~a-runtime-evidence" (syntax-e name-id)))
     (define binding-id (format-id name-id "~a-runtime-binding" (syntax-e name-id)))
     (define type-id (format-id name-id "~a-runtime-type" (syntax-e name-id)))
-    (if (and zero-cost-proofs? erasable?)
-        ;; ── ERASED: no runtime-bind+evidence / validate / parameterize ────────
+    (if erasable?
+        ;; ── ERASED: no runtime-bind+evidence / parameterize ───────────────────
         ;; Preserve the check-fail? short-circuit (control flow, not a proof net).
         ;; Bind *x to the raw value; bind x to the value itself when it is a
         ;; proof-carrying structure (check-ok / named-value / detached-proof /
@@ -1336,23 +1326,7 @@
     (define final-bound-names (validate-binding-sequence! who binding-stxs '() arg-name-symbols))
     (validate-return-stx! who returns-stx final-bound-names)
     (define star-ids (map star-id arg-name-ids))
-    (define quoted-name-stxs
-      (for/list ([id (in-list arg-name-ids)])
-        #`'#,(syntax-e id)))
-    (define arg-evidence-ids
-      (for/list ([id (in-list arg-name-ids)])
-        (format-id id "~a-runtime-evidence" (syntax-e id))))
-    (define arg-binding-ids
-      (for/list ([id (in-list arg-name-ids)])
-        (format-id id "~a-runtime-binding" (syntax-e id))))
     (define arg-spec-exprs (map binding->arg-spec-expr binding-stxs))
-    (define arg-type-datums
-      (for/list ([binding-stx (in-list binding-stxs)])
-        (normalize-gdp-expr (binding-type-datum binding-stx))))
-    (define arg-proof-datums
-      (for/list ([binding-stx (in-list binding-stxs)])
-        (define-values (_name-id _type-stx proof-stx) (binding-parts binding-stx))
-        (and proof-stx (normalize-gdp-expr (syntax->datum proof-stx)))))
     (define signature-id (format-id name-id "~a-signature" (syntax-e name-id)))
     (define kind-id (datum->syntax whole-stx kind))
     (define returns-datum (normalize-type-return-stx returns-stx))
@@ -1362,12 +1336,8 @@
     (define trusted-body
       #`(syntax-parameterize ([accept (make-rename-transformer #'accept/trusted)])
           #,transformed-body))
-    (define full-name-env-id (format-id name-id "~a-runtime-name-env" (syntax-e name-id)))
-    (define default-expr (if (= (length arg-binding-ids) 1)
-                             #`(runtime-binding-raw #,(car arg-binding-ids))
-                             #'#f))
-    ;; Erased twin of default-expr: the raw value of the single argument, read
-    ;; directly off the incoming parameter (no runtime-binding allocated).
+    ;; The raw value of the single argument, read directly off the incoming
+    ;; parameter (no runtime-binding allocated) — `accept`'s implicit value.
     (define default-expr-erased (if (= (length arg-name-ids) 1)
                                     #`(raw-value #,(car arg-name-ids))
                                     #'#f))
@@ -1385,25 +1355,14 @@
          (list #`[#,star-arg (raw-value #,arg-id)]
                #`[#,arg-id #,star-arg]))))
     (with-syntax ([(arg-id ...) arg-name-ids]
-                  [(star-arg ...) star-ids]
-                  [(quoted-name ...) quoted-name-stxs]
-                  [(arg-evidence ...) arg-evidence-ids]
-                  [(arg-binding ...) arg-binding-ids]
                   [(arg-spec-expr ...) arg-spec-exprs]
-                  [(arg-type-expr ...) (for/list ([datum (in-list arg-type-datums)])
-                                        #`'#,datum)]
-                  [(arg-proof-expr ...) (for/list ([datum (in-list arg-proof-datums)])
-                                         (if datum #`'#,datum #'#f))]
                   [(erased-arg-clause ...) erased-arg-clauses]
                   [signature-id signature-id]
                   [name name-id]
-                  [who-id (datum->syntax whole-stx who)]
-                  [full-name-env-id full-name-env-id]
                   [(cap-id ...) cap-stxs]
                   [kind-id kind-id]
                   [returns-expr returns-expr]
                   [raw-expr raw-expr]
-                  [default-expr default-expr]
                   [default-expr-erased default-expr-erased]
                   [input-facts-expr input-facts-expr]
                   [body-expr trusted-body])
@@ -1415,56 +1374,25 @@
                             '(cap-id ...)
                             returns-expr
                             raw-expr))
-          #,(if zero-cost-proofs?
-                ;; ── ERASED expansion (zero-cost mode) ─────────────────────────
-                ;; Drop runtime-bind+evidence, validate-runtime-argument, and the
-                ;; four env-extension parameterizes.  KEEP the check proof factory:
-                ;; the accept→accept/trusted rename (in body-expr) plus the two
-                ;; check parameters accept/reject read (current-check-default-value
-                ;; for `accept`'s implicit value, current-check-input-facts for
-                ;; carrying chained input proofs).  input-facts-expr reads the
-                ;; INCOMING argument before it is rebound to raw, so check chaining
-                ;; (checkB (checkA x)) still accumulates facts.
-                #'(define (name arg-id ...)
-                    (call-with-declared-capabilities
-                     (list cap-id ...)
-                     (lambda ()
-                       (parameterize ([current-check-default-value default-expr-erased]
-                                      [current-check-input-facts input-facts-expr])
-                         (let* (erased-arg-clause ...)
-                           body-expr)))))
-                ;; ── DEFAULT expansion (runtime safety net on) ─────────────────
-                #'(define (name arg-id ...)
+          ;; ── ERASED expansion (zero-cost: the static checker is the sole
+          ;; guarantor of the declared proofs) ───────────────────────────────
+          ;; No runtime-bind+evidence, no validate-runtime-argument, no
+          ;; env-extension parameterizes.  KEEP the check proof factory: the
+          ;; accept→accept/trusted rename (in body-expr) plus the two check
+          ;; parameters accept/reject read (current-check-default-value for
+          ;; `accept`'s implicit value, current-check-input-facts for carrying
+          ;; chained input proofs).  input-facts-expr reads the INCOMING argument
+          ;; before it is rebound to raw, so check chaining (checkB (checkA x))
+          ;; still accumulates facts.
+          (define (name arg-id ...)
             (call-with-declared-capabilities
              (list cap-id ...)
              (lambda ()
-               (let-values ([(arg-evidence arg-binding)
-                             (runtime-bind+evidence quoted-name arg-id)] ...)
-                 (let* ([full-name-env-id (extend-name-env (hash)
-                                                           (list quoted-name ...)
-                                                           (list arg-binding ...))]
-                        [all-arg-bindings (for/fold ([acc (hash)])
-                                                    ([b (in-list (list arg-binding ...))])
-                                            (merge-bindings acc (runtime-binding-bindings b)))])
-                   (validate-runtime-argument 'who-id 'name quoted-name arg-evidence arg-type-expr arg-proof-expr full-name-env-id all-arg-bindings) ...
-                   (parameterize ([current-name-env full-name-env-id]
-                                  [current-proof-env
-                                   (extend-proof-env (hash)
-                                                     (list arg-binding ...))]
-                                  [current-evidence-env
-                                   (extend-evidence-env (hash)
-                                                        (list arg-evidence ...))]
-                                  [current-type-env
-                                   (extend-type-env (hash)
-                                                    (list arg-binding ...)
-                                                    (list arg-type-expr ...))]
-                                  [current-check-default-value default-expr]
-                                  [current-check-input-facts input-facts-expr])
-                     (let ([star-arg (runtime-binding-raw arg-binding)] ...
-                           [arg-id (runtime-binding-name arg-binding)] ...)
-                       body-expr)))))))))) ; last 2 ) close the default (define …) and the (if zero-cost-proofs? …)
+               (parameterize ([current-check-default-value default-expr-erased]
+                              [current-check-input-facts input-facts-expr])
+                 (let* (erased-arg-clause ...)
+                   body-expr))))))))) ; close (define name), (begin), (with-syntax …), (build-check-like-expansion), (begin-for-syntax …)
 
-))
 
 (define-syntax (reject stx)
   (syntax-parse stx

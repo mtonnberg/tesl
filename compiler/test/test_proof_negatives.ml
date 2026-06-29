@@ -1,16 +1,13 @@
 (** Safety-net negative tests — the compile-time proof/capability guarantees.
 
-    The Racket runtime carries a *gated* safety net (proof/validation evidence
-    that survives only under [TESL_ZERO_COST_PROOFS=0]); the production default
-    erases it.  The roadmap (remove_old_safety_net / zero_cost_capabilities)
-    wants the compiler to BE the guarantee, so that even with the runtime net
-    fully erased no unsafe program slips through.
+    Proofs are erased at run time (zero-cost is the only mode), so the OCaml
+    compiler's static checker IS the guarantee: no unsafe program may slip
+    through, because there is no runtime net behind it.
 
     These tests pin that down: each asserts the OCaml compiler rejects an unsafe
-    program at `--check` time, independent of any runtime mode.  If someone later
-    weakens a compile-time check (reasoning "the runtime net will catch it"), the
-    corresponding test fails — surfacing the loss of the static guarantee before
-    the net is removed.
+    program at `--check` time.  If someone later weakens a compile-time check
+    (reasoning "something downstream will catch it"), the corresponding test
+    fails — surfacing the loss of the static guarantee.
 
     Group PN — proofs:    proof construction / decomposition / subject / matching.
     Group CN — caps:      capability declaration is mandatory and complete.

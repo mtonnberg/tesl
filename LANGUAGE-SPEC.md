@@ -15,7 +15,7 @@ Unless stated otherwise, examples use intended `.tesl` syntax. Known implementat
 
 The `.tesl` frontend is the primary user-facing language. The underlying Racket DSL is an elaboration target and runtime substrate, not the main public surface.
 
-Important implementation note on guarantees: when this specification says that something is enforced at compile time, that is the intended `.tesl` surface contract. The current implementation still contains runtime integrity checks in the Racket substrate, especially around trusted/internal boundaries and handler return validation. Those checks are defense in depth and an implementation divergence, not the desired long-term public model.
+Important implementation note on guarantees: when this specification says that proof verification or the declared-context capability check is enforced at compile time, that is literal — the compiler is the sole contract for those, with no runtime re-check behind them. A separate set of checks remains as **core runtime semantics** (not a removable safety net): the ambient capability-grant check (a "Missing capabilities" error if a required capability is not granted at runtime), handler parameter type validation, handler return type/shape validation, and the existential-witness escape check. These run because they are part of how the runtime executes a request at its boundaries, not as defense in depth that duplicates a compile-time guarantee.
 
 ## 2. Product goals (non-normative, but guiding)
 The following are not syntax rules, but they are part of the intended identity of Tesl and should guide language review.
@@ -63,11 +63,11 @@ Proof-relevant information *can* be carried at runtime through evidence-bearing 
 - detached proofs (`detached-proof`);
 - existential packages.
 
-**By default this layer is erased.** For standard `check`/`fn`/`handler` paths the param-binding machinery (struct wrapping, `validate-runtime-argument`, the proof-environment `parameterize`) is dropped during macro expansion, so a release build allocates nothing for proof tracking. The flip to default-on followed a full differential audit: the emitted Racket is byte-identical regardless of the setting, and the erased program behaves identically to the runtime-checked one across the whole corpus (80/80), backed by ~1,150 negative tests.
+**This layer is erased.** For standard `check`/`fn`/`handler` paths the param-binding machinery (struct wrapping, `validate-runtime-argument`, the proof-environment `parameterize`) is dropped during macro expansion, so a build allocates nothing for proof tracking. Proof verification is a purely compile-time guarantee; there is no runtime proof-checking layer behind it to toggle back on.
 
 **Retained pieces ("(almost)"):** free-floating proofs (`detached-proof`, via `detachFact`/`attachFact`) and cross-boundary proof transport keep their carriers; a proof-annotated parameter keeps one allocation so decomposition still works; `establish`/trusted facts, existential packages, newtype nominal wrappers, and `FromDb` proofs retain their representation.
 
-**Erased under `--debug` too.** For a sound checker the runtime structs are redundant — a binding's proof is compile-time information. So `--debug` also erases; the debugger shows the raw runtime value and overlays proof/type from compile-time type info, and breakpoints (`thsl-src!` checkpoints, emitted separately by the OCaml emitter) are unaffected. `TESL_ZERO_COST_PROOFS=0` restores the runtime evidence layer for regression comparison.
+**Erased under `--debug` too.** For a sound checker the runtime structs are redundant — a binding's proof is compile-time information. So `--debug` also erases; the debugger shows the raw runtime value and overlays proof/type from compile-time type info, and breakpoints (`thsl-src!` checkpoints, emitted separately by the OCaml emitter) are unaffected. There is no toggle that restores a runtime evidence layer — proof verification lives entirely in the compiler.
 
 ### 4.4 Public interface
 
@@ -217,12 +217,19 @@ Proof annotations and proof templates must only refer to names that are in scope
 
 A hidden existential witness is scoped to its package/elimination context. Returning or storing it directly is a Skolem escape and is rejected.
 
-### 7.10 Static checking and runtime checking are both part of the alpha contract
+### 7.10 Proof verification is compile-time; some runtime semantics remain
 **Accepted design, Implemented.**
 
 The `.tesl` frontend performs proof-aware static checking when it has enough information. In the current implementation, structural type checking and proof-aware checking run as separate frontend passes before lowering to the Racket DSL.
 
-**Proof verification is compile-time** (excluding the retained carriers noted in §4.3). The runtime evidence structs are erased for standard `check`/`fn` paths — in release and `--debug` alike — so proof verification is a purely compile-time guarantee with zero runtime cost. `TESL_ZERO_COST_PROOFS=0` restores the runtime evidence layer as a regression-comparison safety net.
+**Proof verification is compile-time only** (excluding the retained carriers noted in §4.3). The runtime evidence structs are erased for standard `check`/`fn` paths — in release and `--debug` alike — so proof verification is a purely compile-time guarantee with zero runtime cost. The compiler is the sole contract for it; there is no runtime evidence layer behind it to toggle on, and the same holds for the declared-context capability check.
+
+This does **not** mean the runtime performs no validation. A handful of checks remain as **core runtime semantics**, because they govern how a request crosses the runtime's boundaries rather than duplicating a compile-time proof:
+
+- the ambient capability-grant check — a "Missing capabilities" error if a required capability is not granted at runtime;
+- handler parameter type validation;
+- handler return type/shape validation;
+- the existential-witness escape check (§7.9).
 
 ### 7.11 Newtype nominal identity is enforced at runtime
 **Accepted design, Implemented.**
@@ -369,7 +376,7 @@ The module header must still appear explicitly inside the file.
 Tesl uses two structural mechanisms:
 
 - indentation for function bodies and nested body constructs such as `if`, `case`, and existential packing bodies;
-- braces for top-level blocks such as `record`, `entity`, `database`, `api`, `server`, `main`, and for body blocks such as `with database { ... }` and `with capabilities { ... }`.
+- braces for top-level blocks such as `record`, `entity`, `database`, `api`, `server`, the `App { ... }` record returned by `main`, and for body blocks such as `with database { ... }` and `with transaction { ... }`.
 
 Unexpected indentation is a parse error.
 
@@ -693,12 +700,12 @@ library ModuleName exposing [TypeA, FactB, checkB, helperFn]
 |---|---|
 | `api`, `server` | HTTP server wiring — app-level only |
 | `main` | Entry point — app-level only |
-| `workers` | Background worker wiring — app-level only |
+| `queue`, `sseChannel`, `cache`, `email` | Infrastructure wiring — app-level only |
 | `database`, `entity` | Storage declarations — app-level only |
 
-The compiler rejects any `library` module that contains these infra constructs. This makes the boundary machine-checked: a library is always safe to import from any other module.
+The compiler rejects any `library` module that contains these infra constructs. This makes the boundary machine-checked: a library is always safe to import from any other module. (`worker`/`deadWorker` *function definitions* are allowed; only the queue that folds them together is app-level.)
 
-**Import restriction:** Importing a `module` that itself contains `api`, `server`, `main`, or `workers` wiring is also a compile error. Those constructs are application entry points and cannot be consumed as library dependencies.
+**Import restriction:** Importing a `module` that itself contains `api`, `server`, `main`, or `queue` wiring is also a compile error. Those constructs are application entry points and cannot be consumed as library dependencies.
 
 #### Signature completeness
 
@@ -819,14 +826,15 @@ Consumers import only from `UserLib` and see a single, stable API. The internal 
                    | <capture-decl>
                    | <api-decl>
                    | <server-decl>
-                   | <main-block>
+                   | <main-decl>
                    | <test-block>
                    | <queue-decl>
                    | <channel-decl>
-                   | <workers-decl>
                    | <cache-decl>
                    | <email-decl>
 ```
+
+`main` is an ordinary `<function-decl>` returning an `App` (§11.13); `<main-decl>` is called out separately only because it is the application entry point. There is no `workers`/`deadWorkers` declaration — workers are folded into the queue's `jobs` list (§11.15, §11.17).
 
 `const` is not part of the intended public language. Top-level immutability is already the default.
 
@@ -993,34 +1001,44 @@ Property tests automatically generate random values for record types by construc
 ### 11.15 Queue declarations
 **Accepted design, Implemented.**
 
+A `queue` is a **folded record** assigned with `=`. It pairs each job type with its worker (and an optional dead-letter worker) in a single `jobs` list, names the backing database, and configures retry behaviour and worker concurrency. The capabilities the workers need are listed in the queue's `requires`.
+
 ```text
-<queue-decl> ::= "queue" <identifier> "{"
-                   "database" <identifier>
-                   "jobs" "[" <identifier> { "," <identifier> } "]"
-                   [ "retry" "{" <retry-options> "}" ]
+<queue-decl> ::= "queue" <identifier> "requires" "[" <capability-list> "]" "=" "Queue" "{"
+                   "database" ":" <identifier>
+                   "jobs" ":" "[" <job-entry> { <job-entry> } "]"
+                   [ "retry" ":" "QueueRetryStrategy" "{" <retry-options> "}" ]
+                   [ "numberOfWorkers" ":" <integer> ]
                  "}"
 
+<job-entry> ::= "Job" <JobType> <workerFn> "(" <dead-slot> ")"
+<dead-slot> ::= "Something" <deadFn> | "Nothing"
+
 <retry-options> ::= { <retry-option> }
-<retry-option>  ::= "maxAttempts" ":" <integer>
-                  | "backoff"     ":" ( "exponential" | "fixed" )
+<retry-option>  ::= "maxAttempts"  ":" <integer>
+                  | "backoff"      ":" ( "Exponential" | "Fixed" | "Linear" )
                   | "initialDelay" ":" <integer>
 ```
 
-A `queue` declaration creates a background job queue backed by the named `database`. The `jobs` list names the `record` types that can be enqueued in this queue. The compiler generates the `tesl_jobs` table schema automatically.
+A `queue` declaration creates a background job queue backed by the named `database`. Each `Job <JobType> <workerFn> (<dead-slot>)` entry folds a `record` type together with its normal worker function and an optional dead-letter worker (`(Something deadFn)` or `(Nothing)`). The compiler generates the `tesl_jobs` table schema automatically.
 
-`retry` configures how failed worker jobs are retried. `maxAttempts: 1` (the default) means no retries. With `backoff: exponential` and `initialDelay: N` the delay between retries doubles: N, 2N, 4N, … seconds. With `backoff: fixed` the delay is always `initialDelay`.
+`retry` configures how failed worker jobs are retried. `maxAttempts: 1` (the default) means no retries. With `backoff: Exponential` and `initialDelay: N` the delay between retries doubles: N, 2N, 4N, … seconds. With `backoff: Fixed` the delay is always `initialDelay`.
 
-Each queue declaration implicitly pairs with application-level capabilities following the same pattern as databases:
+`numberOfWorkers: N` (default 1) sets how many parallel normal-worker threads run when the queue is activated. Listing the queue in `App.queues` activates these N workers plus, if any job has a dead slot, the single dead-letter worker — there is no explicit start call.
 
 ```tesl
-queue EmailQueue {
-  database MainDatabase
-  jobs     [SendEmail, GeneratePDF]
-  retry {
-    maxAttempts:  3
-    backoff:      exponential
+queue EmailQueue requires [emailWrite] = Queue {
+  database: MainDatabase
+  jobs: [
+    Job SendEmail   sendEmailWorker  (Something handleDeadEmail)
+    Job GeneratePDF generatePdfWorker (Nothing)
+  ]
+  retry: QueueRetryStrategy {
+    maxAttempts: 3
+    backoff: Exponential
     initialDelay: 60
   }
+  numberOfWorkers: 4
 }
 capability emailWrite implies queueWrite
 capability emailRead  implies queueRead
@@ -1028,17 +1046,19 @@ capability emailRead  implies queueRead
 
 Built-in `queueRead` and `queueWrite` capabilities come from `Tesl.Queue` (analogous to `dbRead`/`dbWrite` from `Tesl.DB`).
 
-### 11.16 Channel declarations
+### 11.16 SSE channel declarations
 **Accepted design, Implemented.**
 
+An `sseChannel` is a **folded record** assigned with `=`:
+
 ```text
-<channel-decl> ::= "channel" <identifier> "(" <binding> { "," <binding> } ")" "{"
-                     "database" <identifier>
-                     "payload"  <identifier>
+<channel-decl> ::= "sseChannel" <identifier> "(" <binding> { "," <binding> } ")" "=" "SseChannel" "{"
+                     "database" ":" <identifier>
+                     "payload"  ":" <identifier>
                    "}"
 ```
 
-A `channel` declaration creates a typed pub/sub channel backed by the named database (via the outbox pattern). The key parameters follow the same binding syntax as function parameters, including proof annotations. The `payload` type must be an ADT — all event variants must be declared before the channel.
+An `sseChannel` declaration creates a typed pub/sub channel backed by the named database (via the outbox pattern). The key parameters follow the same binding syntax as function parameters, including proof annotations. The `payload` type must be an ADT — all event variants must be declared before the channel.
 
 ```tesl
 type UserEvent
@@ -1046,25 +1066,25 @@ type UserEvent
   | AvatarChanged  url: String
   | AccountDeleted
 
-channel UserEvents(userId: String ::: UserId userId) {
-  database MainDatabase
-  payload  UserEvent
+sseChannel UserEvents(userId: String ::: UserId userId) = SseChannel {
+  database: MainDatabase
+  payload: UserEvent
 }
 ```
 
 The `tesl_pubsub_outbox` table is created automatically alongside entity tables. Events published inside `with transaction` are written to the outbox atomically, and in-memory listeners are called after commit. Events published outside a transaction call listeners directly (at-most-once; a linter warning is planned).
 
-The SSE fan-out is driven by in-memory listener callbacks. A PostgreSQL LISTEN connection for multi-process fan-out runs automatically when `serve` detects SSE endpoints and a PostgreSQL database is active.
+The SSE fan-out is driven by in-memory listener callbacks. A PostgreSQL LISTEN connection for multi-process fan-out runs automatically when the runtime detects SSE endpoints and a PostgreSQL database is active. Listing the channel in `App.sseChannels` activates its outbox delivery.
 
 Built-in `pubsub` capability comes from `Tesl.Queue`.
 
 ### 11.17 Worker declarations
 **Accepted design, Implemented.**
 
-`worker` is a new function kind (alongside `fn`, `check`, `establish`, `auth`, `handler`) for background job processors:
+`worker` (and `deadWorker`) is a function kind (alongside `fn`, `check`, `establish`, `auth`, `handler`) for background job processors:
 
 ```text
-<function-kind> ::= "check" | "establish" | "fn" | "auth" | "handler" | "worker"
+<function-kind> ::= "check" | "establish" | "fn" | "auth" | "handler" | "worker" | "deadWorker"
 ```
 
 Worker functions receive a proof-bearing job value (`FromQueue` proof, analogous to `FromDb`), perform their work, and either complete normally (job marked done) or `fail` (job marked failed, eligible for retry):
@@ -1077,18 +1097,19 @@ worker sendEmailWorker(job: SendEmail ::: FromQueue (Id == jobId) job)
 
 `FromQueue (Id == jobId) job` follows the same 2-arg pattern as `FromDb (Id == pk) entity` — both the job's primary key subject and the job entity subject are in the proof.
 
-A `workers` declaration binds worker functions to job types, mirroring `server` for HTTP handlers:
-
-```text
-<workers-decl> ::= "workers" <identifier> "for" <identifier> "{"
-                     { <identifier> "=" <identifier> }
-                   "}"
-```
+There is no separate `workers` declaration. Worker functions are wired to job types directly inside the folded queue's `jobs` list (§11.15). A dead-letter worker is declared with `deadWorker` (it receives a `FromDeadQueue` proof) and is wired via the job's dead slot, `(Something handleDeadEmail)`:
 
 ```tesl
-workers EmailWorkers for EmailQueue {
-  SendEmail   = sendEmailWorker
-  GeneratePDF = generatePdfWorker
+deadWorker handleDeadEmail(job: SendEmail ::: FromDeadQueue (Id == jobId) job)
+  requires [alertCap] =
+  telemetry "email.dead" { to = job.to }
+  job   # returning the job acknowledges it (deletes the dead row)
+
+# Wired in the queue's jobs list — normal worker + dead-letter worker:
+queue EmailQueue requires [smtpSend, alertCap] = Queue {
+  database: MainDatabase
+  jobs: [Job SendEmail sendEmailWorker (Something handleDeadEmail)]
+  retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 }
 }
 ```
 
@@ -1553,18 +1574,46 @@ In queries, `Maybe` fields require a `case` expression or the `isAssignedTo` / h
 | `Maybe T` | column type of `T` | NULL |
 
 ### 11.9 Databases
-**Accepted design, Implemented with a Phase-1 backend restriction.**
+**Accepted design, Implemented.**
+
+A `database` declaration is a folded record assigned with `=`:
 
 ```text
-<database-decl> ::= "database" <identifier> "{" 
-                      "backend" "postgres"
-                      [ "schema" <string> ]
-                      "entities" <capability-list>
-                      "postgres" "{" { <postgres-setting> } "}"
+<database-decl> ::= "database" <identifier> "=" "Database" "{"
+                      [ "schema" ":" <string> ]
+                      "entities" ":" "[" [ <identifier> { "," <identifier> } ] "]"
+                      "backend" ":" <database-backend>
                     "}"
+
+<database-backend> ::= "Postgres" "(" "PostgresConfig" "{"
+                         "dbName"     ":" <expr>
+                         "user"       ":" <expr>
+                         "password"   ":" <expr>
+                         "connection" ":" <connection>
+                       "}" ")"
+                     | "Memory"
+
+<connection> ::= "TcpConnection" "{" "host" ":" <expr> "port" ":" <expr> "}"
+               | "SocketConnection" "{" ... "}"
 ```
 
-Only `backend postgres` is currently supported.
+```tesl
+database MyDatabase = Database {
+  schema: "my_app"
+  entities: [User]
+  backend: Postgres (PostgresConfig {
+    dbName: env "POSTGRES_DB"
+    user: env "POSTGRES_USER"
+    password: env "POSTGRES_PASSWORD"
+    connection: TcpConnection {
+      host: env "POSTGRES_HOST"
+      port: envInt "POSTGRES_PORT" 5432
+    }
+  })
+}
+```
+
+The `backend` is either `Postgres (PostgresConfig { ... })` or `Memory`. The `port` in a `TcpConnection` carries a port-validity obligation: a literal must be in `1..65535` (or use `envInt "VAR" default`), otherwise it is a compile-time error.
 
 ### 11.10 Capture declarations
 **Accepted design, Implemented.**
@@ -1661,61 +1710,62 @@ evts.onmessage = (e) => {
 <server-binding> ::= <identifier> "=" <identifier>
 ```
 
-### 11.13 Main blocks
+### 11.13 Main / the `App` entry point
 **Accepted design, Implemented.**
 
-```text
-<main-block> ::= "main" [ "with" "capabilities" <capability-list> ] "{" <body> "}"
-```
-
-The `with capabilities [...]` declaration on `main` lists every capability the application uses.  Two rules are enforced at compile time:
-
-- **Pure `main {}`** — a `main` block with no capability declaration must not reference any capabilities anywhere in its body.  Any `with capabilities [...]` block, `serve ... with capabilities [non-empty]`, or `startWorkers ... with capabilities [non-empty]` inside is a compile error.  This ensures a bare `main` is a totally pure, capability-free entry point.
-- **`main with capabilities [...]`** — every capability referenced in `with capabilities [...]` blocks, `serve`, and `startWorkers`/`startDeadWorkers` calls must be a subset of the declared set.  A missing capability is a compile error instead of a runtime failure.
-
-**`startWorkers` and `startDeadWorkers`** start worker groups' background poll threads:
-**Accepted design, Implemented.**
-
-**SSE pub/sub LISTEN** starts automatically inside `serve` — no `startWebSocket` call needed.
+`main` is an **ordinary function** that returns an `App` description. There is no `main { ... }` block, no `with capabilities [...]` block, and no `serve`/`startWorkers`/`startDeadWorkers`/`startEmailWorker` statements — those constructs have been removed from the language. The runtime starts everything (HTTP server, queue workers, SSE LISTEN, email delivery) from the returned `App`.
 
 ```text
-<main-statement> ::= ...existing...
-                   | "startWorkers"     [ <integer> ] <identifier> "with" "capabilities" <capability-list>
-                   | "startDeadWorkers" <identifier> "with" "capabilities" <capability-list>
-                   | "startEmailWorker" <identifier>
+<main-decl> ::= "main" "(" ")" "->" "App" "requires" "[" <capability-list> "]" "=" <body>
 ```
 
-`startWorkers N`: the optional integer `N` sets the number of concurrent worker threads for that worker group (default 1). Each thread independently dequeues and processes one job at a time using PostgreSQL's `SELECT ... FOR UPDATE SKIP LOCKED`, so threads never block each other.
+The body is an ordinary function body that may run startup `let` bindings (telemetry init, port resolution, seeding) and must end by returning an `App { ... }` record:
 
-**Choosing N:**
+```text
+<app-record> ::= "App" "{"
+                   "database"    ":" <identifier>
+                   "api"         ":" <identifier>
+                   "port"        ":" <expr>
+                   [ "queues"      ":" "[" [ <identifier> { "," <identifier> } ] "]" ]
+                   [ "email"       ":" "[" [ <identifier> { "," <identifier> } ] "]" ]
+                   [ "sseChannels" ":" "[" [ <identifier> { "," <identifier> } ] "]" ]
+                   [ "static"      ":" <string> ]
+                 "}"
+```
+
+```tesl
+main() -> App requires [appService, smtpSend] =
+  let port = envInt "PORT" 8080
+  App {
+    database: MainDatabase
+    api: MyServer
+    port: port
+    queues: [EmailQueue]          # activates each queue's workers (normal + dead-letter)
+    email: [AppEmail]             # activates each email block's delivery worker
+    sseChannels: [UserEvents]     # activates each SSE channel's outbox delivery
+  }
+```
+
+**Capabilities are granted at the App root**, derived from `main`'s `requires` list. There is no runtime cap-granting block; every capability referenced anywhere in the activated declarations flows from each declaration's own `requires`, and `main.requires` must cover them. A missing capability is a compile error.
+
+**Activation by listing, not by start calls.** Listing a queue in `App.queues` activates its `numberOfWorkers` normal workers plus, if any job has a dead slot, the single dead-letter worker. Listing an email block in `App.email` activates its delivery worker. Listing an SSE channel in `App.sseChannels` activates its outbox delivery. The SSE pub/sub LISTEN connection starts automatically when SSE endpoints are present — there is no `startWebSocket` call.
+
+Worker concurrency is configured on the queue itself via `numberOfWorkers: N` (see §11.15), not at the App root:
 - I/O-bound jobs (HTTP calls, external APIs): N = 4–8
 - CPU-bound jobs: N ≈ number of CPU cores
 - Conservative default: 2–4; increase based on queue depth monitoring
 
-**`startDeadWorkers`** always runs a single-threaded poll — it has no `N` parameter. Dead-letter handlers compensate for failures and should run serially to avoid duplicate compensating actions.
+Dead-letter workers are always single-threaded — there is no concurrency knob for them. Dead-letter handlers compensate for failures and should run serially to avoid duplicate compensating actions.
 
-```tesl
-main with capabilities [appService, smtpSend] {
-  with database MainDatabase {
-    with capabilities [appService, smtpSend] {
-      startWorkers     5 EmailWorkers      with capabilities [smtpSend]   -- 5 concurrent email workers
-      startDeadWorkers DeadEmailWorkers    with capabilities [smtpSend]   -- single-threaded (no N)
-      -- No startWebSocket needed — SSE pub/sub LISTEN starts inside serve
-      serve         MyServer              on port  with capabilities [appService]
-    }
-  }
-}
-```
-
-`startWorkers` launches N+2 threads per queue/handler pair with PostgreSQL (N+1 with the in-memory fallback):
+Activating a queue launches N+2 threads per queue with PostgreSQL, where N is the queue's `numberOfWorkers` (N+1 with the in-memory fallback):
 
 - **Fallback Poller** — wakes every 5 s to ensure no job is ever stranded indefinitely.
 - **LISTEN Connection** *(PostgreSQL only)* — holds a dedicated connection with `LISTEN tesl_queue_<name>`. Wakes immediately when any process enqueues a job and its transaction commits. Reconnects automatically on failure.
 - **SKIP LOCKED Worker** — waits on a semaphore (posted by the LISTEN thread or the poller), drains burst signals, then issues `FOR UPDATE SKIP LOCKED` until the queue is empty.
 
-`enqueue!` also issues `SELECT pg_notify(...)` inside the enclosing transaction so the NOTIFY fires exactly on commit — workers in other processes receive the same sub-millisecond wakeup. **Order matters:** call `startWorkers` before `serve`.
+`enqueue!` also issues `SELECT pg_notify(...)` inside the enclosing transaction so the NOTIFY fires exactly on commit — workers in other processes receive the same sub-millisecond wakeup. The runtime starts worker threads before the HTTP server, so ordering is handled automatically by the App root.
 
-`serve` automatically starts (with PostgreSQL) a pub/sub LISTEN thread when SSE endpoints are registered:
+The runtime automatically starts (with PostgreSQL) a pub/sub LISTEN thread when SSE endpoints are registered:
 
 - Holds a dedicated connection with `LISTEN tesl_pubsub`. When a NOTIFY arrives carrying an outbox row ID, the thread fetches the row, fans the event to in-memory SSE listeners, and delivers it.
 - A fallback poller sweeps `tesl_pubsub_outbox` every 5 s for rows that survived a dropped NOTIFY.
@@ -1733,11 +1783,9 @@ main with capabilities [appService, smtpSend] {
               | <case-statement>
               | <exists-pack-statement>
               | <with-database-statement>
-              | <with-capabilities-statement>
               | <update-statement>
               | <telemetry-statement>
               | <init-telemetry-statement>
-              | <serve-statement>
               | <ok-statement>
               | <fail-statement>
               | <enqueue-statement>
@@ -1950,12 +1998,13 @@ Additional fall-through constraints:
 
 This statement does not bind a fresh variable. It packages an existing named value as an existential witness.
 
-#### Resource / capability blocks
+#### Resource blocks
 
 ```text
 <with-database-statement> ::= "with database" <identifier> "{" <body> "}"
-<with-capabilities-statement> ::= "with capabilities" <capability-list> "{" <body> "}"
 ```
+
+`with database X { ... }` opens a SQL database context for the enclosed body (used in handler bodies that run queries). There is no `with capabilities { ... }` block — that construct has been removed. Capabilities flow from each declaration's `requires` and are granted at the App root (§11.13).
 
 #### Success and failure
 
@@ -2023,9 +2072,9 @@ check validatePositive(n: Int) -> n: Int ::: Positive n =
 <telemetry-attr> ::= <identifier-or-dotted> "=" <expr>
 
 <init-telemetry-statement> ::= "initTelemetry" "service" <string> "endpoint" <string> "console" ("true" | "false")
-
-<serve-statement> ::= "serve" <identifier> "on" <identifier> "with capabilities" <capability-list>
 ```
+
+There is no `serve` statement. The HTTP server is started by the runtime from the `api` field of the `App` record returned by `main` (§11.13).
 
 #### `enqueue`
 **Accepted design, Implemented.**
@@ -2074,7 +2123,7 @@ with transaction {
 }
 ```
 
-#### Dead-letter workers: `deadWorker`, `deadWorkers`, and `startDeadWorkers`
+#### Dead-letter workers: `deadWorker` and the job dead slot
 **Accepted design, Implemented.**
 
 When a job fails `maxAttempts` times it moves to `dead` status and is skipped by the normal worker loop. A separate **dead-letter worker** handles these jobs — typically to send an alert, log the failure, or publish a compensating event.
@@ -2098,37 +2147,17 @@ deadWorker handleDeadEmail(job: SendEmail ::: FromDeadQueue (Id == jobId) job)
 
 Returning the job value marks it **acknowledged** (deleted from the dead-letter queue). Calling `fail` restores it to `dead` status for the next dead-worker pass.
 
-**`deadWorkers`** maps job types to dead-worker functions — mirrors `workers` exactly:
-
-```text
-<dead-workers-decl> ::= "deadWorkers" <identifier> "for" <identifier>
-                        "{" { <identifier> "=" <identifier> } "}"
-```
+**Wiring.** There is no `deadWorkers` mapping declaration and no `startDeadWorkers` call. A dead-letter worker is folded into the queue via the job's **dead slot** — `(Something handleDeadEmail)` in the `jobs` list (§11.15); use `(Nothing)` when a job has no dead-letter worker:
 
 ```tesl
-deadWorkers DeadEmailWorkers for EmailQueue {
-  SendEmail   = handleDeadEmail
-  GeneratePDF = handleDeadPdf
+queue EmailQueue requires [smtpSend, alertCap] = Queue {
+  database: MainDatabase
+  jobs: [Job SendEmail sendEmailWorker (Something handleDeadEmail)]
+  retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 }
 }
 ```
 
-Every job type in the queue must have exactly one dead-letter worker (same completeness rule as `workers`).
-
-**`startDeadWorkers`** in `main` starts the dead-letter poll loop:
-
-```tesl
-main {
-  with database MainDatabase {
-    with capabilities [appService] {
-      startWorkers     EmailWorkers     with capabilities [smtpSend]
-      startDeadWorkers DeadEmailWorkers with capabilities [alertCap]
-      serve            MyServer         on port with capabilities [appService]
-    }
-  }
-}
-```
-
-The dead-letter loop polls every 10 seconds (no NOTIFY wakeup — dead jobs are infrequent). On success the job row is deleted; on failure it stays `dead` and will be retried on the next poll.
+Listing `EmailQueue` in `App.queues` (§11.13) activates the dead-letter poll loop alongside the normal workers — no explicit start call. The dead-letter loop is always single-threaded and polls every 10 seconds (no NOTIFY wakeup — dead jobs are infrequent). On success the job row is deleted; on failure it stays `dead` and will be retried on the next poll.
 
 ### 12.2 Expressions
 **Accepted design, partly Implemented.**
@@ -2931,9 +2960,9 @@ fn getByValidKeys(raw: Dict String User)
 
 All constructs are fully implemented with the PostgreSQL backend. The chat example (`example/chat/`) demonstrates the complete feature set.
 
-**Queue** (`tesl_jobs` table): `enqueue!` inserts within the current transaction and issues `NOTIFY tesl_queue_<name>` (deferred to commit); the three-thread worker model (fallback poller + LISTEN connection + SKIP LOCKED worker) handles both single-process and multi-process deployments. Failed jobs are retried with exponential or fixed backoff; exhausted jobs become `dead`. Dead jobs are handled by `deadWorker`/`deadWorkers`/`startDeadWorkers` — a separate poll loop that runs dead-letter handlers which can publish compensating events, send alerts, or acknowledge the failure.
+**Queue** (`tesl_jobs` table): `enqueue!` inserts within the current transaction and issues `NOTIFY tesl_queue_<name>` (deferred to commit); the three-thread worker model (fallback poller + LISTEN connection + SKIP LOCKED worker) handles both single-process and multi-process deployments. Failed jobs are retried with exponential or fixed backoff; exhausted jobs become `dead`. Dead jobs are handled by a `deadWorker` folded into the queue's job dead slot (`(Something deadFn)`) — a separate poll loop that runs dead-letter handlers which can publish compensating events, send alerts, or acknowledge the failure.
 
-**Pub/sub** (`tesl_pubsub_outbox` table): `publish` inside `with transaction` writes to the outbox atomically and issues `NOTIFY tesl_pubsub` with the row ID (deferred to commit); `serve` automatically starts a LISTEN thread (when SSE endpoints and PostgreSQL are active) that fetches and delivers outbox rows to connected SSE clients, with a 5-second fallback poller for missed notifications.
+**Pub/sub** (`tesl_pubsub_outbox` table): `publish` inside `with transaction` writes to the outbox atomically and issues `NOTIFY tesl_pubsub` with the row ID (deferred to commit); the runtime automatically starts a LISTEN thread (when SSE endpoints and PostgreSQL are active) that fetches and delivers outbox rows to connected SSE clients, with a 5-second fallback poller for missed notifications.
 
 **In-memory fallback**: when no PostgreSQL context is active (unit tests), all operations use the in-memory store — no database required. Design archived in `future-roadmap/completed/well_designed_reactivity_design.md`.
 
@@ -3058,8 +3087,10 @@ A `cache` declaration creates a typed, name-scoped cache backed by a PostgreSQL 
 
 ### 19.1 Declaration syntax
 
+A `cache` is a **folded record** assigned with `=`:
+
 ```text
-<cache-decl> ::= "cache" <identifier> "{"
+<cache-decl> ::= "cache" <identifier> "=" "Cache" "{"
                    "database" ":" <identifier>
                    "defaultTtl" ":" <integer>
                    "valueType" ":" <type-expr>
@@ -3067,16 +3098,16 @@ A `cache` declaration creates a typed, name-scoped cache backed by a PostgreSQL 
 ```
 
 ```tesl
-cacheCap UserProfileCache {
-  database:   MainDB
+cache UserProfileCache = Cache {
+  database: MainDB
   defaultTtl: 3600
-  valueType:  UserProfile
+  valueType: UserProfile
 }
 
-cacheCap ProductListCache {
-  database:   MainDB
+cache ProductListCache = Cache {
+  database: MainDB
   defaultTtl: 300
-  valueType:  List Product
+  valueType: List Product
 }
 ```
 
@@ -3143,10 +3174,10 @@ A sweeper thread runs every 60 seconds and deletes expired rows (`expires_at < N
 ```tesl
 import Tesl.Maybe exposing [Maybe, Something, Nothing]
 
-cacheCap UserProfileCache {
-  database:   MainDB
+cache UserProfileCache = Cache {
+  database: MainDB
   defaultTtl: 3600
-  valueType:  UserProfile
+  valueType: UserProfile
 }
 
 handler getUserProfile(id: String) -> UserProfile
@@ -3170,12 +3201,14 @@ Tesl provides native transactional email via the outbox pattern: `Email.send` wr
 
 ### 20.1 Declaration syntax
 
+An `email` is a **folded record** assigned with `=`:
+
 ```text
-<email-decl> ::= "email" <identifier> "{"
+<email-decl> ::= "email" <identifier> "=" "Email" "{"
                    "database" ":" <identifier>
-                   "smtp" "{"
+                   "smtp" ":" "SmtpConfig" "{"
                      "host"     ":" <expr>
-                     "port"     ":" <integer>
+                     "port"     ":" <expr>
                      "username" ":" <expr>
                      "password" ":" <expr>
                      "tls"      ":" ( "true" | "false" )
@@ -3184,19 +3217,19 @@ Tesl provides native transactional email via the outbox pattern: `Email.send` wr
 ```
 
 ```tesl
-email AppEmail {
+email AppEmail = Email {
   database: MainDB
-  smtp {
-    host:     env("SMTP_HOST")
-    port:     587
-    username: env("SMTP_USER")
-    password: env("SMTP_PASS")
-    tls:      true
+  smtp: SmtpConfig {
+    host: env "SMTP_HOST"
+    port: 587
+    username: env "SMTP_USER"
+    password: env "SMTP_PASS"
+    tls: true
   }
 }
 ```
 
-Multiple `email` blocks can coexist, each backed by the same or a different database.
+Multiple `email` blocks can coexist, each backed by the same or a different database. The `port` carries a port-validity obligation: a literal must be in `1..65535` (or use `envInt "VAR" default`), otherwise it is a compile-time error.
 
 ### 20.2 Capability
 
@@ -3207,10 +3240,9 @@ capability appService implies email
 
 fn sendWelcomeEmail(to: String) -> Unit requires [email] =
   Email.send AppEmail {
-    to:      to
+    to: to
     subject: "Welcome!"
-    text:    "Welcome to the service."
-    html:    "<h1>Welcome!</h1>"
+    body: RichBody "Welcome to the service." "<h1>Welcome!</h1>"
   }
 ```
 
@@ -3222,30 +3254,28 @@ fn sendWelcomeEmail(to: String) -> Unit requires [email] =
 Email.send EmailName {
   to:      String
   subject: String
-  text:    String      # optional — plain-text body
-  html:    String      # optional — HTML body
+  body:    EmailBody    # one of TextBody, HtmlBody, or RichBody
 }
 ```
 
-`Email.send` inserts a row into `tesl_email_outbox` and returns immediately. It does not open a TCP connection. At least one of `text` or `html` should be provided; both may be provided to send a multipart message.
+The `body` field is an `EmailBody` ADT value:
 
-**`startEmailWorker`** — starts the background delivery thread in `main`:
+- `TextBody "plain text"` — plain text only
+- `HtmlBody "<h1>html</h1>"` — HTML only
+- `RichBody "plain text" "<h1>…</h1>"` — both (recommended)
 
-```text
-startEmailWorker EmailName
-```
+The ADT makes a no-body email impossible to construct. `Email.send` inserts a row into `tesl_email_outbox` and returns immediately; it does not open a TCP connection.
 
-This statement must appear inside a `with database` block in `main`, before `serve`. Without it, rows accumulate in the outbox but are never delivered.
+**Activation.** The background delivery thread is started by listing the email block in the `App.email` field of the `App` record returned by `main` (§11.13) — there is no `startEmailWorker` statement. Without listing it, rows accumulate in the outbox but are never delivered.
 
 ```tesl
-main with capabilities [appService] {
-  with database MainDB {
-    with capabilities [appService] {
-      startEmailWorker AppEmail
-      serve MyServer on port with capabilities [appService]
-    }
+main() -> App requires [appService, email] =
+  App {
+    database: MainDB
+    api: MyServer
+    port: 8080
+    email: [AppEmail]
   }
-}
 ```
 
 ### 20.4 Delivery model
@@ -3266,9 +3296,9 @@ handler registerUser(req: RegistrationRequest) -> User requires [dbWrite, email]
   with transaction {
     let user = insert User { id: newId, email: req.email }
     Email.send AppEmail {
-      to:      req.email
+      to: req.email
       subject: "Welcome!"
-      text:    "Your account has been created."
+      body: TextBody "Your account has been created."
     }
     user
   }

@@ -490,9 +490,12 @@ and parse_type_app s =
       (* Type-level application: List Int, Maybe T — only uppercase names *)
       continue_with_type_arg ()
     | IDENT ("where" | "with") ->
-      (* `where` ends a type; `with` is never a type argument — it introduces an
-         inline capture codec (`capture x: T with <codec>`) or a `with database`
-         /`with capabilities` block, so it must terminate type application. *)
+      (* `where` ends a type (proof refinement: `T where P`); `with` is never a
+         type argument — it follows a type to introduce an INLINE capture codec
+         (`capture id: T with <codec>`) or a `with database` / `with transaction`
+         block — so either keyword must terminate type application.  (The OTHER
+         capture form, `capture id: T via <capturer>`, uses the `via`/`using`
+         tokens, not `with`.  `with capabilities` no longer exists.) *)
       return head
     | IDENT _ ->
       (* Lowercase: only a type arg if NOT followed by ':' (field label check) *)

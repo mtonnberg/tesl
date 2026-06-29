@@ -216,21 +216,19 @@ the guarantees you want, not around an imagined allocation budget.
 Proofs are erased even under `--debug`. A binding's proof is *compile-time* information (the static
 checker already knows `port : Int ::: ValidPort`), so the step debugger shows the raw runtime value
 and overlays the proof/type from compile-time type info — it needs no runtime struct. Breakpoints
-and stepping work normally. If you ever want the old runtime safety net back (e.g. to diagnose a
-suspected static-checker gap), set `TESL_ZERO_COST_PROOFS=0`, which restores it for regression
-comparison.
+and stepping work normally. The compiler is the sole proof contract: if a program that should be
+rejected slips through, that is a compiler bug to report — there is no runtime toggle to fall back on.
 
 ```bash
 tesl run my-api.tesl                            # proofs erased, zero overhead
 tesl run --debug my-api.tesl                    # breakpoints + raw-value inspection; proofs still erased
-TESL_ZERO_COST_PROOFS=0 tesl run my-api.tesl    # restores the runtime net (regression comparison)
 ```
 
 ### Per-feature runtime cost
 
 | Feature | Runtime cost |
 |---|---|
-| Proof annotations (`:::`) | **Zero.** Checked once at the boundary, then erased — in release and `--debug` alike. The debugger reads proof/type from compile-time info. `TESL_ZERO_COST_PROOFS=0` restores the runtime net for regression comparison. |
+| Proof annotations (`:::`) | **Zero.** Checked once at the boundary, then erased — in release and `--debug` alike. The debugger reads proof/type from compile-time info. |
 | `check` functions | The check body runs **once**, at the validation boundary. It never re-runs downstream. |
 | Capabilities (`requires [...]`) | **Zero.** A compile-time contract with no runtime representation. |
 | `ForAll` on lists | **Zero.** The list is a plain list at runtime; the annotation is erased — no per-element boxing. |

@@ -79,7 +79,7 @@
 )
 
 (module+ main
-  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 141 (list) (lambda () (with-capabilities (appService notifCap deadCap) (call-with-database FakeDb (lambda () (begin (start-workers! NotifQueueWorkers (list notifCap deadCap)) (begin (start-dead-workers! NotifQueueDeadWorkers (list notifCap deadCap)) (serve AppServer #:port 8086 #:capabilities (list appService notifCap deadCap) #:sse-routes AppServer-sse-routes)))))))))
+  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 143 (list) (lambda () (with-capabilities (appService notifCap deadCap) (call-with-database FakeDb (lambda () (begin (start-workers! NotifQueueWorkers (list notifCap deadCap)) (begin (start-dead-workers! NotifQueueDeadWorkers (list notifCap deadCap)) (serve AppServer #:port 8086 #:capabilities (list appService notifCap deadCap) #:sse-routes AppServer-sse-routes)))))))))
 
 (define NotifQueueWorkers
   (list (cons NotifQueue notifWorker)))

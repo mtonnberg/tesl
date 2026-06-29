@@ -116,5 +116,4 @@ fn readAndWrite(key: String) -> String requires [appCapability] =
 # Capability checking is fully STATIC: the compiler verifies, at each call
 # site, that the caller's `requires [...]` covers the callee's requirements,
 # all the way up to the App root, whose grant set is derived from main's
-# `requires`. There is no separate "with capabilities [...]" runtime block;
-# the App root is the single grant point and the check happens at compile time.
+# `requires`.

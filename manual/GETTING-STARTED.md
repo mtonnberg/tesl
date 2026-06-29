@@ -289,8 +289,8 @@ In Tesl:
 - In a normal (release) build, proofs are **erased** after type-checking: no struct, no allocation,
   zero runtime overhead. The proof lives only in the compiler's static checker.
 - Even under `--debug`, proofs stay erased: the step debugger shows the raw runtime value and
-  overlays a binding's proof/type from compile-time type info. `TESL_ZERO_COST_PROOFS=0` restores
-  the runtime net for regression comparison.
+  overlays a binding's proof/type from compile-time type info. The compiler's static checker is the
+  sole proof contract — there is no runtime net to fall back on.
 - Free-floating proofs (`detachFact` / `attachFact`) always keep a minimal runtime token, because
   they are explicit first-class values.
 - See [best practices › proof cost model](best-practices.md#proof-cost-model) for the full table.

@@ -78,25 +78,6 @@
 (define current-handler-error-port (make-parameter #f))
 (define (handler-error-port) (or (current-handler-error-port) (current-error-port)))
 
-;; Phase-0 (runtime) twin of the expansion-time erasure gate (roadmap A).  Read
-;; once at module load.  Gates the runtime proof RE-CHECK on a function/handler
-;; return value (the static checker is the sole guarantor of the returned proof
-;; in zero-cost mode).  The existential-shape check and the return TYPE check
-;; stay enabled regardless.  DEFAULT-ON, matching the expansion gate: the return
-;; re-check is skipped unless TESL_ZERO_COST_PROOFS explicitly opts OUT.
-;;
-;; NOTE(Contract-1): unlike the expansion gate, this cannot see the --debug
-;; checkpoint require (it is phase-0 module-load code, shared by all programs).
-;; The return re-check is a no-op for statically-valid programs, so a uniform
-;; default is behavior-preserving; re-enabling the full return-net during an
-;; interactive --debug/DAP session (via debug-enabled?) is a tracked follow-up.
-(define zero-cost-proofs?/rt
-  (let ([v (getenv "TESL_ZERO_COST_PROOFS")])
-    (cond [(not v) #t]
-          [(member (string-downcase v) '("0" "false" "no" "off")) #f]
-          [(member (string-downcase v) '("1" "true" "yes" "on")) #t]
-          [else #t])))
-
 (define (parse-cookies-header cookie-header-str)
   (for*/hash ([raw-part  (in-list (string-split (or cookie-header-str "") ";"))]
               [part      (in-value (string-trim raw-part))]
@@ -131,23 +112,13 @@
 ;;    check-runtime.rkt's begin-for-syntax.
 ;; The duplication is intentional and load-bearing; keep both copies in sync.
 (begin-for-syntax
-  ;; ── Zero-cost-proofs erasure gate (roadmap A) ──────────────────────────────
-  ;; Mirror of the gate in dsl/private/check-runtime.rkt (kept in sync — the two
-  ;; transformer environments are intentionally duplicated, see the NOTE above).
-  ;; DEFAULT-ON and UNCONDITIONAL: build-executable-expansion always generates the
-  ;; ERASED expansion (no runtime-bind+evidence / validate-runtime-argument /
-  ;; parameterize; *arg/arg bound to the raw value, proof-annotated params keeping
-  ;; ONE allocation via tesl-establish-param-proof), INCLUDING under `--debug`.
-  ;; A sound static checker makes the runtime proof structs redundant; the
-  ;; debugger sources proof/type display from compile-time type info (see
-  ;; check-runtime.rkt for the full rationale).  TESL_ZERO_COST_PROOFS=0 restores
-  ;; the net for regression comparison only.
-  (define zero-cost-proofs?
-    (let ([v (getenv "TESL_ZERO_COST_PROOFS")])
-      (cond [(not v) #t]
-            [(member (string-downcase v) '("0" "false" "no" "off")) #f]
-            [(member (string-downcase v) '("1" "true" "yes" "on")) #t]
-            [else #t])))
+  ;; ── Zero-cost proofs ───────────────────────────────────────────────────────
+  ;; build-executable-expansion generates the ERASED expansion (no
+  ;; runtime-bind+evidence / validate-runtime-argument / parameterize; *arg/arg
+  ;; bound to the raw value, proof-annotated params keeping ONE allocation via
+  ;; tesl-establish-param-proof).  A sound static checker makes the runtime proof
+  ;; structs redundant; the debugger sources proof/type display from compile-time
+  ;; type info (see check-runtime.rkt for the full rationale).
 
   (struct capture-kind-info (binding parser checker raw) #:transparent)
 
@@ -547,22 +518,7 @@
     (define final-bound-names (validate-binding-sequence! who binding-stxs '() arg-name-symbols))
     (validate-return-stx! who returns-stx final-bound-names #t)
     (define star-ids (map star-id arg-name-ids))
-    (define quoted-name-stxs
-      (for/list ([id (in-list arg-name-ids)])
-        #`'#,(syntax-e id)))
-    (define arg-binding-ids
-      (for/list ([id (in-list arg-name-ids)])
-        (format-id id "~a-runtime-binding" (syntax-e id))))
-    (define arg-value-ids
-      (for/list ([id (in-list arg-name-ids)])
-        (format-id id "~a-runtime-value" (syntax-e id))))
-    (define arg-evidence-ids
-      (for/list ([id (in-list arg-name-ids)])
-        (format-id id "~a-runtime-evidence" (syntax-e id))))
     (define arg-spec-exprs (map binding->arg-spec-expr binding-stxs))
-    (define arg-type-datums
-      (for/list ([binding-stx (in-list binding-stxs)])
-        (normalize-gdp-expr (binding-type-datum binding-stx))))
     (define arg-proof-datums
       (for/list ([binding-stx (in-list binding-stxs)])
         (define proof-datum (and (binding-proof-datum binding-stx)
@@ -595,8 +551,7 @@
                                                   (check-fail-message cf)
                                                   (check-fail-status cf)))])
                 #,trusted-body))))
-    (define full-name-env-id (format-id name-id "~a-runtime-name-env" (syntax-e name-id)))
-    ;; ── Erased param-binding clauses (zero-cost-proofs? = #t) ──────────────────
+    ;; ── Erased param-binding clauses ────────────────────────────────────────────
     ;; For each parameter, bind *arg to the raw value (zero allocation) and arg to:
     ;;   • the SAME raw value when the param carries no proof annotation, or
     ;;   • a single named-value via tesl-establish-param-proof when it does, so
@@ -633,21 +588,10 @@
                                                      #,all-bindings-id)]
              #`[#,arg-id #,star-arg]))))
     (with-syntax ([(arg-id ...) arg-name-ids]
-                  [(star-arg ...) star-ids]
-                  [(quoted-name ...) quoted-name-stxs]
-                  [(arg-evidence ...) arg-evidence-ids]
-                  [(arg-binding ...) arg-binding-ids]
-                  [(arg-value-id ...) arg-value-ids]
                   [(arg-spec-expr ...) arg-spec-exprs]
-                  [(arg-type-expr ...) (for/list ([datum (in-list arg-type-datums)])
-                                        #`'#,datum)]
-                  [(arg-proof-expr ...) (for/list ([datum (in-list arg-proof-datums)])
-                                         (if datum #`'#,datum #'#f))]
                   [(erased-arg-clause ...) erased-arg-clauses]
                   [signature-id signature-id]
                   [name name-id]
-                  [who-id (datum->syntax whole-stx who)]
-                  [full-name-env-id full-name-env-id]
                   [(cap-id ...) cap-stxs]
                   [kind-id kind-id]
                   [returns-expr returns-expr]
@@ -661,58 +605,15 @@
                             '(cap-id ...)
                             returns-expr
                             raw-expr))
-          #,(if zero-cost-proofs?
-                ;; ── ERASED expansion (zero-cost mode) ─────────────────────────
-                #'(define (name arg-id ...)
-                    (call-with-declared-capabilities
-                     (list cap-id ...)
-                     (lambda ()
-                       (let* (erased-arg-clause ...)
-                         (let ([result body-expr])
-                           (validate-signature-return signature-id result))))))
-                ;; ── DEFAULT expansion (runtime safety net on) ─────────────────
-                #'(define (name arg-id ...)
+          ;; ── ERASED expansion (zero-cost: the static checker is the sole
+          ;; guarantor of the declared proofs) ───────────────────────────────
+          (define (name arg-id ...)
             (call-with-declared-capabilities
              (list cap-id ...)
              (lambda ()
-               (let ([arg-value-id arg-id] ...)
-                 (let-values ([(arg-evidence arg-binding)
-                               (runtime-bind+evidence quoted-name arg-id)] ...)
-                   (let* ([full-name-env-id (extend-name-env (hash)
-                                                             (list quoted-name ...)
-                                                             (list arg-binding ...))]
-                          ;; Merged bindings from ALL argument evidence so proof-fact-matches?
-                          ;; can compare gensyms across parameters (e.g., InBounds lo hi n).
-                          [all-arg-bindings (for/fold ([acc (hash)])
-                                                      ([b (in-list (list arg-binding ...))])
-                                              (merge-bindings acc (runtime-binding-bindings b)))])
-                     (validate-runtime-argument 'who-id 'name quoted-name arg-evidence arg-type-expr arg-proof-expr full-name-env-id all-arg-bindings) ...
-                     (parameterize ([current-name-env full-name-env-id]
-                                    [current-proof-env
-                                     (extend-proof-env (current-proof-env)
-                                                       (list arg-binding ...))]
-                                    [current-evidence-env
-                                     (extend-evidence-env (current-evidence-env)
-                                                          (list arg-evidence ...))]
-                                    [current-type-env
-                                     (extend-type-env (current-type-env)
-                                                      (list arg-binding ...)
-                                                      (list arg-type-expr ...))])
-                       (let ([star-arg (runtime-binding-raw arg-binding)] ...
-                             [arg-id (if (or (named-value? arg-value-id)
-                                             (check-result? arg-value-id)
-                                             (runtime-binding? arg-value-id)
-                                             (detached-proof? arg-value-id)
-                                             (packed-witness? arg-value-id)
-                                             (packed-exists? arg-value-id)
-                                             (procedure? arg-value-id)
-                                             (boolean? arg-value-id))
-                                         arg-value-id
-                                         (runtime-binding-name arg-binding))] ...)
-                         (let ([result body-expr])
-                           (validate-signature-return signature-id result))))))))))) ; last ) closes the (if zero-cost-proofs? …)
-
-  )))
+               (let* (erased-arg-clause ...)
+                 (let ([result body-expr])
+                   (validate-signature-return signature-id result)))))))))
 
   (define (parse-auth-piece piece-stx outer-bound-names)
     (define parts (syntax->list piece-stx))
@@ -1435,9 +1336,8 @@
           (error 'route "unsupported segment declaration: ~a" segment)])])))
 
 ;; proof-infix-operands is shared via private/proof-utils.rkt (see that file for
-;; why this is the only one of the 5 collision candidates safe to deduplicate;
-;; flatten-proof-conjunction-facts / proof-fact-matches? / proof-satisfied? /
-;; normalize-typecheck-value stay duplicated here on purpose — they diverge).
+;; why this is the only one of the collision candidates safe to deduplicate;
+;; normalize-typecheck-value stays duplicated here on purpose — it diverges).
 
 (define (input-bearing-segments route)
   (for/list ([segment (in-list (route-spec-segments route))]
@@ -1488,50 +1388,6 @@
                    [else (payload-spec-name segment)])
                  (named-value-name value))))
   (hash-copy env))
-
-(define (flatten-proof-conjunction-facts facts)
-  (append-map
-   (lambda (fact)
-     (define items (proof-infix-operands fact '&&))
-     (if items
-         (flatten-proof-conjunction-facts items)
-         (list fact)))
-   facts))
-
-(define (proof-fact-matches? template fact [bindings (hash)])
-  (cond
-    [(equal? template fact) #t]
-    [(and (pair? template) (pair? fact))
-     (and (proof-fact-matches? (car template) (car fact) bindings)
-          (proof-fact-matches? (cdr template) (cdr fact) bindings))]
-    ;; Interned template symbol matches any uninterned fact symbol (wildcard):
-    [(and (symbol? template) (symbol-interned? template)
-          (symbol? fact) (not (symbol-interned? fact)))
-     #t]
-    ;; Two uninterned symbols: match if they map to the same raw value in bindings.
-    ;; This enables proof transport across function boundaries — an establish function
-    ;; creates (ValidPort port-gensym) and the caller's (ValidPort y-gensym) matches
-    ;; if port-gensym and y-gensym both refer to the same underlying value.
-    [(and (symbol? template) (not (symbol-interned? template))
-          (symbol? fact) (not (symbol-interned? fact)))
-     (let ([t-val (hash-ref bindings template #f)]
-           [f-val (hash-ref bindings fact #f)])
-       (and t-val f-val (equal? (raw-value t-val) (raw-value f-val))))]
-    [else #f]))
-
-(define (proof-satisfied? proof-datum facts name-env [bindings (hash)])
-  (define actual-facts (flatten-proof-conjunction-facts facts))
-  (define instantiated (instantiate-proof-template proof-datum name-env))
-  (cond
-    [(eq? instantiated #t) #t]
-    [(eq? instantiated #f) #f]
-    [(ormap (lambda (f) (proof-fact-matches? instantiated f bindings)) actual-facts) #t]
-    [(proof-infix-operands instantiated '&&)
-     => (lambda (items)
-          (andmap (lambda (item)
-                    (proof-satisfied? item actual-facts name-env bindings))
-                  items))]
-    [else #f]))
 
 (define (return-spec-expected-shape result normalized-return name-env)
   (match normalized-return
@@ -1588,18 +1444,13 @@
                                 expected-type))]))
 
 (define (validate-flat-return subject result normalized-return name-env)
-  (define-values (expected-type expected-proof effective-name-env)
+  (define-values (expected-type _expected-proof effective-name-env)
     (return-spec-expected-shape result normalized-return name-env))
   (validate-type-expression subject result expected-type effective-name-env)
-  ;; The return PROOF re-check is part of the runtime safety net: in zero-cost
-  ;; mode it is erased (the static checker guarantees the returned proof).  The
-  ;; return TYPE check above, and the existential-package SHAPE check in
-  ;; validate-exists-return, are NOT proof re-validation and stay enabled.
-  (when (and expected-proof (not zero-cost-proofs?/rt))
-    (unless (proof-satisfied? expected-proof (facts-of result) effective-name-env)
-      (return-validation-error subject
-                               "~a returned a value that does not satisfy declared return proof ~a"
-                               normalized-return)))
+  ;; The return PROOF re-check is erased: the static checker is the sole
+  ;; guarantor of the returned proof.  The return TYPE check above, and the
+  ;; existential-package SHAPE check in validate-exists-return, are NOT proof
+  ;; re-validation and stay enabled.
   (values result effective-name-env))
 
 (define (validate-exists-return subject result normalized-return name-env)

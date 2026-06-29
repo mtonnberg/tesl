@@ -45,7 +45,7 @@ echo "=== Running test suite ==="
 # nothing changed, and allow parallelism to keep total runtime manageable.
 # Mutation tests (~53 s each) and other slow suites are included.
 # KNOWN PRE-EXISTING failures (verified IDENTICAL on the pre-initiative baseline
-# 11c6782 — NOT introduced by the zero-cost-proofs work) are excluded from the gate:
+# 11c6782) are excluded from the gate:
 #   - mutation-engine reports some genuinely-killed mutants as "survived"
 #     (mutation-results / cli-ergonomics groups) — roadmap task #18.
 #   - test_httpclient_integration (post-put-delete / "POST /echo") flakes ONLY under
@@ -165,42 +165,6 @@ if [ ${#EXACT_FAILS[@]} -eq 0 ]; then
   record_section "Exact-match" "OK ($EXACT_OK matched)"
 else
   record_section "Exact-match" "FAILED: ${EXACT_FAILS[*]}"
-fi
-
-echo ""
-echo "=== Differential proof audit (erase ≡ net parity) ==="
-# Wave-0 safety net: scripts/differential-proofs.sh was previously NOT invoked by
-# CI at all, so the erase≡net behavior-preservation contract was never exercised.
-# We now run it as a gated section.  It compiles each testable .tesl twice
-# (TESL_ZERO_COST_PROOFS off vs on) and asserts byte-identical emit + identical
-# normalized test behavior; any divergence fails this section.
-#
-# Each file runs Racket twice (~13s/file), so the full corpus is too slow for the
-# inner loop.  We default to a fast `--subset N` (N=DIFF_PROOFS_SUBSET, default 8);
-# set DIFF_PROOFS_SUBSET=0 (or "all") to run the FULL strict corpus in nightly/
-# release CI.  If racket/raco are absent the section is recorded as SKIPPED
-# (never a silent pass).
-DIFF_PROOFS_SUBSET="${DIFF_PROOFS_SUBSET:-8}"
-DIFF_SCRIPT="$REPO_ROOT/scripts/differential-proofs.sh"
-if ! command -v racket >/dev/null 2>&1 || ! command -v raco >/dev/null 2>&1; then
-  echo "  ⚠  racket/raco not on PATH — skipping differential proof audit"
-  record_section "Differential-proofs" "SKIPPED (no racket)"
-elif [ ! -x "$DIFF_SCRIPT" ]; then
-  echo "  ⚠  $DIFF_SCRIPT not found/executable — skipping"
-  record_section "Differential-proofs" "SKIPPED (script missing)"
-else
-  diff_args=(--no-color)
-  if [ "$DIFF_PROOFS_SUBSET" != "0" ] && [ "$DIFF_PROOFS_SUBSET" != "all" ]; then
-    diff_args+=(--subset "$DIFF_PROOFS_SUBSET")
-    echo "  (fast inner-loop: first $DIFF_PROOFS_SUBSET testable files; set DIFF_PROOFS_SUBSET=0 for full corpus)"
-  else
-    echo "  (FULL corpus — strict)"
-  fi
-  if bash "$DIFF_SCRIPT" "${diff_args[@]}"; then
-    record_section "Differential-proofs" "OK"
-  else
-    record_section "Differential-proofs" "FAILED (erase≡net divergence — see above)"
-  fi
 fi
 
 # ── Racket test suites (debugger / headless-inspect / MCP / lifted-stdlib) ───────

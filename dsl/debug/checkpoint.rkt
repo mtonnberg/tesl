@@ -15,8 +15,7 @@
 ;; ── B5: one emission path, expansion-time debug gate ─────────────────────────
 ;; The OCaml emitter now ALWAYS emits the `(thsl-src! "file" line locals thunk)`
 ;; form — there is no `--debug` emitter fork.  `thsl-src!` (and the compat
-;; `thsl-src`) are MACROS whose expansion is gated at raco-compile time,
-;; mirroring the `zero-cost-proofs?` gate in dsl/private/check-runtime.rkt:
+;; `thsl-src`) are MACROS whose expansion is gated at raco-compile time:
 ;;   • debug DISABLED (default) → the macro expands to the BARE expression (the
 ;;     thunk body), with ZERO residue: no checkpoint call, no locals list, no
 ;;     thunk allocation.  This is the release build — zero overhead.
@@ -199,7 +198,7 @@
 ;; ── Expansion-time debug gate ────────────────────────────────────────────────
 ;; for-syntax predicate consulted by the thsl-src! / thsl-src macros below.
 ;; TESL_DEBUG ∈ {1,true,yes,on} (case-insensitive) enables checkpoints; anything
-;; else (including unset) erases them.  Mirrors the TESL_ZERO_COST_PROOFS gate.
+;; else (including unset) erases them.
 (begin-for-syntax
   (define (tesl-debug-checkpoints?)
     (let ([v (getenv "TESL_DEBUG")])
@@ -674,12 +673,12 @@
 ;;   List      → [a, b, c]
 ;;   named-val → inner-val  [Proof1, Proof2]  (proof annotations appended, if any survive)
 ;;
-;; NOTE on proofs: under unconditional erasure (zero-cost-proofs?) the runtime
-;; values reaching this function carry NO proof facts — the [Proof, ...] suffix
-;; below is therefore almost always empty.  The authoritative proof/type display
-;; is overlaid by the DAP server from compile-time --local-bindings-json (see
-;; overlay-binding-type in dap-server.rkt).  We keep the facts path for the rare
-;; case a value is inspected with TESL_ZERO_COST_PROOFS=0.
+;; NOTE on proofs: under zero-cost proof erasure the runtime values reaching this
+;; function carry NO proof facts — the [Proof, ...] suffix below is therefore
+;; almost always empty.  The authoritative proof/type display is overlaid by the
+;; DAP server from compile-time --local-bindings-json (see overlay-binding-type
+;; in dap-server.rkt).  We keep the facts path for the rare case a value still
+;; carries an explicitly attached proof.
 (define (safe-display v)
   (cond
     ;; Unwrap GDP wrappers first

@@ -524,33 +524,16 @@
 (define combinedProof/proof-decomposition (tesl-module-value proof-decomposition-module-path 'combinedProof))
 (define restoreCombined/proof-decomposition (tesl-module-value proof-decomposition-module-path 'restoreCombined))
 
-;; Zero-cost proof erasure is the production default (mirrors
-;; dsl/web.rkt:zero-cost-proofs?/rt); disabled only by TESL_ZERO_COST_PROOFS in
-;; {0,false,no,off}.  ProofDecomposition above is compiled in-process under the
-;; current env, so this predicate matches how its proofs were lowered.
-(define (zero-cost-proofs-default?)
-  (let ([v (getenv "TESL_ZERO_COST_PROOFS")])
-    (cond [(not v) #t]
-          [(member (string-downcase v) '("0" "false" "no" "off")) #f]
-          [else #t])))
-
 (check-equal? (decomposeSingle/proof-decomposition 8088) 8088)
 (define combined-proof/decomposition (combinedProof/proof-decomposition 8088))
 (check-true (detached-proof? combined-proof/decomposition))
 (match (detached-proof-fact combined-proof/decomposition)
   [`((ValidPort ,left-token) && (IsPositive ,right-token))
-   ;; Both conjuncts are about the same subject `y` (= 8088).  How their tokens
-   ;; present depends on the proof-cost mode:
-   ;;  - non-zero-cost: the evidence carries the runtime witness, so both tokens
-   ;;    are 8088 and unify;
-   ;;  - zero-cost (default): proofs are erased to their symbolic shape, so each
-   ;;    token is its `establish` function's declared parameter name ('port / 'n).
-   ;; Either is correct for its mode — assert the structure holds and the tokens
-   ;; match the active mode (this is what made the test mode-fragile before).
-   (if (zero-cost-proofs-default?)
-       (begin (check-equal? left-token 'port)
-              (check-equal? right-token 'n))
-       (check-equal? left-token right-token))]
+   ;; Both conjuncts are about the same subject `y` (= 8088).  Under zero-cost
+   ;; proof erasure, proofs are erased to their symbolic shape, so each token is
+   ;; its `establish` function's declared parameter name ('port / 'n).
+   (check-equal? left-token 'port)
+   (check-equal? right-token 'n)]
   [other
    (error 'test "unexpected combined proof shape: ~a" other)])
 (check-equal? (restoreCombined/proof-decomposition 8088) 8088)
@@ -1625,21 +1608,10 @@
   (dispatch-with-server PositivePayloadServer '() 'POST '("payload") #:body (hash 'serial 0)))
 
 (check-equal? (raw-value extracted-serial) 5)
-;; The proof annotation on a record field is evidence-bearing only under
-;; non-zero-cost; the production zero-cost default erases it to a raw value with
-;; no attached facts.  Assert the shape that matches the active mode (same
-;; mode-robustness as the proof-decomposition block above).
-(if (zero-cost-proofs-default?)
-    (begin
-      (check-false (named-value? extracted-serial))
-      (check-equal? (facts-of extracted-serial) '()))
-    (begin
-      (check-true (named-value? extracted-serial))
-      (match (facts-of extracted-serial)
-        [`((Positive ,subject))
-         (check-true (symbol? subject))]
-        [other
-         (error 'test (format "unexpected extracted record proof facts: ~a" other))])))
+;; Under zero-cost proof erasure the proof annotation on a record field is erased
+;; to a raw value with no attached facts.
+(check-false (named-value? extracted-serial))
+(check-equal? (facts-of extracted-serial) '())
 (check-equal? (dsl-response-status positive-payload-response) 200)
 (check-equal? (dsl-response-body positive-payload-response) 9)
 (check-equal? (dsl-response-status invalid-positive-payload-response) 400)
@@ -2210,19 +2182,9 @@
        (check-true (named-value? owned-todo))
        (check-equal? (hash-ref (raw-value owned-todo) 'ownerId) "mikael")
        (define todo-facts (facts-of owned-todo))
-       ;; The `FromDb` query proof is evidence-bearing only under non-zero-cost;
-       ;; the production zero-cost default erases it (the value stays a named-value
-       ;; carrying the raw row, but with no attached facts).  Same mode-robustness
-       ;; as the proof-decomposition / record-field-proof blocks above.
-       (if (zero-cost-proofs-default?)
-           (check-equal? (length todo-facts) 0 "zero-cost: FromDb fact erased")
-           (begin
-             (check-equal? (length todo-facts) 1 "expected one FromDb fact")
-             (match (first todo-facts)
-               [`(FromDb (OwnerId == ,token) ,_entity-subject)
-                (check-equal? (hash-ref (named-value-bindings owned-todo) token) "mikael")]
-               [other
-                (error 'test "unexpected tesl query fact: ~a" other)])))
+       ;; Under zero-cost proof erasure the `FromDb` query proof is erased: the
+       ;; value stays a named-value carrying the raw row, but with no attached facts.
+       (check-equal? (length todo-facts) 0 "zero-cost: FromDb fact erased")
        (define all-todos (listOwnedTodos "mikael"))
        (check-true (list? all-todos))
        (check-equal? (length all-todos) 1)))))

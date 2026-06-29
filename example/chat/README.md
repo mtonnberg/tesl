@@ -91,7 +91,7 @@ The chat backend is designed to run as multiple identical processes behind a loa
 - **Messages** are handled by whichever backend receives the HTTP request.
 - **SSE clients** connect to one backend process each.
 - **Pub/sub fan-out**: when a message is posted, `publish RoomMessages(roomId)` writes to `tesl_pubsub_outbox`. PostgreSQL sends `NOTIFY tesl_pubsub` to ALL backend processes simultaneously. Each process's LISTEN thread reads the same outbox row (SELECT, not DELETE) and delivers to its locally connected SSE clients. **All users receive every message regardless of which backend they're connected to.**
-- **Notification workers**: `enqueue NotifyJob` writes to `tesl_jobs`. All workers compete via `FOR UPDATE SKIP LOCKED` — each job is processed exactly once. Scale worker throughput with `startWorkers N NotificationWorkers with capabilities [notifyCap]`.
+- **Notification workers**: `enqueue NotifyJob` writes to `tesl_jobs`. All workers compete via `FOR UPDATE SKIP LOCKED` — each job is processed exactly once.
 - **Outbox cleanup**: rows older than 30 seconds are deleted automatically. All processes have delivered them well before that.
 
 ### One-command cluster (3 instances + nginx load balancer)

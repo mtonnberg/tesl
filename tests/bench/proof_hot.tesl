@@ -5,9 +5,9 @@ module ProofHot exposing [hotPath, checkBound]
 # realistic shape reference: a `fn` with three proof-annotated parameters,
 # each carrying a `Bounded` fact, called in a tight loop.
 #
-# Under today's runtime "safety net" every call to `hotPath` wraps each of
-# a/b/c in a `named-value`, runs `validate-runtime-argument`, and installs a
-# six-way `parameterize`.  Under the future TESL_ZERO_COST_PROOFS erasure
+# Under the historical runtime "safety net" every call to `hotPath` wrapped each
+# of a/b/c in a `named-value`, ran `validate-runtime-argument`, and installed a
+# six-way `parameterize`.  Under the zero-cost erasure the DSL macros now emit
 # those cost sites vanish (proof-annotated params keep at most one allocation
 # via `tesl-establish-param-proof`; proof-free params allocate nothing).
 #
