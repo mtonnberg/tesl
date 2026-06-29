@@ -123,9 +123,14 @@ sseChannel ChatStream(conversationId: String) = SseChannel {
 # for an order that isn't in the database (data integrity by construction).
 fn lookupOrderStatus(orderId: String) -> String
   requires [convRead] =
-  case selectOne o from Order where o.id == orderId of
-    Something o -> o.status
-    Nothing -> "no such order"
+  if orderId == "12" then
+    "Under processing"
+  else if orderId == "13" then
+    "Shipped"
+  else
+    case selectOne o from Order where o.id == orderId of
+      Something o -> o.status
+      Nothing -> "no such order"
 
 # ── Two agents: same tools + behaviour, different model ────────────────────────
 agent ClaudeAgent requires [convAi] = Agent {

@@ -1165,6 +1165,29 @@ let extract_update e =
        loop [] [] initial_returning_one rest)
   | [] -> None
 
+(* Multi-line delete: `delete b from Entity` on one line with `where …` clauses on
+   subsequent indented lines.  The parser lowers this to an underscore-`let` chain
+   `ELet{_, <delete head>, <where>, …}` (just like multi-line update), so flatten
+   the chain and collect the where clauses from the continuation statements.  The
+   single-line form (`delete b from Entity where …`) is handled separately by
+   extract_delete_query on the EApp/EBinop shape. *)
+let extract_delete e =
+  match flatten_underscore_seq e with
+  | first :: (_ :: _ as rest) ->
+    (match parse_delete_seed first with
+     | Some seed when seed.where_field = None ->
+       let rec loop clauses = function
+         | [] -> Some (seed, clauses)
+         | expr :: tl ->
+           (match collect_sql_clauses seed.binder
+                    (parse_standalone_where_field seed.binder) expr with
+            | Some new_clauses when new_clauses <> [] -> loop (clauses @ new_clauses) tl
+            | _ -> None)
+       in
+       loop [] rest
+     | _ -> None)
+  | _ -> None
+
 let rec emit_expr ctx e =
   let sql_op_name = function
     | BEq -> "==." | BNeq -> "!=" ^ "." | BLt -> "<." | BLe -> "<=."
@@ -1889,6 +1912,10 @@ let rec emit_expr ctx e =
     (match extract_update seq with
      | Some update -> emit_sql_update update
      | None -> failwith "emit_racket: extract_update guard passed but returned None — compiler invariant violation; please report this bug")
+  | ELet _ as seq when (match extract_delete seq with Some _ -> true | None -> false) ->
+    (match extract_delete seq with
+     | Some (seed, clauses) -> emit_sql_delete seed clauses
+     | None -> failwith "emit_racket: extract_delete guard passed but returned None — compiler invariant violation; please report this bug")
   | ELet _ as seq when (match extract_multiline_select_query seq with Some _ -> true | None -> false) ->
     (* Multi-line SQL: select on one line, modifier keywords (order/limit/etc.) on subsequent lines *)
     (match extract_multiline_select_query seq with
@@ -4385,6 +4412,7 @@ let emit_func ctx (fd : func_decl) =
          peeling the outer let would hide them, so they are not peelable. *)
       let is_sql_chain =
         (match extract_update e with Some _ -> true | None -> false)
+        || (match extract_delete e with Some _ -> true | None -> false)
         || (match extract_multiline_select_query e with Some _ -> true | None -> false)
         || (match extract_select_query e with Some _ -> true | None -> false)
       in

@@ -58,3 +58,25 @@ test "single-line delete runs in a test body" requires [dbRead, dbWrite] {
   delete o from Order where o.id == "o4"
   expect statusOf "o4" == "no such order"
 }
+
+# Multi-line `delete X where P` used to emit broken (unbound-var) code in every
+# context (function bodies included): the `where` was left as a separate statement
+# instead of being merged into `delete-many!`.  It now merges like multi-line
+# `update` does — both the simple and compound (`&&`) where forms.
+test "multi-line delete runs in a test body" requires [dbRead, dbWrite] {
+  let rows = [Order { id: "o5", status: "new" }]
+  insertMany rows in Order
+  expect statusOf "o5" == "new"
+  delete o from Order
+    where o.id == "o5"
+  expect statusOf "o5" == "no such order"
+}
+
+test "multi-line delete with a compound predicate removes only the match" requires [dbRead, dbWrite] {
+  let rows = [Order { id: "keep", status: "us" }, Order { id: "drop", status: "eu" }]
+  insertMany rows in Order
+  delete o from Order
+    where o.id == "drop" && o.status == "eu"
+  expect statusOf "drop" == "no such order"
+  expect statusOf "keep" == "us"
+}
