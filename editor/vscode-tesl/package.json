@@ -32,7 +32,8 @@
     "Programming Languages"
   ],
   "activationEvents": [
-    "onLanguage:tesl"
+    "onLanguage:tesl",
+    "workspaceContains:**/*.tesl"
   ],
   "main": "./extension.js",
   "contributes": {

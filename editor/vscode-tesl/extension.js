@@ -2,8 +2,9 @@ const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const { spawnSync } = require("child_process");
+const { spawnSync, spawn } = require("child_process");
 const vscode = require("vscode");
+const { parseTeslTestOutput } = require("./test-output-parser");
 
 let client;
 
@@ -582,55 +583,25 @@ function activate(context) {
   );
 
   // ── Test Explorer (VS Code TestController API) ────────────────────────────────
-  // Enumerate test blocks + doctests per .tesl file and wire run + debug through
-  // the same compiler/DAP paths the code lenses use. Test IDs encode the compiler
-  // test name so the run handler can target an individual test via --test-name.
+  // A-tier integration: discover ALL .tesl tests in the workspace (not just open
+  // files), run them via the `tesl` CLI capturing real pass/fail/error status, and
+  // report results (failure messages + source locations + durations) back to the
+  // Test Explorer. Run is the default profile; Debug launches the DAP per test.
   if (vscode.tests && typeof vscode.tests.createTestController === "function") {
     const ctrl = vscode.tests.createTestController("tesl", "Tesl Tests");
     context.subscriptions.push(ctrl);
 
-    // ID helpers: "<fsPath>::test::<name>" / "<fsPath>::doctest::<fnName>".
-    function refreshFile(document) {
-      if (!document.fileName.endsWith(".tesl")) return;
-      const uri = document.uri;
-      const { tests, apiTests, loadTests, doctests, hasAny } = discoverTests(document.getText());
-      if (!hasAny) { ctrl.items.delete(uri.toString()); return; }
+    // Per-kind tags so the UI can group/filter test / api-test / load-test / doctest.
+    const TAGS = {
+      "test": new vscode.TestTag("test"),
+      "api-test": new vscode.TestTag("api-test"),
+      "load-test": new vscode.TestTag("load-test"),
+      "doctest": new vscode.TestTag("doctest"),
+    };
 
-      let fileItem = ctrl.items.get(uri.toString());
-      if (!fileItem) {
-        fileItem = ctrl.createTestItem(uri.toString(), path.basename(uri.fsPath), uri);
-        ctrl.items.add(fileItem);
-      }
-      fileItem.children.replace([]);
-
-      for (const t of tests) {
-        const id = `${uri.fsPath}::test::${t.name}`;
-        const item = ctrl.createTestItem(id, t.name, uri);
-        item.range = new vscode.Range(t.line, 0, t.line, 0);
-        fileItem.children.add(item);
-      }
-      for (const t of apiTests) {
-        const id = `${uri.fsPath}::api-test::${t.name}`;
-        const item = ctrl.createTestItem(id, `api-test: ${t.name}`, uri);
-        item.range = new vscode.Range(t.line, 0, t.line, 0);
-        fileItem.children.add(item);
-      }
-      for (const t of loadTests) {
-        const id = `${uri.fsPath}::load-test::${t.name}`;
-        const item = ctrl.createTestItem(id, `load-test: ${t.name}`, uri);
-        item.range = new vscode.Range(t.line, 0, t.line, 0);
-        fileItem.children.add(item);
-      }
-      for (const d of doctests) {
-        const id = `${uri.fsPath}::doctest::${d.fnName}`;
-        const item = ctrl.createTestItem(id, `doctest: ${d.fnName}`, uri);
-        item.range = new vscode.Range(d.line, 0, d.line, 0);
-        fileItem.children.add(item);
-      }
-    }
-
-    // Map a TestItem back to (file, compilerTestName, kind) for --test-name/--test-kind
-    // targeting. api-test/load-test/doctest are matched before the plain `test` form.
+    // ID scheme: file nodes use the document URI string; leaf nodes use
+    // "<fsPath>::<kind>::<name>". targetOf() decodes a leaf back to (file, name, kind);
+    // api-test/load-test/doctest are matched before the plain `test` form.
     function targetOf(item) {
       const id = item.id;
       let m = /^(.*)::api-test::(.*)$/.exec(id);
@@ -644,65 +615,253 @@ function activate(context) {
       return null; // file-level node
     }
 
-    // Collect the leaf TestItems implied by a run request.
+    function ensureFileItem(uri) {
+      let fileItem = ctrl.items.get(uri.toString());
+      if (!fileItem) {
+        fileItem = ctrl.createTestItem(uri.toString(), path.basename(uri.fsPath), uri);
+        fileItem.canResolveChildren = true;
+        ctrl.items.add(fileItem);
+      }
+      return fileItem;
+    }
+
+    // Read a .tesl file's text — prefer an open (possibly-unsaved) document so the
+    // tree reflects live edits, else read from disk.
+    function readTeslText(uri) {
+      const open = vscode.workspace.textDocuments.find(
+        (d) => d.uri.toString() === uri.toString()
+      );
+      if (open) return open.getText();
+      try { return fs.readFileSync(uri.fsPath, "utf8"); } catch (_e) { return null; }
+    }
+
+    // Populate a file node's children from its source. Deletes the node if the file
+    // has no tests, so the tree shows only files that actually contain tests.
+    function populateChildren(fileItem, uri, text) {
+      const { tests, apiTests, loadTests, doctests, hasAny } = discoverTests(text);
+      if (!hasAny) { ctrl.items.delete(uri.toString()); return; }
+      const kids = [];
+      const mk = (id, label, line, kind) => {
+        const item = ctrl.createTestItem(id, label, uri);
+        item.range = new vscode.Range(line, 0, line, 0);
+        item.tags = [TAGS[kind]];
+        kids.push(item);
+      };
+      for (const t of tests) mk(`${uri.fsPath}::test::${t.name}`, t.name, t.line, "test");
+      for (const t of apiTests) mk(`${uri.fsPath}::api-test::${t.name}`, `api-test: ${t.name}`, t.line, "api-test");
+      for (const t of loadTests) mk(`${uri.fsPath}::load-test::${t.name}`, `load-test: ${t.name}`, t.line, "load-test");
+      for (const d of doctests) mk(`${uri.fsPath}::doctest::${d.fnName}`, `doctest: ${d.fnName}`, d.line, "doctest");
+      fileItem.children.replace(kids);
+      fileItem.canResolveChildren = false; // children are now materialized
+    }
+
+    function resolveFileItem(fileItem) {
+      const uri = fileItem.uri || vscode.Uri.parse(fileItem.id);
+      const text = readTeslText(uri);
+      if (text == null) {
+        // Transient read failure (e.g. WSL/SSH I/O). Leave the node in place — real
+        // deletions are handled by the file watcher's onDidDelete — and surface why.
+        console.warn(`tesl: could not read ${uri.fsPath} for test discovery`);
+        return;
+      }
+      populateChildren(fileItem, uri, text);
+    }
+
+    const TESL_GLOB = "**/*.tesl";
+    const TESL_EXCLUDE = "**/{node_modules,.git,_build,result,.tesl-postgres}/**";
+
+    // Project-wide discovery: scan every .tesl file once, keep only those with tests.
+    // Coalesced — activation calls this fire-and-forget AND resolveHandler(undefined)/
+    // refreshHandler may call it concurrently; a single in-flight promise prevents the
+    // two from interleaving and double-writing the tree.
+    let discoveryInFlight = null;
+    function discoverAllFiles() {
+      if (discoveryInFlight) return discoveryInFlight;
+      discoveryInFlight = (async () => {
+        try {
+          let uris = [];
+          try { uris = await vscode.workspace.findFiles(TESL_GLOB, TESL_EXCLUDE); } catch (_e) { uris = []; }
+          const seen = new Set();
+          for (const uri of uris) {
+            const text = readTeslText(uri);
+            if (text == null) continue;
+            if (!discoverTests(text).hasAny) { ctrl.items.delete(uri.toString()); continue; }
+            seen.add(uri.toString());
+            populateChildren(ensureFileItem(uri), uri, text);
+          }
+          const stale = [];
+          ctrl.items.forEach((item) => { if (!seen.has(item.id)) stale.push(item.id); });
+          stale.forEach((id) => ctrl.items.delete(id));
+        } finally {
+          discoveryInFlight = null;
+        }
+      })();
+      return discoveryInFlight;
+    }
+
+    // VS Code calls resolveHandler(undefined) to discover the root set (and on the
+    // Test Explorer refresh button), and resolveHandler(fileItem) to lazily expand.
+    ctrl.resolveHandler = async (item) => {
+      if (!item) { await discoverAllFiles(); return; }
+      resolveFileItem(item);
+    };
+    ctrl.refreshHandler = async () => { await discoverAllFiles(); };
+
+    // Gather the leaf test items implied by a run request, resolving file nodes on
+    // demand so "run all"/"run file" works even before the user expanded them.
     function collectLeaves(request) {
+      const roots = (request.include && request.include.length) ? request.include : null;
+      // Resolve unresolved file nodes FIRST via a snapshot pass — resolveFileItem ->
+      // populateChildren can delete a (now test-less) file item from ctrl.items, so it
+      // must not run inside a live ctrl.items.forEach traversal.
+      const toResolve = [];
+      const scan = (item) => { if (!targetOf(item) && item.children.size === 0) toResolve.push(item); };
+      if (roots) roots.forEach(scan); else ctrl.items.forEach(scan);
+      toResolve.forEach(resolveFileItem);
       const leaves = [];
       const visit = (item) => {
-        if (item.children.size > 0) item.children.forEach(visit);
-        else leaves.push(item);
+        if (item.children.size > 0) { item.children.forEach(visit); return; }
+        if (targetOf(item)) leaves.push(item);
       };
-      if (request.include && request.include.length) request.include.forEach(visit);
+      if (roots) roots.forEach(visit);
       else ctrl.items.forEach(visit);
       const excluded = new Set((request.exclude || []).map((i) => i.id));
       return leaves.filter((i) => !excluded.has(i.id));
     }
 
-    // Run profile: shell each selected test through the compiler + raco test.
-    ctrl.createRunProfile("Run", vscode.TestRunProfileKind.Run, (request) => {
+    // Run `tesl test <file>` once, capturing combined output + exit code + duration.
+    function runTeslTestFile(file, token) {
+      return new Promise((resolve) => {
+        const tesl = findTeslWrapper();
+        const start = Date.now();
+        let settled = false;
+        let cancelSub = null;
+        // Both 'error' and 'close' can fire for one process — settle (resolve +
+        // dispose the cancellation listener) exactly once.
+        const finish = (result) => {
+          if (settled) return;
+          settled = true;
+          if (cancelSub) cancelSub.dispose();
+          resolve(result);
+        };
+        let child;
+        try {
+          child = spawn(tesl, ["test", file], { cwd: path.dirname(file) });
+        } catch (e) {
+          finish({ code: -1, output: `failed to launch tesl: ${e && e.message}`, durationMs: 0 });
+          return;
+        }
+        let out = "";
+        const onData = (d) => { out += d.toString(); };
+        if (child.stdout) child.stdout.on("data", onData);
+        if (child.stderr) child.stderr.on("data", onData);
+        cancelSub = token.onCancellationRequested(() => { try { child.kill("SIGTERM"); } catch (_e) {} });
+        child.on("error", (err) => finish({ code: -1, output: `${out}\nfailed to run tesl: ${err.message}`, durationMs: Date.now() - start }));
+        child.on("close", (code) => finish({ code: code == null ? -1 : code, output: out, durationMs: Date.now() - start }));
+      });
+    }
+
+    // Run profile (default): execute selected tests, report real pass/fail/error.
+    // Selected leaves are grouped by file and each file is run ONCE (rackunit prints
+    // only failures; passes are inferred from "discovered ∧ not failed ∧ compiled").
+    const runHandler = async (request, token) => {
       const run = ctrl.createTestRun(request);
-      for (const item of collectLeaves(request)) {
-        const tgt = targetOf(item);
-        if (!tgt) continue;
-        run.started(item);
-        runNamedTestInTerminal(tgt.file, tgt.testName, `Tesl: ${item.label}`, tgt.kind);
-        // Terminal-based execution: we can't observe pass/fail programmatically
-        // without parsing raco output, so we mark the item enqueued/skipped to
-        // avoid reporting a false pass. The terminal shows the authoritative result.
-        run.skipped(item);
+      try {
+        const byFile = new Map(); // file -> [{ item, tgt }]
+        for (const item of collectLeaves(request)) {
+          const tgt = targetOf(item);
+          if (!tgt) continue;
+          run.enqueued(item);
+          if (!byFile.has(tgt.file)) byFile.set(tgt.file, []);
+          byFile.get(tgt.file).push({ item, tgt });
+        }
+        for (const [file, entries] of byFile) {
+          if (token.isCancellationRequested) { entries.forEach((e) => run.skipped(e.item)); continue; }
+          entries.forEach((e) => run.started(e.item));
+          const res = await runTeslTestFile(file, token);
+          run.appendOutput(`\r\n=== ${path.basename(file)} (exit ${res.code}) ===\r\n`);
+          if (res.output) run.appendOutput(res.output.replace(/\r?\n/g, "\r\n"));
+          const { failures, compileError, reportedFailureCount } = parseTeslTestOutput(res.output, res.code);
+          // Only report a PASS when confident every failure was attributed: the run
+          // exited 0, OR the parsed failure count matches the run summary. Otherwise a
+          // failure the parser could not attribute would masquerade as a pass — so the
+          // unattributed tests are marked errored ("undetermined") rather than passed.
+          const confident = res.code === 0 ||
+            (reportedFailureCount !== null && failures.size >= reportedFailureCount);
+          // rackunit reports no per-case timing, so spread the file-run duration
+          // evenly across the file's tests.
+          const per = entries.length ? Math.max(0, Math.round(res.durationMs / entries.length)) : res.durationMs;
+          for (const { item, tgt } of entries) {
+            if (token.isCancellationRequested) { run.skipped(item); continue; }
+            if (compileError) {
+              run.errored(item, new vscode.TestMessage(compileError), per);
+              continue;
+            }
+            const f = failures.get(tgt.testName);
+            if (f) {
+              const msg = new vscode.TestMessage(f.message || "test failed");
+              if (item.uri && item.range) msg.location = new vscode.Location(item.uri, item.range);
+              if (f.expected !== undefined) msg.expectedOutput = f.expected;
+              if (f.actual !== undefined) msg.actualOutput = f.actual;
+              run.failed(item, msg, per);
+            } else if (confident) {
+              run.passed(item, per);
+            } else {
+              run.errored(item, new vscode.TestMessage(
+                "could not determine this test's result — the test runner reported failures that could not be matched to a test name"), per);
+            }
+          }
+        }
+      } finally {
+        run.end();
       }
-      run.end();
+    };
+    ctrl.createRunProfile("Run", vscode.TestRunProfileKind.Run, runHandler, true);
+
+    // Debug profile: launch the DAP session per selected test (test mode). The DAP
+    // session does not report pass/fail back to the TestRun (the debugger UI is the
+    // feedback channel), so we await each launch and only flag a launch FAILURE on the
+    // item — we never mark a started item skipped (an illegal state transition).
+    // Load-tests are throughput benchmarks, not steppable, so they are skipped here.
+    ctrl.createRunProfile("Debug", vscode.TestRunProfileKind.Debug, async (request, token) => {
+      const run = ctrl.createTestRun(request);
+      try {
+        for (const item of collectLeaves(request)) {
+          const tgt = targetOf(item);
+          if (!tgt) continue;
+          if (tgt.kind === "load-test" || token.isCancellationRequested) { run.skipped(item); continue; }
+          const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(tgt.file));
+          let ok = false;
+          try {
+            ok = await vscode.debug.startDebugging(folder, {
+              type: "tesl", request: "launch",
+              name: `Debug: ${item.label}`,
+              program: tgt.file, mode: "test", testName: tgt.testName, testKind: tgt.kind,
+            });
+          } catch (_e) { ok = false; }
+          if (!ok) run.errored(item, new vscode.TestMessage("failed to start the Tesl debug session"));
+        }
+      } finally {
+        run.end();
+      }
     }, false);
 
-    // Debug profile: launch the DAP session per selected test (test mode).
-    ctrl.createRunProfile("Debug", vscode.TestRunProfileKind.Debug, (request) => {
-      const run = ctrl.createTestRun(request);
-      for (const item of collectLeaves(request)) {
-        const tgt = targetOf(item);
-        if (!tgt) continue;
-        // Load-tests are throughput benchmarks, not steppable scenarios — skip them
-        // in the Debug profile (they remain runnable via the Run profile).
-        if (tgt.kind === "load-test") { run.skipped(item); continue; }
-        run.started(item);
-        const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(tgt.file));
-        vscode.debug.startDebugging(folder, {
-          type: "tesl", request: "launch",
-          name: `Debug: ${item.label}`,
-          program: tgt.file, mode: "test", testName: tgt.testName, testKind: tgt.kind,
-        });
-        run.skipped(item);
-      }
-      run.end();
-    }, false);
-
-    // Keep the tree fresh as files open/change.
-    const refreshOpen = () => vscode.workspace.textDocuments.forEach(refreshFile);
-    refreshOpen();
+    // Initial discovery + keep the tree fresh on file create/change/delete and on
+    // live edits in open documents.
+    discoverAllFiles();
+    const teslWatcher = vscode.workspace.createFileSystemWatcher(TESL_GLOB);
+    const refreshUri = (uri) => {
+      const text = readTeslText(uri);
+      if (text != null && discoverTests(text).hasAny) populateChildren(ensureFileItem(uri), uri, text);
+      else ctrl.items.delete(uri.toString());
+    };
+    teslWatcher.onDidCreate(refreshUri);
+    teslWatcher.onDidChange(refreshUri);
+    teslWatcher.onDidDelete((uri) => ctrl.items.delete(uri.toString()));
     context.subscriptions.push(
-      vscode.workspace.onDidOpenTextDocument(refreshFile),
-      vscode.workspace.onDidChangeTextDocument((e) => refreshFile(e.document)),
-      vscode.workspace.onDidCloseTextDocument((doc) => {
-        if (doc.fileName.endsWith(".tesl")) ctrl.items.delete(doc.uri.toString());
-      })
+      teslWatcher,
+      vscode.workspace.onDidOpenTextDocument((doc) => { if (doc.fileName.endsWith(".tesl")) refreshUri(doc.uri); }),
+      vscode.workspace.onDidChangeTextDocument((e) => { if (e.document.fileName.endsWith(".tesl")) refreshUri(e.document.uri); })
     );
   }
 
