@@ -1668,10 +1668,21 @@
                  datum)]
     [else '()]))
 
+;; A raw-value variable `*x` (the runtime raw value of a bound GDP name `x`) is
+;; bound exactly when `x` is.  A computed proof subject such as `ValidScore (n / 2)`
+;; lowers to `(quotient *n 2)`, so the proof template legitimately mentions `*n`;
+;; it is a runtime raw-value binding, NOT an unbound GDP name.
+(define (raw-value-var-of-bound? datum bound)
+  (and (symbol? datum)
+       (let ([s (symbol->string datum)])
+         (and (> (string-length s) 1)
+              (char=? (string-ref s 0) #\*)
+              (member (string->symbol (substring s 1)) bound)))))
+
 (define (proof-arg-unbound-names datum bound)
   (cond
     [(symbol? datum)
-     (if (member datum bound)
+     (if (or (member datum bound) (raw-value-var-of-bound? datum bound))
          '()
          (list datum))]
     [(gdp-atom? datum) '()]

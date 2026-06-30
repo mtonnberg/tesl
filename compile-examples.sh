@@ -518,6 +518,7 @@ EXAMPLE_FILES=(
     example/support-assistant.tesl
     example/ai-live-check.tesl
     example/ai-conversation-service.tesl
+    example/user-service-api.tesl
     "${KANEL_FILES[@]}"
 )
 

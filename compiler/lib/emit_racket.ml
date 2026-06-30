@@ -4053,6 +4053,12 @@ let emit_func ctx (fd : func_decl) =
            | _ -> false
          in
          is_check_call || not is_user_call
+       (* A let bound to a case/if produces a plain value that, when returned in
+          tail position of a plain-return fn, must be raw-value'd — i.e. resolved
+          out of its GDP-named binding while that binding is still in scope.
+          Otherwise the bare name symbol escapes as the return value and fails the
+          return-type check (the evidence env that would resolve it has unwound). *)
+       | Some (ECase _) | Some (EIf _) -> true
        | _ -> false)
     | _ -> false
   in

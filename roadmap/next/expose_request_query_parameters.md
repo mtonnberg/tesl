@@ -54,6 +54,9 @@ So this requires plumbing in three layers, not just a `register-field-access!` e
 
 ## Open questions
 - Repeated keys (`?a=1&a=2`): last-wins `String`, or `Dict String (List String)`?
+  - DECISION: last wins
 - URL-decoding of values (`%20` → space) — decode on parse.
+  - DECISION: Yes, decode
 - Surface for api-tests: inline `?...` in the path vs an explicit `query { }`
   clause (the latter is more consistent with `cookie { }` / `body { }`).
+  - DECISION: inline in path since it is part of the url
