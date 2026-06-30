@@ -60,6 +60,8 @@
  ;; Email operations
  send-email!
  start-email-worker!
+ ;; Security: header-field CRLF guard (exported for the regression suite)
+ email-header-field-safe?
  ;; Struct accessors (tests)
  (struct-out email-spec))
 
@@ -191,12 +193,27 @@
 
 ;; ── SMTP delivery ─────────────────────────────────────────────────────────────
 
+;; A header-bound field (recipient, subject) is safe iff it contains no CR or LF;
+;; either would let an attacker inject arbitrary RFC2822 headers.  Pure predicate,
+;; exported for the security regression suite.
+(define (email-header-field-safe? s)
+  (not (regexp-match? #rx"[\r\n]" s)))
+
 (define (deliver-email! email-s to-str subj-str text-str html-str)
   (define host     (email-spec-smtp-host email-s))
   (define port     (email-spec-smtp-port email-s))
   (define username (email-spec-smtp-username email-s))
   (define password (email-spec-smtp-password email-s))
   (define use-tls? (email-spec-smtp-tls email-s))
+  ;; CRLF header-injection guard: a `\r`/`\n` in a header-bound field (recipient
+  ;; or subject, both user-influenced) would inject arbitrary RFC2822 headers —
+  ;; Bcc exfiltration, spoofing, body injection.  Reject rather than sanitize: a
+  ;; CR/LF in these fields is always a bug or an attack.
+  (for ([named (in-list (list (cons "recipient" to-str) (cons "subject" subj-str)))])
+    (unless (email-header-field-safe? (cdr named))
+      (error 'email
+             (format "email ~a contains a CR/LF newline — header injection rejected"
+                     (car named)))))
   ;; Build a minimal RFC2822 header
   (define header
     (~a "From: " username "\r\n"

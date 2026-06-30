@@ -1087,7 +1087,29 @@
          #t)]
     [else #t]))
 
+;; JSON nesting-depth cap (DoS): the typed decoder recurses once per nested
+;; container; attacker JSON nested thousands deep can exhaust the stack.  A
+;; dynamic depth counter (incremented per call via the wrapper below) bounds it.
+;; Configurable via TESL_MAX_JSON_DEPTH; default 64, far above any real payload.
+(define max-json-decode-depth
+  (let ([v (getenv "TESL_MAX_JSON_DEPTH")])
+    (or (and v (let ([n (string->number v)]) (and (exact-positive-integer? n) n)))
+        64)))
+(define current-json-decode-depth (make-parameter 0))
+
+;; Wrapper: checks/raises on excessive depth, then recurses into the real body.
+;; Every recursive call in the body targets `jsexpr->typed-value` (this wrapper),
+;; so the dynamic counter increments at each level without threading a param
+;; through the many call sites.  jsexpr->typed-value/result catches the raise and
+;; renders it as a clean 400.
 (define (jsexpr->typed-value type-datum value [who 'types])
+  (define depth (current-json-decode-depth))
+  (when (> depth max-json-decode-depth)
+    (error who "JSON nesting too deep (max ~a levels)" max-json-decode-depth))
+  (parameterize ([current-json-decode-depth (add1 depth)])
+    (jsexpr->typed-value* type-datum value who)))
+
+(define (jsexpr->typed-value* type-datum value who)
   (define maybe-adt-spec (adt-type-spec type-datum))
   (define maybe-record-spec (lookup-record-spec type-datum #f))
   (define maybe-list-type (list-type-argument type-datum))

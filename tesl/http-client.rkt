@@ -22,7 +22,15 @@
          HttpClient.get
          HttpClient.post
          HttpClient.put
-         HttpClient.delete)
+         HttpClient.delete
+         ;; Security: outbound header CRLF guard (exported for the regression suite)
+         http-header-field-safe?)
+
+;;; A header name/value is safe iff it contains no CR or LF — either would split
+;;; the outbound request and inject arbitrary headers / smuggle a request.  Pure
+;;; predicate, exported for the security regression suite.
+(define (http-header-field-safe? s)
+  (not (regexp-match? #rx"[\r\n]" s)))
 
 ;;; The httpClient capability — required by all outgoing HTTP functions.
 ;;; Named httpClient (camelCase) so it is a valid Tesl identifier.
@@ -104,12 +112,22 @@
 (define (do-http-request method url-str req-headers body-bytes)
   (require-capabilities! (list httpClient))
   (define-values (host port path-str use-ssl?) (parse-url-parts url-str))
-  ;; Convert Tesl header list (2-element lists) to list of byte strings
+  ;; Convert Tesl header list (2-element lists) to list of byte strings.
+  ;; Reject CR/LF in any header name or value: a `\r\n` would split the outbound
+  ;; request and inject arbitrary headers / smuggle a second request.
+  (define (no-crlf field s)
+    (unless (http-header-field-safe? s)
+      (raise-user-error 'HttpClient
+                        "outbound ~a contains a CR/LF newline — header injection rejected"
+                        field))
+    s)
   (define header-bytes
     (for/list ([h (in-list req-headers)])
       (define name-str (if (list? h) (first h) h))
       (define val-str  (if (list? h) (second h) ""))
-      (string->bytes/utf-8 (string-append name-str ": " val-str))))
+      (string->bytes/utf-8
+       (string-append (no-crlf "header name" name-str) ": "
+                      (no-crlf "header value" val-str)))))
   (define-values (status-line resp-headers resp-port)
     (with-handlers ([exn:fail?
                      (lambda (e)
@@ -132,7 +150,22 @@
       (if (>= (length parts) 2)
           (or (string->number (second parts)) 0)
           0)))
-  (define body-bytes-resp (port->bytes resp-port))
+  ;; Cap the response body (DoS): port->bytes reads the entire upstream body with
+  ;; no limit, so a large/hostile response can exhaust memory.  Read at most
+  ;; max-response-bytes (TESL_HTTP_MAX_RESPONSE_BYTES, default 10 MiB) and reject
+  ;; anything larger.
+  (define max-response-bytes
+    (let ([v (getenv "TESL_HTTP_MAX_RESPONSE_BYTES")])
+      (or (and v (let ([n (string->number v)]) (and (exact-positive-integer? n) n)))
+          (* 10 1024 1024))))
+  (define body-bytes-resp
+    (let ([bs (read-bytes (add1 max-response-bytes) resp-port)])
+      (cond
+        [(eof-object? bs) #""]
+        [(> (bytes-length bs) max-response-bytes)
+         (raise-user-error 'HttpClient
+                           "response body exceeds the ~a-byte cap" max-response-bytes)]
+        [else bs])))
   (define body-str (bytes->string/utf-8 body-bytes-resp #\?))
   (define headers-list (parse-response-headers resp-headers))
   (HttpResponse #:status status-code

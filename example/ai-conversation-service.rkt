@@ -15,7 +15,7 @@
   (prefix-in __tart_ (only-in tesl/tesl/agent defineAgent withTools tool anthropic openai mistral local tesl-agent-decode-args))
   (only-in tesl/tesl/prelude String Unit Bool)
   (only-in tesl/tesl/maybe Maybe Something Nothing)
-  (only-in tesl/tesl/env envInt requireEnv)
+  (only-in tesl/tesl/env envInt requireEnv envRead)
   (only-in tesl/tesl/telemetry initTelemetry)
   (only-in tesl/tesl/db dbRead dbWrite)
   (only-in tesl/tesl/dict [Dict.lookup tesl_import_Dict_lookup])
@@ -197,7 +197,7 @@
 )
 
 (module+ main
-  (thsl-src! "example/ai-conversation-service.tesl" 284 (list) (lambda () (with-capabilities (convService) (call-with-database ConversationDb (lambda () (let ([_ (init-opentelemetry! #:service-name "ai-conversation-service" #:endpoint "in-memory" #:console? #t)]) (let ([port (raw-value (envInt "PORT" 8089))]) (serve ChatServer #:port port #:capabilities (list convService) #:sse-routes ChatServer-sse-routes)))))))))
+  (thsl-src! "example/ai-conversation-service.tesl" 284 (list) (lambda () (with-capabilities (convService envRead) (call-with-database ConversationDb (lambda () (let ([_ (init-opentelemetry! #:service-name "ai-conversation-service" #:endpoint "in-memory" #:console? #t)]) (let ([port (raw-value (envInt "PORT" 8089))]) (serve ChatServer #:port port #:capabilities (list convService envRead) #:sse-routes ChatServer-sse-routes)))))))))
 
 (module+ test
   (require rackunit)

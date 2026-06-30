@@ -3,7 +3,7 @@ module AiLiveCheck exposing [AiServer, askClaude, AskRequest]
 
 import Tesl.Prelude exposing [String, Bool(..)]
 import Tesl.Json exposing [stringCodec]
-import Tesl.Env exposing [envInt]
+import Tesl.Env exposing [envInt, envRead]
 import Tesl.Telemetry exposing [initTelemetry]
 import Tesl.App exposing [App]
 import Tesl.Agent exposing [aiProvider, askReply, replyText]
@@ -75,7 +75,7 @@ database LiveDb = Database {
   backend: Memory
 }
 
-main() -> App requires [liveAi] =
+main() -> App requires [liveAi, envRead] =
   let _ = initTelemetry service "ai-live-check" endpoint "in-memory" console True
   let port = envInt "PORT" 8088
   App {

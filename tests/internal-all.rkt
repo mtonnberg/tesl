@@ -23,6 +23,7 @@
 (define-runtime-path example-api-test-path "example-api-test.rkt")
 (define-runtime-path surface-regression-test-path "surface-regression-test.rkt")
 (define-runtime-path existential-regression-test-path "existential-regression-test.rkt")
+(define-runtime-path security-test-path "security-test.rkt")
 (define-runtime-path tesl-test-path "tesl-test.rkt")
 (define-runtime-path port-test-path "port-test.rkt")
 (define-runtime-path codec-specialization-test-path "codec-specialization-test.rkt")
@@ -97,7 +98,8 @@
   ;; surface/existential are validation-only and pass in the default zero-cost mode.
   (define failures
     (+ (run-tests (load-test-suite surface-regression-test-path 'surface-regression-suite))
-       (run-tests (load-test-suite existential-regression-test-path 'existential-regression-suite))))
+       (run-tests (load-test-suite existential-regression-test-path 'existential-regression-suite))
+       (run-tests (load-test-suite security-test-path 'security-suite))))
   (unless (zero? failures)
     (error 'tests (format "~a supplemental regression tests are failing" failures))))
 

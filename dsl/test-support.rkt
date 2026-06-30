@@ -153,6 +153,7 @@
                                    #:cookie [cookie #f]
                                    #:headers [headers (hash)]
                                    #:body [body #f]
+                                   #:query [query ""]
                                    #:capabilities [capabilities '()])
   (define normalized-headers (normalize-api-test-headers headers))
   (define request-headers
@@ -167,7 +168,7 @@
   (api-test-response
    (dispatch-request
     server
-    (make-request method path #:headers final-headers #:body request-body)
+    (make-request method path #:headers final-headers #:body request-body #:query query)
     #:capabilities capabilities)))
 
 (define (register-api-test-worker-entries! registry entries)

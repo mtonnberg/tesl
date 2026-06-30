@@ -854,16 +854,16 @@ let load_imported_ctors (m : module_form) : (string * (string * scheme)) list =
             | ImportAll -> None
             | ImportExposing names -> Some names
           in
-          let strip_dotdot s =
-            let n = String.length s in
-            if n > 4 && String.sub s (n-4) 4 = "(..)" then String.sub s 0 (n-4) else s
-          in
           List.concat_map (fun (adt_name, ctor_name, ctor_sch) ->
             let qualified_name = imp.module_name ^ "." ^ ctor_name in
             let requested_name = match requested with
               | Some names ->
-                let stripped = List.map strip_dotdot names in
-                List.mem ctor_name stripped || List.mem adt_name stripped
+                (* A constructor enters scope ONLY when named explicitly
+                   (`exposing [Red]`) or via its ADT's wildcard form
+                   (`exposing [Color(..)]`).  Importing the bare type name
+                   (`exposing [Color]`) brings the TYPE, not its constructors —
+                   otherwise unimported constructors leak into scope (soundness). *)
+                List.mem ctor_name names || List.mem (adt_name ^ "(..)") names
               | None -> false
             in
             let include_plain = requested_name in
@@ -2189,7 +2189,7 @@ let rec infer_expr ctx (e : expr) : ty =
   | ERuntimeCall { segments; _ } ->
     (* Desugar-only node: never present during type-checking (desugar runs
        AFTER the checker).  Infer children defensively, result is Unit. *)
-    List.iter (function RLit _ -> () | RArg e -> ignore (infer_expr ctx e)) segments;
+    List.iter (function RLit _ | RRawVar _ -> () | RArg e -> ignore (infer_expr ctx e)) segments;
     t_unit
   in
   let expr_meta = match binding_meta_of_expr ctx e with Some m -> m | None -> PlainBinding in
@@ -3259,9 +3259,90 @@ let stdlib_module_of_prefix : (string * string) list = [
   ("Email",      "Tesl.Email");
 ]
 
-(** Collect all qualified stdlib function uses from function/const bodies.
-    Returns (qualified_name, first_loc) pairs, deduplicated by name. *)
+(** Bare (unqualified) stdlib functions whose runtime lives in an IMPORT-ONLY
+    Racket module (the emitter emits the `(require tesl/X.rkt)` only when the
+    module is imported).  Using one in expression position WITHOUT importing its
+    module type-checks (they sit in the global stdlib env) but is `unbound
+    identifier` at runtime — the soundness gap this closes (Option A).
+
+    Excluded on purpose: the Tesl.Agent function set (its constructors lower via a
+    separate `__tart_` path — gate it separately) and `cli.args` (a qualified-form
+    edge).  Qualified names like `Dict.lookup` are handled by the prefix path
+    above. *)
+let bare_stdlib_fn_module : (string * string) list = [
+  "env", "Tesl.Env"; "envInt", "Tesl.Env"; "envString", "Tesl.Env"; "requireEnv", "Tesl.Env";
+  "generateId", "Tesl.Id"; "generatePrefixedId", "Tesl.Id"; "newId", "Tesl.Id";
+  "randomInt", "Tesl.Random"; "randomFloat", "Tesl.Random";
+  "nowMillis", "Tesl.Time"; "formatTime", "Tesl.Time"; "durationMs", "Tesl.Time";
+  "addMs", "Tesl.Time"; "diffMs", "Tesl.Time"; "subtractMs", "Tesl.Time";
+  "statusOk", "Tesl.ApiTest"; "statusClientError", "Tesl.ApiTest";
+  "statusServerError", "Tesl.ApiTest";
+  "lookupPortArgument", "Tesl.Cli";
+]
+
+(** Every name BOUND by the module — top-level fn/const names plus all binders in
+    fn/const bodies (params, lets, let-proofs, lambda params, case patterns).  A
+    bare-name use that matches one of these is a user binding (a shadow), NOT the
+    stdlib function, so it must never be flagged as needing an import.  Conservative
+    over-approximation (a name bound anywhere shadows everywhere) — safe: it can
+    only SUPPRESS a flag, never raise a false one. *)
+let collect_bound_names (m : module_form) : (string, unit) Hashtbl.t =
+  let t : (string, unit) Hashtbl.t = Hashtbl.create 64 in
+  let add n = Hashtbl.replace t n () in
+  let rec pat = function
+    | PVar n -> add n
+    | PCon { fields; _ } -> List.iter (fun (_, p) -> pat p) fields
+    | _ -> ()
+  in
+  let rec walk = function
+    | ELet { name; value; body; _ } -> add name; walk value; walk body
+    | ELetProof { value_name; proof_name; value; body; _ } ->
+      add value_name; add proof_name; walk value; walk body
+    | ELambda { params; body; _ } ->
+      List.iter (fun (b : binding) -> add b.name) params; walk body
+    | ECase { scrut; arms; _ } ->
+      walk scrut; List.iter (fun (a : case_arm) -> pat a.pattern; walk a.body) arms
+    | EField { obj; _ } -> walk obj
+    | EApp { fn; arg; _ } -> walk fn; walk arg
+    | EBinop { left; right; _ } -> walk left; walk right
+    | EUnop { arg; _ } -> walk arg
+    | EIf { cond; then_; else_; _ } -> walk cond; walk then_; walk else_
+    | EList { elems; _ } -> List.iter walk elems
+    | ERecord { fields; _ } -> List.iter (fun (_, v) -> walk v) fields
+    | EOk { value; _ } -> walk value
+    | EConstructor { args; _ } -> List.iter walk args
+    | EFail { message; _ } -> walk message
+    | ETelemetry { fields; _ } -> List.iter (fun (_, v) -> walk v) fields
+    | EEnqueue { payload; _ } -> walk payload
+    | EPublish { key; payload; _ } -> Option.iter walk key; Option.iter walk payload
+    | EServe { port; _ } -> walk port
+    | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+    | EWithTransaction { body; _ } -> walk body
+    | ECacheGet { key; _ } -> walk key
+    | ECacheSet { key; value; ttl; _ } -> walk key; walk value; Option.iter walk ttl
+    | ECacheDelete { key; _ } -> walk key
+    | ECacheInvalidate { prefix; _ } -> walk prefix
+    | ESendEmail { to_; subject; body; _ } -> walk to_; walk subject; walk body
+    | ERuntimeCall { segments; _ } ->
+      List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk e) segments
+    | ELit _ | EVar _ | EStartWorkers _ | EStartEmailWorker _ -> ()
+  in
+  List.iter (function
+    | DFunc fd ->
+      add fd.name;
+      List.iter (fun (b : binding) -> add b.name) fd.params;
+      walk fd.body
+    | DConst c -> add c.name; walk c.value
+    | _ -> ()
+  ) m.decls;
+  t
+
+(** Collect all qualified stdlib function uses from function/const bodies, PLUS
+    bare import-only stdlib function uses (from [bare_stdlib_fn_module]) that are
+    not shadowed by a user binding.  Returns (name, first_loc) pairs deduped by
+    name. *)
 let collect_stdlib_fn_uses (m : module_form) : (string * Location.loc) list =
+  let bound = collect_bound_names m in
   let all_stdlib_fns =
     List.concat_map snd Type_system.tesl_module_exports
     |> List.filter (fun n -> String.contains n '.')
@@ -3270,6 +3351,14 @@ let collect_stdlib_fn_uses (m : module_form) : (string * Location.loc) list =
   let add qname loc =
     if List.mem qname all_stdlib_fns && not (Hashtbl.mem seen qname) then
       Hashtbl.replace seen qname loc
+  in
+  (* Bare import-only stdlib fn used in expression position and not shadowed by a
+     user binding → record it (checked against imports by the caller). *)
+  let add_bare name loc =
+    if List.mem_assoc name bare_stdlib_fn_module
+       && not (Hashtbl.mem bound name)
+       && not (Hashtbl.mem seen name) then
+      Hashtbl.replace seen name loc
   in
   let rec walk = function
     | EField { obj = EConstructor { name = modname; args = []; _ }; field; loc } ->
@@ -3299,7 +3388,8 @@ let collect_stdlib_fn_uses (m : module_form) : (string * Location.loc) list =
       (match payload with Some p -> walk p | None -> ())
     | EServe { port; _ } -> walk port
     | EFail { message; _ } -> walk message
-    | ELit _ | EVar _ | EStartWorkers _ -> ()
+    | EVar { name; loc } -> add_bare name loc
+    | ELit _ | EStartWorkers _ -> ()
     | ECacheGet { key; _ } -> walk key
     | ECacheSet { key; value; ttl; _ } ->
       walk key; walk value; Option.iter walk ttl
@@ -3309,7 +3399,7 @@ let collect_stdlib_fn_uses (m : module_form) : (string * Location.loc) list =
       walk to_; walk subject; walk body
     | EStartEmailWorker _ -> ()
     | ERuntimeCall { segments; _ } ->
-      List.iter (function RLit _ -> () | RArg e -> walk e) segments
+      List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk e) segments
   in
   List.iter (function
     | DFunc fd -> walk fd.body
@@ -3345,7 +3435,14 @@ let check_stdlib_fn_import_scope (m : module_form) : type_error list =
       | Some i -> String.sub qname 0 i
       | None -> qname
     in
-    match List.assoc_opt prefix stdlib_module_of_prefix with
+    (* Qualified name (Dict.lookup) → resolve by prefix; bare name (envInt) →
+       resolve via the bare import-only table. *)
+    let tesl_module_opt =
+      match List.assoc_opt prefix stdlib_module_of_prefix with
+      | Some tm -> Some tm
+      | None -> List.assoc_opt qname bare_stdlib_fn_module
+    in
+    match tesl_module_opt with
     | None -> None
     | Some tesl_module ->
       if is_fn_available tesl_module qname then None

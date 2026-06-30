@@ -2408,25 +2408,16 @@ let rec emit_expr ctx e =
     emit ctx "(reject ";
     emit_expr_simple ctx message;
     emit ctx (Printf.sprintf " #:http-code %d)" status)
-  | ETelemetry { name; fields; _ } ->
-    emit ctx (Printf.sprintf "(telemetry-event! %S #:attributes (" name);
-    List.iteri (fun i (k, v) ->
-      if i > 0 then emit ctx " ";
-      emit ctx (Printf.sprintf "[%S " k);
-      (* Telemetry values need * prefix for named values *)
-      (match v with
-       | EVar { name; _ } -> emit ctx ("*" ^ name)
-       | _ -> emit_expr_simple ctx v);
-      emit ctx "]"
-    ) fields;
-    emit ctx "))"
-  | EEnqueue _ | EStartWorkers _ | EServe _ ->
+  | ETelemetry _ | EEnqueue _ | EStartWorkers _ | EServe _
+  | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
+  | ESendEmail _ | EStartEmailWorker _ ->
     (* These fixed-shape effect forms are lowered to [ERuntimeCall] by
        {!Desugar.desugar_module}, which [compile_to_string] runs before
        [emit_module].  Reaching emit means the module was not desugared — a
        pipeline bug — so fail loudly rather than emit malformed Racket. *)
-    failwith "emit_racket: EEnqueue/EStartWorkers/EServe reached the emitter \
-              un-desugared (Desugar.desugar_module must run before emit_module)"
+    failwith "emit_racket: fixed-shape effect form (telemetry/enqueue/workers/\
+              serve/cache/email) reached the emitter un-desugared \
+              (Desugar.desugar_module must run before emit_module)"
   | EPublish { channel_name; key; event_ctor; payload; _ } ->
     emit ctx (Printf.sprintf "(publish-event! %s " channel_name);
     (match key with
@@ -2462,46 +2453,17 @@ let rec emit_expr ctx e =
     emit ctx "(call-with-queue-transaction (lambda () ";
     emit_expr ctx body;
     emit ctx "))"
-  | ECacheGet { cache_name; key; _ } ->
-    emit ctx (Printf.sprintf "(cache-get! %s " cache_name);
-    emit_expr_simple ctx key;
-    emit ctx ")"
-  | ECacheSet { cache_name; key; value; ttl; _ } ->
-    emit ctx (Printf.sprintf "(cache-set! %s " cache_name);
-    emit_expr_simple ctx key;
-    emit ctx " ";
-    emit_expr_simple ctx value;
-    (match ttl with
-     | Some ttl_expr -> emit ctx " "; emit_expr_simple ctx ttl_expr
-     | None -> ());
-    emit ctx ")"
-  | ECacheDelete { cache_name; key; _ } ->
-    emit ctx (Printf.sprintf "(cache-delete! %s " cache_name);
-    emit_expr_simple ctx key;
-    emit ctx ")"
-  | ECacheInvalidate { cache_name; prefix; _ } ->
-    emit ctx (Printf.sprintf "(cache-invalidate-prefix! %s " cache_name);
-    emit_expr_simple ctx prefix;
-    emit ctx ")"
-  | ESendEmail { email_name; to_; subject; body; _ } ->
-    emit ctx (Printf.sprintf "(send-email! %s #:to " email_name);
-    emit_expr_simple ctx to_;
-    emit ctx " #:subject ";
-    emit_expr_simple ctx subject;
-    emit ctx " #:body ";
-    emit_expr_simple ctx body;
-    emit ctx ")"
-  | EStartEmailWorker { email_name; _ } ->
-    emit ctx (Printf.sprintf "(start-email-worker! %s)" email_name)
   | ERuntimeCall { segments; _ } ->
     (* Desugar-lowered fixed-shape runtime call (EEnqueue / EStartWorkers /
-       EServe).  Literal segments are emitted verbatim (the call prefix, keyword
-       args and runtime fn names were rendered at desugar time); argument
-       sub-expressions are emitted through the context-aware emit_expr_simple
-       path, exactly as the original effect arms did. *)
+       EServe / cache / email families).  Literal segments are emitted verbatim
+       (the call prefix, keyword args and runtime fn names were rendered at
+       desugar time); argument sub-expressions are emitted through the
+       context-aware emit_expr_simple path, exactly as the original effect arms
+       did. *)
     List.iter (function
       | RLit s -> emit ctx s
-      | RArg e -> emit_expr_simple ctx e) segments
+      | RArg e -> emit_expr_simple ctx e
+      | RRawVar name -> emit ctx ("*" ^ name)) segments
   | EConstructor { name = "Nothing"; args = []; _ } ->
     emit ctx "Nothing"
   | EConstructor { name = "True"; args = []; _ } ->
@@ -3524,7 +3486,7 @@ let collect_qualified_uses_for_module short_name (m : module_form) : string list
     | ESendEmail { to_; subject; body; _ } ->
       walk_expr to_; walk_expr subject; walk_expr body
     | ERuntimeCall { segments; _ } ->
-      List.iter (function RLit _ -> () | RArg e -> walk_expr e) segments
+      List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk_expr e) segments
   in
   List.iter (function
     | DFunc (fd : Ast.func_decl) -> walk_expr fd.body
@@ -5758,11 +5720,15 @@ let rec emit_api_test_template_content ctx ~server_name ~capabilities ~helper_na
 and emit_api_test_path ctx ~server_name ~capabilities e =
   match e with
   | ELit { lit = LString s; _ } ->
+    (* Split off an inline query string ("/search?q=foo"): the path SEGMENTS use
+       only the part before '?'; the query part becomes #:query at the dispatch. *)
+    let path_part = match String.index_opt s '?' with
+      | Some i -> String.sub s 0 i | None -> s in
     emit ctx "(list";
     List.iter (fun part ->
       emit ctx " ";
       emit_api_test_template_content ctx ~server_name ~capabilities ~helper_name:"api-test-path-fragment" part
-    ) (String.split_on_char '/' s |> List.filter (fun part -> part <> ""));
+    ) (String.split_on_char '/' path_part |> List.filter (fun part -> part <> ""));
     emit ctx ")"
   | _ -> emit_expr ctx e
 
@@ -5831,6 +5797,14 @@ and emit_api_test_expr ctx ~server_name ~capabilities e =
        let cookie, headers, body = scan None None None rest in
        emit ctx (Printf.sprintf "(dispatch-api-test-request %s '%s " server_name name);
        emit_api_test_path ctx ~server_name ~capabilities path;
+       (* Inline query string from the path literal ("/search?q=foo") → #:query. *)
+       (match path with
+        | ELit { lit = LString s; _ } ->
+          (match String.index_opt s '?' with
+           | Some i when i + 1 < String.length s ->
+             emit ctx (Printf.sprintf " #:query %S" (String.sub s (i + 1) (String.length s - i - 1)))
+           | _ -> ())
+        | _ -> ());
        (match cookie with
         | Some cookie_expr -> emit ctx " #:cookie "; emit_api_test_expr ctx ~server_name ~capabilities cookie_expr
         | None -> ());

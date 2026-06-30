@@ -39,6 +39,10 @@ import Tesl.Database exposing [
   TcpConnection,
   SocketConnection,
 ]
+# `envRead` is the capability for reading the environment. The `port: envInt …`
+# in the database config below reads env at startup, so the `main` that starts
+# this app must declare `requires [envRead]` (see below).
+import Tesl.Env exposing [envRead]
 
 # ─────────────────────────────────────────────
 # UNDERSTANDING — why it works this way
@@ -235,7 +239,7 @@ server NoteServer for NoteApi {
   updateNoteTitle = updateNoteTitle
 }
 
-main() -> App requires [noteService] =
+main() -> App requires [noteService, envRead] =
   let _ = initTelemetry service "notes-api" endpoint "in-memory" console True
   App {
     database: NoteDatabase

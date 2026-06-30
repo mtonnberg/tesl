@@ -480,7 +480,7 @@ let rec check_expr_call_proofs
                  | ECacheSet { value; _ } -> visit value
                  | ESendEmail _ | EStartEmailWorker _ -> ()
                  | ERuntimeCall { segments; _ } ->
-                   List.iter (function RLit _ -> () | RArg e -> visit e) segments
+                   List.iter (function RLit _ | RRawVar _ -> () | RArg e -> visit e) segments
                in
                visit body;
                let non_call_errors =
@@ -569,7 +569,7 @@ let rec check_expr_call_proofs
           | ECacheSet { value; _ } -> visit value
           | ESendEmail _ | EStartEmailWorker _ -> ()
           | ERuntimeCall { segments; _ } ->
-            List.iter (function RLit _ -> () | RArg e -> visit e) segments
+            List.iter (function RLit _ | RRawVar _ -> () | RArg e -> visit e) segments
         in
         visit body;
         let non_call_errors =
@@ -1491,7 +1491,7 @@ pass a `check` function or a `&&` combination of check functions"
        walk to_; walk subject; walk body
      | EStartEmailWorker _ -> ()
      | ERuntimeCall { segments; _ } ->
-       List.iter (function RLit _ -> () | RArg e -> walk e) segments);
+       List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk e) segments);
   in
   List.iter (function
     | DFunc fd -> walk fd.body
@@ -1834,7 +1834,7 @@ let rec exists_witnesses (e : expr) : string list =
     exists_witnesses to_ @ exists_witnesses subject @ exists_witnesses body
   | EStartEmailWorker _ -> []
   | ERuntimeCall { segments; _ } ->
-    List.concat_map (function RLit _ -> [] | RArg e -> exists_witnesses e) segments
+    List.concat_map (function RLit _ | RRawVar _ -> [] | RArg e -> exists_witnesses e) segments
 
 let check_exists_bindings (decls : top_decl list) : validation_error list =
   let errors = ref [] in
@@ -2419,5 +2419,5 @@ if every guard fails at runtime, the case has no match"
     recurse to_ @ recurse subject @ recurse body
   | EStartEmailWorker _ -> []
   | ERuntimeCall { segments; _ } ->
-    List.concat_map (function RLit _ -> [] | RArg e -> recurse e) segments
+    List.concat_map (function RLit _ | RRawVar _ -> [] | RArg e -> recurse e) segments
 

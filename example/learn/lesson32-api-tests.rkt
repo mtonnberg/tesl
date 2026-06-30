@@ -59,13 +59,13 @@
 (define-handler
   (echo [req : EchoRequest])
   #:returns EchoRequest
-  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 58 (list (cons 'req *req)) (lambda () req)))
+  (thsl-src! "example/learn/lesson32-api-tests.tesl" 58 (list (cons 'req *req)) (lambda () req)))
 
 (define-handler
   (getSeededNote)
   #:capabilities [dbRead]
   #:returns Note
-  (let ([found (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 62 (list) (lambda () (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) "note-1")))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 63 (list (cons 'found *found)) (lambda () (let ([tesl_case_0 (raw-value found)]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 65 (list) (lambda () (reject "note not found" #:http-code 404)))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson32-api-tests.tesl" 67 (list (cons 'n n)) (lambda () *n)))]))))))
+  (let ([found (thsl-src! "example/learn/lesson32-api-tests.tesl" 62 (list) (lambda () (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) "note-1")))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/learn/lesson32-api-tests.tesl" 63 (list (cons 'found *found)) (lambda () (let ([tesl_case_0 (raw-value found)]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "example/learn/lesson32-api-tests.tesl" 65 (list) (lambda () (reject "note not found" #:http-code 404)))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "example/learn/lesson32-api-tests.tesl" 67 (list (cons 'n n)) (lambda () *n)))]))))))
 
 (define Lesson32Server-sse-routes '())
 (define-api Lesson32Api
@@ -97,6 +97,40 @@
             (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref echoResp 'status)))))
             (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref echoResp 'body) 'message)) "hello from api-test")
             (check-true (raw-value (isNull (raw-value (api-test-field-access-ref (api-test-field-access-ref echoResp 'body) 'missing)))))
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "seed prepares fresh in-memory state"
+    (call-with-fresh-memory-db (list Lesson32Database)
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (with-capabilities (dbRead dbWrite)
+              (insert-one! Note (hash 'id "note-1" 'title "Seeded from setup"))
+              (define seeded (dispatch-api-test-request Lesson32Server 'get (list "seeded-note") #:headers (hash) #:capabilities (list dbRead dbWrite)))
+              (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref seeded 'status)))))
+              (check-equal? (raw-value (api-test-field-access-ref (api-test-field-access-ref seeded 'body) 'title)) "Seeded from setup")
+            )
+          ))
+      ))
+  )
+)
+
+(module+ test
+  (require rackunit)
+  (test-case "state is isolated between blocks"
+    (call-with-fresh-memory-db (list Lesson32Database)
+      (lambda ()
+        (call-with-api-test-subscriptions
+          (lambda ()
+            (with-capabilities (dbRead)
+              (define seeded (dispatch-api-test-request Lesson32Server 'get (list "seeded-note") #:headers (hash) #:capabilities (list dbRead)))
+              (check-equal? (raw-value (api-test-field-access-ref seeded 'status)) 404)
+            )
           ))
       ))
   )

@@ -10,7 +10,7 @@ module AiConversationService exposing [
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Json exposing [stringCodec]
-import Tesl.Env exposing [envInt, requireEnv]
+import Tesl.Env exposing [envInt, requireEnv, envRead]
 import Tesl.Telemetry exposing [initTelemetry]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Dict exposing [Dict.lookup]
@@ -281,7 +281,7 @@ server ChatServer for ChatApi {
   sendMessage = sendMessage
 }
 
-main() -> App requires [convService] =
+main() -> App requires [convService, envRead] =
   let _ = initTelemetry service "ai-conversation-service" endpoint "in-memory" console True
   let port = envInt "PORT" 8089
   App {

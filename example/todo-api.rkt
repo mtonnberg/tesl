@@ -17,7 +17,7 @@
   (only-in tesl/tesl/maybe Maybe Something Nothing)
   (only-in tesl/tesl/dict [Dict.lookup tesl_import_Dict_lookup])
   (only-in tesl/tesl/time nowMillis PosixMillis time)
-  (only-in tesl/tesl/env env envInt)
+  (only-in tesl/tesl/env env envInt envRead)
   (only-in tesl/tesl/string [String.length tesl_import_String_length] [String.startsWith tesl_import_String_startsWith] [String.contains tesl_import_String_contains])
   (only-in tesl/tesl/int [Int.parse tesl_import_Int_parse])
   (only-in tesl/tesl/list [List.isEmpty tesl_import_List_isEmpty] [List.filterCheck tesl_import_List_filterCheck])
@@ -267,4 +267,4 @@
 )
 
 (module+ main
-  (thsl-src! "example/todo-api.tesl" 289 (list) (lambda () (with-capabilities (todoWebService) (call-with-database TodoDatabase (lambda () (let ([_ (init-opentelemetry! #:service-name "todo-api" #:endpoint "in-memory" #:console? #t)]) (let ([port (resolveExamplePort tesl_import_cli_args (raw-value (env "TESL_TODO_API_PORT")) (raw-value (env "PORT")))]) (let ([_ (seedExampleData)]) (serve TodoServer #:port port #:capabilities (list todoWebService) #:sse-routes TodoServer-sse-routes))))))))))
+  (thsl-src! "example/todo-api.tesl" 289 (list) (lambda () (with-capabilities (todoWebService envRead) (call-with-database TodoDatabase (lambda () (let ([_ (init-opentelemetry! #:service-name "todo-api" #:endpoint "in-memory" #:console? #t)]) (let ([port (resolveExamplePort tesl_import_cli_args (raw-value (env "TESL_TODO_API_PORT")) (raw-value (env "PORT")))]) (let ([_ (seedExampleData)]) (serve TodoServer #:port port #:capabilities (list todoWebService envRead) #:sse-routes TodoServer-sse-routes))))))))))

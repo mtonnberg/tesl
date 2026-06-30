@@ -19,11 +19,17 @@ let emit oc key path =
   | Some content ->
     Printf.fprintf oc "  (%S,\n   %S);\n\n" key content
 
+(* The LSP writes transient validation copies named `tesl-lsp-<n>.tesl` into the
+   directory of the file being edited; they must never be baked into the embedded
+   docs (else embedded_docs.ml churns on every build). *)
+let is_transient f =
+  String.length f >= 9 && String.sub f 0 9 = "tesl-lsp-"
+
 let walk_dir dir key_prefix ext oc =
   if Sys.file_exists dir then begin
     let files = Sys.readdir dir |> Array.to_list |> List.sort String.compare in
     List.iter (fun f ->
-      if List.exists (Filename.check_suffix f) ext then
+      if (not (is_transient f)) && List.exists (Filename.check_suffix f) ext then
         emit oc (key_prefix ^ f) (Filename.concat dir f)
     ) files
   end

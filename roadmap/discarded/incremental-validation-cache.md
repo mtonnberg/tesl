@@ -42,3 +42,14 @@ of `tesl validate` / `tesl --check-all` only do work for what actually changed.
 ## Out of scope
 
 - Cross-process / distributed caching. Single-machine, single-user warm cache only.
+
+
+---
+## DEFERRED back to `later` (core_polish, 2026-06-30)
+This cycle targets a SMALLER, more STABLE core. An incremental validation cache does the
+opposite: it adds a stateful cache (cache dir, LRU, transitive-import hashing) plus an
+invalidation-key **soundness risk** (a wrong key silently validates stale inputs — worse than
+slow). It is a *performance* item; performance is not this cycle's objective. The item itself
+says "needs a sound design before any code" and "the last and most cautious bet". The "why"
+(warm-run speed) is understood and legitimate, just not aligned now. Revisit after the
+smaller-core work, starting in shadow-mode per the design above.

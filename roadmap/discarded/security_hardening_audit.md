@@ -1,5 +1,15 @@
 # Security — auditing & hardening the compiler and runtime
 
+> **Status (2026-06-30, core_polish):** the bounded secure-by-default **runtime**
+> slice of Phase 2 SHIPPED — path traversal, body/JSON limits, error info-leak,
+> CSPRNG ids, email/HTTP-header CRLF, cache `LIKE`/TTL, SSE auth-raise bug — see
+> `completed/security_hardening_runtime_fixes.md` (+ `tests/security-test.rkt`).
+> This document is retained as the **detailed audit reference** (findings tables
+> with `file:line`, threat model, layer model). The remaining
+> unbounded/architectural work (TCB gates, default-deny, SSRF allowlist, TLS
+> verification, SSE per-key authz, lints-as-policy, SBOM, L1–L7) is tracked as a
+> prioritized backlog in `security_hardening_program.md`.
+
 ## Context
 
 Tesl's promise to its users is **security by design**: write an app, get strong guarantees

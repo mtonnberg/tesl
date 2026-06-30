@@ -1208,6 +1208,36 @@ let check_server_handler_binding
                      endpoint_name p.name)
                    :: !errors
            end
+       ) handler_params;
+       (* Handlers never receive the raw HttpRequest — the router supplies only
+          path captures, the (parsed) request body, and the auth-proven value, all
+          POSITIONALLY.  A handler parameter typed `HttpRequest` therefore cannot be
+          provided and crashes `define-server` at startup with an arity error; this
+          is the canonical mistake (request data must be read in the `auth`/`proof`
+          function and passed as a proven value).  Reject it at compile time.  (The
+          full positional count/type contract — incl. POST/PUT implicit body — is a
+          deeper check; see soundness_increase Tier-0 #2.) *)
+       let handler_loc2 = match hdl with
+         | LocalHandler fd -> fd.loc | ImportedHandler info -> info.fi_loc in
+       List.iter (fun (p : binding) ->
+         let is_http_request =
+           match p.type_expr with
+           | TName { name = "HttpRequest"; _ } -> true
+           | _ -> false
+         in
+         if is_http_request then
+           errors := make_error handler_loc2
+             ~hint:(Printf.sprintf
+               "handlers do not receive the raw request — remove `%s: HttpRequest` \
+                from handler '%s' and read request data (cookies/headers/query) in \
+                the `auth`/`proof` function, passing it as a proven value"
+               p.name handler_name)
+             (Printf.sprintf
+               "server '%s': handler '%s' takes `%s: HttpRequest`, but handlers are \
+                never passed the request — endpoint '%s' supplies only captures, \
+                body, and the auth value"
+               sv.name handler_name p.name endpoint_name)
+             :: !errors
        ) handler_params)
 
 let check_server_completeness ?(extra_funcs = []) (decls : top_decl list) : validation_error list =

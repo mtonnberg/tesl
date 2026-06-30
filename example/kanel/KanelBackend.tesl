@@ -8,7 +8,7 @@ module KanelBackend exposing [KanelServer]
 # domain modules.
 
 import Tesl.Prelude exposing [Bool(..), String, Unit, List]
-import Tesl.Env exposing [env, envInt]
+import Tesl.Env exposing [env, envInt, envRead]
 import Tesl.Time exposing [time]
 import Tesl.Id exposing [generatePrefixedId]
 import Tesl.Random exposing [random]
@@ -826,7 +826,7 @@ api-test "issue status can be updated through valid transitions" for KanelServer
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 main() -> App
-  requires [kanelDbRead, kanelDbWrite, kanelQueue, kanelPubSub, random, time, notifyWorkerCap] =
+  requires [kanelDbRead, kanelDbWrite, kanelQueue, kanelPubSub, random, time, notifyWorkerCap, envRead] =
   let port = envInt "KANEL_PORT" 8080
   App {
     database: KanelDatabase

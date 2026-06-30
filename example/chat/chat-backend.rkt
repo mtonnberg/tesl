@@ -20,8 +20,8 @@
   (only-in tesl/tesl/dict [Dict.lookup tesl_import_Dict_lookup])
   (only-in tesl/tesl/string [String.length tesl_import_String_length])
   (only-in tesl/tesl/time nowMillis time PosixMillis)
-  (only-in tesl/tesl/env env envInt)
   (only-in tesl/tesl/id generatePrefixedId)
+  (only-in tesl/tesl/env envInt envRead)
   (only-in tesl/tesl/random random)
   (only-in tesl/tesl/telemetry telemetry initTelemetry)
   (only-in tesl/tesl/api-test statusOk statusClientError jsonInt jsonString jsonLength isNotNull includesWhere excludesWhere hasLength isNotEmpty arrayAt hasField fieldAt bodyField jsonContains subscribe collect JobResult JobOk JobFailed processNextJob processNextDeadJob pendingJobCount expectJobOk expectJobFailed)
@@ -185,17 +185,17 @@
   (cookieAuth [request : HttpRequest])
   #:capabilities [chatRead]
   #:returns [session : SessionUser ::: (Authenticated session)]
-  (thsl-src-control! "example/chat/chat-backend.tesl" 200 (list (cons 'request *request)) (lambda () (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "chatUserId" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "example/chat/chat-backend.tesl" 202 (list) (lambda () (reject "not logged in: set chatUserId cookie" #:http-code 401)))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([uid (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "example/chat/chat-backend.tesl" 204 (list (cons 'uid uid)) (lambda () (let ([existing (let ([tesl_match (select-one (from ChatUser) (where (==. (entity-field-ref ChatUser 'id) uid)))]) (if tesl_match (Something tesl_match) Nothing))]) (let ([tesl_case_1 (raw-value existing)]) (cond [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Nothing)) (thsl-src! "example/chat/chat-backend.tesl" 207 (list) (lambda () (reject "user not found" #:http-code 401)))] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Something)) (let ([u (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (thsl-src! "example/chat/chat-backend.tesl" 209 (list (cons 'u u)) (lambda () (let/check ([tesl_checked_2 (checkNonEmptyString uid)]) (let ([checkedUid tesl_checked_2]) (let/check ([tesl_checked_3 (checkNonEmptyString (raw-value u.username))]) (let ([checkedUsername tesl_checked_3]) (accept Authenticated #:value (SessionUser #:id checkedUid #:username checkedUsername)))))))))]))))))])))))
+  (thsl-src-control! "example/chat/chat-backend.tesl" 196 (list (cons 'request *request)) (lambda () (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "chatUserId" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "example/chat/chat-backend.tesl" 198 (list) (lambda () (reject "not logged in: set chatUserId cookie" #:http-code 401)))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([uid (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "example/chat/chat-backend.tesl" 200 (list (cons 'uid uid)) (lambda () (let ([existing (let ([tesl_match (select-one (from ChatUser) (where (==. (entity-field-ref ChatUser 'id) uid)))]) (if tesl_match (Something tesl_match) Nothing))]) (let ([tesl_case_1 (raw-value existing)]) (cond [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Nothing)) (thsl-src! "example/chat/chat-backend.tesl" 203 (list) (lambda () (reject "user not found" #:http-code 401)))] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Something)) (let ([u (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (thsl-src! "example/chat/chat-backend.tesl" 205 (list (cons 'u u)) (lambda () (let/check ([tesl_checked_2 (checkNonEmptyString uid)]) (let ([checkedUid tesl_checked_2]) (let/check ([tesl_checked_3 (checkNonEmptyString (raw-value u.username))]) (let ([checkedUsername tesl_checked_3]) (accept Authenticated #:value (SessionUser #:id checkedUid #:username checkedUsername)))))))))]))))))])))))
 
 (define-checker
   (checkNonEmptyString [s : String])
   #:returns [s : String ::: (NonEmpty s)]
-  (thsl-src! "example/chat/chat-backend.tesl" 218 (list (cons 's *s)) (lambda () (if (> (raw-value (tesl_import_String_length *s)) 0) (accept (NonEmpty s) #:value *s) (reject "cannot be empty string" #:http-code 400)))))
+  (thsl-src! "example/chat/chat-backend.tesl" 214 (list (cons 's *s)) (lambda () (if (> (raw-value (tesl_import_String_length *s)) 0) (accept (NonEmpty s) #:value *s) (reject "cannot be empty string" #:http-code 400)))))
 
 (define-checker
   (checkRoomId [id : String])
   #:returns [id : String ::: (ValidRoomId id)]
-  (thsl-src! "example/chat/chat-backend.tesl" 226 (list (cons 'id *id)) (lambda () (if (> (raw-value (tesl_import_String_length *id)) 0) (accept (ValidRoomId id) #:value *id) (reject "invalid room id" #:http-code 400)))))
+  (thsl-src! "example/chat/chat-backend.tesl" 222 (list (cons 'id *id)) (lambda () (if (> (raw-value (tesl_import_String_length *id)) 0) (accept (ValidRoomId id) #:value *id) (reject "invalid room id" #:http-code 400)))))
 
 (define-capture roomIdCapture
   [roomId : String ::: (ValidRoomId roomId)]
@@ -205,37 +205,37 @@
   (login [req : LoginRequest])
   #:capabilities [chatRead]
   #:returns ChatUser
-  (let ([existing (thsl-src! "example/chat/chat-backend.tesl" 237 (list (cons 'req *req)) (lambda () (let ([tesl_match (select-one (from ChatUser) (where (==. (entity-field-ref ChatUser 'username) (raw-value req.username))))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/chat/chat-backend.tesl" 238 (list (cons 'existing *existing) (cons 'req *req)) (lambda () (let ([tesl_case_4 (raw-value existing)]) (cond [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Nothing)) (thsl-src! "example/chat/chat-backend.tesl" 240 (list) (lambda () (reject "user not found" #:http-code 401)))] [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Something)) (let ([u (hash-ref (adt-value-fields *tesl_case_4) 'value)]) (thsl-src! "example/chat/chat-backend.tesl" 242 (list (cons 'u u)) (lambda () *u)))]))))))
+  (let ([existing (thsl-src! "example/chat/chat-backend.tesl" 233 (list (cons 'req *req)) (lambda () (let ([tesl_match (select-one (from ChatUser) (where (==. (entity-field-ref ChatUser 'username) (raw-value req.username))))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/chat/chat-backend.tesl" 234 (list (cons 'existing *existing) (cons 'req *req)) (lambda () (let ([tesl_case_4 (raw-value existing)]) (cond [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Nothing)) (thsl-src! "example/chat/chat-backend.tesl" 236 (list) (lambda () (reject "user not found" #:http-code 401)))] [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Something)) (let ([u (hash-ref (adt-value-fields *tesl_case_4) 'value)]) (thsl-src! "example/chat/chat-backend.tesl" 238 (list (cons 'u u)) (lambda () *u)))]))))))
 
 (define-handler
   (seedUser [req : LoginRequest])
   #:capabilities [chatWrite]
   #:returns (Exists [userId : String] (? ChatUser _entity ::: (FromDb (Id == userId) _entity)))
-  (let ([userId (thsl-src! "example/chat/chat-backend.tesl" 247 (list (cons 'req *req)) (lambda () (generatePrefixedId "usr")))]) (thsl-src! "example/chat/chat-backend.tesl" 248 (list (cons 'userId *userId) (cons 'req *req)) (lambda () (pack ([userId]) (insert-one! ChatUser (hash 'id userId 'username (raw-value req.username))))))))
+  (let ([userId (thsl-src! "example/chat/chat-backend.tesl" 243 (list (cons 'req *req)) (lambda () (generatePrefixedId "usr")))]) (thsl-src! "example/chat/chat-backend.tesl" 244 (list (cons 'userId *userId) (cons 'req *req)) (lambda () (pack ([userId]) (insert-one! ChatUser (hash 'id userId 'username (raw-value req.username))))))))
 
 (define-handler
   (listRooms [session : SessionUser ::: (Authenticated session)])
   #:capabilities [chatRead]
   #:returns (List Room)
-  (let ([_ (thsl-src! "example/chat/chat-backend.tesl" 253 (list (cons 'session *session)) (lambda () (telemetry-event! "rooms.list" #:attributes (["user.id" (raw-value session.id)]))))]) (thsl-src! "example/chat/chat-backend.tesl" 254 (list (cons 'session *session)) (lambda () (select-many (from Room))))))
+  (let ([_ (thsl-src! "example/chat/chat-backend.tesl" 249 (list (cons 'session *session)) (lambda () (telemetry-event! "rooms.list" #:attributes (["user.id" (raw-value session.id)]))))]) (thsl-src! "example/chat/chat-backend.tesl" 250 (list (cons 'session *session)) (lambda () (select-many (from Room))))))
 
 (define-handler
   (createRoom [session : SessionUser ::: (Authenticated session)] [req : CreateRoomRequest])
   #:capabilities [chatWrite]
   #:returns (Exists [roomId : String] (? Room _entity ::: (FromDb (Id == roomId) _entity)))
-  (let ([roomId (thsl-src! "example/chat/chat-backend.tesl" 259 (list (cons 'session *session) (cons 'req *req)) (lambda () (generatePrefixedId "room")))]) (thsl-src! "example/chat/chat-backend.tesl" 260 (list (cons 'roomId *roomId) (cons 'session *session) (cons 'req *req)) (lambda () (pack ([roomId]) (insert-one! Room (hash 'id roomId 'name (raw-value req.name) 'createdAt (raw-value (nowMillis)))))))))
+  (let ([roomId (thsl-src! "example/chat/chat-backend.tesl" 255 (list (cons 'session *session) (cons 'req *req)) (lambda () (generatePrefixedId "room")))]) (thsl-src! "example/chat/chat-backend.tesl" 256 (list (cons 'roomId *roomId) (cons 'session *session) (cons 'req *req)) (lambda () (pack ([roomId]) (insert-one! Room (hash 'id roomId 'name (raw-value req.name) 'createdAt (raw-value (nowMillis)))))))))
 
 (define-handler
   (getMessages [session : SessionUser ::: (Authenticated session)] [roomId : String ::: (ValidRoomId roomId)])
   #:capabilities [chatRead]
   #:returns (List Message)
-  (let ([_ (thsl-src! "example/chat/chat-backend.tesl" 267 (list (cons 'session *session) (cons 'roomId *roomId)) (lambda () (telemetry-event! "messages.get" #:attributes (["room.id" *roomId] ["user.id" (raw-value session.id)]))))]) (thsl-src! "example/chat/chat-backend.tesl" 268 (list (cons 'session *session) (cons 'roomId *roomId)) (lambda () (select-many (from Message) (where (==. (entity-field-ref Message 'roomId) roomId)))))))
+  (let ([_ (thsl-src! "example/chat/chat-backend.tesl" 263 (list (cons 'session *session) (cons 'roomId *roomId)) (lambda () (telemetry-event! "messages.get" #:attributes (["room.id" *roomId] ["user.id" (raw-value session.id)]))))]) (thsl-src! "example/chat/chat-backend.tesl" 264 (list (cons 'session *session) (cons 'roomId *roomId)) (lambda () (select-many (from Message) (where (==. (entity-field-ref Message 'roomId) roomId)))))))
 
 (define-handler
   (postMessage [session : SessionUser ::: (Authenticated session)] [roomId : String ::: (ValidRoomId roomId)] [req : PostMessageRequest])
   #:capabilities [chatWrite chatPubSub chatQueue]
   #:returns (Exists [msgId : String] (? Message _entity ::: (FromDb (Id == msgId) _entity)))
-  (let ([msgId (thsl-src! "example/chat/chat-backend.tesl" 275 (list (cons 'session *session) (cons 'roomId *roomId) (cons 'req *req)) (lambda () (generatePrefixedId "msg")))]) (thsl-src! "example/chat/chat-backend.tesl" 276 (list (cons 'msgId *msgId) (cons 'session *session) (cons 'roomId *roomId) (cons 'req *req)) (lambda () (call-with-queue-transaction (lambda () (begin (publish-event! RoomMessages (format "~a" *roomId) (NewMessage msgId (raw-value session.id) (raw-value session.username) (raw-value req.content) (raw-value (nowMillis)))) (begin (enqueue! NotificationQueue (NotifyJob #:senderName (raw-value session.username) #:roomName *roomId #:content (raw-value req.content))) (pack ([msgId]) (insert-one! Message (hash 'id msgId 'roomId roomId 'userId (raw-value session.id) 'username (raw-value session.username) 'content (raw-value req.content) 'createdAt (raw-value (nowMillis)))))))))))))
+  (let ([msgId (thsl-src! "example/chat/chat-backend.tesl" 271 (list (cons 'session *session) (cons 'roomId *roomId) (cons 'req *req)) (lambda () (generatePrefixedId "msg")))]) (thsl-src! "example/chat/chat-backend.tesl" 272 (list (cons 'msgId *msgId) (cons 'session *session) (cons 'roomId *roomId) (cons 'req *req)) (lambda () (call-with-queue-transaction (lambda () (begin (publish-event! RoomMessages (format "~a" *roomId) (NewMessage msgId (raw-value session.id) (raw-value session.username) (raw-value req.content) (raw-value (nowMillis)))) (begin (enqueue! NotificationQueue (NotifyJob #:senderName (raw-value session.username) #:roomName *roomId #:content (raw-value req.content))) (pack ([msgId]) (insert-one! Message (hash 'id msgId 'roomId roomId 'userId (raw-value session.id) 'username (raw-value session.username) 'content (raw-value req.content) 'createdAt (raw-value (nowMillis)))))))))))))
 
 (define/pow
   (notifyWorker [job : NotifyJob ::: (FromQueue (Id == jobId) job)])
@@ -468,7 +468,7 @@
 )
 
 (module+ main
-  (thsl-src! "example/chat/chat-backend.tesl" 540 (list) (lambda () (with-capabilities (chatService notifyCap deadLetterCap) (call-with-database ChatDatabase (lambda () (let ([_ (init-opentelemetry! #:service-name "chat-backend" #:endpoint "in-memory" #:console? #t)]) (let ([port (raw-value (envInt "CHAT_PORT" 3000))]) (begin (start-workers! NotificationQueueWorkers (list notifyCap deadLetterCap) #:concurrency 3) (begin (start-dead-workers! NotificationQueueDeadWorkers (list notifyCap deadLetterCap) #:concurrency 3) (serve ChatServer #:port port #:capabilities (list chatService notifyCap deadLetterCap) #:static-dir "example/chat/frontend" #:sse-routes ChatServer-sse-routes)))))))))))
+  (thsl-src! "example/chat/chat-backend.tesl" 540 (list) (lambda () (with-capabilities (chatService notifyCap deadLetterCap envRead) (call-with-database ChatDatabase (lambda () (let ([_ (init-opentelemetry! #:service-name "chat-backend" #:endpoint "in-memory" #:console? #t)]) (let ([port (raw-value (envInt "CHAT_PORT" 3000))]) (begin (start-workers! NotificationQueueWorkers (list notifyCap deadLetterCap) #:concurrency 3) (begin (start-dead-workers! NotificationQueueDeadWorkers (list notifyCap deadLetterCap) #:concurrency 3) (serve ChatServer #:port port #:capabilities (list chatService notifyCap deadLetterCap envRead) #:static-dir "example/chat/frontend" #:sse-routes ChatServer-sse-routes)))))))))))
 
 (define NotificationQueueWorkers
   (list (cons NotificationQueue notifyWorker)))

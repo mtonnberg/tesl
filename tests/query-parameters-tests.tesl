@@ -1,0 +1,59 @@
+#lang tesl
+module QueryParametersTests exposing [SearchServer]
+
+import Tesl.Prelude exposing [String]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.ApiTest exposing [statusOk, statusClientError]
+
+# An auth function reads request.queryParameters — the same way lesson55 reads
+# request.cookies and ai-conversation-service reads request.headers.
+fact QueryAuthed (q: String)
+
+auth queryAuth(req: HttpRequest) -> q: String ::: QueryAuthed q =
+  case Dict.lookup "q" req.queryParameters of
+    Nothing -> fail 400 "missing q query parameter"
+    Something v -> ok v ::: QueryAuthed q
+
+api SearchApi {
+  get "/search"
+    auth q : String ::: QueryAuthed q via queryAuth
+    -> String
+}
+
+handler search(q: String ::: QueryAuthed q) -> String requires [] = q
+
+server SearchServer for SearchApi { search = search }
+
+# ── Positive ────────────────────────────────────────────────────────────────
+api-test "query parameter q is read" for SearchServer {
+  let resp = get "/search?q=hello"
+  expect statusOk resp.status
+  expect resp.body == "hello"
+}
+
+api-test "url-encoded query value is decoded (%20 -> space)" for SearchServer {
+  let resp = get "/search?q=hello%20world"
+  expect resp.body == "hello world"
+}
+
+api-test "repeated key: last wins" for SearchServer {
+  let resp = get "/search?q=first&q=second"
+  expect resp.body == "second"
+}
+
+api-test "extra distinct params do not interfere" for SearchServer {
+  let resp = get "/search?other=beta&q=alpha"
+  expect resp.body == "alpha"
+}
+
+# ── Negative ────────────────────────────────────────────────────────────────
+api-test "missing query parameter → client error" for SearchServer {
+  let resp = get "/search"
+  expect statusClientError resp.status
+}
+
+api-test "different key present, q absent → client error" for SearchServer {
+  let resp = get "/search?notq=x"
+  expect statusClientError resp.status
+}

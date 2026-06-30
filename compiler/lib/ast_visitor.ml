@@ -205,7 +205,7 @@ let map_children (f : expr -> expr) (e : expr) : expr =
     ELambda { params; body = body'; loc }
   | ERuntimeCall { segments; loc } ->
     let segments' = List.map (function
-      | RLit _ as s -> s
+      | (RLit _ | RRawVar _) as s -> s
       | RArg e -> RArg (f e)) segments in
     ERuntimeCall { segments = segments'; loc }
 
@@ -256,7 +256,7 @@ let fold_children (f : 'a -> expr -> 'a) (acc : 'a) (e : expr) : 'a =
   | ELambda { body; _ } -> f acc body
   | ERuntimeCall { segments; _ } ->
     List.fold_left (fun acc -> function
-      | RLit _ -> acc
+      | RLit _ | RRawVar _ -> acc
       | RArg e -> f acc e) acc segments
 
 (* ── fold_children_env ───────────────────────────────────────────────────────

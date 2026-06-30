@@ -95,6 +95,40 @@ let two_files_should_fail pat a_name a_src b_name b_src =
     try ignore (Str.search_forward re out 0)
     with Not_found -> failf "expected failure matching %S, got:\n%s" pat out)
 
+let two_files_should_pass a_name a_src b_name b_src =
+  with_two_files a_name a_src b_name b_src (fun path_b ->
+    let code, out = run_compiler ["--check"; path_b] in
+    if code <> 0 then failf "expected success for %s, got:\n%s" b_name out)
+
+(* ── CTORSCOPE — constructor import scoping ──────────────────────────────────
+   A constructor enters scope ONLY when named explicitly (`exposing [Red]`) or
+   via the ADT wildcard (`exposing [Color(..)]`).  Importing the bare TYPE name
+   (`exposing [Color]`) brings the type but NOT its constructors — otherwise an
+   unimported constructor leaks into scope (soundness; incorrect code compiled). *)
+let cs_lib = "#lang tesl\nmodule Palette exposing [Color(..)]\ntype Color\n  = Red\n  | Green\n  | Blue\n"
+let cs_unknown = "unknown constructor\\|not in scope\\|unbound\\|T001"
+let cs_neg b_name body = two_files_should_fail cs_unknown "Palette" cs_lib b_name
+  (Printf.sprintf "#lang tesl\nmodule %s exposing [f]\n%s" b_name body)
+let cs_pos b_name body = two_files_should_pass "Palette" cs_lib b_name
+  (Printf.sprintf "#lang tesl\nmodule %s exposing [f]\n%s" b_name body)
+
+let test_CTORSCOPE01_typeonly_ctor_rejected () =
+  cs_neg "CtorScope01" "import Palette exposing [Color]\nfn f() -> Color = Red\n"
+let test_CTORSCOPE02_wildcard_ctor_ok () =
+  cs_pos "CtorScope02" "import Palette exposing [Color(..)]\nfn f() -> Color = Red\n"
+let test_CTORSCOPE03_explicit_ctor_ok () =
+  cs_pos "CtorScope03" "import Palette exposing [Color, Red]\nfn f() -> Color = Red\n"
+let test_CTORSCOPE04_typeonly_ctor_in_pattern_rejected () =
+  cs_neg "CtorScope04"
+    "import Palette exposing [Color]\nfn f(c: Color) -> Color =\n  case c of\n    Red -> c\n    _ -> c\n"
+let test_CTORSCOPE05_typeonly_type_annotation_ok () =
+  cs_pos "CtorScope05" "import Palette exposing [Color]\nfn f(c: Color) -> Color = c\n"
+let test_CTORSCOPE06_typeonly_other_ctor_rejected () =
+  cs_neg "CtorScope06" "import Palette exposing [Color]\nfn f() -> Color = Green\n"
+let test_CTORSCOPE07_partial_import_unimported_ctor_rejected () =
+  (* `[Color, Red]` brings Red but must NOT bring Green *)
+  cs_neg "CtorScope07" "import Palette exposing [Color, Red]\nfn f() -> Color = Green\n"
+
 (* ── LKWN — library keyword violations ───────────────────────────────────── *)
 
 let test_LKWN01_library_with_server_rejected () =
@@ -975,5 +1009,14 @@ let () =
       test_case "SIGX08 regular module unexported type still compiles (positive)" `Quick test_SIGX08_regular_module_unexported_type_still_compiles;
       test_case "SIGX09 error hint names the missing export" `Quick test_SIGX09_library_hint_names_missing_export;
       test_case "SIGX10 multiple unexported types all reported" `Quick test_SIGX10_library_multiple_unexported_types_all_reported;
+    ];
+    "ctor-import-scoping", [
+      test_case "CTORSCOPE01 type-only import: ctor rejected" `Quick test_CTORSCOPE01_typeonly_ctor_rejected;
+      test_case "CTORSCOPE02 wildcard (..) import: ctor ok (positive)" `Quick test_CTORSCOPE02_wildcard_ctor_ok;
+      test_case "CTORSCOPE03 explicit ctor import: ok (positive)" `Quick test_CTORSCOPE03_explicit_ctor_ok;
+      test_case "CTORSCOPE04 type-only: ctor in pattern rejected" `Quick test_CTORSCOPE04_typeonly_ctor_in_pattern_rejected;
+      test_case "CTORSCOPE05 type-only: type annotation ok (positive)" `Quick test_CTORSCOPE05_typeonly_type_annotation_ok;
+      test_case "CTORSCOPE06 type-only: other ctor rejected" `Quick test_CTORSCOPE06_typeonly_other_ctor_rejected;
+      test_case "CTORSCOPE07 partial import: unimported ctor rejected" `Quick test_CTORSCOPE07_partial_import_unimported_ctor_rejected;
     ];
   ]

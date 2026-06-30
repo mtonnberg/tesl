@@ -82,6 +82,7 @@ let effect_caps key =
 let collect_needed_capabilities
     ?(func_caps : (string * string list) list = [])
     ?(param_caps : (string * string list) list = [])
+    ?(bound : string list = [])
     (e : expr)
     : string list =
   let sql_read_names = ["select"; "selectOne"; "selectCount"; "selectSum"; "selectMax"; "selectMin"] in
@@ -102,6 +103,11 @@ let collect_needed_capabilities
       (match List.assoc_opt name func_caps with
        | Some caps -> caps
        | None -> [])
+    (* A plain local binding (value param, let, lambda/case binder) named like a
+       stdlib effect function (env/nowMillis/randomInt/…) SHADOWS it and introduces
+       NO capability — checked after param_caps/func_caps so function-typed params
+       and user functions keep their own rows. *)
+    else if List.mem name bound then []
     else if List.mem name sql_read_names then ["dbRead"]
     else if List.mem name sql_write_names then ["dbWrite"]
     else if name = "deadJobs" then ["queueRead"]
@@ -113,6 +119,10 @@ let collect_needed_capabilities
     (* BUG-4 fix: generatePrefixedId and randomInt require the `random` capability. *)
     else if List.mem name ["generatePrefixedId"; "randomInt";
                            "Tesl.Id.generatePrefixedId"; "Tesl.Random.randomInt"] then ["random"]
+    (* Reading the environment is an effect: env/envInt/envString/requireEnv require
+       the `envRead` capability (same discipline as time/random; named envRead — not
+       `env` — because `env` is already the name of the Maybe-returning function). *)
+    else if List.mem name ["env"; "envInt"; "envString"; "requireEnv"] then ["envRead"]
     else if List.mem name ["JWT.sign"; "JWT.verify"; "JWT.decode"] then ["jwt"]
     else if List.mem name ["HttpClient.get"; "HttpClient.post";
                            "HttpClient.put"; "HttpClient.delete"] then ["httpClient"]
@@ -177,8 +187,92 @@ let collect_needed_capabilities
   in
   go [] e
 
+(* All names bound within a function — its params plus every let / let-proof /
+   lambda / case-pattern binder in its body.  Passed as [bound] to
+   collect_needed_capabilities so a local binding named like a stdlib effect
+   function (env, nowMillis, randomInt, …) shadows it and adds no spurious
+   capability.  Over-approximation (bound anywhere ⇒ shadows everywhere) — safe:
+   it can only suppress a requirement, never introduce one. *)
+let fn_bound_names (fd : func_decl) : string list =
+  let acc = ref (List.map (fun (b : binding) -> b.name) fd.params) in
+  let add n = acc := n :: !acc in
+  let rec pat = function
+    | PVar n -> add n
+    | PCon { fields; _ } -> List.iter (fun (_, p) -> pat p) fields
+    | _ -> () in
+  let rec walk e =
+    (match e with
+     | ELet { name; _ } -> add name
+     | ELetProof { value_name; proof_name; _ } -> add value_name; add proof_name
+     | ELambda { params; _ } -> List.iter (fun (b : binding) -> add b.name) params
+     | ECase { arms; _ } -> List.iter (fun (a : case_arm) -> pat a.pattern) arms
+     | _ -> ());
+    ignore (Ast_visitor.fold_children (fun () e -> walk e; ()) () e)
+  in
+  walk fd.body; !acc
+
+(* ── Fix C: env read reached through a database config block ──────────────── *)
+
+(** Does an expression read the environment (env / envInt / envString /
+    requireEnv)?  Used both for a function body and for the `= … { }` config of
+    a declarative block, so the env-read discipline ([envRead]) is uniform
+    regardless of how the env read is reached. *)
+let expr_reads_env (e : expr) : bool =
+  let found = ref false in
+  let rec go e =
+    (match e with
+     | EVar { name; _ }
+       when List.mem name ["env"; "envInt"; "envString"; "requireEnv"] -> found := true
+     | _ -> ());
+    ignore (Ast_visitor.fold_children (fun () e -> go e; ()) () e)
+  in
+  go e; !found
+
+(** Does ANY declarative config block — database / queue / email / cache /
+    agent — read the environment in its `= … { }` config?  Every such block
+    initializes at app STARTUP, i.e. when [main] runs, so a module's [main]
+    performs that env read transitively and must declare [envRead].  This is
+    uniform across block kinds: the database block was only the motivating
+    example.  (Per-module, like every other capability check: a library that
+    declares env-reading config but has no [main] relies on the importing app's
+    [main] to carry the requirement.) *)
+let module_config_reads_env (decls : top_decl list) : bool =
+  List.exists (function
+    | DDatabase { config_expr = Some e; _ }
+    | DQueue    { config_expr = Some e; _ }
+    | DEmail    { config_expr = Some e; _ }
+    | DCache    { config_expr = Some e; _ }
+    | DAgent    { config_expr = Some e; _ } -> expr_reads_env e
+    | _ -> false
+  ) decls
+
+(** Per-kind capability-error reporting metadata.  [None] = the kind is not
+    capability-checked (auth/establish/check).  The message text for the four
+    effecting kinds is preserved verbatim (snapshot tests pin it); [MainKind]
+    gets its own env-honesty wording. *)
+let cap_check_kind_info (k : func_kind) : (string * (string -> string -> string)) option =
+  match k with
+  | HandlerKind    -> Some ("handler",
+      fun n caps -> Printf.sprintf
+        "handler '%s' uses [%s] but does not declare the required capabilities" n caps)
+  | WorkerKind     -> Some ("worker",
+      fun n caps -> Printf.sprintf
+        "worker '%s' uses [%s] but does not declare the required capabilities" n caps)
+  | FnKind         -> Some ("fn",
+      fun n caps -> Printf.sprintf
+        "fn '%s' uses privileged operations and callees requiring [%s] but does not declare them" n caps)
+  | DeadWorkerKind -> Some ("deadWorker",
+      fun n caps -> Printf.sprintf
+        "deadWorker '%s' uses [%s] but does not declare the required capabilities" n caps)
+  | MainKind       -> Some ("main",
+      fun n caps -> Printf.sprintf
+        "main '%s' reads the environment (directly or through a declarative config block) \
+         but does not declare the required capability [%s]" n caps)
+  | _ -> None
+
 let check_handler_capabilities ?(cap_map=[]) (decls : top_decl list) : validation_error list =
   let func_caps = build_func_capability_map decls in
+  let config_reads_env = module_config_reads_env decls in
   (* Full transitive closure: expand a set of declared capabilities to everything they
      imply, recursively. Uses the same algorithm as expand_caps in proof_checker.ml. *)
   let expand_declared declared =
@@ -199,54 +293,36 @@ let check_handler_capabilities ?(cap_map=[]) (decls : top_decl list) : validatio
   in
   let errors = ref [] in
   List.iter (function
-    | DFunc fd when fd.kind = HandlerKind ->
-      let param_caps = build_param_capability_map fd in
-      let needed = collect_needed_capabilities ~func_caps ~param_caps fd.body |> List.sort_uniq String.compare in
-      let declared = fd.capabilities in
-      let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
-      if missing <> [] then
-        errors := make_error fd.loc
-          ~hint:(Printf.sprintf "add `requires [%s]` to the handler declaration"
-                   (String.concat ", " missing))
-          (Printf.sprintf "handler '%s' uses [%s] but does not declare the required capabilities"
-             fd.name (String.concat ", " missing))
-          :: !errors
-    | DFunc fd when fd.kind = WorkerKind ->
-      let param_caps = build_param_capability_map fd in
-      let needed = collect_needed_capabilities ~func_caps ~param_caps fd.body |> List.sort_uniq String.compare in
-      let declared = fd.capabilities in
-      let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
-      if missing <> [] then
-        errors := make_error fd.loc
-          ~hint:(Printf.sprintf "add `requires [%s]` to the worker declaration"
-                   (String.concat ", " missing))
-          (Printf.sprintf "worker '%s' uses [%s] but does not declare the required capabilities"
-             fd.name (String.concat ", " missing))
-          :: !errors
-    | DFunc fd when fd.kind = FnKind ->
-      let param_caps = build_param_capability_map fd in
-      let needed = collect_needed_capabilities ~func_caps ~param_caps fd.body |> List.sort_uniq String.compare in
-      let declared = fd.capabilities in
-      let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
-      if missing <> [] then
-        errors := make_error fd.loc
-          ~hint:(Printf.sprintf "add `requires [%s]` to the fn declaration"
-                   (String.concat ", " missing))
-          (Printf.sprintf "fn '%s' uses privileged operations and callees requiring [%s] but does not declare them"
-             fd.name (String.concat ", " missing))
-          :: !errors
-    | DFunc fd when fd.kind = DeadWorkerKind ->
-      let param_caps = build_param_capability_map fd in
-      let needed = collect_needed_capabilities ~func_caps ~param_caps fd.body |> List.sort_uniq String.compare in
-      let declared = fd.capabilities in
-      let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
-      if missing <> [] then
-        errors := make_error fd.loc
-          ~hint:(Printf.sprintf "add `requires [%s]` to the deadWorker declaration"
-                   (String.concat ", " missing))
-          (Printf.sprintf "deadWorker '%s' uses [%s] but does not declare the required capabilities"
-             fd.name (String.concat ", " missing))
-          :: !errors
+    | DFunc fd ->
+      (match cap_check_kind_info fd.kind with
+       | None -> ()  (* auth / establish / check kinds are not capability-checked *)
+       | Some (label, msg) ->
+         let needed =
+           match fd.kind with
+           | MainKind ->
+             (* main is the capability BOUNDARY: its body is lowered to run inside
+                `with capabilities main_caps { with database … }`, so the full
+                transitive check is the scope's job, not main's `requires`.  The
+                one effect the scope does not grant is reading the environment, so
+                main must still declare [envRead] when it reads env — directly in
+                its body, or transitively because a declarative config block it
+                starts up reads env (Fix C, uniform across all block kinds). *)
+             if expr_reads_env fd.body || config_reads_env
+             then ["envRead"] else []
+           | _ ->
+             let param_caps = build_param_capability_map fd in
+             collect_needed_capabilities ~func_caps ~param_caps
+               ~bound:(fn_bound_names fd) fd.body
+             |> List.sort_uniq String.compare
+         in
+         let declared = fd.capabilities in
+         let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
+         if missing <> [] then
+           errors := make_error fd.loc
+             ~hint:(Printf.sprintf "add `requires [%s]` to the %s declaration"
+                      (String.concat ", " missing) label)
+             (msg fd.name (String.concat ", " missing))
+             :: !errors)
     | _ -> ()
   ) decls;
   List.rev !errors
@@ -875,7 +951,7 @@ check your fact declaration or the type of `%s`"
         walk_expr local_env body
       | EStartEmailWorker _ -> ()
       | ERuntimeCall { segments; _ } ->
-        List.iter (function RLit _ -> () | RArg e -> walk_expr local_env e) segments
+        List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk_expr local_env e) segments
     in
     List.iter (function
       | DFunc fd ->
@@ -1106,7 +1182,7 @@ let check_ord_operator_types ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
       walk_expr env to_ @ walk_expr env subject @ walk_expr env body
     | EStartEmailWorker _ -> []
     | ERuntimeCall { segments; _ } ->
-      List.concat_map (function RLit _ -> [] | RArg e -> walk_expr env e) segments
+      List.concat_map (function RLit _ | RRawVar _ -> [] | RArg e -> walk_expr env e) segments
   in
   let rec walk_test_stmts (env : type_env) (stmts : test_stmt list)
       : validation_error list =

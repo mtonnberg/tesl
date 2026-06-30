@@ -89,17 +89,12 @@ let resolve_local_import_path source_file module_name =
   if Sys.file_exists kebab_path then kebab_path
   else Filename.concat dir (module_name ^ ".tesl")
 
-(** Capabilities exported by each Tesl stdlib module, with their implication chains. *)
-let stdlib_capabilities : (string * (string * string list) list) list = [
-  "Tesl.DB",         [("dbRead", []); ("dbWrite", ["dbRead"])];
-  "Tesl.Time",       [("time", [])];
-  "Tesl.Random",     [("random", [])];
-  "Tesl.Queue",      [("queueRead", []); ("queueWrite", ["queueRead"]); ("pubsub", [])];
-  "Tesl.UUID",       [("uuid", [])];
-  "Tesl.JWT",        [("jwt", [])];
-  "Tesl.HttpClient", [("httpClient", [])];
-  "Tesl.Agent",      [("aiProvider", ["httpClient"])];
-]
+(** Capabilities exported by each Tesl stdlib module, with their implication
+    chains.  References the single source of truth in [Validation_common]
+    (consumed there by the capability validator) so the proof checker and the
+    capability validator cannot drift. *)
+let stdlib_capabilities : (string * (string * string list) list) list =
+  Validation_common.tesl_stdlib_cap_map
 
 let load_imported_cap_map (m : module_form) : (string * string list) list =
   List.concat_map (fun (imp : import_decl) ->
@@ -1245,7 +1240,7 @@ let check_module (m : module_form) : proof_error list =
     | ECacheSet { value; _ } -> expr_contains_transaction value
     | ESendEmail _ | EStartEmailWorker _ -> false
     | ERuntimeCall { segments; _ } ->
-      List.exists (function RLit _ -> false | RArg e -> expr_contains_transaction e) segments
+      List.exists (function RLit _ | RRawVar _ -> false | RArg e -> expr_contains_transaction e) segments
   in
   let rec expr_called_functions (e : expr) : string list =
     let dedup = List.sort_uniq String.compare in
@@ -1284,7 +1279,7 @@ let check_module (m : module_form) : proof_error list =
     | ECacheSet { value; _ } -> expr_called_functions value
     | ESendEmail _ | EStartEmailWorker _ -> []
     | ERuntimeCall { segments; _ } ->
-      dedup (List.concat_map (function RLit _ -> [] | RArg e -> expr_called_functions e) segments)
+      dedup (List.concat_map (function RLit _ | RRawVar _ -> [] | RArg e -> expr_called_functions e) segments)
   in
   let rec close_transaction_functions txn_funcs =
     let grown =
@@ -1579,7 +1574,7 @@ supplies the wrong literal arguments (%s); the body must return the declared fac
         | ECacheSet { value; _ } -> check_nested_txn in_txn value
         | ESendEmail _ | EStartEmailWorker _ -> ()
         | ERuntimeCall { segments; _ } ->
-          List.iter (function RLit _ -> () | RArg e -> check_nested_txn in_txn e) segments
+          List.iter (function RLit _ | RRawVar _ -> () | RArg e -> check_nested_txn in_txn e) segments
       in
       check_nested_txn false fd.body;
 

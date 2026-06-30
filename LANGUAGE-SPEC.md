@@ -537,7 +537,7 @@ The current frontend gives special treatment to these module names:
 - `Tesl.Tuple` — tuple constructors and accessors (`Tuple2`, `Tuple3`, `Tuple2.first`, `Tuple2.second`, `Tuple3.first`, `Tuple3.second`, `Tuple3.third`).
 - `Tesl.Env` — environment variable access (`env`, `envInt`)
 - `Tesl.DB` — database capabilities (`dbRead`, `dbWrite`)
-- `Tesl.Http` — HTTP request type (`HttpRequest`)
+- `Tesl.Http` — HTTP request type (`HttpRequest`). Dot-access fields, each a `Dict String String`: `request.cookies`, `request.headers` (names lowercased), `request.queryParameters` (URL-query values are form-url-decoded; repeated keys are last-wins; keys are case-sensitive). An api-test supplies query parameters inline in the path, e.g. `get "/search?q=hello%20world"`.
 - `Tesl.Telemetry` — telemetry sentinel bindings (`telemetry`, `initTelemetry`)
 - `Tesl.Queue` — queue capabilities (`queueRead`, `queueWrite`, `pubsub`), proof predicates (`FromQueue`, `FromDeadQueue`)
 - `Tesl.UUID` — UUID generation and validation: `UUID.v4`, `UUID.v7`, `UUID.validate`, `IsUuid` proof predicate, `uuidV4Codec`, `uuidV7Codec`. The `uuid` capability gates generation; `UUID.validate` requires no capability. See §21.1.

@@ -1,8 +1,15 @@
 #lang racket
 
-(require "private/runtime.rkt")
+(require "private/runtime.rkt"
+         (only-in "../dsl/capability.rkt" define-capability))
 
-(provide env envInt envString requireEnv)
+;; Reading the environment is an effect; a function that calls env/envInt/
+;; envString/requireEnv in its body must declare `requires [envRead]` (enforced by
+;; validation_capabilities). Named envRead, not env, to avoid clashing with the
+;; `env` function below.
+(define-capability envRead)
+
+(provide env envInt envString requireEnv envRead)
 
 (define (env name)
   (tesl-env name))

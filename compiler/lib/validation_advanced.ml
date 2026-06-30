@@ -553,7 +553,7 @@ let check_record_field_proof_construction
         walk_expr type_env subject_env proof_env body
       | EStartEmailWorker _ -> ()
       | ERuntimeCall { segments; _ } ->
-        List.iter (function RLit _ -> () | RArg e -> walk_expr type_env subject_env proof_env e) segments
+        List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk_expr type_env subject_env proof_env e) segments
     in
     List.iter (function
       | DFunc fd ->

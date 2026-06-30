@@ -662,11 +662,17 @@ let load_imported_func_info (m : module_form) : (string * func_info) list =
           ) imported.decls
   ) m.imports
 
-(** Capabilities provided by each Tesl stdlib module. *)
+(** Capabilities provided by each Tesl stdlib module, with their implication
+    chains.  THIS IS THE SINGLE SOURCE OF TRUTH for stdlib capability providers:
+    it is consumed both by the capability validator (below, via
+    [load_imported_cap_map]) and by the proof checker
+    ([Proof_checker.stdlib_capabilities], which references this binding rather
+    than duplicating the literal so the two cannot drift). *)
 let tesl_stdlib_cap_map : (string * (string * string list) list) list = [
   "Tesl.DB",         [("dbRead", []); ("dbWrite", ["dbRead"])];
   "Tesl.Time",       [("time", [])];
   "Tesl.Random",     [("random", [])];
+  "Tesl.Env",        [("envRead", [])];
   "Tesl.Queue",      [("queueRead", []); ("queueWrite", ["queueRead"]); ("pubsub", [])];
   "Tesl.UUID",       [("uuid", [])];
   "Tesl.JWT",        [("jwt", [])];

@@ -714,7 +714,7 @@ let tesl_module_exports : (string * string list) list = [
     [ "IsUuid"; "uuid"; "UUID.v4"; "UUID.v7"; "UUID.validate";
       "uuidV4Codec"; "uuidV7Codec" ] );
   ( "Tesl.Env",
-    [ "env"; "envInt"; "envString"; "requireEnv" ] );
+    [ "env"; "envInt"; "envString"; "requireEnv"; "envRead" ] );
   ( "Tesl.Json",
     [ "stringCodec"; "intCodec"; "boolCodec"; "floatCodec"; "posixMillisCodec";
       "listCodec"; "dictCodec"; "setCodec" ] );

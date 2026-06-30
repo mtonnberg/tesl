@@ -139,18 +139,28 @@ and expr =
   | ERuntimeCall of { segments : rcall_seg list; loc : loc }
                (** Desugar-only lowering target (reduce_language_size, Wave 2).
                    A pre-rendered Racket runtime call: an alternation of verbatim
-                   token strings ([RLit]) and argument sub-expressions ([RArg],
+                   token strings ([RLit]), argument sub-expressions ([RArg],
                    emitted through the context-aware {!Emit_racket.emit_expr_simple}
-                   path).  Produced ONLY by {!Desugar} from fixed-shape effect
-                   forms (EEnqueue / EStartWorkers / EServe) whose templates are
-                   fully determined at desugar time; the emitter walks [segments]
-                   verbatim.  This is never produced by the parser, so all
+                   path) and raw bare-variable operands ([RRawVar], emitted as
+                   [*name]).  Produced ONLY by {!Desugar} from fixed-shape effect
+                   forms (EEnqueue / EStartWorkers / EServe / ETelemetry) whose
+                   templates are fully determined at desugar time; the emitter
+                   walks [segments] verbatim.  This is never produced by the
+                   parser, so all
                    surface-form enforcement/diagnostics (which run BEFORE desugar)
                    still see the original variant. *)
 
 and rcall_seg =
   | RLit of string   (** verbatim Racket tokens emitted as-is *)
   | RArg of expr     (** argument sub-expression, emitted via emit_expr_simple *)
+  | RRawVar of string
+      (** a bare-variable operand emitted as the raw value [*name].  The
+          context-dependent raw-param unwrapping the emitter performs for a bare
+          [EVar] operand cannot be reproduced by routing the operand through
+          [RArg] (which would render a plain [name] via emit_expr_simple), so the
+          desugarer — which has already determined the operand is a raw bare-var
+          in function context — emits this segment, which the [ERuntimeCall] arm
+          renders verbatim as ["*" ^ name].  Carries no child [expr]. *)
 
 and binop =
   | BAdd | BSub | BMul | BDiv | BMod

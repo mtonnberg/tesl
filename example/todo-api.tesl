@@ -11,7 +11,7 @@ import Tesl.Http exposing [HttpRequest]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Dict exposing [Dict.lookup]
 import Tesl.Time exposing [nowMillis, PosixMillis, time]
-import Tesl.Env exposing [env, envInt]
+import Tesl.Env exposing [env, envInt, envRead]
 import Tesl.String exposing [String.length, String.startsWith, String.contains]
 import Tesl.Int exposing [Int.parse]
 import Tesl.List exposing [List.isEmpty, List.filterCheck]
@@ -286,7 +286,7 @@ server TodoServer for TodoApi {
   completeTodo = completeTodo
 }
 
-main() -> App requires [todoWebService] =
+main() -> App requires [todoWebService, envRead] =
   let _ = initTelemetry service "todo-api" endpoint "in-memory" console True
   let port = resolveExamplePort cli.args (env "TESL_TODO_API_PORT") (env "PORT")
   let _ = seedExampleData()

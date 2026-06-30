@@ -652,6 +652,10 @@ let collect_decl_names acc (d : Ast.top_decl) =
   | DDatabase df ->
     (* Entity names listed in `entities [...]` are references to imported types. *)
     let acc = List.fold_left (fun a e -> e :: a) acc df.entities in
+    (* The `Database { … }` RHS references Database/DatabaseBackend/Postgres/
+       PostgresConfig + env(…) calls — credit it so those imports aren't falsely
+       flagged W050-unused (same fix as DQueue/DAgent). *)
+    let acc = match df.config_expr with Some e -> collect_expr_names acc e | None -> acc in
     (* Extract function names from connection-param values like env("X") or envInt("X",5432). *)
     List.fold_left (fun a (_, v) ->
       match String.index_opt v '(' with
@@ -665,8 +669,27 @@ let collect_decl_names acc (d : Ast.top_decl) =
        tool fns). Descend so those imports aren't falsely flagged W050-unused. *)
     let acc = List.fold_left (fun a c -> c :: a) acc af.capabilities in
     (match af.config_expr with Some e -> collect_expr_names acc e | None -> acc)
-  | DConst _ | DQueue _ | DChannel _
-  | DWorkers _ | DCache _ | DEmail _ -> acc
+  | DConst cf -> collect_expr_names acc cf.value
+  | DQueue qf ->
+    (* `queue X requires [C] = Queue { database: D, jobs: [Job J w], retry: … }`
+       references its capabilities, the database, the job/worker names, and every
+       name in the `Queue { … }` RHS (Queue/Job/QueueRetryStrategy/Exponential …).
+       Descend so those imports aren't falsely flagged W050-unused. *)
+    let acc = List.fold_left (fun a c -> c :: a) acc qf.capabilities in
+    let acc = qf.database :: List.fold_left (fun a j -> j :: a) acc qf.jobs in
+    (match qf.config_expr with Some e -> collect_expr_names acc e | None -> acc)
+  | DChannel chf ->
+    let acc = chf.database :: collect_type_expr_names acc chf.payload in
+    (match chf.config_expr with Some e -> collect_expr_names acc e | None -> acc)
+  | DCache caf ->
+    let acc = caf.database :: collect_type_expr_names acc caf.value_type in
+    (match caf.config_expr with Some e -> collect_expr_names acc e | None -> acc)
+  | DEmail ef ->
+    let acc = ef.database :: acc in
+    (match ef.config_expr with Some e -> collect_expr_names acc e | None -> acc)
+  | DWorkers wf ->
+    let acc = wf.queue_name :: acc in
+    List.fold_left (fun a (_, fn) -> fn :: a) acc wf.bindings
   | DCapability cf ->
     List.fold_left (fun a c -> c :: a) acc cf.implies
 

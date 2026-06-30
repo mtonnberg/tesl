@@ -545,18 +545,18 @@ type cap_case = { name : string; imports : string; body : string; ret : string;
                   extra_decl : string }
 
 let cap_scaffold_imports =
-  "import Tesl.Agent exposing [defineAgent, mockProvider, ask, askReply, askFor, decodeAs, converse, newConversation, agentRun, replyText]"
+  "import Tesl.Agent exposing [Agent, mockProvider, ask, askReply, askFor, decodeAs, converse, newConversation, agentRun, replyText]"
 
 let cap_cases = [
   { name = "ask"; imports = ""; ret = "String"; extra_decl = "";
-    body = "  let agent = defineAgent (mockProvider [\"x\"]) \"x\" 64\n  ask agent \"hi\"" };
+    body = "  let agent = Agent { provider: mockProvider [\"x\"], systemPrompt: \"x\", maxTokens: 64, tools: [] }\n  ask agent \"hi\"" };
   { name = "askReply"; imports = ""; ret = "String"; extra_decl = "";
-    body = "  let agent = defineAgent (mockProvider [\"x\"]) \"x\" 64\n  let r = askReply agent \"hi\"\n  replyText r" };
+    body = "  let agent = Agent { provider: mockProvider [\"x\"], systemPrompt: \"x\", maxTokens: 64, tools: [] }\n  let r = askReply agent \"hi\"\n  replyText r" };
   { name = "askFor"; imports = ""; ret = "Out"; extra_decl =
       "record Out { f: String }\ncodec Out {\n  toJson_forbidden\n  fromJson [ { f <- \"f\" with_codec stringCodec } ]\n}\nfn decodeOut(j: String) -> Out = decodeAs \"Out\" j\n";
-    body = "  let agent = defineAgent (mockProvider [\"{\\\"f\\\":\\\"x\\\"}\"]) \"x\" 64\n  askFor agent \"go\" decodeOut 2" };
+    body = "  let agent = Agent { provider: mockProvider [\"{\\\"f\\\":\\\"x\\\"}\"], systemPrompt: \"x\", maxTokens: 64, tools: [] }\n  askFor agent \"go\" decodeOut 2" };
   { name = "converse"; imports = ""; ret = "String"; extra_decl = "";
-    body = "  let agent = defineAgent (mockProvider [\"x\"]) \"x\" 64\n  let c = newConversation agent\n  let _ = converse c \"hi\"\n  \"done\"" };
+    body = "  let agent = Agent { provider: mockProvider [\"x\"], systemPrompt: \"x\", maxTokens: 64, tools: [] }\n  let c = newConversation agent\n  let _ = converse c \"hi\"\n  \"done\"" };
 ]
 
 (* (a) the AI verb used directly in a fn with NO `requires`. *)
@@ -742,7 +742,7 @@ let pos_askfor_with_cap () =
 module PosSAskFor exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, intCodec]
-import Tesl.Agent exposing [aiProvider, decodeAs, askFor, defineAgent, mockProvider]
+import Tesl.Agent exposing [aiProvider, Agent, decodeAs, askFor, mockProvider]
 capability supportBot implies aiProvider
 record Summary { title: String, score: Int }
 codec Summary {
@@ -756,7 +756,7 @@ codec Summary {
 }
 fn decodeSummary(j: String) -> Summary = decodeAs "Summary" j
 fn go() -> Summary requires [supportBot] =
-  let agent = defineAgent (mockProvider ["{\"title\":\"ok\",\"score\":1}"]) "x" 64
+  let agent = Agent { provider: mockProvider ["{\"title\":\"ok\",\"score\":1}"], systemPrompt: "x", maxTokens: 64, tools: [] }
   askFor agent "summarize" decodeSummary 2
 |}
 

@@ -82,17 +82,29 @@ let provenance_from (surface : Location.loc) : provenance = { desugared_from = s
       [RArg] re-emits them through that SAME context-aware path, so the byte
       output is identical.
 
+    Also lowered (same fixed-shape, position-independent template): the cache
+    family ([ECacheGet]/[ECacheSet]/[ECacheDelete]/[ECacheInvalidate]) and the
+    email family ([ESendEmail]/[EStartEmailWorker]).  Their former emit arms were
+    shape-only (constant prefix + keyword tokens, sub-expressions through
+    [emit_expr_simple]); byte-identity is gated by the committed
+    [lesson59-cache.rkt] / [lesson60-email.rkt] snapshots.
+
+    [ETelemetry] is ALSO lowered to {!Ast.ERuntimeCall}: although its bare-[EVar]
+    field value emits the raw [*name], that rule is in fact context-FREE (it does
+    NOT consult [ctx.func_kind] / [ctx.raw_locals] and uses the literal surface
+    name, not [resolve_name]).  The new {!Ast.RRawVar} segment reproduces that
+    [*name] byte output verbatim, so the lowering is byte-identical without any
+    emit-time context — see the [ETelemetry] arm of {!lower_expr}.
+
     Deliberately NOT lowered (documented BLOCKED, see roadmap):
-    - [ETelemetry] / [EPublish]: their operands branch on emit-time-only
-      [ctx.func_kind] / [ctx.raw_locals] to choose [*name] (the raw-param
-      blocker) — a desugar pass cannot reproduce that per-leaf decision.
+    - [EPublish]: its key operand branches on emit-time-only [ctx.func_kind] to
+      choose [*name] vs [(raw-value name)] (the raw-param blocker) — a desugar
+      pass cannot reproduce that per-leaf decision.
     - [EWithDatabase] / [EWithCapabilities] / [EWithTransaction]: position
       dependent — they emit DIFFERENT runtime calls in tail-raw position
       ([with-database] / [call-with-declared-capabilities]) than in statement
       position ([call-with-database] / [with-capabilities]); a single core form
       cannot capture both.
-    - cache / email families: feasible in shape but not exercised by any
-      byte-gated lesson reference, so byte-identity cannot be verified.
     - [EUnop] / [LInterp]: the raw-param blocker (see module docstring above). *)
 
 (** The job-type → queue-name resolution table the emitter builds from [DQueue]
@@ -109,6 +121,25 @@ let queue_ref_of (queues : (string, string) Hashtbl.t) (job_type : string) : str
     reuses the surface node's own [loc] verbatim (span-preserving). *)
 let lower_expr (queues : (string, string) Hashtbl.t) (e : expr) : expr =
   match e with
+  | ETelemetry { name; fields; loc } ->
+    (* (telemetry-event! "NAME" #:attributes ([%S v]...))
+       The former emit arm rendered each field value with a context-FREE rule:
+       a bare [EVar] became the raw value [*name] (the literal surface name, NOT
+       [resolve_name]); every other value went through emit_expr_simple.  So the
+       value operand needs no func-context knowledge — [RRawVar] reproduces the
+       [*name] byte output and [RArg] the emit_expr_simple path, byte-identically. *)
+    let segs = ref [ RLit (Printf.sprintf "(telemetry-event! %S #:attributes (" name) ] in
+    let push s = segs := s :: !segs in
+    List.iteri (fun i (k, v) ->
+      if i > 0 then push (RLit " ");
+      push (RLit (Printf.sprintf "[%S " k));
+      (match v with
+       | EVar { name = vname; _ } -> push (RRawVar vname)
+       | _ -> push (RArg v));
+      push (RLit "]")
+    ) fields;
+    push (RLit "))");
+    ERuntimeCall { segments = List.rev !segs; loc }
   | EEnqueue { job_type; payload; loc } ->
     (* (enqueue! QUEUE_REF <payload via emit_expr_simple>) *)
     let queue_ref = queue_ref_of queues job_type in
@@ -144,6 +175,55 @@ let lower_expr (queues : (string, string) Hashtbl.t) (e : expr) : expr =
       [ RLit prefix
       ; RArg port
       ; RLit (Buffer.contents mid_buf) ]; loc }
+  (* Cache / email families — also fixed-shape, position-independent runtime
+     calls.  Each former emit arm rendered a constant prefix + keyword tokens and
+     emitted its sub-expressions through [emit_expr_simple]; carrying them as
+     [RArg] re-emits through that SAME path, so the byte output is identical.
+     Byte-gated by the committed lesson59-cache / lesson60-email [.rkt]. *)
+  | ECacheGet { cache_name; key; loc } ->
+    (* (cache-get! NAME <key>) *)
+    ERuntimeCall { segments =
+      [ RLit (Printf.sprintf "(cache-get! %s " cache_name)
+      ; RArg key
+      ; RLit ")" ]; loc }
+  | ECacheSet { cache_name; key; value; ttl; loc } ->
+    (* (cache-set! NAME <key> <value>[ <ttl>]) *)
+    let ttl_segs = match ttl with
+      | Some ttl_expr -> [ RLit " "; RArg ttl_expr ]
+      | None -> [] in
+    ERuntimeCall { segments =
+      [ RLit (Printf.sprintf "(cache-set! %s " cache_name)
+      ; RArg key
+      ; RLit " "
+      ; RArg value ]
+      @ ttl_segs
+      @ [ RLit ")" ]; loc }
+  | ECacheDelete { cache_name; key; loc } ->
+    (* (cache-delete! NAME <key>) *)
+    ERuntimeCall { segments =
+      [ RLit (Printf.sprintf "(cache-delete! %s " cache_name)
+      ; RArg key
+      ; RLit ")" ]; loc }
+  | ECacheInvalidate { cache_name; prefix; loc } ->
+    (* (cache-invalidate-prefix! NAME <prefix>) *)
+    ERuntimeCall { segments =
+      [ RLit (Printf.sprintf "(cache-invalidate-prefix! %s " cache_name)
+      ; RArg prefix
+      ; RLit ")" ]; loc }
+  | ESendEmail { email_name; to_; subject; body; loc } ->
+    (* (send-email! NAME #:to <to> #:subject <subject> #:body <body>) *)
+    ERuntimeCall { segments =
+      [ RLit (Printf.sprintf "(send-email! %s #:to " email_name)
+      ; RArg to_
+      ; RLit " #:subject "
+      ; RArg subject
+      ; RLit " #:body "
+      ; RArg body
+      ; RLit ")" ]; loc }
+  | EStartEmailWorker { email_name; loc } ->
+    (* (start-email-worker! NAME) *)
+    ERuntimeCall { segments =
+      [ RLit (Printf.sprintf "(start-email-worker! %s)" email_name) ]; loc }
   | _ -> e
 
 (** Lower a single expression: bottom-up rewrite via the shared traversal
@@ -432,6 +512,39 @@ let desugar_agent_config (a : agent_form) : agent_form =
     { a with provider; model; api_key; endpoint; system_prompt;
              max_tokens; tools; config_expr = Some e }
 
+(** Lower every [expr] carried by a test block.  [DTest]/[DApiTest]/[DLoadTest]
+    were previously passed through verbatim — sound only while the lowered
+    fixed-shape forms never appeared in a test body.  The cache/email lowering
+    DOES occur in test bodies (e.g. [tests/cache-tests], [tests/email-tests]),
+    so the pass must reach those expressions too; otherwise a lowered form
+    reaches the emitter un-desugared and trips its guard.  [lower_expr] is the
+    identity on every non-effect node, so traversing a test body that uses no
+    effect form is a structural no-op (byte-identical emitted Racket). *)
+let rec desugar_test_stmt (queues : (string, string) Hashtbl.t) (ts : test_stmt) : test_stmt =
+  let de = desugar_expr queues in
+  match ts with
+  | TsLet r -> TsLet { r with value = de r.value }
+  | TsLetProof r -> TsLetProof { r with value = de r.value }
+  | TsExpect r -> TsExpect { r with left = de r.left; right = Option.map de r.right }
+  | TsExpectFail r -> TsExpectFail { r with fn = de r.fn; arg = de r.arg }
+  | TsExpectHasProof r -> TsExpectHasProof { r with fn = de r.fn; arg = de r.arg }
+  | TsProperty r ->
+    TsProperty { r with
+      params = List.map (fun (p : property_param) ->
+        { p with where_clause = Option.map de p.where_clause }) r.params;
+      body = de r.body }
+  | TsIf r ->
+    TsIf { r with cond = de r.cond;
+                  then_stmts = List.map (desugar_test_stmt queues) r.then_stmts;
+                  else_stmts = List.map (desugar_test_stmt queues) r.else_stmts }
+  | TsCase r ->
+    TsCase { r with scrut = de r.scrut;
+                    arms = List.map (fun (a : ts_case_arm) ->
+                      { a with ts_guard = Option.map de a.ts_guard;
+                               ts_body = List.map (desugar_test_stmt queues) a.ts_body })
+                      r.arms }
+  | TsExpr r -> TsExpr { r with e = de r.e }
+
 let desugar_decl (queues : (string, string) Hashtbl.t) (d : top_decl) : top_decl =
   match d with
   | DFunc fd -> DFunc { fd with body = desugar_expr queues fd.body }
@@ -442,10 +555,19 @@ let desugar_decl (queues : (string, string) Hashtbl.t) (d : top_decl) : top_decl
   | DChannel c -> DChannel (desugar_channel_config c)
   | DCache c -> DCache (desugar_cache_config c)
   | DAgent a -> DAgent (desugar_agent_config a)
+  | DTest tf ->
+    DTest { tf with stmts = List.map (desugar_test_stmt queues) tf.stmts }
+  | DApiTest af ->
+    DApiTest { af with
+      seed_stmts = List.map (desugar_expr queues) af.seed_stmts;
+      stmts = List.map (desugar_test_stmt queues) af.stmts }
+  | DLoadTest lf ->
+    DLoadTest { lf with
+      seed_stmts = List.map (desugar_expr queues) lf.seed_stmts;
+      request_stmts = List.map (desugar_test_stmt queues) lf.request_stmts }
   | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _
   | DCapability _ | DWorkers _
-  | DCapture _ | DApi _ | DServer _ | DTest _ | DApiTest _
-  | DLoadTest _ -> d
+  | DCapture _ | DApi _ | DServer _ -> d
 
 (** Lower a whole module.  Lowers the fixed-shape effect forms (EEnqueue /
     EStartWorkers / EServe) to {!Ast.ERuntimeCall}; all other nodes pass through

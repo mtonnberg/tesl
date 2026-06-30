@@ -726,8 +726,27 @@ let handle_help args =
     Printf.eprintf "Error: Unknown help command.\n\n";
     display_help ()
 
+(** LSP host indirection: the editor validates an unsaved buffer by writing its
+    text to a transient copy (now in a system temp dir, so the buffer never
+    touches the project tree) and invoking a query command on that copy.  But
+    local imports resolve relative to [Filename.dirname source_file]
+    ([Checker.resolve_local_import_path]), so a system-temp copy would no longer
+    see its sibling modules.
+
+    [TESL_LOGICAL_PATH] lets the host say "read the content from this real file,
+    but treat it as if it lived at this logical path" — the editor sets it to the
+    document's true on-disk path.  Content is still read from the [filename]
+    argument; only the *path* the checker reasons about (import dir + the [file]
+    field of locations) becomes the logical one.  Absent/empty ⇒ unchanged. *)
+let logical_path filename =
+  match Sys.getenv_opt "TESL_LOGICAL_PATH" with
+  | Some p when p <> "" -> p
+  | _ -> filename
+
 let check_json_diags filename source =
-  let diags = Compile.check_source filename source in
+  (* Import resolution + diagnostic [file] use the logical path; the linter
+     still reads the real (temp) file's edited content from disk. *)
+  let diags = Compile.check_source (logical_path filename) source in
   if List.exists (fun (d : Compile.diagnostic) -> d.source = "parser") diags then diags
   else diags @ Linter.lint_file filename
 
@@ -860,10 +879,11 @@ let () =
        wrapper can branch on the status without re-parsing. *)
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let json = Compile.agent_context_source filename source in
+       let lpath = logical_path filename in
+       let json = Compile.agent_context_source lpath source in
        print_string json;
        print_newline ();
-       let diags = Compile.check_source filename source in
+       let diags = Compile.check_source lpath source in
        let has_error = List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") diags in
        exit (if has_error then 1 else 0)
      with Sys_error msg ->
@@ -872,7 +892,7 @@ let () =
   | ["--local-bindings-json"; filename] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let bindings = Compile.local_bindings_source filename source in
+       let bindings = Compile.local_bindings_source (logical_path filename) source in
        print_string (Compile.local_bindings_to_json bindings);
        print_newline ();
        exit 0
@@ -882,7 +902,7 @@ let () =
   | ["--definition-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let definition = Compile.definition_source filename source (int_of_string line) (int_of_string col) in
+       let definition = Compile.definition_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.definition_response_to_json definition);
        print_newline ();
        exit 0
@@ -893,7 +913,7 @@ let () =
   | ["--occurrences-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let occurrences = Compile.occurrences_source filename source (int_of_string line) (int_of_string col) in
+       let occurrences = Compile.occurrences_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.occurrences_response_to_json occurrences);
        print_newline ();
        exit 0
@@ -904,7 +924,7 @@ let () =
   | ["--type-at-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let result = Compile.type_at_source filename source (int_of_string line) (int_of_string col) in
+       let result = Compile.type_at_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.type_at_response_to_json result);
        print_newline ();
        exit 0
@@ -915,7 +935,7 @@ let () =
   | ["--field-at-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let result = Compile.field_at_source filename source (int_of_string line) (int_of_string col) in
+       let result = Compile.field_at_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.field_at_response_to_json result);
        print_newline ();
        exit 0
@@ -926,7 +946,7 @@ let () =
   | ["--config-context-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let result = Compile.config_context_source filename source (int_of_string line) (int_of_string col) in
+       let result = Compile.config_context_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.config_context_response_to_json result);
        print_newline ();
        exit 0
@@ -937,7 +957,7 @@ let () =
   | ["--completions-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let items = Compile.completions_source filename source (int_of_string line) (int_of_string col) in
+       let items = Compile.completions_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.completions_response_to_json items);
        print_newline ();
        exit 0
@@ -948,7 +968,7 @@ let () =
   | ["--signature-help-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let sig_ = Compile.signature_help_source filename source (int_of_string line) (int_of_string col) in
+       let sig_ = Compile.signature_help_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.signature_help_response_to_json sig_);
        print_newline ();
        exit 0
@@ -959,7 +979,7 @@ let () =
   | ["--selection-range-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let ranges = Compile.selection_range_source filename source (int_of_string line) (int_of_string col) in
+       let ranges = Compile.selection_range_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.selection_ranges_response_to_json ranges);
        print_newline ();
        exit 0
@@ -970,7 +990,7 @@ let () =
   | ["--type-definition-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let loc = Compile.type_definition_source filename source (int_of_string line) (int_of_string col) in
+       let loc = Compile.type_definition_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.type_definition_response_to_json loc);
        print_newline ();
        exit 0

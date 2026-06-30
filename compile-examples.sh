@@ -504,8 +504,21 @@ run_racket_test_suite() {
 # given into each emitted .rkt's source map, so relative paths keep the committed
 # .rkt snapshots machine-independent (an absolute "$(pwd)/…" would rewrite every
 # snapshot to this checkout's path on each run).
-LEARN_FILES=( example/learn/*.tesl )
-KANEL_FILES=( example/kanel/*.tesl )
+# The LSP writes transient `tesl-lsp-<n>.tesl` validation copies into the source
+# tree (see roadmap/later/lsp-temp-files-pollute-repo.md). They are gitignored,
+# but the globs below can race-capture one while the LSP is running, tripping the
+# format phase on a non-source file. Never treat a transient copy as a source.
+_drop_transient() {
+    local f
+    for f in "$@"; do
+        case "$(basename -- "$f")" in
+            tesl-lsp-*.tesl) ;;  # skip transient LSP validation copy
+            *) printf '%s\n' "$f" ;;
+        esac
+    done
+}
+mapfile -t LEARN_FILES < <(_drop_transient example/learn/*.tesl)
+mapfile -t KANEL_FILES < <(_drop_transient example/kanel/*.tesl)
 
 EXAMPLE_FILES=(
     example/sandbox.tesl
@@ -522,7 +535,7 @@ EXAMPLE_FILES=(
     "${KANEL_FILES[@]}"
 )
 
-TEST_FILES=( tests/*.tesl )
+mapfile -t TEST_FILES < <(_drop_transient tests/*.tesl)
 
 ALL_FILES=( "${LEARN_FILES[@]}" "${EXAMPLE_FILES[@]}" "${TEST_FILES[@]}" )
 
