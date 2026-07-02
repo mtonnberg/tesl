@@ -436,6 +436,29 @@ import Tesl.Prelude exposing [List, String]
 fn f() -> List String = cli.args
 |}
 
+(* ── CAP-UUID: UUID.v4/v7 are nullary uuid-EFFECTS. Calling one without declaring
+   `requires [uuid]` must be rejected (they used to compile clean with requires []
+   while runtime-gated), and the corrected form must compile (they were also
+   uncallable due to a unit->T type bug). *)
+let test_R75_CAPUUID_missing_requires_rejected () =
+  should_fail "requiring \\[uuid\\]\\|capability" {|
+#lang tesl
+module CapUuidBad exposing [gen]
+import Tesl.Prelude exposing [String]
+import Tesl.UUID exposing [uuid, UUID.v7]
+fn gen() -> String requires [] = UUID.v7()
+|}
+
+let test_R75_CAPUUID_declared_accepted () =
+  should_pass {|
+#lang tesl
+module CapUuidOk exposing [gen4, gen7]
+import Tesl.Prelude exposing [String]
+import Tesl.UUID exposing [uuid, UUID.v4, UUID.v7]
+fn gen4() -> String requires [uuid] = UUID.v4()
+fn gen7() -> String requires [uuid] = UUID.v7()
+|}
+
 let () =
   run "Review75-ReviewFixes" [
     "eq-nominal-fields", [
@@ -478,5 +501,9 @@ let () =
     "drift1-cli-removed", [
       test_case "R75_DRIFT1 import Tesl.Cli rejected" `Quick test_R75_DRIFT1_import_cli_rejected;
       test_case "R75_DRIFT1 bare cli.args rejected" `Quick test_R75_DRIFT1_bare_cli_args_rejected;
+    ];
+    "cap-uuid", [
+      test_case "R75_CAPUUID missing requires [uuid] rejected" `Quick test_R75_CAPUUID_missing_requires_rejected;
+      test_case "R75_CAPUUID declared uuid accepted" `Quick test_R75_CAPUUID_declared_accepted;
     ];
   ]

@@ -143,18 +143,15 @@ let collect_needed_capabilities
   let rec go (bound : string list) (acc : string list) (e : expr) : string list =
     match e with
     | EVar { name; _ } -> var_caps bound name @ acc
-    | EField { obj = EConstructor { name = "JWT"; _ }; field; _ }
-      when List.mem field ["sign"; "verify"; "decode"] -> "jwt" :: acc
-    | EField { obj = EVar { name = "JWT"; _ }; field; _ }
-      when List.mem field ["sign"; "verify"; "decode"] -> "jwt" :: acc
-    | EField { obj = EConstructor { name = "HttpClient"; _ }; field; _ } ->
-      (* HttpClient.get / .post / .put / .delete accessed as EField on EConstructor.
-         Note: the EConstructor obj is intentionally NOT recursed into here (it
-         carries no further capability), matching the original arm exactly. *)
-      if List.mem ("HttpClient." ^ field)
-           ["HttpClient.get"; "HttpClient.post"; "HttpClient.put"; "HttpClient.delete"]
-      then "httpClient" :: acc
-      else acc
+    (* A qualified stdlib call `M.f` (JWT.sign, HttpClient.get, UUID.v4/v7, …) parses
+       as an EField on the module-name constructor/var. Charge its capability from
+       the SINGLE-SOURCE registry (A2-3) — this is what makes `UUID.v7()` require the
+       `uuid` capability (CAP-UUID) without a second hand-list. The module-name obj
+       carries no further capability, so it is not recursed into. Non-capability
+       field accesses (record fields, etc.) map to [] and fall through below. *)
+    | EField { obj = (EConstructor { name = m; _ } | EVar { name = m; _ }); field; _ }
+      when Type_system.stdlib_capabilities_of (m ^ "." ^ field) <> [] ->
+      Type_system.stdlib_capabilities_of (m ^ "." ^ field) @ acc
     (* Effect forms: prepend the fixed data-table token, then descend into
        children via the shared traversal. *)
     | EEnqueue _ | EPublish _ | ETelemetry _ | ESendEmail _ ->

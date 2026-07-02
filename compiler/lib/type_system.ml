@@ -461,8 +461,12 @@ let stdlib_env : (string * scheme) list = [
   "randomFloat",   mono t_float;
 
   (* ── UUID ────────────────────────────────────────────────────────────── *)
-  "UUID.v4",       mono (t_fun [t_unit] t_string);
-  "UUID.v7",       mono (t_fun [t_unit] t_string);
+  (* Nullary EFFECTS (a fresh UUID each call), typed as their result like the
+     other nullary effects `nowMillis`/`randomFloat` — NOT `Unit -> String`, which
+     made `UUID.v7()` fail to unify (CAP-UUID). Invoked as `UUID.v7()`; the emitter
+     lowers the `()` to a nullary Racket call. *)
+  "UUID.v4",       mono t_string;
+  "UUID.v7",       mono t_string;
   "UUID.validate", mono (t_fun [t_string] t_string);
   "IsUuid",        mono t_string;
   "uuidV4Codec",   mono t_string;

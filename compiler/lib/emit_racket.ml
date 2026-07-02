@@ -576,9 +576,13 @@ let gdp_returning_stdlib : (string, unit) Hashtbl.t =
     ];
   h
 
+(* Nullary EFFECT invocations: `f()` lowers to a nullary Racket call `(f)`, not
+   `(f (list))`. Keyed by the Tesl-level name (bare or qualified). UUID.v4/v7 are
+   qualified (A2-7): without them here the `()` was emitted as an empty-list arg to
+   a nullary runtime fn → arity mismatch. *)
 let stdlib_zero_arg_names : (string, unit) Hashtbl.t =
   let h = Hashtbl.create 8 in
-  List.iter (fun k -> Hashtbl.replace h k ()) ["nowMillis"]; h
+  List.iter (fun k -> Hashtbl.replace h k ()) ["nowMillis"; "UUID.v4"; "UUID.v7"]; h
 
 let job_type_to_queue : (string, string) Hashtbl.t = Hashtbl.create 16
 
@@ -1750,8 +1754,16 @@ let rec emit_expr ctx e =
       | _ -> false
     in
     let is_zero_arg_stdlib =
-      let name = stdlib_racket_name fn in
-      name <> "" && Hashtbl.mem stdlib_zero_arg_names name
+      (* Bare stdlib import (nowMillis) keyed by its racket name, OR a qualified
+         one (UUID.v4/v7) keyed by its Tesl-level `Module.field` — the racket name
+         of a qualified import is rename-dependent, so match the Tesl name there. *)
+      let rname = stdlib_racket_name fn in
+      let qname = match fn with
+        | EField { obj = EConstructor { name = m; _ }; field; _ } -> m ^ "." ^ field
+        | _ -> ""
+      in
+      (rname <> "" && Hashtbl.mem stdlib_zero_arg_names rname)
+      || (qname <> "" && Hashtbl.mem stdlib_zero_arg_names qname)
     in
     (* Helper: emit just the function name (no zero-arg call treatment) *)
     let emit_fn_name fn =

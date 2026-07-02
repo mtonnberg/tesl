@@ -5,6 +5,8 @@ module Lesson56Uuid exposing [
   uuidLength,
   hasVersionDigit,
   checkUuidFormat,
+  generateV4,
+  generateV7,
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -69,7 +71,7 @@ module Lesson56Uuid exposing [
 # ─────────────────────────────────────────────────────────────────────────────
 
 import Tesl.Prelude exposing [String, Bool(..), Int]
-import Tesl.UUID exposing [IsUuid, UUID.validate]
+import Tesl.UUID exposing [uuid, IsUuid, UUID.v4, UUID.v7, UUID.validate]
 import Tesl.String exposing [String.length, String.slice]
 
 # ── Validating UUIDs at the API boundary ─────────────────────────────────────
@@ -85,6 +87,18 @@ import Tesl.String exposing [String.length, String.slice]
 
 fn validateId(s: String) -> String =
   UUID.validate s
+
+# ── Generating UUIDs ─────────────────────────────────────────────────────────
+#
+# UUID.v4() and UUID.v7() are nullary EFFECTS (each call yields a fresh id), so
+# any function that calls them must declare `requires [uuid]`. Invoke them with
+# `()` — like `nowMillis()`. v4 is random; v7 is time-ordered (sorts by creation).
+
+fn generateV4() -> String requires [uuid] =
+  UUID.v4()
+
+fn generateV7() -> String requires [uuid] =
+  UUID.v7()
 
 # ── Pure UUID helper functions ────────────────────────────────────────────────
 #
@@ -261,4 +275,21 @@ test "UUID hyphens are at correct positions" {
   expect String.slice v4 13 14 == "-"
   expect String.slice v4 18 19 == "-"
   expect String.slice v4 23 24 == "-"
+}
+
+# These tests actually GENERATE a UUID at runtime and assert the result is a
+# well-formed id of the right version. The `requires [uuid]` on the test block
+# provides the capability the generators need.
+test "generateV4 produces a valid random UUID" requires [uuid] {
+  let id = generateV4()
+  expect checkUuidFormat id == True
+  expect uuidLength id == 36
+  expect describeUuid id == "UUID v4 (random)"
+}
+
+test "generateV7 produces a valid time-ordered UUID" requires [uuid] {
+  let id = generateV7()
+  expect checkUuidFormat id == True
+  expect uuidLength id == 36
+  expect describeUuid id == "UUID v7 (time-ordered)"
 }
