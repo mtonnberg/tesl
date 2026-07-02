@@ -87,6 +87,7 @@ let module_path_table : (string, string) Hashtbl.t =
   add "Tesl.Prelude"   "tesl/prelude.rkt";
   add "Tesl.String"    "tesl/string.rkt";
   add "Tesl.Int"       "tesl/int.rkt";
+  add "Tesl.Int32"     "tesl/int32.rkt";
   add "Tesl.Float"     "tesl/float.rkt";
   add "Tesl.Bool"      "tesl/bool.rkt";
   add "Tesl.List"      "tesl/list.rkt";

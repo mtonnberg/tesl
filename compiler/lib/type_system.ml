@@ -34,6 +34,7 @@ let mono ty = { vars = []; mono = ty }
 (* ── Built-in type constants ─────────────────────────────────────────────── *)
 
 let t_int     = TCon "Int"
+let t_int32   = TCon "Int32"   (* NT-07: nominal, does not unify with Int *)
 let t_string  = TCon "String"
 let t_bool    = TCon "Bool"
 let t_float   = TCon "Float"
@@ -363,6 +364,10 @@ let stdlib_env : (string * scheme) list = [
   "String.fromInt",    mono (t_fun [t_int] t_string);
 
   (* ── Int ─────────────────────────────────────────────────────────────── *)
+  (* NT-07 — Int32 boundary type conversions (pure; no capability). fromInt is the
+     ONLY value-range decision (checked narrowing); toInt is total widening. *)
+  "Int32.fromInt", mono (t_fun [t_int] (t_maybe t_int32));
+  "Int32.toInt",   mono (t_fun [t_int32] t_int);
   "Int.parse",    mono (t_fun [t_string] (t_maybe t_int));
   "Int.toString", mono (t_fun [t_int] t_string);
   "Int.abs",      mono (t_fun [t_int] t_int);
@@ -635,6 +640,10 @@ let tesl_module_exports : (string * string list) list = [
       "Keyword"; "List"; "Null"; "Number"; "Fact"; "Real"; "String"; "Symbol";
       "Unit"; "Vector"; "int"; "integer"; "string";
       "andLeft"; "andRight"; "attachFact"; "detachFact"; "forgetFact"; "introAnd" ] );
+  ( "Tesl.Int32",
+    (* NT-07: a JS-safe (< 2^53) bounded integer for wire/storage boundaries.
+       Nominal — does NOT unify with Int. Conversions are the only value checks. *)
+    [ "Int32"; "Int32.fromInt"; "Int32.toInt" ] );
   ( "Tesl.Maybe",
     [ "Maybe"; "Something"; "Nothing" ] );
   ( "Tesl.Result",
@@ -811,6 +820,8 @@ let always_available_stdlib_names : string list = [
     codecs).  The qualified (dotted) rows are DERIVED from {!tesl_module_exports}
     in {!stdlib_home_module} below, so this list carries only the bare rows. *)
 let stdlib_bare_home_module : (string * string) list = [
+  (* Int32 (NT-07): the bare TYPE name is import-gated like any stdlib name. *)
+  "Int32", "Tesl.Int32";
   (* Env *)
   "env", "Tesl.Env"; "envInt", "Tesl.Env"; "envString", "Tesl.Env";
   "requireEnv", "Tesl.Env";
@@ -925,7 +936,7 @@ let stdlib_capabilities_of (name : string) : string list =
     that have runtime files but no registered export list).
     Used to reject `import Tesl.Unknown` with a compile-time error. *)
 let tesl_known_module_names : string list = [
-  "Tesl.Prelude"; "Tesl.String"; "Tesl.Int"; "Tesl.Float"; "Tesl.Bool";
+  "Tesl.Prelude"; "Tesl.String"; "Tesl.Int"; "Tesl.Int32"; "Tesl.Float"; "Tesl.Bool";
   "Tesl.List"; "Tesl.ListPrim"; "Tesl.Dict"; "Tesl.Maybe"; "Tesl.Either"; "Tesl.EitherPrim"; "Tesl.Result";
   "Tesl.Http"; "Tesl.HttpClient"; "Tesl.Json"; "Tesl.DB"; "Tesl.Time"; "Tesl.Random";
   "Tesl.Uuid"; "Tesl.UUID"; "Tesl.Crypto"; "Tesl.Set"; "Tesl.Map"; "Tesl.Env";

@@ -127,7 +127,10 @@
 (define built-in-db-type-registry
   (hash 'Boolean 'boolean
         'Bytes 'bytea
-        'Integer 'bigint
+        ;; NT-07: Int → NUMERIC (arbitrary precision, lossless for any magnitude);
+        ;; Int32 → integer/int4 (compact + JS-safe). PosixMillis stays bigint (below).
+        'Integer 'numeric
+        'Int32 'integer
         'Number 'double-precision
         'Real 'double-precision
         'String 'text
@@ -192,22 +195,27 @@
        (eq? (car type-datum) 'Maybe)
        (cadr type-datum)))
 
+;; NT-07: resolve a newtype's BASE to its column type. A nominal newtype over
+;; `Integer` (e.g. PosixMillis — a 64-bit millis timestamp) keeps compact BIGINT
+;; storage; only the BARE arbitrary-precision `Int` (direct 'Integer match, below)
+;; widens to NUMERIC. This preserves PosixMillis → BIGINT after Int → NUMERIC.
+(define (newtype-base->db-type base)
+  (and base
+       (if (eq? base 'Integer) 'bigint
+           (hash-ref built-in-db-type-registry base #f))))
+
 (define (default-field-db-type-annotation field)
   (define type-datum (field-spec-type field))
   ;; Maybe X field: derive db type from the inner X type
   (define inner-maybe (maybe-field-inner-type type-datum))
   (if inner-maybe
       (or (hash-ref built-in-db-type-registry inner-maybe #f)
-          (let ([base (hash-ref newtype-registry inner-maybe #f)])
-            (and base (hash-ref built-in-db-type-registry base #f)))
+          (newtype-base->db-type (hash-ref newtype-registry inner-maybe #f))
           'text)  ; fall back to text for unknown Maybe X
-      (or ;; Direct match (e.g. 'String, 'Integer, 'Boolean with plain symbol keys)
+      (or ;; Direct match (e.g. 'String, 'Integer→numeric, 'Boolean with plain symbol keys)
           (hash-ref built-in-db-type-registry type-datum #f)
-          ;; Newtype: look up the base type, then look that up in the registry.
-          ;; This handles PosixMillis → Integer → bigint, and any user-defined newtypes
-          ;; that wrap a built-in type.
-          (let ([base (hash-ref newtype-registry type-datum #f)])
-            (and base (hash-ref built-in-db-type-registry base #f)))
+          ;; Newtype: base type → column type (Integer-based newtypes keep BIGINT).
+          (newtype-base->db-type (hash-ref newtype-registry type-datum #f))
           ;; ADT fields default to jsonb
           (and (field-adt-type? field) 'jsonb)
           #f)))
@@ -226,6 +234,7 @@
     ['bytea "BYTEA"]
     ['bigint "BIGINT"]
     ['integer "INTEGER"]
+    ['numeric "NUMERIC"]   ; NT-07: Int → arbitrary-precision NUMERIC (lossless)
     ['text "TEXT"]
     ['double-precision "DOUBLE PRECISION"]
     [(? symbol?)
@@ -1138,13 +1147,25 @@
          [else
           (define actual-type (hash-ref maybe-column 'data-type))
           (define expected-type (db-type->normalized-string (field-db-type-annotation field)))
-          (unless (equal? actual-type expected-type)
-            (raise-user-error 'sql
-                              "automatic migration found incompatible type for ~a.~a: expected ~a, found ~a"
-                              (entity-table-name entity)
-                              column-name
-                              expected-type
-                              actual-type))
+          (cond
+            [(equal? actual-type expected-type) (void)]
+            ;; NT-07: `Int` columns were BIGINT and now map to NUMERIC (arbitrary
+            ;; precision). BIGINT→NUMERIC (and INTEGER→NUMERIC) is a LOSSLESS
+            ;; widening, so auto-migrate the existing column in place rather than
+            ;; failing — this is the migration the Int→NUMERIC change needs.
+            [(and (equal? expected-type "numeric")
+                  (member actual-type '("bigint" "integer")))
+             (query-exec (database-runtime-connection runtime)
+                         (format "alter table ~a alter column ~a type numeric"
+                                 (qualified-table-name (database-runtime-database runtime) entity)
+                                 column-name))]
+            [else
+             (raise-user-error 'sql
+                               "automatic migration found incompatible type for ~a.~a: expected ~a, found ~a"
+                               (entity-table-name entity)
+                               column-name
+                               expected-type
+                               actual-type)])
           ;; Nullability check: DB column must match the entity declaration.
           ;; Nullable fields (Maybe types) expect "YES"; non-nullable fields expect "NO".
           (define db-is-nullable (not (equal? (hash-ref maybe-column 'is-nullable) "NO")))
