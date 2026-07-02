@@ -1,0 +1,47 @@
+#lang tesl
+module Int32Boundary exposing [narrowSafe, widen, roundTrip]
+
+# NT-07 — Int32: a JS-safe (< 2^31), 32-bit-bounded integer for wire/storage
+# boundaries. It is NOMINAL (does not unify with Int); convert explicitly.
+#
+#   Int32.fromInt : Int -> Maybe Int32   (checked narrowing; the ONLY value check)
+#   Int32.toInt   : Int32 -> Int          (total widening — always safe)
+#
+# Use Int32 for values that cross to a JS/TS/Elm client (JS Number is exact only to
+# 2^53) or that you store compactly (int4). For arbitrary-magnitude values, keep Int
+# (stored as NUMERIC, lossless) — the W091 linter nudges you when Int hits the wire.
+
+import Tesl.Prelude exposing [Int]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Int32 exposing [Int32, Int32.fromInt, Int32.toInt]
+
+# Narrow an Int to an Int32 — Nothing when out of the int32 range.
+fn narrowSafe(n: Int) -> Maybe Int32 =
+  Int32.fromInt n
+
+# Widen an Int32 back to Int (total).
+fn widen(x: Int32) -> Int =
+  Int32.toInt x
+
+# Narrow then widen: an in-range value returns unchanged; out-of-range returns the
+# supplied fallback.
+fn roundTrip(n: Int, fallback: Int) -> Int =
+  case Int32.fromInt n of
+    Something x -> Int32.toInt x
+    Nothing -> fallback
+
+test "in-range value round-trips unchanged" {
+  expect roundTrip 1000 (0 - 1) == 1000
+}
+
+test "the int32 max boundary is in range" {
+  expect roundTrip 2147483647 (0 - 1) == 2147483647
+}
+
+test "a value above the int32 max is out of range" {
+  expect roundTrip 2147483648 (0 - 1) == (0 - 1)
+}
+
+test "a large Int (> 2^53) is out of int32 range" {
+  expect roundTrip 9007199254740993 (0 - 1) == (0 - 1)
+}

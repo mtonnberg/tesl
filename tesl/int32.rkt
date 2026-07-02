@@ -16,7 +16,11 @@
 
 (require "../dsl/types.rkt")
 
-(provide Int32.fromInt Int32.toInt)
+(provide Int32 Int32.fromInt Int32.toInt)
+
+;; The TYPE name is a runtime symbol (like `Maybe`), so `import Tesl.Int32
+;; exposing [Int32, …]` resolves the type binding the emitter references.
+(define Int32 'Int32)
 
 (define INT32-MIN (- (expt 2 31)))
 (define INT32-MAX (sub1 (expt 2 31)))

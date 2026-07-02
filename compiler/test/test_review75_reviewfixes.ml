@@ -500,6 +500,28 @@ agent Bot requires [botAi, random] = Agent {
 fn genTool(x: String) -> String requires [random] = generatePrefixedId x
 |}
 
+(* ── NT-07: Int32 is a NOMINAL boundary type — it does not unify with Int, so an
+   Int cannot be used where Int32 is expected without an explicit Int32.fromInt. *)
+let test_R75_NT07_int_not_int32_rejected () =
+  should_fail "cannot unify Int with Int32\\|unify.*Int32" {|
+#lang tesl
+module Nt07Bad exposing [f]
+import Tesl.Prelude exposing [Int]
+import Tesl.Int32 exposing [Int32, Int32.toInt]
+fn f(n: Int) -> Int = Int32.toInt n
+|}
+
+let test_R75_NT07_int32_conversions_accepted () =
+  should_pass {|
+#lang tesl
+module Nt07Ok exposing [narrow, widen]
+import Tesl.Prelude exposing [Int]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Int32 exposing [Int32, Int32.fromInt, Int32.toInt]
+fn narrow(n: Int) -> Maybe Int32 = Int32.fromInt n
+fn widen(x: Int32) -> Int = Int32.toInt x
+|}
+
 let () =
   run "Review75-ReviewFixes" [
     "eq-nominal-fields", [
@@ -550,5 +572,9 @@ let () =
     "a2-4-agent-tool-caps", [
       test_case "R75_A24 agent tool cap uncovered rejected" `Quick test_R75_A24_agent_tool_cap_uncovered_rejected;
       test_case "R75_A24 agent tool cap covered accepted" `Quick test_R75_A24_agent_tool_cap_covered_accepted;
+    ];
+    "nt07-int32", [
+      test_case "R75_NT07 Int not usable as Int32" `Quick test_R75_NT07_int_not_int32_rejected;
+      test_case "R75_NT07 Int32 conversions accepted" `Quick test_R75_NT07_int32_conversions_accepted;
     ];
   ]
