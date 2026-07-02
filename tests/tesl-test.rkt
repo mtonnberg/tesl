@@ -2205,10 +2205,12 @@
     (define todoDbRead (module-private-value compiled-module-path 'todoDbRead))
     (define todoWebService (module-private-value compiled-module-path 'todoWebService))
 
-     (check-equal? (resolveExamplePort (list "--port=8091") Nothing Nothing) 8091)
-     (check-equal? (resolveExamplePort '() (Something "8092") Nothing) 8092)
-     (check-equal? (resolveExamplePort '() Nothing (Something "8093")) 8093)
-     (check-equal? (resolveExamplePort '() Nothing Nothing) 8086)
+     ;; resolveExamplePort now takes (teslPort portEnv): TESL_TODO_API_PORT wins,
+     ;; then PORT, then default 8086 (the CLI arg went with the Tesl.Cli removal).
+     (check-equal? (resolveExamplePort (Something "8091") Nothing) 8091)
+     (check-equal? (resolveExamplePort (Something "8092") (Something "8099")) 8092)
+     (check-equal? (resolveExamplePort Nothing (Something "8093")) 8093)
+     (check-equal? (resolveExamplePort Nothing Nothing) 8086)
 
      (call-with-database
       todo-database

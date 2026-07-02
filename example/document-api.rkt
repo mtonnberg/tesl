@@ -39,8 +39,13 @@
        (equal? (hash-ref value 'status #f) 'cached)
        (string? (hash-ref value 'docId #f))))
 
+(define (new-document? value)
+  (and (hash? value)
+       (string? (hash-ref value 'title #f))))
+
 (register-runtime-type! 'CacheResult cache-result?)
 (register-runtime-type! 'UserId string?)
+(register-runtime-type! 'NewDocument new-document?)
 
 
 (define-entity Task

@@ -394,7 +394,7 @@ let elm_out_path_infers_api_module_name () =
 let elm_binding_forall_supports_compound_element_proofs () =
   let src = {|#lang tesl
 module Api exposing [TodoApi]
-import Tesl.Prelude exposing [String]
+import Tesl.Prelude exposing [String, List]
 
 fact TodoId (s: String)
 fact ContainsAnA (s: String)
@@ -443,8 +443,14 @@ let elm_capture_collision_renames_only_when_needed () =
   let src = {|#lang tesl
 module Api exposing [TodoApi]
 import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
 
-fact TodoId (s: String)
+fact TodoId (todoId: String)
+
+check isTodoId(todoId: String) -> todoId: String ::: TodoId todoId =
+  ok todoId ::: TodoId todoId
+
+capturer todoIdCapture: String ::: TodoId todoId using stringCodec via isTodoId
 
 api TodoApi {
   get "/todos/:todoId" capture todoId: String ::: TodoId todoId via todoIdCapture -> String
@@ -471,7 +477,7 @@ let elm_exports_proof_types_without_exporting_proof_constructors () =
 let elm_body_forall_proof_surfaces_as_proven_elements_with_outer_list_proofs () =
   let src = {|#lang tesl
 module Api exposing [TodoApi]
-import Tesl.Prelude exposing [String]
+import Tesl.Prelude exposing [String, List]
 
 fact TodoId (s: String)
 fact NonEmpty (xs: List String)

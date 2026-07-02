@@ -1,6 +1,6 @@
 (** A2 — SQL FromDb provenance soundness (external re-review §3).
 
-    §3.1 A1-OR-BROADEN — a disjunction in a provenance WHERE broadens the result
+    re-review §3.1 A1-OR-BROADEN — a disjunction in a provenance WHERE broadens the result
       set beyond the declared subject.  `where col == subj || col == other` was
       credited by matching one disjunct while the `|| …` rode into the emitted SQL
       (a BOLA on the shipped todo-api).  The {AND,EQ} unifier cannot prove a
@@ -8,14 +8,14 @@
       provenance WHERE is now fail-closed.  A narrowing OR nested inside an
       AND-conjunct (`col == subj && (a || b)`) is still accepted — it only narrows.
 
-    §3.2 A1-MASK-NODATAFLOW (read variant) — provenance was credited by ANY
+    re-review §3.2 A1-MASK-NODATAFLOW (read variant) — provenance was credited by ANY
       matching WHERE in the body (a function-wide `matched` bool), so an unused
       sibling `let good = select … where <matching>` laundered a returned value
       from a different, wrong-WHERE select.  Provenance is now tied to the select
       whose result flows to the return (backward closure over `let` definitions);
       a dead sibling can no longer credit.
 
-    (The update/delete-`returning` write variant of §3.2 — verifying a write
+    (The update/delete-`returning` write variant of re-review §3.2 — verifying a write
     chain's WHERE — is tracked separately in
     roadmap/next/sql_update_returning_provenance.md.) *)
 
@@ -84,7 +84,7 @@ entity Todo table "todos" primaryKey id {
 }
 |} name
 
-(* ── §3.1 OR-broaden negatives ────────────────────────────────────────────── *)
+(* ── re-review §3.1 OR-broaden negatives ────────────────────────────────────────────── *)
 let or_pat = "disjunction\\|`||`\\|OR.*broaden\\|broadens"
 
 let neg_or_admin = hdr "OrAdmin" ^ {|
@@ -116,14 +116,14 @@ fn getOne(id0: String, other: String) -> Todo ? FromDb (Id == id0)
     Something t -> t
 |}
 
-(* ── §3.1 narrowing OR positive (must compile) ───────────────────────────── *)
+(* ── re-review §3.1 narrowing OR positive (must compile) ───────────────────────────── *)
 let pos_narrowing_or = hdr "NarrowOr" ^ {|
 fn listMine(me: String) -> List Todo ? ForAll (FromDb (OwnerId == me))
   requires [dbRead] =
   select t from Todo where t.ownerId == me && (t.status == "open" || t.status == "done")
 |}
 
-(* ── §3.2 sibling-mask (read) negatives ──────────────────────────────────── *)
+(* ── re-review §3.2 sibling-mask (read) negatives ──────────────────────────────────── *)
 let neg_mask_unused = hdr "MaskUnused" ^ {|
 fn getThing(id0: String, other: String) -> Todo ? FromDb (Id == id0)
   requires [dbRead] =
@@ -175,7 +175,7 @@ fn getThing(id0: String, other: String) -> Todo ? FromDb (Id == id0)
 
 let () =
   run "A2-SQL-Provenance" [
-    "§3.1 OR-broaden (negatives)", [
+    "re-review §3.1 OR-broaden (negatives)", [
       test_case "ownerId == me || ownerId == admin" `Quick
         (fun () -> should_fail ~pat:or_pat "or-admin" neg_or_admin);
       test_case "ownerId == me || status == open" `Quick
@@ -185,11 +185,11 @@ let () =
       test_case "single-row select with OR" `Quick
         (fun () -> should_fail ~pat:or_pat "or-single" neg_or_single);
     ];
-    "§3.1 narrowing OR (positive)", [
+    "re-review §3.1 narrowing OR (positive)", [
       test_case "col == subj && (a || b) compiles" `Quick
         (fun () -> should_pass "narrowing-or" pos_narrowing_or);
     ];
-    "§3.2 sibling-mask read (negatives)", [
+    "re-review §3.2 sibling-mask read (negatives)", [
       test_case "unused matching sibling masks wrong return" `Quick
         (fun () -> should_fail "mask-unused" neg_mask_unused);
       test_case "matching-first sibling masks wrong return" `Quick

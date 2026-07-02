@@ -81,11 +81,13 @@
 (check-exn exn:fail:user? (lambda () (resolve-example-port '() #:tesl-port "abc" #:port #f)))
 (check-exn exn:fail:user? (lambda () (resolve-example-port '() #:tesl-port #f #:port "70000")))
 
-(check-equal? (todo-resolve-example-port '() Nothing Nothing) 8086)
-(check-equal? (todo-resolve-example-port '("--port" "9101") (Something "9102") (Something "9103")) 9101)
-(check-equal? (todo-resolve-example-port '("--port=9104") (Something "9102") (Something "9103")) 9104)
-(check-equal? (todo-resolve-example-port '() (Something "9110") (Something "9120")) 9110)
-(check-equal? (todo-resolve-example-port '() Nothing (Something "9120")) 9120)
+;; resolveExamplePort now takes (teslPort portEnv) — the CLI arg was removed with
+;; the whole Tesl.Cli module (config is env-vars-only). Precedence:
+;; TESL_TODO_API_PORT (teslPort) → PORT (portEnv) → default 8086.
+(check-equal? (todo-resolve-example-port Nothing Nothing) 8086)
+(check-equal? (todo-resolve-example-port (Something "9102") (Something "9103")) 9102)
+(check-equal? (todo-resolve-example-port (Something "9110") (Something "9120")) 9110)
+(check-equal? (todo-resolve-example-port Nothing (Something "9120")) 9120)
 
 (define parsed-todo-port
   (parse-todo-port-string "9201" "test"))
@@ -97,8 +99,7 @@
   [other
    (error 'port-test "unexpected todo port proof shape: ~a" other)])
 
-(check-exn exn:fail:user? (lambda () (todo-resolve-example-port '("--port") Nothing Nothing)))
-(check-true (todo-check-fail? (todo-resolve-example-port '() (Something "abc") Nothing)))
-(check-true (todo-check-fail? (todo-resolve-example-port '() Nothing (Something "70000"))))
+(check-true (todo-check-fail? (todo-resolve-example-port (Something "abc") Nothing)))
+(check-true (todo-check-fail? (todo-resolve-example-port Nothing (Something "70000"))))
 (check-true (todo-check-fail? (parse-todo-port-string "abc" "test")))
 (check-true (todo-check-fail? (parse-todo-port-string "70000" "test")))
