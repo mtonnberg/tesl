@@ -364,6 +364,46 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
                       (String.concat ", " missing) label)
              (msg fd.name (String.concat ", " missing))
              :: !errors)
+    | DAgent a ->
+      (* A2-4: a declarative `agent X = Agent { … } requires [caps]` block must
+         bound the authority of its tools — each tool's declared capabilities must
+         be covered by the agent's own `requires`. The SAME `Agent { … }` built
+         inside a function body IS charged (via collect_needed_capabilities on the
+         enclosing fn); the declarative block is not a DFunc, so it was never
+         checked, letting an agent declaring [aiProvider] host a tool requiring
+         [dbWrite]. Tool names come from the `tools: [asTool fn, …]` field. *)
+      let tool_names =
+        let from_fields fields =
+          match List.assoc_opt "tools" fields with
+          | Some (EList { elems; _ }) ->
+            List.filter_map (function
+              | EApp { fn = EVar { name = "asTool"; _ }; arg = EVar { name; _ }; _ } -> Some name
+              | _ -> None) elems
+          | _ -> []
+        in
+        match a.config_expr with
+        | Some (ERecord { fields; _ }) -> from_fields fields
+        | Some (EApp { fn = EConstructor { name = "Agent"; _ };
+                       arg = ERecord { fields; _ }; _ }) -> from_fields fields
+        | _ -> a.tools
+      in
+      List.iter (fun tn ->
+        match List.assoc_opt tn func_caps with
+        | Some tcaps ->
+          let missing = List.filter (fun c -> not (cap_covered a.capabilities c)) tcaps in
+          if missing <> [] then
+            errors := make_error a.loc
+              ~hint:(Printf.sprintf
+                       "add [%s] to `agent %s`'s `requires` (or a capability that implies %s)"
+                       (String.concat ", " missing) a.name (String.concat ", " missing))
+              (Printf.sprintf
+                 "agent '%s': tool '%s' requires [%s] but the agent does not declare %s — \
+                  the agent's `requires` must bound the authority of its tools"
+                 a.name tn (String.concat ", " missing)
+                 (if List.length missing = 1 then "it" else "them"))
+            :: !errors
+        | None -> ()  (* an undeclared tool fn is already reported by the checker *)
+      ) tool_names
     | _ -> ()
   ) decls;
   (* ── CAP-COMPOSE (review 2026-07) ──────────────────────────────────────────

@@ -154,7 +154,7 @@ fn lookupOrderStatus(orderId: String) -> String
 # Mistral uses a SERVER-SIDE key from the environment — a declarative `agent` block
 # bakes the provider, key, and tools once. (The block requires `apiKey` because the
 # provider is a cloud provider; the compiler enforces that.)
-agent MistralAgent requires [convAi] = Agent {
+agent MistralAgent requires [convAi, convRead] = Agent {
   provider: mistral (requireEnv "MISTRAL_API_KEY") "mistral-large-latest"
   systemPrompt: "You are a concise support assistant. Use lookupOrderStatus for order questions."
   tools: [asTool lookupOrderStatus]

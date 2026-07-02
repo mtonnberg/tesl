@@ -459,6 +459,47 @@ fn gen4() -> String requires [uuid] = UUID.v4()
 fn gen7() -> String requires [uuid] = UUID.v7()
 |}
 
+(* ── A2-4: a declarative `agent X = Agent {…}` block must bound its tools'
+   authority — a tool requiring a capability the agent doesn't declare is rejected
+   (the same Agent{} built in a fn body was charged; the block was not). *)
+let test_R75_A24_agent_tool_cap_uncovered_rejected () =
+  should_fail "does not declare\\|must bound the authority" {|
+#lang tesl
+module A24Bad exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Env exposing [requireEnv]
+import Tesl.Agent exposing [aiProvider, anthropic, Agent, asTool]
+import Tesl.Random exposing [random]
+import Tesl.Id exposing [generatePrefixedId]
+capability botAi implies aiProvider
+agent Bot requires [botAi] = Agent {
+  provider: anthropic (requireEnv "KEY") "claude-opus-4-8"
+  systemPrompt: "sys"
+  tools: [asTool genTool]
+  maxTokens: 64
+}
+fn genTool(x: String) -> String requires [random] = generatePrefixedId x
+|}
+
+let test_R75_A24_agent_tool_cap_covered_accepted () =
+  should_pass {|
+#lang tesl
+module A24Ok exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Env exposing [requireEnv]
+import Tesl.Agent exposing [aiProvider, anthropic, Agent, asTool]
+import Tesl.Random exposing [random]
+import Tesl.Id exposing [generatePrefixedId]
+capability botAi implies aiProvider
+agent Bot requires [botAi, random] = Agent {
+  provider: anthropic (requireEnv "KEY") "claude-opus-4-8"
+  systemPrompt: "sys"
+  tools: [asTool genTool]
+  maxTokens: 64
+}
+fn genTool(x: String) -> String requires [random] = generatePrefixedId x
+|}
+
 let () =
   run "Review75-ReviewFixes" [
     "eq-nominal-fields", [
@@ -505,5 +546,9 @@ let () =
     "cap-uuid", [
       test_case "R75_CAPUUID missing requires [uuid] rejected" `Quick test_R75_CAPUUID_missing_requires_rejected;
       test_case "R75_CAPUUID declared uuid accepted" `Quick test_R75_CAPUUID_declared_accepted;
+    ];
+    "a2-4-agent-tool-caps", [
+      test_case "R75_A24 agent tool cap uncovered rejected" `Quick test_R75_A24_agent_tool_cap_uncovered_rejected;
+      test_case "R75_A24 agent tool cap covered accepted" `Quick test_R75_A24_agent_tool_cap_covered_accepted;
     ];
   ]
