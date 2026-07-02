@@ -375,6 +375,79 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
              :: !errors)
     | _ -> ()
   ) decls;
+  (* ── CAP-COMPOSE (review 2026-07) ──────────────────────────────────────────
+     The App root (`main`) grants expand(main.requires) app-wide; every wired
+     handler/worker runs inside `with capabilities main_caps`.  A handler/worker
+     requiring a capability `main` does NOT grant compiles clean but 500s at
+     runtime ("Missing capabilities").  Verify at compile time that main's grant
+     covers every handler/worker/queue reachable from the App main returns.
+     Reachability is taken from the App record's `api:` server (endpoint→handler
+     bindings) and its `queues:` list (workers + folded requires), so an unused
+     declaration is never flagged — matching the runtime, which only runs wired
+     units.  The check compares expand(unit) ⊆ expand(main), exactly the runtime
+     condition, so there are no false positives against the capability lattice. *)
+  (match List.find_opt (function DFunc fd -> fd.kind = MainKind | _ -> false) decls with
+   | Some (DFunc main_fd) ->
+     let main_grant = expand_declared main_fd.capabilities in
+     let is_granted c = List.mem c main_grant in
+     let fn_info = List.filter_map (function
+       | DFunc fd -> Some (fd.name, (fd.capabilities, fd.loc)) | _ -> None) decls in
+     let servers = List.filter_map (function
+       | DServer s -> Some (s.name, List.map snd s.bindings) | _ -> None) decls in
+     let workers_by_queue = List.filter_map (function
+       | DWorkers w -> Some (w.queue_name, List.map snd w.bindings) | _ -> None) decls in
+     let queue_caps = List.filter_map (function
+       | DQueue q -> Some (q.name, (q.capabilities, q.loc)) | _ -> None) decls in
+     let rec collect_apps (e : expr) : expr list =
+       let here = match e with
+         | ERecord { fields; _ } when List.mem_assoc "api" fields -> [e] | _ -> [] in
+       here @ Ast_visitor.fold_children (fun acc c -> acc @ collect_apps c) [] e in
+     let apps = collect_apps main_fd.body in
+     (* A server/queue/db reference is a NAME: capitalized identifiers parse as a
+        nullary EConstructor, lowercase ones as EVar — accept both. *)
+     let name_of = function
+       | EVar { name; _ } -> Some name
+       | EConstructor { name; args = []; _ } -> Some name
+       | _ -> None in
+     let referenced field = List.concat_map (fun app -> match app with
+       | ERecord { fields; _ } ->
+         (match List.assoc_opt field fields with
+          | Some (EList { elems; _ }) -> List.filter_map name_of elems
+          | Some e -> (match name_of e with Some n -> [n] | None -> [])
+          | None -> [])
+       | _ -> []) apps in
+     let api_servers = referenced "api" in
+     let app_queues = referenced "queues" in
+     let handler_fns =
+       List.concat_map (fun sn -> match List.assoc_opt sn servers with
+         | Some hs -> hs | None -> []) api_servers |> List.sort_uniq String.compare in
+     let worker_fns =
+       List.concat_map (fun qn -> match List.assoc_opt qn workers_by_queue with
+         | Some ws -> ws | None -> []) app_queues |> List.sort_uniq String.compare in
+     let report kind name requires loc =
+       let missing =
+         List.filter (fun c -> not (is_granted c)) (expand_declared requires)
+         |> List.sort_uniq String.compare in
+       if missing <> [] then
+         errors := make_error loc
+           ~hint:(Printf.sprintf
+             "add [%s] to `main`'s `requires` (or to a capability `main` grants), or remove it from %s `%s`"
+             (String.concat ", " missing) kind name)
+           (Printf.sprintf
+             "%s `%s` requires [%s], but the App root (`main`) does not grant %s; \
+              every wired %s runs under main's granted capabilities, so this fails at \
+              runtime with \"Missing capabilities\""
+             kind name (String.concat ", " missing)
+             (if List.length missing = 1 then "it" else "them") kind)
+           :: !errors
+     in
+     List.iter (fun h -> match List.assoc_opt h fn_info with
+       | Some (reqs, loc) -> report "handler" h reqs loc | None -> ()) handler_fns;
+     List.iter (fun w -> match List.assoc_opt w fn_info with
+       | Some (reqs, loc) -> report "worker" w reqs loc | None -> ()) worker_fns;
+     List.iter (fun qn -> match List.assoc_opt qn queue_caps with
+       | Some (caps, loc) -> report "queue" qn caps loc | None -> ()) app_queues
+   | _ -> ());
   List.rev !errors
 
 (** Extract BOTH sides of a `(Col == rhs)` proof argument string.
@@ -1096,7 +1169,9 @@ let check_insert_pk_match (decls : top_decl list) : validation_error list =
           List.iter (fun (fname, fval) ->
             if fname = "id" then begin
               match fval with
-              | EVar { name; _ } when name <> pk_var && name <> witness ->
+              (* OK: the id field IS the existential witness / declared pk var. *)
+              | EVar { name; _ } when name = pk_var || name = witness -> ()
+              | EVar { name; _ } ->
                 errors := make_error loc
                   ~hint:(Printf.sprintf
                     "the `id` field must be `%s` (the existential witness) to satisfy `FromDb (Id == %s)` in the return spec"
@@ -1116,7 +1191,22 @@ let check_insert_pk_match (decls : top_decl list) : validation_error list =
                      the `id` must be the existential witness `%s`, not a string or integer literal"
                     witness witness)
                 :: !errors
-              | _ -> ()
+              (* review 2026-07 (EE-1): a computed/wrapped id expression
+                 (arithmetic, constructor, call) was previously let through by a
+                 `| _ -> ()` leaf, forging the FromDb provenance.  The id must be
+                 EXACTLY the witness, so anything the compiler cannot equate to it
+                 fails closed. *)
+              | _ ->
+                errors := make_error loc
+                  ~hint:(Printf.sprintf
+                    "use `id: %s` (the existential witness) directly to satisfy `FromDb (Id == %s)` in the return spec"
+                    witness witness)
+                  (Printf.sprintf
+                    "insert sets `id` to a computed expression, but the return spec \
+                     declares `Id == %s`; the `id` must be exactly the existential witness `%s`, \
+                     not a value the compiler cannot equate to it"
+                    witness witness)
+                :: !errors
             end
           ) fields
         | _ -> ()
@@ -1165,6 +1255,73 @@ let check_insert_pk_match (decls : top_decl list) : validation_error list =
              body)
            (packed_witness_and_bodies fd.body)
        | None -> ())
+    | _ -> ()
+  ) decls;
+  List.rev !errors
+
+(** Non-existential named-pack FromDb provenance (review 2026-07 F1/F2).
+    A `-> T ? FromDb (Col == rhs)` return whose body's TAIL is an `insert T {…}`
+    must set the `Col` field to `rhs`; otherwise the inserted row does not carry
+    the declared provenance and the proof is forged.  Legitimate INSERT handlers
+    use the existential form (`exists W => insert { id: W }`, owned by
+    {!check_insert_pk_match}); non-existential named-pack + tail-`insert` with a
+    mismatched provenance field is the forgery.  SELECT bodies are unaffected
+    (the head is not `insert`), and a matching field (`id: rhs`) is accepted. *)
+let check_nonexist_named_pack_insert (decls : top_decl list) : validation_error list =
+  let errors = ref [] in
+  let col_field col =
+    if String.length col = 0 then col
+    else String.make 1 (Char.lowercase_ascii col.[0])
+         ^ String.sub col 1 (String.length col - 1)
+  in
+  let expr_key (e : expr) : string option = match e with
+    | EVar { name; _ } -> Some name
+    | EField { obj = EVar { name; _ }; field; _ } -> Some (name ^ "." ^ field)
+    | _ -> None
+  in
+  let rec tail_exprs (e : expr) : expr list = match e with
+    | ELet { body; _ } | ELetProof { body; _ } -> tail_exprs body
+    | EIf { then_; else_; _ } -> tail_exprs then_ @ tail_exprs else_
+    | ECase { arms; _ } ->
+      List.concat_map (fun (a : case_arm) -> tail_exprs a.body) arms
+    | EWithTransaction { body; _ } | EWithDatabase { body; _ }
+    | EWithCapabilities { body; _ } -> tail_exprs body
+    | e -> [e]
+  in
+  List.iter (function
+    | DFunc fd when (fd.kind = FnKind || fd.kind = HandlerKind) ->
+      (match fd.return_spec with
+       | RetNamedPack { entity_proof = Some ep; _ } ->
+         (match fromdb_col_var ep with
+          | Some (col, rhs) ->
+            let field = col_field col in
+            List.iter (fun leaf ->
+              let (head, args) = collect_call_head_and_args [] leaf in
+              match function_name_of_expr head with
+              | Some "insert" ->
+                List.iter (fun arg -> match arg with
+                  | ERecord { fields; loc; _ } ->
+                    List.iter (fun (fname, fval) ->
+                      if fname = field then
+                        (match expr_key fval with
+                         | Some k when k = rhs -> ()
+                         | _ ->
+                           errors := make_error loc
+                             ~hint:(Printf.sprintf
+                               "set `%s: %s` so the inserted row matches the declared \
+                                provenance `FromDb (%s == %s)`, or generate the key with \
+                                `exists %s => …`" field rhs col rhs rhs)
+                             (Printf.sprintf
+                               "insert sets `%s` to a value that is not `%s`, but the return \
+                                spec declares `FromDb (%s == %s)`; the inserted row does not \
+                                carry that provenance (forged FromDb)" field rhs col rhs)
+                           :: !errors)
+                    ) fields
+                  | _ -> ()) args
+              | _ -> ()
+            ) (tail_exprs fd.body)
+          | None -> ())
+       | _ -> ())
     | _ -> ()
   ) decls;
   List.rev !errors

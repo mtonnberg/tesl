@@ -87,7 +87,7 @@ Use `check` for cross-field validation or complex validation that depends on mul
 
 ```tesl
 check passwordsMatch(password: String, confirm: String) -> unit ::: PasswordsMatch =
-  if password = confirm then
+  if password == confirm then
     ok unit ::: PasswordsMatch
   else
     fail 400 "Passwords do not match"
@@ -97,8 +97,9 @@ check passwordsMatch(password: String, confirm: String) -> unit ::: PasswordsMat
 
 Capabilities in Tesl represent **effects** or **permissions**. They make explicit what a function can do:
 
-- `db` - Can perform database operations
-- `auth` - Can access authentication information
+- `dbRead` - Can read from the database
+- `dbWrite` - Can write to the database
+- `envRead` - Can read the environment
 - `queue` - Can enqueue background jobs
 - `time` - Can access the current time
 - `sse` - Can send Server-Sent Events
@@ -107,11 +108,11 @@ Functions and handlers declare their capabilities in their signature:
 
 ```tesl
 handler getTodo(id: String ::: ValidTodoId id) -> Todo ? FromDb (Id == id)
-  requires [db] =
+  requires [dbRead] =
   selectOne todo from Todo where todo.id == id
 ```
 
-This handler requires the `db` capability to access the database.
+This handler requires the `dbRead` capability to read from the database.
 
 ### What does "Validate Once" mean?
 
@@ -129,7 +130,7 @@ function createUser(email: string) {
 
 In Tesl:
 ```tesl
--- Tesl approach - validate once
+# Tesl approach - validate once
 check isValidEmail(email: String) -> email: String ::: ValidEmail email =
   if String.contains email "@" then
     ok email ::: ValidEmail email
@@ -137,8 +138,8 @@ check isValidEmail(email: String) -> email: String ::: ValidEmail email =
     fail 400 "Invalid email"
 
 handler createUser(req: CreateUserRequest ::: ValidRequest req) -> User ? FromDb (Id == user.id)
-  requires [db] =
-  -- email is guaranteed to be valid here, no need to re-check
+  requires [dbWrite] =
+  # email is guaranteed to be valid here, no need to re-check
   insert User { email: req.email }
 ```
 
@@ -161,33 +162,40 @@ This error occurs when you try to use a value that doesn't have the required pro
 Use `detachFact` and `attachFact` for explicit proof manipulation:
 
 ```tesl
--- Assuming we have: email: String ::: ValidEmail email
+# Assuming we have: email: String ::: ValidEmail email
 let proof = detachFact email in
--- proof is now a separate fact value
+# proof is now a separate fact value
 
 let emailWithProof = attachFact proof email in
--- email now has the proof attached again
+# email now has the proof attached again
 ```
 
 ### What are forall proofs?
 
-Forall proofs allow you to make statements about collections:
+`ForAll` proofs let you make a statement about every element of a collection. It appears
+as a proof form on a list type — `List T ::: ForAll P xs` (or `? ForAll (P)` in a return
+spec) — meaning every element of the list satisfies the predicate `P`:
 
 ```tesl
-forall todo in todos, TodoExists todo.id
+fn doublePositive(xs: List Int ::: ForAll IsPositive xs) -> List Int =
+  ...
 ```
 
-This means "for all todos in the list, the todo with that id exists in the database."
+This means "for every element of `xs`, that element satisfies `IsPositive`." On database
+results the same form threads a per-row proof out of a query, e.g.
+`-> List Todo ? ForAll (FromDb (OwnerId == requestUser.id))`.
 
 ### Can I have multiple proofs on a single value?
 
-Yes! A value can carry multiple proofs:
+Yes! A value can carry multiple proofs, composed with `&&`:
 
 ```tesl
-check validateEmail(email: String) -> email: String ::: ValidEmail email ::: EmailNotDisposable email
+fn transfer(amount: Int ::: InRange amount && Positive amount) -> Unit =
+  ...
 ```
 
-This email has two proofs: it's valid and it's not a disposable email address.
+Here `amount` carries two proofs at once: it's `InRange` and it's `Positive`. Composition
+uses `&&`, not a chain of `:::` annotations.
 
 ---
 
@@ -205,7 +213,7 @@ api TodoApi {
 }
 
 handler getTodo(id: String ::: ValidTodoId id) -> Todo ? FromDb (Id == id)
-  requires [db] =
+  requires [dbRead] =
   let found = selectOne todo from Todo where todo.id == id
   case found of
     Nothing -> fail 404 "Todo not found"
@@ -259,7 +267,7 @@ record NewTodo {
 }
 
 codec NewTodo {
-  toJson_forbidden  -- This type is input-only
+  toJson_forbidden  # This type is input-only
   fromJson [
     {
       title       <- "title"       with_codec stringCodec via isValidTitle
@@ -269,8 +277,8 @@ codec NewTodo {
 }
 
 handler createTodo(req: NewTodo ::: ValidNewTodo) -> Todo ? FromDb (Id == todo.id)
-  requires [db] =
-  -- req is already parsed and validated
+  requires [dbWrite] =
+  # req is already parsed and validated
   insert Todo req
 ```
 
@@ -280,7 +288,7 @@ In handlers, you can access query parameters through the request. For typed quer
 
 ```tesl
 handler listTodos(page: Int ::: Positive page, limit: Int ::: Positive limit) -> Paginated Todo
-  requires [db] =
+  requires [dbRead] =
   let offset = (page - 1) * limit in
   let todos = select todo from Todo limit limit offset offset in
   ok { items: todos, page: page, limit: limit, total: countTodos() }
@@ -297,7 +305,7 @@ handler rawRequest(request: HttpRequest) -> Response
   requires [] =
   let headers = request.headers in
   let queryParams = request.query in
-  -- Access raw request fields
+  # Access raw request fields
   ok response
 ```
 
@@ -345,7 +353,7 @@ Use `transaction` to wrap multiple database operations:
 ```tesl
 handler transferAmount(fromId: String, toId: String, amount: Int ::: Positive amount)
   -> TransferResult
-  requires [db] =
+  requires [dbRead, dbWrite] =
   transaction {
     update account in Account
       where account.id == fromId
@@ -362,11 +370,11 @@ handler transferAmount(fromId: String, toId: String, amount: Int ::: Positive am
 All database operations in Tesl use parameterized queries automatically. The typed SQL syntax prevents SQL injection:
 
 ```tesl
--- ✅ Safe - typed query with compile-time checked field names
+# ✅ Safe - typed query with compile-time checked field names
 let user = selectOne user from User where user.email == email
 
--- ❌ Unsafe - don't use string concatenation in queries
--- let user = selectOne user from User where user.email == ("'" ++ email ++ "'")
+# ❌ Unsafe - don't use string concatenation in queries
+# let user = selectOne user from User where user.email == ("'" ++ email ++ "'")
 ```
 
 ---
@@ -391,7 +399,7 @@ Errors from `check` functions automatically become HTTP error responses. You can
 
 ```tesl
 handler getTodo(id: String ::: ValidTodoId id) -> Todo ? FromDb (Id == id)
-  requires [db] =
+  requires [dbRead] =
   let found = selectOne todo from Todo where todo.id == id
   case found of
     Nothing -> fail 404 "Todo not found"
@@ -457,10 +465,12 @@ tesl test example/todo-api.tesl
 
 ### Is there runtime overhead for proofs?
 
-**No — proofs are zero-cost by default.** In release and `--debug` builds alike, proof annotations
-(`:::`) are erased after type-checking, so by the time your code runs there is no wrapper, struct, or
-allocation. The one exception is a *free-floating* proof (`detachFact` / `attachFact`), which keeps a
-minimal runtime token because it is an explicit first-class value.
+**Almost none — proof *tracking* is erased by default.** In release and `--debug` builds alike, the
+proof-tracking machinery for standard `check`/`fn`/`handler` paths is dropped after type-checking, so
+by the time your code runs there is no proof struct on the standard path. Two things do retain a
+carrier: a proof-annotated *parameter* keeps ≤1 `named-value` allocation so decomposition works, and
+a *free-floating* proof (`detachFact` / `attachFact`) keeps a minimal runtime token because it is an
+explicit first-class value. So it is essentially free, not unconditionally zero-allocation.
 
 See the canonical [proof cost model](best-practices.md#proof-cost-model) for the full per-feature
 table and the debugging story.

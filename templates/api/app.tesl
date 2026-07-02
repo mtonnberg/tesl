@@ -17,7 +17,7 @@ import Tesl.Http exposing [HttpRequest]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Dict exposing [Dict.lookup]
 import Tesl.Time exposing [nowMillis, PosixMillis, time]
-import Tesl.Env exposing [env, envInt]
+import Tesl.Env exposing [env, envInt, envRead]
 import Tesl.String exposing [String.length]
 import Tesl.List exposing [List.isEmpty]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -200,7 +200,7 @@ test "todo id shape" {
   expect String.length "x" <= 5
 }
 
-main() -> App requires [appWebService] =
+main() -> App requires [appWebService, envRead] =
   let _ = initTelemetry service "__APP_NAME__" endpoint "in-memory" console True
   let port = envInt "PORT" defaultPort
   let _ = seedExampleData()

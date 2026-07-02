@@ -16,11 +16,11 @@ on the same framing and compiler-discovery as the Tesl LSP
 |------|------|-------|-------|
 | `tesl.agent_context` | `{file}` | `--agent-context-json` | **PRIMARY** — read after every edit. `{ok, summary, diagnostics, symbols, proof_obligations}` in one compact snapshot. |
 | `tesl.check` | `{file}` | `--check-json` | Coded diagnostics + suggested fixes. |
-| `tesl.type_at` | `{file, line, col}` | `--type-at-json` | line 1-based, col 0-based. |
-| `tesl.signature` | `{file, line, col}` | `--signature-help-json` | |
-| `tesl.completions` | `{file, line, col}` | `--completions-json` | |
-| `tesl.definition` | `{file, line, col}` | `--definition-json` | |
-| `tesl.references` | `{file, line, col}` | `--occurrences-json` | Same-file occurrences. |
+| `tesl.type_at` | `{file, line, col}` | `--type-at-json` | 0-based line, 0-based col. |
+| `tesl.signature` | `{file, line, col}` | `--signature-help-json` | 0-based line, 0-based col. |
+| `tesl.completions` | `{file, line, col}` | `--completions-json` | 0-based line, 0-based col. |
+| `tesl.definition` | `{file, line, col}` | `--definition-json` | 0-based line, 0-based col. |
+| `tesl.references` | `{file, line, col}` | `--occurrences-json` | 0-based line, 0-based col. Same-file occurrences. |
 | `tesl.proof_obligations` | `{file}` | `--agent-context-json` (sliced) | Just the `proof_obligations` array. |
 | `tesl.debug_inspect` | `{file, breakpoints \| break_at, mode?}` | `tesl debug-inspect` | Headless debugger — **you set the breakpoints**, incl. conditional & hit-count. |
 

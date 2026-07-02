@@ -64,6 +64,8 @@ That means, explicitly:
 
 Tesl can now be installed standalone via Nix flake (`nix profile install github:mtonnberg/tesl`) — see [`INSTALL.md`](INSTALL.md). You no longer need to clone this repository to use the language.
 
+**On the mainstream-adoption goal:** the goal above ("a normal programmer… can answer *Tesl*") is a **direction, not a current capability**. Today the on-ramp is **Nix-only**, and the ecosystem enablers that would make Tesl broadly approachable — a package manager, publishable libraries, an online playground, a homepage, and non-Nix/static-binary distribution — are **not yet built** (those roadmap items currently live in `roadmap/discarded/`). So Tesl is a good fit for exploration by people already comfortable with Nix, not yet for the mainstream developer it aims to serve.
+
 ## What Tesl is trying to achieve
 
 Tesl is trying to become a language for building web APIs, quickly and safely - where the important guarantees are structural rather than conventional.

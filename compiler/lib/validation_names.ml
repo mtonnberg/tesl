@@ -264,13 +264,13 @@ let rec check_name_shadowing_expr
       ) params seen
     in
     duplicate_errors @ shadow_errors @ check_name_shadowing_expr seen' body
-  (* EConstructor and EFail are kept explicit as no-ops: the original walk
-     returned `[]` for both WITHOUT descending into their child exprs
-     (constructor args / the `fail` message). `Ast_visitor.fold_children` DOES
-     visit those children, so falling through would newly report shadowing
-     inside e.g. `Some (let x = ... in x)` or `fail (let x = ... in 401)` —
-     a behaviour change. Preserve the exact prior (non-descending) semantics. *)
-  | EConstructor _ | EFail _ -> []
+  (* EConstructor args and the `fail` message MUST be descended into: review
+     2026-07 (SHADOW-1/2/3) showed a proof-carrying binder shadowed inside a bare
+     constructor argument (`Something (case raw of Something n -> needsProof n)`)
+     or a `fail` message escaped V001 entirely, letting the shadow forge the
+     outer proof onto a raw value.  Shadowing is illegal EVERYWHERE (a hard
+     language rule, not position-dependent), so these fall through to the
+     `fold_children` catch-all like every other non-binder form. *)
   (* All remaining variants pass `seen` UNCHANGED into every child expr — only
      the binder-introducing arms above (ELet, ECase, ELetProof, ELambda) extend
      it.  Their hand-rolled recursion is exactly a left-to-right fold over the

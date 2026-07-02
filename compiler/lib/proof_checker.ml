@@ -58,6 +58,27 @@ let normalize_conj (p : proof_expr) : string =
   let sorted = List.sort_uniq (fun a b -> String.compare (pp_proof a) (pp_proof b)) atoms in
   String.concat " && " (List.map pp_proof sorted)
 
+(** Order-insensitive canonical form for a pre-RENDERED proof-conjunction
+    STRING.  Used where only the rendered inner text is available (the ForAll
+    return check compares `pp_proof`-rendered strings, not [proof_expr]s).
+    Splits on top-level `&&`, trims + strips parens per atom, sorts.  Fixes
+    SC-01 (review 2026-07): `ForAll (B && A)` now matches declared
+    `ForAll (A && B)`, matching the order-insensitivity the plain-conjunction
+    path already has via {!normalize_conj}. *)
+let normalize_conj_str (s : string) : string =
+  let atoms =
+    let parts = ref [] and buf = Buffer.create 16 in
+    let n = String.length s and i = ref 0 in
+    while !i < n do
+      if !i + 1 < n && s.[!i] = '&' && s.[!i + 1] = '&' then begin
+        parts := Buffer.contents buf :: !parts; Buffer.clear buf; i := !i + 2
+      end else begin Buffer.add_char buf s.[!i]; incr i end
+    done;
+    parts := Buffer.contents buf :: !parts;
+    List.rev_map (fun a -> String.trim a) !parts
+  in
+  atoms |> List.sort String.compare |> String.concat " && "
+
 (* ── Capability implication expansion ───────────────────────────────────── *)
 
 (** Build a transitive capability implication map from capability declarations. *)
@@ -671,7 +692,7 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
            (match proof with
             | PredApp { pred = "ForAll"; args = [inner_arg]; _ } ->
               let actual = strip_outer_parens inner_arg in
-              if actual <> expected_str then
+              if normalize_conj_str actual <> normalize_conj_str expected_str then
                 errors := { loc; message = Printf.sprintf
                   "ok proof `ForAll (%s)` does not match declared return `ForAll (%s)`"
                   actual expected_str } :: !errors
@@ -681,7 +702,7 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
                 | None -> ()
                 | Some val_name ->
                   (match List.assoc_opt val_name binding_env with
-                   | Some tracked when tracked <> actual ->
+                   | Some tracked when normalize_conj_str tracked <> normalize_conj_str actual ->
                      errors := { loc; message = Printf.sprintf
                        "value `%s` has established proof `ForAll (%s)` but `ok` claims \
                          `ForAll (%s)`; ensure all conjuncts are established by the \
@@ -698,7 +719,7 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
            (match proof with
             | PredApp { pred = "ForAllValues"; args = [inner_arg]; _ } ->
               let actual = strip_outer_parens inner_arg in
-              if actual <> expected_str then
+              if normalize_conj_str actual <> normalize_conj_str expected_str then
                 errors := { loc; message = Printf.sprintf
                   "ok proof `ForAllValues (%s)` does not match declared return `ForAllValues (%s)`"
                   actual expected_str } :: !errors
@@ -711,7 +732,7 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
            (match proof with
             | PredApp { pred = "ForAllKeys"; args = [inner_arg]; _ } ->
               let actual = strip_outer_parens inner_arg in
-              if actual <> expected_str then
+              if normalize_conj_str actual <> normalize_conj_str expected_str then
                 errors := { loc; message = Printf.sprintf
                   "ok proof `ForAllKeys (%s)` does not match declared return `ForAllKeys (%s)`"
                   actual expected_str } :: !errors
@@ -775,7 +796,26 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
          | Some p -> proof_var_env := (proof_name, p) :: !proof_var_env
          | None -> ()));
         validate_ok_expr body
-      | _ -> ()
+      (* Effect-wrapper blocks are TAIL positions: `transaction { ok .. }` /
+         `with database { ok .. }` / `with capabilities { ok .. }` evaluate to
+         their body, so the `ok` return proof lives inside them and MUST be
+         validated.  Review 2026-07 (PF-3..6/AUTH-1/PFC-1): a `| _ -> ()` leaf
+         here let a wrapper-nested `ok` mint an arbitrary/authorization fact
+         unchecked at the trust boundary. *)
+      | EWithDatabase { body; _ }
+      | EWithCapabilities { body; _ }
+      | EWithTransaction { body; _ } -> validate_ok_expr body
+      (* All remaining forms are leaves or non-tail-return positions where a
+         check/auth `ok` return cannot legitimately appear.  Enumerated
+         EXPLICITLY (no `| _ -> ()`) so a NEW expr variant forces a decision
+         here rather than silently falling through — this walker gates proof
+         minting and must fail closed. *)
+      | ELit _ | EVar _ | EField _ | EApp _ | EBinop _ | EUnop _
+      | ERecord _ | EList _ | EFail _ | ETelemetry _ | EEnqueue _
+      | EPublish _ | EStartWorkers _ | ECacheGet _ | ECacheSet _
+      | ECacheDelete _ | ECacheInvalidate _ | ESendEmail _
+      | EStartEmailWorker _ | EServe _ | EConstructor _ | ELambda _
+      | ERuntimeCall _ -> ()
     in
     validate_ok_expr fd.body;
     List.rev !errors
@@ -1423,6 +1463,14 @@ name the proof-carrying value (a different parameter or local), not the Fact par
                | ELet { value; body; _ } | ELetProof { value; body; _ } ->
                  collect_fact_ctors value @ collect_fact_ctors body
                | ELambda { body; _ } -> collect_fact_ctors body
+               (* Effect-wrapper blocks are tail positions holding the returned
+                  fact; descend so a wrapper-nested wrong fact constructor cannot
+                  escape (review 2026-07 PF-5).  Kept as explicit cases (not a
+                  blanket fold_children) so we do NOT newly descend into operand
+                  positions like `&&`, where the declared-pred check does not yet
+                  model conjunction return types. *)
+               | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+               | EWithTransaction { body; _ } -> collect_fact_ctors body
                | _ -> []
              in
              let wrong_ctors = List.sort_uniq String.compare (collect_fact_ctors fd.body) in
@@ -1511,6 +1559,8 @@ fact constructor `%s`; the body must return the declared fact constructor"
                   | ELet { value; body; _ } | ELetProof { value; body; _ } ->
                     walk_args value; walk_args body
                   | ELambda { body; _ } -> walk_args body
+                  | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+                  | EWithTransaction { body; _ } -> walk_args body
                   | _ -> ()
                 in
                 walk_args fd.body;

@@ -1064,6 +1064,67 @@ let check_capture_proof_via
     | _ -> None
   ) decls
 
+(* Auth analogue of {!check_capture_proof_via}.  Review 2026-07 (AUTH-VIA): an
+   endpoint's `auth <b> ::: P via <fn>` clause was NEVER validated at the
+   frontend for (a) existence of <fn>, (b) its kind, or (c) whether it produces
+   the declared predicate — whereas captures had all three.  So a typo'd /
+   wrong-kind / wrong-predicate auth `via` passed --check and failed only at
+   Racket load or first request, violating the validate-once promise on the
+   auth boundary specifically.  This mirrors the capture check exactly. *)
+let check_auth_proof_via
+    ?facts
+    ?(extra_funcs : (string * func_info) list = [])
+    (decls : top_decl list)
+    : validation_error list =
+  let funcs = (facts_or_compute ?facts ~extra_funcs decls).mf_funcs in
+  let kind_label = function
+    | FnKind -> "fn" | HandlerKind -> "handler" | WorkerKind -> "worker"
+    | DeadWorkerKind -> "dead-worker" | EstablishKind -> "establish"
+    | MainKind -> "main" | CheckKind -> "check" | AuthKind -> "auth" in
+  List.concat_map (function
+    | DApi api ->
+      List.filter_map (fun (ep : api_endpoint) ->
+        match ep.auth with
+        | None -> None
+        | Some a ->
+          (match a.binding.proof_ann with
+           | None -> None
+           | Some proof ->
+             let required_preds =
+               List.sort_uniq String.compare (proof_predicates proof) in
+             let via_fn = a.via_fn in
+             (match List.assoc_opt via_fn funcs with
+              | None ->
+                Some (make_error a.binding.loc
+                  ~hint:"auth `via` must reference a declared `auth` (or `check`) function"
+                  (Printf.sprintf
+                     "endpoint `%s`: auth `via %s` is not a declared function; \
+                      the auth clause is never validated and fails only at runtime"
+                     ep.name via_fn))
+              | Some info when info.fi_kind <> CheckKind && info.fi_kind <> AuthKind ->
+                Some (make_error a.binding.loc
+                  ~hint:"only `check`/`auth` functions may appear after auth `via`"
+                  (Printf.sprintf "endpoint `%s`: auth `via %s` is a %s, not a check/auth function"
+                     ep.name via_fn (kind_label info.fi_kind)))
+              | Some info ->
+                let covered = pred_names_of_return_spec info.fi_return in
+                let uncovered =
+                  List.filter (fun p -> not (List.mem p covered)) required_preds in
+                if uncovered = [] then None
+                else
+                  Some (make_error a.binding.loc
+                    ~hint:(Printf.sprintf
+                      "`via %s` establishes %s; use an auth function that produces %s"
+                      via_fn
+                      (if covered = [] then "no proof" else String.concat ", " covered)
+                      (String.concat ", " uncovered))
+                    (Printf.sprintf
+                       "endpoint `%s` declares auth proof %s that is not established by `via %s`"
+                       ep.name (String.concat ", " uncovered) via_fn))))
+      ) api.endpoints
+    | _ -> []
+  ) decls
+
 let check_server_handler_binding
     (handlers : (string * handler_decl_ref) list)
     (auth_preds : string list)

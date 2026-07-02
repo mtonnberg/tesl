@@ -46,6 +46,7 @@ let usage = {|Usage:
   tesl --semantic-json <file>  emit full module semantic snapshot as JSON (IR-1 foundation)
   tesl agent-context <file>    emit a compact AI-agent snapshot (diagnostics+symbols+obligations) as JSON
   tesl --agent-context-json <file>  alias for `tesl agent-context`
+  tesl debug-inspect <file> --break-at SPEC [...]  run to a breakpoint (headless) and dump paused runtime state as JSON
   tesl --mutate <file> [test-file ...]  run mutation testing; optionally merge tests from extra files
   tesl --exe <file> [--out <path>]  build a standalone executable via `raco exe` (needs raco on PATH)
 
@@ -888,7 +889,10 @@ let () =
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
        let lpath = logical_path filename in
-       let json = Compile.agent_context_source lpath source in
+       (* Include linter findings so agent-context reports the SAME diagnostic
+          set as --check-json (review 2026-07 TOOL-AGENTCTX). *)
+       let lint_diags = Linter.lint_file filename in
+       let json = Compile.agent_context_source ~extra_diags:lint_diags lpath source in
        print_string json;
        print_newline ();
        let diags = Compile.check_source lpath source in
@@ -1423,10 +1427,19 @@ let () =
           the denominator, so a compile-error mutant can never inflate the
           score. *)
        let scored = killed + survived in
-       let score = if scored = 0 then 100.0
-                   else float_of_int killed /. float_of_int scored *. 100.0 in
-       Printf.printf "\n%sMutation score%s: %.0f%%" (col "1") (col "0") score;
-       Printf.printf " %s(%d killed / %d scored)%s\n" (col "2") killed scored (col "0");
+       (* Review 2026-07 (VER-MUT): a file with ZERO scorable mutants (all
+          Invalid/Error/NoTests) proves nothing about test strength — reporting
+          "100%" for it read as "perfectly tested" when coverage was actually
+          nil.  Report "n/a" for the no-coverage case instead of a misleading
+          perfect score.  (Exit is unchanged: survived = 0 here.) *)
+       if scored = 0 then
+         Printf.printf "\n%sMutation score%s: n/a %s(0 scorable mutants — no effective coverage)%s\n"
+           (col "1") (col "0") (col "2") (col "0")
+       else begin
+         let score = float_of_int killed /. float_of_int scored *. 100.0 in
+         Printf.printf "\n%sMutation score%s: %.0f%%" (col "1") (col "0") score;
+         Printf.printf " %s(%d killed / %d scored)%s\n" (col "2") killed scored (col "0")
+       end;
        if survived > 0 then exit 1)
 
   | _ -> print_string usage; exit 1

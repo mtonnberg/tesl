@@ -45,8 +45,8 @@ The compiler tracks the proof (`:::` annotation) and ensures the value remains v
 ```tesl
 handler getTodo(requestUser: User ::: Authenticated requestUser, todoId: String ::: ValidTodoId todoId)
   -> Todo ? FromDb (Id == todoId)
-  requires [auth, db] =
-  -- Auth requirement is visible in the signature
+  requires [dbRead] =
+  # Auth is visible in the signature: requestUser carries the Authenticated proof
 ```
 
 **❌ Don't:** Hide auth checks in middleware or handler bodies without type-level visibility.
@@ -159,7 +159,7 @@ check validateRegistration(req: RegistrationRequest) -> valid: RegistrationReque
   ok req ::: ValidRegistration req
 
 check passwordsMatch(password: String, confirm: String) -> unit ::: PasswordsMatch =
-  if password = confirm then
+  if password == confirm then
     ok unit ::: PasswordsMatch
   else
     fail 400 "Passwords do not match"
@@ -174,8 +174,8 @@ check passwordsMatch(password: String, confirm: String) -> unit ::: PasswordsMat
 **✅ Do:** Attach proofs at the validation boundary:
 ```tesl
 handler createTodo(req: NewTodo ::: ValidNewTodo) -> Todo ? FromDb (Id == todo.id)
-  requires [db] =
-  -- req carries the ValidNewTodo proof automatically
+  requires [dbWrite] =
+  # req carries the ValidNewTodo proof automatically
   insert Todo req
 ```
 
@@ -185,8 +185,8 @@ When you need to pass proofs explicitly:
 ```tesl
 fn processTodo(todo: Todo ::: TodoExists todo.id) -> Result =
   let proof = detachFact todo
-  -- proof is now a separate fact value
-  -- todo is the raw value without the proof
+  # proof is now a separate fact value
+  # todo is the raw value without the proof
   ...
 ```
 
@@ -195,7 +195,7 @@ fn processTodo(todo: Todo ::: TodoExists todo.id) -> Result =
 **✅ Do:** Use forall proofs for collections:
 ```tesl
 handler getAllTodos() -> List Todo ? ForAll (FromDb (Id == todo.id))
-  requires [db] =
+  requires [dbRead] =
   select todo from Todo
 ```
 
@@ -203,18 +203,26 @@ handler getAllTodos() -> List Todo ? ForAll (FromDb (Id == todo.id))
 
 ## Proof Cost Model
 
-**Proofs are zero-cost by default.** In a normal (release) build, every proof annotation
-(`:::`) is **erased after type-checking** — there is no wrapper, no struct, and no allocation.
-The proof exists only in the compiler's static checker; by the time your code runs, it is gone.
+**Proof *tracking* is erased on the standard path.** For standard `check`/`fn`/`handler` paths
+the compiler drops the proof-tracking machinery (struct wrapping, runtime argument validation, the
+proof-environment scope) during macro expansion, so a build allocates **nothing for proof tracking**
+in release and `--debug` alike (LANGUAGE-SPEC.md §4.3). Proof verification is a purely compile-time
+guarantee.
 
 This means you should reach for proofs **freely**. Adding a `:::` annotation, composing predicates
-with `&&`, or constraining a list with `ForAll` costs nothing at runtime. Design your types around
-the guarantees you want, not around an imagined allocation budget.
+with `&&`, or constraining a list with `ForAll` costs essentially nothing at runtime. Design your
+types around the guarantees you want, not around an imagined allocation budget.
 
-"Zero-cost" here means **proof tracking is erased** (no proof structs on the standard path) — it
-does *not* mean a call has no runtime overhead at all. Each `fn`/`handler` call still pays a small
-always-on capability-grant + return-shape-validation cost (see the per-feature table below); those
-checks guard runtime-only facts and are never erased.
+The one caveat: erasure applies to *tracking*, not to every carrier. A **proof-annotated parameter
+keeps ≤1 `named-value` allocation** at runtime so proof decomposition (`let (bare ::: p) = x`) still
+works — this is not a bare "zero." Free-floating proofs (`detachFact` / `attachFact`), existential
+packages, newtype nominal wrappers, and `FromDb` proofs likewise retain their representation (§4.3).
+So: proof tracking is erased on the standard path, but a proof-annotated parameter keeps at most one
+allocation — don't claim proofs are unconditionally zero-allocation.
+
+Separately, "erased tracking" does *not* mean a call has zero runtime overhead: each `fn`/`handler`
+call still pays a small always-on capability-grant + return-shape-validation cost (see the
+per-feature table below); those checks guard runtime-only facts and are never erased.
 
 ### Debugging proofs
 
@@ -233,7 +241,7 @@ tesl run --debug my-api.tesl                    # breakpoints + raw-value inspec
 
 | Feature | Runtime cost |
 |---|---|
-| Proof annotations (`:::`) | **Zero.** Checked once at the boundary, then erased — in release and `--debug` alike. The debugger reads proof/type from compile-time info. |
+| Proof annotations (`:::`) | **Tracking erased** on the standard path (no proof structs), in release and `--debug` alike — checked once at the boundary. A *proof-annotated parameter* keeps **≤1 `named-value` allocation** so decomposition works; it is not unconditionally zero-allocation (§4.3). The debugger reads proof/type from compile-time info. |
 | `check` functions | The check body runs **once**, at the validation boundary. It never re-runs downstream. |
 | Capabilities (`requires [...]`) | **Near-zero.** The lattice is verified at compile time; at run time each call runs inside an ambient capability-grant scope with a small membership check against the granted set (not fully erased like proofs). |
 | `ForAll` on lists | **Zero.** The list is a plain list at runtime; the annotation is erased — no per-element boxing. |
@@ -365,12 +373,12 @@ let user = selectOne user from User where user.email == email
 ```tesl
 handler transferAmount(fromId: String, toId: String, amount: Int ::: Positive amount)
   -> TransferResult
-  requires [db] =
+  requires [dbRead, dbWrite] =
   transaction {
     let fromBalance = selectOne account from Account where account.id == fromId
     let toBalance = selectOne account from Account where account.id == toId
 
-    if fromBalance = Nothing || toBalance = Nothing then
+    if fromBalance == Nothing || toBalance == Nothing then
       fail 404 "Account not found"
     else if fromBalance.value.balance < amount then
       fail 400 "Insufficient funds"
@@ -419,28 +427,32 @@ Test individual functions in isolation. Use for pure functions and business logi
 
 **✅ Do:**
 ```tesl
--- Test a pure function
-test "isValidEmail rejects empty strings" = 
+# Test a pure function
+test "isValidEmail rejects empty strings" {
   let result = isValidEmail("")
   expect result.isError == true
+}
 
-test "isValidEmail accepts valid emails" = 
+test "isValidEmail accepts valid emails" {
   let result = isValidEmail("test@example.com")
   expect result.isOk == true
   case result of
     Ok email -> expect email == "test@example.com"
     Err _ -> fail "Expected Ok"
+}
 
--- Test with specific values
-test "addPositive adds correctly" = 
+# Test with specific values
+test "addPositive adds correctly" {
   let result = addPositive(5, 3)
   case result of
     Ok sum -> expect sum == 8
     Err _ -> fail "Expected Ok"
+}
 
-test "addPositive rejects negative numbers" = 
+test "addPositive rejects negative numbers" {
   let result = addPositive(-1, 5)
   expect result.isError == true
+}
 ```
 
 **Key patterns:**
@@ -455,30 +467,27 @@ Verify that properties hold across many randomly generated inputs. Ideal for val
 
 **✅ Do:**
 ```tesl
-property-test "valid emails are never empty" 100 times = 
-  let email = generateValidEmail()
-  expect String.length email > 0
+test "email length" with 100 runs {
+  property "valid emails are never empty" (email: String) { String.length email >= 0 }
+}
 
-property-test "addPositive is commutative" 50 times = 
-  let a = generatePositiveInt()
-  let b = generatePositiveInt()
-  let sum1 = addPositive(a, b)
-  let sum2 = addPositive(b, a)
-  expect sum1 == sum2
+test "addPositive is commutative" with 50 runs {
+  property "commutative" (a: Int, b: Int) { addPositive a b == addPositive b a }
+}
 
-property-test "validated strings are never null" 100 times = 
-  let input = generateNonNullString()
-  let result = check isValidNonNullString(input)
-  case result of
-    Ok s -> expect s != null
-    Err _ -> fail "Should always validate"
+test "clamp stays in range" with 100 runs {
+  property "result is in range" (lo: Int, hi: Int where lo <= hi, n: Int) {
+    clamp lo hi n >= lo && clamp lo hi n <= hi
+  }
+}
 ```
 
 **Key patterns:**
-- Use `property-test` with a number of iterations (e.g., 100)
-- Use generators to create random inputs: `generateInt`, `generateString`, `generatePositiveInt`, etc.
+- Property tests live inside a `test "..." with N runs { ... }` block, one or more
+  `property "name" (params) { expr }` clauses per block
+- Declare the random inputs as the property's parameters (`(x: Int, y: Int)`); add a
+  `where` clause to filter (`(n: Int where n > 0)`) or `via genFn` for a custom generator
 - Test invariants and properties, not specific values
-- Combine with fuzzing to find edge cases
 
 ### 3. API Tests
 
@@ -817,21 +826,24 @@ Validation functions (`check`, `establish`, `auth`) are critical and should be t
 
 **✅ Do:**
 ```tesl
--- Test valid inputs
-test "isValidEmail accepts valid emails" = 
+# Test valid inputs
+test "isValidEmail accepts valid emails" {
   expect (isValidEmail("test@example.com")).isOk == true
   expect (isValidEmail("user@domain.co.uk")).isOk == true
+}
 
--- Test invalid inputs
-test "isValidEmail rejects invalid emails" = 
+# Test invalid inputs
+test "isValidEmail rejects invalid emails" {
   expect (isValidEmail("")).isError == true
   expect (isValidEmail("not-an-email")).isError == true
   expect (isValidEmail("@example.com")).isError == true
+}
 
--- Test edge cases
-test "isValidEmail handles long emails" = 
+# Test edge cases
+test "isValidEmail handles long emails" {
   let longEmail = "a" ++ String.replicate 250 "x" ++ "@example.com"
-  expect (isValidEmail(longEmail)).isError == true  -- or true, depending on spec
+  expect (isValidEmail(longEmail)).isError == true  # or true, depending on spec
+}
 ```
 
 #### 6. Testing Error Cases
@@ -857,9 +869,9 @@ api-test "POST /todos returns 400 for invalid title" for TodoServer {
 Create helper functions to build test data:
 
 ```tesl
--- In a test helper module
+# In a test helper module
 fn createTestUser(?email: String, ?name: String) -> User ::: FromDb (Id == user.id)
-  requires [db, time] =
+  requires [dbWrite, time] =
   let user = {
     id: generatePrefixedId("test-user"),
     email: email | default "test@example.com",
@@ -869,7 +881,7 @@ fn createTestUser(?email: String, ?name: String) -> User ::: FromDb (Id == user.
   insert User user
 
 fn createTestTodo(?title: String, ?userId: String) -> Todo ::: FromDb (Id == todo.id)
-  requires [db, time] =
+  requires [dbWrite, time] =
   let todo = {
     id: generatePrefixedId("test-todo"),
     title: title | default "Test todo",
@@ -990,10 +1002,11 @@ When tests fail, use these techniques:
 2. **Check the test output** - Use `TESL_VERBOSE=1` for verbose output
 3. **Add temporary output** - Use `println` for debugging:
    ```tesl
-   test "debug test" = 
+   test "debug test" {
      let x = computeSomething()
-     println "x is: " x  -- Debug output
+     println "x is: " x  # Debug output
      expect x > 0
+   }
    ```
 4. **Run a single test** - Isolate the failing test
 5. **Check the database** - Manually inspect the test database state
@@ -1019,29 +1032,31 @@ Tesl doesn't have built-in coverage reporting, but you can:
 
 **❌ Don't:**
 ```tesl
--- Testing implementation details
-test "handler uses selectOne" = 
-  -- This tests HOW the handler works, not WHAT it does
-  -- Better: test the behavior, not the implementation
+# Testing implementation details
+test "handler uses selectOne" {
+  # This tests HOW the handler works, not WHAT it does
+  # Better: test the behavior, not the implementation
+}
 
--- Testing too much in one test
-test "complex scenario with many assertions" = 
+# Testing too much in one test
+test "complex scenario with many assertions" {
   let result = doComplexOperation()
   expect result.a == 1
   expect result.b == 2
   expect result.c == 3
   expect result.d == 4
-  -- Better: split into multiple focused tests
+  # Better: split into multiple focused tests
+}
 
--- Slow tests in the wrong place
-test "sleep test" = 
+# Slow tests in the wrong place
+test "sleep test" {
   Thread.sleep 10000
-  -- Better: use load tests for timing tests
+  # Better: use load tests for timing tests
+}
 
--- Tests that depend on each other
-test "first" = ...  -- creates data
-test "second" = ...  -- depends on data from first
-  -- Better: each test should be independent
+# Tests that depend on each other
+test "first" { ... }   # creates data
+test "second" { ... }  # depends on data from first — better: each test independent
 ```
 
 **✅ Do instead:**
@@ -1056,11 +1071,13 @@ test "second" = ...  -- depends on data from first
 
 ### Minimize Allocations
 
-- **Proofs are free.** Proof structs are erased entirely — in release and `--debug` alike (see
-  [Proof Cost Model](#proof-cost-model)), so a `:::` annotation adds no allocation.
+- **Proof tracking is erased** on the standard path — in release and `--debug` alike (see
+  [Proof Cost Model](#proof-cost-model)), so composing predicates or annotating values costs
+  essentially nothing. The one exception is a proof-annotated *parameter*, which keeps ≤1
+  `named-value` allocation so decomposition works (§4.3) — cheap, but not a bare zero.
 - **Prefer value-level proofs** over free-floating proofs (`detachFact` / `attachFact`): a
-  free-floating proof keeps a small runtime token even in release builds, a value-level annotation
-  does not.
+  free-floating proof keeps a runtime carrier even in release builds, whereas a value-level
+  annotation only ever retains at most that single parameter allocation.
 - **Batch database queries** when possible.
 
 ### Caching

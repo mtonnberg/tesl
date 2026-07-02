@@ -32,6 +32,29 @@ let build_record_field_bindings (decls : top_decl list)
     | _ -> None
   ) decls
 
+(** ADT-constructor field bindings (review 2026-07 PFC-2b): a constructor whose
+    field is declared `field: T ::: P field` must, at CONSTRUCTION, receive an
+    argument that carries `P` — otherwise the field proof is decorative and a
+    `Node Leaf (0 - 5) Leaf` fabricates a "PositiveTree" with a negative value.
+    Unlike records (looked up by field name), constructor args are POSITIONAL, so
+    we keep the FULL field list per constructor (proof-annotated or not) and align
+    args positionally in [check_call_proofs] (which skips non-proof fields).  Only
+    constructors with at least one proof-annotated field are included. *)
+let build_adt_ctor_field_bindings (decls : top_decl list)
+    : (string * binding list) list =
+  List.concat_map (function
+    | DType (TypeAdt { variants; _ }) ->
+      List.filter_map (fun (v : adt_variant) ->
+        if not (List.exists (fun (f : field_def) -> f.proof_ann <> None) v.fields)
+        then None
+        else Some (v.ctor,
+          List.map (fun (f : field_def) ->
+            { name = f.name; type_expr = f.type_expr; proof_ann = f.proof_ann; loc = f.loc })
+            v.fields)
+      ) variants
+    | _ -> []
+  ) decls
+
 (** R51_SQ01 / R51_SQ02 / R51_SQ03 — SQL where-clause RHS validation.
 
     The where-clause LHS (`t.field`) has long been checked by
@@ -338,11 +361,22 @@ let check_record_field_proof_construction
   let mf = facts_or_compute ?facts ~extra_funcs decls in
   let funcs = mf.mf_funcs in
   let rec_bindings = build_record_field_bindings decls in
+  let adt_ctor_bindings = build_adt_ctor_field_bindings decls in
   let fields_by_type = mf.mf_fields_map in
   let ctors = mf.mf_ctors in
-  if rec_bindings = [] then []
+  if rec_bindings = [] && adt_ctor_bindings = [] then []
   else
     let errors = ref [] in
+    (* Enforce ADT constructor field proofs at construction (PFC-2b).  Positional
+       alignment of args to the variant's fields; [check_call_proofs] skips fields
+       without a proof annotation. *)
+    let check_ctor_field_proofs subject_env proof_env loc name args =
+      match List.assoc_opt name adt_ctor_bindings with
+      | Some field_bindings when List.length field_bindings = List.length args ->
+        errors := check_call_proofs ~funcs loc name field_bindings args subject_env proof_env
+                  @ !errors
+      | _ -> ()
+    in
     (* Walk expressions accumulating type_env, subject_env and proof_env.  When we
        encounter a typed record construction whose record has proof-annotated
        fields, delegate to check_call_proofs treating fields as parameters. *)
@@ -398,7 +432,11 @@ let check_record_field_proof_construction
             | None -> ())
          | None -> ())
       | EApp _ ->
-        let (_, args) = collect_call_head_and_args [] e in
+        let (head, args) = collect_call_head_and_args [] e in
+        (match head with
+         | EConstructor { name; loc; _ } ->
+           check_ctor_field_proofs subject_env proof_env loc name args
+         | _ -> ());
         List.iter (walk_expr type_env subject_env proof_env) args
       | ELet { name; value; body; _ } ->
         walk_expr type_env subject_env proof_env value;
@@ -549,7 +587,8 @@ let check_record_field_proof_construction
         (match key with Some e -> walk_expr type_env subject_env proof_env e | None -> ());
         (match payload with Some e -> walk_expr type_env subject_env proof_env e | None -> ())
       | EServe { port; _ } -> walk_expr type_env subject_env proof_env port
-      | EConstructor { args; _ } ->
+      | EConstructor { name; args; loc } ->
+        check_ctor_field_proofs subject_env proof_env loc name args;
         List.iter (walk_expr type_env subject_env proof_env) args
       | EStartWorkers _ | ELit _ | EVar _ | EField _ | EFail _ -> ()
       | ECacheGet { key; _ } -> walk_expr type_env subject_env proof_env key

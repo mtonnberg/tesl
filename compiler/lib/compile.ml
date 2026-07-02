@@ -3313,9 +3313,16 @@ let agent_context_to_json
 (** Produce the agent-context JSON for [source] under [filename].  Always
     returns a snapshot: on a parse error the diagnostics carry the parse error
     and [symbols] is empty (best-effort, so an agent still gets the error). *)
-let agent_context_source filename source : string =
+(* [extra_diags] carries linter findings supplied by the caller (main.ml), which
+   depends on both Compile and Linter; Compile cannot reference Linter directly
+   (module ordering).  Review 2026-07 (TOOL-AGENTCTX): agent-context — the
+   documented primary agent loop — previously dropped ALL linter warnings
+   because it only ran [check_source] (the checker emits none), so its "N
+   warnings" count was effectively always 0.  Folding [extra_diags] in makes it
+   report the same diagnostic set as --check-json. *)
+let agent_context_source ?(extra_diags = []) filename source : string =
   let content_hash = Digest.to_hex (Digest.string source) in
-  let diagnostics = check_source filename source in
+  let diagnostics = check_source filename source @ extra_diags in
   let symbols =
     match parse_module filename source with
     | Ok m -> agent_symbols_of_module m

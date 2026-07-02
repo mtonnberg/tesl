@@ -63,7 +63,7 @@ tie-breakers the spec appeals to.
 - Trusted proof introduction should happen at clear, auditable boundaries.
 - The language should be intentionally opinionated: one obvious style, enforced by a built-in linter/formatter.
 - Ordinary side effects should be capability-governed. Telemetry is the deliberate ambient exception.
-- Observability should follow OpenTelemetry semantic conventions (OpenTelemetry-shaped). Note: a native OTLP exporter is not yet implemented — telemetry currently emits structured JSON to stderr; native OTLP export is aspirational.
+- Observability should follow OpenTelemetry semantic conventions (OpenTelemetry-shaped). A native OTLP exporter is implemented: when `initTelemetry` is given a real `endpoint` URL, telemetry is exported over OTLP/HTTP+JSON (Logs signal) to `<endpoint>/v1/logs` (`dsl/otel.rkt`); with no endpoint it emits structured JSON locally. Spans/metrics and the protobuf/gRPC transport are non-goals.
 
 The language is in active development; breaking changes carry **no** backward-compatibility burden.
 We keep the language as tight and small as possible. Earlier architectural notes may use older
@@ -147,7 +147,9 @@ Proof-relevant information *can* be carried at runtime through evidence-bearing 
 
 ### 4.4 Public interface
 
-The only level that should be seen as "front facing" is the tesl-files. What is possible to do in the racket-files with manual changes is not interesting - if the language can prove its stated guarantees if a api web developer only works with the tesl files that is good enough. The racket files are an implementation detail - perhaps we will change it to a Rust och Zig layer in the future(or something else or keep it Racket). The compile layer should catch all errors except inherent runtime problems, such as database not available etc and they should only exist at the bounderies.
+The only level that should be seen as "front facing" is the tesl-files. What is possible to do in the racket-files with manual changes is not interesting - if the language can prove its stated guarantees if a api web developer only works with the tesl files that is good enough. The compile layer should catch all errors except inherent runtime problems, such as database not available etc and they should only exist at the bounderies.
+
+Replacing the Racket substrate with a Rust/Zig (or other) layer is an **aspiration, not a current property**. There is no lowering-IR or backend seam today: `emit_racket.ml` writes Racket forms directly, and the emitters re-derive lowering from the surface AST rather than from a shared normalized IR. (`ir.ml` is a parse-driven JSON tooling export, not a codegen/lowering stage — see `dev-docs/11-frontend-ir.md`.) A runtime swap would therefore require rewriting the emitter and reimplementing the runtime with exact behavior parity, including its trusted semantics. The enabling roadmap item lives in `roadmap/discarded/swappable-runtime-backend.md`.
 
 ## 5. Effect model and operational stance
 This section is normative for the public language design.
@@ -170,7 +172,7 @@ Telemetry is the one deliberate exception to the ordinary capability rule.
 
 The intended model is:
 
-- Tesl telemetry is OpenTelemetry-shaped (follows OpenTelemetry semantic conventions); a native OTLP exporter is not yet implemented, so telemetry currently emits structured JSON to stderr (`dsl/otel.rkt`) — native OTLP export is aspirational;
+- Tesl telemetry is OpenTelemetry-shaped (follows OpenTelemetry semantic conventions); a native OTLP exporter is implemented (`dsl/otel.rkt`): with a configured `endpoint` it exports over OTLP/HTTP+JSON (Logs signal), and with no endpoint it emits structured JSON locally (see the Export paragraph below);
 - telemetry is ambient and does not require an explicit capability in ordinary code;
 - this exception exists because observability is considered part of the platform foundation rather than an arbitrary user-defined effect.
 
@@ -325,16 +327,16 @@ The `:::` operator in expression context outside `establish`, `check`, and `auth
 `-> Todo ? FromDb (Id == todoId)` declares a **named-pack** return. The returned value is automatically named by the caller's `let` binder:
 
 ```tesl
--- function declaration (new canonical infix syntax)
+# function declaration (new canonical infix syntax)
 handler getTodo(...) -> Todo ? FromDb (Id == todoId) requires [...] = ...
 
--- callsite: the let binder `todo` becomes the GDP name
+# callsite: the let binder `todo` becomes the GDP name
 let todo = getTodo(requestUser, todoId)
--- todo :: Todo todo ::: FromDb (Id == todoId) todo
+# todo :: Todo todo ::: FromDb (Id == todoId) todo
 
--- functions requiring the named 2-arg proof
+# functions requiring the named 2-arg proof
 fn process(t: Todo ::: FromDb (Id == id) t) -> ...
-process(todo)   -- works: todo carries FromDb (Id == todoId) todo
+process(todo)   # works: todo carries FromDb (Id == todoId) todo
 ```
 
 **Syntax.** The canonical form is `Type ? EntityProofs [::: OtherProofs]`:
@@ -987,7 +989,7 @@ test "add is commutative" with 50 runs {
 
 ```tesl
 test "rejects duplicate emails" with database AppDb {
-  -- queries here run against AppDb's configured backend
+  # queries here run against AppDb's configured backend
 }
 ```
 
@@ -1453,11 +1455,11 @@ handler getTodo(requestUser: User ::: Authenticated requestUser, todoId: String 
   requires [dbRead] =
   ...
 
--- Compound entity proof: both Positive and Small get _entity appended
+# Compound entity proof: both Positive and Small get _entity appended
 fn makeValue(n: Int ::: Positive n && Small n) -> Int ? Positive && Small =
   n
 
--- Entity proof + independent proof
+# Entity proof + independent proof
 fn make(n: Int ::: Positive n, user: String ::: Admin user) -> Int ? Positive ::: Admin user =
   n ::: detachFact(user)
 ```
@@ -1588,7 +1590,7 @@ Record fields may carry proof annotations documenting what proof a field value m
 ```tesl
 record SafeItem { title: String ::: TitleSafe title }
 fn requiresSafe(t: String ::: TitleSafe t) -> String = t
-fn readField(item: SafeItem) -> String = requiresSafe item.title  -- proof flows through
+fn readField(item: SafeItem) -> String = requiresSafe item.title  # proof flows through
 ```
 
 This implements the "validate once, trust everywhere" thesis for record-heavy code: once a value is stored in a proof-annotated field, the proof is permanently associated with the field and available to all consumers.
@@ -2816,7 +2818,7 @@ let pair = Tuple2 1 "hello"   # Tuple2 Int String
 let xs   = [1, 2, 3]          # List Int
 
 # ERROR — Tuple2 ≠ List
-# let xs2 = Tuple2 1 2   -- cannot pass to fn expecting List Int
+# let xs2 = Tuple2 1 2   (cannot pass to fn expecting List Int)
 ```
 
 Use `Tesl.Tuple` to construct and deconstruct tuples:
@@ -3048,7 +3050,7 @@ Parameter type: use ::: with explicit subject — xs: List T ::: ForAll P xs.
 **ForAll proof expansion** — proofs combine, never replace:
 ```tesl
 fn narrowToSmall(xs: List Int ::: ForAll (IsPositive) xs)
-  -> List Int ? ForAll (IsPositive && IsSmall)  -- P1 AND P2
+  -> List Int ? ForAll (IsPositive && IsSmall)  # P1 AND P2
   requires [] =
   List.filterCheck checkIsSmall xs
 ```
