@@ -120,10 +120,33 @@ identifiers resolved via the type environment, like `Int`/`String`). Touchpoints
 - Linter: `Int` in return / request body / capture / SSE / codec-field → warning; `Int32` there → no
   warning.
 
-## Status
+## Status (2026-07-02) — soundness DELIVERED; one compile-time refinement remains
 
-Active in `roadmap/next`. Everything lands in THIS item: the `NUMERIC` mapping, the full `Int32`
-type work (above), compile-time width-match, decode validation, the oracle flonum fix, and the
-linter. Further widths (`Int64`/`Int16`) and a large-`Int` string/BigNumber wire codec are noted as
-in-file follow-ons — no separate roadmap item. Supersedes the earlier "rename `Int → Int64`",
-"runtime fail-loud range check", and "CARVED → later" notes.
+The silent-truncation hole is CLOSED and every piece below is gate-green (all 11
+phases, incl. the live-PG aggregate):
+
+- **Oracle** — `Int` rejects flonums (`exact-integer?`); `2.0` no longer satisfies
+  `Int`. Closes the Int/Float conflation. (commit "NT-07 part 1")
+- **`Int → NUMERIC`** — arbitrary-precision, lossless for any magnitude; auto-migration
+  widens an existing `bigint`/`integer` column to `numeric` in place. `PosixMillis`
+  (a nominal newtype over `Integer`) stays `BIGINT` via `newtype-base->db-type`.
+- **`Int32`** — a JS-safe (< 2^31) nominal boundary type (does not unify with `Int`),
+  in `Tesl.Int32` (`Int32.fromInt : Int -> Maybe Int32` checked narrowing;
+  `Int32.toInt : Int32 -> Int` total widening); runtime `tesl/int32.rkt`; stored as
+  `int4`. `int32?` is the registered runtime type, so the **codec decode range-checks**
+  an incoming `Int32` field (> 2^31 rejected, not silently wrapped). (commit "part 2")
+- **W091 linter** — advisory warning when `Int` appears at an API body/capture/return
+  or a codec-encoded record field; steers to `Int32`. (commit "part 3")
+- **Corpus example** `example/int32-boundary.tesl` (batch-runner-verified) + regressions
+  (`R75_NT07`, `W091P/N`). (commit "part 4")
+- **Bare construction is width-checked**: `Widget { count: <Int> }` where `count: Int32`
+  is a compile error ("cannot unify Int with Int32").
+
+**Remaining refinement:** the compile-time width-match at the `insert`/`update`/`set`
+SQL forms specifically (their record arg parses as `EConstructor name [bare ERecord]`,
+bypassing the typed-record field-check that already guards bare construction). This is
+DEFENSE-IN-DEPTH over the loud runtime failure — an out-of-range `Int` written to an
+`int4` column is rejected by Postgres (no *silent* truncation), so soundness holds; the
+refinement only moves that to compile time. A correct fix threads the entity field
+types through the insert/update handler's record arg. Further widths (`Int64`/`Int16`)
+and a large-`Int` string/BigNumber wire codec remain in-file follow-ons.
