@@ -1,5 +1,7 @@
 # 04 — Body Compiler, Reference Collector, and Semantics Validator
 
+> Audience: contributors working on function-body compilation in the compiler (`compiler/lib/`).
+
 This guide covers the three Python classes that handle everything inside
 function bodies: `BodyCompiler`, `ReferenceCollector`, and `BodySemanticsValidator`.
 

@@ -2,7 +2,7 @@
   "name": "vscode-tesl",
   "displayName": "Tesl Language",
   "description": "Syntax highlighting, live diagnostics, go-to-definition, hover types, and completions for the Tesl (.tesl) language",
-  "version": "0.6.31",
+  "version": "0.6.33",
   "publisher": "Tesl",
   "namespace": "Tesl",
   "//extensionKind": "Run only on the workspace (remote/WSL) side. Without this, in a Remote-WSL session VSCode can run the extension on BOTH the local UI host and the remote workspace, starting two language-server clients that each publish diagnostics — so every error/warning appears twice.",

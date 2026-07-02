@@ -720,7 +720,10 @@ test "checkAge: boundary values kill all mutants" {
 }
 |});
     ]
-    ~needles:["Mutation score: 100%"; "7 killed"]
+    (* 9 mutants: 7 binop swaps (>= ×3, <= ×3, && ×1) + 2 integer-literal
+       perturbations (18→19, 120→121).  The boundary-exact tests kill them all,
+       so a broadened operator set must still report a 100% score. *)
+    ~needles:["Mutation score: 100%"; "9 killed"]
 
 let () =
   run "review-39-antagonistic" [

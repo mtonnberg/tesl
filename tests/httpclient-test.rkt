@@ -81,7 +81,7 @@
 ;;; ── Test 4: Invalid URL handling ─────────────────────────────────────────────
 
 (test-case "HttpClient.get rejects invalid URL"
-  (with-capabilities (list httpClient)
+  (with-capabilities (httpClient)
     (check-exn
      (lambda (e) (exn:fail? e))
      (lambda ()
@@ -92,7 +92,7 @@
 
 (test-case "HttpClient handles http scheme"
   ;; Test that http scheme is accepted (even if connection fails)
-  (with-capabilities (list httpClient)
+  (with-capabilities (httpClient)
     (check-exn
      ;; Connection refused is expected for localhost:9999 (nothing running)
      ;; but the error should be network-related, not URL parsing
@@ -105,7 +105,7 @@
      "http URL should be parseable (connection may fail)")))
 
 (test-case "HttpClient handles https scheme"
-  (with-capabilities (list httpClient)
+  (with-capabilities (httpClient)
     (check-exn
      (lambda (e)
        (and (exn:fail? e)
@@ -118,7 +118,7 @@
 
 (test-case "HttpClient.get accepts empty headers"
   ;; This tests that empty headers don't cause errors before network attempt
-  (with-capabilities (list httpClient)
+  (with-capabilities (httpClient)
     (check-exn
      (lambda (e) (exn:fail? e))  ;; network error expected, not format error
      (lambda ()
@@ -126,7 +126,7 @@
      "Empty headers list should be accepted")))
 
 (test-case "HttpClient.get accepts non-empty headers list"
-  (with-capabilities (list httpClient)
+  (with-capabilities (httpClient)
     (check-exn
      (lambda (e)
        (and (exn:fail? e)
@@ -191,7 +191,7 @@
 (test-case "HttpClient functions work within with-capabilities"
   ;; Test that the capability context is accepted
   ;; (actual network call will fail, but the capability guard should pass)
-  (with-capabilities (list httpClient)
+  (with-capabilities (httpClient)
     (check-exn
      (lambda (e)
        (and (exn:fail? e)

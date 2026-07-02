@@ -31,8 +31,11 @@ import Tesl.App exposing [App]
 # Spans automatically track the function call duration.
 # Key=value pairs in the braces become span attributes in the OpenTelemetry sense.
 #
-# "endpoint" can be a real OTLP HTTP endpoint URL, or "in-memory" for local testing.
-# "console True" additionally prints spans to stdout during development.
+# "endpoint" can be a real OTLP/HTTP URL: events export as OTLP/HTTP+JSON Logs,
+# batched to <endpoint>/v1/logs; an unreachable collector is tolerated (events are
+# dropped, never failing the request path; no spans/metrics/gRPC yet). Or use
+# "in-memory" for local testing.
+# "console True" additionally prints events (as JSON, to stderr) during development.
 
 # ─────────────────────────────────────────────
 # THEORY — the full model
@@ -78,6 +81,7 @@ server HealthServer for HealthApi {
 }
 
 database TelemetryDb = Database {
+  entities: []
   backend: Memory
 }
 

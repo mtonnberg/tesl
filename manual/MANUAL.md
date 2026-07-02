@@ -13,12 +13,14 @@ Everything here is reachable from the command line — every link below has a ma
 |---|---|---|
 | Install Tesl | `tesl help manual getting-started` | [GETTING-STARTED.md](GETTING-STARTED.md) |
 | Understand the idea | `tesl help manual overview` | [overview.md](overview.md) |
+| See every feature in one read | `tesl help manual tour` | [tour.md](tour.md) |
 | See working code | `tesl help manual examples` | [examples.md](examples.md) |
 | Write idiomatic Tesl | `tesl help manual best-practices` | [best-practices.md](best-practices.md) |
 | Look up exact syntax | `tesl help manual language-spec` | [LANGUAGE-SPEC.md](../LANGUAGE-SPEC.md) |
 | Get unstuck | `tesl help manual faq` | [FAQ.md](FAQ.md) |
 
-New to Tesl? Read **overview → getting-started → examples**, in that order.
+New to Tesl? Read **overview → getting-started → examples**, in that order. Want the whole language
+in one long read? See the **[guided feature tour](tour.md)**.
 
 ---
 
@@ -63,11 +65,14 @@ also accepts are shown in parentheses.
 |---|---|---|
 | `getting-started` | `start`, `get-started` | Install, first project, the build/lint/test/run loop |
 | `overview` | `tutorial` | What Tesl is, the proof model, and why |
+| `tour` | — | The long-form, feature-by-feature guided tour of the whole language |
 | `language-spec` | — | The formal language specification (the source of truth) |
 | `examples` | — | Every bundled example, grouped by topic, with run instructions |
 | `best-practices` | — | Recommended patterns, naming, testing, the proof cost model |
 | `faq` | — | Common questions and "why did I get this error?" |
 | `anchors` | — | The stable manual anchor/ID scheme (this is what error messages cite) |
+| `deploy` | — | Deploying a Tesl web API: `tesl build`, the Docker image, database flavours |
+| `tesl-manifest` | `manifest` | The `tesl.toml` project manifest schema (read by `tesl build` / `tesl db`) |
 | `dev` | — | Pointers into the contributor docs |
 
 Anything else is resolved as a best-effort lookup: `tesl help manual <name>` will also find a
@@ -112,8 +117,9 @@ If you are writing tooling that deep-links into the manual, read that page first
 
 ### 2. Core concepts
 
+- **[Guided Feature Tour](tour.md)** — the long-form, feature-by-feature walkthrough of the whole
+  language (also `tesl help manual tour`)
 - **[Language Specification](../LANGUAGE-SPEC.md)** — the formal specification (source of truth)
-- **[TESL.md](../TESL.md)** — high-level language tour with examples
 - **[Proof Cost Model](best-practices.md#proof-cost-model)** — proofs are zero-cost, erased in
   release and `--debug` alike; the debugger reads proof/type from compile-time
 
@@ -134,12 +140,17 @@ If you are writing tooling that deep-links into the manual, read that page first
 ### 5. Best practices
 
 - **[Best Practices Guide](best-practices.md)** — patterns, naming, testing, proof cost model
+- **[AI / Agent Testing](ai-testing.md)** — testing `Agent { … }` tools, entitlements, and structured output
 
-### 6. Reference
+### 6. Reference & deploy
 
 - **[Language Specification](../LANGUAGE-SPEC.md)** — complete grammar and semantics
 - **[Stable Anchor Scheme](anchors.md)** — anchor IDs for deep-linking
 - **[FAQ](FAQ.md)** — troubleshooting and common questions
+- **[Deploying a Tesl web API](deploy.md)** — `tesl build`, the Docker image, and database flavours
+  (also `tesl help manual deploy`)
+- **[`tesl.toml` project manifest](tesl-manifest.md)** — the manifest schema read by `tesl build` /
+  `tesl db` and written by `tesl init` (also `tesl help manual tesl-manifest`)
 
 ### 7. Contributing
 
@@ -162,8 +173,7 @@ If you are writing tooling that deep-links into the manual, read that page first
 
 ## See also
 
-- **[Manual home](index.md)** — short landing page
 - **[Stable Anchor Scheme](anchors.md)** — deep-link IDs
 - **[README](../README.md)** — project overview and quick start
-- **[TESL.md](../TESL.md)** — high-level language introduction
+- **[Guided Feature Tour](tour.md)** — the long-form language walkthrough
 - **[LANGUAGE-SPEC.md](../LANGUAGE-SPEC.md)** — formal specification

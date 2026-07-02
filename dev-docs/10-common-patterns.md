@@ -1,5 +1,7 @@
 # 10 — Common Patterns, Gotchas, and Quick Reference
 
+> Audience: contributors to the compiler and runtime — gotchas that bite language contributors.
+
 A collection of things that bite language contributors. Read this before
 spending hours debugging a confusing error.
 

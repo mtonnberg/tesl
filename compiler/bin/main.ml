@@ -221,6 +221,12 @@ let section_to_embedded_key name =
   (* dev docs live at the repo root in dev-docs/, embedded under "dev-docs/…" *)
   | "dev"                                  -> "dev-docs/README.md"
   | "faq"                                  -> "manual/FAQ.md"
+  (* D17: the prose "TLDR of the whole language" newcomer track. *)
+  | "intro"                                -> "example/intro/README.md"
+  (* D12/D13: the guided feature tour + the rehomed user-facing deploy/manifest docs. *)
+  | "tour"                                 -> "manual/tour.md"
+  | "deploy"                               -> "manual/deploy.md"
+  | "tesl-manifest" | "manifest"           -> "manual/tesl-manifest.md"
   | other ->
     let ex = remove_example_prefix other in
     (* allow `dev/<file>` and `dev-docs/<file>` to reach a specific dev doc *)
@@ -235,6 +241,7 @@ let section_to_embedded_key name =
     let candidates = [
       "manual/" ^ other ^ ".md";
       "manual/" ^ other;
+      "example/intro/" ^ ex ^ ".md";
       "example/learn/" ^ ex ^ ".tesl";
       "example/learn/" ^ ex ^ ".md";
       "example/kanel/" ^ ex ^ ".tesl";
@@ -268,6 +275,10 @@ let get_manual_content section =
       let doc_dev = Filename.concat !manual_dir "dev-docs/README.md" in
       if Sys.file_exists root_dev then root_dev else doc_dev
     | "faq" -> Filename.concat !manual_dir "FAQ.md"
+    | "intro" -> Filename.concat !root_path "example/intro/README.md"
+    | "tour" -> Filename.concat !manual_dir "tour.md"
+    | "deploy" -> Filename.concat !manual_dir "deploy.md"
+    | "tesl-manifest" | "manifest" -> Filename.concat !manual_dir "tesl-manifest.md"
     | _ ->
       let try_path path = if Sys.file_exists path then Some path else None in
       let try_paths paths =
@@ -306,6 +317,7 @@ let get_manual_content section =
         Filename.concat !root_path ("example/" ^ example_name ^ ".tesl");
         Filename.concat !root_path ("example/" ^ example_name);
         Filename.concat !root_path ("example/" ^ example_name ^ ".md");
+        Filename.concat !root_path ("example/intro/" ^ example_name ^ ".md");
       ] in
       match try_paths possible_paths with
       | Some p -> p
@@ -520,20 +532,9 @@ let display_help () =
    same way the anchor-contract test does, so a citation printed by a diagnostic
    (`tesl help manual best-practices#proof-management`) jumps to that heading. *)
 
-(** Turn a heading line's text into its slug (lower-case; keep [a-z0-9 -]; drop
-    other characters incl. punctuation/emoji/UTF-8; collapse spaces to single
-    '-'; trim).  Mirrors manual/anchors.md and manual/tests/test_embedded_docs.ml. *)
-let slug_of_heading (heading : string) : string =
-  let b = Buffer.create (String.length heading) in
-  String.iter
-    (fun c ->
-       let c = Char.lowercase_ascii c in
-       if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') then Buffer.add_char b c
-       else if c = ' ' || c = '-' then Buffer.add_char b ' ')
-    heading;
-  String.split_on_char ' ' (Buffer.contents b)
-  |> List.filter (fun s -> s <> "")
-  |> String.concat "-"
+(** Slug rule — single-sourced in {!Error_codes.slug_of_heading} (D16) so the
+    diagnostic deep-links here and the anchor-contract test cannot drift. *)
+let slug_of_heading = Error_codes.slug_of_heading
 
 (* Is [line] a Markdown ATX heading?  Returns Some (level, text) if so. *)
 let heading_of_line line =
@@ -726,8 +727,27 @@ let handle_help args =
     Printf.eprintf "Error: Unknown help command.\n\n";
     display_help ()
 
+(** LSP host indirection: the editor validates an unsaved buffer by writing its
+    text to a transient copy (now in a system temp dir, so the buffer never
+    touches the project tree) and invoking a query command on that copy.  But
+    local imports resolve relative to [Filename.dirname source_file]
+    ([Checker.resolve_local_import_path]), so a system-temp copy would no longer
+    see its sibling modules.
+
+    [TESL_LOGICAL_PATH] lets the host say "read the content from this real file,
+    but treat it as if it lived at this logical path" — the editor sets it to the
+    document's true on-disk path.  Content is still read from the [filename]
+    argument; only the *path* the checker reasons about (import dir + the [file]
+    field of locations) becomes the logical one.  Absent/empty ⇒ unchanged. *)
+let logical_path filename =
+  match Sys.getenv_opt "TESL_LOGICAL_PATH" with
+  | Some p when p <> "" -> p
+  | _ -> filename
+
 let check_json_diags filename source =
-  let diags = Compile.check_source filename source in
+  (* Import resolution + diagnostic [file] use the logical path; the linter
+     still reads the real (temp) file's edited content from disk. *)
+  let diags = Compile.check_source (logical_path filename) source in
   if List.exists (fun (d : Compile.diagnostic) -> d.source = "parser") diags then diags
   else diags @ Linter.lint_file filename
 
@@ -738,10 +758,11 @@ let check_json_diags filename source =
     reader can paste verbatim: `tesl help manual <section>#<anchor>`. We also
     point at `tesl help <code>` so the full explanation is one command away.
 
-    The manual anchor is resolved from the central registry first (keyed on the
-    code, refined by the message for the broad [V001] validation code). If the
-    registry has nothing, we fall back to the older keyword-based suggestion so
-    no diagnostic loses its existing hint. *)
+    The manual anchor is the one resolved upstream from the diagnostic's
+    structured topic (carried on [d.manual] for validation errors), or, for other
+    codes, the central registry's code→anchor mapping. If neither yields an
+    anchor, we fall back to the older keyword-based suggestion so no diagnostic
+    loses its existing hint. *)
 let print_diagnostic (d : Compile.diagnostic) =
   let sev_col = match d.severity with
     | "error"   -> col "1;31"
@@ -754,9 +775,15 @@ let print_diagnostic (d : Compile.diagnostic) =
   Printf.eprintf "  %s-->%s %s:%d:%d\n"
     (col "1;34") (col "0")
     d.file (d.start_line + 1) (d.start_col + 1);
-  (* Prefer the registry's code → manual anchor mapping; fall back to the
-     legacy keyword matcher so existing hints never regress. *)
-  let manual_link = Error_codes.manual_for ~code:d.code ~message:d.message in
+  (* B5: prefer the STRUCTURED anchor resolved upstream from the diagnostic's
+     topic (carried on [d.manual]); message text no longer routes the anchor.
+     For non-validation codes [d.manual] is None and we resolve via the registry
+     code→anchor mapping (1:1 for every such code). *)
+  let manual_link =
+    match d.manual with
+    | Some _ as a -> a
+    | None -> Error_codes.manual_for ~code:d.code ~message:d.message ()
+  in
   (match manual_link with
    | Some anchor ->
      Printf.eprintf "  %s%s\n" (col "1;36") (col "0");
@@ -860,10 +887,11 @@ let () =
        wrapper can branch on the status without re-parsing. *)
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let json = Compile.agent_context_source filename source in
+       let lpath = logical_path filename in
+       let json = Compile.agent_context_source lpath source in
        print_string json;
        print_newline ();
-       let diags = Compile.check_source filename source in
+       let diags = Compile.check_source lpath source in
        let has_error = List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") diags in
        exit (if has_error then 1 else 0)
      with Sys_error msg ->
@@ -872,7 +900,7 @@ let () =
   | ["--local-bindings-json"; filename] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let bindings = Compile.local_bindings_source filename source in
+       let bindings = Compile.local_bindings_source (logical_path filename) source in
        print_string (Compile.local_bindings_to_json bindings);
        print_newline ();
        exit 0
@@ -882,7 +910,7 @@ let () =
   | ["--definition-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let definition = Compile.definition_source filename source (int_of_string line) (int_of_string col) in
+       let definition = Compile.definition_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.definition_response_to_json definition);
        print_newline ();
        exit 0
@@ -893,7 +921,7 @@ let () =
   | ["--occurrences-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let occurrences = Compile.occurrences_source filename source (int_of_string line) (int_of_string col) in
+       let occurrences = Compile.occurrences_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.occurrences_response_to_json occurrences);
        print_newline ();
        exit 0
@@ -904,7 +932,7 @@ let () =
   | ["--type-at-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let result = Compile.type_at_source filename source (int_of_string line) (int_of_string col) in
+       let result = Compile.type_at_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.type_at_response_to_json result);
        print_newline ();
        exit 0
@@ -915,7 +943,7 @@ let () =
   | ["--field-at-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let result = Compile.field_at_source filename source (int_of_string line) (int_of_string col) in
+       let result = Compile.field_at_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.field_at_response_to_json result);
        print_newline ();
        exit 0
@@ -926,7 +954,7 @@ let () =
   | ["--config-context-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let result = Compile.config_context_source filename source (int_of_string line) (int_of_string col) in
+       let result = Compile.config_context_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.config_context_response_to_json result);
        print_newline ();
        exit 0
@@ -937,7 +965,7 @@ let () =
   | ["--completions-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let items = Compile.completions_source filename source (int_of_string line) (int_of_string col) in
+       let items = Compile.completions_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.completions_response_to_json items);
        print_newline ();
        exit 0
@@ -948,7 +976,7 @@ let () =
   | ["--signature-help-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let sig_ = Compile.signature_help_source filename source (int_of_string line) (int_of_string col) in
+       let sig_ = Compile.signature_help_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.signature_help_response_to_json sig_);
        print_newline ();
        exit 0
@@ -959,7 +987,7 @@ let () =
   | ["--selection-range-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let ranges = Compile.selection_range_source filename source (int_of_string line) (int_of_string col) in
+       let ranges = Compile.selection_range_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.selection_ranges_response_to_json ranges);
        print_newline ();
        exit 0
@@ -970,7 +998,7 @@ let () =
   | ["--type-definition-json"; filename; line; col] ->
     (try
        let source = In_channel.with_open_text filename In_channel.input_all in
-       let loc = Compile.type_definition_source filename source (int_of_string line) (int_of_string col) in
+       let loc = Compile.type_definition_source (logical_path filename) source (int_of_string line) (int_of_string col) in
        print_string (Compile.type_definition_response_to_json loc);
        print_newline ();
        exit 0
@@ -1047,6 +1075,12 @@ let () =
   | ("--generate-ts" :: filename :: rest) ->
     let out_file = match rest with ["--out"; f] -> Some f | _ -> None in
     (try
+       (* B1 / review §8.2: gate the client generator behind the FULL checker
+          (type + proof + validation), so a program that fails `--check` cannot
+          still emit a plausible client (the checker-bypass hole). *)
+       (match Compile.compile_file ~root_path ~type_check:true filename with
+        | Compile.Failure diags -> List.iter print_diagnostic diags; exit 1
+        | Compile.Success _ -> ());
        let source = In_channel.with_open_text filename In_channel.input_all in
        match Parser.parse_module filename source with
        | Ok m ->
@@ -1068,6 +1102,10 @@ let () =
   | ("--generate-elm" :: filename :: rest) ->
     let out_file = match rest with ["--out"; f] -> Some f | _ -> None in
     (try
+       (* B1 / review §8.2: gate the client generator behind the FULL checker. *)
+       (match Compile.compile_file ~root_path ~type_check:true filename with
+        | Compile.Failure diags -> List.iter print_diagnostic diags; exit 1
+        | Compile.Success _ -> ());
        let source = In_channel.with_open_text filename In_channel.input_all in
        match Parser.parse_module filename source with
        | Ok m ->
@@ -1345,6 +1383,8 @@ let () =
        let total    = report.Mutate.total in
        let killed   = report.Mutate.killed in
        let survived = report.Mutate.survived in
+       let invalid  = report.Mutate.invalid in
+       let errors   = report.Mutate.errors in
        let no_tests = List.length
            (List.filter (fun (_, r) -> r = Mutate.NoTests) report.Mutate.results) in
        let label = match extra_test_files with
@@ -1354,10 +1394,11 @@ let () =
        Printf.printf "%sMutation testing%s: %s\n\n" (col "1") (col "0") label;
        List.iter (fun ((mut : Mutate.mutant), result) ->
          let marker, colour = match result with
-           | Mutate.Killed   -> "KILLED",   "1;32"
-           | Mutate.Survived -> "SURVIVED", "1;31"
-           | Mutate.NoTests  -> "NO TESTS", "1;33"
-           | Mutate.Error _  -> "ERROR",    "1;33"
+           | Mutate.Killed    -> "KILLED",   "1;32"
+           | Mutate.Survived  -> "SURVIVED", "1;31"
+           | Mutate.NoTests   -> "NO TESTS", "1;33"
+           | Mutate.Invalid _ -> "INVALID",  "1;33"
+           | Mutate.Error _   -> "ERROR",    "1;33"
          in
          Printf.printf "  [%s%s%s] %s\n"
            (col colour) marker (col "0") mut.description
@@ -1368,11 +1409,24 @@ let () =
          (col "1;32") killed   (col "0")
          (if survived > 0 then col "1;31" else col "0")
          survived (col "0");
+       if invalid > 0 then
+         (* Compile/expand failures: not counted toward the kill rate. *)
+         Printf.printf " | %s%d invalid%s" (col "1;33") invalid (col "0");
+       if errors > 0 then
+         Printf.printf " | %s%d error%s" (col "1;33") errors (col "0");
        if no_tests > 0 then
          Printf.printf " | %s%d no-tests%s" (col "1;33") no_tests (col "0");
-       let score = if total = 0 then 100.0
-                   else float_of_int (killed + report.Mutate.errors) /. float_of_int total *. 100.0 in
-       Printf.printf "\n%sMutation score%s: %.0f%%\n" (col "1") (col "0") score;
+       (* Kill rate reflects ONLY mutants whose tests actually ran and could
+          distinguish behaviour: killed / (killed + survived).  Mutants that
+          failed to compile (INVALID), timed out / could not be emitted (ERROR),
+          or have no test block (NO TESTS) prove nothing and are excluded from
+          the denominator, so a compile-error mutant can never inflate the
+          score. *)
+       let scored = killed + survived in
+       let score = if scored = 0 then 100.0
+                   else float_of_int killed /. float_of_int scored *. 100.0 in
+       Printf.printf "\n%sMutation score%s: %.0f%%" (col "1") (col "0") score;
+       Printf.printf " %s(%d killed / %d scored)%s\n" (col "2") killed scored (col "0");
        if survived > 0 then exit 1)
 
   | _ -> print_string usage; exit 1

@@ -1,5 +1,37 @@
 # Tesl language specification (draft)
 
+## Table of Contents
+
+Hand-maintained index of the top-level sections. Section **numbers** (e.g. `§7.4`,
+`§14b.2`) are a stability contract — see the `language-spec` entry in
+[`manual/anchors.md`](manual/anchors.md) for how compiler diagnostics and tests cite them.
+
+- [1. Purpose and scope](#1-purpose-and-scope)
+- [2. Product goals](#2-product-goals-non-normative-but-guiding)
+- [3. Reference lineage](#3-reference-lineage-non-normative)
+- [Why a language, not a library](#why-a-language-not-a-library)
+- [4. Language layers](#4-language-layers)
+- [5. Effect model and operational stance](#5-effect-model-and-operational-stance)
+- [6. Core semantic model](#6-core-semantic-model)
+- [7. Global soundness invariants](#7-global-soundness-invariants)
+- [8. Lexical structure](#8-lexical-structure)
+- [9. Expression grammar](#9-expression-grammar)
+- [10. Modules, imports, qualification, and standard library](#10-modules-imports-qualification-and-standard-library)
+- [11. Surface grammar for top-level declarations](#11-surface-grammar-for-top-level-declarations)
+- [12. Function bodies and expressions](#12-function-bodies-and-expressions)
+- [13. Static semantics](#13-static-semantics)
+- [14. Dynamic semantics](#14-dynamic-semantics)
+- [14b. Structural type system](#14b-structural-type-system)
+- [15. Proof composition and decomposition](#15-proof-composition-and-decomposition)
+- [16. Open design areas](#16-open-design-areas)
+- [17. Worked examples](#17-worked-examples)
+- [18. Canonical guidance for future language changes](#18-canonical-guidance-for-future-language-changes)
+- [19. Native Cache](#19-native-cache)
+- [20. Email Support](#20-email-support)
+- [21. Standard Library Extensions](#21-standard-library-extensions)
+- [22. Step Debugger](#22-step-debugger)
+- [Appendix A. Current implementation divergences](#appendix-a-current-implementation-divergences)
+
 ## 1. Purpose and scope
 This document is the canonical draft specification for the `.tesl` surface language.
 
@@ -18,32 +50,76 @@ The `.tesl` frontend is the primary user-facing language. The underlying Racket 
 Important implementation note on guarantees: when this specification says that proof verification or the declared-context capability check is enforced at compile time, that is literal — the compiler is the sole contract for those, with no runtime re-check behind them. A separate set of checks remains as **core runtime semantics** (not a removable safety net): the ambient capability-grant check (a "Missing capabilities" error if a required capability is not granted at runtime), handler parameter type validation, handler return type/shape validation, and the existential-witness escape check. These run because they are part of how the runtime executes a request at its boundaries, not as defense in depth that duplicates a compile-time guarantee.
 
 ## 2. Product goals (non-normative, but guiding)
-The following are not syntax rules, but they are part of the intended identity of Tesl and should guide language review.
+**Scope:** the product-level pitch — who Tesl is for and why it exists — lives in the
+[README](README.md#what-tesl-is-trying-to-achieve). This section keeps only the design-review
+guidelines that constrain normative decisions below. They are not syntax rules; they are the
+tie-breakers the spec appeals to.
 
-- Tesl is a pragmatic GDP-inspired DSL for secure web APIs.
 - The primary authoring surface should be readable, explicit, and unsurprising.
 - The language should make important API knowledge visible in declarations rather than hiding it in handler bodies.
 - The language should make invalid states hard to express without attempting full dependent typing.
 - Proofs should be easy to work with, but not magical or theory-free.
 - Hidden GDP names should be present by default; value unwrapping is handled implicitly by the compiler.
 - Trusted proof introduction should happen at clear, auditable boundaries.
-- The language should be intentionally opinionated and should move toward a built-in linter/formatter so Tesl code has one obvious style.
-- The long-term surface should borrow the type-level clarity of Servant while improving readability and ergonomics in the direction of Elm and TypeScript.
+- The language should be intentionally opinionated: one obvious style, enforced by a built-in linter/formatter.
 - Ordinary side effects should be capability-governed. Telemetry is the deliberate ambient exception.
-- Observability should be OpenTelemetry-first and OpenTelemetry-only.
+- Observability should follow OpenTelemetry semantic conventions (OpenTelemetry-shaped). Note: a native OTLP exporter is not yet implemented — telemetry currently emits structured JSON to stderr; native OTLP export is aspirational.
 
-Earlier architectural notes may use older syntax such as `unchecked-name`, `Requires`, `*name`, or older route notation. Those notes remain useful as design context, but they are not normative syntax. As the language is in active development when we introduce breaking changes we should *not* have any backward compatibility. We want to keep the language as tight and small as possible.
+The language is in active development; breaking changes carry **no** backward-compatibility burden.
+We keep the language as tight and small as possible. Earlier architectural notes may use older
+syntax (`unchecked-name`, `Requires`, `*name`, older route notation) — useful as design context,
+not normative.
 
 ## 3. Reference lineage (non-normative)
-Tesl is directly inspired by two lines of work:
+**Scope:** conceptual ancestors, not templates — see the [README](README.md#what-tesl-is-trying-to-achieve)
+for the framing. Tesl is directly inspired by two lines of work:
 
-- the GDP paper, *Ghosts of Departed Proofs*, especially the idea that preconditions should be checked early and then carried as ghost evidence rather than forcing repeated optional-value handling;
-- the earlier `servant-gdp` work, especially the idea that API declarations can carry named route inputs and rich domain facts.
-
-Tesl is not a direct syntax clone of either reference. They are conceptual ancestors, not exact templates.
+- the GDP paper, *Ghosts of Departed Proofs* — preconditions are checked early and then carried as ghost evidence rather than re-handled as optional values everywhere;
+- the earlier `servant-gdp` work — API declarations can carry named route inputs and rich domain facts.
 
 ### Proofs vs Facts
 Proofs and Facts are used interchangeably in this document. In GDP they are called proofs but in Tesl they are called facts in an attempt to make the subject of using them less daunting.
+
+## Why a language, not a library
+
+The original *Ghosts of Departed Proofs* technique is a **library** technique: it encodes ghost
+evidence inside a host type system (Haskell's) using rank-2 types, phantom parameters, and
+newtype discipline. Tesl deliberately is **not** that. The three guarantees below are the reason
+Tesl earns its keep as a standalone language rather than a package you `import` — each one is
+either impossible or unenforceable from inside a library, because a library cannot constrain the
+program that hosts it.
+
+**Erasure is the sole runtime mode, not an optimization.** In a library, ghost values are ordinary
+host values the compiler *happens* to be able to erase; nothing stops a caller from reflecting over
+them, printing them, or branching on their presence. In Tesl, the standard `check`/`fn`/`handler`
+path performs **no runtime proof-verification and carries no inspectable proof object** in the
+default and `--debug` builds — verification is entirely compile-time (§7.10). A small enumerated set
+of carriers is deliberately retained (detached proofs, existential packages, newtype wrappers,
+`FromDb` proofs, and the ≤1-alloc proof-annotated parameter — see §4.3); outside that closed set
+there is no proof object to inspect, serialize, or forge at runtime because the language, not a
+convention, guarantees it does not exist. A library cannot make that promise about code it does not
+own.
+
+**Host-wide no-shadowing is a whole-program invariant (§7.4).** GDP soundness depends on a hidden
+subject naming exactly one value; the moment a name can be shadowed, a fact about the outer binding
+can be silently re-read as a fact about a different inner value. A library can only refuse to
+shadow *its own* names — it cannot forbid the *host program* from shadowing. Tesl makes name
+shadowing **illegal program-wide** (§7.4), which is a property of the language's binding rules, not
+of any single API. This is the single most load-bearing reason GDP-in-a-library leaks and
+GDP-as-a-language does not.
+
+**`:::` fabrication is restricted to trusted function kinds (§7.12).** The one place a proof is
+minted from nothing — the `:::` annotation that asserts a fact holds — must be auditable and
+un-spoofable. In a library, any caller can construct the "smart-constructor" wrapper, so the
+trusted boundary is only as strong as documentation and review. Tesl makes fabrication a
+**syntactic privilege of trusted declaration kinds** (`check`, `auth`, `proof`, and library-owned
+predicates) and a compile error everywhere else (§7.12). The set of places a fact can enter the
+system is closed and mechanically checked — a guarantee about *who may write `:::`*, which only the
+grammar and checker of a real language can enforce.
+
+Together these define Tesl's right to exist: erasure-as-sole-mode, host-wide no-shadowing, and
+trusted-only fabrication are **whole-language invariants**, not API-local conventions. A library
+can offer the ergonomics of GDP; only a language can offer its guarantees.
 
 ## 4. Language layers
 Tesl currently has three relevant layers.
@@ -94,9 +170,11 @@ Telemetry is the one deliberate exception to the ordinary capability rule.
 
 The intended model is:
 
-- Tesl is OpenTelemetry-first;
+- Tesl telemetry is OpenTelemetry-shaped (follows OpenTelemetry semantic conventions); a native OTLP exporter is not yet implemented, so telemetry currently emits structured JSON to stderr (`dsl/otel.rkt`) — native OTLP export is aspirational;
 - telemetry is ambient and does not require an explicit capability in ordinary code;
 - this exception exists because observability is considered part of the platform foundation rather than an arbitrary user-defined effect.
+
+**Export.** When `initTelemetry` is given a real `endpoint` URL, events are exported to it over OTLP/HTTP+JSON (Logs signal): each event becomes a log record (message → `body`, `timestampMs` → `timeUnixNano`, `service` → the `service.name` resource attribute, attributes → OTLP `KeyValue`s), POSTed in batches to `<endpoint>/v1/logs`. Export is opt-in purely by the presence of a configured endpoint — the outbound network egress is intentionally kept ambient (no `httpClient` capability), consistent with telemetry being platform infrastructure. Export is asynchronous and resilient: events are buffered in a bounded queue (drop-oldest on overflow) flushed by a background timer, and an unreachable/erroring collector degrades to a dropped batch — it never blocks or fails the request path. The sentinel `endpoint "in-memory"` (and the empty string) means "no remote export"; `console True` additionally prints events to the console for local dev. Spans/metrics and the protobuf/gRPC transport are non-goals for this cut — logs over HTTP+JSON only.
 
 ### 5.3 Opinionated foundation
 **Accepted design.**
@@ -352,6 +430,19 @@ only the detached fact to attach elsewhere. The `Maybe (v: T ::: P v)` form is i
 when the returned value itself is produced at the proof boundary and the caller pattern-matches
 on the result.
 
+**Note — canonical proof-return forms (D7).** The compiler accepts five spellings of a
+proof-carrying return, so this note records which are canonical and which are legacy/specialized.
+This is style guidance, not a soundness distinction — all five compile today and are equally sound.
+
+- **Canonical, non-optional:** `check … -> x: T ::: P x` (binding return spec, the preferred form for
+  "validate an input and return it carrying its proof") and `-> T ? EntityProofs` (the named-pack
+  operator, §7.13, for entity/DB results the caller receives named).
+- **Canonical, optional:** `-> Maybe (v: T ::: P v)` — the proof-carrying `Maybe` return above.
+- **Legacy / specialized:** the bare `-> Fact (…)` and `-> Maybe (Fact (…))` forms return a *detached*
+  fact rather than a proof-carrying value. They remain supported for detached-proof transport (the
+  caller already holds the subject and needs only the fact to attach elsewhere), but they are not the
+  one obvious way to return a validated value; prefer the canonical forms above for new code.
+
 ## 8. Lexical structure
 ### 8.1 File prologue
 **Accepted design, Implemented.**
@@ -402,11 +493,11 @@ Explicit import/export names may additionally use the constructor-family form `T
 
 **Accepted design, Implemented.**
 
-**Integer literals** (`Int`): arbitrary decimal sequences, optionally preceded by a minus sign. Integer values are represented as Racket fixnums (63-bit signed integers on 64-bit platforms):
+**Integer literals** (`Int`): arbitrary decimal sequences, optionally preceded by a minus sign. `Int` is **arbitrary-precision** (unbounded): values are Racket integers, which transparently span fixnums and bignums.
 
-- **Range**: `−4611686018427387904` to `4611686018427387903` (i.e., `−2^62` to `2^62 − 1`).
-- Integer literals outside this range are a **compile-time error**.
-- Arithmetic on `Int` values in Tesl is fixnum arithmetic; values exceeding the range are not silently promoted to bignums.
+- **Range**: unbounded. There is no minimum or maximum magnitude; integer literals of any size are accepted.
+- Literals whose magnitude exceeds the native fixnum range are carried by the compiler as a canonical decimal string (`LBigInt`) and emitted as ordinary Racket integer literals; there is no compile-time range check.
+- Arithmetic on `Int` values never overflows: results that exceed the native fixnum range are automatically represented as bignums.
 
 **Float literals**: decimal literals containing a `.` (e.g., `3.14`, `-0.5`). Maps to Racket inexact floats (IEEE 754 double precision).
 
@@ -415,6 +506,8 @@ Explicit import/export names may additionally use the constructor-family form `T
 **Bool literals**: `True` and `False` (capitalised). Lower-case `true`/`false` are not keywords.
 
 **List literals**: `[e1, e2, e3]`. Nested lists require explicit brackets.
+
+## 9. Expression grammar
 
 Tesl currently uses one lightweight GDP expression grammar for both type expressions and proof facts.
 
@@ -537,7 +630,7 @@ The current frontend gives special treatment to these module names:
 - `Tesl.Tuple` — tuple constructors and accessors (`Tuple2`, `Tuple3`, `Tuple2.first`, `Tuple2.second`, `Tuple3.first`, `Tuple3.second`, `Tuple3.third`).
 - `Tesl.Env` — environment variable access (`env`, `envInt`)
 - `Tesl.DB` — database capabilities (`dbRead`, `dbWrite`)
-- `Tesl.Http` — HTTP request type (`HttpRequest`)
+- `Tesl.Http` — HTTP request type (`HttpRequest`). Dot-access fields, each a `Dict String String`: `request.cookies`, `request.headers` (names lowercased), `request.queryParameters` (URL-query values are form-url-decoded; repeated keys are last-wins; keys are case-sensitive). An api-test supplies query parameters inline in the path, e.g. `get "/search?q=hello%20world"`.
 - `Tesl.Telemetry` — telemetry sentinel bindings (`telemetry`, `initTelemetry`)
 - `Tesl.Queue` — queue capabilities (`queueRead`, `queueWrite`, `pubsub`), proof predicates (`FromQueue`, `FromDeadQueue`)
 - `Tesl.UUID` — UUID generation and validation: `UUID.v4`, `UUID.v7`, `UUID.validate`, `IsUuid` proof predicate, `uuidV4Codec`, `uuidV7Codec`. The `uuid` capability gates generation; `UUID.validate` requires no capability. See §21.1.
@@ -829,9 +922,10 @@ Consumers import only from `UserLib` and see a single, stable API. The internal 
                    | <main-decl>
                    | <test-block>
                    | <queue-decl>
-                   | <channel-decl>
+                   | <sseChannel-decl>
                    | <cache-decl>
                    | <email-decl>
+                   | <agent-decl>
 ```
 
 `main` is an ordinary `<function-decl>` returning an `App` (§11.13); `<main-decl>` is called out separately only because it is the application entry point. There is no `workers`/`deadWorkers` declaration — workers are folded into the queue's `jobs` list (§11.15, §11.17).
@@ -1122,6 +1216,81 @@ queue EmailQueue requires [smtpSend, alertCap] = Queue {
   retry: QueueRetryStrategy { maxAttempts: 3  backoff: Exponential  initialDelay: 60 }
 }
 ```
+
+### 11.18 AI agents
+**Accepted design, Implemented.**
+
+An agent is built with a single typed-record constructor, `Agent { … }`. It can be
+declared at the top level as an `agent` binding **or** written as a plain expression
+(e.g. to build a per-request, bring-your-own-key agent inside a function):
+
+```text
+<agent-decl> ::= "agent" <identifier> [ "requires" "[" <capability> { "," <capability> } "]" ] "=" <agent-ctor>
+<agent-ctor> ::= "Agent" "{"
+                   "provider"     ":" <expr>        -- an LlmProvider value
+                   "systemPrompt" ":" <expr>        -- String
+                   "maxTokens"    ":" <expr>        -- Int
+                   "tools"        ":" <expr>        -- List Tool
+                 "}"
+```
+
+`provider` is a full `LlmProvider` value built by one of the provider constructors —
+`anthropic key model`, `openai key model`, `mistral key model`, `local endpoint model`,
+or the deterministic `mockProvider [replies]` / `mockToolProvider [steps]` used in
+tests. The model and key are arguments to the provider, so the type checker enforces
+them (`anthropic : String -> String -> LlmProvider`). Read a server-side key with
+`requireEnv "VAR"` (`String`; fails fast if unset), the String counterpart to
+`env : String -> Maybe String`.
+
+`tools` is a `List Tool`. Wrap a typed Tesl function as a tool with `asTool`: the
+JSON Schema is derived from the function's parameter types and the model's tool-call
+arguments are decoded into those parameters under the hood — no hand-written schema or
+validator. (For full manual control the lower-level `tool name desc schema validate
+dispatch` constructor is still available.) Tool functions take only `String`, `Int`,
+`Float`, `Bool`, or `PosixMillis` parameters.
+
+```tesl
+fn lookupOrderStatus(orderId: String) -> String requires [dbRead] =
+  case selectOne o from Order where o.id == orderId of
+    Something o -> o.status
+    Nothing -> "no such order"
+
+# server-keyed agent (top-level block)
+agent SupportAgent requires [supportAi] = Agent {
+  provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
+  systemPrompt: "You are a concise support assistant."
+  tools: [asTool lookupOrderStatus]
+  maxTokens: 512
+}
+
+# bring-your-own-key agent (the SAME constructor, built per request)
+fn agentForConsumer(c: Consumer) -> Agent requires [supportAi] =
+  Agent {
+    provider: anthropic c.apiKey "claude-opus-4-8"
+    systemPrompt: "You are a concise support assistant."
+    tools: [asTool lookupOrderStatus]
+    maxTokens: 512
+  }
+```
+
+Running inference requires the `aiProvider` capability (from `Tesl.Agent`; it implies
+`httpClient` because real providers perform outbound HTTP). The agent API:
+
+- `ask agent prompt -> String` — one-shot; runs the tool-calling loop, returns the text.
+- `askReply agent prompt -> AgentReply` — like `ask`, plus token usage + tool-call count
+  (`replyText` / `replyTokens` / `replyToolCalls`).
+- `askWith agent prompt provider -> AgentReply` — a per-call provider override (BYOK).
+- `askFor agent prompt decoder maxRetries -> a` — ask for a typed value; the developer's
+  `String -> a` decoder is retried up to `maxRetries` on a decode failure.
+- Multi-turn conversation (the developer owns persistence): `newConversation` /
+  `conversationFrom` build a `Conversation`; `converse` / `converseStreaming` advance it,
+  returning a turn (`turnReply` / `turnConversation`); `conversationJson` /
+  `conversationLength` inspect it. `converseStreaming conv prompt publish` calls `publish`
+  with each tool-use / thought / reply step as it streams.
+
+`Agent`, `LlmProvider`, `Tool`, `AgentReply`, `Conversation` are opaque types. There is
+no separate `defineAgent`/`withTools` — the `Agent { … }` constructor is the only way to
+build an agent.
 
 ### 11.2 Top-level immutable bindings
 **Accepted design.**

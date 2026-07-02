@@ -87,15 +87,15 @@
   (define token (with-jwt (lambda () (JWT.sign test-claims test-secret))))
   (define result (with-jwt (lambda () (JWT.verify token test-secret))))
   (check-true (hash? result))
-  (check-equal? (hash-ref result 'sub) "user123"))
+  (check-equal? (hash-ref result "sub") "user123"))
 
 (test-case "verify returns all claim fields"
   (define claims (hasheq 'sub "u1" 'name "Alice" 'role "admin" 'exp 9999999999999))
   (define token (with-jwt (lambda () (JWT.sign claims test-secret))))
   (define result (with-jwt (lambda () (JWT.verify token test-secret))))
-  (check-equal? (hash-ref result 'sub) "u1")
-  (check-equal? (hash-ref result 'name) "Alice")
-  (check-equal? (hash-ref result 'role) "admin"))
+  (check-equal? (hash-ref result "sub") "u1")
+  (check-equal? (hash-ref result "name") "Alice")
+  (check-equal? (hash-ref result "role") "admin"))
 
 (test-case "verify wrong secret returns check-fail"
   (define token (with-jwt (lambda () (JWT.sign test-claims test-secret))))
@@ -145,13 +145,13 @@
   (define token (with-jwt (lambda () (JWT.sign test-claims test-secret))))
   (define result (with-jwt (lambda () (JWT.decode token))))
   (check-true (hash? result))
-  (check-equal? (hash-ref result 'sub) "user123"))
+  (check-equal? (hash-ref result "sub") "user123"))
 
 (test-case "decode works even with wrong secret context"
   ;; decode ignores the secret — just decodes the payload
   (define token (with-jwt (lambda () (JWT.sign test-claims test-secret))))
   (define result (with-jwt (lambda () (JWT.decode token))))
-  (check-equal? (hash-ref result 'sub) "user123"))
+  (check-equal? (hash-ref result "sub") "user123"))
 
 (test-case "decode malformed token raises error"
   (define bad-token (JwtToken "not-a-jwt"))
@@ -231,14 +231,14 @@
   (define claims (hasheq 'sub "test-user-42" 'exp 9999999999999))
   (define token (with-jwt (lambda () (JWT.sign claims test-secret))))
   (define result (with-jwt (lambda () (JWT.verify token test-secret))))
-  (check-equal? (hash-ref result 'sub) "test-user-42"))
+  (check-equal? (hash-ref result "sub") "test-user-42"))
 
 (test-case "roundtrip: sign then decode gives same claims"
   (define claims (hasheq 'sub "u999" 'exp 9999999999999 'role "admin"))
   (define token (with-jwt (lambda () (JWT.sign claims test-secret))))
   (define decoded (with-jwt (lambda () (JWT.decode token))))
-  (check-equal? (hash-ref decoded 'sub) "u999")
-  (check-equal? (hash-ref decoded 'role) "admin"))
+  (check-equal? (hash-ref decoded "sub") "u999")
+  (check-equal? (hash-ref decoded "role") "admin"))
 
 (test-case "verify fails after token payload tampering"
   (define claims (hasheq 'sub "legit-user" 'exp 9999999999999))
@@ -272,13 +272,13 @@
   (define claims (hasheq 'sub "user+name@example.com" 'exp 9999999999999))
   (define token (with-jwt (lambda () (JWT.sign claims test-secret))))
   (define result (with-jwt (lambda () (JWT.verify token test-secret))))
-  (check-equal? (hash-ref result 'sub) "user+name@example.com"))
+  (check-equal? (hash-ref result "sub") "user+name@example.com"))
 
 (test-case "sign with unicode in claims"
   (define claims (hasheq 'sub "user" 'name "Uber test" 'exp 9999999999999))
   (define token (with-jwt (lambda () (JWT.sign claims test-secret))))
   (define result (with-jwt (lambda () (JWT.verify token test-secret))))
-  (check-equal? (hash-ref result 'name) "Uber test"))
+  (check-equal? (hash-ref result "name") "Uber test"))
 
 (test-case "verify with check-fail status is exactly 401"
   (define token (with-jwt (lambda () (JWT.sign test-claims test-secret))))
@@ -293,8 +293,8 @@
   (define t2 (with-jwt (lambda () (JWT.sign claims2 test-secret))))
   (define d1 (with-jwt (lambda () (JWT.decode t1))))
   (define d2 (with-jwt (lambda () (JWT.decode t2))))
-  (check-equal? (hash-ref d1 'sub) "u1")
-  (check-equal? (hash-ref d2 'sub) "u2"))
+  (check-equal? (hash-ref d1 "sub") "u1")
+  (check-equal? (hash-ref d2 "sub") "u2"))
 
 (test-case "sign with long secret key"
   (define long-secret (JwtSecret (make-string 64 #\k)))

@@ -210,34 +210,34 @@ fn sendHtmlNewsletter(addr: String, htmlContent: String) -> Unit
 # The tests below verify that Email.send compiles and runs without error
 # (it inserts into the in-memory outbox store in test mode, no SMTP needed).
 
-test "sendWelcomeEmail compiles and runs without error" {
+test "sendWelcomeEmail compiles and runs without error" requires [email] {
   let _ = sendWelcomeEmail "alice@example.com" "Alice"
   expect True == True
 }
 
-test "sendPasswordReset compiles and runs without error" {
+test "sendPasswordReset compiles and runs without error" requires [email] {
   let _ = sendPasswordReset "bob@example.com" "https://example.com/reset?token=abc123"
   expect True == True
 }
 
-test "sendNotification with plain text" {
+test "sendNotification with plain text" requires [email] {
   let _ = sendNotification "ops@example.com" "Deployment completed successfully."
   expect True == True
 }
 
-test "sendHtmlNewsletter with HTML content" {
+test "sendHtmlNewsletter with HTML content" requires [email] {
   let _ = sendHtmlNewsletter "newsletter@example.com" "<h1>June Update</h1><p>Here's what's new.</p>"
   expect True == True
 }
 
-test "multiple emails can be queued in sequence" {
+test "multiple emails can be queued in sequence" requires [email] {
   let _ = sendWelcomeEmail "user1@example.com" "User1"
   let _ = sendWelcomeEmail "user2@example.com" "User2"
   let _ = sendWelcomeEmail "user3@example.com" "User3"
   expect True == True
 }
 
-test "email with special characters in body" {
+test "email with special characters in body" requires [email] {
   let _ = sendNotification "test@example.com" "Reset link: https://example.com/reset?token=abc&user=1"
   expect True == True
 }

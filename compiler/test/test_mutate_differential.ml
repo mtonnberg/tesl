@@ -1,9 +1,13 @@
 (** One-off differential check: the migrated {!Mutate.collect_sites} /
-    {!Mutate.replace_binop_at} (now built on {!Ast_visitor}) must produce
-    byte-identical site indices and replacements to a reference re-implementation
-    of the ORIGINAL hand-rolled pre-order walks.  Guards the load-bearing
-    invariant that delegating recursion to the shared visitor did not perturb the
-    deterministic mutation-site indexing.  Pure OCaml; no Racket. *)
+    {!Mutate.replace_at} (now built on {!Ast_visitor}) must produce
+    byte-identical BINOP site indices and replacements to a reference
+    re-implementation of the ORIGINAL hand-rolled pre-order walks.  Guards the
+    load-bearing invariant that delegating recursion to the shared visitor did
+    not perturb the deterministic mutation-site indexing.  [collect_sites] now
+    also returns boolean- and integer-literal sites (each in its OWN per-kind
+    index space), so we project onto the [KBinop] sites before comparing —
+    per-kind counters guarantee the binop indices are unchanged.  Pure OCaml;
+    no Racket. *)
 
 open Ast
 
@@ -42,7 +46,7 @@ let ref_collect body =
     | ELit { lit = LInterp segs; _ } ->
       List.iter (function IExpr e -> walk e | ILiteral _ -> ()) segs
     | ERuntimeCall { segments; _ } ->
-      List.iter (function RLit _ -> () | RArg e -> walk e) segments
+      List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk e) segments
     | ELit _ | EVar _ | EStartWorkers _
     | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
     | ESendEmail _ | EStartEmailWorker _ -> ()
@@ -67,33 +71,43 @@ let () =
     | Some m ->
       List.iter (function
         | DFunc fd ->
-          let new_sites = Mutate.collect_sites fd.name fd.kind fd.body in
+          (* Project onto the binop sites: keep only sites whose original value
+             is a [MOBinop], recovering the [binop] for comparison. *)
+          let binop_sites =
+            Mutate.collect_sites fd.name fd.kind fd.body
+            |> List.filter_map (fun ((s : Mutate.mutation_site), _alts) ->
+                 match s.original with
+                 | Mutate.MOBinop op -> Some (s, op)
+                 | _ -> None)
+          in
           let new_pairs =
-            List.map (fun (s : Mutate.mutation_site) -> (s.site_index, s.original_op))
-              new_sites in
+            List.map (fun ((s : Mutate.mutation_site), op) -> (s.site_index, op))
+              binop_sites in
           let ref_pairs = ref_collect fd.body in
           if new_pairs <> ref_pairs then begin
             incr failed;
             Printf.printf "FAIL - sites differ in %s:%s\n" path fd.name
           end;
-          total_sites := !total_sites + List.length new_sites;
+          total_sites := !total_sites + List.length binop_sites;
           (* replacement lands on the right node: replace a site's op then
              re-collect and confirm exactly that index now carries new_op. *)
-          List.iter (fun (s : Mutate.mutation_site) ->
-            match Mutate.mutation_alternatives s.original_op with
+          List.iter (fun ((s : Mutate.mutation_site), op) ->
+            match Mutate.mutation_alternatives op with
             | new_op :: _ ->
               let body' =
-                Mutate.replace_binop_at ~target_index:s.site_index ~new_op fd.body in
+                Mutate.replace_at ~kind:Mutate.KBinop ~target_index:s.site_index
+                  ~op:(Mutate.MOBinop new_op) fd.body in
               let after = Mutate.collect_sites fd.name fd.kind body' in
-              (match List.find_opt (fun (s2 : Mutate.mutation_site) ->
-                       s2.site_index = s.site_index) after with
-               | Some s2 when s2.original_op <> new_op ->
+              (match List.find_opt (fun ((s2 : Mutate.mutation_site), _alts) ->
+                       s2.kind = Mutate.KBinop && s2.site_index = s.site_index)
+                       after with
+               | Some ({ Mutate.original = Mutate.MOBinop op2; _ }, _) when op2 <> new_op ->
                  incr failed;
                  Printf.printf "FAIL - replace wrong op at %s:%s idx %d\n"
                    path fd.name s.site_index
                | _ -> ())
             | [] -> ()
-          ) new_sites
+          ) binop_sites
         | _ -> ()
       ) m.decls
   ) files;

@@ -6,7 +6,7 @@ import Tesl.String exposing [String.contains]
 import Tesl.Agent exposing [
   aiProvider,
   mockProvider,
-  defineAgent,
+  Agent,
   newConversation,
   conversationFrom,
   converse,
@@ -34,7 +34,7 @@ capability supportBot implies aiProvider
 # `converse` feeds back into the loop: after turn 2 it must contain turn 1's
 # user prompt AND turn 1's assistant reply AND turn 2's, i.e. the full thread.
 test "converse threads turn 1 history into turn 2" requires [supportBot] {
-  let agent = defineAgent (mockProvider ["First reply about cats", "Second reply still about cats"]) "You are a helpful bot." 128
+  let agent = Agent { provider: (mockProvider ["First reply about cats", "Second reply still about cats"]), systemPrompt: "You are a helpful bot.", maxTokens: 128, tools: [] }
 
   let conv0 = newConversation agent
 
@@ -63,7 +63,7 @@ test "converse threads turn 1 history into turn 2" requires [supportBot] {
 # conversationJson / conversationFrom round-trip the history losslessly, so a
 # developer can persist it as a String and resume the SAME thread later.
 test "conversationFrom restores a serialized thread and continues it" requires [supportBot] {
-  let agent = defineAgent (mockProvider ["Reply one", "Reply two"]) "x" 64
+  let agent = Agent { provider: (mockProvider ["Reply one", "Reply two"]), systemPrompt: "x", maxTokens: 64, tools: [] }
 
   let conv0 = newConversation agent
   let turn1 = converse conv0 "first question"

@@ -229,8 +229,47 @@ fn roundtrip(raw: Int) -> String =
   assert_absent diags "W063";
   assert_absent diags "W064"
 
+(* ── W050 — config-block usage is credited ───────────────────────────────────
+   Names used only inside a typed-config RHS (`database X = Database { … }`,
+   `queue X = Queue { … }`, etc.) must be credited as referenced; otherwise they
+   are falsely flagged W050-unused.  Plus a regression guard: a genuinely-unused
+   import is still flagged. *)
+let test_w050_config_block_credits_used_imports () =
+  let diags = lint_src {|#lang tesl
+module DbCfg exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+entity Note table "notes" primaryKey id { id: String }
+database DB = Database {
+  schema: "app"
+  entities: [Note]
+  backend: Postgres (PostgresConfig {
+    dbName: "app"
+    user: "u"
+    password: ""
+    connection: TcpConnection { host: "127.0.0.1" port: 5432 }
+  })
+}
+|} in
+  assert_absent diags "W050"
+
+let test_w050_genuinely_unused_import_still_flagged () =
+  let diags = lint_src {|#lang tesl
+module UnusedImp exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Set exposing [Set.insert]
+fn f(s: String) -> String = s
+|} in
+  assert_has diags "W050"
+
 let () =
   Alcotest.run "Linter" [
+    "W050-config-usage-credited", [
+      Alcotest.test_case "config-block names credited (no spurious W050)" `Quick
+        test_w050_config_block_credits_used_imports;
+      Alcotest.test_case "genuinely-unused import still flagged" `Quick
+        test_w050_genuinely_unused_import_still_flagged;
+    ];
     "W060-proof-decompose", [
       Alcotest.test_case "proof half not flagged as unused" `Quick
         test_w060_decompose_proof_half_not_unused;

@@ -1,5 +1,7 @@
 # 01 — Tesl: End-to-End Compilation Overview
 
+> Audience: contributors to Tesl itself — the compiler (`compiler/lib/`), runtime (`dsl/`, `tesl/`), tests, and tooling.
+
 This guide is for developers who want to understand or contribute to Tesl itself.
 For learning the Tesl *language*, start with `example/learn/lesson00`.
 
@@ -33,6 +35,9 @@ tesl/
 │   ├── prelude.rkt, string.rkt, list.rkt, int.rkt, ...
 │   ├── time.rkt                      # PosixMillis, nowMillis, formatTime
 │   ├── queue.rkt                     # Queue/pub-sub runtime
+│   ├── agent.rkt                      # AI agent runtime (providers, tool loop, conversations)
+│   ├── agent-provider.rkt             # Real LLM provider transports (Anthropic / OpenAI-wire)
+│   ├── env.rkt                        # env / envString / requireEnv
 │   └── websocket.rkt                 # RFC 6455 WebSocket server
 ├── tests/
 │   ├── tesl-test.rkt                 # Main Racket test suite (657+ tests)

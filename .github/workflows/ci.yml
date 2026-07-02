@@ -1,0 +1,66 @@
+# Tesl Continuous Integration
+#
+# This workflow runs the EXACT SAME authoritative gate a human runs locally:
+#
+#     nix develop        # dune + racket + postgresql + ocaml + mailhog + python3
+#     ./ci.sh            # the single combined super-set gate (see its header)
+#
+# ./ci.sh is the single source of truth for "green" (see its header comment). It
+# is the union of the two historical QA scripts (compile-examples.sh and
+# compiler/ci.sh, now thin shims that exec it): dune build + dune test (ID-keyed
+# waivers) + lifted-stdlib snapshots + format + validate sweep + exact-match .rkt
+# snapshots + Tesl tests + mutation + integration + Racket/AI suites + the Racket
+# aggregate suite. It starts its OWN project-local PostgreSQL cluster
+# (initdb/pg_ctl on a temp data dir under CI), so NO external database service
+# is needed here. The gate is exit-code driven: a non-zero exit fails the job.
+# We deliberately do NOT swallow the exit code with `|| true`.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Cancel superseded runs on the same ref to save runner minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Authoritative gate (./ci.sh)
+    runs-on: ubuntu-latest
+    # ci.sh caps its own sub-phases; give the whole gate ample headroom
+    # (build + Racket precompile + aggregate suite can take several minutes).
+    timeout-minutes: 60
+    env:
+      # GitHub Actions already sets CI=true; ci.sh reads CI to pick a temp
+      # PostgreSQL data root (TESL_TEST_USE_TEMP_PG). Set it explicitly so the
+      # behaviour is not dependent on the runner's implicit defaults.
+      CI: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix (flakes enabled)
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+
+      - name: Enable Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # One dev shell, one script: this mirrors the local workflow exactly.
+      # `nix develop --command bash` runs inside the flake devShell (racket, raco,
+      # dune, initdb/pg_ctl, etc. all on PATH). ci.sh detects the direct
+      # racket/raco path and manages its own PostgreSQL cluster. ci.sh already
+      # runs `dune build` + `dune test` as its first two phases, so we invoke it
+      # directly — its non-zero exit fails the job (no `|| true`).
+      - name: Run the authoritative gate
+        run: |
+          nix develop --command bash -lc '
+            set -euo pipefail
+            export TESL_REPO_ROOT="$PWD"
+            ./ci.sh
+          '

@@ -32,7 +32,11 @@ These are full, runnable API examples:
 
 ## Learning Path (Recommended Order)
 
-The `learn/` directory contains a structured learning path:
+The `learn/` directory ships **70 `.tesl` lessons** (`ls example/learn/lesson*.tesl | wc -l`).
+The list below is a curated recommended order through the core concepts, not the full catalog —
+run `ls example/learn/` (or `tesl help manual examples`) to see every lesson, including the later
+ones on UUID/JWT/HTTP client, caching, email, step debugging, AI agents, libraries, and query
+parameters.
 
 ### Basics
 1. **[lesson00-hello-world.tesl](../example/learn/lesson00-hello-world.tesl)** - Your first Tesl program
@@ -60,23 +64,23 @@ The `learn/` directory contains a structured learning path:
 17. **[lesson37-parameterized-adts.tesl](../example/learn/lesson37-parameterized-adts.tesl)** - Parameterized ADTs
 
 ### Capabilities & Effects
-14. **[lesson07-consumer.tesl](../example/learn/lesson07-consumer.tesl)** - Consumer capability
-15. **[lesson11-capabilities.tesl](../example/learn/lesson11-capabilities.tesl)** - Capability system introduction
+18. **[lesson07-consumer.tesl](../example/learn/lesson07-consumer.tesl)** - Consumer capability
+19. **[lesson11-capabilities.tesl](../example/learn/lesson11-capabilities.tesl)** - Capability system introduction
 
 ### Database
-16. **[lesson18-database-sql-and-proofs.tesl](../example/learn/lesson18-database-sql-and-proofs.tesl)** - Database operations with proofs
-17. **[lesson20-named-db-results.tesl](../example/learn/lesson20-named-db-results.tesl)** - Named database results
-18. **[lesson21-sql-reference.tesl](../example/learn/lesson21-sql-reference.tesl)** - SQL reference and examples
+20. **[lesson18-database-sql-and-proofs.tesl](../example/learn/lesson18-database-sql-and-proofs.tesl)** - Database operations with proofs
+21. **[lesson20-named-db-results.tesl](../example/learn/lesson20-named-db-results.tesl)** - Named database results
+22. **[lesson21-sql-reference.tesl](../example/learn/lesson21-sql-reference.tesl)** - SQL reference and examples
 
 ### Forall Proofs
-19. **[lesson29-forall-list-proofs.tesl](../example/learn/lesson29-forall-list-proofs.tesl)** - Forall proofs with lists
-20. **[lesson30-forall-set-proofs.tesl](../example/learn/lesson30-forall-set-proofs.tesl)** - Forall proofs with sets
+23. **[lesson29-forall-list-proofs.tesl](../example/learn/lesson29-forall-list-proofs.tesl)** - Forall proofs with lists
+24. **[lesson30-forall-set-proofs.tesl](../example/learn/lesson30-forall-set-proofs.tesl)** - Forall proofs with sets
 
 ### Proof Advanced
-21. **[lesson38-proof-decomposition.tesl](../example/learn/lesson38-proof-decomposition.tesl)** - Proof decomposition
-22. **[lesson51-proof-combining.tesl](../example/learn/lesson51-proof-combining.tesl)** - Combining proofs
-23. **[lesson52-maybe-proof.tesl](../example/learn/lesson52-maybe-proof.tesl)** - Maybe type proofs
-24. **[lesson53-literal-parametrized-predicates.tesl](../example/learn/lesson53-literal-parametrized-predicates.tesl)** - Literal parametrized predicates
+25. **[lesson38-proof-decomposition.tesl](../example/learn/lesson38-proof-decomposition.tesl)** - Proof decomposition
+26. **[lesson51-proof-combining.tesl](../example/learn/lesson51-proof-combining.tesl)** - Combining proofs
+27. **[lesson52-maybe-proof.tesl](../example/learn/lesson52-maybe-proof.tesl)** - Maybe type proofs
+28. **[lesson53-literal-parametrized-predicates.tesl](../example/learn/lesson53-literal-parametrized-predicates.tesl)** - Literal parametrized predicates
 
 ---
 
@@ -85,13 +89,13 @@ The `learn/` directory contains a structured learning path:
 ### Queues & Background Processing
 | File | Description |
 |------|-------------|
-| [`lesson23-queues-and-workers.tesl`](../example/learn/lesson23-queues-and-workers.tesl) | Queue and worker basics |
+| [`lesson23-queues-and-workers.md`](../example/learn/lesson23-queues-and-workers.md) | Queue and worker basics |
 | [`lesson28-dead-letter-queue.tesl`](../example/learn/lesson28-dead-letter-queue.tesl) | Dead letter queue handling |
 
 ### Pub/Sub & Real-time
 | File | Description |
 |------|-------------|
-| [`lesson24-pubsub-sse.tesl`](../example/learn/lesson24-pubsub-sse.tesl) | Server-Sent Events pub/sub |
+| [`lesson24-pubsub-sse.md`](../example/learn/lesson24-pubsub-sse.md) | Server-Sent Events pub/sub |
 | [`chat/chat-backend.tesl`](../example/chat/chat-backend.tesl) | Complete chat application |
 
 ### Testing

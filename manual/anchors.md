@@ -113,8 +113,50 @@ them.
 
 ### `language-spec`
 
-`language-spec` has no promised sub-anchors yet. Cite the section as a whole
-(`tesl help manual language-spec`) until anchors are published here.
+The specification (`LANGUAGE-SPEC.md`) is addressed by **section number** (`§7.4`, `§14b.2`),
+not by GFM slug. Section numbers are the spec's stable key, exactly as the slugs above are the
+manual's — the *heading text* after a number may be reworded, but the number keeps pointing at a
+heading covering the same topic. Compiler diagnostics, comments, and tests cite the spec this way
+(e.g. `LANGUAGE-SPEC.md §7.12`); `LANGUAGE-SPEC.md` opens with a hand-maintained
+[Table of Contents](../LANGUAGE-SPEC.md#table-of-contents) keyed on these numbers.
+
+**Stability contract.** The following section numbers are cited by name from
+`compiler/lib/*.ml` and `compiler/test/*.ml`. They are a stability contract in the same sense as
+the manual anchors above: renumbering one is a breaking change; keep the old number resolving to a
+heading (add a sub-heading or a note) for at least one release. `compiler/test/test_spec_anchors.ml`
+fails the build if any `§`-number cited by the compiler stops resolving to a real heading in
+`LANGUAGE-SPEC.md`, so this table and the code citations cannot drift apart.
+
+| Spec § | Heading it must resolve to (topic) |
+|---|---|
+| `§6.1` | Raw values |
+| `§6.3` | Named values |
+| `§7.1` | Fresh hidden subjects for ordinary values |
+| `§7.3` | Facts attach to subjects, not to surface spellings |
+| `§7.4` | Name shadowing is illegal (host-wide no-shadowing) |
+| `§7.7` | `attachFact` does not retarget a proof to a new subject |
+| `§7.8` | Unbound GDP names in proof templates are rejected |
+| `§7.9` | Existential witnesses may not escape |
+| `§7.10` | Proof verification is compile-time; some runtime semantics remain |
+| `§7.11` | Newtype nominal identity is enforced at runtime |
+| `§7.12` | `:::` fabrication is restricted to trusted function kinds |
+| `§8.5` | Literals |
+| `§9.1` | GDP expressions |
+| `§11.2` | Top-level immutable bindings |
+| `§11.6` | Type declarations |
+| `§11.7` | Records |
+| `§12` | Function bodies and expressions |
+| `§13.1` | Names, duplication, and imports |
+| `§13.2` | No-shadowing rule (static) |
+| `§13.9` | Proof predicate scope and explicit import |
+| `§14b.1` | Type language (structural) |
+| `§14b.2` | PosixMillis is not Int |
+| `§20.5` | Transactional atomicity (email) |
+
+> **Scope of the check.** The resolution test collects `§`-citations from compiler sources but
+> deliberately **excludes internal-review shorthand** (`Fix-11 §…`, `Review20 §…`,
+> `critical-review-17 §…`, `review 50 §…`) — those numbers refer to review documents, not to the
+> spec — and excludes by-**line** references. Only genuine spec-section citations are validated.
 
 ---
 

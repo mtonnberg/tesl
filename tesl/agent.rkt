@@ -103,7 +103,7 @@
 
 (require (only-in "../dsl/capability.rkt" define-capability require-capabilities!)
          (only-in "../dsl/private/evidence.rkt" raw-value)
-         (only-in "../dsl/types.rkt" tesl-type-codec-decode)
+         (only-in "../dsl/types.rkt" tesl-type-codec-decode register-runtime-type/runtime!)
          (only-in "../dsl/check.rkt" check-fail? check-fail-message)
          json
          "agent-provider.rkt")
@@ -121,6 +121,7 @@
          textStep
          anthropic
          openai
+         mistral
          local
          defineAgent
          withTools
@@ -143,6 +144,7 @@
          newConversation
          conversationFrom
          converse
+         converseStreaming
          turnReply
          turnConversation
          conversationJson
@@ -201,6 +203,25 @@
 ;; only needs to be a bound identifier so the emitted (only-in ...) resolves.
 (define ToolStep llm-response?)
 
+;; S13-full: these opaque library types carry a hand-written Racket predicate
+;; (the `TypeName?` binding above) but were never registered in the runtime
+;; type registry.  Before S13-full's fail-closed flip that was invisible: a
+;; type-ref with no registered predicate failed OPEN, so a `-> Conversation`
+;; handler return was accepted by default.  With fail-closed live, an
+;; UNREGISTERED concrete type-ref is rejected — so we must register each opaque
+;; type's predicate here, exactly as `define-record`/`define-adt` do for their
+;; types, so the runtime boundary check FINDS the predicate and accepts a
+;; genuine value (and still rejects a mismatched one).  Registering under the
+;; bare symbol is sufficient: `runtime-type-predicate` resolves a boundary
+;; type-ref to its bare NAME before the registry lookup.
+(register-runtime-type/runtime! 'LlmProvider procedure?)
+(register-runtime-type/runtime! 'Agent agent?)
+(register-runtime-type/runtime! 'AgentReply agent-reply?)
+(register-runtime-type/runtime! 'Tool tool-spec?)
+(register-runtime-type/runtime! 'Conversation conversation?)
+(register-runtime-type/runtime! 'ConversationTurn conv-turn?)
+(register-runtime-type/runtime! 'ToolStep llm-response?)
+
 ;;; ── Provider constructors ────────────────────────────────────────────────────
 
 ;;; mockProvider : List String -> LlmProvider — text-only scripted replies.
@@ -233,6 +254,11 @@
   (make-anthropic-provider (raw-value api-key) (raw-value model)))
 (define (openai api-key model)
   (make-openai-provider (raw-value api-key) (raw-value model)))
+;; Mistral speaks the OpenAI chat-completions wire format (Bearer auth), so it
+;; reuses the OpenAI provider pointed at Mistral's endpoint.
+(define (mistral api-key model)
+  (make-openai-provider (raw-value api-key) (raw-value model)
+                        "https://api.mistral.ai/v1/chat/completions"))
 (define (local endpoint model)
   (make-local-provider (raw-value endpoint) (raw-value model)))
 
@@ -354,7 +380,15 @@
        [else
         (define result
           (with-tool-db a (lambda () ((tool-spec-dispatch t) (cdr validated)))))
-        (tool-result-block (tool-call-id tc) (->result-string result) #f)])]))
+        ;; AGENT-4: a tool body that returns a `check-fail` (a domain validation
+        ;; that did not hold — e.g. the `refundOrder confirmed:false` guard) must
+        ;; be surfaced to the model as an is_error tool_result, NOT stringified
+        ;; into a normal (success) result.  Otherwise the model is told the tool
+        ;; succeeded and reports a fabricated outcome.
+        (if (check-fail? result)
+            (tool-result-block (tool-call-id tc)
+                               (format "tool failed: ~a" (check-fail-message result)) #t)
+            (tool-result-block (tool-call-id tc) (->result-string result) #f))])]))
 
 (define (->result-string v)
   (define r (raw-value v))
@@ -563,6 +597,25 @@
   (define a (conversation-agent c))
   (define-values (reply transcript)
     (run-the-loop/transcript a prompt #f (conversation-messages c) #f))
+  (conv-turn reply (conversation a transcript)))
+
+;;; converseStreaming : Conversation -> String -> (String -> Unit) -> ConversationTurn
+;;; Like converse, but calls `publish` once per loop step with a step-event String
+;;; ("tool: <name>" as each tool is invoked, "text: <reply>" for the final assistant
+;;; text), so a handler can stream the tool-use / thought process / reply over SSE
+;;; while still threading the full conversation history into the turn.
+(define (converseStreaming conv prompt publish)
+  (require-capabilities! (list aiProvider))
+  (define c (raw-value conv))
+  (unless (conversation? c)
+    (raise-user-error 'converseStreaming "first argument is not a Conversation: ~e" c))
+  (define pub (raw-value publish))
+  (unless (procedure? pub)
+    (raise-user-error 'converseStreaming
+                      "third argument must be a function String -> Unit, got ~e" pub))
+  (define a (conversation-agent c))
+  (define-values (reply transcript)
+    (run-the-loop/transcript a prompt #f (conversation-messages c) (lambda (s) (pub s))))
   (conv-turn reply (conversation a transcript)))
 
 ;;; turnReply : ConversationTurn -> AgentReply

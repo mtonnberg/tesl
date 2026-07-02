@@ -406,16 +406,17 @@ let test_g70_type_alias_unknown_base_type () =
     "  id.value\n" in
   should_fail "unknown.*type\\|NonExistentType\\|undefined\\|T001\\|E000" src
 
-(* ── G71: Integer literal exceeding 63-bit fixnum range is rejected ────── *)
+(* ── G71: Integer literals are arbitrary-precision (A9/HM-1) ────────────── *)
 (*                                                                              *)
-(* The spec §8.5 states that integer literals outside the fixnum range are a  *)
-(* compile-time error. The boundary is 2^62 - 1 = 4611686018427387903.       *)
-(* A literal of 4611686018427387904 (2^62) must be rejected.                 *)
+(* Under A9/HM-1, Int is arbitrary-precision: §8.5's 63-bit fixnum range error *)
+(* is dropped. A literal of 4611686018427387904 (2^62), formerly rejected, now *)
+(* compiles and is carried as an LBigInt canonical string into the Racket      *)
+(* bignum. (Doc update to §8.5 is Wave-4 scope; the anchor heading is stable.) *)
 let test_g71_integer_overflow_compile_error () =
   let src = prelude ^
-    (* 2^62 = 4611686018427387904 — one beyond the maximum fixnum *)
+    (* 2^62 = 4611686018427387904 — beyond native int, now an arbitrary-precision Int *)
     "bigNum = 4611686018427387904\n" in
-  should_fail "overflow\\|out of range\\|too large\\|E000\\|integer.*range\\|literal.*range" src
+  should_pass src
 
 (* ── G72: Polymorphic function used in two return-type positions ─────────── *)
 (*                                                                              *)

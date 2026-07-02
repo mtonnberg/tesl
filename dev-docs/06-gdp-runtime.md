@@ -1,4 +1,7 @@
 # 06 — GDP Runtime and Trusted Boundary
+
+> Audience: contributors working on the GDP proof runtime and trusted boundary (`compiler/lib/proof_checker.ml`, `dsl/private/`).
+
 This document describes the current trusted boundary in Tesl. The Python-era compiler references are obsolete; the active compiler is the OCaml implementation under `compiler/lib/`, and it lowers Tesl programs into the Racket runtime.
 ## The current pipeline
 At a high level, Tesl now flows through these stages:

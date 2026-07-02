@@ -220,19 +220,20 @@ fn classify(mx: Maybe Int) -> String =
 |} in
   should_pass src
 
-(* ── 1.3 FIXED: Integer overflow emits clean error (exit 1), not crash ────── *)
+(* ── 1.3 A9/HM-1: Int is arbitrary-precision — a huge literal compiles ────── *)
+(* Formerly these asserted a clean range error (exit 1). Under A9/HM-1 the 63-bit
+   range check is dropped: the huge magnitude flows through as an LBigInt canonical
+   string into the Racket bignum, so it compiles (exit 0, no error diagnostic). *)
 
 let test_overflow_exit_code_is_one () =
   let src = prelude ^ "fn bigNum() -> Int = 9999999999999999999999\n" in
   let code = exit_code_of src in
-  check bool "overflow must exit 1, not crash (exit 2)" true (code = 1)
+  check bool "huge literal compiles (exit 0), not error/crash" true (code = 0);
+  should_pass src
 
 let test_overflow_error_message_is_informative () =
   let src = prelude ^ "fn bigNum() -> Int = 9999999999999999999999\n" in
-  let out = compile_string src in
-  let re = Str.regexp "out of range\\|integer literal" in
-  check bool "overflow message must mention 'out of range' or 'integer literal'"
-    true (try ignore (Str.search_forward re out 0); true with Not_found -> false)
+  should_pass src
 
 let test_max_int_compiles () =
   (* max_int on 64-bit OCaml is 4611686018427387903 *)

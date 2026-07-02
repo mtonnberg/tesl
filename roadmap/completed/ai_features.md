@@ -1,8 +1,6 @@
 # AI Features — Tesl for the AI age
 
-> **Status:** Later · **Effort:** XL (language + runtime, phased) · **Shape:**
-> vision item with an executable Tier 0 (mostly a library; the only compiler-side
-> touch is a vector column type for RAG).
+> **Status:** A lot of work has been done in a separate branch. It needs major reintegration after the language changes (capabilities, new App type, updates to database, cache, queue blocks etc)
 
 ## Why now
 

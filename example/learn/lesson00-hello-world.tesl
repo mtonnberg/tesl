@@ -16,7 +16,9 @@ module Lesson00HelloWorld exposing [greet, add]
 #   - = "..."   : the body (single expression, no braces needed)
 #
 # Interpolated strings use ${varName} syntax.
-# Integer parameters need "*" to get the raw number: x + y.
+# Use parameters directly in arithmetic — e.g. `x + y`. (There is no raw-access
+# operator in Tesl: proofs are a compile-time concept and are erased before the
+# program runs, so a parameter IS just its value at run time.)
 
 import Tesl.Prelude exposing [Int, String]
 
@@ -24,7 +26,7 @@ fn greet(name: String) -> String = # String in, String out
   "Hello, ${name}!" # ${name} splices the value into the string
 
 fn add(x: Int, y: Int) -> Int = # two Ints in, one Int out
-  x + y # x and y strip the establish wrapper to get bare integers
+  x + y # use the parameters directly — no wrapper, no special operator
 
 test "greet" {
   expect greet "World" == "Hello, World!"
@@ -44,14 +46,10 @@ test "add" {
 # Everything else in this file is private, even if named.
 # This is deliberate — Tesl has no implicit leaking of definitions.
 #
-# The "x" notation is required for integer arithmetic because in Tesl every
-# parameter is a "named value" — a carrier that holds both the raw payload and
-# any proof facts attached to it. Arithmetic operators need the plain integer,
-# not the carrier. So "x" says "give me the raw integer out of x".
-#
-# For String parameters you do NOT write "name" — strings are passed through
-# as-is in interpolation. You only use "*" for Ints (and other numeric types)
-# when you need to perform arithmetic or comparisons on them.
+# You write parameters directly — `x + y`, `greet name`. Conceptually each
+# parameter may carry compile-time proof facts (a "named value"), but those
+# facts are ERASED during compilation, so at run time a parameter is just its
+# raw value. There is no surface raw-access operator to learn.
 #
 # "import Tesl.Prelude exposing [Int, String]" uses the explicit import form.
 # Tesl never auto-imports anything. If you need "Bool", "List", etc., you must
@@ -66,9 +64,10 @@ test "add" {
 #   - the raw payload (the actual integer, string, etc.)
 #   - an attached proof set (initially empty for plain "fn" parameters)
 #
-# This is why "x" is needed: the "+", "-", "*", "/" operators in Tesl call
-# Racket's numeric operations which expect plain numbers, not named-value carriers.
-# The "*" prefix is the "raw access" operator — it projects only the payload.
+# At compile time a "fn" parameter is modelled as a named-value carrier, but the
+# carrier is erased during macro expansion: the emitted Racket binds the plain
+# value, so the "+", "-", "*", "/" operators receive bare numbers directly. There
+# is no surface raw-access operator — you never "unwrap" a parameter by hand.
 #
 # The module system enforces separate compilation. Two modules that both define
 # a name "User" have completely separate declarations. Import resolution is

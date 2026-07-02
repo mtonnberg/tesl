@@ -16,7 +16,24 @@ let rec validate_field_accesses
   match e with
   | EField { obj; field; loc } ->
     let inner = validate_field_accesses env funcs fields_by_type ctors obj in
-    (match infer_expr_type env funcs fields_by_type ctors obj with
+    let obj_record_ty =
+      match infer_expr_type env funcs fields_by_type ctors obj with
+      | Some ty -> Some ty
+      | None ->
+        (* SQL-1: an entity-qualified field in a join condition (`Post.usrId`) has
+           [obj] = the entity NAME as a constructor/var, which infer_expr_type does
+           not resolve to the entity's record type — so the join field previously
+           escaped validation (a false documented guarantee).  Resolve it directly
+           when the name is a declared entity/record.  (Module-qualified stdlib
+           calls like `String.length` have a non-entity head, so record_fields_of_type
+           is None and this does not fire.) *)
+        (match obj with
+         | EConstructor { name; _ } | EVar { name; _ }
+           when record_fields_of_type fields_by_type (mk_name_type name) <> None ->
+           Some (mk_name_type name)
+         | _ -> None)
+    in
+    (match obj_record_ty with
      | Some obj_ty ->
        (match record_fields_of_type fields_by_type obj_ty with
         | Some fields when not (List.exists (fun (f : field_def) -> f.name = field) fields)
@@ -38,8 +55,9 @@ let rec validate_field_accesses
     in
     let (head, args) = flat in
     let sql_binder_env = match head with
-      | EVar { name = ("selectOne" | "select" | "selectCount" | "selectSum"); _ } ->
-        (* args[0] = binder (or field for sum), args[1] = "from", args[2] = Entity name *)
+      | EVar { name = ("selectOne" | "select" | "selectCount" | "selectSum"
+                      | "selectMax" | "selectMin"); _ } ->
+        (* args[0] = binder (or field for sum/max/min), args[1] = "from", args[2] = Entity name *)
         let binder_name = match args with
           | EVar { name; _ } :: _ -> Some name
           | EField { obj = EVar { name; _ }; _ } :: _ -> Some name  (* sum: binder.field from ... *)
@@ -77,6 +95,28 @@ let rec validate_field_accesses
          | _ -> env)
       | _ -> env
     in
+    (* SQL-1: validate the JOINED entity name in `innerJoin <Entity> on …`.  The
+       flattened args carry `EVar "innerJoin" :: <Entity> :: …`; the join FIELDS
+       (`<Entity>.field`) are validated by the EField arm above (via the
+       entity-name resolution), but the joined entity name itself was unchecked,
+       so a misspelled join target compiled and failed at runtime. *)
+    let join_entity_errors = match head with
+      | EVar { name = ("selectOne" | "select" | "selectCount" | "selectSum"
+                      | "selectMax" | "selectMin"); _ } ->
+        let rec scan = function
+          | EVar { name = "innerJoin"; _ } :: ent :: rest ->
+            let here = match ent with
+              | (EConstructor { name; loc; _ } | EVar { name; loc; _ })
+                when record_fields_of_type fields_by_type (mk_name_type name) = None ->
+                [ make_error loc
+                    (Printf.sprintf "unknown entity `%s` in innerJoin" name) ]
+              | _ -> []
+            in here @ scan rest
+          | _ :: rest -> scan rest
+          | [] -> []
+        in scan args
+      | _ -> []
+    in
     (* Also check insert/upsert/update field names directly *)
     let insert_errors = match head with
       | EVar { name = ("insert" | "upsert"); _ } ->
@@ -106,9 +146,14 @@ let rec validate_field_accesses
     (* e is guaranteed to be EApp here (we're inside the EApp match arm), but OCaml
        can't prove that, so provide a safe fallback instead of assert false *)
     let (fn_e, arg_e) = match e with EApp { fn; arg; _ } -> (fn, arg) | _ -> (e, e) in
-    insert_errors
-    @ validate_field_accesses sql_binder_env funcs fields_by_type ctors fn_e
-    @ validate_field_accesses sql_binder_env funcs fields_by_type ctors arg_e
+    let recursive_errs =
+      validate_field_accesses sql_binder_env funcs fields_by_type ctors fn_e
+      @ validate_field_accesses sql_binder_env funcs fields_by_type ctors arg_e in
+    (* The flattened select chain is re-scanned at every peel, so the same
+       innerJoin clause yields the same join-entity error at multiple levels.
+       Emit it only where it is not already reported by a deeper level. *)
+    let join_errs = List.filter (fun je -> not (List.mem je recursive_errs)) join_entity_errors in
+    insert_errors @ join_errs @ recursive_errs
   | ECase { scrut; arms; _ } ->
     let scrut_errors = validate_field_accesses env funcs fields_by_type ctors scrut in
     let scrut_ty = infer_expr_type env funcs fields_by_type ctors scrut in

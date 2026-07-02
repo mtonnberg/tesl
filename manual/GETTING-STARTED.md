@@ -6,58 +6,12 @@ Use `tesl help manual getting-started` to access this from the CLI.
 
 ---
 
-## Prerequisites
-
-Before you begin, ensure you have the following installed:
-
-- **Nix package manager** - Tesl uses Nix for development and deployment
-  - Installation: https://nixos.org/download.html
-  - On macOS: `brew install nix`
-  - On Linux: Follow the official installer
-
-- **PostgreSQL** (optional but recommended) - For database examples
-  - Tesl has built-in PostgreSQL support
-  - Any version from 13+ should work
-
-- **Git** - For cloning the repository (if developing from source)
-
----
-
 ## Installation
 
-### Quick Install (Recommended)
-
-The easiest way to install Tesl is via Nix:
-
-```bash
-nix profile install github:mtonnberg/tesl
-```
-
-This installs the `tesl` CLI globally.
-
-### Verify Installation
-
-```bash
-tesl --version
-# or
-tesl help
-```
-
-### Development Installation
-
-If you want to contribute or work from the source repository:
-
-```bash
-# Clone the repository
-git clone https://github.com/mtonnberg/tesl.git
-cd tesl
-
-# Enter the development shell
-nix develop
-# or: nix-shell
-
-# The tesl command is now available
-```
+See [INSTALL.md](../INSTALL.md) for install and setup (Nix, home-manager, NixOS, editor setup,
+and the PostgreSQL setup the example APIs need). Once installed, `tesl help` verifies the `tesl`
+CLI is on your PATH. To contribute from a source checkout instead, see
+[dev-docs/README.md](../dev-docs/README.md).
 
 ---
 
@@ -79,37 +33,18 @@ nix develop
    ```
    `tesl run` compiles your `.tesl` file to a `.rkt` file next to it. Racket then caches compiled bytecode in a `compiled/` subdirectory. Neither should be committed.
 
-3. Create a `nix-shell` setup (optional but recommended):
-   ```nix
-   # shell.nix
-   { pkgs ? import <nixpkgs> {} }:
-   
-   pkgs.mkShell {
-     packages = [
-       (import (fetchTarball "github:mtonnberg/tesl") {}).packages.x86_64-linux.tesl-cli
-       pkgs.postgresql
-     ];
-   }
-   ```
-
-4. Enter the shell:
-   ```bash
-   nix-shell
-   ```
-
-5. Create your first Tesl file:
+3. Create your first Tesl file:
    ```bash
    touch api.tesl
    ```
+   (For a reproducible per-project dev shell with `tesl` and PostgreSQL on the
+   PATH, see [INSTALL.md](../INSTALL.md).)
 
 ### Option 2: Use the Example as a Template
 
-Copy the todo-api example as a starting point:
+Copy the todo-api example from a repository checkout as a starting point:
 
 ```bash
-# Clone the tesl repository if you haven't already
-git clone https://github.com/mtonnberg/tesl.git
-
 # Copy the example
 cp tesl/example/todo-api.tesl my-api.tesl
 
@@ -126,112 +61,157 @@ Let's create a simple API from scratch. This example will:
 - Create database operations
 - Expose HTTP endpoints
 
-### Step 1: Define Types and Validation
+### Step 1: Define a validated type
 
-Create `api.tesl`:
+Create `users-api.tesl`. Everything starts by validating at the boundary and
+carrying the result as proof:
 
 ```tesl
--- Import the standard library
-import Tesl.Prelude
-import Tesl.Http
-import Tesl.Db
+#lang tesl
+module UsersApi exposing [UserServer]
 
--- Define a predicate for valid email addresses
-predicate ValidEmail(email: String) where
-  String.contains email "@" and
-  String.contains email "."
+# Import exactly what you use — Tesl is explicit about imports.
+import Tesl.Prelude exposing [String]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.String exposing [String.length, String.contains]
+import Tesl.Time exposing [nowMillis, time, PosixMillis]
+import Tesl.Json exposing [stringCodec, posixMillisCodec]
 
--- Create a check function that validates and attaches proof
-check isValidEmail(email: String) -> email: String ::: ValidEmail email =
-  if String.contains email "@" and String.contains email "." then
+# Capabilities this program is allowed to use.
+capability userDbRead implies dbRead
+capability userDbWrite implies dbWrite
+capability userAuthCap
+
+# A fact is a named claim about a value. `check` is the ordinary way to
+# introduce one: it validates at the boundary and stamps the value with proof.
+fact ValidEmail (email: String)
+
+check checkEmail(email: String) -> email: String ::: ValidEmail email =
+  if String.contains email "@" && String.contains email "." then
     ok email ::: ValidEmail email
   else
-    fail 400 "Invalid email format: must contain @ and ."
+    fail 400 "email must contain '@' and '.'"
+```
 
--- Define a user entity
-entity User table "users" primaryKey id {
-  id: String
+### Step 2: Describe the request body and the response
+
+A `record` is a data shape; its `codec` says how it is (de)serialised. Because
+the `NewUser.email` field is proof-annotated and its codec decodes `email`
+`via checkEmail`, an invalid email is rejected at the HTTP boundary — the
+handler can never see one.
+
+```tesl
+record NewUser {
   email: String ::: ValidEmail email
+  name: String
+}
+
+codec NewUser {
+  toJson_forbidden
+  fromJson [
+    {
+      email <- "email" with_codec stringCodec via checkEmail
+      name <- "name" with_codec stringCodec
+    }
+  ]
+}
+
+record User {
+  id: String
+  email: String
   name: String
   createdAt: PosixMillis
 }
+
+codec User {
+  toJson {
+    id -> "id" with_codec stringCodec
+    email -> "email" with_codec stringCodec
+    name -> "name" with_codec stringCodec
+    createdAt -> "createdAt" with_codec posixMillisCodec
+  }
+  fromJson_forbidden
+}
 ```
 
-### Step 2: Create Database Operations
+### Step 3: Authenticate, then write the handlers
 
-Add to `api.tesl`:
+`auth` turns a raw request into a proven identity. A `handler` is like a
+function whose proof-carrying parameters are guaranteed *before its body runs*:
+here `user` is always `Authenticated` and `body.email` always has `ValidEmail`.
 
 ```tesl
--- Function to create a new user
-fn createUser(email: String ::: ValidEmail email, name: String) -> User ::: FromDb (Id == user.id)
-  requires [db, time] =
-  let user = {
-    id: generatePrefixedId("user"),
-    email: email,
-    name: name,
-    createdAt: nowMillis()
-  } in
-  insert User user
+fact Authenticated (user: String)
 
--- Function to get a user by ID
-predicate ValidUserId(id: String) where String.startsWith id "user"
+auth userAuth(request: HttpRequest) -> user: String ::: Authenticated user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "not authenticated"
+    Something userId -> ok userId ::: Authenticated user
 
-check isValidUserId(id: String) -> id: String ::: ValidUserId id =
-  if String.startsWith id "user" then
-    ok id ::: ValidUserId id
-  else
-    fail 400 "Invalid user ID format"
+# How to parse the ":id" path segment.
+capturer userIdCapture: id: String using stringCodec
 
-fn getUser(id: String ::: ValidUserId id) -> User ? FromDb (Id == user.id)
-  requires [db] =
-  let user = selectOne user from User where user.id == id in
-  case user of
-    Nothing -> fail 404 "User not found"
-    Some user -> ok user
+handler createUser(user: String ::: Authenticated user, body: NewUser) -> User
+  requires [userDbWrite, time] =
+  # user is authenticated and body.email is validated — no defensive checks needed.
+  User { id: "user-1", email: body.email, name: body.name, createdAt: nowMillis() }
+
+handler getUser(user: String ::: Authenticated user, id: String) -> Maybe User
+  requires [userDbRead, time] =
+  Something (User { id: id, email: "test@example.com", name: "Test User", createdAt: nowMillis() })
 ```
 
-### Step 3: Define HTTP API
+### Step 4: Declare the API and bind the server
 
-Add to `api.tesl`:
+The `api` block is the type-level shape; the `server` block binds each handler.
+The compiler checks that every endpoint has a handler and that every proof an
+endpoint requires is actually established at the boundary.
 
 ```tesl
--- Define the API
 api UserApi {
-  -- Create a new user
   post "/users"
-    body req: { email: String, name: String }
-      via fromJsonWithValidation
-    -> User ? FromDb (Id == user.id)
-    handler createUser
+    auth user: String ::: Authenticated user via userAuth
+    body body: NewUser
+    -> User
 
-  -- Get a user by ID
   get "/users/:id"
-    capture id: String ::: ValidUserId id via isValidUserId
-    -> User ? FromDb (Id == user.id)
-    handler getUser
+    auth user: String ::: Authenticated user via userAuth
+    capture id: String via userIdCapture
+    -> Maybe User
 }
 
--- Start the server
-server UserServer impl UserApi on 8080
+server UserServer for UserApi {
+  createUser = createUser
+  getUser = getUser
+}
 ```
 
-### Step 4: Run It
+### Step 5: Run it
 
 ```bash
-# Check for errors
-tesl check api.tesl
+# Check for errors (no execution)
+tesl check users-api.tesl
 
-# Run the server
-tesl run api.tesl
+# Run the server — serves on http://localhost:8086
+tesl run users-api.tesl
 
-# In another terminal, test it:
-curl -X POST http://localhost:8080/users \
+# In another terminal, create a user (an auth cookie satisfies `userAuth`):
+curl -X POST http://localhost:8086/users \
   -H "Content-Type: application/json" \
+  -H "Cookie: user=alice" \
   -d '{"email": "test@example.com", "name": "Test User"}'
 
-# Get the user back
-curl http://localhost:8080/users/user-<id>
+# Fetch one back:
+curl -H "Cookie: user=alice" http://localhost:8086/users/user-1
 ```
+
+> This whole program compiles as written. The closest complete, always-compiled
+> versions live in
+> [`example/learn/lesson15-api-handlers-server.tesl`](../example/learn/lesson15-api-handlers-server.tesl)
+> and [`example/learn/lesson16-complete-notes-api.tesl`](../example/learn/lesson16-complete-notes-api.tesl).
 
 ---
 
@@ -285,31 +265,27 @@ In Tesl:
 - Proofs flow through function calls automatically
 - Missing proofs are compile-time errors
 
-**Runtime cost — proofs are zero-cost by default:**
-- In a normal (release) build, proofs are **erased** after type-checking: no struct, no allocation,
-  zero runtime overhead. The proof lives only in the compiler's static checker.
-- Even under `--debug`, proofs stay erased: the step debugger shows the raw runtime value and
-  overlays a binding's proof/type from compile-time type info. The compiler's static checker is the
-  sole proof contract — there is no runtime net to fall back on.
-- Free-floating proofs (`detachFact` / `attachFact`) always keep a minimal runtime token, because
-  they are explicit first-class values.
-- See [best practices › proof cost model](best-practices.md#proof-cost-model) for the full table.
+**Runtime cost — proofs are zero-cost by default.** In release and `--debug` builds alike, proofs are
+erased after type-checking: no struct, no allocation, zero runtime overhead (free-floating
+`detachFact` / `attachFact` proofs are the one minimal-token exception). The canonical
+[proof cost model](best-practices.md#proof-cost-model) has the full per-feature table and the
+debugging story.
 
 ### Proof Flow Example
 
 ```tesl
--- Step 1: Validate at the boundary
-check isValidEmail(email: String) -> email: String ::: ValidEmail email = ...
+# Step 1: Validate at the boundary
+check checkEmail(email: String) -> email: String ::: ValidEmail email = ...
 
--- Step 2: Use the validated value
+# Step 2: Use the validated value
 fn createUser(email: String ::: ValidEmail email) -> User = ...
-  -- email is guaranteed to be valid here
-  -- The proof ValidEmail email is automatically available
+  # email is guaranteed to be valid here
+  # The proof ValidEmail email is automatically available
 
--- Step 3: Proof is automatically carried through
-handler registerUser(email: String ::: ValidEmail email) -> User
-  requires [db] =
-  createUser email  -- No need to re-validate!
+# Step 3: Proof is automatically carried through
+handler registerUser(email: String ::: ValidEmail email, body: NewUser) -> User
+  requires [userDbWrite, time] =
+  createUser email  # No need to re-validate!
 ```
 
 ### Capability System
@@ -318,12 +294,12 @@ Tesl makes effects explicit through a capability system. Functions declare what 
 
 ```tesl
 handler getTodo(id: String) -> Todo
-  requires [db] =  -- Can access the database
+  requires [dbRead] =  # Can read from the database
   selectOne todo from Todo where todo.id == id
 
 handler sendEmail(user: User) -> Result
-  requires [db, smtp] =  -- Can access DB and SMTP
-  -- ...
+  requires [dbRead, sendEmail] =  # Can read the DB and send email
+  # ...
 ```
 
 Common capabilities:
@@ -360,7 +336,7 @@ tesl check api.tesl db.tesl routes.tesl
 tesl fmt api.tesl
 
 # Check formatting without modifying
-tesl fmt-check api.tesl
+tesl fmt --check api.tesl
 ```
 
 ### 4. Lint
@@ -384,11 +360,8 @@ tesl run api.tesl
 ### 6. Test
 
 ```bash
-# Run tests
+# Run tests (mutation testing runs as part of the test suite)
 tesl test tests.tesl
-
-# Run mutation testing
-tesl mutate api.tesl
 ```
 
 ---
@@ -478,9 +451,9 @@ Ensure you're:
 Now that you have a basic understanding, explore:
 
 1. **[Examples](examples.md)** - See complete working examples
-2. **[Best Practices](best-practices.md)** - Learn idiomatic patterns
-3. **[Language Specification](../LANGUAGE-SPEC.md)** - Dive into the details
-4. **[TESL.md](../TESL.md)** - High-level language introduction
+2. **[Guided Feature Tour](tour.md)** - Every feature in one pass
+3. **[Best Practices](best-practices.md)** - Learn idiomatic patterns
+4. **[Language Specification](../LANGUAGE-SPEC.md)** - Dive into the details
 
 ---
 
@@ -488,5 +461,6 @@ Now that you have a basic understanding, explore:
 
 - [Manual Index](MANUAL.md) - Back to the main manual
 - [Overview](overview.md) - Conceptual introduction
+- [Guided Feature Tour](tour.md) - The long-form language walkthrough
 - [Language Specification](../LANGUAGE-SPEC.md) - Formal specification
 - [Best Practices](best-practices.md) - Recommended patterns

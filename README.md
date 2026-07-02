@@ -48,7 +48,7 @@ tesl build --app-only            # smaller image; configure via TESL_POSTGRES_* 
 
 See [`dev-docs/deploy.md`](dev-docs/deploy.md) for the full deployment guide
 (image flavours, runtime config, GitHub Actions), [`INSTALL.md`](INSTALL.md) for editor setup, and
-[“try the language today”](#if-you-want-to-try-the-language-today) below for more.
+[“try the language today”](#try-the-language-today) below for more.
 
 ## Alpha status
 
@@ -74,6 +74,7 @@ In practical terms, that means:
 - auth should not be something you merely remember to wire up
 - effects should be declared and checked
 - typed database access, queues, pub/sub, and telemetry should fit into one coherent programming model
+- AI agents should use ordinary typed functions as tools — `Agent { … }` with `asTool fn`, no hand-written JSON schemas
 - refactoring should preserve guarantees instead of silently eroding them
 
 The intended long-term shape is a language that is small, opinionated, explicit, and boringly reliable for API work that people who just want things done will choose since it is the easiest way to a working and stable product.
@@ -111,30 +112,9 @@ Tesl is **not** trying to be:
 
 The language is intentionally opinionated. If Tesl succeeds, it should do so by being small, sharp, and reliable — not by being endlessly permissive.
 
-## Two ways to use this repository
+**Contributing to the language itself?** See [dev-docs/README.md](dev-docs/README.md) for the dev shell, build, and test workflow.
 
-### If you want to work on the language itself
-
-This path is for people changing the compiler, runtime, tests, docs, or editor tooling.
-
-### Development shell
-
-```bash
-nix develop          # flakes
-# or legacy:
-nix-shell
-```
-
-The shell includes Racket, PostgreSQL tooling, `curl`, and `jq`. The Tesl Racket package is linked automatically on entry — no separate bootstrap step needed.
-
-### Testing
-
-**Write tests in `.tesl` files.** Tesl test blocks exercise the full pipeline
-(parser → type-checker → proof-checker → emitter → Racket runtime). If a `.tesl`
-test passes, the feature works end-to-end.
-
-**Compiling is not testing.** `tesl validate` confirms the program is well-formed.
-`tesl test` confirms it produces the right answers. Always do both.
+**Driving Tesl from an AI coding agent?** See [AGENTS.md](AGENTS.md) — the entry point for the `tesl` agent API (compile-check loop, targeted queries, headless debugging).
 
 ## Documentation and Help
 
@@ -180,22 +160,9 @@ tesl test example/sandbox2.test.tesl
 # Run a single block by name; --test-kind (test | api-test | load-test | doctest)
 # disambiguates same-named blocks and runs one api-test/load-test/doctest alone:
 tesl test --test-name "my test" --test-kind api-test example/sandbox2.test.tesl
-
-# Fast compiler checks (OCaml tests + verify all .tesl files compile):
-bash compiler/ci.sh
-
-# Full pipeline (validate + Tesl tests + mutation testing + Racket aggregate):
-bash compile-examples.sh
 ```
 
-Drop to OCaml tests
-(`compiler/test/*.ml`) only for "**this should not compile**-tests"(very important), compiler internals (parser edge cases, emitter output, diagnostic formatting).
-Drop to Racket tests (`tests/*.rkt`) only for runtime substrate internals
-(proof structs, HTTP dispatch, PostgreSQL integration). See `dev-docs/09-adding-tests.md` for details.
-
-### If you want to try the language today
-
-This path is for people who want to explore Tesl as a user.
+## Try the language today
 
 ### 1. Install
 
@@ -220,19 +187,11 @@ tesl run example/todo-api.tesl
 tesl run example/admin-task-api.tesl
 ```
 
-### 5. Look at other `.tesl` examples in the repo
+### 4. Look at other `.tesl` examples in the repo
 
-Current top-level `.tesl` examples include:
+Browse the full, always-current example catalog with `tesl help manual examples` (or see `manual/examples.md`).
 
-- `example/admin-task-api.tesl`
-- `example/queue-api.tesl`
-- `example/sandbox.tesl`
-- `example/sandbox2.tesl`
-- `example/sandbox2.test.tesl`
-- `example/sandbox3.tesl`
-- `example/todo-api.tesl`
-
-### 6. Run some example APIs
+### 5. Run some example APIs
 
 #### Todo API with PostgreSQL
 
@@ -296,7 +255,7 @@ The compiler exposes the following JSON flags, which the language server uses to
 | `--completions-json <file> <line> <col>` | Context-aware completions (field and identifier) |
 | `--local-bindings-json <file>` | All inferred local binding types in the file |
 
-All flags return versioned JSON. See `editor/protocol.md` for the full compiler–editor protocol contract and `editor/README.md` for installation instructions.
+All flags return versioned JSON. See `editor/protocol.md` for the full compiler–editor protocol contract and [`editor/vscode-tesl/README.md`](editor/vscode-tesl/README.md) for extension installation instructions.
 
 ## Notes on style and imports
 

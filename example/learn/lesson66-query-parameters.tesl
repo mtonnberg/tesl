@@ -1,0 +1,97 @@
+#lang tesl
+module Lesson66QueryParameters exposing [SearchServer]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 66 — Reading query parameters
+#
+# An HttpRequest exposes three dictionaries of request data, each a
+# `Dict String String`, all read the same way with `Dict.lookup`:
+#
+#   request.queryParameters   -- the URL query string  (?q=hello&limit=10)
+#   request.cookies           -- the Cookie header      (see lesson55)
+#   request.headers           -- the request headers    (names are lowercased)
+#
+# This lesson focuses on `request.queryParameters`. A few rules to remember:
+#   * values are form-url-decoded  ("%20" arrives as a space)
+#   * repeated keys are last-wins  ("?q=a&q=b" -> "b")
+#   * keys are case-sensitive      ("?Q=x" does NOT match a lookup of "q")
+#   * a missing key yields `Nothing` (it is a `Maybe String`, not a failure)
+#
+# Request data is read in an `auth` (or `proof`) function — the place that has
+# access to the HttpRequest — which hands the handler a proven value. A handler
+# only ever sees the proven values, never the raw request, so it cannot be
+# called with malformed input.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [String]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.ApiTest exposing [statusOk, statusClientError]
+
+# A record bundling the parsed query: a REQUIRED `q` and an OPTIONAL `order`.
+record SearchParams {
+  q: String,
+  order: String
+}
+
+fact ValidSearch (params: SearchParams)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Parse both parameters in one `auth`:
+#   * `q` is REQUIRED — `fail` with 400 when it is absent.
+#   * `order` is OPTIONAL — `Dict.lookup` returns `Maybe String`, so just
+#     pattern-match and supply a default ("asc") when it is omitted.
+# The resulting `SearchParams` travels to the handler carrying `ValidSearch`,
+# so the handler is guaranteed a present `q`.
+# ─────────────────────────────────────────────────────────────────────────────
+
+auth parseSearch(req: HttpRequest) -> params: SearchParams ::: ValidSearch params =
+  case Dict.lookup "q" req.queryParameters of
+    Nothing -> fail 400 "missing required query parameter: q"
+    Something q ->
+      case Dict.lookup "order" req.queryParameters of
+        Nothing -> ok (SearchParams { q: q, order: "asc" }) ::: ValidSearch params
+        Something o -> ok (SearchParams { q: q, order: o }) ::: ValidSearch params
+
+api SearchApi {
+  get "/search"
+    auth params : SearchParams ::: ValidSearch params via parseSearch
+    -> String
+}
+
+# The handler works purely with the proven, parsed value.
+handler search(params: SearchParams ::: ValidSearch params) -> String requires [] =
+  params.q ++ " (order=" ++ params.order ++ ")"
+
+server SearchServer for SearchApi { search = search }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests — api-tests put the query string inline in the request path.
+# ─────────────────────────────────────────────────────────────────────────────
+
+api-test "reads a required query parameter (optional defaults)" for SearchServer {
+  let resp = get "/search?q=widgets"
+  expect statusOk resp.status
+  expect resp.body == "widgets (order=asc)"
+}
+
+api-test "url-encoded values are decoded (%20 -> space)" for SearchServer {
+  let resp = get "/search?q=red%20widgets"
+  expect resp.body == "red widgets (order=asc)"
+}
+
+api-test "an optional parameter overrides its default" for SearchServer {
+  let resp = get "/search?q=widgets&order=desc"
+  expect resp.body == "widgets (order=desc)"
+}
+
+api-test "repeated keys are last-wins" for SearchServer {
+  let resp = get "/search?q=first&q=second"
+  expect resp.body == "second (order=asc)"
+}
+
+api-test "a missing required parameter is rejected" for SearchServer {
+  let resp = get "/search"
+  expect statusClientError resp.status
+}

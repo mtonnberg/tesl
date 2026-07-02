@@ -1,5 +1,7 @@
 # 08 — Queue and Pub/Sub Runtime
 
+> Audience: contributors working on the queue and pub/sub runtime (`tesl/queue.rkt`).
+
 The queue and pub/sub systems live in `tesl/queue.rkt` and use PostgreSQL's
 `LISTEN/NOTIFY` for horizontal scaling.
 

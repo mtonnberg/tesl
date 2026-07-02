@@ -31,18 +31,8 @@ We're working towards a stable 1.0 release, but we're not there yet.
 
 ### How do I install Tesl?
 
-The easiest way is via Nix:
-
-```bash
-nix profile install github:mtonnberg/tesl
-```
-
-Or try without installing:
-```bash
-nix run github:mtonnberg/tesl -- help
-```
-
-See [INSTALL.md](../INSTALL.md) for more options.
+See [INSTALL.md](../INSTALL.md) for all options (try-without-installing, `nix profile`,
+home-manager, NixOS, editor setup).
 
 ### Do I need to clone the repository to use Tesl?
 
@@ -455,10 +445,10 @@ tesl test example/sandbox2.test.tesl
 
 ### What is mutation testing?
 
-Mutation testing automatically generates small changes ("mutants") to your validation functions and checks if your tests catch them. This helps ensure your tests are thorough.
+Mutation testing automatically generates small changes ("mutants") to your validation functions and checks if your tests catch them. This helps ensure your tests are thorough. It runs as part of the test suite:
 
 ```bash
-tesl mutate example/todo-api.tesl
+tesl test example/todo-api.tesl
 ```
 
 ---
@@ -467,21 +457,13 @@ tesl mutate example/todo-api.tesl
 
 ### Is there runtime overhead for proofs?
 
-**No — proofs are zero-cost by default.** In a normal (release) build the proof annotations
-(`:::`) are **erased** after type-checking: there is no wrapper, no struct, and no allocation.
-The proof exists only in the compiler's static checker, so by the time your code runs it is
-completely gone.
+**No — proofs are zero-cost by default.** In release and `--debug` builds alike, proof annotations
+(`:::`) are erased after type-checking, so by the time your code runs there is no wrapper, struct, or
+allocation. The one exception is a *free-floating* proof (`detachFact` / `attachFact`), which keeps a
+minimal runtime token because it is an explicit first-class value.
 
-Even under `--debug`, proofs stay erased — the step debugger shows the raw runtime value and
-overlays a binding's proof/type from compile-time type info (the static checker already knows it).
-Proof verification is **compile-time only**: the compiler is the sole contract for it, and there
-is no runtime re-check to fall back on.
-
-The one construct that always carries a minimal runtime token is a *free-floating* proof
-(`detachFact` / `attachFact`), because such a proof is an explicit first-class value that is
-passed around at runtime.
-
-See the [proof cost model](best-practices.md#proof-cost-model) for the full per-feature table.
+See the canonical [proof cost model](best-practices.md#proof-cost-model) for the full per-feature
+table and the debugging story.
 
 ### How fast is Tesl?
 
@@ -513,8 +495,8 @@ See [README.md#editor-and-language-server](../README.md#editor-and-language-serv
 Yes! Tesl can generate TypeScript and Elm client code:
 
 ```bash
-tesl --generate-ts my-api.tesl --out client.ts
-tesl --generate-elm my-api.tesl --out Client.elm
+tesl generate ts my-api.tesl --out client.ts
+tesl generate elm my-api.tesl --out Client.elm
 ```
 
 ### Is there a formatter?
@@ -522,8 +504,8 @@ tesl --generate-elm my-api.tesl --out Client.elm
 Yes! Use the built-in formatter:
 
 ```bash
-tesl --fmt my-file.tesl           # Format in place
-tesl --fmt-check my-file.tesl    # Check formatting without modifying
+tesl fmt my-file.tesl             # Format in place
+tesl fmt --check my-file.tesl     # Check formatting without modifying
 ```
 
 ### Is there a linter?
@@ -531,7 +513,7 @@ tesl --fmt-check my-file.tesl    # Check formatting without modifying
 Yes! Use the built-in linter:
 
 ```bash
-tesl --lint my-file.tesl
+tesl lint my-file.tesl
 ```
 
 ---
@@ -557,11 +539,7 @@ We welcome contributions! See [dev-docs/README.md](../dev-docs/README.md) for ge
 
 ### How do I build from source?
 
-```bash
-nix develop  # or nix-shell
-cd compiler
-bash build.sh
-```
+See [dev-docs/README.md](../dev-docs/README.md) for the source-checkout build and dev shell.
 
 ---
 
@@ -594,7 +572,7 @@ Please create a GitHub issue with:
 
 - [Manual Index](MANUAL.md) - Back to the main manual
 - [Overview](overview.md) - Introduction to Tesl
-- [TESL.md](../TESL.md) - High-level language introduction
+- [Guided Feature Tour](tour.md) - The long-form language walkthrough
 - [LANGUAGE-SPEC.md](../LANGUAGE-SPEC.md) - Formal specification
 - [Examples](examples.md) - Complete list of examples
 - [Best Practices](best-practices.md) - Recommended patterns

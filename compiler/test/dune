@@ -1,5 +1,5 @@
 (tests
- (names test_formatter test_linter test_lexer test_parser test_emit test_integration test_advanced test_types test_proofs test_validation test_diagnostics test_diag_snapshots test_ir test_frontend test_review19_antagonistic test_review20_antagonistic test_review24_antagonistic test_review25_antagonistic test_review26_antagonistic test_review27_antagonistic test_mutation test_review29_antagonistic test_review30_antagonistic test_review31_antagonistic test_review32_antagonistic test_dict_forall test_review34_antagonistic test_review36_antagonistic test_review37_antagonistic test_review38_antagonistic test_review39_antagonistic test_review40_antagonistic test_review41_antagonistic test_review42_antagonistic test_review43_antagonistic test_review44_antagonistic test_review45_antagonistic test_review47_antagonistic test_review48_antagonistic test_review49_antagonistic test_review50_antagonistic test_review51_antagonistic test_review52_antagonistic test_review53_antagonistic test_review54_antagonistic test_review55_antagonistic test_review56_antagonistic test_review57_antagonistic test_review58_antagonistic test_review59_antagonistic test_review59_antagonistic_backend test_review60_antagonistic test_review61_antagonistic test_review62_antagonistic test_review63_antagonistic test_review64_antagonistic test_review65_antagonistic test_stdlib_consistency test_review66_api_validation test_review67_block_validation test_capability_polymorphism test_proof_negatives test_review68_newcomer_feedback test_review69_critical_language_validation test_review70_codegen_safety test_review72_critical_002 test_jwt test_httpclient test_debug test_cache test_email test_library_boundary test_library_suite test_library_syntax test_library_negative test_linter_w080 test_review74_sig test_review74_proof test_review74_misc test_review74_gibberish test_proofsuite_attack test_proofsuite_produce test_proofsuite_consume test_proofsuite_flow test_proofsuite_conjunction test_proofsuite_crossparam test_proofsuite_forall test_proofsuite_transport test_proofsuite_existential test_proofsuite_newtype test_proofsuite_identity test_proofsuite_codec test_proofsuite_capability test_proofsuite_exhaustive test_proofsuite_arith test_proofsuite_record test_proofsuite_negspace test_aisuite_capability test_aisuite_entitlement test_aisuite_structured)
+ (names test_formatter test_linter test_lexer test_parser test_emit test_integration test_advanced test_types test_proofs test_validation test_diagnostics test_diag_snapshots test_ir test_frontend test_review18_antagonistic test_review19_antagonistic test_review20_antagonistic test_review24_antagonistic test_review25_antagonistic test_review26_antagonistic test_review27_antagonistic test_mutation test_review29_antagonistic test_review30_antagonistic test_review31_antagonistic test_review32_antagonistic test_dict_forall test_review34_antagonistic test_review36_antagonistic test_review37_antagonistic test_review38_antagonistic test_review39_antagonistic test_review40_antagonistic test_review41_antagonistic test_review42_antagonistic test_review43_antagonistic test_review44_antagonistic test_review45_antagonistic test_review47_antagonistic test_review48_antagonistic test_review49_antagonistic test_review50_antagonistic test_review51_antagonistic test_review52_antagonistic test_review53_antagonistic test_review54_antagonistic test_review55_antagonistic test_review56_antagonistic test_review57_antagonistic test_review58_antagonistic test_review59_antagonistic test_review59_antagonistic_backend test_review60_antagonistic test_review61_antagonistic test_review62_antagonistic test_review63_antagonistic test_review64_antagonistic test_review65_antagonistic test_stdlib_consistency test_review66_api_validation test_review67_block_validation test_capability_polymorphism test_proof_negatives test_review68_newcomer_feedback test_review69_critical_language_validation test_review70_codegen_safety test_review72_critical_002 test_jwt test_agent_decode test_httpclient test_debug test_cache test_email test_library_boundary test_library_suite test_library_syntax test_library_negative test_linter_w080 test_review74_sig test_review74_proof test_review74_misc test_review74_gibberish test_proofsuite_attack test_proofsuite_produce test_proofsuite_consume test_proofsuite_flow test_proofsuite_conjunction test_proofsuite_crossparam test_proofsuite_forall test_proofsuite_transport test_proofsuite_existential test_proofsuite_newtype test_proofsuite_identity test_proofsuite_codec test_proofsuite_capability test_proofsuite_exhaustive test_proofsuite_arith test_proofsuite_record test_proofsuite_negspace test_aisuite_capability test_aisuite_entitlement test_aisuite_structured test_p0_soundness_fixes test_eval_review_fixes test_wave2_soundness test_s7_generative test_literal_subject_identity test_b6_structural_proof_eq test_fromdb_where_unification test_a6_unnamed_proof_return test_s13_fail_closed_boundary test_a2_capability_launder test_import_scope_single_source test_a9_bigint test_a3_proof_identity test_a2_sql_provenance test_a4_capability_completeness test_a5_decoder_comparison test_b1_client_gen test_b5_diagnostics test_a2b_update_provenance)
  (libraries tesl_compiler_lib alcotest unix str)
  (deps ../bin/main.exe))
 
@@ -20,6 +20,61 @@
  (name test_ast_visitor)
  (modules test_ast_visitor)
  (libraries tesl_compiler_lib))
+
+; Pure-OCaml property test for the single float choke point (lib/float_fmt.ml):
+; to_faithful_literal round-trips, identity_key is injective (S15).  No Racket /
+; no alcotest, so it always builds and runs:
+;   dune exec test/test_float_fmt.exe
+(test
+ (name test_float_fmt)
+ (modules test_float_fmt)
+ (libraries tesl_compiler_lib))
+
+; Pure-OCaml conformance test for the single SQL op registry
+; (lib/validation_common.ml): effect classification matches the naming oracle,
+; name predicates agree, name-sets partition (S3b down-payment).  No Racket / no
+; alcotest:
+;   dune exec test/test_sql_registry.exe
+(test
+ (name test_sql_registry)
+ (modules test_sql_registry)
+ (libraries tesl_compiler_lib))
+
+; Pure-OCaml conformance test for the single agent tool-param primitive registry
+; (lib/validation_common.ml: agent_prim + classifiers, B4): every primitive
+; round-trips, decode-tag/schema match an independent oracle, and the checker
+; whitelist / decode-tag emitter / JSON-schema emitter all derive from the ONE
+; registry (tri-site coverage) so adding a primitive can't leave a site behind.
+; No Racket / no alcotest:
+;   dune exec test/test_agent_prim_registry.exe
+(test
+ (name test_agent_prim_registry)
+ (modules test_agent_prim_registry)
+ (libraries tesl_compiler_lib))
+
+; B2 conformance: the trusted proof-introducing kinds live in ONE predicate
+; (Ast.is_proof_introducing_kind); this pins it against an independent oracle
+; over every func_kind constructor so the trusted set cannot silently drift.
+; No Racket / no alcotest:
+;   dune exec test/test_proof_kind_registry.exe
+(test
+ (name test_proof_kind_registry)
+ (modules test_proof_kind_registry)
+ (libraries tesl_compiler_lib))
+
+; Cross-seam SQL effect conformance (B1/S3b): the read/write EFFECT in
+; Validation_common.sql_op_effect must AGREE with the db-read/db-write
+; require-capabilities! guard on the Racket fn each op EMITS to.  The op->head
+; map is an exhaustive OCaml match (a new op can't compile without a head); the
+; guard set is PARSED from dsl/sql.rkt so it tracks the real runtime.  Also
+; compiles example/learn/lesson21-sql-reference.tesl and checks each head is
+; emit-truthful.  Pure OCaml (str + unix); needs the repo tree at
+; TESL_REPO_ROOT / repo_root_default:
+;   dune exec test/test_sql_crossseam.exe
+(test
+ (name test_sql_crossseam)
+ (modules test_sql_crossseam)
+ (libraries tesl_compiler_lib str unix))
 
 ; Pure-OCaml test for the surface-lowering pass (lib/desugar.ml).  Asserts the
 ; pass is a structural identity (every loc preserved, every expr variant carried
@@ -59,3 +114,46 @@
  (names test_error_codes)
  (modules test_error_codes)
  (libraries tesl_compiler_lib unix))
+
+; Spec §-citation resolution test (roadmap D9): every LANGUAGE-SPEC section
+; number cited from compiler/lib+test must resolve to a real spec heading.
+; Pure OCaml (str + unix); runs under `dune runtest`:
+;   dune exec test/test_spec_anchors.exe
+(tests
+ (names test_spec_anchors)
+ (modules test_spec_anchors)
+ (libraries str unix))
+
+; §7 soundness-invariant registry cross-check (S11 / C14): every registry §7.N
+; resolves to a real spec heading (hard gate), AND each invariant is bound to a
+; real red→green exercise — a tiny antagonistic program compiled via main.exe
+; that MUST be rejected with the invariant-specific diagnostic (a missing/failing
+; exercise is a HARD failure; un-exercisable invariants are explicit KnownGaps
+; reconciled against an expected set). Pure OCaml (str + unix); shells out to
+; ../bin/main.exe:
+;   dune exec test/test_invariants.exe
+(tests
+ (names test_invariants)
+ (modules test_invariants)
+ (libraries str unix)
+ (deps ../bin/main.exe))
+
+; Suite-registration meta-test (formal-review G1/S2).  Fails the build if any
+; test_*.ml on disk is NOT named in this dune file — closes the "a test exists
+; but no gate runs it" class (the orphaned test_review18_antagonistic was one).
+; Pure OCaml (only stdlib + str for nothing); runs under `dune runtest`:
+;   dune exec test/test_suite_registration.exe
+(test
+ (name test_suite_registration)
+ (modules test_suite_registration))
+
+; Racket run-set completeness meta-test (S2b, Racket half).  Fails the build if
+; any tests/*.rkt is run by NO gate and not excluded-with-reason — the Racket
+; analogue of test_suite_registration.  Derives the gated set from the actual
+; gate config (compile-examples.sh auto-detect rule + internal-all.rkt +
+; ci.sh).  Pure OCaml (str + unix); runs under `dune runtest`:
+;   dune exec test/test_racket_discover.exe
+(tests
+ (names test_racket_discover)
+ (modules test_racket_discover)
+ (libraries str unix))

@@ -256,6 +256,48 @@ let record_entity_binder value_name value =
     | Some loc -> entity_binder_at_in_val := (loc, value_name) :: !entity_binder_at_in_val
     | None -> ()
 
+(* Stdlib higher-order combinators that distribute a per-element proof from a
+   `ForAll`-carrying collection onto the elements they hand to their callback.
+   Only these have the contract that justifies a proof-annotated lambda
+   parameter; any other HOF (user-defined or non-distributing stdlib) cannot
+   establish the per-element proof, so a proof-annotated lambda passed to it
+   would forge the proof. *)
+let proof_distributing_combinators =
+  [ "List.map"; "Set.map"
+  ; "List.foldr"; "List.foldl"; "List.foldRight"; "List.foldLeft"
+  ; "List.forEach"; "Set.forEach" ]
+
+(* Extract UpperCamelCase identifier tokens (predicate names) from a string such
+   as the pretty-printed inner proof of a `ForAll` predicate
+   ("IsPositive", "IsPositive && IsEven", "InRange 1 10" → ["InRange"]). *)
+let upper_camel_tokens (s : string) : string list =
+  let buf = Buffer.create 16 in
+  let out = ref [] in
+  let flush () =
+    if Buffer.length buf > 0 then begin
+      let t = Buffer.contents buf in
+      (if t.[0] >= 'A' && t.[0] <= 'Z' then out := t :: !out);
+      Buffer.clear buf
+    end
+  in
+  String.iter (fun c ->
+    match c with
+    | 'A'..'Z' | 'a'..'z' | '0'..'9' | '_' -> Buffer.add_char buf c
+    | _ -> flush ()) s;
+  flush ();
+  List.rev !out
+
+(* Element-level predicate names carried by a `ForAll`/`ForAllValues`/`ForAllKeys`
+   proof on a collection. *)
+let forall_inner_pred_names (proofs : proof_expr list) : string list =
+  List.concat_map (fun p ->
+    match p with
+    | PredApp { pred = ("ForAll" | "ForAllValues" | "ForAllKeys"); args = proof_name :: _; _ } ->
+      upper_camel_tokens proof_name
+    | _ -> []
+  ) proofs
+  |> List.sort_uniq String.compare
+
 let rec check_expr_call_proofs
     (subject_env : subject_env)
     (proof_env : proof_env)
@@ -266,7 +308,16 @@ let rec check_expr_call_proofs
   | EApp _ ->
     let (head0, args0) = collect_call_head_and_args [] e in
     let (head, args) = normalize_explicit_check_call head0 args0 in
-    let inner = List.concat_map (check_expr_call_proofs subject_env proof_env funcs) args in
+    (* Proof-annotated lambda ARGUMENTS are checked specially below (their body
+       is checked with the param proof assumed ONLY when a `ForAll` source
+       justifies it), so exclude them from the generic recursion here. *)
+    let is_proof_annotated_lambda = function
+      | ELambda { params; _ } -> List.exists (fun (p : binding) -> p.proof_ann <> None) params
+      | _ -> false
+    in
+    let inner = List.concat_map (fun a ->
+      if is_proof_annotated_lambda a then []
+      else check_expr_call_proofs subject_env proof_env funcs a) args in
     (* attachFact subject-mismatch check: the fact must describe the same underlying
        value as the one being attached to.
        E.g. `attachFact name2 proof` where proof was derived from `ne = check … name`
@@ -370,7 +421,100 @@ let rec check_expr_call_proofs
         check_call_proofs ~funcs call_loc "<lambda>" params args subject_env proof_env
       | _ -> []
     in
-    inner @ attach_errors @ call_errors @ callback_errors @ inline_lambda_errors
+    (* §6.1 — proof-annotated lambda LITERAL passed as an argument.
+       `someHof (fn(n: T ::: P n) -> body) ...` introduces a parameter that
+       CLAIMS to carry `P` with nothing to back it up — a proof conjured from
+       nowhere. The ONLY position where such a lambda is legitimate is as the
+       callback of a recognised element-distributing stdlib combinator
+       (List.map/Set.map/List.foldr/…) over a collection that already carries a
+       matching `ForAll P`: there the per-element proof genuinely COMES FROM the
+       collection (the lesson30 pattern). Every other case is rejected RIGHT AT
+       THE LAMBDA — including a body that happens not to consume the proof yet —
+       because allowing it is a latent footgun (a later edit silently turns it
+       unsound) and the eventual error would land far from its cause. Proofs are
+       never conjured; they are established (check/auth/establish) or distributed
+       (ForAll). When justified we check `body` WITH the param proof assumed.
+       (The lambda-as-call-HEAD immediate-application form, where the argument is
+       checked against the param proof, is handled by `inline_lambda_errors`
+       above; this only fires for non-head argument positions.) *)
+    let lambda_arg_errors = List.concat_map (fun arg ->
+      match arg with
+      | ELambda { params = lam_params; body = lam_body; loc = lam_loc }
+        when is_proof_annotated_lambda arg ->
+        let required_preds =
+          List.concat_map (fun (p : binding) ->
+            match p.proof_ann with Some pr -> proof_predicates pr | None -> []) lam_params
+          |> List.sort_uniq String.compare
+        in
+        let is_distributor = match function_name_of_expr head with
+          | Some n -> List.mem n proof_distributing_combinators
+          | None -> false
+        in
+        (* ForAll element-predicates available from any OTHER argument that is a
+           variable carrying a ForAll proof in the current proof environment. *)
+        let available_preds =
+          List.concat_map (fun a ->
+            match a with
+            | ELambda _ -> []
+            | EVar { name; _ } ->
+              (match List.assoc_opt name proof_env with
+               | Some proofs -> forall_inner_pred_names proofs
+               | None -> [])
+            | _ -> []) args
+          |> List.sort_uniq String.compare
+        in
+        let justified =
+          is_distributor
+          && required_preds <> []
+          && List.for_all (fun p -> List.mem p available_preds) required_preds
+        in
+        if justified then begin
+          (* Legitimate ForAll distribution — the per-element proof is real, so
+             assume it while checking the body (mirrors the generic ELambda
+             arm). *)
+          let body_proof_env =
+            List.fold_left (fun acc (b : binding) ->
+              match b.proof_ann with
+              | None -> acc
+              | Some proof -> (b.name, flatten_proof_conj proof) :: acc
+            ) proof_env lam_params
+          in
+          check_expr_call_proofs subject_env body_proof_env funcs lam_body
+        end else begin
+          (* Unjustified — the lambda's proof annotation has no source. Reject at
+             the lambda itself (one error, at the cause) and do NOT proof-check
+             the body under the bogus premise (that would either hide the forge
+             or emit a confusing secondary error far from here). *)
+          let required_s = String.concat ", " required_preds in
+          let hint =
+            if is_distributor then
+              Printf.sprintf
+                "the collection passed to `%s` must already carry `ForAll (%s)` so each element is proven \
+                 — establish it with `List.filterCheck`/`List.allCheck`/a `select` first, \
+                 then map; or drop the proof annotation and validate inside the lambda with a `check`"
+                (match function_name_of_expr head with Some n -> n | None -> "the combinator") required_s
+            else
+              "a proof-annotated lambda parameter is only valid as the callback of a `ForAll`-distributing \
+               stdlib combinator (List.map/Set.map/List.foldr/List.foldl) over a `ForAll`-proven collection; \
+               drop the annotation and validate inside the lambda with a `check`, or establish the proof first"
+          in
+          let what =
+            match function_name_of_expr head with
+            | Some n when is_distributor ->
+              Printf.sprintf "`%s` over a collection that does not carry `ForAll (%s)`" n required_s
+            | Some n -> Printf.sprintf "`%s`, which does not distribute element proofs" n
+            | None -> "a higher-order function that cannot establish it"
+          in
+          [ make_error lam_loc
+              ~hint
+              (Printf.sprintf
+                 "lambda parameter declares proof `%s`, but nothing establishes it here: the lambda is passed to %s. \
+                  A proof must be established (check/auth/establish) or distributed from a `ForAll` collection — never conjured by annotating a parameter"
+                 required_s what) ]
+        end
+      | _ -> []
+    ) args in
+    inner @ attach_errors @ call_errors @ callback_errors @ inline_lambda_errors @ lambda_arg_errors
   | ELet { name = _binder; declared_proof; declared_type; value; body; loc } ->
     let name = _binder in
     (* R51_P01 / R51_P02 — proof laundering via `let`.
@@ -480,7 +624,7 @@ let rec check_expr_call_proofs
                  | ECacheSet { value; _ } -> visit value
                  | ESendEmail _ | EStartEmailWorker _ -> ()
                  | ERuntimeCall { segments; _ } ->
-                   List.iter (function RLit _ -> () | RArg e -> visit e) segments
+                   List.iter (function RLit _ | RRawVar _ -> () | RArg e -> visit e) segments
                in
                visit body;
                let non_call_errors =
@@ -569,7 +713,7 @@ let rec check_expr_call_proofs
           | ECacheSet { value; _ } -> visit value
           | ESendEmail _ | EStartEmailWorker _ -> ()
           | ERuntimeCall { segments; _ } ->
-            List.iter (function RLit _ -> () | RArg e -> visit e) segments
+            List.iter (function RLit _ | RRawVar _ -> () | RArg e -> visit e) segments
         in
         visit body;
         let non_call_errors =
@@ -960,9 +1104,18 @@ let rec check_expr_call_proofs
         let subject = match List.assoc_opt name subject_env with Some s -> s | None -> name in
         let carried = match List.assoc_opt subject proof_env with Some proofs -> proofs | None ->
           match List.assoc_opt name proof_env with Some proofs -> proofs | None -> [] in
+        (* B6: decide over the RESOLVED predicate identity, not a rendered-string
+           prefix.  The old `String.sub key 0 9 = "IsNonZero"` also matched any
+           predicate whose NAME merely starts with "IsNonZero" (e.g. a
+           user-declared `IsNonZeroish`), and only inspected the top node of a
+           PredAnd.  flatten_proof + exact pred match over the full nonzero
+           family is the structural form. `Int.nonZero` mints `IsNonZero`;
+           `Float.requireNonZero` mints `FloatNonZero` — both mean "safe divisor". *)
         let has_nonzero = List.exists (fun p ->
-          let key = proof_key p in
-          String.length key >= 9 && String.sub key 0 9 = "IsNonZero"
+          List.exists (function
+            | PredApp { pred = ("IsNonZero" | "FloatNonZero"); _ } -> true
+            | _ -> false)
+            (flatten_proof p)
         ) carried in
         if has_nonzero then []
         else
@@ -1491,7 +1644,7 @@ pass a `check` function or a `&&` combination of check functions"
        walk to_; walk subject; walk body
      | EStartEmailWorker _ -> ()
      | ERuntimeCall { segments; _ } ->
-       List.iter (function RLit _ -> () | RArg e -> walk e) segments);
+       List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk e) segments);
   in
   List.iter (function
     | DFunc fd -> walk fd.body
@@ -1735,7 +1888,55 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
                name (String.concat ", " required_preds))
            :: !errors
        | None -> ())
-    | _ -> ()
+    | EList { elems; loc } ->
+      (* §6.3 — a list LITERAL returned at a `ForAll P` position.
+         A literal mints no per-element proof, so a non-empty literal cannot
+         carry `ForAll P` (each element would need the proof). `[]` is allowed:
+         `ForAll P []` is vacuously true. This closes the return-site smuggle
+         where `[-5, -3]` satisfied `List Int ? ForAll (IsPos)`. *)
+      (match expected with
+       | Some wanted ->
+         let required_preds = proof_predicates wanted in
+         if elems <> [] && required_preds <> [] then
+           errors := make_error loc
+             ~hint:(Printf.sprintf
+               "a list literal cannot establish `ForAll [%s]`; build the proven list with `List.filterCheck`/`List.allCheck`/a `select` (or return `[]`, which satisfies ForAll vacuously)"
+               (String.concat ", " required_preds))
+             (Printf.sprintf
+               "list literal does not establish `ForAll [%s]` — a literal mints no per-element proof, so every element is unproven"
+               (String.concat ", " required_preds))
+           :: !errors
+       | None -> ())
+    (* S9-EField: a record field access carries no per-element ForAll proof —
+       proof_expr has NO ForAll variant, so ForAll lives only on bindings/returns
+       produced by filterCheck/allCheck/select, never on a record field.  Hence
+       `w.items` at a `ForAll`-return position is always an unproven smuggle;
+       reject it, mirroring the bare-var and list-literal cases above. *)
+    | EField { field; loc; _ } ->
+      (match expected with
+       | Some wanted ->
+         let required_preds = proof_predicates wanted in
+         if required_preds <> [] then
+           errors := make_error loc
+             ~hint:(Printf.sprintf
+               "a record field access cannot carry `ForAll [%s]` (fields hold plain \
+                values); build the proven list with `List.filterCheck`/`List.allCheck`/a \
+                `select` and return that"
+               (String.concat ", " required_preds))
+             (Printf.sprintf
+               "field access `.%s` does not establish `ForAll [%s]` — a field access \
+                carries no per-element proof, so every element is unproven"
+               field (String.concat ", " required_preds))
+           :: !errors
+       | None -> ())
+    (* S9: enumerate the remaining variants explicitly (no `_`) so adding a new
+       Ast.expr variant becomes a COMPILE error here rather than silently
+       escaping this ForAll-consistency walk.  None of these are ForAll-producing
+       / ForAll-return-tail forms, so their behaviour is unchanged (no descent). *)
+    | ELit _ | EConstructor _ | EFail _ | EStartWorkers _ | EServe _
+    | EBinop _ | EUnop _ | ERecord _ | ETelemetry _ | EOk _ | EEnqueue _
+    | EPublish _ | ELambda _ | ECacheGet _ | ECacheSet _ | ECacheDelete _
+    | ECacheInvalidate _ | ESendEmail _ | EStartEmailWorker _ | ERuntimeCall _ -> ()
   in
   (* A `ForAll (P1 && P2) xs` proof annotation is stored as
      `PredApp { pred="ForAll"; args=["(P1 && P2)"; "xs"] }` — the inner
@@ -1834,7 +2035,7 @@ let rec exists_witnesses (e : expr) : string list =
     exists_witnesses to_ @ exists_witnesses subject @ exists_witnesses body
   | EStartEmailWorker _ -> []
   | ERuntimeCall { segments; _ } ->
-    List.concat_map (function RLit _ -> [] | RArg e -> exists_witnesses e) segments
+    List.concat_map (function RLit _ | RRawVar _ -> [] | RArg e -> exists_witnesses e) segments
 
 let check_exists_bindings (decls : top_decl list) : validation_error list =
   let errors = ref [] in
@@ -1922,9 +2123,7 @@ let looks_proof_carrying (funcs : (string * func_info) list) (e : expr) : bool =
        ]
        || (match List.assoc_opt name funcs with
            | Some info ->
-             info.fi_kind = CheckKind
-             || info.fi_kind = EstablishKind
-             || info.fi_kind = AuthKind
+             is_proof_introducing_kind info.fi_kind  (* B2: single source in Ast *)
              || (match info.fi_return with
                  | RetAttached { binding = b; _ } -> b.proof_ann <> None
                  | RetNamedPack _ -> true
@@ -2289,6 +2488,10 @@ if every guard fails at runtime, the case has no match"
     let redundancy_errors =
       let lit_key = function
         | LInt n -> Some (`Int n)
+        (* A9/HM-1: reuse the `Str key (distinct variant from `Int, so a huge Int
+           literal never collides with a native-int one) so identical huge arms are
+           still flagged as redundant. *)
+        | LBigInt s -> Some (`Str s)
         | LString s -> Some (`Str s)
         | LFloat _ -> None
         | LBool _ -> None
@@ -2419,5 +2622,5 @@ if every guard fails at runtime, the case has no match"
     recurse to_ @ recurse subject @ recurse body
   | EStartEmailWorker _ -> []
   | ERuntimeCall { segments; _ } ->
-    List.concat_map (function RLit _ -> [] | RArg e -> recurse e) segments
+    List.concat_map (function RLit _ | RRawVar _ -> [] | RArg e -> recurse e) segments
 

@@ -502,7 +502,9 @@ fn area(s: Shape) -> Int =
 |})
 
 let r49_a06 () =
-  should_fail_src "range\\|overflow\\|too.*large\\|out.*range\\|integer" (base_header ^ {|
+  (* A9/HM-1: Int is arbitrary-precision — a huge literal compiles (carried as an
+     LBigInt canonical string into the Racket bignum), no longer rejected. *)
+  should_pass_src (base_header ^ {|
 fn bad() -> Int = 9999999999999999999999
 |})
 

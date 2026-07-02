@@ -37,6 +37,7 @@ module Lesson31WorkerConcurrency exposing [EmailQueue, ConcurrencyServer]
 
 import Tesl.Prelude exposing [String, Unit]
 import Tesl.App exposing [App]
+import Tesl.Env exposing [envRead]
 import Tesl.Queue exposing [
   FromQueue,
   FromDeadQueue,
@@ -155,7 +156,7 @@ server ConcurrencyServer for ConcurrencyApi {
 # at once, increasing throughput without adding complexity.  The dead-letter
 # worker is activated too (single-threaded), folded via the job's dead slot.
 
-main() -> App requires [fullService, emailCap, deadEmailCap, enqueueEmail] =
+main() -> App requires [fullService, emailCap, deadEmailCap, enqueueEmail, envRead] =
   let port = 8090
   App {
     database: EmailDatabase

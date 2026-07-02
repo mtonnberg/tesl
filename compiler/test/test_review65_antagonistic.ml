@@ -527,6 +527,152 @@ type Flag
   | Disabled
 |}
 
+(* ── R65_SB — Bare (unqualified) import-only stdlib fns require their import ──
+   These typecheck via the global stdlib env but their runtime lives in an
+   import-only module, so using one in expression position WITHOUT importing its
+   module compiles-then-crashes at runtime (`unbound identifier`). They must be
+   rejected at compile time (Option A). Shadowing by a user binding of the same
+   name must NOT be flagged. *)
+
+let test_R65_SB01_env_without_import_rejected () =
+  should_fail "requires.*import Tesl\\.Env\\|not in the exposing" {|
+#lang tesl
+module R65Sb01 exposing [getPort]
+import Tesl.Prelude exposing [Int, String]
+fn getPort() -> Int requires [] = envInt "PORT" 3000
+|}
+
+let test_R65_SB02_requireEnv_without_import_rejected () =
+  should_fail "requires.*import Tesl\\.Env" {|
+#lang tesl
+module R65Sb02 exposing [key]
+import Tesl.Prelude exposing [String]
+fn key() -> String requires [] = requireEnv "API_KEY"
+|}
+
+let test_R65_SB03_generatePrefixedId_without_import_rejected () =
+  should_fail "requires.*import Tesl\\.Id" {|
+#lang tesl
+module R65Sb03 exposing [mkId]
+import Tesl.Prelude exposing [String]
+fn mkId() -> String requires [] = generatePrefixedId "usr"
+|}
+
+let test_R65_SB04_randomInt_without_import_rejected () =
+  should_fail "requires.*import Tesl\\.Random" {|
+#lang tesl
+module R65Sb04 exposing [roll]
+import Tesl.Prelude exposing [Int]
+fn roll() -> Int requires [] = randomInt 1 6
+|}
+
+let test_R65_SB05_env_with_import_accepted () =
+  (* With the module imported (Fix A) AND the envRead capability declared (Fix B),
+     the function is accepted. *)
+  should_pass {|
+#lang tesl
+module R65Sb05 exposing [getPort]
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Env exposing [envInt, envRead]
+fn getPort() -> Int requires [envRead] = envInt "PORT" 3000
+|}
+
+let test_R65_SB06_param_named_env_not_flagged_accepted () =
+  (* A parameter named `env` shadows the stdlib name; using it must NOT require
+     `import Tesl.Env`. *)
+  should_pass {|
+#lang tesl
+module R65Sb06 exposing [pick]
+import Tesl.Prelude exposing [String]
+fn pick(env: String) -> String requires [] = env
+|}
+
+let test_R65_SB07_let_bound_envInt_not_flagged_accepted () =
+  (* A let-bound local named `envInt` shadows the stdlib name. *)
+  should_pass {|
+#lang tesl
+module R65Sb07 exposing [n]
+import Tesl.Prelude exposing [Int]
+fn n() -> Int requires [] =
+  let envInt = 42
+  envInt
+|}
+
+(* ── R65_SBC — env* require the `envRead` capability in function bodies ──────
+   Reading the environment is an effect; a fn that calls env/envInt/etc. in its
+   body must declare `requires [envRead]`, and the capability flows transitively
+   to every caller (same discipline as `time`). *)
+
+let test_R65_SBC01_env_fn_without_capability_rejected () =
+  should_fail "envRead\\|capability" {|
+#lang tesl
+module R65Sbc01 exposing [getPort]
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Env exposing [envInt]
+fn getPort() -> Int requires [] = envInt "PORT" 3000
+|}
+
+let test_R65_SBC02_env_fn_with_capability_accepted () =
+  should_pass {|
+#lang tesl
+module R65Sbc02 exposing [getPort]
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Env exposing [envInt, envRead]
+fn getPort() -> Int requires [envRead] = envInt "PORT" 3000
+|}
+
+let test_R65_SBC03_transitive_caller_without_capability_rejected () =
+  (* readPort requires [envRead]; caller `start` calls it but omits envRead. *)
+  should_fail "envRead\\|capability" {|
+#lang tesl
+module R65Sbc03 exposing [start]
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Env exposing [envInt, envRead]
+fn readPort() -> Int requires [envRead] = envInt "PORT" 3000
+fn start() -> Int requires [] = readPort()
+|}
+
+(* ── R65_SH — handler parameter contract: no raw HttpRequest ─────────────────
+   Handlers receive only path captures, the parsed body, and the auth-proven value
+   (positionally). A handler taking `req: HttpRequest` compiles-then-crashes at
+   define-server with an arity error; it must be rejected at compile time. *)
+
+let test_R65_SH01_handler_with_httprequest_param_rejected () =
+  should_fail "HttpRequest\\|never passed the request" {|
+#lang tesl
+module R65Sh01 exposing [S]
+import Tesl.Prelude exposing [String]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+fact QAuthed (q: String)
+auth qAuth(req: HttpRequest) -> q: String ::: QAuthed q =
+  case Dict.lookup "q" req.queryParameters of
+    Nothing -> fail 400 "no q"
+    Something v -> ok v ::: QAuthed q
+api A { get "/s" auth q : String ::: QAuthed q via qAuth -> String }
+handler s(req: HttpRequest, q: String ::: QAuthed q) -> String requires [] = q
+server S for A { s = s }
+|}
+
+let test_R65_SH02_positional_handler_params_accepted () =
+  (* `getTask(x)` receives the capture `id` POSITIONALLY (param name need not
+     match); `createTask(x)` receives the POST body. No HttpRequest param. *)
+  should_pass {|
+#lang tesl
+module R65Sh02 exposing [S]
+import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
+capture idCapture: id: String using stringCodec
+handler createTask(x: String) -> String requires [] = x
+handler getTask(x: String) -> String requires [] = x
+api TaskApi {
+  post "/tasks" -> String
+  get "/tasks/:id" capture id: String via idCapture -> String
+}
+server S for TaskApi { createTask = createTask, getTask = getTask }
+|}
+
 (* ── Test runner ─────────────────────────────────────────────────────────── *)
 
 let () =
@@ -582,5 +728,23 @@ let () =
       test_case "R65_SX07 Dict.empty without import rejected" `Quick test_R65_SX07_using_dict_empty_as_value_without_import_rejected;
       test_case "R65_SX08 local Err without Result import accepted" `Quick test_R65_SX08_local_adt_with_same_name_as_result_ctor_accepted_if_not_imported;
       test_case "R65_SX09 Maybe import unique local ctors accepted" `Quick test_R65_SX09_ctor_conflict_checked_for_maybe_type_ok_rejected;
+    ];
+    "bare-stdlib-import-required", [
+      test_case "R65_SB01 envInt without import rejected" `Quick test_R65_SB01_env_without_import_rejected;
+      test_case "R65_SB02 requireEnv without import rejected" `Quick test_R65_SB02_requireEnv_without_import_rejected;
+      test_case "R65_SB03 generatePrefixedId without import rejected" `Quick test_R65_SB03_generatePrefixedId_without_import_rejected;
+      test_case "R65_SB04 randomInt without import rejected" `Quick test_R65_SB04_randomInt_without_import_rejected;
+      test_case "R65_SB05 envInt with import accepted" `Quick test_R65_SB05_env_with_import_accepted;
+      test_case "R65_SB06 param named env not flagged" `Quick test_R65_SB06_param_named_env_not_flagged_accepted;
+      test_case "R65_SB07 let-bound envInt not flagged" `Quick test_R65_SB07_let_bound_envInt_not_flagged_accepted;
+    ];
+    "env-capability-required", [
+      test_case "R65_SBC01 env fn without envRead rejected" `Quick test_R65_SBC01_env_fn_without_capability_rejected;
+      test_case "R65_SBC02 env fn with envRead accepted" `Quick test_R65_SBC02_env_fn_with_capability_accepted;
+      test_case "R65_SBC03 transitive caller without envRead rejected" `Quick test_R65_SBC03_transitive_caller_without_capability_rejected;
+    ];
+    "handler-param-contract", [
+      test_case "R65_SH01 handler with HttpRequest param rejected" `Quick test_R65_SH01_handler_with_httprequest_param_rejected;
+      test_case "R65_SH02 positional handler params accepted" `Quick test_R65_SH02_positional_handler_params_accepted;
     ];
   ]

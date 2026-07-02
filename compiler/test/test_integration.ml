@@ -111,6 +111,45 @@ let test_all_lessons_exact_match () =
        let rkt = lessons ^ "/" ^ stem ^ ".rkt" in
        assert_matches_python stem tesl rkt)
 
+(* The LSP writes transient `tesl-lsp-<n>.tesl` validation copies into the source
+   tree; never treat them as snapshots (mirrors compiler/gen/gen_docs.ml). *)
+let is_transient base =
+  String.length base >= 9 && String.sub base 0 9 = "tesl-lsp-"
+
+(* Recursively collect every *.tesl under [dir] (skipping transient LSP copies). *)
+let rec tesl_files_under dir =
+  if not (Sys.file_exists dir) then []
+  else
+    Sys.readdir dir
+    |> Array.to_list
+    |> List.sort String.compare
+    |> List.concat_map (fun entry ->
+         let path = dir ^ "/" ^ entry in
+         if (try Sys.is_directory path with Sys_error _ -> false) then
+           tesl_files_under path
+         else if Filename.check_suffix entry ".tesl" && not (is_transient entry) then
+           [ path ]
+         else [])
+
+(* Every committed .rkt under a directory must stay byte-exact (basename-
+   normalized) with what the compiler emits from its .tesl source.  Closes the
+   snapshot-drift gap: compile-examples.sh RUNS committed .rkt but never
+   regenerates+compares them, and the lesson-only gate above covered just
+   example/learn.  A .tesl with no committed .rkt sibling is skipped
+   (assert_matches_python returns early on an empty reference). *)
+let exact_match_dir dir =
+  tesl_files_under dir
+  |> List.iter (fun tesl ->
+       let rkt = Filename.chop_suffix tesl ".tesl" ^ ".rkt" in
+       if Sys.file_exists rkt then
+         assert_matches_python (Filename.basename tesl) tesl rkt)
+
+(* example/ (top-level + chat/ + kanel/ + learn/, redundantly) and tests/. The
+   lifted-stdlib snapshots live under tesl/ (not walked here) and are drift-gated
+   separately by ci.sh's Lifted-stdlib-snapshots check. *)
+let test_all_examples_exact_match () = exact_match_dir (root ^ "/example")
+let test_all_tests_exact_match () = exact_match_dir (root ^ "/tests")
+
 (* ── Exact match tests ───────────────────────────────────────────────────── *)
 
 let test_lesson00 () =
@@ -1116,6 +1155,8 @@ let () =
       Alcotest.test_case "lesson32 api tests" `Quick test_lesson32;
       Alcotest.test_case "lesson33 sse and queue tests" `Quick test_lesson33;
       Alcotest.test_case "all checked-in lessons exact-match" `Quick test_all_lessons_exact_match;
+      Alcotest.test_case "all checked-in examples exact-match" `Quick test_all_examples_exact_match;
+      Alcotest.test_case "all checked-in tests exact-match" `Quick test_all_tests_exact_match;
     ];
     "compile-lessons", [
       Alcotest.test_case "lesson02 ADTs" `Quick test_lesson02_parses;

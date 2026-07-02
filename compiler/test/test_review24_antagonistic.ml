@@ -729,13 +729,16 @@ fn f() -> Int = 0
 (* ── F20: Int max is 62-bit (Racket fixnum), not 64-bit ──────────────────── *)
 
 let test_int_max_is_62bit () =
-  (* F20: Max Int in Tesl is 4611686018427387903 = 2^62-1 (Racket fixnum). *)
+  (* A9/HM-1: Int is now arbitrary-precision. The former 63-bit fixnum range error
+     is gone — the old max (2^62-1) AND the former out-of-range value (2^62) both
+     compile. A huge magnitude beyond native int is carried through as LBigInt and
+     emitted verbatim into the Racket bignum. *)
   let max62 = "4611686018427387903" in
   let above  = "4611686018427387904" in
   let src_ok  = Printf.sprintf "%s\nbig = %s\n" prelude max62 in
-  let src_bad = Printf.sprintf "%s\nbig = %s\n" prelude above in
+  let src_above = Printf.sprintf "%s\nbig = %s\n" prelude above in
   should_pass src_ok;
-  should_fail "out of range" src_bad
+  should_pass src_above
 
 (* ── F21: Parameterised ADT: recursive Tree compiles and tests pass ───────── *)
 
@@ -761,8 +764,11 @@ test "tree size" {
 (* ── B5 regression: Lambda with conjunction proof annotation ─────────────── *)
 
 let test_forall_lambda_proof_annotation_rejected_with_v001 () =
-  (* B5 fixed: Lambda params with conjunction proof annotations now work.
-     e.g. `fn(x: Int ::: P x && Q x) -> ...` properly satisfies requirements for P and Q. *)
+  (* Soundness fix (§6.1): mapping a proof-annotated lambda whose body CONSUMES
+     the proof (`requiresBoth x`) over a RAW `List Int` (no `ForAll`) forges the
+     per-element proof and is now rejected. The sound form establishes the
+     `ForAll (Positive && Small)` first via List.filterCheck/allCheck, then maps
+     (see lesson30); a lambda body that ignores the annotation still compiles. *)
   let src = prelude_list ^ {|
 fact Positive (n: Int)
 fact Small    (n: Int)
@@ -772,7 +778,7 @@ fn requiresBoth(n: Int ::: Positive n && Small n) -> Int = n
 fn f(xs: List Int) -> List Int =
   List.map (fn(x: Int ::: Positive x && Small x) -> requiresBoth x) xs
 |} in
-  should_pass src
+  should_fail "V001\\|does not statically satisfy" src
 
 (* ── F24: Integer division by zero needs NonZero proof ───────────────────── *)
 

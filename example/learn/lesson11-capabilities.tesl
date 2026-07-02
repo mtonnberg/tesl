@@ -29,7 +29,7 @@ module Lesson11Capabilities exposing [
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Time exposing [nowMillis, time, PosixMillis]
-import Tesl.Env exposing [env]
+import Tesl.Env exposing [env, envRead]
 import Tesl.Maybe exposing [Maybe(..)]
 
 # Declare custom capabilities for this module.
@@ -43,10 +43,11 @@ capability auditWrite implies dbWrite # auditWrite subsumes dbWrite
 # Any function with appCapability satisfies both auditWrite and fileRead requirements.
 capability appCapability implies auditWrite, fileRead
 
-# "env" is a built-in prelude function guarded by a capability.
-# This wrapper needs no explicit requires since env() is a prelude primitive
-# that the runtime handles — but in practice env-reading functions would declare fileRead.
-fn readEnvVar(key: String) -> Maybe String =
+# Reading the environment is an effect, so `env`/`envInt`/`envString`/`requireEnv`
+# are guarded by the `envRead` capability (imported from Tesl.Env alongside the
+# functions). A function that calls one of them in its body must declare
+# `requires [envRead]` — capabilities flow transitively, exactly like `time`.
+fn readEnvVar(key: String) -> Maybe String requires [envRead] =
   env key # env key reads an environment variable (returns Maybe String)
 
 # nowMillis requires [time] capability — declared here with "requires [time]".
@@ -58,10 +59,11 @@ fn getCurrentTime() -> PosixMillis requires [time] =
 fn logMessage(message: String) -> String requires [auditWrite, dbRead] =
   "logged: ${message}" # in a real app, this would write to the DB
 
-# This function uses appCapability, which implies auditWrite and fileRead.
-# Any function that requires [auditWrite] or [fileRead] can be called from here.
-fn readAndWrite(key: String) -> String requires [appCapability] =
-  let value = readEnvVar key # fileRead satisfied by appCapability implies fileRead
+# This function uses appCapability (implies auditWrite + fileRead) AND calls
+# readEnvVar, which requires [envRead] — so readAndWrite must propagate envRead
+# too (capabilities flow transitively to every caller).
+fn readAndWrite(key: String) -> String requires [appCapability, envRead] =
+  let value = readEnvVar key # readEnvVar requires [envRead], propagated here
   let valueStr = case value of
     Nothing -> "(not set)"
     Something v -> v

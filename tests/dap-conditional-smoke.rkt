@@ -21,6 +21,13 @@
 (define RACKET-BIN (or (getenv "RACKET_BIN") (find-executable-path "racket")))
 (define DAP-SERVER (build-path REPO-ROOT "dsl/debug/dap-server.rkt"))
 (define TESL-FILE  (path->string (build-path REPO-ROOT "example/learn/lesson61-step-debugging.tesl")))
+
+;; Pin the worktree-built compiler so the dap-server subprocess does not fall back
+;; to a stale PATH `tesl` binary that may not match this worktree (or may not be
+;; --debug-capable). Mirrors the gated sibling dap-headless-inspect-conditional-smoke.
+(define TESL-BIN (build-path REPO-ROOT "compiler" "_build" "default" "bin" "main.exe"))
+(when (and (not (getenv "TESL_COMPILER")) (file-exists? TESL-BIN))
+  (putenv "TESL_COMPILER" (path->string TESL-BIN)))
 ;; The checkScore checkpoint line in lesson61 (thsl-src! "…" 91 (list (cons 'n *n)) …).
 (define CHECK-LINE 91)
 
@@ -56,12 +63,19 @@
                 [(pred m) m]
                 [else (loop)])))))
 
-(define ready? (and RACKET-BIN (file-exists? DAP-SERVER) (file-exists? TESL-FILE)))
+;; A --debug-capable compiler is required: either TESL_COMPILER is set (pinned above
+;; or supplied by the gate) or the worktree binary is built. Without one, the
+;; dap-server subprocess would compile with a mismatched/stale PATH `tesl` and the
+;; conditional breakpoint could never fire — so we SKIP rather than report a false RED,
+;; matching dap-headless-inspect-conditional-smoke.rkt's degrade-to-SKIP behavior.
+(define have-compiler? (or (getenv "TESL_COMPILER") (file-exists? TESL-BIN)))
+(define ready? (and RACKET-BIN (file-exists? DAP-SERVER) (file-exists? TESL-FILE)
+                    have-compiler?))
 
 (cond
   [(not ready?)
-   (printf "SKIPPED: prerequisites missing (racket=~a server=~a tesl=~a)\n"
-           RACKET-BIN (file-exists? DAP-SERVER) (file-exists? TESL-FILE))]
+   (printf "SKIPPED: prerequisites missing (racket=~a server=~a tesl=~a compiler=~a)\n"
+           RACKET-BIN (file-exists? DAP-SERVER) (file-exists? TESL-FILE) have-compiler?)]
   [else
    (define-values (proc out in err)
      (subprocess #f #f #f RACKET-BIN (path->string DAP-SERVER)))

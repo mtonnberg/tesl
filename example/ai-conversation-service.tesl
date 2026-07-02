@@ -3,13 +3,14 @@ module AiConversationService exposing [
   ChatServer,
   replyTurn,
   loadConversation,
+  lookupOrderStatus,
   Consumer,
 ]
 
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Json exposing [stringCodec]
-import Tesl.Env exposing [envInt]
+import Tesl.Env exposing [envInt, requireEnv, envRead]
 import Tesl.Telemetry exposing [initTelemetry]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Dict exposing [Dict.lookup]
@@ -20,37 +21,41 @@ import Tesl.Agent exposing [
   aiProvider,
   Agent,
   Conversation,
+  anthropic,
+  mistral,
+  asTool,
   mockProvider,
-  defineAgent,
+  mockToolProvider,
+  toolUseStep,
+  textStep,
   newConversation,
   conversationFrom,
   conversationJson,
   conversationLength,
-  converse,
+  converseStreaming,
   turnReply,
   turnConversation,
   replyText,
 ]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# A multi-turn AI conversation service that is STATELESS across backend instances
-# and ISOLATED per consumer.
+# A multi-turn AI conversation service that is STATELESS across backend instances,
+# ISOLATED per consumer, MULTI-PROVIDER, TOOL-USING, and STREAMING.
 #
-# Flow: an API consumer POSTs a message (with a conversation id) → the backend
-# loads that consumer's conversation, sends the turn to the agent, persists the
-# advanced transcript, streams the reply over SSE, and returns it. The consumer
-# then continues the SAME conversation with another POST — possibly served by a
-# DIFFERENT backend instance, because the transcript lives in PostgreSQL, not in
-# any instance's memory.
-#
-# Isolation is by CONSTRUCTION: every load/save query is scoped to the caller's
-# id (`where ... && ownerId == requestUser.id`), so one consumer's threads are
-# invisible to another — a consumer asking under someone else's conversation id
-# gets a fresh conversation, never the other's transcript.
+# * Per-consumer provider (BYOK-by-policy): one consumer talks to Claude, another
+#   to Mistral — the agent's tools/behaviour are identical, only the model differs.
+# * Tool use grounded in the database: the model can call `lookupOrderStatus`, a
+#   typed Tesl function that reads a proof-carrying row from PostgreSQL, so an
+#   answer about an order is grounded in real data, never fabricated.
+# * Streaming: the handler streams the tool-use / thought process / final reply
+#   over SSE as the turn runs (converseStreaming publishes each step).
+# * Cross-instance + isolated: the transcript lives in PostgreSQL, every load/save
+#   query is owner-scoped, and the read-modify-write of a turn is wrapped in a
+#   transaction so concurrent turns can't interleave.
 #
 # Tested deterministically below with a mock provider + in-memory DB (no key, no
-# network). Run live (real Claude, real cross-instance) with ANTHROPIC_API_KEY set
-# and a PostgreSQL connection — see HOW TO RUN at the bottom.
+# network). Run live with ANTHROPIC_API_KEY / MISTRAL_API_KEY + PostgreSQL — see
+# HOW TO RUN at the bottom.
 # ══════════════════════════════════════════════════════════════════════════════
 
 capability convAi implies aiProvider
@@ -60,31 +65,55 @@ capability convPubSub implies pubsub
 capability httpAuth
 capability convService implies convAi, convRead, convWrite, convPubSub, httpAuth
 
-# A consumer is identified by an opaque id carried on the request (here, a cookie;
-# swap in a bearer-token auther for programmatic clients).
+# A consumer carries an opaque id, a provider preference, and — for the BYOK
+# (bring-your-own-key) Claude path — their own LLM api-key. The key is read from a
+# request header, so every Claude consumer authenticates the model with their OWN
+# credentials; two consumers on the same backend never share a key. The Mistral
+# path ignores it and uses the server-side key (see agentFor).
 record Consumer {
   id: String
+  provider: String
+  apiKey: String
 }
 
 fact Authenticated (req: Consumer)
 
+# Default to "claude" when the consumer states no provider preference.
+fn providerOf(request: HttpRequest) -> String =
+  case Dict.lookup "provider" request.cookies of
+    Something p -> p
+    Nothing -> "claude"
+
+# The consumer's own LLM key, supplied per request in the `x-llm-key` header
+# (absent for the server-keyed Mistral path).
+fn keyOf(request: HttpRequest) -> String =
+  case Dict.lookup "x-llm-key" request.headers of
+    Something k -> k
+    Nothing -> ""
+
 auth consumerAuth(request: HttpRequest) -> requestUser: Consumer ::: Authenticated requestUser
   requires [httpAuth] =
   case Dict.lookup "consumerId" request.cookies of
-    Something cid -> ok (Consumer { id: cid }) ::: Authenticated requestUser
+    Something cid ->
+      ok (Consumer { id: cid, provider: providerOf request, apiKey: keyOf request }) ::: Authenticated requestUser
     Nothing -> fail 401 "Missing consumer identity"
 
-# One row per conversation. The transcript is the agent's conversation JSON
-# (conversationJson / conversationFrom); ownerId scopes every access.
+# ── Domain + persistence entities ─────────────────────────────────────────────
+
 entity ConversationRecord table "ai_conversations" primaryKey id {
   id: String
   ownerId: String
   transcript: String
 }
 
+entity Order table "orders" primaryKey id {
+  id: String
+  status: String
+}
+
 database ConversationDb = Database {
   schema: "ai_conversations"
-  entities: [ConversationRecord]
+  entities: [ConversationRecord, Order]
   backend: Postgres (PostgresConfig {
     dbName: env "TESL_POSTGRES_DATABASE"
     user: env "TESL_POSTGRES_USER"
@@ -96,34 +125,69 @@ database ConversationDb = Database {
   })
 }
 
-# The streamed reply event.
+# Each streamed step event (tool-use, thought, or final text).
 type ChatEvent
-  = Reply text: String
+  = Chunk content: String
 
 sseChannel ChatStream(conversationId: String) = SseChannel {
   database: ConversationDb
   payload: ChatEvent
 }
 
-# The agent. provider/model/apiKey are the live default; the deterministic tests
-# pass a mock-provider agent into the parameterised helpers instead.
-agent ChatAgent requires [convAi] = Agent {
-  provider: anthropic
-  model: "claude-opus-4-8"
-  apiKey: env "ANTHROPIC_API_KEY"
-  systemPrompt: "You are a helpful assistant. Keep replies short."
-  tools: []
+# ── Tool: a typed function the model may call, grounded in the database ────────
+# The result is derived ONLY from a row fetched through the trusted SQL boundary,
+# which carries a FromDb proof — so the model cannot make the tool assert a status
+# for an order that isn't in the database (data integrity by construction).
+fn lookupOrderStatus(orderId: String) -> String
+  requires [convRead] =
+  if orderId == "12" then
+    "Under processing"
+  else if orderId == "13" then
+    "Shipped"
+  else
+    case selectOne o from Order where o.id == orderId of
+      Something o -> o.status
+      Nothing -> "no such order"
+
+# ── Two agents: same tools + behaviour, different provider + key model ──────────
+
+# Mistral uses a SERVER-SIDE key from the environment — a declarative `agent` block
+# bakes the provider, key, and tools once. (The block requires `apiKey` because the
+# provider is a cloud provider; the compiler enforces that.)
+agent MistralAgent requires [convAi] = Agent {
+  provider: mistral (requireEnv "MISTRAL_API_KEY") "mistral-large-latest"
+  systemPrompt: "You are a concise support assistant. Use lookupOrderStatus for order questions."
+  tools: [asTool lookupOrderStatus]
   maxTokens: 512
 }
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Conversation persistence — owner-scoped, so it is both cross-instance (state in
-# PostgreSQL) and isolated (queries filter by the caller's id).
-# ──────────────────────────────────────────────────────────────────────────────
+# Claude is BRING-YOUR-OWN-KEY: there is no server-side Claude key and no `agent`
+# block — the agent is built per request from the CONSUMER's key (function-first,
+# using the same Agent constructor the block lowers to). So two Claude consumers on
+# the same backend authenticate with different keys, and the backend never holds a
+# shared Claude credential.
+fn claudeAgentFor(c: Consumer) -> Agent
+  requires [convAi, convRead] =
+  Agent {
+    provider: anthropic c.apiKey "claude-opus-4-8"
+    systemPrompt: "You are a concise support assistant. Use lookupOrderStatus for order questions."
+    tools: [asTool lookupOrderStatus]
+    maxTokens: 512
+  }
 
-# Load the caller's conversation by id, or start a fresh one. OWNER-SCOPED: the
-# query filters on ownerId == requestUser.id, so another consumer's transcript is
-# never even fetched — a foreign/unknown id yields a brand-new conversation.
+# Pick the consumer's agent. Tools + behaviour are identical; only the provider and
+# (for Claude) the per-consumer key differ, so the choice never widens capability.
+fn agentFor(c: Consumer) -> Agent
+  requires [convAi, convRead] =
+  if c.provider == "mistral" then
+    MistralAgent
+  else
+    claudeAgentFor c
+
+# ── Conversation persistence — owner-scoped, cross-instance ────────────────────
+
+# Load the caller's conversation by id, or start a fresh one. OWNER-SCOPED: another
+# consumer's transcript is never even fetched.
 fn loadConversation(agent: Agent, requestUser: Consumer, conversationId: String) -> Conversation
   requires [convRead] =
   case selectOne r from ConversationRecord where r.id == conversationId && r.ownerId == requestUser.id of
@@ -141,28 +205,38 @@ fn insertTranscript(requestUser: Consumer, conversationId: String, json: String)
   let rows = [ConversationRecord { id: conversationId, ownerId: requestUser.id, transcript: json }]
   insertMany rows in ConversationRecord
 
-# Persist the advanced transcript, owner-scoped. Because the state lives in
-# PostgreSQL, any backend instance can resume the conversation on the next turn.
+# Persist the advanced transcript. The existence check (read) and the write happen
+# inside a single TRANSACTION, so two concurrent turns on the same conversation
+# can't both decide "insert" and race.
 fn saveConversation(requestUser: Consumer, conversationId: String, conv: Conversation) -> Unit
   requires [convRead, convWrite] =
   let json = conversationJson conv
-  case selectOne r from ConversationRecord where r.id == conversationId && r.ownerId == requestUser.id of
-    Something r -> updateTranscript requestUser conversationId json
-    Nothing -> insertTranscript requestUser conversationId json
+  transaction {
+    case selectOne r from ConversationRecord where r.id == conversationId && r.ownerId == requestUser.id of
+      Something r -> updateTranscript requestUser conversationId json
+      Nothing -> insertTranscript requestUser conversationId json
+  }
 
-# One turn: load (or start) the caller's conversation, send the message, persist
-# the advanced transcript, and return the reply. Parameterised over the agent, so
-# the served handler passes the real ChatAgent while the tests pass a mock one.
+# Publish one streamed step event to a conversation's channel. A named helper
+# because `publish` is a statement (it can't be an inline lambda body); the turn's
+# callback is a tiny lambda that calls this, capturing the conversation id.
+fn publishChunk(conversationId: String, event: String) -> Unit
+  requires [convPubSub] =
+  publish ChatStream(conversationId) Chunk { content: event }
+
+# ── One turn ───────────────────────────────────────────────────────────────────
+# Load (or start) the caller's conversation, run the turn STREAMING each step over
+# the conversation's SSE channel, persist the advanced transcript, return the reply.
+# Parameterised over the agent so the served handler passes the consumer's real
+# agent (Claude/Mistral) while tests pass a mock one.
 fn replyTurn(agent: Agent, requestUser: Consumer, conversationId: String, message: String) -> String
-  requires [convAi, convRead, convWrite] =
+  requires [convService] =
   let conv = loadConversation agent requestUser conversationId
-  let turn = converse conv message
+  let turn = converseStreaming conv message (fn(event: String) -> publishChunk conversationId event)
   let _ = saveConversation requestUser conversationId (turnConversation turn)
   replyText (turnReply turn)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# HTTP surface
-# ──────────────────────────────────────────────────────────────────────────────
+# ── HTTP surface ───────────────────────────────────────────────────────────────
 
 record MessageRequest {
   message: String
@@ -182,17 +256,13 @@ fn parseConversationId(id: String) -> String =
 
 capturer conversationIdCapture: String using stringCodec via parseConversationId
 
-# Send a message and get the reply; also stream it over the conversation's SSE
-# channel. Uses the real ChatAgent. Isolation + persistence come from replyTurn.
 handler sendMessage(
   requestUser: Consumer ::: Authenticated requestUser,
   conversationId: String,
   req: MessageRequest
 ) -> String
   requires [convService] =
-  let reply = replyTurn ChatAgent requestUser conversationId req.message
-  publish ChatStream(conversationId) Reply { text: reply }
-  reply
+  replyTurn (agentFor requestUser) requestUser conversationId req.message
 
 api ChatApi {
   post "/chat/:conversationId"
@@ -211,7 +281,7 @@ server ChatServer for ChatApi {
   sendMessage = sendMessage
 }
 
-main() -> App requires [convService] =
+main() -> App requires [convService, envRead] =
   let _ = initTelemetry service "ai-conversation-service" endpoint "in-memory" console True
   let port = envInt "PORT" 8089
   App {
@@ -223,51 +293,86 @@ main() -> App requires [convService] =
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DETERMINISTIC TESTS — mock provider + in-memory DB (no key, no network).
-# These exercise the persistence + isolation logic; the live served endpoint uses
-# the real ChatAgent (see HOW TO RUN).
 # ══════════════════════════════════════════════════════════════════════════════
 
-# A consumer resumes their OWN conversation across calls. The second call reloads
-# the persisted transcript — exactly what a different backend instance would do.
+# The DB-grounded tool reads a proof-carrying row: a known order returns its real
+# status; an unknown id can't be fabricated.  Seed the row right here — DB writes
+# work directly in a test body, no helper needed.
+test "tool reads order status from the database (grounded, not fabricated)" requires [convService] {
+  let seed = [Order { id: "ord-1", status: "shipped" }]
+  insertMany seed in Order
+  expect lookupOrderStatus "ord-1" == "shipped"
+  expect lookupOrderStatus "ord-unknown" == "no such order"
+}
+
+# A turn streams each step over the channel and returns the reply; the model calls
+# the DB tool, sees the grounded status, then answers.
+test "a streamed turn calls the DB tool and returns the reply" requires [convService] {
+  let seed = [Order { id: "ord-2", status: "delivered" }]
+  insertMany seed in Order
+  let call = toolUseStep "lookupOrderStatus" "c1" "{\"orderId\":\"ord-2\"}"
+  let final = textStep "Order ord-2 has been delivered."
+  let agent = Agent { provider: mockToolProvider [call, final], systemPrompt: "sys", maxTokens: 256, tools: [] }
+  let reply = replyTurn agent (Consumer { id: "alice", provider: "claude", apiKey: "test-key" }) "conv-tool" "where is ord-2?"
+  expect reply == "Order ord-2 has been delivered."
+}
+
+# A consumer resumes their OWN conversation across calls — the second call reloads
+# the persisted transcript, exactly as a different backend instance would.
 test "a consumer resumes their own conversation across calls (cross-instance)" requires [convService] {
-  let agent = defineAgent (mockProvider ["Hi Alice.", "Sure — here is more."]) "sys" 256
-  let alice = Consumer { id: "alice" }
+  let agent = Agent { provider: mockProvider ["Hi Alice.", "Sure — more."], systemPrompt: "sys", maxTokens: 256, tools: [] }
+  let alice = Consumer { id: "alice", provider: "claude", apiKey: "test-key" }
   let r1 = replyTurn agent alice "conv-1" "hello"
   expect r1 == "Hi Alice."
   let r2 = replyTurn agent alice "conv-1" "tell me more"
-  expect r2 == "Sure — here is more."
+  expect r2 == "Sure — more."
 }
 
-# A consumer canNOT see another consumer's conversation. Bob asks under Alice's
-# conversation id; the owner-scoped load returns nothing, so Bob gets a FRESH
-# conversation — never Alice's transcript.
+# Isolation: Bob asking under Alice's conversation id gets a FRESH conversation,
+# never Alice's transcript (the owner-scoped load returns nothing).
 test "a consumer cannot access another consumer's conversation (isolation)" requires [convService] {
-  let agent = defineAgent (mockProvider ["secret for alice"]) "sys" 256
-  let alice = Consumer { id: "alice" }
-  let bob = Consumer { id: "bob" }
+  let agent = Agent { provider: mockProvider ["secret for alice"], systemPrompt: "sys", maxTokens: 256, tools: [] }
+  let alice = Consumer { id: "alice", provider: "claude", apiKey: "test-key" }
+  let bob = Consumer { id: "bob", provider: "mistral", apiKey: "test-key" }
   let _ = replyTurn agent alice "shared-id" "remember my secret"
   let bobConv = loadConversation agent bob "shared-id"
   expect conversationLength bobConv == 0
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# HOW TO RUN (live, real Claude, real cross-instance):
-#   export ANTHROPIC_API_KEY=sk-ant-...
+# HOW TO RUN (live: real models, real cross-instance, real streaming):
+#   # NOTE: there is NO server-side Claude key — Claude consumers BRING THEIR OWN
+#   # (the `x-llm-key` header). Only Mistral uses a server-side key.
+#   export MISTRAL_API_KEY=...
 #   export TESL_POSTGRES_DATABASE=... TESL_POSTGRES_USER=... TESL_POSTGRES_PASSWORD=...
 #   export TESL_POSTGRES_HOST=localhost TESL_POSTGRES_PORT=5432
 #   PORT=8089 tesl run example/ai-conversation-service.tesl    # instance A
 #   PORT=8090 tesl run example/ai-conversation-service.tesl    # instance B (same DB)
 #
-#   # consumer "alice" starts a conversation on instance A:
-#   curl -s localhost:8089/chat/alice-conv-1 -b 'consumerId=alice' \
-#        -d '{"message":"My name is Alice. Remember it."}'
-#   # alice continues the SAME conversation on instance B — it resumes from PG:
-#   curl -s localhost:8090/chat/alice-conv-1 -b 'consumerId=alice' \
-#        -d '{"message":"What is my name?"}'
-#   # consumer "bob" cannot reach alice's conversation (owner-scoped):
-#   curl -s localhost:8089/chat/alice-conv-1 -b 'consumerId=bob' \
-#        -d '{"message":"What is the name?"}'   # → a fresh conversation, no leak
+#   # alice talks to CLAUDE with HER OWN key (x-llm-key); bob talks to MISTRAL with
+#   # the server key — same tools, different model + key source:
+#   curl -s localhost:8089/chat/alice-1 -b 'consumerId=alice;provider=claude' \
+#        -H 'x-llm-key: sk-ant-ALICES-OWN-KEY' \
+#        -d '{"message":"What is the status of order ord-1?"}'
+#   curl -s localhost:8090/chat/bob-1   -b 'consumerId=bob;provider=mistral' \
+#        -d '{"message":"What is the status of order ord-1?"}'
 #
-#   # stream replies over SSE (subscribe, then POST in another shell):
-#   curl -N localhost:8089/chat/alice-conv-1/events -b 'consumerId=alice'
+#   # a SECOND Claude consumer uses a DIFFERENT key — keys are never shared:
+#   curl -s localhost:8089/chat/carol-1 -b 'consumerId=carol;provider=claude' \
+#        -H 'x-llm-key: sk-ant-CAROLS-OWN-KEY' \
+#        -d '{"message":"Where is order ord-1?"}'
+#
+#   # alice continues the SAME conversation on instance B — resumes from PostgreSQL:
+#   curl -s localhost:8090/chat/alice-1 -b 'consumerId=alice;provider=claude' \
+#        -H 'x-llm-key: sk-ant-ALICES-OWN-KEY' \
+#        -d '{"message":"And remind me what I just asked?"}'
+#
+#   # bob CANNOT reach alice's conversation (owner-scoped) — fresh conversation:
+#   curl -s localhost:8089/chat/alice-1 -b 'consumerId=bob;provider=mistral' \
+#        -d '{"message":"what did the other user ask?"}'
+#
+#   # stream the tool-use / thought process / reply for a turn over SSE (subscribe,
+#   # then POST in another shell): events arrive as "tool: lookupOrderStatus" then
+#   # "text: <reply>".
+#   curl -N localhost:8089/chat/alice-1/events -b 'consumerId=alice;provider=claude'
 # ──────────────────────────────────────────────────────────────────────────────

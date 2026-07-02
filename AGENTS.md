@@ -124,10 +124,10 @@ the inspector captures + dumps the paused state.
 ## MCP server (`editor/tesl-mcp`)
 
 For MCP-capable agents, `editor/tesl-mcp/tesl-mcp.rkt` exposes the surface above as
-discoverable tools over stdio: `tesl.agent_context`, `tesl.check`, `tesl.type_at`,
-`tesl.signature`, `tesl.completions`, `tesl.definition`, `tesl.references`,
-`tesl.proof_obligations`, `tesl.debug_inspect` (with full breakpoint-setting incl.
-conditional/hit-count). Register it with your client.
+discoverable tools over stdio (agent-context, diagnostics, type/signature/completion
+queries, definition, references, proof obligations, and the headless step-debugger
+with full breakpoint-setting). See [`editor/tesl-mcp/README.md`](editor/tesl-mcp/README.md)
+for the full tool catalog and argument shapes. Register it with your client.
 
 If Tesl is **installed via the Nix flake** (`nix profile install github:mtonnberg/tesl`),
 the `tesl-mcp` binary is on PATH — no repo checkout or env needed:
@@ -166,3 +166,12 @@ Everything here is covered by automatic regression tests in `compiler/ci.sh`
 (OCaml query flags via `dune test` + a "Racket-suites" section running the DAP
 debugger, headless `debug-inspect` incl. conditional breakpoints, and the MCP
 protocol smoke). A change that breaks the agent API fails the gate.
+
+
+## Leveraging Proofs
+
+Tesl has a very powerful proof system, make sure to leverage that when coding. The goal is to reduce the amount of code a human need to review/look at to know that the code does what she/he wants. That means, using types, proofs, tests(test, api-test, load-test), auth, check, establish and point the human to relevant parts. When you need a decision/guidance from a human, try to frame it through the lens of proofs (explaining the different options in a friendly and easy-to-understand way).
+
+## Communication style
+
+Be crisp, concise and precise but helpful and constructive. Avoid fluff and go directly to the point. Use BLUF where appropiate (Bottom Line Up Front).

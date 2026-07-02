@@ -135,8 +135,8 @@ let agent_hdr modname = Printf.sprintf
    import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n\
    import Tesl.Json exposing [stringCodec]\n\
-   import Tesl.Agent exposing [aiProvider, Agent, LlmProvider, Tool, tool, withTools, \
-   defineAgent, mockProvider, ask, askReply, replyText]\n\
+   import Tesl.Agent exposing [aiProvider, Agent, LlmProvider, Tool, tool, \
+   mockProvider, ask, askReply, replyText]\n\
    capability supportBot implies aiProvider\n"
   modname
 
@@ -173,7 +173,7 @@ let db_hdr modname = Printf.sprintf
   "#lang tesl\nmodule %s exposing []\n\
    import Tesl.Prelude exposing [Int, String, List, Unit]\n\
    import Tesl.DB exposing [dbRead]\n\
-   import Tesl.Agent exposing [aiProvider, Agent, defineAgent, mockProvider, ask]\n\
+   import Tesl.Agent exposing [aiProvider, Agent, mockProvider, ask]\n\
    capability supportBot implies aiProvider\n\
    entity Note table \"notes\" primaryKey id { id: String authorId: String body: String }\n"
   modname
@@ -428,12 +428,12 @@ let cap_missing idx op =
       (Printf.sprintf
         "#lang tesl\nmodule %s exposing []\n\
          import Tesl.Prelude exposing [Int, String]\n\
-         import Tesl.Agent exposing [aiProvider, Agent, defineAgent, mockProvider, \
+         import Tesl.Agent exposing [aiProvider, Agent, mockProvider, \
          ask, askReply, replyText]\n%s"
         m
         (Printf.sprintf {|
 fn dispatch%s(input: String) -> String =
-  let agent = defineAgent (mockProvider ["x"]) "sys" 64
+  let agent = Agent { provider: mockProvider ["x"], systemPrompt: "sys", maxTokens: 64, tools: [] }
   %s
 |} m op))
   in
@@ -498,7 +498,7 @@ let pos_cap_ok () =
   should_pass
     (agent_hdr "PosCap01" ^ {|
 fn dispatchSummarize(input: String) -> String requires [aiProvider] =
-  let agent = defineAgent (mockProvider ["ok"]) "sys" 64
+  let agent = Agent { provider: mockProvider ["ok"], systemPrompt: "sys", maxTokens: 64, tools: [] }
   ask agent input
 |})
 
@@ -512,10 +512,39 @@ fn validateDoc(argsJson: String) -> Doc =
 fn dispatchDelete(t: Doc) -> String = t.id
 test "delete tool wires up" requires [supportBot] {
   let delTool = tool "delete_doc" "Delete a document" "{}" validateDoc dispatchDelete
-  let agent = withTools (defineAgent (mockProvider ["done"]) "sys" 64) [delTool]
+  let agent = Agent { provider: mockProvider ["done"], systemPrompt: "sys", maxTokens: 64, tools: [delTool] }
   expect (ask agent "delete it") == "done"
 }
 |})
+
+(* ══════════════════════════════════════════════════════════════════════════
+   REMOVED-API — the Agent surface was unified on the `Agent { … }` constructor;
+   `defineAgent` / `withTools` were removed.  These MUST NOT compile — a guard that
+   the old, larger surface stays gone (smaller-surface regression test).
+   ══════════════════════════════════════════════════════════════════════════ *)
+let removed_api_re =
+  "does not export\\|unknown\\|unbound\\|not in scope\\|V001\\|T001"
+
+let removed_api_cases =
+  [ ("REMOVED-01 import defineAgent rejected", (fun () ->
+       should_fail removed_api_re
+         "#lang tesl\nmodule R01 exposing []\n\
+          import Tesl.Agent exposing [defineAgent]\n"));
+    ("REMOVED-02 import withTools rejected", (fun () ->
+       should_fail removed_api_re
+         "#lang tesl\nmodule R02 exposing []\n\
+          import Tesl.Agent exposing [withTools]\n"));
+    ("REMOVED-03 defineAgent call rejected", (fun () ->
+       should_fail removed_api_re
+         "#lang tesl\nmodule R03 exposing []\n\
+          import Tesl.Agent exposing [Agent, mockProvider]\n\
+          fn f() -> Agent = defineAgent (mockProvider []) \"s\" 8\n"));
+    ("REMOVED-04 withTools call rejected", (fun () ->
+       should_fail removed_api_re
+         "#lang tesl\nmodule R04 exposing []\n\
+          import Tesl.Agent exposing [Agent, mockProvider]\n\
+          fn f() -> Agent =\n\
+          \  withTools (Agent { provider: mockProvider [], systemPrompt: \"s\", maxTokens: 8, tools: [] }) []\n")); ]
 
 (* ── Registration ────────────────────────────────────────────────────────── *)
 
@@ -528,6 +557,7 @@ let () =
     "SCOPE-user-scoping",     to_cases (scope_where_cases @ scope_consume_cases @ scope_bare_cases);
     "HAND-fabricated-value",  to_cases (hand_ok_cases @ hand_ctor_cases @ hand_establish_cases);
     "CAP-missing-aiProvider", to_cases cap_cases;
+    "REMOVED-API-rejected",   to_cases removed_api_cases;
     "POS-companions", (
       to_cases (pos_owned_cases @ pos_scope_cases) @ [
         test_case "POS ownership proof reused across ops" `Quick pos_proof_reuse;

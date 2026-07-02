@@ -126,9 +126,9 @@ Prefix validation functions with verbs that indicate their purpose:
 **✅ Do:** Compose simple checks into complex ones:
 ```tesl
 check validateUser(user: RawUser) -> validated: User ::: ValidUser validated =
-  let email = check isValidEmail(user.email) in
-  let name = check isValidName(user.name) in
-  let age = check isValidAge(user.age) in
+  let email = check isValidEmail(user.email)
+  let name = check isValidName(user.name)
+  let age = check isValidAge(user.age)
   ok { email, name, age } ::: ValidUser { email, name, age }
 ```
 
@@ -153,9 +153,9 @@ codec NewTodo {
 **✅ Do:** Use `check` for cross-field validation:
 ```tesl
 check validateRegistration(req: RegistrationRequest) -> valid: RegistrationRequest ::: ValidRegistration valid =
-  let email = check isValidEmail(req.email) in
-  let password = check isValidPassword(req.password) in
-  let _ = check passwordsMatch(req.password, req.confirmPassword) in
+  let email = check isValidEmail(req.email)
+  let password = check isValidPassword(req.password)
+  let _ = check passwordsMatch(req.password, req.confirmPassword)
   ok req ::: ValidRegistration req
 
 check passwordsMatch(password: String, confirm: String) -> unit ::: PasswordsMatch =
@@ -184,7 +184,7 @@ handler createTodo(req: NewTodo ::: ValidNewTodo) -> Todo ? FromDb (Id == todo.i
 When you need to pass proofs explicitly:
 ```tesl
 fn processTodo(todo: Todo ::: TodoExists todo.id) -> Result =
-  let proof = detachFact todo in
+  let proof = detachFact todo
   -- proof is now a separate fact value
   -- todo is the raw value without the proof
   ...
@@ -211,6 +211,11 @@ This means you should reach for proofs **freely**. Adding a `:::` annotation, co
 with `&&`, or constraining a list with `ForAll` costs nothing at runtime. Design your types around
 the guarantees you want, not around an imagined allocation budget.
 
+"Zero-cost" here means **proof tracking is erased** (no proof structs on the standard path) — it
+does *not* mean a call has no runtime overhead at all. Each `fn`/`handler` call still pays a small
+always-on capability-grant + return-shape-validation cost (see the per-feature table below); those
+checks guard runtime-only facts and are never erased.
+
 ### Debugging proofs
 
 Proofs are erased even under `--debug`. A binding's proof is *compile-time* information (the static
@@ -230,14 +235,16 @@ tesl run --debug my-api.tesl                    # breakpoints + raw-value inspec
 |---|---|
 | Proof annotations (`:::`) | **Zero.** Checked once at the boundary, then erased — in release and `--debug` alike. The debugger reads proof/type from compile-time info. |
 | `check` functions | The check body runs **once**, at the validation boundary. It never re-runs downstream. |
-| Capabilities (`requires [...]`) | **Zero.** A compile-time contract with no runtime representation. |
+| Capabilities (`requires [...]`) | **Near-zero.** The lattice is verified at compile time; at run time each call runs inside an ambient capability-grant scope with a small membership check against the granted set (not fully erased like proofs). |
 | `ForAll` on lists | **Zero.** The list is a plain list at runtime; the annotation is erased — no per-element boxing. |
 | Free-floating proofs (`detachFact` / `attachFact`) | **Minimal token, always.** These are explicit first-class values passed around at runtime, so they keep a small representation even in release builds. |
 | ADTs / sum types | A normal tagged-union struct, like a discriminated union in any other language. |
 | Newtypes (`type UserId = String`) | A thin wrapper struct for nominal distinctness; unwrapped automatically on DB and JSON boundaries. |
 
-> The wording here matches the cost table in [`TESL.md`](../TESL.md) and the proof-erasure rules in
-> [`LANGUAGE-SPEC.md`](../LANGUAGE-SPEC.md). If those diverge, the language spec is authoritative.
+> This table is the **canonical** proof-cost model for the docs — the overview, getting-started, FAQ,
+> tour, and `TESL.md` all link here rather than restate it. The underlying proof-erasure rules are
+> specified in [`LANGUAGE-SPEC.md`](../LANGUAGE-SPEC.md); if this table and the spec ever diverge, the
+> language spec is authoritative.
 
 ---
 
@@ -414,11 +421,11 @@ Test individual functions in isolation. Use for pure functions and business logi
 ```tesl
 -- Test a pure function
 test "isValidEmail rejects empty strings" = 
-  let result = isValidEmail("") in
+  let result = isValidEmail("")
   expect result.isError == true
 
 test "isValidEmail accepts valid emails" = 
-  let result = isValidEmail("test@example.com") in
+  let result = isValidEmail("test@example.com")
   expect result.isOk == true
   case result of
     Ok email -> expect email == "test@example.com"
@@ -426,13 +433,13 @@ test "isValidEmail accepts valid emails" =
 
 -- Test with specific values
 test "addPositive adds correctly" = 
-  let result = addPositive(5, 3) in
+  let result = addPositive(5, 3)
   case result of
     Ok sum -> expect sum == 8
     Err _ -> fail "Expected Ok"
 
 test "addPositive rejects negative numbers" = 
-  let result = addPositive(-1, 5) in
+  let result = addPositive(-1, 5)
   expect result.isError == true
 ```
 
@@ -449,19 +456,19 @@ Verify that properties hold across many randomly generated inputs. Ideal for val
 **✅ Do:**
 ```tesl
 property-test "valid emails are never empty" 100 times = 
-  let email = generateValidEmail() in
+  let email = generateValidEmail()
   expect String.length email > 0
 
 property-test "addPositive is commutative" 50 times = 
-  let a = generatePositiveInt() in
-  let b = generatePositiveInt() in
-  let sum1 = addPositive(a, b) in
-  let sum2 = addPositive(b, a) in
+  let a = generatePositiveInt()
+  let b = generatePositiveInt()
+  let sum1 = addPositive(a, b)
+  let sum2 = addPositive(b, a)
   expect sum1 == sum2
 
 property-test "validated strings are never null" 100 times = 
-  let input = generateNonNullString() in
-  let result = check isValidNonNullString(input) in
+  let input = generateNonNullString()
+  let result = check isValidNonNullString(input)
   case result of
     Ok s -> expect s != null
     Err _ -> fail "Should always validate"
@@ -984,7 +991,7 @@ When tests fail, use these techniques:
 3. **Add temporary output** - Use `println` for debugging:
    ```tesl
    test "debug test" = 
-     let x = computeSomething() in
+     let x = computeSomething()
      println "x is: " x  -- Debug output
      expect x > 0
    ```
@@ -1049,9 +1056,8 @@ test "second" = ...  -- depends on data from first
 
 ### Minimize Allocations
 
-- **Proofs are free.** In a release build proof structs are erased entirely (see
-  [Proof Cost Model](#proof-cost-model)), so a `:::` annotation adds no allocation. They are only
-  materialised under `--debug` for the step debugger.
+- **Proofs are free.** Proof structs are erased entirely — in release and `--debug` alike (see
+  [Proof Cost Model](#proof-cost-model)), so a `:::` annotation adds no allocation.
 - **Prefer value-level proofs** over free-floating proofs (`detachFact` / `attachFact`): a
   free-floating proof keeps a small runtime token even in release builds, a value-level annotation
   does not.
@@ -1104,4 +1110,4 @@ fn validateEmail(email: String) -> String = ...
 - [Stable Anchor Scheme](anchors.md) - Deep-link IDs (error messages cite this file's anchors)
 - [Examples](examples.md) - Complete list of examples
 - [LANGUAGE-SPEC.md](../LANGUAGE-SPEC.md) - Formal specification
-- [TESL.md](../TESL.md) - High-level introduction
+- [Guided Feature Tour](tour.md) - The long-form language walkthrough

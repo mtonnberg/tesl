@@ -513,42 +513,27 @@
        [positive-value (positive 5)]
        [positive-pow-result (requires-positive positive-value)]
        [trusted-pow-result (trusted-positive positive-value)])
-  (check-exn
-   (lambda (exn)
-     (and (exn:fail:user? exn)
-          (regexp-match? #rx"declared type Integer" (exn-message exn))))
-   (lambda ()
-     (typed-only "oops")))
-  (check-exn
-   (lambda (exn)
-     (and (exn:fail:user? exn)
-          (regexp-match? #rx"declared proof" (exn-message exn))))
-   (lambda ()
-     (requires-positive -1)))
+  ;; Entry type/proof re-validation for define/pow and define-trusted was
+  ;; intentionally erased (zero-cost proofs); these guarantees now live in the
+  ;; static checker, so there is no runtime exception to assert here anymore.
+  ;; (Former check-exn blocks for `typed-only "oops"`, `requires-positive -1`,
+  ;; and `trusted-positive -1` were removed as obsolete.)
   (check-equal? (raw-value positive-pow-result) 5)
   (check-true (detached-proof? (detach-proof positive-pow-result)))
   (check-equal? (raw-value (forward-positive positive-value)) 5)
   (check-equal? (detach-positive positive-value) 5)
   (check-equal? (raw-value trusted-pow-result) 5)
-  (check-true (detached-proof? (detach-proof trusted-pow-result)))
-  (check-exn
-   (lambda (exn)
-     (and (exn:fail:user? exn)
-          (regexp-match? #rx"declared proof" (exn-message exn))))
-   (lambda ()
-     (trusted-positive -1))))
+  (check-true (detached-proof? (detach-proof trusted-pow-result))))
 (check-exn
  (lambda (exn)
    (and (exn:fail? exn)
         (regexp-match? #rx"declared ADT return" (exn-message exn))))
  (lambda ()
    ((run-temp-module invalid-pow-adt-shape-module 'bad-pow) 5)))
-(check-exn
- (lambda (exn)
-   (and (exn:fail? exn)
-        (regexp-match? #rx"declared return proof" (exn-message exn))))
- (lambda ()
-   ((run-temp-module invalid-pow-adt-proof-module 'bad-pow) 5)))
+;; The runtime no longer re-checks declared return proofs (zero-cost proofs);
+;; the former check-exn for invalid-pow-adt-proof-module ("declared return
+;; proof") was removed as obsolete. The ADT *shape* return check above is still
+;; enforced and remains asserted.
 (check-equal? (run-temp-module custom-adt-module 'custom-result)
               '(#t #t 5))
 
@@ -668,7 +653,11 @@
                                     (make-request 'GET '("tasks"))
                                     #:capabilities '())])
     (check-equal? (dsl-response-status response) 500)
-    (check-true (regexp-match? #rx"BrokenCodecTaskResponse" (first (hash-ref (dsl-response-body response) 'details))))))
+    ;; Security hardening (web.rkt "A2"): handler-error detail is redacted from
+    ;; the client body (only logged server-side / echoed under TESL_VERBOSE).
+    ;; Assert the redaction contract instead of reading the leaked detail.
+    (check-equal? (hash-ref (dsl-response-body response) 'details) '())
+    (check-equal? (hash-ref (dsl-response-body response) 'error) "Internal server error")))
 
 (seed-state!)
 (let ([response (dispatch 'GET '("tasks" "1") #:cookie "user=mikael")])
@@ -724,3 +713,35 @@
 (define emitted-events (drain-telemetry!))
 (check-false (null? emitted-events))
 (check-equal? (telemetry-event-service-name (first emitted-events)) "document-api")
+
+;; ── CONC-1: SSE per-key capture is enforced (fail-closed) ──────────────────
+;; An `sse` endpoint's `capture key ::: P key via someCapturer` is lowered to a
+;; `(sse-key-capture someCapturer)` validator (4th element of the SSE route).
+;; The validator must reject an invalid channel key (rather than the check being
+;; silently dropped, which let any authenticated user subscribe to any key — an
+;; IDOR/BOLA gap).  This reconstructs the emitted checker/capturer forms and
+;; exercises the validator directly.
+(define conc1-sse-validate
+  (run-temp-module
+   (format "#lang racket
+(require (file ~s) (file ~s))
+(provide validate)
+(define ValidRoomId 'ValidRoomId)
+(define-checker
+  (checkRoomId [id : String])
+  #:returns [id : String ::: (ValidRoomId id)]
+  (if (> (string-length *id) 0)
+      (accept (ValidRoomId id) #:value *id)
+      (reject \"invalid room id\" #:http-code 400)))
+(define-capture roomIdCapture
+  [roomId : String ::: (ValidRoomId roomId)]
+  #:parser string-segment #:check checkRoomId)
+(define validate (sse-key-capture roomIdCapture))
+"
+           (path->string check-rkt)
+           (path->string web-rkt))
+   'validate))
+(check-false (check-fail? (conc1-sse-validate "room-1"))
+             "CONC-1: a valid SSE channel key is accepted")
+(check-true (check-fail? (conc1-sse-validate ""))
+            "CONC-1: an invalid (empty) SSE channel key is rejected fail-closed")

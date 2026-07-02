@@ -1,4 +1,7 @@
 # 11 — Frontend IR and `--ir`
+
+> Audience: contributors working on the frontend IR in the compiler (`compiler/lib/ir.ml`, `compiler/bin/main.ml`).
+
 The current frontend-facing IR lives in the OCaml compiler, not in Python staging modules. The implementation is `compiler/lib/ir.ml`, and the CLI surface is `tesl --ir` in `compiler/bin/main.ml`.
 ## What `--ir` is today
 `tesl --ir file.tesl`:

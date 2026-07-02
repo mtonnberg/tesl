@@ -9,8 +9,8 @@
 
       type_system.ml  │  tesl_module_exports        – canonical export lists
                       │  stdlib_env                 – type-checker environment
-      checker.ml      │  stdlib_module_of_prefix    – prefix → Tesl.X mapping
-                      │                               needed by check_stdlib_fn_import_scope
+                      │  stdlib_home_module         – A7 single-source name → module
+                      │                               (drives check_stdlib_fn_import_scope)
       validation.ml   │  stdlib_adt_ctors           – ADT constructor sets
                       │                               needed by imported_plain_exposed_ctor_entries
       emit_racket.ml  │  module_path_table          – Racket file paths
@@ -18,8 +18,10 @@
 
     When you add a new stdlib function:
       1. Add it to stdlib_env in type_system.ml
-      2. Add it to tesl_module_exports in type_system.ml
-      3. If its module prefix is new, add it to stdlib_module_of_prefix in checker.ml
+      2. Add it to tesl_module_exports in type_system.ml (qualified rows feed
+         stdlib_home_module automatically); for a BARE gated name add a row to
+         stdlib_bare_home_module (or, if always-available, to
+         always_available_stdlib_names)
 
     When you add a new stdlib ADT:
       1. Add its constructors to stdlib_adt_ctors in validation.ml
@@ -28,9 +30,7 @@
 
     When you add a new stdlib module:
       1. Add it to module_path_table in emit_racket.ml
-      2. Add it to tesl_known_module_names in type_system.ml
-      3. If it exports qualified names (Module.func style), add its prefix to
-         stdlib_module_of_prefix in checker.ml  *)
+      2. Add it to tesl_known_module_names in type_system.ml  *)
 
 open Alcotest
 
@@ -56,37 +56,43 @@ let all_export_prefixes () =
   |> List.filter_map qualified_prefix
   |> List.sort_uniq String.compare
 
-(** All module prefixes registered in checker's stdlib_module_of_prefix. *)
-let registered_prefixes () =
-  List.map fst Checker.stdlib_module_of_prefix
-  |> List.sort_uniq String.compare
+let _ = all_export_prefixes  (* retained helper; used by the checks below *)
 
-(* ── Test: every qualified export prefix is registered ──────────────────── *)
+(* ── Test: every qualified export resolves via the single-source registry ── *)
 
+(** A7: qualified names are DERIVED into {!Type_system.stdlib_home_module} from
+    {!Type_system.tesl_module_exports}, so every dotted export must resolve — and
+    to the very module that declares it.  This guards the derivation, replacing
+    the old prefix-coverage table check. *)
 let test_every_export_prefix_is_registered () =
-  let covered = registered_prefixes () in
   let missing =
-    all_export_prefixes ()
-    |> List.filter (fun prefix -> not (List.mem prefix covered))
+    Type_system.tesl_module_exports
+    |> List.concat_map (fun (m, names) ->
+         List.filter_map (fun n ->
+           if String.contains n '.' then
+             match Type_system.stdlib_home_module_of n with
+             | Some m' when m' = m -> None
+             | _ -> Some (Printf.sprintf "%s (expected %s)" n m)
+           else None) names)
+    |> List.sort_uniq String.compare
   in
   if missing <> [] then
     fail (Printf.sprintf
-      "Qualified exports in tesl_module_exports have module prefixes that are \
-       not in stdlib_module_of_prefix in checker.ml.  Add entries for: %s\n\
-       See check_stdlib_fn_import_scope in checker.ml."
-      (String.concat ", " (List.map (fun p -> Printf.sprintf {|("%s", "Tesl.X")|} p) missing)))
+      "Qualified exports in tesl_module_exports do not resolve to their declaring \
+       module via Type_system.stdlib_home_module_of.  Offenders:\n  %s"
+      (String.concat "\n  " missing))
 
-(* ── Test: every registered prefix maps to a known Tesl module ──────────── *)
+(* ── Test: every home module is a known Tesl module ─────────────────────── *)
 
 let test_every_registered_prefix_maps_to_known_module () =
   let known = Type_system.tesl_known_module_names in
-  List.iter (fun (prefix, tesl_module) ->
+  List.iter (fun (name, tesl_module) ->
     if not (List.mem tesl_module known) then
       fail (Printf.sprintf
-        "stdlib_module_of_prefix in checker.ml maps prefix %S to %S, \
-         but %S is not in tesl_known_module_names in type_system.ml."
-        prefix tesl_module tesl_module)
-  ) Checker.stdlib_module_of_prefix
+        "stdlib_home_module in type_system.ml maps %S to %S, \
+         but %S is not in tesl_known_module_names."
+        name tesl_module tesl_module)
+  ) Type_system.stdlib_home_module
 
 (* ── Test: stdlib_adt_ctors is consistent with tesl_module_exports ────────── *)
 
@@ -127,14 +133,15 @@ let test_every_stdlib_env_fn_is_in_exports () =
     |> List.concat_map snd
     |> List.map strip_dotdot
   in
+  let known_prefixes = all_export_prefixes () in
   let missing =
     Type_system.make_stdlib_env ()
     |> List.filter_map (fun (name, _) ->
          if String.contains name '.' then
-           (* Only check if the prefix is a known stdlib module prefix *)
+           (* Only check if the prefix is a known stdlib module prefix (i.e. it
+              appears on some qualified export) *)
            (match qualified_prefix name with
-            | Some prefix
-              when List.mem_assoc prefix Checker.stdlib_module_of_prefix ->
+            | Some prefix when List.mem prefix known_prefixes ->
                 if not (List.mem name all_exports) then Some name
                 else None
             | _ -> None)

@@ -5,6 +5,12 @@ open Validation_structural
 open Validation_proof
 open Validation_names
 
+(* [body_has_db_site] and [is_forgery_restricted_kind] are now the single shared
+   definitions in {!Validation_common} (S4b: they were duplicated here and in
+   checker.ml, with checker.ml's copy NOT shadow-aware).  They are in scope via
+   `open Validation_common` above; see that module for the shadow-awareness /
+   §7.12 rationale. *)
+
 let build_record_field_bindings (decls : top_decl list)
     : (string * binding list) list =
   (* Records AND entities both construct via `Name { field: value, ... }` and both
@@ -303,7 +309,13 @@ let check_sql_where_clauses
     | ELambda { params; body; _ } ->
       let bound' = List.map (fun (b : binding) -> b.name) params @ bound_names in
       walk tenv binder_env bound' body
-    | _ -> ()
+    (* S9: enumerate the remaining variants explicitly (no `_`) so a new Ast.expr
+       variant becomes a COMPILE error rather than silently escaping this SQL
+       where-clause scan.  These forms cannot host a select…where chain, so their
+       behaviour is unchanged (no descent). *)
+    | ELit _ | EVar _ | EConstructor _ | EFail _ | EStartWorkers _ | EField _
+    | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
+    | ESendEmail _ | EStartEmailWorker _ | ERuntimeCall _ -> ()
   in
   List.iter (function
     | DFunc fd ->
@@ -553,7 +565,7 @@ let check_record_field_proof_construction
         walk_expr type_env subject_env proof_env body
       | EStartEmailWorker _ -> ()
       | ERuntimeCall { segments; _ } ->
-        List.iter (function RLit _ -> () | RArg e -> walk_expr type_env subject_env proof_env e) segments
+        List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk_expr type_env subject_env proof_env e) segments
     in
     List.iter (function
       | DFunc fd ->
@@ -712,9 +724,20 @@ let check_fn_return_proof_annotations
      checking so fn functions can correctly propagate these proofs.
      Note: IsTrimmed, IsSorted, IsUpperCase, IsLowerCase are now in
      stdlib_func_infos so they ARE validated; don't list them here. *)
+  (* PROOF-1 fix: a predicate may be auto-granted on a `:::` return ONLY when it
+     has a verified producing site or a dedicated flow validator.  FromDb is gated
+     by body_has_db_site (an actual select/insert/upsert); FromQueue/FromDeadQueue
+     are never minted in a body (handled in is_stdlib_auto below); ForAll/
+     ForAllValues/ForAllKeys have a dedicated forall-flow validator that rejects
+     forgery independently.  The remaining predicates that used to live here —
+     HasKey, IsNonZero, IsNonNegative, IsNonEmpty, FloatNonZero — are produced
+     ONLY by check/establish functions (Dict.requireKey, Int.nonZero,
+     String.requireNonEmpty, Float.requireNonZero).  Trusting them by NAME let a
+     plain `fn` forge them from thin air (`fn f(n) -> n ::: IsNonZero n = n`).
+     They are removed: a fn that returns one must now receive it on a parameter
+     (proof_matches below) or obtain it via `ok`/`attachFact` (body_uses_attach_or_ok). *)
   let stdlib_auto_preds =
-    [ "FromDb"; "FromQueue"; "ForAll"; "ForAllValues"; "ForAllKeys";
-      "HasKey"; "IsNonZero"; "IsNonNegative"; "IsNonEmpty"; "FloatNonZero" ] in
+    [ "FromDb"; "FromQueue"; "ForAll"; "ForAllValues"; "ForAllKeys" ] in
   let rec check_named_pack_body (fd : func_decl) ret_loc entity_proof other_proof type_env subject_env proof_env expr =
     match expr with
     | ELet { name; value; body; _ } ->
@@ -866,11 +889,8 @@ let check_fn_return_proof_annotations
      can fabricate a proof their inputs do not carry. (check/auth/establish are the
      only kinds that may introduce a fresh proof at a boundary.) deadWorker is
      intentionally excluded — its job carries an infrastructure FromDeadQueue proof
-     handled elsewhere. *)
-  let is_forgery_restricted_kind = function
-    | FnKind | HandlerKind | WorkerKind -> true
-    | _ -> false
-  in
+     handled elsewhere.  [is_forgery_restricted_kind] is the shared definition in
+     Validation_common (in scope via `open`). *)
   List.iter (function
     | DFunc fd when is_forgery_restricted_kind fd.kind ->
       (match fd.return_spec with
@@ -901,62 +921,78 @@ let check_fn_return_proof_annotations
          let binding_subject = match List.assoc_opt b.name subject_env with Some s -> s | None -> b.name in
          let required_norm = subst_proof [(b.name, binding_subject)] required_proof in
          let required_pred = match required_norm with PredApp { pred; _ } -> Some pred | _ -> None in
-         let is_stdlib_auto = match required_pred with Some p -> List.mem p stdlib_auto_preds | None -> false in
+         let is_stdlib_auto = match required_pred with
+           (* FromDb on a `:::` return is framework-produced ONLY when the body
+              actually runs a select/insert/upsert; with no DB site it forges
+              provenance. FromQueue/FromDeadQueue can never be minted in a body. *)
+           | Some "FromDb" ->
+             (* PROOF-2: exclude user-defined top-level functions so a `fn select`
+                cannot masquerade as the SQL builtin and forge DB provenance. *)
+             let user_fn_names =
+               List.filter_map (function DFunc d -> Some d.name | _ -> None) decls in
+             body_has_db_site ~shadowed:user_fn_names fd.body
+           | Some ("FromQueue" | "FromDeadQueue") -> false
+           | Some p -> List.mem p stdlib_auto_preds
+           | None -> false in
          let all_carried = List.concat_map snd proof_env @ field_carried in
-         (* `fn f ... -> T ::: Proof` is legitimate when the body introduces
-            the proof via `attachFact` (with an `establish`-produced Fact) or
-            via an explicit `ok v ::: Proof`. Walk the body for either shape —
-            if found, trust the existing call-proof validators to catch
-            misuse and skip the conservative rejection. *)
-         let rec body_uses_attach_or_ok (e : expr) : bool =
+         (* GDP-FORGE-1 fix (formal-review CRITICAL).  A `fn`/`handler`/`worker`
+            may legitimately introduce its declared return proof in the body via
+            `attachFact` (with an `establish`-produced Fact) or an `ok v ::: P`.
+            The PREVIOUS gate accepted the body whenever it *syntactically
+            mentioned* `attachFact`/`attach`/`ok` ANYWHERE — a decide-by-spelling
+            proxy that let a body attach an UNRELATED predicate and still declare
+            an arbitrary return proof (e.g. `let y = attachFact x w; y` where `w`
+            carries `Whatever` but the return claims `IsPositive`).  Because
+            proofs are erased at runtime (§7.10, sole-root-of-trust), that forged
+            value then satisfied every downstream proof obligation silently.
+
+            We now decide by PROOF CONTENT, not spelling: walk the body's return
+            paths through the same proof engine the named-pack path uses
+            ([extend_let_envs] / [proofs_of_expr] / [carried_proofs_of_expr],
+            which resolve `attachFact value evidence` to the evidence's actual
+            predicate) and require every returning leaf to CARRY the declared
+            predicate.  A body that only attaches an unrelated fact no longer
+            escapes the forgery rejection. *)
+         let type_env0 =
+           List.map (fun (p : binding) -> (p.name, p.type_expr)) fd.params in
+         let rec body_carries_required type_env subject_env proof_env (e : expr) : bool =
            match e with
-           | EOk _ -> true
-           | EApp _ ->
-             let rec head = function
-               | EApp { fn = f; _ } -> head f
-               | x -> x
+           | ELet { name; value; body; _ } ->
+             let te, se, pe = extend_let_envs type_env subject_env proof_env name value in
+             body_carries_required te se pe body
+           | ELetProof { value_name; proof_name; value; body; _ } ->
+             let te, se, pe = extend_let_envs type_env subject_env proof_env value_name value in
+             let pe =
+               let proofs = proofs_of_expr value_name funcs se pe value in
+               if proofs = [] then pe else (proof_name, proofs) :: pe
              in
-             (match head e with
-              | EVar { name = n; _ }
-                when n = "attachFact" || n = "attach" -> true
-              | _ ->
-                let rec args_of acc = function
-                  | EApp { fn = f; arg = a; _ } -> args_of (a :: acc) f
-                  | _ -> acc
-                in
-                List.exists body_uses_attach_or_ok (args_of [] e))
-           | ELet { value = v; body = b; _ }
-           | ELetProof { value = v; body = b; _ } ->
-             body_uses_attach_or_ok v || body_uses_attach_or_ok b
-           | EIf { cond; then_; else_; _ } ->
-             body_uses_attach_or_ok cond
-             || body_uses_attach_or_ok then_
-             || body_uses_attach_or_ok else_
+             body_carries_required te se pe body
+           | EIf { then_; else_; _ } ->
+             (* Every return path must carry the proof. *)
+             body_carries_required type_env subject_env proof_env then_
+             && body_carries_required type_env subject_env proof_env else_
            | ECase { scrut; arms; _ } ->
-             body_uses_attach_or_ok scrut
-             || List.exists (fun (a : case_arm) ->
-                  body_uses_attach_or_ok a.body
-                  || (match a.guard with
-                      | Some g -> body_uses_attach_or_ok g
-                      | None -> false)) arms
-           | EBinop { left; right; _ } ->
-             body_uses_attach_or_ok left || body_uses_attach_or_ok right
-           | EUnop { arg; _ } -> body_uses_attach_or_ok arg
-           | EField { obj; _ } -> body_uses_attach_or_ok obj
-           | ERecord { fields; _ } ->
-             List.exists (fun (_, v) -> body_uses_attach_or_ok v) fields
-           | EList { elems; _ } -> List.exists body_uses_attach_or_ok elems
-           | EFail { message; _ } -> body_uses_attach_or_ok message
-           | EWithDatabase { body = b; _ }
-           | EWithCapabilities { body = b; _ }
-           | EWithTransaction { body = b; _ } -> body_uses_attach_or_ok b
-           | EConstructor { args; _ } -> List.exists body_uses_attach_or_ok args
-           | ELambda { body = b; _ } -> body_uses_attach_or_ok b
-           | _ -> false
+             let scrut_ty = infer_expr_type type_env funcs fields_by_type ctors scrut in
+             let scrut_proofs = proofs_of_expr "_" funcs subject_env proof_env scrut in
+             arms <> [] && List.for_all (fun (arm : case_arm) ->
+               let te = pattern_bindings scrut_ty ctors arm.pattern @ type_env in
+               let pe, se = extend_case_envs subject_env proof_env scrut scrut_proofs arm.pattern in
+               body_carries_required te se pe arm.body
+             ) arms
+           | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+           | EWithTransaction { body; _ } ->
+             body_carries_required type_env subject_env proof_env body
+           | EFail _ -> true  (* never returns — no proof obligation on this path *)
+           | _ ->
+             let result_subject = match subject_of_expr subject_env e with
+               | Some s -> s | None -> b.name in
+             let required_here = subst_proof [(b.name, result_subject)] required_proof in
+             let carried = proofs_of_expr result_subject funcs subject_env proof_env e in
+             proof_matches required_here carried
          in
          if not is_stdlib_auto
             && not (proof_matches required_norm all_carried)
-            && not (body_uses_attach_or_ok fd.body) then begin
+            && not (body_carries_required type_env0 subject_env proof_env fd.body) then begin
            let proof_str = pp_proof required_proof in
            let kw = match fd.kind with
              | HandlerKind -> "handler" | WorkerKind -> "worker" | _ -> "fn" in

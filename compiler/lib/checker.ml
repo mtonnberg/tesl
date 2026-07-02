@@ -73,6 +73,9 @@ type ctx = {
   subst    : subst ref;
   filename : string;
   in_establish : bool;  (** true when type-checking an establish function body *)
+  codec_decode_types : string list;
+  (** locally-declared type names that have a non-forbidden fromJson codec.
+      Consulted (decide-by-resolution) to validate `decodeAs` targets. *)
 }
 
 let make_ctx ~filename ~env = {
@@ -93,6 +96,7 @@ let make_ctx ~filename ~env = {
   subst    = ref empty_subst;
   filename;
   in_establish = false;
+  codec_decode_types = [];
 }
 
 let add_error ctx loc msg =
@@ -345,6 +349,21 @@ let build_adt_def (name : string) (params : string list) (variants : adt_variant
 
 (** Add all type definitions from a module to the context. *)
 let collect_type_defs ctx (decls : top_decl list) : ctx =
+  (* Built-in `Agent` record: an agent is constructed with the normal typed-record
+     constructor `Agent { provider, systemPrompt, maxTokens, tools }`, used both as a
+     top-level `agent X = Agent { … }` block and as a plain expression (e.g. building
+     a per-request BYOK agent in a function). Registering its fields here lets the
+     standard record-construction type-checking validate it. *)
+  let agent_record = {
+    rd_name = "Agent";
+    rd_fields = [
+      ("provider", TCon "LlmProvider");
+      ("systemPrompt", TCon "String");
+      ("maxTokens", TCon "Int");
+      ("tools", TApp (TCon "List", TCon "Tool"));
+    ];
+  } in
+  let ctx = { ctx with records = ("Agent", agent_record) :: ctx.records } in
   List.fold_left (fun ctx decl ->
     match decl with
     | DRecord r ->
@@ -382,6 +401,14 @@ let collect_type_defs ctx (decls : top_decl list) : ctx =
       let ctor_sch = mono ctor_ty in
       { ctx with
         ctors = (name, (name, ctor_sch)) :: ctx.ctors }
+    | DCodec cf ->
+      (* Register the target type as decodable iff it has a non-forbidden
+         fromJson codec; this drives the decide-by-resolution check for
+         `decodeAs` (we consult the resolved type's codec, never the string). *)
+      (match cf.from_json with
+       | FromJsonForbidden -> ctx
+       | FromJsonAlts _ | FromJsonAdt ->
+         { ctx with codec_decode_types = cf.type_name :: ctx.codec_decode_types })
     | _ -> ctx
   ) ctx decls
 
@@ -839,16 +866,16 @@ let load_imported_ctors (m : module_form) : (string * (string * scheme)) list =
             | ImportAll -> None
             | ImportExposing names -> Some names
           in
-          let strip_dotdot s =
-            let n = String.length s in
-            if n > 4 && String.sub s (n-4) 4 = "(..)" then String.sub s 0 (n-4) else s
-          in
           List.concat_map (fun (adt_name, ctor_name, ctor_sch) ->
             let qualified_name = imp.module_name ^ "." ^ ctor_name in
             let requested_name = match requested with
               | Some names ->
-                let stripped = List.map strip_dotdot names in
-                List.mem ctor_name stripped || List.mem adt_name stripped
+                (* A constructor enters scope ONLY when named explicitly
+                   (`exposing [Red]`) or via its ADT's wildcard form
+                   (`exposing [Color(..)]`).  Importing the bare type name
+                   (`exposing [Color]`) brings the TYPE, not its constructors —
+                   otherwise unimported constructors leak into scope (soundness). *)
+                List.mem ctor_name names || List.mem (adt_name ^ "(..)") names
               | None -> false
             in
             let include_plain = requested_name in
@@ -1390,6 +1417,51 @@ let rec classify_lowered_query e =
       if args = [] then None
       else classify_lowered_query base_fn
 
+(* Decide-by-resolution for `decodeAs`: the runtime type read is driven by the
+   resolved RESULT type, so the literal type-name string must agree with it and
+   the result must be a concrete codec-registered type. Called from both EApp
+   arms with the already-inferred+substituted result type. *)
+let check_decodeAs_call ?(strict = true) ctx ~loc ~args ~result_ty =
+  match args with
+  | (ELit { lit = LString type_name_str; loc = str_loc }) :: _json :: _ ->
+    let head = match apply !(ctx.subst) result_ty with
+      | TCon n -> Some n
+      | TApp (TCon n, _) -> Some n
+      | _ -> None in
+    (match head with
+     | None ->
+       (* Only the check-path (strict) reports ambiguity: it runs with the
+          resolved expected type. The infer-path runs BEFORE surrounding
+          unification pins the result (e.g. `let x = decodeAs "T" j` whose type
+          is fixed only by a later use / the enclosing fn return), so a `None`
+          head there is "not yet resolved", NOT "ambiguous" — reporting it
+          over-rejects legitimate let-bound decodes. When the type IS resolved
+          (Some, below) the name/codec match is enforced on both paths. *)
+       if strict then
+         add_error ctx loc
+           "`decodeAs` result type is ambiguous; annotate the target type \
+            (e.g. `fn f(j: String) -> T = decodeAs \"T\" j`)"
+     | Some resolved_name ->
+       if type_name_str <> resolved_name then
+         add_error ctx str_loc
+           (Printf.sprintf
+              "`decodeAs \"%s\"` decodes as type `%s` but the result is used as `%s`; \
+               the type-name string must match the target type"
+              type_name_str type_name_str resolved_name)
+       else if (List.mem_assoc resolved_name ctx.records
+                || List.mem_assoc resolved_name ctx.adts)
+               && not (List.mem resolved_name ctx.codec_decode_types) then
+         add_error ctx str_loc
+           (Printf.sprintf
+              "`decodeAs` target type `%s` has no `fromJson` codec; declare one \
+               (`codec %s { ... fromJson [ ... ] }`)" resolved_name resolved_name))
+  | (first :: _) ->
+    (* first arg is not a string literal: the type name must be a compile-time
+       literal so it can be checked against the type. *)
+    add_error ctx (expr_loc first)
+      "`decodeAs` requires a literal type-name string as its first argument"
+  | [] -> ()
+
 (** Infer the type of an expression. Returns the inferred type;
     errors are accumulated in ctx. *)
 let rec infer_expr ctx (e : expr) : ty =
@@ -1424,7 +1496,14 @@ let rec infer_expr ctx (e : expr) : ty =
        (match List.assoc_opt name ctx.ctors with
         | Some (_, ctor_sch) -> instantiate ctor_sch
         | None ->
-          add_error ctx loc (Printf.sprintf "unknown name: %s" name);
+          (* D8 idiom-transfer hint: `return x` is a common transfer mistake —
+             Tesl has no `return`; a function body IS its value. *)
+          add_error ctx loc
+            (if name = "return" then
+               "unknown name: `return` — Tesl has no `return` statement; a function \
+                body IS its return value, so write the value as the last expression \
+                (e.g. `x` instead of `return x`)"
+             else Printf.sprintf "unknown name: %s" name);
           fresh ()))
 
   | EField { obj; field; loc } ->
@@ -1781,6 +1860,33 @@ let rec infer_expr ctx (e : expr) : ty =
            Infer arg types for any side effects but return t_fact. *)
         List.iter (fun arg -> ignore (infer_expr ctx arg)) args;
         t_fact
+     | EVar { name = "decodeAs"; loc } ->
+        (* Infer normally so the (json:String) arg is checked and the result var
+           can be pinned by surrounding unification, then decide-by-resolution.
+           When the context later constrains the result (e.g. an annotated fn
+           return), the check-path arm re-runs with the resolved type; this arm
+           catches the truly-ambiguous standalone case. *)
+        let result_ty = infer_direct_call base_fn args in
+        (* A5 / review §6.3: DRIVE the result type from the literal type-name so
+           HM unification enforces name==type at EVERY use.  Previously the result
+           was a free var cross-checked non-strictly HERE (before surrounding
+           unification pinned it), so `let x = decodeAs "Priority" j` pinned to a
+           different type by a LATER use evaded the check entirely.  Unifying the
+           result with the named concrete type turns a wrong-type use into an
+           ordinary unification error at the use site.  Only fires for a literal
+           type-name that resolves to a registered concrete type. *)
+        (match args with
+         | (ELit { lit = LString tn; _ }) :: _
+           when List.mem_assoc tn ctx.records
+                || List.mem_assoc tn ctx.adts
+                || List.mem tn ctx.codec_decode_types ->
+           unify_at ctx loc result_ty (TCon tn)
+         | _ -> ());
+        (* Infer-path: non-strict — see check_decodeAs_call. With the result now
+           driven above, this still enforces the codec/name check. *)
+        check_decodeAs_call ~strict:false ctx ~loc ~args
+          ~result_ty:(apply !(ctx.subst) result_ty);
+        apply !(ctx.subst) result_ty
      | _ ->
         infer_direct_call base_fn args)
   | EBinop _ as binop ->
@@ -2174,7 +2280,7 @@ let rec infer_expr ctx (e : expr) : ty =
   | ERuntimeCall { segments; _ } ->
     (* Desugar-only node: never present during type-checking (desugar runs
        AFTER the checker).  Infer children defensively, result is Unit. *)
-    List.iter (function RLit _ -> () | RArg e -> ignore (infer_expr ctx e)) segments;
+    List.iter (function RLit _ | RRawVar _ -> () | RArg e -> ignore (infer_expr ctx e)) segments;
     t_unit
   in
   let expr_meta = match binding_meta_of_expr ctx e with Some m -> m | None -> PlainBinding in
@@ -2183,6 +2289,7 @@ let rec infer_expr ctx (e : expr) : ty =
 
 and infer_lit = function
   | LInt _    -> t_int
+  | LBigInt _ -> t_int   (* A9/HM-1: arbitrary-precision Int literal *)
   | LFloat _  -> t_float
   | LBool _   -> t_bool
   | LString _ -> t_string
@@ -2195,13 +2302,24 @@ and infer_binop ctx loc op left right =
   | BAdd | BSub | BMul | BDiv | BMod ->
     let lt' = apply !(ctx.subst) lt in
     let rt' = apply !(ctx.subst) rt in
-    let num_ty = match lt', rt' with
-      | TCon "Float", _ | _, TCon "Float" -> t_float
-      | _ -> t_int
-    in
-    unify_at ctx loc lt num_ty;
-    unify_at ctx loc rt num_ty;
-    num_ty
+    (* D8 idiom-transfer hint: `+` on a String is the classic TS/Python/Java
+       transfer mistake.  Emit ONE clear "use `++`" error and short-circuit to
+       [String] so the caller does not then see three cascading "unify String
+       with Int" errors. *)
+    if op = BAdd && (lt' = TCon "String" || rt' = TCon "String") then begin
+      add_error ctx loc
+        "operator `+` is not defined for `String`; use `++` for string \
+         concatenation (Tesl reserves `+` for numeric addition)";
+      t_string
+    end else begin
+      let num_ty = match lt', rt' with
+        | TCon "Float", _ | _, TCon "Float" -> t_float
+        | _ -> t_int
+      in
+      unify_at ctx loc lt num_ty;
+      unify_at ctx loc rt num_ty;
+      num_ty
+    end
   | BConcat ->
     unify_at ctx loc lt t_string;
     unify_at ctx loc rt t_string;
@@ -2691,6 +2809,13 @@ use the `Tuple3 a b c` constructor instead";
           Delegate to infer_expr which correctly classifies the merged SQL expression. *)
        fallback ()
      | _ ->
+       (* Generic call-checking path: infer the function type, check each arg
+          against expected, unify the result with the annotation.  We do NOT
+          route `decodeAs` through `fallback ()`/`infer_expr` here (that would
+          re-enter the infer-path decodeAs arm with a not-yet-pinned free var and
+          spuriously flag it as ambiguous); instead we check args + unify the
+          result with `expected` inline, so `expected_ty` is the RESOLVED result
+          type when we run the decide-by-resolution cross-check below. *)
        let current_ty = ref (infer_expr ctx base_fn) in
        List.iteri (fun idx arg_expr ->
          let resolved_fn = apply !(ctx.subst) !current_ty in
@@ -2724,6 +2849,13 @@ use the `Tuple3 a b c` constructor instead";
        ) args;
        let resolved_result = apply !(ctx.subst) !current_ty in
        unify_expected_at ctx (expr_loc app) resolved_result expected;
+       (match base_fn with
+        | EVar { name = "decodeAs"; _ } ->
+          (* decide-by-resolution: the literal type-name string must equal the
+             now-resolved result type name, and that type must have a codec. *)
+          check_decodeAs_call ctx ~loc:(expr_loc app) ~args
+            ~result_ty:(apply !(ctx.subst) expected_ty)
+        | _ -> ());
        apply !(ctx.subst) expected_ty)
   | _ ->
     fallback ()
@@ -2734,7 +2866,14 @@ use the `Tuple3 a b c` constructor instead";
 
 (* ── Function declaration type checking ─────────────────────────────────── *)
 
-let check_func_decl ctx (fd : func_decl) =
+let check_func_decl ?(user_fn_names : string list = []) ctx (fd : func_decl) =
+  (* [user_fn_names] are the top-level fn names (which may shadow a SQL builtin).
+     They were threaded in so the checker's §7.12 FromDb-forgery gate could be
+     shadow-aware (S4b).  A6 removed that in-checker forgery gate — the §7.12
+     forgery decision (incl. shadow-aware FromDb provenance) now lives SOLELY in
+     Validation_advanced.check_fn_return_proof_annotations (V001) — so the label
+     is retained for call-site stability but is intentionally unused here. *)
+  ignore user_fn_names;
   (* Each function gets its own fresh substitution to avoid interference. *)
   let ctx = { ctx with subst = ref empty_subst } in
   (* Build param environment *)
@@ -2763,64 +2902,38 @@ let check_func_decl ctx (fd : func_decl) =
     let hover_note = hover_note_for_meta ctx'.subject_chain_env b.name meta in
     record_local_binding ?hover_note ctx' b.name b.loc (ty_of_type_expr b.type_expr) meta
   ) fd.params;
-  (* A fn/handler/worker may use RetAttached only if the proof was already on the
-     matching input parameter. Fabricating a new proof inside the body and declaring
-     it in the return type is banned (§7.12 forgery hole); only check/establish/auth
-     may introduce new proof-carrying return types. deadWorker is excluded — its job
-     carries an infrastructure FromDeadQueue proof handled elsewhere. *)
-  let is_forgery_restricted_kind = function
-    | FnKind | HandlerKind | WorkerKind -> true
-    | _ -> false
-  in
-  (match fd.kind, fd.return_spec with
-   | k, RetAttached { binding = ret_b; loc; _ }
-     when is_forgery_restricted_kind k && ret_b.proof_ann <> None ->
-     let param_has_proof =
-       List.exists (fun (b : binding) ->
-         b.name = ret_b.name && b.proof_ann <> None
-       ) fd.params
-     in
-     (* Also allow when the body produces a value with the declared binding name —
-        handles several legitimate passthrough patterns:
-        1. Field access: `fn f(r: R) -> field: T ::: P field = r.field`
-           (proof propagated from record field annotation)
-        2. Direct variable: `fn f(x: T ::: P x) -> y: T ::: P y = x`
-           (proof already on input, just renamed in binding)
-        3. Named variable from case/let: selectOne returns a named-pack value
-           and the arm extracts it by name — common SQL query pattern
-        4. Infrastructure proofs (FromDb, FromQueue, IsPositive on DB results) —
-           produced by the SQL/queue infrastructure, not user check functions *)
-     let body_is_valid_passthrough =
-       let ret_name = ret_b.name in
-       let is_infrastructure_proof = match ret_b.proof_ann with
-         | Some (PredApp { pred; _ }) ->
-           (* SQL and queue infrastructure proofs — produced by the framework *)
-           List.mem pred ["FromDb"; "FromQueue"; "FromDeadQueue"]
-         | _ -> false
-       in
-       let rec body_returns_named ret_name = function
-         | EField { field; _ } -> field = ret_name
-         | EVar { name; _ } -> name = ret_name
-         | ELet { body; _ } | ELetProof { body; _ } -> body_returns_named ret_name body
-         | EIf { then_; else_; _ } ->
-           body_returns_named ret_name then_ || body_returns_named ret_name else_
-         | ECase { arms; _ } ->
-           List.exists (fun (a : case_arm) -> body_returns_named ret_name a.body) arms
-         | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
-         | EWithTransaction { body; _ } -> body_returns_named ret_name body
-         | _ -> false
-       in
-       is_infrastructure_proof || body_returns_named ret_name fd.body
-     in
-     if not param_has_proof && not body_is_valid_passthrough then
-       let kw = match k with
-         | HandlerKind -> "handler" | WorkerKind -> "worker" | _ -> "plain `fn`" in
-       add_error ctx loc
-         (Printf.sprintf
-            "%s cannot declare a proof-carrying return type for `%s` \
-             unless `%s` was received with that proof on an input parameter; \
-             use `check` to validate at a boundary or `establish` to assert an axiom"
-            kw ret_b.name ret_b.name)
+  (* A6: the forgery decision for a fn/handler/worker RetAttached proof-carrying
+     return (§7.12) is made SOLELY by Validation_advanced.check_fn_return_proof_annotations
+     (V001), which threads let/case/if/attachFact proof ENVIRONMENTS
+     (extend_let_envs / proofs_of_expr / carried_proofs_of_expr) and decides by
+     proof CONTENT — not by identifier spelling.  The former T001 block here
+     admitted a return whenever the body syntactically returned a variable/field
+     whose NAME matched the return binder (`body_returns_named`), a decide-by-
+     spelling carve-out that let `let n = raw; n` or `attachFact x <unrelated>; y`
+     forge an arbitrary return proof; it was sound only because V001 was unioned
+     in.  That carve-out is removed so V001 is the single source of truth.
+
+     The one rule T001 uniquely enforced — and which V001 deliberately does NOT
+     (its content walk ACCEPTS a body that legitimately carries the proof) — is
+     that a proof-carrying return must NAME its binding.  We preserve exactly that,
+     keyed off the synthetic `_entity` binder the parser mints for the unnamed
+     `-> Type ::: Pred` RetAttached form (parser.ml ~951/1040/1046).  `_entity`
+     is a gensym the user cannot spell, so this decides over the resolved binder
+     IDENTITY, not over body text. *)
+  let is_forgery_restricted_kind = Validation_common.is_forgery_restricted_kind in
+  (match fd.return_spec with
+   | RetAttached { binding = ret_b; loc; _ }
+     when is_forgery_restricted_kind fd.kind
+          && ret_b.proof_ann <> None
+          && ret_b.name = "_entity" ->
+     let proof_str = match ret_b.proof_ann with
+       | Some p -> Validation_common.pp_proof p | None -> "" in
+     let ty_str = Validation_common.pp_type_expr ret_b.type_expr in
+     add_error ctx loc
+       (Printf.sprintf
+          "a proof-carrying return type must name its binding, e.g. \
+           `-> result: %s ::: %s`; an unnamed `-> %s ::: ...` cannot carry a proof"
+          ty_str proof_str ty_str)
    | _ -> ());
   (* Check that return binding doesn't reuse a parameter name with a different type *)
   (match fd.return_spec with
@@ -3220,86 +3333,156 @@ let collect_proof_predicate_uses (m : module_form) : (string * Location.loc) lis
     | _ -> []
   ) m.decls
 
-(** Map from short module name prefix to canonical Tesl stdlib module name. *)
-let stdlib_module_of_prefix : (string * string) list = [
-  ("List",   "Tesl.List");
-  ("ListPrim", "Tesl.ListPrim");
-  ("Dict",   "Tesl.Dict");
-  ("String", "Tesl.String");
-  ("Int",    "Tesl.Int");
-  ("Float",  "Tesl.Float");
-  ("Set",    "Tesl.Set");
-  ("Either", "Tesl.Either");
-  ("Tuple2", "Tesl.Tuple");
-  ("Tuple3", "Tesl.Tuple");
-  ("Time",   "Tesl.Time");
-  ("Random", "Tesl.Random");
-  ("UUID",       "Tesl.UUID");
-  ("Env",        "Tesl.Env");
-  ("Cli",        "Tesl.Cli");
-  ("Id",         "Tesl.Id");
-  ("JWT",        "Tesl.JWT");
-  ("HttpClient", "Tesl.HttpClient");
-  ("Cache",      "Tesl.Cache");
-  ("Email",      "Tesl.Email");
-]
+(* A7: the two hand-maintained "name → module" tables that lived here
+   (`stdlib_module_of_prefix` and `bare_stdlib_fn_module`) have been DELETED.
+   Both the "needs import M" scope decision (below) and the emitter's require
+   path now derive from the SINGLE authoritative registry
+   {!Type_system.stdlib_home_module} / {!Type_system.stdlib_home_module_of}. *)
 
-(** Collect all qualified stdlib function uses from function/const bodies.
-    Returns (qualified_name, first_loc) pairs, deduplicated by name. *)
-let collect_stdlib_fn_uses (m : module_form) : (string * Location.loc) list =
-  let all_stdlib_fns =
-    List.concat_map snd Type_system.tesl_module_exports
-    |> List.filter (fun n -> String.contains n '.')
-  in
-  let seen : (string, Location.loc) Hashtbl.t = Hashtbl.create 16 in
-  let add qname loc =
-    if List.mem qname all_stdlib_fns && not (Hashtbl.mem seen qname) then
-      Hashtbl.replace seen qname loc
+(** Every name BOUND by the module — top-level fn/const names plus all binders in
+    fn/const bodies (params, lets, let-proofs, lambda params, case patterns).  A
+    bare-name use that matches one of these is a user binding (a shadow), NOT the
+    stdlib function, so it must never be flagged as needing an import.  Conservative
+    over-approximation (a name bound anywhere shadows everywhere) — safe: it can
+    only SUPPRESS a flag, never raise a false one. *)
+let collect_bound_names (m : module_form) : (string, unit) Hashtbl.t =
+  let t : (string, unit) Hashtbl.t = Hashtbl.create 64 in
+  let add n = Hashtbl.replace t n () in
+  let rec pat = function
+    | PVar n -> add n
+    | PCon { fields; _ } -> List.iter (fun (_, p) -> pat p) fields
+    | _ -> ()
   in
   let rec walk = function
-    | EField { obj = EConstructor { name = modname; args = []; _ }; field; loc } ->
-      add (modname ^ "." ^ field) loc
-    | EField { obj = EVar { name = modname; _ }; field; loc } ->
-      add (modname ^ "." ^ field) loc
+    | ELet { name; value; body; _ } -> add name; walk value; walk body
+    | ELetProof { value_name; proof_name; value; body; _ } ->
+      add value_name; add proof_name; walk value; walk body
+    | ELambda { params; body; _ } ->
+      List.iter (fun (b : binding) -> add b.name) params; walk body
+    | ECase { scrut; arms; _ } ->
+      walk scrut; List.iter (fun (a : case_arm) -> pat a.pattern; walk a.body) arms
     | EField { obj; _ } -> walk obj
     | EApp { fn; arg; _ } -> walk fn; walk arg
     | EBinop { left; right; _ } -> walk left; walk right
     | EUnop { arg; _ } -> walk arg
     | EIf { cond; then_; else_; _ } -> walk cond; walk then_; walk else_
-    | ECase { scrut; arms; _ } ->
-      walk scrut; List.iter (fun (arm : Ast.case_arm) -> walk arm.body) arms
-    | ELet { value; body; _ } | ELetProof { value; body; _ } ->
-      walk value; walk body
     | EList { elems; _ } -> List.iter walk elems
     | ERecord { fields; _ } -> List.iter (fun (_, v) -> walk v) fields
     | EOk { value; _ } -> walk value
     | EConstructor { args; _ } -> List.iter walk args
-    | ELambda { body; _ } -> walk body
-    | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
-    | EWithTransaction { body; _ } -> walk body
+    | EFail { message; _ } -> walk message
     | ETelemetry { fields; _ } -> List.iter (fun (_, v) -> walk v) fields
     | EEnqueue { payload; _ } -> walk payload
-    | EPublish { key; payload; _ } ->
-      (match key with Some k -> walk k | None -> ());
-      (match payload with Some p -> walk p | None -> ())
+    | EPublish { key; payload; _ } -> Option.iter walk key; Option.iter walk payload
     | EServe { port; _ } -> walk port
-    | EFail { message; _ } -> walk message
-    | ELit _ | EVar _ | EStartWorkers _ -> ()
+    | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+    | EWithTransaction { body; _ } -> walk body
     | ECacheGet { key; _ } -> walk key
-    | ECacheSet { key; value; ttl; _ } ->
-      walk key; walk value; Option.iter walk ttl
+    | ECacheSet { key; value; ttl; _ } -> walk key; walk value; Option.iter walk ttl
     | ECacheDelete { key; _ } -> walk key
     | ECacheInvalidate { prefix; _ } -> walk prefix
-    | ESendEmail { to_; subject; body; _ } ->
-      walk to_; walk subject; walk body
-    | EStartEmailWorker _ -> ()
+    | ESendEmail { to_; subject; body; _ } -> walk to_; walk subject; walk body
     | ERuntimeCall { segments; _ } ->
-      List.iter (function RLit _ -> () | RArg e -> walk e) segments
+      List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk e) segments
+    | ELit _ | EVar _ | EStartWorkers _ | EStartEmailWorker _ -> ()
   in
   List.iter (function
-    | DFunc fd -> walk fd.body
-    | DConst c -> walk c.value
+    | DFunc fd ->
+      add fd.name;
+      List.iter (fun (b : binding) -> add b.name) fd.params;
+      walk fd.body
+    | DConst c -> add c.name; walk c.value
     | _ -> ()
+  ) m.decls;
+  t
+
+(** Enumerate the child expressions carried by one [test_stmt] and apply [f] to
+    each (recursing into nested [test_stmt]s for [TsIf]/[TsCase]).  Used to make
+    the stdlib-import scope fold reach test / api-test / load-test bodies. *)
+let rec iter_test_stmt (f : expr -> unit) (s : test_stmt) : unit =
+  match s with
+  | TsLet { value; _ } -> f value
+  | TsLetProof { value; _ } -> f value
+  | TsExpect { left; right; _ } -> f left; Option.iter f right
+  | TsExpectFail { fn; arg; _ } | TsExpectHasProof { fn; arg; _ } -> f fn; f arg
+  | TsProperty { params; body; _ } ->
+    List.iter (fun (p : property_param) -> Option.iter f p.where_clause) params;
+    f body
+  | TsIf { cond; then_stmts; else_stmts; _ } ->
+    f cond;
+    List.iter (iter_test_stmt f) then_stmts;
+    List.iter (iter_test_stmt f) else_stmts
+  | TsCase { scrut; arms; _ } ->
+    f scrut;
+    List.iter (fun (a : ts_case_arm) ->
+      Option.iter f a.ts_guard;
+      List.iter (iter_test_stmt f) a.ts_body) arms
+  | TsExpr { e; _ } -> f e
+
+(** Collect stdlib value/function uses (bare AND qualified) that resolve to a
+    home module via {!Type_system.stdlib_home_module_of}, across ALL declaration
+    contexts, deduped by name → first location.
+
+    A7: one generic AST fold ({!Ast_visitor.iter}) drives the per-expression
+    recording, and ONE decl→expr enumeration covers every declaration form that
+    carries user expressions — fn/const bodies AND test / api-test / load-test
+    bodies (previously unscanned, so bare stdlib uses inside `test { … }` escaped
+    the check).  A non-exhaustive [match] on the decl below is a compile error, so
+    a new declaration form cannot silently escape the scope check.
+
+    Config-record RHSs of the infrastructure declarations
+    (database/queue/channel/cache/email/agent) are DELIBERATELY not swept: those
+    records are desugared at compile time and their compile-time forms
+    (`env "…"`, `anthropic …`, provider names) emit no runtime bare-name require,
+    so demanding an import for them would over-reject.  Record/entity invariants
+    carry proof PREDICATES (a [string list], no value exprs) and are handled by
+    {!check_proof_predicate_scope}. *)
+let collect_stdlib_fn_uses (m : module_form) : (string * Location.loc) list =
+  let bound = collect_bound_names m in
+  let seen : (string, Location.loc) Hashtbl.t = Hashtbl.create 32 in
+  let record name loc =
+    if not (Hashtbl.mem seen name)
+       && not (Hashtbl.mem bound name)               (* user shadow suppresses *)
+       && Type_system.stdlib_home_module_of name <> None
+    then Hashtbl.replace seen name loc
+  in
+  (* Per-NODE recorder: a module-qualifier field access (Dict.lookup) or a bare
+     gated value (initTelemetry / mockProvider).  Bare constructors are never
+     recorded because they are absent from the home-module registry. *)
+  let visit (e : expr) : unit =
+    Ast_visitor.iter (fun node ->
+      match node with
+      | EField { obj = (EConstructor { name = modname; args = []; _ }
+                       | EVar { name = modname; _ }); field; loc } ->
+        record (modname ^ "." ^ field) loc
+      | EVar { name; loc } -> record name loc
+      | _ -> ()
+    ) e
+  in
+  List.iter (function
+    | DFunc fd -> visit fd.body
+    | DConst c -> visit c.value
+    | DTest t -> List.iter (iter_test_stmt visit) t.stmts
+    | DApiTest t ->
+      List.iter visit t.seed_stmts;
+      List.iter (iter_test_stmt visit) t.stmts
+    | DLoadTest lt ->
+      List.iter visit lt.seed_stmts;
+      List.iter (iter_test_stmt visit) lt.request_stmts
+    (* A7-c-agent-config-leak (review §6.2): unlike database/queue/channel/cache/
+       email — whose config RHSs desugar to erased scalars — an `agent X = Agent {…}`
+       config_expr is KEPT by desugar and re-emitted verbatim by emit_agent, so a
+       gated stdlib name in a config slot (e.g. `envString` in `apiKey`/
+       `systemPrompt`) passes --check yet dies at `raco expand` (unbound). Sweep it
+       like a function body so the missing import is a compile error. *)
+    | DAgent a -> Option.iter visit a.config_expr
+    (* Config-block RHSs are compile-time desugared — not swept (see doc above).
+       Remaining forms carry no user value expressions that reference gated
+       stdlib names.  Kept as an explicit, exhaustive enumeration so a new decl
+       form forces a decision here. *)
+    | DDatabase _ | DQueue _ | DChannel _ | DCache _ | DEmail _
+    | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _ | DCapability _
+    | DWorkers _ | DCapture _ | DApi _ | DServer _ -> ()
   ) m.decls;
   Hashtbl.fold (fun k v acc -> (k, v) :: acc) seen []
 
@@ -3326,11 +3509,10 @@ let check_stdlib_fn_import_scope (m : module_form) : type_error list =
     ) m.imports
   in
   List.filter_map (fun (qname, loc) ->
-    let prefix = match String.index_opt qname '.' with
-      | Some i -> String.sub qname 0 i
-      | None -> qname
-    in
-    match List.assoc_opt prefix stdlib_module_of_prefix with
+    (* A7: qualified (Dict.lookup) and bare (envInt / initTelemetry / mockProvider)
+       names alike resolve through the SINGLE authoritative home-module registry. *)
+    let tesl_module_opt = Type_system.stdlib_home_module_of qname in
+    match tesl_module_opt with
     | None -> None
     | Some tesl_module ->
       if is_fn_available tesl_module qname then None
@@ -3382,6 +3564,124 @@ let check_proof_predicate_scope (m : module_form) : type_error list =
     end
   ) uses
 
+(** BMOD-FORGE-01 (review §4.2 + §4.3): a proof-predicate (`fact`) name must have a
+    SINGLE owning module across the import graph — exactly as a type name does.
+
+    Before this, predicate identity was the bare surface name and the emitter
+    interned a shared `eq?` symbol, so a consumer could declare a local `fact F`
+    with the same spelling as a predicate owned by an imported module and thereby
+    (a) become a co-"owner" able to MINT it, and (b) satisfy that module's `::: F`
+    obligation with a forged value — the exact cross-module forgery the thesis's
+    invariant #2 forbids.  It also left thesis invariant #1 (no-shadowing) with a
+    hole for `fact` specifically (the fn/type shadow detector omits it).
+
+    Rather than re-architect predicate identity, we close the class fail-closed:
+    a proof-predicate name must resolve to a SINGLE owning module across everything
+    in scope.  This rejects (a) a local `fact` whose name is already owned by an
+    imported module, (b) two DISTINCT imported modules that each own a fact of the
+    same name reachable in this module — the cross-module "diamond" where a value
+    carrying `ModA.F` would satisfy a `ModB.F` obligation because identity is the
+    bare name (confirmed forgeable via `ModA.mint` + `ModB.sink` bridged in a
+    consumer), and (c) a local `fact` colliding with an explicitly-imported stdlib
+    predicate.  A re-export of the SAME originally-declared fact keeps one owner, so
+    legitimate re-export + use is unaffected. *)
+let check_fact_name_distinctness (m : module_form) : type_error list =
+  let is_tesl_module name =
+    String.length name >= 5 && String.sub name 0 5 = "Tesl." in
+  (* Facts a module PROVIDES as (name, ORIGINAL-owner): those it declares (owner =
+     itself), plus those it re-exports resolved transitively to their declaring
+     module — so a re-export chain of one fact keeps a single owner, while two
+     independent declarations of the same name have two distinct owners.  [visited]
+     bounds recursion over cycles. *)
+  let rec provided_owned visited (mm : module_form) : (string * string) list =
+    if List.mem mm.module_name visited then []
+    else begin
+      let visited = mm.module_name :: visited in
+      let declared =
+        List.filter_map (function
+          | DFact { name; _ } -> Some (name, mm.module_name) | _ -> None) mm.decls in
+      let exported_names =
+        List.filter_map (function ExportName n | ExportAdt n -> Some n) mm.exports in
+      let reexported =
+        List.concat_map (fun (imp : import_decl) ->
+          if is_tesl_module imp.module_name then []
+          else
+            match parse_local_import_module
+                    (resolve_local_import_path mm.source_file imp.module_name) with
+            | Some (Ok im) ->
+              List.filter (fun (n, _) -> List.mem n exported_names) (provided_owned visited im)
+            | _ -> []
+        ) mm.imports
+      in
+      declared @ reexported
+    end
+  in
+  (* fact-name -> distinct owning modules reachable in THIS module, and, for a
+     diamond with no local declaration, an import loc to report at. *)
+  let owners : (string, string list) Hashtbl.t = Hashtbl.create 16 in
+  let import_loc_of : (string, Location.loc) Hashtbl.t = Hashtbl.create 16 in
+  let add_owner ?loc name owner =
+    let cur = try Hashtbl.find owners name with Not_found -> [] in
+    if not (List.mem owner cur) then Hashtbl.replace owners name (owner :: cur);
+    (match loc with
+     | Some l when not (Hashtbl.mem import_loc_of name) -> Hashtbl.replace import_loc_of name l
+     | _ -> ())
+  in
+  let local_facts =
+    List.filter_map (function DFact { name; loc; _ } -> Some (name, loc) | _ -> None) m.decls in
+  List.iter (fun (name, loc) -> add_owner ~loc name m.module_name) local_facts;
+  List.iter (fun (imp : import_decl) ->
+    if not (is_tesl_module imp.module_name) then
+      match parse_local_import_module
+              (resolve_local_import_path m.source_file imp.module_name) with
+      | Some (Ok imported) ->
+        List.iter (fun (name, owner) -> add_owner ~loc:imp.loc name owner)
+          (provided_owned [] imported)
+      | _ -> ()
+  ) m.imports;
+  (* Report each name owned by >= 2 distinct modules exactly once, preferring a
+     local-declaration loc for the message when this module declares the fact. *)
+  let local_name_loc = local_facts in
+  let ambiguity_errors =
+    Hashtbl.fold (fun name owner_list acc ->
+      match owner_list with
+      | _ :: _ :: _ ->
+        let owners_str = String.concat ", " (List.sort compare owner_list) in
+        let loc, msg =
+          match List.assoc_opt name local_name_loc with
+          | Some loc ->
+            loc, Printf.sprintf
+              "fact `%s` is already owned by another module in scope (owners: %s); \
+               a proof predicate has a single owning module (like a type), so a local \
+               `fact %s` here would forge that module's proof. Rename this fact, or \
+               import and reuse the existing one." name owners_str name
+          | None ->
+            let loc = try Hashtbl.find import_loc_of name with Not_found -> Location.dummy_loc m.source_file in
+            loc, Printf.sprintf
+              "proof predicate `%s` is declared by MORE THAN ONE module in scope \
+               (owners: %s); its identity is ambiguous here, so a value carrying one \
+               module's `%s` could satisfy another's obligation. Import `%s` from a \
+               single owning module." name owners_str name name
+        in
+        { loc; message = msg } :: acc
+      | _ -> acc
+    ) owners []
+  in
+  (* A local `fact` colliding with an EXPLICITLY-imported stdlib predicate (stdlib
+     preds have no user-module owner, so they don't enter [owners]). *)
+  let imported_stdlib_preds = collect_explicitly_imported_stdlib_predicates m in
+  let stdlib_errors =
+    List.filter_map (fun (name, loc) ->
+      if List.mem name imported_stdlib_preds then
+        Some { loc; message = Printf.sprintf
+          "fact `%s` shadows the imported stdlib proof predicate `%s`; a proof \
+           predicate has a single owning module. Drop the local `fact %s` and use \
+           the imported one, or rename this fact." name name name }
+      else None
+    ) local_facts
+  in
+  ambiguity_errors @ stdlib_errors
+
 (** Collect variable bindings introduced by a pattern (recursive for nested patterns). *)
 let rec pattern_var_names = function
   | PVar n -> [n]
@@ -3424,8 +3724,11 @@ let check_api_test_scope ctx (m : module_form) seed_stmts stmts =
     "update"; "updateAndReturnOne";
     "delete"; "deleteAndReturnResult";
     "where"; "set"; "returning"; "one"; "from";
-    (* Other built-in DSL keywords *)
-    "check"; "initTelemetry"; "serve"; "make-witness";
+    (* Other built-in DSL keywords.
+       A7: `initTelemetry` is no longer whitelisted here — its import is now
+       enforced uniformly by check_stdlib_fn_import_scope, whose fold covers
+       api-test seed/stmts too, so the third duplicated copy of the fact is gone. *)
+    "check"; "serve"; "make-witness";
   ] in
   (* Names from the module environment (stdlib + local imports + module defs) *)
   let env_names = List.map fst ctx.env in
@@ -3655,6 +3958,7 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
   let import_errors = import_errors @ check_local_import_names m in
   let import_errors = import_errors @ check_type_names_in_scope m in
   let import_errors = import_errors @ check_proof_predicate_scope m in
+  let import_errors = import_errors @ check_fact_name_distinctness m in
   let import_errors = import_errors @ check_stdlib_fn_import_scope m in
   let initial_env = make_stdlib_env () in
   let ctx = make_ctx ~filename:m.source_file ~env:initial_env in
@@ -3724,13 +4028,57 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
     { ctx with env = agent_bindings @ cache_bindings @ ctx.env }
   in
 
-  (* 3c. Validate declarative agent blocks: every tool must resolve to a local
-     `fn` whose parameters are JSON-decodable primitives (the model's tool-call
-     arguments are decoded from JSON through the codec path).  The agent's tools
-     live in [config_expr] until the desugar pass runs (after the checker), so read
-     them from there. *)
+  (* 3c. Validate agent tool parameters: every tool must resolve to a local `fn`
+     whose parameters are JSON-decodable primitives (the model's tool-call
+     arguments are decoded from JSON through the codec path) and carry NO proof
+     annotation (AGENT-1 — a proof on a model-supplied value would be fabricated).
+     This runs for BOTH a declarative `agent X = Agent { … }` block AND an
+     expression-position `Agent { … }` (BYOK), which previously skipped the check
+     entirely (AGENT-2). *)
+  let agent_tool_refs_of_fields fields =
+    match List.assoc_opt "tools" fields with
+    | Some (Ast.EList { elems; _ }) ->
+      (* Each tool is `asTool <fn>`; recover the wrapped function name. *)
+      List.filter_map (function
+        | Ast.EApp { fn = Ast.EVar { name = "asTool"; _ }; arg = Ast.EVar { name; loc }; _ } -> Some (name, loc)
+        | _ -> None) elems
+    | _ -> []
+  in
+  let check_agent_tool_refs agent_label tool_refs =
+    List.iter (fun (tn, tloc) ->
+      match List.find_opt (function DFunc fd -> fd.name = tn | _ -> false) m.decls with
+      | Some (DFunc fd) ->
+        List.iter (fun (b : Ast.binding) ->
+          (match b.proof_ann with
+           | Some _ ->
+             add_error ctx b.loc (Printf.sprintf
+               "%s: tool '%s' parameter '%s' must not carry a proof annotation (`:::`) — \
+                the model supplies this argument as untrusted JSON, so a proof on it would be \
+                fabricated, not validated; take the raw value and validate it inside the tool with a `check`"
+               agent_label tn b.name)
+           | None -> ());
+          (* Whitelist is the single Validation_common.agent_prim registry (B4);
+             the message type-list is DERIVED from it so it cannot drift. *)
+          if Validation_common.agent_prim_of_type_expr b.type_expr = None then
+            add_error ctx b.loc (Printf.sprintf
+              "%s: tool '%s' parameter '%s' must be %s — agent tool arguments are decoded from the model's JSON"
+              agent_label tn b.name Validation_common.agent_prim_whitelist_english)
+        ) fd.params
+      | _ ->
+        add_error ctx tloc (Printf.sprintf
+          "%s: tool '%s' is not a function declared in this module" agent_label tn)
+    ) tool_refs
+  in
+  (* The record fields of an `Agent { … }` construction (either surface shape). *)
+  let agent_fields_of_expr = function
+    | Ast.ERecord { type_hint = Some "Agent"; fields; _ } -> Some fields
+    | Ast.EApp { fn = Ast.EConstructor { name = "Agent"; _ }; arg = Ast.ERecord { fields; _ }; _ } -> Some fields
+    | _ -> None
+  in
+  (* Declarative `agent X = Agent { … }` blocks. *)
   List.iter (function
     | DAgent (a : Ast.agent_form) ->
+      (match a.config_expr with Some e -> ignore (infer_expr ctx e) | None -> ());
       let tool_refs =
         match a.config_expr with
         | Some e ->
@@ -3738,35 +4086,32 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
             | Ast.ERecord { fields; _ } -> fields
             | Ast.EApp { fn = Ast.EConstructor _; arg = Ast.ERecord { fields; _ }; _ } -> fields
             | _ -> []) in
-          (match List.assoc_opt "tools" fields with
-           | Some (Ast.EList { elems; _ }) ->
-             List.filter_map (function Ast.EVar { name; loc } -> Some (name, loc) | _ -> None) elems
-           | _ -> [])
+          agent_tool_refs_of_fields fields
         | None -> List.map (fun n -> (n, a.loc)) a.tools
       in
-      List.iter (fun (tn, tloc) ->
-        match List.find_opt (function DFunc fd -> fd.name = tn | _ -> false) m.decls with
-        | Some (DFunc fd) ->
-          List.iter (fun (b : Ast.binding) ->
-            let ok = match b.type_expr with
-              | Ast.TName { name = ("String" | "Int" | "Float" | "Bool" | "PosixMillis"); _ } -> true
-              | _ -> false in
-            if not ok then
-              add_error ctx b.loc (Printf.sprintf
-                "agent '%s': tool '%s' parameter '%s' must be String, Int, Float, Bool, or PosixMillis — agent tool arguments are decoded from the model's JSON"
-                a.name tn b.name)
-          ) fd.params
-        | _ ->
-          add_error ctx tloc (Printf.sprintf
-            "agent '%s': tool '%s' is not a function declared in this module" a.name tn)
-      ) tool_refs
+      check_agent_tool_refs (Printf.sprintf "agent '%s'" a.name) tool_refs
+    | _ -> ()) m.decls;
+  (* AGENT-2: expression-position `Agent { … }` (BYOK) anywhere in a function body. *)
+  let rec walk_agents_in_expr label (e : Ast.expr) : unit =
+    (match agent_fields_of_expr e with
+     | Some fields -> check_agent_tool_refs label (agent_tool_refs_of_fields fields)
+     | None -> ());
+    ignore (Ast_visitor.fold_children (fun () c -> walk_agents_in_expr label c) () e)
+  in
+  List.iter (function
+    | DFunc fd ->
+      walk_agents_in_expr (Printf.sprintf "agent expression in `%s`" fd.name) fd.body
     | _ -> ()) m.decls;
 
   (* 4. Type-check each declaration *)
+  (* Top-level fn names that may shadow a SQL builtin — threaded into the §7.12
+     FromDb-forgery gate so it decides DB sites by resolution, not spelling (S4b). *)
+  let user_fn_names =
+    List.filter_map (function DFunc d -> Some d.name | _ -> None) m.decls in
   List.iter (fun decl ->
     match decl with
     | DFunc fd ->
-      check_func_decl ctx fd
+      check_func_decl ~user_fn_names ctx fd
     | DConst c ->
       let ty = infer_expr ctx c.value in
       (* Update the env with the inferred type *)
@@ -3919,7 +4264,7 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
   ) m.decls in
   (* Proof predicates declared by check/auth/establish functions *)
   let predicate_names = List.concat_map (function
-    | DFunc fd when (match fd.kind with CheckKind | AuthKind | EstablishKind -> true | _ -> false) ->
+    | DFunc fd when is_proof_introducing_kind fd.kind ->
       let collect_pred = function
         | RetPlain { ty = TApp { head = TName { name = "Fact"; _ }; arg; _ }; _ } ->
           (match arg with
@@ -4010,7 +4355,7 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
     from_rs fd.return_spec
   in
   let fact_ownership_errors = List.concat_map (function
-    | DFunc fd when (match fd.kind with CheckKind | AuthKind | EstablishKind -> true | _ -> false) ->
+    | DFunc fd when is_proof_introducing_kind fd.kind ->
       List.filter_map (fun (pred, loc) ->
         (* Skip if it's a qualified name (already module-prefixed) or a type variable *)
         if String.contains pred '.' then None

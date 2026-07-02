@@ -43,6 +43,25 @@
     [(symbol? raw) (symbol->string raw)]
     [else (~a raw)]))
 
+;; A test's `cookie { "k": v, ... }` clause arrives here as a Dict (a Racket hash
+;; of name->value). The HTTP layer, however, wants the Cookie *header* as a single
+;; string ("k=v; k2=v2"): the request pipeline re-parses that header
+;; (parse-cookies-header / tesl-request-cookie via string-split) back into
+;; req.cookies with string keys. Setting the header to the raw hash makes those
+;; string-split calls blow up ("expected string?, given #hash(...)"), so serialize
+;; it. A ready-made string is passed through unchanged.
+(define (api-test-cookie->header cookie)
+  (cond
+    [(string? cookie) cookie]
+    [(hash? cookie)
+     (string-join
+      (for/list ([(k v) (in-hash cookie)])
+        (string-append (if (symbol? k) (symbol->string k) (api-test-string-fragment k))
+                       "="
+                       (api-test-string-fragment v)))
+      "; ")]
+    [else (api-test-string-fragment cookie)]))
+
 (define (api-test-path-fragment value)
   (uri-encode (api-test-string-fragment value)))
 
@@ -134,11 +153,12 @@
                                    #:cookie [cookie #f]
                                    #:headers [headers (hash)]
                                    #:body [body #f]
+                                   #:query [query ""]
                                    #:capabilities [capabilities '()])
   (define normalized-headers (normalize-api-test-headers headers))
   (define request-headers
     (cond
-      [cookie (hash-set normalized-headers "cookie" cookie)]
+      [cookie (hash-set normalized-headers "cookie" (api-test-cookie->header cookie))]
       [else normalized-headers]))
   (define final-headers
     (if body
@@ -148,7 +168,7 @@
   (api-test-response
    (dispatch-request
     server
-    (make-request method path #:headers final-headers #:body request-body)
+    (make-request method path #:headers final-headers #:body request-body #:query query)
     #:capabilities capabilities)))
 
 (define (register-api-test-worker-entries! registry entries)
@@ -195,7 +215,7 @@
   (define normalized-headers (normalize-api-test-headers headers))
   (define final-headers
     (if cookie
-        (hash-set normalized-headers "cookie" cookie)
+        (hash-set normalized-headers "cookie" (api-test-cookie->header cookie))
         normalized-headers))
   (define route (find-api-test-sse-route sse-routes path))
   (unless route
@@ -205,6 +225,10 @@
   (define prefix    (first route))
   (define auth-fn   (second route))
   (define channel-s (third route))
+  ;; CONC-1: 4th element is the per-key validator (or #f) — see emit_sse_route /
+  ;; handle-sse-request.  Enforce it here too so the api-test path matches the
+  ;; production path (and so the per-key check is actually exercised by tests).
+  (define key-capture (and (>= (length route) 4) (fourth route)))
   (define key-str   (list-ref path (length prefix)))
   (define req       (make-request "GET" path #:headers final-headers))
   (when auth-fn
@@ -214,6 +238,13 @@
                         "subscribe failed for ~a: ~a"
                         (or name path)
                         (check-fail-message auth-result))))
+  (when key-capture
+    (define checked (key-capture key-str))
+    (when (check-fail? checked)
+      (raise-user-error 'subscribe
+                        "subscribe failed for ~a: ~a"
+                        (or name path)
+                        (check-fail-message checked))))
   (define event-channel (make-async-channel))
   (define backlog       (box '()))
   (define (on-event evt)

@@ -28,7 +28,7 @@ module UserServiceApi exposing [UserServer]
 
 import Tesl.Prelude exposing [Bool(..), String, Fact]
 import Tesl.Http exposing [HttpRequest]
-import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Dict exposing [Dict.singleton, Dict.lookup]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Json exposing [stringCodec]
 import Tesl.String exposing [
@@ -264,8 +264,15 @@ record AuthResponse {
   userId: String
 }
 
+# AuthResponse is a RESPONSE type: handlers return it and the runtime JSON-encodes
+# it into the HTTP body, so it needs a `toJson` encoder (unlike request types, which
+# are decode-only and use `toJson_forbidden`).
 codec AuthResponse {
-  toJson_forbidden
+  toJson {
+    token -> "token" with_codec stringCodec
+    userId -> "userId" with_codec stringCodec
+  }
+  fromJson_forbidden
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -294,11 +301,12 @@ fact Authenticated (userId: String)
 # For this example, makeToken and jwtAuth take the secret as a parameter.
 jwtSigningSecret = JwtSecret "dev-secret-change-in-production"
 
-# makeToken: sign a JWT with the userId as the payload.
-# JWT.sign is deterministic: same userId + secret always produces the same token.
+# makeToken: sign a JWT carrying the userId in the `sub` claim.
+# JWT claims are a Dict (serialized to the JWT payload as JSON); JWT.sign is
+# deterministic: same claims + secret always produce the same token.
 fn makeToken(userId: String) -> JwtToken
   requires [userJwt] =
-  JWT.sign userId jwtSigningSecret
+  JWT.sign (Dict.singleton "sub" userId) jwtSigningSecret
 
 # jwtAuth: extract and verify the Bearer token from the Authorization header.
 auth jwtAuth(request: HttpRequest) -> userId: String ::: Authenticated userId
@@ -309,10 +317,13 @@ auth jwtAuth(request: HttpRequest) -> userId: String ::: Authenticated userId
     Something rawHeader ->
       if String.startsWith rawHeader "Bearer " then
         let tokenStr = String.dropPrefix rawHeader "Bearer "
-        # JWT.verify returns the claims value (the userId string we signed).
+        # JWT.verify returns the claims Dict we signed; read the userId from `sub`.
         # On bad signature or expiry it automatically produces a 401 response.
-        let verifiedUserId = JWT.verify (JwtToken tokenStr) jwtSigningSecret
-        ok verifiedUserId ::: Authenticated userId
+        case Dict.lookup "sub" (JWT.verify (JwtToken tokenStr) jwtSigningSecret) of
+          Nothing ->
+            fail 401 "Invalid token: missing sub claim"
+          Something verifiedUserId ->
+            ok verifiedUserId ::: Authenticated userId
       else
         fail 401 "Authorization header must start with 'Bearer '"
 
@@ -587,72 +598,75 @@ test "checkPassword accepts an 8-character password" {
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Public endpoints are reachable without authentication.
-api-test "POST /register succeeds with valid body" for UserServer {
+api-test "POST /register succeeds with valid body" for UserServer requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, email] {
   let resp = post "/register" body {
     "username": "alice",
     "email": "alice@example.com",
     "password": "securepass"
   }
-  expect statusOk resp
+  expect statusOk resp.status
 }
 
-api-test "POST /login succeeds with valid body" for UserServer {
+api-test "POST /login succeeds with valid body" for UserServer requires [userDbRead, userDbWrite, userJwt, userTime] {
+  seed {
+    insert User { id: "alice-id", username: "alice", emailAddress: "alice@example.com", passwordHash: "hash:securepass", bio: "", avatarUrl: "", createdAt: nowMillis() }
+  }
   let resp = post "/login" body {
     "email": "alice@example.com",
     "password": "securepass"
   }
-  expect statusOk resp
+  expect statusOk resp.status
 }
 
-api-test "POST /forgot-password succeeds with valid body" for UserServer {
+api-test "POST /forgot-password succeeds with valid body" for UserServer requires [userDbRead, email] {
   let resp = post "/forgot-password" body {
     "email": "alice@example.com"
   }
-  expect statusOk resp
+  expect statusOk resp.status
 }
 
 # JWT-protected endpoints reject requests without a Bearer token.
-api-test "GET /me returns 401 without Authorization header" for UserServer {
+api-test "GET /me returns 401 without Authorization header" for UserServer requires [userJwt, userDbRead, cacheCap UserProfileCache] {
   let resp = get "/me"
-  expect statusClientError resp
+  expect statusClientError resp.status
 }
 
-api-test "PUT /me returns 401 without Authorization header" for UserServer {
+api-test "PUT /me returns 401 without Authorization header" for UserServer requires [userJwt, userDbRead, userDbWrite, cacheCap UserProfileCache, userHttp] {
   let resp = put "/me" body { "bio": "Hello world" }
-  expect statusClientError resp
+  expect statusClientError resp.status
 }
 
 # Validation errors return 400 for malformed input.
-api-test "POST /register with invalid email returns 400" for UserServer {
+api-test "POST /register with invalid email returns 400" for UserServer requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, email] {
   let resp = post "/register" body {
     "username": "bob",
     "email": "not-an-email",
     "password": "securepass"
   }
-  expect statusClientError resp
+  expect statusClientError resp.status
 }
 
-api-test "POST /register with short password returns 400" for UserServer {
+api-test "POST /register with short password returns 400" for UserServer requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, email] {
   let resp = post "/register" body {
     "username": "bob",
     "email": "bob@example.com",
     "password": "short"
   }
-  expect statusClientError resp
+  expect statusClientError resp.status
 }
 
-api-test "POST /register with short username returns 400" for UserServer {
+api-test "POST /register with short username returns 400" for UserServer requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, email] {
   let resp = post "/register" body {
     "username": "x",
     "email": "x@example.com",
     "password": "securepass"
   }
-  expect statusClientError resp
+  expect statusClientError resp.status
 }
 
-api-test "POST /login with missing password field returns 400" for UserServer {
+api-test "POST /login with missing password field returns 400" for UserServer requires [userDbRead, userJwt] {
   let resp = post "/login" body {
     "email": "alice@example.com"
   }
-  expect statusClientError resp
+  expect statusClientError resp.status
 }

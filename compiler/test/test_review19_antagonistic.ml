@@ -142,24 +142,28 @@ server TestServer2 for TestApi2 {
   (* Endpoint requires auth, handler has no auth-proof parameter — must be caught *)
   should_fail "V001\\|auth-proof\\|requires auth" src
 
-(* ── P2: Integer overflow must not crash ───────────────────────────────────── *)
-(* CURRENT BEHAVIOUR: Fatal error: exception Failure("int_of_string") *)
+(* ── P2: Large integer literals compile (A9/HM-1: Int is arbitrary-precision) ── *)
+(* Formerly these asserted a compile-time range error. Under A9/HM-1 the 63-bit
+   fixnum range check is gone: a huge magnitude is carried through as an LBigInt
+   canonical string into the Racket bignum. These now must compile (and, of course,
+   still must not crash). *)
 
 let test_no_crash_on_large_literal () =
   let src = prelude ^ "fn bigNum() -> Int = 9999999999999999999999\n" in
-  should_not_crash src
+  should_not_crash src;
+  should_pass src
 
 let test_no_crash_on_max_int_plus_one () =
-  (* On 64-bit, OCaml max_int = 4611686018427387903 *)
+  (* 2^62 = 4611686018427387904 — formerly the out-of-range boundary, now a bignum *)
   let src = prelude ^ "fn bigNum() -> Int = 4611686018427387904\n" in
-  should_not_crash src
+  should_not_crash src;
+  should_pass src
 
 let test_graceful_error_on_large_literal () =
-  (* The compiler must emit an error, not a crash *)
+  (* A9/HM-1: a huge literal compiles cleanly (exit 0), no longer an error. *)
   let src = prelude ^ "fn bigNum() -> Int = 9999999999999999999999\n" in
   let code = exit_code_of src in
-  (* exit 1 = compiler error (good), exit 2 = crash (bad) *)
-  check bool "exit code must be 1 (error) not 2 (crash)" true (code = 1)
+  check bool "huge literal compiles (exit 0), not error/crash" true (code = 0)
 
 (* ── S1: Unit constructor ───────────────────────────────────────────────────── *)
 (* FIXED: Unit is now registered in stdlib_env and constructible as a value. *)

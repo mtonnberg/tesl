@@ -59,6 +59,20 @@
   (unless (procedure? thunk)
     (raise-user-error 'capabilities "expected a thunk procedure, got ~a" thunk))
   (define declared-caps (expand-capabilities declared))
+  ;; CAP-A2 — runtime narrowing (maintainer decision #1, Option A) was ATTEMPTED
+  ;; here (`parameterize current-capabilities` to `declared-caps`) and REVERTED:
+  ;; the authoritative gate proved it is unsafe as a naive narrow.  A handler's
+  ;; emitted declared row is NOT the complete set it uses at runtime — its `auth`
+  ;; via-function (e.g. a session lookup that reads the DB) and server-scoped
+  ;; grants (e.g. `pubsub` for `publish`) run under the same dynamic context but
+  ;; are not in the handler's `requires`, so narrowing denied them (kanel
+  ;; `listMyOrgsHandler` lost `db-read`; the ai-conversation SSE handler lost
+  ;; `pubsub`).  These gaps are masked today by the whole-app union.  Option A
+  ;; therefore has a PREREQUISITE: the STATIC capability inference must be made
+  ;; complete AND the emitted per-call row must be the full transitive + auth +
+  ;; server-scoped set — only then can narrowing to it be sound.  Tracked in
+  ;; roadmap/later.  For now this remains a subset-assertion (declared ⊆ ambient)
+  ;; with no narrowing.
   (require-capabilities! declared-caps)
   (thunk))
 

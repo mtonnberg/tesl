@@ -158,25 +158,39 @@ When `publish` runs inside `transaction`:
 5. Each SSE server's LISTEN thread fetches the outbox row, delivers to in-memory listeners.
 6. A 5-second fallback poller sweeps for rows where NOTIFY was dropped.
 
-### Multiple `subscribe` lines
+### One channel per SSE endpoint
 
-A single SSE endpoint can subscribe to multiple channels:
+Each `sse` endpoint streams exactly **one** channel — this is by design, not a
+limitation. To deliver several kinds of event, declare **several `sse` blocks**
+in the api (each with its own path) and have the client open one `EventSource`
+per endpoint (over HTTP/2 these share the single connection to the port):
 
 ```tesl
-sse "/events/user/:userId"
-  auth    session: Session ::: Authenticated session && ChannelOwner session userId
-          via sessionOwnerAuth
-  capture userId: String ::: UserId userId via userIdCapture
-  subscribe UserEvents(userId)
-  subscribe SystemAlerts(userId)
+api NotificationsApi {
+  sse "/events/notices/:userId"
+    auth    session: Session ::: Authenticated session && ChannelOwner session userId
+            via sessionOwnerAuth
+    capture userId: String ::: UserId userId via userIdCapture
+    subscribe UserNotices(userId)
+
+  sse "/events/alerts/:userId"
+    auth    session: Session ::: Authenticated session && ChannelOwner session userId
+            via sessionOwnerAuth
+    capture userId: String ::: UserId userId via userIdCapture
+    subscribe SystemAlerts(userId)
+}
 ```
 
-Each message includes a `"channel"` discriminant so the client routes it correctly:
+Each endpoint's messages carry a `"channel"` discriminant so the client can route
+them:
 
 ```json
-{ "channel": "UserEvents",    "payload": { "tag": "ProfileUpdated", "bio": "..." } }
-{ "channel": "SystemAlerts",  "payload": { "tag": "MaintenanceAlert", "message": "..." } }
+{ "channel": "UserNotices",  "payload": { "tag": "ProfileUpdated", "bio": "..." } }
+{ "channel": "SystemAlerts", "payload": { "tag": "MaintenanceAlert", "message": "..." } }
 ```
+
+Keeping one channel per endpoint also keeps each channel's auth and key scoping
+(e.g. per-user vs admin-only) explicit and independent at its own endpoint.
 
 ### SSE path convention
 

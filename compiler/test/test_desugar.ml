@@ -1,18 +1,27 @@
 (** Tests for the surface-lowering pass {!Desugar}.
 
-    Wave 2 (reduce_language_size, P3) lowers the three fixed-shape, context-free,
-    position-independent effect forms to the core {!Ast.ERuntimeCall} node:
+    The pass lowers the TEN fixed-shape, context-free, position-independent
+    effect forms to the core {!Ast.ERuntimeCall} node:
 
-      - [EEnqueue]      → [(enqueue! QUEUE <payload>)]
-      - [EStartWorkers] → [(start-workers! NAME (list CAP...)[ #:concurrency N])]
-      - [EServe]        → [(serve NAME #:port <port> #:capabilities (list ...)
-                            [ #:static-dir "..."] #:sse-routes NAME-sse-routes)]
+      - [EEnqueue]         → [(enqueue! QUEUE <payload>)]
+      - [EStartWorkers]    → [(start-workers! NAME (list CAP...)[ #:concurrency N])]
+      - [EServe]           → [(serve NAME #:port <port> #:capabilities (list ...)
+                               [ #:static-dir "..."] #:sse-routes NAME-sse-routes)]
+      - [ECacheGet]        → [(cache-get! NAME <key>)]
+      - [ECacheSet]        → [(cache-set! NAME <key> <value>[ <ttl>])]
+      - [ECacheDelete]     → [(cache-delete! NAME <key>)]
+      - [ECacheInvalidate] → [(cache-invalidate-prefix! NAME <prefix>)]
+      - [ESendEmail]       → [(send-email! NAME #:to <to> #:subject <s> #:body <b>)]
+      - [EStartEmailWorker]→ [(start-email-worker! NAME)]
+      - [ETelemetry]       → [(telemetry-event! "NAME" #:attributes ([%S v]...))]
+                             (a bare-EVar value becomes the raw [*name] via the
+                              {!Ast.RRawVar} segment — a context-FREE rule)
 
     Every OTHER {!Ast.expr} variant — including the deliberately-BLOCKED forms
-    [ETelemetry] / [EPublish] / [EWithDatabase] / [EWithCapabilities] /
-    [EWithTransaction] / cache / email / [EUnop] / [LInterp] — must pass through
-    STRUCTURALLY UNCHANGED, every [loc] preserved byte-for-byte, so
-    {!Emit_racket} still produces byte-identical Racket for them.
+    [EPublish] / [EWithDatabase] / [EWithCapabilities] /
+    [EWithTransaction] / [EUnop] / [LInterp] — must pass through STRUCTURALLY
+    UNCHANGED, every [loc] preserved byte-for-byte, so {!Emit_racket} still
+    produces byte-identical Racket for them.
 
     The lowered nodes MUST reuse the surface node's own [loc] verbatim (spans for
     go-to-definition / diagnostics).  We compare with OCaml's polymorphic [=]
@@ -96,13 +105,16 @@ let sample_expr : expr =
   ELet { name = "all"; declared_type = None; declared_proof = None;
          value = bundle; body = var 71 "all"; loc = loc_at 72 }
 
-(* Same forest with the three lowered families REMOVED — must be a strict
+(* Same forest with ALL ten lowered families REMOVED — must be a strict
    structural identity through the pass (every other variant preserved). *)
 let sample_expr_no_lowered : expr =
   match sample_expr with
   | ELet ({ value = EList ({ elems; _ } as l); _ } as outer) ->
     let elems' = List.filter (function
-      | EEnqueue _ | EStartWorkers _ | EServe _ -> false | _ -> true) elems in
+      | EEnqueue _ | EStartWorkers _ | EServe _
+      | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
+      | ESendEmail _ | EStartEmailWorker _ | ETelemetry _ -> false
+      | _ -> true) elems in
     ELet { outer with value = EList { l with elems = elems' } }
   | _ -> sample_expr
 
@@ -177,6 +189,22 @@ let () =
      check "EServe with static_dir injects #:static-dir" true
    | _ -> check "EServe with static_dir injects #:static-dir" false);
 
+  (* 4c. ETelemetry → (telemetry-event! "NAME" #:attributes ([%S v]...)).  A bare
+     EVar field value becomes the raw [*name] (RRawVar — the literal surface name,
+     NOT resolve_name), every other value goes through emit_expr_simple (RArg). *)
+  (match Desugar.desugar_expr empty_queues
+           (ETelemetry { name = "evt";
+                         fields = [ ("user.id", var 80 "userId"); ("count", int_ 81 1) ];
+                         loc = loc_at 82 }) with
+   | ERuntimeCall { segments =
+       [ RLit "(telemetry-event! \"evt\" #:attributes (";
+         RLit "[\"user.id\" "; RRawVar "userId"; RLit "]";
+         RLit " "; RLit "[\"count\" "; RArg c; RLit "]";
+         RLit "))" ]; loc } ->
+     check "ETelemetry lowers to ERuntimeCall (RRawVar bare-var, RArg otherwise, loc)"
+       (c = int_ 81 1 && loc = loc_at 82)
+   | _ -> check "ETelemetry lowers to ERuntimeCall (RRawVar bare-var, RArg otherwise, loc)" false);
+
   (* 5. Module-level lowering threads the DQueue table and lowers in place. *)
   let out = Desugar.desugar_module sample_module in
   let lowered_count = ref 0 in
@@ -187,8 +215,8 @@ let () =
        | e -> ignore (Ast_visitor.fold_children (fun () e -> count e; ()) () e)
      in count fd.body
    | _ -> ());
-  check "desugar_module lowers exactly the 3 fixed-shape forms in the body"
-    (!lowered_count = 3);
+  check "desugar_module lowers exactly the 10 fixed-shape forms in the body"
+    (!lowered_count = 10);
 
   (* 6. Provenance helper records the surface loc verbatim. *)
   let surface = loc_at 200 in

@@ -42,6 +42,14 @@ type diagnostic = {
   message    : string;
   fix        : diagnostic_fix option;
   source     : string;
+  (* B5: pre-resolved manual deep-link anchor ("<section>#<anchor>"), decided by
+     the STRUCTURED topic the producing validation pass stamped on the error —
+     NOT by sniffing keywords out of [message].  [None] means "no structured
+     anchor was resolved here"; the renderer then falls back to the registry's
+     code→anchor mapping (which is 1:1 for every non-V001 code).  CLI-render-only:
+     deliberately NOT serialized by [diag_to_json] so the JSON wire format stays
+     byte-identical for existing consumers. *)
+  manual     : string option;
 }
 
 type compile_result =
@@ -70,6 +78,7 @@ let diag_of_parse_error (e : parse_error) : diagnostic = {
   message    = e.msg;
   fix        = None;
   source     = "parser";
+  manual     = None;
 }
 
 let diag_of_proof_error (e : Proof_checker.proof_error) : diagnostic = {
@@ -83,6 +92,7 @@ let diag_of_proof_error (e : Proof_checker.proof_error) : diagnostic = {
   message    = e.message;
   fix        = None;
   source     = "proof-checker";
+  manual     = None;
 }
 
 let diag_of_type_error (e : Type_system.type_error) : diagnostic = {
@@ -96,6 +106,7 @@ let diag_of_type_error (e : Type_system.type_error) : diagnostic = {
   message    = e.message;
   fix        = None;
   source     = "type-checker";
+  manual     = None;
 }
 
 let diag_of_validation_error (e : Validation.validation_error) : diagnostic = {
@@ -109,6 +120,10 @@ let diag_of_validation_error (e : Validation.validation_error) : diagnostic = {
   message    = if e.hint = "" then e.message else e.message ^ "\nHint: " ^ e.hint;
   fix        = None;
   source     = "validation";
+  (* B5: resolve the deep-link anchor from the STRUCTURED topic the producing
+     pass stamped on the error — not from the message text.  main.ml prefers
+     this over the (now vestigial) message-based path. *)
+  manual     = Error_codes.manual_for ~topic:e.topic ~code:"V001" ~message:e.message ();
 }
 
 let fix_to_json = function
@@ -661,7 +676,7 @@ let rec definition_in_expr env locals line col (expr : Ast.expr) =
          definition_in_expr env locals line col body)
   | Ast.EStartEmailWorker _ -> None
   | Ast.ERuntimeCall { segments; _ } ->
-    List.find_map (function Ast.RLit _ -> None | Ast.RArg e -> recurse e) segments
+    List.find_map (function Ast.RLit _ | Ast.RRawVar _ -> None | Ast.RArg e -> recurse e) segments
   | Ast.EConstructor { name; args; loc } ->
     let ctor_loc = precise_name_loc loc name in
     if loc_contains_position ctor_loc line col then
@@ -1154,7 +1169,7 @@ let rec resolve_symbol_in_expr env locals line col (expr : Ast.expr) =
          resolve_symbol_in_expr env locals line col body)
   | Ast.EStartEmailWorker _ -> None
   | Ast.ERuntimeCall { segments; _ } ->
-    List.find_map (function Ast.RLit _ -> None | Ast.RArg e -> recurse e) segments
+    List.find_map (function Ast.RLit _ | Ast.RRawVar _ -> None | Ast.RArg e -> recurse e) segments
   | Ast.EConstructor { name; args; loc } ->
     let ctor_loc = precise_name_loc loc name in
     if loc_contains_position ctor_loc line col then find_ctor_symbol env.ctor_defs name
@@ -1575,7 +1590,7 @@ let rec collect_occurrences_in_expr env locals target (expr : Ast.expr) =
     @ collect_occurrences_in_expr env locals target body
   | Ast.EStartEmailWorker _ -> []
   | Ast.ERuntimeCall { segments; _ } ->
-    List.concat_map (function Ast.RLit _ -> [] | Ast.RArg e -> recurse e) segments
+    List.concat_map (function Ast.RLit _ | Ast.RRawVar _ -> [] | Ast.RArg e -> recurse e) segments
   | Ast.EConstructor { name; args; loc } ->
     (match find_ctor_symbol env.ctor_defs name with
      | Some symbol when symbol_equal symbol target -> loc :: List.concat_map (collect_occurrences_in_expr env locals target) args
@@ -2398,6 +2413,7 @@ let legacy_bool_diag source_lines loc ~old_text ~replacement ~message = {
   message    = message;
   fix        = single_line_replace_fix source_lines loc ~old_text replacement;
   source     = "validation";
+  manual     = None;
 }
 
 let missing_bool_import_diag loc ~is_ctor =
@@ -2418,6 +2434,7 @@ let missing_bool_import_diag loc ~is_ctor =
     message;
     fix        = None;
     source     = "validation";
+    manual     = None;
   }
 
 let legacy_bool_diagnostics _filename source (m : module_form) =
@@ -2888,6 +2905,7 @@ let check_source filename source =
     message    = msg;
     fix        = None;
     source     = "lexer";
+    manual     = None;
   }]
 
 let check_file filename =
@@ -2919,7 +2937,7 @@ let check_files_batch (filenames : string list) : (string * diagnostic list) lis
       with Sys_error msg ->
         [{ file = filename; start_line = 0; start_col = 0;
            end_line = 0; end_col = 0; severity = "error";
-           code = "E000"; message = msg; fix = None; source = "io" }]
+           code = "E000"; message = msg; fix = None; source = "io"; manual = None }]
     in
     (filename, diags)
   ) filenames
@@ -3389,6 +3407,34 @@ let output_indicates_failure output =
   List.exists (fun line -> line = "FAILURE" || line = "ERROR")
     (String.split_on_char '\n' output)
 
+(** [true] when [output] carries a signal that [raco test] actually loaded and
+    RAN the test module — i.e. the mutant compiled and expanded successfully so
+    the suite got a chance to run.  A run that never reaches the tests (a module
+    load / macro-expansion / compile error) is a fundamentally different outcome
+    from a run whose tests executed and failed, and must not be scored as a
+    kill.
+
+    rackunit prints one summary line per module — either a per-check
+    "FAILURE"/"ERROR" banner (a check ran and failed / raised) or, on a clean
+    module, a "N test(s) passed" / "raco test:" progress line.  We treat the
+    presence of ANY of these as proof the suite ran.  A non-zero exit with NONE
+    of them means Racket bailed out before running a single test (the compile /
+    expand error case), which {!classify_mutant_outcome} maps to [`Invalid]. *)
+let output_indicates_tests_ran output =
+  output_indicates_failure output
+  || List.exists (fun line ->
+       (* rackunit / raco-test progress and pass banners. *)
+       let l = String.trim line in
+       (String.length l >= 4
+        && (let contains sub =
+              let n = String.length sub and m = String.length l in
+              let rec at i = i + n <= m && (String.sub l i n = sub || at (i + 1)) in
+              at 0
+            in
+            contains "test passed" || contains "tests passed"
+            || contains "raco test:"))
+     ) (String.split_on_char '\n' output)
+
 (** Classify a single mutant's [raco test] run.  Returns [true] when the mutant
     SURVIVED (the test suite demonstrably ran and passed), [false] when it was
     KILLED.
@@ -3400,9 +3446,36 @@ let output_indicates_failure output =
     "FAILURE"/"ERROR" marker is ALSO a kill: this guards against the case where
     [raco test] reports success without actually exercising the test suite to a
     clean pass, which previously caused genuinely-killed mutants to be reported
-    as false survivors. *)
+    as false survivors.
+
+    NOTE: this boolean survivor/non-survivor predicate does NOT distinguish a
+    genuine kill from a mutant that failed to compile — both are "not a
+    survivor".  {!classify_mutant_outcome} refines the non-survivor case into
+    [`Killed] vs [`Invalid]; prefer it for scoring. *)
 let classify_mutant_run ~exit_code ~output =
   exit_code = 0 && not (output_indicates_failure output)
+
+(** Three-way classification of a single mutant's [raco test] run, used for
+    scoring.  Timeouts are handled by the caller (they surface as exit 124).
+
+    - [`Survived]: exit 0 with no rackunit failure marker — the suite ran clean
+      and did not detect the mutant (a real coverage gap).
+    - [`Killed]: the suite RAN and the mutant was detected — either a rackunit
+      "FAILURE"/"ERROR" banner was printed (regardless of exit code), or the
+      run exited non-zero AFTER the tests demonstrably ran.
+    - [`Invalid]: the mutant did NOT compile / expand (non-zero exit with no
+      evidence the tests ever ran).  A mutant that fails to compile proves
+      NOTHING about the tests, so it must NOT be credited as a kill; the caller
+      excludes it from the kill-rate denominator.
+
+    The distinction between [`Killed] and [`Invalid] is exactly "did the test
+    suite get to run?": a compile/expand error aborts before any test executes
+    (no failure marker, no pass/progress banner), whereas a genuine kill is a
+    test that ran and failed. *)
+let classify_mutant_outcome ~exit_code ~output =
+  if exit_code = 0 && not (output_indicates_failure output) then `Survived
+  else if output_indicates_tests_ran output then `Killed
+  else `Invalid
 
 (** Number of mutant [raco test] processes to run concurrently.  Defaults to
     the machine's available parallelism (≈ [nproc]), capped at 16 so a very
@@ -3580,15 +3653,20 @@ let mutate_file ?(root_path=default_root_path ()) ?(extra_test_files=[]) filenam
                            timeout_pfx (Filename.quote tmp) in
                let exit_code, output = run_capture cmd in
                if exit_code = 124 then Mutate.Error "raco test timed out (no DB?)"
-               else if classify_mutant_run ~exit_code ~output then Mutate.Survived
-               else Mutate.Killed)
+               else match classify_mutant_outcome ~exit_code ~output with
+                 | `Survived -> Mutate.Survived
+                 | `Killed   -> Mutate.Killed
+                 (* Compile/expand error: the mutant never ran the tests, so it
+                    is INVALID (skipped), NOT credited as a kill. *)
+                 | `Invalid  -> Mutate.Invalid "mutant did not compile")
        in
        let result_arr = parallel_map ~jobs:mutate_jobs n run_one in
        let results = List.mapi (fun i mut -> (mut, result_arr.(i))) mutants in
        let killed   = List.length (List.filter (fun (_, r) -> r = Mutate.Killed)   results) in
        let survived = List.length (List.filter (fun (_, r) -> r = Mutate.Survived) results) in
+       let invalid  = List.length (List.filter (fun (_, r) -> match r with Mutate.Invalid _ -> true | _ -> false) results) in
        let errors   = List.length (List.filter (fun (_, r) -> match r with Mutate.Error _ -> true | _ -> false) results) in
-       MutateOk { Mutate.total = List.length mutants; killed; survived; errors; results }))
+       MutateOk { Mutate.total = List.length mutants; killed; survived; invalid; errors; results }))
 
 (* ── WS6: standalone-executable build (`tesl --exe`) ─────────────────────────
    Emit the program's Racket *exactly* as `tesl <file>` would (byte-identical

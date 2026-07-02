@@ -21,24 +21,24 @@
 (define/pow
   (greet [name : String])
   #:returns String
-  (thsl-src! "example/learn/lesson00-hello-world.tesl" 24 (list (cons 'name *name)) (lambda () (format "Hello, ~a!" (tesl-display-val *name)))))
+  (thsl-src! "example/learn/lesson00-hello-world.tesl" 26 (list (cons 'name *name)) (lambda () (format "Hello, ~a!" (tesl-display-val *name)))))
 
 (define/pow
   (add [x : Integer] [y : Integer])
   #:returns Integer
-  (thsl-src! "example/learn/lesson00-hello-world.tesl" 27 (list (cons 'x *x) (cons 'y *y)) (lambda () (+ *x *y))))
+  (thsl-src! "example/learn/lesson00-hello-world.tesl" 29 (list (cons 'x *x) (cons 'y *y)) (lambda () (+ *x *y))))
 
 (module+ test
   (require rackunit)
   (test-case "greet"
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson00-hello-world.tesl" 30 (list) (lambda () (greet "World")))) "Hello, World!")
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson00-hello-world.tesl" 31 (list) (lambda () (greet "Tesl")))) "Hello, Tesl!")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson00-hello-world.tesl" 32 (list) (lambda () (greet "World")))) "Hello, World!")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson00-hello-world.tesl" 33 (list) (lambda () (greet "Tesl")))) "Hello, Tesl!")
   )
 
   (test-case "add"
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson00-hello-world.tesl" 35 (list) (lambda () (add 1 2)))) 3)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson00-hello-world.tesl" 36 (list) (lambda () (add 0 0)))) 0)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson00-hello-world.tesl" 37 (list) (lambda () (add 10 -3)))) 7)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson00-hello-world.tesl" 37 (list) (lambda () (add 1 2)))) 3)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson00-hello-world.tesl" 38 (list) (lambda () (add 0 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson00-hello-world.tesl" 39 (list) (lambda () (add 10 -3)))) 7)
   )
 
 )

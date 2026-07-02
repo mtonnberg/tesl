@@ -1,6 +1,13 @@
-#lang racket
+#lang typed/racket/optional
 
 ;; evidence.rkt — GDP evidence struct definitions and base-layer utilities.
+;;
+;; Typing note: this module uses #lang typed/racket/optional as a
+;; static-documentation experiment.  Optional typing ERASES at runtime
+;; (no contracts are generated at the typed/untyped boundary), so the
+;; untyped importers (types.rkt, check-runtime.rkt) load these structs and
+;; helpers with zero runtime cost and no behavioural change.  Many fields
+;; are genuinely heterogeneous Tesl runtime values and are typed `Any`.
 ;;
 ;; Design note: this file is the lowest-level layer of the GDP runtime.
 ;; It is required by types.rkt, which in turn is required by check-runtime.rkt.
@@ -30,22 +37,28 @@
  attach
  forget-proof)
 
-(struct named-value (name value facts bindings) #:transparent)
-(struct check-ok (value facts bindings) #:transparent)
-(struct check-fail (message status details) #:transparent)
-(struct detached-proof (fact bindings) #:transparent)
-(struct packed-witness (public-name value) #:transparent)
-(struct packed-exists (witnesses body) #:transparent)
-(struct runtime-binding (name raw bindings) #:transparent)
+;; Bindings map runtime names (symbols) to raw Tesl values.
+(define-type Bindings (HashTable Any Any))
 
+(struct named-value ([name : Any] [value : Any] [facts : (Listof Any)] [bindings : Bindings]) #:transparent)
+(struct check-ok ([value : Any] [facts : (Listof Any)] [bindings : Bindings]) #:transparent)
+(struct check-fail ([message : Any] [status : Any] [details : Any]) #:transparent)
+(struct detached-proof ([fact : Any] [bindings : Bindings]) #:transparent)
+(struct packed-witness ([public-name : Any] [value : Any]) #:transparent)
+(struct packed-exists ([witnesses : Any] [body : Any]) #:transparent)
+(struct runtime-binding ([name : Any] [raw : Any] [bindings : Bindings]) #:transparent)
+
+(: check-result? (-> Any Boolean))
 (define (check-result? value)
   (or (check-ok? value) (check-fail? value)))
 
+(: check-success? (-> Any Boolean))
 (define (check-success? value)
   (check-ok? value))
 
 ;; Base-layer raw-value: no environment lookup.
 ;; check-runtime.rkt provides an extended version with current-evidence-env support.
+(: raw-value (-> Any Any))
 (define (raw-value value)
   (cond
     [(named-value? value) (named-value-value value)]
@@ -55,6 +68,7 @@
 ;; Convert a Tesl value to its string representation for use in string
 ;; interpolation ("${expr}").  Booleans are rendered as "true"/"false"
 ;; (Tesl convention) rather than Racket's "#t"/"#f".
+(: tesl-display-val (-> Any Any))
 (define (tesl-display-val value)
   (let ([r (raw-value value)])
     (if (boolean? r)
@@ -63,6 +77,7 @@
 
 ;; Base-layer facts-of: no environment lookup.
 ;; check-runtime.rkt provides an extended version with current-evidence-env support.
+(: facts-of (-> Any (Listof Any)))
 (define (facts-of value)
   (cond
     [(named-value? value) (named-value-facts value)]
@@ -70,25 +85,30 @@
     [(detached-proof? value) (list (detached-proof-fact value))]
     [else '()]))
 
+(: merge-bindings (-> Bindings Bindings Bindings))
 (define (merge-bindings left right)
-  (for/fold ([acc left]) ([(key value) (in-hash right)])
+  (for/fold ([acc : Bindings left]) ([(key value) (in-hash right)])
     (hash-set acc key value)))
 
+(: public-name-symbol? (-> Any Boolean))
 (define (public-name-symbol? name)
   (and (symbol? name)
        (eq? (string->symbol (symbol->string name)) name)))
 
+(: fresh-runtime-name (-> Any Symbol))
 (define (fresh-runtime-name label)
   (cond
     [(symbol? label) (gensym label)]
     [else (gensym 'value)]))
 
+(: normalize-runtime-name (-> Any Symbol))
 (define (normalize-runtime-name name)
   (cond
     [(public-name-symbol? name) (fresh-runtime-name name)]
     [(symbol? name) name]
     [else (fresh-runtime-name name)]))
 
+(: evidence->facts+bindings (-> Any (Values (Listof Any) Bindings)))
 (define (evidence->facts+bindings evidence)
   (cond
     [(check-ok? evidence)
@@ -102,13 +122,14 @@
              (detached-proof-bindings evidence))]
     [(and (list? evidence) (andmap detached-proof? evidence))
      (values (map detached-proof-fact evidence)
-             (for/fold ([acc (hash)]) ([proof (in-list evidence)])
+             (for/fold ([acc : Bindings (hash)]) ([proof (in-list evidence)])
                (merge-bindings acc (detached-proof-bindings proof))))]
     [else
      (values (list evidence) (hash))]))
 
 ;; Base-layer ensure-named: no #:subject keyword or environment lookup.
 ;; check-runtime.rkt provides the full version with #:subject support.
+(: ensure-named (->* (Any Any) ((Listof Any) Bindings) named-value))
 (define (ensure-named name value [facts '()] [bindings (hash)])
   (define effective-name
     (cond
@@ -119,7 +140,7 @@
       [else
        (normalize-runtime-name name)]))
   (define raw (raw-value value))
-  (define base-bindings
+  (define base-bindings : Bindings
     (cond
       [(named-value? value) (named-value-bindings value)]
       [else (hash)]))
@@ -133,6 +154,7 @@
                          effective-name
                          raw)))
 
+(: attach (-> Any Any named-value))
 (define (attach value evidence)
   (define-values (extra-facts extra-bindings)
     (evidence->facts+bindings evidence))
@@ -144,6 +166,7 @@
    extra-facts
    extra-bindings))
 
+(: forget-proof (-> Any Any))
 (define (forget-proof value)
   (cond
     [(named-value? value)

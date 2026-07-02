@@ -833,13 +833,65 @@ fn good(raw: List Int) -> Int =
   needsBoth b
 |})
 
-(* PC03 — laundering done right: wrap the proof-requiring fn in a lambda. *)
+(* PC03 — proof-forge via a HOF lambda over a NON-ForAll list is REJECTED.
+   Wrapping `doublePos` (requires `IsPositive`) in a proof-annotated lambda and
+   mapping it over a RAW `List Int` (no `ForAll IsPositive`) would call
+   `doublePos` on unproven elements — a forged per-element proof. The sound
+   idiom is to establish `ForAll IsPositive` first (List.filterCheck/allCheck),
+   then map (see lesson30). A lambda whose body merely IGNORES the annotation
+   (`-> x * 2`) is still accepted; only a body that CONSUMES the would-be-forged
+   proof is rejected. *)
 let test_PC03_lambda_wrapper_ok () =
-  should_pass
+  should_fail "V001\\|does not statically satisfy"
     ((mod_header "PcLambdaWrap") ^ "import Tesl.List exposing [List.map]\n" ^ proof_decls ^ {|
 fn doublePos(n: Int ::: IsPositive n) -> Int = n + n
 fn good(raw: List Int) -> List Int =
   List.map (fn(n: Int ::: IsPositive n) -> doublePos n) raw
+|})
+
+(* PC03b — even a "harmless" proof-annotated lambda (body never consumes the
+   proof) over a non-ForAll list is REJECTED: a proof must never be conjured from
+   nowhere. Accepting it would be a latent footgun — a later edit to the body
+   that DOES consume the proof would silently become unsound, with the eventual
+   error landing far from the lambda that introduced the bogus proof. Reject at
+   the cause. (Drop the annotation, or establish `ForAll` first — see PC03e.) *)
+let test_PC03b_harmless_lambda_rejected () =
+  should_fail "V001\\|nothing establishes\\|never conjured"
+    ((mod_header "PcHarmless") ^ "import Tesl.List exposing [List.map]\n" ^ proof_decls ^ {|
+fn good(raw: List Int) -> List Int =
+  List.map (fn(n: Int ::: IsPositive n) -> n * 2) raw
+|})
+
+(* PC03c — the §6.1 escalation: forge the AUTH predicate to a security sink via
+   the stdlib List.map over an unauthenticated list. Must be rejected. *)
+let test_PC03c_forge_auth_via_map () =
+  should_fail "V001\\|does not statically satisfy"
+    ((mod_header "PcForgeAuth") ^ "import Tesl.List exposing [List.map]\n" ^ {|
+fact Authenticated (u: String)
+fn protected(u: String ::: Authenticated u) -> String = u
+fn attack(attackers: List String) -> List String =
+  List.map (fn(u: String ::: Authenticated u) -> protected u) attackers
+|})
+
+(* PC03d — forge via a USER-defined higher-order function (no ForAll-distribution
+   contract). Must be rejected. *)
+let test_PC03d_forge_via_user_hof () =
+  should_fail "V001\\|does not statically satisfy"
+    ((mod_header "PcForgeHof") ^ proof_decls ^ {|
+fn myApply(f: Int -> Int, v: Int) -> Int = f v
+fn needPos(n: Int ::: IsPositive n) -> Int = n
+fn attack(x: Int) -> Int =
+  myApply (fn(n: Int ::: IsPositive n) -> needPos n) x
+|})
+
+(* PC03e — the SOUND idiom (lesson30): a proof-consuming lambda mapped over a
+   list that genuinely carries `ForAll IsPositive` is accepted. *)
+let test_PC03e_forall_justified_ok () =
+  should_pass
+    ((mod_header "PcForAllOk") ^ "import Tesl.List exposing [List.map]\n" ^ proof_decls ^ {|
+fn doublePos(n: Int ::: IsPositive n) -> Int = n + n
+fn good(xs: List Int ::: ForAll (IsPositive) xs) -> List Int =
+  List.map (fn(n: Int ::: IsPositive n) -> doublePos n) xs
 |})
 
 (* PC04 — multi-arg proof used in the CORRECT order. *)
@@ -1121,7 +1173,11 @@ let () =
       (* 10. Positive counterparts *)
       test_case "PC01 ForAll ok" `Quick test_PC01_forall_ok;
       test_case "PC02 ForAll both ok" `Quick test_PC02_forall_both_ok;
-      test_case "PC03 lambda wrapper ok" `Quick test_PC03_lambda_wrapper_ok;
+      test_case "PC03 proof-consuming lambda over raw list rejected (forge)" `Quick test_PC03_lambda_wrapper_ok;
+      test_case "PC03b harmless proof-lambda over raw list still rejected (never conjure proofs)" `Quick test_PC03b_harmless_lambda_rejected;
+      test_case "PC03c forge Authenticated to a sink via List.map rejected" `Quick test_PC03c_forge_auth_via_map;
+      test_case "PC03d forge proof via user-defined HOF rejected" `Quick test_PC03d_forge_via_user_hof;
+      test_case "PC03e proof-lambda over ForAll-proven list ok (lesson30 pattern)" `Quick test_PC03e_forall_justified_ok;
       test_case "PC04 multi-arg correct order ok" `Quick test_PC04_multiarg_correct_order;
       test_case "PC05 decompose correct ok" `Quick test_PC05_decompose_correct;
       test_case "PC06 introAnd same-subject ok" `Quick test_PC06_introand_same_subject_ok;

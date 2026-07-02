@@ -1,5 +1,7 @@
 # 09 — Adding Tests
 
+> Audience: contributors adding or changing tests across the Tesl (`.tesl`), Racket, and OCaml test layers.
+
 Tesl has three test layers.  The most important rule is: **write tests in
 `.tesl` files first.**  Drop to Racket or OCaml only when the Tesl surface
 cannot express what you need. If you need to write tesl that *should* not compile (you should), then use OCaml tests, see compiler/tests/test_review47_antagonistic.ml for inspiration. 

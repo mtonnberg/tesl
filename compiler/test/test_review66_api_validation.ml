@@ -637,16 +637,34 @@ api R66Ca14 {
 |}
 
 let test_R66_CA15_inline_sse_capture_accepted () =
-  (* SSE endpoints accept the inline capture form too. *)
+  (* SSE endpoints accept the inline capture form too.  This test predates the
+     G3 guard that makes a `-> ReturnType` on an SSE endpoint a hard error (an
+     SSE stream has no single response type); the stale `-> String` is dropped
+     and replaced with the required `subscribe`, so the test now asserts what it
+     always meant to: the INLINE `capture … using <codec>` form on an SSE route. *)
   should_pass {|
 #lang tesl
 module R66Ca15 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+import Tesl.SSE exposing [SseChannel]
+database EventDb = Database {
+  schema: "e"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "d"
+    user: "u"
+    password: ""
+    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
+}
+type Ev = EvA msg: String
+sseChannel Events(userId: String) = SseChannel { database: EventDb  payload: Ev }
 api R66Ca15 {
   sse "/events/:userId"
     capture userId: String using stringCodec
-    -> String
+    subscribe Events(userId)
 }
 |}
 

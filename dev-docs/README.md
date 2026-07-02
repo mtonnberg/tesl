@@ -1,5 +1,7 @@
 # Tesl Language Developer Documentation
 
+> Audience: contributors to Tesl itself — the compiler, runtime, DSL macros, and standard library. The two former user-facing guides here (`deploy.md`, `tesl-manifest.md`) have moved onto the user/manual path; only redirect stubs remain in this folder.
+
 This folder contains guides for developers who want to **contribute to Tesl
 itself** — the compiler, runtime, DSL macros, and standard library.
 
@@ -23,6 +25,9 @@ If you want to learn how to *write* Tesl applications, start with
 | `09-adding-tests.md` | Test patterns, infrastructure, regression test conventions |
 | `10-common-patterns.md` | Gotchas, quick reference table, diagnostic commands |
 | `11-frontend-ir.md` | Generator-facing frontend IR stage and `emit_ir` architecture |
+| `zero-cost-proofs-contract.md` | Proof erasure as the only mode — the as-built compile-time proof/declared-context contract |
+| `deploy.md` | *(moved → [`manual/deploy.md`](../manual/deploy.md))* Deploying a Tesl web API — `tesl build`, the generated Docker image, database flavours. This file is now a redirect stub. |
+| `tesl-manifest.md` | *(moved → [`manual/tesl-manifest.md`](../manual/tesl-manifest.md))* `tesl.toml` project manifest schema read by `tesl build` / `tesl db`. This file is now a redirect stub. |
 
 ---
 
@@ -33,7 +38,7 @@ If you want to learn how to *write* Tesl applications, start with
    ```bash
    tesl test example/learn/lesson05-intro-to-proofs.tesl
    ```
-3. Pick a task from `roadmap/now/` and read the relevant guide.
+3. Pick a task from `roadmap/next/` (active queue) or `roadmap/later/` (backlog) and read the relevant guide.
 
 For adding a standard library function: `05-adding-stdlib-function.md`.
 For fixing a compiler bug: `02-parser.md` + `04-body-compiler.md`.

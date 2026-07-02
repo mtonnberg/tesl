@@ -15,7 +15,7 @@
 
     Plus: a TOOL whose validate/dispatch fn requires a privileged capability
     (e.g. dbWrite) flows that requirement transitively through
-    tool/withTools/askReply into the enclosing consumer — granting [aiProvider]
+    tool/Agent{tools}/askReply into the enclosing consumer — granting [aiProvider]
     alone is not enough; the consumer must also declare [dbWrite].
 
     Positive controls: granting [aiProvider] directly, or a capability that
@@ -123,7 +123,7 @@ let should_pass src =
    For each we capture the imports it needs, the consumer return type, and a
    body fragment that CALLS it from a context where [agent]/[prompt] are bound.
    The fragment is glued into a fn/handler body that prebinds:
-     let agent = defineAgent (mockProvider ["r1","r2"]) "x" 100
+     let agent = Agent { provider: mockProvider ["r1","r2"], systemPrompt: "x", maxTokens: 100, tools: [] }
    and (for converse) a conversation.  All return types are concrete so the
    capability check (which runs regardless of inference) is reached. *)
 
@@ -139,7 +139,7 @@ type ai_fn = {
 let agent_imports extra =
   Printf.sprintf
     "import Tesl.Agent exposing [aiProvider, Agent, LlmProvider, AgentReply, \
-     mockProvider, defineAgent, ask, askReply, askWith, askFor, replyText, \
+     mockProvider, ask, askReply, askWith, askFor, replyText, \
      newConversation, converse, turnReply, agentRun, decodeAs%s]"
     (if extra = "" then "" else ", " ^ extra)
 
@@ -227,14 +227,14 @@ let consumers = [
     c_extra_decls = "";
     c_decl = (fun ~ret ~req ~body ->
       Printf.sprintf
-        "fn consume(prompt: String) -> %s requires [%s] =\n  let agent = defineAgent (mockProvider [\"r1\", \"r2\"]) \"x\" 100\n  %s"
+        "fn consume(prompt: String) -> %s requires [%s] =\n  let agent = Agent { provider: mockProvider [\"r1\", \"r2\"], systemPrompt: \"x\", maxTokens: 100, tools: [] }\n  %s"
         ret req body) };
   { c_id = "handler";
     c_pat = "handler '.*' uses \\[aiProvider\\] but does not declare the required capabilities";
     c_extra_decls = "";
     c_decl = (fun ~ret ~req ~body ->
       Printf.sprintf
-        "handler consume(prompt: String) -> %s requires [%s] =\n  let agent = defineAgent (mockProvider [\"r1\", \"r2\"]) \"x\" 100\n  %s"
+        "handler consume(prompt: String) -> %s requires [%s] =\n  let agent = Agent { provider: mockProvider [\"r1\", \"r2\"], systemPrompt: \"x\", maxTokens: 100, tools: [] }\n  %s"
         ret req body) };
   { c_id = "worker";
     c_pat = "worker '.*' uses \\[aiProvider\\] but does not declare the required capabilities";
@@ -242,7 +242,7 @@ let consumers = [
     c_decl = (fun ~ret:_ ~req ~body ->
       (* worker returns its job; we bind the body's value to _r and ignore it *)
       Printf.sprintf
-        "worker consume(j: JobRec) requires [%s] =\n  let prompt = j.prompt\n  let agent = defineAgent (mockProvider [\"r1\", \"r2\"]) \"x\" 100\n  let _r = %s\n  j"
+        "worker consume(j: JobRec) requires [%s] =\n  let prompt = j.prompt\n  let agent = Agent { provider: mockProvider [\"r1\", \"r2\"], systemPrompt: \"x\", maxTokens: 100, tools: [] }\n  let _r = %s\n  j"
         req body) };
 ]
 
@@ -331,12 +331,12 @@ let build_agentrun ~mod_id ~req ~pre =
 {|#lang tesl
 module %s exposing []
 import Tesl.Prelude exposing [String, Unit]
-import Tesl.Agent exposing [aiProvider, mockProvider, defineAgent, agentRun]
+import Tesl.Agent exposing [aiProvider, Agent, mockProvider, agentRun]
 %s
 record JobRec { prompt: String }
 fn publishStep(event: String) -> Unit = Unit
 worker doJob(j: JobRec) requires [%s] =
-  let agent = defineAgent (mockProvider ["r1"]) "x" 100
+  let agent = Agent { provider: mockProvider ["r1"], systemPrompt: "x", maxTokens: 100, tools: [] }
   let _r = agentRun agent j.prompt publishStep
   j
 |}
@@ -360,11 +360,11 @@ let agentrun_pos =
     sufficient_grants
 
 (* ── N3 — tool-fn privileged-cap flow: a tool whose dispatch/validate fn needs
-   dbWrite flows that requirement through tool/withTools/askReply into the
+   dbWrite flows that requirement through tool/Agent{tools}/askReply into the
    enclosing consumer. Granting aiProvider alone is NOT enough — the consumer
    must ALSO declare dbWrite. Sweep consumer × which-tool-fn-carries-the-cap. *)
 
-let tool_cap_imports = "import Tesl.Agent exposing [aiProvider, AgentReply, mockToolProvider, toolUseStep, textStep, defineAgent, withTools, tool, askReply, replyText, decodeAs]"
+let tool_cap_imports = "import Tesl.Agent exposing [aiProvider, Agent, AgentReply, mockToolProvider, toolUseStep, textStep, tool, askReply, replyText, decodeAs]"
 
 let echo_decls = {|
 record EchoArgs { text: String }
@@ -384,8 +384,7 @@ let tool_cap_sites = [
 
 let tool_consumer_decl c_id req =
   let prelude = {|  let echoTool = tool "echo" "Echo" "{}" validateEcho dispatchEcho
-  let base = defineAgent (mockToolProvider [toolUseStep "echo" "c1" "{\"text\":\"hi\"}", textStep "done"]) "x" 256
-  let agent = withTools base [echoTool]
+  let agent = Agent { provider: mockToolProvider [toolUseStep "echo" "c1" "{\"text\":\"hi\"}", textStep "done"], systemPrompt: "x", maxTokens: 256, tools: [echoTool] }
   let reply = askReply agent prompt
   replyText reply|} in
   match c_id with
@@ -454,9 +453,9 @@ let test_N4_handler_no_cap () =
 #lang tesl
 module AiCtrlH exposing []
 import Tesl.Prelude exposing [String]
-import Tesl.Agent exposing [aiProvider, mockProvider, defineAgent, ask]
+import Tesl.Agent exposing [aiProvider, Agent, mockProvider, ask]
 handler h(prompt: String) -> String requires [] =
-  let agent = defineAgent (mockProvider ["hi"]) "x" 100
+  let agent = Agent { provider: mockProvider ["hi"], systemPrompt: "x", maxTokens: 100, tools: [] }
   ask agent prompt
 |}
 
@@ -467,9 +466,9 @@ let test_N4_fn_unrelated_cap () =
 module AiCtrlF exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead]
-import Tesl.Agent exposing [aiProvider, mockProvider, defineAgent, ask]
+import Tesl.Agent exposing [aiProvider, Agent, mockProvider, ask]
 fn f(prompt: String) -> String requires [dbRead] =
-  let agent = defineAgent (mockProvider ["hi"]) "x" 100
+  let agent = Agent { provider: mockProvider ["hi"], systemPrompt: "x", maxTokens: 100, tools: [] }
   ask agent prompt
 |}
 
@@ -480,10 +479,10 @@ let test_N4_custom_nonimplying_cap () =
 module AiCtrlN exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead]
-import Tesl.Agent exposing [aiProvider, mockProvider, defineAgent, ask]
+import Tesl.Agent exposing [aiProvider, Agent, mockProvider, ask]
 capability logger implies dbRead
 handler h(prompt: String) -> String requires [logger] =
-  let agent = defineAgent (mockProvider ["hi"]) "x" 100
+  let agent = Agent { provider: mockProvider ["hi"], systemPrompt: "x", maxTokens: 100, tools: [] }
   ask agent prompt
 |}
 
@@ -493,14 +492,14 @@ let test_P4_direct_aiProvider () =
 #lang tesl
 module AiCtrlPos exposing []
 import Tesl.Prelude exposing [String]
-import Tesl.Agent exposing [aiProvider, mockProvider, defineAgent, ask]
+import Tesl.Agent exposing [aiProvider, Agent, mockProvider, ask]
 handler h(prompt: String) -> String requires [aiProvider] =
-  let agent = defineAgent (mockProvider ["hi"]) "x" 100
+  let agent = Agent { provider: mockProvider ["hi"], systemPrompt: "x", maxTokens: 100, tools: [] }
   ask agent prompt
 |}
 
 let test_P4_pure_constructors_need_no_cap () =
-  (* defineAgent / mockProvider / replyText etc. are PURE — building an agent
+  (* Agent {...} / mockProvider / replyText etc. are PURE — building an agent
      and inspecting a reply value requires NO capability; only the inference
      entry points do. A consumer that builds an agent but never calls a
      provider compiles with no requires. *)
@@ -509,9 +508,9 @@ let test_P4_pure_constructors_need_no_cap () =
 #lang tesl
 module AiPureCtor exposing []
 import Tesl.Prelude exposing [String, Int]
-import Tesl.Agent exposing [aiProvider, Agent, LlmProvider, mockProvider, defineAgent]
+import Tesl.Agent exposing [aiProvider, Agent, LlmProvider, mockProvider]
 fn buildAgent(sys: String) -> Agent =
-  defineAgent (mockProvider ["hi"]) sys 100
+  Agent { provider: mockProvider ["hi"], systemPrompt: sys, maxTokens: 100, tools: [] }
 |}
 
 (* ── Runner ────────────────────────────────────────────────────────────────── *)

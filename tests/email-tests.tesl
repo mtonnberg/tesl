@@ -15,6 +15,7 @@ import Tesl.Email exposing [Email, SmtpConfig]
 
 database TestDB = Database {
   schema: "public"
+  entities: []
   backend: Postgres (PostgresConfig {
     dbName: ""
     user: ""

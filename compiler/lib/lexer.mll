@@ -43,7 +43,6 @@ let keywords : (string, Token.t) Hashtbl.t =
     "email",       EMAIL;
     "smtp",        SMTP;
     "workers",     WORKERS;
-    "deadWorkers", DEAD_WORKERS;
     "capability",  CAPABILITY;
     "implies",     IMPLIES;
     "case",        CASE;
@@ -73,7 +72,6 @@ let keywords : (string, Token.t) Hashtbl.t =
     "toJson_forbidden",   TO_JSON_FORBIDDEN;
     "fromJson_forbidden", FROM_JSON_FORBIDDEN;
     "adtJson",     ADT_JSON;
-    "inject",      INJECT;
     "subscribe",   SUBSCRIBE;
     "publish",     PUBLISH;
     "sse",         SSE;
@@ -157,31 +155,28 @@ rule token_line acc = parse
   | digit+
       { let (l,c) = get_pos lexbuf in
         let s = Lexing.lexeme lexbuf in
-        (* Parse as Int64 first to handle the boundary value 2^62 = 4611686018427387904,
-           which is the absolute value of OCaml min_int and only valid as -2^62 in Tesl. *)
-        let n64 = (try Int64.of_string s
-                   with Failure _ ->
-                     failwith (Printf.sprintf
-                       "integer literal `%s` at line %d col %d is out of range; \
-                        Tesl Int is a 63-bit fixnum (range: -2^62 to 2^62-1)"
-                       s l c))
+        (* A9/HM-1: Int is arbitrary-precision.  There is NO range failure here.
+           Canonicalize the magnitude (strip leading zeros, keep at least one digit)
+           so that `007` and `7` share a single identity through the pipeline, then:
+             - if the canonical magnitude fits native OCaml int, emit INT (fast path,
+               byte-identical to the old behaviour for all in-range literals);
+             - otherwise emit BIGINT carrying the canonical decimal string.
+           The sign is applied later by the parser's unary-minus handling; here [canon]
+           is always a non-negative magnitude.  int_of_string_opt naturally routes the
+           +2^62 boundary (which overflows native int) to BIGINT, so the old min_int
+           sentinel and its two failwith range errors are gone. *)
+        let canon =
+          let i = ref 0 in
+          let n = String.length s in
+          while !i < n - 1 && s.[!i] = '0' do incr i done;
+          String.sub s !i (n - !i)
         in
-        (* 2^62 = 4611686018427387904: only valid under unary minus as -2^62.
-           We use the sentinel value min_int to signal this to the parser. *)
-        let min_int_boundary64 = Int64.of_string "4611686018427387904" in
-        let max_int64 = Int64.of_int max_int in
-        let n =
-          if Int64.compare n64 min_int_boundary64 = 0 then
-            min_int  (* sentinel: must appear under unary minus *)
-          else if Int64.compare n64 max_int64 <= 0 && Int64.compare n64 0L >= 0 then
-            Int64.to_int n64
-          else
-            failwith (Printf.sprintf
-              "integer literal `%s` at line %d col %d is out of range; \
-               Tesl Int is a 63-bit fixnum (max positive value: %d = 2^62-1)"
-              s l c max_int)
+        let tok =
+          match int_of_string_opt canon with
+          | Some v -> INT v
+          | None   -> BIGINT canon
         in
-        token_line ((INT n,l,c)::acc) lexbuf }
+        token_line ((tok,l,c)::acc) lexbuf }
   | '"'
       { let (l,c) = get_pos lexbuf in
         Buffer.clear string_buf;

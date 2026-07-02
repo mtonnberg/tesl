@@ -101,7 +101,11 @@ fn f(n: Int) -> Int ::: P n =
 (* A plain `fn` cannot DECLARE a proof-carrying return unless that proof arrived
    on an input parameter — it cannot fabricate a guarantee on a fresh value. *)
 let test_PN02_fn_declares_unjustified_proof () =
-  should_fail "cannot declare a proof-carrying return type" {|
+  (* A6: the return is UNNAMED (`-> Int ::: P n`), so after removing the T001
+     spelling carve-out it is caught by the preserved well-formedness rule
+     (a proof-carrying return must name its binding) — the sharper, T001-emitted
+     diagnostic.  V001 also fires, but we pin the precise new rule. *)
+  should_fail "proof-carrying return type must name its binding" {|
 module ProofNegDeclare exposing [f]
 import Tesl.Prelude exposing [Int]
 fact P (n: Int)
@@ -192,6 +196,25 @@ fn f(x: Int) -> Int requires [mystery] =
   x
 |}
 
+(* CAP-A1 (formal-review HIGH).  insertMany / updateAndReturnOne /
+   deleteAndReturnResult are real DB-write emitters, but the capability
+   write-set restated them inconsistently and omitted these three — so a handler
+   whose only write was `insertMany` was statically inferred to need no
+   [dbWrite].  Classification now flows from the single SQL registry; using
+   insertMany under a dbRead-only declaration must require dbWrite. *)
+let test_CN03_insertMany_requires_dbWrite () =
+  should_fail "dbWrite" {|
+module CapNegInsertMany exposing [f]
+import Tesl.Prelude exposing [Int, String, List, Unit]
+import Tesl.DB exposing [dbRead]
+entity Product table "products" primaryKey id {
+  id: String
+  qty: Int
+}
+fn f(items: List Product) -> Unit requires [dbRead] =
+  insertMany items in Product
+|}
+
 (* ── PC — positive controls (the safe forms still compile) ─────────────────── *)
 
 (* A real boundary check constructs the proof — this is the *sanctioned* place,
@@ -234,6 +257,45 @@ fn good(x: Int) -> Int requires [dbThing] =
   helper x
 |}
 
+(* GDP-FORGE-1 (formal-review CRITICAL).  A `fn` may legitimately introduce its
+   declared return proof in the body via `attachFact` with an establish-produced
+   Fact — but ONLY when the attached Fact carries the DECLARED predicate.  The
+   previous gate accepted the body whenever it *syntactically mentioned*
+   `attachFact`/`attach`/`ok` anywhere (decide-by-spelling), so a body attaching
+   an UNRELATED predicate could still declare an arbitrary return proof; because
+   proofs are erased at runtime, that forged value then satisfied every
+   downstream obligation silently.  This pins that the rejection now decides by
+   proof CONTENT: attaching `Whatever` cannot satisfy a declared `IsPositive`. *)
+let test_PN08_attach_unrelated_fact_forgery () =
+  should_fail "cannot declare a proof return type" {|
+module ProofNegAttachForge exposing [forge]
+import Tesl.Prelude exposing [Int, Fact, attachFact]
+fact Whatever (n: Int)
+fact IsPositive (n: Int)
+establish makeWhatever(n: Int) -> Fact (Whatever n) =
+  Whatever n
+fn forge(x: Int) -> y: Int ::: IsPositive y =
+  let w = makeWhatever x
+  let y = attachFact x w
+  y
+|}
+
+(* Positive companion to PN08: attaching the Fact that DOES carry the declared
+   predicate is the legitimate manual-proof pattern and must still compile (the
+   fix must not over-reject body-introduced proofs). *)
+let test_PC04_attach_matching_fact_ok () =
+  should_pass {|
+module ProofPosAttachMatch exposing [good]
+import Tesl.Prelude exposing [Int, Fact, attachFact]
+fact IsPositive (n: Int)
+establish makeIsPositive(n: Int) -> Fact (IsPositive n) =
+  IsPositive n
+fn good(x: Int) -> y: Int ::: IsPositive y =
+  let p = makeIsPositive x
+  let y = attachFact x p
+  y
+|}
+
 let () =
   run "proof-negatives" [
     "proofs", [
@@ -244,14 +306,17 @@ let () =
       test_case "PN05 proof subject cannot be a dotted path"     `Quick test_PN05_dotted_path_proof_subject;
       test_case "PN06 ok must return the declared binding"        `Quick test_PN06_ok_returns_non_identifier;
       test_case "PN07 return binder cannot retype an input"       `Quick test_PN07_binder_reuse_different_type;
+      test_case "PN08 attaching unrelated fact cannot forge return proof" `Quick test_PN08_attach_unrelated_fact_forgery;
     ];
     "capabilities", [
       test_case "CN01 capability use must be declared (leak)"     `Quick test_CN01_capability_leak;
       test_case "CN02 undeclared capability rejected"             `Quick test_CN02_undeclared_capability;
+      test_case "CN03 insertMany requires dbWrite (registry)"     `Quick test_CN03_insertMany_requires_dbWrite;
     ];
     "positive", [
       test_case "PC01 boundary check constructs proof"            `Quick test_PC01_check_constructs_proof;
       test_case "PC02 fn propagates input proof"                  `Quick test_PC02_fn_propagates_input_proof;
       test_case "PC03 declared capability compiles"               `Quick test_PC03_declared_capability_ok;
+      test_case "PC04 attaching matching fact compiles"           `Quick test_PC04_attach_matching_fact_ok;
     ];
   ]

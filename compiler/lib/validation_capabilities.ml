@@ -82,12 +82,18 @@ let effect_caps key =
 let collect_needed_capabilities
     ?(func_caps : (string * string list) list = [])
     ?(param_caps : (string * string list) list = [])
+    ?(bound : string list = [])
     (e : expr)
     : string list =
-  let sql_read_names = ["select"; "selectOne"; "selectCount"; "selectSum"; "selectMax"; "selectMin"] in
-  let sql_write_names = ["insert"; "update"; "delete"; "upsert"] in
-  (* var_caps: the capability(ies) a bare referenced name introduces. *)
-  let var_caps name =
+  (* CAP-A1 fix: read/write classification comes from the single SQL registry
+     (Validation_common) so it cannot drift from the set the emitter lowers to
+     DB calls.  The old inline write-set omitted insertMany/updateAndReturnOne/
+     deleteAndReturnResult, statically inferring no dbWrite for handlers that
+     used them — a real capability-soundness hole. *)
+  (* var_caps: the capability(ies) a bare referenced name introduces, given the
+     names [bound] in lexical scope at the use site (a bound name shadows the
+     builtin and introduces nothing). *)
+  let var_caps bound name =
     (* A function-typed PARAMETER (`f: (A -> B requires c)`) shadows everything:
        calling it requires its capability-row variable(s), which the enclosing
        function declares in its own `requires`. *)
@@ -102,8 +108,13 @@ let collect_needed_capabilities
       (match List.assoc_opt name func_caps with
        | Some caps -> caps
        | None -> [])
-    else if List.mem name sql_read_names then ["dbRead"]
-    else if List.mem name sql_write_names then ["dbWrite"]
+    (* A plain local binding (value param, let, lambda/case binder) named like a
+       stdlib effect function (env/nowMillis/randomInt/…) SHADOWS it and introduces
+       NO capability — checked after param_caps/func_caps so function-typed params
+       and user functions keep their own rows. *)
+    else if List.mem name bound then []
+    else if is_sql_read_builtin name then ["dbRead"]
+    else if is_sql_write_builtin name then ["dbWrite"]
     else if name = "deadJobs" then ["queueRead"]
     else if name = "requeue" then ["queueWrite"]
     else if List.mem name ["now"; "nowMillis"; "Time.now"; "Time.nowMillis";
@@ -113,6 +124,10 @@ let collect_needed_capabilities
     (* BUG-4 fix: generatePrefixedId and randomInt require the `random` capability. *)
     else if List.mem name ["generatePrefixedId"; "randomInt";
                            "Tesl.Id.generatePrefixedId"; "Tesl.Random.randomInt"] then ["random"]
+    (* Reading the environment is an effect: env/envInt/envString/requireEnv require
+       the `envRead` capability (same discipline as time/random; named envRead — not
+       `env` — because `env` is already the name of the Maybe-returning function). *)
+    else if List.mem name ["env"; "envInt"; "envString"; "requireEnv"] then ["envRead"]
     else if List.mem name ["JWT.sign"; "JWT.verify"; "JWT.decode"] then ["jwt"]
     else if List.mem name ["HttpClient.get"; "HttpClient.post";
                            "HttpClient.put"; "HttpClient.delete"] then ["httpClient"]
@@ -120,13 +135,30 @@ let collect_needed_capabilities
        tool-calling loop, BYOK, and structured-output askFor) performs inference
        and requires the aiProvider capability. Pure constructors/accessors do not. *)
     else if List.mem name ["ask"; "askReply"; "askWith"; "askFor";
-                           "converse"; "agentRun"] then ["aiProvider"]
+                           "converse"; "converseStreaming"; "agentRun"] then ["aiProvider"]
     else []
   in
-  (* acc is threaded left-to-right; result order is irrelevant (caller sort_uniqs). *)
-  let rec go (acc : string list) (e : expr) : string list =
+  (* Names bound by a pattern (PVar / nested PCon fields) — the per-arm binder
+     set, mirroring what the old fn_bound_names collected for the whole function. *)
+  let rec pat_names acc = function
+    | PVar n -> n :: acc
+    | PCon { fields; _ } -> List.fold_left (fun acc (_, p) -> pat_names acc p) acc fields
+    | _ -> acc
+  in
+  (* acc is threaded left-to-right; result order is irrelevant (caller sort_uniqs).
+     [bound] is the set of names in LEXICAL scope at this expression — the
+     function parameters plus the let / let-proof / lambda / case binders of
+     ENCLOSING scopes.  A name in [bound] shadows the stdlib effect/SQL builtin
+     of the same name ONLY within the scope it is bound in.  This is the fix for
+     the `requires []` capability-suppression hole: previously every binder
+     anywhere in the function (e.g. a `delete` bound in one case arm) suppressed
+     the capability function-wide, so a binder in a disjoint scope could hide a
+     real effect.  Threading [bound] lexically makes the capability checker agree
+     with the typechecker's own scoping (checker.ml routes a name to the SQL/
+     builtin path only when it is NOT locally bound). *)
+  let rec go (bound : string list) (acc : string list) (e : expr) : string list =
     match e with
-    | EVar { name; _ } -> var_caps name @ acc
+    | EVar { name; _ } -> var_caps bound name @ acc
     | EField { obj = EConstructor { name = "JWT"; _ }; field; _ }
       when List.mem field ["sign"; "verify"; "decode"] -> "jwt" :: acc
     | EField { obj = EVar { name = "JWT"; _ }; field; _ }
@@ -145,40 +177,147 @@ let collect_needed_capabilities
       let key = match e with
         | EEnqueue _ -> "EEnqueue" | EPublish _ -> "EPublish"
         | ETelemetry _ -> "ETelemetry" | _ -> "ESendEmail" in
-      Ast_visitor.fold_children go (effect_caps key @ acc) e
-    | EStartEmailWorker _ -> effect_caps "EStartEmailWorker" @ acc
-    (* EConstructor is kept EXPLICIT as a no-capability LEAF: the original arm
-       was `EConstructor _ -> []`, which did NOT walk constructor arguments.
-       fold_children WOULD descend into the args, so we keep the original
-       non-descent to remain byte-identical. *)
-    | EConstructor _ -> acc
-    (* ECase is kept EXPLICIT (not delegated to fold_children) to preserve the
-       original traversal set EXACTLY: the hand-rolled arm descended into the
-       scrutinee and each arm BODY but NOT the arm guards.  fold_children would
-       additionally descend into guards — a strictly-safe over-approximation, but
-       we keep behaviour byte-identical rather than widen the analysed set here. *)
+      Ast_visitor.fold_children_env go bound (effect_caps key @ acc) e
+    | EStartEmailWorker _ ->
+      (* CAP-4 fix: descend into child exprs after prepending the fixed token,
+         exactly like the EEnqueue/EPublish/ETelemetry/ESendEmail arm above — a
+         child expression can itself carry effects and must be walked. *)
+      Ast_visitor.fold_children_env go bound (effect_caps "EStartEmailWorker" @ acc) e
+    (* CAP-1 fix: EConstructor is NO LONGER a no-capability leaf.  The previous
+       explicit `EConstructor _ -> acc` arm dropped constructor ARGUMENTS, so an
+       effect wrapped in a built-in args-carrying constructor (e.g.
+       `Something (insert ...)`, `Something (env key)`) escaped capability
+       analysis entirely.  By removing the arm, EConstructor now falls through to
+       the shared `_ -> Ast_visitor.fold_children_env ...` catch-all below, which
+       walks its args identically to every other node.  (The JWT/HttpClient
+       `EField { obj = EConstructor ... }` arms above still match first and are
+       unaffected — they match EField, not a bare EConstructor.) *)
+    (* Binder forms: extend [bound] with the names each binder introduces, but
+       ONLY for the sub-scope that binder governs (value exprs are evaluated in
+       the enclosing scope; bodies/arms see the new name). *)
+    | ELet { name; value; body; _ } ->
+      let acc = go bound acc value in
+      go (name :: bound) acc body
+    | ELetProof { value_name; proof_name; value; body; _ } ->
+      let acc = go bound acc value in
+      go (value_name :: proof_name :: bound) acc body
+    | ELambda { params; body; _ } ->
+      go (List.map (fun (b : binding) -> b.name) params @ bound) acc body
+    (* ECase descends into the scrutinee, each arm GUARD, and each arm BODY.
+       B-GUARD-CAP-ESCAPE (review §5.2): the arm guard was previously skipped on
+       the unenforced assumption "guards are pure boolean tests", so a privileged
+       effect hidden in a `where` guard (e.g. a `deleteAndReturnResult`, an `env`
+       read) escaped the capability charge entirely — a read-only handler could
+       write undeclared.  The guard is an ordinary expression that runs at request
+       time, so it must be folded exactly like the body.  Both see the arm's
+       pattern binders. *)
     | ECase { scrut; arms; _ } ->
-      let acc = go acc scrut in
-      List.fold_left (fun acc (arm : case_arm) -> go acc arm.body) acc arms
+      let acc = go bound acc scrut in
+      List.fold_left (fun acc (arm : case_arm) ->
+        let arm_bound = pat_names bound arm.pattern in
+        let acc = match arm.guard with Some g -> go arm_bound acc g | None -> acc in
+        go arm_bound acc arm.body) acc arms
     (* Cache forms: data-dependent token, then descend into key/value/ttl/prefix. *)
     | ECacheGet { cache_name; _ } | ECacheSet { cache_name; _ }
     | ECacheDelete { cache_name; _ } | ECacheInvalidate { cache_name; _ } ->
-      Ast_visitor.fold_children go (("cacheCap " ^ cache_name) :: acc) e
-    (* Purely-mechanical variants: descend into child exprs only.  This includes
-       EField (non-special obj), EApp, EBinop, EUnop, EIf, ELet, ELetProof,
-       ERecord, EList, EOk, EWithDatabase/EWithCapabilities/EWithTransaction,
-       EServe, ELambda, and the no-capability leaves (ELit, EFail, EStartWorkers,
-       EConstructor, plain EVar handled above).
-
-       NOTE on EServe: fold_children visits exactly the [port] child (the only
-       expr field), matching the original `EServe { port; _ }` arm.  EWith*
-       forms each carry a single [body] child, also matched exactly. *)
-    | _ -> Ast_visitor.fold_children go acc e
+      Ast_visitor.fold_children_env go bound (("cacheCap " ^ cache_name) :: acc) e
+    (* Purely-mechanical variants: descend into child exprs in the same scope.
+       Includes EField (non-special obj), EApp, EBinop, EUnop, EIf, ERecord,
+       EList, EOk, EWithDatabase/EWithCapabilities/EWithTransaction, EServe, and
+       the no-capability leaves (ELit, EFail, EStartWorkers). *)
+    | _ -> Ast_visitor.fold_children_env go bound acc e
   in
-  go [] e
+  go bound [] e
 
-let check_handler_capabilities ?(cap_map=[]) (decls : top_decl list) : validation_error list =
-  let func_caps = build_func_capability_map decls in
+(* (Removed fn_bound_names: the function-wide bound-name set it produced was the
+   root of the `requires []` capability-suppression hole — a binder in any
+   disjoint scope suppressed a capability everywhere.  collect_needed_capabilities
+   now threads `bound` lexically, seeded with the function parameters at the call
+   site below.) *)
+
+(* ── Fix C: env read reached through a database config block ──────────────── *)
+
+(** Does an expression read the environment (env / envInt / envString /
+    requireEnv)?  Used both for a function body and for the `= … { }` config of
+    a declarative block, so the env-read discipline ([envRead]) is uniform
+    regardless of how the env read is reached. *)
+let expr_reads_env (e : expr) : bool =
+  let found = ref false in
+  let rec go e =
+    (match e with
+     | EVar { name; _ }
+       when List.mem name ["env"; "envInt"; "envString"; "requireEnv"] -> found := true
+     | _ -> ());
+    ignore (Ast_visitor.fold_children (fun () e -> go e; ()) () e)
+  in
+  go e; !found
+
+(** Does ANY declarative config block — database / queue / email / cache /
+    agent — read the environment in its `= … { }` config?  Every such block
+    initializes at app STARTUP, i.e. when [main] runs, so a module's [main]
+    performs that env read transitively and must declare [envRead].  This is
+    uniform across block kinds: the database block was only the motivating
+    example.  (Per-module, like every other capability check: a library that
+    declares env-reading config but has no [main] relies on the importing app's
+    [main] to carry the requirement.) *)
+let module_config_reads_env (decls : top_decl list) : bool =
+  List.exists (function
+    | DDatabase { config_expr = Some e; _ }
+    | DQueue    { config_expr = Some e; _ }
+    | DEmail    { config_expr = Some e; _ }
+    | DCache    { config_expr = Some e; _ }
+    | DAgent    { config_expr = Some e; _ } -> expr_reads_env e
+    | _ -> false
+  ) decls
+
+(** Per-kind capability-error reporting metadata.  Every [func_kind] is now
+    capability-checked: check/auth/establish each get their OWN runtime
+    capability boundary (emit_racket emits `#:capabilities` for their declared
+    `requires`), so a privileged operation in their body must be covered by
+    their own declared row — identical treatment to [fn].  This closes the
+    compile-time effect-laundering hole (a `check`/`auth`/`establish` body could
+    previously perform e.g. a dbWrite that the ambient whole-app union satisfied
+    at runtime, with no static declaration).  The message text for the four
+    effecting kinds is preserved verbatim (snapshot tests pin it); [MainKind]
+    gets its own env-honesty wording.
+
+    This match is intentionally EXHAUSTIVE (no `_ ->` wildcard): a future new
+    [func_kind] becomes a non-exhaustive-match COMPILE error here rather than a
+    silent capability-check skip (enforced-by-construction). *)
+let cap_check_kind_info (k : func_kind) : (string * (string -> string -> string)) option =
+  match k with
+  | HandlerKind    -> Some ("handler",
+      fun n caps -> Printf.sprintf
+        "handler '%s' uses [%s] but does not declare the required capabilities" n caps)
+  | WorkerKind     -> Some ("worker",
+      fun n caps -> Printf.sprintf
+        "worker '%s' uses [%s] but does not declare the required capabilities" n caps)
+  | FnKind         -> Some ("fn",
+      fun n caps -> Printf.sprintf
+        "fn '%s' uses privileged operations and callees requiring [%s] but does not declare them" n caps)
+  | CheckKind      -> Some ("check",
+      fun n caps -> Printf.sprintf
+        "check '%s' uses privileged operations and callees requiring [%s] but does not declare them" n caps)
+  | AuthKind       -> Some ("auth",
+      fun n caps -> Printf.sprintf
+        "auth '%s' uses privileged operations and callees requiring [%s] but does not declare them" n caps)
+  | EstablishKind  -> Some ("establish",
+      fun n caps -> Printf.sprintf
+        "establish '%s' uses privileged operations and callees requiring [%s] but does not declare them" n caps)
+  | DeadWorkerKind -> Some ("deadWorker",
+      fun n caps -> Printf.sprintf
+        "deadWorker '%s' uses [%s] but does not declare the required capabilities" n caps)
+  | MainKind       -> Some ("main",
+      fun n caps -> Printf.sprintf
+        "main '%s' reads the environment (directly or through a declarative config block) \
+         but does not declare the required capability [%s]" n caps)
+
+let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : top_decl list) : validation_error list =
+  (* Local callee→caps first (a local name shadows an imported one); then
+     imported functions' declared `requires`, so a transitive call into an
+     imported effecting function is enforced across the module boundary. *)
+  let func_caps = build_func_capability_map decls @ imported_func_caps in
+  let config_reads_env = module_config_reads_env decls in
   (* Full transitive closure: expand a set of declared capabilities to everything they
      imply, recursively. Uses the same algorithm as expand_caps in proof_checker.ml. *)
   let expand_declared declared =
@@ -199,78 +338,72 @@ let check_handler_capabilities ?(cap_map=[]) (decls : top_decl list) : validatio
   in
   let errors = ref [] in
   List.iter (function
-    | DFunc fd when fd.kind = HandlerKind ->
-      let param_caps = build_param_capability_map fd in
-      let needed = collect_needed_capabilities ~func_caps ~param_caps fd.body |> List.sort_uniq String.compare in
-      let declared = fd.capabilities in
-      let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
-      if missing <> [] then
-        errors := make_error fd.loc
-          ~hint:(Printf.sprintf "add `requires [%s]` to the handler declaration"
-                   (String.concat ", " missing))
-          (Printf.sprintf "handler '%s' uses [%s] but does not declare the required capabilities"
-             fd.name (String.concat ", " missing))
-          :: !errors
-    | DFunc fd when fd.kind = WorkerKind ->
-      let param_caps = build_param_capability_map fd in
-      let needed = collect_needed_capabilities ~func_caps ~param_caps fd.body |> List.sort_uniq String.compare in
-      let declared = fd.capabilities in
-      let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
-      if missing <> [] then
-        errors := make_error fd.loc
-          ~hint:(Printf.sprintf "add `requires [%s]` to the worker declaration"
-                   (String.concat ", " missing))
-          (Printf.sprintf "worker '%s' uses [%s] but does not declare the required capabilities"
-             fd.name (String.concat ", " missing))
-          :: !errors
-    | DFunc fd when fd.kind = FnKind ->
-      let param_caps = build_param_capability_map fd in
-      let needed = collect_needed_capabilities ~func_caps ~param_caps fd.body |> List.sort_uniq String.compare in
-      let declared = fd.capabilities in
-      let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
-      if missing <> [] then
-        errors := make_error fd.loc
-          ~hint:(Printf.sprintf "add `requires [%s]` to the fn declaration"
-                   (String.concat ", " missing))
-          (Printf.sprintf "fn '%s' uses privileged operations and callees requiring [%s] but does not declare them"
-             fd.name (String.concat ", " missing))
-          :: !errors
-    | DFunc fd when fd.kind = DeadWorkerKind ->
-      let param_caps = build_param_capability_map fd in
-      let needed = collect_needed_capabilities ~func_caps ~param_caps fd.body |> List.sort_uniq String.compare in
-      let declared = fd.capabilities in
-      let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
-      if missing <> [] then
-        errors := make_error fd.loc
-          ~hint:(Printf.sprintf "add `requires [%s]` to the deadWorker declaration"
-                   (String.concat ", " missing))
-          (Printf.sprintf "deadWorker '%s' uses [%s] but does not declare the required capabilities"
-             fd.name (String.concat ", " missing))
-          :: !errors
+    | DFunc fd ->
+      (match cap_check_kind_info fd.kind with
+       | None -> ()  (* total-match safety net: no func_kind returns None today
+                        (every kind is capability-checked); kept so the outer
+                        match stays total if a future kind ever opts out. *)
+       | Some (label, msg) ->
+         let needed =
+           match fd.kind with
+           | MainKind ->
+             (* main is the capability BOUNDARY: its body is lowered to run inside
+                `with capabilities main_caps { with database … }`, so the full
+                transitive check is the scope's job, not main's `requires`.  The
+                one effect the scope does not grant is reading the environment, so
+                main must still declare [envRead] when it reads env — directly in
+                its body, or transitively because a declarative config block it
+                starts up reads env (Fix C, uniform across all block kinds). *)
+             if expr_reads_env fd.body || config_reads_env
+             then ["envRead"] else []
+           | _ ->
+             let param_caps = build_param_capability_map fd in
+             (* Seed [bound] with the function parameters (in scope for the whole
+                body); collect_needed_capabilities extends it lexically per inner
+                binder so a disjoint binder can no longer suppress a capability. *)
+             collect_needed_capabilities ~func_caps ~param_caps
+               ~bound:(List.map (fun (b : binding) -> b.name) fd.params) fd.body
+             |> List.sort_uniq String.compare
+         in
+         let declared = fd.capabilities in
+         let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
+         if missing <> [] then
+           errors := make_error fd.loc
+             ~hint:(Printf.sprintf "add `requires [%s]` to the %s declaration"
+                      (String.concat ", " missing) label)
+             (msg fd.name (String.concat ", " missing))
+             :: !errors)
     | _ -> ()
   ) decls;
   List.rev !errors
 
-(** Extract variable name from a `(Id == varName)` proof argument string.
-    E.g., "(Id == id)" → Some "id". *)
-let extract_id_eq_var (arg : string) : string option =
-  (* Strip surrounding parens if present *)
+(** Extract BOTH sides of a `(Col == rhs)` proof argument string.
+    E.g. "(Id == todoId)" → Some ("Id", "todoId");
+         "(OwnerId == requestUser . id)" → Some ("OwnerId", "requestUser.id").
+
+    The parser captures a parenthesized proof arg token-by-token with a space
+    after each token (parser.ml:336-356), so a dotted field-access RHS arrives
+    as three tokens `requestUser`, `.`, `id`.  We rejoin the post-`==` tokens
+    with no separator so `requestUser . id` collapses back to `requestUser.id`,
+    matching the dotted paths the parser already emits for field-access WHERE
+    subjects. *)
+let extract_col_eq_var (arg : string) : (string * string) option =
   let s = String.trim arg in
   let s = if String.length s > 1 && s.[0] = '(' && s.[String.length s - 1] = ')'
           then String.sub s 1 (String.length s - 2) |> String.trim
           else s in
-  (* Find "==" and take everything after it, trimmed *)
-  match String.split_on_char ' ' s with
-  | parts ->
-    (* Find "==" token and take the next non-empty token *)
-    let rec find_after_eq = function
-      | [] -> None
-      | "==" :: next :: _ ->
-        let v = String.trim next in
-        if String.length v > 0 then Some v else None
-      | _ :: rest -> find_after_eq rest
-    in
-    find_after_eq (List.filter (fun p -> p <> "") parts)
+  let parts = List.filter (fun p -> p <> "") (String.split_on_char ' ' s) in
+  match parts with
+  | col :: "==" :: rest when rest <> [] ->
+    (* Rejoin so `requestUser . id` → `requestUser.id` and `todoId` → `todoId`. *)
+    Some (col, String.concat "" rest)
+  | _ -> None
+
+(** Extract variable name from a `(Id == varName)` proof argument string.
+    Retained as the RHS-only projection of {!extract_col_eq_var} so existing
+    callers (e.g. {!check_insert_pk_match}) are unchanged. *)
+let extract_id_eq_var (arg : string) : string option =
+  Option.map snd (extract_col_eq_var arg)
 
 (** Extract the variable from a FromDb proof's (Id == X) argument. *)
 let fromdb_pk_var (proof : proof_expr) : string option =
@@ -278,167 +411,652 @@ let fromdb_pk_var (proof : proof_expr) : string option =
   | PredApp { pred = "FromDb"; args = [arg]; _ } -> extract_id_eq_var arg
   | _ -> None
 
-(** Extract the plain variable from a ForAll FromDb proof's (Field == X) argument.
-    Returns None if the variable is a field access (e.g. requestUser.id — tokenized
-    as "requestUser . id" with spaces, so the next token after the variable is ".").
-    E.g., ForAll (FromDb (RoomId == roomId)) → Some "roomId".
-    E.g., ForAll (FromDb (OwnerId == requestUser.id)) → None (field access). *)
-let forall_fromdb_field_var (proof : proof_expr) : string option =
+(** Extract the (column, rhs) pair from a FromDb proof, descending PredAnd to
+    find the FromDb conjunct.  Covers both a bare `FromDb (Col == x)` and a
+    compound proof such as `FromDb (Col == x) && IsOpen` (the listOpenTodos
+    pattern), which a plain top-level PredApp match would silently skip.
+    The rhs is returned even when it is a field access (`requestUser.id`); the
+    caller unifies the COLUMN unconditionally and the SUBJECT by full dotted
+    string. *)
+let rec fromdb_col_var (proof : proof_expr) : (string * string) option =
   match proof with
-  | PredApp { pred = "FromDb"; args = [arg]; _ } ->
-    let s = String.trim arg in
-    let s = if String.length s > 1 && s.[0] = '(' && s.[String.length s - 1] = ')'
-            then String.sub s 1 (String.length s - 2) |> String.trim
-            else s in
-    let parts = List.filter (fun p -> p <> "") (String.split_on_char ' ' s) in
-    (* Find the variable after == and check if it's followed by "." (field access) *)
-    let rec find_var = function
-      | [] -> None
-      | "==" :: v :: "." :: _ -> ignore v; None  (* field access: skip *)
-      | "==" :: v :: _ ->
-        if String.length v > 0 && v.[0] >= 'a' && v.[0] <= 'z'
-        then Some v
-        else None
-      | _ :: rest -> find_var rest
-    in
-    find_var parts
+  | PredApp { pred = "FromDb"; args = [arg]; _ } -> extract_col_eq_var arg
+  | PredAnd { left; right; _ } ->
+    (match fromdb_col_var left with
+     | Some _ as r -> r
+     | None -> fromdb_col_var right)
   | _ -> None
 
-(** Check that SELECT WHERE conditions match the named-pack return spec's pk constraint.
-    E.g., `-> Task ? FromDb (Id == id)` requires `selectOne t from Task where t.id == id`.
-    Also validates ForAll return types: `-> List Msg ? ForAll (FromDb (RoomId == roomId))`
-    requires the SELECT to use `roomId`, not another variable. *)
+(** Render an expression as a dotted subject path, for comparing a SQL WHERE
+    RHS against a proof subject: `EVar x` → "x", `EField x.f` → "x.f",
+    `EField x.f.g` → "x.f.g".  Returns None for anything else (e.g. a literal). *)
+let rec expr_dotted_subject (e : expr) : string option =
+  match e with
+  | EVar { name; _ } -> Some name
+  | EField { obj; field; _ } ->
+    (match expr_dotted_subject obj with
+     | Some base -> Some (base ^ "." ^ field)
+     | None -> None)
+  | _ -> None
+
+(** Check that SELECT WHERE conditions establish the FromDb provenance declared
+    by a named-pack / ForAll return spec — matching BOTH the COLUMN (via the
+    single {!Ir.entity_field_fact_name} field→column mapping, honoring an
+    explicit `first_field_fact`) and the SUBJECT.
+
+    E.g. `-> Task ? FromDb (Id == id)` requires `selectOne t from Task where
+    t.id == id`; `-> List Msg ? ForAll (FromDb (RoomId == roomId))` requires the
+    SELECT to filter `m.roomId == roomId`.
+
+    Soundness (A1): the declared FromDb (column, subject) is unified against the
+    resolved WHERE equality — a select fetching by the WRONG column (e.g. by
+    `ownerId` while claiming `Id == todoId`), or a select with NO matching WHERE
+    at all, is rejected (previously only the RHS variable spelling was checked,
+    so a wrong-column or where-less select forged provenance).  The must-have-a-
+    matching-WHERE requirement is scoped to select-derived grants: insert- and
+    update-returning-derived FromDb grants (which have no select WHERE for the
+    pk) are exempt (insert is owned by {!check_insert_pk_match}). *)
 let check_pk_match (decls : top_decl list) : validation_error list =
+  let fields_by_type = build_fields_map decls in
+  (* field → column for a given entity, honoring first_field_fact via the single
+     shared ir.ml mapping (do not re-implement the capitalize heuristic). *)
+  let field_to_column (entity_name : string) (fname : string) : string =
+    match record_fields_of_type fields_by_type (mk_name_type entity_name) with
+    | Some efs ->
+      (match List.find_opt (fun (f : field_def) -> f.name = fname) efs with
+       | Some f -> Ir.entity_field_fact_name f
+       | None -> String.capitalize_ascii fname)
+    | None -> String.capitalize_ascii fname
+  in
   let errors = ref [] in
   List.iter (function
     | DFunc fd when (fd.kind = FnKind || fd.kind = HandlerKind) ->
-      (* Determine the expected WHERE variable from the return spec, and a label
-         describing it for error messages. Returns (expected_var, spec_label). *)
+      (* Determine the declared FromDb (column, subject) from the return spec, and
+         a label describing it for error messages. *)
       let where_spec = match fd.return_spec with
         | RetNamedPack { entity_proof = Some ep; _ } ->
-          (match fromdb_pk_var ep with
-           | Some v -> Some (v, Printf.sprintf "Id == %s" v)
+          (match fromdb_col_var ep with
+           | Some (col, rhs) -> Some (col, rhs, Printf.sprintf "%s == %s" col rhs)
            | None -> None)
         | RetForAll { proof; _ } | RetMaybeForAll { proof; _ } ->
-          (match forall_fromdb_field_var proof with
-           | Some v when not (String.contains v '.') ->
-             (* Only check simple parameter names (no field access like `user.id`).
-                Field-access subjects like `requestUser.id` are legitimate but cannot
-                be validated by simple param-name matching. *)
-             Some (v, Printf.sprintf "FromDb (...%s...) in ForAll" v)
-           | _ -> None)
+          (match fromdb_col_var proof with
+           | Some (col, rhs) ->
+             Some (col, rhs, Printf.sprintf "FromDb (%s == %s) in ForAll" col rhs)
+           | None -> None)
         | _ -> None
       in
       (match where_spec with
        | None -> ()
-       | Some (expected_var, spec_label) ->
+       | Some (expected_col, expected_rhs, spec_label) ->
          let param_names = List.map (fun (b : binding) -> b.name) fd.params in
-         (* Check that expected_var is a parameter *)
-         if not (List.mem expected_var param_names) then
+         (* The declared subject: a bare param, or a field access on a param
+            (e.g. requestUser.id).  Verify the subject root resolves to a
+            parameter.  Skip this scope check for a dotted subject only when its
+            root is a parameter (field-access subjects are legitimate). *)
+         let subj_root =
+           match String.index_opt expected_rhs '.' with
+           | Some i -> String.sub expected_rhs 0 i
+           | None -> expected_rhs
+         in
+         if not (List.mem subj_root param_names) then
            errors := make_error fd.loc
              ~hint:(Printf.sprintf "`%s` used in `%s` is not a parameter name; \
-                     use a function parameter" expected_var spec_label)
+                     use a function parameter" expected_rhs spec_label)
              (Printf.sprintf "return spec `%s`: `%s` is not a parameter name"
-                spec_label expected_var)
+                spec_label expected_rhs)
            :: !errors
          else begin
-              (* Walk body looking for SELECT WHERE conditions *)
-              let rec check_expr (e : expr) =
-                match e with
+           (* Result of unifying ONE select-with-WHERE against the declared
+              (col, subject): whether it matched, plus a deferred error for the
+              near-misses (right column / wrong subject, or wrong column). *)
+           let matched = ref false in
+           let subject_mismatch : validation_error option ref = ref None in
+           let column_mismatch : validation_error option ref = ref None in
+           (* A1-OR-BROADEN (review §3.1): a disjunction in a provenance WHERE
+              broadens the result set, so the {AND,EQ} unifier cannot prove it
+              entails the declared `col == subj` for EVERY returned row.  We model
+              only conjunctions; a top-level OR whose spine reaches the select head
+              is fail-closed (a narrowing OR nested inside an AND-conjunct — e.g.
+              `col==subj && (a || b)` — has no select head in its spine and is
+              unaffected). *)
+           let disjunction_seen : validation_error option ref = ref None in
+           let select_head_seen = ref false in
+           (* A1-MASK-NODATAFLOW write variant (review §3.2): the FromDb value is
+              produced by a row-returning WRITE (update/updateAndReturnOne …
+              returning one, deleteAndReturnResult).  Set when such a write is on
+              the return path, so a where-LESS returning-write is rejected the same
+              way a where-less select is (its provenance is unestablished). *)
+           let write_head_seen = ref false in
+           (* Write-path result refs, kept SEPARATE from the select refs: a
+              return-reachable write must establish the provenance for the row IT
+              returns; a matching select on a DIFFERENT path must not suppress a
+              wrong-column write's rejection (a mixed-path handler could otherwise
+              forge write provenance). *)
+           let write_matched = ref false in
+           let write_subject_mismatch : validation_error option ref = ref None in
+           let write_column_mismatch : validation_error option ref = ref None in
+
+           (* Gather the (field, rhs_expr) equality conjuncts of a compound WHERE.
+              The SQL DSL parses `... where a && b && c` as a left-leaning BAnd of
+              BEq conjuncts; only the leftmost conjunct carries the select head in
+              its left spine, so we must walk the whole BAnd tree to find the pk
+              conjunct wherever it sits. *)
+           let rec eq_conjuncts binder (e : expr) : (string * expr * loc) list =
+             match e with
+             | EBinop { op = BAnd; left; right; _ } ->
+               eq_conjuncts binder left @ eq_conjuncts binder right
+             | EBinop { op = BEq; left; right; loc } ->
+               (* left is either the select-chain ending in `where binder.field`
+                  (leftmost conjunct) or a bare `binder.field` (later conjunct). *)
+               let last_field =
+                 let rec last = function
+                   | EField { obj = EVar { name; _ }; field; _ } when name = binder ->
+                     Some field
+                   | EApp { fn; arg; _ } ->
+                     (match arg with
+                      | EField { obj = EVar { name; _ }; field; _ } when name = binder ->
+                        Some field
+                      | _ -> (match last arg with Some f -> Some f | None -> last fn))
+                   | _ -> None
+                 in last left
+               in
+               (match last_field with
+                | Some f -> [(f, right, loc)]
+                | None -> [])
+             | _ -> []
+           in
+
+           (* Unify a WHERE (rooted at a BEq/BAnd whose left spine reaches a SQL
+              head — select/selectOne, or a standalone `where` clause emitted by
+              update/updateAndReturnOne/delete) against the declared (col, subj).
+              [entity] resolves the field→column mapping; when None (entity binder
+              unresolved) we fall back to capitalize so a bare pk still unifies.
+
+              [matched]/[subject_mismatch]/[column_mismatch] are passed in so the
+              SELECT path and the returning-WRITE path each track their OWN result:
+              a matching select must NOT suppress a sibling wrong-column write's
+              rejection (that would forge write provenance on a mixed-path handler).
+              [noun] tailors the message (SELECT vs returning write). *)
+           let unify_where ~matched ~subject_mismatch ~column_mismatch ~noun
+               entity binder (root : expr) =
+             let col_of f = match entity with
+               | Some en -> field_to_column en f
+               | None -> String.capitalize_ascii f
+             in
+             let conjuncts = eq_conjuncts binder root in
+             (* A conjunct whose column matches the declared column. *)
+             let col_hit =
+               List.find_opt (fun (f, _, _) -> col_of f = expected_col) conjuncts
+             in
+             (match col_hit with
+              | Some (_f, rhs_expr, loc) ->
+                (match expr_dotted_subject rhs_expr with
+                 | Some subj when subj = expected_rhs -> matched := true
+                 | Some where_v ->
+                   if !subject_mismatch = None then
+                     subject_mismatch := Some (make_error loc
+                       ~hint:(Printf.sprintf "the WHERE clause should use `%s` \
+                               (from `%s` in the return spec)"
+                               expected_rhs spec_label)
+                       (Printf.sprintf "WHERE clause uses `%s` but return spec \
+                              declares `%s == %s`; these do not match"
+                          where_v expected_col expected_rhs))
+                 | None ->
+                   (* literal (or non-subject expr) on the RHS *)
+                   if !subject_mismatch = None then
+                     subject_mismatch := Some (make_error loc
+                       ~hint:(Printf.sprintf "the WHERE clause should compare \
+                               to `%s` (from `%s` in the return spec)"
+                               expected_rhs spec_label)
+                       (Printf.sprintf "WHERE condition does not match \
+                              `%s == %s` in return spec; \
+                              use parameter `%s` not a literal"
+                          expected_col expected_rhs expected_rhs)))
+              | None ->
+                (* No conjunct constrains the declared column: wrong-column WHERE. *)
+                if conjuncts <> [] && !column_mismatch = None then begin
+                  let cols = List.map (fun (f, _, _) -> col_of f) conjuncts in
+                  let loc = match conjuncts with (_, _, l) :: _ -> l | [] -> fd.loc in
+                  column_mismatch := Some (make_error loc
+                    ~hint:(Printf.sprintf "the %s must filter on column `%s` \
+                            equal to `%s` to establish `%s`"
+                            noun expected_col expected_rhs spec_label)
+                    (Printf.sprintf "%s constrains column(s) [%s] but return \
+                           spec declares `%s == %s`; the declared FromDb \
+                           provenance is not established by this WHERE"
+                       noun (String.concat ", " cols) expected_col expected_rhs))
+                end)
+           in
+           (* The SELECT path keeps its existing refs + wording verbatim. *)
+           let unify_where_select entity binder root =
+             unify_where ~matched ~subject_mismatch ~column_mismatch
+               ~noun:"SELECT" entity binder root
+           in
+
+           (* Extract (binder, entity) from a SQL DSL call chain head
+              (select/selectOne/update/updateAndReturnOne/delete ... from|in E),
+              mirroring validation_advanced.ml's binder_env construction. *)
+           let sql_binder_entity args =
+             let binder = match args with
+               | EVar { name; _ } :: _ -> Some name
+               | EField { obj = EVar { name; _ }; _ } :: _ -> Some name
+               | _ -> None
+             in
+             let entity =
+               let rec find = function
+                 | EVar { name = ("from" | "in"); _ } :: EConstructor { name; _ } :: _ -> Some name
+                 | EVar { name = ("from" | "in"); _ } :: EVar { name; _ } :: _ -> Some name
+                 | _ :: rest -> find rest
+                 | [] -> None
+               in find args
+             in
+             (binder, entity)
+           in
+
+           (* Collect binder → entity for EVERY SQL DSL head in the body, up front.
+              A standalone `where` clause (from update/updateAndReturnOne ...
+              returning one) is parsed as a SIBLING statement to the `update ... in
+              E` chain that names the entity, so the entity is not reachable from
+              the `where` expression itself — we resolve it through this map.
+              Binder names are function-unique in practice, so a flat function-wide
+              map is sufficient (and degrades to the capitalize fallback if a
+              binder is unresolved). *)
+           let binder_env =
+             let acc = ref [] in
+             let rec collect (e : expr) =
+               (match e with
                 | EApp _ ->
-                  let flat = let rec go acc = function
-                    | EApp { fn; arg; _ } -> go (arg :: acc) fn
-                    | hd -> (hd, acc)
-                    in go [] e
-                  in
-                  let (head, args) = flat in
+                  let (head, args) = collect_call_head_and_args [] e in
                   (match head with
-                   | EVar { name = ("selectOne" | "select"); _ } ->
-                     (* Find the WHERE condition — args: [binder, "from", Entity, "where", EField{binder.field}] *)
-                     (* The actual comparison value is in the outer EBinop if present *)
-                     List.iter check_expr args
-                   | _ ->
-                     List.iter check_expr args;
-                     check_expr head)
-                | EBinop { op = BEq; left; right; loc } ->
-                  (* SELECT ... WHERE binder.field == value — check value matches expected_var *)
-                  let flat = let rec go acc = function
-                    | EApp { fn; arg; _ } -> go (arg :: acc) fn
-                    | hd -> (hd, acc)
-                    in go [] left
+                   | EVar { name = ("selectOne" | "select" | "update"
+                                  | "updateAndReturnOne" | "delete"
+                                  | "deleteAndReturnResult"); _ } ->
+                     (match sql_binder_entity args with
+                      | Some bn, Some en ->
+                        if not (List.mem_assoc bn !acc) then acc := (bn, en) :: !acc
+                      | _ -> ())
+                   | _ -> ())
+                | _ -> ());
+               ignore (Ast_visitor.fold_children (fun () c -> collect c) () e)
+             in
+             collect fd.body; !acc
+           in
+
+           (* A1-MASK-NODATAFLOW (review §3.2): the declared provenance must be
+              established by the WHERE of the select that PRODUCES the returned
+              value — not by any matching WHERE anywhere in the body.  [matched]
+              was function-wide, so an unused sibling `let good = select … where
+              <matching>` laundered a returned value from a different, wrong-WHERE
+              select.  We compute the set of variables whose value flows to the
+              function result (following `let`-body, `if`-branches, and
+              `case scrut of … Ctor b -> … b …` back to the scrutinee), and only
+              credit a select whose `let`-binder is return-reachable (or a select
+              not let-bound at all, i.e. already in the return path). *)
+           let returned_vars =
+             let pat_binders =
+               let rec pb = function
+                 | PVar n -> [n] | PWild | PNullary _ | PLit _ -> []
+                 | PCon { fields; _ } -> List.concat_map (fun (_, p) -> pb p) fields
+               in pb
+             in
+             (* all variable USES in an expression (over-approximate free vars). *)
+             let free_vars e =
+               let acc = ref [] in
+               let rec go e =
+                 (match e with EVar { name; _ } -> acc := name :: !acc | _ -> ());
+                 ignore (Ast_visitor.fold_children (fun () c -> go c) () e)
+               in go e; !acc
+             in
+             (* every `let`-binder → the free vars of its bound value. *)
+             let let_defs =
+               let acc = ref [] in
+               let rec go e =
+                 (match e with
+                  | ELet { name; value; _ } -> acc := (name, free_vars value) :: !acc
+                  | ELetProof { value_name; value; _ } -> acc := (value_name, free_vars value) :: !acc
+                  | _ -> ());
+                 ignore (Ast_visitor.fold_children (fun () c -> go c) () e)
+               in go fd.body; !acc
+             in
+             (* Variables used in RESULT position (peeling `let` VALUES, tracing a
+                returned pattern binder back to its scrutinee).  Intermediate `let`
+                values are reached only via the closure below, so a dead sibling
+                select's binder never enters the set. *)
+             let rec result_uses e =
+               match e with
+               | ELet { body; _ } | ELetProof { body; _ }
+               | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+               | EWithTransaction { body; _ } -> result_uses body
+               | EIf { then_; else_; _ } -> result_uses then_ @ result_uses else_
+               | ECase { scrut; arms; _ } ->
+                 List.concat_map (fun (arm : case_arm) ->
+                   let bvs = result_uses arm.body in
+                   let pbs = pat_binders arm.pattern in
+                   if List.exists (fun v -> List.mem v pbs) bvs
+                   then free_vars scrut @ bvs else bvs
+                 ) arms
+               | EField { obj; _ } -> result_uses obj
+               | EOk { value; _ } -> result_uses value
+               | _ -> free_vars e
+             in
+             (* Backward closure: a returned variable pulls in the free vars of the
+                value it was bound to, so `let b = f a in … b …` credits `a`'s
+                select while a never-contributing sibling stays out. *)
+             let rec close seen = function
+               | [] -> seen
+               | v :: rest ->
+                 if List.mem v seen then close seen rest
+                 else
+                   let extra = match List.assoc_opt v let_defs with Some fvs -> fvs | None -> [] in
+                   close (v :: seen) (extra @ rest)
+             in
+             close [] (result_uses fd.body)
+           in
+           let should_credit = function
+             | None -> true                         (* result position → in the return path *)
+             | Some x -> List.mem x returned_vars
+           in
+
+           (* ── Returning-WRITE provenance (review §3.2 write variant) ────────
+              A row-producing write — `update … where … set … returning one`,
+              `updateAndReturnOne … where … set …`, or `deleteAndReturnResult …
+              where …` — hands back a value carrying the declared FromDb.  Its
+              WHERE is NOT fused into a select-head spine (the multi-line form is
+              lowered by the parser to a sibling `let _ = <where …>` chain, so the
+              `should_credit`-gated select walk in `check_expr` never sees it), so
+              it must be unified separately here.  We reuse the SAME `unify_where`
+              (⇒ matched / column_mismatch / subject_mismatch) and disjunction
+              fail-closed used for selects; the only new work is isolating the
+              write's WHERE conjunct(s) from its `set`/`returning` modifiers.
+
+              The heads that RETURN a row (and so can carry a FromDb grant): a
+              multi-line `update`/`updateAndReturnOne` chain, a multi-line
+              `delete`/`deleteAndReturnResult` chain, and their single-line
+              `updateAndReturnOne`/`deleteAndReturnResult … where …` forms.  A
+              plain non-returning `update`/`delete` produces Unit and cannot carry
+              a FromDb, so it is only credited when a `returning one` tail is
+              present. *)
+           let is_update_head = function
+             | "update" | "updateAndReturnOne" -> true | _ -> false in
+           let is_delete_head = function
+             | "delete" | "deleteAndReturnResult" -> true | _ -> false in
+           let is_write_head n = is_update_head n || is_delete_head n in
+           (* Head keyword of a statement, peeling any BEq/BAnd/BOr comparison
+              wrapper to reach the SQL-call spine (a `where a == b` statement is an
+              EBinop whose left spine is the `where`/select/update EApp chain). *)
+           let rec stmt_head_kw (e : expr) : string option =
+             match e with
+             | EBinop { op = (BEq | BAnd | BOr); left; _ } -> stmt_head_kw left
+             | EApp _ -> (match collect_call_head_and_args [] e with
+                          | EVar { name; _ }, _ -> Some name
+                          | _ -> None)
+             | EVar { name; _ } -> Some name
+             | _ -> None
+           in
+           (* True when a top-level `||` rides the WHERE spine (fail-closed). *)
+           let where_has_disjunction (e : expr) : bool =
+             let rec go = function
+               | EBinop { op = BOr; _ } -> true
+               | EBinop { op = (BEq | BAnd); left; right; _ } -> go left || go right
+               | _ -> false
+             in go e
+           in
+           (* Best-effort loc for a WHERE statement (its top comparison node),
+              falling back to the function loc — [expr_loc] lives in checker.ml
+              which this task must not touch. *)
+           let where_loc (e : expr) : loc =
+             match e with
+             | EBinop { loc; _ } -> loc
+             | _ -> fd.loc
+           in
+           (* Given a returning-write expression [e] (multi-line `let _` chain or a
+              single-line call), unify each of its WHERE conjuncts against the
+              declared (col, subj).  [set] statements are never passed to the
+              unifier, so `set field = value` is not mistaken for a WHERE conjunct. *)
+           let unify_write_where entity binder (where_stmts : expr list) =
+             List.iter (fun w ->
+               if where_has_disjunction w then begin
+                 if !disjunction_seen = None then
+                   disjunction_seen := Some (make_error (where_loc w)
+                     ~hint:(Printf.sprintf "a WHERE with `||` broadens the rows the \
+                             write touches; to establish `%s` every affected row must \
+                             satisfy `%s == %s`, so remove the disjunction"
+                             spec_label expected_col expected_rhs)
+                     (Printf.sprintf "returning-write WHERE clause uses `||` \
+                            (disjunction); the declared FromDb provenance `%s == %s` \
+                            in `%s` is not established for every affected row"
+                        expected_col expected_rhs spec_label))
+               end else
+                 unify_where ~matched:write_matched
+                   ~subject_mismatch:write_subject_mismatch
+                   ~column_mismatch:write_column_mismatch
+                   ~noun:"returning write" entity binder w
+             ) where_stmts
+           in
+           (* Recognise a returning-write and return its (entity, binder, WHERE
+              statements).  Returns None for anything that is not a row-returning
+              write. *)
+           let returning_write (e : expr) : (string option * string * expr list) option =
+             (* Multi-line form: `let _ = <update/delete head> in let _ = <where …>
+                in let _ = <set …> in … returning one`. *)
+             let rec flatten acc = function
+               | ELet { name = "_"; value; body; _ } -> flatten (value :: acc) body
+               | last -> List.rev (last :: acc)
+             in
+             let stmts = flatten [] e in
+             match stmts with
+             | head_stmt :: rest ->
+               (match collect_call_head_and_args [] head_stmt with
+                | EVar { name; _ }, args when is_write_head name ->
+                  let binder, entity = sql_binder_entity args in
+                  (* which statements are WHERE clauses (not set/returning)? *)
+                  let where_stmts =
+                    List.filter (fun s -> stmt_head_kw s = Some "where") rest in
+                  (* a `returning one` tail (or an updateAndReturnOne / *AndReturn*
+                     head) makes the write row-returning. *)
+                  let returns_row =
+                    name = "updateAndReturnOne" || name = "deleteAndReturnResult"
+                    || List.exists (fun s ->
+                         match collect_call_head_and_args [] s with
+                         | EVar { name = "returning"; _ }, _ -> true
+                         | _ -> false) rest
                   in
-                  let (head, args) = flat in
-                  (* Detect select WHERE: head = selectOne/select, last arg is binder.field *)
-                  let is_select = match head with
-                    | EVar { name = ("selectOne" | "select"); _ } -> true
-                    | _ -> false
-                  in
-                  (* Detect update/standalone WHERE: head = "where", single arg = binder.field *)
-                  let is_where_clause = match head with
-                    | EVar { name = "where"; _ } -> true
-                    | _ -> false
-                  in
-                  let check_where_value binder last_arg =
-                    let is_binder_field = match last_arg with
-                      | EField { obj = EVar { name; _ }; _ } when name = binder -> true
-                      | _ -> false
-                    in
-                    if is_binder_field then begin
-                      let where_val = match right with
-                        | EVar { name; _ } -> Some name
-                        | ELit _ -> None
-                        | _ -> None
-                      in
-                      (match where_val with
-                       | None ->
-                         errors := make_error loc
-                           ~hint:(Printf.sprintf "the WHERE clause should compare \
-                                   to `%s` (from `Id == %s` in the return spec)"
-                                   expected_var expected_var)
-                           (Printf.sprintf "WHERE condition does not match \
-                                  `Id == %s` in return spec; \
-                                  use parameter `%s` not a literal"
-                              expected_var expected_var)
-                         :: !errors
-                       | Some where_v when where_v <> expected_var ->
-                         errors := make_error loc
-                           ~hint:(Printf.sprintf "the WHERE clause should use `%s` \
-                                   (from `Id == %s` in the return spec)"
-                                   expected_var expected_var)
-                           (Printf.sprintf "WHERE clause uses `%s` but return spec \
-                                  declares `Id == %s`; these do not match"
-                              where_v expected_var)
-                         :: !errors
-                       | _ -> ())
-                    end
-                  in
-                  if is_select then begin
-                    let binder = match args with EVar { name; _ } :: _ -> name | _ -> "_" in
-                    let last_arg = match List.rev args with x :: _ -> x | [] -> ELit { lit = LInt 0; loc } in
-                    check_where_value binder last_arg
-                  end else if is_where_clause then begin
-                    (* update WHERE: EApp{fn=EVar"where"; arg=EField{binder.field}} == value *)
-                    let last_arg = match args with [x] -> x | _ -> ELit { lit = LInt 0; loc } in
-                    let binder = match last_arg with
-                      | EField { obj = EVar { name; _ }; _ } -> name
-                      | _ -> "_"
-                    in
-                    check_where_value binder last_arg
-                  end;
-                  check_expr left; check_expr right
-                | ELet { value; body; _ } -> check_expr value; check_expr body
-                | ELetProof { value; body; _ } -> check_expr value; check_expr body
-                | EIf { cond; then_; else_; _ } ->
-                  check_expr cond; check_expr then_; check_expr else_
-                | ECase { scrut; arms; _ } ->
-                  check_expr scrut;
-                  List.iter (fun (arm : case_arm) -> check_expr arm.body) arms
-                | EWithTransaction { body; _ } | EWithDatabase { body; _ }
-                | EWithCapabilities { body; _ } -> check_expr body
-                | _ -> ()
-              in
-              check_expr fd.body
-            end)
+                  if returns_row then
+                    (match binder with
+                     | Some bn ->
+                       let entity = match entity with Some _ -> entity
+                                    | None -> List.assoc_opt bn binder_env in
+                       Some (entity, bn, where_stmts)
+                     | None -> None)
+                  else None
+                | _ ->
+                  (* Single-line form: `updateAndReturnOne b … where …` or
+                     `deleteAndReturnResult b … where …` — the whole expression is
+                     one call whose WHERE is fused into the arg spine. *)
+                  (match e with
+                   | (EApp _ | EBinop { op = (BEq | BAnd | BOr); _ }) ->
+                     let spine_head =
+                       let rec sp = function
+                         | EBinop { op = (BEq | BAnd | BOr); left; _ } -> sp left
+                         | other -> other
+                       in sp e
+                     in
+                     (match collect_call_head_and_args [] spine_head with
+                      | EVar { name; _ }, args
+                        when name = "updateAndReturnOne" || name = "deleteAndReturnResult" ->
+                        (match sql_binder_entity args with
+                         | Some bn, entity ->
+                           let entity = match entity with Some _ -> entity
+                                        | None -> List.assoc_opt bn binder_env in
+                           Some (entity, bn, [e])
+                         | None, _ -> None)
+                      | _ -> None)
+                   | _ -> None))
+             | [] -> None
+           in
+           (* Walk RESULT positions only (mirroring `result_uses`), so a write is
+              checked exactly when its value flows to the function result — a dead
+              sibling `let bad = updateAndReturnOne … where <wrong>` that is never
+              returned does not (write-variant sibling mask, review §3.2). *)
+           let rec check_writes (e : expr) =
+             match returning_write e with
+             | Some (entity, binder, where_stmts) ->
+               write_head_seen := true;
+               unify_write_where entity binder where_stmts
+             | None ->
+               (match e with
+                | ELet { body; _ } | ELetProof { body; _ }
+                | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+                | EWithTransaction { body; _ } -> check_writes body
+                | EIf { then_; else_; _ } -> check_writes then_; check_writes else_
+                | ECase { arms; _ } ->
+                  List.iter (fun (arm : case_arm) -> check_writes arm.body) arms
+                | EField { obj; _ } -> check_writes obj
+                | EOk { value; _ } -> check_writes value
+                | _ -> ())
+           in
+
+           (* Walk the body: unify each WHERE — select-rooted OR standalone
+              (update/delete-derived) — against the declared spec.  A select/
+              selectOne head sets [select_head_seen] so the must-have-WHERE
+              requirement fires ONLY for select-derived grants (insert/update-
+              returning grants have no select head and stay exempt). *)
+           (* Find the SQL head in a comparison chain's left spine: either a
+              select/selectOne (select-derived grant) or a standalone `where`
+              clause (update/delete-derived).  Lifted out so both the conjunction
+              and disjunction arms of [check_expr] can consult it. *)
+           let rec sql_root = function
+             | EBinop { op = BAnd | BEq; left; _ } -> sql_root left
+             | EApp _ as a ->
+               let (head, args) = collect_call_head_and_args [] a in
+               (match head with
+                | EVar { name = ("selectOne" | "select"); _ } ->
+                  (match sql_binder_entity args with
+                   | Some bn, en -> Some (`Select, bn, en)
+                   | None, _ -> None)
+                | EVar { name = "where"; _ } ->
+                  (match args with
+                   | [ EField { obj = EVar { name = bn; _ }; _ } ] ->
+                     Some (`Where, bn, List.assoc_opt bn binder_env)
+                   | _ -> None)
+                | _ -> None)
+             | _ -> None
+           in
+           (* [binder] = the `let`-binder currently being bound to [e], or None
+              when [e] is not directly on the right of a `let`.  Used to decide
+              whether a select's provenance may be credited (return-reachability). *)
+           let rec check_expr ?(binder=None) (e : expr) =
+             match e with
+             | ELet { name; value; body; _ } ->
+               check_expr ~binder:(Some name) value;
+               check_expr ~binder:None body
+             | ELetProof { value; body; _ } ->
+               check_expr ~binder:None value;
+               check_expr ~binder:None body
+             | EApp _ ->
+               let (head, _args) = collect_call_head_and_args [] e in
+               (match head with
+                | EVar { name = ("selectOne" | "select"); _ } ->
+                  (* A select head: credit only if its value flows to the return.
+                     Either way do NOT descend — the select's own subtree carries no
+                     other credited grant, and descending would re-credit it. *)
+                  if should_credit binder then select_head_seen := true
+                | _ ->
+                  ignore (Ast_visitor.fold_children (fun () c -> check_expr c) () e))
+             | EBinop { op = (BEq | BAnd); _ } ->
+               (match sql_root e with
+                | Some (kind, sbinder, entity) ->
+                  (* This EBinop IS a select/where condition.  Credit only if the
+                     produced value is return-reachable; do NOT descend (the inner
+                     select EApp would otherwise re-set select_head_seen even when
+                     the value is a discarded sibling). *)
+                  if should_credit binder then begin
+                    (match kind with `Select -> select_head_seen := true | `Where -> ());
+                    unify_where_select entity sbinder e
+                  end
+                | None ->
+                  ignore (Ast_visitor.fold_children (fun () c -> check_expr c) () e))
+             | EBinop { op = BOr; loc; _ }
+               when should_credit binder
+                    && (let rec or_root = function
+                       | EBinop { op = BOr; left; right; _ } ->
+                         (match sql_root left with Some _ as r -> r
+                          | None -> (match or_root left with Some _ as r -> r
+                                     | None -> (match sql_root right with Some _ as r -> r
+                                                | None -> or_root right)))
+                       | _ -> None
+                     in or_root e <> None) ->
+               (* Fail-closed: a disjunction at the WHERE top level cannot be shown
+                  to establish the declared provenance for every branch.  Mark the
+                  select head seen, record the rejection, and do NOT descend into
+                  the disjuncts (which would credit the single matching branch). *)
+               select_head_seen := true;
+               if !disjunction_seen = None then
+                 disjunction_seen := Some (make_error loc
+                   ~hint:(Printf.sprintf "a WHERE with `||` broadens the result set; \
+                           to establish `%s` every row must satisfy `%s == %s`, so \
+                           remove the disjunction (or move it into a narrowing \
+                           conjunct: `%s == %s && (…)`)"
+                           spec_label expected_col expected_rhs expected_col expected_rhs)
+                   (Printf.sprintf "WHERE clause uses `||` (disjunction); the declared \
+                          FromDb provenance `%s == %s` in `%s` is not established for \
+                          every returned row (an `OR` broadens beyond the declared \
+                          subject)" expected_col expected_rhs spec_label))
+             | _ -> ignore (Ast_visitor.fold_children (fun () c -> check_expr c) () e)
+           in
+           check_expr fd.body;
+           check_writes fd.body;
+
+           (* Report.  A disjunction in ANY provenance WHERE (select or write) is a
+              definite rejection even if a sibling matched — an OR broadens the rows
+              beyond the declared subject.  The SELECT and WRITE paths are reported
+              INDEPENDENTLY (each tracks its own matched / near-miss refs) so a
+              matching select on one branch cannot suppress a wrong-column write's
+              rejection on another (the mixed-path write-forgery gap). *)
+           (match !disjunction_seen with
+            | Some e -> errors := e :: !errors
+            | None ->
+              (* SELECT path — unchanged: prefer subject then column near-miss,
+                 else a where-less select head is unestablished. *)
+              if not !matched then begin
+                match !subject_mismatch, !column_mismatch with
+                | Some e, _ -> errors := e :: !errors
+                | None, Some e -> errors := e :: !errors
+                | None, None ->
+                  if !select_head_seen then
+                    errors := make_error fd.loc
+                      ~hint:(Printf.sprintf "add a WHERE clause constraining column \
+                              `%s` to `%s` so the SELECT establishes `%s`"
+                              expected_col expected_rhs spec_label)
+                      (Printf.sprintf "SELECT does not constrain `%s` to `%s`; the \
+                             declared FromDb provenance in `%s` is not established \
+                             by any WHERE clause"
+                         expected_col expected_rhs spec_label)
+                    :: !errors
+              end;
+              (* WRITE path — independent of the select result: a return-reachable
+                 row-returning write must establish the provenance for its own row. *)
+              if not !write_matched then begin
+                match !write_subject_mismatch, !write_column_mismatch with
+                | Some e, _ -> errors := e :: !errors
+                | None, Some e -> errors := e :: !errors
+                | None, None ->
+                  if !write_head_seen then
+                    (* A row-returning write reached the return path but no WHERE
+                       conjunct constrained the declared column to the declared
+                       subject (a where-less returning-write forges provenance). *)
+                    errors := make_error fd.loc
+                      ~hint:(Printf.sprintf "add a `where %s == %s` clause to the \
+                              returning write so it establishes `%s`"
+                              (String.uncapitalize_ascii expected_col) expected_rhs
+                              spec_label)
+                      (Printf.sprintf "returning write does not constrain `%s` to \
+                             `%s`; the declared FromDb provenance in `%s` is not \
+                             established by any WHERE clause"
+                         expected_col expected_rhs spec_label)
+                    :: !errors
+              end)
+         end)
     | _ -> ()
   ) decls;
   List.rev !errors
@@ -875,7 +1493,7 @@ check your fact declaration or the type of `%s`"
         walk_expr local_env body
       | EStartEmailWorker _ -> ()
       | ERuntimeCall { segments; _ } ->
-        List.iter (function RLit _ -> () | RArg e -> walk_expr local_env e) segments
+        List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk_expr local_env e) segments
     in
     List.iter (function
       | DFunc fd ->
@@ -1015,18 +1633,73 @@ let check_ord_operator_types ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
   (* Resolve through alias/newtype chains to check orderability *)
   let rec is_orderable (seen : string list) (ty : type_expr) : bool =
     match ty with
-    | TVar _ -> true  (* Generic type variable — can't determine at checking time; trust HM *)
+    | TVar _ -> true  (* Generic type variable — stays permissive, by design.
+                         S14b decision (maintainer, 2026-07-01): comparison's
+                         requirement is the concrete scalars (Int / Float /
+                         PosixMillis, and their derived newtypes), NOT a general
+                         `Ord`-qualified polymorphism — so we deliberately do NOT
+                         build an Ord/Eq qualified-type layer to police `a < b`
+                         for an unconstrained `a: a`.  Leaving TVar permissive is
+                         sound in practice: the corpus's generic comparison
+                         helpers only ever instantiate `a` to a concrete
+                         comparable type, and the one genuinely-unsound
+                         instantiation — a FUNCTION — is rejected regardless by the
+                         `_ -> false` arm below (a concrete `TFun`), which now
+                         covers the bare fn ref / partial application / lambda
+                         shapes too, since [infer_expr_type] resolves them all to a
+                         `TFun` (A5, decide-by-resolution). *)
     | TName { name; _ } ->
       List.mem name orderable_bases ||
       (not (List.mem name seen) &&
        match List.assoc_opt name alias_map with
        | Some base -> is_orderable (name :: seen) base
        | None -> false)
-    | _ -> false
+    | _ -> false   (* TFun / TApp / TTuple are never orderable *)
+  in
+  (* TSS-2 (formal-review HIGH): `==`/`!=` were `forall a. a -> a -> Bool` with
+     NO decidability constraint, so `f == g` on FUNCTIONS type-checked and
+     compiled to a meaningless Racket `equal?` (procedure identity).  Equality
+     is decidable for every Tesl value EXCEPT a function (or a composite that
+     contains one); reject those operands at the type level.  Total over the
+     closed type universe: TFun (and any TApp/TTuple carrying a TFun) is the
+     only non-equatable shape.  A bare TVar stays permissive (genuinely
+     undecidable here; the residual generic case needs a qualified-type/Eq layer
+     — tracked in roadmap/later). *)
+  let rec is_equatable (seen : string list) (ty : type_expr) : bool =
+    match ty with
+    | TFun _ -> false  (* the clear-cut, corpus-safe TSS-2 closure: functions
+                          have no decidable equality. *)
+    | TVar _ -> true   (* unconstrained: see is_orderable's TVar note — permissive
+                          BY DESIGN (S14b decision: no Eq/Ord qualified-type layer;
+                          concrete scalars are the requirement).  Rejecting here
+                          over-rejects legitimate generic helpers and proof-subject
+                          type args; the unsound instantiation (a function) is
+                          rejected by the `TFun -> false` arm above, which now
+                          also covers bare fn refs / partial applications /
+                          lambdas via [infer_expr_type]'s arrow inference (A5). *)
+    | TName { name; _ } ->
+      List.mem name seen ||
+      (match List.assoc_opt name alias_map with
+       | Some base -> is_equatable (name :: seen) base
+       | None -> true)  (* primitive / record / ADT / nominal — equatable *)
+    | TApp { head; arg; _ } -> is_equatable seen head && is_equatable seen arg
+    | TTuple { elems; _ } -> List.for_all (is_equatable seen) elems
   in
   let ord_op_name = function
     | BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">=" | _ -> "?"
   in
+  (* TSS-3 (formal-review follow-up) + S14b + A5: a function VALUE has no
+     decidable equality and no total order.  Historically the syntactic
+     function-value shapes — a bare top-level fn ref of arity >= 1, a PARTIAL
+     application of a top-level fn, a lambda literal — inferred [None] (or a wrong
+     concrete return type) here, so the type-based is_equatable/is_orderable
+     checks never saw them; a dedicated syntactic guard [operand_is_function_valued]
+     rejected them by AST shape.  As of A5, [infer_expr_type] resolves ALL THREE
+     shapes to a real curried [TFun] (decide-by-resolution), so the [TFun -> false]
+     arms of is_equatable/is_orderable reject them directly — the syntactic guard
+     is redundant and has been deleted.  A locally-bound name that merely SHADOWS
+     a top-level fn is still in [env] and resolves to its bound type (shadowing
+     handled inside infer_expr_type's EVar arm). *)
   let rec walk_expr (env : type_env) (e : expr) : validation_error list =
     match e with
     | EBinop { op = (BLt | BLe | BGt | BGe) as op; left; right; loc } ->
@@ -1037,9 +1710,7 @@ let check_ord_operator_types ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
            syntax here, not a Tesl ordering comparison.  Skip the check. *)
         if infer_sql_aggregate_type e <> None then []
         else
-          match infer_expr_type env funcs fields_by_type ctors left with
-          | Some ty when is_orderable [] ty -> []
-          | Some ty ->
+          let not_orderable_error tyname =
             [ make_error loc
                 ~hint:(Printf.sprintf
                   "only Int, Float, PosixMillis, and nominal types derived from them \
@@ -1047,10 +1718,56 @@ let check_ord_operator_types ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
                   (ord_op_name op))
                 (Printf.sprintf
                   "ordering operator `%s` is not defined for type `%s`"
-                  (ord_op_name op) (type_key ty)) ]
-          | None -> []  (* cannot infer type — do not block *)
+                  (ord_op_name op) tyname) ]
+          in
+          (* TSS-3 + S14b + A5: a function value has no total order.  It now infers
+             a concrete [TFun] (under-applied call / bare top-level fn / lambda),
+             which is_orderable rejects via its [_ -> false] arm — no syntactic
+             pre-check needed. *)
+          match infer_expr_type env funcs fields_by_type ctors left with
+          | Some ty when is_orderable [] ty -> []
+          | Some ty -> not_orderable_error (type_key ty)
+          | None ->
+            (* HM-2: a record LITERAL infers to None here, so the old
+               `None -> []` ("do not block") let `Point{..} < Point{..}` through —
+               it then emitted `(< (Point ...) (Point ...))`, a runtime contract
+               violation.  A record literal is NEVER orderable, so reject it
+               syntactically.  Record construction surfaces in two shapes:
+               a bare `ERecord {type_hint}` and `EApp(EConstructor name, ERecord)`;
+               match both.  A NEWTYPE construction (`Celsius 20.0`) is
+               `EApp(EConstructor, <non-record>)` and so does NOT match — those
+               resolve through the `Some` arm and stay orderable. *)
+            (match left with
+             | ERecord { type_hint; _ } ->
+               not_orderable_error (match type_hint with Some n -> n | None -> "record")
+             | EApp { fn = EConstructor { name; _ }; arg = ERecord _; _ } ->
+               not_orderable_error name
+             | _ -> [])  (* genuinely cannot infer — do not block *)
       in
       child_errs @ ord_errs
+    | EBinop { op = (BEq | BNeq) as op; left; right; loc } ->
+      let child_errs = walk_expr env left @ walk_expr env right in
+      let eq_errs =
+        (* SQL where-clause `==`/`!=` are predicate syntax, not Tesl equality. *)
+        if infer_sql_aggregate_type e <> None then []
+        else
+          let eq_error tyname =
+            [ make_error loc
+                ~hint:"functions have no decidable equality; compare a value \
+                       derived from them instead"
+                (Printf.sprintf
+                  "equality operator `%s` is not defined for type `%s`"
+                  (match op with BEq -> "==" | _ -> "!=") tyname) ]
+          in
+          (* TSS-3 + S14b + A5: a function value has no decidable equality.  It now
+             infers a concrete [TFun] (under-applied call / bare top-level fn /
+             lambda), which is_equatable rejects via its [TFun -> false] arm — no
+             syntactic pre-check needed. *)
+          (match infer_expr_type env funcs fields_by_type ctors left with
+           | Some ty when not (is_equatable [] ty) -> eq_error (type_key ty)
+           | _ -> [])
+      in
+      child_errs @ eq_errs
     | ELet { name; value; body; _ } ->
       let child_errs = walk_expr env value in
       let env' = match infer_expr_type env funcs fields_by_type ctors value with
@@ -1106,7 +1823,7 @@ let check_ord_operator_types ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
       walk_expr env to_ @ walk_expr env subject @ walk_expr env body
     | EStartEmailWorker _ -> []
     | ERuntimeCall { segments; _ } ->
-      List.concat_map (function RLit _ -> [] | RArg e -> walk_expr env e) segments
+      List.concat_map (function RLit _ | RRawVar _ -> [] | RArg e -> walk_expr env e) segments
   in
   let rec walk_test_stmts (env : type_env) (stmts : test_stmt list)
       : validation_error list =

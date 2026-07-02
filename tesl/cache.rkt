@@ -156,16 +156,23 @@
 
 (define (pg-set! conn schema key value ttl)
   (define json-str (serialize-value value))
-  (define expires-sql
-    (if ttl
-        (format "NOW() + interval '~a seconds'" ttl)
-        "NULL::timestamptz"))
-  (query-exec conn
-    (format "INSERT INTO ~a (key, value, expires_at) VALUES ($1, $2::jsonb, ~a)
-             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, expires_at = EXCLUDED.expires_at"
-            (pg-table schema "tesl_cache")
-            expires-sql)
-    key json-str))
+  ;; Bind the TTL as a parameter ($3 * interval '1 second') instead of
+  ;; string-interpolating it into the SQL.  Previously `interval '~a seconds'`
+  ;; was safe ONLY because the type checker guarantees `ttl` is an Int — and with
+  ;; proof/type erasure the checker is the sole guarantor.  Binding removes that
+  ;; latent dependency and matches queue.rkt / email.rkt (which already bind it).
+  (define tmpl
+    (string-append
+     "INSERT INTO ~a (key, value, expires_at) VALUES ($1, $2::jsonb, ~a)"
+     " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, expires_at = EXCLUDED.expires_at"))
+  (define table (pg-table schema "tesl_cache"))
+  (if ttl
+      (query-exec conn
+        (format tmpl table "NOW() + ($3 * interval '1 second')")
+        key json-str ttl)
+      (query-exec conn
+        (format tmpl table "NULL::timestamptz")
+        key json-str)))
 
 (define (pg-delete! conn schema key)
   (query-exec conn
@@ -173,8 +180,13 @@
     key))
 
 (define (pg-invalidate-prefix! conn schema prefix)
+  ;; Literal prefix match.  The previous `key LIKE $1 || '%'` treats `%`/`_` in
+  ;; the prefix as LIKE wildcards → over-invalidation (a prefix containing `%`
+  ;; matches far more keys than intended; `%` alone wipes the namespace).
+  ;; `left(key, length($1)) = $1` matches the literal prefix with no pattern
+  ;; semantics — same result for ordinary prefixes, correct for ones with %/_.
   (query-exec conn
-    (format "DELETE FROM ~a WHERE key LIKE $1 || '%%'" (pg-table schema "tesl_cache"))
+    (format "DELETE FROM ~a WHERE left(key, length($1)) = $1" (pg-table schema "tesl_cache"))
     prefix))
 
 ;; ── Public cache operations ───────────────────────────────────────────────────

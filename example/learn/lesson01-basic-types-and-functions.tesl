@@ -131,9 +131,10 @@ test "clamp is bounded" with 200 runs {
 # Two calls to "double 5" produce two named values both with raw payload 5 but
 # with DIFFERENT hidden subjects. They are distinct proof-theoretically.
 #
-# "n" is the raw access operator. It strips the named-value wrapper and returns
-# only the raw payload. After "n" the result is a plain Racket number, so it can
-# be passed to Racket arithmetic. The subject and proofs are gone after raw access.
+# You use a parameter directly (`n`); there is no surface raw-access operator.
+# The compile-time named-value carrier is erased during compilation, so the
+# emitted Racket passes the plain payload to arithmetic — the subject and proofs
+# exist only in the static checker, never at run time.
 #
 # "let x = expr" creates a new named value binding. The compiler assigns a fresh
 # hidden subject to x at the point of binding. If you later do "let x = ..."

@@ -127,8 +127,8 @@ let test_g32_selectsum_returns_int () =
 
 (* ── G33: PosixMillis does NOT auto-unwrap in arithmetic (spec vs impl) ─── *)
 (*                                                                              *)
-(* LANGUAGE-SPEC.md §14b.2 and §503 state: "PosixMillis auto-unwraps to Int  *)
-(* when passed to arithmetic or comparison operators."                          *)
+(* LANGUAGE-SPEC.md §14b.2 ("PosixMillis is not Int") — the impl must NOT auto- *)
+(* unwrap PosixMillis to Int when used in arithmetic or comparison operators.  *)
 (* However, the type checker (checker.ml:1453-1462) requires both sides of    *)
 (* arithmetic to unify with Int or Float. PosixMillis != Int, so a - b where  *)
 (* a and b are PosixMillis fails with T001.                                    *)
@@ -249,7 +249,7 @@ let test_g39_proof_arity_mismatch_at_declaration () =
 (* ── G40: Nested transaction correctly gives P001 error ─────────────── *)
 (*                                                                              *)
 (* Nesting `transaction` inside another `transaction` must be       *)
-(* rejected with P001. The spec §1823 explicitly forbids nesting.             *)
+(* rejected with P001 (transactional atomicity — LANGUAGE-SPEC §20.5).         *)
 let test_g40_nested_transaction_rejected () =
   let src = db_prelude ^
     "fn nestedTx() -> Unit requires [dbWrite] =\n" ^

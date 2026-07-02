@@ -17,14 +17,202 @@ type validation_error = {
   loc     : loc;
   message : string;
   hint    : string;
+  (* B5: the manual deep-link topic for this error, decided by WHICH validation
+     pass produced it (the orchestrator stamps it via [with_topic]).  Defaults to
+     [TGeneric] so the ~172 [make_error] callsites need no churn; the orchestrator
+     overrides per pass.  Resolved to an anchor by [Error_codes.anchor_of_topic]
+     at render time — message text never routes the anchor. *)
+  topic   : Error_codes.manual_topic;
 }
 
-let make_error ?(hint="") loc message = { loc; message; hint }
+let make_error ?(hint="") ?(topic=Error_codes.TGeneric) loc message =
+  { loc; message; hint; topic }
+
+(** Re-tag a whole pass's output with its manual topic in one place.  Used by the
+    orchestrator ([validation.ml]) so a pass's errors route by the resolved pass,
+    exactly once, never by message text. *)
+let with_topic (t : Error_codes.manual_topic) (es : validation_error list)
+  : validation_error list =
+  List.map (fun e -> { e with topic = t }) es
 
 let fmt_validation_error (e : validation_error) =
   Printf.sprintf "%s:%d:%d: validation: %s%s"
     e.loc.file (e.loc.start.line + 1) (e.loc.start.col + 1) e.message
     (if e.hint = "" then "" else Printf.sprintf "\n  hint: %s" e.hint)
+
+(* ── SQL builtin registry — single source of truth (formal-review G2/S3) ─────
+   The set of SQL operations the emitter lowers to a database call was restated
+   by hand at ~8 sites with DIVERGENT membership; the capability write-set
+   (`validation_capabilities.ml`) omitted [insertMany]/[updateAndReturnOne]/
+   [deleteAndReturnResult] even though the emitter lowers all three to real DB
+   writes — so a handler whose only write was one of them was statically
+   inferred to need no [dbWrite] (formal-review CAP-A1).
+
+   Classification now lives ONCE, in a closed variant with a TOTAL classifier
+   (no `_` arm): adding an operation without classifying its effect is a
+   non-exhaustive-match COMPILE ERROR, not a silent blind spot.  The name-keyed
+   predicates below are derived from that classifier, so every string-matching
+   site that consults them cannot drift from it. *)
+type sql_effect = SqlRead | SqlWrite
+
+type sql_op =
+  | SqlSelect | SqlSelectOne | SqlSelectCount | SqlSelectSum | SqlSelectMax
+  | SqlSelectMin | SqlSelectMany
+  | SqlInsert | SqlInsertMany | SqlUpsert
+  | SqlUpdate | SqlUpdateAndReturnOne
+  | SqlDelete | SqlDeleteAndReturnResult
+
+let sql_op_of_name : string -> sql_op option = function
+  | "select"               -> Some SqlSelect
+  | "selectOne"            -> Some SqlSelectOne
+  | "selectCount"          -> Some SqlSelectCount
+  | "selectSum"            -> Some SqlSelectSum
+  | "selectMax"            -> Some SqlSelectMax
+  | "selectMin"            -> Some SqlSelectMin
+  | "selectMany"           -> Some SqlSelectMany
+  | "insert"               -> Some SqlInsert
+  | "insertMany"           -> Some SqlInsertMany
+  | "upsert"               -> Some SqlUpsert
+  | "update"               -> Some SqlUpdate
+  | "updateAndReturnOne"   -> Some SqlUpdateAndReturnOne
+  | "delete"               -> Some SqlDelete
+  | "deleteAndReturnResult" -> Some SqlDeleteAndReturnResult
+  | _                      -> None
+
+(* TOTAL classifier — the [@@warning "-..."]-free exhaustive match is the
+   enforcement: a new [sql_op] constructor without an effect here will not
+   compile. *)
+let sql_op_effect : sql_op -> sql_effect = function
+  | SqlSelect | SqlSelectOne | SqlSelectCount | SqlSelectSum | SqlSelectMax
+  | SqlSelectMin | SqlSelectMany -> SqlRead
+  | SqlInsert | SqlInsertMany | SqlUpsert
+  | SqlUpdate | SqlUpdateAndReturnOne
+  | SqlDelete | SqlDeleteAndReturnResult -> SqlWrite
+
+let all_sql_ops : sql_op list =
+  [ SqlSelect; SqlSelectOne; SqlSelectCount; SqlSelectSum; SqlSelectMax;
+    SqlSelectMin; SqlSelectMany; SqlInsert; SqlInsertMany; SqlUpsert;
+    SqlUpdate; SqlUpdateAndReturnOne; SqlDelete; SqlDeleteAndReturnResult ]
+
+let sql_op_name : sql_op -> string = function
+  | SqlSelect -> "select" | SqlSelectOne -> "selectOne"
+  | SqlSelectCount -> "selectCount" | SqlSelectSum -> "selectSum"
+  | SqlSelectMax -> "selectMax" | SqlSelectMin -> "selectMin"
+  | SqlSelectMany -> "selectMany"
+  | SqlInsert -> "insert" | SqlInsertMany -> "insertMany" | SqlUpsert -> "upsert"
+  | SqlUpdate -> "update" | SqlUpdateAndReturnOne -> "updateAndReturnOne"
+  | SqlDelete -> "delete" | SqlDeleteAndReturnResult -> "deleteAndReturnResult"
+
+(* Name-keyed predicates, derived from the registry — single point every
+   string-matching site consults so membership cannot diverge. *)
+let is_sql_builtin (n : string) : bool = sql_op_of_name n <> None
+let is_sql_read_builtin (n : string) : bool =
+  match sql_op_of_name n with Some o -> sql_op_effect o = SqlRead | None -> false
+let is_sql_write_builtin (n : string) : bool =
+  match sql_op_of_name n with Some o -> sql_op_effect o = SqlWrite | None -> false
+let sql_read_op_names : string list =
+  List.filter_map (fun o -> if sql_op_effect o = SqlRead then Some (sql_op_name o) else None) all_sql_ops
+let sql_write_op_names : string list =
+  List.filter_map (fun o -> if sql_op_effect o = SqlWrite then Some (sql_op_name o) else None) all_sql_ops
+
+(* ── Agent tool-param primitive registry (single source, B4) ───────────────
+   The set of parameter types an agent tool `fn` may take: the model supplies
+   these as untrusted JSON, decoded through the codec path. ONE registry, three
+   TOTAL classifiers; a new variant here fails to compile at every consumer
+   (checker whitelist, decode-tag emitter, JSON-schema emitter) until handled.
+   (mirrors the sql_op registry pattern above.) *)
+type agent_prim = APString | APInt | APFloat | APBool | APPosixMillis
+
+(* the ONLY membership test — the surface type name the user writes *)
+let agent_prim_of_type_name : string -> agent_prim option = function
+  | "String"      -> Some APString
+  | "Int"         -> Some APInt
+  | "Float"       -> Some APFloat
+  | "Bool"        -> Some APBool
+  | "PosixMillis" -> Some APPosixMillis
+  | _             -> None
+
+let agent_prim_type_name : agent_prim -> string = function
+  | APString -> "String" | APInt -> "Int" | APFloat -> "Float"
+  | APBool -> "Bool" | APPosixMillis -> "PosixMillis"
+
+let all_agent_prims : agent_prim list =
+  [ APString; APInt; APFloat; APBool; APPosixMillis ]
+
+(* TOTAL: the tag `tesl-agent-decode-args` understands (Racket symbol name) *)
+let agent_prim_decode_tag : agent_prim -> string = function
+  | APString -> "string" | APInt -> "int" | APPosixMillis -> "int"
+  | APFloat -> "float" | APBool -> "bool"
+
+(* TOTAL: the JSON Schema property fragment for this primitive *)
+let agent_prim_schema_prop : agent_prim -> string = function
+  | APInt | APPosixMillis -> {|{"type":"integer"}|}
+  | APFloat -> {|{"type":"number"}|}
+  | APBool  -> {|{"type":"boolean"}|}
+  | APString -> {|{"type":"string"}|}
+
+(* English whitelist for diagnostics — derived, not hand-typed, so the error
+   message cannot drift from the registry. e.g. "String, Int, Float, Bool, or
+   PosixMillis". *)
+let agent_prim_whitelist_english : string =
+  match List.rev (List.map agent_prim_type_name all_agent_prims) with
+  | [] -> ""
+  | [x] -> x
+  | last :: rest -> String.concat ", " (List.rev rest) ^ ", or " ^ last
+
+(* helper: classify a type_expr (only nominal TName types can be primitives) *)
+let agent_prim_of_type_expr (t : type_expr) : agent_prim option =
+  match t with TName { name; _ } -> agent_prim_of_type_name name | _ -> None
+
+(* ── §7.12 forgery-restriction helpers (single decision site, S4b) ─────────
+
+   These two helpers used to be duplicated: [is_forgery_restricted_kind] was
+   defined identically in both [checker.ml] and [validation_advanced.ml], and
+   [body_has_db_site] existed twice — a shadow-aware copy in
+   [validation_advanced.ml] and a NON-shadow-aware copy in [checker.ml].  The
+   duplicated logic is exactly the kind of drift that let the
+   insertMany/updateAndReturnOne/deleteAndReturnResult write-op omission slip in
+   (fixed in S3/S4).  They now live here so every forgery gate consults ONE
+   definition; the SQL op set comes from the registry above so it cannot diverge. *)
+
+(* fn / handler / worker may use an attached (`:::`) proof return only if the
+   proof was already carried on an input parameter (or is a genuine
+   framework-produced provenance proof).  check / auth / establish are the only
+   kinds that may introduce a fresh proof at a boundary.  deadWorker is excluded
+   — its FromDeadQueue proof is infrastructure-produced and handled elsewhere. *)
+let is_forgery_restricted_kind : func_kind -> bool = function
+  | FnKind | HandlerKind | WorkerKind -> true
+  | _ -> false
+
+(* A FromDb provenance proof on a fn/handler/worker return is only
+   framework-produced when the body actually runs a select/insert/upsert/…
+   builtin.  A builtin SQL name only counts as a DB site when it RESOLVES to the
+   builtin — i.e. it is NOT shadowed by a user-defined function of the same name
+   (passed in [shadowed]) nor by a local let / let-proof / lambda / case binder.
+   The language deliberately permits `fn select(...)` (test R57_B1); without this
+   gate, naming a local function `select`/`insert` made `select a` look like a DB
+   query and forged a `FromDb` provenance proof on a value that never touched the
+   database.  Identifier privilege is decided by resolution, not spelling. *)
+let body_has_db_site ?(shadowed : string list = []) (e : expr) : bool =
+  let rec pat_names acc = function
+    | PVar n -> n :: acc
+    | PCon { fields; _ } -> List.fold_left (fun acc (_, p) -> pat_names acc p) acc fields
+    | _ -> acc
+  in
+  let rec go (bound : string list) (e : expr) : bool =
+    match e with
+    | EVar { name; _ } -> is_sql_builtin name && not (List.mem name bound)
+    | ELet { name; value; body; _ } -> go bound value || go (name :: bound) body
+    | ELetProof { value_name; proof_name; value; body; _ } ->
+      go bound value || go (value_name :: proof_name :: bound) body
+    | ELambda { params; body; _ } ->
+      go (List.map (fun (b : binding) -> b.name) params @ bound) body
+    | ECase { scrut; arms; _ } ->
+      go bound scrut
+      || List.exists (fun (a : case_arm) -> go (pat_names bound a.pattern) a.body) arms
+    | _ -> Ast_visitor.fold_children (fun found c -> found || go bound c) false e
+  in
+  go shadowed e
 
 (* ── Proof helpers ───────────────────────────────────────────────────────── *)
 
@@ -57,17 +245,46 @@ let strip_outer_parens (s : string) : string =
   else
     s
 
-let rec proof_key (p : proof_expr) : string =
+(* B6: structural, injective proof key.  The old key rendered a proof to a
+   single space-joined string, so `PredApp("P",["a b";"c"])` and
+   `PredApp("P",["a";"b c"])` — both reachable via the parser's opaque
+   parenthesised-arg capture and via [normalize_carried_forall]'s pp_proof'd
+   inner rendering — collapsed to the SAME string "P a b c" and matched/deduped
+   as equal.  Keeping pred and each arg as SEPARATE fields makes the pred/arg-0
+   and inter-arg boundaries unambiguous.  Conjunctions are sorted so `P && Q`
+   and `Q && P` dedup/match identically.  Comparison is polymorphic structural
+   (=) over this variant, i.e. over the RESOLVED predicate identity (pred name)
+   and the RESOLVED subject identities (the canonical arg strings produced by
+   subst_proof_args_with_subjects / A4 literal identity keys). *)
+type proof_key_t =
+  | KApp of string * string list       (* (resolved pred, resolved args) *)
+  | KAnd of proof_key_t list           (* sorted conjuncts, order-insensitive *)
+
+let rec proof_key (p : proof_expr) : proof_key_t =
   match p with
   | PredApp { pred = "ForAll"; args = [proof_name; subject]; _ } ->
-    "ForAll " ^ strip_outer_parens proof_name ^ " " ^ subject
-  | PredApp { pred; args = []; _ } -> pred
-  | PredApp { pred; args; _ } -> pred ^ " " ^ String.concat " " args
-  | PredAnd { left; right; _ } -> proof_key left ^ " && " ^ proof_key right
+    (* Keep the required (parenthesised) and carried (bare) inner renderings
+       comparable, matching the pre-B6 special case.  The inner is still one
+       rendered field, but the pred/subject BOUNDARY is now unambiguous. *)
+    KApp ("ForAll", [strip_outer_parens proof_name; subject])
+  | PredApp { pred; args; _ } -> KApp (pred, args)
+  | PredAnd { left; right; _ } ->
+    let flat = function KAnd xs -> xs | k -> [k] in
+    KAnd (List.sort compare (flat (proof_key left) @ flat (proof_key right)))
+(* Note: pp_proof (above) remains the string renderer for DIAGNOSTICS only; it
+   must never be used for equality (that would reintroduce the collision). *)
 
 let rec proof_subjects (p : proof_expr) : string list =
   match p with
   | PredApp { args; _ } ->
+    (* A4: literal VALUE occurrences are keyed `lit#<basename-no-ext>:line:col`
+       (see [literal_occurrence_key] below).  Such a key starts with lowercase
+       'l' and — because [literal_occurrence_key] strips the file extension —
+       contains no '.' and no '(', so it PASSES this filter and is correctly
+       treated as a trackable subject (like a variable).  This is WHY the
+       extension MUST be stripped: a dotted key (e.g. `lit#foo.tesl:3:5`) would
+       be silently dropped by the no-dot filter and re-open the provenance
+       leak. *)
     List.filter (fun s ->
       String.length s > 0
       && s.[0] >= 'a' && s.[0] <= 'z'
@@ -136,13 +353,60 @@ let rec expand_entity_proof_group (p : proof_expr) : proof_expr =
       right = expand_entity_proof_group right;
     }
 
+(* A4: recover a literal occurrence key's CONTENT.  Occurrence keys are globally
+   unique (file:line:col), so a global registry is sound: it maps each minted
+   `lit#…` subject key to the literal's content-key.  Populated lazily whenever
+   [subject_of_expr] mints an occurrence key (below).  Consulted by
+   [canonicalize_content_args] to re-content content-parameter positions while
+   subject positions stay occurrence-keyed. *)
+let literal_occ_content : (string, string) Hashtbl.t = Hashtbl.create 64
+
+let literal_content_of_key (key : string) : string option =
+  Hashtbl.find_opt literal_occ_content key
+
+(* A4: canonicalize the CONTENT-parameter positions of a proof predicate so that
+   a literal used as a content parameter (e.g. `let lo = 1` feeding `Clamped 1
+   100 n`) still matches by CONTENT, while the SUBJECT position keeps its
+   per-occurrence literal identity.
+
+   Convention (codebase-wide): the FINAL argument of a fact predicate is the
+   subject; all LEADING arguments are content parameters.  We therefore rewrite
+   every arg except the last, mapping any `lit#…` occurrence key back to its
+   recorded content-key (identity otherwise).  The subject (last arg) is left
+   untouched, so two distinct literal SUBJECTS never collapse.
+
+   This is the arity-free "all-args-except-final" form (see spec A4): it needs no
+   fact registry because a literal only ever reaches a LEADING position through a
+   `let`-bound content parameter, and the subject is always last.  For 0/1-arg
+   predicates there are no leading content positions, so nothing is rewritten. *)
+let canonicalize_content_args (p : proof_expr) : proof_expr =
+  let recover s = match literal_content_of_key s with Some c -> c | None -> s in
+  let rec go = function
+    | PredApp ({ args; _ } as app) ->
+      let n = List.length args in
+      let args' =
+        List.mapi (fun i a -> if i < n - 1 then recover a else a) args
+      in
+      PredApp { app with args = args' }
+    | PredAnd ({ left; right; _ } as conj) ->
+      PredAnd { conj with left = go left; right = go right }
+  in
+  go p
+
 let rec proof_matches (required : proof_expr) (carried : proof_expr list) : bool =
-  let carried = List.concat_map flatten_proof carried in
+  let carried =
+    List.concat_map flatten_proof carried |> List.map canonicalize_content_args
+  in
   match required with
   | PredAnd { left; right; _ } ->
     proof_matches left carried && proof_matches right carried
   | _ ->
-    let key = proof_key required in
+    (* B6: structural key equality (proof_key now returns proof_key_t) instead of
+       rendered-string equality — cannot be fooled by arg-space rendering.
+       A4: canonicalize content-parameter positions of both sides before the
+       structural comparison, so content facts match by content and subjects by
+       per-occurrence identity. *)
+    let key = proof_key (canonicalize_content_args required) in
     List.exists (fun p -> proof_key p = key) carried
 
 let pred_names_of_return_spec (spec : return_spec) : string list =
@@ -662,11 +926,60 @@ let load_imported_func_info (m : module_form) : (string * func_info) list =
           ) imported.decls
   ) m.imports
 
-(** Capabilities provided by each Tesl stdlib module. *)
+(** Capability requirements (`requires [...]`) declared by IMPORTED functions,
+    keyed by both their plain and module-qualified names.  This is what closes
+    the cross-module capability hole: the capability validator merges this map
+    into its callee→caps table so that calling an imported `requires [dbWrite]`
+    function from a `requires []` function is rejected exactly as the single-file
+    case is.  Tesl stdlib effect primitives are matched by name inside
+    {!Validation_capabilities.collect_needed_capabilities} and so contribute
+    nothing here.  Capability-ROW variables are dropped (mirroring
+    {!Validation_capabilities.build_func_capability_map}) — only a function's
+    concrete declared capabilities propagate to callers. *)
+let load_imported_func_caps (m : module_form) : (string * string list) list =
+  let is_tesl_module name =
+    String.length name >= 5 && String.sub name 0 5 = "Tesl."
+  in
+  List.concat_map (fun (imp : import_decl) ->
+    if is_tesl_module imp.module_name then []
+    else
+      let path = resolve_local_import_path m.source_file imp.module_name in
+      if not (Sys.file_exists path) then []
+      else
+        let source = In_channel.with_open_text path In_channel.input_all in
+        match Parser.parse_module path source with
+        | Err _ -> []
+        | Ok imported ->
+          let requested = match imp.names with
+            | ImportAll -> None
+            | ImportExposing names -> Some names
+          in
+          List.concat_map (function
+            | DFunc fd ->
+              let bound = Ast.func_bound_cap_vars fd in
+              let caps = List.filter (fun c -> not (List.mem c bound)) fd.capabilities in
+              let qualified_name = imp.module_name ^ "." ^ fd.name in
+              let include_plain = match requested with
+                | Some names -> List.mem fd.name names
+                | None -> false
+              in
+              (if include_plain then [ (fd.name, caps) ] else [])
+              @ [ (qualified_name, caps) ]
+            | _ -> []
+          ) imported.decls
+  ) m.imports
+
+(** Capabilities provided by each Tesl stdlib module, with their implication
+    chains.  THIS IS THE SINGLE SOURCE OF TRUTH for stdlib capability providers:
+    it is consumed both by the capability validator (below, via
+    [load_imported_cap_map]) and by the proof checker
+    ([Proof_checker.stdlib_capabilities], which references this binding rather
+    than duplicating the literal so the two cannot drift). *)
 let tesl_stdlib_cap_map : (string * (string * string list) list) list = [
   "Tesl.DB",         [("dbRead", []); ("dbWrite", ["dbRead"])];
   "Tesl.Time",       [("time", [])];
   "Tesl.Random",     [("random", [])];
+  "Tesl.Env",        [("envRead", [])];
   "Tesl.Queue",      [("queueRead", []); ("queueWrite", ["queueRead"]); ("pubsub", [])];
   "Tesl.UUID",       [("uuid", [])];
   "Tesl.JWT",        [("jwt", [])];
@@ -851,10 +1164,30 @@ let rec infer_expr_type
   | None ->
   match e with
   | ELit { lit = LInt _; _ } -> Some (mk_name_type "Int")
+  | ELit { lit = LBigInt _; _ } -> Some (mk_name_type "Int")
   | ELit { lit = LFloat _; _ } -> Some (mk_name_type "Float")
   | ELit { lit = LBool _; _ } -> Some (mk_name_type "Bool")
   | ELit { lit = LString _; _ } | ELit { lit = LInterp _; _ } -> Some (mk_name_type "String")
-  | EVar { name; _ } -> List.assoc_opt name env
+  | EVar { name; _ } ->
+    (match List.assoc_opt name env with
+     | Some ty -> Some ty              (* local binding / param wins (shadowing) *)
+     | None ->
+       (* Bare reference to a top-level fn of arity >= 1 is itself a function
+          value; resolve it to its curried arrow so function-value comparison is
+          rejected by is_equatable/is_orderable (A5, option A).  A NULLARY
+          top-level fn (fi_params = []) stays None here — its bare use is its
+          RESULT value, matching the existing `pi == pi` positive test — so
+          privilege/shape is decided by RESOLUTION over funcs, never by spelling. *)
+       (match List.assoc_opt name funcs with
+        | Some info when info.fi_params <> [] ->
+          (match return_value_type info.fi_return with
+           | Some cod ->
+             Some (List.fold_right
+                     (fun (b : binding) acc ->
+                        TFun { dom = b.type_expr; cod = acc; caps = []; loc = gen_loc })
+                     info.fi_params cod)
+           | None -> None)
+        | _ -> None))
   | EField { obj; field; _ } ->
     (match infer_expr_type env funcs fields_by_type ctors obj with
      | Some obj_ty -> field_type fields_by_type obj_ty field
@@ -898,7 +1231,20 @@ let rec infer_expr_type
   | EWithDatabase { body; _ } | EWithCapabilities { body; _ } | EWithTransaction { body; _ } ->
     infer_expr_type env funcs fields_by_type ctors body
   | EServe _ -> Some (mk_name_type "Unit")
-  | ELambda _ -> None
+  | ELambda { params; body; _ } ->
+    (* A lambda literal is a function value; infer its curried arrow from the
+       params' declared types over the body's inferred codomain (A5, option A).
+       If the body does not infer, stay None (matches prior behavior) — this only
+       ever tightens the comparison check, never loosens it. *)
+    let env' =
+      List.map (fun (b : binding) -> (b.name, b.type_expr)) params @ env in
+    (match infer_expr_type env' funcs fields_by_type ctors body with
+     | Some cod ->
+       Some (List.fold_right
+               (fun (b : binding) acc ->
+                  TFun { dom = b.type_expr; cod = acc; caps = []; loc = gen_loc })
+               params cod)
+     | None -> None)
   | EBinop { op; _ } ->
     (match op with
      | BAnd | BOr | BEq | BNeq | BLt | BLe | BGt | BGe -> Some (mk_name_type "Bool")
@@ -910,13 +1256,48 @@ let rec infer_expr_type
      | Some (_, result_ty) -> Some result_ty
      | None -> None)
   | EApp _ ->
-    let (head, _) = collect_call_head_and_args [] e in
+    let (head, args) = collect_call_head_and_args [] e in
     (match function_name_of_expr head with
     | Some fn_name ->
       (* Check user-defined functions first, then known SQL built-in return types. *)
       (match List.assoc_opt fn_name funcs with
-       | Some info -> return_value_type info.fi_return
+       | Some info ->
+         let arity = List.length info.fi_params in
+         let n = List.length args in
+         if n < arity then
+           (* Under-applied: the value IS a function.  Build the curried arrow
+              from the UNconsumed params to the (fully-applied) return type.
+              Decide-by-resolution: the resolved semantic object is an arrow, so
+              comparison's is_equatable/is_orderable reject it directly instead of
+              relying on a syntactic AST-shape allowlist (S14b / A5). *)
+           (match return_value_type info.fi_return with
+            | Some cod ->
+              let rem =
+                List.filteri (fun i _ -> i >= n) info.fi_params
+                |> List.map (fun (b : binding) -> b.type_expr) in
+              (* rem is non-empty when n < arity, so this yields at least one TFun. *)
+              Some (List.fold_right
+                      (fun dom acc -> TFun { dom; cod = acc; caps = []; loc = gen_loc })
+                      rem cod)
+            | None -> None)   (* return type unknown -> stay conservative *)
+         else
+           return_value_type info.fi_return   (* fully/over-applied: unchanged *)
        | None ->
+         (* A5 / review §6.4: the head is not a top-level fn but may be a
+            function-typed BINDING in scope — a higher-order PARAMETER
+            (`f: Int -> Int -> Int`) or a let bound to one.  Unwind its arrow by
+            the number of applied args, so an under-applied HOF-param value
+            resolves to a TFun and function-value comparison is rejected by
+            is_equatable/is_orderable (decide-by-resolution, not by whether the
+            head happens to be in the top-level funcs table). *)
+         (match List.assoc_opt fn_name env with
+          | Some head_ty when (match head_ty with TFun _ -> true | _ -> false) ->
+            let rec unwind ty n =
+              if n <= 0 then ty
+              else (match ty with TFun { cod; _ } -> unwind cod (n - 1) | _ -> ty)
+            in
+            Some (unwind head_ty (List.length args))
+          | _ ->
          (match fn_name with
           | "selectCount" | "selectSum" | "selectMin" | "selectMax" ->
             Some (mk_name_type "Int")
@@ -925,7 +1306,7 @@ let rec infer_expr_type
           | "selectOne" ->
             Some (mk_app_type (mk_name_type "Maybe") (mk_var_type "a"))
           | "upsert" -> Some (mk_name_type "Unit")
-          | _ -> None))
+          | _ -> None)))
     | None -> None)
   | ECacheGet _ -> Some (mk_app_type (mk_name_type "Maybe") (mk_name_type "a"))
   | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _ -> Some (mk_name_type "Unit")
@@ -1105,12 +1486,54 @@ let rec normalize_proof_aliases (proof_env : proof_env) (proof : proof_expr) : p
       loc;
     }
 
+(* A4: the CONTENT-key of a literal — its stable string identity, as the parser
+   also captures a literal proof ARGUMENT (parser.ml:398-410).  Used to recover
+   a literal's content when it sits in a content-PARAMETER position of a fact. *)
+let literal_content_key (lit : lit) : string option =
+  match lit with
+  | LInt n -> Some (string_of_int n)
+  (* A9/HM-1: a huge Int literal's canonical signed decimal string IS its stable
+     content identity.  It flows through the SAME per-occurrence subject machinery
+     as LInt (subject_of_expr's ELit arm mints a location-keyed occurrence key and
+     records this content in literal_occ_content), so a huge literal cannot alias a
+     textually-equal one at another position — mirroring A4's LInt treatment. *)
+  | LBigInt s -> Some s
+  | LFloat f -> Some (Float_fmt.identity_key f)
+  | LString s -> Some ("\"" ^ s ^ "\"")
+  | LBool b -> Some (if b then "true" else "false")
+  | _ -> None
+
+(* A4: a fresh, user-unspellable SUBJECT key for each literal VALUE occurrence,
+   keyed by source location.  Contains '#' and ':' so it is not a legal
+   identifier a user can spell, and can never equal a parser-captured content
+   arg.  The file extension is stripped so the key contains no '.', and thus
+   PASSES proof_subjects' no-dot filter (treated as a real, trackable subject —
+   see the comment on proof_subjects).  Two textually-equal literals at
+   DIFFERENT source positions get DISTINCT keys, so a proof earned about one
+   literal cannot be reused for a second, independently-authored identical
+   literal (the provenance/taint forgery this closes). *)
+let literal_occurrence_key (loc : loc) : string =
+  Printf.sprintf "lit#%s:%d:%d"
+    (Filename.remove_extension (Filename.basename loc.file))
+    loc.start.line loc.start.col
+
 let rec subject_of_expr (subject_env : subject_env) (expr : expr) : string option =
   match expr with
   | EVar { name; _ } ->
     Some (match List.assoc_opt name subject_env with Some subject -> subject | None -> name)
   | EOk { value; _ } -> subject_of_expr subject_env value
-  | EField { obj; _ } -> subject_of_expr subject_env obj
+  (* BSUBJ-1 (review §4.1): a field selector is PART of the subject identity.
+     Collapsing `o.fieldA` to `o`'s subject let a proof about one field satisfy a
+     requirement about a sibling field of the same type (the trusted-beside-
+     untrusted request-DTO shape).  Qualify the subject with the field name so
+     `o.fieldA` and `o.fieldB` are DISTINCT subjects.  Both the proof side and the
+     requirement side route through here, so legitimate same-field proofs still
+     match.  If the object has no stable subject we stay fail-closed (None →
+     bind-and-recheck), never widening. *)
+  | EField { obj; field; _ } ->
+    (match subject_of_expr subject_env obj with
+     | Some obj_subject -> Some (obj_subject ^ "." ^ field)
+     | None -> None)
   | EApp _ ->
     let (head, args) = collect_call_head_and_args [] expr in
     (match function_name_of_expr head, args with
@@ -1121,14 +1544,27 @@ let rec subject_of_expr (subject_env : subject_env) (expr : expr) : string optio
         as that would incorrectly equate the result subject with arg subjects for
         non-identity functions (e.g. database selectors, transformers). *)
      | _ -> None)
-  (* Literal values act as their own stable subjects (string representation).
-     This allows integer/string constants to participate in multi-param proofs:
-     `HasMin 100 n` where `100` is the `lo` argument. *)
-  | ELit { lit = LInt n; _ } -> Some (string_of_int n)
-  | ELit { lit = LFloat f; _ } -> Some (string_of_float f)
-  | ELit { lit = LString s; _ } -> Some ("\"" ^ s ^ "\"")
-  | EUnop { op = UNeg; arg = ELit { lit = LInt n; _ }; _ } -> Some ("-" ^ string_of_int n)
-  | EUnop { op = UNeg; arg = ELit { lit = LFloat f; _ }; _ } -> Some ("-" ^ string_of_float f)
+  (* A4: a literal VALUE occurrence is its OWN, per-occurrence subject (keyed by
+     source location), NOT its rendered text.  This is the soundness change: two
+     textually-equal literals are DIFFERENT subjects, so a proof about one cannot
+     be reused for the other.  Its CONTENT is recorded in [literal_occ_content]
+     so content-PARAMETER positions (e.g. the `10` in `HasMin 10 n`, the `1 100`
+     in `Clamped 1 100 n`) still match by content via [canonicalize_content_args].
+     S15's collision-free float key is preserved as the recorded content. *)
+  | ELit { lit; loc } when literal_content_key lit <> None ->
+    let occ = literal_occurrence_key loc in
+    (match literal_content_key lit with
+     | Some content -> Hashtbl.replace literal_occ_content occ content
+     | None -> ());
+    Some occ
+  | EUnop { op = UNeg; arg = ELit { lit = (LInt _ as l); loc }; _ } ->
+    let occ = literal_occurrence_key loc in
+    (match l with LInt n -> Hashtbl.replace literal_occ_content occ ("-" ^ string_of_int n) | _ -> ());
+    Some occ
+  | EUnop { op = UNeg; arg = ELit { lit = (LFloat _ as l); loc }; _ } ->
+    let occ = literal_occurrence_key loc in
+    (match l with LFloat f -> Hashtbl.replace literal_occ_content occ (Float_fmt.identity_key (-. f)) | _ -> ());
+    Some occ
   | _ -> None
 
 (** Extract proofs from an evidence expression (second arg to attachFact).

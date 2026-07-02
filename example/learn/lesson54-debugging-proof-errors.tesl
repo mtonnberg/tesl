@@ -136,7 +136,7 @@ fn diagnoseCommonMistakes(raw: Int) -> String =
 # mathematical invariants, so callers never need to re-validate.
 #
 # Halving a score is always valid: if 0 <= n <= 100, then 0 <= n/2 <= 50.
-establish halvePreservesScore(n: Int) -> Fact (ValidScore (n / 2)) =
+establish halvePreservesScore(n: Int ::: ValidScore n) -> Fact (ValidScore (n / 2)) =
   ValidScore (n / 2)
 
 fn halveScore(n: Int ::: ValidScore n) -> Int ? ValidScore =

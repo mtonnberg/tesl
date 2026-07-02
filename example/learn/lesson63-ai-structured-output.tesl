@@ -11,12 +11,14 @@ import Tesl.Agent exposing [
   aiProvider,
   LlmProvider,
   mockProvider,
-  defineAgent,
+  Agent,
+  anthropic,
   askWith,
   askFor,
   decodeAs,
   replyText,
 ]
+import Tesl.Env exposing [requireEnv]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 63 — Structured output, and bring-your-own-key (BYOK)
@@ -58,7 +60,12 @@ fn decodePriority(j: String) -> Priority =
 # against a real model in production and a scripted mock in tests.
 fn classifyPriority(provider: LlmProvider, ticket: String) -> Priority
   requires [assistantAi] =
-  let agent = defineAgent provider "Classify the ticket's priority as JSON." 256
+  let agent = Agent {
+    provider: provider
+    systemPrompt: "Classify the ticket's priority as JSON."
+    maxTokens: 256
+    tools: []
+  }
   askFor agent ticket decodePriority 2
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -69,10 +76,8 @@ fn classifyPriority(provider: LlmProvider, ticket: String) -> Priority
 # the call site with `askWith` — the agent's behaviour never changes with whose key
 # is used; only who pays and which model answers.
 
-agent Assistant requires [assistantAi] = Assistant {
-  provider: anthropic
-  model: "claude-opus-4-8"
-  apiKey: env "ANTHROPIC_API_KEY"
+agent Assistant requires [assistantAi] = Agent {
+  provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
   systemPrompt: "You are a helpful assistant. Be concise."
   tools: []
   maxTokens: 256

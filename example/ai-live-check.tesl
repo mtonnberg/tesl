@@ -3,7 +3,7 @@ module AiLiveCheck exposing [AiServer, askClaude, AskRequest]
 
 import Tesl.Prelude exposing [String, Bool(..)]
 import Tesl.Json exposing [stringCodec]
-import Tesl.Env exposing [envInt]
+import Tesl.Env exposing [envInt, envRead, requireEnv]
 import Tesl.Telemetry exposing [initTelemetry]
 import Tesl.App exposing [App]
 import Tesl.Agent exposing [aiProvider, askReply, replyText]
@@ -32,9 +32,7 @@ capability liveAi implies aiProvider
 # The agent's provider/model/apiKey are the live production binding. `apiKey` is
 # read from the environment when inference runs.
 agent Assistant requires [liveAi] = Agent {
-  provider: anthropic
-  model: "claude-opus-4-8"
-  apiKey: env "ANTHROPIC_API_KEY"
+  provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
   systemPrompt: "You are a helpful assistant. Answer in one short sentence."
   tools: []
   maxTokens: 256
@@ -77,7 +75,7 @@ database LiveDb = Database {
   backend: Memory
 }
 
-main() -> App requires [liveAi] =
+main() -> App requires [liveAi, envRead] =
   let _ = initTelemetry service "ai-live-check" endpoint "in-memory" console True
   let port = envInt "PORT" 8088
   App {

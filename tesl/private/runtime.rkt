@@ -1,5 +1,6 @@
 #lang racket
 (require racket/string
+         racket/random
          "../../dsl/types.rkt"
          (only-in "../../dsl/private/evidence.rkt" detached-proof)
          (only-in "../../dsl/private/check-runtime.rkt"
@@ -96,7 +97,16 @@
       Nothing))
 
 (define (tesl-generate-prefixed-id prefix)
-  (format "~a-~a-~a" prefix (current-seconds) (random 1000000)))
+  ;; Unguessable id: CSPRNG bytes rendered as hex.  The previous
+  ;; `(current-seconds)` + `(random 1000000)` form was predictable/brute-forceable
+  ;; (≤1e6 values per second), unsafe if an id is used as a token.  Mirrors the
+  ;; crypto-random-bytes discipline in tesl/uuid.rkt.
+  (define (byte->hex b)
+    (define s (number->string b 16))
+    (if (= (string-length s) 1) (string-append "0" s) s))
+  (string-append prefix "-"
+                 (apply string-append
+                        (map byte->hex (bytes->list (crypto-random-bytes 16))))))
 
 ;; Test-only: create a named value with proof attached for property-based test generators.
 ;; This bypasses the normal trusted-proof boundary; it must only be used in test contexts.

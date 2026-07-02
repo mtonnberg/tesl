@@ -673,8 +673,38 @@ let extract_single_constraint base_name = function
   | EBinop { op; left; right; _ } -> comparison_constraint base_name op left right
   | expr -> string_call_constraint base_name expr
 
+(* B1 / review §8.2 (B1-nested-if-drop): the then-branch must UNCONDITIONALLY
+   reach an `ok` — no nested `if`/`case` guard that could still reject a value the
+   extracted condition already admitted.  Otherwise the extracted constraints
+   UNDER-approximate the real predicate and a client smart-constructor would mint
+   a proof (`axiom`) for a value the server rejects. *)
+let rec ok_unguarded = function
+  | EOk _ -> true
+  | ELet { body; _ } | ELetProof { body; _ }
+  | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+  | EWithTransaction { body; _ } -> ok_unguarded body
+  | _ -> false
+
+(* The else-branch must never produce an `ok` (it only fails); otherwise the
+   condition does not decide acceptance and the constraints are not the predicate. *)
+let rec branch_no_ok = function
+  | EOk _ -> false
+  | EIf { then_; else_; _ } -> branch_no_ok then_ && branch_no_ok else_
+  | ECase { arms; _ } -> List.for_all (fun (a : case_arm) -> branch_no_ok a.body) arms
+  | ELet { body; _ } | ELetProof { body; _ }
+  | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+  | EWithTransaction { body; _ } -> branch_no_ok body
+  | _ -> true
+
+(* Return [Some constraints] ONLY when the body is PROVABLY the canonical
+   fully-captured shape `if <all-extractable-conjuncts> then <ok…> else <fail…>`,
+   so the constraint list IS the whole predicate.  Any nested guard on the
+   ok-path, an inverted branch, a disjunction, or an unhandled conjunct yields
+   [None] → the caller falls back to server-only validation and never manufactures
+   a client proof.  (Making this TOTAL is the fail-closed fix; it is sound for the
+   server IR too — server-only merely means "the server validates it".) *)
 let extract_simple_constraints base_name = function
-  | EIf { cond; _ } ->
+  | EIf { cond; then_; else_; _ } when ok_unguarded then_ && branch_no_ok else_ ->
     let parts = flatten_and cond in
     let rec collect acc = function
       | [] -> Some (List.rev acc)

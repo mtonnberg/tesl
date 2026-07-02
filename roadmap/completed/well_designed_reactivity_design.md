@@ -55,16 +55,16 @@ queue EmailQueue {
 }
 ```
 
-### `channel`
+### `sseChannel`
 
 ```text
-<channel-decl> ::= "channel" <identifier> "(" <binding> { "," <binding> } ")" "{"
+<channel-decl> ::= "sseChannel" <identifier> "(" <binding> { "," <binding> } ")" "{"
                      "database" <identifier>
                      "payload"  <identifier>
                    "}"
 ```
 
-A `channel` declaration creates a typed pub/sub channel backed by the named database (via the outbox pattern). Channel key parameters follow the same binding syntax as function parameters, including proof annotations. The `payload` type must be an ADT.
+A `sseChannel` declaration creates a typed pub/sub channel backed by the named database (via the outbox pattern). Channel key parameters follow the same binding syntax as function parameters, including proof annotations. The `payload` type must be an ADT.
 
 The runtime mangles the channel name and key into a Postgres channel string. `NOTIFY` carries only an outbox row ID; the actual payload is fetched from `tesl_pubsub_outbox`.
 
@@ -74,7 +74,7 @@ type UserEvent
   | AvatarChanged  url: String
   | AccountDeleted
 
-channel UserEvents(userId: String ::: UserId userId) {
+sseChannel UserEvents(userId: String ::: UserId userId) {
   database MainDatabase
   payload  UserEvent
 }

@@ -143,17 +143,22 @@ let rec carried_proofs_of_expr
           else Some preds
         | other -> other)
      | _ -> None)
-  | EField { obj; field; _ } ->
+  | EField { field; _ } ->
     (* When a proof-annotated record field is accessed, propagate the field's
-       declared proof with its subject substituted to the actual object subject. *)
+       declared proof with its subject substituted to the field-access subject.
+       BSUBJ-1 (review §4.1): the subject is the FIELD-QUALIFIED key `obj.field`
+       (exactly what [subject_of_expr] now yields for this same node), so the
+       carried proof lines up with the requirement side, which also qualifies by
+       field.  Using the bare object subject here would make `doc.title`'s proof
+       read as `NonEmpty doc` while the requirement reads `NonEmpty doc.title`. *)
     (match List.assoc_opt field !field_proof_registry with
      | None -> None
      | Some (param_name, proof) ->
-       let obj_subj = match subject_of_expr subject_env obj with
+       let field_subj = match subject_of_expr subject_env expr with
          | Some s -> s
          | None -> field
        in
-       Some [subst_proof [(param_name, obj_subj)] proof])
+       Some [subst_proof [(param_name, field_subj)] proof])
   | _ -> None
 
 let proofs_of_expr
@@ -377,35 +382,32 @@ type handler_decl_ref =
   | LocalHandler of func_decl
   | ImportedHandler of func_info
 
-(** Extract the proof-predicate name from an auth function's return spec.
-    Auth functions return `-> name: T ::: PredName name`, so the predicate
-    is in the RetAttached binding's proof_ann. *)
-let auth_proof_pred_of_return_spec spec =
-  match spec with
-  | RetAttached { binding; _ } ->
-    (match binding.proof_ann with
-     | Some (PredApp { pred; _ }) -> Some pred
-     | _ -> None)
-  | _ -> None
-
 (** Build the set of proof-predicate names produced by all auth functions
-    reachable from [decls] and [extra_funcs]. *)
+    reachable from [decls] and [extra_funcs].
+
+    Uses [pred_names_of_return_spec], the canonical extractor, so that EVERY auth
+    return shape contributes — not just `-> name: T ::: PredName name`
+    (RetAttached + single PredApp).  In particular the named-pack form
+    `-> T ? Authenticated` (RetNamedPack) and the conjunction form
+    `-> name: T ::: A name && B name` (RetAttached + PredAnd) are now included.
+    Previously these produced no predicate, so a module whose only auth fn used
+    one of those forms had an empty [auth_preds] and the entire auth-wiring check
+    (gated on `auth_preds <> []`) was silently skipped — letting a handler drop
+    its auth-proof parameter. This also keeps [auth_preds] consistent with
+    [auth_fn_preds], which already uses [pred_names_of_return_spec]. *)
 let collect_auth_predicates decls extra_funcs =
   let from_decls =
-    List.filter_map (function
-      | DFunc fd when fd.kind = AuthKind ->
-        auth_proof_pred_of_return_spec fd.return_spec
-      | _ -> None
+    List.concat_map (function
+      | DFunc fd when fd.kind = AuthKind -> pred_names_of_return_spec fd.return_spec
+      | _ -> []
     ) decls
   in
   let from_imports =
-    List.filter_map (fun (_, info : string * func_info) ->
-      if info.fi_kind = AuthKind then
-        auth_proof_pred_of_return_spec info.fi_return
-      else None
+    List.concat_map (fun (_, info : string * func_info) ->
+      if info.fi_kind = AuthKind then pred_names_of_return_spec info.fi_return else []
     ) extra_funcs
   in
-  from_decls @ from_imports
+  List.sort_uniq String.compare (from_decls @ from_imports)
 
 (** Return true if any param in [params] carries a proof annotation whose
     predicate name is in [auth_preds].  Handles conjunction proofs (PredAnd)
@@ -523,6 +525,55 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
                  path parameter (`:param`) in the path"
                 ep_id c.binding.name)
         ) ep.captures;
+
+        (* G3 (formal-review): SSE clause-legality.  [emit_sse_route] projects an
+           SSE endpoint into a positional tuple (path, auth, ONE channel,
+           key-validator) — it took only the HEAD of `subscribes` and never
+           emitted `body`/`response`, so extra subscribe channels, a `body`, and
+           a `-> ReturnType` were type-checked and then SILENTLY DROPPED by code
+           generation.  For a validate-once language a silent drop is the worst
+           failure mode, so reject these unsupported clauses explicitly instead
+           (the G3 discipline: a clause a route cannot honour is a hard error,
+           never an implicit drop).  Corpus-safe: every real SSE endpoint
+           declares exactly one channel and no body/return. *)
+        if ep.method_ = SSE then begin
+          (match ep.subscribes with
+           | _ :: _ :: _ ->
+             (* An SSE endpoint streams ONE channel BY DESIGN — this is not a
+                code-gen limitation.  Multiple independent channels are expressed
+                as multiple `sse` blocks in the api (each its own path + route,
+                fully supported); a client opens one EventSource per endpoint (or
+                relies on HTTP/2 multiplexing over the shared port).  Keeping one
+                channel per endpoint also keeps per-channel auth / key scoping
+                (per-user vs admin) explicit at the endpoint. *)
+             add_hint
+               "give each channel its own `sse` block in the api (a client opens \
+                one EventSource per endpoint); an `sse` endpoint streams a single \
+                channel"
+               (Printf.sprintf
+                 "endpoint %s: an `sse` endpoint declares exactly one `subscribe` \
+                  channel, but %d were given — split the extra channels into \
+                  separate `sse` endpoints"
+                 ep_id (List.length ep.subscribes))
+           | _ -> ());
+          (match ep.body with
+           | Some _ ->
+             add_hint
+               "remove the `body` clause — an SSE endpoint streams server \
+                events and does not decode a request body"
+               (Printf.sprintf
+                 "endpoint %s: an SSE endpoint cannot declare a `body` clause \
+                  (it would be silently dropped by code generation)" ep_id)
+           | None -> ());
+          if ep.has_explicit_return then
+            add_hint
+              "remove the `-> ReturnType` — an SSE endpoint streams events and \
+               has no single response type"
+              (Printf.sprintf
+                "endpoint %s: an SSE endpoint cannot declare a `-> ReturnType` \
+                 response (it would be silently dropped by code generation)"
+                ep_id)
+        end;
 
         (* The remaining two checks apply only to HTTP endpoints: SSE routes
            are emitted by [emit_sse_route], which strips `:param` segments and
@@ -1016,6 +1067,7 @@ let check_capture_proof_via
 let check_server_handler_binding
     (handlers : (string * handler_decl_ref) list)
     (auth_preds : string list)
+    (auth_fn_preds : (string * string list) list)
     (sv : server_form)
     (endpoint_opt : api_endpoint option)
     (endpoint_name, handler_name)
@@ -1069,6 +1121,53 @@ let check_server_handler_binding
            | _ -> ())
         | _ -> ())
      | _ -> ());
+    (* S16: positional arity contract, DERIVED from the endpoint.  The router
+       supplies handler arguments positionally: the auth-proven value (if the
+       endpoint has an `auth` clause), one argument per path capture, and the
+       request body.  Two subtleties the earlier name-based attempt tripped on:
+         - query parameters arrive THROUGH the `auth`/proof function (see
+           lesson66), NOT as extra handler params;
+         - a body is supplied for a body-carrying method (POST/PUT/PATCH/DELETE)
+           even with NO explicit `body` clause — the handler may bind it (R65_SH02)
+           or ignore it.  So the valid param count is a RANGE, not a single value:
+             min = auth + captures + (explicit body ? 1 : 0)   (must be consumed)
+             max = auth + captures + (GET ? explicit-body : 1)  (implicit body optional)
+       A count outside [min, max] cannot be satisfied by any supplied value and
+       would fail `define-server` at startup — reject it.  Using the range (never
+       a single number) is what keeps this from false-positiving on the valid
+       implicit-body handlers.  SSE endpoints stream via subscribe channels (no
+       body/response), so they are skipped. *)
+    (match endpoint_opt with
+     | Some ep when ep.method_ <> SSE && ep.subscribes = [] ->
+       let handler_params = match hdl with
+         | LocalHandler fd -> fd.params | ImportedHandler info -> info.fi_params in
+       let handler_loc = match hdl with
+         | LocalHandler fd -> fd.loc | ImportedHandler info -> info.fi_loc in
+       let n_auth = if ep.auth <> None then 1 else 0 in
+       let n_explicit_body = if ep.body <> None then 1 else 0 in
+       let n_cap = List.length ep.captures in
+       let is_get = ep.method_ = GET in
+       let lo = n_auth + n_cap + n_explicit_body in
+       let hi = n_auth + n_cap + (if is_get then n_explicit_body else 1) in
+       let got = List.length handler_params in
+       if got < lo || got > hi then
+         errors := make_error handler_loc
+           ~hint:(Printf.sprintf
+             "endpoint '%s' supplies %s handler argument(s) positionally (%d auth, %d capture(s)%s); \
+              handler '%s' must declare that many parameters, in that order (auth, then captures, then body)"
+             endpoint_name
+             (if lo = hi then string_of_int lo else Printf.sprintf "%d-%d" lo hi)
+             n_auth n_cap
+             (if is_get then "" else ", and the request body")
+             handler_name)
+           (Printf.sprintf
+             "server '%s': handler '%s' takes %d parameter(s), but endpoint '%s' supplies %s \
+              positionally (auth + captures + body) — the arity mismatch would fail \
+              `define-server` at startup"
+             sv.name handler_name got endpoint_name
+             (if lo = hi then string_of_int lo else Printf.sprintf "%d-%d" lo hi))
+           :: !errors
+     | _ -> ());
     (* Auth-wiring alignment check — only meaningful when auth predicates are known *)
     if auth_preds <> [] then begin
       let handler_params = match hdl with
@@ -1084,6 +1183,61 @@ let check_server_handler_binding
       | Some ep ->
         let ep_needs_auth = ep.auth <> None in
         let handler_has_auth = has_auth_proof_param auth_preds handler_params in
+        (* The specific auth predicate(s) THIS endpoint's `auth via <fn>` produces. *)
+        let ep_auth_preds = match ep.auth with
+          | Some a ->
+            let from_binding = match a.binding.proof_ann with
+              | Some p -> proof_predicates p | None -> [] in
+            let from_via = match List.assoc_opt a.via_fn auth_fn_preds with
+              | Some ps -> ps | None -> [] in
+            List.sort_uniq String.compare (from_binding @ from_via)
+          | None -> []
+        in
+        (* The auth-related predicate(s) the handler actually requires on its params. *)
+        let handler_auth_preds =
+          List.concat_map (fun (b : binding) ->
+            match b.proof_ann with
+            | Some p -> List.filter (fun pred -> List.mem pred auth_preds) (proof_predicates p)
+            | None -> []
+          ) handler_params
+          |> List.sort_uniq String.compare
+        in
+        (* (Fix a) Reject auth predicate OVER-declaration: the predicate(s) the
+           endpoint declares on its `auth <binding> via <fn>` clause MUST be a
+           subset of what <fn> actually produces. Otherwise a declared-but-
+           unproduced predicate (e.g. `IsAdmin` declared while `via cookieAuth`
+           produces only `Authenticated`) flows to a handler that trusts it —
+           an end-to-end privilege escalation accepted statically. This mirrors
+           check_capture_proof_via's `declared ⊆ produced` check for captures. *)
+        (match ep.auth with
+         | Some a ->
+           let declared =
+             match a.binding.proof_ann with
+             | Some p -> List.sort_uniq String.compare (proof_predicates p)
+             | None -> []
+           in
+           let produced =
+             match List.assoc_opt a.via_fn auth_fn_preds with Some ps -> ps | None -> []
+           in
+           let over_declared =
+             List.filter (fun pred -> not (List.mem pred produced)) declared
+           in
+           if over_declared <> [] then
+             errors := make_error handler_loc
+               ~hint:(Printf.sprintf
+                 "declare the endpoint's `auth` proof as a subset of what `via %s` \
+                  establishes [%s], or authenticate `via` a function that produces [%s]"
+                 a.via_fn
+                 (if produced = [] then "no proof" else String.concat ", " produced)
+                 (String.concat ", " over_declared))
+               (Printf.sprintf
+                 "server '%s': endpoint '%s' declares auth proof [%s] not established by \
+                  `via %s` (which produces [%s]) — the declared auth predicate is unproven \
+                  (privilege-escalation risk)"
+                 sv.name endpoint_name (String.concat ", " over_declared)
+                 a.via_fn (if produced = [] then "nothing" else String.concat ", " produced))
+               :: !errors
+         | None -> ());
         if ep_needs_auth && not handler_has_auth then
           errors := make_error handler_loc
             ~hint:(Printf.sprintf
@@ -1093,6 +1247,26 @@ let check_server_handler_binding
             (Printf.sprintf
               "server '%s': endpoint '%s' requires auth but handler '%s' has no auth-proof parameter"
               sv.name endpoint_name handler_name)
+            :: !errors
+        else if ep_needs_auth && handler_has_auth
+             && ep_auth_preds <> []
+             && (let mismatched =
+                   List.filter (fun pred -> not (List.mem pred ep_auth_preds)) handler_auth_preds
+                 in mismatched <> []) then
+          let mismatched =
+            List.filter (fun pred -> not (List.mem pred ep_auth_preds)) handler_auth_preds in
+          let via_fn = match ep.auth with Some a -> a.via_fn | None -> "?" in
+          errors := make_error handler_loc
+            ~hint:(Printf.sprintf
+              "wire endpoint '%s' to an `auth via <fn>` that produces [%s], \
+               or change handler '%s' to require the predicate this endpoint's `auth via %s` produces [%s]"
+              endpoint_name (String.concat ", " mismatched)
+              handler_name via_fn (String.concat ", " ep_auth_preds))
+            (Printf.sprintf
+              "server '%s': handler '%s' requires auth proof [%s] but endpoint '%s' authenticates with `via %s`, \
+               which produces [%s] — the required auth predicate is never established on this route (privilege-escalation risk)"
+              sv.name handler_name (String.concat ", " mismatched)
+              endpoint_name via_fn (String.concat ", " ep_auth_preds))
             :: !errors
         else if not ep_needs_auth && handler_has_auth then
           errors := make_error handler_loc
@@ -1125,10 +1299,9 @@ let check_server_handler_binding
           name here. We exclude them endpoint-wide: any predicate the endpoint's own
           `auth` clause carries (read off `ep.auth.binding.proof_ann`) plus the global
           auth_preds set. Reading the endpoint's auth clause directly matters because
-          auth functions written in the named-pack form `-> T ? Authenticated` are not
-          picked up by auth_proof_pred_of_return_spec, so relying on auth_preds alone
-          would wrongly demand a capture/body for an auth-supplied param (and the auth
-          param name need not match the handler param name). *)
+          the auth param name need not match the handler param name, so relying on the
+          module-global auth_preds alone could wrongly demand a capture/body for an
+          auth-supplied param. *)
        let endpoint_auth_preds =
          auth_preds @ (match ep.auth with
            | Some a -> (match a.binding.proof_ann with
@@ -1208,6 +1381,36 @@ let check_server_handler_binding
                      endpoint_name p.name)
                    :: !errors
            end
+       ) handler_params;
+       (* Handlers never receive the raw HttpRequest — the router supplies only
+          path captures, the (parsed) request body, and the auth-proven value, all
+          POSITIONALLY.  A handler parameter typed `HttpRequest` therefore cannot be
+          provided and crashes `define-server` at startup with an arity error; this
+          is the canonical mistake (request data must be read in the `auth`/`proof`
+          function and passed as a proven value).  Reject it at compile time.  (The
+          full positional count/type contract — incl. POST/PUT implicit body — is a
+          deeper check; see soundness_increase Tier-0 #2.) *)
+       let handler_loc2 = match hdl with
+         | LocalHandler fd -> fd.loc | ImportedHandler info -> info.fi_loc in
+       List.iter (fun (p : binding) ->
+         let is_http_request =
+           match p.type_expr with
+           | TName { name = "HttpRequest"; _ } -> true
+           | _ -> false
+         in
+         if is_http_request then
+           errors := make_error handler_loc2
+             ~hint:(Printf.sprintf
+               "handlers do not receive the raw request — remove `%s: HttpRequest` \
+                from handler '%s' and read request data (cookies/headers/query) in \
+                the `auth`/`proof` function, passing it as a proven value"
+               p.name handler_name)
+             (Printf.sprintf
+               "server '%s': handler '%s' takes `%s: HttpRequest`, but handlers are \
+                never passed the request — endpoint '%s' supplies only captures, \
+                body, and the auth value"
+               sv.name handler_name p.name endpoint_name)
+             :: !errors
        ) handler_params)
 
 let check_server_completeness ?(extra_funcs = []) (decls : top_decl list) : validation_error list =
@@ -1223,6 +1426,20 @@ let check_server_completeness ?(extra_funcs = []) (decls : top_decl list) : vali
     @ List.map (fun (name, info) -> (name, ImportedHandler info)) extra_funcs
   in
   let auth_preds = collect_auth_predicates decls extra_funcs in
+  (* Per-auth-function produced predicates, so we can check that an endpoint's
+     specific `auth via <fn>` produces exactly the predicate the handler requires
+     — not merely *some* predicate from the module-global auth union. Closes the
+     cross-predicate privilege-escalation hole (endpoint runs cookieAuth →
+     Authenticated, handler requires IsAdmin). *)
+  let auth_fn_preds : (string * string list) list =
+    List.filter_map (function
+      | DFunc fd when fd.kind = AuthKind -> Some (fd.name, pred_names_of_return_spec fd.return_spec)
+      | _ -> None
+    ) decls
+    @ List.filter_map (fun (name, info : string * func_info) ->
+        if info.fi_kind = AuthKind then Some (name, pred_names_of_return_spec info.fi_return) else None
+      ) extra_funcs
+  in
   let errors = ref [] in
   List.iter (function
     | DServer sv ->
@@ -1252,7 +1469,7 @@ let check_server_completeness ?(extra_funcs = []) (decls : top_decl list) : vali
            ) (drop expected_count sv.bindings);
            List.iteri (fun i binding ->
              let ep_opt = List.nth_opt non_sse_eps i in
-             check_server_handler_binding handlers auth_preds sv ep_opt binding errors
+             check_server_handler_binding handlers auth_preds auth_fn_preds sv ep_opt binding errors
            ) (take expected_count sv.bindings)
          end else begin
            List.iter (fun endpoint_name ->
@@ -1269,7 +1486,7 @@ let check_server_completeness ?(extra_funcs = []) (decls : top_decl list) : vali
                  (Printf.sprintf "server '%s' binds unknown endpoint '%s'" sv.name endpoint_name)
                  :: !errors;
              let ep_opt = List.find_opt (fun (ep : api_endpoint) -> ep.name = endpoint_name) non_sse_eps in
-             check_server_handler_binding handlers auth_preds sv ep_opt (endpoint_name, handler_name) errors
+             check_server_handler_binding handlers auth_preds auth_fn_preds sv ep_opt (endpoint_name, handler_name) errors
            ) sv.bindings
          end)
     | _ -> ()
@@ -1378,7 +1595,7 @@ type vkind =
 let config_block_schema = function
   (* schema is required for the postgres backend but not for Memory; the
      postgres-specific requirement is enforced in check_typed_config_blocks. *)
-  | "Database" -> [ "schema", VStr, false; "entities", VEntityList, false;
+  | "Database" -> [ "schema", VStr, false; "entities", VEntityList, true;
                     "backend", VBackend, true ]
   | "PostgresConfig" -> [ "dbName", VStr, true; "user", VStr, true;
                           "password", VStr, true; "connection", VConn, true ]
@@ -1403,6 +1620,9 @@ let config_block_schema = function
                "email", VRefList, false; "sseChannels", VRefList, false;
                "api", VTypeRef, true; "port", VExpr, false;
                "static", VStr, false ]
+  (* Agent { provider, systemPrompt, maxTokens, tools } is a typed-record constructor
+     validated by the type checker (registered record fields), so it needs no
+     structural schema here. *)
   | _ -> []
 
 let cfg_fields = function
@@ -1445,6 +1665,10 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
     | VInt ->
       (match v with
        | ELit { lit = LInt _; _ } -> []
+       (* A9/HM-1: a huge (arbitrary-precision) Int literal is still not a valid
+          config Int here — this field wants a native-range value. Reject explicitly. *)
+       | ELit { lit = LBigInt s; _ } ->
+         err (Printf.sprintf "field `%s` is out of range: `%s` exceeds the native Int range for this field" fname s)
        | _ when is_env_call "envInt" v -> []
        | _ -> err (Printf.sprintf "field `%s` must be an Int (a literal or `envInt \"VAR\" default`)" fname))
     | VPort ->
@@ -1455,6 +1679,9 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
        | ELit { lit = LInt n; _ } when n >= 1 && n <= 65535 -> []
        | ELit { lit = LInt n; _ } ->
          err (Printf.sprintf "field `%s` is not a valid port: %d is outside the range 1..65535" fname n)
+       (* A9/HM-1: a huge (arbitrary-precision) Int literal is never a valid port. *)
+       | ELit { lit = LBigInt s; _ } ->
+         err (Printf.sprintf "field `%s` is not a valid port: `%s` is outside the range 1..65535" fname s)
        | _ when is_env_call "envInt" v -> []
        | _ -> err (Printf.sprintf "field `%s` must be a port number (an Int literal in 1..65535 or `envInt \"VAR\" default`)" fname))
     | VBool ->
@@ -1575,6 +1802,7 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
          | EApp { fn = EConstructor { name = "App"; _ }; arg = ERecord _; _ }) as e ->
          check_record fd.loc "App" (cfg_fields e)
        | _ -> [])
+    | DAgent r -> check_decl "Agent" r.loc r.config_expr
     | _ -> []
   ) decls
 

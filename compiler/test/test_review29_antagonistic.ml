@@ -189,22 +189,21 @@ let test_f04_ghost_witness_unrelated_proof () =
   should_fail "ghost witness\\|predicate mismatch\\|WrongFact\\|RequiredInvariant" src
 
 (* ─────────────────────────────────────────────────────────────────────────── *)
-(* F05 — Minimum Int literal (-2^62) is now expressible (R52-INT-NEG fixed).   *)
+(* F05 — Int is arbitrary-precision (A9/HM-1).                                  *)
 (*                                                                              *)
-(*  The spec states the range is [-2^62, 2^62-1]. The minimum -4611686018427387904  *)
-(*  is now valid: the lexer emits a sentinel token for 4611686018427387904 and   *)
-(*  the parser folds it with the unary minus to produce the correct min value.   *)
-(*  Positive 4611686018427387904 (without minus) is still rejected.              *)
+(*  The former 63-bit fixnum range is gone. -2^62 is expressible (folded by the *)
+(*  parser as LBigInt "-4611686018427387904"), and positive 2^62 — formerly     *)
+(*  rejected as out of range — now also compiles, carried as an LBigInt bignum.  *)
 (* ─────────────────────────────────────────────────────────────────────────── *)
 let test_f05_min_int_inexpressible () =
   let src_valid     = prelude ^ "x = -4611686018427387903\n" in
   let src_min       = prelude ^ "x = -4611686018427387904\n" in
   let src_above_max = prelude ^ "x = 4611686018427387904\n" in
   should_pass src_valid;
-  (* Fixed: -2^62 is now a valid Tesl Int literal *)
+  (* -2^62 is a valid Tesl Int literal *)
   should_pass src_min;
-  (* Positive 2^62 is still out of range *)
-  should_fail "out of range" src_above_max
+  (* A9/HM-1: positive 2^62 now compiles too (arbitrary-precision Int) *)
+  should_pass src_above_max
 
 (* ─────────────────────────────────────────────────────────────────────────── *)
 (* F06 — ADT variant fields now support ::: proof annotations.                *)
@@ -313,7 +312,12 @@ let test_f12_inline_constructor_pattern () =
 (*  `fn(x: Int ::: IsPositive x) -> x * 2` is valid syntax for lambdas.        *)
 (* ─────────────────────────────────────────────────────────────────────────── *)
 let test_f13_lambda_proof_annotated_params () =
-  (* Needs its own source with imports before definitions *)
+  (* Proof-annotated lambda params ARE supported — but only where the per-element
+     proof genuinely comes from somewhere. The sound position is the callback of
+     a ForAll-distributing combinator over a `ForAll`-proven collection: here the
+     element proof is distributed from `xs : ForAll (IsPositive)`. Mapping the
+     same lambda over a RAW `List Int` is rejected (a proof conjured from nowhere
+     — see PC03/PC03b in test_proofsuite_attack.ml). *)
   let src =
     "#lang tesl\nmodule T exposing []\n" ^
     "import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact]\n" ^
@@ -324,7 +328,7 @@ let test_f13_lambda_proof_annotated_params () =
     "    ok n ::: IsPositive n\n" ^
     "  else\n" ^
     "    fail 400 \"neg\"\n" ^
-    "fn test(xs: List Int) -> List Int =\n" ^
+    "fn test(xs: List Int ::: ForAll (IsPositive) xs) -> List Int =\n" ^
     "  List.map (fn(x: Int ::: IsPositive x) -> x * 2) xs\n" in
   should_pass src
 

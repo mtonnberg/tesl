@@ -33,61 +33,69 @@ let check_module (m : module_form) : validation_error list =
      that is called ~extra_funcs:imported_funcs. (check_existential_proof_enforcement
      is intentionally NOT given facts: the orchestrator calls it without extra_funcs.) *)
   let facts = build_module_facts ~extra_funcs:imported_funcs decls in
-  check_file_module_name_match m
-  @ check_local_imports_exist m
-  @ check_duplicate_imports m.imports
-  @ check_imported_exposed_name_conflicts m
-  @ check_imported_exposed_type_and_ctor_conflicts m
-  @ check_self_imports m.module_name m.imports
-  @ check_duplicate_top_level_names decls
-  @ check_duplicate_adt_constructors decls
-  @ check_duplicate_decl_fields decls
-  @ check_capability_cycles decls
-  @ check_check_fn_has_proof_return decls
-  @ check_library_self_boundary m
-  @ check_entity_structure ~facts decls
-  @ check_capture_codec_types decls
-  @ check_capture_proof_via ~facts decls
-  @ check_api_endpoint_structure ~facts decls
-  @ check_queue_structure decls
-  @ check_channel_structure decls
-  @ check_workers_structure ~extra_funcs:imported_funcs decls
-  @ check_cache_structure decls
-  @ check_email_structure decls
-  @ check_typed_config_blocks decls
-  @ check_app_wiring decls
-  @ check_database_entities m
-  @ check_api_test_structure m
-  @ check_test_descriptions decls
-  @ check_server_completeness ~extra_funcs:imported_funcs decls
-  @ check_sql_field_names ~facts decls
-  @ check_codec_target_types ~facts decls
-  @ check_codec_proof_coverage ~facts decls
-  @ check_codec_field_types ~facts decls
-  @ check_call_site_proofs ~facts decls
-  @ check_record_field_proof_construction ~facts decls
-  @ check_sql_where_clauses ~facts decls
-  @ check_fn_return_proof_annotations ~facts decls
-  @ check_circular_const_bindings decls
-  @ check_ghost_witness_predicates decls
-  @ check_filter_check_args ~facts decls
-  @ check_forall_consistency ~facts decls
-  @ check_fact_arg_types decls
-  @ check_exists_bindings decls
-  @ check_existential_proof_enforcement decls
-  @ check_case_exhaustiveness ~extra_ctors:(load_imported_ctor_info m) decls
-  @ check_name_shadowing m
-  @ check_forall_param_subjects decls
-  @ check_handler_capabilities ~cap_map decls
-  @ check_pk_match decls
-  @ check_insert_pk_match decls
-  @ check_cookies_field_access decls
-  @ check_adt_variant_names decls
-  @ check_self_referential_aliases decls
-  @ check_type_arities decls
-  @ check_ord_operator_types ~facts decls
-  @ check_handler_isolation decls
-  @ check_auth_call_restriction decls
-  @ check_imported_module_is_library m
-  @ check_exported_signature_completeness m
-  @ collect_import_parse_errors m
+  (* B5: the manual deep-link topic is decided HERE by which pass produced the
+     error — a semantic object, listed exactly once per pass — and stamped onto
+     every error the pass returns via [with_topic].  Message text never routes
+     the anchor (that was the substring-sniffing bug this replaces).  Each pass
+     gets exactly one stable topic, so the same rule can never route two ways. *)
+  let open Error_codes in
+  let ( @: ) (t : manual_topic) es = with_topic t es in
+    (TNaming @: check_file_module_name_match m)
+  @ (TNaming @: check_local_imports_exist m)
+  @ (TNaming @: check_duplicate_imports m.imports)
+  @ (TNaming @: check_imported_exposed_name_conflicts m)
+  @ (TNaming @: check_imported_exposed_type_and_ctor_conflicts m)
+  @ (TNaming @: check_self_imports m.module_name m.imports)
+  @ (TNaming @: check_duplicate_top_level_names decls)
+  @ (TNaming @: check_duplicate_adt_constructors decls)
+  @ (TNaming @: check_duplicate_decl_fields decls)
+  @ (TCapability @: check_capability_cycles decls)
+  @ (TProof @: check_check_fn_has_proof_return decls)
+  @ (TNaming @: check_library_self_boundary m)
+  @ (TDatabase @: check_entity_structure ~facts decls)
+  @ (TCodec @: check_capture_codec_types decls)
+  @ (TProof @: check_capture_proof_via ~facts decls)
+  @ (TStructural @: check_api_endpoint_structure ~facts decls)
+  @ (TStructural @: check_queue_structure decls)
+  @ (TStructural @: check_channel_structure decls)
+  @ (TStructural @: check_workers_structure ~extra_funcs:imported_funcs decls)
+  @ (TStructural @: check_cache_structure decls)
+  @ (TStructural @: check_email_structure decls)
+  @ (TStructural @: check_typed_config_blocks decls)
+  @ (TStructural @: check_app_wiring decls)
+  @ (TDatabase @: check_database_entities m)
+  @ (TTesting @: check_api_test_structure m)
+  @ (TTesting @: check_test_descriptions decls)
+  @ (TStructural @: check_server_completeness ~extra_funcs:imported_funcs decls)
+  @ (TDatabase @: check_sql_field_names ~facts decls)
+  @ (TCodec @: check_codec_target_types ~facts decls)
+  @ (TCodec @: check_codec_proof_coverage ~facts decls)
+  @ (TCodec @: check_codec_field_types ~facts decls)
+  @ (TProof @: check_call_site_proofs ~facts decls)
+  @ (TProof @: check_record_field_proof_construction ~facts decls)
+  @ (TDatabase @: check_sql_where_clauses ~facts decls)
+  @ (TProof @: check_fn_return_proof_annotations ~facts decls)
+  @ (TNaming @: check_circular_const_bindings decls)
+  @ (TProof @: check_ghost_witness_predicates decls)
+  @ (TProof @: check_filter_check_args ~facts decls)
+  @ (TProof @: check_forall_consistency ~facts decls)
+  @ (TProof @: check_fact_arg_types decls)
+  @ (TProof @: check_exists_bindings decls)
+  @ (TProof @: check_existential_proof_enforcement decls)
+  @ (TNaming @: check_case_exhaustiveness ~extra_ctors:(load_imported_ctor_info m) decls)
+  @ (TNaming @: check_name_shadowing m)
+  @ (TNaming @: check_reserved_generated_names decls)
+  @ (TProof @: check_forall_param_subjects decls)
+  @ (TCapability @: check_handler_capabilities ~cap_map ~imported_func_caps:(load_imported_func_caps m) decls)
+  @ (TDatabase @: check_pk_match decls)
+  @ (TDatabase @: check_insert_pk_match decls)
+  @ (TStructural @: check_cookies_field_access decls)
+  @ (TNaming @: check_adt_variant_names decls)
+  @ (TNaming @: check_self_referential_aliases decls)
+  @ (TNaming @: check_type_arities decls)
+  @ (TCapability @: check_ord_operator_types ~facts decls)
+  @ (TStructural @: check_handler_isolation decls)
+  @ (TCapability @: check_auth_call_restriction decls)
+  @ (TNaming @: check_imported_module_is_library m)
+  @ (TNaming @: check_exported_signature_completeness m)
+  @ (TNaming @: collect_import_parse_errors m)

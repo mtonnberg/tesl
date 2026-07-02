@@ -62,13 +62,16 @@
   #:returns Any
   (select-many (from TestTask)))
 
+;; The per-function declared-context capability check was removed by design;
+;; the static checker now guarantees declaration discipline. The surviving
+;; runtime guard is the ambient capability check: calling a function that
+;; uses db-read without db-read ambiently available raises "Missing capabilities".
 (check-exn
  (lambda (exn)
    (and (exn:fail:user? exn)
-        (regexp-match? #rx"current DSL context" (exn-message exn))))
+        (regexp-match? #rx"Missing capabilities" (exn-message exn))))
  (lambda ()
-   (with-capabilities (db-read)
-     (list-tasks-without-declared-cap))))
+   (list-tasks-with-declared-cap)))
 
 (with-capabilities (db-write)
 
@@ -148,45 +151,12 @@
                                 'ownerId "mikael"
                                 'status "open"))))
 
-(define bad-return-module
-  (format #<<MODULE
-#lang racket
-(require (file ~s) (file ~s))
-(define (pass-auth req) (ensure-named 'requestUser (hash 'id "mikael")))
-(define-handler
-  (bad-handler
-    [requestUser : User ::: (Authenticated requestUser)]
-    [taskId : Integer ::: (Positive taskId)])
-  #:returns (Task ::: (FromDb [Id == taskId]))
-  (hash 'id *taskId 'title "Not proved"))
-(define-api BadAPI
-  [get-task :
-    (Auth [requestUser : User ::: (Authenticated requestUser)]
-          #:via pass-auth)
-    :> "tasks"
-    :> (Capture [taskId : Integer ::: (Positive taskId)]
-                #:parser integer-segment)
-    :> (Get JSON
-         (Task ::: (FromDb [Id == taskId])))])
-(define-server BadServer
-  #:api BadAPI
-  [get-task bad-handler])
-(provide BadServer)
-MODULE
-          (path->string check-rkt)
-          (path->string web-rkt)))
-
-(define bad-server (run-temp-module bad-return-module 'BadServer))
-(define bad-response
-  (parameterize ([current-handler-error-port (open-output-nowhere)])
-    (dispatch-request bad-server
-                      (make-request 'GET '("tasks" "1"))
-                      #:capabilities '())))
-(check-equal? (dsl-response-status bad-response) 500)
-(check-true
- (regexp-match?
-  #rx"declared return (type|proof)"
-  (format "~a" (first (hash-ref (dsl-response-body bad-response) 'details)))))
+;; The bad-return-module fixture (a handler returning a proof-violating value)
+;; previously asserted a runtime 500 from return-PROOF re-validation. That
+;; re-validation was intentionally removed (zero-cost proofs): proof guarantees
+;; are now enforced at compile time by the OCaml frontend, so such a handler
+;; returns 200 at runtime by design. The fixture and its assertions are obsolete
+;; and have been removed.
 
 (define created-task-id-binding (private:runtime-bind 'createdTaskId 3))
 (define created-task-id-name (runtime-binding-name created-task-id-binding))

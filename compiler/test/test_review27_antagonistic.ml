@@ -475,15 +475,16 @@ fn testHof(n: Int) -> Int =
 |} in
   should_pass src
 
-(* ── F22: Large integer literal overflow gives a clear error ──────────────
-   Int literals above the Racket fixnum limit must be rejected with a clear
-   diagnostic, not silently wrapped or truncated.                               *)
+(* ── F22: Large integer literal compiles (A9/HM-1: Int is arbitrary-precision) ──
+   Formerly Int literals above the fixnum limit were rejected. Under A9/HM-1 the
+   range check is dropped: the huge magnitude is carried as an LBigInt canonical
+   string into the Racket bignum — never silently wrapped or truncated.          *)
 
 let test_large_integer_literal_rejected () =
   let src = prelude ^ {|
 fn f() -> Int = 99999999999999999999
 |} in
-  should_fail "out of range\\|overflow\\|integer literal" src
+  should_pass src
 
 (* ── F23: Nested ADT matching via inner case compiles ────────────────────
    While `Wrap (Something n)` nested constructor patterns are not supported,

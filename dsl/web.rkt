@@ -1,6 +1,7 @@
 #lang racket
 
 (require json
+         net/uri-codec
          net/url-structs
          racket/file
          racket/function
@@ -53,6 +54,8 @@
  define-trusted
  trusted-proof
  define-capture
+ sse-key-capture
+ apply-checker-to-value
  define-api
  define-server
  build-server-spec
@@ -64,12 +67,15 @@
  error-response
  integer-segment
  string-segment
+ ;; Security: static-file path-traversal segment guard (exported for the suite)
+ static-path-segments-safe?
+ static-path-segment-safe?
  (struct-out dsl-request)
  (struct-out dsl-response)
  current-handler-error-port
  tesl-establish-param-proof)
 
-(struct dsl-request (method path headers body cookies raw-request) #:transparent)
+(struct dsl-request (method path headers body cookies query raw-request) #:transparent)
 
 ; Controls where handler runtime errors are logged.
 ; Defaults to current-error-port (production behaviour).
@@ -84,6 +90,19 @@
               [m         (in-value (regexp-match #rx"^([^=]+)=(.*)" part))]
               #:when m)
     (values (string-trim (cadr m)) (caddr m))))
+
+;; Query parameters → a Dict-shaped hash: String key -> String value, form-url
+;; decoded, last-wins on repeated keys (for/hash keeps the last binding), keys
+;; case-sensitive.  `query-alist->hash` consumes the parsed alist shape that BOTH
+;; `(url-query u)` (production) and `form-urlencoded->alist` (api-test inline
+;; `?...`) produce: (listof (cons symbol (or string #f))).  A bare `?k` (no `=`)
+;; yields the empty string.
+(define (query-alist->hash alist)
+  (for/hash ([kv (in-list alist)])
+    (values (symbol->string (car kv)) (or (cdr kv) ""))))
+(define (parse-query-string qs)
+  (query-alist->hash (form-urlencoded->alist (or qs ""))))
+
 (struct dsl-response (status headers body) #:transparent)
 
 (define-syntax-parameter trusted-proof
@@ -930,6 +949,26 @@
      #`(define-syntax name
          (capture-kind-info #'binding #'parser #'#f '#,raw-datum))]))
 
+;; CONC-1: resolve a capturer into a runtime channel-key validator.  An `sse`
+;; endpoint that declares `capture key: T ::: P key via someCapturer` previously
+;; had that capture SILENTLY DROPPED at codegen (the SSE route carried only
+;; prefix/auth/channel), so any authenticated user could subscribe to ANY key —
+;; an IDOR/BOLA gap.  The emitter now puts `(sse-key-capture someCapturer)` in
+;; the SSE route; this macro mirrors the HTTP `Capture` path — it reads the
+;; capturer's parser + checker (compile-time `capture-kind-info`) and expands to
+;; a closure that parses the raw key segment and runs the checker, returning a
+;; `check-fail` on rejection (which `handle-sse-request` raises → the check's
+;; HTTP status) or the validated value on success.
+(define-syntax (sse-key-capture stx)
+  (syntax-parse stx
+    [(_ cap:id)
+     (define kind-info (capture-kind-ref 'sse-key-capture #'cap))
+     (define keyname-sym (binding-name-symbol (capture-kind-info-binding kind-info)))
+     (with-syntax ([parser  (capture-kind-info-parser kind-info)]
+                   [checker (capture-kind-info-checker kind-info)])
+       #`(lambda (key-str)
+           (apply-checker-to-value '#,keyname-sym (parser key-str) checker)))]))
+
 (define-syntax (define-api stx)
   (syntax-parse stx
     [(_ api-name:id endpoint:expr ...+)
@@ -1094,13 +1133,14 @@
        [(bytes? value) (bytes->string/utf-8 value)]
        [else value]))))
 
-(define (make-request method path #:headers [headers (hash)] #:body [body #""])
+(define (make-request method path #:headers [headers (hash)] #:body [body #""] #:query [query ""])
   (define normalized-headers (normalize-headers headers))
   (dsl-request (normalize-method method)
                (map ~a path)
                normalized-headers
                body
                (parse-cookies-header (hash-ref normalized-headers "cookie" #f))
+               (parse-query-string query)
                #f))
 
 (define (request-header req key [default #f])
@@ -1146,6 +1186,7 @@
                headers
                (or (request-post-data/raw req) #"")
                (parse-cookies-header (hash-ref headers "cookie" #f))
+               (query-alist->hash (url-query (request-uri req)))
                req))
 
 (define (instantiate-binder-proof binder bound proof-datum)
@@ -1181,10 +1222,21 @@
     (dsl-response-headers response))
    (list (jsexpr->bytes (prepare-json (dsl-response-body response))))))
 
+;; Request body size cap (DoS): the whole body is read into memory and parsed by
+;; `bytes->jsexpr`; an unbounded body lets a client exhaust memory / CPU.  Reject
+;; oversized bodies with 413 before parsing.  Configurable via TESL_MAX_BODY_BYTES
+;; (bytes); default 1 MiB, which is generous for a typed JSON API.
+(define max-body-bytes
+  (let ([v (getenv "TESL_MAX_BODY_BYTES")])
+    (or (and v (let ([n (string->number v)]) (and (exact-positive-integer? n) n)))
+        (* 1 1024 1024))))
+
 (define (parse-json-body req)
   (cond
     [(not (regexp-match? #rx"application/json" (or (request-header req "content-type" "") "")))
      (check-fail "Expected application/json payload" 415 '())]
+    [(> (bytes-length (dsl-request-body req)) max-body-bytes)
+     (check-fail "Request body too large" 413 '())]
     [(zero? (bytes-length (dsl-request-body req)))
      (check-fail "Missing JSON payload" 400 '())]
     [else
@@ -1247,7 +1299,13 @@
     [(check-fail? parsed) parsed]
     [else
      (with-handlers ([exn:fail? (lambda (exn)
-                                  (check-fail (exn-message exn) 400 '()))])
+                                  ;; Generic client message by default (don't leak
+                                  ;; internal exn text on the decode/handler path);
+                                  ;; full detail only under TESL_VERBOSE.
+                                  (check-fail (if tesl-verbose?
+                                                  (exn-message exn)
+                                                  "Invalid request payload")
+                                              400 '()))])
        (define decoded
          (cond
            [(payload-spec-wire-type spec)
@@ -1725,9 +1783,17 @@
                                                 (dsl-request-method req)
                                                 (string-append "/" (string-join (dsl-request-path req) "/"))
                                                 (exn-message exn)))
+                                      ;; Do NOT leak the internal exception text to
+                                      ;; the client by default — it can expose DB/SQL
+                                      ;; fragments, file paths, internal identifiers.
+                                      ;; The full message is always logged server-side
+                                      ;; above; only echo it in the response under
+                                      ;; TESL_VERBOSE (a dev aid).
                                       (error-response 500
                                                       "Internal server error"
-                                                      #:details (list (exn-message exn))))])
+                                                      #:details (if tesl-verbose?
+                                                                    (list (exn-message exn))
+                                                                    '())))])
            (handler-result->response
            route
            (validate-handler-return
@@ -1804,6 +1870,9 @@
   (define prefix     (first route))
   (define auth-fn    (second route))
   (define channel-s  (third route))
+  ;; CONC-1: 4th element is the channel-key validator (or #f).  Older 3-element
+  ;; routes (none after a recompile) degrade to #f = no key validation.
+  (define key-capture (and (>= (length route) 4) (fourth route)))
   (define path       (dsl-request-path dsl-req))
   (define key-str    (list-ref path (length prefix)))
 
@@ -1811,7 +1880,22 @@
   (when auth-fn
     (define auth-result (auth-fn dsl-req))
     (when (check-fail? auth-result)
-      (raise (auth-result))))
+      ;; Raise the check-fail VALUE (not call it).  The previous `(raise
+      ;; (auth-result))` applied the struct as a procedure — it has no
+      ;; prop:procedure, so it raised "application: not a procedure", which the
+      ;; check-fail? guard in `serve` does not catch, escaping as a 500 with a
+      ;; stack trace.  Raising the value lets that guard render a clean 401.
+      (raise auth-result)))
+
+  ;; CONC-1: enforce the declared per-key capture (e.g. `capture roomId :::
+  ;; ValidRoomId roomId via roomIdCapture`) BEFORE registering the listener.
+  ;; Fail-closed: a rejected key raises the check-fail, which `serve` renders as
+  ;; the check's HTTP status — the same discipline as the HTTP route path and
+  ;; the auth check above.  Previously this declared check was silently dropped.
+  (when key-capture
+    (define checked (key-capture key-str))
+    (when (check-fail? checked)
+      (raise checked)))
 
   ;; Release the pool connection — SSE loop holds the thread alive for minutes
   ;; but needs no DB access.  Without this each open SSE stream permanently
@@ -1834,6 +1918,19 @@
    handler))
 
 ;; ── serve ─────────────────────────────────────────────────────────────────────
+
+;; A static-file URL path segment is "safe" iff it is an ordinary file-name
+;; component: never a `.`/`..` traversal token and containing no path separator.
+;; This is the path-traversal defense for try-serve-static (blocks
+;; `GET /../../etc/passwd`, which decodes to the segments ("..","..",...)).
+;; Pure predicates, exported for the security regression suite.
+(define (static-path-segment-safe? p)
+  (and (not (string=? p ".."))
+       (not (string=? p "."))
+       (not (string-contains? p "/"))
+       (not (string-contains? p "\\"))))
+(define (static-path-segments-safe? parts)
+  (for/and ([p (in-list parts)]) (static-path-segment-safe? p)))
 
 (define (serve server
                #:port         [port 8080]
@@ -1879,17 +1976,32 @@
     (and static-dir-path
          (string=? (dsl-request-method dsl-req) "GET")
          (let* ([path-parts (dsl-request-path dsl-req)]
-                ;; Resolve the path under the static dir, preventing traversal
-                [rel-path (if (null? path-parts)
-                              "index.html"
-                              (apply build-path (map (lambda (p)
-                                                       (if (string=? p "") "index.html" p))
-                                                     path-parts)))]
-                [file-path (build-path static-dir-path rel-path)])
-           (and (file-exists? file-path)
-                (response/full 200 #"OK" (current-seconds)
-                               (path->mime-type file-path) '()
-                               (list (file->bytes file-path)))))))
+                ;; Path-traversal defense.  Each URL segment must be an ordinary
+                ;; file-name component: never `..`/`.` and never containing a path
+                ;; separator or NUL.  `GET /%2e%2e/%2e%2e/etc/passwd` decodes to the
+                ;; segments ("..","..","etc","passwd"); rejecting `..` segments
+                ;; stops `static-dir/../../etc/passwd` (unauthenticated arbitrary
+                ;; file read).  This runs BEFORE auth/dispatch, so it must fail
+                ;; closed.
+                [safe? (static-path-segments-safe? path-parts)])
+           (and safe?
+                (let* ([rel-path (if (null? path-parts)
+                                     "index.html"
+                                     (apply build-path (map (lambda (p)
+                                                              (if (string=? p "") "index.html" p))
+                                                            path-parts)))]
+                       [file-path (build-path static-dir-path rel-path)]
+                       ;; Defense in depth: the resolved path must stay inside the
+                       ;; static dir even after syntactic `..` collapse.
+                       [base (path->string
+                              (simplify-path (path->complete-path static-dir-path) #f))]
+                       [resolved (path->string
+                                  (simplify-path (path->complete-path file-path) #f))])
+                  (and (string-prefix? resolved base)
+                       (file-exists? file-path)
+                       (response/full 200 #"OK" (current-seconds)
+                                      (path->mime-type file-path) '()
+                                      (list (file->bytes file-path)))))))))
 
   (serve/servlet
    (lambda (req)
@@ -1936,9 +2048,15 @@
    #:connection-close? #f))
 
 ;; Register HttpRequest as a runtime type with field access for its fields.
-;; This enables dot-access on HttpRequest values: request.cookies returns the
-;; pre-parsed Dict of cookie key→value pairs.
+;; This enables dot-access on HttpRequest values:
+;;   request.cookies  → pre-parsed Dict of cookie key→value pairs
+;;   request.headers  → Dict of header name→value (names lowercased)
+;; (request.queryParameters is not yet exposed — see roadmap/next.)
 (register-runtime-type/runtime! 'HttpRequest dsl-request?)
 (register-field-access! 'HttpRequest
-                        '(cookies)
-                        (lambda (value _field-name) (dsl-request-cookies value)))
+                        '(cookies headers queryParameters)
+                        (lambda (value field-name)
+                          (case field-name
+                            [(headers) (dsl-request-headers value)]
+                            [(queryParameters) (dsl-request-query value)]
+                            [else      (dsl-request-cookies value)])))

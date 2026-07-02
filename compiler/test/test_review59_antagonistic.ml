@@ -129,9 +129,13 @@ establish positive(n: Int) -> Fact (IsPositive n) =
 (* ── R59_FN — Plain fn cannot mint proofs ───────────────────────────────── *)
 
 let test_R59_FN01_fn_cannot_declare_proof_return () =
-  (* A plain fn cannot declare a proof-carrying return type if the value
-     wasn't received with that proof as a parameter *)
-  should_fail "plain .fn. cannot declare a proof-carrying return type" {|
+  (* A plain fn cannot mint a proof its inputs didn't carry.  The body here uses
+     `ok ::: proof` construction, which is confined to check/auth/establish.
+     A6: the old T001 spelling carve-out was removed (forgery is now decided
+     solely by content in V001); the surviving, more-specific diagnostic for
+     this program is P001 — proof construction is not allowed in `fn` (the same
+     wording R59_FN02 pins, so it is stable). *)
+  should_fail "ok .* proof construction is not allowed in .fn." {|
 #lang tesl
 module R59Fn01 exposing []
 import Tesl.Prelude exposing [Int]

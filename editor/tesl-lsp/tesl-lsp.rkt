@@ -280,10 +280,11 @@
     ;; Tesl.Env
     (cons "env"                 "fn env(name: String) -> Maybe String")
     (cons "envInt"              "fn envInt(name: String, default: Int) -> Int\n\nReads the env var as an integer, returning `default` when it is unset or unparseable (so the result is always an `Int`, never `Maybe Int`).")
+    (cons "requireEnv"          "fn requireEnv(name: String) -> String\n\nReads an env var as a String, failing at startup if it is unset. The String-returning counterpart to `env` (which returns `Maybe String`), for places that need a value directly — e.g. `anthropic (requireEnv \"ANTHROPIC_API_KEY\") \"claude-opus-4-8\"`.")
     ;; Tesl.Agent (AI)
-    (cons "defineAgent"         "fn defineAgent(provider: LlmProvider, systemPrompt: String, maxTokens: Int) -> Agent\n\nBuild an agent from a provider, a system prompt, and a max-tokens budget. Attach tools with withTools. The declarative `agent { … }` block lowers to this.")
-    (cons "withTools"           "fn withTools(agent: Agent, tools: List Tool) -> Agent\n\nAttach a list of tools to an agent, returning the updated agent.")
-    (cons "tool"                "fn tool(name: String, description: String, schema: String, validate: (String) -> a, dispatch: (a) -> String) -> Tool\n\nBuild a tool from a name, description, JSON-schema string, an argument validator, and a dispatch function. The declarative `agent` block derives the schema and validator from a typed function automatically.")
+    (cons "Agent"               "Agent { provider: LlmProvider, systemPrompt: String, maxTokens: Int, tools: List Tool } -> Agent\n\nThe agent constructor. Use it as a top-level `agent X requires [..] = Agent { … }` block OR as a plain expression (e.g. building a per-request bring-your-own-key agent inside a function). `provider` is a full LlmProvider (`anthropic key model`, `mistral key model`, `mockProvider [...]`, …); `tools` is a `List Tool` — wrap typed functions with `asTool`.")
+    (cons "tool"                "fn tool(name: String, description: String, schema: String, validate: (String) -> a, dispatch: (a) -> String) -> Tool\n\nBuild a tool from a name, description, JSON-schema string, an argument validator, and a dispatch function. For a typed Tesl function, prefer `asTool`, which derives all of this automatically.")
+    (cons "asTool"              "asTool <fn> -> Tool\n\nWrap a typed Tesl function as an LLM tool: the JSON schema is derived from the function's parameter types, the model's tool-call arguments are decoded into those parameters, and the function is dispatched — no hand-written schema or validator. Use it in an `Agent { tools: [...] }` field (block or expression), e.g. `tools: [asTool lookupOrderStatus]`. The tool's description is the function's doc-comment.")
     (cons "ask"                 "fn ask(agent: Agent, prompt: String) -> String\n  requires [aiProvider]\n\nRun the agent's tool-calling loop on the prompt and return the model's final assistant text.")
     (cons "askReply"            "fn askReply(agent: Agent, prompt: String) -> AgentReply\n  requires [aiProvider]\n\nLike ask, but returns a richer AgentReply (text + token usage + tool-call count).")
     (cons "askWith"             "fn askWith(agent: Agent, prompt: String, provider: LlmProvider) -> AgentReply\n  requires [aiProvider]\n\nLike askReply, but overrides the agent's default provider for this call — the per-user / bring-your-own-key (BYOK) path.")
@@ -294,6 +295,7 @@
     (cons "replyToolCalls"      "fn replyToolCalls(reply: AgentReply) -> Int\n\nHow many tool round-trips the loop made — assert the exact tool-call sequence length.")
     (cons "anthropic"           "fn anthropic(apiKey: String, model: String) -> LlmProvider\n\nAn Anthropic provider binding. Used inline as an agent block's `provider:` default, or passed to askWith for BYOK.")
     (cons "openai"              "fn openai(apiKey: String, model: String) -> LlmProvider\n\nAn OpenAI provider binding.")
+    (cons "mistral"             "fn mistral(apiKey: String, model: String) -> LlmProvider\n\nA Mistral provider binding (the OpenAI-compatible chat-completions API at Mistral's endpoint).")
     (cons "local"               "fn local(endpoint: String, model: String) -> LlmProvider\n\nA local / OpenAI-compatible provider binding (e.g. Ollama, vLLM) reached at endpoint.")
     (cons "mockProvider"        "fn mockProvider(replies: List String) -> LlmProvider\n\nA deterministic text provider for tests: returns the scripted replies by call index. No network, no keys, no cost.")
     (cons "mockToolProvider"    "fn mockToolProvider(steps: List ToolStep) -> LlmProvider\n\nA deterministic tool-calling provider for tests: scripts the model's tool-use requests and final text with toolUseStep / textStep.")
@@ -303,6 +305,7 @@
     (cons "newConversation"     "fn newConversation(agent: Agent) -> Conversation\n\nStart a fresh multi-turn conversation for the agent.")
     (cons "conversationFrom"    "fn conversationFrom(agent: Agent, json: String) -> Conversation\n\nRestore a conversation from its persisted JSON (see conversationJson).")
     (cons "converse"            "fn converse(conversation: Conversation, prompt: String) -> ConversationTurn\n  requires [aiProvider]\n\nTake one turn: send the prompt and return a ConversationTurn carrying the reply and the advanced conversation.")
+    (cons "converseStreaming"   "fn converseStreaming(conversation: Conversation, prompt: String, publish: (String) -> Unit) -> ConversationTurn\n  requires [aiProvider]\n\nLike converse, but calls `publish` once per loop step with a step event (\"tool: <name>\" as each tool runs, \"text: <reply>\" for the final text) — stream the tool-use/thought process and reply over SSE while threading conversation history.")
     (cons "turnReply"           "fn turnReply(turn: ConversationTurn) -> AgentReply\n\nThe AgentReply produced by a conversation turn.")
     (cons "turnConversation"    "fn turnConversation(turn: ConversationTurn) -> Conversation\n\nThe conversation advanced past this turn (thread it into the next converse).")
     (cons "conversationJson"    "fn conversationJson(conversation: Conversation) -> String\n\nSerialize a conversation to JSON for persistence; restore with conversationFrom.")
@@ -412,7 +415,7 @@
     ("capability"  . "capability declaration")
     ("database"    . "database declaration")
     ("queue"       . "job queue declaration")
-    ("channel"     . "pub/sub channel declaration")
+    ("sseChannel"     . "pub/sub channel declaration")
     ("codec"       . "JSON codec declaration")
     ("capture"     . "capture clause")
     ("server"      . "server declaration")
@@ -858,6 +861,54 @@
 (define (hyphenated-word-at lines line-num char-num)
   (word-at-pred lines line-num char-num hyphenated-ident-char?))
 
+;; ── Validation temp copies ────────────────────────────────────────────────────
+;; To validate an unsaved buffer we write its text to a transient .tesl copy and
+;; invoke a compiler query command on that copy. The copy goes in the SYSTEM temp
+;; dir (not beside the document) so the project tree never gets stray files —
+;; even on a crash, cleanup gap, or read-only/watched source dir.
+;;
+;; But local imports resolve relative to the source file's directory, so a copy
+;; in the temp dir would no longer see its sibling modules. We bridge that with
+;; the `TESL_LOGICAL_PATH` env var: the compiler reads the buffer text from the
+;; temp copy but resolves imports (and reports location `file`s) as if the file
+;; lived at this logical path — the document's true on-disk path. `current-logical-path`
+;; carries that path; the run-* subprocess helpers set the env var from it.
+(define current-logical-path (make-parameter #f))
+
+(define (logical-path->string lp)
+  (cond [(path? lp) (path->string lp)]
+        [(string? lp) lp]
+        [else #f]))
+
+;; Spawn a compiler subprocess with `TESL_LOGICAL_PATH` set to the current
+;; logical path (when one is in effect). Restores the environment afterward.
+(define (with-logical-env thunk)
+  (let ([lp (logical-path->string (current-logical-path))])
+    (if lp
+        (let ([env (environment-variables-copy (current-environment-variables))])
+          (environment-variables-set! env #"TESL_LOGICAL_PATH" (string->bytes/utf-8 lp))
+          (parameterize ([current-environment-variables env]) (thunk)))
+        (thunk))))
+
+;; Create a transient validation copy in the system temp dir (no document-dir arg).
+(define (make-validation-tmp template)
+  (make-temporary-file template))
+
+;; Write `text` to a system-temp validation copy, run `proc` with the temp path
+;; while `current-logical-path` is bound to `logical-path`, then delete the copy.
+;; Returns `fallback` if there is no text/compiler.
+(define (with-validation-tmp template text logical-path compiler proc [fallback #f])
+  (if (and text compiler)
+      (let ([tmp (make-validation-tmp template)])
+        (dynamic-wind
+          void
+          (lambda ()
+            (with-output-to-file tmp #:exists 'truncate (lambda () (display text)))
+            (parameterize ([current-logical-path logical-path])
+              (proc tmp)))
+          (lambda () (when (file-exists? tmp) (delete-file tmp)))))
+      fallback))
+
 ;; ── Diagnostics ──────────────────────────────────────────────────────────────
 
 (define (diag->lsp d)
@@ -875,6 +926,7 @@
                        (if (eq? fix 'null) (hash) (hash 'fix fix))))))
 
 (define (run-check compiler file-path)
+  (with-logical-env (lambda ()
   (let-values ([(proc pout pin perr)
                 (subprocess #f #f #f
                             (path->string compiler)
@@ -885,9 +937,10 @@
            [_   (port->string perr)]
            [_   (subprocess-wait proc)])
       (with-handlers ([exn? (lambda (e) (log (format "check json: ~a" (exn-message e))) '())])
-        (map diag->lsp (hash-ref (read-json (open-input-string raw)) 'diagnostics '()))))))
+        (map diag->lsp (hash-ref (read-json (open-input-string raw)) 'diagnostics '()))))))))
 
 (define (run-local-bindings compiler file-path)
+  (with-logical-env (lambda ()
   (let-values ([(proc pout pin perr)
                 (subprocess #f #f #f
                             (path->string compiler)
@@ -898,9 +951,10 @@
            [_   (port->string perr)]
            [_   (subprocess-wait proc)])
       (with-handlers ([exn? (lambda (e) (log (format "local bindings json: ~a" (exn-message e))) '())])
-        (hash-ref (read-json (open-input-string raw)) 'bindings '())))))
+        (hash-ref (read-json (open-input-string raw)) 'bindings '())))))))
 
 (define (run-definition compiler file-path line col)
+  (with-logical-env (lambda ()
   (let-values ([(proc pout pin perr)
                 (subprocess #f #f #f
                             (path->string compiler)
@@ -914,9 +968,10 @@
            [_   (subprocess-wait proc)])
       (with-handlers ([exn? (lambda (e) (log (format "definition json: ~a" (exn-message e))) #f)])
         (let ([definition (hash-ref (read-json (open-input-string raw)) 'definition 'null)])
-          (and (hash? definition) definition))))))
+          (and (hash? definition) definition))))))))
 
 (define (run-occurrences compiler file-path line col)
+  (with-logical-env (lambda ()
   (let-values ([(proc pout pin perr)
                 (subprocess #f #f #f
                             (path->string compiler)
@@ -929,10 +984,11 @@
            [_   (port->string perr)]
            [_   (subprocess-wait proc)])
       (with-handlers ([exn? (lambda (e) (log (format "occurrences json: ~a" (exn-message e))) '())])
-        (hash-ref (read-json (open-input-string raw)) 'occurrences '())))))
+        (hash-ref (read-json (open-input-string raw)) 'occurrences '())))))))
 
 (define (run-semantic compiler file-path)
   ;; --semantic-json <file> → full typed module snapshot (or #f on parse error).
+  (with-logical-env (lambda ()
   (let-values ([(proc pout pin perr)
                 (subprocess #f #f #f
                             (path->string compiler)
@@ -944,19 +1000,20 @@
            [_   (subprocess-wait proc)])
       (with-handlers ([exn? (lambda (e) (log (format "semantic json: ~a" (exn-message e))) #f)])
         (let ([j (read-json (open-input-string raw))])
-          (and (hash? j) j))))))
+          (and (hash? j) j))))))))
 
 (define (run-fmt compiler text source-path)
   ;; The CLI `--fmt` rewrites a file in place. Run it on a temp copy of the
   ;; current (possibly unsaved) buffer text and read the formatted result back.
   ;; Returns the formatted string, or #f if formatting failed (parse error etc.).
   (and text compiler
-       (let* ([dir (or (path-only source-path) (current-directory))]
-              [tmp (make-temporary-file "tesl-fmt-~a.tesl" #f dir)])
+       (let ([tmp (make-validation-tmp "tesl-fmt-~a.tesl")])
          (dynamic-wind
            void
            (lambda ()
              (with-output-to-file tmp #:exists 'truncate (lambda () (display text)))
+             (parameterize ([current-logical-path source-path])
+             (with-logical-env (lambda ()
              (let-values ([(proc pout pin perr)
                            (subprocess #f #f #f
                                        (path->string compiler)
@@ -969,11 +1026,12 @@
                       [code (subprocess-status proc)])
                  (if (zero? code)
                      (file->string tmp)
-                     (begin (log (format "fmt failed: ~a" (string-trim er))) #f)))))
+                     (begin (log (format "fmt failed: ~a" (string-trim er))) #f))))))))
            (lambda ()
              (when (file-exists? tmp) (delete-file tmp)))))))
 
 (define (run-completions compiler file-path line col)
+  (with-logical-env (lambda ()
   (let-values ([(proc pout pin perr)
                 (subprocess #f #f #f
                             (path->string compiler)
@@ -986,9 +1044,10 @@
            [_   (port->string perr)]
            [_   (subprocess-wait proc)])
       (with-handlers ([exn? (lambda (e) (log (format "completions json: ~a" (exn-message e))) '())])
-        (hash-ref (read-json (open-input-string raw)) 'completions '())))))
+        (hash-ref (read-json (open-input-string raw)) 'completions '())))))))
 
 (define (run-type-at compiler file-path line col)
+  (with-logical-env (lambda ()
   (let-values ([(proc pout pin perr)
                 (subprocess #f #f #f
                             (path->string compiler)
@@ -1002,9 +1061,10 @@
            [_   (subprocess-wait proc)])
       (with-handlers ([exn? (lambda (e) (log (format "type-at json: ~a" (exn-message e))) #f)])
         (let ([type-at (hash-ref (read-json (open-input-string raw)) 'type_at 'null)])
-          (and (hash? type-at) type-at))))))
+          (and (hash? type-at) type-at))))))))
 
 (define (run-field-at compiler file-path line col)
+  (with-logical-env (lambda ()
   (let-values ([(proc pout pin perr)
                 (subprocess #f #f #f
                             (path->string compiler)
@@ -1018,13 +1078,14 @@
            [_   (subprocess-wait proc)])
       (with-handlers ([exn? (lambda (e) (log (format "field-at json: ~a" (exn-message e))) #f)])
         (let ([field-at (hash-ref (read-json (open-input-string raw)) 'field_at 'null)])
-          (and (hash? field-at) field-at))))))
+          (and (hash? field-at) field-at))))))))
 
 ;; ── New positional compiler queries (Wave E2) ───────────────────────────────────
 ;; Generic helper: run the compiler with a positional JSON flag and return the
 ;; parsed top-level jsexpr, or `on-fail` when anything goes wrong. Mirrors the
 ;; one-off run-* helpers above; centralised so new flags stay one-liners.
 (define (run-compiler-positional-json compiler flag file-path line col on-fail label)
+  (with-logical-env (lambda ()
   (let-values ([(proc pout pin perr)
                 (subprocess #f #f #f
                             (path->string compiler)
@@ -1037,7 +1098,7 @@
            [_   (port->string perr)]
            [_   (subprocess-wait proc)])
       (with-handlers ([exn? (lambda (e) (log (format "~a json: ~a" label (exn-message e))) on-fail)])
-        (read-json (open-input-string raw))))))
+        (read-json (open-input-string raw))))))))
 
 (define (run-signature-help compiler file-path line col)
   ;; --signature-help-json → {signature:{label,parameters,active_parameter}|null}.
@@ -1225,19 +1286,12 @@
          (format "```tesl\n~a\n```" ty))))
 
 (define (compiler-hover-markdown compiler source-path text line col)
-  (and text compiler
-       (let* ([dir (or (path-only source-path) (current-directory))]
-              [tmp (make-temporary-file "tesl-hover-~a.tesl" #f dir)])
-         (dynamic-wind
-           void
-           (lambda ()
-             (with-output-to-file tmp #:exists 'truncate (lambda () (display text)))
-             (let ([field-at (run-field-at compiler tmp line col)])
-               (or (and field-at (format-field-at-hover field-at))
-                   (let ([type-at (run-type-at compiler tmp line col)])
-                     (and type-at (format-type-at-hover type-at))))))
-           (lambda ()
-             (when (file-exists? tmp) (delete-file tmp)))))))
+  (with-validation-tmp "tesl-hover-~a.tesl" text source-path compiler
+    (lambda (tmp)
+      (let ([field-at (run-field-at compiler tmp line col)])
+        (or (and field-at (format-field-at-hover field-at))
+            (let ([type-at (run-type-at compiler tmp line col)])
+              (and type-at (format-type-at-hover type-at))))))))
 
 ;; ── Completion mapping ──────────────────────────────────────────────────────────
 ;; LSP CompletionItemKind numeric codes we use.
@@ -1803,14 +1857,12 @@
      (hash-set! local-bindings-cache uri '())
      (log "no compiler")]
     [else
-     (let* ([dir  (or (path-only disk-path) (current-directory))]
-            [tmp  (make-temporary-file "tesl-lsp-~a.tesl" #f dir)])
-       (with-output-to-file tmp #:exists 'truncate (lambda () (display text)))
-       (let ([diags    (run-check compiler tmp)]
-             [bindings (run-local-bindings compiler tmp)])
-         (hash-set! local-bindings-cache uri bindings)
-         (delete-file tmp)
-         (publish-diags! out uri diags)))]))
+     (with-validation-tmp "tesl-lsp-~a.tesl" text disk-path compiler
+       (lambda (tmp)
+         (let ([diags    (run-check compiler tmp)]
+               [bindings (run-local-bindings compiler tmp)])
+           (hash-set! local-bindings-cache uri bindings)
+           (publish-diags! out uri diags))))]))
 
 (define (check-disk! out uri disk-path compiler)
   (cond
@@ -1839,21 +1891,14 @@
   (string->symbol uri))
 
 ;; Run `proc` with a temp file holding the current (possibly unsaved) buffer
-;; `text`, beside `source-path` so relative imports still resolve. `proc` takes
+;; `text`, written to the SYSTEM temp dir. `current-logical-path` is bound to
+;; `source-path` so the run-* helpers tell the compiler to resolve imports (and
+;; report location `file`s) as if the copy lived at `source-path`. `proc` takes
 ;; the temp path and returns whatever; the file is always cleaned up. Returns
 ;; `fallback` when there is no text/compiler. Centralises the repeated
 ;; make-temporary-file / dynamic-wind idiom used by positional queries.
 (define (with-text-tmp text source-path compiler proc [fallback #f])
-  (if (and text compiler)
-      (let* ([dir (or (path-only source-path) (current-directory))]
-             [tmp (make-temporary-file "tesl-lsp-q-~a.tesl" #f dir)])
-        (dynamic-wind
-          void
-          (lambda ()
-            (with-output-to-file tmp #:exists 'truncate (lambda () (display text)))
-            (proc tmp))
-          (lambda () (when (file-exists? tmp) (delete-file tmp)))))
-      fallback))
+  (with-validation-tmp "tesl-lsp-q-~a.tesl" text source-path compiler proc fallback))
 
 ;; ── Incremental document sync ────────────────────────────────────────────────
 ;; Convert an LSP {line,character} position into a 0-based string offset within
@@ -2231,16 +2276,9 @@
                           (and (>= idx 0) (< idx (string-length ln))
                                (eqv? (string-ref ln idx) #\.))))]
                   [compiler-items
-                   (and text compiler
-                        (let* ([dir (or (path-only source-path) (current-directory))]
-                               [tmp (make-temporary-file "tesl-completion-~a.tesl" #f dir)])
-                          (dynamic-wind
-                            void
-                            (lambda ()
-                              (with-output-to-file tmp #:exists 'truncate (lambda () (display text)))
-                              (run-completions compiler tmp line-num char-num))
-                            (lambda ()
-                              (when (file-exists? tmp) (delete-file tmp))))))]
+                   (with-validation-tmp "tesl-completion-~a.tesl" text source-path compiler
+                     (lambda (tmp)
+                       (run-completions compiler tmp line-num char-num)))]
                   ;; Inside a config block (and not after a dot): offer the
                   ;; block's not-yet-written schema fields, ranked first.
                   [cfg-cc (and text (not after-dot?)
@@ -2288,7 +2326,9 @@
                       [source-path (uri->path uri)]
                       [result (with-text-tmp text source-path compiler
                                 (lambda (tmp)
-                                  (definition->lsp (run-definition compiler tmp line-num char-num) uri tmp)))])
+                                  ;; The compiler reports same-file locations under the
+                                  ;; logical path (source-path), so compare against it.
+                                  (definition->lsp (run-definition compiler tmp line-num char-num) uri source-path)))])
                  (or result 'null))))
            (loop)]
 
@@ -2305,7 +2345,7 @@
                       [source-path (uri->path uri)]
                       [result (with-text-tmp text source-path compiler
                                 (lambda (tmp)
-                                  (location->lsp (run-type-definition compiler tmp line-num char-num) uri tmp)))])
+                                  (location->lsp (run-type-definition compiler tmp line-num char-num) uri source-path)))])
                  (or result 'null))))
            (loop)]
 
@@ -2328,16 +2368,9 @@
                         (let ([query-path source-path]
                               [original-uri uri])
                           (if (hash-has-key? docs uri)
-                              (let* ([dir (or (path-only source-path) (current-directory))]
-                                     [tmp (make-temporary-file "tesl-definition-~a.tesl" #f dir)])
-                                (dynamic-wind
-                                  void
-                                  (lambda ()
-                                    (with-output-to-file tmp #:exists 'truncate (lambda () (display text)))
-                                    (definition->lsp (run-definition compiler tmp line-num char-num) original-uri tmp))
-                                  (lambda ()
-                                    (when (file-exists? tmp)
-                                      (delete-file tmp)))))
+                              (with-validation-tmp "tesl-definition-~a.tesl" text source-path compiler
+                                (lambda (tmp)
+                                  (definition->lsp (run-definition compiler tmp line-num char-num) original-uri source-path)))
                               (definition->lsp (run-definition compiler query-path line-num char-num) original-uri query-path))))]
                   [fallback-result
                    (and text
@@ -2368,16 +2401,9 @@
                         (let ([query-path source-path]
                               [original-uri uri])
                           (if (hash-has-key? docs uri)
-                              (let* ([dir (or (path-only source-path) (current-directory))]
-                                     [tmp (make-temporary-file "tesl-occurrences-~a.tesl" #f dir)])
-                                (dynamic-wind
-                                  void
-                                  (lambda ()
-                                    (with-output-to-file tmp #:exists 'truncate (lambda () (display text)))
-                                    (occurrences->lsp (run-occurrences compiler tmp line-num char-num) original-uri tmp))
-                                  (lambda ()
-                                    (when (file-exists? tmp)
-                                      (delete-file tmp)))))
+                              (with-validation-tmp "tesl-occurrences-~a.tesl" text source-path compiler
+                                (lambda (tmp)
+                                  (occurrences->lsp (run-occurrences compiler tmp line-num char-num) original-uri source-path)))
                               (occurrences->lsp (run-occurrences compiler query-path line-num char-num) original-uri query-path))))])
              (write-message out (hash 'jsonrpc "2.0" 'id id 'result (or result '()))))
            (loop)]
@@ -2391,18 +2417,11 @@
                   [text      (hash-ref docs uri #f)]
                   [source-path (uri->path uri)]
                   [result
-                   (and text compiler
-                        (let* ([dir (or (path-only source-path) (current-directory))]
-                               [tmp (make-temporary-file "tesl-prepare-~a.tesl" #f dir)])
-                          (dynamic-wind
-                            void
-                            (lambda ()
-                              (with-output-to-file tmp #:exists 'truncate (lambda () (display text)))
-                              (occurrences->prepare-rename
-                               (run-occurrences compiler tmp line-num char-num)
-                               line-num char-num))
-                            (lambda ()
-                              (when (file-exists? tmp) (delete-file tmp))))))])
+                   (with-validation-tmp "tesl-prepare-~a.tesl" text source-path compiler
+                     (lambda (tmp)
+                       (occurrences->prepare-rename
+                        (run-occurrences compiler tmp line-num char-num)
+                        line-num char-num)))])
              (write-message out (hash 'jsonrpc "2.0" 'id id 'result (or result 'null))))
            (loop)]
 
@@ -2421,16 +2440,9 @@
                         (let ([query-path source-path]
                               [original-uri uri])
                           (if (hash-has-key? docs uri)
-                              (let* ([dir (or (path-only source-path) (current-directory))]
-                                     [tmp (make-temporary-file "tesl-rename-~a.tesl" #f dir)])
-                                (dynamic-wind
-                                  void
-                                  (lambda ()
-                                    (with-output-to-file tmp #:exists 'truncate (lambda () (display text)))
-                                    (occurrences->workspace-edit (run-occurrences compiler tmp line-num char-num) new-name original-uri tmp))
-                                  (lambda ()
-                                    (when (file-exists? tmp)
-                                      (delete-file tmp)))))
+                              (with-validation-tmp "tesl-rename-~a.tesl" text source-path compiler
+                                (lambda (tmp)
+                                  (occurrences->workspace-edit (run-occurrences compiler tmp line-num char-num) new-name original-uri source-path)))
                               (occurrences->workspace-edit (run-occurrences compiler query-path line-num char-num) new-name original-uri query-path))))])
              (write-message out (hash 'jsonrpc "2.0" 'id id 'result (or result 'null))))
            (loop)]
@@ -2455,16 +2467,9 @@
                   [text (hash-ref docs uri #f)]
                   [source-path (uri->path uri)]
                   [result
-                   (and text compiler
-                        (let* ([dir (or (path-only source-path) (current-directory))]
-                               [tmp (make-temporary-file "tesl-symbols-~a.tesl" #f dir)])
-                          (dynamic-wind
-                            void
-                            (lambda ()
-                              (with-output-to-file tmp #:exists 'truncate (lambda () (display text)))
-                              (semantic->document-symbols (run-semantic compiler tmp) uri))
-                            (lambda ()
-                              (when (file-exists? tmp) (delete-file tmp))))))])
+                   (with-validation-tmp "tesl-symbols-~a.tesl" text source-path compiler
+                     (lambda (tmp)
+                       (semantic->document-symbols (run-semantic compiler tmp) uri)))])
              (write-message out (hash 'jsonrpc "2.0" 'id id 'result (or result '()))))
            (loop)]
 
@@ -2590,17 +2595,10 @@
                   [text     (hash-ref docs uri #f)]
                   [source-path (uri->path uri)]
                   [result
-                   (and text compiler
-                        (let* ([dir (or (path-only source-path) (current-directory))]
-                               [tmp (make-temporary-file "tesl-highlight-~a.tesl" #f dir)])
-                          (dynamic-wind
-                            void
-                            (lambda ()
-                              (with-output-to-file tmp #:exists 'truncate (lambda () (display text)))
-                              (occurrences->document-highlights
-                               (run-occurrences compiler tmp line-num char-num)))
-                            (lambda ()
-                              (when (file-exists? tmp) (delete-file tmp))))))])
+                   (with-validation-tmp "tesl-highlight-~a.tesl" text source-path compiler
+                     (lambda (tmp)
+                       (occurrences->document-highlights
+                        (run-occurrences compiler tmp line-num char-num))))])
              (write-message out (hash 'jsonrpc "2.0" 'id id 'result (or result '()))))
            (loop)]
 

@@ -4,6 +4,10 @@
 
 The current `auto-migrate?: true` approach creates/alters tables at startup. This is convenient for development but not always suitable for production: no rollback path, no audit trail, destructive changes (rename column, change type) not supported, and multi-instance deployments can race.
 
+## Feedback
+
+This feature might not be as necessary as we first thought - after feedback from users the automatic migrations work very well.
+
 ## Proposed design
 
 ```tesl

@@ -1533,9 +1533,11 @@ codec Msg {
     Alcotest.failf "codec_missing_with_codec: expected tesl-codec-decode-Msg-0 in output"
 
 let test_codec_missing_toJson_errors () =
-  (* OCaml compiler is lenient about missing toJson — it parses the codec block
-     without the toJson section. The decoder is still emitted.
-     Verify the decoder is present. *)
+  (* A codec must declare BOTH JSON directions explicitly (or the *_forbidden
+     escape hatch / adtJson).  A codec with only `fromJson` and no `toJson` is
+     a half-defined codec — the codec-completeness rule rejects it rather than
+     silently emitting only one direction (which previously let a one-way codec
+     through unnoticed). *)
   let src = module_ ~exports:"Msg" {|
 record Msg {
   content: String
@@ -1548,9 +1550,19 @@ codec Msg {
   ]
 }
 |} in
-  let racket = compile_ok "codec_missing_toJson" src in
-  if not (contains "tesl-codec-decode-Msg-0" racket) then
-    Alcotest.failf "codec_missing_toJson: expected tesl-codec-decode-Msg-0 in output"
+  match Compile.compile_source ~root_path:root "<test>" src with
+  | Compile.Success _ ->
+    Alcotest.failf
+      "codec_missing_toJson: expected rejection (codec missing the toJson \
+       direction) but it compiled"
+  | Compile.Failure diags ->
+    let msg =
+      String.concat "; "
+        (List.map (fun (d : Compile.diagnostic) -> d.message) diags) in
+    if not (contains "toJson" msg) then
+      Alcotest.failf
+        "codec_missing_toJson: expected a missing-toJson completeness error, \
+         got: %s" msg
 
 let test_codec_required_for_http_body () =
   (* OCaml validation: check_source reports an error when a record used as HTTP

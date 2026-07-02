@@ -398,20 +398,27 @@ and parse_proof_atom s =
       | INT n ->
         advance s;
         args := string_of_int n :: !args
+      | BIGINT bs ->
+        (* A9/HM-1: huge integer proof argument — canonical string identity. *)
+        advance s;
+        args := bs :: !args
       | FLOAT f ->
         advance s;
-        args := string_of_float f :: !args
+        (* S15: float proof args use the collision-free identity key, matching the
+           proof-SUBJECT identity in Validation_common.subject_of_expr. *)
+        args := Float_fmt.identity_key f :: !args
       | STRING str ->
         advance s;
         (* Store string as a quoted opaque argument so proof predicates
            round-trip and the validator can match on string content. *)
         args := ("\"" ^ str ^ "\"") :: !args
-      | MINUS when (match peek2 s with INT _ | FLOAT _ -> true | _ -> false) ->
-        (* Negative numeric literals: -100, -3.14 *)
+      | MINUS when (match peek2 s with INT _ | BIGINT _ | FLOAT _ -> true | _ -> false) ->
+        (* Negative numeric literals: -100, -3.14, -99999999999999999999999 *)
         advance s;
         (match peek s with
          | INT n  -> advance s; args := ("-" ^ string_of_int n)  :: !args
-         | FLOAT f -> advance s; args := ("-" ^ string_of_float f) :: !args
+         | BIGINT bs -> advance s; args := ("-" ^ bs) :: !args
+         | FLOAT f -> advance s; args := Float_fmt.identity_key (-. f) :: !args
          | _ -> continue_ := false)
       | _ -> continue_ := false
     done;
@@ -1158,7 +1165,7 @@ and parse_body_require_indent s _kw_loc kw_name =
     if peek s = DEDENT then advance s;  (* consume DEDENT *)
     return e
   end else
-    err s (Printf.sprintf "the `%s` body must be on an indented new line. Single-line `if cond then a else b` is not supported." kw_name)
+    err s (Printf.sprintf "the `%s` body must be on an indented new line. Single-line `if cond then a else b` is not supported — put `then` and `else` on their own indented lines:\n    if cond then\n        a\n    else\n        b" kw_name)
 
 (** Parse a body that may be on the same line OR indented on next line. *)
 and parse_body_or_inline s =
@@ -1300,6 +1307,9 @@ and parse_pattern s =
       | INT n ->
         let lloc = current_loc s in
         advance s; [("value", PLit { value = LInt n; loc = lloc })]
+      | BIGINT bs ->
+        let lloc = current_loc s in
+        advance s; [("value", PLit { value = LBigInt bs; loc = lloc })]
       | STRING str ->
         let lloc = current_loc s in
         advance s; [("value", PLit { value = LString str; loc = lloc })]
@@ -1322,6 +1332,9 @@ and parse_pattern s =
          | INT n ->
            let loc2 = span lloc (current_loc s) in
            advance s; [("value", PLit { value = LInt (-n); loc = loc2 })]
+         | BIGINT bs ->
+           let loc2 = span lloc (current_loc s) in
+           advance s; [("value", PLit { value = LBigInt ("-" ^ bs); loc = loc2 })]
          | _ -> [])
       | _ -> []
     in
@@ -1398,6 +1411,12 @@ and parse_pattern s =
           advance s;
           let pos = List.length !fields in
           fields := (Printf.sprintf "_pos%d" pos, PLit { value = LInt n; loc = lloc }) :: !fields
+        | BIGINT bs ->
+          (* Nested huge integer literal pattern: Something 99999999999999999999999 *)
+          let lloc = current_loc s in
+          advance s;
+          let pos = List.length !fields in
+          fields := (Printf.sprintf "_pos%d" pos, PLit { value = LBigInt bs; loc = lloc }) :: !fields
         | MINUS ->
           (* Nested negative integer literal pattern: Something -1 *)
           let lloc = current_loc s in
@@ -1407,6 +1426,10 @@ and parse_pattern s =
              advance s;
              let pos = List.length !fields in
              fields := (Printf.sprintf "_pos%d" pos, PLit { value = LInt (-n); loc = lloc }) :: !fields
+           | BIGINT bs ->
+             advance s;
+             let pos = List.length !fields in
+             fields := (Printf.sprintf "_pos%d" pos, PLit { value = LBigInt ("-" ^ bs); loc = lloc }) :: !fields
            | _ -> continue_ := false)
         | STRING str ->
           (* Nested string literal pattern: Something "hello" *)
@@ -1430,6 +1453,9 @@ and parse_pattern s =
   | INT n ->
     let loc = span loc0 (current_loc s) in
     advance s; return (PLit { value = LInt n; loc })
+  | BIGINT bs ->
+    let loc = span loc0 (current_loc s) in
+    advance s; return (PLit { value = LBigInt bs; loc })
   | MINUS ->
     (* Negative integer literal in pattern: -42 *)
     advance s;
@@ -1437,6 +1463,9 @@ and parse_pattern s =
      | INT n ->
        let loc = span loc0 (current_loc s) in
        advance s; return (PLit { value = LInt (-n); loc })
+     | BIGINT bs ->
+       let loc = span loc0 (current_loc s) in
+       advance s; return (PLit { value = LBigInt ("-" ^ bs); loc })
      | t ->
        err s (Printf.sprintf "expected integer after `-` in pattern, got %s" (tok_to_string t)))
   | t ->
@@ -1783,12 +1812,13 @@ and parse_unary s =
   match peek s with
   | MINUS ->
     advance s;
-    (* Special case: -4611686018427387904 = -2^62 = min_int, the valid negative boundary.
-       The lexer emits this as INT min_int (sentinel) since 2^62 overflows OCaml int. *)
+    (* A9/HM-1: a negated out-of-native-range magnitude (e.g. -4611686018427387904
+       = -2^62, or any huge literal) is folded into a signed LBigInt string here, so
+       downstream code never sees EUnop(UNeg, LBigInt _). *)
     (match peek s with
-     | INT n when n = min_int ->
+     | BIGINT bs ->
        advance s;
-       return (ELit { lit = LInt min_int; loc = loc0 })
+       return (ELit { lit = LBigInt ("-" ^ bs); loc = loc0 })
      | _ ->
        let* arg = parse_app s in
        let loc = span loc0 (expr_loc arg) in
@@ -1962,7 +1992,7 @@ and parse_app s =
     | `Continue in_test_request_continuation ->
     (* An argument can only start with an atom *)
     match peek s with
-    | INT _ | FLOAT _ | STRING _ | INTERP _ | TRUE | FALSE
+    | INT _ | BIGINT _ | FLOAT _ | STRING _ | INTERP _ | TRUE | FALSE
     | NOTHING | SOMETHING | LPAREN | LBRACE | LBRACKET ->
       (* Don't consume if it looks like it starts a new statement / operator *)
       (match try_parse s (fun s ->
@@ -1992,8 +2022,12 @@ and parse_app s =
     | IDENT name when is_statement_starter_ident name ->
       return fn
     | IDENT _ | UIDENT _
-    (* Allow keyword-as-identifier tokens as function application arguments *)
-    | EMAIL | SMTP ->
+    (* Allow keyword-as-identifier tokens as function application arguments.
+       These are contextual/block keywords that are also natural local-variable
+       names (e.g. `seed` for seed rows, `table`/`schema` in DB code); without
+       this, `insertMany seed in Order` would stop consuming args at `seed`,
+       leaving `insertMany` bare ("unknown name: insertMany"). *)
+    | EMAIL | SMTP | SEED | TABLE | SCHEMA | BACKEND ->
       (* Don't consume if it looks like it starts a new statement / operator *)
       (match try_parse s (fun s ->
          let saved = s.pos in
@@ -2020,7 +2054,7 @@ and parse_app s =
          let loc = span (expr_loc fn) (expr_loc arg) in
          loop in_test_request_continuation (EApp { fn; arg; loc })
        | Ok None | Err _ -> return fn)
-    | MINUS when (match peek2 s with INT _ | FLOAT _ -> true | _ -> false) &&
+    | MINUS when (match peek2 s with INT _ | BIGINT _ | FLOAT _ -> true | _ -> false) &&
                  (* Only treat as negative literal when '-' is immediately adjacent to the
                     digit (no whitespace): `f -3` parses as f(-3), but `x - 3` is subtraction.
                     This lets plain variables like `n` participate in arithmetic without `*`. *)
@@ -2085,15 +2119,13 @@ and parse_postfix s =
 and parse_atom s =
   let loc0 = current_loc s in
   match peek s with
-  | INT n when n = min_int ->
-    (* The sentinel min_int means the source literal was 4611686018427387904 (= 2^62),
-       which is only valid as a negative literal -4611686018427387904. *)
-    err s (Printf.sprintf
-      "integer literal 4611686018427387904 is out of range for a positive Int \
-       (max positive value is %d = 2^62-1); did you mean -4611686018427387904?" max_int)
   | INT n ->
     advance s;
     return (ELit { lit = LInt n; loc = loc0 })
+  | BIGINT bs ->
+    (* A9/HM-1: out-of-native-range magnitude carried as a canonical string. *)
+    advance s;
+    return (ELit { lit = LBigInt bs; loc = loc0 })
   | FLOAT f ->
     advance s;
     return (ELit { lit = LFloat f; loc = loc0 })
@@ -2102,10 +2134,8 @@ and parse_atom s =
     let saved = s.pos in
     advance s;
     (match peek s with
-     | INT n when n = min_int ->
-       (* -4611686018427387904 = min_int = -2^62: the valid negative boundary of Tesl Int *)
-       advance s; return (ELit { lit = LInt min_int; loc = loc0 })
      | INT n  -> advance s; return (ELit { lit = LInt (-n); loc = loc0 })
+     | BIGINT bs -> advance s; return (ELit { lit = LBigInt ("-" ^ bs); loc = loc0 })
      | FLOAT f -> advance s; return (ELit { lit = LFloat (-.f); loc = loc0 })
      | _ -> s.pos <- saved; err s "expected expression")
   | TRUE ->
@@ -2802,7 +2832,7 @@ let parse_func_body s =
       let loc = expr_loc first in
       let* rest = parse_stmt_seq s in
       return (ELet { name = "_"; declared_type = None; declared_proof = None; value = first; body = rest; loc })
-    | IDENT _ | UIDENT _ | STRING _ | INTERP _ | INT _ | FLOAT _
+    | IDENT _ | UIDENT _ | STRING _ | INTERP _ | INT _ | BIGINT _ | FLOAT _
     | NOTHING | SOMETHING | LPAREN | LBRACE | LBRACKET | TRUE | FALSE
     | MINUS ->
       (* Could be more statements at same level — try to parse as sequence *)
@@ -3430,11 +3460,18 @@ let parse_codec_form s name type_name =
   skip_layout s;
   let to_json = ref ToJsonForbidden in
   let from_json = ref FromJsonForbidden in
+  (* Track which JSON directions were stated EXPLICITLY.  Omitting a direction
+     used to silently default to *_forbidden, which masked real bugs (e.g. a
+     response type with only `toJson` would still be treated as decode-forbidden,
+     and a type with neither was silently non-serializable).  Require both. *)
+  let to_set = ref false in
+  let from_set = ref false in
   while peek s <> RBRACE && peek s <> EOF do
     skip_layout s;
     (match peek s with
      | TO_JSON ->
        advance s;
+       to_set := true;
        if peek s = LBRACE then begin
          advance s; skip_layout s;
          let entries = ref [] in
@@ -3470,9 +3507,11 @@ let parse_codec_form s name type_name =
        end
      | TO_JSON_FORBIDDEN ->
        advance s;
+       to_set := true;
        to_json := ToJsonForbidden
      | FROM_JSON ->
        advance s;
+       from_set := true;
        (* fromJson [ { field <- "key" with_codec c via checker, ... }, ... ] *)
        if peek s = LBRACKET then begin
          advance s; skip_layout s;
@@ -3568,9 +3607,12 @@ let parse_codec_form s name type_name =
        end
      | FROM_JSON_FORBIDDEN ->
        advance s;
+       from_set := true;
        from_json := FromJsonForbidden
      | ADT_JSON ->
        advance s;
+       to_set := true;
+       from_set := true;
        to_json := ToJsonAdt;
        from_json := FromJsonAdt
      | NEWLINE -> advance s
@@ -3580,7 +3622,22 @@ let parse_codec_form s name type_name =
   done;
   let* _ = expect s RBRACE in
   let loc = span loc0 (current_loc s) in
-  return { name; type_name; to_json = !to_json; from_json = !from_json; loc }
+  if not !to_set || not !from_set then
+    let missing =
+      match !to_set, !from_set with
+      | false, false -> "both toJson and fromJson"
+      | false, _     -> "toJson"
+      | _, false     -> "fromJson"
+      | _            -> ""
+    in
+    Err { msg = Printf.sprintf
+            "codec `%s` must declare both JSON directions explicitly; missing %s. \
+             Add `toJson { … }` or `toJson_forbidden`, and `fromJson [ … ]` or \
+             `fromJson_forbidden` (or use `adtJson` for an ADT type)."
+            name missing;
+          loc = loc0 }
+  else
+    return { name; type_name; to_json = !to_json; from_json = !from_json; loc }
 
 (** Parse a database declaration: `database NAME = Database { … }`. *)
 let parse_database_form s =
@@ -4267,6 +4324,37 @@ and parse_test_stmt_items s =
       return nested
     end else
       return []
+  (* SQL write statements (`update`/`delete`) carry indented `where … set … = …`
+     continuation clauses.  The test-body expression parser runs with
+     `allow_test_multiline_request_continuations` on (for api-test request
+     modifiers like `.cookie`/`.headers`), which mis-consumes those indented SQL
+     clauses and chokes on the `=`.  Parse these statements the same way function
+     bodies do instead: head with the flag OFF, then the indented continuation
+     block as a `parse_stmt_seq` (mirrors parse_stmt_seq's INDENT arm). *)
+  | IDENT ("update" | "delete") ->
+    let saved = s.allow_test_multiline_request_continuations in
+    s.allow_test_multiline_request_continuations <- false;
+    let result =
+      match parse_expr s with
+      | Ok e ->
+        skip_newlines s;
+        (match peek s with
+         | INDENT ->
+           advance s;
+           (match parse_stmt_seq s with
+            | Ok body ->
+              skip_newlines s;
+              if peek s = DEDENT then advance s;
+              let combined = ELet { name = "_"; declared_type = None;
+                                    declared_proof = None; value = e; body;
+                                    loc = expr_loc e } in
+              return [TsExpr { e = combined; loc = expr_loc combined }]
+            | Err _ -> return [TsExpr { e; loc = expr_loc e }])
+         | _ -> return [TsExpr { e; loc = expr_loc e }])
+      | Err _ -> return []
+    in
+    s.allow_test_multiline_request_continuations <- saved;
+    result
   | _ ->
     (match parse_test_expr_with_indented_args s with
      | Ok e -> return [TsExpr { e; loc = expr_loc e }]

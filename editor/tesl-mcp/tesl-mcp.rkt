@@ -220,25 +220,25 @@
 
    (hasheq
     'name "tesl.type_at"
-    'description "Type of the expression at a position (1-based line, 0-based col)."
+    'description "Type of the expression at a position (0-based line, 0-based col)."
     'inputSchema (file-line-col-schema)
     'run (positional-json-tool "--type-at-json"))
 
    (hasheq
     'name "tesl.signature"
-    'description "Signature help for the call at a position (1-based line, 0-based col)."
+    'description "Signature help for the call at a position (0-based line, 0-based col)."
     'inputSchema (file-line-col-schema)
     'run (positional-json-tool "--signature-help-json"))
 
    (hasheq
     'name "tesl.completions"
-    'description "In-scope completions at a position (1-based line, 0-based col)."
+    'description "In-scope completions at a position (0-based line, 0-based col)."
     'inputSchema (file-line-col-schema)
     'run (positional-json-tool "--completions-json"))
 
    (hasheq
     'name "tesl.definition"
-    'description "Go-to-definition for the symbol at a position (1-based line, 0-based col)."
+    'description "Go-to-definition for the symbol at a position (0-based line, 0-based col)."
     'inputSchema (file-line-col-schema)
     'run (positional-json-tool "--definition-json"))
 
@@ -246,7 +246,7 @@
     'name "tesl.references"
     'description (string-append
                   "Find references/occurrences of the symbol at a position "
-                  "(1-based line, 0-based col). Same-file only.")
+                  "(0-based line, 0-based col). Same-file only.")
     'inputSchema (file-line-col-schema)
     'run (positional-json-tool "--occurrences-json"))
 

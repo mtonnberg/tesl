@@ -1,5 +1,7 @@
 # 03 — Module System, Import Graph, and SCC Detection
 
+> Audience: contributors working on multi-module compilation in the compiler (`compiler/lib/`).
+
 Tesl supports cyclic imports between modules. This guide explains how the
 compiler handles multi-module compilation and mutually recursive modules.
 

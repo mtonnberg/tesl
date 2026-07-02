@@ -1,5 +1,5 @@
 # Tesl
-## *Joyfully unbreakable APIs.*
+## *Proof-carrying web APIs, for humans and AI agents.*
 
 A language for building web APIs where the important guarantees are part of the language — not bolted on afterward.
 

@@ -467,6 +467,85 @@ database R67Db06 = Database {
 }
 |}
 
+(* ── R67_AG — declarative agent block schema ─────────────────────────────── *)
+
+let test_R67_AG01_agent_missing_provider_rejected () =
+  (* Agent { } is a typed-record constructor; omitting a required field is rejected
+     by the record type-checker. *)
+  should_fail "missing required field `provider`\\|provider" {|
+#lang tesl
+module R67Ag01 exposing []
+import Tesl.Agent exposing [aiProvider, Agent]
+capability ai implies aiProvider
+agent A requires [ai] = Agent {
+  systemPrompt: "s"
+  tools: []
+  maxTokens: 256
+}
+|}
+
+let test_R67_AG02_agent_missing_maxtokens_rejected () =
+  should_fail "missing required field `maxTokens`\\|maxTokens" {|
+#lang tesl
+module R67Ag02 exposing []
+import Tesl.Agent exposing [aiProvider, Agent, anthropic]
+capability ai implies aiProvider
+agent A requires [ai] = Agent {
+  provider: anthropic "k" "m"
+  systemPrompt: "s"
+  tools: []
+}
+|}
+
+let test_R67_AG03_provider_must_be_llmprovider_rejected () =
+  (* `provider` is a full LlmProvider expression. A bare provider kind (a function,
+     not an LlmProvider) is a type error — the key + model must be applied. *)
+  should_fail "LlmProvider\\|provider" {|
+#lang tesl
+module R67Ag03 exposing []
+import Tesl.Agent exposing [aiProvider, Agent, anthropic]
+capability ai implies aiProvider
+agent A requires [ai] = Agent {
+  provider: anthropic
+  systemPrompt: "s"
+  tools: []
+  maxTokens: 256
+}
+|}
+
+let test_R67_AG04_agent_block_accepted () =
+  should_pass {|
+#lang tesl
+module R67Ag04 exposing []
+import Tesl.Agent exposing [aiProvider, Agent, anthropic]
+capability ai implies aiProvider
+agent A requires [ai] = Agent {
+  provider: anthropic "k" "claude-opus-4-8"
+  systemPrompt: "s"
+  tools: []
+  maxTokens: 256
+}
+|}
+
+let test_R67_AG05_agent_expression_with_tools_accepted () =
+  (* Agent { } also works as a plain expression, and `asTool fn` wraps a typed
+     function in the tools list. *)
+  should_pass {|
+#lang tesl
+module R67Ag05 exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Agent exposing [aiProvider, Agent, anthropic, asTool]
+capability ai implies aiProvider
+fn weather(city: String) -> String = city
+fn build(key: String) -> Agent requires [ai] =
+  Agent {
+    provider: anthropic key "claude-opus-4-8"
+    systemPrompt: "s"
+    tools: [asTool weather]
+    maxTokens: 256
+  }
+|}
+
 (* ── R67_AT — api-test structure ─────────────────────────────────────────── *)
 
 let test_R67_AT01_api_test_undefined_server_rejected () =
@@ -872,7 +951,7 @@ import Tesl.Prelude exposing [String, Int]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential, Job]
 import Tesl.App exposing [App]
-import Tesl.Env exposing [env, envInt]
+import Tesl.Env exposing [env, envInt, envRead]
 capability emailCap
 capability pubsub
 record EmailJob { recipientId: String }
@@ -894,8 +973,11 @@ queue EmailQueue requires [emailCap, pubsub] = Queue {
 |}
 
 let test_R67_APP01_folded_queue_and_main_app_accepted () =
+  (* `main` mounts DemoDb (whose config reads env) and itself calls `envInt`, so
+     it must declare `envRead` — the env-honesty rule (Fix C), uniform across all
+     declarative config blocks. *)
   should_pass (app_prelude ^ {|
-main() -> App requires [emailCap, pubsub] =
+main() -> App requires [emailCap, pubsub, envRead] =
   let port = envInt "PORT" 8086
   App { database: DemoDb  queues: [EmailQueue]  email: []  sseChannels: []  api: DemoServer  port: port }
 |})
@@ -928,6 +1010,136 @@ queue EmailQueue = Queue {
   jobs: [ Job EmailJob processEmail Nothing ]
   retry: { maxAttempts: 3 backoff: Sideways initialDelay: 10 }
 }
+|}
+
+(* ── R67_ENV — env-honesty (Fix C) ───────────────────────────────────────────
+   A `main` that reads the environment — DIRECTLY (env/envInt/envString/
+   requireEnv in its body) or TRANSITIVELY because a declarative config block it
+   starts up reads env — must declare `requires [envRead]`.  The rule is uniform
+   across ALL config-block kinds (database / queue / email / cache / agent): the
+   database block is only the motivating example.  `main` is otherwise the
+   capability boundary (its body runs in `with capabilities … { with database … }`),
+   so envRead is the ONE capability it must still declare on its own. *)
+
+(* Memory-backed prelude: NO env in any config block, so it isolates the
+   direct-env-in-main path and the no-env control from any config-block env. *)
+let env_memory_prelude = {|
+#lang tesl
+module R67Env exposing []
+import Tesl.Prelude exposing [String, Int]
+import Tesl.App exposing [App]
+import Tesl.Env exposing [envInt, envRead]
+import Tesl.Database exposing [Database, Memory]
+handler handleRoot() -> String requires [] = "ok"
+api DemoApi { get "/" -> String }
+server DemoServer for DemoApi { endpoint_0 = handleRoot }
+database PlainDb = Database { entities: []  backend: Memory }
+|}
+
+(* C2 — main mounts a database whose `= Database { … }` config reads env. *)
+let test_R67_ENV01_main_mounts_env_database_without_envRead_rejected () =
+  should_fail "envRead" (app_prelude ^ {|
+main() -> App requires [emailCap, pubsub] =
+  App { database: DemoDb  api: DemoServer  port: 8086 }
+|})
+
+let test_R67_ENV02_main_mounts_env_database_with_envRead_accepted () =
+  should_pass (app_prelude ^ {|
+main() -> App requires [emailCap, pubsub, envRead] =
+  App { database: DemoDb  api: DemoServer  port: 8086 }
+|})
+
+(* C1 — main reads env DIRECTLY; no config block reads env. *)
+let test_R67_ENV03_main_reads_env_directly_without_envRead_rejected () =
+  should_fail "envRead" (env_memory_prelude ^ {|
+main() -> App requires [] =
+  let port = envInt "PORT" 8086
+  App { database: PlainDb  api: DemoServer  port: port }
+|})
+
+let test_R67_ENV04_main_reads_env_directly_with_envRead_accepted () =
+  should_pass (env_memory_prelude ^ {|
+main() -> App requires [envRead] =
+  let port = envInt "PORT" 8086
+  App { database: PlainDb  api: DemoServer  port: port }
+|})
+
+(* Control — NO env access anywhere: main must NOT be forced to declare envRead
+   (guards against a false positive that would reject valid code). *)
+let test_R67_ENV05_main_without_env_does_not_require_envRead () =
+  should_pass (env_memory_prelude ^ {|
+main() -> App requires [] =
+  App { database: PlainDb  api: DemoServer  port: 8086 }
+|})
+
+(* Regression — the NON-main env discipline (Fix B) is unchanged: a plain fn that
+   calls env* still needs envRead, and is accepted once it declares it. *)
+let test_R67_ENV06_fn_reads_env_without_envRead_rejected () =
+  should_fail "envRead" {|
+#lang tesl
+module R67EnvFn exposing []
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Env exposing [envInt]
+fn readPort() -> Int requires [] = envInt "PORT" 8086
+|}
+
+let test_R67_ENV07_fn_reads_env_with_envRead_accepted () =
+  should_pass {|
+#lang tesl
+module R67EnvFn exposing []
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Env exposing [envInt, envRead]
+fn readPort() -> Int requires [envRead] = envInt "PORT" 8086
+|}
+
+(* Uniformity — a NON-database config block (agent) whose config reads env makes
+   main require envRead just the same; the database block is not special. *)
+let test_R67_ENV08_main_with_env_agent_without_envRead_rejected () =
+  should_fail "envRead" {|
+#lang tesl
+module R67EnvAgent exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.App exposing [App]
+import Tesl.Env exposing [requireEnv, envRead]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Agent exposing [aiProvider, anthropic, Agent, asTool]
+capability myAi implies aiProvider
+agent SupportAgent requires [myAi] = Agent {
+  provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
+  systemPrompt: "x"
+  maxTokens: 256
+  tools: []
+}
+handler handleRoot() -> String requires [] = "ok"
+api DemoApi { get "/" -> String }
+server DemoServer for DemoApi { endpoint_0 = handleRoot }
+database PlainDb = Database { entities: []  backend: Memory }
+main() -> App requires [] =
+  App { database: PlainDb  api: DemoServer  port: 8086 }
+|}
+
+let test_R67_ENV09_main_with_env_agent_with_envRead_accepted () =
+  should_pass {|
+#lang tesl
+module R67EnvAgent exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.App exposing [App]
+import Tesl.Env exposing [requireEnv, envRead]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Agent exposing [aiProvider, anthropic, Agent, asTool]
+capability myAi implies aiProvider
+agent SupportAgent requires [myAi] = Agent {
+  provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
+  systemPrompt: "x"
+  maxTokens: 256
+  tools: []
+}
+handler handleRoot() -> String requires [] = "ok"
+api DemoApi { get "/" -> String }
+server DemoServer for DemoApi { endpoint_0 = handleRoot }
+database PlainDb = Database { entities: []  backend: Memory }
+main() -> App requires [envRead] =
+  App { database: PlainDb  api: DemoServer  port: 8086 }
 |}
 
 (* ── R67_WIRE — App/config wiring-graph reference checks ──────────────────────
@@ -1023,6 +1235,13 @@ let () =
       test_case "R67_OK03 database with entities accepted" `Quick test_R67_OK03_database_with_entities_accepted;
       test_case "R67_OK04 multiple test blocks accepted" `Quick test_R67_OK04_multiple_test_blocks_accepted;
     ];
+    "agent-block-schema", [
+      test_case "R67_AG01 agent missing provider rejected" `Quick test_R67_AG01_agent_missing_provider_rejected;
+      test_case "R67_AG02 agent missing maxTokens rejected" `Quick test_R67_AG02_agent_missing_maxtokens_rejected;
+      test_case "R67_AG03 provider must be an LlmProvider rejected" `Quick test_R67_AG03_provider_must_be_llmprovider_rejected;
+      test_case "R67_AG04 agent block accepted" `Quick test_R67_AG04_agent_block_accepted;
+      test_case "R67_AG05 agent expression with tools accepted" `Quick test_R67_AG05_agent_expression_with_tools_accepted;
+    ];
     "config-field-schema", [
       test_case "R67_CF01 missing colon rejected" `Quick test_R67_CF01_missing_colon_rejected;
       test_case "R67_CF02 unknown field rejected" `Quick test_R67_CF02_unknown_field_rejected;
@@ -1047,5 +1266,16 @@ let () =
       test_case "R67_WIRE02 App unknown server rejected" `Quick test_R67_WIRE02_app_unknown_server_rejected;
       test_case "R67_WIRE03 App unknown queue rejected" `Quick test_R67_WIRE03_app_unknown_queue_rejected;
       test_case "R67_WIRE04 queue unknown database rejected" `Quick test_R67_WIRE04_queue_unknown_database_rejected;
+    ];
+    "env-honesty", [
+      test_case "R67_ENV01 main mounts env database without envRead rejected" `Quick test_R67_ENV01_main_mounts_env_database_without_envRead_rejected;
+      test_case "R67_ENV02 main mounts env database with envRead accepted" `Quick test_R67_ENV02_main_mounts_env_database_with_envRead_accepted;
+      test_case "R67_ENV03 main reads env directly without envRead rejected" `Quick test_R67_ENV03_main_reads_env_directly_without_envRead_rejected;
+      test_case "R67_ENV04 main reads env directly with envRead accepted" `Quick test_R67_ENV04_main_reads_env_directly_with_envRead_accepted;
+      test_case "R67_ENV05 main without env does not require envRead" `Quick test_R67_ENV05_main_without_env_does_not_require_envRead;
+      test_case "R67_ENV06 fn reads env without envRead rejected" `Quick test_R67_ENV06_fn_reads_env_without_envRead_rejected;
+      test_case "R67_ENV07 fn reads env with envRead accepted" `Quick test_R67_ENV07_fn_reads_env_with_envRead_accepted;
+      test_case "R67_ENV08 main with env agent without envRead rejected" `Quick test_R67_ENV08_main_with_env_agent_without_envRead_rejected;
+      test_case "R67_ENV09 main with env agent with envRead accepted" `Quick test_R67_ENV09_main_with_env_agent_with_envRead_accepted;
     ];
   ]

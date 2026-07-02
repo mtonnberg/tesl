@@ -1,5 +1,7 @@
 # 07 — SQL Layer: Entities, Parameterized Queries, Newtype Coercion
 
+> Audience: contributors working on the SQL runtime layer (`dsl/sql.rkt`).
+
 The SQL layer lives in `dsl/sql.rkt`. It bridges Tesl's GDP proof system with
 PostgreSQL (and provides an in-memory fallback for tests).
 

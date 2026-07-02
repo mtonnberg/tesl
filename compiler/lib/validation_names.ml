@@ -41,6 +41,104 @@ let duplicate_parameter_errors (bindings : binding list) : validation_error list
     )
   ) bindings
 
+(* ── EMIT-1. Reserve the compiler's generated-name grammar ──────────────────
+   The emitter mints temporaries named `tesl_case_N`, `_tesl_pN_M`,
+   `tesl_checked_N`, `tesl_proof_binding_N`, and `tesl_lazy_import*` (see
+   emit_racket.ml).  User identifiers are NOT name-mangled, so a user binder
+   spelled identically to a temp would capture / be captured by it, producing
+   silently-wrong Racket that still type-checks.  Forbidding user identifiers
+   that match the generated grammar closes the whole variable-capture CLASS at
+   the source boundary, so the emitter never has to be hygienic against user
+   names.  (Smallest sound change per the review's EMIT-1 fix_class.) *)
+let is_reserved_generated_name (n : string) : bool =
+  let starts p =
+    let lp = String.length p in
+    String.length n >= lp && String.sub n 0 lp = p
+  in
+  starts "tesl_case_" || starts "_tesl_p" || starts "tesl_checked_"
+  || starts "tesl_proof_binding_" || starts "tesl_lazy_import"
+  (* Temps minted while emitting TEST / api-test / load-test statement bodies
+     (emit_racket.ml emit_test / emit_api_test_stmt): `tesl_ignored_N` for a `_`
+     discard binding and `tesl_proof_bind_N` for a proof binding.  Note
+     `tesl_proof_bind_` is a genuine NEAR-MISS of the reserved
+     `tesl_proof_binding_` (no "ing"), so it was NOT covered by that prefix and a
+     user `tesl_proof_bind_0` inside a `test { }` block would capture the minted
+     temp.  Both are minted only in test-form bodies, which is why the walk below
+     must descend DTest/DApiTest/DLoadTest (it previously descended DFunc only). *)
+  || starts "tesl_ignored_" || starts "tesl_proof_bind_"
+
+let check_reserved_generated_names (decls : top_decl list) : validation_error list =
+  let errors = ref [] in
+  let chk loc kind n =
+    if n <> "_" && is_reserved_generated_name n then
+      errors := make_error loc
+        ~hint:"identifiers beginning with `tesl_case_`, `tesl_checked_`, \
+               `tesl_proof_binding_`, `tesl_proof_bind_`, `tesl_ignored_`, \
+               `tesl_lazy_import`, or `_tesl_p` are reserved for \
+               compiler-generated temporaries; rename it"
+        (Printf.sprintf "%s `%s` uses a reserved compiler-generated name prefix" kind n)
+        :: !errors
+  in
+  let rec walk (e : expr) : unit =
+    (match e with
+     | ELet { name; loc; _ } -> chk loc "binding" name
+     | ELetProof { value_name; proof_name; loc; _ } ->
+       chk loc "binding" value_name; chk loc "proof binding" proof_name
+     | ELambda { params; _ } ->
+       List.iter (fun (b : binding) -> chk b.loc "lambda parameter" b.name) params
+     | ECase { arms; _ } ->
+       List.iter (fun (a : case_arm) ->
+         List.iter (fun n -> chk a.loc "pattern binding" n)
+           (pattern_bound_names a.pattern)) arms
+     | _ -> ());
+    ignore (Ast_visitor.fold_children (fun () c -> walk c) () e)
+  in
+  (* Test-form bodies mint `tesl_ignored_N` / `tesl_proof_bind_N` temps, so their
+     user binders (and embedded exprs) must be checked too — the walk above only
+     covered DFunc, leaving the capture class open inside test / api-test /
+     load-test blocks. *)
+  let rec walk_test_stmt (s : test_stmt) : unit =
+    match s with
+    | TsLet { name; value; loc; _ } -> chk loc "test binding" name; walk value
+    | TsLetProof { value_name; proof_names; value; loc } ->
+      chk loc "test binding" value_name;
+      List.iter (chk loc "test proof binding") proof_names;
+      walk value
+    | TsExpect { left; right; _ } -> walk left; Option.iter walk right
+    | TsExpectFail { fn; arg; _ } -> walk fn; walk arg
+    | TsExpectHasProof { fn; arg; _ } -> walk fn; walk arg
+    | TsProperty { params; body; _ } ->
+      List.iter (fun (p : property_param) -> chk p.loc "property parameter" p.binding.name) params;
+      walk body
+    | TsIf { cond; then_stmts; else_stmts; _ } ->
+      walk cond;
+      List.iter walk_test_stmt then_stmts;
+      List.iter walk_test_stmt else_stmts
+    | TsCase { scrut; arms; _ } ->
+      walk scrut;
+      List.iter (fun (a : ts_case_arm) ->
+        List.iter (fun n -> chk a.ts_loc "pattern binding" n)
+          (pattern_bound_names a.ts_pattern);
+        Option.iter walk a.ts_guard;
+        List.iter walk_test_stmt a.ts_body) arms
+    | TsExpr { e; _ } -> walk e
+  in
+  List.iter (function
+    | DFunc fd ->
+      chk fd.loc "function" fd.name;
+      List.iter (fun (b : binding) -> chk b.loc "parameter" b.name) fd.params;
+      walk fd.body
+    | DTest tf -> List.iter walk_test_stmt tf.stmts
+    | DApiTest at ->
+      List.iter walk at.seed_stmts;
+      List.iter walk_test_stmt at.stmts
+    | DLoadTest lt ->
+      List.iter walk lt.seed_stmts;
+      List.iter walk_test_stmt lt.request_stmts
+    | _ -> ()
+  ) decls;
+  List.rev !errors
+
 (** Walk every `exists witness => body` in an expression, tracking only the
     witness names seen in outer `exists` frames.  Fires when an inner `exists`
     reuses the same witness name as an outer one — e.g. `exists p => exists p
@@ -635,6 +733,10 @@ let check_duplicate_top_level_names (decls : top_decl list) : validation_error l
   let seen_funcs : (string * loc) list ref = ref [] in
   let seen_types : (string * loc) list ref = ref [] in
   let seen_facts : (string * loc) list ref = ref [] in
+  (* A codec is keyed by the type it serialises; two codecs for the same type
+     emit colliding `tesl-codec-encode-<T>` defines (a `raco` error, not a Tesl
+     diagnostic). Reject the second codec at the frontend. *)
+  let seen_codecs : (string * loc) list ref = ref [] in
   let check seen name loc kind =
     match List.assoc_opt name !seen with
     | Some first_loc ->
@@ -652,6 +754,7 @@ let check_duplicate_top_level_names (decls : top_decl list) : validation_error l
     | DRecord rf -> check seen_types rf.name rf.loc "record"
     | DEntity ef -> check seen_types ef.name ef.loc "entity"
     | DFact ff -> check seen_facts ff.name ff.loc "fact"
+    | DCodec cf -> check seen_codecs cf.type_name cf.loc "codec for type"
     | _ -> ()
   ) decls;
   List.rev !errors

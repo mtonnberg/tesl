@@ -480,6 +480,10 @@ let stdlib_env : (string * scheme) list = [
   "env",       mono (t_fun [t_string] (t_maybe t_string));
   "envInt",    mono (t_fun [t_string; t_int] t_int);
   "envString", mono (t_fun [t_string; t_string] t_string);
+  (* requireEnv: read an env var as a String, failing at startup if unset.  The
+     String-returning counterpart to `env` (which returns Maybe), for places that
+     need a value directly, e.g. `anthropic (requireEnv "ANTHROPIC_API_KEY") model`. *)
+  "requireEnv", mono (t_fun [t_string] t_string);
 
   (* ── HTTP ────────────────────────────────────────────────────────────── *)
   "statusOk",          mono t_int;
@@ -496,11 +500,6 @@ let stdlib_env : (string * scheme) list = [
   (* ── Agent (AI Tier-0) ──────────────────────────────────────────────── *)
   (* mockProvider: list of scripted reply strings → an opaque LlmProvider. *)
   "mockProvider", mono (t_fun [t_list t_string] t_llm_provider);
-  (* defineAgent: provider, systemPrompt, maxTokens → an opaque Agent value.
-     Positional args (Tesl forbids bare record literals, and a named stdlib
-     config record would need field metadata the compiler doesn't track for
-     hand-written modules; positional is the robust Tier-0 surface). *)
-  "defineAgent",  mono (t_fun [t_llm_provider; t_string; t_int] t_agent);
   (* ask: one-shot inference — Agent → prompt String → assistant text String.
      Requires the aiProvider capability (enforced in validation_capabilities). *)
   "ask",          mono (t_fun [t_agent; t_string] t_string);
@@ -513,6 +512,7 @@ let stdlib_env : (string * scheme) list = [
   "textStep",     mono (t_fun [t_string] t_tool_step);
   "anthropic",    mono (t_fun [t_string; t_string] t_llm_provider);
   "openai",       mono (t_fun [t_string; t_string] t_llm_provider);
+  "mistral",      mono (t_fun [t_string; t_string] t_llm_provider);
   "local",        mono (t_fun [t_string; t_string] t_llm_provider);
 
   (* tool: name, description, JSON-schema string, validator (args-JSON String → a),
@@ -523,8 +523,12 @@ let stdlib_env : (string * scheme) list = [
   "tool",         { vars = _r1_a;
                     mono = t_fun [t_string; t_string; t_string;
                                   t_fun [t_string] _a; t_fun [_a] t_string] t_tool };
-  (* withTools: attach a list of tools to an agent. *)
-  "withTools",    mono (t_fun [t_agent; t_list t_tool] t_agent);
+  (* asTool: wrap a typed Tesl function as a Tool, deriving the JSON schema from its
+     parameter types and decoding/dispatching the model's args under the hood.  Used
+     in the Agent { tools: [...] } field (block and expression alike).  The argument
+     is a function reference; its concrete type is irrelevant to the result, so it is
+     polymorphic in the argument. *)
+  "asTool",       { vars = _r1_a; mono = t_fun [_a] t_tool };
 
   (* askReply / askWith: full tool-calling loop returning an AgentReply.
      askWith takes a BYOK LlmProvider override as its last argument. *)
@@ -549,6 +553,7 @@ let stdlib_env : (string * scheme) list = [
   "newConversation",  mono (t_fun [t_agent] t_conversation);
   "conversationFrom", mono (t_fun [t_agent; t_string] t_conversation);
   "converse",         mono (t_fun [t_conversation; t_string] t_conversation_turn);
+  "converseStreaming", mono (t_fun [t_conversation; t_string; t_fun [t_string] t_unit] t_conversation_turn);
   "turnReply",        mono (t_fun [t_conversation_turn] t_agent_reply);
   "turnConversation", mono (t_fun [t_conversation_turn] t_conversation);
   "conversationJson",   mono (t_fun [t_conversation] t_string);
@@ -570,12 +575,14 @@ let stdlib_env : (string * scheme) list = [
   (* JwtToken and JwtSecret are nominal newtypes wrapping String. *)
   "JwtToken",  mono (t_fun [t_string] t_jwt_token);
   "JwtSecret", mono (t_fun [t_string] t_jwt_secret);
-  (* JWT.sign: takes any claims value (polymorphic) and a JwtSecret, returns JwtToken. *)
-  "JWT.sign",   { vars = _r1_a; mono = t_fun [_a; t_jwt_secret] t_jwt_token };
-  (* JWT.verify: takes a JwtToken and JwtSecret, returns claims (polymorphic). *)
-  "JWT.verify", { vars = _r1_a; mono = t_fun [t_jwt_token; t_jwt_secret] _a };
-  (* JWT.decode: takes a JwtToken, returns claims without checking signature. *)
-  "JWT.decode", { vars = _r1_a; mono = t_fun [t_jwt_token] _a };
+  (* Claims are a string-keyed JSON object; the runtime (jwt.rkt
+     jwt-claims->string-keyed) always returns a string-keyed hash, and every
+     consumer reads it via Dict.lookup. Pin to a CONCRETE Dict String String so
+     a free result var can no longer be silently typed as Int/String/etc.
+     (security hole). Round-trips with sign. t_dict = Dict String String. *)
+  "JWT.sign",   mono (t_fun [t_dict t_string t_string; t_jwt_secret] t_jwt_token);
+  "JWT.verify", mono (t_fun [t_jwt_token; t_jwt_secret] (t_dict t_string t_string));
+  "JWT.decode", mono (t_fun [t_jwt_token] (t_dict t_string t_string));
 
   (* ── Queue / Tesl infrastructure ─────────────────────────────────────── *)
   (* requeue: accepts any dead-job value, returns the declared return type freely.
@@ -709,7 +716,7 @@ let tesl_module_exports : (string * string list) list = [
     [ "IsUuid"; "uuid"; "UUID.v4"; "UUID.v7"; "UUID.validate";
       "uuidV4Codec"; "uuidV7Codec" ] );
   ( "Tesl.Env",
-    [ "env"; "envInt"; "envString" ] );
+    [ "env"; "envInt"; "envString"; "requireEnv"; "envRead" ] );
   ( "Tesl.Json",
     [ "stringCodec"; "intCodec"; "boolCodec"; "floatCodec"; "posixMillisCodec";
       "listCodec"; "dictCodec"; "setCodec" ] );
@@ -750,14 +757,14 @@ let tesl_module_exports : (string * string list) list = [
       "HttpClient.get"; "HttpClient.post"; "HttpClient.put"; "HttpClient.delete" ] );
   ( "Tesl.Agent",
     [ "aiProvider"; "Agent"; "LlmProvider"; "AgentReply"; "AgentReply?"; "Tool"; "ToolStep";
-      "mockProvider"; "defineAgent"; "ask";
+      "mockProvider"; "ask";
       "mockToolProvider"; "toolUseStep"; "textStep";
-      "anthropic"; "openai"; "local";
-      "tool"; "withTools";
+      "anthropic"; "openai"; "mistral"; "local";
+      "tool"; "asTool";
       "askReply"; "askWith"; "replyText"; "replyTokens"; "replyToolCalls";
       "decodeAs"; "askFor";
       "Conversation"; "Conversation?"; "ConversationTurn"; "ConversationTurn?";
-      "newConversation"; "conversationFrom"; "converse"; "turnReply";
+      "newConversation"; "conversationFrom"; "converse"; "converseStreaming"; "turnReply";
       "turnConversation"; "conversationJson"; "conversationLength"; "agentRun" ] );
   (* Tesl.Http, Tesl.DB, Tesl.Bool, Tesl.Uuid, Tesl.Crypto, Tesl.Map, Tesl.Logging,
      Tesl.Queue, Tesl.Channel, Tesl.Sse —
@@ -770,6 +777,106 @@ let tesl_module_exports : (string * string list) list = [
     or internal module), in which case all import names are accepted. *)
 let tesl_module_export_set (module_name : string) : string list option =
   List.assoc_opt module_name tesl_module_exports
+
+(* ── Single-source stdlib "home module" registry (A7) ──────────────────────── *)
+
+(** Names that are ALWAYS available with no import: operators, the Prelude
+    values [check]/[identity]/[const]/[print]/[True]/[False]/[Unit], and the GDP
+    proof utilities.  Their runtime is provided by the always-emitted
+    dsl/runtime + Prelude requires, so using them compiles with no `import`.
+
+    Constructors ([Ok]/[Err]/[Nothing]/[Something]/[Left]/[Right]/[Tuple2]/…/
+    [TextBody]/…) are DELIBERATELY excluded from both this set and
+    {!stdlib_home_module}: they are handled by the constructor-scope machinery
+    (`Maybe(..)`/`Result(..)`/`EmailBody` import forms), and the stdlib-fn scope
+    checker never records bare constructor uses. *)
+let always_available_stdlib_names : string list = [
+  (* arithmetic / comparison / boolean operators *)
+  "+"; "-"; "*"; "/"; "%"; "quotient"; "modulo";
+  "=="; "!="; "<"; "<="; ">"; ">=";
+  "&&"; "||"; "!"; "not";
+  (* Prelude values that need no import *)
+  "True"; "False"; "Unit";
+  "check"; "identity"; "const"; "print";
+  (* GDP / proof utilities (Tesl.Prelude exports, emitted with the always-on
+     Prelude require) *)
+  "forgetFact"; "detachFact"; "attachFact"; "andLeft"; "andRight"; "introAnd";
+]
+
+(** Bare (unqualified) stdlib value/function names whose runtime lives in an
+    import-gated module that has NO export list in {!tesl_module_exports}
+    (Tesl.Telemetry / Tesl.Agent) or whose bare token needs an explicit
+    home-module mapping (Env / Id / Time / Random / ApiTest / Cli / Queue / UUID
+    codecs).  The qualified (dotted) rows are DERIVED from {!tesl_module_exports}
+    in {!stdlib_home_module} below, so this list carries only the bare rows. *)
+let stdlib_bare_home_module : (string * string) list = [
+  (* Env *)
+  "env", "Tesl.Env"; "envInt", "Tesl.Env"; "envString", "Tesl.Env";
+  "requireEnv", "Tesl.Env";
+  (* Id *)
+  "generateId", "Tesl.Id"; "generatePrefixedId", "Tesl.Id"; "newId", "Tesl.Id";
+  (* Random *)
+  "randomInt", "Tesl.Random"; "randomFloat", "Tesl.Random";
+  (* Time *)
+  "nowMillis", "Tesl.Time"; "formatTime", "Tesl.Time"; "durationMs", "Tesl.Time";
+  "addMs", "Tesl.Time"; "diffMs", "Tesl.Time"; "subtractMs", "Tesl.Time";
+  (* Cli *)
+  "lookupPortArgument", "Tesl.Cli";
+  (* HTTP status helpers + queue/job-drain test helpers (Tesl.ApiTest) *)
+  "statusOk", "Tesl.ApiTest"; "statusClientError", "Tesl.ApiTest";
+  "statusServerError", "Tesl.ApiTest";
+  "pendingJobCount", "Tesl.ApiTest"; "drainQueue", "Tesl.ApiTest";
+  "processNextJob", "Tesl.ApiTest"; "processNextDeadJob", "Tesl.ApiTest";
+  (* Queue infrastructure (Tesl.Queue — internal module, no export list) *)
+  "requeue", "Tesl.Queue"; "deadJobs", "Tesl.Queue";
+  (* UUID codecs (bare tokens; UUID.* dotted forms come from the derived rows) *)
+  "uuidV4Codec", "Tesl.UUID"; "uuidV7Codec", "Tesl.UUID";
+  (* Telemetry — was MISSING from every checker table (the soundness gap). *)
+  "initTelemetry", "Tesl.Telemetry"; "telemetry", "Tesl.Telemetry";
+  (* Whole Tesl.Agent bare API — was MISSING from every checker table.
+     NOTE: the compile-time-lowered provider/tool forms
+     (anthropic/openai/mistral/local/asTool) are intentionally NOT here — they
+     lower via the `__tart_` desugar path and have no plain runtime require, so
+     demanding an import for them would contradict what the emitter honors. *)
+  "mockProvider", "Tesl.Agent"; "ask", "Tesl.Agent";
+  "mockToolProvider", "Tesl.Agent"; "toolUseStep", "Tesl.Agent";
+  "textStep", "Tesl.Agent"; "tool", "Tesl.Agent";
+  "askReply", "Tesl.Agent"; "askWith", "Tesl.Agent";
+  "replyText", "Tesl.Agent"; "replyTokens", "Tesl.Agent";
+  "replyToolCalls", "Tesl.Agent"; "decodeAs", "Tesl.Agent";
+  "askFor", "Tesl.Agent"; "newConversation", "Tesl.Agent";
+  "conversationFrom", "Tesl.Agent"; "converse", "Tesl.Agent";
+  "converseStreaming", "Tesl.Agent"; "turnReply", "Tesl.Agent";
+  "turnConversation", "Tesl.Agent"; "conversationJson", "Tesl.Agent";
+  "conversationLength", "Tesl.Agent"; "agentRun", "Tesl.Agent";
+]
+
+(** THE authoritative name → home-module table (A7 single source).
+
+    Consumed by BOTH the scope checker's "needs import M" decision
+    ({!Checker.check_stdlib_fn_import_scope}) and — belt-and-suspenders — the
+    exhaustiveness test that guards {!Emit_racket.module_path_table}.  A name that
+    is a function value in {!stdlib_env}, is not a constructor, and is neither in
+    {!always_available_stdlib_names} nor here, is a compile-time regression
+    (caught by the exhaustiveness test).
+
+    The dotted (qualified) rows are DERIVED from {!tesl_module_exports} — filter
+    to names containing '.' — so the very same list that validates
+    `import Tesl.X exposing [X.f]` also drives the scope decision (no drift). The
+    bare rows come from {!stdlib_bare_home_module}. *)
+let stdlib_home_module : (string * string) list =
+  let dotted_rows =
+    List.concat_map (fun (m, names) ->
+      List.filter_map (fun n ->
+        if String.contains n '.' then Some (n, m) else None) names)
+      tesl_module_exports
+  in
+  stdlib_bare_home_module @ dotted_rows
+
+(** Resolve the Tesl.* module that provides [name] at runtime, or [None] when
+    [name] is always-available / a constructor / not a gated stdlib name. *)
+let stdlib_home_module_of (name : string) : string option =
+  List.assoc_opt name stdlib_home_module
 
 (** Complete set of valid Tesl.* stdlib module names (including internal modules
     that have runtime files but no registered export list).

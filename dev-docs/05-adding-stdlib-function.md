@@ -1,4 +1,7 @@
 # 05 — Adding a Standard Library Function
+
+> Audience: contributors adding a stdlib function across the compiler (`compiler/lib/`) and Racket runtime (`tesl/`).
+
 This guide describes the current compiler/runtime path for standard library functions. Older Python-era instructions are obsolete; the active implementation is split between the OCaml compiler and the Racket runtime modules.
 ## Current moving pieces
 When you add a stdlib function, there are usually four places to think about:

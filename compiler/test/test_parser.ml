@@ -448,6 +448,47 @@ codec NewTask {
     | _ -> Alcotest.fail "expected DCodec"
   )
 
+(* A codec must declare BOTH JSON directions explicitly.  Omitting one used to
+   silently default to *_forbidden, masking real bugs (e.g. a response type that
+   cannot actually be encoded).  Each of these must now be rejected. *)
+let test_codec_incomplete_rejected () =
+  assert_err {|#lang tesl
+module Foo exposing []
+codec Task {
+  toJson {
+    id -> "id" with_codec stringCodec
+  }
+}
+|};
+  assert_err {|#lang tesl
+module Foo exposing []
+codec Task {
+  fromJson_forbidden
+}
+|};
+  assert_err {|#lang tesl
+module Foo exposing []
+codec Task {
+}
+|}
+
+(* `adtJson` supplies both directions at once, so it is a complete codec. *)
+let test_codec_adt_json () =
+  let src = {|#lang tesl
+module Foo exposing []
+codec Color {
+  adtJson
+}
+|} in
+  assert_ok src (fun m ->
+    match first_decl m with
+    | DCodec cf ->
+      (match cf.to_json, cf.from_json with
+       | ToJsonAdt, FromJsonAdt -> ()
+       | _ -> Alcotest.fail "expected ToJsonAdt / FromJsonAdt")
+    | _ -> Alcotest.fail "expected DCodec"
+  )
+
 (* ── API and server tests ────────────────────────────────────────────────── *)
 
 let test_api_declaration () =
@@ -943,6 +984,8 @@ let () =
     "codecs", [
       Alcotest.test_case "toJson codec" `Quick test_codec_to_json;
       Alcotest.test_case "fromJson codec" `Quick test_codec_from_json;
+      Alcotest.test_case "incomplete codec rejected" `Quick test_codec_incomplete_rejected;
+      Alcotest.test_case "adtJson codec" `Quick test_codec_adt_json;
     ];
     "api-server", [
       Alcotest.test_case "api declaration" `Quick test_api_declaration;

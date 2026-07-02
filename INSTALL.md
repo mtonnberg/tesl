@@ -110,30 +110,38 @@ environment.systemPackages = [
 Write a file called `hello.tesl` anywhere on your machine:
 
 ```tesl
-module Hello
+#lang tesl
+module Hello exposing [greet]
+import Tesl.Prelude exposing [String]
 
-endpoint GET /hello -> Text {
-  "hello from tesl"
+fn greet(name: String) -> String =
+  "hello from tesl, ${name}"
+
+test "greet works" {
+  expect greet("world") == "hello from tesl, world"
 }
 ```
 
-Check it type-checks:
+Type-check it (parse + types + proofs + lint, no execution):
 
 ```bash
-tesl check hello.tesl
+tesl validate hello.tesl
 ```
 
-Compile it to Racket to confirm the full pipeline:
+Run its `test` block to confirm the **full pipeline** end-to-end
+(parser → type-checker → proof-checker → emitter → Racket runtime):
 
 ```bash
-tesl compile hello.tesl
-# → writes hello.rkt
+tesl test hello.tesl
 ```
 
-Run it (requires Racket in PATH — included when you enter `nix develop` or install via Nix):
+To see a complete, runnable web service instead of a single function, scaffold a
+project (this is the recommended starting point):
 
 ```bash
-tesl run hello.tesl
+tesl init myapi --yes
+cd myapi
+tesl run app.tesl     # serves on http://localhost:8086
 ```
 
 ---
@@ -176,6 +184,6 @@ TESL_POSTGRES_PASSWORD  (optional)
 | `brew install tesl` / `apt install tesl` | Roadmap — not done |
 | VS Code Marketplace | Roadmap — not done |
 | Native Windows (no WSL2) | Not planned for alpha |
-| Docker image | Roadmap — not done |
+| Docker image (via `tesl build`) | Available — see [dev-docs/deploy.md](dev-docs/deploy.md) |
 
-See `roadmap/next/language_distribution.md` for the plan.
+See `roadmap/discarded/language_distribution.md` for the plan.

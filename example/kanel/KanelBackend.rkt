@@ -13,7 +13,7 @@
   tesl/tesl/queue
   tesl/tesl/sse
   (only-in tesl/tesl/prelude Bool String Unit List)
-  (only-in tesl/tesl/env env envInt)
+  (only-in tesl/tesl/env env envInt envRead)
   (only-in tesl/tesl/time time)
   (only-in tesl/tesl/id generatePrefixedId)
   (only-in tesl/tesl/random random)
@@ -101,7 +101,7 @@
   #:parser string-segment #:check checkTargetUserId)
 
 (define KanelServer-sse-routes
-  (list (list (list "events" "users") cookieAuth UserNotifications)))
+  (list (list (list "events" "users") cookieAuth UserNotifications (sse-key-capture userCapture))))
 (define-api KanelApi
   [registerHandler :
     "auth"
@@ -609,7 +609,7 @@
 )
 
 (module+ main
-  (thsl-src! "example/kanel/KanelBackend.tesl" 828 (list) (lambda () (with-capabilities (kanelDbRead kanelDbWrite kanelQueue kanelPubSub random time notifyWorkerCap) (call-with-database KanelDatabase (lambda () (let ([port (raw-value (envInt "KANEL_PORT" 8080))]) (begin (start-workers! KanelNotifyQueueWorkers (list notifyWorkerCap kanelPubSub) #:concurrency 2) (begin (start-dead-workers! KanelNotifyQueueDeadWorkers (list notifyWorkerCap kanelPubSub) #:concurrency 2) (serve KanelServer #:port port #:capabilities (list kanelDbRead kanelDbWrite kanelQueue kanelPubSub random time notifyWorkerCap) #:static-dir "example/kanel/frontend" #:sse-routes KanelServer-sse-routes))))))))))
+  (thsl-src! "example/kanel/KanelBackend.tesl" 828 (list) (lambda () (with-capabilities (kanelDbRead kanelDbWrite kanelQueue kanelPubSub random time notifyWorkerCap envRead) (call-with-database KanelDatabase (lambda () (let ([port (raw-value (envInt "KANEL_PORT" 8080))]) (begin (start-workers! KanelNotifyQueueWorkers (list notifyWorkerCap kanelPubSub) #:concurrency 2) (begin (start-dead-workers! KanelNotifyQueueDeadWorkers (list notifyWorkerCap kanelPubSub) #:concurrency 2) (serve KanelServer #:port port #:capabilities (list kanelDbRead kanelDbWrite kanelQueue kanelPubSub random time notifyWorkerCap envRead) #:static-dir "example/kanel/frontend" #:sse-routes KanelServer-sse-routes))))))))))
 
 (define KanelNotifyQueueWorkers
   (list (cons KanelNotifyQueue notifyWorker)))

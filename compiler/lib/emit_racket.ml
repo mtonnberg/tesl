@@ -261,6 +261,10 @@ type ctx = {
     (** set of user-defined function names — these are not GDP named values *)
   fn_arities : (string, int) Hashtbl.t;
     (** known function arities for local/imported functions, used for partial application lowering *)
+  fn_tool_decls : (string, Ast.func_decl) Hashtbl.t;
+    (** declared-function name → its decl — for `asTool fn`, which derives a Tool's
+        JSON schema + arg decode from the function's parameter types (the same wrapping
+        the declarative `agent` block applies to its `tools:` list). *)
   mutable preserve_case_payload_names : bool;
     (** when true, constructor case payload bindings should remain named values instead of raw payloads *)
   proof_locals : (string, unit) Hashtbl.t;
@@ -312,6 +316,7 @@ let default_root_path () =
 let mk_ctx ?(root_path=default_root_path ()) ?(record_fields=[]) ?(record_meta=[]) () =
   { buf = Buffer.create 4096; case_counter = 0; root_path; record_fields; record_meta; func_kind = None; func_return_spec = None;
     fn_names = Hashtbl.create 16; fn_arities = Hashtbl.create 16;
+    fn_tool_decls = Hashtbl.create 8;
     preserve_case_payload_names = false;
     proof_locals = Hashtbl.create 16; raw_locals = Hashtbl.create 16;
     fact_locals = Hashtbl.create 8; ctor_fields = Hashtbl.create 8;
@@ -466,6 +471,12 @@ let qualified_imports : (string, string) Hashtbl.t = Hashtbl.create 16
 (** Set of plain (unqualified) names imported from Tesl stdlib modules.
     These are stdlib functions that need (raw-value ...) wrapping. *)
 let stdlib_plain_imports : (string, unit) Hashtbl.t = Hashtbl.create 16
+
+(** EMIT-2 / S15: format a float literal so the emitted Racket reads back as
+    EXACTLY the same double.  The logic now lives in the single float choke point
+    {!Float_fmt.to_faithful_literal} (emission side); this is a thin alias so the
+    many call sites below read unchanged. *)
+let format_float_literal (f : float) : string = Float_fmt.to_faithful_literal f
 
 (** Escape a UTF-8 string for use in a Racket string literal.
     Non-ASCII codepoints are emitted as \uXXXX (or \UXXXXXX for > 0xFFFF). *)
@@ -1165,6 +1176,77 @@ let extract_update e =
        loop [] [] initial_returning_one rest)
   | [] -> None
 
+(* Multi-line delete: `delete b from Entity` on one line with `where …` clauses on
+   subsequent indented lines.  The parser lowers this to an underscore-`let` chain
+   `ELet{_, <delete head>, <where>, …}` (just like multi-line update), so flatten
+   the chain and collect the where clauses from the continuation statements.  The
+   single-line form (`delete b from Entity where …`) is handled separately by
+   extract_delete_query on the EApp/EBinop shape. *)
+let extract_delete e =
+  match flatten_underscore_seq e with
+  | first :: (_ :: _ as rest) ->
+    (match parse_delete_seed first with
+     | Some seed when seed.where_field = None ->
+       let rec loop clauses = function
+         | [] -> Some (seed, clauses)
+         | expr :: tl ->
+           (match collect_sql_clauses seed.binder
+                    (parse_standalone_where_field seed.binder) expr with
+            | Some new_clauses when new_clauses <> [] -> loop (clauses @ new_clauses) tl
+            | _ -> None)
+       in
+       loop [] rest
+     | _ -> None)
+  | _ -> None
+
+(* ── Typed-function → LLM tool wrapping ─────────────────────────────────────
+   A tool is a typed Tesl function: its JSON Schema is DERIVED from the parameter
+   types and the model's tool-call arguments are decoded into the function's
+   positional parameters under the hood.  Used both by the declarative `agent`
+   block's `tools:` list and by the function-first `asTool fn` form. *)
+
+(* base type -> the tag tesl-agent-decode-args understands. Derived from the
+   single Validation_common.agent_prim registry (B4) via an EXHAUSTIVE match — a
+   new agent_prim variant fails to compile here until it is given a decode tag.
+   None only for a genuinely non-primitive type, which the checker has already
+   rejected before emit. *)
+let agent_arg_type_tag (t : Ast.type_expr) : string option =
+  match Validation_common.agent_prim_of_type_expr t with
+  | Some p -> Some (Validation_common.agent_prim_decode_tag p)
+  | None   -> None
+
+(* base type -> JSON Schema property fragment, derived from the same registry
+   via an EXHAUSTIVE match (agent_prim_schema_prop is total). The old catch-all
+   `_ -> string` is gone: a non-primitive can only reach here if the checker let
+   it through, which is now impossible; the string fallback covers only that
+   unreachable case and preserves current bytes for String. *)
+let agent_arg_schema_prop (t : Ast.type_expr) : string =
+  match Validation_common.agent_prim_of_type_expr t with
+  | Some p -> Validation_common.agent_prim_schema_prop p
+  | None   -> {|{"type":"string"}|}  (* unreachable post-checker; keeps a total fn *)
+
+(* JSON Schema object string derived from a tool function's parameter list *)
+let agent_tool_schema_json (params : Ast.binding list) : string =
+  let props = List.map (fun (b : Ast.binding) ->
+    Printf.sprintf "%S:%s" b.name (agent_arg_schema_prop b.type_expr)) params in
+  let required = List.map (fun (b : Ast.binding) -> Printf.sprintf "%S" b.name) params in
+  Printf.sprintf {|{"type":"object","properties":{%s},"required":[%s]}|}
+    (String.concat "," props) (String.concat "," required)
+
+(* Emit `(__tart_tool name desc schema validator dispatch)` for a tool function.
+   description = the fn's harvested doc-comment, else its name. *)
+let emit_tool_from_fd ctx (fd : Ast.func_decl) =
+  let schema = agent_tool_schema_json fd.params in
+  let desc = match fd.doc with Some d when String.trim d <> "" -> d | _ -> fd.name in
+  emit ctx (Printf.sprintf "(__tart_tool %S %S %S" fd.name desc schema);
+  emit ctx " (lambda (_args) (__tart_tesl-agent-decode-args _args (list";
+  List.iter (fun (b : Ast.binding) ->
+    match agent_arg_type_tag b.type_expr with
+    | Some tag -> emit ctx (Printf.sprintf " (cons %S '%s)" b.name tag)
+    | None -> ()) fd.params;
+  emit ctx ")))";
+  emit ctx (Printf.sprintf " (lambda (_decoded) (apply %s _decoded)))" fd.name)
+
 let rec emit_expr ctx e =
   let sql_op_name = function
     | BEq -> "==." | BNeq -> "!=" ^ "." | BLt -> "<." | BLe -> "<=."
@@ -1369,10 +1451,13 @@ let rec emit_expr ctx e =
       (* SQL operation keywords must only appear in recognised SQL patterns.
          If they reach here as free variables the emitter has not matched the
          surrounding expression as a SQL pattern — report a compile-time error
-         rather than emitting an unbound identifier that fails at Racket runtime. *)
-      let sql_op_keywords = ["update"; "updateAndReturnOne"; "insert"; "insertMany";
-                             "delete"; "deleteAndReturnResult"; "selectOne"] in
-      if List.mem name sql_op_keywords &&
+         rather than emitting an unbound identifier that fails at Racket runtime.
+         S3b: the op set is DERIVED from the single [Validation_common] registry
+         ([is_sql_builtin] covers all 14 ops) instead of a hand-maintained literal
+         that had drifted to 7 (it omitted select/selectMany/selectCount/…), so a
+         free-var occurrence of any SQL op now yields the clean compile-time error,
+         and adding an op to the registry cannot leave this guard behind. *)
+      if Validation_common.is_sql_builtin name &&
          not (Hashtbl.mem ctx.fn_names name) then
         failwith (Printf.sprintf
           "%s:%d:%d: SQL keyword '%s' used in an unrecognized expression pattern.\n\
@@ -1454,6 +1539,16 @@ let rec emit_expr ctx e =
     (match parse_upsert_expr app with
      | Some upsert -> emit_sql_upsert upsert
      | None -> failwith "emit_racket: parse_upsert_expr guard passed but returned None — compiler invariant violation; please report this bug")
+  | EApp _ as app when (match flatten_app_expr [] app with
+                        | EVar { name = "asTool"; _ }, [EVar { name; _ }] -> Hashtbl.mem ctx.fn_tool_decls name
+                        | _ -> false) ->
+    (* `asTool fn` — wrap a typed Tesl function as an LLM tool (schema derived
+       from its parameter types), the function-first counterpart to the agent
+       block's `tools:` list. *)
+    (match flatten_app_expr [] app with
+     | EVar { name = "asTool"; _ }, [EVar { name; _ }] ->
+       emit_tool_from_fd ctx (Hashtbl.find ctx.fn_tool_decls name)
+     | _ -> failwith "emit_racket: asTool guard passed but returned None — compiler invariant violation; please report this bug")
   | EApp _ as app when (match parse_insert_many_expr app with Some _ -> true | None -> false) ->
     (match parse_insert_many_expr app with
      | Some (list_var, entity) -> emit_sql_insert_many list_var entity
@@ -1512,6 +1607,30 @@ let rec emit_expr ctx e =
        ) other_fields;
        emit ctx "))"
      | None -> emit ctx "()"  (* should not happen *))
+  (* Agent { provider, systemPrompt, maxTokens, tools } — the agent constructor,
+     usable as a top-level `agent X = Agent { … }` block AND as a plain expression
+     (e.g. a per-request BYOK agent). Lowers to the runtime defineAgent + withTools
+     primitives. `provider` is a full LlmProvider expression; `tools` is a `List Tool`
+     whose `asTool fn` elements lower to wrapped tools. *)
+  | EApp {
+      fn = EConstructor { name = "Agent"; args = []; _ };
+      arg = ERecord { fields; loc = rloc; _ };
+      _;
+    } ->
+    let field name fallback = match List.assoc_opt name fields with Some e -> e | None -> fallback in
+    let provider = field "provider" (EList { elems = []; loc = rloc }) in
+    let system   = field "systemPrompt" (ELit { lit = LString ""; loc = rloc }) in
+    let maxtok   = field "maxTokens" (ELit { lit = LInt 1024; loc = rloc }) in
+    let tools    = field "tools" (EList { elems = []; loc = rloc }) in
+    emit ctx "(__tart_withTools (__tart_defineAgent ";
+    emit_raw_value ctx provider;
+    emit ctx " ";
+    emit_raw_value ctx system;
+    emit ctx " ";
+    emit_raw_value ctx maxtok;
+    emit ctx ") ";
+    emit_expr ctx tools;
+    emit ctx ")"
   (* TypeName { field: val } — record or entity construction with explicit type name *)
   | EApp {
       fn = EConstructor { name = rname; args = []; _ };
@@ -1889,6 +2008,10 @@ let rec emit_expr ctx e =
     (match extract_update seq with
      | Some update -> emit_sql_update update
      | None -> failwith "emit_racket: extract_update guard passed but returned None — compiler invariant violation; please report this bug")
+  | ELet _ as seq when (match extract_delete seq with Some _ -> true | None -> false) ->
+    (match extract_delete seq with
+     | Some (seed, clauses) -> emit_sql_delete seed clauses
+     | None -> failwith "emit_racket: extract_delete guard passed but returned None — compiler invariant violation; please report this bug")
   | ELet _ as seq when (match extract_multiline_select_query seq with Some _ -> true | None -> false) ->
     (* Multi-line SQL: select on one line, modifier keywords (order/limit/etc.) on subsequent lines *)
     (match extract_multiline_select_query seq with
@@ -2296,25 +2419,16 @@ let rec emit_expr ctx e =
     emit ctx "(reject ";
     emit_expr_simple ctx message;
     emit ctx (Printf.sprintf " #:http-code %d)" status)
-  | ETelemetry { name; fields; _ } ->
-    emit ctx (Printf.sprintf "(telemetry-event! %S #:attributes (" name);
-    List.iteri (fun i (k, v) ->
-      if i > 0 then emit ctx " ";
-      emit ctx (Printf.sprintf "[%S " k);
-      (* Telemetry values need * prefix for named values *)
-      (match v with
-       | EVar { name; _ } -> emit ctx ("*" ^ name)
-       | _ -> emit_expr_simple ctx v);
-      emit ctx "]"
-    ) fields;
-    emit ctx "))"
-  | EEnqueue _ | EStartWorkers _ | EServe _ ->
+  | ETelemetry _ | EEnqueue _ | EStartWorkers _ | EServe _
+  | ECacheGet _ | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _
+  | ESendEmail _ | EStartEmailWorker _ ->
     (* These fixed-shape effect forms are lowered to [ERuntimeCall] by
        {!Desugar.desugar_module}, which [compile_to_string] runs before
        [emit_module].  Reaching emit means the module was not desugared — a
        pipeline bug — so fail loudly rather than emit malformed Racket. *)
-    failwith "emit_racket: EEnqueue/EStartWorkers/EServe reached the emitter \
-              un-desugared (Desugar.desugar_module must run before emit_module)"
+    failwith "emit_racket: fixed-shape effect form (telemetry/enqueue/workers/\
+              serve/cache/email) reached the emitter un-desugared \
+              (Desugar.desugar_module must run before emit_module)"
   | EPublish { channel_name; key; event_ctor; payload; _ } ->
     emit ctx (Printf.sprintf "(publish-event! %s " channel_name);
     (match key with
@@ -2350,46 +2464,17 @@ let rec emit_expr ctx e =
     emit ctx "(call-with-queue-transaction (lambda () ";
     emit_expr ctx body;
     emit ctx "))"
-  | ECacheGet { cache_name; key; _ } ->
-    emit ctx (Printf.sprintf "(cache-get! %s " cache_name);
-    emit_expr_simple ctx key;
-    emit ctx ")"
-  | ECacheSet { cache_name; key; value; ttl; _ } ->
-    emit ctx (Printf.sprintf "(cache-set! %s " cache_name);
-    emit_expr_simple ctx key;
-    emit ctx " ";
-    emit_expr_simple ctx value;
-    (match ttl with
-     | Some ttl_expr -> emit ctx " "; emit_expr_simple ctx ttl_expr
-     | None -> ());
-    emit ctx ")"
-  | ECacheDelete { cache_name; key; _ } ->
-    emit ctx (Printf.sprintf "(cache-delete! %s " cache_name);
-    emit_expr_simple ctx key;
-    emit ctx ")"
-  | ECacheInvalidate { cache_name; prefix; _ } ->
-    emit ctx (Printf.sprintf "(cache-invalidate-prefix! %s " cache_name);
-    emit_expr_simple ctx prefix;
-    emit ctx ")"
-  | ESendEmail { email_name; to_; subject; body; _ } ->
-    emit ctx (Printf.sprintf "(send-email! %s #:to " email_name);
-    emit_expr_simple ctx to_;
-    emit ctx " #:subject ";
-    emit_expr_simple ctx subject;
-    emit ctx " #:body ";
-    emit_expr_simple ctx body;
-    emit ctx ")"
-  | EStartEmailWorker { email_name; _ } ->
-    emit ctx (Printf.sprintf "(start-email-worker! %s)" email_name)
   | ERuntimeCall { segments; _ } ->
     (* Desugar-lowered fixed-shape runtime call (EEnqueue / EStartWorkers /
-       EServe).  Literal segments are emitted verbatim (the call prefix, keyword
-       args and runtime fn names were rendered at desugar time); argument
-       sub-expressions are emitted through the context-aware emit_expr_simple
-       path, exactly as the original effect arms did. *)
+       EServe / cache / email families).  Literal segments are emitted verbatim
+       (the call prefix, keyword args and runtime fn names were rendered at
+       desugar time); argument sub-expressions are emitted through the
+       context-aware emit_expr_simple path, exactly as the original effect arms
+       did. *)
     List.iter (function
       | RLit s -> emit ctx s
-      | RArg e -> emit_expr_simple ctx e) segments
+      | RArg e -> emit_expr_simple ctx e
+      | RRawVar name -> emit ctx ("*" ^ name)) segments
   | EConstructor { name = "Nothing"; args = []; _ } ->
     emit ctx "Nothing"
   | EConstructor { name = "True"; args = []; _ } ->
@@ -2563,7 +2648,12 @@ and emit_expr_simple ctx e =
       | EApp { fn = EConstructor { args = []; _ }; arg = ERecord _; _ } -> true
       | _ -> false
     in
+    let is_tool_from = match flatten_app_expr [] app with
+      | EVar { name = "asTool"; _ }, [EVar { name; _ }] -> Hashtbl.mem ctx.fn_tool_decls name
+      | _ -> false
+    in
     if is_typename_record
+       || is_tool_from
        || (match extract_select_query app with Some _ -> true | None -> false)
        || (match parse_insert_expr app with Some _ -> true | None -> false)
        || (match parse_insert_many_expr app with Some _ -> true | None -> false)
@@ -2596,7 +2686,8 @@ and emit_expr_simple ctx e =
 
 and emit_lit ctx = function
   | LInt n -> emit ctx (string_of_int n)
-  | LFloat f -> emit ctx (string_of_float f)
+  | LBigInt s -> emit ctx s   (* A9/HM-1: canonical decimal, a valid Racket integer literal *)
+  | LFloat f -> emit ctx (format_float_literal f)
   | LBool true -> emit ctx "#t"
   | LBool false -> emit ctx "#f"
   | LString s ->
@@ -2961,6 +3052,7 @@ and pattern_to_racket ctx pat scrut_var =
     let guard = match value with
       | LString s -> Printf.sprintf "(equal? %s \"%s\")" (star_ref scrut_var) (String.escaped s)
       | LInt n    -> Printf.sprintf "(= %s %d)" (star_ref scrut_var) n
+      | LBigInt s -> Printf.sprintf "(= %s %s)" (star_ref scrut_var) s
       | LBool b   -> Printf.sprintf "(eq? %s %b)" (star_ref scrut_var) b
       | _         -> "#t"
     in
@@ -3407,7 +3499,7 @@ let collect_qualified_uses_for_module short_name (m : module_form) : string list
     | ESendEmail { to_; subject; body; _ } ->
       walk_expr to_; walk_expr subject; walk_expr body
     | ERuntimeCall { segments; _ } ->
-      List.iter (function RLit _ -> () | RArg e -> walk_expr e) segments
+      List.iter (function RLit _ | RRawVar _ -> () | RArg e -> walk_expr e) segments
   in
   List.iter (function
     | DFunc (fd : Ast.func_decl) -> walk_expr fd.body
@@ -3449,13 +3541,34 @@ let emit_requires ctx (m : module_form) =
   let has_cache = List.exists (function Ast.DCache _ -> true | _ -> false) m.decls in
   let has_email = List.exists (function Ast.DEmail _ -> true | _ -> false) m.decls in
   let has_agent = List.exists (function Ast.DAgent _ -> true | _ -> false) m.decls in
+  (* `Agent { … }` (block or expression) and `asTool fn` both lower to the Tesl.Agent
+     library constructors (`__tart_withTools`/`__tart_defineAgent`/`__tart_tool` …).
+     Both are compile-time forms that must import `Agent`/`asTool` to be referenced,
+     so a name in any exposing-list is the reliable signal (it works wherever the form
+     appears — block, fn body, handler, test body). *)
+  let imports_any names =
+    List.exists (fun (imp : Ast.import_decl) ->
+      match imp.names with
+      | Ast.ImportExposing ns -> List.exists (fun n -> List.mem n ns) names
+      | Ast.ImportAll -> false) m.imports
+  in
+  let uses_agent_constructors = imports_any ["Agent"; "asTool"] in
   if has_cache then emit_line ctx "  tesl/tesl/cache";
   if has_email then emit_line ctx "  tesl/tesl/email";
-  (* A declarative `agent { … }` block lowers to the Tesl.Agent library constructors.
-     Require them under a private prefix so the lowering works regardless of what the
-     module chose to `expose`-import, and never collides with a user's own imports. *)
+  (* A declarative `agent { … }` block or an `Agent { … }`/`asTool` expression lowers
+     to the Tesl.Agent library constructors.  Require them under a private prefix so
+     the lowering works regardless of what the module chose to `expose`-import, and
+     never collides with a user's own imports. *)
+  (* A3: emit_agent wraps the top-level agent config in `with-env-bootstrap`, so
+     require that marker whenever a top-level agent block exists.  emit_agent is
+     the sole user and runs only when has_agent, matching the __tart_ conditional
+     below.  A separate (only-in tesl/tesl/env with-env-bootstrap) coexists with
+     any per-import (only-in tesl/tesl/env …) from `import Tesl.Env` — multiple
+     only-in specs from the same module are valid inside one `require`. *)
   if has_agent then
-    emit_line ctx "  (prefix-in __tart_ (only-in tesl/tesl/agent defineAgent withTools tool anthropic openai local tesl-agent-decode-args))";
+    emit_line ctx "  (only-in tesl/tesl/env with-env-bootstrap)";
+  if has_agent || uses_agent_constructors then
+    emit_line ctx "  (prefix-in __tart_ (only-in tesl/tesl/agent defineAgent withTools tool anthropic openai mistral local tesl-agent-decode-args))";
   if needs_runtime_path then
     emit_line ctx "  racket/runtime-path";
 
@@ -3555,7 +3668,10 @@ let emit_requires ctx (m : module_form) =
           "PostgresConnection"; "TcpConnection"; "SocketConnection";
           "Queue"; "QueueRetryStrategy"; "QueueRetryConfig"; "QueueRetryBackoff";
           "Exponential"; "Fixed"; "Linear";
-          "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job"; "Cache" ] in
+          "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job"; "Cache";
+          (* `asTool fn` is a compile-time form: it lowers to `__tart_tool …`
+             (schema derived from the fn's types) and has no runtime binding. *)
+          "asTool" ] in
       let expanded = List.filter (fun n -> not (List.mem n config_only_names)) expanded in
       let qualified = List.filter (fun n -> String.contains n '.') expanded in
       let plain = List.filter (fun n -> not (String.contains n '.')) expanded in
@@ -3920,6 +4036,12 @@ let emit_func ctx (fd : func_decl) =
            | _ -> false
          in
          is_check_call || not is_user_call
+       (* A let bound to a case/if produces a plain value that, when returned in
+          tail position of a plain-return fn, must be raw-value'd — i.e. resolved
+          out of its GDP-named binding while that binding is still in scope.
+          Otherwise the bare name symbol escapes as the return value and fails the
+          return-type check (the evidence env that would resolve it has unwound). *)
+       | Some (ECase _) | Some (EIf _) -> true
        | _ -> false)
     | _ -> false
   in
@@ -4385,6 +4507,7 @@ let emit_func ctx (fd : func_decl) =
          peeling the outer let would hide them, so they are not peelable. *)
       let is_sql_chain =
         (match extract_update e with Some _ -> true | None -> false)
+        || (match extract_delete e with Some _ -> true | None -> false)
         || (match extract_multiline_select_query e with Some _ -> true | None -> false)
         || (match extract_select_query e with Some _ -> true | None -> false)
       in
@@ -4879,6 +5002,38 @@ let emit_capture ctx (c : capture_form) =
    | None -> emit_line ctx ")");
   emit_nl ctx
 
+(* CONC-1: the validator for an SSE channel key.  The key is the first `:param`
+   path segment; if the endpoint declares a `capture` for it, emit a runtime
+   key-validator so the declared check is ENFORCED (fail-closed) at subscribe
+   time instead of being silently dropped (an IDOR/BOLA gap).  A capturer-backed
+   capture (`via someCapturer`) resolves through the `sse-key-capture` macro
+   (mirrors the HTTP `Capture` path); an inline capture emits the parser+check
+   directly.  No capture ⇒ `#f` (auth-only, the documented fallback). *)
+let sse_key_capture_expr (ep : api_endpoint) : string =
+  let param =
+    List.find_map (fun seg ->
+      if String.length seg > 1 && seg.[0] = ':'
+      then Some (String.sub seg 1 (String.length seg - 1)) else None)
+      (String.split_on_char '/' ep.path)
+  in
+  match param with
+  | None -> "#f"
+  | Some p ->
+    (match List.find_opt (fun (c : api_capture) -> c.binding.name = p) ep.captures with
+     | Some c when c.via_fn <> "" -> Printf.sprintf "(sse-key-capture %s)" c.via_fn
+     | Some c ->
+       (match c.inline_codec with
+        | Some codec ->
+          let parser = match codec with
+            | "stringCodec" -> "string-segment"
+            | "intCodec"    -> "integer-segment"
+            | other         -> other in
+          let checker = match c.inline_check with Some chk -> chk | None -> "#f" in
+          Printf.sprintf "(lambda (key-str) (apply-checker-to-value '%s (%s key-str) %s))"
+            p parser checker
+        | None -> "#f")
+     | None -> "#f")
+
 let emit_sse_route ctx (ep : api_endpoint) =
   emit ctx "(list (list";
   let path_parts = String.split_on_char '/' ep.path |> List.filter (fun s -> s <> "" && s.[0] <> ':') in
@@ -4894,6 +5049,9 @@ let emit_sse_route ctx (ep : api_endpoint) =
   (match ep.subscribes with
    | channel_name :: _ -> emit ctx channel_name
    | [] -> emit ctx "#f");
+  (* CONC-1: 4th element — the channel-key validator (or #f). *)
+  emit ctx " ";
+  emit ctx (sse_key_capture_expr ep);
   emit ctx ")"
 
 let rec emit_api ctx ?(server_name="") ?(server_bindings=[]) (api : api_form) =
@@ -5099,78 +5257,43 @@ let emit_server ctx (sv : server_form) =
    Tesl.Agent library constructors (defineAgent + withTools + tool).  Each tool is a
    typed Tesl function: its JSON Schema is DERIVED from the parameter types, and the
    model's tool-call arguments are decoded into the function's positional parameters
-   under the hood — no hand-written schema string or validator. *)
+   under the hood — no hand-written schema string or validator.  The per-tool
+   wrapping (schema helpers + emit_tool_from_fd) lives above emit_expr so the
+   function-first `asTool fn` form can reuse it. *)
 
-(* base type -> the type tag tesl-agent-decode-args understands (None = unsupported) *)
-let agent_arg_type_tag (t : Ast.type_expr) : string option =
-  match t with
-  | TName { name = "String"; _ }      -> Some "string"
-  | TName { name = "Int"; _ }         -> Some "int"
-  | TName { name = "PosixMillis"; _ } -> Some "int"
-  | TName { name = "Float"; _ }       -> Some "float"
-  | TName { name = "Bool"; _ }        -> Some "bool"
-  | _                                 -> None
-
-(* base type -> JSON Schema property fragment *)
-let agent_arg_schema_prop (t : Ast.type_expr) : string =
-  match t with
-  | TName { name = "Int"; _ } | TName { name = "PosixMillis"; _ } -> {|{"type":"integer"}|}
-  | TName { name = "Float"; _ } -> {|{"type":"number"}|}
-  | TName { name = "Bool"; _ }  -> {|{"type":"boolean"}|}
-  | _ -> {|{"type":"string"}|}
-
-(* JSON Schema object string derived from a tool function's parameter list *)
-let agent_tool_schema_json (params : Ast.binding list) : string =
-  let props = List.map (fun (b : Ast.binding) ->
-    Printf.sprintf "%S:%s" b.name (agent_arg_schema_prop b.type_expr)) params in
-  let required = List.map (fun (b : Ast.binding) -> Printf.sprintf "%S" b.name) params in
-  Printf.sprintf {|{"type":"object","properties":{%s},"required":[%s]}|}
-    (String.concat "," props) (String.concat "," required)
-
-let emit_agent ctx (decls : Ast.top_decl list) (a : Ast.agent_form) =
-  let find_fn name =
-    List.find_map (function Ast.DFunc fd when fd.name = name -> Some fd | _ -> None) decls in
-  let emit_provider () =
-    let kind = if a.provider = "" then "anthropic" else a.provider in
-    match kind with
-    | "local" ->
-      emit ctx "(__tart_local "; emit_postgres_value ctx a.endpoint;
-      emit ctx " "; emit_postgres_value ctx a.model; emit ctx ")"
-    | "openai" ->
-      emit ctx "(__tart_openai "; emit_postgres_value ctx a.api_key;
-      emit ctx " "; emit_postgres_value ctx a.model; emit ctx ")"
-    | _ ->
-      emit ctx "(__tart_anthropic "; emit_postgres_value ctx a.api_key;
-      emit ctx " "; emit_postgres_value ctx a.model; emit ctx ")"
+(* A declarative `agent X requires [...] = Agent { … }` block binds [X] to the agent
+   value the `Agent { … }` constructor produces. The construction itself is lowered
+   by emit_expr's `Agent { … }` arm (shared with expression-position use), so the
+   block is just a top-level binding of that expression. *)
+let emit_agent ctx (_decls : Ast.top_decl list) (a : Ast.agent_form) =
+  (* The parser stores the block's `Agent { … }` RHS as a type-hinted record
+     (ERecord { type_hint = Some "Agent" }), but the dedicated agent-lowering arm
+     of emit_expr matches the constructor-application shape
+     (EApp { EConstructor "Agent"; ERecord }) shared with expression-position use.
+     Normalise to that shape so the block reuses the SAME lowering — otherwise the
+     record would fall through to the generic typed-record path and emit a bogus
+     `(Agent #:provider …)` keyword call against the runtime `agent?` predicate. *)
+  let config = match a.config_expr with
+    | Some (Ast.ERecord { type_hint = Some "Agent"; fields; loc }) ->
+      Some (Ast.EApp {
+        fn = Ast.EConstructor { name = "Agent"; args = []; loc };
+        arg = Ast.ERecord { fields; type_hint = None; loc };
+        loc;
+      })
+    | other -> other
   in
+  (* A3: wrap the top-level agent config expression in the bootstrap-trust marker
+     so the one-time module-load provider env read (e.g. `requireEnv "…"`) is
+     trusted, while every runtime env read stays guarded.  Only reachable from a
+     top-level `agent … = Agent { … }` block; expression-position `Agent { … }`
+     inside fn bodies goes through emit_expr and stays guarded under the caller's
+     real capability context. *)
   emit_line ctx (Printf.sprintf "(define %s" a.name);
-  emit ctx "  (__tart_withTools (__tart_defineAgent ";
-  emit_provider ();
-  emit ctx (Printf.sprintf " %S %d)" a.system_prompt a.max_tokens);
-  emit_nl ctx;
-  emit ctx "    (list";
-  List.iter (fun tool_name ->
-    match find_fn tool_name with
-    | None -> ()  (* validation has already reported the missing tool *)
-    | Some fd ->
-      let schema = agent_tool_schema_json fd.params in
-      (* The tool description is the fn's harvested doc-comment, else its name. *)
-      let desc = match fd.doc with Some d when String.trim d <> "" -> d | _ -> tool_name in
-      emit_nl ctx;
-      emit ctx (Printf.sprintf "      (__tart_tool %S %S %S" tool_name desc schema);
-      emit_nl ctx;
-      (* validator: decode the model's args JSON into the fn's positional params *)
-      emit ctx "        (lambda (_args) (__tart_tesl-agent-decode-args _args (list";
-      List.iter (fun (b : Ast.binding) ->
-        match agent_arg_type_tag b.type_expr with
-        | Some tag -> emit ctx (Printf.sprintf " (cons %S '%s)" b.name tag)
-        | None -> ()) fd.params;
-      emit ctx ")))";
-      emit_nl ctx;
-      (* dispatch: apply the typed Tesl function; the loop stringifies the result *)
-      emit ctx (Printf.sprintf "        (lambda (_decoded) (apply %s _decoded)))" tool_name)
-  ) a.tools;
-  emit_line ctx ")))";
+  emit ctx "  (with-env-bootstrap ";
+  (match config with
+   | Some e -> emit_expr ctx e
+   | None -> emit ctx "(void)");
+  emit_line ctx "))";
   emit_nl ctx
 
 let emit_test ctx (t : test_form) =
@@ -5659,11 +5782,15 @@ let rec emit_api_test_template_content ctx ~server_name ~capabilities ~helper_na
 and emit_api_test_path ctx ~server_name ~capabilities e =
   match e with
   | ELit { lit = LString s; _ } ->
+    (* Split off an inline query string ("/search?q=foo"): the path SEGMENTS use
+       only the part before '?'; the query part becomes #:query at the dispatch. *)
+    let path_part = match String.index_opt s '?' with
+      | Some i -> String.sub s 0 i | None -> s in
     emit ctx "(list";
     List.iter (fun part ->
       emit ctx " ";
       emit_api_test_template_content ctx ~server_name ~capabilities ~helper_name:"api-test-path-fragment" part
-    ) (String.split_on_char '/' s |> List.filter (fun part -> part <> ""));
+    ) (String.split_on_char '/' path_part |> List.filter (fun part -> part <> ""));
     emit ctx ")"
   | _ -> emit_expr ctx e
 
@@ -5732,6 +5859,14 @@ and emit_api_test_expr ctx ~server_name ~capabilities e =
        let cookie, headers, body = scan None None None rest in
        emit ctx (Printf.sprintf "(dispatch-api-test-request %s '%s " server_name name);
        emit_api_test_path ctx ~server_name ~capabilities path;
+       (* Inline query string from the path literal ("/search?q=foo") → #:query. *)
+       (match path with
+        | ELit { lit = LString s; _ } ->
+          (match String.index_opt s '?' with
+           | Some i when i + 1 < String.length s ->
+             emit ctx (Printf.sprintf " #:query %S" (String.sub s (i + 1) (String.length s - i - 1)))
+           | _ -> ())
+        | _ -> ());
        (match cookie with
         | Some cookie_expr -> emit ctx " #:cookie "; emit_api_test_expr ctx ~server_name ~capabilities cookie_expr
         | None -> ());
@@ -6051,6 +6186,11 @@ let emit_load_test ctx ~(database_names : string list) (t : load_test_form) =
     match a with
     | LtAssertMetric { metric; op; value; unit; } ->
       let _ = unit in
+      (* S15 exception (justified): a load-test assertion THRESHOLD is a
+         user-specified performance number for the load-test harness, not a
+         proof-subject identity nor a value-semantics-critical program literal, so
+         %g's display rendering is acceptable and avoids churning the committed
+         load-test .rkt snapshots. *)
       emit ctx (Printf.sprintf " (load-test-assert %s '%s %g)"
         (emit_load_test_metric metric) (emit_load_test_op op) value)
     | LtAssertRegression { metric; ratio } ->
@@ -6192,6 +6332,7 @@ let emit_module ctx (m : module_form) =
     | DFunc fd ->
       Hashtbl.replace ctx.fn_names fd.name ();
       Hashtbl.replace ctx.fn_arities fd.name (List.length fd.params);
+      Hashtbl.replace ctx.fn_tool_decls fd.name fd;
       Hashtbl.replace ctx.fn_return_specs fd.name fd.return_spec
     | _ -> ()
   ) m.decls;

@@ -36,8 +36,8 @@ module Lesson57Jwt exposing [
 # PRACTICAL PATTERN: Login → Token → Protected endpoint
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# Step 1 (login handler):
-#   let token = JWT.sign { sub: userId, role: "user" } appSecret
+# Step 1 (login handler): claims are a Dict (the JWT payload is a JSON object).
+#   let token = JWT.sign (Dict.fromList [["sub", userId], ["role", "user"]]) appSecret
 #   # Return token.value as the session token in a cookie or JSON response
 #
 # Step 2 (auth function for protected endpoints):
@@ -46,8 +46,10 @@ module Lesson57Jwt exposing [
 #       Nothing -> fail 401 "missing Authorization header"
 #       Something raw ->
 #         let token  = JwtToken (String.dropPrefix "Bearer " raw)
-#         let claims = JWT.verify token appSecret
-#         ok claims.sub ::: Authenticated user
+#         # JWT.verify returns the claims Dict; read the subject back out.
+#         case Dict.lookup "sub" (JWT.verify token appSecret) of
+#           Nothing  -> fail 401 "token missing sub claim"
+#           Something user -> ok user ::: Authenticated user
 #
 # Step 3 (protected handler):
 #   handler profile(user: String ::: Authenticated user) -> String requires [] =
@@ -65,6 +67,7 @@ import Tesl.JWT exposing [
   JWT.decode,
 ]
 import Tesl.String exposing [String.length]
+import Tesl.Dict exposing [Dict.singleton, Dict.lookup]
 
 # ── Step 1: Declare a capability that implies `jwt` ───────────────────────────
 #
@@ -75,8 +78,8 @@ capability authCap implies jwt
 
 # ── Step 2: Sign a JWT at login time ─────────────────────────────────────────
 #
-# JWT.sign takes ANY claims value (polymorphic) and a JwtSecret.
-# The claims are JSON-serialized into the JWT payload.
+# JWT.sign takes a claims Dict (String keys) and a JwtSecret. The claims are
+# JSON-serialized into the JWT payload; build them with Dict.singleton/fromList.
 #
 # Best practice: always include an `exp` field (expiry as posix milliseconds).
 # Without `exp`, the token never expires and cannot be revoked without changing
@@ -86,7 +89,7 @@ capability authCap implies jwt
 # token (no random nonce). This means tokens are idempotent to generate.
 
 fn makeLoginToken(userId: String, secret: JwtSecret) -> JwtToken requires [authCap] =
-  JWT.sign userId secret
+  JWT.sign (Dict.singleton "sub" userId) secret
 
 # ── Step 3: Verify the JWT on protected endpoints ─────────────────────────────
 #
@@ -98,7 +101,9 @@ fn makeLoginToken(userId: String, secret: JwtSecret) -> JwtToken requires [authC
 # failure as a 401 response if the token is invalid. The happy path continues.
 
 fn getUserFromToken(token: JwtToken, secret: JwtSecret) -> String requires [authCap] =
-  JWT.verify token secret
+  case Dict.lookup "sub" (JWT.verify token secret) of
+    Nothing -> ""
+    Something userId -> userId
 
 # ── Step 4: Decode without verifying ─────────────────────────────────────────
 #
@@ -110,7 +115,9 @@ fn getUserFromToken(token: JwtToken, secret: JwtSecret) -> String requires [auth
 # Still requires the `jwt` capability to prevent accidental misuse.
 
 fn decodeToken(token: JwtToken) -> String requires [authCap] =
-  JWT.decode token
+  case Dict.lookup "sub" (JWT.decode token) of
+    Nothing -> ""
+    Something userId -> userId
 
 # ── Step 5: Constructing nominal newtypes from raw strings ───────────────────
 #
@@ -125,7 +132,9 @@ fn decodeToken(token: JwtToken) -> String requires [authCap] =
 fn wrapAndVerify(rawToken: String, rawSecret: String) -> String requires [authCap] =
   let token = JwtToken rawToken
   let secret = JwtSecret rawSecret
-  JWT.verify token secret
+  case Dict.lookup "sub" (JWT.verify token secret) of
+    Nothing -> ""
+    Something userId -> userId
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UNDERSTANDING — why JWT works this way in Tesl
@@ -168,7 +177,7 @@ fn wrapAndVerify(rawToken: String, rawSecret: String) -> String requires [authCa
 # TESTS
 # ─────────────────────────────────────────────────────────────────────────────
 
-test "makeLoginToken produces a 36+ character JwtToken" {
+test "makeLoginToken produces a 36+ character JwtToken" requires [authCap] {
   let secret = JwtSecret "lesson57-test-key"
   let token = makeLoginToken "user:alice" secret
   expect String.length token.value > 36
@@ -186,7 +195,7 @@ test "JwtSecret.value retrieves the inner key" {
   expect secret.value == key
 }
 
-test "different secrets produce different tokens" {
+test "different secrets produce different tokens" requires [authCap] {
   let s1 = JwtSecret "key-alpha"
   let s2 = JwtSecret "key-beta"
   let t1 = makeLoginToken "user" s1
@@ -194,56 +203,56 @@ test "different secrets produce different tokens" {
   expect t1.value != t2.value
 }
 
-test "same inputs always produce the same token (deterministic)" {
+test "same inputs always produce the same token (deterministic)" requires [authCap] {
   let secret = JwtSecret "stable-key"
   let t1 = makeLoginToken "user:123" secret
   let t2 = makeLoginToken "user:123" secret
   expect t1.value == t2.value
 }
 
-test "different claims produce different tokens" {
+test "different claims produce different tokens" requires [authCap] {
   let secret = JwtSecret "same-secret"
   let t1 = makeLoginToken "alice" secret
   let t2 = makeLoginToken "bob" secret
   expect t1.value != t2.value
 }
 
-test "getUserFromToken round-trip: verify recovers claims" {
+test "getUserFromToken round-trip: verify recovers claims" requires [authCap] {
   let secret = JwtSecret "roundtrip-key"
   let token = makeLoginToken "user:42" secret
   let result = getUserFromToken token secret
   expect String.length result > 0
 }
 
-test "decodeToken extracts payload without verification" {
+test "decodeToken extracts payload without verification" requires [authCap] {
   let secret = JwtSecret "decode-key"
   let token = makeLoginToken "decode-user" secret
   let result = decodeToken token
   expect String.length result > 0
 }
 
-test "wrapAndVerify: wrap raw strings and verify" {
+test "wrapAndVerify: wrap raw strings and verify" requires [authCap] {
   let secret = JwtSecret "wrap-test-key"
   let token = makeLoginToken "wrapped-user" secret
   let result = wrapAndVerify token.value secret.value
   expect String.length result > 0
 }
 
-test "token length grows with longer claims" {
+test "token length grows with longer claims" requires [authCap] {
   let secret = JwtSecret "length-test"
   let short = makeLoginToken "u" secret
   let long = makeLoginToken "user:with-a-very-long-id-value-here-123456789" secret
   expect String.length long.value > String.length short.value
 }
 
-test "signing with a long secret works" {
+test "signing with a long secret works" requires [authCap] {
   let longKey = "a-very-long-secret-key-that-is-at-least-64-characters-long-abcdefgh"
   let secret = JwtSecret longKey
   let token = makeLoginToken "user" secret
   expect String.length token.value > 0
 }
 
-test "sequential sign-verify pairs work independently" {
+test "sequential sign-verify pairs work independently" requires [authCap] {
   let s1 = JwtSecret "seq-key-1"
   let s2 = JwtSecret "seq-key-2"
   let t1 = makeLoginToken "user1" s1

@@ -651,28 +651,29 @@ import Tesl.Prelude exposing [Int]
 fn maxInt() -> Int = 4611686018427387903
 |}
 
-(* R52_N08 — The literal JUST above the positive fixnum cap is rejected. *)
+(* R52_N08 — A9/HM-1: Int is arbitrary-precision. The literal just above the
+   former positive fixnum cap now compiles (carried as an LBigInt bignum). *)
 let r52_n08_above_max_int_literal_rejected () =
-  should_fail_src "out of range\\|fixnum" {|#lang tesl
+  should_pass_src {|#lang tesl
 module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn tooBig() -> Int = 4611686018427387904
 |}
 
-(* R52_N09 — FIXED (R52-INT-NEG). The lexer now allows the literal
-   4611686018427387904 (= 2^62) under a unary minus, so `-2^62` is valid.
-   The positive literal 4611686018427387904 alone is still rejected. *)
+(* R52_N09 — A9/HM-1: both -2^62 and positive 2^62 compile now. -2^62 is folded
+   by the parser into LBigInt "-4611686018427387904"; positive 2^62 — formerly
+   rejected — is carried through as LBigInt "4611686018427387904". *)
 let r52_n09_below_min_int_literal_bug () =
-  (* -2^62 is now valid as the minimum Tesl Int value *)
+  (* -2^62 is a valid Tesl Int value *)
   should_pass_src {|#lang tesl
 module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn negMin() -> Int = -4611686018427387904
 |};
-  (* Positive 2^62 is still too large *)
-  should_fail_src "out of range" {|#lang tesl
+  (* A9/HM-1: positive 2^62 now compiles too (arbitrary-precision Int) *)
+  should_pass_src {|#lang tesl
 module Test exposing []
 import Tesl.Prelude exposing [Int]
 

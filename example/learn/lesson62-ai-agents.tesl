@@ -3,8 +3,12 @@ module Lesson62AiAgents exposing [WeatherAgent, getWeather, bookTable]
 
 import Tesl.Prelude exposing [Int, String]
 import Tesl.String exposing [String.concat]
+import Tesl.Env exposing [requireEnv]
 import Tesl.Agent exposing [
   aiProvider,
+  anthropic,
+  Agent,
+  asTool,
   mockToolProvider,
   toolUseStep,
   textStep,
@@ -23,11 +27,9 @@ import Tesl.Agent exposing [
 # a list of `tools` — which are ORDINARY typed Tesl functions referenced by name:
 #
 #   agent MyAgent requires [myAi] = Agent {
-#     provider:     anthropic            -- anthropic | openai | local
-#     model:        "claude-opus-4-8"
-#     apiKey:       env "ANTHROPIC_API_KEY"
+#     provider:     anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
 #     systemPrompt: "..."
-#     tools:        [toolFnA, toolFnB]
+#     tools:        [asTool toolFnA, asTool toolFnB]
 #     maxTokens:    512
 #   }
 #
@@ -73,11 +75,9 @@ fn bookTable(restaurant: String, guests: Int) -> String =
 # production and under test.
 
 agent WeatherAgent requires [myAi] = Agent {
-  provider: anthropic
-  model: "claude-opus-4-8"
-  apiKey: env "ANTHROPIC_API_KEY"
+  provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
   systemPrompt: "You are a helpful concierge. Use the tools to answer."
-  tools: [getWeather, bookTable]
+  tools: [asTool getWeather, asTool bookTable]
   maxTokens: 512
 }
 

@@ -20,11 +20,14 @@
         entry; `tesl help codes` lists the whole registry.
 
     The {!manual_for} function additionally refines the broad validation code
-    [V001] (which currently tags every validation-pass error) to the most
-    relevant manual anchor using stable keywords in the message — so a
-    capability error and a codec error link to different sections even though
-    they share a rendered code.  This keeps the rendered code stable while still
-    giving precise "read more" pointers.
+    [V001] (which tags every validation-pass error) to the most relevant manual
+    anchor using the STRUCTURED {!manual_topic} the producing validation pass
+    stamped on the error — so a capability error and a codec error link to
+    different sections even though they share a rendered code.  Routing is by the
+    resolved topic (decide-by-resolution), never by sniffing keywords out of the
+    rendered message text.  This keeps the rendered code stable while still
+    giving precise "read more" pointers that cannot be hijacked by incidental
+    words in user-controlled identifiers.
 
     Anchors here MUST match a heading slug documented in [manual/anchors.md]; the
     test [test_error_codes.ml] fails the build if any anchor stops resolving. *)
@@ -56,6 +59,52 @@ type entry = {
   explanation : string;       (** the "why / how to think about it" prose *)
   manual   : string option;   (** "<section>#<anchor>" or "<section>" or None *)
 }
+
+(* ── Manual deep-link topic (B5) ────────────────────────────────────────────
+   The broad validation code [V001] tags a whole family of rules, but each rule
+   should deep-link to the manual section that teaches ITS concept.  That routing
+   used to be decided by SUBSTRING-SNIFFING the rendered message text — so the
+   SAME structural rule routed to DIFFERENT anchors purely by incidental words in
+   user-controlled identifiers (e.g. an api-test whose description happened to
+   contain "database" was hijacked from #testing to #database-access).
+
+   The topic is now a CLOSED variant decided UPSTREAM by which validation pass
+   produced the error (see validation.ml), carried structurally on the
+   [validation_error] (see validation_common.ml), and resolved to an anchor by
+   the single TOTAL [anchor_of_topic] map below.  Message text no longer decides
+   anything: a rule's anchor is a property of the rule, listed exactly once. *)
+type manual_topic =
+  | TStructural   (* servers/handlers/bindings/queues/channels/workers/cache/email/config/app-wiring *)
+  | TDatabase     (* entities, database blocks, SQL field names, SQL WHERE, PK matching *)
+  | TTesting      (* test blocks, api-test structure/descriptions *)
+  | TProof        (* call-site proofs, forall/exists, ghost witness, record-field/return proof annotations *)
+  | TCodec        (* codec coverage/types, capture codec types *)
+  | TCapability   (* handler capabilities, capability cycles, auth/ord restrictions *)
+  | TNaming       (* exhaustiveness, shadowing, imports, duplicates, arities, reserved names *)
+  | TGeneric      (* fallback == the topic-less V001 default *)
+
+(** SINGLE source of truth: one arm per constructor.  A new [manual_topic]
+    constructor without an anchor here is a non-exhaustive-match COMPILE ERROR,
+    not a silent dangling deep-link.  Every anchor below is slug-checked by
+    [test_error_codes.ml] so a heading rename cannot silently break a link. *)
+let anchor_of_topic : manual_topic -> string = function
+  | TStructural  -> "best-practices#api-design"
+  | TDatabase    -> "best-practices#database-access"
+  | TTesting     -> "best-practices#testing"
+  | TProof       -> "best-practices#proof-management"
+  | TCodec       -> "best-practices#validation-patterns"
+  | TCapability  -> "best-practices#api-design"
+  | TNaming      -> "best-practices#validation-patterns"
+  | TGeneric     -> "best-practices#validation-patterns"
+
+(** Every [manual_topic] constructor, so tests can iterate the closed set and
+    assert totality of [anchor_of_topic].  Keep in sync with the variant (the
+    exhaustive match in [anchor_of_topic] enforces the anchor side; this list is
+    the enumeration side — the test guards it against a forgotten constructor by
+    comparing lengths in a warning-covered position is not possible, so keep this
+    list complete by hand when adding a topic). *)
+let all_topics : manual_topic list =
+  [ TStructural; TDatabase; TTesting; TProof; TCodec; TCapability; TNaming; TGeneric ]
 
 (* ── The registry ─────────────────────────────────────────────────────────
    One row per *rendered* code.  Keep this list in sync with:
@@ -280,38 +329,21 @@ let contains_ci ~needle haystack =
 
 (** Pick the most relevant manual anchor for a rendered diagnostic.
 
-    For most codes this is simply the registry's [manual] field. The broad
-    validation code [V001] tags many different rules, so we refine it using
-    stable keywords present in the message text (the messages themselves are
-    fixed strings in the validation passes). This lets, say, a capability error
-    and a codec error deep-link to different manual sections while keeping the
-    rendered code stable. *)
-let manual_for ~(code : string) ~(message : string) : string option =
-  let refined_v001 () =
-    let has s = contains_ci ~needle:s message in
-    if has "capabilit" || has "requires [" || has "privileged" then
-      Some "best-practices#api-design"
-    else if has "database" || has "entity" || has "table" || has "selectone"
-            || has "select " || has "channel" then
-      Some "best-practices#database-access"
-    else if has "proof" || has "fact" || has "::: " || has "witness"
-            || has "detachfact" then
-      Some "best-practices#proof-management"
-    else if has "codec" || has "tojson" || has "fromjson" || has "with_codec"
-            || has "check" || has "validat" then
-      Some "best-practices#validation-patterns"
-    else if has "server" || has "binding" || has "handler" || has "route"
-            || has "api" then
-      Some "best-practices#api-design"
-    else if has "test" || has "description" then
-      Some "best-practices#testing"
-    else None
-  in
-  match code with
-  | "V001" ->
-    (match refined_v001 () with
-     | Some _ as a -> a
-     | None -> (match lookup code with Some e -> e.manual | None -> None))
+    For most codes this is simply the registry's [manual] field.  The broad
+    validation code [V001] tags a whole family of rules; each rule's anchor is
+    decided by the STRUCTURED [topic] the producing validation pass stamped on
+    the error (see {!manual_topic}), resolved by the single total
+    {!anchor_of_topic} map.  Message text is NOT consulted — decide-by-resolution,
+    not decide-by-spelling — so the same rule always links to the same section
+    regardless of what user identifiers happen to be spelled in the message.
+
+    When no topic is supplied (e.g. `tesl help V001` with no live diagnostic),
+    V001 falls back to the registry's topic-less default, which is the same
+    anchor as {!TGeneric}. *)
+let manual_for ?(topic : manual_topic option) ~(code : string) ~(message : string) () : string option =
+  ignore message;  (* message text no longer routes the anchor (B5) *)
+  match code, topic with
+  | "V001", Some t -> Some (anchor_of_topic t)
   | _ -> (match lookup code with Some e -> e.manual | None -> None)
 
 (** A multi-line explanation block for `tesl help <code>` / `tesl explain <code>`.
@@ -357,3 +389,24 @@ let index () : string =
     end
   ) cats;
   Buffer.contents buf
+
+(** Turn a Markdown heading's text into its anchor slug (D16 — the SINGLE source
+    of the slug rule for lib-linked consumers).  Lower-case; keep [a-z0-9]; map
+    ' '/'-' to a space; drop everything else (punctuation, emoji, UTF-8 bytes);
+    collapse runs of spaces to a single '-'; trim.  Mirrors manual/anchors.md.
+    [compiler/bin/main.ml] and [compiler/test/test_error_codes.ml] both call this
+    so the rule cannot drift between the diagnostic deep-links and the anchor test.
+    (manual/tests/test_embedded_docs.ml deliberately links only str/unix — no
+    compiler lib — so it keeps its own byte-identical mirror; that mirror names
+    THIS function as its source of truth.) *)
+let slug_of_heading (heading : string) : string =
+  let b = Buffer.create (String.length heading) in
+  String.iter
+    (fun c ->
+       let c = Char.lowercase_ascii c in
+       if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') then Buffer.add_char b c
+       else if c = ' ' || c = '-' then Buffer.add_char b ' ')
+    heading;
+  String.split_on_char ' ' (Buffer.contents b)
+  |> List.filter (fun s -> s <> "")
+  |> String.concat "-"

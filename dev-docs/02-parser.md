@@ -1,4 +1,7 @@
 # 02 — The Tesl Parser
+
+> Audience: contributors working on the lexer and parser in the compiler (`compiler/lib/lexer.mll`, `compiler/lib/parser.ml`).
+
 Tesl currently uses a hand-written recursive descent parser in OCaml. The parser no longer lives in a split Python frontend; the active implementation is the compiler in `compiler/lib/`.
 ## Current parser files
 - `compiler/lib/lexer.mll` — turns source text into a token stream, including `INDENT` / `DEDENT` / `NEWLINE`

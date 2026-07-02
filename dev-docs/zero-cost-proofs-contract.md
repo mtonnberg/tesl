@@ -15,9 +15,20 @@
 TESL attaches GDP (Ghosts of Departed Proofs) proofs to values. **All of the
 proof-tracking cost lives in the Racket DSL macro expansion, not in the OCaml
 emitter** — the emitter emits only macro *calls*, and `raw-value`/`facts-of` are
-idempotent on raw values. The erasure is therefore DSL-only; the emitted `.rkt`
-is identical whether or not a binding carries a proof annotation, because what
-changes is how the *macros* expand, not the emitted text.
+idempotent on raw values. The erasure is therefore DSL-only: for a proof-FREE
+binding the emitted `.rkt` is identical to (and as cheap as) the unannotated
+form, because what changes is how the *macros* expand, not the emitted text. A
+proof-ANNOTATED parameter is NOT byte-identical — the emitter writes the
+annotation into the macro header (`[x : Integer ::: (InRange x)]`) and the
+expansion binds it via `tesl-establish-param-proof`, retaining one `named-value`
+carrier (the ≤1-alloc carve-out enumerated in §3). The "byte-identical" property
+holds for proof-free bindings, not for proof-carrying ones.
+
+"Zero-cost" refers specifically to *proof erasure*: proof TRACKING is erased (no
+proof structs on the standard path), not to all runtime overhead. Each
+fn/handler call still pays a small always-on capability-grant + return-shape
+validation cost — see §4 for the full list of always-on checks that are NOT
+erased.
 
 All line numbers below are indicative against an earlier baseline; re-`grep` the
 named identifier before editing (they drift).
@@ -127,9 +138,17 @@ Erasure removes the *proof re-validation* net. The following runtime checks are
 orthogonal and remain ON unconditionally — they guard runtime-only facts the
 static checker cannot establish:
 
-* **Ambient capability-grant.** The capability grant installed for a handler's
-  declared `requires [...]` context is a runtime dynamic-extent — capabilities are
-  granted/checked at run time, not erased with proofs.
+* **Ambient capability-grant.** The runtime installs the *whole-app capability
+  union* as the ambient dynamic-extent (`dsl/capability.rkt`
+  `with-capabilities`); there is no per-handler narrowing. Each handler's
+  `call-with-declared-capabilities` is a subset-*assertion* (`declared ⊆ ambient`
+  via `require-capabilities!`) — it checks, but does not narrow to, the handler's
+  `requires [...]` row. Per-handler narrowing (CAP-A2) was attempted and reverted;
+  it is not yet done, blocked on making per-callsite capability inference complete
+  (roadmap/later). Capabilities are still granted/checked at run time, not erased
+  with proofs. Note that `auth`/`check`/`establish` bodies are now *statically*
+  capability-checked at compile time (they must declare the effects they use —
+  `compiler/lib/validation_capabilities.ml` `cap_check_kind_info`).
 * **Parameter type validation.** The runtime type check on incoming values
   (`runtime-type-satisfied?`) at the boundary stays — it validates *shape* of data
   arriving from outside the program (request bodies, DB rows), which is not a

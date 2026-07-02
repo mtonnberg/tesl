@@ -294,7 +294,23 @@
         'Real real?
         'String string?
         'Symbol symbol?
-        'Vector vector?))
+        'Vector vector?
+        ;; S13: surface aliases that hand-written stdlib .rkt files pass as bare
+        ;; symbols (Int from tesl/list.rkt & tesl/int.rkt; Bool/Float analogues).
+        ;; Map to the SAME predicate as their canonical form so semantics are
+        ;; identical.  Without these the fail-closed default below would reject
+        ;; valid stdlib boundary args (e.g. List.repeat's `n : Int`).
+        'Int integer?
+        'Bool boolean?
+        'Float real?
+        ;; S13: genuinely-unconstrained types whose runtime value is a
+        ;; side-effect result or an erased proof — register an explicit
+        ;; always-true predicate so they fail OPEN by intent, not by default.
+        ;;   Unit  — `-> Unit` fns return (void)/DB-op results, not a 'Unit value.
+        ;;   Fact  — carries a detached (erased) proof; re-verifying it would
+        ;;           violate the proof-erasure discipline.
+        'Unit (lambda (_value) #t)
+        'Fact (lambda (_value) #t)))
 
 (define (type-key? value)
   (or (symbol? value)
@@ -304,6 +320,19 @@
   (cond
     [(type-ref? value) (type-ref-name value)]
     [else value]))
+
+;; S13: a type KEY is a type VARIABLE when its resolved name is lowercase-initial
+;; (e.g. `a`, `b`).  The parser guarantees uppercase-initial = concrete type and
+;; lowercase-initial = polymorphic type variable, so this decides over the
+;; resolved type-key-name, not a spelling heuristic on user text.  Type variables
+;; are unconstrained at runtime, so runtime-type-satisfied? keeps them fail-open.
+(define (type-variable-key? k)
+  (and (type-key? k)
+       (let* ([name (type-key-name k)])
+         (and (symbol? name)
+              (let ([s (symbol->string name)])
+                (and (> (string-length s) 0)
+                     (char-lower-case? (string-ref s 0))))))))
 
 (define (type-datum-display datum)
   (cond
@@ -353,16 +382,27 @@
          #'(register-runtime-type/runtime! name predicate))]))
 
 (define (runtime-type-predicate type-name)
+  ;; S13: a type KEY reaching here is either a bare symbol (built-in/stdlib
+  ;; surface type, e.g. `Integer`, `Int`, `Unit`) or a `type-ref` struct (every
+  ;; USER record/ADT/newtype/alias, plus the built-in ADTs like DeleteResult that
+  ;; are `define-adt`'d inside this module).  The runtime registry stores each
+  ;; entry's NAME as the bare symbol (`type-key-name`), but a type-ref carries a
+  ;; module OWNER: a handler-return / param type-ref emitted by the compiler has a
+  ;; different owner than the registration site, so a raw `hash-ref` by the struct
+  ;; MISSES.  Resolving to the bare name first lets the name-indexed fallback find
+  ;; the registered predicate for a type-ref, turning those (previously dormant)
+  ;; record/ADT/newtype runtime checks ON.
+  (define resolved-name (type-key-name type-name))
   (define direct-entry (hash-ref runtime-type-registry type-name #f))
   (cond
     [direct-entry (runtime-type-entry-predicate direct-entry)]
-    [(and (symbol? type-name)
-          (hash-has-key? built-in-runtime-type-registry type-name))
-     (hash-ref built-in-runtime-type-registry type-name)]
-    [(symbol? type-name)
+    [(and (symbol? resolved-name)
+          (hash-has-key? built-in-runtime-type-registry resolved-name))
+     (hash-ref built-in-runtime-type-registry resolved-name)]
+    [(symbol? resolved-name)
      (define match
        (unique-match-by-name (hash-values runtime-type-registry)
-                             type-name
+                             resolved-name
                              runtime-type-entry-name
                              'runtime-type-predicate
                              'runtime-type))
@@ -1082,12 +1122,55 @@
             (runtime-type-satisfied? maybe-set-type item)))]
     [(type-key? type-datum)
      (define predicate (runtime-type-predicate type-datum))
-     (if predicate
-         (predicate value)
-         #t)]
+     (cond
+       [predicate (predicate value)]
+       ;; S13: type VARIABLES (lowercase-initial names like `a`, `b`) are
+       ;; polymorphic parameters with no runtime constraint; keep fail-open by
+       ;; construction.  These are the stdlib return heads (list-derived.rkt
+       ;; maximum/minimum/foldr `#:returns a|b`) that a naive flip broke.
+       [(type-variable-key? type-datum) #t]
+       ;; S13 (full): fail-CLOSED is now LIVE for the no-predicate case.  This was
+       ;; previously retained fail-OPEN because `runtime-type-predicate` resolved
+       ;; ONLY bare symbols and NOT a `type-ref` struct — so every type-ref (Unit,
+       ;; DeleteResult, and every user record/ADT/newtype) reached here with no
+       ;; predicate even though one was registered under its name, and closing
+       ;; would have rejected valid returns.  `runtime-type-predicate` now resolves
+       ;; a type-ref to its bare NAME first (see above), so a registered
+       ;; record/ADT/newtype/built-in predicate IS found and taken via the
+       ;; `[predicate ...]` branch above.  Only a genuinely UNKNOWN concrete type
+       ;; (no registered predicate, not a type variable) falls through here, and it
+       ;; now fails CLOSED — the residual §7.10 boundary hole is shut.
+       [else #f])]
+    ;; Compound datums (binding-forms `[n : T ::: P]`, `?`-forms, `Exists`, and
+    ;; `Fact (Pred ...)` applications) fall through here.  These are handled by
+    ;; dedicated validators (validate-exists-return, validate-adt-return, the
+    ;; checker/auther) or are erased-proof payloads; failing them closed here
+    ;; would over-reject and re-introduce proof re-verification.  Retained.
     [else #t]))
 
+;; JSON nesting-depth cap (DoS): the typed decoder recurses once per nested
+;; container; attacker JSON nested thousands deep can exhaust the stack.  A
+;; dynamic depth counter (incremented per call via the wrapper below) bounds it.
+;; Configurable via TESL_MAX_JSON_DEPTH; default 64, far above any real payload.
+(define max-json-decode-depth
+  (let ([v (getenv "TESL_MAX_JSON_DEPTH")])
+    (or (and v (let ([n (string->number v)]) (and (exact-positive-integer? n) n)))
+        64)))
+(define current-json-decode-depth (make-parameter 0))
+
+;; Wrapper: checks/raises on excessive depth, then recurses into the real body.
+;; Every recursive call in the body targets `jsexpr->typed-value` (this wrapper),
+;; so the dynamic counter increments at each level without threading a param
+;; through the many call sites.  jsexpr->typed-value/result catches the raise and
+;; renders it as a clean 400.
 (define (jsexpr->typed-value type-datum value [who 'types])
+  (define depth (current-json-decode-depth))
+  (when (> depth max-json-decode-depth)
+    (error who "JSON nesting too deep (max ~a levels)" max-json-decode-depth))
+  (parameterize ([current-json-decode-depth (add1 depth)])
+    (jsexpr->typed-value* type-datum value who)))
+
+(define (jsexpr->typed-value* type-datum value who)
   (define maybe-adt-spec (adt-type-spec type-datum))
   (define maybe-record-spec (lookup-record-spec type-datum #f))
   (define maybe-list-type (list-type-argument type-datum))
@@ -1668,10 +1751,21 @@
                  datum)]
     [else '()]))
 
+;; A raw-value variable `*x` (the runtime raw value of a bound GDP name `x`) is
+;; bound exactly when `x` is.  A computed proof subject such as `ValidScore (n / 2)`
+;; lowers to `(quotient *n 2)`, so the proof template legitimately mentions `*n`;
+;; it is a runtime raw-value binding, NOT an unbound GDP name.
+(define (raw-value-var-of-bound? datum bound)
+  (and (symbol? datum)
+       (let ([s (symbol->string datum)])
+         (and (> (string-length s) 1)
+              (char=? (string-ref s 0) #\*)
+              (member (string->symbol (substring s 1)) bound)))))
+
 (define (proof-arg-unbound-names datum bound)
   (cond
     [(symbol? datum)
-     (if (member datum bound)
+     (if (or (member datum bound) (raw-value-var-of-bound? datum bound))
          '()
          (list datum))]
     [(gdp-atom? datum) '()]

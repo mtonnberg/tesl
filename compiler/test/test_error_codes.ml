@@ -6,8 +6,10 @@
          a REAL heading in the named manual section — so the "read more" links a
          diagnostic prints never dangle (this is the same stability promise the
          manual-side test makes, but starting from the compiler's registry);
-      3. the broad validation code [V001] refines to the right section by
-         message keyword;
+      3. the broad validation code [V001] deep-links by the STRUCTURED topic the
+         producing pass stamped on the error (Error_codes.manual_topic) — a total
+         topic→anchor map, invariant to message text, un-hijackable by user
+         identifiers, and stable end-to-end (B5);
       4. [explain] / [index] / [lookup] behave.
 
     Pure OCaml + the compiler lib; reads manual/*.md off disk (located the same
@@ -76,16 +78,11 @@ let section_file = function
      test's policy. *)
   | _ -> None
 
-(* slug rule — identical to Error_codes.slug_of_heading / anchors.md *)
-let slug heading =
-  let b = Buffer.create (String.length heading) in
-  String.iter (fun c ->
-    let c = Char.lowercase_ascii c in
-    if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') then Buffer.add_char b c
-    else if c = ' ' || c = '-' then Buffer.add_char b ' ') heading;
-  String.split_on_char ' ' (Buffer.contents b)
-  |> List.filter (fun s -> s <> "")
-  |> String.concat "-"
+(* slug rule — single-sourced in Error_codes.slug_of_heading (D16); this test
+   links the compiler lib, so it consumes that function directly (drift between
+   the diagnostic deep-links and this anchor test is now a compile-time
+   impossibility, not a hand-synced copy). *)
+let slug = Error_codes.slug_of_heading
 
 let slugs_of_file file =
   match read_file file with
@@ -152,44 +149,93 @@ let () =
               (Printf.sprintf "no heading in %s slugs to '%s'" file a))))
     reg;
 
-  (* 4. V001 message refinement *)
-  let refines msg expected =
-    Error_codes.manual_for ~code:"V001" ~message:msg = Some expected
-  in
-  check "V001 capability -> api-design"
-    (refines "handler 'h' uses [db] but does not declare the required capabilities"
-       "best-practices#api-design") "wrong refinement";
-  check "V001 database -> database-access"
-    (refines "database `D` references unknown entity `E`" "best-practices#database-access")
-    "wrong refinement";
-  check "V001 codec -> validation-patterns"
-    (refines "codec 'C' refers to unknown type 'C'" "best-practices#validation-patterns")
-    "wrong refinement";
-  check "V001 server -> api-design"
-    (refines "server 'S': handler 'h' for endpoint 'e' is not declared"
-       "best-practices#api-design") "wrong refinement";
+  (* 4. B5: manual deep-link anchors are decided by the STRUCTURED topic the
+     producing validation pass stamped on the error — never by sniffing keywords
+     out of the rendered message text.  These four checks replace the old
+     message-keyword refinement assertions (which encoded the very
+     decide-by-spelling bug this fix removes). *)
 
-  (* 4b. every anchor manual_for can EMIT (incl. V001 refinements not tied to a
-     code's manual field) resolves to a real heading. Guards against a heading
-     rename silently breaking a refined deep-link. *)
-  let emitted_anchors =
-    [ "overview#core-principles";
-      "best-practices#validation-patterns";
-      "best-practices#proof-management";
-      "best-practices#api-design";
-      "best-practices#database-access";
-      "best-practices#error-handling";
-      "best-practices#testing" ]
-  in
-  List.iter (fun spec ->
+  (* (a) TOTALITY: every manual_topic constructor maps via anchor_of_topic to a
+     `section#anchor` whose anchor resolves to a REAL heading slug in the named
+     manual file.  Iterating the closed Error_codes.all_topics gives this the same
+     teeth the old emitted_anchors block had, now keyed on the closed topic set:
+     a heading rename that breaks any topic's deep-link fails the build. *)
+  List.iter (fun t ->
+    let spec = Error_codes.anchor_of_topic t in
     let section, anchor = split_anchor spec in
     match anchor, section_file section with
     | Some a, Some file ->
-      check (Printf.sprintf "emitted anchor resolves: %s" spec)
+      check (Printf.sprintf "topic anchor resolves: %s" spec)
         (List.mem a (slugs_of_file file))
         (Printf.sprintf "no heading in %s slugs to '%s'" file a)
-    | _ -> ())
-    emitted_anchors;
+    | _ ->
+      check (Printf.sprintf "topic anchor has resolvable section#anchor form: %s" spec)
+        false spec)
+    Error_codes.all_topics;
+
+  (* (b) SAME-RULE / DIFFERENT-NAME INVARIANCE: with a FIXED topic, manual_for
+     ignores the message text entirely.  The two api-test-references-unknown-server
+     messages that USED to diverge (one hijacked to database-access by the word
+     "database" in the user's test description, the other to api-design) must now
+     map to ONE stable anchor.  Also: a fixed TTesting topic always yields #testing
+     regardless of message content. *)
+  let anchor_for topic msg =
+    Error_codes.manual_for ~topic ~code:"V001" ~message:msg ()
+  in
+  check "topic decides, not spelling (api-test unknown server)"
+    (anchor_for Error_codes.TStructural
+       "api-test `save to database` references unknown server `B`"
+     = anchor_for Error_codes.TStructural
+       "api-test `login flow` references unknown server `B`")
+    "anchor must not depend on user identifier text";
+  check "testing topic is stable across any message"
+    (anchor_for Error_codes.TTesting "anything at all with server database codec proof"
+     = Some "best-practices#testing")
+    "TTesting must always resolve to #testing";
+
+  (* (c) MESSAGE TEXT CANNOT HIJACK THE ANCHOR: a TDatabase-tagged error whose
+     message contains the word "test"/"testing" still links database-access —
+     proving the old substring cascade (which would have routed on "test") is
+     gone. *)
+  check "no substring hijack: database topic ignores the word 'test'"
+    (Error_codes.manual_for ~topic:Error_codes.TDatabase ~code:"V001"
+       ~message:"entity Test references unknown table for testing" ()
+     = Some "best-practices#database-access")
+    "substring in message must not win over the structured topic";
+
+  (* (d) END-TO-END CROSS-SEAM: compile a real .tesl whose api-test description
+     literally contains "database" and references an UNDECLARED server, so
+     check_api_test_structure (a TTesting pass) fires.  The emitted V001
+     diagnostic's resolved deep-link (d.manual) must be #testing — the pass's
+     topic — NOT #database-access, which the old substring cascade would have
+     picked from the word "database" in the user's description. *)
+  let hijack_src =
+    String.concat "\n"
+      [ "#lang tesl";
+        "module Designb5AnchorTest exposing []";
+        "";
+        "api-test \"save to database and reload\" for MissingServer {";
+        "  let resp = get \"/\"";
+        "  expect resp.status == 200";
+        "}";
+        "" ]
+  in
+  let diags = Compile.check_source "design-b5-anchor.tesl" hijack_src in
+  let api_test_diags =
+    List.filter (fun (d : Compile.diagnostic) ->
+      d.code = "V001"
+      && Error_codes.contains_ci ~needle:"references unknown server" d.message)
+      diags
+  in
+  check "cross-seam: api-test-unknown-server V001 is emitted"
+    (api_test_diags <> [])
+    (Printf.sprintf "no matching V001 diagnostic among %d diags" (List.length diags));
+  List.iter (fun (d : Compile.diagnostic) ->
+    check "cross-seam: api-test topic wins over 'database' in description"
+      (d.manual = Some "best-practices#testing")
+      (Printf.sprintf "expected #testing, got %s"
+         (match d.manual with Some a -> a | None -> "<none>")))
+    api_test_diags;
 
   (* 5. explain / index / lookup *)
   check "explain known code" (Error_codes.explain "T001" <> None) "no explanation";
