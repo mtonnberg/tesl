@@ -26,7 +26,7 @@
 (define-auther
   (queryAuth [req : HttpRequest])
   #:returns [q : String ::: (QueryAuthed q)]
-  (thsl-src-control! "tests/query-parameters-tests.tesl" 14 (list (cons 'req *req)) (lambda () (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "q" (raw-value req.queryParameters)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "tests/query-parameters-tests.tesl" 15 (list) (lambda () (reject "missing q query parameter" #:http-code 400)))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "tests/query-parameters-tests.tesl" 16 (list (cons 'v v)) (lambda () (accept (QueryAuthed v) #:value *v))))])))))
+  (thsl-src-control! "tests/query-parameters-tests.tesl" 14 (list (cons 'req *req)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "q" (raw-value req.queryParameters)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "tests/query-parameters-tests.tesl" 15 (list) (lambda () (reject "missing q query parameter" #:http-code 400)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "tests/query-parameters-tests.tesl" 16 (list (cons 'v v)) (lambda () (accept (QueryAuthed v) #:value *v))))])))))
 
 (define SearchServer-sse-routes '())
 (define-api SearchApi

@@ -48,12 +48,12 @@
 (define/pow
   (createUser [req : NewUserRequest])
   #:returns UserRecord
-  (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 63 (list (cons 'req *req)) (lambda () (let/check ([tesl_checked_0 (checkEmail (tesl-dot/runtime req 'email))]) (let ([validEmail tesl_checked_0]) (let/check ([tesl_checked_1 (checkAge (tesl-dot/runtime req 'age))]) (let ([validAge tesl_checked_1]) (UserRecord #:email validEmail #:age validAge))))))))
+  (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 63 (list (cons 'req *req)) (lambda () (let/check ([tesl-checked-0 (checkEmail (tesl-dot/runtime req 'email))]) (let ([validEmail tesl-checked-0]) (let/check ([tesl-checked-1 (checkAge (tesl-dot/runtime req 'age))]) (let ([validAge tesl-checked-1]) (UserRecord #:email validEmail #:age validAge))))))))
 
 (define-checker
   (parseAndValidate [ageStr : String])
   #:returns [n : Integer ::: (ValidAge n)]
-  (thsl-src-control! "example/learn/lesson24-error-handling-patterns.tesl" 72 (list (cons 'ageStr *ageStr)) (lambda () (let ([tesl_case_2 (raw-value (tesl_import_Int_parse *ageStr))]) (cond [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Nothing)) (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 73 (list) (lambda () (reject "age must be a number" #:http-code 400)))] [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Something)) (let ([parsed (hash-ref (adt-value-fields *tesl_case_2) 'value)]) (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 75 (list (cons 'parsed parsed)) (lambda () (checkAge parsed))))])))))
+  (thsl-src-control! "example/learn/lesson24-error-handling-patterns.tesl" 72 (list (cons 'ageStr *ageStr)) (lambda () (let ([tesl-case-2 (raw-value (tesl_import_Int_parse *ageStr))]) (cond [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Nothing)) (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 73 (list) (lambda () (reject "age must be a number" #:http-code 400)))] [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Something)) (let ([parsed (hash-ref (adt-value-fields *tesl-case-2) 'value)]) (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 75 (list (cons 'parsed parsed)) (lambda () (checkAge parsed))))])))))
 
 (define-checker
   (checkNonEmpty [s : String])
@@ -63,16 +63,16 @@
 (define/pow
   (processRequest [req : NewUserRequest])
   #:returns String
-  (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 90 (list (cons 'req *req)) (lambda () (let/check ([tesl_checked_3 ((check-and checkEmail checkNonEmpty) (tesl-dot/runtime req 'email))]) (let ([email tesl_checked_3]) (let/check ([tesl_checked_4 (checkAge (tesl-dot/runtime req 'age))]) (let ([age tesl_checked_4]) (format "processed ~a age ~a" (tesl-display-val *email) (tesl-display-val *age)))))))))
+  (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 90 (list (cons 'req *req)) (lambda () (let/check ([tesl-checked-3 ((check-and checkEmail checkNonEmpty) (tesl-dot/runtime req 'email))]) (let ([email tesl-checked-3]) (let/check ([tesl-checked-4 (checkAge (tesl-dot/runtime req 'age))]) (let ([age tesl-checked-4]) (format "processed ~a age ~a" (tesl-display-val *email) (tesl-display-val *age)))))))))
 
 (module+ test
   (require rackunit)
   (test-case "valid email passes check"
   (define email (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 122 (list) (lambda () "user@example.com")))
-  (define tesl_checked_5 (checkEmail email))
-  (when (check-fail? tesl_checked_5)
-    (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl_checked_5)))
-  (define result tesl_checked_5)
+  (define tesl-checked-5 (checkEmail email))
+  (when (check-fail? tesl-checked-5)
+    (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-5)))
+  (define result tesl-checked-5)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 124 (list (cons 'result result) (cons 'email email)) (lambda () result))) "user@example.com")
   )
 
@@ -86,10 +86,10 @@
 
   (test-case "valid age passes check"
   (define age (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 133 (list) (lambda () 25)))
-  (define tesl_checked_6 (checkAge age))
-  (when (check-fail? tesl_checked_6)
-    (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl_checked_6)))
-  (define result tesl_checked_6)
+  (define tesl-checked-6 (checkAge age))
+  (when (check-fail? tesl-checked-6)
+    (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-6)))
+  (define result tesl-checked-6)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 135 (list (cons 'result result) (cons 'age age)) (lambda () result))) 25)
   )
 

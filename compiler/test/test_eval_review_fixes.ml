@@ -112,18 +112,22 @@ let test_cap1_pure_ctor_accepted () =
      fn pureCtor(x: Int) -> Maybe Int requires [] =\n\
      \  Something x\n"
 
-(* ── EMIT-1: reserved compiler-generated name grammar ────────────────────── *)
+(* ── EMIT-1 → S5b: generated temps are now lexer-illegal (hyphenated) ───────
+   The reserved-generated-name check was retired: every emitter temp is minted with
+   a hyphen (`tesl-case-N`, `tesl-p-N-M`, …), which a Tesl identifier can never
+   contain, so a user binder spelled like the OLD underscore grammar can no longer
+   collide with a temp — it is now an ordinary, ACCEPTED identifier. *)
 
-let test_emit1_reserved_name_rejected () =
-  should_fail "reserved compiler-generated name"
+let test_emit1_former_reserved_name_accepted () =
+  should_pass
     "#lang tesl\nmodule T exposing []\n\
      import Tesl.Prelude exposing [Int]\n\
      fn f(seed: Int) -> Int =\n\
      \  let tesl_case_0 = seed\n\
      \  tesl_case_0\n"
 
-let test_emit1_reserved_param_rejected () =
-  should_fail "reserved compiler-generated name"
+let test_emit1_former_reserved_param_accepted () =
+  should_pass
     "#lang tesl\nmodule T exposing []\n\
      import Tesl.Prelude exposing [Int]\n\
      fn f(_tesl_p0_0: Int) -> Int = _tesl_p0_0\n"
@@ -143,8 +147,8 @@ let test_emit1_normal_name_accepted () =
    descended DFunc only — so a user binder inside a `test { }` block could
    capture them (silently-wrong Racket that still type-checks).  Both prefixes
    are now reserved and the walk descends the test forms. *)
-let test_emit1_reserved_ignored_in_test_rejected () =
-  should_fail "reserved compiler-generated name"
+let test_emit1_former_reserved_ignored_in_test_accepted () =
+  should_pass
     "#lang tesl\nmodule T exposing []\n\
      import Tesl.Prelude exposing [Int, Bool(..)]\n\
      fn f(x: Int) -> Int = x\n\
@@ -153,8 +157,8 @@ let test_emit1_reserved_ignored_in_test_rejected () =
      \  expect tesl_ignored_0 == 1\n\
      }\n"
 
-let test_emit1_reserved_proof_bind_in_test_rejected () =
-  should_fail "reserved compiler-generated name"
+let test_emit1_former_reserved_proof_bind_in_test_accepted () =
+  should_pass
     "#lang tesl\nmodule T exposing []\n\
      import Tesl.Prelude exposing [Int, Bool(..)]\n\
      fn f(x: Int) -> Int = x\n\
@@ -163,8 +167,8 @@ let test_emit1_reserved_proof_bind_in_test_rejected () =
      \  expect tesl_proof_bind_0 == 1\n\
      }\n"
 
-let test_emit1_reserved_ignored_in_func_rejected () =
-  should_fail "reserved compiler-generated name"
+let test_emit1_former_reserved_ignored_in_func_accepted () =
+  should_pass
     "#lang tesl\nmodule T exposing []\n\
      import Tesl.Prelude exposing [Int]\n\
      fn f(seed: Int) -> Int =\n\
@@ -326,12 +330,12 @@ let () =
       test_case "pure value in Something accepted" `Quick test_cap1_pure_ctor_accepted;
     ];
     "emit-1-reserved-names", [
-      test_case "reserved let-binding name rejected" `Quick test_emit1_reserved_name_rejected;
-      test_case "reserved parameter name rejected" `Quick test_emit1_reserved_param_rejected;
+      test_case "S5b former-reserved let-binding name accepted" `Quick test_emit1_former_reserved_name_accepted;
+      test_case "S5b former-reserved parameter name accepted" `Quick test_emit1_former_reserved_param_accepted;
       test_case "ordinary name accepted" `Quick test_emit1_normal_name_accepted;
-      test_case "reserved `tesl_ignored_` in test block rejected" `Quick test_emit1_reserved_ignored_in_test_rejected;
-      test_case "reserved `tesl_proof_bind_` in test block rejected" `Quick test_emit1_reserved_proof_bind_in_test_rejected;
-      test_case "reserved `tesl_ignored_` in fn body rejected" `Quick test_emit1_reserved_ignored_in_func_rejected;
+      test_case "S5b former-reserved `tesl_ignored_` in test block accepted" `Quick test_emit1_former_reserved_ignored_in_test_accepted;
+      test_case "S5b former-reserved `tesl_proof_bind_` in test block accepted" `Quick test_emit1_former_reserved_proof_bind_in_test_accepted;
+      test_case "S5b former-reserved `tesl_ignored_` in fn body accepted" `Quick test_emit1_former_reserved_ignored_in_func_accepted;
       test_case "ordinary name in test block accepted" `Quick test_emit1_normal_name_in_test_accepted;
     ];
     "hm-2-orderable-record", [

@@ -84,7 +84,9 @@ let check_module (m : module_form) : validation_error list =
   @ (TProof @: check_existential_proof_enforcement decls)
   @ (TNaming @: check_case_exhaustiveness ~extra_ctors:(load_imported_ctor_info m) decls)
   @ (TNaming @: check_name_shadowing m)
-  @ (TNaming @: check_reserved_generated_names decls)
+  (* S5b: the reserved-generated-name check was retired — every emitter temp is now
+     minted with a lexer-illegal hyphen (`tesl-case-N`, `tesl-ignored-N`, …), so a
+     user identifier can never collide with one by construction. *)
   @ (TProof @: check_forall_param_subjects decls)
   @ (TCapability @: check_handler_capabilities ~cap_map ~imported_func_caps:(load_imported_func_caps m) decls)
   @ (TDatabase @: check_pk_match decls)

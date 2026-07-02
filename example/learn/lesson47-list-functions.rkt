@@ -56,7 +56,7 @@
 (define/pow
   (parseInts [strs : (List String)])
   #:returns (List Integer)
-  (thsl-src! "example/learn/lesson47-list-functions.tesl" 142 (list (cons 'strs *strs)) (lambda () (raw-value (tesl_import_List_filterMap (let () (define/pow (tesl-lambda-5 [s : String]) #:returns Any (let ([tesl_case_6 (raw-value (tesl_import_String_toInt *s))]) (cond [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl_case_6) 'value)]) (thsl-src! "example/learn/lesson47-list-functions.tesl" 144 (list (cons 'n n)) (lambda () (raw-value (Something *n)))))] [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Nothing)) (thsl-src! "example/learn/lesson47-list-functions.tesl" 145 (list) (lambda () Nothing))]))) tesl-lambda-5) *strs)))))
+  (thsl-src! "example/learn/lesson47-list-functions.tesl" 142 (list (cons 'strs *strs)) (lambda () (raw-value (tesl_import_List_filterMap (let () (define/pow (tesl-lambda-5 [s : String]) #:returns Any (let ([tesl-case-6 (raw-value (tesl_import_String_toInt *s))]) (cond [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl-case-6) 'value)]) (thsl-src! "example/learn/lesson47-list-functions.tesl" 144 (list (cons 'n n)) (lambda () (raw-value (Something *n)))))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Nothing)) (thsl-src! "example/learn/lesson47-list-functions.tesl" 145 (list) (lambda () Nothing))]))) tesl-lambda-5) *strs)))))
 
 (define/pow
   (total [ns : (List Integer)])
@@ -101,22 +101,22 @@
 (define/pow
   (buildRange [start : Integer] [count : Integer])
   #:returns (List Integer)
-  (thsl-src! "example/learn/lesson47-list-functions.tesl" 189 (list (cons 'start *start) (cons 'count *count)) (lambda () (let/check ([tesl_checked_12 (tesl_import_Int_nonNegative count)]) (let ([safeCount tesl_checked_12]) (raw-value (tesl_import_List_take safeCount (raw-value (tesl_import_List_range *start (+ *start *count))))))))))
+  (thsl-src! "example/learn/lesson47-list-functions.tesl" 189 (list (cons 'start *start) (cons 'count *count)) (lambda () (let/check ([tesl-checked-12 (tesl_import_Int_nonNegative count)]) (let ([safeCount tesl-checked-12]) (raw-value (tesl_import_List_take safeCount (raw-value (tesl_import_List_range *start (+ *start *count))))))))))
 
 (define/pow
   (fillWith [value : Integer] [n : Integer])
   #:returns (List Integer)
-  (thsl-src! "example/learn/lesson47-list-functions.tesl" 193 (list (cons 'value *value) (cons 'n *n)) (lambda () (let/check ([tesl_checked_13 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl_checked_13]) (raw-value (tesl_import_List_repeat *value safeN)))))))
+  (thsl-src! "example/learn/lesson47-list-functions.tesl" 193 (list (cons 'value *value) (cons 'n *n)) (lambda () (let/check ([tesl-checked-13 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl-checked-13]) (raw-value (tesl_import_List_repeat *value safeN)))))))
 
 (define/pow
   (firstThree [ns : (List Integer)])
   #:returns (List Integer)
-  (thsl-src! "example/learn/lesson47-list-functions.tesl" 197 (list (cons 'ns *ns)) (lambda () (let ([raw3 3]) (let/check ([tesl_checked_14 (tesl_import_Int_nonNegative raw3)]) (let ([n3 tesl_checked_14]) (raw-value (tesl_import_List_take n3 *ns))))))))
+  (thsl-src! "example/learn/lesson47-list-functions.tesl" 197 (list (cons 'ns *ns)) (lambda () (let ([raw3 3]) (let/check ([tesl-checked-14 (tesl_import_Int_nonNegative raw3)]) (let ([n3 tesl-checked-14]) (raw-value (tesl_import_List_take n3 *ns))))))))
 
 (define/pow
   (skipFirst [ns : (List Integer)] [n : Integer])
   #:returns (List Integer)
-  (thsl-src! "example/learn/lesson47-list-functions.tesl" 202 (list (cons 'ns *ns) (cons 'n *n)) (lambda () (let/check ([tesl_checked_15 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl_checked_15]) (raw-value (tesl_import_List_drop safeN *ns)))))))
+  (thsl-src! "example/learn/lesson47-list-functions.tesl" 202 (list (cons 'ns *ns) (cons 'n *n)) (lambda () (let/check ([tesl-checked-15 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl-checked-15]) (raw-value (tesl_import_List_drop safeN *ns)))))))
 
 (define/pow
   (sortInts [ns : (List Integer)])

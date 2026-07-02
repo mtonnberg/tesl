@@ -49,12 +49,12 @@
 (define/pow
   (normalize [value : Real] [lo : Real] [hi : Real])
   #:returns Real
-  (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 98 (list (cons 'value *value) (cons 'lo *lo) (cons 'hi *hi)) (lambda () (let ([range (raw-value (tesl_import_Float_sub *hi *lo))]) (let/check ([tesl_checked_0 (tesl_import_Float_requireNonZero range)]) (let ([safeRange tesl_checked_0]) (raw-value (tesl_import_Float_div (raw-value (tesl_import_Float_sub *value *lo)) safeRange))))))))
+  (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 98 (list (cons 'value *value) (cons 'lo *lo) (cons 'hi *hi)) (lambda () (let ([range (raw-value (tesl_import_Float_sub *hi *lo))]) (let/check ([tesl-checked-0 (tesl_import_Float_requireNonZero range)]) (let ([safeRange tesl-checked-0]) (raw-value (tesl_import_Float_div (raw-value (tesl_import_Float_sub *value *lo)) safeRange))))))))
 
 (define/pow
   (safeAverage [a : Real] [b : Real] [count : Real])
   #:returns (Maybe Real)
-  (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 112 (list (cons 'a *a) (cons 'b *b) (cons 'count *count)) (lambda () (if (raw-value (tesl_import_Float_isZero *count)) (raw-value Nothing) (let/check ([tesl_checked_1 (tesl_import_Float_requireNonZero count)]) (let ([checkedCount tesl_checked_1]) (raw-value (raw-value (Something (raw-value (tesl_import_Float_div (+ *a *b) checkedCount)))))))))))
+  (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 112 (list (cons 'a *a) (cons 'b *b) (cons 'count *count)) (lambda () (if (raw-value (tesl_import_Float_isZero *count)) (raw-value Nothing) (let/check ([tesl-checked-1 (tesl_import_Float_requireNonZero count)]) (let ([checkedCount tesl-checked-1]) (raw-value (raw-value (Something (raw-value (tesl_import_Float_div (+ *a *b) checkedCount)))))))))))
 
 (define/pow
   (roundToInt [x : Real])

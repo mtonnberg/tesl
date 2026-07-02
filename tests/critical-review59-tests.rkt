@@ -100,7 +100,7 @@
 (define/pow
   (doChain5 [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review59-tests.tesl" 105 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_0 (checkA raw)]) (let ([a tesl_checked_0]) (let/check ([tesl_checked_1 (checkB a)]) (let ([b tesl_checked_1]) (let/check ([tesl_checked_2 (checkC b)]) (let ([c tesl_checked_2]) (let/check ([tesl_checked_3 (checkD c)]) (let ([d tesl_checked_3]) (let/check ([tesl_checked_4 (checkE d)]) (let ([e tesl_checked_4]) (raw-value (needsAll e)))))))))))))))
+  (thsl-src! "tests/critical-review59-tests.tesl" 105 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-0 (checkA raw)]) (let ([a tesl-checked-0]) (let/check ([tesl-checked-1 (checkB a)]) (let ([b tesl-checked-1]) (let/check ([tesl-checked-2 (checkC b)]) (let ([c tesl-checked-2]) (let/check ([tesl-checked-3 (checkD c)]) (let ([d tesl-checked-3]) (let/check ([tesl-checked-4 (checkE d)]) (let ([e tesl-checked-4]) (raw-value (needsAll e)))))))))))))))
 
 (define/pow
   (introAndLeft [raw : Integer])
@@ -115,12 +115,12 @@
 (define/pow
   (singleDetach [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review59-tests.tesl" 163 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_5 (checkA raw)]) (let ([a tesl_checked_5]) (let ([pa (detach-all-proof a)]) (let ([v (forget-proof a)]) (let ([withA (attach-proof v pa)]) (raw-value (needsA withA))))))))))
+  (thsl-src! "tests/critical-review59-tests.tesl" 163 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-5 (checkA raw)]) (let ([a tesl-checked-5]) (let ([pa (detach-all-proof a)]) (let ([v (forget-proof a)]) (let ([withA (attach-proof v pa)]) (raw-value (needsA withA))))))))))
 
 (define/pow
   (multiProofDetach [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review59-tests.tesl" 178 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_6 (checkA raw)]) (let ([a tesl_checked_6]) (let/check ([tesl_checked_7 (checkB a)]) (let ([b tesl_checked_7]) (let ([_p (detach-all-proof b)]) 0))))))))
+  (thsl-src! "tests/critical-review59-tests.tesl" 178 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-6 (checkA raw)]) (let ([a tesl-checked-6]) (let/check ([tesl-checked-7 (checkB a)]) (let ([b tesl-checked-7]) (let ([_p (detach-all-proof b)]) 0))))))))
 
 (define/pow
   (isEven [n : Integer])
@@ -135,7 +135,7 @@
 (define/pow
   (proofDecompChain [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review59-tests.tesl" 223 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_8 (checkA raw)]) (let ([a tesl_checked_8]) (let/check ([tesl_checked_9 (checkB a)]) (let ([b tesl_checked_9]) (let ([tesl_proof_binding_10 b]) (let ([v (forget-proof tesl_proof_binding_10)] [p (detach-all-proof tesl_proof_binding_10)]) (let ([pA (and-left p)]) (let ([withA (attach-proof v pA)]) (raw-value (needsA withA)))))))))))))
+  (thsl-src! "tests/critical-review59-tests.tesl" 223 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-8 (checkA raw)]) (let ([a tesl-checked-8]) (let/check ([tesl-checked-9 (checkB a)]) (let ([b tesl-checked-9]) (let ([tesl-proof-binding-10 b]) (let ([v (forget-proof tesl-proof-binding-10)] [p (detach-all-proof tesl-proof-binding-10)]) (let ([pA (and-left p)]) (let ([withA (attach-proof v pA)]) (raw-value (needsA withA)))))))))))))
 
 (module+ test
   (require rackunit)
@@ -204,19 +204,19 @@
 
   (test-case "R59_PD02 andRight also works on accumulated proofs"
   (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 237 (list) (lambda () 5)))
-  (define tesl_checked_14 (checkA r1))
-  (when (check-fail? tesl_checked_14)
-    (raise-user-error 'tesl-test "unexpected failure in let a: ~a" (check-fail-message tesl_checked_14)))
-  (define a tesl_checked_14)
-  (define tesl_checked_15 (checkB a))
-  (when (check-fail? tesl_checked_15)
-    (raise-user-error 'tesl-test "unexpected failure in let b: ~a" (check-fail-message tesl_checked_15)))
-  (define b tesl_checked_15)
-  (define tesl_proof_bind_16 b)
-  (when (check-fail? tesl_proof_bind_16)
-    (raise-user-error 'tesl-test "unexpected failure in let-proof: ~a" (check-fail-message tesl_proof_bind_16)))
-  (define v (forget-proof tesl_proof_bind_16))
-  (define p (detach-all-proof tesl_proof_bind_16))
+  (define tesl-checked-14 (checkA r1))
+  (when (check-fail? tesl-checked-14)
+    (raise-user-error 'tesl-test "unexpected failure in let a: ~a" (check-fail-message tesl-checked-14)))
+  (define a tesl-checked-14)
+  (define tesl-checked-15 (checkB a))
+  (when (check-fail? tesl-checked-15)
+    (raise-user-error 'tesl-test "unexpected failure in let b: ~a" (check-fail-message tesl-checked-15)))
+  (define b tesl-checked-15)
+  (define tesl-proof-bind-16 b)
+  (when (check-fail? tesl-proof-bind-16)
+    (raise-user-error 'tesl-test "unexpected failure in let-proof: ~a" (check-fail-message tesl-proof-bind-16)))
+  (define v (forget-proof tesl-proof-bind-16))
+  (define p (detach-all-proof tesl-proof-bind-16))
   (define pB (thsl-src! "tests/critical-review59-tests.tesl" 241 (list (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (and-right p))))
   (define withB (thsl-src! "tests/critical-review59-tests.tesl" 242 (list (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (attach-proof v pB))))
   (define result (thsl-src! "tests/critical-review59-tests.tesl" 243 (list (cons 'withB withB) (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (needsB withB))))

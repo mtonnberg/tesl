@@ -70,7 +70,7 @@
   (cookieAuth [request : HttpRequest])
   #:capabilities [timedRead]
   #:returns [user : String ::: (Authenticated user)]
-  (thsl-src-control! "example/learn/lesson26-time-and-posix.tesl" 135 (list (cons 'request *request)) (lambda () (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 136 (list) (lambda () (reject "not logged in" #:http-code 401)))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([uid (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 137 (list (cons 'uid uid)) (lambda () (accept (Authenticated uid) #:value *uid))))])))))
+  (thsl-src-control! "example/learn/lesson26-time-and-posix.tesl" 135 (list (cons 'request *request)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 136 (list) (lambda () (reject "not logged in" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([uid (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 137 (list (cons 'uid uid)) (lambda () (accept (Authenticated uid) #:value *uid))))])))))
 
 (define/pow
   (currentTimestamp)

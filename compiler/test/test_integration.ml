@@ -851,7 +851,7 @@ fn f() -> Int =
   let count = check Int.nonNegative 2
   count
 |} in
-  check_contains "stdlib let/check" src "(let/check ([tesl_checked_0";
+  check_contains "stdlib let/check" src "(let/check ([tesl-checked-0";
   check_contains "stdlib let/check target" src "tesl_import_Int_nonNegative 2"
 
 let test_stdlib_empty_list_is_not_zero_arg () =
@@ -969,7 +969,7 @@ fn unwrap(m: Maybe Int) -> Int =
   (* The bound payload is still extracted and returned RAW as the starred name;
      the arm body is now wrapped in a per-arm thsl-src! checkpoint (erased in
      release), so the raw return is the checkpoint thunk body, not the bare let. *)
-  check_contains "case bound value binding" src "(let ([value (hash-ref (adt-value-fields *tesl_case_0) 'value)])";
+  check_contains "case bound value binding" src "(let ([value (hash-ref (adt-value-fields *tesl-case-0) 'value)])";
   check_contains "case bound value raw return" src "(lambda () *value)"
 
 let test_constructor_payload_unwraps_named_values () =
@@ -994,8 +994,8 @@ test "dict proof local" {
   expect Dict.get key checked == 1
 }
 |} in
-  check_contains "test let/check temp binding" src "(define tesl_checked_0 (tesl_import_Dict_requireKey key d))";
-  check_contains "test let/check direct binding" src "(define checked tesl_checked_0)";
+  check_contains "test let/check temp binding" src "(define tesl-checked-0 (tesl_import_Dict_requireKey key d))";
+  check_contains "test let/check direct binding" src "(define checked tesl-checked-0)";
   check_contains "test let/check proof local use" src "(tesl_import_Dict_get (raw-value key) checked)"
 
 let test_stdlib_call_raw_unwraps_user_function_result () =

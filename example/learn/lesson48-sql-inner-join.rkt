@@ -80,9 +80,9 @@
   (require rackunit)
   (test-case "innerJoin filters out orders with no matching customer"
     (with-capabilities (dbRead dbWrite)
-    (define tesl_ignored_0 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 159 (list) (lambda () (insert-one! Customer (hash 'id "c1" 'name "Alice" 'country "SE")))))
-    (define tesl_ignored_1 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 160 (list) (lambda () (insert-one! Order (hash 'id "o1" 'customerId "c1" 'amount 50 'status "new")))))
-    (define tesl_ignored_2 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 162 (list) (lambda () (insert-one! Order (hash 'id "o2" 'customerId "no-such-customer" 'amount 100 'status "new")))))
+    (define tesl-ignored-0 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 159 (list) (lambda () (insert-one! Customer (hash 'id "c1" 'name "Alice" 'country "SE")))))
+    (define tesl-ignored-1 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 160 (list) (lambda () (insert-one! Order (hash 'id "o1" 'customerId "c1" 'amount 50 'status "new")))))
+    (define tesl-ignored-2 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 162 (list) (lambda () (insert-one! Order (hash 'id "o2" 'customerId "no-such-customer" 'amount 100 'status "new")))))
     (define results (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 164 (list) (lambda () (findOrderWithCustomer "c1"))))
     (check-not-equal? (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 165 (list (cons 'results results)) (lambda () results)) (list))
     )
@@ -90,10 +90,10 @@
 
   (test-case "innerJoin returns only orders for the given customer"
     (with-capabilities (dbRead dbWrite)
-    (define tesl_ignored_3 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 170 (list) (lambda () (insert-one! Customer (hash 'id "c2" 'name "Bob" 'country "US")))))
-    (define tesl_ignored_4 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 171 (list) (lambda () (insert-one! Customer (hash 'id "c3" 'name "Carol" 'country "UK")))))
-    (define tesl_ignored_5 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 172 (list) (lambda () (insert-one! Order (hash 'id "o3" 'customerId "c2" 'amount 200 'status "shipped")))))
-    (define tesl_ignored_6 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 173 (list) (lambda () (insert-one! Order (hash 'id "o4" 'customerId "c3" 'amount 300 'status "shipped")))))
+    (define tesl-ignored-3 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 170 (list) (lambda () (insert-one! Customer (hash 'id "c2" 'name "Bob" 'country "US")))))
+    (define tesl-ignored-4 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 171 (list) (lambda () (insert-one! Customer (hash 'id "c3" 'name "Carol" 'country "UK")))))
+    (define tesl-ignored-5 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 172 (list) (lambda () (insert-one! Order (hash 'id "o3" 'customerId "c2" 'amount 200 'status "shipped")))))
+    (define tesl-ignored-6 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 173 (list) (lambda () (insert-one! Order (hash 'id "o4" 'customerId "c3" 'amount 300 'status "shipped")))))
     (define results (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 175 (list) (lambda () (findOrderWithCustomer "c2"))))
     (check-not-equal? (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 176 (list (cons 'results results)) (lambda () results)) (list))
     )
@@ -101,9 +101,9 @@
 
   (test-case "cheapOrdersByCountry returns results when orders with customers exist"
     (with-capabilities (dbRead dbWrite)
-    (define tesl_ignored_7 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 181 (list) (lambda () (insert-one! Customer (hash 'id "c4" 'name "Dave" 'country "DE")))))
-    (define tesl_ignored_8 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 182 (list) (lambda () (insert-one! Order (hash 'id "o5" 'customerId "c4" 'amount 10 'status "new")))))
-    (define tesl_ignored_9 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 183 (list) (lambda () (insert-one! Order (hash 'id "o6" 'customerId "c4" 'amount 20 'status "new")))))
+    (define tesl-ignored-7 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 181 (list) (lambda () (insert-one! Customer (hash 'id "c4" 'name "Dave" 'country "DE")))))
+    (define tesl-ignored-8 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 182 (list) (lambda () (insert-one! Order (hash 'id "o5" 'customerId "c4" 'amount 10 'status "new")))))
+    (define tesl-ignored-9 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 183 (list) (lambda () (insert-one! Order (hash 'id "o6" 'customerId "c4" 'amount 20 'status "new")))))
     (define results (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 185 (list) (lambda () (cheapOrdersByCountry 5))))
     (check-not-equal? (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 186 (list (cons 'results results)) (lambda () results)) (list))
     )
@@ -111,10 +111,10 @@
 
   (test-case "findOrderItemsByOrderId uses innerJoin to filter items"
     (with-capabilities (dbRead dbWrite)
-    (define tesl_ignored_10 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 191 (list) (lambda () (insert-one! Customer (hash 'id "c5" 'name "Eve" 'country "FR")))))
-    (define tesl_ignored_11 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 192 (list) (lambda () (insert-one! Order (hash 'id "o7" 'customerId "c5" 'amount 75 'status "processing")))))
-    (define tesl_ignored_12 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 193 (list) (lambda () (insert-one! OrderItem (hash 'id "i1" 'orderId "o7" 'productName "Widget" 'quantity 3)))))
-    (define tesl_ignored_13 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 195 (list) (lambda () (insert-one! OrderItem (hash 'id "i2" 'orderId "ghost-order" 'productName "Gadget" 'quantity 1)))))
+    (define tesl-ignored-10 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 191 (list) (lambda () (insert-one! Customer (hash 'id "c5" 'name "Eve" 'country "FR")))))
+    (define tesl-ignored-11 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 192 (list) (lambda () (insert-one! Order (hash 'id "o7" 'customerId "c5" 'amount 75 'status "processing")))))
+    (define tesl-ignored-12 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 193 (list) (lambda () (insert-one! OrderItem (hash 'id "i1" 'orderId "o7" 'productName "Widget" 'quantity 3)))))
+    (define tesl-ignored-13 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 195 (list) (lambda () (insert-one! OrderItem (hash 'id "i2" 'orderId "ghost-order" 'productName "Gadget" 'quantity 1)))))
     (define items (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 197 (list) (lambda () (findOrderItemsByOrderId "o7"))))
     (check-not-equal? (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 198 (list (cons 'items items)) (lambda () items)) (list))
     )
@@ -122,7 +122,7 @@
 
   (test-case "innerJoin with no matching customer returns empty list"
     (with-capabilities (dbRead dbWrite)
-    (define tesl_ignored_14 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 204 (list) (lambda () (insert-one! Order (hash 'id "orphan1" 'customerId "missing-customer" 'amount 999 'status "new")))))
+    (define tesl-ignored-14 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 204 (list) (lambda () (insert-one! Order (hash 'id "orphan1" 'customerId "missing-customer" 'amount 999 'status "new")))))
     (define results (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 206 (list) (lambda () (findOrderWithCustomer "missing-customer"))))
     (check-equal? (raw-value (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 207 (list (cons 'results results)) (lambda () results))) (list))
     )

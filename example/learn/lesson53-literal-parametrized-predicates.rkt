@@ -57,7 +57,7 @@
 (define/pow
   (testAllBounds [raw : Integer])
   #:returns Integer
-  (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 94 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_0 (checkMin10 raw)]) (let ([a tesl_checked_0]) (let/check ([tesl_checked_1 (checkMax100 a)]) (let ([b tesl_checked_1]) (raw-value (needBothBounds b)))))))))
+  (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 94 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-0 (checkMin10 raw)]) (let ([a tesl-checked-0]) (let/check ([tesl-checked-1 (checkMax100 a)]) (let ([b tesl-checked-1]) (raw-value (needBothBounds b)))))))))
 
 (define-trusted
   (proveHttp [port : Integer])
@@ -97,7 +97,7 @@
 (define/pow
   (testClampedLet [raw : Integer])
   #:returns Integer
-  (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 145 (list (cons 'raw *raw)) (lambda () (let ([lo 1]) (let ([hi 100]) (let/check ([tesl_checked_2 (checkClamped lo hi raw)]) (let ([v tesl_checked_2]) (raw-value (needClamped1to100 v)))))))))
+  (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 145 (list (cons 'raw *raw)) (lambda () (let ([lo 1]) (let ([hi 100]) (let/check ([tesl-checked-2 (checkClamped lo hi raw)]) (let ([v tesl-checked-2]) (raw-value (needClamped1to100 v)))))))))
 
 (define/pow
   (needOneAbove10 [x : Integer ::: (HasMin 10 x)])
@@ -144,16 +144,16 @@
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: testAllBounds 101"))
   (define raw10 (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 196 (list) (lambda () 10)))
-  (define tesl_checked_4 (checkMin10 raw10))
-  (when (check-fail? tesl_checked_4)
-    (raise-user-error 'tesl-test "unexpected failure in let v10: ~a" (check-fail-message tesl_checked_4)))
-  (define v10 tesl_checked_4)
+  (define tesl-checked-4 (checkMin10 raw10))
+  (when (check-fail? tesl-checked-4)
+    (raise-user-error 'tesl-test "unexpected failure in let v10: ~a" (check-fail-message tesl-checked-4)))
+  (define v10 tesl-checked-4)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 198 (list (cons 'v10 v10) (cons 'raw10 raw10)) (lambda () (needAbove10 v10)))) 10)
   (define raw20 (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 201 (list (cons 'v10 v10) (cons 'raw10 raw10)) (lambda () 20)))
-  (define tesl_checked_5 (checkMin20 raw20))
-  (when (check-fail? tesl_checked_5)
-    (raise-user-error 'tesl-test "unexpected failure in let v20: ~a" (check-fail-message tesl_checked_5)))
-  (define v20 tesl_checked_5)
+  (define tesl-checked-5 (checkMin20 raw20))
+  (when (check-fail? tesl-checked-5)
+    (raise-user-error 'tesl-test "unexpected failure in let v20: ~a" (check-fail-message tesl-checked-5)))
+  (define v20 tesl-checked-5)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 203 (list (cons 'v20 v20) (cons 'raw20 raw20) (cons 'v10 v10) (cons 'raw10 raw10)) (lambda () (needAbove20 v20)))) 20)
   (define raw15 (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 206 (list (cons 'v20 v20) (cons 'raw20 raw20) (cons 'v10 v10) (cons 'raw10 raw10)) (lambda () 15)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 207 (list (cons 'raw15 raw15) (cons 'v20 v20) (cons 'raw20 raw20) (cons 'v10 v10) (cons 'raw10 raw10)) (lambda ()

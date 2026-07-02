@@ -49,13 +49,13 @@
   (verifyClaims [token : JwtToken] [secret : JwtSecret])
   #:capabilities [jwtCap]
   #:returns String
-  (thsl-src-control! "tests/jwt-tests.tesl" 63 (list (cons 'token *token) (cons 'secret *secret)) (lambda () (let ([tesl_case_0 (raw-value (tesl_import_Dict_lookup "sub" (raw-value (tesl_import_JWT_verify *token *secret))))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "tests/jwt-tests.tesl" 64 (list) (lambda () (raw-value "")))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([s (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "tests/jwt-tests.tesl" 65 (list (cons 's s)) (lambda () *s)))])))))
+  (thsl-src-control! "tests/jwt-tests.tesl" 63 (list (cons 'token *token) (cons 'secret *secret)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "sub" (raw-value (tesl_import_JWT_verify *token *secret))))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "tests/jwt-tests.tesl" 64 (list) (lambda () (raw-value "")))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([s (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "tests/jwt-tests.tesl" 65 (list (cons 's s)) (lambda () *s)))])))))
 
 (define/pow
   (decodeClaims [token : JwtToken])
   #:capabilities [jwtCap]
   #:returns String
-  (thsl-src-control! "tests/jwt-tests.tesl" 68 (list (cons 'token *token)) (lambda () (let ([tesl_case_1 (raw-value (tesl_import_Dict_lookup "sub" (raw-value (tesl_import_JWT_decode *token))))]) (cond [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Nothing)) (thsl-src! "tests/jwt-tests.tesl" 69 (list) (lambda () (raw-value "")))] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Something)) (let ([s (hash-ref (adt-value-fields *tesl_case_1) 'value)]) (thsl-src! "tests/jwt-tests.tesl" 70 (list (cons 's s)) (lambda () *s)))])))))
+  (thsl-src-control! "tests/jwt-tests.tesl" 68 (list (cons 'token *token)) (lambda () (let ([tesl-case-1 (raw-value (tesl_import_Dict_lookup "sub" (raw-value (tesl_import_JWT_decode *token))))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "tests/jwt-tests.tesl" 69 (list) (lambda () (raw-value "")))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([s (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "tests/jwt-tests.tesl" 70 (list (cons 's s)) (lambda () *s)))])))))
 
 (define/pow
   (checkTokenStr [token : JwtToken])
@@ -191,7 +191,7 @@
     (with-capabilities (jwtCap)
     (define secret (thsl-src! "tests/jwt-tests.tesl" 181 (list) (lambda () (makeSecret "test-key"))))
     (define token (thsl-src! "tests/jwt-tests.tesl" 182 (list (cons 'secret secret)) (lambda () (signClaims "decode-test" secret))))
-    (define tesl_ignored_2 (thsl-src! "tests/jwt-tests.tesl" 183 (list (cons 'token token) (cons 'secret secret)) (lambda () (decodeClaims token))))
+    (define tesl-ignored-2 (thsl-src! "tests/jwt-tests.tesl" 183 (list (cons 'token token) (cons 'secret secret)) (lambda () (decodeClaims token))))
     (check-equal? (raw-value (thsl-src! "tests/jwt-tests.tesl" 184 (list (cons 'token token) (cons 'secret secret)) (lambda () #t))) #t)
     )
   )

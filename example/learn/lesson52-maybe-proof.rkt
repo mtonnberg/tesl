@@ -40,22 +40,22 @@
 (define/pow
   (insertTree [t : PositiveTree] [v : Integer ::: (IsPositive v)])
   #:returns PositiveTree
-  (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 60 (list (cons 't *t) (cons 'v *v)) (lambda () (let ([tesl_case_0 *t]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Leaf)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 62 (list) (lambda () (raw-value (raw-value (Node Leaf v Leaf)))))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Node)) (let ([l (hash-ref (adt-value-fields *tesl_case_0) 'left)]) (let ([cur (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (let ([r (hash-ref (adt-value-fields *tesl_case_0) 'right)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 64 (list (cons 'l l) (cons 'cur cur) (cons 'r r)) (lambda () (if (< *v *cur) (raw-value (raw-value (Node (insertTree *l v) cur *r))) (if (> *v *cur) (raw-value (raw-value (Node *l cur (insertTree *r v)))) *t)))))))])))))
+  (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 60 (list (cons 't *t) (cons 'v *v)) (lambda () (let ([tesl-case-0 *t]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Leaf)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 62 (list) (lambda () (raw-value (raw-value (Node Leaf v Leaf)))))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Node)) (let ([l (hash-ref (adt-value-fields *tesl-case-0) 'left)]) (let ([cur (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (let ([r (hash-ref (adt-value-fields *tesl-case-0) 'right)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 64 (list (cons 'l l) (cons 'cur cur) (cons 'r r)) (lambda () (if (< *v *cur) (raw-value (raw-value (Node (insertTree *l v) cur *r))) (if (> *v *cur) (raw-value (raw-value (Node *l cur (insertTree *r v)))) *t)))))))])))))
 
 (define/pow
   (treeSize [t : PositiveTree])
   #:returns Integer
-  (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 72 (list (cons 't *t)) (lambda () (let ([tesl_case_1 *t]) (cond [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Leaf)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 73 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Node)) (let ([l (hash-ref (adt-value-fields *tesl_case_1) 'left)]) (let ([r (hash-ref (adt-value-fields *tesl_case_1) 'right)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 74 (list (cons 'l l) (cons 'r r)) (lambda () (raw-value (+ (+ 1 (raw-value (treeSize *l))) (raw-value (treeSize *r))))))))])))))
+  (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 72 (list (cons 't *t)) (lambda () (let ([tesl-case-1 *t]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Leaf)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 73 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Node)) (let ([l (hash-ref (adt-value-fields *tesl-case-1) 'left)]) (let ([r (hash-ref (adt-value-fields *tesl-case-1) 'right)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 74 (list (cons 'l l) (cons 'r r)) (lambda () (raw-value (+ (+ 1 (raw-value (treeSize *l))) (raw-value (treeSize *r))))))))])))))
 
 (define/pow
   (treeSum [t : PositiveTree])
   #:returns Integer
-  (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 77 (list (cons 't *t)) (lambda () (let ([tesl_case_2 *t]) (cond [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Leaf)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 78 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Node)) (let ([l (hash-ref (adt-value-fields *tesl_case_2) 'left)]) (let ([v (hash-ref (adt-value-fields *tesl_case_2) 'value)]) (let ([r (hash-ref (adt-value-fields *tesl_case_2) 'right)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 79 (list (cons 'l l) (cons 'v v) (cons 'r r)) (lambda () (raw-value (+ (+ *v (raw-value (treeSum *l))) (raw-value (treeSum *r)))))))))])))))
+  (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 77 (list (cons 't *t)) (lambda () (let ([tesl-case-2 *t]) (cond [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Leaf)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 78 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Node)) (let ([l (hash-ref (adt-value-fields *tesl-case-2) 'left)]) (let ([v (hash-ref (adt-value-fields *tesl-case-2) 'value)]) (let ([r (hash-ref (adt-value-fields *tesl-case-2) 'right)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 79 (list (cons 'l l) (cons 'v v) (cons 'r r)) (lambda () (raw-value (+ (+ *v (raw-value (treeSum *l))) (raw-value (treeSum *r)))))))))])))))
 
 (define/pow
   (findMin [t : PositiveTree])
   #:returns (Either String Integer)
-  (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 96 (list (cons 't *t)) (lambda () (let ([tesl_case_3 *t]) (cond [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Leaf)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 97 (list) (lambda () (raw-value (Left "Not found"))))] [(and (and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Node)) (let ([tesl_case_3_f0 (raw-value (hash-ref (adt-value-fields *tesl_case_3) 'left))]) (and (adt-value? *tesl_case_3_f0) (eq? (adt-value-variant *tesl_case_3_f0) 'Leaf)))) (let ([tesl_case_3_f0 (raw-value (hash-ref (adt-value-fields *tesl_case_3) 'left))]) (let ([cur (hash-ref (adt-value-fields *tesl_case_3) 'value)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 98 (list (cons 'cur cur)) (lambda () (raw-value (Right cur))))))] [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Node)) (let ([l (hash-ref (adt-value-fields *tesl_case_3) 'left)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 99 (list (cons 'l l)) (lambda () (findMin l))))])))))
+  (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 96 (list (cons 't *t)) (lambda () (let ([tesl-case-3 *t]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Leaf)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 97 (list) (lambda () (raw-value (Left "Not found"))))] [(and (and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Node)) (let ([tesl-case-3_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-3) 'left))]) (and (adt-value? *tesl-case-3_f0) (eq? (adt-value-variant *tesl-case-3_f0) 'Leaf)))) (let ([tesl-case-3_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-3) 'left))]) (let ([cur (hash-ref (adt-value-fields *tesl-case-3) 'value)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 98 (list (cons 'cur cur)) (lambda () (raw-value (Right cur))))))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Node)) (let ([l (hash-ref (adt-value-fields *tesl-case-3) 'left)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 99 (list (cons 'l l)) (lambda () (findMin l))))])))))
 
 (define-adt (CustomEither l r)
   [CustomLeft [left : l]]
@@ -65,27 +65,27 @@
 (define/pow
   (findMinAlt [t : PositiveTree])
   #:returns (CustomEither String Integer)
-  (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 106 (list (cons 't *t)) (lambda () (let ([tesl_case_4 *t]) (cond [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Leaf)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 107 (list) (lambda () (raw-value (CustomLeft "Not found"))))] [(and (and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Node)) (let ([tesl_case_4_f0 (raw-value (hash-ref (adt-value-fields *tesl_case_4) 'left))]) (and (adt-value? *tesl_case_4_f0) (eq? (adt-value-variant *tesl_case_4_f0) 'Leaf)))) (let ([tesl_case_4_f0 (raw-value (hash-ref (adt-value-fields *tesl_case_4) 'left))]) (let ([cur (hash-ref (adt-value-fields *tesl_case_4) 'value)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 108 (list (cons 'cur cur)) (lambda () (raw-value (CustomRight cur))))))] [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Node)) (let ([l (hash-ref (adt-value-fields *tesl_case_4) 'left)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 109 (list (cons 'l l)) (lambda () (findMinAlt l))))])))))
+  (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 106 (list (cons 't *t)) (lambda () (let ([tesl-case-4 *t]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Leaf)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 107 (list) (lambda () (raw-value (CustomLeft "Not found"))))] [(and (and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Node)) (let ([tesl-case-4_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-4) 'left))]) (and (adt-value? *tesl-case-4_f0) (eq? (adt-value-variant *tesl-case-4_f0) 'Leaf)))) (let ([tesl-case-4_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-4) 'left))]) (let ([cur (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 108 (list (cons 'cur cur)) (lambda () (raw-value (CustomRight cur))))))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Node)) (let ([l (hash-ref (adt-value-fields *tesl-case-4) 'left)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 109 (list (cons 'l l)) (lambda () (findMinAlt l))))])))))
 
 (define/pow
   (findMax [t : PositiveTree])
   #:returns (Maybe Integer)
-  (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 112 (list (cons 't *t)) (lambda () (let ([tesl_case_5 *t]) (cond [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Leaf)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 113 (list) (lambda () Nothing))] [(and (and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Node)) (let ([tesl_case_5_f2 (raw-value (hash-ref (adt-value-fields *tesl_case_5) 'right))]) (and (adt-value? *tesl_case_5_f2) (eq? (adt-value-variant *tesl_case_5_f2) 'Leaf)))) (let ([cur (hash-ref (adt-value-fields *tesl_case_5) 'value)]) (let ([tesl_case_5_f2 (raw-value (hash-ref (adt-value-fields *tesl_case_5) 'right))]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 114 (list (cons 'cur cur)) (lambda () (raw-value (Something cur))))))] [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Node)) (let ([r (hash-ref (adt-value-fields *tesl_case_5) 'right)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 115 (list (cons 'r r)) (lambda () (findMax *r))))])))))
+  (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 112 (list (cons 't *t)) (lambda () (let ([tesl-case-5 *t]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Leaf)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 113 (list) (lambda () Nothing))] [(and (and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Node)) (let ([tesl-case-5_f2 (raw-value (hash-ref (adt-value-fields *tesl-case-5) 'right))]) (and (adt-value? *tesl-case-5_f2) (eq? (adt-value-variant *tesl-case-5_f2) 'Leaf)))) (let ([cur (hash-ref (adt-value-fields *tesl-case-5) 'value)]) (let ([tesl-case-5_f2 (raw-value (hash-ref (adt-value-fields *tesl-case-5) 'right))]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 114 (list (cons 'cur cur)) (lambda () (raw-value (Something cur))))))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Node)) (let ([r (hash-ref (adt-value-fields *tesl-case-5) 'right)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 115 (list (cons 'r r)) (lambda () (findMax *r))))])))))
 
 (define/pow
   (doubleMin [t : PositiveTree])
   #:returns Integer
-  (let ([m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 118 (list (cons 't *t)) (lambda () (findMin t)))]) (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 119 (list (cons 'm *m) (cons 't *t)) (lambda () (let ([tesl_case_6 (raw-value m)]) (cond [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Left)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 120 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl_case_6) (eq? (adt-value-variant *tesl_case_6) 'Right)) (let ([v (hash-ref (adt-value-fields *tesl_case_6) 'value)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 123 (list (cons 'v v)) (lambda () (raw-value (+ (raw-value (needPositive v)) (raw-value (needPositive v)))))))]))))))
+  (let ([m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 118 (list (cons 't *t)) (lambda () (findMin t)))]) (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 119 (list (cons 'm *m) (cons 't *t)) (lambda () (let ([tesl-case-6 (raw-value m)]) (cond [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Left)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 120 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Right)) (let ([v (hash-ref (adt-value-fields *tesl-case-6) 'value)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 123 (list (cons 'v v)) (lambda () (raw-value (+ (raw-value (needPositive v)) (raw-value (needPositive v)))))))]))))))
 
 (define/pow
   (sumMinMax [t : PositiveTree])
   #:returns Integer
-  (let ([mn (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 126 (list (cons 't *t)) (lambda () (findMin t)))]) (let ([mx (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 127 (list (cons 'mn *mn) (cons 't *t)) (lambda () (findMax t)))]) (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 128 (list (cons 'mx *mx) (cons 'mn *mn) (cons 't *t)) (lambda () (let ([tesl_case_7 (raw-value mn)]) (cond [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Left)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 129 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'Right)) (let ([lo (hash-ref (adt-value-fields *tesl_case_7) 'value)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 131 (list (cons 'lo lo)) (lambda () (let ([tesl_case_8 (raw-value mx)]) (cond [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Nothing)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 132 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Something)) (let ([hi (hash-ref (adt-value-fields *tesl_case_8) 'value)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 134 (list (cons 'hi hi)) (lambda () (raw-value (+ (raw-value (needPositive lo)) (raw-value (needPositive hi)))))))])))))])))))))
+  (let ([mn (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 126 (list (cons 't *t)) (lambda () (findMin t)))]) (let ([mx (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 127 (list (cons 'mn *mn) (cons 't *t)) (lambda () (findMax t)))]) (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 128 (list (cons 'mx *mx) (cons 'mn *mn) (cons 't *t)) (lambda () (let ([tesl-case-7 (raw-value mn)]) (cond [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Left)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 129 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Right)) (let ([lo (hash-ref (adt-value-fields *tesl-case-7) 'value)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 131 (list (cons 'lo lo)) (lambda () (let ([tesl-case-8 (raw-value mx)]) (cond [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Nothing)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 132 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Something)) (let ([hi (hash-ref (adt-value-fields *tesl-case-8) 'value)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 134 (list (cons 'hi hi)) (lambda () (raw-value (+ (raw-value (needPositive lo)) (raw-value (needPositive hi)))))))])))))])))))))
 
 (define/pow
   (insertRaw [t : PositiveTree] [raw : Integer])
   #:returns PositiveTree
-  (let ([tesl_proof_binding_9 (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 147 (list (cons 't *t) (cons 'raw *raw)) (lambda () (checkPositive raw)))]) (let ([_ (forget-proof tesl_proof_binding_9)] [p (detach-all-proof tesl_proof_binding_9)]) (let ([proven (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 148 (list (cons '_ *_) (cons 't *t) (cons 'raw *raw)) (lambda () (attach-proof raw p)))]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 149 (list (cons 'proven *proven) (cons '_ *_) (cons 't *t) (cons 'raw *raw)) (lambda () (raw-value (insertTree t proven))))))))
+  (let ([tesl-proof-binding-9 (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 147 (list (cons 't *t) (cons 'raw *raw)) (lambda () (checkPositive raw)))]) (let ([_ (forget-proof tesl-proof-binding-9)] [p (detach-all-proof tesl-proof-binding-9)]) (let ([proven (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 148 (list (cons '_ *_) (cons 't *t) (cons 'raw *raw)) (lambda () (attach-proof raw p)))]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 149 (list (cons 'proven *proven) (cons '_ *_) (cons 't *t) (cons 'raw *raw)) (lambda () (raw-value (insertTree t proven))))))))
 
 (define-capability ptreeService)
 
@@ -148,17 +148,17 @@
 (define-handler
   (getMin)
   #:returns Integer
-  (let ([m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 193 (list) (lambda () (findMin (exampleTree))))]) (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 194 (list (cons 'm *m)) (lambda () (let ([tesl_case_10 (raw-value m)]) (cond [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'Left)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 195 (list) (lambda () 0))] [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'Right)) (let ([v (hash-ref (adt-value-fields *tesl_case_10) 'value)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 196 (list (cons 'v v)) (lambda () (needPositive *v))))]))))))
+  (let ([m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 193 (list) (lambda () (findMin (exampleTree))))]) (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 194 (list (cons 'm *m)) (lambda () (let ([tesl-case-10 (raw-value m)]) (cond [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Left)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 195 (list) (lambda () 0))] [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Right)) (let ([v (hash-ref (adt-value-fields *tesl-case-10) 'value)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 196 (list (cons 'v v)) (lambda () (needPositive *v))))]))))))
 
 (define-handler
   (getMinAlt)
   #:returns Integer
-  (let ([m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 199 (list) (lambda () (findMinAlt (exampleTree))))]) (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 200 (list (cons 'm *m)) (lambda () (let ([tesl_case_11 (raw-value m)]) (cond [(and (adt-value? *tesl_case_11) (eq? (adt-value-variant *tesl_case_11) 'CustomLeft)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 201 (list) (lambda () 0))] [(and (adt-value? *tesl_case_11) (eq? (adt-value-variant *tesl_case_11) 'CustomRight)) (let ([v (hash-ref (adt-value-fields *tesl_case_11) 'right)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 202 (list (cons 'v v)) (lambda () (needPositive *v))))]))))))
+  (let ([m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 199 (list) (lambda () (findMinAlt (exampleTree))))]) (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 200 (list (cons 'm *m)) (lambda () (let ([tesl-case-11 (raw-value m)]) (cond [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'CustomLeft)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 201 (list) (lambda () 0))] [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'CustomRight)) (let ([v (hash-ref (adt-value-fields *tesl-case-11) 'right)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 202 (list (cons 'v v)) (lambda () (needPositive *v))))]))))))
 
 (define-handler
   (getMax)
   #:returns Integer
-  (let ([m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 205 (list) (lambda () (findMax (exampleTree))))]) (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 206 (list (cons 'm *m)) (lambda () (let ([tesl_case_12 (raw-value m)]) (cond [(and (adt-value? *tesl_case_12) (eq? (adt-value-variant *tesl_case_12) 'Nothing)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 207 (list) (lambda () 0))] [(and (adt-value? *tesl_case_12) (eq? (adt-value-variant *tesl_case_12) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl_case_12) 'value)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 208 (list (cons 'v v)) (lambda () (needPositive *v))))]))))))
+  (let ([m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 205 (list) (lambda () (findMax (exampleTree))))]) (thsl-src-control! "example/learn/lesson52-maybe-proof.tesl" 206 (list (cons 'm *m)) (lambda () (let ([tesl-case-12 (raw-value m)]) (cond [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Nothing)) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 207 (list) (lambda () 0))] [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl-case-12) 'value)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 208 (list (cons 'v v)) (lambda () (needPositive *v))))]))))))
 
 (define-handler
   (getSum)
@@ -215,12 +215,12 @@
   (test-case "findMin: empty tree returns Left"
   (define t (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 252 (list) (lambda () Leaf)))
   (define m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 253 (list (cons 't t)) (lambda () (findMin t))))
-  (let ([*tesl_case_13 (raw-value 
+  (let ([*tesl-case-13 (raw-value 
     m)]) (cond
-    [(and (adt-value? *tesl_case_13) (eq? (adt-value-variant *tesl_case_13) 'Left))
+    [(and (adt-value? *tesl-case-13) (eq? (adt-value-variant *tesl-case-13) 'Left))
       (check-true (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 255 (list) (lambda () #t))))
     ]
-    [(and (adt-value? *tesl_case_13) (eq? (adt-value-variant *tesl_case_13) 'Right))
+    [(and (adt-value? *tesl-case-13) (eq? (adt-value-variant *tesl-case-13) 'Right))
       (check-true (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 256 (list) (lambda () #f))))
     ]
   ))
@@ -229,13 +229,13 @@
   (test-case "findMin: single-node tree"
   (define t (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 260 (list) (lambda () (insertRaw Leaf 7))))
   (define m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 261 (list (cons 't t)) (lambda () (findMin t))))
-  (let ([*tesl_case_14 (raw-value 
+  (let ([*tesl-case-14 (raw-value 
     m)]) (cond
-    [(and (adt-value? *tesl_case_14) (eq? (adt-value-variant *tesl_case_14) 'Left))
+    [(and (adt-value? *tesl-case-14) (eq? (adt-value-variant *tesl-case-14) 'Left))
       (check-true (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 263 (list) (lambda () #f))))
     ]
-    [(and (adt-value? *tesl_case_14) (eq? (adt-value-variant *tesl_case_14) 'Right))
-      (let ([v (hash-ref (adt-value-fields *tesl_case_14) 'value)])
+    [(and (adt-value? *tesl-case-14) (eq? (adt-value-variant *tesl-case-14) 'Right))
+      (let ([v (hash-ref (adt-value-fields *tesl-case-14) 'value)])
         (check-equal? (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 265 (list) (lambda () v))) 7)
       )
     ]
@@ -246,20 +246,20 @@
   (define t (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 269 (list) (lambda () (insertRaw (insertRaw (insertRaw Leaf 3) 1) 5))))
   (define m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 270 (list (cons 't t)) (lambda () (findMin t))))
   (define mAlt (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 271 (list (cons 'm m) (cons 't t)) (lambda () (findMinAlt t))))
-  (let ([*tesl_case_15 (raw-value 
+  (let ([*tesl-case-15 (raw-value 
     m)]) (cond
-    [(and (adt-value? *tesl_case_15) (eq? (adt-value-variant *tesl_case_15) 'Left))
+    [(and (adt-value? *tesl-case-15) (eq? (adt-value-variant *tesl-case-15) 'Left))
       (check-true (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 273 (list) (lambda () #f))))
     ]
-    [(and (adt-value? *tesl_case_15) (eq? (adt-value-variant *tesl_case_15) 'Right))
-      (let ([v (hash-ref (adt-value-fields *tesl_case_15) 'value)])
-        (let ([*tesl_case_16 (raw-value 
+    [(and (adt-value? *tesl-case-15) (eq? (adt-value-variant *tesl-case-15) 'Right))
+      (let ([v (hash-ref (adt-value-fields *tesl-case-15) 'value)])
+        (let ([*tesl-case-16 (raw-value 
           mAlt)]) (cond
-          [(and (adt-value? *tesl_case_16) (eq? (adt-value-variant *tesl_case_16) 'CustomLeft))
+          [(and (adt-value? *tesl-case-16) (eq? (adt-value-variant *tesl-case-16) 'CustomLeft))
             (check-true (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 276 (list) (lambda () #f))))
           ]
-          [(and (adt-value? *tesl_case_16) (eq? (adt-value-variant *tesl_case_16) 'CustomRight))
-            (let ([vAlt (hash-ref (adt-value-fields *tesl_case_16) 'right)])
+          [(and (adt-value? *tesl-case-16) (eq? (adt-value-variant *tesl-case-16) 'CustomRight))
+            (let ([vAlt (hash-ref (adt-value-fields *tesl-case-16) 'right)])
               (define n (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 279 (list) (lambda () (needPositive v))))
               (define nAlt (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 280 (list) (lambda () (needPositive vAlt))))
               (check-equal? (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 281 (list) (lambda () n))) nAlt)
@@ -274,13 +274,13 @@
   (test-case "findMax: returns largest value with IsPositive proof"
   (define t (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 285 (list) (lambda () (insertRaw (insertRaw (insertRaw Leaf 3) 1) 5))))
   (define m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 286 (list (cons 't t)) (lambda () (findMax t))))
-  (let ([*tesl_case_17 (raw-value 
+  (let ([*tesl-case-17 (raw-value 
     m)]) (cond
-    [(and (adt-value? *tesl_case_17) (eq? (adt-value-variant *tesl_case_17) 'Nothing))
+    [(and (adt-value? *tesl-case-17) (eq? (adt-value-variant *tesl-case-17) 'Nothing))
       (check-true (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 288 (list) (lambda () #f))))
     ]
-    [(and (adt-value? *tesl_case_17) (eq? (adt-value-variant *tesl_case_17) 'Something))
-      (let ([v (hash-ref (adt-value-fields *tesl_case_17) 'value)])
+    [(and (adt-value? *tesl-case-17) (eq? (adt-value-variant *tesl-case-17) 'Something))
+      (let ([v (hash-ref (adt-value-fields *tesl-case-17) 'value)])
         (define n (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 290 (list) (lambda () (needPositive v))))
         (check-equal? (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 291 (list) (lambda () n))) 5)
       )
@@ -313,20 +313,20 @@
   (define tb (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 316 (list (cons 'ta ta)) (lambda () (insertRaw Leaf 20))))
   (define ma (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 317 (list (cons 'tb tb) (cons 'ta ta)) (lambda () (findMin ta))))
   (define mb (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 318 (list (cons 'ma ma) (cons 'tb tb) (cons 'ta ta)) (lambda () (findMin tb))))
-  (let ([*tesl_case_18 (raw-value 
+  (let ([*tesl-case-18 (raw-value 
     ma)]) (cond
-    [(and (adt-value? *tesl_case_18) (eq? (adt-value-variant *tesl_case_18) 'Left))
+    [(and (adt-value? *tesl-case-18) (eq? (adt-value-variant *tesl-case-18) 'Left))
       (check-true (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 320 (list) (lambda () #f))))
     ]
-    [(and (adt-value? *tesl_case_18) (eq? (adt-value-variant *tesl_case_18) 'Right))
-      (let ([a (hash-ref (adt-value-fields *tesl_case_18) 'value)])
-        (let ([*tesl_case_19 (raw-value 
+    [(and (adt-value? *tesl-case-18) (eq? (adt-value-variant *tesl-case-18) 'Right))
+      (let ([a (hash-ref (adt-value-fields *tesl-case-18) 'value)])
+        (let ([*tesl-case-19 (raw-value 
           mb)]) (cond
-          [(and (adt-value? *tesl_case_19) (eq? (adt-value-variant *tesl_case_19) 'Left))
+          [(and (adt-value? *tesl-case-19) (eq? (adt-value-variant *tesl-case-19) 'Left))
             (check-true (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 323 (list) (lambda () #f))))
           ]
-          [(and (adt-value? *tesl_case_19) (eq? (adt-value-variant *tesl_case_19) 'Right))
-            (let ([b (hash-ref (adt-value-fields *tesl_case_19) 'value)])
+          [(and (adt-value? *tesl-case-19) (eq? (adt-value-variant *tesl-case-19) 'Right))
+            (let ([b (hash-ref (adt-value-fields *tesl-case-19) 'value)])
               (check-equal? (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 325 (list) (lambda () a))) 10)
               (check-equal? (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 326 (list) (lambda () b))) 20)
               (define na (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 328 (list) (lambda () (needPositive a))))

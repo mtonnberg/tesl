@@ -37,7 +37,7 @@
 (define/pow
   (describeInBounds [lo : Integer] [hi : Integer] [raw : Integer])
   #:returns String
-  (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 74 (list (cons 'lo *lo) (cons 'hi *hi) (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_0 (checkInBounds lo hi raw)]) (let ([safeN tesl_checked_0]) (raw-value (requiresInBounds lo hi safeN)))))))
+  (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 74 (list (cons 'lo *lo) (cons 'hi *hi) (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-0 (checkInBounds lo hi raw)]) (let ([safeN tesl-checked-0]) (raw-value (requiresInBounds lo hi safeN)))))))
 
 (define-checker
   (checkBudget [amount : Integer] [budget : Integer])
@@ -52,7 +52,7 @@
 (define/pow
   (approvedDescription [rawAmount : Integer] [rawBudget : Integer])
   #:returns String
-  (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 96 (list (cons 'rawAmount *rawAmount) (cons 'rawBudget *rawBudget)) (lambda () (let ([budget rawBudget]) (let/check ([tesl_checked_1 (checkBudget rawAmount budget)]) (let ([amount tesl_checked_1]) (raw-value (requiresApproved amount budget))))))))
+  (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 96 (list (cons 'rawAmount *rawAmount) (cons 'rawBudget *rawBudget)) (lambda () (let ([budget rawBudget]) (let/check ([tesl-checked-1 (checkBudget rawAmount budget)]) (let ([amount tesl-checked-1]) (raw-value (requiresApproved amount budget))))))))
 
 (define-checker
   (checkInWindow [start : Integer] [span : Integer] [t : Integer])
@@ -67,7 +67,7 @@
 (define/pow
   (pairDescription [start : Integer] [span : Integer] [raw1 : Integer] [raw2 : Integer])
   #:returns String
-  (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 118 (list (cons 'start *start) (cons 'span *span) (cons 'raw1 *raw1) (cons 'raw2 *raw2)) (lambda () (let/check ([tesl_checked_2 (checkInWindow start span raw1)]) (let ([t1 tesl_checked_2]) (let/check ([tesl_checked_3 (checkInWindow start span raw2)]) (let ([t2 tesl_checked_3]) (let ([s1 (requiresInWindow start span t1)]) (let ([s2 (requiresInWindow start span t2)]) (format "~a and ~a" (tesl-display-val *s1) (tesl-display-val *s2)))))))))))
+  (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 118 (list (cons 'start *start) (cons 'span *span) (cons 'raw1 *raw1) (cons 'raw2 *raw2)) (lambda () (let/check ([tesl-checked-2 (checkInWindow start span raw1)]) (let ([t1 tesl-checked-2]) (let/check ([tesl-checked-3 (checkInWindow start span raw2)]) (let ([t2 tesl-checked-3]) (let ([s1 (requiresInWindow start span t1)]) (let ([s2 (requiresInWindow start span t2)]) (format "~a and ~a" (tesl-display-val *s1) (tesl-display-val *s2)))))))))))
 
 (define-checker
   (checkSortedPair [a : Integer] [b : Integer])
@@ -82,7 +82,7 @@
 (define/pow
   (describeSortedPair [rawA : Integer] [b : Integer])
   #:returns String
-  (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 147 (list (cons 'rawA *rawA) (cons 'b *b)) (lambda () (let/check ([tesl_checked_4 (checkSortedPair rawA b)]) (let ([a tesl_checked_4]) (raw-value (useSortedPair a b)))))))
+  (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 147 (list (cons 'rawA *rawA) (cons 'b *b)) (lambda () (let/check ([tesl-checked-4 (checkSortedPair rawA b)]) (let ([a tesl-checked-4]) (raw-value (useSortedPair a b)))))))
 
 (module+ test
   (require rackunit)

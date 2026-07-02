@@ -386,7 +386,7 @@ let sm_region ctx ~(form : string) (loc : Location.loc) (thunk : unit -> unit) =
 let fresh_case ctx =
   let n = ctx.case_counter in
   ctx.case_counter <- n + 1;
-  Printf.sprintf "tesl_case_%d" n
+  Printf.sprintf "tesl-case-%d" n
 
 (* Return the raw-value reference for a scrutinee variable.
    In fn-body contexts, define/pow's transform-body-expr creates `*var` for every
@@ -1786,7 +1786,7 @@ let rec emit_expr ctx e =
       let missing = arity - List.length args in
       let partial_id = ctx.case_counter in
       ctx.case_counter <- ctx.case_counter + 1;
-      let params = List.init missing (fun i -> Printf.sprintf "_tesl_p%d_%d" partial_id i) in
+      let params = List.init missing (fun i -> Printf.sprintf "tesl-p-%d-%d" partial_id i) in
       (* Emit nested curried lambdas so chained partial application works:
          mul3 2 => (lambda (p0) (lambda (p1) (mul3 2 p0 p1))) *)
       List.iter (fun param ->
@@ -2040,7 +2040,7 @@ let rec emit_expr ctx e =
            | _ -> false
           in find_check check_app) ->
     (* check form: let x = check fn args → (let/check ([tmp (fn args)]) (let ([x (attach-proof...)]) body)) *)
-    let tmp = Printf.sprintf "tesl_checked_%d" ctx.case_counter in
+    let tmp = Printf.sprintf "tesl-checked-%d" ctx.case_counter in
     ctx.case_counter <- ctx.case_counter + 1;
     (* Strip the "check" prefix: collect all args and the real function *)
     let rec collect_check_args acc = function
@@ -2123,7 +2123,7 @@ let rec emit_expr ctx e =
        (let ([tmp y]) (let ([x (forget-proof tmp)] [p (detach-all-proof tmp)]) body))
        When y is a check call, emit it WITHOUT the raw-value wrapper so that
        detach-all-proof can access the proof carried by the check-ok result. *)
-    let tmp = Printf.sprintf "tesl_proof_binding_%d" ctx.case_counter in
+    let tmp = Printf.sprintf "tesl-proof-binding-%d" ctx.case_counter in
     ctx.case_counter <- ctx.case_counter + 1;
     emit ctx (Printf.sprintf "(let ([%s " tmp);
     (match direct_check_call value with
@@ -3743,10 +3743,10 @@ let emit_requires ctx (m : module_form) =
     emit_line ctx "        [id #'(getter)]))))";
     emit_nl ctx;
     List.iteri (fun import_i (path, bindings) ->
-      let path_id = Printf.sprintf "tesl_lazy_import_path_%d" import_i in
+      let path_id = Printf.sprintf "tesl-lazy-import-path-%d" import_i in
       emit_line ctx (Printf.sprintf "(define-runtime-path %s %S)" path_id path);
       List.iteri (fun binding_i (orig_name, bound_name) ->
-        let getter_id = Printf.sprintf "tesl_lazy_import_%d_%d" import_i binding_i in
+        let getter_id = Printf.sprintf "tesl-lazy-import-%d-%d" import_i binding_i in
         emit_line ctx (Printf.sprintf "(define %s" getter_id);
         emit_line ctx "  (let ([loaded? #f] [value #f])";
         emit_line ctx "    (lambda ()";
@@ -3871,7 +3871,7 @@ let emit_func ctx (fd : func_decl) =
         emit ctx ")"
       | ELetProof { value_name; proof_name; value; body; _ } ->
         let val_loc = Checker.expr_loc value in
-        let tmp = Printf.sprintf "tesl_proof_binding_%d" ctx.case_counter in
+        let tmp = Printf.sprintf "tesl-proof-binding-%d" ctx.case_counter in
         ctx.case_counter <- ctx.case_counter + 1;
         emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d " tmp
           val_loc.Location.file (val_loc.Location.start.line + 1));
@@ -4117,7 +4117,7 @@ let emit_func ctx (fd : func_decl) =
              | _ -> false
             in find_check check_app) ->
       (* let x = check fn args in tail position: must use let/check form, same as emit_expr *)
-      let tmp = Printf.sprintf "tesl_checked_%d" ctx.case_counter in
+      let tmp = Printf.sprintf "tesl-checked-%d" ctx.case_counter in
       ctx.case_counter <- ctx.case_counter + 1;
       let rec collect_check_args acc = function
         | EApp { fn = EVar { name = "check"; _ }; arg; _ } -> (arg, acc)
@@ -4179,7 +4179,7 @@ let emit_func ctx (fd : func_decl) =
       if is_proof_carrier_here then Hashtbl.remove ctx.proof_carrier_lets name;
       emit ctx ")"
     | ELetProof { value_name; proof_name; value; body; _ } ->
-      let tmp = Printf.sprintf "tesl_proof_binding_%d" ctx.case_counter in
+      let tmp = Printf.sprintf "tesl-proof-binding-%d" ctx.case_counter in
       ctx.case_counter <- ctx.case_counter + 1;
       emit ctx (Printf.sprintf "(let ([%s " tmp);
       (* Preserve check-ok result for proof decomposition — do not wrap in raw-value *)
@@ -4267,7 +4267,7 @@ let emit_func ctx (fd : func_decl) =
       emit ctx ")"
         | ECase { scrut; arms; _ } when ctx.func_kind <> Some EstablishKind ->
       (* Case expression in raw tail: emit cond with each arm body through emit_with_raw_tail *)
-      let tmp = Printf.sprintf "tesl_case_%d" ctx.case_counter in
+      let tmp = Printf.sprintf "tesl-case-%d" ctx.case_counter in
       ctx.case_counter <- ctx.case_counter + 1;
       (* Check if scrutinee is a proof-carrying Maybe value — either a let-bound
          variable tracked in proof_carrier_lets, or an inline call to a function
@@ -4630,7 +4630,7 @@ let emit_func ctx (fd : func_decl) =
       emit ctx ")"
     | ELetProof { value_name; proof_name; value; body; _ } ->
       let val_loc = Checker.expr_loc value in
-      let tmp = Printf.sprintf "tesl_proof_binding_%d" ctx.case_counter in
+      let tmp = Printf.sprintf "tesl-proof-binding-%d" ctx.case_counter in
       ctx.case_counter <- ctx.case_counter + 1;
       emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d " tmp
         val_loc.Location.file (val_loc.Location.start.line + 1));
@@ -5413,11 +5413,11 @@ let emit_test ctx (t : test_form) =
         if String.equal name "_" then begin
           let n = ctx.case_counter in
           ctx.case_counter <- ctx.case_counter + 1;
-          Printf.sprintf "tesl_ignored_%d" n
+          Printf.sprintf "tesl-ignored-%d" n
         end else
           name
       in
-      let tmp = Printf.sprintf "tesl_checked_%d" ctx.case_counter in
+      let tmp = Printf.sprintf "tesl-checked-%d" ctx.case_counter in
       ctx.case_counter <- ctx.case_counter + 1;
       let rec collect_check_args acc = function
         | EApp { fn = EVar { name = "check"; _ }; arg; _ } -> (arg, acc)
@@ -5444,7 +5444,7 @@ let emit_test ctx (t : test_form) =
            (when (check-fail? tmp) (raise ...))
            (define x (forget-proof tmp))
            (define p (detach-all-proof tmp)) *)
-      let tmp = Printf.sprintf "tesl_proof_bind_%d" ctx.case_counter in
+      let tmp = Printf.sprintf "tesl-proof-bind-%d" ctx.case_counter in
       ctx.case_counter <- ctx.case_counter + 1;
       emit ctx indent;
       emit ctx (Printf.sprintf "(define %s " tmp);
@@ -5454,7 +5454,7 @@ let emit_test ctx (t : test_form) =
       emit_line ctx (Printf.sprintf "%s  (raise-user-error 'tesl-test \"unexpected failure in let-proof: ~a\" (check-fail-message %s)))" indent tmp);
       let vname = if String.equal value_name "_" then
         let n = ctx.case_counter in ctx.case_counter <- ctx.case_counter + 1;
-        Printf.sprintf "tesl_ignored_%d" n
+        Printf.sprintf "tesl-ignored-%d" n
       else value_name in
       emit_line ctx (Printf.sprintf "%s(define %s (forget-proof %s))" indent vname tmp);
       List.iter (fun pname ->
@@ -5466,7 +5466,7 @@ let emit_test ctx (t : test_form) =
         if String.equal name "_" then begin
           let n = ctx.case_counter in
           ctx.case_counter <- ctx.case_counter + 1;
-          Printf.sprintf "tesl_ignored_%d" n
+          Printf.sprintf "tesl-ignored-%d" n
         end else
           name
       in
@@ -5956,11 +5956,11 @@ let rec emit_api_test_stmt ctx ~indent ~server_name ~capabilities = function
       if String.equal name "_" then begin
         let n = ctx.case_counter in
         ctx.case_counter <- ctx.case_counter + 1;
-        Printf.sprintf "tesl_ignored_%d" n
+        Printf.sprintf "tesl-ignored-%d" n
       end else
         name
     in
-    let tmp = Printf.sprintf "tesl_checked_%d" ctx.case_counter in
+    let tmp = Printf.sprintf "tesl-checked-%d" ctx.case_counter in
     ctx.case_counter <- ctx.case_counter + 1;
     let rec collect_check_args acc = function
       | EApp { fn = EVar { name = "check"; _ }; arg; _ } -> (arg, acc)
@@ -5982,14 +5982,14 @@ let rec emit_api_test_stmt ctx ~indent ~server_name ~capabilities = function
     emit_nl ctx;
     Hashtbl.replace ctx.proof_locals binding_name ()
   | TsLetProof { value_name; proof_names; value; _ } ->
-    let tmp = Printf.sprintf "tesl_proof_bind_%d" ctx.case_counter in
+    let tmp = Printf.sprintf "tesl-proof-bind-%d" ctx.case_counter in
     ctx.case_counter <- ctx.case_counter + 1;
     emit_line ctx (Printf.sprintf "  (define %s " tmp);
     emit_expr ctx value;
     emit_line ctx ")";
     emit_line ctx (Printf.sprintf "  (when (check-fail? %s)" tmp);
     emit_line ctx (Printf.sprintf "    (raise-user-error 'tesl-test \"unexpected failure in let-proof: ~a\" (check-fail-message %s)))" tmp);
-    let vname = if String.equal value_name "_" then Printf.sprintf "tesl_ignored_%d" (let n = ctx.case_counter in ctx.case_counter <- ctx.case_counter + 1; n) else value_name in
+    let vname = if String.equal value_name "_" then Printf.sprintf "tesl-ignored-%d" (let n = ctx.case_counter in ctx.case_counter <- ctx.case_counter + 1; n) else value_name in
     emit_line ctx (Printf.sprintf "  (define %s (forget-proof %s))" vname tmp);
     List.iter (fun pname ->
       emit_line ctx (Printf.sprintf "  (define %s (detach-all-proof %s))" pname tmp);
@@ -6000,7 +6000,7 @@ let rec emit_api_test_stmt ctx ~indent ~server_name ~capabilities = function
       if String.equal name "_" then begin
         let n = ctx.case_counter in
         ctx.case_counter <- ctx.case_counter + 1;
-        Printf.sprintf "tesl_ignored_%d" n
+        Printf.sprintf "tesl-ignored-%d" n
       end else
         name
     in

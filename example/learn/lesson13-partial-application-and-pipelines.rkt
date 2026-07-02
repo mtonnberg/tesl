@@ -36,12 +36,12 @@
 (define/pow
   (increment [n : Integer])
   #:returns Integer
-  (let ([addOne (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 41 (list (cons 'n *n)) (lambda () (lambda (_tesl_p0_0) (add 1 _tesl_p0_0))))]) (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 42 (list (cons 'addOne *addOne) (cons 'n *n)) (lambda () (raw-value (addOne n))))))
+  (let ([addOne (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 41 (list (cons 'n *n)) (lambda () (lambda (tesl-p-0-0) (add 1 tesl-p-0-0))))]) (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 42 (list (cons 'addOne *addOne) (cons 'n *n)) (lambda () (raw-value (addOne n))))))
 
 (define/pow
   (decrement [n : Integer])
   #:returns Integer
-  (let ([subOne (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 45 (list (cons 'n *n)) (lambda () (lambda (_tesl_p1_0) (add -1 _tesl_p1_0))))]) (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 46 (list (cons 'subOne *subOne) (cons 'n *n)) (lambda () (raw-value (subOne n))))))
+  (let ([subOne (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 45 (list (cons 'n *n)) (lambda () (lambda (tesl-p-1-0) (add -1 tesl-p-1-0))))]) (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 46 (list (cons 'subOne *subOne) (cons 'n *n)) (lambda () (raw-value (subOne n))))))
 
 (define/pow
   (pipeline [n : Integer])

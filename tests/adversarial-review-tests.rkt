@@ -70,7 +70,7 @@
 (define/pow
   (safeDiv [a : Integer] [b : Integer])
   #:returns (Either String Integer)
-  (thsl-src! "tests/adversarial-review-tests.tesl" 220 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (equal? *b 0) (raw-value (raw-value (Left "division by zero"))) (let/check ([tesl_checked_0 (tesl_import_Int_nonZero b)]) (let ([checkedB tesl_checked_0]) (raw-value (raw-value (Right (tesl_import_Int_divide *a checkedB))))))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 220 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (equal? *b 0) (raw-value (raw-value (Left "division by zero"))) (let/check ([tesl-checked-0 (tesl_import_Int_nonZero b)]) (let ([checkedB tesl-checked-0]) (raw-value (raw-value (Right (tesl_import_Int_divide *a checkedB))))))))))
 
 (define/pow
   (clampAndAdd [lo : Integer] [hi : Integer] [n : Integer] [delta : Integer])
@@ -98,7 +98,7 @@
 (define/pow
   (describeColor [c : Color])
   #:returns String
-  (thsl-src-control! "tests/adversarial-review-tests.tesl" 275 (list (cons 'c *c)) (lambda () (let ([tesl_case_1 *c]) (cond [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Red)) (thsl-src! "tests/adversarial-review-tests.tesl" 276 (list) (lambda () (raw-value "red")))] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Green)) (thsl-src! "tests/adversarial-review-tests.tesl" 277 (list) (lambda () (raw-value "green")))] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Blue)) (thsl-src! "tests/adversarial-review-tests.tesl" 278 (list) (lambda () (raw-value "blue")))] [(and (adt-value? *tesl_case_1) (eq? (adt-value-variant *tesl_case_1) 'Custom)) (let ([r (hash-ref (adt-value-fields *tesl_case_1) 'r)]) (let ([g (hash-ref (adt-value-fields *tesl_case_1) 'g)]) (let ([b (hash-ref (adt-value-fields *tesl_case_1) 'b)]) (thsl-src! "tests/adversarial-review-tests.tesl" 279 (list (cons 'r r) (cons 'g g) (cons 'b b)) (lambda () (raw-value (format "custom(~a,~a,~a)" (tesl-display-val *r) (tesl-display-val *g) (tesl-display-val *b))))))))])))))
+  (thsl-src-control! "tests/adversarial-review-tests.tesl" 275 (list (cons 'c *c)) (lambda () (let ([tesl-case-1 *c]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Red)) (thsl-src! "tests/adversarial-review-tests.tesl" 276 (list) (lambda () (raw-value "red")))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Green)) (thsl-src! "tests/adversarial-review-tests.tesl" 277 (list) (lambda () (raw-value "green")))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Blue)) (thsl-src! "tests/adversarial-review-tests.tesl" 278 (list) (lambda () (raw-value "blue")))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Custom)) (let ([r (hash-ref (adt-value-fields *tesl-case-1) 'r)]) (let ([g (hash-ref (adt-value-fields *tesl-case-1) 'g)]) (let ([b (hash-ref (adt-value-fields *tesl-case-1) 'b)]) (thsl-src! "tests/adversarial-review-tests.tesl" 279 (list (cons 'r r) (cons 'g g) (cons 'b b)) (lambda () (raw-value (format "custom(~a,~a,~a)" (tesl-display-val *r) (tesl-display-val *g) (tesl-display-val *b))))))))])))))
 
 (define/pow
   (describeAll [colors : (List Color)])
@@ -115,12 +115,12 @@
 (define/pow
   (evaluate [e : Expr])
   #:returns Integer
-  (thsl-src-control! "tests/adversarial-review-tests.tesl" 304 (list (cons 'e *e)) (lambda () (let ([tesl_case_2 *e]) (cond [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Lit)) (let ([n (hash-ref (adt-value-fields *tesl_case_2) 'n)]) (thsl-src! "tests/adversarial-review-tests.tesl" 305 (list (cons 'n n)) (lambda () *n)))] [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Add)) (let ([left (hash-ref (adt-value-fields *tesl_case_2) 'left)]) (let ([right (hash-ref (adt-value-fields *tesl_case_2) 'right)]) (thsl-src! "tests/adversarial-review-tests.tesl" 306 (list (cons 'left left) (cons 'right right)) (lambda () (raw-value (+ (raw-value (evaluate *left)) (raw-value (evaluate *right))))))))] [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Mul)) (let ([left (hash-ref (adt-value-fields *tesl_case_2) 'left)]) (let ([right (hash-ref (adt-value-fields *tesl_case_2) 'right)]) (thsl-src! "tests/adversarial-review-tests.tesl" 307 (list (cons 'left left) (cons 'right right)) (lambda () (raw-value (* (raw-value (evaluate *left)) (raw-value (evaluate *right))))))))] [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Neg)) (let ([inner (hash-ref (adt-value-fields *tesl_case_2) 'inner)]) (thsl-src! "tests/adversarial-review-tests.tesl" 308 (list (cons 'inner inner)) (lambda () (raw-value (- 0 (raw-value (evaluate *inner)))))))])))))
+  (thsl-src-control! "tests/adversarial-review-tests.tesl" 304 (list (cons 'e *e)) (lambda () (let ([tesl-case-2 *e]) (cond [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Lit)) (let ([n (hash-ref (adt-value-fields *tesl-case-2) 'n)]) (thsl-src! "tests/adversarial-review-tests.tesl" 305 (list (cons 'n n)) (lambda () *n)))] [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Add)) (let ([left (hash-ref (adt-value-fields *tesl-case-2) 'left)]) (let ([right (hash-ref (adt-value-fields *tesl-case-2) 'right)]) (thsl-src! "tests/adversarial-review-tests.tesl" 306 (list (cons 'left left) (cons 'right right)) (lambda () (raw-value (+ (raw-value (evaluate *left)) (raw-value (evaluate *right))))))))] [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Mul)) (let ([left (hash-ref (adt-value-fields *tesl-case-2) 'left)]) (let ([right (hash-ref (adt-value-fields *tesl-case-2) 'right)]) (thsl-src! "tests/adversarial-review-tests.tesl" 307 (list (cons 'left left) (cons 'right right)) (lambda () (raw-value (* (raw-value (evaluate *left)) (raw-value (evaluate *right))))))))] [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Neg)) (let ([inner (hash-ref (adt-value-fields *tesl-case-2) 'inner)]) (thsl-src! "tests/adversarial-review-tests.tesl" 308 (list (cons 'inner inner)) (lambda () (raw-value (- 0 (raw-value (evaluate *inner)))))))])))))
 
 (define/pow
   (describeNested [s : Shape] [label : String])
   #:returns String
-  (thsl-src-control! "tests/adversarial-review-tests.tesl" 320 (list (cons 's *s) (cons 'label *label)) (lambda () (let ([tesl_case_3 *s]) (cond [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Circle)) (let ([r (hash-ref (adt-value-fields *tesl_case_3) 'radius)]) (thsl-src! "tests/adversarial-review-tests.tesl" 321 (list (cons 'r r)) (lambda () (raw-value (format "~a: circle with radius ~a" (tesl-display-val *label) (tesl-display-val *r))))))] [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Rectangle)) (let ([w (hash-ref (adt-value-fields *tesl_case_3) 'width)]) (let ([h (hash-ref (adt-value-fields *tesl_case_3) 'height)]) (thsl-src! "tests/adversarial-review-tests.tesl" 322 (list (cons 'w w) (cons 'h h)) (lambda () (raw-value (format "~a: ~ax~a rectangle" (tesl-display-val *label) (tesl-display-val *w) (tesl-display-val *h)))))))] [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Triangle)) (let ([b (hash-ref (adt-value-fields *tesl_case_3) 'base)]) (let ([h (hash-ref (adt-value-fields *tesl_case_3) 'height)]) (thsl-src! "tests/adversarial-review-tests.tesl" 323 (list (cons 'b b) (cons 'h h)) (lambda () (raw-value (format "~a: triangle base=~a height=~a" (tesl-display-val *label) (tesl-display-val *b) (tesl-display-val *h)))))))])))))
+  (thsl-src-control! "tests/adversarial-review-tests.tesl" 320 (list (cons 's *s) (cons 'label *label)) (lambda () (let ([tesl-case-3 *s]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Circle)) (let ([r (hash-ref (adt-value-fields *tesl-case-3) 'radius)]) (thsl-src! "tests/adversarial-review-tests.tesl" 321 (list (cons 'r r)) (lambda () (raw-value (format "~a: circle with radius ~a" (tesl-display-val *label) (tesl-display-val *r))))))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Rectangle)) (let ([w (hash-ref (adt-value-fields *tesl-case-3) 'width)]) (let ([h (hash-ref (adt-value-fields *tesl-case-3) 'height)]) (thsl-src! "tests/adversarial-review-tests.tesl" 322 (list (cons 'w w) (cons 'h h)) (lambda () (raw-value (format "~a: ~ax~a rectangle" (tesl-display-val *label) (tesl-display-val *w) (tesl-display-val *h)))))))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Triangle)) (let ([b (hash-ref (adt-value-fields *tesl-case-3) 'base)]) (let ([h (hash-ref (adt-value-fields *tesl-case-3) 'height)]) (thsl-src! "tests/adversarial-review-tests.tesl" 323 (list (cons 'b b) (cons 'h h)) (lambda () (raw-value (format "~a: triangle base=~a height=~a" (tesl-display-val *label) (tesl-display-val *b) (tesl-display-val *h)))))))])))))
 
 (define-checker
   (checkPositive [n : Integer])
@@ -199,7 +199,7 @@
 (define/pow
   (decomposeThenPass [age : Integer])
   #:returns String
-  (thsl-src! "tests/adversarial-review-tests.tesl" 512 (list (cons 'age *age)) (lambda () (let/check ([tesl_checked_4 (checkAge age)]) (let ([validated tesl_checked_4]) (let ([tesl_proof_binding_5 validated]) (let ([raw (forget-proof tesl_proof_binding_5)] [proof (detach-all-proof tesl_proof_binding_5)]) (let ([reattached (attach-proof raw proof)]) (raw-value (needsValidAge reattached))))))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 512 (list (cons 'age *age)) (lambda () (let/check ([tesl-checked-4 (checkAge age)]) (let ([validated tesl-checked-4]) (let ([tesl-proof-binding-5 validated]) (let ([raw (forget-proof tesl-proof-binding-5)] [proof (detach-all-proof tesl-proof-binding-5)]) (let ([reattached (attach-proof raw proof)]) (raw-value (needsValidAge reattached))))))))))
 
 (define-checker
   (checkInBounds [lo : Integer] [hi : Integer] [n : Integer])
@@ -234,7 +234,7 @@
 (define/pow
   (applyValidated [n : Integer] [f : (-> Integer Integer)])
   #:returns Integer
-  (thsl-src! "tests/adversarial-review-tests.tesl" 642 (list (cons 'n *n) (cons 'f *f)) (lambda () (let/check ([tesl_checked_6 (checkPositive n)]) (let ([validated tesl_checked_6]) (raw-value (f validated)))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 642 (list (cons 'n *n) (cons 'f *f)) (lambda () (let/check ([tesl-checked-6 (checkPositive n)]) (let ([validated tesl-checked-6]) (raw-value (f validated)))))))
 
 (define/pow
   (buildMessage [name : String] [count : Integer])
@@ -292,7 +292,7 @@
 (define/pow
   (withDefault [m : (Maybe Integer)] [d : Integer])
   #:returns Integer
-  (thsl-src-control! "tests/adversarial-review-tests.tesl" 745 (list (cons 'm *m) (cons 'd *d)) (lambda () (let ([tesl_case_10 *m]) (cond [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'Nothing)) (thsl-src! "tests/adversarial-review-tests.tesl" 746 (list) (lambda () *d))] [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl_case_10) 'value)]) (thsl-src! "tests/adversarial-review-tests.tesl" 747 (list (cons 'v v)) (lambda () *v)))])))))
+  (thsl-src-control! "tests/adversarial-review-tests.tesl" 745 (list (cons 'm *m) (cons 'd *d)) (lambda () (let ([tesl-case-10 *m]) (cond [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Nothing)) (thsl-src! "tests/adversarial-review-tests.tesl" 746 (list) (lambda () *d))] [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl-case-10) 'value)]) (thsl-src! "tests/adversarial-review-tests.tesl" 747 (list (cons 'v v)) (lambda () *v)))])))))
 
 (define/pow
   (chainMaybe [xs : (List Integer)])
@@ -318,7 +318,7 @@
 (define/pow
   (classifyThreshold [t : Threshold])
   #:returns String
-  (thsl-src-control! "tests/adversarial-review-tests.tesl" 862 (list (cons 't *t)) (lambda () (let ([tesl_case_11 *t]) (cond [(and (and (adt-value? *tesl_case_11) (eq? (adt-value-variant *tesl_case_11) 'Low)) (let ([n (hash-ref (adt-value-fields *tesl_case_11) 'n)]) (< *n 0))) (let ([n (hash-ref (adt-value-fields *tesl_case_11) 'n)]) (thsl-src! "tests/adversarial-review-tests.tesl" 863 (list (cons 'n n)) (lambda () (raw-value "low-negative"))))] [(and (adt-value? *tesl_case_11) (eq? (adt-value-variant *tesl_case_11) 'Low)) (let ([n (hash-ref (adt-value-fields *tesl_case_11) 'n)]) (thsl-src! "tests/adversarial-review-tests.tesl" 864 (list (cons 'n n)) (lambda () (raw-value "low-nonneg"))))] [(and (and (adt-value? *tesl_case_11) (eq? (adt-value-variant *tesl_case_11) 'Mid)) (let ([n (hash-ref (adt-value-fields *tesl_case_11) 'n)]) (> *n 50))) (let ([n (hash-ref (adt-value-fields *tesl_case_11) 'n)]) (thsl-src! "tests/adversarial-review-tests.tesl" 865 (list (cons 'n n)) (lambda () (raw-value "mid-high"))))] [(and (adt-value? *tesl_case_11) (eq? (adt-value-variant *tesl_case_11) 'Mid)) (thsl-src! "tests/adversarial-review-tests.tesl" 866 (list) (lambda () (raw-value "mid-low")))] [(and (adt-value? *tesl_case_11) (eq? (adt-value-variant *tesl_case_11) 'High)) (thsl-src! "tests/adversarial-review-tests.tesl" 867 (list) (lambda () (raw-value "high")))])))))
+  (thsl-src-control! "tests/adversarial-review-tests.tesl" 862 (list (cons 't *t)) (lambda () (let ([tesl-case-11 *t]) (cond [(and (and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Low)) (let ([n (hash-ref (adt-value-fields *tesl-case-11) 'n)]) (< *n 0))) (let ([n (hash-ref (adt-value-fields *tesl-case-11) 'n)]) (thsl-src! "tests/adversarial-review-tests.tesl" 863 (list (cons 'n n)) (lambda () (raw-value "low-negative"))))] [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Low)) (let ([n (hash-ref (adt-value-fields *tesl-case-11) 'n)]) (thsl-src! "tests/adversarial-review-tests.tesl" 864 (list (cons 'n n)) (lambda () (raw-value "low-nonneg"))))] [(and (and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Mid)) (let ([n (hash-ref (adt-value-fields *tesl-case-11) 'n)]) (> *n 50))) (let ([n (hash-ref (adt-value-fields *tesl-case-11) 'n)]) (thsl-src! "tests/adversarial-review-tests.tesl" 865 (list (cons 'n n)) (lambda () (raw-value "mid-high"))))] [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Mid)) (thsl-src! "tests/adversarial-review-tests.tesl" 866 (list) (lambda () (raw-value "mid-low")))] [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'High)) (thsl-src! "tests/adversarial-review-tests.tesl" 867 (list) (lambda () (raw-value "high")))])))))
 
 (define/pow
   (countItems [xs : (List Integer)])
@@ -348,17 +348,17 @@
 (define/pow
   (checkPosAndSmallAndSidecar1 [n : Integer] [m : Integer])
   #:returns (? Integer _entity ::: (((Positive _entity) && (Small _entity)) && (Positive m)))
-  (let ([tesl_proof_binding_14 (thsl-src! "tests/adversarial-review-tests.tesl" 954 (list (cons 'n *n) (cons 'm *m)) (lambda () (checkPositive m)))]) (let ([_ (forget-proof tesl_proof_binding_14)] [p (detach-all-proof tesl_proof_binding_14)]) (thsl-src! "tests/adversarial-review-tests.tesl" 955 (list (cons '_ *_) (cons 'n *n) (cons 'm *m)) (lambda () (attach-proof ((check-and checkPositive checkSmall) n) p))))))
+  (let ([tesl-proof-binding-14 (thsl-src! "tests/adversarial-review-tests.tesl" 954 (list (cons 'n *n) (cons 'm *m)) (lambda () (checkPositive m)))]) (let ([_ (forget-proof tesl-proof-binding-14)] [p (detach-all-proof tesl-proof-binding-14)]) (thsl-src! "tests/adversarial-review-tests.tesl" 955 (list (cons '_ *_) (cons 'n *n) (cons 'm *m)) (lambda () (attach-proof ((check-and checkPositive checkSmall) n) p))))))
 
 (define/pow
   (checkPosAndSmallAndSidecar2_shouldWork [n : Integer] [m : Integer])
   #:returns (? Integer _entity ::: (((Positive _entity) && (Small _entity)) && (Small m)))
-  (let ([tesl_proof_binding_15 (thsl-src! "tests/adversarial-review-tests.tesl" 962 (list (cons 'n *n) (cons 'm *m)) (lambda () (checkSmall m)))]) (let ([_ (forget-proof tesl_proof_binding_15)] [p (detach-all-proof tesl_proof_binding_15)]) (thsl-src! "tests/adversarial-review-tests.tesl" 963 (list (cons '_ *_) (cons 'n *n) (cons 'm *m)) (lambda () (attach-proof ((check-and checkPositive checkSmall) n) p))))))
+  (let ([tesl-proof-binding-15 (thsl-src! "tests/adversarial-review-tests.tesl" 962 (list (cons 'n *n) (cons 'm *m)) (lambda () (checkSmall m)))]) (let ([_ (forget-proof tesl-proof-binding-15)] [p (detach-all-proof tesl-proof-binding-15)]) (thsl-src! "tests/adversarial-review-tests.tesl" 963 (list (cons '_ *_) (cons 'n *n) (cons 'm *m)) (lambda () (attach-proof ((check-and checkPositive checkSmall) n) p))))))
 
 (define/pow
   (foo)
   #:returns Integer
-  (thsl-src! "tests/adversarial-review-tests.tesl" 966 (list) (lambda () (let ([n1 1]) (let ([n99 99]) (let ([tesl_proof_binding_16 (checkPosAndSmall n1)]) (let ([v1 (forget-proof tesl_proof_binding_16)] [v1_smallFact (detach-all-proof tesl_proof_binding_16)]) (let ([tesl_proof_binding_17 (checkPosAndSmallAndSidecar1 n99 v1)]) (let ([int1 (forget-proof tesl_proof_binding_17)] [posP (detach-all-proof tesl_proof_binding_17)]) (let ([tesl_proof_binding_18 (checkPosAndSmallAndSidecar1 n99 v1)]) (let ([_ (forget-proof tesl_proof_binding_18)] [smallP (detach-all-proof tesl_proof_binding_18)]) (let ([tesl_proof_binding_19 (checkPosAndSmallAndSidecar1 n99 v1)]) (let ([_ (forget-proof tesl_proof_binding_19)] [v1_positiveFact (detach-all-proof tesl_proof_binding_19)]) (let ([_ (requiresPosAndSmall (attach-proof v1 (list v1_positiveFact v1_smallFact)))]) (let ([_ (equal? (raw-value (requiresPosAndSmall (attach-proof int1 (list posP smallP)))) 99)]) 2)))))))))))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 966 (list) (lambda () (let ([n1 1]) (let ([n99 99]) (let ([tesl-proof-binding-16 (checkPosAndSmall n1)]) (let ([v1 (forget-proof tesl-proof-binding-16)] [v1_smallFact (detach-all-proof tesl-proof-binding-16)]) (let ([tesl-proof-binding-17 (checkPosAndSmallAndSidecar1 n99 v1)]) (let ([int1 (forget-proof tesl-proof-binding-17)] [posP (detach-all-proof tesl-proof-binding-17)]) (let ([tesl-proof-binding-18 (checkPosAndSmallAndSidecar1 n99 v1)]) (let ([_ (forget-proof tesl-proof-binding-18)] [smallP (detach-all-proof tesl-proof-binding-18)]) (let ([tesl-proof-binding-19 (checkPosAndSmallAndSidecar1 n99 v1)]) (let ([_ (forget-proof tesl-proof-binding-19)] [v1_positiveFact (detach-all-proof tesl-proof-binding-19)]) (let ([_ (requiresPosAndSmall (attach-proof v1 (list v1_positiveFact v1_smallFact)))]) (let ([_ (equal? (raw-value (requiresPosAndSmall (attach-proof int1 (list posP smallP)))) 99)]) 2)))))))))))))))
 
 (define/pow
   (requiresPosAndSmall [n : Integer ::: ((Positive n) && (Small n))])
@@ -395,7 +395,7 @@
 (define/pow
   (wrapAndUnwrap [n : Integer])
   #:returns Integer
-  (thsl-src! "tests/adversarial-review-tests.tesl" 1092 (list (cons 'n *n)) (lambda () (let/check ([tesl_checked_20 (checkPositive n)]) (let ([validated tesl_checked_20]) (let ([raw (forget-proof validated)]) (let ([proof (detach-all-proof validated)]) (let ([reattached (attach-proof raw proof)]) (let/check ([tesl_checked_21 (checkBounded reattached)]) (let ([rb tesl_checked_21]) (raw-value (requiresBounded rb))))))))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 1092 (list (cons 'n *n)) (lambda () (let/check ([tesl-checked-20 (checkPositive n)]) (let ([validated tesl-checked-20]) (let ([raw (forget-proof validated)]) (let ([proof (detach-all-proof validated)]) (let ([reattached (attach-proof raw proof)]) (let/check ([tesl-checked-21 (checkBounded reattached)]) (let ([rb tesl-checked-21]) (raw-value (requiresBounded rb))))))))))))
 
 (define/pow
   (safeRecip [x : Real])
@@ -440,7 +440,7 @@
 (define/pow
   (treeDepth [t : Tree])
   #:returns Integer
-  (thsl-src-control! "tests/adversarial-review-tests.tesl" 1228 (list (cons 't *t)) (lambda () (let ([tesl_case_22 *t]) (cond [(and (adt-value? *tesl_case_22) (eq? (adt-value-variant *tesl_case_22) 'Leaf)) (thsl-src! "tests/adversarial-review-tests.tesl" 1229 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl_case_22) (eq? (adt-value-variant *tesl_case_22) 'Node)) (let ([left (hash-ref (adt-value-fields *tesl_case_22) 'left)]) (let ([right (hash-ref (adt-value-fields *tesl_case_22) 'right)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1231 (list (cons 'left left) (cons 'right right)) (lambda () (let ([leftDepth (treeDepth *left)]) (let ([rightDepth (treeDepth *right)]) (if (> (raw-value leftDepth) (raw-value rightDepth)) (raw-value (+ 1 (raw-value leftDepth))) (raw-value (+ 1 (raw-value rightDepth))))))))))])))))
+  (thsl-src-control! "tests/adversarial-review-tests.tesl" 1228 (list (cons 't *t)) (lambda () (let ([tesl-case-22 *t]) (cond [(and (adt-value? *tesl-case-22) (eq? (adt-value-variant *tesl-case-22) 'Leaf)) (thsl-src! "tests/adversarial-review-tests.tesl" 1229 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl-case-22) (eq? (adt-value-variant *tesl-case-22) 'Node)) (let ([left (hash-ref (adt-value-fields *tesl-case-22) 'left)]) (let ([right (hash-ref (adt-value-fields *tesl-case-22) 'right)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1231 (list (cons 'left left) (cons 'right right)) (lambda () (let ([leftDepth (treeDepth *left)]) (let ([rightDepth (treeDepth *right)]) (if (> (raw-value leftDepth) (raw-value rightDepth)) (raw-value (+ 1 (raw-value leftDepth))) (raw-value (+ 1 (raw-value rightDepth))))))))))])))))
 
 (define/pow
   (factorial [n : Integer])
@@ -455,7 +455,7 @@
 (define/pow
   (conjunctSatisfied [n : Integer])
   #:returns String
-  (thsl-src! "tests/adversarial-review-tests.tesl" 1315 (list (cons 'n *n)) (lambda () (let/check ([tesl_checked_23 (checkPositive n)]) (let ([_pos tesl_checked_23]) (let/check ([tesl_checked_24 ((check-and checkPositive checkSmall) n)]) (let ([_both tesl_checked_24]) "done")))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 1315 (list (cons 'n *n)) (lambda () (let/check ([tesl-checked-23 (checkPositive n)]) (let ([_pos tesl-checked-23]) (let/check ([tesl-checked-24 ((check-and checkPositive checkSmall) n)]) (let ([_both tesl-checked-24]) "done")))))))
 
 (define/pow
   (sumList2 [xs : (List Integer)])
@@ -485,37 +485,37 @@
 (define/pow
   (checkInBounds1020 [n : Integer])
   #:returns String
-  (thsl-src! "tests/adversarial-review-tests.tesl" 1412 (list (cons 'n *n)) (lambda () (let ([lo 10]) (let ([hi 20]) (let/check ([tesl_checked_26 (checkInBounds lo hi n)]) (let ([v tesl_checked_26]) (raw-value (requiresInBounds lo hi v)))))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 1412 (list (cons 'n *n)) (lambda () (let ([lo 10]) (let ([hi 20]) (let/check ([tesl-checked-26 (checkInBounds lo hi n)]) (let ([v tesl-checked-26]) (raw-value (requiresInBounds lo hi v)))))))))
 
 (define/pow
   (checkInBoundsEqual [n : Integer])
   #:returns String
-  (thsl-src! "tests/adversarial-review-tests.tesl" 1418 (list (cons 'n *n)) (lambda () (let ([lo 5]) (let ([hi 5]) (let/check ([tesl_checked_27 (checkInBounds lo hi n)]) (let ([v tesl_checked_27]) (raw-value (requiresInBounds lo hi v)))))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 1418 (list (cons 'n *n)) (lambda () (let ([lo 5]) (let ([hi 5]) (let/check ([tesl-checked-27 (checkInBounds lo hi n)]) (let ([v tesl-checked-27]) (raw-value (requiresInBounds lo hi v)))))))))
 
 (define/pow
   (checkInBoundsNeg [n : Integer])
   #:returns String
-  (thsl-src! "tests/adversarial-review-tests.tesl" 1424 (list (cons 'n *n)) (lambda () (let ([lo -10]) (let ([hi -1]) (let/check ([tesl_checked_28 (checkInBounds lo hi n)]) (let ([v tesl_checked_28]) (raw-value (requiresInBounds lo hi v)))))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 1424 (list (cons 'n *n)) (lambda () (let ([lo -10]) (let ([hi -1]) (let/check ([tesl-checked-28 (checkInBounds lo hi n)]) (let ([v tesl-checked-28]) (raw-value (requiresInBounds lo hi v)))))))))
 
 (define/pow
   (checkInBoundsLo [n : Integer])
   #:returns String
-  (thsl-src! "tests/adversarial-review-tests.tesl" 1430 (list (cons 'n *n)) (lambda () (let ([lo 0]) (let ([hi 100]) (let/check ([tesl_checked_29 (checkInBounds lo hi n)]) (let ([v tesl_checked_29]) (raw-value (requiresInBounds lo hi v)))))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 1430 (list (cons 'n *n)) (lambda () (let ([lo 0]) (let ([hi 100]) (let/check ([tesl-checked-29 (checkInBounds lo hi n)]) (let ([v tesl-checked-29]) (raw-value (requiresInBounds lo hi v)))))))))
 
 (define/pow
   (parseAndValidate [s : String])
   #:returns (Either String Integer)
-  (thsl-src-control! "tests/adversarial-review-tests.tesl" 1462 (list (cons 's *s)) (lambda () (let ([tesl_case_30 (raw-value (raw-value (checkNonEmpty s)))]) (cond [#t (let ([result *tesl_case_30]) (thsl-src! "tests/adversarial-review-tests.tesl" 1464 (list (cons 'result result)) (lambda () (let ([n (tesl_import_String_length *result)]) (if (< (raw-value n) 10) (raw-value (raw-value (Right (raw-value n)))) (raw-value (raw-value (Left "too long"))))))))])))))
+  (thsl-src-control! "tests/adversarial-review-tests.tesl" 1462 (list (cons 's *s)) (lambda () (let ([tesl-case-30 (raw-value (raw-value (checkNonEmpty s)))]) (cond [#t (let ([result *tesl-case-30]) (thsl-src! "tests/adversarial-review-tests.tesl" 1464 (list (cons 'result result)) (lambda () (let ([n (tesl_import_String_length *result)]) (if (< (raw-value n) 10) (raw-value (raw-value (Right (raw-value n)))) (raw-value (raw-value (Left "too long"))))))))])))))
 
 (define/pow
   (evalNested [e : Expr])
   #:returns Integer
-  (thsl-src-control! "tests/adversarial-review-tests.tesl" 1492 (list (cons 'e *e)) (lambda () (let ([tesl_case_31 *e]) (cond [(and (adt-value? *tesl_case_31) (eq? (adt-value-variant *tesl_case_31) 'Lit)) (let ([n (hash-ref (adt-value-fields *tesl_case_31) 'n)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1493 (list (cons 'n n)) (lambda () *n)))] [(and (adt-value? *tesl_case_31) (eq? (adt-value-variant *tesl_case_31) 'Add)) (let ([left (hash-ref (adt-value-fields *tesl_case_31) 'left)]) (let ([right (hash-ref (adt-value-fields *tesl_case_31) 'right)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1495 (list (cons 'left left) (cons 'right right)) (lambda () (raw-value (+ (raw-value (evalNested *left)) (raw-value (evalNested *right))))))))] [(and (adt-value? *tesl_case_31) (eq? (adt-value-variant *tesl_case_31) 'Mul)) (let ([left (hash-ref (adt-value-fields *tesl_case_31) 'left)]) (let ([right (hash-ref (adt-value-fields *tesl_case_31) 'right)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1497 (list (cons 'left left) (cons 'right right)) (lambda () (raw-value (* (raw-value (evalNested *left)) (raw-value (evalNested *right))))))))] [(and (adt-value? *tesl_case_31) (eq? (adt-value-variant *tesl_case_31) 'Neg)) (let ([inner (hash-ref (adt-value-fields *tesl_case_31) 'inner)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1498 (list (cons 'inner inner)) (lambda () (raw-value (- 0 (raw-value (evalNested *inner)))))))])))))
+  (thsl-src-control! "tests/adversarial-review-tests.tesl" 1492 (list (cons 'e *e)) (lambda () (let ([tesl-case-31 *e]) (cond [(and (adt-value? *tesl-case-31) (eq? (adt-value-variant *tesl-case-31) 'Lit)) (let ([n (hash-ref (adt-value-fields *tesl-case-31) 'n)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1493 (list (cons 'n n)) (lambda () *n)))] [(and (adt-value? *tesl-case-31) (eq? (adt-value-variant *tesl-case-31) 'Add)) (let ([left (hash-ref (adt-value-fields *tesl-case-31) 'left)]) (let ([right (hash-ref (adt-value-fields *tesl-case-31) 'right)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1495 (list (cons 'left left) (cons 'right right)) (lambda () (raw-value (+ (raw-value (evalNested *left)) (raw-value (evalNested *right))))))))] [(and (adt-value? *tesl-case-31) (eq? (adt-value-variant *tesl-case-31) 'Mul)) (let ([left (hash-ref (adt-value-fields *tesl-case-31) 'left)]) (let ([right (hash-ref (adt-value-fields *tesl-case-31) 'right)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1497 (list (cons 'left left) (cons 'right right)) (lambda () (raw-value (* (raw-value (evalNested *left)) (raw-value (evalNested *right))))))))] [(and (adt-value? *tesl-case-31) (eq? (adt-value-variant *tesl-case-31) 'Neg)) (let ([inner (hash-ref (adt-value-fields *tesl-case-31) 'inner)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1498 (list (cons 'inner inner)) (lambda () (raw-value (- 0 (raw-value (evalNested *inner)))))))])))))
 
 (define/pow
   (proofIndependenceCorrect [a : Integer] [b : Integer])
   #:returns Integer
-  (thsl-src! "tests/adversarial-review-tests.tesl" 1532 (list (cons 'a *a) (cons 'b *b)) (lambda () (let/check ([tesl_checked_32 (checkPositive a)]) (let ([va tesl_checked_32]) (let/check ([tesl_checked_33 (checkPositive b)]) (let ([vb tesl_checked_33]) (let/check ([tesl_checked_34 (checkBounded va)]) (let ([vab tesl_checked_34]) (let/check ([tesl_checked_35 (checkBounded vb)]) (let ([vbb tesl_checked_35]) (+ (raw-value (requiresBounded vab)) (raw-value (requiresBounded vbb))))))))))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 1532 (list (cons 'a *a) (cons 'b *b)) (lambda () (let/check ([tesl-checked-32 (checkPositive a)]) (let ([va tesl-checked-32]) (let/check ([tesl-checked-33 (checkPositive b)]) (let ([vb tesl-checked-33]) (let/check ([tesl-checked-34 (checkBounded va)]) (let ([vab tesl-checked-34]) (let/check ([tesl-checked-35 (checkBounded vb)]) (let ([vbb tesl-checked-35]) (+ (raw-value (requiresBounded vab)) (raw-value (requiresBounded vbb))))))))))))))
 
 (define/pow
   (maxRec [a : Integer] [b : Integer])
@@ -546,20 +546,20 @@
   (require rackunit)
   (test-case "range check accepts boundary values"
   (define n0 (thsl-src! "tests/adversarial-review-tests.tesl" 122 (list) (lambda () 0)))
-  (define tesl_checked_36 (checkRange n0))
-  (when (check-fail? tesl_checked_36)
-    (raise-user-error 'tesl-test "unexpected failure in let r0: ~a" (check-fail-message tesl_checked_36)))
-  (define r0 tesl_checked_36)
+  (define tesl-checked-36 (checkRange n0))
+  (when (check-fail? tesl-checked-36)
+    (raise-user-error 'tesl-test "unexpected failure in let r0: ~a" (check-fail-message tesl-checked-36)))
+  (define r0 tesl-checked-36)
   (define n100 (thsl-src! "tests/adversarial-review-tests.tesl" 124 (list (cons 'r0 r0) (cons 'n0 n0)) (lambda () 100)))
-  (define tesl_checked_37 (checkRange n100))
-  (when (check-fail? tesl_checked_37)
-    (raise-user-error 'tesl-test "unexpected failure in let r100: ~a" (check-fail-message tesl_checked_37)))
-  (define r100 tesl_checked_37)
+  (define tesl-checked-37 (checkRange n100))
+  (when (check-fail? tesl-checked-37)
+    (raise-user-error 'tesl-test "unexpected failure in let r100: ~a" (check-fail-message tesl-checked-37)))
+  (define r100 tesl-checked-37)
   (define n50 (thsl-src! "tests/adversarial-review-tests.tesl" 126 (list (cons 'r100 r100) (cons 'n100 n100) (cons 'r0 r0) (cons 'n0 n0)) (lambda () 50)))
-  (define tesl_checked_38 (checkRange n50))
-  (when (check-fail? tesl_checked_38)
-    (raise-user-error 'tesl-test "unexpected failure in let r50: ~a" (check-fail-message tesl_checked_38)))
-  (define r50 tesl_checked_38)
+  (define tesl-checked-38 (checkRange n50))
+  (when (check-fail? tesl-checked-38)
+    (raise-user-error 'tesl-test "unexpected failure in let r50: ~a" (check-fail-message tesl-checked-38)))
+  (define r50 tesl-checked-38)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 128 (list (cons 'r50 r50) (cons 'n50 n50) (cons 'r100 r100) (cons 'n100 n100) (cons 'r0 r0) (cons 'n0 n0)) (lambda () (requiresRange r0)))) 1)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 129 (list (cons 'r50 r50) (cons 'n50 n50) (cons 'r100 r100) (cons 'n100 n100) (cons 'r0 r0) (cons 'n0 n0)) (lambda () (requiresRange r100)))) 101)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 130 (list (cons 'r50 r50) (cons 'n50 n50) (cons 'r100 r100) (cons 'n100 n100) (cons 'r0 r0) (cons 'n0 n0)) (lambda () (requiresRange r50)))) 51)
@@ -604,20 +604,20 @@
 
   (test-case "non-empty check passes valid strings"
   (define s1 (thsl-src! "tests/adversarial-review-tests.tesl" 168 (list) (lambda () "hello")))
-  (define tesl_checked_39 (checkNonEmpty s1))
-  (when (check-fail? tesl_checked_39)
-    (raise-user-error 'tesl-test "unexpected failure in let a: ~a" (check-fail-message tesl_checked_39)))
-  (define a tesl_checked_39)
+  (define tesl-checked-39 (checkNonEmpty s1))
+  (when (check-fail? tesl-checked-39)
+    (raise-user-error 'tesl-test "unexpected failure in let a: ~a" (check-fail-message tesl-checked-39)))
+  (define a tesl-checked-39)
   (define s2 (thsl-src! "tests/adversarial-review-tests.tesl" 170 (list (cons 'a a) (cons 's1 s1)) (lambda () " ")))
-  (define tesl_checked_40 (checkNonEmpty s2))
-  (when (check-fail? tesl_checked_40)
-    (raise-user-error 'tesl-test "unexpected failure in let b: ~a" (check-fail-message tesl_checked_40)))
-  (define b tesl_checked_40)
+  (define tesl-checked-40 (checkNonEmpty s2))
+  (when (check-fail? tesl-checked-40)
+    (raise-user-error 'tesl-test "unexpected failure in let b: ~a" (check-fail-message tesl-checked-40)))
+  (define b tesl-checked-40)
   (define s3 (thsl-src! "tests/adversarial-review-tests.tesl" 172 (list (cons 'b b) (cons 's2 s2) (cons 'a a) (cons 's1 s1)) (lambda () "a")))
-  (define tesl_checked_41 (checkNonEmpty s3))
-  (when (check-fail? tesl_checked_41)
-    (raise-user-error 'tesl-test "unexpected failure in let c: ~a" (check-fail-message tesl_checked_41)))
-  (define c tesl_checked_41)
+  (define tesl-checked-41 (checkNonEmpty s3))
+  (when (check-fail? tesl-checked-41)
+    (raise-user-error 'tesl-test "unexpected failure in let c: ~a" (check-fail-message tesl-checked-41)))
+  (define c tesl-checked-41)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 174 (list (cons 'c c) (cons 's3 s3) (cons 'b b) (cons 's2 s2) (cons 'a a) (cons 's1 s1)) (lambda () (requiresNonEmpty a)))) 5)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 175 (list (cons 'c c) (cons 's3 s3) (cons 'b b) (cons 's2 s2) (cons 'a a) (cons 's1 s1)) (lambda () (requiresNonEmpty b)))) 1)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 176 (list (cons 'c c) (cons 's3 s3) (cons 'b b) (cons 's2 s2) (cons 'a a) (cons 's1 s1)) (lambda () (requiresNonEmpty c)))) 1)
@@ -632,15 +632,15 @@
 
   (test-case "email check accepts well-formed addresses"
   (define raw1 (thsl-src! "tests/adversarial-review-tests.tesl" 196 (list) (lambda () "user@example.com")))
-  (define tesl_checked_42 (checkEmail raw1))
-  (when (check-fail? tesl_checked_42)
-    (raise-user-error 'tesl-test "unexpected failure in let e1: ~a" (check-fail-message tesl_checked_42)))
-  (define e1 tesl_checked_42)
+  (define tesl-checked-42 (checkEmail raw1))
+  (when (check-fail? tesl-checked-42)
+    (raise-user-error 'tesl-test "unexpected failure in let e1: ~a" (check-fail-message tesl-checked-42)))
+  (define e1 tesl-checked-42)
   (define raw2 (thsl-src! "tests/adversarial-review-tests.tesl" 198 (list (cons 'e1 e1) (cons 'raw1 raw1)) (lambda () "a@b.c")))
-  (define tesl_checked_43 (checkEmail raw2))
-  (when (check-fail? tesl_checked_43)
-    (raise-user-error 'tesl-test "unexpected failure in let e2: ~a" (check-fail-message tesl_checked_43)))
-  (define e2 tesl_checked_43)
+  (define tesl-checked-43 (checkEmail raw2))
+  (when (check-fail? tesl-checked-43)
+    (raise-user-error 'tesl-test "unexpected failure in let e2: ~a" (check-fail-message tesl-checked-43)))
+  (define e2 tesl-checked-43)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 200 (list (cons 'e2 e2) (cons 'raw2 raw2) (cons 'e1 e1) (cons 'raw1 raw1)) (lambda () (tesl_import_String_length e1)))) 16)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 201 (list (cons 'e2 e2) (cons 'raw2 raw2) (cons 'e1 e1) (cons 'raw1 raw1)) (lambda () (tesl_import_String_length e2)))) 5)
   )
@@ -786,15 +786,15 @@
 
   (test-case "trimmed check accepts trimmed strings"
   (define s1 (thsl-src! "tests/adversarial-review-tests.tesl" 474 (list) (lambda () "hello")))
-  (define tesl_checked_44 (checkTrimmed s1))
-  (when (check-fail? tesl_checked_44)
-    (raise-user-error 'tesl-test "unexpected failure in let a: ~a" (check-fail-message tesl_checked_44)))
-  (define a tesl_checked_44)
+  (define tesl-checked-44 (checkTrimmed s1))
+  (when (check-fail? tesl-checked-44)
+    (raise-user-error 'tesl-test "unexpected failure in let a: ~a" (check-fail-message tesl-checked-44)))
+  (define a tesl-checked-44)
   (define s2 (thsl-src! "tests/adversarial-review-tests.tesl" 476 (list (cons 'a a) (cons 's1 s1)) (lambda () "no spaces here")))
-  (define tesl_checked_45 (checkTrimmed s2))
-  (when (check-fail? tesl_checked_45)
-    (raise-user-error 'tesl-test "unexpected failure in let b: ~a" (check-fail-message tesl_checked_45)))
-  (define b tesl_checked_45)
+  (define tesl-checked-45 (checkTrimmed s2))
+  (when (check-fail? tesl-checked-45)
+    (raise-user-error 'tesl-test "unexpected failure in let b: ~a" (check-fail-message tesl-checked-45)))
+  (define b tesl-checked-45)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 478 (list (cons 'b b) (cons 's2 s2) (cons 'a a) (cons 's1 s1)) (lambda () (requiresTrimmed a)))) 5)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 479 (list (cons 'b b) (cons 's2 s2) (cons 'a a) (cons 's1 s1)) (lambda () (requiresTrimmed b)))) 14)
   )
@@ -849,10 +849,10 @@
   (define lo (thsl-src! "tests/adversarial-review-tests.tesl" 544 (list) (lambda () 1)))
   (define hi (thsl-src! "tests/adversarial-review-tests.tesl" 545 (list (cons 'lo lo)) (lambda () 10)))
   (define n (thsl-src! "tests/adversarial-review-tests.tesl" 546 (list (cons 'hi hi) (cons 'lo lo)) (lambda () 5)))
-  (define tesl_checked_46 (checkInBounds lo hi n))
-  (when (check-fail? tesl_checked_46)
-    (raise-user-error 'tesl-test "unexpected failure in let x: ~a" (check-fail-message tesl_checked_46)))
-  (define x tesl_checked_46)
+  (define tesl-checked-46 (checkInBounds lo hi n))
+  (when (check-fail? tesl-checked-46)
+    (raise-user-error 'tesl-test "unexpected failure in let x: ~a" (check-fail-message tesl-checked-46)))
+  (define x tesl-checked-46)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 548 (list (cons 'x x) (cons 'n n) (cons 'hi hi) (cons 'lo lo)) (lambda () x))) 5)
   )
 
@@ -861,14 +861,14 @@
   (define hi (thsl-src! "tests/adversarial-review-tests.tesl" 553 (list (cons 'lo lo)) (lambda () 100)))
   (define v0 (thsl-src! "tests/adversarial-review-tests.tesl" 554 (list (cons 'hi hi) (cons 'lo lo)) (lambda () 0)))
   (define v100 (thsl-src! "tests/adversarial-review-tests.tesl" 555 (list (cons 'v0 v0) (cons 'hi hi) (cons 'lo lo)) (lambda () 100)))
-  (define tesl_checked_47 (checkInBounds lo hi v0))
-  (when (check-fail? tesl_checked_47)
-    (raise-user-error 'tesl-test "unexpected failure in let atLo: ~a" (check-fail-message tesl_checked_47)))
-  (define atLo tesl_checked_47)
-  (define tesl_checked_48 (checkInBounds lo hi v100))
-  (when (check-fail? tesl_checked_48)
-    (raise-user-error 'tesl-test "unexpected failure in let atHi: ~a" (check-fail-message tesl_checked_48)))
-  (define atHi tesl_checked_48)
+  (define tesl-checked-47 (checkInBounds lo hi v0))
+  (when (check-fail? tesl-checked-47)
+    (raise-user-error 'tesl-test "unexpected failure in let atLo: ~a" (check-fail-message tesl-checked-47)))
+  (define atLo tesl-checked-47)
+  (define tesl-checked-48 (checkInBounds lo hi v100))
+  (when (check-fail? tesl-checked-48)
+    (raise-user-error 'tesl-test "unexpected failure in let atHi: ~a" (check-fail-message tesl-checked-48)))
+  (define atHi tesl-checked-48)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 558 (list (cons 'atHi atHi) (cons 'atLo atLo) (cons 'v100 v100) (cons 'v0 v0) (cons 'hi hi) (cons 'lo lo)) (lambda () atLo))) 0)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 559 (list (cons 'atHi atHi) (cons 'atLo atLo) (cons 'v100 v100) (cons 'v0 v0) (cons 'hi hi) (cons 'lo lo)) (lambda () atHi))) 100)
   )
@@ -1002,10 +1002,10 @@
 
   (test-case "checkAtLeastFive: precise boundary"
   (define n5 (thsl-src! "tests/adversarial-review-tests.tesl" 796 (list) (lambda () 5)))
-  (define tesl_checked_53 (checkAtLeastFive n5))
-  (when (check-fail? tesl_checked_53)
-    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl_checked_53)))
-  (define v tesl_checked_53)
+  (define tesl-checked-53 (checkAtLeastFive n5))
+  (when (check-fail? tesl-checked-53)
+    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl-checked-53)))
+  (define v tesl-checked-53)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 798 (list (cons 'v v) (cons 'n5 n5)) (lambda () v))) 5)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 799 (list (cons 'v v) (cons 'n5 n5)) (lambda ()
                           (checkAtLeastFive 4))))])
@@ -1015,25 +1015,25 @@
 
   (test-case "checkAtLeastFive: values above boundary"
   (define n6 (thsl-src! "tests/adversarial-review-tests.tesl" 803 (list) (lambda () 6)))
-  (define tesl_checked_54 (checkAtLeastFive n6))
-  (when (check-fail? tesl_checked_54)
-    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl_checked_54)))
-  (define v tesl_checked_54)
+  (define tesl-checked-54 (checkAtLeastFive n6))
+  (when (check-fail? tesl-checked-54)
+    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl-checked-54)))
+  (define v tesl-checked-54)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 805 (list (cons 'v v) (cons 'n6 n6)) (lambda () v))) 6)
   (define n1000 (thsl-src! "tests/adversarial-review-tests.tesl" 806 (list (cons 'v v) (cons 'n6 n6)) (lambda () 1000)))
-  (define tesl_checked_55 (checkAtLeastFive n1000))
-  (when (check-fail? tesl_checked_55)
-    (raise-user-error 'tesl-test "unexpected failure in let w: ~a" (check-fail-message tesl_checked_55)))
-  (define w tesl_checked_55)
+  (define tesl-checked-55 (checkAtLeastFive n1000))
+  (when (check-fail? tesl-checked-55)
+    (raise-user-error 'tesl-test "unexpected failure in let w: ~a" (check-fail-message tesl-checked-55)))
+  (define w tesl-checked-55)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 808 (list (cons 'w w) (cons 'n1000 n1000) (cons 'v v) (cons 'n6 n6)) (lambda () w))) 1000)
   )
 
   (test-case "checkAtMostTen: precise boundary"
   (define n10 (thsl-src! "tests/adversarial-review-tests.tesl" 812 (list) (lambda () 10)))
-  (define tesl_checked_56 (checkAtMostTen n10))
-  (when (check-fail? tesl_checked_56)
-    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl_checked_56)))
-  (define v tesl_checked_56)
+  (define tesl-checked-56 (checkAtMostTen n10))
+  (when (check-fail? tesl-checked-56)
+    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl-checked-56)))
+  (define v tesl-checked-56)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 814 (list (cons 'v v) (cons 'n10 n10)) (lambda () v))) 10)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 815 (list (cons 'v v) (cons 'n10 n10)) (lambda ()
                           (checkAtMostTen 11))))])
@@ -1043,16 +1043,16 @@
 
   (test-case "checkAtMostTen: values below boundary"
   (define n9 (thsl-src! "tests/adversarial-review-tests.tesl" 819 (list) (lambda () 9)))
-  (define tesl_checked_57 (checkAtMostTen n9))
-  (when (check-fail? tesl_checked_57)
-    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl_checked_57)))
-  (define v tesl_checked_57)
+  (define tesl-checked-57 (checkAtMostTen n9))
+  (when (check-fail? tesl-checked-57)
+    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl-checked-57)))
+  (define v tesl-checked-57)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 821 (list (cons 'v v) (cons 'n9 n9)) (lambda () v))) 9)
   (define nNeg (thsl-src! "tests/adversarial-review-tests.tesl" 822 (list (cons 'v v) (cons 'n9 n9)) (lambda () -100)))
-  (define tesl_checked_58 (checkAtMostTen nNeg))
-  (when (check-fail? tesl_checked_58)
-    (raise-user-error 'tesl-test "unexpected failure in let w: ~a" (check-fail-message tesl_checked_58)))
-  (define w tesl_checked_58)
+  (define tesl-checked-58 (checkAtMostTen nNeg))
+  (when (check-fail? tesl-checked-58)
+    (raise-user-error 'tesl-test "unexpected failure in let w: ~a" (check-fail-message tesl-checked-58)))
+  (define w tesl-checked-58)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 824 (list (cons 'w w) (cons 'nNeg nNeg) (cons 'v v) (cons 'n9 n9)) (lambda () w))) -100)
   )
 
@@ -1060,7 +1060,7 @@
   ; property: every filtered element is in 0..100
   (for ([tesl-prop-i (in-range 100)])
     (let ([n (- (random 2000001) 1000000)])
-      (when (and (>= (raw-value n) 0) (<= (raw-value n) 100)) (check-true (let/check ([tesl_checked_59 (checkRange n)]) (let ([validated tesl_checked_59]) (and (>= (raw-value (requiresRange validated)) 1) (<= (raw-value (requiresRange validated)) 101)))) "every filtered element is in 0..100"))
+      (when (and (>= (raw-value n) 0) (<= (raw-value n) 100)) (check-true (let/check ([tesl-checked-59 (checkRange n)]) (let ([validated tesl-checked-59]) (and (>= (raw-value (requiresRange validated)) 1) (<= (raw-value (requiresRange validated)) 101)))) "every filtered element is in 0..100"))
     ))
   )
 
@@ -1068,7 +1068,7 @@
   ; property: checkAtLeastFive succeeds for >= 5
   (for ([tesl-prop-i (in-range 50)])
     (let ([n (- (random 2000001) 1000000)])
-      (when (and (>= (raw-value n) 5) (< (raw-value n) 1000)) (check-true (let/check ([tesl_checked_60 (checkAtLeastFive n)]) (let ([v tesl_checked_60]) (>= (raw-value v) 5))) "checkAtLeastFive succeeds for >= 5"))
+      (when (and (>= (raw-value n) 5) (< (raw-value n) 1000)) (check-true (let/check ([tesl-checked-60 (checkAtLeastFive n)]) (let ([v tesl-checked-60]) (>= (raw-value v) 5))) "checkAtLeastFive succeeds for >= 5"))
     ))
   )
 
@@ -1076,7 +1076,7 @@
   ; property: checkNonEmpty preserves length
   (for ([tesl-prop-i (in-range 100)])
     (let ([s (format "s~a" (random 1000000))])
-      (when (> (raw-value (tesl_import_String_length (raw-value s))) 0) (check-true (let/check ([tesl_checked_61 (checkNonEmpty s)]) (let ([v tesl_checked_61]) (equal? (raw-value (requiresNonEmpty v)) (raw-value (tesl_import_String_length (raw-value s)))))) "checkNonEmpty preserves length"))
+      (when (> (raw-value (tesl_import_String_length (raw-value s))) 0) (check-true (let/check ([tesl-checked-61 (checkNonEmpty s)]) (let ([v tesl-checked-61]) (equal? (raw-value (requiresNonEmpty v)) (raw-value (tesl_import_String_length (raw-value s)))))) "checkNonEmpty preserves length"))
     ))
   )
 
@@ -1105,16 +1105,16 @@
 
   (test-case "bounded: boundary values accepted"
   (define n1 (thsl-src! "tests/adversarial-review-tests.tesl" 923 (list) (lambda () 1)))
-  (define tesl_checked_62 (checkBounded n1))
-  (when (check-fail? tesl_checked_62)
-    (raise-user-error 'tesl-test "unexpected failure in let v1: ~a" (check-fail-message tesl_checked_62)))
-  (define v1 tesl_checked_62)
+  (define tesl-checked-62 (checkBounded n1))
+  (when (check-fail? tesl-checked-62)
+    (raise-user-error 'tesl-test "unexpected failure in let v1: ~a" (check-fail-message tesl-checked-62)))
+  (define v1 tesl-checked-62)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 925 (list (cons 'v1 v1) (cons 'n1 n1)) (lambda () (requiresBounded v1)))) 2)
   (define n999 (thsl-src! "tests/adversarial-review-tests.tesl" 926 (list (cons 'v1 v1) (cons 'n1 n1)) (lambda () 999)))
-  (define tesl_checked_63 (checkBounded n999))
-  (when (check-fail? tesl_checked_63)
-    (raise-user-error 'tesl-test "unexpected failure in let v999: ~a" (check-fail-message tesl_checked_63)))
-  (define v999 tesl_checked_63)
+  (define tesl-checked-63 (checkBounded n999))
+  (when (check-fail? tesl-checked-63)
+    (raise-user-error 'tesl-test "unexpected failure in let v999: ~a" (check-fail-message tesl-checked-63)))
+  (define v999 tesl-checked-63)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 928 (list (cons 'v999 v999) (cons 'n999 n999) (cons 'v1 v1) (cons 'n1 n1)) (lambda () (requiresBounded v999)))) 1998)
   )
 
@@ -1139,10 +1139,10 @@
 
   (test-case "bounded: midpoint accepted"
   (define n500 (thsl-src! "tests/adversarial-review-tests.tesl" 939 (list) (lambda () 500)))
-  (define tesl_checked_64 (checkBounded n500))
-  (when (check-fail? tesl_checked_64)
-    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl_checked_64)))
-  (define v tesl_checked_64)
+  (define tesl-checked-64 (checkBounded n500))
+  (when (check-fail? tesl-checked-64)
+    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl-checked-64)))
+  (define v tesl-checked-64)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 941 (list (cons 'v v) (cons 'n500 n500)) (lambda () (requiresBounded v)))) 1000)
   )
 
@@ -1153,23 +1153,23 @@
   (define n99 (thsl-src! "tests/adversarial-review-tests.tesl" 980 (list (cons 'v1 v1) (cons 'n1 n1)) (lambda () 99)))
   (define v99 (thsl-src! "tests/adversarial-review-tests.tesl" 981 (list (cons 'n99 n99) (cons 'v1 v1) (cons 'n1 n1)) (lambda () (checkPosAndSmall n99))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 982 (list (cons 'v99 v99) (cons 'n99 n99) (cons 'v1 v1) (cons 'n1 n1)) (lambda () (requiresPosAndSmall v99)))) 99)
-  (define tesl_proof_bind_65 (checkPosAndSmallAndSidecar1 n99 n1))
-  (when (check-fail? tesl_proof_bind_65)
-    (raise-user-error 'tesl-test "unexpected failure in let-proof: ~a" (check-fail-message tesl_proof_bind_65)))
-  (define tesl_ignored_66 (forget-proof tesl_proof_bind_65))
-  (define n1_p1 (detach-all-proof tesl_proof_bind_65))
-  (define tesl_proof_bind_67 (checkPosAndSmallAndSidecar2_shouldWork n99 n1))
-  (when (check-fail? tesl_proof_bind_67)
-    (raise-user-error 'tesl-test "unexpected failure in let-proof: ~a" (check-fail-message tesl_proof_bind_67)))
-  (define tesl_ignored_68 (forget-proof tesl_proof_bind_67))
-  (define n1_p2 (detach-all-proof tesl_proof_bind_67))
+  (define tesl-proof-bind-65 (checkPosAndSmallAndSidecar1 n99 n1))
+  (when (check-fail? tesl-proof-bind-65)
+    (raise-user-error 'tesl-test "unexpected failure in let-proof: ~a" (check-fail-message tesl-proof-bind-65)))
+  (define tesl-ignored-66 (forget-proof tesl-proof-bind-65))
+  (define n1_p1 (detach-all-proof tesl-proof-bind-65))
+  (define tesl-proof-bind-67 (checkPosAndSmallAndSidecar2_shouldWork n99 n1))
+  (when (check-fail? tesl-proof-bind-67)
+    (raise-user-error 'tesl-test "unexpected failure in let-proof: ~a" (check-fail-message tesl-proof-bind-67)))
+  (define tesl-ignored-68 (forget-proof tesl-proof-bind-67))
+  (define n1_p2 (detach-all-proof tesl-proof-bind-67))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 986 (list (cons '_ _) (cons '_ _) (cons 'v99 v99) (cons 'n99 n99) (cons 'v1 v1) (cons 'n1 n1)) (lambda () (requiresPosAndSmall (attach-proof n1 (list n1_p1 n1_p2)))))) 1)
-  (define tesl_proof_bind_69 (checkPosAndSmallAndSidecar1 n99 n1))
-  (when (check-fail? tesl_proof_bind_69)
-    (raise-user-error 'tesl-test "unexpected failure in let-proof: ~a" (check-fail-message tesl_proof_bind_69)))
-  (define int1 (forget-proof tesl_proof_bind_69))
-  (define posP (detach-all-proof tesl_proof_bind_69))
-  (define smallP (detach-all-proof tesl_proof_bind_69))
+  (define tesl-proof-bind-69 (checkPosAndSmallAndSidecar1 n99 n1))
+  (when (check-fail? tesl-proof-bind-69)
+    (raise-user-error 'tesl-test "unexpected failure in let-proof: ~a" (check-fail-message tesl-proof-bind-69)))
+  (define int1 (forget-proof tesl-proof-bind-69))
+  (define posP (detach-all-proof tesl-proof-bind-69))
+  (define smallP (detach-all-proof tesl-proof-bind-69))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 989 (list (cons 'int1 int1) (cons '_ _) (cons '_ _) (cons 'v99 v99) (cons 'n99 n99) (cons 'v1 v1) (cons 'n1 n1)) (lambda () (requiresPosAndSmall (attach-proof int1 (list posP smallP)))))) 99)
   )
 
@@ -1210,16 +1210,16 @@
 
   (test-case "ascii check accepts non-empty strings"
   (define s1 (thsl-src! "tests/adversarial-review-tests.tesl" 1053 (list) (lambda () "hello")))
-  (define tesl_checked_70 (checkAscii s1))
-  (when (check-fail? tesl_checked_70)
-    (raise-user-error 'tesl-test "unexpected failure in let v1: ~a" (check-fail-message tesl_checked_70)))
-  (define v1 tesl_checked_70)
+  (define tesl-checked-70 (checkAscii s1))
+  (when (check-fail? tesl-checked-70)
+    (raise-user-error 'tesl-test "unexpected failure in let v1: ~a" (check-fail-message tesl-checked-70)))
+  (define v1 tesl-checked-70)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1055 (list (cons 'v1 v1) (cons 's1 s1)) (lambda () (requiresAscii v1)))) 5)
   (define s2 (thsl-src! "tests/adversarial-review-tests.tesl" 1056 (list (cons 'v1 v1) (cons 's1 s1)) (lambda () "a")))
-  (define tesl_checked_71 (checkAscii s2))
-  (when (check-fail? tesl_checked_71)
-    (raise-user-error 'tesl-test "unexpected failure in let v2: ~a" (check-fail-message tesl_checked_71)))
-  (define v2 tesl_checked_71)
+  (define tesl-checked-71 (checkAscii s2))
+  (when (check-fail? tesl-checked-71)
+    (raise-user-error 'tesl-test "unexpected failure in let v2: ~a" (check-fail-message tesl-checked-71)))
+  (define v2 tesl-checked-71)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1058 (list (cons 'v2 v2) (cons 's2 s2) (cons 'v1 v1) (cons 's1 s1)) (lambda () (requiresAscii v2)))) 1)
   )
 
@@ -1232,14 +1232,14 @@
 
   (test-case "proof survives fn wrapper"
   (define n5 (thsl-src! "tests/adversarial-review-tests.tesl" 1074 (list) (lambda () 5)))
-  (define tesl_checked_72 (checkPositiveMsg n5))
-  (when (check-fail? tesl_checked_72)
-    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl_checked_72)))
-  (define v tesl_checked_72)
-  (define tesl_checked_73 (checkBounded v))
-  (when (check-fail? tesl_checked_73)
-    (raise-user-error 'tesl-test "unexpected failure in let vb: ~a" (check-fail-message tesl_checked_73)))
-  (define vb tesl_checked_73)
+  (define tesl-checked-72 (checkPositiveMsg n5))
+  (when (check-fail? tesl-checked-72)
+    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl-checked-72)))
+  (define v tesl-checked-72)
+  (define tesl-checked-73 (checkBounded v))
+  (when (check-fail? tesl-checked-73)
+    (raise-user-error 'tesl-test "unexpected failure in let vb: ~a" (check-fail-message tesl-checked-73)))
+  (define vb tesl-checked-73)
   (define w (thsl-src! "tests/adversarial-review-tests.tesl" 1077 (list (cons 'vb vb) (cons 'v v) (cons 'n5 n5)) (lambda () (requiresBounded vb))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1078 (list (cons 'w w) (cons 'vb vb) (cons 'v v) (cons 'n5 n5)) (lambda () w))) 10)
   )
@@ -1297,16 +1297,16 @@
 
   (test-case "slug: accepts short non-empty string"
   (define s1 (thsl-src! "tests/adversarial-review-tests.tesl" 1160 (list) (lambda () "my-slug")))
-  (define tesl_checked_74 (checkSlug s1))
-  (when (check-fail? tesl_checked_74)
-    (raise-user-error 'tesl-test "unexpected failure in let v1: ~a" (check-fail-message tesl_checked_74)))
-  (define v1 tesl_checked_74)
+  (define tesl-checked-74 (checkSlug s1))
+  (when (check-fail? tesl-checked-74)
+    (raise-user-error 'tesl-test "unexpected failure in let v1: ~a" (check-fail-message tesl-checked-74)))
+  (define v1 tesl-checked-74)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1162 (list (cons 'v1 v1) (cons 's1 s1)) (lambda () (requiresSlug v1)))) 7)
   (define s2 (thsl-src! "tests/adversarial-review-tests.tesl" 1163 (list (cons 'v1 v1) (cons 's1 s1)) (lambda () "a")))
-  (define tesl_checked_75 (checkSlug s2))
-  (when (check-fail? tesl_checked_75)
-    (raise-user-error 'tesl-test "unexpected failure in let v2: ~a" (check-fail-message tesl_checked_75)))
-  (define v2 tesl_checked_75)
+  (define tesl-checked-75 (checkSlug s2))
+  (when (check-fail? tesl-checked-75)
+    (raise-user-error 'tesl-test "unexpected failure in let v2: ~a" (check-fail-message tesl-checked-75)))
+  (define v2 tesl-checked-75)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1165 (list (cons 'v2 v2) (cons 's2 s2) (cons 'v1 v1) (cons 's1 s1)) (lambda () (requiresSlug v2)))) 1)
   )
 
@@ -1319,10 +1319,10 @@
 
   (test-case "slug: accepts exactly 64 chars"
   (define s64 (thsl-src! "tests/adversarial-review-tests.tesl" 1173 (list) (lambda () "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))
-  (define tesl_checked_76 (checkSlug s64))
-  (when (check-fail? tesl_checked_76)
-    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl_checked_76)))
-  (define v tesl_checked_76)
+  (define tesl-checked-76 (checkSlug s64))
+  (when (check-fail? tesl-checked-76)
+    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl-checked-76)))
+  (define v tesl-checked-76)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1175 (list (cons 'v v) (cons 's64 s64)) (lambda () (requiresSlug v)))) 64)
   )
 
@@ -1335,26 +1335,26 @@
 
   (test-case "identityProof preserves InRange"
   (define n50 (thsl-src! "tests/adversarial-review-tests.tesl" 1190 (list) (lambda () 50)))
-  (define tesl_checked_77 (checkRange n50))
-  (when (check-fail? tesl_checked_77)
-    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl_checked_77)))
-  (define v tesl_checked_77)
+  (define tesl-checked-77 (checkRange n50))
+  (when (check-fail? tesl-checked-77)
+    (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl-checked-77)))
+  (define v tesl-checked-77)
   (define out (thsl-src! "tests/adversarial-review-tests.tesl" 1192 (list (cons 'v v) (cons 'n50 n50)) (lambda () (identityProof v))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1193 (list (cons 'out out) (cons 'v v) (cons 'n50 n50)) (lambda () (requiresRange out)))) 51)
   )
 
   (test-case "nonNegStr: all strings have non-negative length"
   (define s1 (thsl-src! "tests/adversarial-review-tests.tesl" 1211 (list) (lambda () "")))
-  (define tesl_checked_78 (checkNonNegStr s1))
-  (when (check-fail? tesl_checked_78)
-    (raise-user-error 'tesl-test "unexpected failure in let v1: ~a" (check-fail-message tesl_checked_78)))
-  (define v1 tesl_checked_78)
+  (define tesl-checked-78 (checkNonNegStr s1))
+  (when (check-fail? tesl-checked-78)
+    (raise-user-error 'tesl-test "unexpected failure in let v1: ~a" (check-fail-message tesl-checked-78)))
+  (define v1 tesl-checked-78)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1213 (list (cons 'v1 v1) (cons 's1 s1)) (lambda () (requiresNonNegStr v1)))) 0)
   (define s2 (thsl-src! "tests/adversarial-review-tests.tesl" 1214 (list (cons 'v1 v1) (cons 's1 s1)) (lambda () "hello world")))
-  (define tesl_checked_79 (checkNonNegStr s2))
-  (when (check-fail? tesl_checked_79)
-    (raise-user-error 'tesl-test "unexpected failure in let v2: ~a" (check-fail-message tesl_checked_79)))
-  (define v2 tesl_checked_79)
+  (define tesl-checked-79 (checkNonNegStr s2))
+  (when (check-fail? tesl-checked-79)
+    (raise-user-error 'tesl-test "unexpected failure in let v2: ~a" (check-fail-message tesl-checked-79)))
+  (define v2 tesl-checked-79)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1216 (list (cons 'v2 v2) (cons 's2 s2) (cons 'v1 v1) (cons 's1 s1)) (lambda () (requiresNonNegStr v2)))) 11)
   )
 

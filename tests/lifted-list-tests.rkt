@@ -25,17 +25,17 @@
 (define/pow
   (repeatN [value : Integer] [n : Integer])
   #:returns (List Integer)
-  (thsl-src! "tests/lifted-list-tests.tesl" 156 (list (cons 'value *value) (cons 'n *n)) (lambda () (let/check ([tesl_checked_0 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl_checked_0]) (raw-value (tesl_import_List_repeat *value safeN)))))))
+  (thsl-src! "tests/lifted-list-tests.tesl" 156 (list (cons 'value *value) (cons 'n *n)) (lambda () (let/check ([tesl-checked-0 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl-checked-0]) (raw-value (tesl_import_List_repeat *value safeN)))))))
 
 (define/pow
   (takeN [n : Integer] [xs : (List Integer)])
   #:returns (List Integer)
-  (thsl-src! "tests/lifted-list-tests.tesl" 160 (list (cons 'n *n) (cons 'xs *xs)) (lambda () (let/check ([tesl_checked_1 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl_checked_1]) (raw-value (tesl_import_List_take safeN *xs)))))))
+  (thsl-src! "tests/lifted-list-tests.tesl" 160 (list (cons 'n *n) (cons 'xs *xs)) (lambda () (let/check ([tesl-checked-1 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl-checked-1]) (raw-value (tesl_import_List_take safeN *xs)))))))
 
 (define/pow
   (dropN [n : Integer] [xs : (List Integer)])
   #:returns (List Integer)
-  (thsl-src! "tests/lifted-list-tests.tesl" 164 (list (cons 'n *n) (cons 'xs *xs)) (lambda () (let/check ([tesl_checked_2 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl_checked_2]) (raw-value (tesl_import_List_drop safeN *xs)))))))
+  (thsl-src! "tests/lifted-list-tests.tesl" 164 (list (cons 'n *n) (cons 'xs *xs)) (lambda () (let/check ([tesl-checked-2 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl-checked-2]) (raw-value (tesl_import_List_drop safeN *xs)))))))
 
 (module+ test
   (require rackunit)

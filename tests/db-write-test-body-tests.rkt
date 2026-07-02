@@ -37,7 +37,7 @@
   (statusOf [orderId : String])
   #:capabilities [dbRead]
   #:returns String
-  (thsl-src-control! "tests/db-write-test-body-tests.tesl" 34 (list (cons 'orderId *orderId)) (lambda () (let ([tesl_case_0 (raw-value (let ([tesl_match (select-one (from Order) (where (==. (entity-field-ref Order 'id) orderId)))]) (if tesl_match (Something tesl_match) Nothing)))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([o (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "tests/db-write-test-body-tests.tesl" 35 (list (cons 'o o)) (lambda () (raw-value (raw-value o.status)))))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "tests/db-write-test-body-tests.tesl" 36 (list) (lambda () (raw-value "no such order")))])))))
+  (thsl-src-control! "tests/db-write-test-body-tests.tesl" 34 (list (cons 'orderId *orderId)) (lambda () (let ([tesl-case-0 (raw-value (let ([tesl_match (select-one (from Order) (where (==. (entity-field-ref Order 'id) orderId)))]) (if tesl_match (Something tesl_match) Nothing)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([o (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "tests/db-write-test-body-tests.tesl" 35 (list (cons 'o o)) (lambda () (raw-value (raw-value o.status)))))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "tests/db-write-test-body-tests.tesl" 36 (list) (lambda () (raw-value "no such order")))])))))
 
 (module+ test
   (require rackunit)

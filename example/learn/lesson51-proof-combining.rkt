@@ -43,7 +43,7 @@
 (define/pow
   (validateAndProcess [raw : String])
   #:returns String
-  (thsl-src! "example/learn/lesson51-proof-combining.tesl" 65 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_0 (checkNonEmpty raw)]) (let ([ne tesl_checked_0]) (let/check ([tesl_checked_1 (checkName ne)]) (let ([full tesl_checked_1]) (raw-value (processName full full)))))))))
+  (thsl-src! "example/learn/lesson51-proof-combining.tesl" 65 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-0 (checkNonEmpty raw)]) (let ([ne tesl-checked-0]) (let/check ([tesl-checked-1 (checkName ne)]) (let ([full tesl-checked-1]) (raw-value (processName full full)))))))))
 
 (define-checker
   (checkInRange [n : Integer])
@@ -58,7 +58,7 @@
 (define/pow
   (processNameManual [name : String])
   #:returns String
-  (thsl-src! "example/learn/lesson51-proof-combining.tesl" 89 (list (cons 'name *name)) (lambda () (let/check ([tesl_checked_2 (checkNonEmpty name)]) (let ([ne tesl_checked_2]) (let ([raw (forget-proof ne)]) (let ([proof (detach-all-proof ne)]) (let ([reattach (attach-proof raw proof)]) (let/check ([tesl_checked_3 (checkName reattach)]) (let ([validated tesl_checked_3]) (raw-value validated)))))))))))
+  (thsl-src! "example/learn/lesson51-proof-combining.tesl" 89 (list (cons 'name *name)) (lambda () (let/check ([tesl-checked-2 (checkNonEmpty name)]) (let ([ne tesl-checked-2]) (let ([raw (forget-proof ne)]) (let ([proof (detach-all-proof ne)]) (let ([reattach (attach-proof raw proof)]) (let/check ([tesl-checked-3 (checkName reattach)]) (let ([validated tesl-checked-3]) (raw-value validated)))))))))))
 
 (define-checker
   (checkHasAt [email : String])
@@ -78,7 +78,7 @@
 (define/pow
   (validateEmail [raw : String])
   #:returns String
-  (thsl-src! "example/learn/lesson51-proof-combining.tesl" 127 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_4 (checkHasAt raw)]) (let ([withAt tesl_checked_4]) (let/check ([tesl_checked_5 (checkLongEnough withAt)]) (let ([full tesl_checked_5]) (raw-value (requiresValidEmail full full)))))))))
+  (thsl-src! "example/learn/lesson51-proof-combining.tesl" 127 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-4 (checkHasAt raw)]) (let ([withAt tesl-checked-4]) (let/check ([tesl-checked-5 (checkLongEnough withAt)]) (let ([full tesl-checked-5]) (raw-value (requiresValidEmail full full)))))))))
 
 (module+ test
   (require rackunit)

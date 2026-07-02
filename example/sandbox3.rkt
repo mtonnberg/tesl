@@ -45,12 +45,12 @@
 (define/pow
   (shouldWork [x : Integer] [y : Integer])
   #:returns Integer
-  (thsl-src-control! "example/sandbox.tesl" 10 (list (cons 'x *x) (cons 'y *y)) (lambda () (let ([tesl_case_0 (raw-value (validPort y))]) (cond [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Something)) (let ([proof (hash-ref (adt-value-fields *tesl_case_0) 'value)]) (thsl-src! "example/sandbox.tesl" 11 (list (cons 'proof proof)) (lambda () (raw-value (doSomething (attach-proof y proof))))))] [(and (adt-value? *tesl_case_0) (eq? (adt-value-variant *tesl_case_0) 'Nothing)) (thsl-src! "example/sandbox.tesl" 12 (list) (lambda () *x))])))))
+  (thsl-src-control! "example/sandbox.tesl" 10 (list (cons 'x *x) (cons 'y *y)) (lambda () (let ([tesl-case-0 (raw-value (validPort y))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([proof (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/sandbox.tesl" 11 (list (cons 'proof proof)) (lambda () (raw-value (doSomething (attach-proof y proof))))))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/sandbox.tesl" 12 (list) (lambda () *x))])))))
 
 (define/pow
   (shouldWork2 [x : Integer] [y : Integer ::: (ValidPort x)])
   #:returns Integer
-  (thsl-src! "example/sandbox.tesl" 15 (list (cons 'x *x) (cons 'y *y)) (lambda () (let ([tesl_proof_binding_1 y]) (let ([y_withoutProof (forget-proof tesl_proof_binding_1)] [xProof (detach-all-proof tesl_proof_binding_1)]) (raw-value (doSomething (attach-proof x xProof))))))))
+  (thsl-src! "example/sandbox.tesl" 15 (list (cons 'x *x) (cons 'y *y)) (lambda () (let ([tesl-proof-binding-1 y]) (let ([y_withoutProof (forget-proof tesl-proof-binding-1)] [xProof (detach-all-proof tesl-proof-binding-1)]) (raw-value (doSomething (attach-proof x xProof))))))))
 
 (define/pow
   (shouldWork3 [x : Integer ::: (ValidPort y)] [y : Integer ::: (ValidPort x)])
@@ -60,12 +60,12 @@
 (define/pow
   (shouldWork4 [x : Integer ::: (ValidPort x)] [y : Integer ::: (IsPositive x)])
   #:returns Integer
-  (thsl-src! "example/sandbox.tesl" 24 (list (cons 'x *x) (cons 'y *y)) (lambda () (let ([xProof1 (detach-all-proof x)]) (let ([tesl_proof_binding_2 y]) (let ([_ (forget-proof tesl_proof_binding_2)] [xProof2 (detach-all-proof tesl_proof_binding_2)]) (raw-value (doSomething2 (attach-proof (forget-proof x) (and (raw-value xProof1) (raw-value xProof2)))))))))))
+  (thsl-src! "example/sandbox.tesl" 24 (list (cons 'x *x) (cons 'y *y)) (lambda () (let ([xProof1 (detach-all-proof x)]) (let ([tesl-proof-binding-2 y]) (let ([_ (forget-proof tesl-proof-binding-2)] [xProof2 (detach-all-proof tesl-proof-binding-2)]) (raw-value (doSomething2 (attach-proof (forget-proof x) (and (raw-value xProof1) (raw-value xProof2)))))))))))
 
 (define/pow
   (shouldWork41 [x : Integer ::: ((ValidPort x) && (IsPositive y))] [y : Integer ::: (IsPositive x)])
   #:returns Integer
-  (thsl-src! "example/sandbox.tesl" 29 (list (cons 'x *x) (cons 'y *y)) (lambda () (let ([tesl_proof_binding_3 x]) (let ([x_withoutProof (forget-proof tesl_proof_binding_3)] [xProof1 (detach-all-proof tesl_proof_binding_3)]) (let ([tesl_proof_binding_4 y]) (let ([_ (forget-proof tesl_proof_binding_4)] [xProof2 (detach-all-proof tesl_proof_binding_4)]) (raw-value (doSomething2 (attach-proof x_withoutProof (list xProof1 xProof2)))))))))))
+  (thsl-src! "example/sandbox.tesl" 29 (list (cons 'x *x) (cons 'y *y)) (lambda () (let ([tesl-proof-binding-3 x]) (let ([x_withoutProof (forget-proof tesl-proof-binding-3)] [xProof1 (detach-all-proof tesl-proof-binding-3)]) (let ([tesl-proof-binding-4 y]) (let ([_ (forget-proof tesl-proof-binding-4)] [xProof2 (detach-all-proof tesl-proof-binding-4)]) (raw-value (doSomething2 (attach-proof x_withoutProof (list xProof1 xProof2)))))))))))
 
 (define/pow
   (shouldWork5 [x : ARecord])

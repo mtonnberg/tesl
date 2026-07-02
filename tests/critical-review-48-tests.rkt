@@ -70,12 +70,12 @@
 (define/pow
   (decompose48 [n : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review-48-tests.tesl" 180 (list (cons 'n *n)) (lambda () (let/check ([tesl_checked_0 (checkPositive48 n)]) (let ([proven tesl_checked_0]) (let ([tesl_proof_binding_1 proven]) (let ([raw (forget-proof tesl_proof_binding_1)] [proof (detach-all-proof tesl_proof_binding_1)]) (let ([reattached (attach-proof raw proof)]) (raw-value (requiresPositive48 reattached))))))))))
+  (thsl-src! "tests/critical-review-48-tests.tesl" 180 (list (cons 'n *n)) (lambda () (let/check ([tesl-checked-0 (checkPositive48 n)]) (let ([proven tesl-checked-0]) (let ([tesl-proof-binding-1 proven]) (let ([raw (forget-proof tesl-proof-binding-1)] [proof (detach-all-proof tesl-proof-binding-1)]) (let ([reattached (attach-proof raw proof)]) (raw-value (requiresPositive48 reattached))))))))))
 
 (define/pow
   (decomposeAndUse [n : Integer])
   #:returns String
-  (thsl-src! "tests/critical-review-48-tests.tesl" 186 (list (cons 'n *n)) (lambda () (let/check ([tesl_checked_2 (checkPositive48 n)]) (let ([proven tesl_checked_2]) (let ([val proven]) (format "value is ~a" (tesl-display-val *val))))))))
+  (thsl-src! "tests/critical-review-48-tests.tesl" 186 (list (cons 'n *n)) (lambda () (let/check ([tesl-checked-2 (checkPositive48 n)]) (let ([proven tesl-checked-2]) (let ([val proven]) (format "value is ~a" (tesl-display-val *val))))))))
 
 (define-checker
   (checkSmall48 [n : Integer])
@@ -112,7 +112,7 @@
 (define/pow
   (describeMovement [m : Movement])
   #:returns String
-  (thsl-src-control! "tests/critical-review-48-tests.tesl" 263 (list (cons 'm *m)) (lambda () (let ([tesl_case_3 *m]) (cond [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Stopped)) (thsl-src! "tests/critical-review-48-tests.tesl" 264 (list) (lambda () (raw-value "stopped")))] [(and (adt-value? *tesl_case_3) (eq? (adt-value-variant *tesl_case_3) 'Moving)) (let ([dir (hash-ref (adt-value-fields *tesl_case_3) 'dir)]) (let ([speed (hash-ref (adt-value-fields *tesl_case_3) 'speed)]) (thsl-src! "tests/critical-review-48-tests.tesl" 266 (list (cons 'dir dir) (cons 'speed speed)) (lambda () (let ([dirStr (let ([tesl_case_4 (raw-value dir)]) (cond [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'North)) (thsl-src! "tests/critical-review-48-tests.tesl" 267 (list) (lambda () "north"))] [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'South)) (thsl-src! "tests/critical-review-48-tests.tesl" 268 (list) (lambda () "south"))] [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'East)) (thsl-src! "tests/critical-review-48-tests.tesl" 269 (list) (lambda () "east"))] [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'West)) (thsl-src! "tests/critical-review-48-tests.tesl" 270 (list) (lambda () "west"))]))]) (let ([speedStr (let ([tesl_case_5 (raw-value speed)]) (cond [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Slow)) (thsl-src! "tests/critical-review-48-tests.tesl" 272 (list) (lambda () "slowly"))] [(and (adt-value? *tesl_case_5) (eq? (adt-value-variant *tesl_case_5) 'Fast)) (thsl-src! "tests/critical-review-48-tests.tesl" 273 (list) (lambda () "quickly"))]))]) (raw-value (format "moving ~a ~a" (tesl-display-val *dirStr) (tesl-display-val *speedStr)))))))))])))))
+  (thsl-src-control! "tests/critical-review-48-tests.tesl" 263 (list (cons 'm *m)) (lambda () (let ([tesl-case-3 *m]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Stopped)) (thsl-src! "tests/critical-review-48-tests.tesl" 264 (list) (lambda () (raw-value "stopped")))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Moving)) (let ([dir (hash-ref (adt-value-fields *tesl-case-3) 'dir)]) (let ([speed (hash-ref (adt-value-fields *tesl-case-3) 'speed)]) (thsl-src! "tests/critical-review-48-tests.tesl" 266 (list (cons 'dir dir) (cons 'speed speed)) (lambda () (let ([dirStr (let ([tesl-case-4 (raw-value dir)]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'North)) (thsl-src! "tests/critical-review-48-tests.tesl" 267 (list) (lambda () "north"))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'South)) (thsl-src! "tests/critical-review-48-tests.tesl" 268 (list) (lambda () "south"))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'East)) (thsl-src! "tests/critical-review-48-tests.tesl" 269 (list) (lambda () "east"))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'West)) (thsl-src! "tests/critical-review-48-tests.tesl" 270 (list) (lambda () "west"))]))]) (let ([speedStr (let ([tesl-case-5 (raw-value speed)]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Slow)) (thsl-src! "tests/critical-review-48-tests.tesl" 272 (list) (lambda () "slowly"))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Fast)) (thsl-src! "tests/critical-review-48-tests.tesl" 273 (list) (lambda () "quickly"))]))]) (raw-value (format "moving ~a ~a" (tesl-display-val *dirStr) (tesl-display-val *speedStr)))))))))])))))
 
 (define/pow
   (add48 [x : Integer] [y : Integer])
@@ -147,7 +147,7 @@
 (define/pow
   (testBetween [lo : Integer] [hi : Integer] [n : Integer])
   #:returns String
-  (thsl-src! "tests/critical-review-48-tests.tesl" 333 (list (cons 'lo *lo) (cons 'hi *hi) (cons 'n *n)) (lambda () (let/check ([tesl_checked_6 (checkBetween48 lo hi n)]) (let ([v tesl_checked_6]) (raw-value (requiresBetween48 lo hi v)))))))
+  (thsl-src! "tests/critical-review-48-tests.tesl" 333 (list (cons 'lo *lo) (cons 'hi *hi) (cons 'n *n)) (lambda () (let/check ([tesl-checked-6 (checkBetween48 lo hi n)]) (let ([v tesl-checked-6]) (raw-value (requiresBetween48 lo hi v)))))))
 
 (define/pow
   (filterSmallPositive [xs : (List Integer)])
@@ -173,7 +173,7 @@
 (define/pow
   (evalExpr48 [e : ExprF])
   #:returns Integer
-  (thsl-src-control! "tests/critical-review-48-tests.tesl" 420 (list (cons 'e *e)) (lambda () (let ([tesl_case_7 *e]) (cond [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'LitF)) (let ([n (hash-ref (adt-value-fields *tesl_case_7) 'n)]) (thsl-src! "tests/critical-review-48-tests.tesl" 421 (list (cons 'n n)) (lambda () *n)))] [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'AddF)) (let ([left (hash-ref (adt-value-fields *tesl_case_7) 'left)]) (let ([right (hash-ref (adt-value-fields *tesl_case_7) 'right)]) (thsl-src! "tests/critical-review-48-tests.tesl" 422 (list (cons 'left left) (cons 'right right)) (lambda () (raw-value (+ (raw-value (evalExpr48 *left)) (raw-value (evalExpr48 *right))))))))] [(and (adt-value? *tesl_case_7) (eq? (adt-value-variant *tesl_case_7) 'NegF)) (let ([inner (hash-ref (adt-value-fields *tesl_case_7) 'inner)]) (thsl-src! "tests/critical-review-48-tests.tesl" 423 (list (cons 'inner inner)) (lambda () (raw-value (- 0 (raw-value (evalExpr48 *inner)))))))])))))
+  (thsl-src-control! "tests/critical-review-48-tests.tesl" 420 (list (cons 'e *e)) (lambda () (let ([tesl-case-7 *e]) (cond [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'LitF)) (let ([n (hash-ref (adt-value-fields *tesl-case-7) 'n)]) (thsl-src! "tests/critical-review-48-tests.tesl" 421 (list (cons 'n n)) (lambda () *n)))] [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'AddF)) (let ([left (hash-ref (adt-value-fields *tesl-case-7) 'left)]) (let ([right (hash-ref (adt-value-fields *tesl-case-7) 'right)]) (thsl-src! "tests/critical-review-48-tests.tesl" 422 (list (cons 'left left) (cons 'right right)) (lambda () (raw-value (+ (raw-value (evalExpr48 *left)) (raw-value (evalExpr48 *right))))))))] [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'NegF)) (let ([inner (hash-ref (adt-value-fields *tesl-case-7) 'inner)]) (thsl-src! "tests/critical-review-48-tests.tesl" 423 (list (cons 'inner inner)) (lambda () (raw-value (- 0 (raw-value (evalExpr48 *inner)))))))])))))
 
 (define-adt Status48
   [Active48]
@@ -184,7 +184,7 @@
 (define/pow
   (describeStatus48 [s : Status48])
   #:returns String
-  (thsl-src-control! "tests/critical-review-48-tests.tesl" 452 (list (cons 's *s)) (lambda () (let ([tesl_case_8 *s]) (cond [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Active48)) (thsl-src! "tests/critical-review-48-tests.tesl" 453 (list) (lambda () (raw-value "active")))] [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Inactive48)) (thsl-src! "tests/critical-review-48-tests.tesl" 454 (list) (lambda () (raw-value "inactive")))] [(and (adt-value? *tesl_case_8) (eq? (adt-value-variant *tesl_case_8) 'Suspended48)) (let ([reason (hash-ref (adt-value-fields *tesl_case_8) 'reason)]) (thsl-src! "tests/critical-review-48-tests.tesl" 455 (list (cons 'reason reason)) (lambda () (raw-value (format "suspended: ~a" (tesl-display-val *reason))))))])))))
+  (thsl-src-control! "tests/critical-review-48-tests.tesl" 452 (list (cons 's *s)) (lambda () (let ([tesl-case-8 *s]) (cond [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Active48)) (thsl-src! "tests/critical-review-48-tests.tesl" 453 (list) (lambda () (raw-value "active")))] [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Inactive48)) (thsl-src! "tests/critical-review-48-tests.tesl" 454 (list) (lambda () (raw-value "inactive")))] [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Suspended48)) (let ([reason (hash-ref (adt-value-fields *tesl-case-8) 'reason)]) (thsl-src! "tests/critical-review-48-tests.tesl" 455 (list (cons 'reason reason)) (lambda () (raw-value (format "suspended: ~a" (tesl-display-val *reason))))))])))))
 
 (define/pow
   (largeMul [a : Integer] [b : Integer])
@@ -194,7 +194,7 @@
 (define/pow
   (resultFromCase48 [m : (Maybe Integer)])
   #:returns Integer
-  (thsl-src-control! "tests/critical-review-48-tests.tesl" 491 (list (cons 'm *m)) (lambda () (let ([tesl_case_9 *m]) (cond [(and (adt-value? *tesl_case_9) (eq? (adt-value-variant *tesl_case_9) 'Nothing)) (thsl-src! "tests/critical-review-48-tests.tesl" 492 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl_case_9) (eq? (adt-value-variant *tesl_case_9) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl_case_9) 'value)]) (thsl-src! "tests/critical-review-48-tests.tesl" 494 (list (cons 'v v)) (lambda () (let/check ([tesl_checked_10 (checkPositive48 *v)]) (let ([proven tesl_checked_10]) (raw-value (requiresPositive48 proven)))))))])))))
+  (thsl-src-control! "tests/critical-review-48-tests.tesl" 491 (list (cons 'm *m)) (lambda () (let ([tesl-case-9 *m]) (cond [(and (adt-value? *tesl-case-9) (eq? (adt-value-variant *tesl-case-9) 'Nothing)) (thsl-src! "tests/critical-review-48-tests.tesl" 492 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl-case-9) (eq? (adt-value-variant *tesl-case-9) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl-case-9) 'value)]) (thsl-src! "tests/critical-review-48-tests.tesl" 494 (list (cons 'v v)) (lambda () (let/check ([tesl-checked-10 (checkPositive48 *v)]) (let ([proven tesl-checked-10]) (raw-value (requiresPositive48 proven)))))))])))))
 
 (define/pow
   (makeAdder [n : Integer])
@@ -216,12 +216,12 @@
 (define/pow
   (priorityLabel [p : Priority48])
   #:returns String
-  (thsl-src-control! "tests/critical-review-48-tests.tesl" 545 (list (cons 'p *p)) (lambda () (let ([tesl_case_12 *p]) (cond [(and (adt-value? *tesl_case_12) (eq? (adt-value-variant *tesl_case_12) 'Critical48)) (thsl-src! "tests/critical-review-48-tests.tesl" 548 (list) (lambda () (raw-value "urgent")))] [(and (adt-value? *tesl_case_12) (eq? (adt-value-variant *tesl_case_12) 'High48)) (thsl-src! "tests/critical-review-48-tests.tesl" 548 (list) (lambda () (raw-value "urgent")))] [(and (adt-value? *tesl_case_12) (eq? (adt-value-variant *tesl_case_12) 'Medium48)) (thsl-src! "tests/critical-review-48-tests.tesl" 550 (list) (lambda () (raw-value "normal")))] [(and (adt-value? *tesl_case_12) (eq? (adt-value-variant *tesl_case_12) 'Low48)) (thsl-src! "tests/critical-review-48-tests.tesl" 552 (list) (lambda () (raw-value "low")))])))))
+  (thsl-src-control! "tests/critical-review-48-tests.tesl" 545 (list (cons 'p *p)) (lambda () (let ([tesl-case-12 *p]) (cond [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Critical48)) (thsl-src! "tests/critical-review-48-tests.tesl" 548 (list) (lambda () (raw-value "urgent")))] [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'High48)) (thsl-src! "tests/critical-review-48-tests.tesl" 548 (list) (lambda () (raw-value "urgent")))] [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Medium48)) (thsl-src! "tests/critical-review-48-tests.tesl" 550 (list) (lambda () (raw-value "normal")))] [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Low48)) (thsl-src! "tests/critical-review-48-tests.tesl" 552 (list) (lambda () (raw-value "low")))])))))
 
 (define/pow
   (httpStatus [code : Integer])
   #:returns String
-  (thsl-src-control! "tests/critical-review-48-tests.tesl" 575 (list (cons 'code *code)) (lambda () (let ([tesl_case_13 *code]) (cond [(= *tesl_case_13 200) (thsl-src! "tests/critical-review-48-tests.tesl" 576 (list) (lambda () (raw-value "OK")))] [(= *tesl_case_13 201) (thsl-src! "tests/critical-review-48-tests.tesl" 577 (list) (lambda () (raw-value "Created")))] [(= *tesl_case_13 400) (thsl-src! "tests/critical-review-48-tests.tesl" 578 (list) (lambda () (raw-value "Bad Request")))] [(= *tesl_case_13 404) (thsl-src! "tests/critical-review-48-tests.tesl" 579 (list) (lambda () (raw-value "Not Found")))] [(= *tesl_case_13 500) (thsl-src! "tests/critical-review-48-tests.tesl" 580 (list) (lambda () (raw-value "Internal Server Error")))] [#t (thsl-src! "tests/critical-review-48-tests.tesl" 581 (list) (lambda () (raw-value "Unknown")))])))))
+  (thsl-src-control! "tests/critical-review-48-tests.tesl" 575 (list (cons 'code *code)) (lambda () (let ([tesl-case-13 *code]) (cond [(= *tesl-case-13 200) (thsl-src! "tests/critical-review-48-tests.tesl" 576 (list) (lambda () (raw-value "OK")))] [(= *tesl-case-13 201) (thsl-src! "tests/critical-review-48-tests.tesl" 577 (list) (lambda () (raw-value "Created")))] [(= *tesl-case-13 400) (thsl-src! "tests/critical-review-48-tests.tesl" 578 (list) (lambda () (raw-value "Bad Request")))] [(= *tesl-case-13 404) (thsl-src! "tests/critical-review-48-tests.tesl" 579 (list) (lambda () (raw-value "Not Found")))] [(= *tesl-case-13 500) (thsl-src! "tests/critical-review-48-tests.tesl" 580 (list) (lambda () (raw-value "Internal Server Error")))] [#t (thsl-src! "tests/critical-review-48-tests.tesl" 581 (list) (lambda () (raw-value "Unknown")))])))))
 
 (define/pow
   (wrapAll [xs : (List Integer)])
@@ -246,7 +246,7 @@
 (define/pow
   (tryListen [p : Integer])
   #:returns String
-  (let ([maybeProof (thsl-src! "tests/critical-review-48-tests.tesl" 633 (list (cons 'p *p)) (lambda () (attemptProve48 p)))]) (thsl-src-control! "tests/critical-review-48-tests.tesl" 634 (list (cons 'maybeProof *maybeProof) (cons 'p *p)) (lambda () (let ([tesl_case_16 (raw-value maybeProof)]) (cond [(and (adt-value? *tesl_case_16) (eq? (adt-value-variant *tesl_case_16) 'Something)) (let ([proof (hash-ref (adt-value-fields *tesl_case_16) 'value)]) (thsl-src! "tests/critical-review-48-tests.tesl" 635 (list (cons 'proof proof)) (lambda () (raw-value (requiresValidPort48 (attach-proof p proof))))))] [(and (adt-value? *tesl_case_16) (eq? (adt-value-variant *tesl_case_16) 'Nothing)) (thsl-src! "tests/critical-review-48-tests.tesl" 636 (list) (lambda () (raw-value "invalid port")))]))))))
+  (let ([maybeProof (thsl-src! "tests/critical-review-48-tests.tesl" 633 (list (cons 'p *p)) (lambda () (attemptProve48 p)))]) (thsl-src-control! "tests/critical-review-48-tests.tesl" 634 (list (cons 'maybeProof *maybeProof) (cons 'p *p)) (lambda () (let ([tesl-case-16 (raw-value maybeProof)]) (cond [(and (adt-value? *tesl-case-16) (eq? (adt-value-variant *tesl-case-16) 'Something)) (let ([proof (hash-ref (adt-value-fields *tesl-case-16) 'value)]) (thsl-src! "tests/critical-review-48-tests.tesl" 635 (list (cons 'proof proof)) (lambda () (raw-value (requiresValidPort48 (attach-proof p proof))))))] [(and (adt-value? *tesl-case-16) (eq? (adt-value-variant *tesl-case-16) 'Nothing)) (thsl-src! "tests/critical-review-48-tests.tesl" 636 (list) (lambda () (raw-value "invalid port")))]))))))
 
 (define-checker
   (checkTitle48 [s : String])
@@ -280,7 +280,7 @@
 (define/pow
   (makeOrderedPair [a : Integer] [b : Integer])
   #:returns (Maybe OrderedPair)
-  (let ([maybeProof (thsl-src! "tests/critical-review-48-tests.tesl" 708 (list (cons 'a *a) (cons 'b *b)) (lambda () (proveOrdered a b)))]) (thsl-src-control! "tests/critical-review-48-tests.tesl" 709 (list (cons 'maybeProof *maybeProof) (cons 'a *a) (cons 'b *b)) (lambda () (let ([tesl_case_17 (raw-value maybeProof)]) (cond [(and (adt-value? *tesl_case_17) (eq? (adt-value-variant *tesl_case_17) 'Nothing)) (thsl-src! "tests/critical-review-48-tests.tesl" 710 (list) (lambda () (raw-value Nothing)))] [(and (adt-value? *tesl_case_17) (eq? (adt-value-variant *tesl_case_17) 'Something)) (let ([proof (hash-ref (adt-value-fields *tesl_case_17) 'value)]) (thsl-src! "tests/critical-review-48-tests.tesl" 712 (list (cons 'proof proof)) (lambda () (raw-value (raw-value (Something (OrderedPair #:lo *a #:hi *b)))))))]))))))
+  (let ([maybeProof (thsl-src! "tests/critical-review-48-tests.tesl" 708 (list (cons 'a *a) (cons 'b *b)) (lambda () (proveOrdered a b)))]) (thsl-src-control! "tests/critical-review-48-tests.tesl" 709 (list (cons 'maybeProof *maybeProof) (cons 'a *a) (cons 'b *b)) (lambda () (let ([tesl-case-17 (raw-value maybeProof)]) (cond [(and (adt-value? *tesl-case-17) (eq? (adt-value-variant *tesl-case-17) 'Nothing)) (thsl-src! "tests/critical-review-48-tests.tesl" 710 (list) (lambda () (raw-value Nothing)))] [(and (adt-value? *tesl-case-17) (eq? (adt-value-variant *tesl-case-17) 'Something)) (let ([proof (hash-ref (adt-value-fields *tesl-case-17) 'value)]) (thsl-src! "tests/critical-review-48-tests.tesl" 712 (list (cons 'proof proof)) (lambda () (raw-value (raw-value (Something (OrderedPair #:lo *a #:hi *b)))))))]))))))
 
 (define-checker
   (checkNonEmpty48 [s : String])
@@ -290,26 +290,26 @@
 (define/pow
   (safeTake48 [xs : (List Integer)] [n : Integer])
   #:returns (List Integer)
-  (thsl-src! "tests/critical-review-48-tests.tesl" 765 (list (cons 'xs *xs) (cons 'n *n)) (lambda () (let/check ([tesl_checked_18 (tesl_import_Int_nonNegative n)]) (let ([nn tesl_checked_18]) (raw-value (tesl_import_List_take nn *xs)))))))
+  (thsl-src! "tests/critical-review-48-tests.tesl" 765 (list (cons 'xs *xs) (cons 'n *n)) (lambda () (let/check ([tesl-checked-18 (tesl_import_Int_nonNegative n)]) (let ([nn tesl-checked-18]) (raw-value (tesl_import_List_take nn *xs)))))))
 
 (define/pow
   (safeDivide48 [a : Integer] [b : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review-48-tests.tesl" 769 (list (cons 'a *a) (cons 'b *b)) (lambda () (let/check ([tesl_checked_19 (tesl_import_Int_nonZero b)]) (let ([nz tesl_checked_19]) (raw-value (tesl_import_Int_divide *a nz)))))))
+  (thsl-src! "tests/critical-review-48-tests.tesl" 769 (list (cons 'a *a) (cons 'b *b)) (lambda () (let/check ([tesl-checked-19 (tesl_import_Int_nonZero b)]) (let ([nz tesl-checked-19]) (raw-value (tesl_import_Int_divide *a nz)))))))
 
 (define/pow
   (forgetAndRecheck [n : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review-48-tests.tesl" 813 (list (cons 'n *n)) (lambda () (let/check ([tesl_checked_20 (checkPositive48 n)]) (let ([proven tesl_checked_20]) (let ([forgotten (forget-proof proven)]) (let/check ([tesl_checked_21 (checkPositive48 forgotten)]) (let ([reproven tesl_checked_21]) (raw-value (requiresPositive48 reproven))))))))))
+  (thsl-src! "tests/critical-review-48-tests.tesl" 813 (list (cons 'n *n)) (lambda () (let/check ([tesl-checked-20 (checkPositive48 n)]) (let ([proven tesl-checked-20]) (let ([forgotten (forget-proof proven)]) (let/check ([tesl-checked-21 (checkPositive48 forgotten)]) (let ([reproven tesl-checked-21]) (raw-value (requiresPositive48 reproven))))))))))
 
 (module+ test
   (require rackunit)
   (test-case "R48-01: proof round-trip via check -> requires"
   (define raw (thsl-src! "tests/critical-review-48-tests.tesl" 91 (list) (lambda () 42)))
-  (define tesl_checked_22 (checkPositive48 raw))
-  (when (check-fail? tesl_checked_22)
-    (raise-user-error 'tesl-test "unexpected failure in let proven: ~a" (check-fail-message tesl_checked_22)))
-  (define proven tesl_checked_22)
+  (define tesl-checked-22 (checkPositive48 raw))
+  (when (check-fail? tesl-checked-22)
+    (raise-user-error 'tesl-test "unexpected failure in let proven: ~a" (check-fail-message tesl-checked-22)))
+  (define proven tesl-checked-22)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-48-tests.tesl" 93 (list (cons 'proven proven) (cons 'raw raw)) (lambda () (requiresPositive48 proven)))) 84)
   )
 
@@ -388,10 +388,10 @@
 
   (test-case "R48-13: conjunction passes for valid values"
   (define n (thsl-src! "tests/critical-review-48-tests.tesl" 222 (list) (lambda () 50)))
-  (define tesl_checked_23 (checkBothProofs n))
-  (when (check-fail? tesl_checked_23)
-    (raise-user-error 'tesl-test "unexpected failure in let proven: ~a" (check-fail-message tesl_checked_23)))
-  (define proven tesl_checked_23)
+  (define tesl-checked-23 (checkBothProofs n))
+  (when (check-fail? tesl-checked-23)
+    (raise-user-error 'tesl-test "unexpected failure in let proven: ~a" (check-fail-message tesl-checked-23)))
+  (define proven tesl-checked-23)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-48-tests.tesl" 224 (list (cons 'proven proven) (cons 'n n)) (lambda () (useBothProofs proven)))) 150)
   )
 
@@ -411,16 +411,16 @@
 
   (test-case "R48-16: conjunction boundary: 1 and 99"
   (define n1 (thsl-src! "tests/critical-review-48-tests.tesl" 236 (list) (lambda () 1)))
-  (define tesl_checked_24 (checkBothProofs n1))
-  (when (check-fail? tesl_checked_24)
-    (raise-user-error 'tesl-test "unexpected failure in let v1: ~a" (check-fail-message tesl_checked_24)))
-  (define v1 tesl_checked_24)
+  (define tesl-checked-24 (checkBothProofs n1))
+  (when (check-fail? tesl-checked-24)
+    (raise-user-error 'tesl-test "unexpected failure in let v1: ~a" (check-fail-message tesl-checked-24)))
+  (define v1 tesl-checked-24)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-48-tests.tesl" 238 (list (cons 'v1 v1) (cons 'n1 n1)) (lambda () (useBothProofs v1)))) 3)
   (define n99 (thsl-src! "tests/critical-review-48-tests.tesl" 239 (list (cons 'v1 v1) (cons 'n1 n1)) (lambda () 99)))
-  (define tesl_checked_25 (checkBothProofs n99))
-  (when (check-fail? tesl_checked_25)
-    (raise-user-error 'tesl-test "unexpected failure in let v99: ~a" (check-fail-message tesl_checked_25)))
-  (define v99 tesl_checked_25)
+  (define tesl-checked-25 (checkBothProofs n99))
+  (when (check-fail? tesl-checked-25)
+    (raise-user-error 'tesl-test "unexpected failure in let v99: ~a" (check-fail-message tesl-checked-25)))
+  (define v99 tesl-checked-25)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-48-tests.tesl" 241 (list (cons 'v99 v99) (cons 'n99 n99) (cons 'v1 v1) (cons 'n1 n1)) (lambda () (useBothProofs v99)))) 297)
   )
 
@@ -641,20 +641,20 @@
 
   (test-case "R48-61: record field carries proof"
   (define rawTitle (thsl-src! "tests/critical-review-48-tests.tesl" 677 (list) (lambda () "my item")))
-  (define tesl_checked_27 (checkTitle48 rawTitle))
-  (when (check-fail? tesl_checked_27)
-    (raise-user-error 'tesl-test "unexpected failure in let validTitle: ~a" (check-fail-message tesl_checked_27)))
-  (define validTitle tesl_checked_27)
+  (define tesl-checked-27 (checkTitle48 rawTitle))
+  (when (check-fail? tesl-checked-27)
+    (raise-user-error 'tesl-test "unexpected failure in let validTitle: ~a" (check-fail-message tesl-checked-27)))
+  (define validTitle tesl-checked-27)
   (define item (thsl-src! "tests/critical-review-48-tests.tesl" 679 (list (cons 'validTitle validTitle) (cons 'rawTitle rawTitle)) (lambda () (SafeItem48 #:title validTitle))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-48-tests.tesl" 680 (list (cons 'item item) (cons 'validTitle validTitle) (cons 'rawTitle rawTitle)) (lambda () (readSafeField item)))) 7)
   )
 
   (test-case "R48-62: record field proof on boundary length"
   (define rawTitle (thsl-src! "tests/critical-review-48-tests.tesl" 684 (list) (lambda () "x")))
-  (define tesl_checked_28 (checkTitle48 rawTitle))
-  (when (check-fail? tesl_checked_28)
-    (raise-user-error 'tesl-test "unexpected failure in let validTitle: ~a" (check-fail-message tesl_checked_28)))
-  (define validTitle tesl_checked_28)
+  (define tesl-checked-28 (checkTitle48 rawTitle))
+  (when (check-fail? tesl-checked-28)
+    (raise-user-error 'tesl-test "unexpected failure in let validTitle: ~a" (check-fail-message tesl-checked-28)))
+  (define validTitle tesl-checked-28)
   (define item (thsl-src! "tests/critical-review-48-tests.tesl" 686 (list (cons 'validTitle validTitle) (cons 'rawTitle rawTitle)) (lambda () (SafeItem48 #:title validTitle))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-48-tests.tesl" 687 (list (cons 'item item) (cons 'validTitle validTitle) (cons 'rawTitle rawTitle)) (lambda () (readSafeField item)))) 1)
   )
@@ -678,7 +678,7 @@
   ; property: positive check succeeds for positive ints
   (for ([tesl-prop-i (in-range 100)])
     (let ([n (- (random 2000001) 1000000)])
-      (when (and (> (raw-value n) 0) (< (raw-value n) 10000)) (check-true (let/check ([tesl_checked_29 (checkPositive48 n)]) (let ([v tesl_checked_29]) (> (raw-value (requiresPositive48 v)) 0))) "positive check succeeds for positive ints"))
+      (when (and (> (raw-value n) 0) (< (raw-value n) 10000)) (check-true (let/check ([tesl-checked-29 (checkPositive48 n)]) (let ([v tesl-checked-29]) (> (raw-value (requiresPositive48 v)) 0))) "positive check succeeds for positive ints"))
     ))
   )
 

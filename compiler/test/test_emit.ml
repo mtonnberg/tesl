@@ -131,7 +131,7 @@ fn colorName(c: Color) -> String =
     Blue -> "blue"
 |} in
   let racket = compile_ok src "fn_case" in
-  assert_contains ~name:"let tesl_case" racket "tesl_case_";
+  assert_contains ~name:"let tesl_case" racket "tesl-case-";
   assert_contains ~name:"cond" racket "(cond";
   assert_contains ~name:"adt-value?" racket "adt-value?";
   assert_contains ~name:"adt-value-variant" racket "adt-value-variant"
@@ -1003,6 +1003,31 @@ api-test "request templates" for ChatServer {
       assert_contains ~name:"selected plain test present" only_plain "(test-case \"unit thing\"";
       assert_not_contains ~name:"api-test suppressed" only_plain "(test-case \"request templates\"")
 
+(* ── S5b: generated temps are lexer-illegal (hyphenated) ──────────────────── *)
+
+(* Every compiler-minted temporary is hyphenated (`tesl-case-N`, `tesl-checked-N`,
+   `tesl-ignored-N`, `tesl-p-N-M`, …). A Tesl identifier can never contain a hyphen,
+   so a user binder cannot collide with a temp — the reserved-name machinery was
+   retired in favour of this structural guarantee. This pins that no emit path
+   reintroduces an underscore-grammar temp. *)
+let test_s5b_generated_temps_are_hyphenated () =
+  let src = {|#lang tesl
+module S5b exposing [f]
+import Tesl.Prelude exposing [Int]
+import Tesl.Maybe exposing [Maybe(..)]
+fn f(m: Maybe Int) -> Int =
+  let base = 1
+  case m of
+    Something n -> n
+    Nothing -> base
+|} in
+  let racket = compile_ok src "s5b" in
+  assert_contains ~name:"case temp is hyphenated" racket "tesl-case-";
+  List.iter (fun bad ->
+    assert_not_contains ~name:("no underscore-grammar temp " ^ bad) racket bad)
+    [ "tesl_case_"; "tesl_checked_"; "tesl_ignored_"; "tesl_proof_binding_";
+      "tesl_proof_bind_"; "tesl_lazy_import"; "_tesl_p" ]
+
 (* ── Suite ───────────────────────────────────────────────────────────────── *)
 
 let () =
@@ -1090,6 +1115,7 @@ let () =
     "property-tests", [
       Alcotest.test_case "known proof uses tesl-test-proof-field" `Quick test_property_known_proof_uses_proof_field;
       Alcotest.test_case "unknown proof no fabrication" `Quick test_property_unknown_proof_no_fabrication;
+      Alcotest.test_case "S5b generated temps are hyphenated" `Quick test_s5b_generated_temps_are_hyphenated;
     ];
     "codec", [
       Alcotest.test_case "stray colon after codec field name still decodes" `Quick test_codec_field_stray_colon;

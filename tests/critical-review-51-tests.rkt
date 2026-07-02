@@ -57,17 +57,17 @@
 (define/pow
   (p01_flow [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review-51-tests.tesl" 68 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_0 (isPositive raw)]) (let ([checked tesl_checked_0]) (raw-value (needPositive checked)))))))
+  (thsl-src! "tests/critical-review-51-tests.tesl" 68 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-0 (isPositive raw)]) (let ([checked tesl-checked-0]) (raw-value (needPositive checked)))))))
 
 (define/pow
   (p02_roundtrip [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review-51-tests.tesl" 73 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_1 (isPositive raw)]) (let ([checked tesl_checked_1]) (let ([tesl_proof_binding_2 checked]) (let ([x (forget-proof tesl_proof_binding_2)] [p (detach-all-proof tesl_proof_binding_2)]) (let ([restored (attach-proof x p)]) (raw-value (needPositive restored))))))))))
+  (thsl-src! "tests/critical-review-51-tests.tesl" 73 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-1 (isPositive raw)]) (let ([checked tesl-checked-1]) (let ([tesl-proof-binding-2 checked]) (let ([x (forget-proof tesl-proof-binding-2)] [p (detach-all-proof tesl-proof-binding-2)]) (let ([restored (attach-proof x p)]) (raw-value (needPositive restored))))))))))
 
 (define/pow
   (p03_multi_param [lo : Integer] [hi : Integer] [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review-51-tests.tesl" 80 (list (cons 'lo *lo) (cons 'hi *hi) (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_3 (inRange lo hi raw)]) (let ([ranged tesl_checked_3]) (raw-value (needInRange lo hi ranged)))))))
+  (thsl-src! "tests/critical-review-51-tests.tesl" 80 (list (cons 'lo *lo) (cons 'hi *hi) (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-3 (inRange lo hi raw)]) (let ([ranged tesl-checked-3]) (raw-value (needInRange lo hi ranged)))))))
 
 (define-trusted
   (isPositiveOpt [n : Integer])
@@ -77,17 +77,17 @@
 (define/pow
   (p04_attach_sugar [x : Integer])
   #:returns Integer
-  (let ([mp (thsl-src! "tests/critical-review-51-tests.tesl" 91 (list (cons 'x *x)) (lambda () (isPositiveOpt x)))]) (thsl-src-control! "tests/critical-review-51-tests.tesl" 92 (list (cons 'mp *mp) (cons 'x *x)) (lambda () (let ([tesl_case_4 (raw-value mp)]) (cond [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Something)) (let ([p (hash-ref (adt-value-fields *tesl_case_4) 'value)]) (thsl-src! "tests/critical-review-51-tests.tesl" 94 (list (cons 'p p)) (lambda () (raw-value (needPositive (attach-proof x p))))))] [(and (adt-value? *tesl_case_4) (eq? (adt-value-variant *tesl_case_4) 'Nothing)) (thsl-src! "tests/critical-review-51-tests.tesl" 96 (list) (lambda () (raw-value 0)))]))))))
+  (let ([mp (thsl-src! "tests/critical-review-51-tests.tesl" 91 (list (cons 'x *x)) (lambda () (isPositiveOpt x)))]) (thsl-src-control! "tests/critical-review-51-tests.tesl" 92 (list (cons 'mp *mp) (cons 'x *x)) (lambda () (let ([tesl-case-4 (raw-value mp)]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Something)) (let ([p (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "tests/critical-review-51-tests.tesl" 94 (list (cons 'p p)) (lambda () (raw-value (needPositive (attach-proof x p))))))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Nothing)) (thsl-src! "tests/critical-review-51-tests.tesl" 96 (list) (lambda () (raw-value 0)))]))))))
 
 (define/pow
   (p05_forget_then_recheck [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review-51-tests.tesl" 100 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_5 (isPositive raw)]) (let ([checked tesl_checked_5]) (let ([bare (forget-proof checked)]) (let/check ([tesl_checked_6 (isPositive bare)]) (let ([revalidated tesl_checked_6]) (raw-value (needPositive revalidated))))))))))
+  (thsl-src! "tests/critical-review-51-tests.tesl" 100 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-5 (isPositive raw)]) (let ([checked tesl-checked-5]) (let ([bare (forget-proof checked)]) (let/check ([tesl-checked-6 (isPositive bare)]) (let ([revalidated tesl-checked-6]) (raw-value (needPositive revalidated))))))))))
 
 (define/pow
   (p06_composite [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review-51-tests.tesl" 107 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_7 (isPositive raw)]) (let ([pos tesl_checked_7]) (let/check ([tesl_checked_8 (isEven pos)]) (let ([both tesl_checked_8]) (let ([requireBoth (let () (define/pow (tesl-lambda-9 [n : Integer]) #:returns Integer (let ([n (tesl-establish-param-proof n *n `(((IsPositive n) && (IsEven n))))]) n)) tesl-lambda-9)]) (raw-value (requireBoth both))))))))))
+  (thsl-src! "tests/critical-review-51-tests.tesl" 107 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-7 (isPositive raw)]) (let ([pos tesl-checked-7]) (let/check ([tesl-checked-8 (isEven pos)]) (let ([both tesl-checked-8]) (let ([requireBoth (let () (define/pow (tesl-lambda-9 [n : Integer]) #:returns Integer (let ([n (tesl-establish-param-proof n *n `(((IsPositive n) && (IsEven n))))]) n)) tesl-lambda-9)]) (raw-value (requireBoth both))))))))))
 
 (define/pow
   (t01_tuple_as_list)
@@ -102,7 +102,7 @@
 (define/pow
   (t02_tree_size [t : (MyTree Integer)])
   #:returns Integer
-  (thsl-src-control! "tests/critical-review-51-tests.tesl" 125 (list (cons 't *t)) (lambda () (let ([tesl_case_10 *t]) (cond [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'MkLeaf)) (thsl-src! "tests/critical-review-51-tests.tesl" 126 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl_case_10) (eq? (adt-value-variant *tesl_case_10) 'MkNode)) (thsl-src! "tests/critical-review-51-tests.tesl" 127 (list) (lambda () (raw-value 1)))])))))
+  (thsl-src-control! "tests/critical-review-51-tests.tesl" 125 (list (cons 't *t)) (lambda () (let ([tesl-case-10 *t]) (cond [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'MkLeaf)) (thsl-src! "tests/critical-review-51-tests.tesl" 126 (list) (lambda () (raw-value 0)))] [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'MkNode)) (thsl-src! "tests/critical-review-51-tests.tesl" 127 (list) (lambda () (raw-value 1)))])))))
 
 (define-newtype UserId String)
 
@@ -120,32 +120,32 @@
 (define/pow
   (c01_nested_paren [w : Wrapped])
   #:returns Integer
-  (thsl-src-control! "tests/critical-review-51-tests.tesl" 142 (list (cons 'w *w)) (lambda () (let ([tesl_case_11 *w]) (cond [(and (and (adt-value? *tesl_case_11) (eq? (adt-value-variant *tesl_case_11) 'MkWrap)) (let ([tesl_case_11_f0 (raw-value (hash-ref (adt-value-fields *tesl_case_11) 'inner))]) (and (adt-value? *tesl_case_11_f0) (eq? (adt-value-variant *tesl_case_11_f0) 'Something)))) (let ([tesl_case_11_f0 (raw-value (hash-ref (adt-value-fields *tesl_case_11) 'inner))]) (let ([n (hash-ref (adt-value-fields *tesl_case_11_f0) 'value)]) (thsl-src! "tests/critical-review-51-tests.tesl" 143 (list (cons 'n n)) (lambda () *n))))] [(and (and (adt-value? *tesl_case_11) (eq? (adt-value-variant *tesl_case_11) 'MkWrap)) (let ([tesl_case_11_f0 (raw-value (hash-ref (adt-value-fields *tesl_case_11) 'inner))]) (and (adt-value? *tesl_case_11_f0) (eq? (adt-value-variant *tesl_case_11_f0) 'Nothing)))) (let ([tesl_case_11_f0 (raw-value (hash-ref (adt-value-fields *tesl_case_11) 'inner))]) (thsl-src! "tests/critical-review-51-tests.tesl" 144 (list) (lambda () (raw-value 0))))])))))
+  (thsl-src-control! "tests/critical-review-51-tests.tesl" 142 (list (cons 'w *w)) (lambda () (let ([tesl-case-11 *w]) (cond [(and (and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'MkWrap)) (let ([tesl-case-11_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-11) 'inner))]) (and (adt-value? *tesl-case-11_f0) (eq? (adt-value-variant *tesl-case-11_f0) 'Something)))) (let ([tesl-case-11_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-11) 'inner))]) (let ([n (hash-ref (adt-value-fields *tesl-case-11_f0) 'value)]) (thsl-src! "tests/critical-review-51-tests.tesl" 143 (list (cons 'n n)) (lambda () *n))))] [(and (and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'MkWrap)) (let ([tesl-case-11_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-11) 'inner))]) (and (adt-value? *tesl-case-11_f0) (eq? (adt-value-variant *tesl-case-11_f0) 'Nothing)))) (let ([tesl-case-11_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-11) 'inner))]) (thsl-src! "tests/critical-review-51-tests.tesl" 144 (list) (lambda () (raw-value 0))))])))))
 
 (define/pow
   (c02_where_guard [m : (Maybe Integer)])
   #:returns Integer
-  (thsl-src-control! "tests/critical-review-51-tests.tesl" 147 (list (cons 'm *m)) (lambda () (let ([tesl_case_12 *m]) (cond [(and (adt-value? *tesl_case_12) (eq? (adt-value-variant *tesl_case_12) 'Nothing)) (thsl-src! "tests/critical-review-51-tests.tesl" 148 (list) (lambda () (raw-value 0)))] [(and (and (adt-value? *tesl_case_12) (eq? (adt-value-variant *tesl_case_12) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl_case_12) 'value)]) (> *n 100))) (let ([n (hash-ref (adt-value-fields *tesl_case_12) 'value)]) (thsl-src! "tests/critical-review-51-tests.tesl" 149 (list (cons 'n n)) (lambda () (raw-value 100))))] [(and (adt-value? *tesl_case_12) (eq? (adt-value-variant *tesl_case_12) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl_case_12) 'value)]) (thsl-src! "tests/critical-review-51-tests.tesl" 150 (list (cons 'n n)) (lambda () *n)))])))))
+  (thsl-src-control! "tests/critical-review-51-tests.tesl" 147 (list (cons 'm *m)) (lambda () (let ([tesl-case-12 *m]) (cond [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Nothing)) (thsl-src! "tests/critical-review-51-tests.tesl" 148 (list) (lambda () (raw-value 0)))] [(and (and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl-case-12) 'value)]) (> *n 100))) (let ([n (hash-ref (adt-value-fields *tesl-case-12) 'value)]) (thsl-src! "tests/critical-review-51-tests.tesl" 149 (list (cons 'n n)) (lambda () (raw-value 100))))] [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl-case-12) 'value)]) (thsl-src! "tests/critical-review-51-tests.tesl" 150 (list (cons 'n n)) (lambda () *n)))])))))
 
 (define/pow
   (n01_bare_nullary [m : (Maybe (Maybe Integer))])
   #:returns Integer
-  (thsl-src-control! "tests/critical-review-51-tests.tesl" 159 (list (cons 'm *m)) (lambda () (let ([tesl_case_13 *m]) (cond [(and (adt-value? *tesl_case_13) (eq? (adt-value-variant *tesl_case_13) 'Nothing)) (thsl-src! "tests/critical-review-51-tests.tesl" 160 (list) (lambda () (raw-value 0)))] [(and (and (adt-value? *tesl_case_13) (eq? (adt-value-variant *tesl_case_13) 'Something)) (let ([tesl_case_13_f0 (raw-value (hash-ref (adt-value-fields *tesl_case_13) 'value))]) (and (adt-value? *tesl_case_13_f0) (eq? (adt-value-variant *tesl_case_13_f0) 'Nothing)))) (let ([tesl_case_13_f0 (raw-value (hash-ref (adt-value-fields *tesl_case_13) 'value))]) (thsl-src! "tests/critical-review-51-tests.tesl" 161 (list) (lambda () (raw-value 1))))] [(and (and (adt-value? *tesl_case_13) (eq? (adt-value-variant *tesl_case_13) 'Something)) (let ([tesl_case_13_f0 (raw-value (hash-ref (adt-value-fields *tesl_case_13) 'value))]) (and (adt-value? *tesl_case_13_f0) (eq? (adt-value-variant *tesl_case_13_f0) 'Something)))) (let ([tesl_case_13_f0 (raw-value (hash-ref (adt-value-fields *tesl_case_13) 'value))]) (let ([n (hash-ref (adt-value-fields *tesl_case_13_f0) 'value)]) (thsl-src! "tests/critical-review-51-tests.tesl" 162 (list (cons 'n n)) (lambda () *n))))])))))
+  (thsl-src-control! "tests/critical-review-51-tests.tesl" 159 (list (cons 'm *m)) (lambda () (let ([tesl-case-13 *m]) (cond [(and (adt-value? *tesl-case-13) (eq? (adt-value-variant *tesl-case-13) 'Nothing)) (thsl-src! "tests/critical-review-51-tests.tesl" 160 (list) (lambda () (raw-value 0)))] [(and (and (adt-value? *tesl-case-13) (eq? (adt-value-variant *tesl-case-13) 'Something)) (let ([tesl-case-13_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-13) 'value))]) (and (adt-value? *tesl-case-13_f0) (eq? (adt-value-variant *tesl-case-13_f0) 'Nothing)))) (let ([tesl-case-13_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-13) 'value))]) (thsl-src! "tests/critical-review-51-tests.tesl" 161 (list) (lambda () (raw-value 1))))] [(and (and (adt-value? *tesl-case-13) (eq? (adt-value-variant *tesl-case-13) 'Something)) (let ([tesl-case-13_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-13) 'value))]) (and (adt-value? *tesl-case-13_f0) (eq? (adt-value-variant *tesl-case-13_f0) 'Something)))) (let ([tesl-case-13_f0 (raw-value (hash-ref (adt-value-fields *tesl-case-13) 'value))]) (let ([n (hash-ref (adt-value-fields *tesl-case-13_f0) 'value)]) (thsl-src! "tests/critical-review-51-tests.tesl" 162 (list (cons 'n n)) (lambda () *n))))])))))
 
 (define/pow
   (n02_case_cmp [x : Integer])
   #:returns Integer
-  (thsl-src-control! "tests/critical-review-51-tests.tesl" 167 (list (cons 'x *x)) (lambda () (let ([tesl_case_14 (raw-value (> *x 0))]) (cond [(eq? *tesl_case_14 #t) (thsl-src! "tests/critical-review-51-tests.tesl" 168 (list) (lambda () (raw-value 1)))] [(eq? *tesl_case_14 #f) (thsl-src! "tests/critical-review-51-tests.tesl" 169 (list) (lambda () (raw-value 0)))])))))
+  (thsl-src-control! "tests/critical-review-51-tests.tesl" 167 (list (cons 'x *x)) (lambda () (let ([tesl-case-14 (raw-value (> *x 0))]) (cond [(eq? *tesl-case-14 #t) (thsl-src! "tests/critical-review-51-tests.tesl" 168 (list) (lambda () (raw-value 1)))] [(eq? *tesl-case-14 #f) (thsl-src! "tests/critical-review-51-tests.tesl" 169 (list) (lambda () (raw-value 0)))])))))
 
 (define/pow
   (n03_case_conj [a : Integer] [b : Integer])
   #:returns Integer
-  (thsl-src-control! "tests/critical-review-51-tests.tesl" 173 (list (cons 'a *a) (cons 'b *b)) (lambda () (let ([tesl_case_15 (raw-value (and (> *a 0) (> *b 0)))]) (cond [(eq? *tesl_case_15 #t) (thsl-src! "tests/critical-review-51-tests.tesl" 174 (list) (lambda () (raw-value 1)))] [(eq? *tesl_case_15 #f) (thsl-src! "tests/critical-review-51-tests.tesl" 175 (list) (lambda () (raw-value 0)))])))))
+  (thsl-src-control! "tests/critical-review-51-tests.tesl" 173 (list (cons 'a *a) (cons 'b *b)) (lambda () (let ([tesl-case-15 (raw-value (and (> *a 0) (> *b 0)))]) (cond [(eq? *tesl-case-15 #t) (thsl-src! "tests/critical-review-51-tests.tesl" 174 (list) (lambda () (raw-value 1)))] [(eq? *tesl-case-15 #f) (thsl-src! "tests/critical-review-51-tests.tesl" 175 (list) (lambda () (raw-value 0)))])))))
 
 (define/pow
   (n04_case_arith [a : Integer] [b : Integer])
   #:returns Integer
-  (thsl-src-control! "tests/critical-review-51-tests.tesl" 179 (list (cons 'a *a) (cons 'b *b)) (lambda () (let ([tesl_case_16 (raw-value (+ *a *b))]) (cond [(= *tesl_case_16 0) (thsl-src! "tests/critical-review-51-tests.tesl" 180 (list) (lambda () (raw-value 100)))] [#t (thsl-src! "tests/critical-review-51-tests.tesl" 181 (list) (lambda () (raw-value 0)))])))))
+  (thsl-src-control! "tests/critical-review-51-tests.tesl" 179 (list (cons 'a *a) (cons 'b *b)) (lambda () (let ([tesl-case-16 (raw-value (+ *a *b))]) (cond [(= *tesl-case-16 0) (thsl-src! "tests/critical-review-51-tests.tesl" 180 (list) (lambda () (raw-value 100)))] [#t (thsl-src! "tests/critical-review-51-tests.tesl" 181 (list) (lambda () (raw-value 0)))])))))
 
 (define-record Point
   [x : Integer]
@@ -170,17 +170,17 @@
 (define/pow
   (n07_forget_recheck_chain [n : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review-51-tests.tesl" 200 (list (cons 'n *n)) (lambda () (let/check ([tesl_checked_17 (isPositive n)]) (let ([p tesl_checked_17]) (let ([p2 (forget-proof p)]) (let/check ([tesl_checked_18 (isPositive p2)]) (let ([p3 tesl_checked_18]) (raw-value (needPositive p3))))))))))
+  (thsl-src! "tests/critical-review-51-tests.tesl" 200 (list (cons 'n *n)) (lambda () (let/check ([tesl-checked-17 (isPositive n)]) (let ([p tesl-checked-17]) (let ([p2 (forget-proof p)]) (let/check ([tesl-checked-18 (isPositive p2)]) (let ([p3 tesl-checked-18]) (raw-value (needPositive p3))))))))))
 
 (define/pow
   (n08_existential_with_check [raw : Integer])
   #:returns (Exists [x : Integer] [_entity : Integer ::: (IsPositive x)])
-  (thsl-src! "tests/critical-review-51-tests.tesl" 210 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_19 (isPositive raw)]) (let ([checked tesl_checked_19]) (pack ([checked]) checked))))))
+  (thsl-src! "tests/critical-review-51-tests.tesl" 210 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-19 (isPositive raw)]) (let ([checked tesl-checked-19]) (pack ([checked]) checked))))))
 
 (define/pow
   (n09_int_case [code : Integer])
   #:returns String
-  (thsl-src-control! "tests/critical-review-51-tests.tesl" 217 (list (cons 'code *code)) (lambda () (let ([tesl_case_20 *code]) (cond [(= *tesl_case_20 200) (thsl-src! "tests/critical-review-51-tests.tesl" 218 (list) (lambda () (raw-value "ok")))] [(= *tesl_case_20 404) (thsl-src! "tests/critical-review-51-tests.tesl" 219 (list) (lambda () (raw-value "not found")))] [#t (thsl-src! "tests/critical-review-51-tests.tesl" 220 (list) (lambda () (raw-value "other")))])))))
+  (thsl-src-control! "tests/critical-review-51-tests.tesl" 217 (list (cons 'code *code)) (lambda () (let ([tesl-case-20 *code]) (cond [(= *tesl-case-20 200) (thsl-src! "tests/critical-review-51-tests.tesl" 218 (list) (lambda () (raw-value "ok")))] [(= *tesl-case-20 404) (thsl-src! "tests/critical-review-51-tests.tesl" 219 (list) (lambda () (raw-value "not found")))] [#t (thsl-src! "tests/critical-review-51-tests.tesl" 220 (list) (lambda () (raw-value "other")))])))))
 
 (module+ test
   (require rackunit)

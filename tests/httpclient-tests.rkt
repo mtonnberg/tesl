@@ -73,7 +73,7 @@
 (define/pow
   (extractFirstHeader [headers : (List (Tuple2 String String))])
   #:returns (Maybe String)
-  (thsl-src-control! "tests/httpclient-tests.tesl" 89 (list (cons 'headers *headers)) (lambda () (let ([tesl_case_2 (raw-value (tesl_import_List_head *headers))]) (cond [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Something)) (let ([h (hash-ref (adt-value-fields *tesl_case_2) 'value)]) (thsl-src! "tests/httpclient-tests.tesl" 90 (list (cons 'h h)) (lambda () (raw-value (raw-value (Something (raw-value (tesl_import_Tuple2_first *h))))))))] [(and (adt-value? *tesl_case_2) (eq? (adt-value-variant *tesl_case_2) 'Nothing)) (thsl-src! "tests/httpclient-tests.tesl" 91 (list) (lambda () (raw-value Nothing)))])))))
+  (thsl-src-control! "tests/httpclient-tests.tesl" 89 (list (cons 'headers *headers)) (lambda () (let ([tesl-case-2 (raw-value (tesl_import_List_head *headers))]) (cond [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Something)) (let ([h (hash-ref (adt-value-fields *tesl-case-2) 'value)]) (thsl-src! "tests/httpclient-tests.tesl" 90 (list (cons 'h h)) (lambda () (raw-value (raw-value (Something (raw-value (tesl_import_Tuple2_first *h))))))))] [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Nothing)) (thsl-src! "tests/httpclient-tests.tesl" 91 (list) (lambda () (raw-value Nothing)))])))))
 
 (define/pow
   (headersToDict [resp : HttpResponse])

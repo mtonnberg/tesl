@@ -27,7 +27,7 @@
 (define/pow
   (processRawInput [rawN : Integer] [rawLabel : String])
   #:returns String
-  (thsl-src! "example/learn/lesson07-consumer.tesl" 32 (list (cons 'rawN *rawN) (cons 'rawLabel *rawLabel)) (lambda () (let/check ([tesl_checked_0 (checkInBounds rawN)]) (let ([validN tesl_checked_0]) (let/check ([tesl_checked_1 (sanitize rawLabel)]) (let ([validLabel tesl_checked_1]) (raw-value (processInput validN validLabel)))))))))
+  (thsl-src! "example/learn/lesson07-consumer.tesl" 32 (list (cons 'rawN *rawN) (cons 'rawLabel *rawLabel)) (lambda () (let/check ([tesl-checked-0 (checkInBounds rawN)]) (let ([validN tesl-checked-0]) (let/check ([tesl-checked-1 (sanitize rawLabel)]) (let ([validLabel tesl-checked-1]) (raw-value (processInput validN validLabel)))))))))
 
 (module+ test
   (require rackunit)

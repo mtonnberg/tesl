@@ -33,7 +33,7 @@
 (define/pow
   (diagnoseCommonMistakes [raw : Integer])
   #:returns String
-  (thsl-src! "example/learn/lesson54-debugging-proof-errors.tesl" 55 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_0 (checkScore raw)]) (let ([validated tesl_checked_0]) (raw-value (requiresValidScore validated)))))))
+  (thsl-src! "example/learn/lesson54-debugging-proof-errors.tesl" 55 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-0 (checkScore raw)]) (let ([validated tesl-checked-0]) (raw-value (requiresValidScore validated)))))))
 
 (define-trusted
   (halvePreservesScore [n : Integer ::: (ValidScore n)])
@@ -53,7 +53,7 @@
 (define/pow
   (roundtripProof [raw : Integer])
   #:returns String
-  (thsl-src! "example/learn/lesson54-debugging-proof-errors.tesl" 153 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_1 (checkScore raw)]) (let ([validated tesl_checked_1]) (let ([pf (detach-all-proof validated)]) (let ([stripped (forget-proof validated)]) (let ([restored (attach-proof stripped pf)]) (raw-value (requiresValidScore restored))))))))))
+  (thsl-src! "example/learn/lesson54-debugging-proof-errors.tesl" 153 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-1 (checkScore raw)]) (let ([validated tesl-checked-1]) (let ([pf (detach-all-proof validated)]) (let ([stripped (forget-proof validated)]) (let ([restored (attach-proof stripped pf)]) (raw-value (requiresValidScore restored))))))))))
 
 (module+ test
   (require rackunit)
@@ -71,10 +71,10 @@
 
   (test-case "halveScore preserves proof without revalidation"
   (define n (thsl-src! "example/learn/lesson54-debugging-proof-errors.tesl" 173 (list) (lambda () 80)))
-  (define tesl_checked_2 (checkScore n))
-  (when (check-fail? tesl_checked_2)
-    (raise-user-error 'tesl-test "unexpected failure in let validated: ~a" (check-fail-message tesl_checked_2)))
-  (define validated tesl_checked_2)
+  (define tesl-checked-2 (checkScore n))
+  (when (check-fail? tesl-checked-2)
+    (raise-user-error 'tesl-test "unexpected failure in let validated: ~a" (check-fail-message tesl-checked-2)))
+  (define validated tesl-checked-2)
   (define result (thsl-src! "example/learn/lesson54-debugging-proof-errors.tesl" 175 (list (cons 'validated validated) (cons 'n n)) (lambda () (halveAndShow validated))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson54-debugging-proof-errors.tesl" 176 (list (cons 'result result) (cons 'validated validated) (cons 'n n)) (lambda () result))) "score: 40")
   )

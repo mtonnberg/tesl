@@ -33,34 +33,34 @@
 (define/pow
   (computeGrade [rawScore : Integer])
   #:returns String
-  (thsl-src! "example/learn/lesson61-step-debugging.tesl" 116 (list (cons 'rawScore *rawScore)) (lambda () (let/check ([tesl_checked_0 (checkScore rawScore)]) (let ([validated tesl_checked_0]) (raw-value (describeScore validated)))))))
+  (thsl-src! "example/learn/lesson61-step-debugging.tesl" 116 (list (cons 'rawScore *rawScore)) (lambda () (let/check ([tesl-checked-0 (checkScore rawScore)]) (let ([validated tesl-checked-0]) (raw-value (describeScore validated)))))))
 
 (module+ test
   (require rackunit)
   (test-case "checkScore accepts valid score 0"
   (define n (thsl-src! "example/learn/lesson61-step-debugging.tesl" 172 (list) (lambda () 0)))
-  (define tesl_checked_1 (checkScore n))
-  (when (check-fail? tesl_checked_1)
-    (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl_checked_1)))
-  (define result tesl_checked_1)
+  (define tesl-checked-1 (checkScore n))
+  (when (check-fail? tesl-checked-1)
+    (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-1)))
+  (define result tesl-checked-1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson61-step-debugging.tesl" 174 (list (cons 'result result) (cons 'n n)) (lambda () result))) 0)
   )
 
   (test-case "checkScore accepts valid score 100"
   (define n (thsl-src! "example/learn/lesson61-step-debugging.tesl" 178 (list) (lambda () 100)))
-  (define tesl_checked_2 (checkScore n))
-  (when (check-fail? tesl_checked_2)
-    (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl_checked_2)))
-  (define result tesl_checked_2)
+  (define tesl-checked-2 (checkScore n))
+  (when (check-fail? tesl-checked-2)
+    (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-2)))
+  (define result tesl-checked-2)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson61-step-debugging.tesl" 180 (list (cons 'result result) (cons 'n n)) (lambda () result))) 100)
   )
 
   (test-case "checkScore accepts mid-range score"
   (define n (thsl-src! "example/learn/lesson61-step-debugging.tesl" 184 (list) (lambda () 75)))
-  (define tesl_checked_3 (checkScore n))
-  (when (check-fail? tesl_checked_3)
-    (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl_checked_3)))
-  (define result tesl_checked_3)
+  (define tesl-checked-3 (checkScore n))
+  (when (check-fail? tesl-checked-3)
+    (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-3)))
+  (define result tesl-checked-3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson61-step-debugging.tesl" 186 (list (cons 'result result) (cons 'n n)) (lambda () result))) 75)
   )
 

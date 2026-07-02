@@ -91,17 +91,17 @@
 (define/pow
   (li01_literal_min_correct [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review-56-tests.tesl" 67 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_0 (checkMin10 raw)]) (let ([v tesl_checked_0]) (raw-value (needMin10 v)))))))
+  (thsl-src! "tests/critical-review-56-tests.tesl" 67 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-0 (checkMin10 raw)]) (let ([v tesl-checked-0]) (raw-value (needMin10 v)))))))
 
 (define/pow
   (li02_literal_max_correct [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review-56-tests.tesl" 71 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_1 (checkMax100 raw)]) (let ([v tesl_checked_1]) (raw-value (needMax100 v)))))))
+  (thsl-src! "tests/critical-review-56-tests.tesl" 71 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-1 (checkMax100 raw)]) (let ([v tesl-checked-1]) (raw-value (needMax100 v)))))))
 
 (define/pow
   (li03_literal_both_bounds [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review-56-tests.tesl" 75 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_2 (checkMin10 raw)]) (let ([a tesl_checked_2]) (let/check ([tesl_checked_3 (checkMax100 a)]) (let ([b tesl_checked_3]) (raw-value (needBothBounds b)))))))))
+  (thsl-src! "tests/critical-review-56-tests.tesl" 75 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-2 (checkMin10 raw)]) (let ([a tesl-checked-2]) (let/check ([tesl-checked-3 (checkMax100 a)]) (let ([b tesl-checked-3]) (raw-value (needBothBounds b)))))))))
 
 (define/pow
   (li04_string_literal_proof [raw : Integer])
@@ -116,7 +116,7 @@
 (define/pow
   (li06_mixed_lit_var_bounds [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review-56-tests.tesl" 88 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_4 (checkMin10 raw)]) (let ([a tesl_checked_4]) (let/check ([tesl_checked_5 (checkMax100 a)]) (let ([b tesl_checked_5]) (raw-value (needBothBounds b)))))))))
+  (thsl-src! "tests/critical-review-56-tests.tesl" 88 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-4 (checkMin10 raw)]) (let ([a tesl-checked-4]) (let/check ([tesl-checked-5 (checkMax100 a)]) (let ([b tesl-checked-5]) (raw-value (needBothBounds b)))))))))
 
 (define-checker
   (checkPQ [price : Integer] [quantity : Integer])
@@ -169,7 +169,7 @@
 (define/pow
   (ch01_combined_literal_preds [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review-56-tests.tesl" 200 (list (cons 'raw *raw)) (lambda () (let/check ([tesl_checked_7 (checkMin10 raw)]) (let ([a tesl_checked_7]) (let/check ([tesl_checked_8 (checkMax100 a)]) (let ([b tesl_checked_8]) (raw-value (needBothBounds b)))))))))
+  (thsl-src! "tests/critical-review-56-tests.tesl" 200 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-7 (checkMin10 raw)]) (let ([a tesl-checked-7]) (let/check ([tesl-checked-8 (checkMax100 a)]) (let ([b tesl-checked-8]) (raw-value (needBothBounds b)))))))))
 
 (module+ test
   (require rackunit)
@@ -207,18 +207,18 @@
   (test-case "R56_GW: ghost witness construction"
   (define price100 (thsl-src! "tests/critical-review-56-tests.tesl" 139 (list) (lambda () 100)))
   (define qty50 (thsl-src! "tests/critical-review-56-tests.tesl" 140 (list (cons 'price100 price100)) (lambda () 50)))
-  (define tesl_checked_9 (checkPos price100))
-  (when (check-fail? tesl_checked_9)
-    (raise-user-error 'tesl-test "unexpected failure in let p: ~a" (check-fail-message tesl_checked_9)))
-  (define p tesl_checked_9)
-  (define tesl_checked_10 (checkPos qty50))
-  (when (check-fail? tesl_checked_10)
-    (raise-user-error 'tesl-test "unexpected failure in let q: ~a" (check-fail-message tesl_checked_10)))
-  (define q tesl_checked_10)
-  (define tesl_checked_11 (checkPQ price100 qty50))
-  (when (check-fail? tesl_checked_11)
-    (raise-user-error 'tesl-test "unexpected failure in let pq: ~a" (check-fail-message tesl_checked_11)))
-  (define pq tesl_checked_11)
+  (define tesl-checked-9 (checkPos price100))
+  (when (check-fail? tesl-checked-9)
+    (raise-user-error 'tesl-test "unexpected failure in let p: ~a" (check-fail-message tesl-checked-9)))
+  (define p tesl-checked-9)
+  (define tesl-checked-10 (checkPos qty50))
+  (when (check-fail? tesl-checked-10)
+    (raise-user-error 'tesl-test "unexpected failure in let q: ~a" (check-fail-message tesl-checked-10)))
+  (define q tesl-checked-10)
+  (define tesl-checked-11 (checkPQ price100 qty50))
+  (when (check-fail? tesl-checked-11)
+    (raise-user-error 'tesl-test "unexpected failure in let pq: ~a" (check-fail-message tesl-checked-11)))
+  (define pq tesl-checked-11)
   (define ol (thsl-src! "tests/critical-review-56-tests.tesl" 144 (list (cons 'pq pq) (cons 'q q) (cons 'p p) (cons 'qty50 qty50) (cons 'price100 price100)) (lambda () (makeOrderLine p q pq))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-56-tests.tesl" 145 (list (cons 'ol ol) (cons 'pq pq) (cons 'q q) (cons 'p p) (cons 'qty50 qty50) (cons 'price100 price100)) (lambda () (getPrice ol)))) 100)
   (define badPrice (thsl-src! "tests/critical-review-56-tests.tesl" 146 (list (cons 'ol ol) (cons 'pq pq) (cons 'q q) (cons 'p p) (cons 'qty50 qty50) (cons 'price100 price100)) (lambda () 50)))
@@ -231,22 +231,22 @@
 
   (test-case "R56_FP: field proof passthrough runtime"
   (define rawSerial (thsl-src! "tests/critical-review-56-tests.tesl" 170 (list) (lambda () 42)))
-  (define tesl_checked_12 (checkPos rawSerial))
-  (when (check-fail? tesl_checked_12)
-    (raise-user-error 'tesl-test "unexpected failure in let posSerial: ~a" (check-fail-message tesl_checked_12)))
-  (define posSerial tesl_checked_12)
+  (define tesl-checked-12 (checkPos rawSerial))
+  (when (check-fail? tesl-checked-12)
+    (raise-user-error 'tesl-test "unexpected failure in let posSerial: ~a" (check-fail-message tesl-checked-12)))
+  (define posSerial tesl-checked-12)
   (define payload (thsl-src! "tests/critical-review-56-tests.tesl" 172 (list (cons 'posSerial posSerial) (cons 'rawSerial rawSerial)) (lambda () (ValidPayload #:serial posSerial))))
   (define extracted (thsl-src! "tests/critical-review-56-tests.tesl" 173 (list (cons 'payload payload) (cons 'posSerial posSerial) (cons 'rawSerial rawSerial)) (lambda () (extractSerial payload))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-56-tests.tesl" 174 (list (cons 'extracted extracted) (cons 'payload payload) (cons 'posSerial posSerial) (cons 'rawSerial rawSerial)) (lambda () (needPos extracted)))) 42)
   (define rawVal (thsl-src! "tests/critical-review-56-tests.tesl" 176 (list (cons 'extracted extracted) (cons 'payload payload) (cons 'posSerial posSerial) (cons 'rawSerial rawSerial)) (lambda () 5)))
-  (define tesl_checked_13 (checkPos rawVal))
-  (when (check-fail? tesl_checked_13)
-    (raise-user-error 'tesl-test "unexpected failure in let pv: ~a" (check-fail-message tesl_checked_13)))
-  (define pv tesl_checked_13)
-  (define tesl_checked_14 (checkSmall pv))
-  (when (check-fail? tesl_checked_14)
-    (raise-user-error 'tesl-test "unexpected failure in let sv: ~a" (check-fail-message tesl_checked_14)))
-  (define sv tesl_checked_14)
+  (define tesl-checked-13 (checkPos rawVal))
+  (when (check-fail? tesl-checked-13)
+    (raise-user-error 'tesl-test "unexpected failure in let pv: ~a" (check-fail-message tesl-checked-13)))
+  (define pv tesl-checked-13)
+  (define tesl-checked-14 (checkSmall pv))
+  (when (check-fail? tesl-checked-14)
+    (raise-user-error 'tesl-test "unexpected failure in let sv: ~a" (check-fail-message tesl-checked-14)))
+  (define sv tesl-checked-14)
   (define item (thsl-src! "tests/critical-review-56-tests.tesl" 179 (list (cons 'sv sv) (cons 'pv pv) (cons 'rawVal rawVal) (cons 'extracted extracted) (cons 'payload payload) (cons 'posSerial posSerial) (cons 'rawSerial rawSerial)) (lambda () (ValidItem #:value sv))))
   (define v (thsl-src! "tests/critical-review-56-tests.tesl" 180 (list (cons 'item item) (cons 'sv sv) (cons 'pv pv) (cons 'rawVal rawVal) (cons 'extracted extracted) (cons 'payload payload) (cons 'posSerial posSerial) (cons 'rawSerial rawSerial)) (lambda () (extractValue item))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-56-tests.tesl" 181 (list (cons 'v v) (cons 'item item) (cons 'sv sv) (cons 'pv pv) (cons 'rawVal rawVal) (cons 'extracted extracted) (cons 'payload payload) (cons 'posSerial posSerial) (cons 'rawSerial rawSerial)) (lambda () (needBoth v)))) 5)
