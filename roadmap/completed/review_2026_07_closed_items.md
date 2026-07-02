@@ -83,6 +83,21 @@ baseline). Companion reports: `EXECUTIVE-REVIEW-2026-07.md`,
   is tracked in `roadmap/later/type_decidability_ord_eq.md`.
 
 ## Robustness / consistency
+- **DRIFT-1 — `Tesl.Cli` removed entirely (config is env-vars-only).** The
+  checker↔runtime name-resolution drift (`cli.args` typechecked with no import yet
+  was unbound at runtime — `tesl_import_cli_args: unbound identifier`) is closed by
+  deleting the feature rather than patching the guard: `cli.args`/
+  `lookupPortArgument` removed from `stdlib_env`, the name→module map, and the
+  importable-module list (`type_system.ml`); the `cli.args` field-emit arm and the
+  `Tesl.Cli`→`tesl/cli.rkt` mapping removed (`emit_racket.ml`); the runtime
+  `tesl/cli.rkt` module and the `tesl-cli-args`/`tesl-lookup-port-argument`
+  primitives (`tesl/private/runtime.rkt`) deleted. Now `import Tesl.Cli` →
+  "unknown stdlib module `Tesl.Cli`" and bare `cli.args` → "unknown name: cli",
+  both at compile time (fail-closed; the runtime hole is gone). The `todo-api`
+  example migrated to env-var port resolution (`TESL_TODO_API_PORT` → `PORT` →
+  default `8086`) and its `.rkt` was regenerated; spec §10 module list, README,
+  and the LSP hover table updated. Regression: `test_import_scope_single_source`
+  no longer needs a `cli.args` ungate exemption (`intentionally_ungated = []`).
 - **SC-01** — ForAll conjunction comparison made order-insensitive
   (`normalize_conj_str`), matching the plain-conjunction path.
 - **AUTH-VIA** — `check_auth_proof_via` mirrors `check_capture_proof_via`:

@@ -442,9 +442,6 @@ let stdlib_env : (string * scheme) list = [
   "Left",             { vars = _r2_ab; mono = t_fun [_a] (t_either _a _b) };
   "Right",            { vars = _r2_ab; mono = t_fun [_b] (t_either _a _b) };
 
-  (* ── Cli ─────────────────────────────────────────────────────────────── *)
-  "cli.args",          mono (t_list t_string);
-  "lookupPortArgument", mono (t_fun [t_list t_string] (t_maybe t_string));
 
   (* ── Float arithmetic functions ─────────────────────────────────────── *)
   "Float.add",  mono (t_fun [t_float; t_float] t_float);
@@ -820,8 +817,6 @@ let stdlib_bare_home_module : (string * string) list = [
   (* Time *)
   "nowMillis", "Tesl.Time"; "formatTime", "Tesl.Time"; "durationMs", "Tesl.Time";
   "addMs", "Tesl.Time"; "diffMs", "Tesl.Time"; "subtractMs", "Tesl.Time";
-  (* Cli *)
-  "lookupPortArgument", "Tesl.Cli";
   (* HTTP status helpers + queue/job-drain test helpers (Tesl.ApiTest) *)
   "statusOk", "Tesl.ApiTest"; "statusClientError", "Tesl.ApiTest";
   "statusServerError", "Tesl.ApiTest";
@@ -886,7 +881,7 @@ let tesl_known_module_names : string list = [
   "Tesl.List"; "Tesl.ListPrim"; "Tesl.Dict"; "Tesl.Maybe"; "Tesl.Either"; "Tesl.EitherPrim"; "Tesl.Result";
   "Tesl.Http"; "Tesl.HttpClient"; "Tesl.Json"; "Tesl.DB"; "Tesl.Time"; "Tesl.Random";
   "Tesl.Uuid"; "Tesl.UUID"; "Tesl.Crypto"; "Tesl.Set"; "Tesl.Map"; "Tesl.Env";
-  "Tesl.Telemetry"; "Tesl.Cli"; "Tesl.ApiTest"; "Tesl.Tuple"; "Tesl.Id";
+  "Tesl.Telemetry"; "Tesl.ApiTest"; "Tesl.Tuple"; "Tesl.Id";
   "Tesl.Queue"; "Tesl.Channel"; "Tesl.Sql"; "Tesl.Sse"; "Tesl.Logging";
   "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database"; "Tesl.SSE"; "Tesl.App"; "Tesl.Agent";
 ]

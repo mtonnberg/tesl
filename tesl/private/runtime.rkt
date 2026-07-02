@@ -13,8 +13,6 @@
          tesl-env-string-raw
          tesl-env-int
          tesl-env-int-raw
-         tesl-cli-args
-         tesl-lookup-port-argument
          tesl-int-parse
          tesl-request-cookie
          tesl-generate-prefixed-id
@@ -61,24 +59,6 @@
   (if raw
       (Something (parse-integer-env name raw 'tesl-env-int))
       Nothing))
-
-(define (tesl-cli-args)
-  (vector->list (current-command-line-arguments)))
-
-(define (tesl-lookup-port-argument [args (tesl-cli-args)])
-  (let loop ([remaining args])
-    (cond
-      [(null? remaining) Nothing]
-      [(string-prefix? (car remaining) "--port=")
-       (Something (substring (car remaining) (string-length "--port=")))]
-      [(equal? (car remaining) "--port")
-       (cond
-         [(null? (cdr remaining))
-          (raise-user-error 'tesl "`--port` requires a value")]
-         [else
-          (Something (cadr remaining))])]
-      [else
-       (loop (cdr remaining))])))
 
 (define (tesl-int-parse raw)
   (define maybe-int (and raw (string->number raw)))

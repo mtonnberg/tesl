@@ -1578,7 +1578,7 @@ let rec infer_expr ctx (e : expr) : ty =
           fresh ()))
 
   | EField { obj; field; loc } ->
-    (* First try module-qualified name: Module.function (e.g., Dict.lookup, cli.args).
+    (* First try module-qualified name: Module.function (e.g., Dict.lookup).
        For constructors (uppercase), always try qualified. For EVar (lowercase), try
        qualified first and fall back to record field access if not found. *)
     let try_qualified () =

@@ -263,4 +263,4 @@ All flags return versioned JSON. See `editor/protocol.md` for the full compilerâ
 
 Tesl is intentionally explicit.
 
-Standard `.tesl` names are explicit. Import general built-ins from `Tesl.Prelude`, import constructor families with syntax like `Maybe(..)`, import built-in capabilities such as `time` explicitly, and pull specialized helpers like `cli.args`, `lookupPortArgument`, or `generatePrefixedId` from their dedicated modules instead of the Prelude.
+Standard `.tesl` names are explicit. Import general built-ins from `Tesl.Prelude`, import constructor families with syntax like `Maybe(..)`, import built-in capabilities such as `time` explicitly, and pull specialized helpers like `generatePrefixedId` or `env` from their dedicated modules instead of the Prelude.

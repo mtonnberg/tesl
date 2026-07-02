@@ -626,7 +626,6 @@ The current frontend gives special treatment to these module names:
 **Core infrastructure**
 
 - `Tesl.Prelude` — core type symbols (`Int`, `Bool`, `String`, `List`, `Fact`, etc.), and fact operations (`attachFact`, `detachFact`, `forgetFact`, `andLeft`, `andRight`, `introAnd`)
-- `Tesl.Cli` — CLI argument helpers (`lookupPortArgument`)
 - `Tesl.Id` — ID generation (`generatePrefixedId`). Requires the `random` capability — callers must import `random` from `Tesl.Random` and declare it in their capability's `implies` chain.
 - `Tesl.Random` — randomness capability (`random`) and functions (`randomInt`). The `random` capability gates all non-deterministic operations. Import it alongside `Tesl.Id` when using `generatePrefixedId`, or standalone when calling `randomInt`.
 - `Tesl.Tuple` — tuple constructors and accessors (`Tuple2`, `Tuple3`, `Tuple2.first`, `Tuple2.second`, `Tuple3.first`, `Tuple3.second`, `Tuple3.third`).
@@ -2838,8 +2837,9 @@ The three kinds differ in *when* the proof can fail, not in the authority they
 grant:
 
 - `check` validates at runtime and can `fail STATUS "..."`. It is the right
-  choice at external boundaries (HTTP request bodies, CLI arguments, decoded
-  data) where the input might legitimately be invalid.
+  choice at external boundaries (HTTP request bodies, URL query parameters,
+  environment variables, decoded data) where the input might legitimately be
+  invalid.
 - `auth` validates at runtime and can `fail STATUS "..."`. It is a specialised
   `check` whose proof is about *identity* rather than *shape*.
 - `establish` is total: it cannot `fail`. It is the right choice when the

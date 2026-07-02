@@ -17,7 +17,6 @@ import Tesl.Int exposing [Int.parse]
 import Tesl.List exposing [List.isEmpty, List.filterCheck]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Telemetry exposing [telemetry, initTelemetry]
-import Tesl.Cli exposing [cli.args, lookupPortArgument]
 import Tesl.Id exposing [generatePrefixedId]
 import Tesl.Random exposing [random]
 import Tesl.App exposing [App]
@@ -102,16 +101,13 @@ fn parsePortString(rawPort: String, source: String) -> Int ? ValidPort =
     Something parsedPort -> isValidPort parsedPort
     Nothing -> fail 400 "invalid ${source} port value ${rawPort}; expected an integer between 1 and 65535"
 
-fn resolveExamplePort(args: List String, teslPort: Maybe String, portEnv: Maybe String) -> Int =
-  case lookupPortArgument args of
-    Something cliPort -> parsePortString cliPort "command-line"
+fn resolveExamplePort(teslPort: Maybe String, portEnv: Maybe String) -> Int =
+  case teslPort of
+    Something port -> parsePortString port "TESL_TODO_API_PORT"
     Nothing ->
-      case teslPort of
-        Something port -> parsePortString port "TESL_TODO_API_PORT"
-        Nothing ->
-          case portEnv of
-            Something port -> parsePortString port "PORT"
-            Nothing -> defaultExamplePort
+      case portEnv of
+        Something port -> parsePortString port "PORT"
+        Nothing -> defaultExamplePort
 
 fact Authenticated (req: User)
 
@@ -288,7 +284,7 @@ server TodoServer for TodoApi {
 
 main() -> App requires [todoWebService, envRead] =
   let _ = initTelemetry service "todo-api" endpoint "in-memory" console True
-  let port = resolveExamplePort cli.args (env "TESL_TODO_API_PORT") (env "PORT")
+  let port = resolveExamplePort (env "TESL_TODO_API_PORT") (env "PORT")
   let _ = seedExampleData()
   App {
     database: TodoDatabase

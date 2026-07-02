@@ -263,11 +263,12 @@ let is_constructor name =
    would contradict the emitter). *)
 let compile_time_lowered = [ "anthropic"; "openai"; "mistral"; "local"; "asTool" ]
 
-(* [cli.args] is a dotted-but-lowercase-prefix bare value (not a Module.fn form
-   and not in tesl_module_exports); it is intentionally un-gated (matches the
-   pre-A7 behaviour where the "cli" prefix resolved to nothing).  Exclude it from
-   the exhaustiveness requirement so it is not a false offender. *)
-let intentionally_ungated = [ "cli.args" ]
+(* No intentionally-ungated stdlib names remain.  The only former entry — the
+   `cli.args` bare value — was removed together with the whole `Tesl.Cli` module
+   (all config is env-vars-only now), so it is no longer in `stdlib_env` to
+   classify.  Kept as an explicit empty list so a future exemption is a visible,
+   reviewed addition rather than a silent widening. *)
+let intentionally_ungated : string list = []
 
 let test_every_fn_env_name_is_classified () =
   (* Every stdlib_env name (function-valued or a runtime value that lives in an

@@ -107,7 +107,6 @@ let module_path_table : (string, string) Hashtbl.t =
   add "Tesl.Map"       "tesl/map.rkt";
   add "Tesl.Env"       "tesl/env.rkt";
   add "Tesl.Telemetry" "tesl/telemetry.rkt";
-  add "Tesl.Cli"       "tesl/cli.rkt";
   add "Tesl.ApiTest"   "tesl/api-test.rkt";
   add "Tesl.Tuple"     "tesl/tuple.rkt";
   add "Tesl.Id"        "tesl/id.rkt";
@@ -1470,8 +1469,6 @@ let rec emit_expr ctx e =
       else
         emit ctx (resolve_name name)
     end
-  | EField { obj = EVar { name = "cli"; _ }; field = "args"; _ } ->
-    emit ctx "tesl_import_cli_args"
   | EField { obj; field; _ } ->
     (* Check if this is a module-qualified name: Module.function *)
     let qual_name = match obj with

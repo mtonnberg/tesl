@@ -14,11 +14,16 @@ CAP-COMPOSE is **done** (whole-program grant coverage) — see
   fix is unverifiable until that bug is fixed — fix them together, and ideally
   single-source the compile-time allowlist and the runtime `require-capabilities!`
   primitive set so they cannot drift.
-- **DRIFT-1 (high):** ~~`cli.args` typechecks with no import but is unbound at runtime;~~
-  ~~the import-scope guard skips lowercase module prefixes (`cli`). Fix must not~~
-  ~~disturb other lowercase-prefixed stdlib names. (`todo-api` imports it correctly, so~~
-  ~~only the unimported case is affected.)~~
-  Remove the cli import, should not be possible and should not be part of the language. All config should be done via environment vars.
+- **DRIFT-1 — DONE (2026-07-02):** the whole `Tesl.Cli` module was removed (config
+  is env-vars-only). `cli.args`/`lookupPortArgument` deleted from `stdlib_env` and
+  the import-module list (`type_system.ml`), the `cli.args` field-emit path and the
+  `Tesl.Cli`→`tesl/cli.rkt` mapping deleted from `emit_racket.ml`, and the runtime
+  `tesl/cli.rkt` + `tesl-cli-args`/`tesl-lookup-port-argument` (`runtime.rkt`)
+  removed. Both `import Tesl.Cli` ("unknown stdlib module `Tesl.Cli`") and a bare
+  `cli.args` ("unknown name: cli") are now compile-time errors — the former
+  typecheck-but-unbound-at-runtime drift is gone. `todo-api` migrated to
+  env-var port resolution (`TESL_TODO_API_PORT`, then `PORT`, then default 8086);
+  `.rkt` regenerated. See `roadmap/completed/review_2026_07_closed_items.md`.
 
 
 ## Tests

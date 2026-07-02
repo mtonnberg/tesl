@@ -415,6 +415,27 @@ fn same(a: Point, b: Point) -> Bool =
   a == b
 |}
 
+(* ── DRIFT-1: the Tesl.Cli module was removed (config is env-vars-only) ──────
+   Both an explicit `import Tesl.Cli` and a bare `cli.args` must now be
+   COMPILE-TIME errors (they were the checker↔runtime name-resolution drift:
+   typecheck-clean but unbound at runtime). *)
+let test_R75_DRIFT1_import_cli_rejected () =
+  should_fail "unknown stdlib module" {|
+#lang tesl
+module Drift1Import exposing [f]
+import Tesl.Prelude exposing [Int]
+import Tesl.Cli exposing [lookupPortArgument]
+fn f() -> Int = 1
+|}
+
+let test_R75_DRIFT1_bare_cli_args_rejected () =
+  should_fail "unknown name: cli" {|
+#lang tesl
+module Drift1Bare exposing [f]
+import Tesl.Prelude exposing [List, String]
+fn f() -> List String = cli.args
+|}
+
 let () =
   run "Review75-ReviewFixes" [
     "eq-nominal-fields", [
@@ -453,5 +474,9 @@ let () =
     "auth-via-validation", [
       test_case "R75_AV01 auth via undeclared rejected" `Quick test_R75_AV01_auth_via_undeclared_rejected;
       test_case "R75_AV02 auth via legit accepted" `Quick test_R75_AV02_auth_via_legit_accepted;
+    ];
+    "drift1-cli-removed", [
+      test_case "R75_DRIFT1 import Tesl.Cli rejected" `Quick test_R75_DRIFT1_import_cli_rejected;
+      test_case "R75_DRIFT1 bare cli.args rejected" `Quick test_R75_DRIFT1_bare_cli_args_rejected;
     ];
   ]

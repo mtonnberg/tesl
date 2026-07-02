@@ -318,8 +318,6 @@
     (cons "Conversation"        "type Conversation\n\nMulti-turn agent conversation state. Advance with converse; persist with conversationJson / conversationFrom.")
     (cons "ConversationTurn"    "type ConversationTurn\n\nOne conversation turn: the reply (turnReply) plus the advanced conversation (turnConversation).")
     (cons "aiProvider"          "capability aiProvider implies httpClient\n\nThe AI boundary capability: every inference call (ask / askReply / askWith / askFor / converse / agentRun) requires it. Implies httpClient because real providers perform outbound HTTP.")
-    ;; Tesl.Cli
-    (cons "lookupPortArgument"  "fn lookupPortArgument(args: List String) -> Maybe String")
     ;; Fact operations (Tesl.Prelude)
     (cons "attachFact"          "fn attachFact(value: a, fact: Fact p) -> a ::: p")
     (cons "detachFact"          "fn detachFact(value: a ::: p) -> Fact p")

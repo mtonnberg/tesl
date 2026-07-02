@@ -743,7 +743,6 @@ import Tesl.Env exposing [env, envInt]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.String exposing [String.startsWith]
 import Tesl.Telemetry exposing [telemetry, initTelemetry]
-import Tesl.Cli exposing [cli.args]
 import Tesl.Agent exposing [aiProvider, agentReply, ask, AgentReply]
 
 -- Capabilities: the agent may read orders and issue refunds — and nothing more.
