@@ -456,24 +456,67 @@ type api_capture = {
   inline_check : string option;   (** optional `via <check>` of the inline form (mints a proof) *)
 }
 
-type api_endpoint = {
-  name           : string;   (** derived from the handler name *)
-  method_        : http_method;
-  path           : string;
-  auth           : api_auth option;
+(* S6a/C11: an endpoint is either an HTTP request/response endpoint OR an SSE
+   stream. The HTTP-only fields (body, response, return spec) live in [http_clause]
+   and the SSE-only channel list in [sse_clause], so an SSE endpoint STRUCTURALLY
+   cannot hold a body/response/return — the unsound combination the validator used
+   to reject is now unrepresentable. Common fields stay on [api_endpoint]. *)
+type http_clause = {
   body           : binding option;
   body_wire_type : string option;
   body_decoder   : string option;
   body_via       : string option;
   response_wire_type : string option;
   response_encoder   : string option;
-  captures       : api_capture list;
   return_spec    : return_spec;
-  subscribes     : string list;
-  loc            : loc;
   has_explicit_return    : bool;  (** true iff `->` was written in source *)
   has_clause_after_return : bool; (** true iff an endpoint clause appears after `->` *)
 }
+
+type sse_clause = {
+  subscribes : string list;       (** the channel(s) an SSE endpoint streams *)
+  (** S6a: an SSE endpoint may NOT declare body/response/return clauses. The parser
+      records which such clauses were WRITTEN (breadcrumbs only — never the body/
+      response VALUES, so emit still cannot use them) so validation rejects them
+      with a clear message rather than silently dropping. *)
+  illegal_clauses : string list;
+}
+
+type endpoint_kind =
+  | Http of http_clause
+  | Sse  of sse_clause
+
+type api_endpoint = {
+  name           : string;   (** derived from the handler name *)
+  method_        : http_method;   (** never [SSE] when [kind] is [Http] *)
+  path           : string;
+  auth           : api_auth option;
+  captures       : api_capture list;
+  loc            : loc;
+  kind           : endpoint_kind;
+}
+
+(* S6a accessors — read a per-clause field with an SSE-safe default, so consumers
+   that treated the old flat record uniformly stay concise. An SSE endpoint has no
+   body/response/return (structurally); those default to None/[]/false here. *)
+let ep_body ep = match ep.kind with Http h -> h.body | Sse _ -> None
+let ep_body_wire_type ep = match ep.kind with Http h -> h.body_wire_type | Sse _ -> None
+let ep_body_decoder ep = match ep.kind with Http h -> h.body_decoder | Sse _ -> None
+let ep_body_via ep = match ep.kind with Http h -> h.body_via | Sse _ -> None
+let ep_response_wire_type ep = match ep.kind with Http h -> h.response_wire_type | Sse _ -> None
+let ep_response_encoder ep = match ep.kind with Http h -> h.response_encoder | Sse _ -> None
+let ep_has_explicit_return ep = match ep.kind with Http h -> h.has_explicit_return | Sse _ -> false
+let ep_has_clause_after_return ep = match ep.kind with Http h -> h.has_clause_after_return | Sse _ -> false
+let ep_subscribes ep = match ep.kind with Sse s -> s.subscribes | Http _ -> []
+(** Illegal clauses an SSE endpoint declared (body/response/return); [] for HTTP. *)
+let ep_sse_illegal_clauses ep = match ep.kind with Sse s -> s.illegal_clauses | Http _ -> []
+(** The return spec of an HTTP endpoint; [None] for SSE (which has no response). *)
+let ep_return_spec_opt ep = match ep.kind with Http h -> Some h.return_spec | Sse _ -> None
+(** Return spec with an SSE default of [RetPlain Unit] (SSE had that default before
+    S6a, so consumers stay byte-exact). *)
+let ep_return_spec ep = match ep.kind with
+  | Http h -> h.return_spec
+  | Sse _ -> RetPlain { ty = TName { name = "Unit"; loc = ep.loc }; loc = ep.loc }
 
 type api_form = {
   name      : string;

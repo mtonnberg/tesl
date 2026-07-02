@@ -818,7 +818,7 @@ let definition_in_top_decl env line col (decl : Ast.top_decl) =
       | Some _ as result -> result
       | None ->
         let body_result =
-          match endpoint.body with
+          match (ep_body endpoint) with
           | Some binding -> definition_in_binding env line col binding
           | None -> None
         in
@@ -830,7 +830,7 @@ let definition_in_top_decl env line col (decl : Ast.top_decl) =
           in
           match capture_result with
           | Some _ as result -> result
-          | None -> definition_in_return_spec env line col endpoint.return_spec
+          | None -> definition_in_return_spec env line col (ep_return_spec endpoint)
     ) api.endpoints
   | Ast.DTest test ->
     definition_in_test_stmts env [] line col test.stmts
@@ -1336,7 +1336,7 @@ let resolve_symbol_in_top_decl env line col (decl : Ast.top_decl) =
        | Some _ as result -> result
        | None ->
          let body_result =
-           match endpoint.body with
+           match (ep_body endpoint) with
            | Some binding -> resolve_symbol_in_binding env line col binding
            | None -> None
          in
@@ -1348,7 +1348,7 @@ let resolve_symbol_in_top_decl env line col (decl : Ast.top_decl) =
            in
            match capture_result with
            | Some _ as result -> result
-           | None -> resolve_symbol_in_return_spec env line col endpoint.return_spec
+           | None -> resolve_symbol_in_return_spec env line col (ep_return_spec endpoint)
      ) api.endpoints with
      | Some _ as result -> result
      | None -> let name_loc = precise_name_loc api.loc api.name in if loc_contains_position name_loc line col then Some (term_symbol api.name name_loc) else None)
@@ -1698,9 +1698,9 @@ let rec collect_occurrences_in_top_decl env target (decl : Ast.top_decl) =
     (if symbol_equal (term_symbol api.name name_loc) target then [name_loc] else [])
     @ List.concat_map (fun (endpoint : Ast.api_endpoint) ->
          (match endpoint.auth with Some auth -> collect_occurrences_in_binding env target auth.binding | None -> [])
-         @ (match endpoint.body with Some binding -> collect_occurrences_in_binding env target binding | None -> [])
+         @ (match (ep_body endpoint) with Some binding -> collect_occurrences_in_binding env target binding | None -> [])
          @ List.concat_map (fun (capture : Ast.api_capture) -> collect_occurrences_in_binding env target capture.binding) endpoint.captures
-         @ collect_occurrences_in_return_spec env target endpoint.return_spec
+         @ collect_occurrences_in_return_spec env target (ep_return_spec endpoint)
       ) api.endpoints
   | Ast.DTest test -> collect_occurrences_in_test_stmts env [] target test.stmts
   | Ast.DApiTest test ->

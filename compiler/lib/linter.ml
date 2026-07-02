@@ -635,13 +635,13 @@ let collect_decl_names acc (d : Ast.top_decl) =
       let a = List.fold_left (fun a (cap : Ast.api_capture) ->
         collect_binding_names (cap.via_fn :: a) cap.binding
       ) a ep.captures in
-      let a = match ep.body with Some b -> collect_binding_names a b | None -> a in
-      let a = match ep.body_wire_type with Some t -> t :: a | None -> a in
-      let a = match ep.body_via with Some v -> v :: a | None -> a in
-      let a = match ep.body_decoder with Some c -> c :: a | None -> a in
-      let a = match ep.response_wire_type with Some t -> t :: a | None -> a in
-      let a = match ep.response_encoder with Some c -> c :: a | None -> a in
-      collect_return_spec_names a ep.return_spec
+      let a = match (Ast.ep_body ep) with Some b -> collect_binding_names a b | None -> a in
+      let a = match (Ast.ep_body_wire_type ep) with Some t -> t :: a | None -> a in
+      let a = match (Ast.ep_body_via ep) with Some v -> v :: a | None -> a in
+      let a = match (Ast.ep_body_decoder ep) with Some c -> c :: a | None -> a in
+      let a = match (Ast.ep_response_wire_type ep) with Some t -> t :: a | None -> a in
+      let a = match (Ast.ep_response_encoder ep) with Some c -> c :: a | None -> a in
+      collect_return_spec_names a (Ast.ep_return_spec ep)
     ) acc af.endpoints
   | DCapture cf ->
     let acc = match cf.checker with Some c -> c :: acc | None -> acc in
@@ -1278,10 +1278,10 @@ let lint_int_at_wire filename (source : string) (out : lint_diag list ref) =
     List.iter (function
       | Ast.DApi api ->
         List.iter (fun (ep : Ast.api_endpoint) ->
-          (match ep.body with Some b -> check b.type_expr "an API request body" | None -> ());
+          (match (Ast.ep_body ep) with Some b -> check b.type_expr "an API request body" | None -> ());
           List.iter (fun (c : Ast.api_capture) ->
             check c.binding.type_expr "an API capture") ep.captures;
-          (match ep.return_spec with
+          (match (Ast.ep_return_spec ep) with
            | Ast.RetPlain { ty; _ } -> check ty "an API return type"
            | Ast.RetAttached { binding; _ } -> check binding.type_expr "an API return type"
            | Ast.RetNamedPack { ty; _ } -> check ty "an API return type"

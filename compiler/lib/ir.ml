@@ -230,17 +230,22 @@ let ir_endpoint_of_api_endpoint (ep : api_endpoint) : ir_endpoint =
     ire_path = ep.path;
     ire_auth = Option.map (fun (auth : api_auth) -> ir_binding_of_binding ~via:auth.via_fn auth.binding) ep.auth;
     ire_auth_via = Option.map (fun (auth : api_auth) -> auth.via_fn) ep.auth;
-    ire_body = Option.map (fun body -> ir_binding_of_binding ?via:ep.body_via ?codec:ep.body_decoder body) ep.body;
-    ire_body_wire_type = ep.body_wire_type;
-    ire_body_decoder = ep.body_decoder;
-    ire_body_via = ep.body_via;
-    ire_response_wire_type = ep.response_wire_type;
-    ire_response_encoder = ep.response_encoder;
+    ire_body = Option.map (fun body -> ir_binding_of_binding ?via:(ep_body_via ep) ?codec:(ep_body_decoder ep) body) (ep_body ep);
+    ire_body_wire_type = ep_body_wire_type ep;
+    ire_body_decoder = ep_body_decoder ep;
+    ire_body_via = ep_body_via ep;
+    ire_response_wire_type = ep_response_wire_type ep;
+    ire_response_encoder = ep_response_encoder ep;
     ire_captures = List.map (fun (capture : api_capture) ->
       { irc_binding = ir_binding_of_binding ~via:capture.via_fn capture.binding; irc_via_fn = capture.via_fn }
     ) ep.captures;
-    ire_return = ir_return_of_return_spec ep.return_spec;
-    ire_subscribes = ep.subscribes;
+    (* SSE has no return spec; it defaulted to `RetPlain Unit` before S6a, so keep
+       that IR shape for a byte-exact export. *)
+    ire_return = ir_return_of_return_spec
+      (match ep_return_spec_opt ep with
+       | Some rs -> rs
+       | None -> RetPlain { ty = TName { name = "Unit"; loc = ep.loc }; loc = ep.loc });
+    ire_subscribes = ep_subscribes ep;
     ire_loc = ep.loc;
   }
 
@@ -860,24 +865,24 @@ let endpoint_json ~(codec_names : string list) (ep : api_endpoint) =
     | Some auth -> binding_json ~via:auth.via_fn auth.binding
   in
   let inferred_body_codec =
-    match ep.body with
+    match (ep_body ep) with
     | Some body ->
       let ty = type_expr_to_text body.type_expr in
       if List.mem ty codec_names then Some ty else Some ty
     | None -> None
   in
   let body_codec =
-    match ep.body_via with
+    match (ep_body_via ep) with
     | Some c -> Some c
     | None ->
-      (match ep.body_decoder with
+      (match (ep_body_decoder ep) with
        | Some c -> Some c
        | None -> inferred_body_codec)
   in
   let body_json =
-    match ep.body with
+    match (ep_body ep) with
     | None -> json_null
-    | Some body -> binding_json ?codec:body_codec ?via:ep.body_via body
+    | Some body -> binding_json ?codec:body_codec ?via:(ep_body_via ep) body
   in
   json_object [
     json_field "name" (json_string ep.name);
@@ -886,8 +891,8 @@ let endpoint_json ~(codec_names : string list) (ep : api_endpoint) =
     json_field "auth" auth_json;
     json_field "captures" (json_array (List.map (fun c -> binding_json ~via:c.via_fn c.binding) ep.captures));
     json_field "body" body_json;
-    json_field "response" (response_json ep.return_spec);
-    json_field "semantic_return" (semantic_return_json ep.return_spec);
+    json_field "response" (response_json (ep_return_spec ep));
+    json_field "semantic_return" (semantic_return_json (ep_return_spec ep));
   ]
 
 let module_to_json ~(source_name : string) (m : module_form) =

@@ -3341,11 +3341,13 @@ let check_type_names_in_scope (m : module_form) : type_error list =
       ) t.stmts
     | DApi af ->
       List.concat_map (fun (ep : api_endpoint) ->
-        (* Skip return-spec check when no explicit `->` was written (default Unit) *)
-        (if ep.has_explicit_return then check_rs ep.return_spec else [])
+        (* Skip return-spec check when no explicit `->` was written (default Unit),
+           and for SSE (no return spec at all). *)
+        (match ep_return_spec_opt ep with
+         | Some rs when ep_has_explicit_return ep -> check_rs rs | _ -> [])
         @ (match ep.auth with Some a -> check_te a.binding.type_expr | None -> [])
         @ List.concat_map (fun (c : api_capture) -> check_te c.binding.type_expr) ep.captures
-        @ (match ep.body with Some b -> check_te b.type_expr | None -> [])
+        @ (match ep_body ep with Some b -> check_te b.type_expr | None -> [])
       ) af.endpoints
     | DFact ff ->
       List.concat_map (fun (b : binding) -> check_te b.type_expr) ff.params
@@ -4031,7 +4033,7 @@ let check_api_decl_types ctx (m : module_form) =
       List.iter (fun (ep : api_endpoint) ->
         (match ep.auth with Some a -> check_binding a.binding | None -> ());
         List.iter (fun (c : api_capture) -> check_binding c.binding) ep.captures;
-        (match ep.body with Some b -> check_binding b | None -> ())
+        (match (ep_body ep) with Some b -> check_binding b | None -> ())
       ) af.endpoints
     | _ -> ()
   ) m.decls

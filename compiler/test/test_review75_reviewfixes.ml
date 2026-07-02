@@ -522,6 +522,29 @@ fn narrow(n: Int) -> Maybe Int32 = Int32.fromInt n
 fn widen(x: Int32) -> Int = Int32.toInt x
 |}
 
+(* ── S6a: an SSE endpoint cannot hold a body/response/return. It's structurally
+   unrepresentable (sse_clause has no such fields); a written clause is REJECTED,
+   never silently dropped. A valid SSE (subscribe only) still compiles. *)
+let test_R75_S6A_sse_with_body_rejected () =
+  should_fail "an SSE endpoint cannot declare" {|
+#lang tesl
+module S6aBad exposing [EvApi]
+import Tesl.Prelude exposing [String]
+api EvApi {
+  sse "/events/:userId" capture userId: String body payload: String -> String
+}
+|}
+
+let test_R75_S6A_valid_sse_accepted () =
+  should_pass {|
+#lang tesl
+module S6aOk exposing [EvApi]
+import Tesl.Prelude exposing [String]
+api EvApi {
+  sse "/events/:userId" capture userId: String subscribe UserEvents(userId)
+}
+|}
+
 let () =
   run "Review75-ReviewFixes" [
     "eq-nominal-fields", [
@@ -576,5 +599,9 @@ let () =
     "nt07-int32", [
       test_case "R75_NT07 Int not usable as Int32" `Quick test_R75_NT07_int_not_int32_rejected;
       test_case "R75_NT07 Int32 conversions accepted" `Quick test_R75_NT07_int32_conversions_accepted;
+    ];
+    "s6a-endpoint-sum-type", [
+      test_case "R75_S6A SSE with body rejected" `Quick test_R75_S6A_sse_with_body_rejected;
+      test_case "R75_S6A valid SSE accepted" `Quick test_R75_S6A_valid_sse_accepted;
     ];
   ]

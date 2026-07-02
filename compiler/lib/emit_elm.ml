@@ -924,9 +924,9 @@ let decl_uses_proofs = function
   | DApi api ->
     List.exists (fun (ep : api_endpoint) ->
       option_exists (fun (a : api_auth) -> a.binding.proof_ann <> None) ep.auth
-      || option_exists (fun (b : binding) -> b.proof_ann <> None) ep.body
+      || option_exists (fun (b : binding) -> b.proof_ann <> None) (ep_body ep)
       || List.exists (fun (c : api_capture) -> c.binding.proof_ann <> None) ep.captures
-      || return_has_proof ep.return_spec
+      || return_has_proof (ep_return_spec ep)
     ) api.endpoints
   | _ -> false
 

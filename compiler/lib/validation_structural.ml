@@ -461,7 +461,7 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
         let ep_id = Printf.sprintf "`%s \"%s\"`" (method_str ep.method_) ep.path in
 
         (* Clause(s) appeared after `->` — they were silently ignored by the parser *)
-        if ep.has_clause_after_return then
+        if (ep_has_clause_after_return ep) then
           add_hint
             "move all `auth`, `body`, `capture`, `response`, and `subscribe` \
              clauses to before the `->` return type"
@@ -471,7 +471,7 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
               ep_id);
 
         (* Missing `->` return type (SSE endpoints are exempt: they stream events, no response type) *)
-        if not ep.has_explicit_return && ep.method_ <> SSE then
+        if not (ep_has_explicit_return ep) && ep.method_ <> SSE then
           add_hint
             "add `-> ReturnType` at the end of the endpoint, \
              e.g. `-> String` or `-> MyResponseRecord`"
@@ -537,7 +537,7 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
            never an implicit drop).  Corpus-safe: every real SSE endpoint
            declares exactly one channel and no body/return. *)
         if ep.method_ = SSE then begin
-          (match ep.subscribes with
+          (match (ep_subscribes ep) with
            | _ :: _ :: _ ->
              (* An SSE endpoint streams ONE channel BY DESIGN — this is not a
                 code-gen limitation.  Multiple independent channels are expressed
@@ -554,18 +554,28 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
                  "endpoint %s: an `sse` endpoint declares exactly one `subscribe` \
                   channel, but %d were given — split the extra channels into \
                   separate `sse` endpoints"
-                 ep_id (List.length ep.subscribes))
+                 ep_id (List.length (ep_subscribes ep)))
            | _ -> ());
-          (match ep.body with
-           | Some _ ->
-             add_hint
-               "remove the `body` clause — an SSE endpoint streams server \
-                events and does not decode a request body"
-               (Printf.sprintf
-                 "endpoint %s: an SSE endpoint cannot declare a `body` clause \
-                  (it would be silently dropped by code generation)" ep_id)
-           | None -> ());
-          if ep.has_explicit_return then
+          (* S6a: an SSE endpoint STRUCTURALLY cannot hold a body/response/return
+             (they're not fields of [sse_clause]); the parser records which such
+             clauses were written so we still reject them here rather than dropping
+             them silently. Same messages as before the refactor. *)
+          let illegal = ep_sse_illegal_clauses ep in
+          if List.mem "body" illegal then
+            add_hint
+              "remove the `body` clause — an SSE endpoint streams server \
+               events and does not decode a request body"
+              (Printf.sprintf
+                "endpoint %s: an SSE endpoint cannot declare a `body` clause \
+                 (it would be silently dropped by code generation)" ep_id);
+          if List.mem "response" illegal then
+            add_hint
+              "remove the `response` clause — an SSE endpoint streams events \
+               and has no single response type"
+              (Printf.sprintf
+                "endpoint %s: an SSE endpoint cannot declare a `response` clause \
+                 (it would be silently dropped by code generation)" ep_id);
+          if List.mem "-> ReturnType" illegal then
             add_hint
               "remove the `-> ReturnType` — an SSE endpoint streams events and \
                has no single response type"
@@ -1154,12 +1164,14 @@ let check_server_handler_binding
     (* Return type compatibility check: handler return type must match endpoint declaration *)
     (match endpoint_opt with
      | None -> ()
-     | Some ep when ep.has_explicit_return ->
+     | Some ep when (ep_has_explicit_return ep) ->
        let handler_return = match hdl with
          | LocalHandler fd -> return_value_type fd.return_spec
          | ImportedHandler info -> return_value_type info.fi_return
        in
-       let endpoint_return = return_value_type ep.return_spec in
+       let endpoint_return = match ep_return_spec_opt ep with
+         | Some rs -> return_value_type rs
+         | None -> return_value_type (RetPlain { ty = TName { name = "Unit"; loc = ep.loc }; loc = ep.loc }) in
        let handler_loc = match hdl with
          | LocalHandler fd -> fd.loc
          | ImportedHandler info -> info.fi_loc
@@ -1199,13 +1211,13 @@ let check_server_handler_binding
        implicit-body handlers.  SSE endpoints stream via subscribe channels (no
        body/response), so they are skipped. *)
     (match endpoint_opt with
-     | Some ep when ep.method_ <> SSE && ep.subscribes = [] ->
+     | Some ep when ep.method_ <> SSE && (ep_subscribes ep) = [] ->
        let handler_params = match hdl with
          | LocalHandler fd -> fd.params | ImportedHandler info -> info.fi_params in
        let handler_loc = match hdl with
          | LocalHandler fd -> fd.loc | ImportedHandler info -> info.fi_loc in
        let n_auth = if ep.auth <> None then 1 else 0 in
-       let n_explicit_body = if ep.body <> None then 1 else 0 in
+       let n_explicit_body = if (ep_body ep) <> None then 1 else 0 in
        let n_cap = List.length ep.captures in
        let is_get = ep.method_ = GET in
        let lo = n_auth + n_cap + n_explicit_body in
@@ -1381,7 +1393,7 @@ let check_server_handler_binding
            ) ep.captures
          in
          let from_body =
-           match ep.body with
+           match (ep_body ep) with
            | Some b when b.name = param_name ->
              (match b.proof_ann with Some p -> proof_predicates p | None -> [])
            | _ -> []
@@ -1391,7 +1403,7 @@ let check_server_handler_binding
        (* A capture or body binding with the same name exists at all? *)
        let has_named_source (param_name : string) : bool =
          List.exists (fun (c : api_capture) -> c.binding.name = param_name) ep.captures
-         || (match ep.body with Some b -> b.name = param_name | None -> false)
+         || (match (ep_body ep) with Some b -> b.name = param_name | None -> false)
        in
        List.iter (fun (p : binding) ->
          match p.proof_ann with

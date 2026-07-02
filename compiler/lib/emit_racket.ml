@@ -5056,7 +5056,7 @@ let emit_sse_route ctx (ep : api_endpoint) =
    | Some auth -> emit ctx auth.via_fn
    | None -> emit ctx "#f");
   emit ctx " ";
-  (match ep.subscribes with
+  (match (ep_subscribes ep) with
    | channel_name :: _ -> emit ctx channel_name
    | [] -> emit ctx "#f");
   (* CONC-1: 4th element — the channel-key validator (or #f). *)
@@ -5127,7 +5127,7 @@ let rec emit_api ctx ?(server_name="") ?(server_bindings=[]) (api : api_form) =
         emit ctx (Printf.sprintf "
     %S" part)
     ) path_parts;
-    (match ep.body with
+    (match (ep_body ep) with
      | Some b ->
        emit ctx "
     :> (ReqBody JSON [";
@@ -5151,25 +5151,25 @@ let rec emit_api ctx ?(server_name="") ?(server_bindings=[]) (api : api_form) =
         | Some wire_ty ->
           emit ctx " #:wire ";
           emit_type_name ctx wire_ty;
-          (match ep.body_via with
+          (match (ep_body_via ep) with
            | Some via_fn -> emit ctx (Printf.sprintf " #:decoder %s" via_fn)
            | None ->
-             match ep.body_decoder with
+             match (ep_body_decoder ep) with
              | Some decoder -> emit ctx (Printf.sprintf " #:decoder %s" decoder)
              | None -> ())
         | None ->
           (* Also handle body_wire_type set directly *)
-          (match ep.body_wire_type with
+          (match (ep_body_wire_type ep) with
            | Some wire ->
              emit ctx (Printf.sprintf " #:wire %s" wire);
-             (match ep.body_decoder with
+             (match (ep_body_decoder ep) with
               | Some decoder -> emit ctx (Printf.sprintf " #:decoder %s" decoder)
               | None -> ())
            | None -> ()));
        emit ctx ")"
      | None -> ());
     (* Emit Response spec if there's a wire response type or response encoder *)
-    (match ep.response_wire_type, ep.response_encoder with
+    (match (ep_response_wire_type ep), (ep_response_encoder ep) with
      | Some wire_type, encoder_opt ->
        emit ctx "
     :> (Response JSON ";
@@ -5182,7 +5182,7 @@ let rec emit_api ctx ?(server_name="") ?(server_bindings=[]) (api : api_form) =
        (* Response encoder without separate wire type *)
        emit ctx "
     :> (Response JSON ";
-       emit_return_spec_type ctx ep.return_spec;
+       emit_return_spec_type ctx (ep_return_spec ep);
        emit ctx (Printf.sprintf " #:encoder %s)" enc)
      | None, None -> ());
     let method_str = match ep.method_ with
@@ -5195,7 +5195,7 @@ let rec emit_api ctx ?(server_name="") ?(server_bindings=[]) (api : api_form) =
     :> (";
     emit ctx method_str;
     emit ctx " JSON ";
-    emit_return_spec_type ctx ep.return_spec;
+    emit_return_spec_type ctx (ep_return_spec ep);
     emit_line ctx ")";
     emit_line ctx "    ]"
   ) http_endpoints;

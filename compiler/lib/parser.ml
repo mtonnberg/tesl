@@ -3960,16 +3960,32 @@ let parse_api_form s =
             )
           done;
           let ep_loc = span ep_loc0 (current_loc s) in
+          (* S6a: SSE endpoints stream a channel and cannot hold a body/response;
+             everything else is an HTTP request/response endpoint. For SSE we do NOT
+             carry any body/response/return VALUE (so emit can never use one), but we
+             record which such clauses were written so validation can reject them
+             with a clear message instead of silently dropping them. *)
+          let kind =
+            if method_ = SSE then
+              let illegal_clauses =
+                (if !body <> None then ["body"] else [])
+                @ (if !resp_wire <> None || !resp_enc <> None then ["response"] else [])
+                @ (if !return_seen then ["-> ReturnType"] else [])
+              in
+              Sse { subscribes = !subscribes; illegal_clauses }
+            else Http {
+              body = !body;
+              body_wire_type = !body_wire; body_decoder = !body_dec;
+              body_via = !body_via_; response_wire_type = !resp_wire;
+              response_encoder = !resp_enc;
+              return_spec = !return_spec;
+              has_explicit_return = !return_seen;
+              has_clause_after_return = !clause_after_return;
+            }
+          in
           let ep = {
             name = Printf.sprintf "endpoint_%d" !ep_counter;
-            method_; path; auth = !auth; body = !body;
-            body_wire_type = !body_wire; body_decoder = !body_dec;
-            body_via = !body_via_; response_wire_type = !resp_wire;
-            response_encoder = !resp_enc;
-            captures = !captures; return_spec = !return_spec;
-            subscribes = !subscribes; loc = ep_loc;
-            has_explicit_return = !return_seen;
-            has_clause_after_return = !clause_after_return;
+            method_; path; auth = !auth; captures = !captures; loc = ep_loc; kind;
           } in
           endpoints := ep :: !endpoints
     end;
