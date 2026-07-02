@@ -23,12 +23,12 @@ verified pass — a rushed change would risk false-positives/regressions and wor
    maintainer decision; a blunt fail-closed guard over-rejects valid generic code).
 
 ### Moderate — additive checks needing careful false-positive verification
-1. **CAP-UUID** — `uuid` uncharged statically; **currently masked** by a separate
-   `unit -> T` parse/type bug that makes `UUID.v4/v7` uncallable (fix together).
-2. **DRIFT-1 — DONE (2026-07-02):** the whole `Tesl.Cli` module was removed (config
-   is env-vars-only); `import Tesl.Cli` and bare `cli.args` are now compile-time
-   errors, closing the typecheck-but-unbound-at-runtime drift. `todo-api` migrated
-   to env-var port resolution. See `roadmap/completed/review_2026_07_closed_items.md`.
-3. **VER-PROP** — a `where`-guarded `property` passes vacuously; add a
-   min-effective-iterations floor in the `property` emit (touches every property
-   test's emitted loop — needs a runtime test pass).
+1. ~~**CAP-UUID** — `uuid` uncharged statically; **currently masked** by a separate~~
+   ~~`unit -> T` parse/type bug that makes `UUID.v4/v7` uncallable (fix together).~~
+   Completed
+2. ~~**DRIFT-1 — DONE (2026-07-02):** the whole `Tesl.Cli` module was removed (config~~
+   ~~is env-vars-only); `import Tesl.Cli` and bare `cli.args` are now compile-time~~
+   ~~errors, closing the typecheck-but-unbound-at-runtime drift. `todo-api` migrated~~
+   ~~to env-var port resolution. See `roadmap/completed/review_2026_07_closed_items.md`.~~
+   completed
+

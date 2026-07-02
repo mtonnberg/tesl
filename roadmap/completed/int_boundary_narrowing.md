@@ -120,7 +120,7 @@ identifiers resolved via the type environment, like `Int`/`String`). Touchpoints
 - Linter: `Int` in return / request body / capture / SSE / codec-field → warning; `Int32` there → no
   warning.
 
-## Status (2026-07-02) — soundness DELIVERED; one compile-time refinement remains
+## Status (2026-07-02) — COMPLETED (soundness DELIVERED, gate-green)
 
 The silent-truncation hole is CLOSED and every piece below is gate-green (all 11
 phases, incl. the live-PG aggregate):
@@ -142,11 +142,11 @@ phases, incl. the live-PG aggregate):
 - **Bare construction is width-checked**: `Widget { count: <Int> }` where `count: Int32`
   is a compile error ("cannot unify Int with Int32").
 
-**Remaining refinement:** the compile-time width-match at the `insert`/`update`/`set`
-SQL forms specifically (their record arg parses as `EConstructor name [bare ERecord]`,
-bypassing the typed-record field-check that already guards bare construction). This is
-DEFENSE-IN-DEPTH over the loud runtime failure — an out-of-range `Int` written to an
-`int4` column is rejected by Postgres (no *silent* truncation), so soundness holds; the
-refinement only moves that to compile time. A correct fix threads the entity field
-types through the insert/update handler's record arg. Further widths (`Int64`/`Int16`)
-and a large-`Int` string/BigNumber wire codec remain in-file follow-ons.
+**Split-out follow-ons (not required for soundness):** the non-fixed parts were moved to
+a focused item — `roadmap/next/int_boundary_width_followons.md`:
+1. compile-time width-match at the `insert`/`update`/`set` SQL forms (defense-in-depth
+   over the loud Postgres write-time rejection, which already prevents *silent*
+   truncation — soundness holds without it);
+2. additive nominal widths (`Int64`/`Int16`);
+3. a large-`Int` string/BigNumber wire codec (the W091 linter already steers off the
+   silent-loss footgun).
