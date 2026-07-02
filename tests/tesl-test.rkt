@@ -605,7 +605,9 @@
     "defaultExamplePort = 8086\n"
     "fn mainPort() -> Int =\n"
     "  defaultExamplePort\n")))
-(check-true (regexp-match? #rx"expected .module. or .library." missing-module-error))
+;; The `library` keyword was removed (config/reuse is module-only now), so the
+;; parse error names only `module`.
+(check-true (regexp-match? #rx"expected .module." missing-module-error))
 
 (define binder-reuse-error
   (compile-tesl-error
