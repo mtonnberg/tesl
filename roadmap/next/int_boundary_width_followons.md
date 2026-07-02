@@ -1,6 +1,6 @@
 # Int boundary — remaining width-match + additive widths (NT-07 follow-ons)
 
-**Status:** OPEN · **Effort:** compile-time width-match S–M; additive widths + wire codec M
+**Status:** OPEN · **Effort:** compile-time width-match S–M
 · **Split from** `roadmap/completed/int_boundary_narrowing.md` (NT-07). The soundness hole
 (silent Int truncation at storage/wire boundaries) is **CLOSED and gate-green** in that item;
 this file tracks only the parts that were **not** implemented there. None is required for
