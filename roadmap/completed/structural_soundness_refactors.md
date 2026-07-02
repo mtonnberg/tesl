@@ -1,9 +1,10 @@
-# Structural soundness refactor — S6a (S5b is DONE, see below)
+# Structural soundness refactors — S6a + S5b — BOTH DONE (2026-07-02)
 
-> **S5b landed 2026-07-02** (gensyms hyphenated, reserved-name machinery deleted).
-> **S6a remains** — a structural **upgrade**, not an open soundness hole (the current
-> rejection-based validation already rejects the unsound SSE-with-body case).
-> A parallel attempt confirmed **S6a is feasible and byte-exact zero-emitted-diff**
+> **S5b landed** (gensyms hyphenated, reserved-name machinery deleted) and **S6a
+> landed** (endpoint clause sum-type; SSE cannot hold a body/response by
+> construction). Both are structural **upgrades** of already-sound rejections;
+> both are byte-exact and gate-green. Details below.
+> A parallel attempt had confirmed **S6a is feasible and byte-exact zero-emitted-diff**
 > (binary `endpoint_clause = Http of http_clause | Sse of sse_clause`; SSE cannot
 > hold body/response/return by construction; consumed via non-`_` matches across
 > parser/ir/checker/validation_structural/emit_racket/emit_elm/linter/compile), but
@@ -27,24 +28,29 @@ a construction that makes the unsound state unrepresentable.
 
 ---
 
-## S6a / C11 — routes via an exhaustive clause sum-type
+## S6a / C11 — DONE (2026-07-02) — routes via an exhaustive clause sum-type
 
-*Closes generator class G3.* Review §8.1 (block-grammar proliferation).
+*Closed generator class G3.* Review §8.1 (block-grammar proliferation).
+
+Implemented as the **binary** split: `endpoint_kind = Http of http_clause | Sse of
+sse_clause`. `api_endpoint` keeps the common fields (name/method_/path/auth/captures/
+loc); the HTTP-only fields (body, body/response wire types + codecs, return_spec,
+has_explicit_return) live in `http_clause` and the channel list in `sse_clause`, so an
+SSE endpoint STRUCTURALLY cannot hold a body/response/return. SSE-safe accessors
+(`ep_body`/`ep_return_spec`/`ep_subscribes`/…) keep the ~consumers concise; the parser
+records which illegal clauses an SSE endpoint declared (breadcrumbs, never the values)
+so validation still rejects them with the same messages (no silent drop). Byte-exact:
+the exact-match `.rkt` snapshots are unchanged; corpus + dune test green; regression
+`R75_S6A`. (S6b — multi-channel SSE — was already reversed/done.)
+
+### Historical notes (kept for context)
 
 ### The problem
 
 HTTP and SSE endpoints share a route representation, so an SSE endpoint *can structurally
-hold* a body/response field even though it must not. Today the validation **rejects** the
-unsound combinations, but nothing at the type level prevents them from being constructed.
-
-### Fix approach
-
-Split HTTP/SSE into distinct endpoint variants (or a `clause` sum type) consumed via
-non-`_` matches, so an SSE endpoint structurally cannot hold a body/response. (S6b —
-multi-channel SSE — was reversed as redundant and is done.)
-
-There is an unsettled shape decision: a **ternary** split (SSE | GET | POST-etc) vs a
-**binary** split (SSE | HTTP). Settle this before the refactor.
+hold* a body/response field even though it must not. Before this change the validation
+**rejected** the unsound combinations, but nothing at the type level prevented them from
+being constructed.
 
 ### Effort
 
