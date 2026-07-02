@@ -302,6 +302,14 @@ let registry : entry list = [
     explanation = "A bare `print` skips the telemetry capability. Route logging \
        through the telemetry API so effects stay explicit.";
     manual = Some "best-practices" };
+  { code = "W091"; category = Lint;
+    title = "`Int` at a wire/serialized boundary may lose precision on JS clients";
+    explanation = "JavaScript numbers are exact only up to 2^53, so a large `Int` \
+       at an API request body, capture, or return type can silently lose precision \
+       crossing to a JS/TS/Elm client. Use `Int32` (JS-safe, < 2^31) for bounded \
+       values, or a string/BigNumber codec for genuinely large `Int`. Advisory: \
+       internal/compute `Int` use is unaffected.";
+    manual = Some "best-practices" };
 ]
 
 (* ── Lookup helpers ───────────────────────────────────────────────────────── *)

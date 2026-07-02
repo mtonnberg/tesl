@@ -198,8 +198,57 @@ fn requiresValid(n: Int ::: IsValid n) -> Int = n
 
 (* ── Test runner ─────────────────────────────────────────────────────────── *)
 
+(* ── W091 (NT-07) — `Int` at a wire/serialized boundary ─────────────────────── *)
+
+let should_lint_no_w091 src =
+  with_temp_file src (fun path ->
+    let _code, out = run_compiler ["--lint"; path] in
+    let found = ref false in
+    (try ignore (Str.search_forward (Str.regexp {|warning\[W091\]|}) out 0); found := true
+     with Not_found -> ());
+    if !found then failf "expected no W091, but got:\n%s" out)
+
+let test_W091P01_int_at_api_return () =
+  should_lint_warn "W091\\|Int.*wire\\|2\\^53" {|
+#lang tesl
+module W091P01 exposing [Api]
+import Tesl.Prelude exposing [Int]
+api Api {
+  get "/count" -> Int
+}
+|}
+
+let test_W091P02_int_codec_field () =
+  should_lint_warn "W091\\|codec-encoded" {|
+#lang tesl
+module W091P02 exposing [Item]
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Json exposing [stringCodec]
+record Item { name: String, count: Int }
+codec Item {
+  toJson_forbidden
+  fromJson [ { name <- "name" with_codec stringCodec } ]
+}
+|}
+
+let test_W091N01_int32_at_api_no_warn () =
+  should_lint_no_w091 {|
+#lang tesl
+module W091N01 exposing [Api]
+import Tesl.Prelude exposing [Int]
+import Tesl.Int32 exposing [Int32]
+api Api {
+  get "/count" -> Int32
+}
+|}
+
 let () =
   run "W080-Unexported-Signature-Types" [
+    "w091-int-at-wire", [
+      test_case "W091P01 Int at API return warns" `Quick test_W091P01_int_at_api_return;
+      test_case "W091P02 Int codec-encoded field warns" `Quick test_W091P02_int_codec_field;
+      test_case "W091N01 Int32 at API does not warn" `Quick test_W091N01_int32_at_api_no_warn;
+    ];
     "w080-positive", [
       test_case "W080P01 unexported record param warns" `Quick test_W080P01_unexported_record_param;
       test_case "W080P02 unexported record return warns" `Quick test_W080P02_unexported_record_return;

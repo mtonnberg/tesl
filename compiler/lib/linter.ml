@@ -1241,6 +1241,64 @@ let lint_bare_print filename (source : string) (out : lint_diag list ref) =
       | _ -> ()
     ) m.decls
 
+(** W091 (NT-07) — `Int` at a wire/serialized boundary can lose precision on a JS
+    client (JS Number is exact only to 2^53). Advisory warning at API request
+    bodies, captures, return types, and codec-encoded record fields; steer to
+    `Int32` (JS-safe) or a string/BigNumber codec. Internal `Int` use is untouched. *)
+let rec type_expr_int_loc (te : Ast.type_expr) : Location.loc option =
+  match te with
+  | Ast.TName { name = "Int"; loc } -> Some loc
+  | Ast.TName _ | Ast.TVar _ -> None
+  | Ast.TApp { head; arg; _ } ->
+    (match type_expr_int_loc head with Some l -> Some l | None -> type_expr_int_loc arg)
+  | Ast.TFun { dom; cod; _ } ->
+    (match type_expr_int_loc dom with Some l -> Some l | None -> type_expr_int_loc cod)
+  | Ast.TTuple { elems; _ } ->
+    List.fold_left
+      (fun acc e -> match acc with Some _ -> acc | None -> type_expr_int_loc e) None elems
+
+let lint_int_at_wire filename (source : string) (out : lint_diag list ref) =
+  match Parser.parse_module filename source with
+  | Err _ -> ()
+  | Ok m ->
+    let warn (loc : Location.loc) where =
+      out := { file = filename; line = loc.start.line; col = loc.start.col;
+               severity = "warning"; code = "W091";
+               message = Printf.sprintf
+                 "`Int` at %s: JavaScript numbers are exact only to 2^53, so a large \
+                  `Int` can lose precision crossing to a JS/TS/Elm client — use `Int32` \
+                  (JS-safe, < 2^31) for bounded values, or a string/BigNumber codec for \
+                  large `Int`" where;
+               fix = None } :: !out
+    in
+    let check te where = match type_expr_int_loc te with Some loc -> warn loc where | None -> () in
+    (* Records that have a codec: their fields are serialized to/from JSON. *)
+    let record_fields =
+      List.filter_map (function Ast.DRecord r -> Some (r.name, r.fields) | _ -> None) m.decls in
+    List.iter (function
+      | Ast.DApi api ->
+        List.iter (fun (ep : Ast.api_endpoint) ->
+          (match ep.body with Some b -> check b.type_expr "an API request body" | None -> ());
+          List.iter (fun (c : Ast.api_capture) ->
+            check c.binding.type_expr "an API capture") ep.captures;
+          (match ep.return_spec with
+           | Ast.RetPlain { ty; _ } -> check ty "an API return type"
+           | Ast.RetAttached { binding; _ } -> check binding.type_expr "an API return type"
+           | Ast.RetNamedPack { ty; _ } -> check ty "an API return type"
+           | _ -> ()  (* ForAll/collection/exists returns: element Int is rarer;
+                         the record-codec walk below still covers Int record fields *))
+        ) api.endpoints
+      | Ast.DCodec c ->
+        (match List.assoc_opt c.type_name record_fields with
+         | Some fields ->
+           List.iter (fun (f : Ast.field_def) ->
+             match type_expr_int_loc f.type_expr with
+             | Some loc -> warn loc (Printf.sprintf "codec-encoded field `%s.%s`" c.type_name f.name)
+             | None -> ()) fields
+         | None -> ())
+      | _ -> ()
+    ) m.decls
+
 (* ── Public API ──────────────────────────────────────────────────────────── *)
 
 (** Run all lint checks and return diagnostics as [Compile.diagnostic] values
@@ -1263,6 +1321,7 @@ let lint_file (filename : string) : Compile.diagnostic list =
   lint_missing_email_worker    filename src out;
   lint_unexported_signature_names filename src out;
   lint_bare_print                 filename src out;
+  lint_int_at_wire                filename src out;
   (* Sort by line then col *)
   let sorted = List.sort (fun a b ->
     let c = compare a.line b.line in
