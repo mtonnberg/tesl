@@ -286,7 +286,7 @@
         'Bytes bytes?
         'Char char?
         'Hash hash?
-        'Integer integer?
+        'Integer exact-integer?
         'Keyword keyword?
         'List list?
         'Null null?
@@ -300,7 +300,10 @@
         ;; Map to the SAME predicate as their canonical form so semantics are
         ;; identical.  Without these the fail-closed default below would reject
         ;; valid stdlib boundary args (e.g. List.repeat's `n : Int`).
-        'Int integer?
+        ;; NT-07: `Int` is EXACT — `(integer? 2.0)` is #t in Racket, so plain
+        ;; `integer?` let a flonum masquerade as an Int (conflating Int/Float).
+        ;; `exact-integer?` rejects 2.0 while accepting bignums of any magnitude.
+        'Int exact-integer?
         'Bool boolean?
         'Float real?
         ;; S13: genuinely-unconstrained types whose runtime value is a
