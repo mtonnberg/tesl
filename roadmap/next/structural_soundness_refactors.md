@@ -1,8 +1,8 @@
-# Structural soundness refactors — S6a + S5b
+# Structural soundness refactor — S6a (S5b is DONE, see below)
 
-> **DEFERRED to `later` 2026-07-02 (`stability_wave`).** Both are structural
-> **upgrades**, not open soundness holes (the current rejection-based validation is
-> already sound), so they were deprioritised behind the wave's silent-forgery holes.
+> **S5b landed 2026-07-02** (gensyms hyphenated, reserved-name machinery deleted).
+> **S6a remains** — a structural **upgrade**, not an open soundness hole (the current
+> rejection-based validation already rejects the unsound SSE-with-body case).
 > A parallel attempt confirmed **S6a is feasible and byte-exact zero-emitted-diff**
 > (binary `endpoint_clause = Http of http_clause | Sse of sse_clause`; SSE cannot
 > hold body/response/return by construction; consumed via non-`_` matches across
@@ -53,30 +53,15 @@ paths.
 
 ---
 
-## S5b / C10 — hyphenate every generated temp; delete the reserved-name machinery
+## S5b / C10 — DONE (2026-07-02)
 
-*Closes generator class G4.* 
-
-### The problem
-
-With S5a landed, the variable-capture **class** is closed by rejection: minted temps
-(`tesl_ignored_%d`, `tesl_proof_bind_%d`, etc.) are reserved and the reserved-name walk
-descends test/api-test/load-test bodies, so a user binder colliding with a minted temp is
-rejected. S5b is the stronger *structural* form.
-
-### Fix approach
-
-Mint every generated temp with a **lexer-illegal hyphen** (as `tesl-lambda-%d` already
-does), so a collision with a user identifier is impossible by construction — then delete
-`is_reserved_generated_name` / `check_reserved_generated_names` entirely.
-
-Enforced by one property test: every gensym helper's output contains a lexer-illegal
-character.
-
-### Effort
-
-**M** — but churns ~103–174 committed `.rkt` snapshots (the byte-exact `test_integration`
-gate) plus an EMIT-1 test update; best done as a focused snapshot-regen change of its own.
+Every generated temp is now minted with a lexer-illegal hyphen (`tesl-case-N`,
+`tesl-ignored-N`, `tesl-p-N-M`, …), so a user binder can never collide with one by
+construction; `is_reserved_generated_name` / `check_reserved_generated_names` were
+deleted (the 5 EMIT-1 "reserved name rejected" tests flipped to "accepted") and a
+property test pins that no underscore-grammar temp is ever emitted. All 124
+`.tesl`-paired `.rkt` snapshots + the lifted-stdlib snapshots regenerated. See
+`roadmap/completed/review_2026_07_closed_items.md`. Full gate green.
 
 ---
 

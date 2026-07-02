@@ -1,5 +1,17 @@
 # Single-source the effect→capability map; charge agent-block caps; UUID codegen (review §5.4)
 
+> **DONE (2026-07-02).** All three items landed:
+> - **A2-3** — `var_caps` is now DERIVED from a single-source registry
+>   (`Type_system.stdlib_capabilities`); added the missing `UUID.v4/v7 → uuid`,
+>   dropped the phantom dotted `Time.*`; conformance test `test_capability_registry`.
+> - **A2-4** — `check_handler_capabilities` now charges a declarative `Agent{}`
+>   block's tools against its `requires` (caught + fixed an under-declaration in
+>   `ai-conversation-service`); regression `R75_A24`.
+> - **A2-7** — `UUID.v4/v7` emit a nullary Racket call (arity fixed); exercised
+>   live in `lesson56-uuid` (`generateV4`/`generateV7` + tests).
+>
+> See `roadmap/completed/review_2026_07_closed_items.md`. Full gate green.
+
 **Status:** DEFERRED to `later` (2026-07-02, `stability_wave`). These are static-COMPLETENESS
 holes with a runtime union backstop (NOT silent fail-opens), and the principled fix is a
 single-source registry *refactor* (architecture, not a bug fix). Given the wave's "close the

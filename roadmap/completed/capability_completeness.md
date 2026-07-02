@@ -1,4 +1,11 @@
-# Capability completeness — remaining (open) items
+# Capability completeness — DONE (2026-07-02)
+
+> All items landed: **CAP-COMPOSE** (whole-program grant coverage, earlier),
+> **CAP-01** (qualified calls to imported effectful fns now charged — regression
+> `CAP01` in test_review74_misc), **CAP-UUID** (UUID.v4/v7 callable + uuid-gated —
+> regression `R75_CAPUUID`), **DRIFT-1** (Tesl.Cli removed). See
+> `roadmap/completed/review_2026_07_closed_items.md`. Full gate green.
+
 
 CAP-COMPOSE is **done** (whole-program grant coverage) — see
 `roadmap/completed/review_2026_07_closed_items.md`. What remains:
