@@ -1,42 +1,54 @@
-# Ordering/equality decidability — fail closed
+# Eq/Ord open polymorphism (#2) — qualified types
 
 ## Status (2026-07-02)
-**#3 CLOSED:** `is_equatable` recurses through record/ADT field types — a nominal
-type that transitively contains a function is non-equatable (regression R75_EQFIELD;
-see `roadmap/completed/review_2026_07_closed_items.md`). **#1 and #2 remain** (below):
-both need the deferred Eq/Ord qualified-type layer / HM-type consumption — a per-fn
-stdlib table (#1) or a blunt fail-closed TVar guard (#2) would be drift-prone /
-over-reject valid generic code (the deliberate S14b maintainer decision).
+**#1 and #3 CLOSED; the shadow inferencer is RETIRED (Eq/Ord Stage 1).** The
+`<`/`==` operand-decidability check is now driven from the HM-resolved operand
+type at `checker.ml` `infer_binop` (see
+`roadmap/completed/review_2026_07_closed_items.md`, "TS-ORD/EQ"). Ground operands
+outside the Ord/Eq instance set are rejected with a precise message; generic
+operands stay permissive. Only **#2** remains, below.
 
-## Why
-**TS-ORD/EQ (high):** `<`/`==` are fully-polymorphic stdlib signatures guarded by a
-second, hand-written shadow inferencer (`is_orderable`/`is_equatable`). Where the
-shadow disagrees with the real HM checker the guard fails open:
-- `String.toInt a < String.toInt b` (both `Maybe Int`) accepted → runtime crash
-  (shadow returns `None` → `None → allow`).
-- `genLt f f` / `genEq f f` on functions via a generic helper accepted → crash / silent `#f`
-  (`TVar → true` arm ignores instantiation).
-- record/ADT with a function field compared `==` accepted → silent wrong
-  (`is_equatable` doesn't recurse into nominal definitions).
+## The residual (#2): open Eq/Ord polymorphism
+A comparison hidden behind a GENERIC boundary is not caught, because a type
+variable is deliberately treated as permissive (the S14b decision):
 
-## Fix (instance = fail closed, now)
-- `None` from the shadow inferencer → **reject** (was: allow), with a clear message
-  ("cannot determine that <expr> is comparable; annotate or restructure").
-- `TVar` in ord/eq position → reject unless bounded by a resolved comparable type.
-- `is_equatable`/`is_orderable` recurse through record/ADT field types (a type that
-  transitively contains a function is not comparable).
+```tesl
+fn genLt(a: a, b: a) -> Bool = a < b   -- `a` generic -> permissive -> accepted
+fn bad() -> Bool = genLt f g           -- f, g : Int -> Int -> compiles, but is a
+                                       --   function comparison (crash / silent #f)
+```
 
-This is the safe direction (may over-reject some valid generic comparisons; those
-get an explicit annotation path). Full principled fix = qualified types (Eq/Ord
-classes) participating in HM generalization/instantiation → **roadmap/later**
-(`type_classes_eq_ord.md`).
+`genLt`'s body types `a < b` while `a` is still generic, so the ground-operand
+check does not fire; the call site `genLt f g` has no comparison operator, so
+nothing re-checks the now-concrete `a = Int -> Int`. Direct/concrete function
+comparison IS already rejected (Stage 1) — only this generic-helper indirection
+leaks.
 
-## Tests
-the three repros → REJECTED; direct `Int`/`Float`/`String` comparisons → accepted;
-a representative sample of the example corpus still compiles.
+## Why it is deferred (not a blunt patch)
+The two cheap "fixes" are both wrong:
+- A **per-fn stdlib table** (the old shadow's approach) is drift-prone and cannot
+  see user-defined generic helpers.
+- **Rejecting every `TVar` in ord/eq position** over-rejects all valid generic
+  comparison helpers (`member`, `maximum`, `minimum`, and any user helper that
+  compares its parameters), which the corpus relies on.
 
-## Status: CARVED → `roadmap/later/review_2026_07_deferred.md` §6 — 2026-07-02
-The fail-closed instance fix was NOT landed this pass: making the shadow guard
-reject on `None`/`TVar` risks over-rejecting valid generic comparisons without a
-principled replacement + annotation escape hatch. Deferred to the qualified-types
-(Eq/Ord) design.
+## The principled fix — qualified types (Eq/Ord type classes)
+Give `<`/`==` qualified schemes (`Ord a => a -> a -> Bool` / `Eq a => ...`) so the
+`Ord`/`Eq` constraint is CAPTURED during `generalize` on a helper like `genLt`
+(inferred type `Ord a => (a, a) -> Bool`) and DISCHARGED at each call site when
+`a` is instantiated to a concrete type (`Int -> Int` -> no instance -> reject;
+`Int` -> discharged). This is a real HM extension:
+- constraints threaded through `instantiate`/`generalize` (a `constraints` field
+  on `scheme`, or a constraint-set carried alongside the substitution);
+- discharge at instantiation against the same instance predicates already in
+  `checker.ml` (`ty_is_ord`/`ty_is_eq`);
+- a clear "no `Ord`/`Eq` instance for type `T` (required by generic use of `<`)"
+  message with the originating call site.
+
+Scope it so generic helpers keep compiling (constraint deferred, not rejected) and
+only concrete instantiation at a non-instance type fails.
+
+## Tests (when landed)
+`genLt f g` / `genEq f g` -> REJECTED at the call site; `genLt 1 2`,
+`member x xs`, `maximum xs`, `minimum xs` on comparable elements -> accepted; add
+to the `F-decidable-comparison` group in `test_wave2_soundness.ml`.

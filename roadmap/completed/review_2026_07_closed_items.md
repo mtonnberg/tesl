@@ -51,15 +51,36 @@ baseline). Companion reports: `EXECUTIVE-REVIEW-2026-07.md`,
   handler/worker requiring a capability `main` does not grant is now a compile error
   with a clear hint, instead of a runtime "Missing capabilities" 500.
 
-- **TS-EQ #3 — equality recurses through nominal fields.** `is_equatable`'s
-  `TName` arm now descends into a record/ADT's field types (guarded against
-  recursive types), so a type that TRANSITIVELY contains a function is
-  non-equatable — `record Handler { callback: (Int -> Int) }; a == b` is rejected
-  ("`==` is not defined for type `Handler`") instead of emitting a meaningless
-  `equal?` on closures. Plain records still compare. Regression R75_EQFIELD. (The
-  remaining TS-ORD/EQ sub-holes — #1 stdlib-result types, #2 functions via a
-  generic `TVar` helper — need the deferred Eq/Ord qualified-type layer / HM-type
-  consumption; tracked in `roadmap/later/`.)
+- **TS-ORD/EQ — Eq/Ord decidability now driven from the HM checker (Stage 1);
+  the divergent shadow inferencer is RETIRED.** The ord/eq operand check moved to
+  `checker.ml` `infer_binop`: at every `<`/`<=`/`>`/`>=`/`==`/`!=` site the
+  operand's *HM-resolved* type is inspected and, if it is GROUND (fully
+  determined) and not a member of the Ord/Eq instance set, the comparison is
+  rejected with a precise message. Instance sets: Ord = `Int`/`Float`/`PosixMillis`
+  and newtypes/aliases resolving to them (through `ctx.type_aliases`); Eq =
+  everything without a function component, recursing through type arguments,
+  record/ADT fields, and newtype/alias bases. Generic operands (a `TVar`, or a
+  lowercase-`TCon` type parameter such as `a`) stay PERMISSIVE — this is the
+  deliberate S14b decision (no open Eq/Ord polymorphism yet). The whole
+  `check_ord_operator_types` shadow re-inferencer + its `is_orderable`/
+  `is_equatable` helpers (~290 lines, `validation_capabilities.ml`) were deleted;
+  `validation.ml` no longer wires it. This CLOSES:
+  - **#1 (the real hole):** non-orderable stdlib results —
+    `String.toInt a < String.toInt b` (both `Maybe Int`) — are now rejected; the
+    shadow could not see this because it did not know stdlib return signatures.
+  - **#3:** record/ADT transitively containing a function is non-equatable
+    (preserved: `record Handler { callback: (Int -> Int) }; a == b` rejected).
+  - **concrete function comparison:** `f == g`, a partial application, and a
+    lambda all infer a `TFun` type and are rejected.
+  Positive controls preserved (no over-reject): plain records `==`, `Maybe Int`
+  `==`, newtype/alias-of-Int `<`, and every generic stdlib helper (`member`,
+  `maximum`, `minimum`, …) still compile; corpus 90 + 38 green. Regressions: the
+  `F-decidable-comparison` group in `test_wave2_soundness.ml` (75 cases), incl.
+  `< Maybe rejected (#1)`, `== Maybe Int accepted`, `== Maybe-of-fn rejected`.
+  **Residual: #2 only** — open Eq/Ord polymorphism (a generic helper
+  `fn genLt(a,b)=a<b` applied to function values) still compiles; that requires
+  qualified types (Eq/Ord classes participating in HM generalize/instantiate) and
+  is tracked in `roadmap/later/type_decidability_ord_eq.md`.
 
 ## Robustness / consistency
 - **SC-01** — ForAll conjunction comparison made order-insensitive

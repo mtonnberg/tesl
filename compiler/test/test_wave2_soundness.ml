@@ -373,6 +373,33 @@ type Callback = (Int) -> Int
 fn f(a: Callback, b: Callback) -> Bool = a == b
 |})
 
+(* TS-ORD/EQ #1 (the real hole the retired shadow inferencer could not see): a
+   non-orderable CONTAINER — the exact shape produced by stdlib results such as
+   `String.toInt x : Maybe Int` — is ordered by NEITHER structural comparison; it
+   must be rejected.  Driven purely from the HM-resolved operand type. *)
+let test_f_lt_maybe_rejected () =
+  should_fail "ordering operator.*not defined for type"
+    (prim_hdr ^ {|
+import Tesl.Maybe exposing [Maybe(..)]
+fn f(a: Maybe Int, b: Maybe Int) -> Bool = a < b
+|})
+(* …but a container of equatable elements IS structurally equatable (no over-reject). *)
+let test_f_eq_maybe_int_accepted () =
+  should_pass
+    (prim_hdr ^ {|
+import Tesl.Maybe exposing [Maybe(..)]
+fn f(a: Maybe Int, b: Maybe Int) -> Bool = a == b
+|})
+(* A container that transitively holds a function is NOT equatable (recurses into
+   type arguments AND through the alias to the function base). *)
+let test_f_eq_maybe_fn_rejected () =
+  should_fail "equality operator.*not defined for type"
+    (prim_hdr ^ {|
+import Tesl.Maybe exposing [Maybe(..)]
+type Fn = (Int) -> Int
+fn f(a: Maybe Fn, b: Maybe Fn) -> Bool = a == b
+|})
+
 (* S14b: a PARTIAL application of a top-level fn (supplied args < arity) is a
    function VALUE.  It infers a WRONG concrete return type at the comparison
    site (as if fully applied), so it slips past the inference-based check unless
@@ -646,6 +673,9 @@ let () =
       test_case "== record accepted" `Quick test_f_eq_record_accepted;
       test_case "< newtype-of-Int accepted" `Quick test_f_newtype_int_orderable_accepted;
       test_case "== newtype-of-fn rejected" `Quick test_f_newtype_fn_eq_rejected;
+      test_case "< Maybe rejected (#1 stdlib-result hole)" `Quick test_f_lt_maybe_rejected;
+      test_case "== Maybe Int accepted (equatable container)" `Quick test_f_eq_maybe_int_accepted;
+      test_case "== Maybe-of-fn rejected (transitive)" `Quick test_f_eq_maybe_fn_rejected;
       test_case "== partial-app rejected (S14b)" `Quick test_f_eq_partial_app_rejected;
       test_case "< partial-app rejected (S14b)" `Quick test_f_lt_partial_app_rejected;
       test_case "== full-app accepted (no over-reject)" `Quick test_f_eq_full_app_accepted;
