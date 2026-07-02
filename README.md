@@ -1,6 +1,6 @@
 # Tesl
 
-**Tesl is an alpha-stage language project that is trying to make web APIs feel closer to a solved problem.**
+**Tesl is an beta-stage language project built for the AI-era that is trying to make web APIs feel closer to a solved problem.**
 
 The bet behind Tesl is that most API bugs are not fundamentally “business logic is hard” bugs. They come from validation being forgotten, auth being implicit, effects being hidden, and domain guarantees evaporating a few function calls after the boundary.
 
@@ -10,8 +10,11 @@ Tesl is trying to push those concerns into the language itself:
 - make auth requirements visible in signatures instead of middleware folklore
 - make capabilities and side effects explicit
 - make common API infrastructure part of the language story instead of an afterthought
+- Combining the strengths of LLMs with a strong and deterministic compiler
 
 The goal is not to produce a clever research toy. The goal is to get to a point where a normal programmer asking _“what should I use for my next web API?”_ can answer _“Tesl”_ because the language makes the correct path the obvious path.
+
+Currently Tesl has gotten the features envisioned at the start and is in a stabilizing phase. New features is (currently) not the main focus.
 
 ## Quick start
 
@@ -50,21 +53,19 @@ See [`dev-docs/deploy.md`](dev-docs/deploy.md) for the full deployment guide
 (image flavours, runtime config, GitHub Actions), [`INSTALL.md`](INSTALL.md) for editor setup, and
 [“try the language today”](#try-the-language-today) below for more.
 
-## Alpha status
+## Beta status
 
-Tesl is **alpha**.
+Tesl is in **beta**.
 
 That means, explicitly:
 
 - the language is in active development
 - breaking changes are expected
 - backward compatibility is **not** a goal yet
-- the implementation is real and useful for exploration, but it is not finished
+- the implementation is real, useful for exploration and building non-critical apps, but it is not finished
 - Feedback and ideas are most appreciated
 
-Tesl can now be installed standalone via Nix flake (`nix profile install github:mtonnberg/tesl`) — see [`INSTALL.md`](INSTALL.md). You no longer need to clone this repository to use the language.
-
-**On the mainstream-adoption goal:** the goal above ("a normal programmer… can answer *Tesl*") is a **direction, not a current capability**. Today the on-ramp is **Nix-only**, and the ecosystem enablers that would make Tesl broadly approachable — a package manager, publishable libraries, an online playground, a homepage, and non-Nix/static-binary distribution — are **not yet built** (those roadmap items currently live in `roadmap/discarded/`). So Tesl is a good fit for exploration by people already comfortable with Nix, not yet for the mainstream developer it aims to serve.
+Tesl can now be installed standalone via Nix flake (`nix profile install github:mtonnberg/tesl`) — see [`INSTALL.md`](INSTALL.md).
 
 ## What Tesl is trying to achieve
 
@@ -93,9 +94,9 @@ The goal is to make the theoretically "best path" the path of least resistance�
 Broadly, the project is here today:
 
 - `.tesl` is the primary authoring surface
-- there is a working compiler, CLI, formatter, and linter
+- there is a working compiler, CLI, formatter, LSP, and linter
 - the repo contains larger examples, tests, and experimental client-generation work
-- the current implementation is still a hybrid system: a frontend compiler plus a Racket runtime/substrate
+- the current implementation is a hybrid system: a frontend compiler plus a Racket runtime/substrate
 - some important guarantees are already enforced statically, while some runtime integrity checks still exist in internal/trusted parts of the current implementation
 - the language design is still being tightened; ergonomics and tooling are still moving targets
 
@@ -107,7 +108,7 @@ Tesl is **not** trying to be:
 
 - a language with many equally valid styles and conventions
 - a framework where auth, validation, and effects are mostly runtime wiring concerns
-- a backward-compatible platform during alpha
+- a backward-compatible platform during beta
 - a general-purpose language before it is excellent at the web API problem
 - a language where unsafe escape hatches are the normal way to get things done
 - a project that preserves old syntax forever once a better design is found

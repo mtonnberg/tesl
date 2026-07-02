@@ -16,7 +16,7 @@ One markdown file per slide, in numbered order. Each slide is self-contained.
 | [07-realtime.md](07-realtime.md) | Real-time SSE on the same port |
 | [08-testing.md](08-testing.md) | Testing built into the language |
 | [09-full-picture.md](09-full-picture.md) | A complete Tesl API end-to-end |
-| [10-status.md](10-status.md) | Alpha status, what works today, what's next |
+| [10-status.md](10-status.md) | Beta status, what works today, what's next |
 
 **5-minute overview:** read 00 → 02 → 03 → 09.  
 **The heart of the language:** slide 02.  

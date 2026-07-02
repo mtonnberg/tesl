@@ -306,7 +306,7 @@ let () =
            (Printf.sprintf "no banned marketing phrase %S in %s" phrase label)
            (offenders = [])
            (Printf.sprintf
-              "found %d line(s) with %S outside the allowlisted alpha disclaimer"
+              "found %d line(s) with %S outside the allowlisted beta disclaimer"
               (List.length offenders) phrase))
       banned
   in

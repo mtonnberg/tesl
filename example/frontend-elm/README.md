@@ -2,7 +2,7 @@
 
 An Elm frontend that consumes the `todo-api.tesl` API using a generated
 typed client. The Elm client generator is still experimental, so generated
-API shapes and proof helpers can change between alpha releases.
+API shapes and proof helpers can change between beta releases.
 
 ## What this demonstrates
 

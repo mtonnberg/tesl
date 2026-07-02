@@ -2,7 +2,7 @@
 
 Syntax highlighting, live type-checking, go-to-definition, hover types, completions, and occurrence highlighting for the [Tesl](https://github.com/mtonnberg/tesl) language.
 
-Tesl is an alpha-stage language for building web APIs where validation, auth, and side effects are enforced by the compiler rather than by convention.
+Tesl is an beta-stage language for building web APIs where validation, auth, and side effects are enforced by the compiler rather than by convention.
 
 ---
 
@@ -79,7 +79,7 @@ If you have the Tesl repository open as your workspace and have run `nix develop
 
 ## Known limitations
 
-- **Alpha language** — breaking changes are expected; the extension tracks the language version
+- **Beta stage** — breaking changes are expected; the extension tracks the language version
 - **Nix only** — standalone binaries for non-Nix users are on the roadmap
 - **Linux / macOS only** — Windows native is not supported; WSL2 with Nix works
 

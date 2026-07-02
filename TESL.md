@@ -1,6 +1,6 @@
 # Tesl — proof-carrying web APIs, for humans and AI agents
 
-> **Status: alpha.** The guarantees described below are real and compiler-enforced for code written in Tesl, but they are *compile-time* guarantees with no runtime re-check (see [Runtime cost](#runtime-cost)), and the trust boundary is drawn precisely in [`LANGUAGE-SPEC.md` §7](LANGUAGE-SPEC.md). Tesl is not yet production-stable; breaking changes are expected. Read this document as the design intent and what is enforced today — not as a promise of an unbreakable system.
+> **Status: beta.** The guarantees described below are real and compiler-enforced for code written in Tesl, but they are *compile-time* guarantees with no runtime re-check (see [Runtime cost](#runtime-cost)), and the trust boundary is drawn precisely in [`LANGUAGE-SPEC.md` §7](LANGUAGE-SPEC.md). Tesl is not yet production-stable; breaking changes are expected. Read this document as the design intent and what is enforced today — not as a promise of an unbreakable system.
 
 **Tesl** is a programming language for building robust web APIs without the infrastructure tax. A
 `check` function makes a validated value *carry its proof*, so once data is checked at the boundary
@@ -10,7 +10,7 @@ of the language, not bolted on.
 
 This root file is intentionally short. The full material lives in three places:
 
-- **[README](README.md)** — the pitch, quick start, alpha status, and non-goals.
+- **[README](README.md)** — the pitch, quick start, beta status, and non-goals.
 - **[Guided feature tour](manual/tour.md)** — the long-form, feature-by-feature walkthrough
   (how it works, auth, capabilities, typed SQL, ADTs, queues, SSE, agents, `ForAll` proofs, tests,
   and the theory behind it). Also available as `tesl help manual tour`.

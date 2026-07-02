@@ -13,7 +13,7 @@ Validation, auth, and side effects are tracked by the compiler. Once data is che
 
 **Scope:** HTTP APIs + PostgreSQL. Intentionally narrow. Excellent at what it does.
 
-**Status:** Alpha. Working. Opinionated. Not yet production-stable.
+**Status:** Beta. Working. Opinionated. Not yet production-stable.
 
 ---
 

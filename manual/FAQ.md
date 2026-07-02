@@ -14,7 +14,7 @@ Use `tesl help manual faq` to access this from the CLI.
 
 No, Tesl is specifically designed for **building web APIs**. It's a domain-specific language (DSL) focused on the web API problem domain. The goal is to be excellent at this one thing rather than adequate at many things.
 
-### What does "alpha-stage" mean?
+### What does "beta-stage" mean?
 
 Tesl is in active development. This means:
 - **Breaking changes** are expected and frequent
@@ -481,7 +481,7 @@ The compiler is written in OCaml and is quite fast. The runtime is Racket, which
 
 ### Can I use Tesl in production?
 
-Tesl is **alpha-stage**, so we don't recommend it for production use yet. However, we're actively working towards a stable release.
+Tesl is **beta-stage**, so we don't recommend it for production use yet. However, we're actively working towards a stable release.
 
 ---
 

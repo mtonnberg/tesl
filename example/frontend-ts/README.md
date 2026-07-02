@@ -2,7 +2,7 @@
 
 A React + TypeScript frontend that consumes the `todo-api.tesl` API using a
 generated Zod client. The TypeScript client generator is still experimental,
-so generated names and edge-case behavior can change between alpha releases.
+so generated names and edge-case behavior can change between beta releases.
 
 ## What this demonstrates
 

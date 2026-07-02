@@ -1,6 +1,6 @@
 # Installing Tesl
 
-**Tesl is alpha.** Expect breaking changes. The only supported install path today is Nix. A standalone binary installer and VS Code Marketplace publish are on the roadmap but not yet done.
+**Tesl is beta.** Expect breaking changes. The only supported install path today is Nix. A standalone binary installer and VS Code Marketplace publish are on the roadmap but not yet done.
 
 ---
 
@@ -183,7 +183,7 @@ TESL_POSTGRES_PASSWORD  (optional)
 | Standalone binary (no Nix) | Roadmap — not done |
 | `brew install tesl` / `apt install tesl` | Roadmap — not done |
 | VS Code Marketplace | Roadmap — not done |
-| Native Windows (no WSL2) | Not planned for alpha |
+| Native Windows (no WSL2) | Not planned for beta |
 | Docker image (via `tesl build`) | Available — see [dev-docs/deploy.md](dev-docs/deploy.md) |
 
 See `roadmap/discarded/language_distribution.md` for the plan.

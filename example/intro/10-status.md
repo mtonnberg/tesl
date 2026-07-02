@@ -1,10 +1,10 @@
-# Status: Alpha, Real, Moving Fast
+# Status: Beta, Real, Moving Fast
 
-Tesl is alpha. That's worth being direct about.
+Tesl is beta. That's worth being direct about.
 
 ---
 
-## What alpha means, concretely
+## What beta means, concretely
 
 - **Breaking changes are expected** — the language is still being tightened
 - **Backward compatibility is not a goal yet** — if a better design is found, the old syntax goes

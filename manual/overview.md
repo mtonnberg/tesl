@@ -148,9 +148,9 @@ See the README for status and the roadmap for what's planned.
 ## Who Should Use Tesl?
 
 Tesl is for productive web developers (TypeScript, C#, Java, Kotlin) who want API-shaped guarantees
-to be the path of least resistance — and, since it is **alpha-stage**, not yet for systems that need
+to be the path of least resistance — and, since it is **beta**, not yet for systems that need
 stability guarantees or extensive third-party library support. See [Who is Tesl for?](../README.md)
-and the [alpha status](../README.md) notes in the README for the full framing.
+and the [beta status](../README.md) notes in the README for the full framing.
 
 ---
 

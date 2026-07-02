@@ -13,7 +13,7 @@ queues and real-time pub/sub, Tesl gives you the operational simplicity to ship 
 the confidence to refactor it as it grows — the shortest path from your business logic to a reliable
 system, for humans and AI agents alike.
 
-> **Status: alpha.** The guarantees described below are real and compiler-enforced for code written
+> **Status: beta.** The guarantees described below are real and compiler-enforced for code written
 > in Tesl, but they are *compile-time* guarantees with no runtime re-check, and the trust boundary
 > is drawn precisely in [`LANGUAGE-SPEC.md` §7](../LANGUAGE-SPEC.md). Tesl is not yet
 > production-stable; breaking changes are expected. Read this document as the design intent and what
@@ -116,7 +116,7 @@ codecs and type shapes, Tesl can reuse one wire-format story across the stack in
 separate ad hoc schemas for each consumer.
 
 > Note: the generated TypeScript and Elm clients, along with the frontend-facing IR they depend on,
-> are still experimental in the current alpha and may change aggressively — names and emitted helper
+> are still experimental in the current beta and may change aggressively — names and emitted helper
 > shapes may still change, not every proof can be mirrored client-side yet, and the generators still
 > consume the compiler AST directly rather than a fully normalized internal frontend IR.
 
