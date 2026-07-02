@@ -52,6 +52,16 @@
  (modules test_agent_prim_registry)
  (libraries tesl_compiler_lib))
 
+; A2-3 conformance: the single-source effect->capability registry
+; (Type_system.stdlib_capabilities) that var_caps derives from. An independent
+; oracle pins every capability-bearing stdlib name, guards the UUID drift-fix,
+; and asserts pure PosixMillis ops carry no capability. No Racket / no alcotest:
+;   dune exec test/test_capability_registry.exe
+(test
+ (name test_capability_registry)
+ (modules test_capability_registry)
+ (libraries tesl_compiler_lib))
+
 ; B2 conformance: the trusted proof-introducing kinds live in ONE predicate
 ; (Ast.is_proof_introducing_kind); this pins it against an independent oracle
 ; over every func_kind constructor so the trusted set cannot silently drift.

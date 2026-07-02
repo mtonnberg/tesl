@@ -115,28 +115,12 @@ let collect_needed_capabilities
     else if List.mem name bound then []
     else if is_sql_read_builtin name then ["dbRead"]
     else if is_sql_write_builtin name then ["dbWrite"]
-    else if name = "deadJobs" then ["queueRead"]
-    else if name = "requeue" then ["queueWrite"]
-    else if List.mem name ["now"; "nowMillis"; "Time.now"; "Time.nowMillis";
-                           "Time.secondsToPosix"; "Time.posixToMillis";
-                           "Time.durationMs"; "Time.diffMs"; "Time.addMs";
-                           "Time.subtractMs"; "Time.formatTime"] then ["time"]
-    (* BUG-4 fix: generatePrefixedId and randomInt require the `random` capability. *)
-    else if List.mem name ["generatePrefixedId"; "randomInt";
-                           "Tesl.Id.generatePrefixedId"; "Tesl.Random.randomInt"] then ["random"]
-    (* Reading the environment is an effect: env/envInt/envString/requireEnv require
-       the `envRead` capability (same discipline as time/random; named envRead — not
-       `env` — because `env` is already the name of the Maybe-returning function). *)
-    else if List.mem name ["env"; "envInt"; "envString"; "requireEnv"] then ["envRead"]
-    else if List.mem name ["JWT.sign"; "JWT.verify"; "JWT.decode"] then ["jwt"]
-    else if List.mem name ["HttpClient.get"; "HttpClient.post";
-                           "HttpClient.put"; "HttpClient.delete"] then ["httpClient"]
-    (* Tesl.Agent: every entry point that contacts a provider (one-shot ask, the
-       tool-calling loop, BYOK, and structured-output askFor) performs inference
-       and requires the aiProvider capability. Pure constructors/accessors do not. *)
-    else if List.mem name ["ask"; "askReply"; "askWith"; "askFor";
-                           "converse"; "converseStreaming"; "agentRun"] then ["aiProvider"]
-    else []
+    (* A2-3: every other effect→capability decision is DERIVED from the single
+       source of truth in type_system (queue/time/random/env/jwt/httpClient/uuid/
+       aiProvider). SQL stays structural above because a user fn may legitimately
+       shadow those keyword spellings. Pure stdlib fns (PosixMillis arithmetic,
+       constructors, accessors) are absent from the registry → []. *)
+    else Type_system.stdlib_capabilities_of name
   in
   (* Names bound by a pattern (PVar / nested PCon fields) — the per-arm binder
      set, mirroring what the old fn_bound_names collected for the whole function. *)

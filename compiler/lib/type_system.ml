@@ -873,6 +873,50 @@ let stdlib_home_module : (string * string) list =
 let stdlib_home_module_of (name : string) : string option =
   List.assoc_opt name stdlib_home_module
 
+(** A2-3 single source: the capability(ies) a referenced stdlib name introduces.
+
+    THE authoritative effect→capability map for stdlib *value* names. The
+    capability checker's [var_caps] (validation_capabilities.ml) is DERIVED from
+    this rather than re-listing the same names, so the two cannot drift (generator
+    class G1). Names NOT listed here introduce no capability (pure functions).
+
+    NOT covered here (handled structurally elsewhere, by design):
+    - the SQL keyword operations `insert`/`select`/`update`/`delete` — they are not
+      stdlib value names; [is_sql_read_builtin]/[is_sql_write_builtin] classify
+      them, since a user function may legitimately shadow those spellings.
+
+    Pure stdlib functions deliberately absent (no capability): the PosixMillis
+    arithmetic ops `durationMs`/`diffMs`/`addMs`/`subtractMs`/`formatTime`/
+    `secondsToPosix`/`posixToMillis` (only clock *reads* — `nowMillis`/`now` — take
+    `time`); constructors and accessors of every module. *)
+let stdlib_capabilities : (string * string list) list = [
+  (* Time — reading the wall clock is an effect. *)
+  "now", ["time"]; "nowMillis", ["time"];
+  (* Random *)
+  "randomInt", ["random"]; "randomFloat", ["random"];
+  "generatePrefixedId", ["random"];
+  (* Env *)
+  "env", ["envRead"]; "envInt", ["envRead"];
+  "envString", ["envRead"]; "requireEnv", ["envRead"];
+  (* Queue infrastructure *)
+  "deadJobs", ["queueRead"]; "requeue", ["queueWrite"];
+  (* JWT *)
+  "JWT.sign", ["jwt"]; "JWT.verify", ["jwt"]; "JWT.decode", ["jwt"];
+  (* HttpClient *)
+  "HttpClient.get", ["httpClient"]; "HttpClient.post", ["httpClient"];
+  "HttpClient.put", ["httpClient"]; "HttpClient.delete", ["httpClient"];
+  (* UUID generation (A2-3 drift fix: these were MISSING from var_caps). *)
+  "UUID.v4", ["uuid"]; "UUID.v7", ["uuid"];
+  (* Tesl.Agent inference entry points — every call that contacts a provider. *)
+  "ask", ["aiProvider"]; "askReply", ["aiProvider"]; "askWith", ["aiProvider"];
+  "askFor", ["aiProvider"]; "converse", ["aiProvider"];
+  "converseStreaming", ["aiProvider"]; "agentRun", ["aiProvider"];
+]
+
+(** The capability(ies) referenced stdlib [name] introduces ([] if pure/unknown). *)
+let stdlib_capabilities_of (name : string) : string list =
+  match List.assoc_opt name stdlib_capabilities with Some c -> c | None -> []
+
 (** Complete set of valid Tesl.* stdlib module names (including internal modules
     that have runtime files but no registered export list).
     Used to reject `import Tesl.Unknown` with a compile-time error. *)
