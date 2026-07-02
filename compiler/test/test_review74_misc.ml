@@ -708,9 +708,47 @@ test "comparison" {
 
 (* ── Test runner ─────────────────────────────────────────────────────────── *)
 
+(* CAP-01: a QUALIFIED call to an imported effectful function (`Lib.fn()`) must be
+   charged the callee's capabilities exactly like the unqualified call (`fn()`).
+   Previously the qualified form escaped the transitive charge. *)
+let test_CAP01_qualified_imported_effect_charged () =
+  two_files_should_fail "requiring \\[random\\]\\|undeclared\\|capability" "cap01-lib" {|
+#lang tesl
+module Cap01Lib exposing [genId]
+import Tesl.Prelude exposing [String]
+import Tesl.Random exposing [random]
+import Tesl.Id exposing [generatePrefixedId]
+fn genId() -> String requires [random] = generatePrefixedId "x"
+|} "cap01-app" {|
+#lang tesl
+module Cap01App exposing [make]
+import Tesl.Prelude exposing [String]
+import Cap01Lib exposing [genId]
+fn make() -> String requires [] = Cap01Lib.genId()
+|}
+
+let test_CAP01_qualified_imported_effect_declared_passes () =
+  two_files_should_pass "cap01-lib2" {|
+#lang tesl
+module Cap01Lib2 exposing [genId]
+import Tesl.Prelude exposing [String]
+import Tesl.Random exposing [random]
+import Tesl.Id exposing [generatePrefixedId]
+fn genId() -> String requires [random] = generatePrefixedId "x"
+|} "cap01-app2" {|
+#lang tesl
+module Cap01App2 exposing [make]
+import Tesl.Prelude exposing [String]
+import Tesl.Random exposing [random]
+import Cap01Lib2 exposing [genId]
+fn make() -> String requires [random] = Cap01Lib2.genId()
+|}
+
 let () =
   run "Review74-Misc" [
     "module-system-edges", [
+      test_case "CAP01 qualified imported effect charged"    `Quick test_CAP01_qualified_imported_effect_charged;
+      test_case "CAP01 qualified imported effect declared ok" `Quick test_CAP01_qualified_imported_effect_declared_passes;
       test_case "ME01 import nonexistent module fails"       `Quick test_ME01_import_nonexistent_module;
       test_case "ME02 self-import fails"                     `Quick test_ME02_self_import;
       test_case "ME03 export undeclared name fails"          `Quick test_ME03_export_undeclared_name;

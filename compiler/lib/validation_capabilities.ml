@@ -143,15 +143,25 @@ let collect_needed_capabilities
   let rec go (bound : string list) (acc : string list) (e : expr) : string list =
     match e with
     | EVar { name; _ } -> var_caps bound name @ acc
-    (* A qualified stdlib call `M.f` (JWT.sign, HttpClient.get, UUID.v4/v7, …) parses
-       as an EField on the module-name constructor/var. Charge its capability from
-       the SINGLE-SOURCE registry (A2-3) — this is what makes `UUID.v7()` require the
-       `uuid` capability (CAP-UUID) without a second hand-list. The module-name obj
-       carries no further capability, so it is not recursed into. Non-capability
-       field accesses (record fields, etc.) map to [] and fall through below. *)
+    (* A qualified call `M.f` parses as an EField on the module-name constructor/var.
+       It is charged the SAME as the unqualified call `f`:
+       - a qualified stdlib call (JWT.sign, HttpClient.get, UUID.v4/v7, …) from the
+         single-source registry (A2-3) — this is what makes `UUID.v7()` require
+         `uuid` (CAP-UUID);
+       - a qualified call to an IMPORTED user function (`Mod.fn`) from func_caps,
+         which holds the `Module.fn` key with the callee's declared capabilities.
+         Without this, `Mod.fn()` escaped the transitive charge while the bare
+         `fn()` was charged — the asymmetry CAP-01 closes.
+       The module-name obj carries no further capability, so it is not recursed
+       into. Non-capability field accesses (record fields) map to [] and fall
+       through to the generic descent below. *)
     | EField { obj = (EConstructor { name = m; _ } | EVar { name = m; _ }); field; _ }
-      when Type_system.stdlib_capabilities_of (m ^ "." ^ field) <> [] ->
-      Type_system.stdlib_capabilities_of (m ^ "." ^ field) @ acc
+      when (let q = m ^ "." ^ field in
+            Type_system.stdlib_capabilities_of q <> [] || List.mem_assoc q func_caps) ->
+      let q = m ^ "." ^ field in
+      (match List.assoc_opt q func_caps with
+       | Some caps -> caps
+       | None -> Type_system.stdlib_capabilities_of q) @ acc
     (* Effect forms: prepend the fixed data-table token, then descend into
        children via the shared traversal. *)
     | EEnqueue _ | EPublish _ | ETelemetry _ | ESendEmail _ ->
