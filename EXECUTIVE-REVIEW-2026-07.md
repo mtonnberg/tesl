@@ -37,11 +37,20 @@ new regression module `compiler/test/test_review75_reviewfixes.ml` guards them):
   touch drift** (the `tesl init` templates now compile; the FAQ and cost claims are
   corrected).
 
-The remaining, deeper items (a container-wrapped minting case, the DB-provenance
-edge, capability whole-program checks, principled `Eq`/`Ord`, and the runtime
-proof-witness backstop) are **tracked, not dropped** — each carved to
-`roadmap/later/review_2026_07_deferred.md` with the maximum done now and a precise
-reason it needs its own pass. Full plan + status: `roadmap/next/review_2026_07_master.md`.
+Since then, the **compare-functions-or-optionals** finding (row 5 of the table
+below) has also been closed: the second, divergent type-checker that guarded
+`<`/`==` was removed, and the check now uses the compiler's own type information.
+Comparing optionals (e.g. `Maybe Int`), functions, or a record that hides a
+function is now rejected at compile time. One narrow residual remains — comparing
+functions *indirectly* through a generic helper — which needs a small,
+well-understood type-system addition and is scheduled, not dropped.
+
+The other remaining deeper items (a container-wrapped minting case, the
+DB-provenance edge, capability whole-program checks, and the runtime proof-witness
+backstop) are **tracked, not dropped** — each carved to `roadmap/later/` (open
+items) with the maximum done now and a precise reason it needs its own pass; landed
+work is recorded under `roadmap/completed/` (`review_2026_07_closed_items.md` and
+the program tracker `review_2026_07_master.md`).
 
 ## What Tesl is trying to achieve
 

@@ -18,12 +18,18 @@
 > (SHADOW-1/2/3 — the no-shadowing walk descends into constructor args / `fail`
 > messages), §5.7 (AUTH-VIA — new `check_auth_proof_via`), SC-01 (order-insensitive
 > ForAll comparison), the agent-context/debug-inspect/mutation-score tooling fixes,
-> and the docs/template drift (§6). Carried forward (with partial work done): §5.2
-> (PFC-2 container minting — direct forms gated, container needs engine-level
-> proof-lifting), §5.3 (F1/F2 FromDb named-pack), §5.5 (Eq/Ord type-classes), §5.6
-> (capability whole-program/registry), §5.8 (EE-1/LB-01/NT-07), and the
-> generative-fuzz/runtime-witness backstop. Regression guard:
-> `compiler/test/test_review75_reviewfixes.ml`.
+> and the docs/template drift (§6). Also since closed: §5.5 (Eq/Ord decidability —
+> the shadow inferencer is retired and the check is now HM-driven in `infer_binop`;
+> #1 stdlib-result + #3 nominal-field holes closed, only #2 open polymorphism
+> remains — see the §5.5 remediation note). Carried forward (with partial work
+> done): §5.2 (PFC-2 container minting), §5.3 (F1/F2 FromDb named-pack), §5.6
+> (capability whole-program/registry), §5.8 (EE-1/NT-07), and the
+> generative-fuzz/runtime-witness backstop. Tracking now lives in
+> `roadmap/completed/` (landed items, incl. `review_2026_07_closed_items.md`) and
+> `roadmap/later/` (open items only; the old `roadmap/next/` tracker and
+> `review_2026_07_deferred.md` were folded into these). Regression guards:
+> `compiler/test/test_review75_reviewfixes.ml` and the `F-decidable-comparison`
+> group in `compiler/test/test_wave2_soundness.ml`.
 
 ## 1. What Tesl is
 
@@ -160,6 +166,7 @@ Ordering/equality is a fully-polymorphic stdlib signature (`< : ∀a. a → a �
 
 **Root:** decidability is enforced monomorphically at each syntactic comparison site by a shadow type system rather than as qualified types (`Eq`/`Ord`) in the real checker's generalization/instantiation.
 **Class fix:** §9-6.
+**Remediation — CLOSED except #2 (Eq/Ord Stage 1, 2026-07-02):** the shadow inferencer was **deleted** and the ord/eq operand check moved into the real checker (`checker.ml` `infer_binop`), reading the HM-resolved operand type. Ground operands outside the Ord/Eq instance set are rejected; generic operands stay permissive (the deliberate S14b decision). This closes bullet 1 (`String.toInt a < …` on `Maybe Int` now rejected — the checker knows the real stdlib return type) and bullet 3 (record/ADT transitively holding a function is non-equatable), plus concrete function/partial-app/lambda comparison. **Bullet 2 (open polymorphism — `genLt f f` through a generic helper) remains**: it needs the qualified-type layer (`Eq`/`Ord` constraints captured at `generalize`, discharged at `instantiate`), tracked in `roadmap/later/type_decidability_ord_eq.md`. Regressions in the `F-decidable-comparison` group of `test_wave2_soundness.ml` (75 cases); corpus 90 + 38 green.
 
 ### 5.6 HIGH — Whole-program capability composition is not checked (compile-time-decidable error escapes to runtime 500)
 
