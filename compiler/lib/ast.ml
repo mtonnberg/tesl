@@ -617,7 +617,6 @@ type top_decl =
 
 type module_form = {
   module_name : string;
-  is_library  : bool;    (** true when declared with `library` keyword instead of `module` *)
   exports     : export_item list;
   imports     : import_decl list;
   decls       : top_decl list;

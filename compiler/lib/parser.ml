@@ -4993,20 +4993,18 @@ let rec parse_module filename source =
 
   skip_layout s;
 
-  let* (module_name, exports, is_library) = parse_module_header_body s in
+  let* (module_name, exports) = parse_module_header_body s in
   let* imports = parse_imports s [] in
   let* decls = parse_top_decls s [] in
   let doctest_decls = extract_doctest_decls filename source in
   let decls = attach_doc_comments source decls in
 
-  return { module_name; is_library; exports; imports; decls = decls @ doctest_decls; source_file = filename }
+  return { module_name; exports; imports; decls = decls @ doctest_decls; source_file = filename }
 
 and parse_module_header_body s =
-  let is_library = peek s = LIBRARY in
   let* _ = (match peek s with
     | MODULE  -> advance s; Ok ()
-    | LIBRARY -> advance s; Ok ()
-    | t -> err s (Printf.sprintf "expected `module` or `library` keyword, got %s" (tok_to_string t))) in
+    | t -> err s (Printf.sprintf "expected `module` keyword, got %s" (tok_to_string t))) in
   let* name = expect_uident s in
   let* _ = expect s EXPOSING in
   let* items = parse_bracketed_list (fun s ->
@@ -5024,7 +5022,7 @@ and parse_module_header_body s =
       err s (Printf.sprintf "expected export name, got %s" (tok_to_string (peek s)))
   ) s in
   skip_layout s;
-  return (name, items, is_library)
+  return (name, items)
 
 (* ── Resilient (recovering) module parse ──────────────────────────────────── *)
 
@@ -5081,7 +5079,7 @@ let parse_module_recover filename source : Ast.module_form option =
   skip_layout s;
   match parse_module_header_body s with
   | Err _ -> None
-  | Ok (module_name, exports, is_library) ->
+  | Ok (module_name, exports) ->
     (* Imports are best-effort: if they fail, recover into declaration parsing
        so a broken import line does not blank the whole snapshot. *)
     let imports =
@@ -5091,5 +5089,5 @@ let parse_module_recover filename source : Ast.module_form option =
     in
     let decls = parse_top_decls_recover s [] in
     let doctest_decls = extract_doctest_decls filename source in
-    Some { module_name; is_library; exports; imports;
+    Some { module_name; exports; imports;
            decls = decls @ doctest_decls; source_file = filename }

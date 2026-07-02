@@ -32,10 +32,10 @@ These are full, runnable API examples:
 
 ## Learning Path (Recommended Order)
 
-The `learn/` directory ships **70 `.tesl` lessons** (`ls example/learn/lesson*.tesl | wc -l`).
+The `learn/` directory ships **67 `.tesl` lessons** (`ls example/learn/lesson*.tesl | wc -l`).
 The list below is a curated recommended order through the core concepts, not the full catalog —
 run `ls example/learn/` (or `tesl help manual examples`) to see every lesson, including the later
-ones on UUID/JWT/HTTP client, caching, email, step debugging, AI agents, libraries, and query
+ones on UUID/JWT/HTTP client, caching, email, step debugging, AI agents, and query
 parameters.
 
 ### Basics

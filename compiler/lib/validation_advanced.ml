@@ -1051,6 +1051,114 @@ let check_fn_return_proof_annotations
          let subject_env = build_initial_subject_env fd.params in
          let proof_env = build_initial_proof_env fd.params in
          check_named_pack_body fd loc entity_proof other_proof type_env subject_env proof_env fd.body
+       (* PFC-2 (b): container-wrapped proof minting.  `Maybe (v: T ::: P v)` /
+          `Maybe (T ? P)` / `Either L (T ? P)` / custom eithers all parse to
+          RetMaybeAttached.  A forgery-restricted kind must not mint the inner
+          proof: every returning SUCCESS payload (a single-arg constructor whose
+          payload has the proof's subject TYPE — `Something x`/`Right x`/`CustomRight
+          x`, but NOT the error side `Left "e"`:String nor `Nothing`) must CARRY the
+          proof.  Field proofs propagate through pattern matching (PFC-2 a), so
+          `findMin`'s `Node Leaf cur _ -> Right cur` is accepted (cur carries the
+          field proof) while `Something (0 - 999)` is rejected. *)
+       | RetMaybeAttached { binding = b; loc = ret_loc; _ }
+         when is_forgery_restricted_kind fd.kind && b.proof_ann <> None ->
+         let required_proof = match b.proof_ann with Some p -> p | None -> PredApp { pred = ""; args = []; loc = fd.loc } in
+         let pred_name = match required_proof with PredApp { pred; _ } -> Some pred | _ -> None in
+         let facts = List.filter_map (function DFact f -> Some f | _ -> None) decls in
+         let type_name_of = function
+           | TName { name; _ } -> Some name
+           | TApp { head = TName { name; _ }; _ } -> Some name
+           | _ -> None in
+         let inner_tyname = match pred_name with
+           | Some pn ->
+             (match List.find_opt (fun (f : fact_form) -> f.name = pn) facts with
+              | Some { params = p :: _; _ } -> type_name_of p.type_expr
+              | _ -> None)
+           | None -> None in
+         let is_stdlib_auto = match pred_name with
+           | Some "FromDb" ->
+             let user_fn_names = List.filter_map (function DFunc d -> Some d.name | _ -> None) decls in
+             body_has_db_site ~shadowed:user_fn_names fd.body
+           | Some ("FromQueue" | "FromDeadQueue") -> false
+           | Some p -> List.mem p stdlib_auto_preds
+           | None -> false in
+         (* Skip conservatively when we cannot resolve the inner type (compound /
+            unknown predicate) or the proof is framework-auto — no false positives. *)
+         (match inner_tyname with
+          | Some inner_ty when not is_stdlib_auto ->
+            let ctor_fps = build_ctor_field_proof_map decls in
+            let ctor_app (e : expr) : (string * expr list) option =
+              match collect_call_head_and_args [] e with
+              | (EConstructor { name; args = ha; _ }, applied) -> Some (name, ha @ applied)
+              | _ -> None in
+            let type_env0 = List.map (fun (p : binding) -> (p.name, p.type_expr)) fd.params in
+            let subject_env0 = build_initial_subject_env fd.params in
+            let proof_env0 = build_initial_proof_env fd.params in
+            let rec walk type_env subject_env proof_env (e : expr) =
+              match e with
+              | ELet { name; value; body; _ } ->
+                let te, se, pe = extend_let_envs type_env subject_env proof_env name value in
+                walk te se pe body
+              | ELetProof { value_name; proof_name; value; body; _ } ->
+                let te, se, pe = extend_let_envs type_env subject_env proof_env value_name value in
+                let pe = let ps = proofs_of_expr value_name funcs se pe value in
+                  if ps = [] then pe else (proof_name, ps) :: pe in
+                walk te se pe body
+              | EIf { then_; else_; _ } ->
+                walk type_env subject_env proof_env then_;
+                walk type_env subject_env proof_env else_
+              | ECase { scrut; arms; _ } ->
+                let scrut_ty = infer_expr_type type_env funcs fields_by_type ctors scrut in
+                let scrut_proofs = proofs_of_expr "_" funcs subject_env proof_env scrut in
+                List.iter (fun (arm : case_arm) ->
+                  let te = pattern_bindings scrut_ty ctors arm.pattern @ type_env in
+                  let pe, se = extend_case_envs subject_env proof_env scrut scrut_proofs arm.pattern in
+                  (* field-proof propagation (PFC-2 a) for this walk *)
+                  let pe, se = match arm.pattern with
+                    | PCon { ctor; fields; _ } ->
+                      (match List.assoc_opt ctor ctor_fps with
+                       | Some fps when List.length fps = List.length fields ->
+                         List.fold_left2 (fun (p, s) (fname, proof_opt) (_l, pat) ->
+                           match proof_opt, pat with
+                           | Some pr, PVar var -> ((var, [subst_proof [(fname, var)] pr]) :: p, (var, var) :: s)
+                           | _ -> (p, s)) (pe, se) fps fields
+                       | _ -> (pe, se))
+                    | _ -> (pe, se) in
+                  walk te se pe arm.body
+                ) arms
+              | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+              | EWithTransaction { body; _ } -> walk type_env subject_env proof_env body
+              | EFail _ -> ()
+              | _ ->
+                (match ctor_app e with
+                 | Some (ctor, [payload]) ->
+                   let payload_tyname = match infer_expr_type type_env funcs fields_by_type ctors payload with
+                     | Some te -> type_name_of te | None -> None in
+                   (* Only demand the proof on the payload whose TYPE is the proof's
+                      subject type (the success side); the error side (different type)
+                      and nullary constructors carry no obligation. *)
+                   if payload_tyname = Some inner_ty then begin
+                     let result_subject = match subject_of_expr subject_env payload with
+                       | Some s -> s | None -> b.name in
+                     let required_here = subst_proof [(b.name, result_subject)] required_proof in
+                     let carried = proofs_of_expr result_subject funcs subject_env proof_env payload in
+                     if not (proof_matches required_here carried) then begin
+                       let kw = match fd.kind with
+                         | HandlerKind -> "handler" | WorkerKind -> "worker" | _ -> "fn" in
+                       errors := make_error ret_loc
+                         ~hint:(Printf.sprintf
+                           "return the error/empty side, or a value that carries `%s` (validate it with a `check`/`auth`); a `%s` cannot introduce a fresh proof"
+                           (pp_proof required_proof) kw)
+                         (Printf.sprintf
+                           "%s `%s` returns a proof-carrying `%s`, but the value in `%s ...` does not carry `%s`; only `check`/`auth`/`establish` may introduce a fresh proof"
+                           kw fd.name (pp_type_expr b.type_expr) ctor (pp_proof required_proof))
+                       :: !errors
+                     end
+                   end
+                 | _ -> ())
+            in
+            walk type_env0 subject_env0 proof_env0 fd.body
+          | _ -> ())
        | _ -> ())
     | _ -> ()
   ) decls;

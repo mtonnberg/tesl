@@ -985,47 +985,6 @@ let check_local_imports_exist (m : module_form) : validation_error list =
   ) m.imports
 
 
-(** E090 — library exports a function whose signature references a locally-defined
-    type or proof predicate that is not also exported.
-
-    Consumers of the library cannot call such a function: they cannot create
-    values of the unexported type, nor satisfy the unexported proof predicate.
-    For `library` modules this is a hard error (the library has a broken public
-    API).  Regular `module` declarations get a lint warning instead (W080). *)
-let check_exported_signature_completeness (m : module_form) : validation_error list =
-  if not m.is_library then []
-  else begin
-    let locally_defined = List.filter_map (function
-      | DRecord r -> Some r.name
-      | DType (TypeAdt { name; _ }) -> Some name
-      | DType (TypeNewtype { name; _ }) -> Some name
-      | DType (TypeAlias { name; _ }) -> Some name
-      | DFact f -> Some f.name
-      | DCapability cap -> Some cap.name
-      | _ -> None
-    ) m.decls in
-    let exported_set = List.filter_map (function
-      | ExportName n | ExportAdt n -> Some n) m.exports in
-    List.concat_map (function
-      | DFunc fd when List.mem fd.name exported_set ->
-        let seen = Hashtbl.create 4 in
-        List.filter_map (fun (name, loc) ->
-          if Hashtbl.mem seen name then None
-          else if List.mem name locally_defined && not (List.mem name exported_set) then begin
-            Hashtbl.add seen name ();
-            Some (make_error loc
-              ~hint:(Printf.sprintf "add `%s` to the `exposing [...]` list" name)
-              (Printf.sprintf
-                "library `%s` exports `%s` but `%s` (used in its signature) is not \
-                 exported — consumers cannot use this function"
-                m.module_name fd.name name))
-          end else None
-        ) (func_sig_refs fd)
-      | _ -> []
-    ) m.decls
-  end
-
-
 (** Build a map from function name → declared capabilities for all DFunc decls *)
 (** Build a map of ALL user-defined function names to their declared capabilities.
     Functions with `requires []` map to an empty list.

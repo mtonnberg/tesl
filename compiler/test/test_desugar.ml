@@ -128,7 +128,7 @@ let sample_func : func_decl = {
 let sample_const : const_form = { name = "K"; value = int_ 110 7; loc = loc_at 111 }
 
 let sample_module : module_form = {
-  module_name = "M"; is_library = false; exports = []; imports = [];
+  module_name = "M"; exports = []; imports = [];
   decls = [ DFunc sample_func; DConst sample_const ];
   source_file = "test.tesl";
 }

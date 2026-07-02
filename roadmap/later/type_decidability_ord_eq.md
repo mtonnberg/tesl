@@ -1,5 +1,13 @@
 # Ordering/equality decidability — fail closed
 
+## Status (2026-07-02)
+**#3 CLOSED:** `is_equatable` recurses through record/ADT field types — a nominal
+type that transitively contains a function is non-equatable (regression R75_EQFIELD;
+see `roadmap/completed/review_2026_07_closed_items.md`). **#1 and #2 remain** (below):
+both need the deferred Eq/Ord qualified-type layer / HM-type consumption — a per-fn
+stdlib table (#1) or a blunt fail-closed TVar guard (#2) would be drift-prone /
+over-reject valid generic code (the deliberate S14b maintainer decision).
+
 ## Why
 **TS-ORD/EQ (high):** `<`/`==` are fully-polymorphic stdlib signatures guarded by a
 second, hand-written shadow inferencer (`is_orderable`/`is_equatable`). Where the

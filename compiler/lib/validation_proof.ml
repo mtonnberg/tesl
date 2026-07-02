@@ -1081,6 +1081,24 @@ let rec check_expr_call_proofs
           (penv, senv)
         | _ -> (proof_env, subject_env)
       in
+      (* PFC-2 (a): propagate CONSTRUCTOR FIELD proofs to pattern binders,
+         positionally.  `case t of Node l cur r -> …` gives `cur` the `value`
+         field's `::: P` proof (subject renamed field_name -> binder).  Sound
+         because field proofs are now enforced at construction (PFC-2b / a0). *)
+      let proof_env', subject_env' = match arm.pattern with
+        | PCon { ctor; fields; _ } ->
+          (match List.assoc_opt ctor !ctor_field_proof_registry with
+           | Some fps when List.length fps = List.length fields ->
+             List.fold_left2 (fun (penv, senv) (fname, proof_opt) (_lbl, pat) ->
+               match proof_opt, pat with
+               | Some proof, PVar var ->
+                 ((var, [subst_proof [(fname, var)] proof]) :: penv,
+                  (var, var) :: senv)
+               | _ -> (penv, senv)
+             ) (proof_env', subject_env') fps fields
+           | _ -> (proof_env', subject_env'))
+        | _ -> (proof_env', subject_env')
+      in
       check_expr_call_proofs subject_env' proof_env' funcs arm.body
     ) arms in
     scrut_errors @ arm_errors
@@ -1501,6 +1519,7 @@ let check_call_site_proofs ?facts ?(extra_funcs=[]) (decls : top_decl list) : va
   let mf = facts_or_compute ?facts ~extra_funcs decls in
   let funcs = mf.mf_funcs in
   field_proof_registry := mf.mf_field_proof_map;
+  ctor_field_proof_registry := mf.mf_ctor_field_proof_map;
   let errors = ref [] in
   List.iter (function
     | DFunc fd ->
@@ -1520,6 +1539,7 @@ let check_call_site_proofs ?facts ?(extra_funcs=[]) (decls : top_decl list) : va
     | _ -> ()
   ) decls;
   field_proof_registry := [];
+  ctor_field_proof_registry := [];
   List.rev !errors
 
 (** Validate that every argument passed to filterCheck/allCheck/filterCheckValues/

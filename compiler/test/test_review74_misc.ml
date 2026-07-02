@@ -213,19 +213,25 @@ import Tesl.Prelude exposing [Int, String]
 fn f() -> Int = 42
 |}
 
-(* ME07: Import from module with server block → library boundary error *)
+(* ME07: importing a module that contains app infrastructure (api/server) is
+   ALLOWED.  The `library` feature (and its import boundary restriction) was
+   removed 2026-07 to shrink the language — modules are just modules; importing
+   one brings its exposed names into scope and ignores its infra. *)
 let test_ME07_import_module_with_server () =
-  two_files_should_fail "server.*not allowed in library\\|library.*server\\|not allowed in library\\|server.*library" "me07-lib" {|
+  two_files_should_pass "me07-lib" {|
 #lang tesl
-module Me07Lib exposing []
+module Me07Lib exposing [ping]
 import Tesl.Prelude exposing [String]
+fn ping() -> String = "pong"
 api Me07LibApi { get "/ping" -> String }
 handler pingH() -> String requires [] = "pong"
 server Me07LibServer for Me07LibApi { ping = pingH }
 |} "me07-app" {|
 #lang tesl
-module Me07App exposing []
-import Me07Lib
+module Me07App exposing [greet]
+import Me07Lib exposing [ping]
+import Tesl.Prelude exposing [String]
+fn greet() -> String = ping()
 |}
 
 (* ME08: Import clean library module → should_pass (two-file positive) *)
@@ -260,9 +266,11 @@ import Me09Lib exposing [add, multiply]
 fn compute(x: Int, y: Int) -> Int = add (multiply x y) x
 |}
 
-(* ME10: Re-export: import A's type and include it in own exposing *)
+(* ME10: Re-export is REJECTED — a module may export only names it declares
+   locally, never a name it merely imported.  Re-export was removed 2026-07 along
+   with the `library` feature (code sharing moves to stable artifacts). *)
 let test_ME10_reexport_type () =
-  two_files_should_pass "me10-lib" {|
+  two_files_should_fail "only locally-defined names can be exported\\|non-local name" "me10-lib" {|
 #lang tesl
 module Me10Lib exposing [Color(..)]
 import Tesl.Prelude exposing [String]
@@ -709,10 +717,10 @@ let () =
       test_case "ME04 import unexported name fails"          `Quick test_ME04_import_unexported_name;
       test_case "ME05 ambiguous same-name import"            `Quick test_ME05_ambiguous_import_same_name;
       test_case "ME06 duplicate import fails"                `Quick test_ME06_duplicate_import;
-      test_case "ME07 import module with server fails"       `Quick test_ME07_import_module_with_server;
+      test_case "ME07 import module with server allowed"     `Quick test_ME07_import_module_with_server;
       test_case "ME08 import clean library passes"           `Quick test_ME08_import_clean_library;
       test_case "ME09 export import use passes"              `Quick test_ME09_export_import_use;
-      test_case "ME10 re-export type passes"                 `Quick test_ME10_reexport_type;
+      test_case "ME10 re-export type rejected"               `Quick test_ME10_reexport_type;
       test_case "ME11 local fn with same name as lib hidden fn passes" `Quick test_ME11_reexport_unexposed_name;
       test_case "ME12 empty module passes"                   `Quick test_ME12_empty_module;
       test_case "ME13 export only fact passes"               `Quick test_ME13_export_only_fact;

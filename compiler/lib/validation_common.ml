@@ -1656,6 +1656,26 @@ let build_field_proof_map (decls : top_decl list) : (string * (string * proof_ex
     | _ -> []
   ) decls
 
+(** ADT-constructor field proofs, POSITIONAL (review 2026-07 PFC-2 part a).
+    `ctor -> [(field_name, proof_ann option)]` in declaration order, for variants
+    with at least one proof-annotated field.  Used to PROPAGATE a field proof to a
+    pattern binder on destructuring: `case t of Node l cur r -> …` gives `cur` the
+    `value` field's `::: P` proof (renamed subject field_name -> binder).  Sound
+    because field proofs are now enforced at CONSTRUCTION (PFC-2b / a0). *)
+let ctor_field_proof_registry : (string * (string * proof_expr option) list) list ref = ref []
+
+let build_ctor_field_proof_map (decls : top_decl list)
+    : (string * (string * proof_expr option) list) list =
+  List.concat_map (function
+    | DType (TypeAdt { variants; _ }) ->
+      List.filter_map (fun (v : adt_variant) ->
+        if not (List.exists (fun (f : field_def) -> f.proof_ann <> None) v.fields)
+        then None
+        else Some (v.ctor, List.map (fun (f : field_def) -> (f.name, f.proof_ann)) v.fields)
+      ) variants
+    | _ -> []
+  ) decls
+
 (** Precomputed module-level facts, derived once from a module's [decls] (and the
     imported function infos) and threaded through the validation passes that would
     otherwise rebuild them on every call.
@@ -1672,6 +1692,7 @@ type module_facts = {
   mf_fields_map : field_map;                  (* build_fields_map decls *)
   mf_ctors : ctor_info;                       (* build_ctor_info decls *)
   mf_field_proof_map : (string * (string * proof_expr)) list; (* build_field_proof_map decls *)
+  mf_ctor_field_proof_map : (string * (string * proof_expr option) list) list; (* build_ctor_field_proof_map decls *)
   (* Validation-consolidation Phase 1: per-decl projections extracted ONCE here
      instead of being re-filtered out of [decls] by every structural/codec pass.
      Each list preserves the SOURCE ORDER of [decls] (List.filter_map is
@@ -1693,6 +1714,7 @@ let build_module_facts ?(extra_funcs : (string * func_info) list = []) (decls : 
     mf_fields_map = build_fields_map decls;
     mf_ctors = build_ctor_info decls;
     mf_field_proof_map = build_field_proof_map decls;
+    mf_ctor_field_proof_map = build_ctor_field_proof_map decls;
     mf_api_forms = List.filter_map (function DApi af -> Some af | _ -> None) decls;
     mf_entities  = List.filter_map (function DEntity e -> Some e | _ -> None) decls;
     mf_codecs    = List.filter_map (function DCodec cf -> Some cf | _ -> None) decls;

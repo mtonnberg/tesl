@@ -20,22 +20,46 @@ baseline). Companion reports: `EXECUTIVE-REVIEW-2026-07.md`,
   forgery, generalised over the provenance column (`Id` and `OwnerId`/cross-tenant):
   `check_nonexist_named_pack_insert`.
 - **EE-1** — existential insert with a wrapped/computed id now fails closed.
-- **PFC-2b / ADT-FIELD-PROOF (a0)** — ADT field proofs are now enforced at
-  construction. A constructor field declared `value: Int ::: IsPositive value` was
-  previously decorative — `Node Leaf 5 Leaf` (unproven value) compiled clean,
-  fabricating a "PositiveTree" with a non-positive value. Now the argument must
-  carry the field's proof (`build_adt_ctor_field_bindings` + `check_ctor_field_proofs`
-  in `check_record_field_proof_construction`, mirroring the record path). Zero corpus
-  regressions (lesson52 already constructs with proven values). Regression
-  R75_ADTFIELD. (This is the foundation of PFC-2; the remaining destructuring-
-  propagation + container-producer-check parts are tracked in
-  `roadmap/later/review_2026_07_deferred.md` §1.)
+- **PFC-2 — container-wrapped proof minting (the last critical-class forgery) — FULLY
+  CLOSED** via a 3-part chain, each verified with zero corpus regressions (99+38+2
+  green; lesson52 `findMin`/`findMax`/`findMinAlt` — the Maybe/Either/custom cases —
+  all still compile because their payloads carry the proof legitimately):
+    - **(a0) field proofs enforced at CONSTRUCTION.** A constructor field declared
+      `value: Int ::: IsPositive value` was decorative — `Node Leaf 5 Leaf` compiled
+      clean, fabricating a "PositiveTree" with a non-positive value. Now the argument
+      must carry the field's proof (`build_adt_ctor_field_bindings` +
+      `check_ctor_field_proofs` in `check_record_field_proof_construction`, mirroring
+      the record path). Regression R75_ADTFIELD.
+    - **(a) field proofs PROPAGATE on destructuring.** `case t of Node l cur r ->`
+      now gives `cur` the field's `::: P` proof (subject renamed field→binder), via a
+      new `ctor_field_proof_registry` / `build_ctor_field_proof_map` and per-field
+      propagation in the `ECase` handler of `check_expr_call_proofs`. Monotonic (only
+      accepts more) — `needPositive cur` now compiles. Regression R75_FIELDPROP.
+    - **(b) container producer check.** A forgery-restricted `fn`/`handler`/`worker`
+      returning `Maybe (T ? P)` / `Either L (T ? P)` / custom eithers must have every
+      returning SUCCESS payload (single-arg ctor whose payload TYPE is the proof's
+      subject type — `Something x`/`Right x`/`CustomRight x`, NOT the error side nor
+      `Nothing`) actually CARRY the proof. `Something (0 - 999)` / `Right (0 - 999)`
+      rejected with a clear message; `check`-validated and field-proof-carried
+      payloads accepted. Regressions R75_PFC2 (Maybe/Either forgery + checked-payload
+      control). New `RetMaybeAttached` branch in the fn-forgery gate
+      (`validation_advanced.ml`).
 - **CAP-COMPOSE** — whole-program capability composition: `check_handler_capabilities`
   verifies `expand(unit.requires) ⊆ expand(main.requires)` for every handler (App
   `api:` server bindings), worker (`queues:` → `DWorkers`), and queue reachable from
   the App `main` returns. App-based reachability ⇒ zero false positives; a
   handler/worker requiring a capability `main` does not grant is now a compile error
   with a clear hint, instead of a runtime "Missing capabilities" 500.
+
+- **TS-EQ #3 — equality recurses through nominal fields.** `is_equatable`'s
+  `TName` arm now descends into a record/ADT's field types (guarded against
+  recursive types), so a type that TRANSITIVELY contains a function is
+  non-equatable — `record Handler { callback: (Int -> Int) }; a == b` is rejected
+  ("`==` is not defined for type `Handler`") instead of emitting a meaningless
+  `equal?` on closures. Plain records still compare. Regression R75_EQFIELD. (The
+  remaining TS-ORD/EQ sub-holes — #1 stdlib-result types, #2 functions via a
+  generic `TVar` helper — need the deferred Eq/Ord qualified-type layer / HM-type
+  consumption; tracked in `roadmap/later/`.)
 
 ## Robustness / consistency
 - **SC-01** — ForAll conjunction comparison made order-insensitive

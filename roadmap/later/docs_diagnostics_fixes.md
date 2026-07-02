@@ -15,13 +15,3 @@ operator), `return x` removal, single-line-`if` → indented form.
 threading a `fix` field through the checker's error representation into the compile diagnostics — a
 plumbing change across `checker.ml`/`compile.ml`, not a local edit. The prose hints (D8) already
 give humans/AI the guidance; the machine-applicable *auto-fix* is the incremental win.
-
-## D12 — don't emit an all-parameters `bindings` hash for proof-free fns
-The parameter-provenance `bindings` hash (`dsl/private/evidence.rkt` `Bindings`, emitted via
-`check-ok-bindings`/`ensure-named` in `emit_racket.ml`) is emitted even for functions with no proof
-obligation. Suppress it when the function carries no proof obligation.
-**Why deferred:** it changes emitted Racket → requires regenerating the ~175 byte-exact `.rkt`
-snapshots (the same regen the deferred S5b needs), which should be one atomic snapshot commit on a
-clean base. Low value (a minor emit trim) against that churn + the snapshot-gate risk; best bundled
-with the S5b snapshot-regen pass. Refs: `emit_racket.ml` `emit_binding_param` / the `ensure-named`
-sites (~:4833/:4856).

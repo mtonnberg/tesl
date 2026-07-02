@@ -20,7 +20,6 @@ type t =
   | HASH_LANG            (** #lang *)
   | TESL                 (** tesl — after #lang *)
   | MODULE
-  | LIBRARY  (** library keyword — explicit library module declaration *)
   | EXPOSING
   | IMPORT
   | FN
@@ -145,7 +144,7 @@ let pp fmt t =
     | TRUE -> "true" | FALSE -> "false"
     | IDENT s -> s | UIDENT s -> s
     | HASH_LANG -> "#lang" | TESL -> "tesl"
-    | MODULE -> "module" | LIBRARY -> "library" | EXPOSING -> "exposing" | IMPORT -> "import"
+    | MODULE -> "module" | EXPOSING -> "exposing" | IMPORT -> "import"
     | FN -> "fn" | HANDLER -> "handler" | CHECK -> "check" | AUTH -> "auth"
     | CAPTURE -> "capture" | CAPTURER -> "capturer" | ESTABLISH -> "establish" | FACT -> "fact"
     | TYPE -> "type" | RECORD -> "record" | ENTITY -> "entity"

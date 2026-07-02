@@ -14,10 +14,12 @@ CAP-COMPOSE is **done** (whole-program grant coverage) — see
   fix is unverifiable until that bug is fixed — fix them together, and ideally
   single-source the compile-time allowlist and the runtime `require-capabilities!`
   primitive set so they cannot drift.
-- **DRIFT-1 (high):** `cli.args` typechecks with no import but is unbound at runtime;
-  the import-scope guard skips lowercase module prefixes (`cli`). Fix must not
-  disturb other lowercase-prefixed stdlib names. (`todo-api` imports it correctly, so
-  only the unimported case is affected.)
+- **DRIFT-1 (high):** ~~`cli.args` typechecks with no import but is unbound at runtime;~~
+  ~~the import-scope guard skips lowercase module prefixes (`cli`). Fix must not~~
+  ~~disturb other lowercase-prefixed stdlib names. (`todo-api` imports it correctly, so~~
+  ~~only the unimported case is affected.)~~
+  Remove the cli import, should not be possible and should not be part of the language. All config should be done via environment vars.
+
 
 ## Tests
 Negative for each; positive controls (correctly-declared programs still compile+run).

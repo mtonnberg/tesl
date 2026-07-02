@@ -59,6 +59,7 @@ type ctx = {
   env      : (string * scheme) list;
   records  : (string * record_def) list;
   adts     : (string * adt_def) list;      (* type name → ADT def *)
+  type_aliases : (string * ty) list;        (* newtype/alias name → base type (for Eq/Ord resolution) *)
   ctors    : (string * (string * scheme)) list;(* ctor name → (type_name, ctor_scheme) *)
   errors   : type_error list ref;
   local_bindings : local_binding_info list ref;
@@ -82,6 +83,7 @@ let make_ctx ~filename ~env = {
   env;
   records  = [];
   adts     = [];
+  type_aliases = [];
   ctors    = [];
   errors   = ref [];
   local_bindings = ref [];
@@ -400,7 +402,11 @@ let collect_type_defs ctx (decls : top_decl list) : ctx =
       let ctor_ty  = TFun (base, TCon name) in
       let ctor_sch = mono ctor_ty in
       { ctx with
-        ctors = (name, (name, ctor_sch)) :: ctx.ctors }
+        ctors = (name, (name, ctor_sch)) :: ctx.ctors;
+        type_aliases = (name, base) :: ctx.type_aliases }
+    | DType (TypeAlias { name; base_type; _ }) ->
+      (* Transparent alias — record its base so Eq/Ord resolution can chase it. *)
+      { ctx with type_aliases = (name, ty_of_type_expr base_type) :: ctx.type_aliases }
     | DCodec cf ->
       (* Register the target type as decodable iff it has a non-forbidden
          fromJson codec; this drives the decide-by-resolution check for
@@ -1462,6 +1468,71 @@ let check_decodeAs_call ?(strict = true) ctx ~loc ~args ~result_ty =
       "`decodeAs` requires a literal type-name string as its first argument"
   | [] -> ()
 
+(* ── Eq/Ord instance predicates (scoped type-class layer, Stage 1) ──────────
+   The comparison operators demand `Eq`/`Ord` on their operand type.  Rather than
+   a divergent shadow re-inferencer, the check is driven from the HM-resolved
+   operand type at the comparison site (see [infer_binop]).  It fires ONLY on a
+   FULLY-GROUND type (no type variable anywhere) — a type still mentioning a
+   variable is generic and stays PERMISSIVE (the S14b decision: no open Eq/Ord
+   polymorphism; a bad concrete instantiation is caught wherever it becomes
+   ground).  Instance set: Ord = {Int, Float, PosixMillis} + newtypes over them;
+   Eq = everything except a function (or a composite transitively containing one),
+   with records/ADTs recursed through their field types. *)
+(* A lowercase-initial TCon name is a TYPE VARIABLE (type parameter), not a real
+   type — real Tesl types are always capitalized.  ty_of_type_expr encodes a
+   type-param `a` as `TCon "a"`, so it must be treated as generic (permissive /
+   non-ground), exactly like a TVar. *)
+let is_ty_var_name (s : string) : bool =
+  String.length s > 0 && s.[0] >= 'a' && s.[0] <= 'z'
+
+let rec ty_is_ground (t : ty) : bool =
+  match t with
+  | TVar _ -> false
+  | TCon name -> not (is_ty_var_name name)
+  | TApp (h, a) | TFun (h, a) -> ty_is_ground h && ty_is_ground a
+
+(* [ctx.type_aliases] holds both newtype and transparent-alias bases (populated in
+   collect_type_defs); resolving through it makes `type Celsius = Float` orderable
+   and `type Callback = (Int) -> Int` non-equatable.  Nominal identity is unaffected
+   (unification still distinguishes the TCons); this only decides comparability. *)
+let ty_is_ord ctx (t : ty) : bool =
+  let rec go seen t =
+    match apply !(ctx.subst) t with
+    | TCon ("Int" | "Float" | "PosixMillis") -> true
+    | TVar _ -> true  (* generic — permissive (the ground-check gates real use) *)
+    | TCon name when is_ty_var_name name -> true   (* generic type param — permissive *)
+    | TCon name when not (List.mem name seen) ->
+      (match List.assoc_opt name ctx.type_aliases with
+       | Some b -> go (name :: seen) b | None -> false)
+    | _ -> false      (* records, ADTs, Maybe/List/…, functions, tuples: not ordered *)
+  in go [] t
+
+let ty_is_eq ctx (t : ty) : bool =
+  let rec go seen t =
+    match apply !(ctx.subst) t with
+    | TFun _ -> false                      (* functions have no decidable equality *)
+    | TVar _ -> true                       (* generic / type-param — permissive *)
+    | TCon name when is_ty_var_name name -> true   (* generic type param — permissive *)
+    | TApp (h, a) -> go seen h && go seen a (* container + args must be equatable *)
+    | TCon name when List.mem name seen -> true  (* recursive type: eq at the cycle *)
+    | TCon name ->
+      (match List.assoc_opt name ctx.type_aliases with
+       | Some b -> go (name :: seen) b
+       | None ->
+         (match List.assoc_opt name ctx.records with
+          | Some rd -> List.for_all (fun (_, ft) -> go (name :: seen) ft) rd.rd_fields
+          | None ->
+            (match List.assoc_opt name ctx.adts with
+             | Some ad ->
+               List.for_all (fun (_, fields) ->
+                 List.for_all (fun (_, ft) -> go (name :: seen) ft) fields) ad.ad_variants
+             | None -> true)))  (* primitive / opaque nominal → equatable *)
+  in go [] t
+
+let cmp_op_name = function
+  | BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">="
+  | BEq -> "==" | BNeq -> "!=" | _ -> "?"
+
 (** Infer the type of an expression. Returns the inferred type;
     errors are accumulated in ctx. *)
 let rec infer_expr ctx (e : expr) : ty =
@@ -2339,9 +2410,22 @@ and infer_binop ctx loc op left right =
     t_bool
   | BEq | BNeq ->
     unify_at ctx loc lt rt;
+    let t = apply !(ctx.subst) lt in
+    if ty_is_ground t && not (ty_is_eq ctx t) then
+      add_error ctx loc (Printf.sprintf
+        "equality operator `%s` is not defined for type `%s` \
+         (only types without a function component can be compared for equality)"
+        (cmp_op_name op) (pp_ty t));
     t_bool
   | BLt | BLe | BGt | BGe ->
     unify_at ctx loc lt rt;
+    let t = apply !(ctx.subst) lt in
+    if ty_is_ground t && not (ty_is_ord ctx t) then
+      add_error ctx loc (Printf.sprintf
+        "ordering operator `%s` is not defined for type `%s` \
+         (only Int, Float, PosixMillis, and newtypes over them are ordered; \
+         compare a numeric representation instead)"
+        (cmp_op_name op) (pp_ty t));
     t_bool
 
 and unwind_fun_type ty =
@@ -4375,21 +4459,11 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
     | _ -> []
   ) m.decls in
 
-  (* Names imported via explicit `exposing [...]` clauses are also valid to re-export.
-     Re-export preserves the original proof predicate identity (it is still owned by
-     the defining module; the re-exporting module just exposes it on its surface). *)
-  let imported_exposed_names =
-    let strip_dotdot s =
-      let n = String.length s in
-      if n > 4 && String.sub s (n-4) 4 = "(..)" then String.sub s 0 (n-4) else s
-    in
-    List.concat_map (fun (imp : import_decl) ->
-      match imp.names with
-      | ImportAll -> []
-      | ImportExposing names -> List.map strip_dotdot names
-    ) m.imports
-  in
-  let all_known_names = decl_names @ predicate_names @ List.map fst ctx.ctors @ imported_exposed_names in
+  (* Re-export was removed 2026-07 (along with the `library` feature): a module may
+     export ONLY names it declares locally, never a name it merely imported.  So
+     imported-exposed names are NOT added here — exporting one now fails with the
+     "only locally-defined names can be exported" error below. *)
+  let all_known_names = decl_names @ predicate_names @ List.map fst ctx.ctors in
   let seen_exports : (string, Location.loc) Hashtbl.t = Hashtbl.create 16 in
   let export_errors = List.concat_map (fun export ->
     let n = match export with ExportName n | ExportAdt n -> n in

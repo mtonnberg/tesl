@@ -1,5 +1,9 @@
 # Enforce `exposing` for facts under bare `import Mod`
 
+## Updates
+
+Discarded since we removed the library concept from the language.
+
 ## Why
 **LB-01 (med):** under bare `import Mod` (import-all), a library's `exposing` list is
 not enforced for **fact/predicate** names — non-exposed proof predicates leak into the

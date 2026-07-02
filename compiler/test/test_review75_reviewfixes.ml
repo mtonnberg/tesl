@@ -317,8 +317,116 @@ fn mk(v: Int ::: IsPositive v) -> PositiveTree =
   Node Leaf v Leaf
 |})
 
+(* ── PFC-2 (a)+(b): field-proof propagation + container producer check ──── *)
+
+let pfc2_prelude = {|
+fact IsPositive (n: Int)
+type PositiveTree
+  = Leaf
+  | Node (left: PositiveTree) (value: Int ::: IsPositive value) (right: PositiveTree)
+check checkPos(n: Int) -> n: Int ::: IsPositive n =
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "no"
+fn needPos(n: Int ::: IsPositive n) -> Int = n
+|}
+
+(* (a): a field proof propagates to a pattern binder on destructuring. *)
+let test_R75_FIELDPROP_destructure_carries_proof () =
+  should_pass ({|
+#lang tesl
+module Pfc2A exposing [IsPositive, PositiveTree, checkPos, needPos, getVal]
+import Tesl.Prelude exposing [Bool(..), Int]
+|} ^ pfc2_prelude ^ {|
+fn getVal(t: PositiveTree) -> Int =
+  case t of
+    Leaf -> 0
+    Node l cur r -> needPos cur
+|})
+
+(* (b): a plain fn cannot mint the proof through a Maybe container. *)
+let test_R75_PFC2_maybe_forgery_rejected () =
+  should_fail "does not carry" ({|
+#lang tesl
+module Pfc2M exposing [IsPositive, PositiveTree, checkPos, needPos, launder]
+import Tesl.Prelude exposing [Bool(..), Int]
+import Tesl.Maybe exposing [Maybe(..)]
+|} ^ pfc2_prelude ^ {|
+fn launder() -> Maybe (Int ? IsPositive) =
+  Something (0 - 999)
+|})
+
+(* (b): nor through an Either container. *)
+let test_R75_PFC2_either_forgery_rejected () =
+  should_fail "does not carry" ({|
+#lang tesl
+module Pfc2E exposing [IsPositive, PositiveTree, checkPos, needPos, launder]
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Either exposing [Either(..)]
+|} ^ pfc2_prelude ^ {|
+fn launder() -> Either String (Int ? IsPositive) =
+  Right (0 - 999)
+|})
+
+(* (b) control: a payload validated via a `check` is accepted. *)
+let test_R75_PFC2_checked_payload_accepted () =
+  should_pass ({|
+#lang tesl
+module Pfc2Ok exposing [IsPositive, PositiveTree, checkPos, needPos, produce]
+import Tesl.Prelude exposing [Bool(..), Int]
+import Tesl.Maybe exposing [Maybe(..)]
+|} ^ pfc2_prelude ^ {|
+fn produce(raw: Int) -> Maybe (v: Int ::: IsPositive v) =
+  if raw > 0 then
+    let good = check checkPos raw
+    Something good
+  else
+    Nothing
+|})
+
+(* ── TS-EQ (#3): equality recurses through nominal fields ────────────────── *)
+
+let test_R75_EQFIELD_function_field_record_rejected () =
+  (* A record whose field is a function has no decidable equality; `==` used to
+     compile to a meaningless `equal?` on closures. *)
+  should_fail "not defined for type" {|
+#lang tesl
+module EqField exposing [Handler, same]
+import Tesl.Prelude exposing [Bool(..), Int]
+record Handler {
+  id: Int
+  callback: (Int -> Int)
+}
+fn same(a: Handler, b: Handler) -> Bool =
+  a == b
+|}
+
+let test_R75_EQFIELD_plain_record_accepted () =
+  should_pass {|
+#lang tesl
+module EqOk exposing [Point, same]
+import Tesl.Prelude exposing [Bool(..), Int]
+record Point {
+  x: Int
+  y: Int
+}
+fn same(a: Point, b: Point) -> Bool =
+  a == b
+|}
+
 let () =
   run "Review75-ReviewFixes" [
+    "eq-nominal-fields", [
+      test_case "R75_EQFIELD function-field record rejected" `Quick test_R75_EQFIELD_function_field_record_rejected;
+      test_case "R75_EQFIELD plain record accepted" `Quick test_R75_EQFIELD_plain_record_accepted;
+    ];
+    "pfc2-container-minting", [
+      test_case "R75_FIELDPROP destructure carries field proof (a)" `Quick test_R75_FIELDPROP_destructure_carries_proof;
+      test_case "R75_PFC2 Maybe container forgery rejected (b)" `Quick test_R75_PFC2_maybe_forgery_rejected;
+      test_case "R75_PFC2 Either container forgery rejected (b)" `Quick test_R75_PFC2_either_forgery_rejected;
+      test_case "R75_PFC2 checked payload accepted (b control)" `Quick test_R75_PFC2_checked_payload_accepted;
+    ];
     "adt-field-proof-construction", [
       test_case "R75_ADTFIELD literal construction rejected" `Quick test_R75_ADTFIELD_literal_construction_rejected;
       test_case "R75_ADTFIELD proven construction accepted" `Quick test_R75_ADTFIELD_proven_construction_accepted;

@@ -51,7 +51,6 @@ let check_module (m : module_form) : validation_error list =
   @ (TNaming @: check_duplicate_decl_fields decls)
   @ (TCapability @: check_capability_cycles decls)
   @ (TProof @: check_check_fn_has_proof_return decls)
-  @ (TNaming @: check_library_self_boundary m)
   @ (TDatabase @: check_entity_structure ~facts decls)
   @ (TCodec @: check_capture_codec_types decls)
   @ (TProof @: check_capture_proof_via ~facts decls)
@@ -95,9 +94,9 @@ let check_module (m : module_form) : validation_error list =
   @ (TNaming @: check_adt_variant_names decls)
   @ (TNaming @: check_self_referential_aliases decls)
   @ (TNaming @: check_type_arities decls)
-  @ (TCapability @: check_ord_operator_types ~facts decls)
+  (* Ord/Eq operand decidability is now driven from HM-resolved types at the
+     comparison site (checker.ml infer_binop, Eq/Ord Stage 1); the divergent
+     shadow re-inferencer `check_ord_operator_types` was retired. *)
   @ (TStructural @: check_handler_isolation decls)
   @ (TCapability @: check_auth_call_restriction decls)
-  @ (TNaming @: check_imported_module_is_library m)
-  @ (TNaming @: check_exported_signature_completeness m)
   @ (TNaming @: collect_import_parse_errors m)

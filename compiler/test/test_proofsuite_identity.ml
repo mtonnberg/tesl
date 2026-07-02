@@ -602,8 +602,14 @@ fn f(x: Int, m: Maybe Int) -> Int =
     Nothing -> x
 |}
 
+(* Re-export was removed 2026-07 (with the `library` feature): a module may export
+   only names it declares locally.  The `Bridge` module re-exporting FactOwner's
+   ValidEmail/checkEmail is now rejected — so the "re-export chain" cannot even be
+   built (forging a foreign fact through it is impossible a fortiori). *)
 let pos_chain_legit_use () =
-  with_two_files_pass ~label:"J-POS chain legit" fact_owner reexport_bridge
+  two_files_should_fail ~label:"J re-export chain rejected"
+    "only locally-defined names can be exported\\|non-local name"
+    fact_owner reexport_bridge
 
 let pos_fn_takes_proof_param_returns_plain () =
   should_pass ~label:"J-POS fn proof param plain return" {|
@@ -677,7 +683,7 @@ let () =
       test_case "legit re-export and use compiles" `Quick pos_legit_reexport_and_use;
       test_case "distinct binder names compile" `Quick pos_no_shadow_distinct_names;
       test_case "disjoint case binders compile" `Quick pos_disjoint_case_binders;
-      test_case "re-export chain (legit) compiles" `Quick pos_chain_legit_use;
+      test_case "re-export chain rejected" `Quick pos_chain_legit_use;
       test_case "fn proof param plain return compiles" `Quick pos_fn_takes_proof_param_returns_plain;
       test_case "handler consumes auth proof compiles" `Quick pos_handler_consumes_auth_proof;
     ];
