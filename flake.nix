@@ -218,8 +218,8 @@
         # Used inside devShells.default so developers run against their local
         # compiler/_build/  rather than the pinned store binary.
         tesl-cli-dev = pkgs.writeShellScriptBin "tesl" (''
-          export TESL_REPO_ROOT="${toString ./.}"
-          export TESL_OCAML_COMPILER="$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe"
+          export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-${toString ./.}}"
+          export TESL_OCAML_COMPILER="''${TESL_OCAML_COMPILER:-$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe}"
           export PLTCOLLECTS="${pkgs.racket}/share/racket/collects:${tesl-racket}/share/tesl-collections''${PLTCOLLECTS:+:$PLTCOLLECTS}"
 
           export PATH="${pkgs.racket}/bin:$PATH"
@@ -285,8 +285,8 @@
           ];
 
           shellHook = ''
-            export TESL_REPO_ROOT="${toString ./.}"
-            export TESL_OCAML_COMPILER="$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe"
+            export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-${toString ./.}}"
+            export TESL_OCAML_COMPILER="''${TESL_OCAML_COMPILER:-$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe}"
 
             if [ -z "''${TESL_SKIP_AUTO_BUILD:-}" ] && [ ! -x "$TESL_OCAML_COMPILER" ]; then
               echo "[tesl] OCaml compiler not built; building compiler/bin/main.exe..."

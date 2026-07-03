@@ -75,6 +75,29 @@ cd "$SCRIPT_DIR"
 export TESL_REPO_ROOT="$SCRIPT_DIR"
 COMPILER_DIR="$SCRIPT_DIR/compiler"
 
+# ── CI hermetic-store guard ──────────────────────────────────────────────────
+# Under `nix develop`, the flake source is realised into the READ-ONLY Nix
+# store, so the dev shell's shellHook can neither build the OCaml compiler in
+# place nor `raco --link` the runtime collections there — it leaves the `tesl`
+# wrapper pointing at an unbuilt store binary and no `tesl` collection linked.
+# ci.sh always runs from the WRITABLE checkout ($SCRIPT_DIR, basename `tesl`), so:
+#   (1) point the compiler env at the binary phase 1 builds here — the dev `tesl`
+#       wrapper now honours a pre-set $TESL_OCAML_COMPILER (see flake.nix), and
+#   (2) register the `tesl` Racket collection against the checkout so a bare
+#       `racket foo.rkt` (integration tests) resolves `(require tesl/dsl/…)`.
+# Both are idempotent and harmless when the source is already writable (local).
+export TESL_OCAML_COMPILER="$COMPILER_DIR/_build/default/bin/main.exe"
+
+if command -v raco >/dev/null 2>&1; then
+    if ! raco pkg show tesl 2>/dev/null | grep -qF "link $SCRIPT_DIR"; then
+        if raco pkg show tesl 2>/dev/null | grep -Eq '^[[:space:]]*tesl([[:space:]]|$)'; then
+            raco pkg update  --auto --link "$SCRIPT_DIR" >/dev/null 2>&1 || true
+        else
+            raco pkg install --auto --link "$SCRIPT_DIR" >/dev/null 2>&1 || true
+        fi
+    fi
+fi
+
 # ── Parallel worker pool size (fmt/validate) ─────────────────────────────────
 # The per-file `tesl fmt` and `tesl validate` loops are embarrassingly parallel.
 # TESL_CI_JOBS overrides the worker count (default: one per core). 1 = serial.

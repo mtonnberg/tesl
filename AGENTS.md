@@ -174,4 +174,4 @@ Tesl has a very powerful proof system, make sure to leverage that when coding. T
 
 ## Communication style
 
-Be crisp, concise and precise but helpful and constructive. Avoid fluff and go directly to the point. Use BLUF where appropiate (Bottom Line Up Front).
+Be very crisp, concise and precise but helpful and constructive. Avoid fluff and go directly to the point. Use BLUF where appropiate (Bottom Line Up Front). If a user do not seem to understand, be a bit more verbose and use tables to clearly make different options clear and understandable.
