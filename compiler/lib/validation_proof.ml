@@ -2194,29 +2194,50 @@ let looks_proof_carrying (funcs : (string * func_info) list) (e : expr) : bool =
      | None -> false)
   | _ -> false
 
-(* Like packed_body_exprs, but also threads the in-scope `let`-bound local
-   environment (name → bound value expression) down to each pack site.  Only
-   plain `let x = v` bindings are tracked — case-pattern bindings and
-   destructuring binders are intentionally NOT, so packing a value bound by a
-   `case ... of Ctor x ->` arm is never flagged (it carries the scrutinee's
-   proof history, validated elsewhere). *)
-let packed_body_exprs_with_locals (e : expr) : (expr * (string * expr) list) list =
-  let rec go (env : (string * expr) list) (e : expr) : (expr * (string * expr) list) list =
+(* Like packed_body_exprs, but also threads, down to each pack site, the
+   in-scope binder environments.  Returns per pack site: (packed_body, let_env,
+   case_env) where:
+     - let_env maps `let x = v` / `let (v ::: p) = value` binders to their value;
+     - case_env maps `case … of Ctor v ->` PATTERN binders to the SCRUTINEE they
+       were unwrapped from.
+   GDP-EXISTS-CASE (2026-07 fresh review, CRITICAL): case-pattern binders used to
+   be dropped entirely, so `case scrut of Ctor v -> exists w => v` reached the
+   "binder we cannot see → accept conservatively" branch and minted an arbitrary
+   proof (incl. FromDb provenance) on unvalidated data.  Threading them lets the
+   enforcement decide by the scrutinee's actual provenance instead of failing
+   open, and letproof binders are threaded too so their value is resolvable. *)
+let packed_body_exprs_with_locals (e : expr)
+    : (expr * (string * expr) list * (string * expr) list) list =
+  let rec pat_binders acc = function
+    | PVar n -> n :: acc
+    | PCon { fields; _ } -> List.fold_left (fun acc (_, p) -> pat_binders acc p) acc fields
+    | _ -> acc
+  in
+  let rec go let_env case_env (e : expr) =
     match e with
     | EApp {
         fn = EVar { name = "make-witness"; _ };
         arg = EApp { arg = body; _ };
-        _ } -> [(body, env)]
-    | EIf { then_; else_; _ } -> go env then_ @ go env else_
-    | ECase { arms; _ } ->
-      List.concat_map (fun (a : case_arm) -> go env a.body) arms
-    | ELet { name; value; body; _ } -> go ((name, value) :: env) body
-    | ELetProof { body; _ } -> go env body
+        _ } -> [(body, let_env, case_env)]
+    | EIf { then_; else_; _ } -> go let_env case_env then_ @ go let_env case_env else_
+    | ECase { scrut; arms; _ } ->
+      (* Resolve a let-bound scrutinee to its value so provenance (e.g. `let x =
+         selectOne …  ; case x of …`) is not lost when the binder is checked. *)
+      let scrut' = match scrut with
+        | EVar { name; _ } -> (match List.assoc_opt name let_env with Some v -> v | None -> scrut)
+        | _ -> scrut in
+      List.concat_map (fun (a : case_arm) ->
+        let case_env' =
+          List.map (fun n -> (n, scrut')) (pat_binders [] a.pattern) @ case_env in
+        go let_env case_env' a.body) arms
+    | ELet { name; value; body; _ } -> go ((name, value) :: let_env) case_env body
+    | ELetProof { value_name; value; body; _ } ->
+      go ((value_name, value) :: let_env) case_env body
     | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
-    | EWithTransaction { body; _ } -> go env body
+    | EWithTransaction { body; _ } -> go let_env case_env body
     | _ -> []
   in
-  go [] e
+  go [] [] e
 
 let check_existential_proof_enforcement ?(extra_funcs = []) (decls : top_decl list) : validation_error list =
   let funcs = build_func_info decls @ extra_funcs in
@@ -2273,7 +2294,28 @@ let check_existential_proof_enforcement ?(extra_funcs = []) (decls : top_decl li
               | Some { proof_ann = Some p; _ } -> proof_predicates p
               | _ -> []
             in
-            List.concat_map (fun (body, local_env) ->
+            let user_fn_names =
+              List.filter_map (function DFunc d -> Some d.name | _ -> None) decls in
+            let is_fromdb_family =
+              List.exists (fun p -> List.mem p ["FromDb"; "FromQueue"; "FromDeadQueue"])
+                declared_preds in
+            (* A case-arm binder carries the declared proof iff the SCRUTINEE it was
+               unwrapped from provably does: either the proof engine resolves the
+               declared predicate(s) on the scrutinee, or — for framework provenance
+               (FromDb/FromQueue) not modelled as a first-class proof — the
+               scrutinee's returned value flows from a real DB site.  A fabricated
+               constructor/record scrutinee satisfies neither and is rejected. *)
+            let case_scrut_carries scrut =
+              let se = build_initial_subject_env fd.params in
+              let pe = build_initial_proof_env fd.params in
+              let carried =
+                try List.concat_map proof_predicates (proofs_of_expr "_pack" funcs se pe scrut)
+                with _ -> [] in
+              (carried <> [] && List.for_all (fun p -> List.mem p carried) declared_preds)
+              || (is_fromdb_family
+                  && return_value_flows_from_db_site ~shadowed:user_fn_names scrut)
+            in
+            List.concat_map (fun (body, local_env, case_env) ->
               match body with
               | EVar { loc; name } when List.mem name param_names ->
                 (* Raw parameter: OK only if it declares the required proof. *)
@@ -2285,28 +2327,42 @@ let check_existential_proof_enforcement ?(extra_funcs = []) (decls : top_decl li
                          "existential pack returns the raw parameter `%s`; the packed value must \
                           carry the proof `%s` declared in the return spec"
                          name (pp_proof declared_proof)) ]
-              | EVar { loc; name } ->
-                (match List.assoc_opt name local_env with
-                 | Some value ->
-                   let carried = resolved_preds value in
-                   if is_wrong_fact carried then
-                     [ make_error loc ~hint
-                         (Printf.sprintf
-                            "existential pack body carries proof(s) `%s` but must carry the proof \
-                             `%s` declared in the return spec"
-                            (String.concat ", " carried) (pp_proof declared_proof)) ]
-                   else if looks_proof_carrying funcs value then []
-                   else
-                     [ make_error loc ~hint
-                         (Printf.sprintf
-                            "existential pack returns the raw local `%s`; the packed value must \
-                             carry the proof `%s` declared in the return spec"
-                            name (pp_proof declared_proof)) ]
-                 | None ->
-                   (* A binder we cannot see here (e.g. a `case … of Something t ->`
-                      pattern binder carrying `FromDb`).  Accept conservatively, as
-                      the original did — the call-site checker guards downstream use. *)
-                   [])
+              | EVar { loc; name } when List.mem_assoc name local_env ->
+                let value = List.assoc name local_env in
+                let carried = resolved_preds value in
+                if is_wrong_fact carried then
+                  [ make_error loc ~hint
+                      (Printf.sprintf
+                         "existential pack body carries proof(s) `%s` but must carry the proof \
+                          `%s` declared in the return spec"
+                         (String.concat ", " carried) (pp_proof declared_proof)) ]
+                else if looks_proof_carrying funcs value then []
+                else
+                  [ make_error loc ~hint
+                      (Printf.sprintf
+                         "existential pack returns the raw local `%s`; the packed value must \
+                          carry the proof `%s` declared in the return spec"
+                         name (pp_proof declared_proof)) ]
+              | EVar { loc; name } when List.mem_assoc name case_env ->
+                (* GDP-EXISTS-CASE: a value unwrapped from a `case` arm.  Decide by
+                   the scrutinee's provenance, NOT by conservative acceptance. *)
+                if case_scrut_carries (List.assoc name case_env) then []
+                else
+                  [ make_error loc ~hint
+                      (Printf.sprintf
+                         "existential pack returns `%s`, unwrapped from a value that is not shown \
+                          to carry the proof `%s` declared in the return spec; validate it at a \
+                          boundary (`check`/`establish`) or read it from the database"
+                         name (pp_proof declared_proof)) ]
+              | EVar _ ->
+                (* The existential WITNESS binder itself (`exists w => w`, the
+                   identity introduction) or another binder we cannot resolve
+                   here.  Accept conservatively, as the original did — the
+                   case-arm laundering path that used to fall through HERE is now
+                   handled by the [case_env] branch above, so this no longer fails
+                   open on it.  (Witness-identity intro is covered by dedicated
+                   tests and must keep compiling.) *)
+                []
               | _ ->
                 (* Non-identifier body: accept a recognised proof-carrier
                    (EOk / check / select / insert / attachFact / …); reject a

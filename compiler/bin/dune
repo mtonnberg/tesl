@@ -1,6 +1,7 @@
 (executable
  (name main)
  (modules main)
+ (flags (:standard -warn-error +8))
  (libraries tesl_compiler_lib unix))
 
 ; A1: headless source-map CLI (emit-map / translate). Separate executable so it
@@ -8,4 +9,5 @@
 (executable
  (name tesl_sourcemap)
  (modules tesl_sourcemap)
+ (flags (:standard -warn-error +8))
  (libraries tesl_compiler_lib unix))

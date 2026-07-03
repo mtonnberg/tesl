@@ -940,7 +940,9 @@ let check_fn_return_proof_annotations
           | Some "FromDb" ->
             let user_fn_names =
               List.filter_map (function DFunc d -> Some d.name | _ -> None) decls in
-            body_has_db_site ~shadowed:user_fn_names fd.body
+            (* GDP-FROMDB-DATAFLOW: dataflow, not presence — the RETURNED value
+               must flow from the DB site, else a discarded select forges FromDb. *)
+            return_value_flows_from_db_site ~shadowed:user_fn_names fd.body
           | Some ("FromQueue" | "FromDeadQueue") -> false
           | Some p -> List.mem p stdlib_auto_preds
           | None -> false in
@@ -1063,7 +1065,9 @@ let check_fn_return_proof_annotations
                 cannot masquerade as the SQL builtin and forge DB provenance. *)
              let user_fn_names =
                List.filter_map (function DFunc d -> Some d.name | _ -> None) decls in
-             body_has_db_site ~shadowed:user_fn_names fd.body
+             (* GDP-FROMDB-DATAFLOW: dataflow, not presence — the RETURNED value
+               must flow from the DB site, else a discarded select forges FromDb. *)
+            return_value_flows_from_db_site ~shadowed:user_fn_names fd.body
            | Some ("FromQueue" | "FromDeadQueue") -> false
            | Some p -> List.mem p stdlib_auto_preds
            | None -> false in
@@ -1172,7 +1176,9 @@ let check_fn_return_proof_annotations
          let is_stdlib_auto = match pred_name with
            | Some "FromDb" ->
              let user_fn_names = List.filter_map (function DFunc d -> Some d.name | _ -> None) decls in
-             body_has_db_site ~shadowed:user_fn_names fd.body
+             (* GDP-FROMDB-DATAFLOW: dataflow, not presence — the RETURNED value
+               must flow from the DB site, else a discarded select forges FromDb. *)
+            return_value_flows_from_db_site ~shadowed:user_fn_names fd.body
            | Some ("FromQueue" | "FromDeadQueue") -> false
            | Some p -> List.mem p stdlib_auto_preds
            | None -> false in
@@ -1253,7 +1259,21 @@ let check_fn_return_proof_annotations
             in
             walk type_env0 subject_env0 proof_env0 fd.body
           | _ -> ())
-       | _ -> ())
+       (* All remaining return specs carry no forgery obligation in THIS gate:
+            - RetPlain: no proof.
+            - RetForAll / RetMaybeForAll / RetSetForAll / RetMaybeSetForAll /
+              RetForAllDictValues / RetForAllDictKeys: validated by
+              Validation_proof.check_forall_consistency.
+            - RetExists: validated by
+              Validation_proof.check_existential_proof_enforcement.
+            - the guard-FALSE cases of the three specs handled above (e.g. an
+              attached / named-pack / maybe return with no proof annotation).
+          Enumerated (NOT a wildcard) so -warn-error +8 forces a decision here
+          when a new return_spec constructor is added — fail-closed on new AST
+          shapes rather than silently skipping the forgery restriction. *)
+       | RetPlain _ | RetForAll _ | RetMaybeForAll _ | RetSetForAll _
+       | RetMaybeSetForAll _ | RetForAllDictValues _ | RetForAllDictKeys _
+       | RetExists _ | RetAttached _ | RetNamedPack _ | RetMaybeAttached _ -> ())
     | _ -> ()
   ) decls;
   field_proof_registry := [];

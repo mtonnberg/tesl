@@ -1,8 +1,13 @@
 (library
  (name tesl_compiler_lib)
  (wrapped false)
- (ocamlopt_flags (:standard -w -50))
- (ocamlc_flags (:standard -w -50))
+ ; -warn-error +8: a non-exhaustive pattern match (warning 8) is a COMPILE
+ ; ERROR across the whole compiler, not just the two soundness modules that
+ ; previously opted in with [@@@ocaml.warning "@8"].  A match that forgets a
+ ; constructor now fails the build instead of silently falling through — the
+ ; fail-closed discipline the proof/validation passes depend on.
+ (ocamlopt_flags (:standard -w -50 -warn-error +8))
+ (ocamlc_flags (:standard -w -50 -warn-error +8))
  (modules formatter linter ast ast_visitor desugar checker compile emit_racket emit_ts emit_elm error_codes float_fmt ir lexer location mutate parser proof_checker source_map token type_system validation_common validation_structural validation_sql_codec validation_proof validation_names validation_capabilities validation_advanced validation embedded_docs)
  ; unix: wall-clock timestamps for opt-in per-phase timing (TESL_PHASE_TIMING)
  ;       in compile.ml.  unix ships with the OCaml distribution.

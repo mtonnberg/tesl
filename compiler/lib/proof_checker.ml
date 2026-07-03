@@ -806,7 +806,13 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
                 errors := { loc; message = Printf.sprintf
                   "ok proof does not match declared Maybe return spec: got `%s`, expected `%s`"
                   (pp_proof normalized) (pp_proof expected) } :: !errors)
-         | _ -> ());
+         (* RetPlain: no declared proof, so an `ok` here carries no obligation.
+            RetExists: the packed value's proof is enforced by the PRIMARY gate
+            Validation_proof.check_existential_proof_enforcement (which decides
+            by the scrutinee's provenance, fail-closed); this secondary
+            ok-proof-match site defers to it.  Enumerated (no wildcard) so a NEW
+            return_spec constructor forces a decision here under -warn-error +8. *)
+         | RetPlain _ | RetExists _ -> ());
       | EIf { then_; else_; _ } ->
         validate_ok_expr then_; validate_ok_expr else_
       | ECase { arms; _ } ->

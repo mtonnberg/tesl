@@ -4440,7 +4440,7 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
       collect_preds_from_proof left @ collect_preds_from_proof right
   in
   let extract_produced_preds_with_loc (fd : func_decl) : (string * Location.loc) list =
-    let from_rs = function
+    let rec from_rs = function
       | RetPlain { ty = TApp { head = TName { name = "Fact"; _ }; arg; loc; _ }; _ } ->
         (match arg with
          | TApp { head = TName { name; _ }; _ } -> [(name, loc)]
@@ -4462,17 +4462,25 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
           | Some p -> List.map (fun pred -> (pred, loc)) (collect_preds_from_proof p)
         in
         of_opt entity_proof @ of_opt other_proof
-      | RetForAll { proof = PredApp { pred; _ }; loc; _ }
-      | RetMaybeForAll { proof = PredApp { pred; _ }; loc; _ }
-      | RetSetForAll { proof = PredApp { pred; _ }; loc; _ }
-      | RetMaybeSetForAll { proof = PredApp { pred; _ }; loc; _ }
-      | RetForAllDictValues { proof = PredApp { pred; _ }; loc; _ }
-      | RetForAllDictKeys   { proof = PredApp { pred; _ }; loc; _ } -> [(pred, loc)]
+      (* Route the WHOLE proof through collect_preds_from_proof (which recurses
+         into PredAnd) so a CONJUNCTION `ForAll (P && Q)` produces BOTH P and Q
+         for the ownership gate.  Matching only `PredApp` here (as before) let a
+         function mint an unowned conjunct predicate: the compound fell through
+         to `| _ -> []` and produced nothing, so the ownership check passed. *)
+      | RetForAll { proof; loc; _ }
+      | RetMaybeForAll { proof; loc; _ }
+      | RetSetForAll { proof; loc; _ }
+      | RetMaybeSetForAll { proof; loc; _ }
+      | RetForAllDictValues { proof; loc; _ }
+      | RetForAllDictKeys   { proof; loc; _ } ->
+        List.map (fun pred -> (pred, loc)) (collect_preds_from_proof proof)
       | RetMaybeAttached { binding = b; loc; _ } ->
         (match b.proof_ann with
          | Some p -> List.map (fun pred -> (pred, loc)) (collect_preds_from_proof p)
          | None -> [])
-      | _ -> []
+      (* An existential return may itself carry a proof-producing inner spec. *)
+      | RetExists { body; _ } -> from_rs body
+      | RetPlain _ -> []
     in
     from_rs fd.return_spec
   in

@@ -182,7 +182,10 @@ let agent_prim_of_type_expr (t : type_expr) : agent_prim option =
    — its FromDeadQueue proof is infrastructure-produced and handled elsewhere. *)
 let is_forgery_restricted_kind : func_kind -> bool = function
   | FnKind | HandlerKind | WorkerKind -> true
-  | _ -> false
+  (* Enumerated (no wildcard) so a NEW func_kind forces an explicit soundness
+     decision here under -warn-error +8 rather than silently defaulting to
+     "not restricted" (fail-open).  Mirrors is_proof_introducing_kind. *)
+  | CheckKind | AuthKind | EstablishKind | DeadWorkerKind | MainKind -> false
 
 (* A FromDb provenance proof on a fn/handler/worker return is only
    framework-produced when the body actually runs a select/insert/upsert/…
@@ -213,6 +216,110 @@ let body_has_db_site ?(shadowed : string list = []) (e : expr) : bool =
     | _ -> Ast_visitor.fold_children (fun found c -> found || go bound c) false e
   in
   go shadowed e
+
+(* GDP-FROMDB-DATAFLOW (2026-07 fresh review, CRITICAL).  [body_has_db_site] is a
+   pure PRESENCE test: it says "a select/insert/… occurs SOMEWHERE in the body".
+   That was used to auto-grant a `FromDb` provenance proof on a fn/handler return —
+   but presence is not provenance.  A body that runs a select and DISCARDS the
+   result (`let _r = selectOne …  ;  Task { …fabricated… }`) passed the gate and
+   minted `FromDb` on an attacker-shaped record that never came from the database.
+
+   [return_value_flows_from_db_site] is the DATAFLOW replacement: it accepts only
+   when every RETURNING leaf of the body evaluates to a DB-sourced value — the DB
+   call itself, or a `let`/`case` binder that carries one.  A fabricated record /
+   constructor / literal does NOT flow from the DB and is rejected, closing the
+   forgery, while the genuine `let x = selectOne … ; case x of … -> x` and
+   `update … returning one` shapes are still accepted.  Identifier privilege is
+   still decided by resolution, not spelling (via [shadowed], as before). *)
+let return_value_flows_from_db_site ?(shadowed : string list = []) (e : expr) : bool =
+  (* Drill through BOTH application spine (`fn`) AND binop left operand — a
+     `select … where t.id == id` parses as `EBinop (==, <select-chain>, id)`, so
+     the select builtin sits at the head of the binop's LEFT, exactly as the
+     parser's own [is_select_expr] resolves it. *)
+  let rec spine_head = function
+    | EApp { fn; _ } -> spine_head fn
+    | EBinop { left; _ } -> spine_head left
+    | e -> e
+  in
+  let rec pat_binders acc = function
+    | PVar n -> n :: acc
+    | PCon { fields; _ } -> List.fold_left (fun acc (_, p) -> pat_binders acc p) acc fields
+    | _ -> acc
+  in
+  (* Is this a LEAF expression (not a structural form threaded by [flows]) that
+     evaluates to a DB-sourced value?  Decided by the leaf's spine head:
+       - an SQL builtin (select/insert/update/…)                       → yes
+       - a USER-defined top-level function (present in [shadowed])      → NO — a
+         `fn` result is whatever the fn returns; wrapping a select in a user
+         function must not launder DB provenance onto a fabricated value.
+       - any OTHER head (SQL surface keyword like `set`/`returning`, or a
+         non-identifier statement form like `update … returning one`) → yes iff
+         its subtree actually contains a DB site.
+     Fabrications (records/constructors/literals/lambdas/bare vars) are never
+     DB-sourced, so a select buried in a record field does not launder. *)
+  let is_db_leaf (e : expr) : bool =
+    match e with
+    | ERecord _ | EConstructor _ | ELit _ | ELambda _ | EVar _ -> false
+    | _ ->
+      (match spine_head e with
+       | EVar { name; _ } when is_sql_builtin name && not (List.mem name shadowed) -> true
+       | EVar { name; _ } when List.mem name shadowed -> false  (* user fn — no laundering *)
+       | _ -> body_has_db_site ~shadowed e)
+  in
+  (* A statement whose spine head is a WRITE builtin (insert/upsert/update/delete
+     …).  A DB WRITE surface statement lowers to a multi-statement sequence
+     (`update … / where … / set … / returning one`); its trailing `returning <p>`
+     projection is the row the write produced.  We therefore treat a trailing
+     `returning` as DB-sourced ONLY when a write preceded it in the SAME sequence
+     ([saw_write]).  Reads never use `returning`, so `select (discarded); returning
+     (fabricated)` stays rejected. *)
+  let is_db_write_leaf (e : expr) : bool =
+    match spine_head e with
+    | EVar { name; _ } ->
+      (match sql_op_of_name name with Some op -> sql_op_effect op = SqlWrite | None -> false)
+      && not (List.mem name shadowed)
+    | _ -> false
+  in
+  (* A DB write's surface modifier statements (`where`/`set`/`returning`/…) are
+     sequenced as separate trailing statements; the write's result (the row)
+     flows out through them.  These are DB-sourced only in a write sequence
+     ([saw_write]); standalone they are not (and reads never use them as the
+     returned statement). *)
+  let is_sql_modifier_stmt (e : expr) : bool =
+    match spine_head e with
+    | EVar { name; _ } ->
+      List.mem name ["where"; "set"; "returning"; "from"; "in";
+                     "order"; "limit"; "offset"; "groupBy"; "innerJoin";
+                     "onConflict"; "doUpdate"]
+    | _ -> false
+  in
+  (* [tainted] = local names bound to a DB-sourced value; [saw_write] = a DB write
+     occurred earlier in the current statement sequence.  Structural forms are
+     matched FIRST so [is_db_leaf] is only ever asked about leaves. *)
+  let rec flows (tainted : string list) (saw_write : bool) (e : expr) : bool =
+    match e with
+    | ELet { name; value; body; _ } ->
+      let v_db = flows tainted false value in
+      flows (if v_db then name :: tainted else tainted)
+        (saw_write || is_db_write_leaf value) body
+    | ELetProof { value_name; value; body; _ } ->
+      let v_db = flows tainted false value in
+      flows (if v_db then value_name :: tainted else tainted)
+        (saw_write || is_db_write_leaf value) body
+    | EIf { then_; else_; _ } ->
+      flows tainted saw_write then_ && flows tainted saw_write else_
+    | ECase { scrut; arms; _ } ->
+      let scrut_db = flows tainted false scrut in
+      arms <> [] && List.for_all (fun (a : case_arm) ->
+        flows (if scrut_db then pat_binders tainted a.pattern else tainted) saw_write a.body) arms
+    | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+    | EWithTransaction { body; _ } -> flows tainted saw_write body
+    | EFail _ -> true  (* never returns a value — not a fabrication counterexample *)
+    | EVar { name; _ } -> List.mem name tainted
+    | _ -> is_db_leaf e || (saw_write && is_sql_modifier_stmt e)
+  in
+  let flows tainted e = flows tainted false e in
+  flows [] e
 
 (* ── Proof helpers ───────────────────────────────────────────────────────── *)
 

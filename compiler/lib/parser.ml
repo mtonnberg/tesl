@@ -655,19 +655,17 @@ let parse_binding_with_type_parser parse_type s =
   let* name = expect_ident s in
   let* _  = expect s COLON in
   let* ty = parse_type s in
-  (* Skip `? Proof` named-pack annotation in parameter position —
-     the type is kept as the base type (e.g. `n: Int ? Positive` → type = Int). *)
-  if peek s = QUESTION then begin
-    advance s;
-    (* Skip the proof/predicate tokens after ? *)
-    let continue_ = ref true in
-    while !continue_ do
-      match peek s with
-      | IDENT _ | UIDENT _ -> advance s
-      | DOUBLE_AMP -> advance s  (* && in compound proof like Int ? A && B *)
-      | _ -> continue_ := false
-    done
-  end;
+  (* The `?` named-pack operator is a RETURN-type construct only.  In a binding
+     position (parameter, capture, auth binding) it was previously skipped
+     SILENTLY — the proof was dropped with no diagnostic, so `n: Int ? Positive`
+     quietly became a plain `n: Int` with no proof obligation (a footgun).  Fail
+     closed with a helpful message pointing at `:::`. *)
+  if peek s = QUESTION then
+    err s (Printf.sprintf
+      "the `?` named-pack operator is only valid in a return type; to require a \
+       proof on parameter `%s`, use `:::` instead (e.g. `%s: <Type> ::: <Proof> %s`)"
+      name name name)
+  else
   let* proof_ann =
     if peek s = PROOF_ANNOT then begin
       advance s;
@@ -3832,6 +3830,12 @@ let parse_api_form s =
   skip_layout s;
   let endpoints = ref [] in
   let ep_counter = ref 0 in
+  (* GDP-AUTH-DROP (2026-07 fresh review, HIGH): a malformed/incomplete endpoint
+     `auth` clause (e.g. missing the trailing `via <fn>`) must NOT be silently
+     dropped — doing so leaves the endpoint's [auth] field = None, which turns a
+     would-be protected endpoint into a fully public one with zero diagnostics.
+     Any such failure is recorded here and fails the parse fail-closed. *)
+  let ep_parse_err : parse_error option ref = ref None in
   while peek s <> RBRACE && peek s <> EOF do
     skip_layout s;
     if peek s = RBRACE then ()
@@ -3896,9 +3900,16 @@ let parse_api_form s =
                    | Ok () ->
                      (match expect_ident s with
                       | Ok vfn -> auth := Some { binding = b; via_fn = vfn }
-                      | Err _ -> ())
-                   | Err _ -> ())
-                | Err _ -> ())
+                      | Err e ->
+                        if !ep_parse_err = None then ep_parse_err := Some e)
+                   | Err _ ->
+                     if !ep_parse_err = None then
+                       ep_parse_err := Some {
+                         msg = "auth clause requires `via <authFunction>` \
+                                (e.g. `auth user: User ::: Authenticated user via cookieAuth`)";
+                         loc = current_loc s })
+                | Err e ->
+                  if !ep_parse_err = None then ep_parse_err := Some e)
              | IDENT "body" ->
                advance s;
                (match parse_api_body_binding s with
@@ -4005,9 +4016,12 @@ let parse_api_form s =
     end;
     skip_layout s
   done;
-  let* _ = expect s RBRACE in
-  let loc = span loc0 (current_loc s) in
-  return { name; endpoints = List.rev !endpoints; loc }
+  (match !ep_parse_err with
+   | Some e -> Err e
+   | None ->
+     let* _ = expect s RBRACE in
+     let loc = span loc0 (current_loc s) in
+     return { name; endpoints = List.rev !endpoints; loc })
 
 let rec abbreviated_binding_name default = function
   | PredApp { args = []; _ } -> default

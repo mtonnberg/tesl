@@ -370,7 +370,24 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
                               cf.name field_name (String.concat ", " uncovered))
                            :: !errors
                      end)
-                | DecodeDefault _ | DecodeCrossCheck _ -> ()
+                | DecodeDefault { field_name; loc; _ } ->
+                  (* A proof-annotated field must be validated at the boundary
+                     (`via <checkFn>`); populating it from a codec DEFAULT value
+                     establishes no proof, so the decoded record would carry an
+                     unproven field.  Fail closed for such fields; non-proof
+                     fields (no requirement) keep defaulting freely. *)
+                  (match List.assoc_opt field_name field_requirements with
+                   | Some (_ :: _ as required_preds) ->
+                     errors := make_error loc
+                       ~hint:(Printf.sprintf
+                         "field '%s' carries a proof; decode it with `via <checkFn>` that establishes it, not from a default value"
+                         field_name)
+                       (Printf.sprintf
+                         "codec '%s': decoder field '%s' requires proof predicates %s but is populated from a default value with no `via` validation"
+                         cf.name field_name (String.concat ", " required_preds))
+                       :: !errors
+                   | Some [] | None -> ())
+                | DecodeCrossCheck _ -> ()
               ) alt
             ) alts))
   ) codecs;

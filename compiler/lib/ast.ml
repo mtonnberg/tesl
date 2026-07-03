@@ -675,6 +675,21 @@ type module_form = {
     each call site); all other names are concrete capabilities.  Shared by the
     capability checker (P001 + the needs⊆declares check) and the emitter (which
     drops row variables from the emitted `#:capabilities`). *)
+(* Concrete built-in capabilities.  A capability-ROW variable is a FRESH,
+   polymorphic name (instantiated per call site); a concrete built-in capability
+   is not.  GDP-CAP-SPELLING (2026-07 fresh review): [func_bound_cap_vars_of_params]
+   collected row names purely by spelling, so writing a concrete capability (e.g.
+   `time`) as a parameter arrow's cap-row (`f: (Int -> Int requires time)`) made
+   the function's own genuine `requires [time]` get stripped from propagation AND
+   from the emitted runtime `#:capabilities` — laundering the capability.  A
+   concrete capability can therefore NEVER be a row variable.  (Single source of
+   truth for the built-in set is [Validation_common.tesl_stdlib_cap_map]; this
+   lowest-layer list mirrors it — a mismatch is caught by the seam tests.) *)
+let builtin_capability_names : string list =
+  [ "dbRead"; "dbWrite"; "time"; "random"; "envRead";
+    "queueRead"; "queueWrite"; "pubsub"; "uuid"; "jwt";
+    "httpClient"; "aiProvider"; "email" ]
+
 let func_bound_cap_vars_of_params (params : binding list) : string list =
   let rec from_type acc (t : type_expr) =
     match t with
@@ -684,6 +699,9 @@ let func_bound_cap_vars_of_params (params : binding list) : string list =
     | TName _ | TVar _ -> acc
   in
   List.fold_left (fun acc (b : binding) -> from_type acc b.type_expr) [] params
+  (* A concrete built-in capability is never a row variable, even when it is
+     spelled as a parameter arrow's cap-row — otherwise it launders. *)
+  |> List.filter (fun n -> not (List.mem n builtin_capability_names))
   |> List.sort_uniq String.compare
 
 let func_bound_cap_vars (fd : func_decl) : string list =

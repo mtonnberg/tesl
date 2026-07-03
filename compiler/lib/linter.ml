@@ -270,13 +270,43 @@ let lint_naming (file : string) (lines : string array) (out : lint_diag list ref
     end
   ) lines
 
+(* Replace the contents of double-quoted string literals and of trailing `#`
+   comments with spaces, preserving length and column positions.  A purely
+   textual lint must not fire on text that only *looks* like receiver syntax
+   because it appears inside a string (`"max.length exceeded"`) or a comment. *)
+let blank_noncode (line : string) : string =
+  let b = Bytes.of_string line in
+  let n = Bytes.length b in
+  let in_str = ref false in
+  let i = ref 0 in
+  (try
+     while !i < n do
+       let c = Bytes.get b !i in
+       if !in_str then begin
+         if c = '\\' && !i + 1 < n then begin
+           Bytes.set b !i ' '; Bytes.set b (!i + 1) ' '; i := !i + 2
+         end else begin
+           if c = '"' then in_str := false else Bytes.set b !i ' ';
+           incr i
+         end
+       end else if c = '"' then (in_str := true; incr i)
+       else if c = '#' then (for j = !i to n - 1 do Bytes.set b j ' ' done; raise Exit)
+       else incr i
+     done
+   with Exit -> ());
+  Bytes.to_string b
+
 let lint_deprecated_syntax (file : string) (lines : string array) (out : lint_diag list ref) =
-  Array.iteri (fun i line ->
+  Array.iteri (fun i raw_line ->
+    let line = blank_noncode raw_line in
     let stripped = String.trim line in
     if stripped = "" || starts_with stripped "#" then ()
     else begin
+      (* Heuristic TEXTUAL lint: it cannot tell a genuine record field named
+         `length` from receiver misuse, so it is a WARNING (guidance), never a
+         hard error that rejects a legitimate program. *)
       let emit ?(fix=None) col code message =
-        out := { file; line = i; col; severity = "error"; code; message; fix } :: !out
+        out := { file; line = i; col; severity = "warning"; code; message; fix } :: !out
       in
       (* .length receiver syntax *)
       if string_contains stripped ".length" then begin
