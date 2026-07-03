@@ -140,9 +140,12 @@ let internal_all : SS.t =
   |> List.concat_map (find_all (Str.regexp "\"\\([A-Za-z0-9_-]+\\.rkt\\)\""))
   |> SS.of_list
 
-(* ── 3. CI-RKT — parse compiler/ci.sh non-comment lines for tests/X.rkt ─────── *)
+(* ── 3. CI-RKT — parse the authoritative gate's non-comment lines for tests/X.rkt.
+   The two historical QA scripts were merged into the repo-root `ci.sh`;
+   `compiler/ci.sh` is now a thin `exec` shim (0 suite references), so the
+   Racket run-set now lives in `<repo_root>/ci.sh`.  Parse that. ─────────────── *)
 let ci_rkt : SS.t =
-  let content = read_file (Filename.concat repo_root (Filename.concat "compiler" "ci.sh")) in
+  let content = read_file (Filename.concat repo_root "ci.sh") in
   content
   |> String.split_on_char '\n'
   |> List.filter (fun ln ->

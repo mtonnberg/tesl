@@ -296,13 +296,11 @@ fact Pos (n: Int)
 fn bad(n: Int) -> n: Int ::: Pos n = n
 |}
 
-(* CLOSED (was a static-checker gap reported to ZC-FINALIZE).
-   §7.12 says "only check/establish/auth may introduce new proof-carrying
-   return types".  The proof-return restriction was previously gated on `FnKind`
-   only — a `handler` declaring a proof-carrying return its parameters do NOT
-   carry was accepted.  The kind gate now extends to {fn, handler, worker}, so
-   this is correctly rejected. *)
-let test_handler_proof_return_KNOWN_GAP () =
+(* §7.12 says "only check/establish/auth may introduce new proof-carrying
+   return types".  The proof-return restriction gate extends to {fn, handler,
+   worker}, so a `handler` declaring a proof-carrying return its parameters do
+   NOT carry is rejected. *)
+let test_handler_proof_return_rejected () =
   should_fail ~label:"J-RET handler proof return" ret_pat {|
 #lang tesl
 module RetH exposing []
@@ -312,9 +310,9 @@ fact Pos (n: Int)
 handler bad(req: HttpRequest, n: Int) -> n: Int ::: Pos n requires [] = n
 |}
 
-(* CLOSED (same root cause as the handler case): a `worker` declaring a
-   proof-carrying return its params do not carry is now correctly rejected. *)
-let test_worker_proof_return_KNOWN_GAP () =
+(* Same kind gate as the handler case: a `worker` declaring a proof-carrying
+   return its params do not carry is rejected. *)
+let test_worker_proof_return_rejected () =
   should_fail ~label:"J-RET worker proof return" ret_pat {|
 #lang tesl
 module RetW exposing []
@@ -654,8 +652,8 @@ let () =
     ];
     "J-RET proof return on plain kinds", [
       test_case "fn cannot declare proof return" `Quick test_fn_proof_return;
-      test_case "handler proof return (KNOWN GAP, pinned)" `Quick test_handler_proof_return_KNOWN_GAP;
-      test_case "worker proof return (KNOWN GAP, pinned)" `Quick test_worker_proof_return_KNOWN_GAP;
+      test_case "handler proof return rejected" `Quick test_handler_proof_return_rejected;
+      test_case "worker proof return rejected" `Quick test_worker_proof_return_rejected;
     ];
     "J-SHADOW illegal shadowing", [
       test_case "let shadows param" `Quick test_shadow_let_over_param;

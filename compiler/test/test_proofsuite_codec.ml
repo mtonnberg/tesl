@@ -16,10 +16,9 @@
               both encode and decode direction → `error[V001] … has type `T` but
               `cCodec` encodes/decodes-to `U``.
     K-FIELD — a codec entry naming a field that does not exist on the type.
-    K-ADT   — `adtJson` misuse and ADT/record codec-kind mismatch (KNOWN GAPS,
-              pinned — see notes).
+    K-ADT   — `adtJson` misuse and ADT/record codec-kind mismatch are rejected.
     K-BYPASS — a `capture` that establishes no proof wired to a proof-carrying
-              handler param (KNOWN GAP, pinned — see notes).
+              handler param is rejected at the HTTP boundary.
 
     Hardening: a static rejection must never leak a runtime token
     (`raise-user-error`, `check-fail`, `.rkt` trace).  `should_fail` asserts
@@ -206,8 +205,8 @@ codec Person {
 
 let test_via_missing_one_of_two_fields () =
   (* Two proof-carrying fields, only one given a via → the other must error.
-     Field names deliberately NON-keyword (`nick`/`addr`) — see the keyword
-     KNOWN GAP below for why `email`-style names behave differently. *)
+     Field names deliberately NON-keyword (`nick`/`addr`); the keyword-named
+     case (`email`) is covered separately below. *)
   should_fail ~label:"K-VIA one of two missing" via_pat {|
 #lang tesl
 module KViaPartial exposing []
@@ -238,21 +237,13 @@ codec Person {
 }
 |}
 
-(* KNOWN STATIC-CHECKER / PARSER GAP (reported to ZC-FINALIZE).
-   A `fromJson` decoder field whose NAME is a reserved keyword token (e.g.
-   `email`, which lexes as `EMAIL` per token.ml:49) is SILENTLY DROPPED by the
-   codec parser: parser.ml:3522 matches the field name with a raw `IDENT`
-   pattern (not the keyword-tolerant `expect_ident` used for record fields), so
-   when the token is `EMAIL` the arm fails to match and the whole field is
-   skipped at parser.ml:3560 (`| _ -> advance s`).  No `DecodeField` node is
-   produced, so NEITHER the proof-coverage check (`check_codec_proof_coverage`)
-   NOR the type-mismatch check (`check_codec_field_types`) ever sees it.
-   RESULT: a proof-carrying decoder field named `email` with NO `via` (and even
-   a type-mismatched codec) COMPILES — the proof obligation is silently lost.
-   CLOSED: the parser now binds the decoder field name via `expect_ident` in
-   parse_codec_form, so the `email` decoder field is no longer silently dropped
-   and its missing `via` is correctly flagged. *)
-let test_via_keyword_field_name_dropped_KNOWN_GAP () =
+(* A `fromJson` decoder field whose NAME is a reserved keyword token (e.g.
+   `email`) is parsed via `expect_ident` in parse_codec_form (the same
+   keyword-tolerant path used for record fields), so a `DecodeField` node is
+   produced and the proof-coverage check sees it.  A proof-carrying decoder
+   field named `email` with NO `via` therefore has its missing `via` correctly
+   flagged. *)
+let test_via_keyword_field_name_missing_via () =
   should_fail ~label:"K-VIA keyword field name decoded, missing via" via_pat {|
 #lang tesl
 module KViaKeyword exposing []
@@ -350,19 +341,15 @@ codec Outer {
 |}
 
 (* ════════════════════════════════════════════════════════════════════════
-   K-ADT — adtJson misuse / codec-kind mismatch.
-   KNOWN STATIC-CHECKER GAPS (reported to ZC-FINALIZE): the codec validator
-   (validation_sql_codec.ml) has explicit no-op branches `ToJsonAdt -> ()` /
-   `FromJsonAdt -> ()` (lines 248, 384, 395) and never verifies that:
-     (a) `adtJson` is applied to an ADT (not a record/entity), nor
-     (b) a record-field-style codec is applied to a record (not an ADT).
-   Both cases below COMPILE today; they SHOULD be rejected.  Pinned as
-   `should_pass` with TODOs so the suite stays green.
+   K-ADT — adtJson misuse / codec-kind mismatch is rejected.
+   The codec validator verifies that `adtJson` is applied to an ADT (not a
+   record/entity) and that a record-field-style codec is applied to a record
+   (not an ADT); both mismatches below are rejected.
    ════════════════════════════════════════════════════════════════════════ *)
 
-(* CLOSED: adtJson on a record is now rejected (adtJson encodes a constructor
-   name; a record has no constructors). *)
-let test_adtjson_on_record_KNOWN_GAP () =
+(* adtJson on a record is rejected (adtJson encodes a constructor name; a record
+   has no constructors). *)
+let test_adtjson_on_record_rejected () =
   should_fail ~label:"K-ADT adtJson on record" "requires an ADT target" {|
 #lang tesl
 module KAdtRecord exposing []
@@ -373,9 +360,9 @@ codec Person {
 }
 |}
 
-(* CLOSED: a record-field-style codec applied to an ADT (which has no fields,
-   only constructors) is now rejected and requires `adtJson` instead. *)
-let test_record_codec_on_adt_KNOWN_GAP () =
+(* A record-field-style codec applied to an ADT (which has no fields, only
+   constructors) is rejected and requires `adtJson` instead. *)
+let test_record_codec_on_adt_rejected () =
   should_fail ~label:"K-ADT record-codec on ADT" "requires a record/entity target" {|
 #lang tesl
 module KFieldCodecOnAdt exposing []
@@ -395,27 +382,22 @@ codec Color {
 
 (* ════════════════════════════════════════════════════════════════════════
    K-BYPASS — capture/body proof-coverage at the HTTP boundary.
-   KNOWN STATIC-CHECKER GAP (reported to ZC-FINALIZE): there is NO validation
-   reconciling a handler's proof-carrying parameter against the proof
-   established by the api endpoint clause (`capture`/`body`) the server binding
-   connects.  `check_server_handler_binding`
-   (compiler/lib/validation_structural.ml:847) reconciles ONLY `auth` clauses;
-   `capture` and `body` proofs are never reconciled.  Unlike codec decoder
-   fields (which DO require `via` — validation_sql_codec.ml:259/294), a `capture`
-   declaration that *declares* a proof never requires a `via` to establish it.
+   `check_server_handler_binding` reconciles a handler's proof-carrying
+   parameter against the proof established by the api endpoint clause
+   (`capture`/`body`) the server binding connects — mirroring the codec
+   proof-coverage check — so a `capture` that establishes no proof cannot be
+   wired to a proof-carrying handler param.
 
-   Below: a handler demands `::: TodoId todoId`, but the wiring establishes no
-   such proof — and it COMPILES.  Both SHOULD be rejected.  Pinned `should_pass`
-   with TODOs.
+   Below: a handler demands `::: TodoId todoId` but the wiring establishes no
+   such proof; both cases are rejected.
    ════════════════════════════════════════════════════════════════════════ *)
 
-(* TODO(ZC-FINALIZE): the handler param `todoId: String ::: TodoId todoId` is
-   wired to a `capture todoId: String` (no proof) backed by `capture
-   todoIdCapture: String using stringCodec` (no `via`).  The proof obligation is
-   silently dropped at the HTTP entry boundary.  CLOSED:
-   check_server_handler_binding now reconciles capture/body proofs (mirroring the
-   codec proof-coverage check), so this is rejected. *)
-let test_capture_no_proof_feeds_proof_param_KNOWN_GAP () =
+(* The handler param `todoId: String ::: TodoId todoId` is wired to a `capture
+   todoId: String` (no proof) backed by `capture todoIdCapture: String using
+   stringCodec` (no `via`).  check_server_handler_binding reconciles capture/body
+   proofs (mirroring the codec proof-coverage check), so the dropped proof
+   obligation at the HTTP entry boundary is rejected. *)
+let test_capture_no_proof_feeds_proof_param_rejected () =
   should_fail ~label:"K-BYPASS capture w/o proof → proof param"
     "obligation is lost at the HTTP boundary" {|
 #lang tesl
@@ -442,10 +424,10 @@ server S for TodoApi {
 }
 |}
 
-(* CLOSED: the capture declaration *declares* `::: TodoId todoId` but provides
-   no `via` check to establish it (`using stringCodec` alone cannot establish a
-   proof).  It now requires a `via` like codec decoder fields do. *)
-let test_capture_declares_proof_no_via_KNOWN_GAP () =
+(* The capture declaration *declares* `::: TodoId todoId` but provides no `via`
+   check to establish it (`using stringCodec` alone cannot establish a proof).
+   It requires a `via` like codec decoder fields do, so this is rejected. *)
+let test_capture_declares_proof_no_via_rejected () =
   should_fail ~label:"K-BYPASS capture declares proof, no via"
     "has no `via` validation" {|
 #lang tesl
@@ -689,7 +671,7 @@ let () =
       test_case "proof field missing via" `Quick test_via_missing;
       test_case "via establishes wrong proof" `Quick test_via_wrong_proof;
       test_case "one of two proof fields missing via" `Quick test_via_missing_one_of_two_fields;
-      test_case "keyword field name silently dropped (KNOWN GAP)" `Quick test_via_keyword_field_name_dropped_KNOWN_GAP;
+      test_case "keyword field name decoded, missing via" `Quick test_via_keyword_field_name_missing_via;
     ];
     "K-FIELD nonexistent codec field", [
       test_case "nonexistent field (encode)" `Quick test_field_nonexistent_encode;
@@ -698,13 +680,13 @@ let () =
     "K-UDEF user-defined codec mismatch", [
       test_case "user-defined codec on wrong field type" `Quick test_userdef_codec_wrong_type;
     ];
-    "K-ADT adtJson / codec-kind (KNOWN GAPS, pinned)", [
-      test_case "adtJson on a record (KNOWN GAP)" `Quick test_adtjson_on_record_KNOWN_GAP;
-      test_case "record-field codec on an ADT (KNOWN GAP)" `Quick test_record_codec_on_adt_KNOWN_GAP;
+    "K-ADT adtJson / codec-kind mismatch", [
+      test_case "adtJson on a record rejected" `Quick test_adtjson_on_record_rejected;
+      test_case "record-field codec on an ADT rejected" `Quick test_record_codec_on_adt_rejected;
     ];
-    "K-BYPASS capture proof coverage (KNOWN GAPS, pinned)", [
-      test_case "capture w/o proof feeds proof param (KNOWN GAP)" `Quick test_capture_no_proof_feeds_proof_param_KNOWN_GAP;
-      test_case "capture declares proof but has no via (KNOWN GAP)" `Quick test_capture_declares_proof_no_via_KNOWN_GAP;
+    "K-BYPASS capture proof coverage", [
+      test_case "capture w/o proof feeds proof param rejected" `Quick test_capture_no_proof_feeds_proof_param_rejected;
+      test_case "capture declares proof but has no via rejected" `Quick test_capture_declares_proof_no_via_rejected;
     ];
     "K-POS positive companions", [
       test_case "via establishes a field proof" `Quick pos_via_establishes_proof;

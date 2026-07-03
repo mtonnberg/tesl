@@ -7,7 +7,7 @@
     Every negative is STATIC: [should_fail] asserts non-zero exit AND that the
     rejection never leaked to runtime (no `raise-user-error` / `check-fail` /
     Racket trace in the output). A negative that compiles is a real static-checker
-    gap; such cases are named `..._GAP_...` and reported (informs ZC-FINALIZE).
+    gap.
 
     Anchors: LANGUAGE-SPEC §7.12 (fabrication restricted to trusted kinds),
     §7.8 (unbound GDP names), fact-ownership (P001/T001). *)
@@ -88,11 +88,10 @@ let should_pass src =
     let code, out = run_compiler ["--check"; path] in
     if code <> 0 then failf "expected clean compile, got exit %d:\n%s" code out)
 
-(* KNOWN STATIC-CHECKER GAP. This source SHOULD be rejected statically (it forges
-   or mis-produces a proof) but the current checker accepts it. We pin the CURRENT
-   (buggy) behavior so the suite stays green while loudly recording the gap for
-   ZC-FINALIZE / `validation_proof.ml`. If the checker is later fixed to reject
-   this, the assertion below flips and tells us to promote it to a real negative.
+(* Helper that pins a source the checker currently ACCEPTS but which SHOULD be
+   rejected statically (it forges or mis-produces a proof).  It asserts the
+   current (accepting) behavior so that if the checker is later fixed to reject
+   this, the assertion flips and tells us to promote it to a real negative.
    [what] is a human description of what SHOULD be rejected.
    (All produce-suite gaps are now closed → flipped to should_fail; kept here,
    warning-suppressed, for re-pinning if a future regression reopens one.) *)
@@ -214,11 +213,11 @@ establish e(n: Int) -> Fact (IsPositive n) =
   IsNegative n
 |})
 
-(* CLOSED (establish + literal-param fact): `establish` declaring a 3-arg
-   literal-param fact `Clamped 1 100 n` with a body returning a DIFFERENT
-   constructor entirely is now rejected ("must return the declared fact
-   constructor"), matching the 1-arg fact and `check` paths. *)
-let test_A_GAP_establish_literal_param_wrong_constructor () =
+(* establish + literal-param fact: `establish` declaring a 3-arg literal-param
+   fact `Clamped 1 100 n` with a body returning a DIFFERENT constructor entirely
+   is rejected ("must return the declared fact constructor"), matching the 1-arg
+   fact and `check` paths. *)
+let test_A_establish_literal_param_wrong_constructor () =
   should_fail "must return the declared fact constructor"
     (prelude "AGapEstCtor" ^ {|
 fact Clamped (lo: Int) (hi: Int) (n: Int)
@@ -227,9 +226,9 @@ establish e(n: Int) -> Fact (Clamped 1 100 n) =
   Decoy n
 |})
 
-(* CLOSED (establish + literal-param fact): same constructor with WRONG literal
-   args (`Clamped 2 200 n` vs declared `Clamped 1 100 n`) is now rejected. *)
-let test_A_GAP_establish_literal_param_wrong_args () =
+(* establish + literal-param fact: same constructor with WRONG literal args
+   (`Clamped 2 200 n` vs declared `Clamped 1 100 n`) is rejected. *)
+let test_A_establish_literal_param_wrong_args () =
   should_fail "wrong arguments"
     (prelude "AGapEstArgs" ^ {|
 fact Clamped (lo: Int) (hi: Int) (n: Int)
@@ -316,12 +315,7 @@ auth a(req: HttpRequest) -> user: User ::: Authed user =
   ok User { id: "x" }
 |})
 
-(* CLOSED (auth ok-value validation now matches check): `auth` returning a bare
-   LITERAL as the named-pack value (`ok 999 ::: AuthedN user`) while the proof is
-   about the `user` binder is now rejected, like the analogous `check` ("ok
-   expression returns a non-identifier and is not a constructor application;
-   ...must return the declared binding name or wrap it in a constructor"). *)
-let test_A_GAP_auth_literal_value () =
+let test_A_auth_literal_value_ok () =
   (* NOT a gap: `auth` PRODUCES the identity (a trusted minter), so — unlike `check`,
      which validates an input and must return it (LANGUAGE-SPEC scopes the
      ok-binding-name rule to check only) — auth may return a literal as the named-pack
@@ -700,11 +694,11 @@ let () =
       test_case "A establish uses fail" `Quick test_A_establish_uses_fail;
       test_case "A establish wrong constructor" `Quick test_A_establish_wrong_constructor;
     ];
-    "establish-KNOWN-GAPS", [
-      test_case "A GAP establish literal-param wrong constructor" `Quick test_A_GAP_establish_literal_param_wrong_constructor;
-      test_case "A GAP establish literal-param wrong args" `Quick test_A_GAP_establish_literal_param_wrong_args;
-      test_case "A establish wrong subject (§3.1)" `Quick test_A_establish_wrong_subject;
-      test_case "A FromDb named-pack forgery (§3.3)" `Quick test_A_fromdb_namedpack_forgery;
+    "establish-negatives", [
+      test_case "A establish literal-param wrong constructor" `Quick test_A_establish_literal_param_wrong_constructor;
+      test_case "A establish literal-param wrong args" `Quick test_A_establish_literal_param_wrong_args;
+      test_case "A establish wrong subject (GDP-EST-SUBJECT)" `Quick test_A_establish_wrong_subject;
+      test_case "A FromDb named-pack forgery (GDP-FROMDB-NAMEDPACK)" `Quick test_A_fromdb_namedpack_forgery;
       test_case "A inline Maybe-establish rejected (§P1)" `Quick test_A_inline_maybe_establish_rejected;
       test_case "A inline total-establish ok (§P1)" `Quick test_A_inline_total_establish_ok;
     ];
@@ -712,7 +706,7 @@ let () =
       test_case "A auth wrong subject" `Quick test_A_auth_wrong_subject;
       test_case "A auth wrong predicate" `Quick test_A_auth_wrong_predicate;
       test_case "A auth no stamp" `Quick test_A_auth_no_stamp;
-      test_case "A GAP auth literal named-pack value" `Quick test_A_GAP_auth_literal_value;
+      test_case "A auth literal named-pack value ok" `Quick test_A_auth_literal_value_ok;
     ];
     "ownership", [
       test_case "A produce undeclared fact" `Quick test_A_undeclared_fact;

@@ -1326,10 +1326,17 @@ let check_circular_const_bindings (decls : top_decl list) : validation_error lis
     predicate matches the declared invariant predicate.
     E.g. `SafeOrder { ... } ::: wrongProof` where `wrongProof` carries
     `WrongFact x` instead of `PriceGtQty price quantity` should be rejected. *)
-let check_ghost_witness_predicates (decls : top_decl list)
+let check_ghost_witness_predicates
+    ?facts
+    ?(extra_funcs : (string * func_info) list = [])
+    (decls : top_decl list)
     : validation_error list =
-  (* Build map: record_name → invariant predicate name *)
-  let record_invariants : (string * string) list =
+  (* Build map: record_name → (invariant predicate NAME, full invariant proof,
+     field NAMES).  The predicate name is kept for the conservative name-only
+     fallback; the FULL invariant proof + field names drive the new
+     subject-aware comparison (the invariant's declared subjects are the record's
+     own field names, e.g. `PriceExceedsQuantity price quantity`). *)
+  let record_invariants : (string * (string * proof_expr * string list)) list =
     List.filter_map (function
       | DRecord r ->
         (match r.invariant with
@@ -1343,188 +1350,305 @@ let check_ghost_witness_predicates (decls : top_decl list)
                 | PredApp { pred; _ } :: _ -> pred
                 | _ -> "")
            in
-           if pred = "" then None else Some (r.name, pred)
+           let field_names = List.map (fun (f : field_def) -> f.name) r.fields in
+           if pred = "" then None
+           else Some (r.name, (pred, inv.proof_text, field_names))
          | None -> None)
       | _ -> None
     ) decls
   in
   if record_invariants = [] then []
   else
+    let mf = facts_or_compute ?facts ~extra_funcs decls in
+    let funcs = mf.mf_funcs in
+    let fields_by_type = mf.mf_fields_map in
+    let ctors = mf.mf_ctors in
+    field_proof_registry := mf.mf_field_proof_map;
     let errors = ref [] in
-    (* Check if a proof expression could plausibly carry the required predicate.
-       This is checked conservatively: we only flag definite mismatches where the
-       proof is a simple PredApp with a different predicate name, or a conjunction
-       where no part matches. *)
-    let pred_of_fact_type (te : type_expr) : string option =
-      (* type_expr for a Fact parameter: Fact (PredName ...) or Fact PredName *)
-      let rec inner = function
-        | TApp { head; arg; _ } ->
-          (match head with
-           | TName { name = "Fact"; _ } -> inner arg
-           | _ -> inner head)
-        | TName { name; _ } when name <> "Fact" -> Some name
-        | _ -> None
+    (* Seed the initial proof_env for a function's params.  A Fact-typed param
+       (`w: Fact (P a b)`) carries its proof in its TYPE (not a `:::` proof_ann),
+       so [build_initial_proof_env] (which reads only proof_ann) misses it — we
+       additionally seed such params from [proof_of_fact_type]. *)
+    let initial_proof_env (params : binding list) : proof_env =
+      let base = build_initial_proof_env params in
+      List.fold_left (fun acc (b : binding) ->
+        if List.mem_assoc b.name acc then acc
+        else match proof_of_fact_type b.type_expr with
+          | Some proof -> (b.name, [proof]) :: acc
+          | None -> acc
+      ) base params
+    in
+    (* Resolve the FULL carried proof (predicate name AND subjects) of a ghost
+       witness proof-expression, threading it through [carried_proofs_of_expr] via
+       an [EOk] wrapper whose value carries NO proofs of its own (an [EFail] node),
+       so the returned proofs come solely from resolving the witness annotation.
+       Returns [] when the witness cannot be resolved (unknown proof var, opaque
+       source) — the caller then falls back to the name-only check. *)
+    let resolve_witness_proofs subject_env proof_env (witness : proof_expr) loc
+        : proof_expr list =
+      let wrapper =
+        EOk { value = EFail { status = 0; message = ELit { lit = LString ""; loc }; loc };
+              proof = witness; loc }
       in
-      inner te
+      match carried_proofs_of_expr ~funcs subject_env proof_env wrapper with
+      | Some proofs -> proofs
+      | None -> []
     in
-    (* Build a map from parameter names that have Fact(...) type to their predicate.
-       IMPORTANT: only include params whose actual type_expr is `TApp { head = Fact; arg = ... }`
-       (i.e. truly Fact-typed params), not params with plain types like `Int` or `String`.
-       `pred_of_fact_type` extracts the predicate but returns `Some name` for plain TName too —
-       we must guard against that by checking the outer type wrapper is Fact. *)
-    let is_fact_typed (te : type_expr) : bool =
-      match te with
-      | TApp { head = TName { name = "Fact"; _ }; _ } -> true
-      | TApp { head = TName { name = "Maybe"; _ };
-               arg = TApp { head = TName { name = "Fact"; _ }; _ }; _ } -> true
-      | _ -> false
+    (* Report a subject/predicate mismatch at a witnessed construction site.
+       [name_only] selects the legacy predicate-name-only message (used when the
+       full witness proof could not be resolved) vs. the full subject-aware
+       message (both sides fully resolved). *)
+    let report_mismatch loc rname ~expected_pred ~actual_pred =
+      errors := make_error loc
+        ~hint:(Printf.sprintf
+          "the ghost witness must establish `%s` (the declared invariant of `%s`), \
+           but carries `%s`; use a function that returns `Fact (%s ...)` instead"
+          expected_pred rname actual_pred expected_pred)
+        (Printf.sprintf
+          "ghost witness predicate mismatch on `%s` construction: \
+           invariant requires `%s` but witness carries `%s`"
+          rname expected_pred actual_pred)
+      :: !errors
     in
-    let fact_param_map (params : binding list) : (string * string) list =
-      List.filter_map (fun (b : binding) ->
-        if not (is_fact_typed b.type_expr) then None
-        else match pred_of_fact_type b.type_expr with
-        | Some pred -> Some (b.name, pred)
-        | None -> None
-      ) params
+    let report_subject_mismatch loc rname ~required ~carried =
+      errors := make_error loc
+        ~hint:(Printf.sprintf
+          "the ghost witness for `%s` must be about the record's own field values; \
+           supply a proof of `%s`"
+          rname (pp_proof required))
+        (Printf.sprintf
+          "ghost witness for `%s` proves `%s` but the invariant requires `%s`"
+          rname (pp_proof carried) (pp_proof required))
+      :: !errors
     in
-    (* Build a map from function names (establish/check) to their Fact return predicate.
-       Used to resolve `let pf = establish_fn args` → `pf` carries predicate `P`. *)
-    let establish_pred_map : (string * string) list =
-      List.filter_map (function
-        | DFunc fd when fd.kind = EstablishKind || fd.kind = CheckKind ->
-          let pred_opt = match fd.return_spec with
-            | RetPlain { ty; _ } -> (match proof_of_fact_type ty with
-                | Some (PredApp { pred; _ }) -> Some pred
-                | Some (PredAnd _) -> None
-                | None -> None)
-            | RetAttached { binding = b; _ } ->
-              (match b.proof_ann with
-               | Some (PredApp { pred; _ }) -> Some pred
-               | _ -> None)
-            | _ -> None
+    (* The witnessed-construction check.  [subject_env]/[proof_env] carry the
+       resolved subjects and proofs of in-scope bindings (params, lets, case
+       binders); they let us resolve the witness's FULL proof and the field
+       values' subjects. *)
+    let check_witness subject_env proof_env loc rname witnessed_fields proof =
+      let (expected_pred, inv_proof, field_names) = List.assoc rname record_invariants in
+      (* required = invariant with each FIELD NAME substituted by the SUBJECT of
+         that field's value expression in the record literal.  A field value with
+         no stable subject is conservatively skipped (left unsubstituted). *)
+      let field_subst =
+        List.filter_map (fun (fname, fe) ->
+          if not (List.mem fname field_names) then None
+          else match subject_of_expr subject_env fe with
+            | Some s -> Some (fname, s)
+            | None -> None
+        ) witnessed_fields
+      in
+      let required = subst_proof field_subst inv_proof in
+      (* Resolve the witness's FULL carried proof (predicate + subjects). *)
+      let carried = resolve_witness_proofs subject_env proof_env proof loc in
+      (* SUBJECT-AWARE PATH: when BOTH the required proof and the witness's carried
+         proof fully resolve, compare predicate name AND subject args.  This is
+         purely ADDITIVE — it can only add rejections that the name-only path below
+         would have accepted; whenever [proof_matches] holds we accept, and whenever
+         either side fails to resolve we FALL BACK to the name-only check. *)
+      if carried <> [] && proof_matches required carried then
+        ()  (* full match — accept *)
+      else if carried <> [] then begin
+        (* Both sides resolved but do not match.  Distinguish a predicate mismatch
+           (report with the legacy message + code) from a pure subject mismatch. *)
+        let required_preds = List.sort_uniq compare (proof_predicates required) in
+        let carried_preds =
+          List.sort_uniq compare (List.concat_map proof_predicates carried) in
+        if required_preds <> carried_preds then
+          (* Predicate name differs — legacy-style message. *)
+          let actual_pred = match carried_preds with p :: _ -> p | [] -> "?" in
+          report_mismatch loc rname ~expected_pred ~actual_pred
+        else
+          (* Same predicate(s), wrong subjects — the newly-closed GAP 1. *)
+          let carried_proof = match combine_proof_list loc carried with
+            | Some p -> p | None -> (match carried with p :: _ -> p | [] -> required) in
+          report_subject_mismatch loc rname ~required ~carried:carried_proof
+      end
+      else
+        (* FALLBACK: witness could not be fully resolved.  Keep the conservative
+           predicate-name-only check (unchanged behaviour): flag only a definite
+           name mismatch resolvable from the proof-env / detachFact chain. *)
+        let is_pred_name s =
+          String.length s > 0 && s.[0] >= 'A' && s.[0] <= 'Z'
+        in
+        let pred_of_proof_var name =
+          (* Resolve a proof variable to its predicate name via proof_env. *)
+          match List.assoc_opt name proof_env with
+          | Some (p :: _) -> (match proof_predicates p with pn :: _ -> Some pn | [] -> None)
+          | _ ->
+            let subj = match List.assoc_opt name subject_env with Some s -> s | None -> name in
+            (match List.assoc_opt subj proof_env with
+             | Some (p :: _) -> (match proof_predicates p with pn :: _ -> Some pn | [] -> None)
+             | _ -> None)
+        in
+        let proof_pred = match proof with
+          | PredApp { pred; args = []; _ } when is_pred_name pred ->
+            (match pred_of_proof_var pred with Some p -> Some p | None -> Some pred)
+          | PredApp { pred; args = []; _ } -> pred_of_proof_var pred
+          | PredApp { pred = "detachFact"; args = [pf_name]; _ } -> pred_of_proof_var pf_name
+          | PredApp { pred = "detachFact"; _ } -> None
+          | PredApp { pred; _ } when pred <> "detachFact" && is_pred_name pred -> Some pred
+          | _ -> None
+        in
+        (match proof_pred with
+         | Some actual_pred when actual_pred <> expected_pred ->
+           report_mismatch loc rname ~expected_pred ~actual_pred
+         | _ -> ())
+    in
+    (* Walk the body threading type_env/subject_env/proof_env so that the witness's
+       carried proof and the field values' subjects can be resolved through the
+       shared proof engine.  This mirrors [check_record_field_proof_construction]'s
+       env-threading walk. *)
+    let rec walk_expr (type_env : type_env) (subject_env : subject_env)
+        (proof_env : proof_env) (e : expr) =
+      match e with
+      | EOk { value; proof; loc } ->
+        (match value with
+         | EApp { fn = EConstructor { name = rname; args = []; _ };
+                  arg = ERecord { fields = witnessed_fields; _ }; _ }
+           when List.mem_assoc rname record_invariants ->
+           check_witness subject_env proof_env loc rname witnessed_fields proof;
+           (* Recurse into the record's field expressions ONLY (not the whole
+              construction node), so the bare-construction arm does NOT re-flag
+              this witnessed site. *)
+           List.iter (fun (_, fe) -> walk_expr type_env subject_env proof_env fe)
+             witnessed_fields
+         | _ -> walk_expr type_env subject_env proof_env value)
+      | ELet { name; value; body; _ } ->
+        walk_expr type_env subject_env proof_env value;
+        let subject_env' = match subject_of_expr subject_env value with
+          | Some s -> (name, s) :: subject_env
+          | None ->
+            (match value with
+             | EApp _ ->
+               let (head0, args0) = collect_call_head_and_args [] value in
+               let (head, args) = normalize_explicit_check_call head0 args0 in
+               (match function_name_of_expr head with
+                | Some fn_name ->
+                  (match List.assoc_opt fn_name funcs with
+                   | Some info when (match info.fi_return with RetAttached _ -> true | _ -> false) ->
+                     let binding_arg = match info.fi_return with
+                       | RetAttached { binding = b; _ } ->
+                         let rec find_idx i = function
+                           | [] -> None
+                           | (p : binding) :: _ when p.name = b.name ->
+                             if i < List.length args then Some (List.nth args i) else None
+                           | _ :: rest -> find_idx (i+1) rest
+                         in
+                         (match find_idx 0 info.fi_params with
+                          | Some a -> Some a
+                          | None -> List.nth_opt args 0)
+                       | _ -> List.nth_opt args 0
+                     in
+                     (match binding_arg with
+                      | Some arg ->
+                        (match subject_of_expr subject_env arg with
+                         | Some s -> (name, s) :: subject_env
+                         | None -> subject_env)
+                      | None -> subject_env)
+                   | _ -> subject_env)
+                | None -> subject_env)
+             | _ -> subject_env)
+        in
+        let new_proofs = proofs_of_expr name funcs subject_env' proof_env value in
+        let proof_env' = if new_proofs = [] then proof_env
+                         else (name, new_proofs) :: proof_env in
+        let type_env' = match infer_expr_type type_env funcs fields_by_type ctors value with
+          | Some ty -> (name, ty) :: type_env
+          | None -> type_env
+        in
+        walk_expr type_env' subject_env' proof_env' body
+      | ELetProof { value_name; proof_name; value; body; _ } ->
+        walk_expr type_env subject_env proof_env value;
+        let subject_env' = match subject_of_expr subject_env value with
+          | Some s -> (value_name, s) :: subject_env
+          | None -> subject_env
+        in
+        let detached_proofs =
+          match carried_proofs_of_expr ~funcs subject_env proof_env value with
+          | Some (_ :: _ as proofs) -> proofs
+          | _ -> proofs_of_expr value_name funcs subject_env' proof_env value
+        in
+        let proof_env' =
+          if proof_name <> "_" && detached_proofs <> [] then
+            (proof_name, detached_proofs) :: proof_env
+          else proof_env
+        in
+        walk_expr type_env subject_env' proof_env' body
+      | EIf { cond; then_; else_; _ } ->
+        walk_expr type_env subject_env proof_env cond;
+        walk_expr type_env subject_env proof_env then_;
+        walk_expr type_env subject_env proof_env else_
+      | ECase { scrut; arms; _ } ->
+        walk_expr type_env subject_env proof_env scrut;
+        (* Propagate case-arm binder proofs: `case scrut of Something p -> body`
+           binds `p` to the proofs extracted from the scrut's Maybe (Fact P)
+           shape, so a witness `::: p` in the arm body resolves correctly. *)
+        let scrut_proofs = proofs_of_expr "_" funcs subject_env proof_env scrut in
+        List.iter (fun (arm : case_arm) ->
+          let proof_env', subject_env' = match arm.pattern with
+            | PVar x when x <> "_" ->
+              let pe = if scrut_proofs <> [] then (x, scrut_proofs) :: proof_env else proof_env in
+              let se = match subject_of_expr subject_env scrut with
+                | Some s when s <> x -> (x, s) :: subject_env | _ -> subject_env in
+              (pe, se)
+            | PCon { fields = [(_, PVar x)]; _ } ->
+              let pe = if scrut_proofs <> [] then (x, scrut_proofs) :: proof_env else proof_env in
+              let se = match subject_of_expr subject_env scrut with
+                | Some s when s <> x -> (x, s) :: subject_env | _ -> subject_env in
+              (pe, se)
+            | _ -> (proof_env, subject_env)
           in
-          (match pred_opt with Some p -> Some (fd.name, p) | None -> None)
-        | _ -> None
-      ) decls
-    in
-    let check_ghost_in_func (params : binding list) (body : expr) =
-      (* Map from variable name → proof predicate name.
-         Starts with fact-typed parameters, then augmented with local let bindings
-         that call establish/check functions. Used to resolve detachFact(pf) proof. *)
-      let local_fact_map = ref (fact_param_map params) in
-      let track_let_binding name value =
-        (* If value is a call to a known establish/check function, record the predicate *)
-        let (head, _) = collect_call_head_and_args [] value in
-        (match function_name_of_expr head with
-         | Some fn_name ->
-           (match List.assoc_opt fn_name establish_pred_map with
-            | Some pred -> local_fact_map := (name, pred) :: !local_fact_map
-            | None -> ())
-         | None -> ())
-      in
-      let rec walk_body = function
-        | EOk { value; proof; loc } ->
-          (match value with
-           | EApp { fn = EConstructor { name = rname; args = []; _ }; arg = ERecord { fields = witnessed_fields; _ }; _ }
-             when List.mem_assoc rname record_invariants ->
-             let expected_pred = List.assoc rname record_invariants in
-             (* Resolve the proof predicate from the ghost witness expression.
-                Handles: direct PredApp, detachFact(pf) where pf is in local_fact_map *)
-             (* Determine the predicate name the ghost witness proof carries.
-                - Uppercase PredApp: it IS a predicate constructor (`IsValidRange`)
-                - Lowercase PredApp with no args: a PROOF VARIABLE (`proodd`) —
-                  check local_fact_map; if not found, we can't determine predicate
-                  so return None (don't flag — be conservative)
-                - detachFact(pf_name): look up pf_name in local_fact_map *)
-             let is_pred_name s =
-               String.length s > 0 && s.[0] >= 'A' && s.[0] <= 'Z'
-             in
-             let proof_pred = match proof with
-               | PredApp { pred; args = []; _ } when is_pred_name pred ->
-                 (* Uppercase zero-arg proof variable (shouldn't normally appear) *)
-                 (match List.assoc_opt pred !local_fact_map with
-                  | Some p -> Some p
-                  | None -> Some pred)
-               | PredApp { pred; args = []; _ } ->
-                 (* Lowercase proof variable: look up in local_fact_map *)
-                 (match List.assoc_opt pred !local_fact_map with
-                  | Some p -> Some p
-                  | None -> None)   (* Unknown proof var — skip the check *)
-               | PredApp { pred = "detachFact"; args = [pf_name]; _ } ->
-                 (match List.assoc_opt pf_name !local_fact_map with
-                  | Some p -> Some p
-                  | None -> None)
-               | PredApp { pred = "detachFact"; _ } ->
-                 None  (* multi-arg or no-arg detachFact — can't determine predicate *)
-               | PredApp { pred; _ } when pred <> "detachFact" && is_pred_name pred ->
-                 Some pred
-               | _ -> None
-             in
-             (match proof_pred with
-              | Some actual_pred when actual_pred <> expected_pred ->
-                errors := make_error loc
-                  ~hint:(Printf.sprintf
-                    "the ghost witness must establish `%s` (the declared invariant of `%s`), \
-                     but carries `%s`; use a function that returns `Fact (%s ...)` instead"
-                    expected_pred rname actual_pred expected_pred)
-                  (Printf.sprintf
-                    "ghost witness predicate mismatch on `%s` construction: \
-                     invariant requires `%s` but witness carries `%s`"
-                    rname expected_pred actual_pred)
-                :: !errors
-              | _ -> ());
-             (* Witness is present and validated above.  Recurse into the record's
-                field expressions ONLY (not the whole construction node), so the
-                bare-construction arm below does NOT re-flag this witnessed site. *)
-             List.iter (fun (_, fe) -> walk_body fe) witnessed_fields
-           | _ -> walk_body value);
-        (* ELet keeps its explicit arm because the `track_let_binding` side
-           effect (registering an establish/check binding in `local_fact_map`)
-           must fire for THIS binder before recursing — that is a semantic
-           action, not pure recursion. *)
-        | ELet { name; value; body; _ } ->
-          track_let_binding name value;
-          walk_body value; walk_body body
-        (* The original walk treated these as NON-descending no-ops; a ghost
-           witness mismatch is reported only at an `EOk { value = Ctor {...} }`
-           site, which never lives inside a `fail` message or a field-projection
-           object. `Ast_visitor.iter_children` WOULD descend into EField.obj /
-           EFail.message, so keep these explicit no-ops to preserve behaviour. *)
-        | EStartWorkers _ | ELit _ | EVar _ | EField _ | EFail _
-        | EStartEmailWorker _ -> ()
-        (* GDP-RECORD-WITNESS (2026-07 review §3.2): a record type that declares a
-           cross-field invariant (`record R { ... } ::: Pred a b`) must be constructed
-           WITH a ghost witness — `R { ... } ::: <proofVar>` (which parses to an
-           EOk node, handled above).  A BARE construction reaches HERE as a plain
-           `EApp { EConstructor R; ERecord }` (not inside an EOk), carries no witness,
-           and — because the invariant is erased at runtime with no backstop — would
-           silently produce a value that violates the invariant.  The spec (§11.7)
-           promises this exact rejection; it was previously emitted by no pass.  This
-           also covers a bare construction nested anywhere (e.g. `Something (R {..})`),
-           since iter_children routes such sub-exprs through walk_body. *)
-        | EApp { fn = EConstructor { name = rname; args = []; _ };
-                 arg = ERecord { fields = bare_fields; _ }; loc; _ }
-          when List.mem_assoc rname record_invariants ->
-          let inv = List.assoc rname record_invariants in
-          errors := make_error loc
-            ~hint:(Printf.sprintf
-              "supply the cross-field proof as a ghost witness at the construction site: \
-               `%s { ... } ::: <proofVar>`, where `<proofVar>` carries `%s`" rname inv)
-            (Printf.sprintf
-              "constructing `%s` requires a ghost witness for its cross-field invariant `%s`; \
-               a `%s { ... }` literal must be written `%s { ... } ::: <proofVar>`"
-              rname inv rname rname)
-          :: !errors;
-          List.iter (fun (_, fe) -> walk_body fe) bare_fields
-        (* Every remaining variant recurses into all child exprs with the same
-           captured `errors`/`local_fact_map` refs — the shared
-           {!Ast_visitor.iter_children} traversal, same children, same order. *)
-        | e -> Ast_visitor.iter_children walk_body e
-      in
-      walk_body body
+          walk_expr type_env subject_env' proof_env' arm.body
+        ) arms
+      | ELambda { params; body; _ } ->
+        let type_env' = List.fold_left (fun acc (b : binding) ->
+          (b.name, b.type_expr) :: acc) type_env params in
+        let subject_env' = List.fold_left (fun acc (b : binding) ->
+          (b.name, b.name) :: acc) subject_env params in
+        let proof_env' = List.fold_left (fun acc (b : binding) ->
+          match b.proof_ann with
+          | Some p -> (b.name, [p]) :: acc
+          | None ->
+            (match proof_of_fact_type b.type_expr with
+             | Some p -> (b.name, [p]) :: acc
+             | None -> acc)) proof_env params in
+        walk_expr type_env' subject_env' proof_env' body
+      | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+      | EWithTransaction { body; _ } -> walk_expr type_env subject_env proof_env body
+      (* Leaf / non-descending nodes: no witnessed construction can hide here. *)
+      | EStartWorkers _ | ELit _ | EVar _ | EField _ | EFail _
+      | EStartEmailWorker _ -> ()
+      (* GDP-RECORD-WITNESS (2026-07 review §3.2): a record type that declares a
+         cross-field invariant must be constructed WITH a ghost witness.  A BARE
+         construction reaches HERE as a plain `EApp { EConstructor R; ERecord }`
+         (not inside an EOk) and carries no witness — reject it. *)
+      | EApp { fn = EConstructor { name = rname; args = []; _ };
+               arg = ERecord { fields = bare_fields; _ }; loc; _ }
+        when List.mem_assoc rname record_invariants ->
+        let (inv, _, _) = List.assoc rname record_invariants in
+        errors := make_error loc
+          ~hint:(Printf.sprintf
+            "supply the cross-field proof as a ghost witness at the construction site: \
+             `%s { ... } ::: <proofVar>`, where `<proofVar>` carries `%s`" rname inv)
+          (Printf.sprintf
+            "constructing `%s` requires a ghost witness for its cross-field invariant `%s`; \
+             a `%s { ... }` literal must be written `%s { ... } ::: <proofVar>`"
+            rname inv rname rname)
+        :: !errors;
+        List.iter (fun (_, fe) -> walk_expr type_env subject_env proof_env fe) bare_fields
+      (* Every remaining variant recurses into all child exprs with the shared
+         {!Ast_visitor.iter_children} traversal (same children, same order),
+         re-using the CURRENT envs — none of these nodes bind new subjects/proofs
+         relevant to a witness. *)
+      | e -> Ast_visitor.iter_children (walk_expr type_env subject_env proof_env) e
     in
     List.iter (function
-      | DFunc fd -> check_ghost_in_func fd.params fd.body
+      | DFunc fd ->
+        let type_env = List.map (fun (b : binding) -> (b.name, b.type_expr)) fd.params in
+        let subject_env = build_initial_subject_env fd.params in
+        let proof_env = initial_proof_env fd.params in
+        walk_expr type_env subject_env proof_env fd.body
       | _ -> ()
     ) decls;
     List.rev !errors

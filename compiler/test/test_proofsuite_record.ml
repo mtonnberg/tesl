@@ -5,18 +5,16 @@
         value (the construction site is checked exactly like a proof-requiring
         function call);
       - a record-level invariant `} ::: Pred a b` requires a ghost witness
-        (`{...} ::: proofVar`), and the witness's predicate must match the
-        invariant (mismatch is rejected; a non-`detachFact` witness is rejected).
+        (`{...} ::: proofVar`), and the witness's full proof — both PREDICATE
+        NAME and SUBJECTS — must match the invariant (the invariant's declared
+        subjects, its field names, are substituted by the record literal's actual
+        field-value subjects before comparison; any mismatch is rejected, and a
+        non-`detachFact` witness is rejected).
 
-    IMPORTANT — paths that are NOT statically enforced on this substrate (so we
-    do NOT write negatives that would wrongly expect rejection):
-      - ENTITY field proofs at construction (only DRecord is wired) — entity
-        construction from a raw value COMPILES.  We assert that as a positive +
-        a TODO marker, so a future tightening (ZC-FINALIZE) flips it to a should_fail.
-      - missing ghost witness entirely (compiles).
-      - ghost-witness SUBJECT mismatch (compiles).
-      - detachFact of a local-let check result carrying the wrong predicate
-        (compiles).
+    Subject-aware witness comparison (2026-07-03) closed the two formerly-open
+    paths, now covered by regression negatives:
+      - ghost-witness SUBJECT mismatch (right predicate, wrong subjects) — O9.
+      - detachFact of a local-let check result carrying the wrong predicate — O10.
 
     Hardening: [should_fail] additionally fails on any runtime-leak marker.
 
@@ -343,19 +341,51 @@ fn mk(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity) ->
   OrderLine { price: price, quantity: quantity } ::: (detachFact pq)
 |} order_setup)
 
-(* ── O7 — entity field proofs: documented NON-ENFORCEMENT (positives) ─────── *)
-(* On this substrate, build_record_field_bindings matches only DRecord, so an
-   entity field's `::: P` is NOT enforced at construction.  These COMPILE today.
-   They are pinned as positives with a TODO so ZC-FINALIZE can flip them to
-   should_fail once entity construction is wired into the proof obligation.
+(* ── O9 — ghost witness SUBJECT mismatch (2026-07-03, gap 1 closed) ────────── *)
+(* The witness carries the CORRECT predicate (`PriceExceedsQty`) but about the
+   WRONG subjects: `PriceExceedsQty a b` instead of `PriceExceedsQty price
+   quantity`.  The subject-aware witness comparison in `check_ghost_in_func`
+   (validation_advanced.ml) substitutes the record's own field-value subjects
+   into the invariant and rejects the mismatch.  Formerly this compiled. *)
+let test_O9_witness_wrong_subjects () =
+  should_fail "requires .PriceExceedsQty price quantity.\\|proves .PriceExceedsQty a b.\\|ghost witness"
+    (Printf.sprintf {|
+#lang tesl
+module OGhostSubjWrong exposing []
+import Tesl.Prelude exposing [Int, Fact]
+%s
+fn mk(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity,
+      a: Int, b: Int, wrong: Fact (PriceExceedsQty a b)) -> OrderLine =
+  OrderLine { price: price, quantity: quantity } ::: wrong
+|} order_setup)
 
-   GAP (entity-field-proof-not-enforced): a raw value into an entity field with
-   a `:::` proof annotation compiles cleanly — the construction-site obligation
-   is never checked for DEntity. *)
+(* ── O10 — ghost witness: detachFact of a LOCAL check result carrying the
+   WRONG predicate (2026-07-03, gap 2 closed) ──────────────────────────────── *)
+(* `let checkedP = check checkPositiveInt price` carries `IsPositive price`;
+   detaching it as the witness for an invariant requiring `PriceExceedsQty` is a
+   predicate mismatch.  The witness's full proof is resolved through the shared
+   proof engine (proofs_of_expr / detachFact of a let-bound check result) and
+   rejected.  Formerly this compiled. *)
+let test_O10_detach_local_wrong_predicate () =
+  should_fail "invariant requires .PriceExceedsQty.\\|does not match record .OrderLine. invariant\\|ghost witness"
+    (Printf.sprintf {|
+#lang tesl
+module OGhostDetachLocalWrong exposing []
+import Tesl.Prelude exposing [Int, Fact, detachFact]
+%s
+fn mk(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity) -> OrderLine =
+  let checkedP = check checkPositiveInt price
+  OrderLine { price: price, quantity: quantity } ::: (detachFact checkedP)
+|} order_setup)
 
-let test_O7_entity_field_raw_compiles_TODO () =
-  (* CLOSED: entity construction is now proof-checked — a raw value into an
-     entity field carrying a `:::` proof is rejected at the construction site. *)
+(* ── O7 — entity field proofs enforced at construction ────────────────────── *)
+(* Entity construction is proof-checked: build_record_field_bindings covers
+   DEntity as well as DRecord, so a raw value into an entity field carrying a
+   `:::` proof is rejected at the construction site, exactly like a record. *)
+
+let test_O7_entity_field_raw_rejected () =
+  (* Entity construction is proof-checked — a raw value into an entity field
+     carrying a `:::` proof is rejected at the construction site. *)
   should_fail "does not statically satisfy declared proof.*IsPositive"
     (Printf.sprintf {|
 #lang tesl
@@ -586,7 +616,7 @@ let () =
       "O4b correct 2-arg witness (positive)", test_O4b_correct_2arg_witness_positive;
     ]);
     "O4c-ghost-witness-absence", to_cases [
-      "O4c bare construction missing witness (§3.2)", test_O4c_bare_construction_missing_witness;
+      "O4c bare construction missing witness (GDP-RECORD-WITNESS)", test_O4c_bare_construction_missing_witness;
     ];
     "O5-ghost-witness-detach-param", to_cases [
       "O5 detachFact param wrong predicate", test_O5_detach_param_wrong_predicate;
@@ -595,8 +625,14 @@ let () =
       "O6 non-detachFact witness", test_O6_non_detachfact_witness;
       "O6 detachFact local (positive)", test_O6_detachfact_local_positive;
     ];
-    "O7-entity-field-nonenforcement", to_cases [
-      "O7 entity raw field compiles (TODO: should_fail)", test_O7_entity_field_raw_compiles_TODO;
+    "O9-ghost-witness-subject-mismatch", to_cases [
+      "O9 witness wrong subjects (gap 1)", test_O9_witness_wrong_subjects;
+    ];
+    "O10-ghost-witness-detach-local-wrong-pred", to_cases [
+      "O10 detachFact local wrong predicate (gap 2)", test_O10_detach_local_wrong_predicate;
+    ];
+    "O7-entity-field-enforcement", to_cases [
+      "O7 entity raw field rejected", test_O7_entity_field_raw_rejected;
       "O7 entity proven field (positive)", test_O7_entity_proven_field_positive;
     ];
     "O8-plain-record", to_cases [

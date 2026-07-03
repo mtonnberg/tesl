@@ -5,8 +5,7 @@
     Modeled on [test_library_negative.ml] / [test_review20_antagonistic.ml].
 
     Every negative is STATIC: [should_fail] asserts non-zero exit AND no runtime
-    leak. A negative that compiles is a real static-checker gap; such cases are
-    named `..._GAP_...` and reported (informs ZC-FINALIZE).
+    leak. A negative that compiles is a real static-checker gap.
 
     Anchors: `check_expr_call_proofs` / `validation_proof.ml`. §7.4 (shadowing
     illegal). Proof-carrying `Maybe` + proof-through-`case` (TESL.md). *)

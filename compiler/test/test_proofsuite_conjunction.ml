@@ -6,8 +6,7 @@
     net. Modeled on [test_library_negative.ml] / [test_review20_antagonistic.ml].
 
     Every negative is STATIC: [should_fail] asserts non-zero exit AND no runtime
-    leak. A negative that compiles is a real static-checker gap; such cases are
-    named `..._GAP_...` and reported (informs ZC-FINALIZE).
+    leak. A negative that compiles is a real static-checker gap.
 
     Anchors: combined-check proof propagation (Review20 §1.1), decomposition via
     `let (x ::: p && q)`, `validation_proof.ml` V001/P001. *)

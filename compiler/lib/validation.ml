@@ -76,7 +76,7 @@ let check_module (m : module_form) : validation_error list =
   @ (TDatabase @: check_sql_where_clauses ~facts decls)
   @ (TProof @: check_fn_return_proof_annotations ~facts decls)
   @ (TNaming @: check_circular_const_bindings decls)
-  @ (TProof @: check_ghost_witness_predicates decls)
+  @ (TProof @: check_ghost_witness_predicates ~facts decls)
   @ (TProof @: check_filter_check_args ~facts decls)
   @ (TProof @: check_forall_consistency ~facts decls)
   @ (TProof @: check_fact_arg_types decls)

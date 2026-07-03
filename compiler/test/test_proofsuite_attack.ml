@@ -18,7 +18,7 @@
       4.  Conjunction split-and-reassemble swap
       5.  attachFact retarget (§7.7 — proof about a different subject)
       6.  Cross-module forgery (re-export a fact then try to mint it)
-      7.  Skolem escape (§7.9 — currently runtime-only → KNOWN-GAP, separate grp)
+      7.  Skolem escape (§7.9 — statically rejected; separate grp)
       8.  `:::` fabrication in disguise (§7.12 — fn/let/if/case-arm/record field)
       9.  Shadowing to blur subjects (§7.4); forget-then-stale-reattach
       10. Positive counterparts — rejection is specificity, not blanket refusal. *)
@@ -457,9 +457,9 @@ fn cross(a: Int, b: Int) -> Int =
 |})
 
 (* CJ04 — control: a genuine P-only proof reattached where Q is required is
-   CORRECTLY rejected.  (Contrast with the andLeft/andRight KNOWN-GAP below:
-   this confirms the static checker DOES track single-conjunct subjects — it is
-   specifically the projection functions it fails to honor.) *)
+   CORRECTLY rejected.  This confirms the static checker tracks single-conjunct
+   subjects; the andLeft/andRight projection cases below verify the same for
+   the projection functions. *)
 let test_CJ04_single_conjunct_misuse_rejected () =
   should_fail ~who:"CJ04" no_satisfy
     (prelude ^ proof_decls ^ {|
@@ -986,24 +986,16 @@ fn gen() -> exists tokenId: String => tokenId: String ::: IsTokenId tokenId requ
 |})
 
 (* ════════════════════════════════════════════════════════════════════════ *)
-(* 7. Skolem escape (§7.9) — KNOWN-GAP (currently runtime-only).              *)
+(* 7. Skolem escape (§7.9) — existential witness cannot escape as a proof     *)
+(*    subject.                                                                *)
 (*                                                                            *)
-(*    FINDING (reported by NEG-ATTACK): the `.tesl` SURFACE has no            *)
-(*    `pack`/`unpack` keyword — existentials are written `exists w => body`.  *)
-(*    The genuine "witness name escapes its `unpack` scope" Skolem check      *)
-(*    (`ensure-no-skolem-escape`, dsl/private/check-runtime.rkt) is           *)
-(*    RUNTIME-ONLY; there is no OCaml static equivalent.  The surface cannot  *)
-(*    even express the raw escape the runtime guards.                         *)
-(*                                                                            *)
-(*    The NEAREST expressible attempt is to take an existential RESULT and    *)
-(*    feed it to a proof-requiring consumer (re-using the hidden witness as a *)
-(*    proof subject).  Good news: that IS statically rejected today           *)
-(*    ("does not statically satisfy declared proof") — verified below.        *)
-(*                                                                            *)
-(*    These cases run in a SEPARATE "known-gaps" group.  They use the same    *)
-(*    `should_fail`/`should_pass`, so they pass TODAY; if a future change     *)
-(*    makes the nearest-attempt compile, the suite turns red and flags that   *)
-(*    net-deletion is blocked.  See the final report.                         *)
+(*    The `.tesl` SURFACE has no `pack`/`unpack` keyword — existentials are   *)
+(*    written `exists w => body` — so the raw "witness name escapes its       *)
+(*    `unpack` scope" form the runtime guards cannot even be expressed.  The  *)
+(*    nearest expressible attempt is to take an existential RESULT and feed   *)
+(*    it to a proof-requiring consumer (re-using the hidden witness as a      *)
+(*    proof subject); the static checker rejects that today ("does not        *)
+(*    statically satisfy declared proof") — verified below.                   *)
 (* ════════════════════════════════════════════════════════════════════════ *)
 
 let exists_caps = "import Tesl.Time exposing [time]\nimport Tesl.Random exposing [random]\n"
@@ -1018,12 +1010,12 @@ fn gen() -> exists tokenId: String => tokenId: String ::: IsTokenId tokenId requ
     tokenId ::: proveTok tokenId
 |}
 
-(* SK01 (KNOWN-GAP) — feed an existential result to a proof-requiring consumer.
-   The hidden witness cannot be used as a proof subject downstream; this is the
-   nearest surface-expressible analogue of a Skolem escape.  Statically rejected
-   TODAY via the generic subject-mismatch error. *)
-let test_SK01_existential_result_at_proof_site_KNOWN_GAP () =
-  should_fail ~who:"SK01-KNOWN-GAP" no_satisfy
+(* SK01 — feed an existential result to a proof-requiring consumer.  The hidden
+   witness cannot be used as a proof subject downstream; this is the nearest
+   surface-expressible analogue of a Skolem escape.  Statically rejected via the
+   generic subject-mismatch error. *)
+let test_SK01_existential_result_at_proof_site_rejected () =
+  should_fail ~who:"SK01" no_satisfy
     ((mod_header "SkolemUse") ^ exists_caps ^ exists_token_decls ^ {|
 fn needsTokSubject(s: String ::: IsTokenId s) -> String = s
 fn escape() -> String requires [sessionCapability] =
@@ -1031,10 +1023,10 @@ fn escape() -> String requires [sessionCapability] =
   needsTokSubject t
 |})
 
-(* SK02 (KNOWN-GAP) — re-pack the existential result under a NEW existential and
-   try to attach a fresh proof keyed to the leaked value.  Still rejected. *)
-let test_SK02_existential_repack_KNOWN_GAP () =
-  should_fail ~who:"SK02-KNOWN-GAP" no_satisfy
+(* SK02 — re-pack the existential result under a NEW existential and try to
+   attach a fresh proof keyed to the leaked value.  Still rejected. *)
+let test_SK02_existential_repack_rejected () =
+  should_fail ~who:"SK02" no_satisfy
     ((mod_header "SkolemRepack") ^ exists_caps ^ exists_token_decls ^ {|
 fn needsTokSubject(s: String ::: IsTokenId s) -> String = s
 fn escape() -> String requires [sessionCapability] =
@@ -1045,7 +1037,7 @@ fn escape() -> String requires [sessionCapability] =
 
 (* PC-SK — POSITIVE: a correctly-constructed existential pack compiles (the
    witness stays hidden, never used downstream as a proof subject). *)
-let test_PCSK_existential_pack_ok_KNOWN_GAP () =
+let test_PCSK_existential_pack_ok () =
   should_pass
     ((mod_header "SkolemOk") ^ exists_caps ^ exists_token_decls ^ {|
 fn good() -> String requires [sessionCapability] =
@@ -1054,31 +1046,24 @@ fn good() -> String requires [sessionCapability] =
 |})
 
 (* ════════════════════════════════════════════════════════════════════════ *)
-(* CRITICAL KNOWN-GAP — andLeft/andRight conjunction projection is NOT        *)
-(* tracked by the static checker.                                            *)
+(* andLeft/andRight conjunction projection IS tracked by the static checker.  *)
 (*                                                                            *)
-(*    FINDING (NEG-ATTACK): when a value is decomposed via                    *)
-(*    `let (v ::: conj) = b` (where `b : ... ::: P && Q`), the checker keeps  *)
-(*    the FULL conjunction `P && Q` associated with `v`'s reattachable proof. *)
-(*    Passing `conj` through `andLeft`/`andRight` does NOT narrow what the    *)
-(*    checker believes: `v ::: andLeft conj` is still treated as carrying the *)
-(*    whole `P && Q`.  So a SINGLE projected conjunct can masquerade as the   *)
-(*    full conjunction — and, worse, as the OTHER conjunct.                   *)
+(*    When a value is decomposed via `let (v ::: conj) = b` (where            *)
+(*    `b : ... ::: P && Q`) and `conj` is passed through `andLeft`/`andRight`,*)
+(*    the checker narrows the reattachable proof to the projected conjunct.   *)
+(*    So `andLeft conj` carries only `P` and `andRight conj` only `Q`; a      *)
+(*    single projected conjunct can no longer masquerade as the full          *)
+(*    conjunction or as the OTHER conjunct.                                   *)
 (*                                                                            *)
 (*    Soundness control (CJ04 above): a genuine single-conjunct proof from a  *)
-(*    P-only check IS correctly rejected where Q is required.  The defect is  *)
-(*    specifically that `andLeft`/`andRight` are no-ops in the proof tracker. *)
+(*    P-only check is also correctly rejected where Q is required.            *)
 (*                                                                            *)
-(*    The two cases below SHOULD be statically rejected; they COMPILE TODAY.  *)
-(*    They are `should_pass` so the suite stays green while documenting the   *)
-(*    gap — when the checker is fixed to honor projections, these turn red    *)
-(*    and must be converted to `should_fail`.  Reported in the final message  *)
-(*    as a CRITICAL finding that may block net deletion.                      *)
+(*    The two cases below are correctly rejected (they assert should_fail).   *)
 (* ════════════════════════════════════════════════════════════════════════ *)
 
-(* GAP-ANDPROJ-01 (CLOSED) — `andLeft conj` (= IsPositive) used where IsSmall
-   required is now correctly rejected: the projected proof is subject-precise. *)
-let test_GAP_andleft_projection_unsound_KNOWN_GAP () =
+(* ANDPROJ-01 — `andLeft conj` (= IsPositive) used where IsSmall required is
+   correctly rejected: the projected proof is subject-precise. *)
+let test_andleft_projection_rejected () =
   should_fail "does not statically satisfy"
     ((mod_header "GapAndLeft") ^ proof_decls ^ {|
 fn unsound(raw: Int) -> Int =
@@ -1089,9 +1074,9 @@ fn unsound(raw: Int) -> Int =
   needSmall <| v ::: justP
 |})
 
-(* GAP-ANDPROJ-02 (CLOSED) — `andRight conj` (= IsSmall) used where IsPositive
-   required is now correctly rejected: the projected proof is subject-precise. *)
-let test_GAP_andright_projection_unsound_KNOWN_GAP () =
+(* ANDPROJ-02 — `andRight conj` (= IsSmall) used where IsPositive required is
+   correctly rejected: the projected proof is subject-precise. *)
+let test_andright_projection_rejected () =
   should_fail "does not statically satisfy"
     ((mod_header "GapAndRight") ^ proof_decls ^ {|
 fn unsound(raw: Int) -> Int =
@@ -1187,19 +1172,17 @@ let () =
       test_case "PC10 existential pack ok" `Quick test_PC10_existential_pack_ok;
     ];
 
-    (* 7. Skolem escape — documented KNOWN-GAP (runtime-only today).
-       These pass today; if the nearest-attempt ever compiles, the suite goes
-       red, flagging that net-deletion is blocked. *)
-    "known-gaps", [
-      test_case "SK01 KNOWN-GAP existential result at proof site (statically rejected today)"
-        `Quick test_SK01_existential_result_at_proof_site_KNOWN_GAP;
-      test_case "SK02 KNOWN-GAP existential repack (statically rejected today)"
-        `Quick test_SK02_existential_repack_KNOWN_GAP;
+    (* 7. Skolem escape + conjunction projection — statically rejected. *)
+    "skolem-and-projection", [
+      test_case "SK01 existential result at proof site rejected"
+        `Quick test_SK01_existential_result_at_proof_site_rejected;
+      test_case "SK02 existential repack rejected"
+        `Quick test_SK02_existential_repack_rejected;
       test_case "PC-SK existential pack ok (positive)"
-        `Quick test_PCSK_existential_pack_ok_KNOWN_GAP;
-      test_case "GAP-ANDPROJ-01 KNOWN-GAP andLeft projection unsound (COMPILES TODAY; should reject)"
-        `Quick test_GAP_andleft_projection_unsound_KNOWN_GAP;
-      test_case "GAP-ANDPROJ-02 KNOWN-GAP andRight projection unsound (COMPILES TODAY; should reject)"
-        `Quick test_GAP_andright_projection_unsound_KNOWN_GAP;
+        `Quick test_PCSK_existential_pack_ok;
+      test_case "ANDPROJ-01 andLeft projection rejected"
+        `Quick test_andleft_projection_rejected;
+      test_case "ANDPROJ-02 andRight projection rejected"
+        `Quick test_andright_projection_rejected;
     ];
   ]
