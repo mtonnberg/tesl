@@ -296,6 +296,35 @@ fn good(x: Int) -> y: Int ::: IsPositive y =
   y
 |}
 
+(* Hole #2 (2026-07-04): an `establish` may not DELEGATE its declared fact to a
+   prove-fn that establishes it about a DIFFERENT subject.  The direct-form swap
+   `-> Fact (P n) = P m` was already rejected; this closes the delegation path
+   `= proveConst()` where proveConst proves `IsPositive 7`, not `_n`. *)
+let test_PN09_establish_delegate_wrong_subject () =
+  should_fail "delegates to a function that establishes the fact about" {|
+module EstDelegateForge exposing [factFor]
+import Tesl.Prelude exposing [Int, Fact]
+fact IsPositive (n: Int)
+establish proveConst() -> Fact (IsPositive 7) =
+  IsPositive 7
+establish factFor(_n: Int) -> Fact (IsPositive _n) =
+  proveConst()
+|}
+
+(* Positive companion to PN09: subject-PRESERVING delegation is legitimate —
+   `factFor(n)` delegating to `prove(n)` (where `prove(m) -> Fact (IsPositive m)`)
+   is about the same subject and must still compile. *)
+let test_PC05_establish_delegate_same_subject () =
+  should_pass {|
+module EstDelegateOk exposing [factFor]
+import Tesl.Prelude exposing [Int, Fact]
+fact IsPositive (n: Int)
+establish prove(m: Int) -> Fact (IsPositive m) =
+  IsPositive m
+establish factFor(n: Int) -> Fact (IsPositive n) =
+  prove(n)
+|}
+
 let () =
   run "proof-negatives" [
     "proofs", [
@@ -307,6 +336,7 @@ let () =
       test_case "PN06 ok must return the declared binding"        `Quick test_PN06_ok_returns_non_identifier;
       test_case "PN07 return binder cannot retype an input"       `Quick test_PN07_binder_reuse_different_type;
       test_case "PN08 attaching unrelated fact cannot forge return proof" `Quick test_PN08_attach_unrelated_fact_forgery;
+      test_case "PN09 establish cannot delegate to a wrong-subject prove-fn" `Quick test_PN09_establish_delegate_wrong_subject;
     ];
     "capabilities", [
       test_case "CN01 capability use must be declared (leak)"     `Quick test_CN01_capability_leak;
@@ -318,5 +348,6 @@ let () =
       test_case "PC02 fn propagates input proof"                  `Quick test_PC02_fn_propagates_input_proof;
       test_case "PC03 declared capability compiles"               `Quick test_PC03_declared_capability_ok;
       test_case "PC04 attaching matching fact compiles"           `Quick test_PC04_attach_matching_fact_ok;
+      test_case "PC05 subject-preserving establish delegation compiles" `Quick test_PC05_establish_delegate_same_subject;
     ];
   ]

@@ -1632,6 +1632,70 @@ fact constructor `%s`; the body must return the declared fact constructor"
                   | _ -> ()
                 in
                 walk_args fd.body;
+                (* GDP-EST-DELEGATE (hole #2, 2026-07-04): the constructor walk above
+                   catches the DIRECT swap `-> Fact (P n) = P m`, but a DELEGATE
+                   `= proveConst()` — a tail call to another prove-fn whose return is
+                   `Fact (P <other-subject>)` — slipped through, since the body head
+                   (`proveConst`) is not `declared_pred` (`P`).  Resolve the delegate's
+                   declared return fact, substitute its params with the call args, and
+                   apply the same subject/literal comparison.  A subject-PRESERVING
+                   delegation (`f(n) = g(n)` with `g(n) -> Fact (P n)`) still passes;
+                   only a subject-MISMATCHED delegate is rejected.  Fail-closed only on
+                   a resolvable delegate — a compound tail (if/case with a computed arg)
+                   renders to the "\000" sentinel below and stays conservatively
+                   unchecked, so no false positives. *)
+                let rec body_tails (e : Ast.expr) : Ast.expr list =
+                  match e with
+                  | ELet { body; _ } | ELetProof { body; _ } -> body_tails body
+                  | EIf { then_; else_; _ } -> body_tails then_ @ body_tails else_
+                  | ECase { arms; _ } ->
+                    List.concat_map (fun (a : Ast.case_arm) -> body_tails a.body) arms
+                  | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+                  | EWithTransaction { body; _ } -> body_tails body
+                  | other -> [ other ]
+                in
+                let rec zip_min a b = match a, b with
+                  | x :: xs, y :: ys -> (x, y) :: zip_min xs ys
+                  | _ -> [] in
+                let delegate_produced_args (e : Ast.expr) : string list option =
+                  match flatten_ctor_app e with
+                  | Some (name, call_args) when name <> declared_pred ->
+                    (match List.find_opt (fun (g : func_decl) -> g.name = name) all_funcs with
+                     | Some g ->
+                       (match declared_fact_of_return g.return_spec with
+                        | Some (gpred, gargs) when gpred = declared_pred ->
+                          let subst =
+                            zip_min
+                              (List.map (fun (b : binding) -> b.name) g.params)
+                              (List.map (fun a ->
+                                 match expr_arg_to_string a with Some s -> s | None -> "\000")
+                                 call_args)
+                          in
+                          Some (List.map (fun ga ->
+                                  match List.assoc_opt ga subst with Some s -> s | None -> ga)
+                                  gargs)
+                        | _ -> None)
+                     | None -> None)
+                  | _ -> None
+                in
+                List.iter (fun tail ->
+                  match delegate_produced_args tail with
+                  | Some produced when List.length produced = List.length declared_args ->
+                    List.iteri (fun i declared_a ->
+                      if is_checked_pos declared_a then
+                        match List.nth_opt produced i with
+                        | Some actual when actual <> declared_a && actual <> "\000" ->
+                          errors := { loc = fd.loc; message = Printf.sprintf
+                            "establish '%s' declares return type `Fact (%s)` but delegates to a \
+function that establishes the fact about `%s`, not the declared `%s` (argument %d); a delegated \
+proof must be about the declared subject"
+                            fd.name (String.concat " " (declared_pred :: declared_args))
+                            actual declared_a (i + 1) }
+                          :: !errors
+                        | _ -> ()
+                    ) declared_args
+                  | _ -> ()
+                ) (body_tails fd.body);
                 List.iter (fun detail ->
                   errors := { loc = fd.loc; message = Printf.sprintf
                     "establish '%s' declares return type `Fact (%s)` but its body's `%s` constructor \
