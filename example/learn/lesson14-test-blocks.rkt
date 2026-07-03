@@ -86,12 +86,12 @@
   ; property: idempotent: clamping twice is same as once
   (for ([tesl-prop-i (in-range 200)])
     (let ([lo (- (random 2000001) 1000000)] [hi (- (random 2000001) 1000000)] [n (- (random 2000001) 1000000)])
-      (when (<= (raw-value lo) (raw-value hi)) (check-true (equal? (raw-value (clamp lo hi (clamp lo hi n))) (raw-value (clamp lo hi n))) "idempotent: clamping twice is same as once"))
+      (when (<= (raw-value lo) (raw-value hi)) (check-true (tesl-equal? (raw-value (clamp lo hi (clamp lo hi n))) (raw-value (clamp lo hi n))) "idempotent: clamping twice is same as once"))
     ))
   ; property: clamp lo lo n == lo for any n
   (for ([tesl-prop-i (in-range 200)])
     (let ([lo (- (random 2000001) 1000000)] [n (- (random 2000001) 1000000)])
-      (check-true (equal? (raw-value (clamp lo lo n)) (raw-value lo)) "clamp lo lo n == lo for any n")
+      (check-true (tesl-equal? (raw-value (clamp lo lo n)) (raw-value lo)) "clamp lo lo n == lo for any n")
     ))
   )
 

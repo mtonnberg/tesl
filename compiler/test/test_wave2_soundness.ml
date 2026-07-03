@@ -337,11 +337,41 @@ fn pi() -> Int = 3
 fn f() -> Bool = pi == pi
 |})
 
-(* Generic type variables stay permissive by design (TSS-1 residual). *)
+(* Generic type variables stay permissive AT THE DEFINITION (a generic helper
+   must keep compiling); the obligation is discharged at each CALL site once the
+   type is concrete (Eq/Ord Stage 3). *)
 let test_f_eq_generic_tvar_accepted () =
   should_pass (prim_hdr ^ "fn f(a: a, b: a) -> Bool = a == b\n")
 let test_f_lt_generic_tvar_accepted () =
   should_pass (prim_hdr ^ "fn f(a: a, b: a) -> Bool = a < b\n")
+
+(* Eq/Ord Stage 3: a generic comparison helper instantiated at a NON-instance
+   type (a function) is rejected at the CALL site, even though the helper's own
+   body typed while the operand was still generic (the S14b residual, now
+   closed for same-module callees). *)
+let test_f_generic_ord_call_at_fn_rejected () =
+  should_fail "ordering is not defined for type"
+    (prim_hdr ^ {|
+fn genLt(a: a, b: a) -> Bool = a < b
+fn bad(f: (Int) -> Int, g: (Int) -> Int) -> Bool = genLt f g
+|})
+let test_f_generic_eq_call_at_fn_rejected () =
+  should_fail "equality is not defined for type"
+    (prim_hdr ^ {|
+fn genEq(a: a, b: a) -> Bool = a == b
+fn bad(f: (Int) -> Int, g: (Int) -> Int) -> Bool = genEq f g
+|})
+(* …but the SAME helpers instantiated at an instance type (Int) still compile. *)
+let test_f_generic_ord_call_at_int_accepted () =
+  should_pass (prim_hdr ^ {|
+fn genLt(a: a, b: a) -> Bool = a < b
+fn good() -> Bool = genLt 1 2
+|})
+let test_f_generic_eq_call_at_int_accepted () =
+  should_pass (prim_hdr ^ {|
+fn genEq(a: a, b: a) -> Bool = a == b
+fn good() -> Bool = genEq 3 4
+|})
 
 (* Record literals: `<` is a runtime-crashing bypass (HM-2) → rejected;
    `==` is structurally decidable → accepted. *)
@@ -669,6 +699,10 @@ let () =
       test_case "nullary fn value == accepted" `Quick test_f_nullary_fn_value_accepted;
       test_case "== generic tvar accepted" `Quick test_f_eq_generic_tvar_accepted;
       test_case "< generic tvar accepted" `Quick test_f_lt_generic_tvar_accepted;
+      test_case "generic < call at fn rejected" `Quick test_f_generic_ord_call_at_fn_rejected;
+      test_case "generic == call at fn rejected" `Quick test_f_generic_eq_call_at_fn_rejected;
+      test_case "generic < call at Int accepted" `Quick test_f_generic_ord_call_at_int_accepted;
+      test_case "generic == call at Int accepted" `Quick test_f_generic_eq_call_at_int_accepted;
       test_case "< record literal rejected (HM-2)" `Quick test_f_lt_record_rejected;
       test_case "== record accepted" `Quick test_f_eq_record_accepted;
       test_case "< newtype-of-Int accepted" `Quick test_f_newtype_int_orderable_accepted;

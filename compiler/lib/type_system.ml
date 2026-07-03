@@ -200,6 +200,32 @@ let instantiate (sch : scheme) : ty =
     subst_rigid sch.mono
   end
 
+(** Like [instantiate], but also returns the rigid→fresh id mapping used, so a
+    caller can freshen SIDE data expressed in the same rigid vars (e.g. Eq/Ord
+    constraints on a scheme) consistently with the instantiated [mono].  Used by
+    the Eq/Ord constraint discharge (checker.ml). *)
+let instantiate_with_map (sch : scheme) : ty * (int * int) list =
+  let mapping = List.map (fun rid -> (rid, fresh_id ())) sch.vars in
+  let rec subst_rigid ty =
+    match ty with
+    | TVar id ->
+      (match List.assoc_opt id mapping with Some n -> TVar n | None -> ty)
+    | TCon _           -> ty
+    | TApp (h, a)      -> TApp (subst_rigid h, subst_rigid a)
+    | TFun (a, b)      -> TFun (subst_rigid a, subst_rigid b)
+  in
+  (subst_rigid sch.mono, mapping)
+
+(** Rewrite every [TVar id] whose id appears in [imap] to [TVar (imap id)].
+    (Total, exhaustive — no wildcard fallthrough that could silently drop a
+    constructor.) *)
+let rec apply_int_map (imap : (int * int) list) (ty : ty) : ty =
+  match ty with
+  | TVar id -> (match List.assoc_opt id imap with Some n -> TVar n | None -> ty)
+  | TCon _ -> ty
+  | TApp (h, a) -> TApp (apply_int_map imap h, apply_int_map imap a)
+  | TFun (a, b) -> TFun (apply_int_map imap a, apply_int_map imap b)
+
 (** Generalize a type over variables not free in the environment.
     Quantified variables get negative IDs (rigid). *)
 let generalize (env_free : int list) (subst : subst) (ty : ty) : scheme =

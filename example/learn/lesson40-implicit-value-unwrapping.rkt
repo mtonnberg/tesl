@@ -41,7 +41,7 @@
 (define/pow
   (isEqual [x : Integer] [y : Integer])
   #:returns Boolean
-  (thsl-src! "example/learn/lesson40-implicit-value-unwrapping.tesl" 37 (list (cons 'x *x) (cons 'y *y)) (lambda () (equal? *x *y))))
+  (thsl-src! "example/learn/lesson40-implicit-value-unwrapping.tesl" 37 (list (cons 'x *x) (cons 'y *y)) (lambda () (tesl-equal? *x *y))))
 
 (define/pow
   (greet [name : String])

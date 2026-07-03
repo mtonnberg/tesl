@@ -68,7 +68,7 @@
   (notifyWorker [job : KanelNotifyJob ::: (FromQueue (Id == jobId) job)])
   #:capabilities [notifyWorkerCap kanelPubSub]
   #:returns KanelNotifyJob
-  (thsl-src! "example/kanel/KanelBackend.tesl" 195 (list (cons 'job *job)) (lambda () (if (equal? (raw-value job.recipientEmail) "blocked@example.com") (reject "notifications blocked for recipient" #:http-code 500) (begin (publish-event! UserNotifications (format "~a" (raw-value job.recipientUserId)) (NotificationDelivered (raw-value job.recipientEmail) (raw-value job.subject))) job)))))
+  (thsl-src! "example/kanel/KanelBackend.tesl" 195 (list (cons 'job *job)) (lambda () (if (tesl-equal? (raw-value job.recipientEmail) "blocked@example.com") (reject "notifications blocked for recipient" #:http-code 500) (begin (publish-event! UserNotifications (format "~a" (raw-value job.recipientUserId)) (NotificationDelivered (raw-value job.recipientEmail) (raw-value job.subject))) job)))))
 
 (define/pow
   (deadNotifyWorker [job : KanelNotifyJob ::: (FromDeadQueue (Id == jobId) job)])

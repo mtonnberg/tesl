@@ -101,7 +101,7 @@
   (lookupOrderStatus [orderId : String])
   #:capabilities [convRead]
   #:returns String
-  (thsl-src! "example/ai-conversation-service.tesl" 143 (list (cons 'orderId *orderId)) (lambda () (if (equal? *orderId "12") (raw-value "Under processing") (if (equal? *orderId "13") (raw-value "Shipped") (let ([tesl-case-3 (raw-value (let ([tesl_match (select-one (from Order) (where (==. (entity-field-ref Order 'id) orderId)))]) (if tesl_match (Something tesl_match) Nothing)))]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Something)) (let ([o (hash-ref (adt-value-fields *tesl-case-3) 'value)]) (thsl-src! "example/ai-conversation-service.tesl" 149 (list (cons 'o o)) (lambda () (raw-value (raw-value o.status)))))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Nothing)) (thsl-src! "example/ai-conversation-service.tesl" 150 (list) (lambda () (raw-value "no such order")))])))))))
+  (thsl-src! "example/ai-conversation-service.tesl" 143 (list (cons 'orderId *orderId)) (lambda () (if (tesl-equal? *orderId "12") (raw-value "Under processing") (if (tesl-equal? *orderId "13") (raw-value "Shipped") (let ([tesl-case-3 (raw-value (let ([tesl_match (select-one (from Order) (where (==. (entity-field-ref Order 'id) orderId)))]) (if tesl_match (Something tesl_match) Nothing)))]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Something)) (let ([o (hash-ref (adt-value-fields *tesl-case-3) 'value)]) (thsl-src! "example/ai-conversation-service.tesl" 149 (list (cons 'o o)) (lambda () (raw-value (raw-value o.status)))))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Nothing)) (thsl-src! "example/ai-conversation-service.tesl" 150 (list) (lambda () (raw-value "no such order")))])))))))
 
 (define MistralAgent
   (with-env-bootstrap (__tart_withTools (__tart_defineAgent (raw-value (mistral (raw-value (requireEnv "MISTRAL_API_KEY")) "mistral-large-latest")) (raw-value "You are a concise support assistant. Use lookupOrderStatus for order questions.") (raw-value 512)) (list (__tart_tool "lookupOrderStatus" "\226\148\128\226\148\128 Tool: a typed function the model may call, grounded in the database \226\148\128\226\148\128\226\148\128\226\148\128\226\148\128\226\148\128\226\148\128\226\148\128 The result is derived ONLY from a row fetched through the trusted SQL boundary, which carries a FromDb proof \226\128\148 so the model cannot make the tool assert a status for an order that isn't in the database (data integrity by construction)." "{\"type\":\"object\",\"properties\":{\"orderId\":{\"type\":\"string\"}},\"required\":[\"orderId\"]}" (lambda (_args) (__tart_tesl-agent-decode-args _args (list (cons "orderId" 'string)))) (lambda (_decoded) (apply lookupOrderStatus _decoded)))))))
@@ -116,7 +116,7 @@
   (agentFor [c : Consumer])
   #:capabilities [convAi convRead]
   #:returns Agent
-  (thsl-src! "example/ai-conversation-service.tesl" 182 (list (cons 'c *c)) (lambda () (if (equal? (tesl-dot/runtime c 'provider) "mistral") (raw-value MistralAgent) (raw-value (claudeAgentFor c))))))
+  (thsl-src! "example/ai-conversation-service.tesl" 182 (list (cons 'c *c)) (lambda () (if (tesl-equal? (tesl-dot/runtime c 'provider) "mistral") (raw-value MistralAgent) (raw-value (claudeAgentFor c))))))
 
 (define/pow
   (loadConversation [agent : Agent] [requestUser : Consumer] [conversationId : String])

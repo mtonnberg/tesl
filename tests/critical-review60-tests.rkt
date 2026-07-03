@@ -44,12 +44,12 @@
 (define-checker
   (checkC [n : Integer ::: ((A n) && (B n))])
   #:returns [n : Integer ::: (C n)]
-  (thsl-src! "tests/critical-review60-tests.tesl" 63 (list (cons 'n *n)) (lambda () (if (not (equal? *n 42)) (accept (C n) #:value *n) (reject "fail C" #:http-code 400)))))
+  (thsl-src! "tests/critical-review60-tests.tesl" 63 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 42)) (accept (C n) #:value *n) (reject "fail C" #:http-code 400)))))
 
 (define-checker
   (checkD [n : Integer ::: ((A n) && ((B n) && (C n)))])
   #:returns [n : Integer ::: (D n)]
-  (thsl-src! "tests/critical-review60-tests.tesl" 69 (list (cons 'n *n)) (lambda () (if (not (equal? *n 99)) (accept (D n) #:value *n) (reject "fail D" #:http-code 400)))))
+  (thsl-src! "tests/critical-review60-tests.tesl" 69 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 99)) (accept (D n) #:value *n) (reject "fail D" #:http-code 400)))))
 
 (define-checker
   (checkPos [n : Integer])

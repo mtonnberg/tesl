@@ -36,12 +36,12 @@
 (define/pow
   (safeDivideInt [a : Integer] [b : Integer])
   #:returns (Maybe Integer)
-  (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 44 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (equal? *b 0) (raw-value Nothing) (let/check ([tesl-checked-0 (tesl_import_Int_nonZero b)]) (let ([checkedB tesl-checked-0]) (raw-value (raw-value (Something (tesl_import_Int_divide *a checkedB))))))))))
+  (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 44 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (tesl-equal? *b 0) (raw-value Nothing) (let/check ([tesl-checked-0 (tesl_import_Int_nonZero b)]) (let ([checkedB tesl-checked-0]) (raw-value (raw-value (Something (tesl_import_Int_divide *a checkedB))))))))))
 
 (define/pow
   (hasId [targetId : Integer] [u : User])
   #:returns Boolean
-  (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 51 (list (cons 'targetId *targetId) (cons 'u *u)) (lambda () (equal? (tesl-dot/runtime u 'id) *targetId))))
+  (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 51 (list (cons 'targetId *targetId) (cons 'u *u)) (lambda () (tesl-equal? (tesl-dot/runtime u 'id) *targetId))))
 
 (define/pow
   (findUser [users : (List User)] [userId : Integer])

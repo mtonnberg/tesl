@@ -61,7 +61,7 @@
 (define-checker
   (checkEv35 [n : Integer])
   #:returns [n : Integer ::: (Ev35 n)]
-  (thsl-src! "tests/critical-review-35-tests.tesl" 242 (list (cons 'n *n)) (lambda () (if (equal? (remainder *n 2) 0) (accept (Ev35 n) #:value *n) (reject "not even" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-35-tests.tesl" 242 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 2) 0) (accept (Ev35 n) #:value *n) (reject "not even" #:http-code 400)))))
 
 (define-checker
   (checkSmall35 [n : Integer])
@@ -150,7 +150,7 @@
 (define/pow
   (safeFloatDiv35 [a : Real] [b : Real])
   #:returns (Maybe Real)
-  (thsl-src! "tests/critical-review-35-tests.tesl" 447 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (equal? *b 0.) (raw-value Nothing) (let/check ([tesl-checked-6 (tesl_import_Float_requireNonZero b)]) (let ([divisor tesl-checked-6]) (raw-value (raw-value (Something (raw-value (tesl_import_Float_div *a divisor)))))))))))
+  (thsl-src! "tests/critical-review-35-tests.tesl" 447 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (tesl-equal? *b 0.) (raw-value Nothing) (let/check ([tesl-checked-6 (tesl_import_Float_requireNonZero b)]) (let ([divisor tesl-checked-6]) (raw-value (raw-value (Something (raw-value (tesl_import_Float_div *a divisor)))))))))))
 
 (define/pow
   (xor35 [a : Boolean] [b : Boolean])
@@ -270,7 +270,7 @@
 (define/pow
   (classify35 [n : Integer])
   #:returns String
-  (thsl-src! "tests/critical-review-35-tests.tesl" 980 (list (cons 'n *n)) (lambda () (if (< *n 0) (raw-value "negative") (if (equal? *n 0) (raw-value "zero") (if (< *n 10) (raw-value "small") (raw-value "large")))))))
+  (thsl-src! "tests/critical-review-35-tests.tesl" 980 (list (cons 'n *n)) (lambda () (if (< *n 0) (raw-value "negative") (if (tesl-equal? *n 0) (raw-value "zero") (if (< *n 10) (raw-value "small") (raw-value "large")))))))
 
 (module+ test
   (require rackunit)
@@ -702,17 +702,17 @@
   ; property: addition commutative
   (for ([tesl-prop-i (in-range 50)])
     (let ([a (- (random 2000001) 1000000)] [b (- (random 2000001) 1000000)])
-      (when (and (> (raw-value a) -10000) (< (raw-value a) 10000) (> (raw-value b) -10000) (< (raw-value b) 10000)) (check-true (equal? (+ (raw-value a) (raw-value b)) (+ (raw-value b) (raw-value a))) "addition commutative"))
+      (when (and (> (raw-value a) -10000) (< (raw-value a) 10000) (> (raw-value b) -10000) (< (raw-value b) 10000)) (check-true (tesl-equal? (+ (raw-value a) (raw-value b)) (+ (raw-value b) (raw-value a))) "addition commutative"))
     ))
   ; property: multiplication commutative
   (for ([tesl-prop-i (in-range 50)])
     (let ([a (- (random 2000001) 1000000)] [b (- (random 2000001) 1000000)])
-      (when (and (> (raw-value a) -1000) (< (raw-value a) 1000) (> (raw-value b) -1000) (< (raw-value b) 1000)) (check-true (equal? (* (raw-value a) (raw-value b)) (* (raw-value b) (raw-value a))) "multiplication commutative"))
+      (when (and (> (raw-value a) -1000) (< (raw-value a) 1000) (> (raw-value b) -1000) (< (raw-value b) 1000)) (check-true (tesl-equal? (* (raw-value a) (raw-value b)) (* (raw-value b) (raw-value a))) "multiplication commutative"))
     ))
   ; property: addition associative
   (for ([tesl-prop-i (in-range 50)])
     (let ([a (- (random 2000001) 1000000)] [b (- (random 2000001) 1000000)] [c (- (random 2000001) 1000000)])
-      (when (and (> (raw-value a) -1000) (< (raw-value a) 1000) (> (raw-value b) -1000) (< (raw-value b) 1000) (> (raw-value c) -1000) (< (raw-value c) 1000)) (check-true (equal? (+ (+ (raw-value a) (raw-value b)) (raw-value c)) (+ (raw-value a) (+ (raw-value b) (raw-value c)))) "addition associative"))
+      (when (and (> (raw-value a) -1000) (< (raw-value a) 1000) (> (raw-value b) -1000) (< (raw-value b) 1000) (> (raw-value c) -1000) (< (raw-value c) 1000)) (check-true (tesl-equal? (+ (+ (raw-value a) (raw-value b)) (raw-value c)) (+ (raw-value a) (+ (raw-value b) (raw-value c)))) "addition associative"))
     ))
   )
 
@@ -720,12 +720,12 @@
   ; property: reverse involution
   (for ([tesl-prop-i (in-range 50)])
     (let ([xs (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))])
-      (check-true (equal? (raw-value (tesl_import_List_reverse (raw-value (tesl_import_List_reverse (raw-value xs))))) (raw-value xs)) "reverse involution")
+      (check-true (tesl-equal? (raw-value (tesl_import_List_reverse (raw-value (tesl_import_List_reverse (raw-value xs))))) (raw-value xs)) "reverse involution")
     ))
   ; property: sort idempotent
   (for ([tesl-prop-i (in-range 50)])
     (let ([xs (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))])
-      (check-true (equal? (raw-value (tesl_import_List_sort (raw-value (tesl_import_List_sort (raw-value xs))))) (raw-value (tesl_import_List_sort (raw-value xs)))) "sort idempotent")
+      (check-true (tesl-equal? (raw-value (tesl_import_List_sort (raw-value (tesl_import_List_sort (raw-value xs))))) (raw-value (tesl_import_List_sort (raw-value xs)))) "sort idempotent")
     ))
   ; property: length non-negative
   (for ([tesl-prop-i (in-range 50)])
@@ -735,7 +735,7 @@
   ; property: append length additive
   (for ([tesl-prop-i (in-range 50)])
     (let ([xs (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))] [ys (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))])
-      (check-true (equal? (raw-value (tesl_import_List_length (raw-value (tesl_import_List_append (raw-value xs) (raw-value ys))))) (+ (raw-value (tesl_import_List_length (raw-value xs))) (raw-value (tesl_import_List_length (raw-value ys))))) "append length additive")
+      (check-true (tesl-equal? (raw-value (tesl_import_List_length (raw-value (tesl_import_List_append (raw-value xs) (raw-value ys))))) (+ (raw-value (tesl_import_List_length (raw-value xs))) (raw-value (tesl_import_List_length (raw-value ys))))) "append length additive")
     ))
   )
 

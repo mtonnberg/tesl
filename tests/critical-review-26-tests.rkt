@@ -149,12 +149,12 @@
 (define-checker
   (checkC4 [n : Integer])
   #:returns [n : Integer ::: (FactC n)]
-  (thsl-src! "tests/critical-review-26-tests.tesl" 385 (list (cons 'n *n)) (lambda () (if (not (equal? *n 13)) (accept (FactC n) #:value *n) (reject "FactC: 13 is unlucky" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-26-tests.tesl" 385 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 13)) (accept (FactC n) #:value *n) (reject "FactC: 13 is unlucky" #:http-code 400)))))
 
 (define-checker
   (checkD4 [n : Integer])
   #:returns [n : Integer ::: (FactD n)]
-  (thsl-src! "tests/critical-review-26-tests.tesl" 391 (list (cons 'n *n)) (lambda () (if (equal? (remainder *n 2) 0) (accept (FactD n) #:value *n) (reject "FactD: must be even" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-26-tests.tesl" 391 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 2) 0) (accept (FactD n) #:value *n) (reject "FactD: must be even" #:http-code 400)))))
 
 (define/pow
   (requiresABCD [n : Integer ::: ((FactA n) && ((FactB n) && ((FactC n) && (FactD n))))])
@@ -164,7 +164,7 @@
 (define-checker
   (checkAll4 [n : Integer])
   #:returns [n : Integer ::: ((FactA n) && ((FactB n) && ((FactC n) && (FactD n))))]
-  (thsl-src! "tests/critical-review-26-tests.tesl" 404 (list (cons 'n *n)) (lambda () (if (> *n 0) (if (< *n 100) (if (not (equal? *n 13)) (if (equal? (remainder *n 2) 0) (accept ((FactA n) && ((FactB n) && ((FactC n) && (FactD n)))) #:value *n) (reject "FactD: must be even" #:http-code 400)) (reject "FactC: 13 is unlucky" #:http-code 400)) (reject "FactB: must be < 100" #:http-code 400)) (reject "FactA: must be > 0" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-26-tests.tesl" 404 (list (cons 'n *n)) (lambda () (if (> *n 0) (if (< *n 100) (if (not (tesl-equal? *n 13)) (if (tesl-equal? (remainder *n 2) 0) (accept ((FactA n) && ((FactB n) && ((FactC n) && (FactD n)))) #:value *n) (reject "FactD: must be even" #:http-code 400)) (reject "FactC: 13 is unlucky" #:http-code 400)) (reject "FactB: must be < 100" #:http-code 400)) (reject "FactA: must be > 0" #:http-code 400)))))
 
 (define/pow
   (useAll4 [n : Integer])
@@ -235,12 +235,12 @@
 (define/pow
   (isEven2 [n : Integer])
   #:returns Boolean
-  (thsl-src! "tests/critical-review-26-tests.tesl" 684 (list (cons 'n *n)) (lambda () (if (equal? *n 0) (raw-value #t) (raw-value (isOdd2 (- *n 1)))))))
+  (thsl-src! "tests/critical-review-26-tests.tesl" 684 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #t) (raw-value (isOdd2 (- *n 1)))))))
 
 (define/pow
   (isOdd2 [n : Integer])
   #:returns Boolean
-  (thsl-src! "tests/critical-review-26-tests.tesl" 690 (list (cons 'n *n)) (lambda () (if (equal? *n 0) (raw-value #f) (raw-value (isEven2 (- *n 1)))))))
+  (thsl-src! "tests/critical-review-26-tests.tesl" 690 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #f) (raw-value (isEven2 (- *n 1)))))))
 
 (define/pow
   (doubleAndFilter [xs : (List Integer)])
@@ -287,7 +287,7 @@
 (define/pow
   (lookupWithDefault [items : (List Integer)] [target : Integer])
   #:returns Integer
-  (let ([found (thsl-src! "tests/critical-review-26-tests.tesl" 860 (list (cons 'items *items) (cons 'target *target)) (lambda () (raw-value (tesl_import_List_head (raw-value (tesl_import_List_filter (let () (define/pow (tesl-lambda-18 [n : Integer]) #:returns Boolean (equal? *n *target)) tesl-lambda-18) *items))))))]) (thsl-src-control! "tests/critical-review-26-tests.tesl" 861 (list (cons 'found *found) (cons 'items *items) (cons 'target *target)) (lambda () (let ([tesl-case-19 (raw-value found)]) (cond [(and (adt-value? *tesl-case-19) (eq? (adt-value-variant *tesl-case-19) 'Nothing)) (thsl-src! "tests/critical-review-26-tests.tesl" 862 (list) (lambda () (raw-value -999)))] [(and (adt-value? *tesl-case-19) (eq? (adt-value-variant *tesl-case-19) 'Something)) (let ([val (hash-ref (adt-value-fields *tesl-case-19) 'value)]) (thsl-src! "tests/critical-review-26-tests.tesl" 863 (list (cons 'val val)) (lambda () *val)))]))))))
+  (let ([found (thsl-src! "tests/critical-review-26-tests.tesl" 860 (list (cons 'items *items) (cons 'target *target)) (lambda () (raw-value (tesl_import_List_head (raw-value (tesl_import_List_filter (let () (define/pow (tesl-lambda-18 [n : Integer]) #:returns Boolean (tesl-equal? *n *target)) tesl-lambda-18) *items))))))]) (thsl-src-control! "tests/critical-review-26-tests.tesl" 861 (list (cons 'found *found) (cons 'items *items) (cons 'target *target)) (lambda () (let ([tesl-case-19 (raw-value found)]) (cond [(and (adt-value? *tesl-case-19) (eq? (adt-value-variant *tesl-case-19) 'Nothing)) (thsl-src! "tests/critical-review-26-tests.tesl" 862 (list) (lambda () (raw-value -999)))] [(and (adt-value? *tesl-case-19) (eq? (adt-value-variant *tesl-case-19) 'Something)) (let ([val (hash-ref (adt-value-fields *tesl-case-19) 'value)]) (thsl-src! "tests/critical-review-26-tests.tesl" 863 (list (cons 'val val)) (lambda () *val)))]))))))
 
 (define/pow
   (aVeryLongFunctionNameThatTestsIfTheLexerHandlesLongIdentifiersCorrectly [n : Integer])
@@ -346,7 +346,7 @@
 (define-trusted
   (establishEven [n : Integer])
   #:returns (Maybe (Fact (EvenFact n)))
-  (thsl-src! "tests/critical-review-26-tests.tesl" 1030 (list (cons 'n *n)) (lambda () (if (equal? (remainder *n 2) 0) (Something (trusted-proof (EvenFact n))) Nothing))))
+  (thsl-src! "tests/critical-review-26-tests.tesl" 1030 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 2) 0) (Something (trusted-proof (EvenFact n))) Nothing))))
 
 (define/pow
   (requiresEven [n : Integer ::: (EvenFact n)])

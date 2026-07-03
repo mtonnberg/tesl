@@ -28,6 +28,6 @@
 ## Status: PARTIAL — 2026-07-02
 DONE: VER-MUT scored=0 bug (reports "n/a", not a false 100%); durable regression
 fixtures for the fixed forgery class (`compiler/test/test_review75_reviewfixes.ml`).
-CARVED → `roadmap/later/review_2026_07_deferred.md` §8-9: property min-success floor
+CARVED → `roadmap/completed/review_2026_07_deferred.md` §8-9: property min-success floor
 (VER-PROP), grammar fuzzer + metamorphic property + runtime proof-witness
 differential oracle, broadened mutation coverage.

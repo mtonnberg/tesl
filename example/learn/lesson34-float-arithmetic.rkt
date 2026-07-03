@@ -69,7 +69,7 @@
 (define/pow
   (isValidReading [x : Real])
   #:returns Boolean
-  (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 133 (list (cons 'x *x)) (lambda () (and (equal? (raw-value (tesl_import_Float_isNaN *x)) #f) (equal? (raw-value (tesl_import_Float_isInfinite *x)) #f)))))
+  (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 133 (list (cons 'x *x)) (lambda () (and (tesl-equal? (raw-value (tesl_import_Float_isNaN *x)) #f) (tesl-equal? (raw-value (tesl_import_Float_isInfinite *x)) #f)))))
 
 (module+ test
   (require rackunit)

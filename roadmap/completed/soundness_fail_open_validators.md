@@ -53,6 +53,6 @@ tests in `compiler/test/test_review75_reviewfixes.ml`.
 **Also closed (2nd pass):** F1/F2 (non-existential named-pack `FromDb (Col == rhs)`
 insert forgery — `check_nonexist_named_pack_insert`), EE-1 (existential insert with a
 wrapped/computed id fails closed). Regression cases R75_F1/F2/F1ok/EE1.
-**Still carved → `roadmap/later/review_2026_07_deferred.md` §1:** PFC-2
+**Still carved → `roadmap/completed/review_2026_07_deferred.md` §1:** PFC-2
 (container-wrapped minting — direct forms gated; the container case needs
 engine-level proof-lifting).

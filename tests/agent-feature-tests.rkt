@@ -115,7 +115,7 @@
 (define/pow
   (intToString [n : Integer])
   #:returns String
-  (thsl-src! "tests/agent-feature-tests.tesl" 157 (list (cons 'n *n)) (lambda () (if (equal? *n 0) (raw-value "0") (raw-value "n")))))
+  (thsl-src! "tests/agent-feature-tests.tesl" 157 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value "0") (raw-value "n")))))
 
 (define/pow
   (decodeSummary [j : String])

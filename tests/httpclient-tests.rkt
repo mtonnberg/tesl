@@ -48,7 +48,7 @@
 (define/pow
   (isOkStatus [resp : HttpResponse])
   #:returns Boolean
-  (thsl-src! "tests/httpclient-tests.tesl" 69 (list (cons 'resp *resp)) (lambda () (equal? (raw-value resp.status) 200))))
+  (thsl-src! "tests/httpclient-tests.tesl" 69 (list (cons 'resp *resp)) (lambda () (tesl-equal? (raw-value resp.status) 200))))
 
 (define/pow
   (classifyStatus [resp : HttpResponse])
@@ -58,12 +58,12 @@
 (define/pow
   (hasHeader [name : String] [headers : (List (Tuple2 String String))])
   #:returns Boolean
-  (thsl-src! "tests/httpclient-tests.tesl" 77 (list (cons 'name *name) (cons 'headers *headers)) (lambda () (raw-value (tesl_import_List_any (let () (define/pow (tesl-lambda-0 [h : (Tuple2 String String)]) #:returns Boolean (equal? (raw-value (tesl_import_Tuple2_first *h)) *name)) tesl-lambda-0) *headers)))))
+  (thsl-src! "tests/httpclient-tests.tesl" 77 (list (cons 'name *name) (cons 'headers *headers)) (lambda () (raw-value (tesl_import_List_any (let () (define/pow (tesl-lambda-0 [h : (Tuple2 String String)]) #:returns Boolean (tesl-equal? (raw-value (tesl_import_Tuple2_first *h)) *name)) tesl-lambda-0) *headers)))))
 
 (define/pow
   (findHeader [name : String] [headers : (List (Tuple2 String String))])
   #:returns (Maybe (Tuple2 String String))
-  (thsl-src! "tests/httpclient-tests.tesl" 81 (list (cons 'name *name) (cons 'headers *headers)) (lambda () (raw-value (tesl_import_List_head (raw-value (tesl_import_List_filter (let () (define/pow (tesl-lambda-1 [h : (Tuple2 String String)]) #:returns Boolean (equal? (raw-value (tesl_import_Tuple2_first *h)) *name)) tesl-lambda-1) *headers)))))))
+  (thsl-src! "tests/httpclient-tests.tesl" 81 (list (cons 'name *name) (cons 'headers *headers)) (lambda () (raw-value (tesl_import_List_head (raw-value (tesl_import_List_filter (let () (define/pow (tesl-lambda-1 [h : (Tuple2 String String)]) #:returns Boolean (tesl-equal? (raw-value (tesl_import_Tuple2_first *h)) *name)) tesl-lambda-1) *headers)))))))
 
 (define/pow
   (hasJsonContent [headers : (List (Tuple2 String String))])

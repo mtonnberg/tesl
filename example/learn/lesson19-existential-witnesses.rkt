@@ -72,7 +72,7 @@
 (define-checker
   (checkSessionCreated [session : Session] [sessionId : String] [user : String ::: (Authenticated user)])
   #:returns [session : Session ::: (IsCreatedSession (Id == sessionId) user)]
-  (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 157 (list (cons 'session *session) (cons 'sessionId *sessionId) (cons 'user *user)) (lambda () (if (equal? (raw-value session.id) *sessionId) (accept (IsCreatedSession (Id == sessionId) user) #:value *session) (reject "session id does not match the witness" #:http-code 500)))))
+  (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 157 (list (cons 'session *session) (cons 'sessionId *sessionId) (cons 'user *user)) (lambda () (if (tesl-equal? (raw-value session.id) *sessionId) (accept (IsCreatedSession (Id == sessionId) user) #:value *session) (reject "session id does not match the witness" #:http-code 500)))))
 
 (define-handler
   (createSession [user : String ::: (Authenticated user)])

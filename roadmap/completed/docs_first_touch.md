@@ -34,4 +34,4 @@ cost claim corrected to match §4.3; stale OTLP "not implemented" text removed; 
 `--help` (TOOL-DBG-HELP); MCP coord convention corrected. `embedded_docs.ml`
 re-synced from the manual.
 **Carved:** SEC-SSE-CORS (runtime `ACAO:*` config) and TOOL-FMT-HINT (verify the
-Nix-wrapped `tesl fmt` alias) → `roadmap/later/review_2026_07_deferred.md`.
+Nix-wrapped `tesl fmt` alias) → `roadmap/completed/review_2026_07_deferred.md`.

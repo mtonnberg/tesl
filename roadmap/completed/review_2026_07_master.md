@@ -38,7 +38,7 @@ assert the verdict is unchanged).
 | CAP-01 | High | qualified-name effectful call escapes transitive charge | capability_completeness | fix now |
 | AUTH-VIA | High | auth `via` clause unvalidated at frontend | auth_via_boundary | fix now |
 | LB-01 | Med | `exposing` not enforced for facts under bare `import Mod` | library_exposing_facts | fix now |
-| TS-ORD/EQ | High | ord/eq on `Maybe`/functions/records typechecks → runtime crash | type_decidability_ord_eq | fail-closed now; full Eq/Ord classes → later |
+| TS-ORD/EQ | High | ord/eq on `Maybe`/functions/records typechecks → runtime crash | completed/type_decidability_ord_eq | LANDED 2026-07-03 (closed built-in Ord/Eq, no type classes); cross-module 1b → next/eq_ord_generic_soundness |
 | NT-07 | Med | `Int` bignum silently narrowed at DB/JS boundaries | int_boundary_narrowing | boundary guard now; type-level bounded Int → later |
 | DOC-TEMPLATES | High | `tesl init` scaffolds don't compile (envRead) | docs_first_touch | fix now |
 | DOC-FAQ | High | FAQ teaches non-compiling syntax | docs_first_touch | fix now |
@@ -108,7 +108,7 @@ green, full `dune test` shows no new failures — only the pre-existing
   cost claim corrected to match §4.3, OTLP text de-staled, spec `tesl` blocks use
   `#`, MCP coord convention corrected.
 
-**Carved to `roadmap/later/review_2026_07_deferred.md`** (maximum done now, precise
+**Carved to `roadmap/completed/review_2026_07_deferred.md`** (maximum done now, precise
 reason each needs its own pass — see that file): PFC-2 (container-wrapped minting —
 direct forms gated; container needs engine proof-lifting), F1/F2 (FromDb named-pack
 provenance), EE-1, CAP-COMPOSE/UUID/DRIFT-1/CAP-01, LB-01, TS-ORD/EQ (type-classes),

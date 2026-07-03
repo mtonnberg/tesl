@@ -294,12 +294,12 @@
 (define/pow
   (isEven [n : Integer])
   #:returns Boolean
-  (thsl-src! "tests/critical-review64-tests.tesl" 531 (list (cons 'n *n)) (lambda () (if (equal? *n 0) (raw-value #t) (raw-value (isOdd (- *n 1)))))))
+  (thsl-src! "tests/critical-review64-tests.tesl" 531 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #t) (raw-value (isOdd (- *n 1)))))))
 
 (define/pow
   (isOdd [n : Integer])
   #:returns Boolean
-  (thsl-src! "tests/critical-review64-tests.tesl" 537 (list (cons 'n *n)) (lambda () (if (equal? *n 0) (raw-value #f) (raw-value (isEven (- *n 1)))))))
+  (thsl-src! "tests/critical-review64-tests.tesl" 537 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #f) (raw-value (isEven (- *n 1)))))))
 
 (define/pow
   (filterActive [xs : (List Integer)])

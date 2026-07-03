@@ -120,7 +120,7 @@
 (define/pow
   (chunksOf [xs : (List Integer)] [n : Integer])
   #:returns (List (List Integer))
-  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 234 (list (cons 'xs *xs) (cons 'n *n)) (lambda () (let/check ([tesl-checked-6 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl-checked-6]) (let ([len (raw-value (tesl_import_List_length *xs))]) (if (equal? (raw-value len) 0) (raw-value (list)) (let ([chunk (tesl_import_List_take safeN *xs)]) (let ([rest (tesl_import_List_drop safeN *xs)]) (if (< (raw-value (tesl_import_List_length (raw-value chunk))) (raw-value safeN)) (raw-value (list)) (if (raw-value (tesl_import_List_isEmpty (raw-value rest))) (raw-value (list *chunk)) (raw-value (tesl_import_List_append (list *chunk) (raw-value (chunksOf rest n)))))))))))))))
+  (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 234 (list (cons 'xs *xs) (cons 'n *n)) (lambda () (let/check ([tesl-checked-6 (tesl_import_Int_nonNegative n)]) (let ([safeN tesl-checked-6]) (let ([len (raw-value (tesl_import_List_length *xs))]) (if (tesl-equal? (raw-value len) 0) (raw-value (list)) (let ([chunk (tesl_import_List_take safeN *xs)]) (let ([rest (tesl_import_List_drop safeN *xs)]) (if (< (raw-value (tesl_import_List_length (raw-value chunk))) (raw-value safeN)) (raw-value (list)) (if (raw-value (tesl_import_List_isEmpty (raw-value rest))) (raw-value (list *chunk)) (raw-value (tesl_import_List_append (list *chunk) (raw-value (chunksOf rest n)))))))))))))))
 
 (define/pow
   (describeList [xs : (List Integer)])

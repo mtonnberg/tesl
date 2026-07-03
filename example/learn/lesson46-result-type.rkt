@@ -25,7 +25,7 @@
 (define/pow
   (divide [a : Integer] [b : Integer])
   #:returns (Result Integer String)
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 61 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (equal? *b 0) (raw-value (raw-value (Err "division by zero"))) (let/check ([tesl-checked-0 (tesl_import_Int_nonZero b)]) (let ([safeb tesl-checked-0]) (raw-value (raw-value (Ok (tesl_import_Int_divide *a safeb))))))))))
+  (thsl-src! "example/learn/lesson46-result-type.tesl" 61 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (tesl-equal? *b 0) (raw-value (raw-value (Err "division by zero"))) (let/check ([tesl-checked-0 (tesl_import_Int_nonZero b)]) (let ([safeb tesl-checked-0]) (raw-value (raw-value (Ok (tesl_import_Int_divide *a safeb))))))))))
 
 (define/pow
   (safeDivideOrDefault [a : Integer] [b : Integer] [fallback : Integer])
@@ -66,7 +66,7 @@
 (define/pow
   (fetchUser [userId : String] [requestingUser : String])
   #:returns (Result String UserError)
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 124 (list (cons 'userId *userId) (cons 'requestingUser *requestingUser)) (lambda () (if (tesl_import_String_isEmpty *userId) (raw-value (raw-value (Err (InvalidInput "userId cannot be empty")))) (if (and (equal? *userId "admin") (not (equal? *requestingUser "admin"))) (raw-value (raw-value (Err (Forbidden requestingUser)))) (if (equal? *userId "ghost") (raw-value (raw-value (Err (NotFound userId)))) (raw-value (raw-value (Ok *userId)))))))))
+  (thsl-src! "example/learn/lesson46-result-type.tesl" 124 (list (cons 'userId *userId) (cons 'requestingUser *requestingUser)) (lambda () (if (tesl_import_String_isEmpty *userId) (raw-value (raw-value (Err (InvalidInput "userId cannot be empty")))) (if (and (tesl-equal? *userId "admin") (not (tesl-equal? *requestingUser "admin"))) (raw-value (raw-value (Err (Forbidden requestingUser)))) (if (tesl-equal? *userId "ghost") (raw-value (raw-value (Err (NotFound userId)))) (raw-value (raw-value (Ok *userId)))))))))
 
 (define/pow
   (describeError [err : UserError])

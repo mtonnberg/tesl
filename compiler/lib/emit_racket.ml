@@ -2806,11 +2806,14 @@ and emit_binop ctx op left right =
      emit_val_arg left; emit ctx " "; emit_val_arg right;
      emit ctx ")"
    | BNeq ->
-     emit ctx "(not (equal? ";
+     (* tesl-equal? is equal? plus a fail-closed guard: it raises on a function
+        operand instead of silently returning a reference-identity boolean.
+        (Eq/Ord Stage-2 runtime backstop — see tesl/private/runtime.rkt.) *)
+     emit ctx "(not (tesl-equal? ";
      emit_val_arg left; emit ctx " "; emit_val_arg right;
      emit ctx "))"
    | BEq ->
-     emit ctx "(equal? ";
+     emit ctx "(tesl-equal? ";
      emit_val_arg left; emit ctx " "; emit_val_arg right;
      emit ctx ")"
    | BAnd ->

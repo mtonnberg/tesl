@@ -35,7 +35,7 @@
 (define-checker
   (check3 [n : Integer])
   #:returns [n : Integer ::: (P3 n)]
-  (thsl-src! "tests/critical-review-48-conjunction-regression.tesl" 39 (list (cons 'n *n)) (lambda () (if (not (equal? *n 42)) (accept (P3 n) #:value *n) (reject "fail3" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-48-conjunction-regression.tesl" 39 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 42)) (accept (P3 n) #:value *n) (reject "fail3" #:http-code 400)))))
 
 (define/pow
   (needsP1 [n : Integer ::: (P1 n)])

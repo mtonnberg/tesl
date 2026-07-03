@@ -207,7 +207,7 @@
   (test-case "T20: JwtSecret and JwtToken are separate types (runtime check)"
   (define s (thsl-src! "tests/jwt-tests.tesl" 196 (list) (lambda () (makeSecret "my-secret"))))
   (define t (thsl-src! "tests/jwt-tests.tesl" 197 (list (cons 's s)) (lambda () (makeToken "my-token"))))
-  (check-not-equal? (thsl-src! "tests/jwt-tests.tesl" 198 (list (cons 't t) (cons 's s)) (lambda () (raw-value (tesl-dot/runtime s 'value)))) (or (raw-value (tesl-dot/runtime t 'value)) (equal? #t #t)))
+  (check-not-equal? (thsl-src! "tests/jwt-tests.tesl" 198 (list (cons 't t) (cons 's s)) (lambda () (raw-value (tesl-dot/runtime s 'value)))) (or (raw-value (tesl-dot/runtime t 'value)) (tesl-equal? #t #t)))
   )
 
 )

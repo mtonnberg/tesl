@@ -93,7 +93,7 @@
 (define/pow
   (isNonEmpty [s : String])
   #:returns Boolean
-  (thsl-src! "example/learn/lesson36-lambdas.tesl" 201 (list (cons 's *s)) (lambda () (equal? (raw-value (tesl_import_String_isEmpty *s)) #f))))
+  (thsl-src! "example/learn/lesson36-lambdas.tesl" 201 (list (cons 's *s)) (lambda () (tesl-equal? (raw-value (tesl_import_String_isEmpty *s)) #f))))
 
 (define/pow
   (isShortEnough [s : String])

@@ -240,7 +240,7 @@
 (define/pow
   (notifyWorker [job : NotifyJob ::: (FromQueue (Id == jobId) job)])
   #:returns NotifyJob
-  (let ([_ (thsl-src! "example/chat/chat-backend.tesl" 318 (list (cons 'job *job)) (lambda () (telemetry-event! "notify.job" #:attributes (["sender" (raw-value job.senderName)] ["room" (raw-value job.roomName)]))))]) (thsl-src! "example/chat/chat-backend.tesl" 319 (list (cons 'job *job)) (lambda () (if (equal? (raw-value job.senderName) "anna") (reject "notifications blocked for anna" #:http-code 500) *job)))))
+  (let ([_ (thsl-src! "example/chat/chat-backend.tesl" 318 (list (cons 'job *job)) (lambda () (telemetry-event! "notify.job" #:attributes (["sender" (raw-value job.senderName)] ["room" (raw-value job.roomName)]))))]) (thsl-src! "example/chat/chat-backend.tesl" 319 (list (cons 'job *job)) (lambda () (if (tesl-equal? (raw-value job.senderName) "anna") (reject "notifications blocked for anna" #:http-code 500) *job)))))
 
 (define/pow
   (handleDeadNotify [job : NotifyJob ::: (FromDeadQueue (Id == jobId) job)])

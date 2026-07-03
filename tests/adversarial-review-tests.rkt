@@ -70,7 +70,7 @@
 (define/pow
   (safeDiv [a : Integer] [b : Integer])
   #:returns (Either String Integer)
-  (thsl-src! "tests/adversarial-review-tests.tesl" 220 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (equal? *b 0) (raw-value (raw-value (Left "division by zero"))) (let/check ([tesl-checked-0 (tesl_import_Int_nonZero b)]) (let ([checkedB tesl-checked-0]) (raw-value (raw-value (Right (tesl_import_Int_divide *a checkedB))))))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 220 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (tesl-equal? *b 0) (raw-value (raw-value (Left "division by zero"))) (let/check ([tesl-checked-0 (tesl_import_Int_nonZero b)]) (let ([checkedB tesl-checked-0]) (raw-value (raw-value (Right (tesl_import_Int_divide *a checkedB))))))))))
 
 (define/pow
   (clampAndAdd [lo : Integer] [hi : Integer] [n : Integer] [delta : Integer])
@@ -179,7 +179,7 @@
 (define-checker
   (checkTrimmed [s : String])
   #:returns [s : String ::: (Trimmed s)]
-  (thsl-src! "tests/adversarial-review-tests.tesl" 465 (list (cons 's *s)) (lambda () (if (and (> (raw-value (tesl_import_String_length *s)) 0) (equal? (raw-value (tesl_import_String_length (raw-value (tesl_import_String_trim *s)))) (raw-value (tesl_import_String_length *s)))) (accept (Trimmed s) #:value *s) (reject "string must be non-empty and trimmed" #:http-code 400)))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 465 (list (cons 's *s)) (lambda () (if (and (> (raw-value (tesl_import_String_length *s)) 0) (tesl-equal? (raw-value (tesl_import_String_length (raw-value (tesl_import_String_trim *s)))) (raw-value (tesl_import_String_length *s)))) (accept (Trimmed s) #:value *s) (reject "string must be non-empty and trimmed" #:http-code 400)))))
 
 (define/pow
   (requiresTrimmed [s : String ::: (Trimmed s)])
@@ -214,12 +214,12 @@
 (define/pow
   (isEven [n : Integer])
   #:returns Boolean
-  (thsl-src! "tests/adversarial-review-tests.tesl" 574 (list (cons 'n *n)) (lambda () (if (equal? *n 0) (raw-value #t) (raw-value (isOdd (- *n 1)))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 574 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #t) (raw-value (isOdd (- *n 1)))))))
 
 (define/pow
   (isOdd [n : Integer])
   #:returns Boolean
-  (thsl-src! "tests/adversarial-review-tests.tesl" 580 (list (cons 'n *n)) (lambda () (if (equal? *n 0) (raw-value #f) (raw-value (isEven (- *n 1)))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 580 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #f) (raw-value (isEven (- *n 1)))))))
 
 (define/pow
   (intBoundary [n : Integer])
@@ -358,7 +358,7 @@
 (define/pow
   (foo)
   #:returns Integer
-  (thsl-src! "tests/adversarial-review-tests.tesl" 966 (list) (lambda () (let ([n1 1]) (let ([n99 99]) (let ([tesl-proof-binding-16 (checkPosAndSmall n1)]) (let ([v1 (forget-proof tesl-proof-binding-16)] [v1_smallFact (detach-all-proof tesl-proof-binding-16)]) (let ([tesl-proof-binding-17 (checkPosAndSmallAndSidecar1 n99 v1)]) (let ([int1 (forget-proof tesl-proof-binding-17)] [posP (detach-all-proof tesl-proof-binding-17)]) (let ([tesl-proof-binding-18 (checkPosAndSmallAndSidecar1 n99 v1)]) (let ([_ (forget-proof tesl-proof-binding-18)] [smallP (detach-all-proof tesl-proof-binding-18)]) (let ([tesl-proof-binding-19 (checkPosAndSmallAndSidecar1 n99 v1)]) (let ([_ (forget-proof tesl-proof-binding-19)] [v1_positiveFact (detach-all-proof tesl-proof-binding-19)]) (let ([_ (requiresPosAndSmall (attach-proof v1 (list v1_positiveFact v1_smallFact)))]) (let ([_ (equal? (raw-value (requiresPosAndSmall (attach-proof int1 (list posP smallP)))) 99)]) 2)))))))))))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 966 (list) (lambda () (let ([n1 1]) (let ([n99 99]) (let ([tesl-proof-binding-16 (checkPosAndSmall n1)]) (let ([v1 (forget-proof tesl-proof-binding-16)] [v1_smallFact (detach-all-proof tesl-proof-binding-16)]) (let ([tesl-proof-binding-17 (checkPosAndSmallAndSidecar1 n99 v1)]) (let ([int1 (forget-proof tesl-proof-binding-17)] [posP (detach-all-proof tesl-proof-binding-17)]) (let ([tesl-proof-binding-18 (checkPosAndSmallAndSidecar1 n99 v1)]) (let ([_ (forget-proof tesl-proof-binding-18)] [smallP (detach-all-proof tesl-proof-binding-18)]) (let ([tesl-proof-binding-19 (checkPosAndSmallAndSidecar1 n99 v1)]) (let ([_ (forget-proof tesl-proof-binding-19)] [v1_positiveFact (detach-all-proof tesl-proof-binding-19)]) (let ([_ (requiresPosAndSmall (attach-proof v1 (list v1_positiveFact v1_smallFact)))]) (let ([_ (tesl-equal? (raw-value (requiresPosAndSmall (attach-proof int1 (list posP smallP)))) 99)]) 2)))))))))))))))
 
 (define/pow
   (requiresPosAndSmall [n : Integer ::: ((Positive n) && (Small n))])
@@ -450,7 +450,7 @@
 (define/pow
   (fibonacci [n : Integer])
   #:returns Integer
-  (thsl-src! "tests/adversarial-review-tests.tesl" 1274 (list (cons 'n *n)) (lambda () (if (<= *n 0) (raw-value 0) (if (equal? *n 1) (raw-value 1) (raw-value (+ (raw-value (fibonacci (- *n 1))) (raw-value (fibonacci (- *n 2))))))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 1274 (list (cons 'n *n)) (lambda () (if (<= *n 0) (raw-value 0) (if (tesl-equal? *n 1) (raw-value 1) (raw-value (+ (raw-value (fibonacci (- *n 1))) (raw-value (fibonacci (- *n 2))))))))))
 
 (define/pow
   (conjunctSatisfied [n : Integer])
@@ -465,12 +465,12 @@
 (define/pow
   (upperLengthPreserved [s : String])
   #:returns Boolean
-  (thsl-src! "tests/adversarial-review-tests.tesl" 1365 (list (cons 's *s)) (lambda () (equal? (raw-value (tesl_import_String_length (raw-value (tesl_import_String_toUpper *s)))) (raw-value (tesl_import_String_length *s))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 1365 (list (cons 's *s)) (lambda () (tesl-equal? (raw-value (tesl_import_String_length (raw-value (tesl_import_String_toUpper *s)))) (raw-value (tesl_import_String_length *s))))))
 
 (define/pow
   (lowerLengthPreserved [s : String])
   #:returns Boolean
-  (thsl-src! "tests/adversarial-review-tests.tesl" 1368 (list (cons 's *s)) (lambda () (equal? (raw-value (tesl_import_String_length (raw-value (tesl_import_String_toLower *s)))) (raw-value (tesl_import_String_length *s))))))
+  (thsl-src! "tests/adversarial-review-tests.tesl" 1368 (list (cons 's *s)) (lambda () (tesl-equal? (raw-value (tesl_import_String_length (raw-value (tesl_import_String_toLower *s)))) (raw-value (tesl_import_String_length *s))))))
 
 (define/pow
   (filterPositiveTwice [xs : (List Integer)])
@@ -1076,7 +1076,7 @@
   ; property: checkNonEmpty preserves length
   (for ([tesl-prop-i (in-range 100)])
     (let ([s (format "s~a" (random 1000000))])
-      (when (> (raw-value (tesl_import_String_length (raw-value s))) 0) (check-true (let/check ([tesl-checked-61 (checkNonEmpty s)]) (let ([v tesl-checked-61]) (equal? (raw-value (requiresNonEmpty v)) (raw-value (tesl_import_String_length (raw-value s)))))) "checkNonEmpty preserves length"))
+      (when (> (raw-value (tesl_import_String_length (raw-value s))) 0) (check-true (let/check ([tesl-checked-61 (checkNonEmpty s)]) (let ([v tesl-checked-61]) (tesl-equal? (raw-value (requiresNonEmpty v)) (raw-value (tesl_import_String_length (raw-value s)))))) "checkNonEmpty preserves length"))
     ))
   )
 

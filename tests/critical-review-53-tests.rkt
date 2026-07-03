@@ -41,7 +41,7 @@
 (define-checker
   (checkEven [n : Integer])
   #:returns [n : Integer ::: (IsEven n)]
-  (thsl-src! "tests/critical-review-53-tests.tesl" 62 (list (cons 'n *n)) (lambda () (if (equal? (remainder *n 2) 0) (accept (IsEven n) #:value *n) (reject "not even" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-53-tests.tesl" 62 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 2) 0) (accept (IsEven n) #:value *n) (reject "not even" #:http-code 400)))))
 
 (define-checker
   (checkNonEmpty [s : String])
@@ -337,7 +337,7 @@
   ; property: pos+small+even chain
   (for ([tesl-prop-i (in-range 20)])
     (let ([n (- (random 2000001) 1000000)])
-      (when (and (> (raw-value n) 0) (< (raw-value n) 1000) (equal? (remainder (raw-value n) 2) 0)) (check-true (equal? (raw-value (a03_four_predicates n)) (raw-value n)) "pos+small+even chain"))
+      (when (and (> (raw-value n) 0) (< (raw-value n) 1000) (tesl-equal? (remainder (raw-value n) 2) 0)) (check-true (tesl-equal? (raw-value (a03_four_predicates n)) (raw-value n)) "pos+small+even chain"))
     ))
   )
 

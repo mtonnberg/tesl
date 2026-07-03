@@ -392,7 +392,7 @@
   ; property: valid estimates are returned unchanged
   (for ([tesl-prop-i (in-range 100)])
     (let ([n (- (random 2000001) 1000000)])
-      (when (>= (raw-value n) 0) (check-true (equal? (raw-value (checkEstimate n)) (raw-value n)) "valid estimates are returned unchanged"))
+      (when (>= (raw-value n) 0) (check-true (tesl-equal? (raw-value (checkEstimate n)) (raw-value n)) "valid estimates are returned unchanged"))
     ))
   )
 
@@ -400,7 +400,7 @@
   ; property: valid minute counts are returned unchanged
   (for ([tesl-prop-i (in-range 100)])
     (let ([n (- (random 2000001) 1000000)])
-      (when (and (>= (raw-value n) 1) (<= (raw-value n) 1440)) (check-true (equal? (raw-value (checkPositiveMinutes n)) (raw-value n)) "valid minute counts are returned unchanged"))
+      (when (and (>= (raw-value n) 1) (<= (raw-value n) 1440)) (check-true (tesl-equal? (raw-value (checkPositiveMinutes n)) (raw-value n)) "valid minute counts are returned unchanged"))
     ))
   )
 
@@ -408,7 +408,7 @@
   ; property: a + b == b + a
   (for ([tesl-prop-i (in-range 50)])
     (let ([a (- (random 2000001) 1000000)] [b (- (random 2000001) 1000000)])
-      (when (and (and (>= (raw-value a) 0) (< (raw-value a) 1000)) (and (>= (raw-value b) 0) (< (raw-value b) 1000))) (check-true (equal? (+ (raw-value a) (raw-value b)) (+ (raw-value b) (raw-value a))) "a + b == b + a"))
+      (when (and (and (>= (raw-value a) 0) (< (raw-value a) 1000)) (and (>= (raw-value b) 0) (< (raw-value b) 1000))) (check-true (tesl-equal? (+ (raw-value a) (raw-value b)) (+ (raw-value b) (raw-value a))) "a + b == b + a"))
     ))
   )
 
@@ -550,7 +550,7 @@
   ; property: single char comment accepted
   (for ([tesl-prop-i (in-range 1)])
     (let ([n (- (random 2000001) 1000000)])
-      (when (> (raw-value n) 0) (check-true (equal? (raw-value (tesl_import_String_length "x")) 1) "single char comment accepted"))
+      (when (> (raw-value n) 0) (check-true (tesl-equal? (raw-value (tesl_import_String_length "x")) 1) "single char comment accepted"))
     ))
   )
 

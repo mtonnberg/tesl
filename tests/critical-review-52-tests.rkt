@@ -38,7 +38,7 @@
 (define-checker
   (isEven [n : Integer])
   #:returns [n : Integer ::: (IsEven n)]
-  (thsl-src! "tests/critical-review-52-tests.tesl" 52 (list (cons 'n *n)) (lambda () (if (equal? (remainder *n 2) 0) (accept (IsEven n) #:value *n) (reject "not even" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-52-tests.tesl" 52 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 2) 0) (accept (IsEven n) #:value *n) (reject "not even" #:http-code 400)))))
 
 (define-checker
   (inRange [lo : Integer] [hi : Integer] [n : Integer])

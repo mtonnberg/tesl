@@ -28,4 +28,4 @@ Endpoint `auth <b> ::: P via <fn>` now validates: fn exists, is check/auth kind,
 and produces the declared predicate. Verified: undeclared `via` rejected; real
 auth-via examples still pass (99+38 green); regression test R75_AV01/02.
 **Carved:** the multi-subject (IDOR/BOLA) boundary-proof story is a design change →
-`roadmap/later/review_2026_07_deferred.md`.
+`roadmap/completed/review_2026_07_deferred.md`.

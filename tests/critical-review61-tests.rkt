@@ -272,12 +272,12 @@
 (define-checker
   (checkEven [n : Integer])
   #:returns [n : Integer ::: (IsEven n)]
-  (thsl-src! "tests/critical-review61-tests.tesl" 410 (list (cons 'n *n)) (lambda () (if (< *n 0) (reject "negative" #:http-code 400) (if (equal? *n 0) (accept (IsEven n) #:value *n) (let/check ([tesl-checked-17 (checkOdd (- *n 1))]) (let ([_odd tesl-checked-17]) (accept (IsEven n) #:value *n))))))))
+  (thsl-src! "tests/critical-review61-tests.tesl" 410 (list (cons 'n *n)) (lambda () (if (< *n 0) (reject "negative" #:http-code 400) (if (tesl-equal? *n 0) (accept (IsEven n) #:value *n) (let/check ([tesl-checked-17 (checkOdd (- *n 1))]) (let ([_odd tesl-checked-17]) (accept (IsEven n) #:value *n))))))))
 
 (define-checker
   (checkOdd [n : Integer])
   #:returns [n : Integer ::: (IsOdd n)]
-  (thsl-src! "tests/critical-review61-tests.tesl" 419 (list (cons 'n *n)) (lambda () (if (<= *n 0) (reject "not odd" #:http-code 400) (if (equal? *n 1) (accept (IsOdd n) #:value *n) (let/check ([tesl-checked-18 (checkEven (- *n 1))]) (let ([_even tesl-checked-18]) (accept (IsOdd n) #:value *n))))))))
+  (thsl-src! "tests/critical-review61-tests.tesl" 419 (list (cons 'n *n)) (lambda () (if (<= *n 0) (reject "not odd" #:http-code 400) (if (tesl-equal? *n 1) (accept (IsOdd n) #:value *n) (let/check ([tesl-checked-18 (checkEven (- *n 1))]) (let ([_even tesl-checked-18]) (accept (IsOdd n) #:value *n))))))))
 
 (define/pow
   (requiresEven [n : Integer ::: (IsEven n)])

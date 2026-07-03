@@ -95,7 +95,7 @@
   ; property: double n == n * 2
   (for ([tesl-prop-i (in-range 50)])
     (let ([n (- (random 2000001) 1000000)])
-      (check-true (equal? (raw-value (double n)) (* (raw-value n) 2)) "double n == n * 2")
+      (check-true (tesl-equal? (raw-value (double n)) (* (raw-value n) 2)) "double n == n * 2")
     ))
   )
 
@@ -103,7 +103,7 @@
   ; property: add x y == add y x
   (for ([tesl-prop-i (in-range 50)])
     (let ([x (- (random 2000001) 1000000)] [y (- (random 2000001) 1000000)])
-      (check-true (equal? (raw-value (add x y)) (raw-value (add y x))) "add x y == add y x")
+      (check-true (tesl-equal? (raw-value (add x y)) (raw-value (add y x))) "add x y == add y x")
     ))
   )
 
@@ -127,7 +127,7 @@
   ; property:  add is commutative
   (for ([tesl-prop-i (in-range 100)])
     (let ([n (AnIntRecord #:someProp (- (random 2000001) 1000000))] [m (AnIntRecord #:someProp (- (random 2000001) 1000000))])
-      (check-true (equal? (raw-value (add (raw-value (tesl-dot/runtime n 'someProp)) (raw-value (tesl-dot/runtime m 'someProp)))) (raw-value (add (raw-value (tesl-dot/runtime m 'someProp)) (raw-value (tesl-dot/runtime n 'someProp))))) " add is commutative")
+      (check-true (tesl-equal? (raw-value (add (raw-value (tesl-dot/runtime n 'someProp)) (raw-value (tesl-dot/runtime m 'someProp)))) (raw-value (add (raw-value (tesl-dot/runtime m 'someProp)) (raw-value (tesl-dot/runtime n 'someProp))))) " add is commutative")
     ))
   )
 
@@ -147,7 +147,7 @@
         (void) ; skip this iteration after too many retries
         (with-handlers ([exn:fail? (lambda (e) (tesl-retry (+ tesl-attempts 1)))])
           (let ([n (let ([tesl_gen_someProp (+ 1 (random 1000000))] [tesl_gen_someProp2 (+ 1 (random 1000000))]) (AnIntRecordWithProof #:someProp (tesl-test-proof-field 'someProp tesl_gen_someProp (list 'IsPositive 'someProp)) #:someProp2 (tesl-test-proof-field 'someProp2 tesl_gen_someProp2 (list 'IsPositive 'someProp2))))] [m (let ([tesl_gen_someProp (+ 1 (random 1000000))] [tesl_gen_someProp2 (+ 1 (random 1000000))]) (AnIntRecordWithProof #:someProp (tesl-test-proof-field 'someProp tesl_gen_someProp (list 'IsPositive 'someProp)) #:someProp2 (tesl-test-proof-field 'someProp2 tesl_gen_someProp2 (list 'IsPositive 'someProp2))))])
-            (check-true (equal? (raw-value (add (raw-value (tesl-dot/runtime n 'someProp)) (raw-value (tesl-dot/runtime m 'someProp)))) (raw-value (add (raw-value (tesl-dot/runtime m 'someProp)) (raw-value (tesl-dot/runtime n 'someProp))))) " add is commutative")
+            (check-true (tesl-equal? (raw-value (add (raw-value (tesl-dot/runtime n 'someProp)) (raw-value (tesl-dot/runtime m 'someProp)))) (raw-value (add (raw-value (tesl-dot/runtime m 'someProp)) (raw-value (tesl-dot/runtime n 'someProp))))) " add is commutative")
           )))))
   )
 

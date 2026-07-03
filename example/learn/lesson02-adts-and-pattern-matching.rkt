@@ -61,7 +61,7 @@
 (define/pow
   (safeDivide [a : Integer] [b : Integer])
   #:returns (Maybe Integer)
-  (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 89 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (equal? *b 0) (raw-value Nothing) (let/check ([tesl-checked-3 (tesl_import_Int_nonZero b)]) (let ([safe tesl-checked-3]) (raw-value (raw-value (Something (tesl_import_Int_divide *a safe))))))))))
+  (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 89 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (tesl-equal? *b 0) (raw-value Nothing) (let/check ([tesl-checked-3 (tesl_import_Int_nonZero b)]) (let ([safe tesl-checked-3]) (raw-value (raw-value (Something (tesl_import_Int_divide *a safe))))))))))
 
 (define-adt Shape
   [Circle [radius : Integer]]

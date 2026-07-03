@@ -100,12 +100,12 @@
 (define-checker
   (checkActive [note : Note])
   #:returns [note : Note ::: (IsActive note)]
-  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 176 (list (cons 'note *note)) (lambda () (if (equal? (raw-value note.active) "yes") (accept (IsActive note) #:value *note) (reject "note is not active" #:http-code 422)))))
+  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 176 (list (cons 'note *note)) (lambda () (if (tesl-equal? (raw-value note.active) "yes") (accept (IsActive note) #:value *note) (reject "note is not active" #:http-code 422)))))
 
 (define-checker
   (checkPinned [note : Note])
   #:returns [note : Note ::: (IsPinned note)]
-  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 184 (list (cons 'note *note)) (lambda () (if (equal? (raw-value note.pinned) "yes") (accept (IsPinned note) #:value *note) (reject "note is not pinned" #:http-code 422)))))
+  (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 184 (list (cons 'note *note)) (lambda () (if (tesl-equal? (raw-value note.pinned) "yes") (accept (IsPinned note) #:value *note) (reject "note is not pinned" #:http-code 422)))))
 
 (define-auther
   (cookieAuth [request : HttpRequest])

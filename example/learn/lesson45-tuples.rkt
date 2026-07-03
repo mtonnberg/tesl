@@ -89,7 +89,7 @@
 (define/pow
   (classifyPair [t : (Tuple2 Integer Integer)])
   #:returns String
-  (let ([x (thsl-src! "example/learn/lesson45-tuples.tesl" 121 (list (cons 't *t)) (lambda () (raw-value (tesl_import_Tuple2_first *t))))]) (let ([y (thsl-src! "example/learn/lesson45-tuples.tesl" 122 (list (cons 'x *x) (cons 't *t)) (lambda () (raw-value (tesl_import_Tuple2_second *t))))]) (thsl-src! "example/learn/lesson45-tuples.tesl" 123 (list (cons 'y *y) (cons 'x *x) (cons 't *t)) (lambda () (if (equal? (raw-value x) (raw-value y)) (raw-value "equal") (if (< (raw-value x) (raw-value y)) (raw-value "ascending") (raw-value "descending"))))))))
+  (let ([x (thsl-src! "example/learn/lesson45-tuples.tesl" 121 (list (cons 't *t)) (lambda () (raw-value (tesl_import_Tuple2_first *t))))]) (let ([y (thsl-src! "example/learn/lesson45-tuples.tesl" 122 (list (cons 'x *x) (cons 't *t)) (lambda () (raw-value (tesl_import_Tuple2_second *t))))]) (thsl-src! "example/learn/lesson45-tuples.tesl" 123 (list (cons 'y *y) (cons 'x *x) (cons 't *t)) (lambda () (if (tesl-equal? (raw-value x) (raw-value y)) (raw-value "equal") (if (< (raw-value x) (raw-value y)) (raw-value "ascending") (raw-value "descending"))))))))
 
 (module+ test
   (require rackunit)

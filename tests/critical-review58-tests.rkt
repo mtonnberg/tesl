@@ -47,22 +47,22 @@
 (define-checker
   (checkC [n : Integer ::: ((A n) && (B n))])
   #:returns [n : Integer ::: (C n)]
-  (thsl-src! "tests/critical-review58-tests.tesl" 72 (list (cons 'n *n)) (lambda () (if (not (equal? *n 42)) (accept (C n) #:value *n) (reject "fail C" #:http-code 400)))))
+  (thsl-src! "tests/critical-review58-tests.tesl" 72 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 42)) (accept (C n) #:value *n) (reject "fail C" #:http-code 400)))))
 
 (define-checker
   (checkD [n : Integer ::: ((A n) && ((B n) && (C n)))])
   #:returns [n : Integer ::: (D n)]
-  (thsl-src! "tests/critical-review58-tests.tesl" 78 (list (cons 'n *n)) (lambda () (if (not (equal? *n 99)) (accept (D n) #:value *n) (reject "fail D" #:http-code 400)))))
+  (thsl-src! "tests/critical-review58-tests.tesl" 78 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 99)) (accept (D n) #:value *n) (reject "fail D" #:http-code 400)))))
 
 (define-checker
   (checkE [n : Integer ::: ((A n) && ((B n) && ((C n) && (D n))))])
   #:returns [n : Integer ::: (E n)]
-  (thsl-src! "tests/critical-review58-tests.tesl" 84 (list (cons 'n *n)) (lambda () (if (not (equal? *n 500)) (accept (E n) #:value *n) (reject "fail E" #:http-code 400)))))
+  (thsl-src! "tests/critical-review58-tests.tesl" 84 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 500)) (accept (E n) #:value *n) (reject "fail E" #:http-code 400)))))
 
 (define-checker
   (checkF [n : Integer ::: ((A n) && ((B n) && ((C n) && ((D n) && (E n)))))])
   #:returns [n : Integer ::: (F n)]
-  (thsl-src! "tests/critical-review58-tests.tesl" 90 (list (cons 'n *n)) (lambda () (if (not (equal? *n 777)) (accept (F n) #:value *n) (reject "fail F" #:http-code 400)))))
+  (thsl-src! "tests/critical-review58-tests.tesl" 90 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 777)) (accept (F n) #:value *n) (reject "fail F" #:http-code 400)))))
 
 (define-checker
   (checkG [n : Integer ::: ((A n) && ((B n) && ((C n) && ((D n) && ((E n) && (F n))))))])
@@ -82,7 +82,7 @@
 (define-checker
   (checkEven [n : Integer])
   #:returns [n : Integer ::: (IsEven n)]
-  (thsl-src! "tests/critical-review58-tests.tesl" 111 (list (cons 'n *n)) (lambda () (if (equal? (remainder *n 2) 0) (accept (IsEven n) #:value *n) (reject "not even" #:http-code 400)))))
+  (thsl-src! "tests/critical-review58-tests.tesl" 111 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 2) 0) (accept (IsEven n) #:value *n) (reject "not even" #:http-code 400)))))
 
 (define-checker
   (checkInBounds [lo : Integer] [hi : Integer] [n : Integer])
@@ -197,12 +197,12 @@
 (define-checker
   (checkC4 [n : Integer])
   #:returns [n : Integer ::: (C n)]
-  (thsl-src! "tests/critical-review58-tests.tesl" 210 (list (cons 'n *n)) (lambda () (if (not (equal? *n 42)) (accept (C n) #:value *n) (reject "fail" #:http-code 400)))))
+  (thsl-src! "tests/critical-review58-tests.tesl" 210 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 42)) (accept (C n) #:value *n) (reject "fail" #:http-code 400)))))
 
 (define-checker
   (checkD4 [n : Integer])
   #:returns [n : Integer ::: (D n)]
-  (thsl-src! "tests/critical-review58-tests.tesl" 216 (list (cons 'n *n)) (lambda () (if (not (equal? *n 99)) (accept (D n) #:value *n) (reject "fail" #:http-code 400)))))
+  (thsl-src! "tests/critical-review58-tests.tesl" 216 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 99)) (accept (D n) #:value *n) (reject "fail" #:http-code 400)))))
 
 (define/pow
   (needs4 [n : Integer ::: ((A n) && ((B n) && ((C n) && (D n))))])

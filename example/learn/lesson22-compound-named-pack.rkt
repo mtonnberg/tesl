@@ -53,7 +53,7 @@
 (define-checker
   (checkIsAdmin [user : String])
   #:returns [user : String ::: (IsAdmin user)]
-  (thsl-src! "example/learn/lesson22-compound-named-pack.tesl" 81 (list (cons 'user *user)) (lambda () (if (equal? *user "admin") (accept (IsAdmin user) #:value *user) (reject "admin only" #:http-code 401)))))
+  (thsl-src! "example/learn/lesson22-compound-named-pack.tesl" 81 (list (cons 'user *user)) (lambda () (if (tesl-equal? *user "admin") (accept (IsAdmin user) #:value *user) (reject "admin only" #:http-code 401)))))
 
 (define/pow
   (makePositive [n : Integer ::: (IsPositive n)])

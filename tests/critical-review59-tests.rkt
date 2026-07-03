@@ -40,17 +40,17 @@
 (define-checker
   (checkC [n : Integer ::: ((A n) && (B n))])
   #:returns [n : Integer ::: (C n)]
-  (thsl-src! "tests/critical-review59-tests.tesl" 59 (list (cons 'n *n)) (lambda () (if (not (equal? *n 42)) (accept (C n) #:value *n) (reject "fail C" #:http-code 400)))))
+  (thsl-src! "tests/critical-review59-tests.tesl" 59 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 42)) (accept (C n) #:value *n) (reject "fail C" #:http-code 400)))))
 
 (define-checker
   (checkD [n : Integer ::: ((A n) && ((B n) && (C n)))])
   #:returns [n : Integer ::: (D n)]
-  (thsl-src! "tests/critical-review59-tests.tesl" 65 (list (cons 'n *n)) (lambda () (if (not (equal? *n 99)) (accept (D n) #:value *n) (reject "fail D" #:http-code 400)))))
+  (thsl-src! "tests/critical-review59-tests.tesl" 65 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 99)) (accept (D n) #:value *n) (reject "fail D" #:http-code 400)))))
 
 (define-checker
   (checkE [n : Integer ::: ((A n) && ((B n) && ((C n) && (D n))))])
   #:returns [n : Integer ::: (E n)]
-  (thsl-src! "tests/critical-review59-tests.tesl" 71 (list (cons 'n *n)) (lambda () (if (not (equal? *n 500)) (accept (E n) #:value *n) (reject "fail E" #:http-code 400)))))
+  (thsl-src! "tests/critical-review59-tests.tesl" 71 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 500)) (accept (E n) #:value *n) (reject "fail E" #:http-code 400)))))
 
 (define-checker
   (checkPos [n : Integer])
@@ -125,12 +125,12 @@
 (define/pow
   (isEven [n : Integer])
   #:returns Boolean
-  (thsl-src! "tests/critical-review59-tests.tesl" 191 (list (cons 'n *n)) (lambda () (if (equal? *n 0) (raw-value #t) (raw-value (isOdd (- *n 1)))))))
+  (thsl-src! "tests/critical-review59-tests.tesl" 191 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #t) (raw-value (isOdd (- *n 1)))))))
 
 (define/pow
   (isOdd [n : Integer])
   #:returns Boolean
-  (thsl-src! "tests/critical-review59-tests.tesl" 197 (list (cons 'n *n)) (lambda () (if (equal? *n 0) (raw-value #f) (raw-value (isEven (- *n 1)))))))
+  (thsl-src! "tests/critical-review59-tests.tesl" 197 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #f) (raw-value (isEven (- *n 1)))))))
 
 (define/pow
   (proofDecompChain [raw : Integer])

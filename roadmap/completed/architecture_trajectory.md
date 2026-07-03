@@ -24,7 +24,7 @@
 
 ## Status: PARTIAL — 2026-07-02
 DONE (honest-claims edits): the stale OTLP "not implemented" text was corrected
-(DOC-OTLP, docs pass). CARVED → `roadmap/later/review_2026_07_deferred.md` §10: the
+(DOC-OTLP, docs pass). CARVED → `roadmap/completed/review_2026_07_deferred.md` §10: the
 `ir.ml`/backend-swap claim correction in the spec, the lowering-IR seam
 (ARCH-SEAM), per-handler capability narrowing (ARCH-CAP-NARROW), adoption path
 (ARCH-ADOPTION), telemetry egress control (SEC-TELEMETRY). These are architectural

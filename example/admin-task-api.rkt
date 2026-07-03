@@ -75,7 +75,7 @@
 (define-handler
   (getAdminTask [requestUser : AdminUser ::: (Authenticated requestUser)] [taskId : Integer ::: (Positive taskId)])
   #:returns AdminTask
-  (thsl-src! "example/admin-task-api.tesl" 63 (list (cons 'requestUser *requestUser) (cons 'taskId *taskId)) (lambda () (if (equal? (raw-value requestUser.role) "admin") (begin (telemetry-event! "task.fetch.admin" #:attributes (["user.id" (raw-value requestUser.id)] ["task.id" *taskId])) (if (equal? *taskId 2) (AdminTask #:id *taskId #:title "Review audit log" #:ownerId "anna") (reject "Task not found" #:http-code 404))) (reject "Admin role required" #:http-code 403)))))
+  (thsl-src! "example/admin-task-api.tesl" 63 (list (cons 'requestUser *requestUser) (cons 'taskId *taskId)) (lambda () (if (tesl-equal? (raw-value requestUser.role) "admin") (begin (telemetry-event! "task.fetch.admin" #:attributes (["user.id" (raw-value requestUser.id)] ["task.id" *taskId])) (if (tesl-equal? *taskId 2) (AdminTask #:id *taskId #:title "Review audit log" #:ownerId "anna") (reject "Task not found" #:http-code 404))) (reject "Admin role required" #:http-code 403)))))
 
 (define AdminTaskServer-sse-routes '())
 (define-api AdminTaskApi

@@ -55,6 +55,13 @@ type field_access_info = {
   fa_field_type  : string;  (** display type of the field, e.g. "String" *)
 }
 
+(* Eq/Ord Stage-3 (compile-time constraint threading).  A closed, built-in
+   predicate set — no user classes/instances, no surface syntax.  POrd/PEq mark a
+   type variable that a function's body compares with </== ; captured per-fn from
+   the body (harvest) and discharged at each call site against the concrete
+   instantiation (see [ord_eq_constraints], [check_ord_eq_calls]). *)
+type ord_eq_pred = POrd | PEq
+
 type ctx = {
   env      : (string * scheme) list;
   records  : (string * record_def) list;
@@ -77,6 +84,16 @@ type ctx = {
   codec_decode_types : string list;
   (** locally-declared type names that have a non-forbidden fromJson codec.
       Consulted (decide-by-resolution) to validate `decodeAs` targets. *)
+  ord_eq_acc : (ord_eq_pred * ty) list ref;
+  (** Per-fn accumulator: (pred, operand-type) for every </== whose operand was
+      NON-ground while checking the current function body.  Reset per fn in
+      [check_func_decl]; finalized into [ord_eq_constraints]. *)
+  ord_eq_constraints : (string, (ord_eq_pred * ty) list) Hashtbl.t;
+  (** Module-wide: fn name → its captured Eq/Ord obligations, expressed in the
+      fn scheme's RIGID vars (so they freshen consistently at a call). *)
+  ord_eq_calls : (string * ty list * Location.loc) list ref;
+  (** Module-wide: (callee-name, resolved arg types, call loc) recorded at each
+      direct call, discharged after the module is checked. *)
 }
 
 let make_ctx ~filename ~env = {
@@ -99,6 +116,9 @@ let make_ctx ~filename ~env = {
   filename;
   in_establish = false;
   codec_decode_types = [];
+  ord_eq_acc = ref [];
+  ord_eq_constraints = Hashtbl.create 64;
+  ord_eq_calls = ref [];
 }
 
 let add_error ctx loc msg =
@@ -1556,6 +1576,17 @@ let cmp_op_name = function
   | BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">="
   | BEq -> "==" | BNeq -> "!=" | _ -> "?"
 
+(* Resolve the callable's name for Eq/Ord constraint discharge: a bare fn
+   (`genLt`) or a qualified stdlib member (`List.member`).  None for anything
+   without a stable name (lambdas, computed callees) — those simply aren't
+   discharged here (residual is caught by the runtime backstop). *)
+let ord_eq_callee_name (fn_expr : expr) : string option =
+  match fn_expr with
+  | EVar { name; _ } -> Some name
+  | EField { obj = EConstructor { name = modname; _ }; field; _ } -> Some (modname ^ "." ^ field)
+  | EField { obj = EVar { name = modname; _ }; field; _ } -> Some (modname ^ "." ^ field)
+  | _ -> None
+
 (** Infer the type of an expression. Returns the inferred type;
     errors are accumulated in ctx. *)
 let rec infer_expr ctx (e : expr) : ty =
@@ -1864,12 +1895,22 @@ let rec infer_expr ctx (e : expr) : ty =
     let (base_fn, args) = flatten_app_expr [] app in
     let infer_direct_call fn_expr call_args =
       let fn_ty = infer_expr ctx fn_expr in
+      let arg_tys_rev = ref [] in
       let final_ret_ty = List.fold_left (fun current_ret_ty arg_expr ->
         let arg_ty = infer_expr ctx arg_expr in
+        arg_tys_rev := arg_ty :: !arg_tys_rev;
         let next_ret_ty = fresh () in
         unify_at ctx (expr_loc arg_expr) current_ret_ty (TFun (arg_ty, next_ret_ty));
         apply !(ctx.subst) next_ret_ty
       ) fn_ty call_args in
+      (* Record the call for Eq/Ord discharge after the whole module is checked
+         (when every fn's obligations are known).  Resolve arg types NOW, in this
+         fn's substitution.  Additive: does not affect inference. *)
+      (match ord_eq_callee_name fn_expr with
+       | Some name when call_args <> [] ->
+         let resolved = List.rev_map (fun a -> apply !(ctx.subst) a) !arg_tys_rev in
+         ctx.ord_eq_calls := (name, resolved, expr_loc fn_expr) :: !(ctx.ord_eq_calls)
+       | _ -> ());
       apply !(ctx.subst) final_ret_ty
     in
     (match base_fn with
@@ -2483,21 +2524,29 @@ and infer_binop ctx loc op left right =
   | BEq | BNeq ->
     unify_at ctx loc lt rt;
     let t = apply !(ctx.subst) lt in
-    if ty_is_ground t && not (ty_is_eq ctx t) then
-      add_error ctx loc (Printf.sprintf
-        "equality operator `%s` is not defined for type `%s` \
-         (only types without a function component can be compared for equality)"
-        (cmp_op_name op) (pp_ty t));
+    if ty_is_ground t then begin
+      if not (ty_is_eq ctx t) then
+        add_error ctx loc (Printf.sprintf
+          "equality operator `%s` is not defined for type `%s` \
+           (only types without a function component can be compared for equality)"
+          (cmp_op_name op) (pp_ty t))
+    end else
+      (* Generic operand: capture an Eq obligation on this type, discharged at
+         each call site once the type is concrete (Eq/Ord Stage 3). *)
+      ctx.ord_eq_acc := (PEq, t) :: !(ctx.ord_eq_acc);
     t_bool
   | BLt | BLe | BGt | BGe ->
     unify_at ctx loc lt rt;
     let t = apply !(ctx.subst) lt in
-    if ty_is_ground t && not (ty_is_ord ctx t) then
-      add_error ctx loc (Printf.sprintf
-        "ordering operator `%s` is not defined for type `%s` \
-         (only Int, Float, PosixMillis, and newtypes over them are ordered; \
-         compare a numeric representation instead)"
-        (cmp_op_name op) (pp_ty t));
+    if ty_is_ground t then begin
+      if not (ty_is_ord ctx t) then
+        add_error ctx loc (Printf.sprintf
+          "ordering operator `%s` is not defined for type `%s` \
+           (only Int, Float, PosixMillis, and newtypes over them are ordered; \
+           compare a numeric representation instead)"
+          (cmp_op_name op) (pp_ty t))
+    end else
+      ctx.ord_eq_acc := (POrd, t) :: !(ctx.ord_eq_acc);
     t_bool
 
 and unwind_fun_type ty =
@@ -2972,7 +3021,8 @@ use the `Tuple3 a b c` constructor instead";
           spuriously flag it as ambiguous); instead we check args + unify the
           result with `expected` inline, so `expected_ty` is the RESOLVED result
           type when we run the decide-by-resolution cross-check below. *)
-       let current_ty = ref (infer_expr ctx base_fn) in
+       let initial_fn_ty = infer_expr ctx base_fn in
+       let current_ty = ref initial_fn_ty in
        List.iteri (fun idx arg_expr ->
          let resolved_fn = apply !(ctx.subst) !current_ty in
          match resolved_fn with
@@ -3003,6 +3053,22 @@ use the `Tuple3 a b c` constructor instead";
              unify_at ctx (expr_loc arg_expr) resolved_fn (TFun (arg_ty, next_ret_ty));
              current_ty := apply !(ctx.subst) next_ret_ty)
        ) args;
+       (* Eq/Ord Stage 3: record this call for post-check discharge.  The callee's
+          instantiated param slots are now bound to the argument types, so read
+          them straight off the resolved fn type (no re-inference). *)
+       (match ord_eq_callee_name base_fn with
+        | Some name when args <> [] ->
+          let resolved_fn = apply !(ctx.subst) initial_fn_ty in
+          let rec take n ty =
+            if n = 0 then []
+            else match ty with
+              | TFun (a, b) -> apply !(ctx.subst) a :: take (n - 1) b
+              | _ -> []
+          in
+          let arg_tys = take (List.length args) resolved_fn in
+          if List.length arg_tys = List.length args then
+            ctx.ord_eq_calls := (name, arg_tys, expr_loc app) :: !(ctx.ord_eq_calls)
+        | _ -> ());
        let resolved_result = apply !(ctx.subst) !current_ty in
        unify_expected_at ctx (expr_loc app) resolved_result expected;
        (match base_fn with
@@ -3022,6 +3088,43 @@ use the `Tuple3 a b c` constructor instead";
 
 (* ── Function declaration type checking ─────────────────────────────────── *)
 
+(* Rewrite a harvested operand type (body form: type params are lowercase
+   [TCon "a"]) into the fn scheme's RIGID vars, using [params_map] (the SAME
+   name→rigid-id assignment [decl_scheme] uses).  Returns None if the type is not
+   fully attributable to the fn's own type params — a stray unification [TVar] or
+   an unknown lowercase name — so such a constraint is dropped rather than stored
+   wrongly (the runtime backstop still covers it).  Total match, no wildcard. *)
+let rec constraint_to_rigid (params_map : (string * int) list) (ty : ty) : ty option =
+  match ty with
+  | TCon name when is_ty_var_name name ->
+    (match List.assoc_opt name params_map with Some rid -> Some (TVar rid) | None -> None)
+  | TCon _ -> Some ty
+  | TVar id when id < 0 -> Some (TVar id)
+  | TVar _ -> None
+  | TApp (h, a) ->
+    (match constraint_to_rigid params_map h, constraint_to_rigid params_map a with
+     | Some h', Some a' -> Some (TApp (h', a')) | _ -> None)
+  | TFun (a, b) ->
+    (match constraint_to_rigid params_map a, constraint_to_rigid params_map b with
+     | Some a', Some b' -> Some (TFun (a', b')) | _ -> None)
+
+(* Capture the current fn's harvested Eq/Ord obligations, keyed by [name], into
+   the module-wide table (constraints expressed in the scheme's rigid vars). *)
+let finalize_ord_eq_constraints ctx (name : string) (fd_params : binding list) return_spec =
+  let param_tvars = List.concat_map (fun (b : binding) -> collect_tvar_names b.type_expr) fd_params in
+  let ret_tvars = collect_ret_spec_tvar_names return_spec in
+  let all_tvars = List.sort_uniq String.compare (param_tvars @ ret_tvars) in
+  let params_map = List.mapi (fun i n -> (n, -(i + 1))) all_tvars in
+  let converted =
+    List.filter_map (fun (pred, t) ->
+      match constraint_to_rigid params_map t with
+      | Some t' -> Some (pred, t')
+      | None -> None)
+      !(ctx.ord_eq_acc)
+  in
+  let dedup = List.sort_uniq compare converted in
+  if dedup <> [] then Hashtbl.replace ctx.ord_eq_constraints name dedup
+
 let check_func_decl ?(user_fn_names : string list = []) ctx (fd : func_decl) =
   (* [user_fn_names] are the top-level fn names (which may shadow a SQL builtin).
      They were threaded in so the checker's §7.12 FromDb-forgery gate could be
@@ -3031,7 +3134,7 @@ let check_func_decl ?(user_fn_names : string list = []) ctx (fd : func_decl) =
      is retained for call-site stability but is intentionally unused here. *)
   ignore user_fn_names;
   (* Each function gets its own fresh substitution to avoid interference. *)
-  let ctx = { ctx with subst = ref empty_subst } in
+  let ctx = { ctx with subst = ref empty_subst; ord_eq_acc = ref [] } in
   (* Build param environment *)
   let param_env = List.map (fun (b : binding) ->
     (b.name, mono (ty_of_type_expr b.type_expr))
@@ -3132,10 +3235,12 @@ let check_func_decl ?(user_fn_names : string list = []) ctx (fd : func_decl) =
        | _ -> false
      in tail fd.body)
   in
-  if is_app_main then () else
-  check_stmt ctx' fd.body
-    (mk_expectation ~origin:fd.loc ~role:(ReturnBody fd.name)
-      ~reason:(return_reason fd.name expected) expected)
+  (if is_app_main then () else
+   check_stmt ctx' fd.body
+     (mk_expectation ~origin:fd.loc ~role:(ReturnBody fd.name)
+       ~reason:(return_reason fd.name expected) expected));
+  (* Eq/Ord Stage 3: record this fn's harvested obligations for call-site discharge. *)
+  finalize_ord_eq_constraints ctx fd.name fd.params fd.return_spec
 
 (* ── Module-level type checker ───────────────────────────────────────────── *)
 
@@ -4110,6 +4215,50 @@ let check_api_decl_types ctx (m : module_form) =
     | _ -> ()
   ) m.decls
 
+(* Eq/Ord Stage 3 — discharge.  Run AFTER every fn body is checked (so
+   [ord_eq_constraints] is complete).  For each recorded direct call to a fn that
+   carries an Eq/Ord obligation, re-instantiate the callee's scheme, bind its
+   fresh vars against the recorded (already-resolved) argument types, and check
+   the obligation type once it is concrete.  Fail-CLOSED: a concrete non-instance
+   type is rejected here; a still-generic obligation is left for the enclosing
+   fn's own call sites (and, as a final backstop, the runtime tesl-equal? / the
+   loud `<` crash).  Purely additive — reads recorded data, only emits errors. *)
+let check_ord_eq_calls ctx =
+  List.iter (fun (callee, arg_tys, loc) ->
+    match Hashtbl.find_opt ctx.ord_eq_constraints callee with
+    | None -> ()
+    | Some constraints ->
+      (match env_lookup callee ctx.env with
+       | None -> ()
+       | Some sch ->
+         let (fn_ty, imap) = instantiate_with_map sch in
+         let result = fresh () in
+         let applied = List.fold_right (fun a acc -> TFun (a, acc)) arg_tys result in
+         let local_subst = (try unify empty_subst fn_ty applied with _ -> empty_subst) in
+         List.iter (fun (pred, c_rigid) ->
+           let concrete = apply local_subst (apply_int_map imap c_rigid) in
+           if ty_is_ground concrete then begin
+             let ok = match pred with
+               | POrd -> ty_is_ord ctx concrete
+               | PEq  -> ty_is_eq ctx concrete
+             in
+             if not ok then
+               add_error ctx loc
+                 (match pred with
+                  | POrd -> Printf.sprintf
+                      "ordering is not defined for type `%s` — it reaches a generic \
+                       `<`/`>` comparison via `%s` (only Int, Float, PosixMillis, and \
+                       newtypes over them are ordered)"
+                      (pp_ty concrete) callee
+                  | PEq -> Printf.sprintf
+                      "equality is not defined for type `%s` — it reaches a generic \
+                       `==`/`!=` comparison via `%s` (types with a function component \
+                       have no decidable equality)"
+                      (pp_ty concrete) callee)
+           end
+         ) constraints)
+  ) !(ctx.ord_eq_calls)
+
 let check_module_with_metadata (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * type_error list =
   reset_counter ();
   let import_errors = check_stdlib_import_names m in
@@ -4403,6 +4552,9 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
     | _ -> ()  (* codecs, databases, etc. — skip for Phase 2 *)
   ) m.decls;
   check_api_decl_types ctx m;
+  (* Eq/Ord Stage 3: discharge every recorded generic-comparison call now that
+     all fns' obligations are known. *)
+  check_ord_eq_calls ctx;
 
   (* 5. Check that all exported names actually exist in the module *)
   let decl_names = List.concat_map (function

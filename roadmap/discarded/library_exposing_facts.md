@@ -17,4 +17,4 @@ already governs value/type imports, for both `import Mod` and `import Mod exposi
 consumer references a non-exposed fact of an imported module → REJECTED; exposed fact
 → accepted; re-export facade still works.
 
-## Status: CARVED → `roadmap/later/review_2026_07_deferred.md` §5 — 2026-07-02
+## Status: CARVED → `roadmap/completed/review_2026_07_deferred.md` §5 — 2026-07-02

@@ -117,7 +117,7 @@
 (define-checker
   (checkEven28 [n : Integer])
   #:returns [n : Integer ::: (IsEven28 n)]
-  (thsl-src! "tests/critical-review-28-tests.tesl" 308 (list (cons 'n *n)) (lambda () (if (equal? (remainder *n 2) 0) (accept (IsEven28 n) #:value *n) (reject "not even" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-28-tests.tesl" 308 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 2) 0) (accept (IsEven28 n) #:value *n) (reject "not even" #:http-code 400)))))
 
 (define/pow
   (doubleEven28 [n : Integer ::: (IsEven28 n)])
@@ -230,12 +230,12 @@
 (define/pow
   (filteredSubset28 [xs : (List Integer)])
   #:returns Boolean
-  (thsl-src! "tests/critical-review-28-tests.tesl" 620 (list (cons 'xs *xs)) (lambda () (equal? (raw-value (tesl_import_List_length (raw-value (tesl_import_List_sort *xs)))) (raw-value (tesl_import_List_length *xs))))))
+  (thsl-src! "tests/critical-review-28-tests.tesl" 620 (list (cons 'xs *xs)) (lambda () (tesl-equal? (raw-value (tesl_import_List_length (raw-value (tesl_import_List_sort *xs)))) (raw-value (tesl_import_List_length *xs))))))
 
 (define-checker
   (checkTrimmed28 [s : String])
   #:returns [s : String ::: (IsTrimmed28 s)]
-  (thsl-src! "tests/critical-review-28-tests.tesl" 656 (list (cons 's *s)) (lambda () (if (equal? (raw-value (tesl_import_String_trim *s)) *s) (accept (IsTrimmed28 s) #:value *s) (reject "not trimmed" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-28-tests.tesl" 656 (list (cons 's *s)) (lambda () (if (tesl-equal? (raw-value (tesl_import_String_trim *s)) *s) (accept (IsTrimmed28 s) #:value *s) (reject "not trimmed" #:http-code 400)))))
 
 (define-checker
   (checkLong28 [s : String ::: (IsTrimmed28 s)])
@@ -270,7 +270,7 @@
 (define/pow
   (safeDivide28 [a : Integer] [b : Integer])
   #:returns (Either String Integer)
-  (thsl-src! "tests/critical-review-28-tests.tesl" 737 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (equal? *b 0) (raw-value (raw-value (Left "division by zero"))) (let/check ([tesl-checked-17 (tesl_import_Int_nonZero b)]) (let ([nb tesl-checked-17]) (raw-value (raw-value (Right (tesl_import_Int_divide *a nb))))))))))
+  (thsl-src! "tests/critical-review-28-tests.tesl" 737 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (tesl-equal? *b 0) (raw-value (raw-value (Left "division by zero"))) (let/check ([tesl-checked-17 (tesl_import_Int_nonZero b)]) (let ([nb tesl-checked-17]) (raw-value (raw-value (Right (tesl_import_Int_divide *a nb))))))))))
 
 (define/pow
   (negArithmetic28 [a : Integer] [b : Integer])
@@ -295,7 +295,7 @@
 (define/pow
   (forgetAndRaw28 [n : Integer])
   #:returns Boolean
-  (thsl-src! "tests/critical-review-28-tests.tesl" 844 (list (cons 'n *n)) (lambda () (let/check ([tesl-checked-20 (checkRange28 n)]) (let ([v tesl-checked-20]) (let ([forgotten (forget-proof v)]) (let ([tesl-proof-binding-21 v]) (let ([raw (forget-proof tesl-proof-binding-21)] [_proof (detach-all-proof tesl-proof-binding-21)]) (equal? (raw-value forgotten) (raw-value raw))))))))))
+  (thsl-src! "tests/critical-review-28-tests.tesl" 844 (list (cons 'n *n)) (lambda () (let/check ([tesl-checked-20 (checkRange28 n)]) (let ([v tesl-checked-20]) (let ([forgotten (forget-proof v)]) (let ([tesl-proof-binding-21 v]) (let ([raw (forget-proof tesl-proof-binding-21)] [_proof (detach-all-proof tesl-proof-binding-21)]) (tesl-equal? (raw-value forgotten) (raw-value raw))))))))))
 
 (define/pow
   (allCheckResult28 [xs : (List Integer)])
@@ -305,12 +305,12 @@
 (define/pow
   (safeFloatDiv28 [a : Real] [b : Real])
   #:returns (Either String Real)
-  (thsl-src! "tests/critical-review-28-tests.tesl" 894 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (equal? *b 0.) (raw-value (raw-value (Left "zero"))) (let/check ([tesl-checked-23 (tesl_import_Float_requireNonZero b)]) (let ([nb tesl-checked-23]) (raw-value (raw-value (Right (raw-value (tesl_import_Float_div *a nb)))))))))))
+  (thsl-src! "tests/critical-review-28-tests.tesl" 894 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (tesl-equal? *b 0.) (raw-value (raw-value (Left "zero"))) (let/check ([tesl-checked-23 (tesl_import_Float_requireNonZero b)]) (let ([nb tesl-checked-23]) (raw-value (raw-value (Right (raw-value (tesl_import_Float_div *a nb)))))))))))
 
 (define/pow
   (divOrError28 [a : Integer] [b : Integer])
   #:returns (Either String Integer)
-  (thsl-src! "tests/critical-review-28-tests.tesl" 923 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (equal? *b 0) (raw-value (raw-value (Left "zero"))) (let/check ([tesl-checked-24 (tesl_import_Int_nonZero b)]) (let ([nb tesl-checked-24]) (raw-value (raw-value (Right (tesl_import_Int_divide *a nb))))))))))
+  (thsl-src! "tests/critical-review-28-tests.tesl" 923 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (tesl-equal? *b 0) (raw-value (raw-value (Left "zero"))) (let/check ([tesl-checked-24 (tesl_import_Int_nonZero b)]) (let ([nb tesl-checked-24]) (raw-value (raw-value (Right (tesl_import_Int_divide *a nb))))))))))
 
 (define/pow
   (doubleRight28 [e : (Either String Integer)])
@@ -330,7 +330,7 @@
 (define/pow
   (listSumReverseSame28 [xs : (List Integer)])
   #:returns Boolean
-  (thsl-src! "tests/critical-review-28-tests.tesl" 1103 (list (cons 'xs *xs)) (lambda () (equal? (raw-value (tesl_import_List_sum *xs)) (raw-value (tesl_import_List_sum (raw-value (tesl_import_List_reverse *xs))))))))
+  (thsl-src! "tests/critical-review-28-tests.tesl" 1103 (list (cons 'xs *xs)) (lambda () (tesl-equal? (raw-value (tesl_import_List_sum *xs)) (raw-value (tesl_import_List_sum (raw-value (tesl_import_List_reverse *xs))))))))
 
 (module+ test
   (require rackunit)
@@ -724,7 +724,7 @@
   ; property: integer division
   (for ([tesl-prop-i (in-range 30)])
     (let ([a (- (random 2000001) 1000000)] [b (- (random 2000001) 1000000)])
-      (check-true (if (equal? (raw-value b) 0) (equal? (raw-value (safeDivide28 a b)) (raw-value (Left "division by zero"))) (not (equal? (raw-value (safeDivide28 a b)) (raw-value (Left "division by zero"))))) "integer division")
+      (check-true (if (tesl-equal? (raw-value b) 0) (tesl-equal? (raw-value (safeDivide28 a b)) (raw-value (Left "division by zero"))) (not (tesl-equal? (raw-value (safeDivide28 a b)) (raw-value (Left "division by zero"))))) "integer division")
     ))
   )
 
@@ -749,7 +749,7 @@
   ; property: commutativity
   (for ([tesl-prop-i (in-range 100)])
     (let ([x (- (random 2000001) 1000000)] [y (- (random 2000001) 1000000)])
-      (check-true (equal? (+ (raw-value x) (raw-value y)) (+ (raw-value y) (raw-value x))) "commutativity")
+      (check-true (tesl-equal? (+ (raw-value x) (raw-value y)) (+ (raw-value y) (raw-value x))) "commutativity")
     ))
   )
 
@@ -757,7 +757,7 @@
   ; property: distributivity
   (for ([tesl-prop-i (in-range 50)])
     (let ([a (- (random 2000001) 1000000)] [b (- (random 2000001) 1000000)] [c (- (random 2000001) 1000000)])
-      (check-true (equal? (* (raw-value a) (+ (raw-value b) (raw-value c))) (+ (* (raw-value a) (raw-value b)) (* (raw-value a) (raw-value c)))) "distributivity")
+      (check-true (tesl-equal? (* (raw-value a) (+ (raw-value b) (raw-value c))) (+ (* (raw-value a) (raw-value b)) (* (raw-value a) (raw-value c)))) "distributivity")
     ))
   )
 
@@ -1027,7 +1027,7 @@
   ; property: append length
   (for ([tesl-prop-i (in-range 200)])
     (let ([xs (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))] [ys (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))])
-      (check-true (equal? (raw-value (tesl_import_List_length (raw-value (tesl_import_List_append (raw-value xs) (raw-value ys))))) (+ (raw-value (tesl_import_List_length (raw-value xs))) (raw-value (tesl_import_List_length (raw-value ys))))) "append length")
+      (check-true (tesl-equal? (raw-value (tesl_import_List_length (raw-value (tesl_import_List_append (raw-value xs) (raw-value ys))))) (+ (raw-value (tesl_import_List_length (raw-value xs))) (raw-value (tesl_import_List_length (raw-value ys))))) "append length")
     ))
   )
 

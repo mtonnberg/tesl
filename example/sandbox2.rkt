@@ -49,12 +49,12 @@
 (define/pow
   (mutualRecursion1 [x : Integer])
   #:returns Integer
-  (thsl-src! "example/sandbox2.tesl" 35 (list (cons 'x *x)) (lambda () (if (equal? *x 0) (raw-value 1) (raw-value (mutualRecursion2 (- *x 1)))))))
+  (thsl-src! "example/sandbox2.tesl" 35 (list (cons 'x *x)) (lambda () (if (tesl-equal? *x 0) (raw-value 1) (raw-value (mutualRecursion2 (- *x 1)))))))
 
 (define/pow
   (mutualRecursion2 [x : Integer])
   #:returns Integer
-  (thsl-src! "example/sandbox2.tesl" 41 (list (cons 'x *x)) (lambda () (if (equal? *x 0) (raw-value 1) (raw-value (mutualRecursion1 (- *x 1)))))))
+  (thsl-src! "example/sandbox2.tesl" 41 (list (cons 'x *x)) (lambda () (if (tesl-equal? *x 0) (raw-value 1) (raw-value (mutualRecursion1 (- *x 1)))))))
 
 
 ; ── Inlined from cyclic module Sandbox ──────────────────

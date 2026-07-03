@@ -17,7 +17,31 @@
          tesl-request-cookie
          tesl-generate-prefixed-id
          tesl-test-make-proof
-         tesl-test-proof-field)
+         tesl-test-proof-field
+         tesl-equal?)
+
+;; tesl-equal? — the fail-closed backstop for the `==`/`!=` operators (Eq/Ord
+;; Stage-2 runtime guard).  A well-typed program never reaches here with a
+;; function operand: the checker rejects a ground function comparison, and the
+;; generic-comparison hole is closed statically (Eq/Ord constraint threading).
+;; This guard exists only to turn a hypothetical checker BUG into a VISIBLE
+;; error instead of `equal?`'s silent reference-identity result on procedures
+;; (`(equal? f g)` → #f with no error — the one silent-wrong-answer case).
+;;
+;; It is deliberately a TOP-LEVEL operand check, not a deep structural scan.
+;; A deep scan would have to walk transparent Tesl value structs, whose internal
+;; metadata (e.g. a record-field-spec `checker`) can itself be a procedure — so a
+;; deep "contains a procedure?" walk would FALSE-POSITIVE and crash valid record
+;; equality.  Completeness for functions hidden inside composites is provided by
+;; the static layer (which rejects them), not by this runtime guard.  Delegates
+;; to `equal?` for the actual comparison so all structural semantics are
+;; unchanged for every non-function value.
+(define (tesl-equal? a b)
+  (when (or (procedure? a) (procedure? b))
+    (raise-user-error
+     'comparison
+     "functions cannot be compared for equality (== / !=); this indicates a checker bug — please report it"))
+  (equal? a b))
 
 (define (empty-string->false value)
   (if (and (string? value) (string=? (string-trim value) ""))

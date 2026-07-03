@@ -56,7 +56,7 @@
 (define-checker
   (checkPrime33 [n : Integer])
   #:returns [n : Integer ::: (IsPrime33 n)]
-  (thsl-src! "tests/critical-review-33-tests.tesl" 195 (list (cons 'n *n)) (lambda () (if (or (equal? *n 2) (or (equal? *n 3) (or (equal? *n 5) (or (equal? *n 7) (or (equal? *n 11) (equal? *n 13)))))) (accept (IsPrime33 n) #:value *n) (reject "not a small prime" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-33-tests.tesl" 195 (list (cons 'n *n)) (lambda () (if (or (tesl-equal? *n 2) (or (tesl-equal? *n 3) (or (tesl-equal? *n 5) (or (tesl-equal? *n 7) (or (tesl-equal? *n 11) (tesl-equal? *n 13)))))) (accept (IsPrime33 n) #:value *n) (reject "not a small prime" #:http-code 400)))))
 
 (define/pow
   (requiresPrime33 [n : Integer ::: (IsPrime33 n)])
@@ -76,7 +76,7 @@
 (define-checker
   (checkTrimmed33 [s : String])
   #:returns [s : String ::: (IsTrimmed33 s)]
-  (let ([trimmed (thsl-src! "tests/critical-review-33-tests.tesl" 233 (list (cons 's *s)) (lambda () (tesl_import_String_trim *s)))]) (thsl-src! "tests/critical-review-33-tests.tesl" 234 (list (cons 'trimmed *trimmed) (cons 's *s)) (lambda () (if (equal? (raw-value trimmed) *s) (accept (IsTrimmed33 s) #:value *s) (reject "not trimmed" #:http-code 400))))))
+  (let ([trimmed (thsl-src! "tests/critical-review-33-tests.tesl" 233 (list (cons 's *s)) (lambda () (tesl_import_String_trim *s)))]) (thsl-src! "tests/critical-review-33-tests.tesl" 234 (list (cons 'trimmed *trimmed) (cons 's *s)) (lambda () (if (tesl-equal? (raw-value trimmed) *s) (accept (IsTrimmed33 s) #:value *s) (reject "not trimmed" #:http-code 400))))))
 
 (define/pow
   (requiresBothProofs33 [s : String ::: ((IsShort33 s) && (IsTrimmed33 s))])
@@ -106,12 +106,12 @@
 (define/pow
   (isEven33 [n : Integer])
   #:returns Boolean
-  (thsl-src! "tests/critical-review-33-tests.tesl" 297 (list (cons 'n *n)) (lambda () (if (equal? *n 0) (raw-value #t) (raw-value (isOdd33 (- *n 1)))))))
+  (thsl-src! "tests/critical-review-33-tests.tesl" 297 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #t) (raw-value (isOdd33 (- *n 1)))))))
 
 (define/pow
   (isOdd33 [n : Integer])
   #:returns Boolean
-  (thsl-src! "tests/critical-review-33-tests.tesl" 303 (list (cons 'n *n)) (lambda () (if (equal? *n 0) (raw-value #f) (raw-value (isEven33 (- *n 1)))))))
+  (thsl-src! "tests/critical-review-33-tests.tesl" 303 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #f) (raw-value (isEven33 (- *n 1)))))))
 
 (define-adt IntTree33
   [Leaf33]
@@ -215,7 +215,7 @@
 (define-checker
   (checkEven33 [n : Integer])
   #:returns [n : Integer ::: (IsEven33 n)]
-  (thsl-src! "tests/critical-review-33-tests.tesl" 518 (list (cons 'n *n)) (lambda () (if (equal? (remainder *n 2) 0) (accept (IsEven33 n) #:value *n) (reject "not even" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-33-tests.tesl" 518 (list (cons 'n *n)) (lambda () (if (tesl-equal? (remainder *n 2) 0) (accept (IsEven33 n) #:value *n) (reject "not even" #:http-code 400)))))
 
 (define/pow
   (narrowForAll33 [xs : (List Integer)])
@@ -298,12 +298,12 @@
 (define/pow
   (proofTotalDivide33 [a : Integer] [b : Integer])
   #:returns (Maybe Integer)
-  (thsl-src! "tests/critical-review-33-tests.tesl" 709 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (equal? *b 0) (raw-value Nothing) (let/check ([tesl-checked-12 (tesl_import_Int_nonZero b)]) (let ([divisor tesl-checked-12]) (raw-value (raw-value (Something (tesl_import_Int_divide *a divisor))))))))))
+  (thsl-src! "tests/critical-review-33-tests.tesl" 709 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (tesl-equal? *b 0) (raw-value Nothing) (let/check ([tesl-checked-12 (tesl_import_Int_nonZero b)]) (let ([divisor tesl-checked-12]) (raw-value (raw-value (Something (tesl_import_Int_divide *a divisor))))))))))
 
 (define/pow
   (proofTotalFloatDiv33 [a : Real] [b : Real])
   #:returns (Maybe Real)
-  (thsl-src! "tests/critical-review-33-tests.tesl" 735 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (equal? *b 0.) (raw-value Nothing) (let/check ([tesl-checked-13 (tesl_import_Float_requireNonZero b)]) (let ([divisor tesl-checked-13]) (raw-value (raw-value (Something (raw-value (tesl_import_Float_div *a divisor)))))))))))
+  (thsl-src! "tests/critical-review-33-tests.tesl" 735 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (tesl-equal? *b 0.) (raw-value Nothing) (let/check ([tesl-checked-13 (tesl_import_Float_requireNonZero b)]) (let ([divisor tesl-checked-13]) (raw-value (raw-value (Something (raw-value (tesl_import_Float_div *a divisor)))))))))))
 
 (define/pow
   (allCheckSome33 [xs : (List Integer)])
@@ -368,7 +368,7 @@
 (define/pow
   (boolNegation33 [b : Boolean])
   #:returns Boolean
-  (thsl-src! "tests/critical-review-33-tests.tesl" 1014 (list (cons 'b *b)) (lambda () (if (equal? *b #t) (raw-value #f) (raw-value #t)))))
+  (thsl-src! "tests/critical-review-33-tests.tesl" 1014 (list (cons 'b *b)) (lambda () (if (tesl-equal? *b #t) (raw-value #f) (raw-value #t)))))
 
 (define-adt FixShape33
   [FixCircle33 [radius : Integer]]
@@ -495,7 +495,7 @@
   ; property: even and odd are complementary
   (for ([tesl-prop-i (in-range 30)])
     (let ([n (- (random 2000001) 1000000)])
-      (when (and (>= (raw-value n) 0) (< (raw-value n) 50)) (check-true (not (equal? (raw-value (isEven33 n)) (raw-value (isOdd33 n)))) "even and odd are complementary"))
+      (when (and (>= (raw-value n) 0) (< (raw-value n) 50)) (check-true (not (tesl-equal? (raw-value (isEven33 n)) (raw-value (isOdd33 n)))) "even and odd are complementary"))
     ))
   )
 
@@ -551,17 +551,17 @@
   ; property: addZero identity
   (for ([tesl-prop-i (in-range 50)])
     (let ([n (- (random 2000001) 1000000)])
-      (when (and (> (raw-value n) -1000000) (< (raw-value n) 1000000)) (check-true (equal? (raw-value (addZero33 n)) (raw-value n)) "addZero identity"))
+      (when (and (> (raw-value n) -1000000) (< (raw-value n) 1000000)) (check-true (tesl-equal? (raw-value (addZero33 n)) (raw-value n)) "addZero identity"))
     ))
   ; property: mulOne identity
   (for ([tesl-prop-i (in-range 50)])
     (let ([n (- (random 2000001) 1000000)])
-      (when (and (> (raw-value n) -1000000) (< (raw-value n) 1000000)) (check-true (equal? (raw-value (mulOne33 n)) (raw-value n)) "mulOne identity"))
+      (when (and (> (raw-value n) -1000000) (< (raw-value n) 1000000)) (check-true (tesl-equal? (raw-value (mulOne33 n)) (raw-value n)) "mulOne identity"))
     ))
   ; property: subSelf is zero
   (for ([tesl-prop-i (in-range 50)])
     (let ([n (- (random 2000001) 1000000)])
-      (when (and (> (raw-value n) -1000000) (< (raw-value n) 1000000)) (check-true (equal? (raw-value (subSelf33 n)) 0) "subSelf is zero"))
+      (when (and (> (raw-value n) -1000000) (< (raw-value n) 1000000)) (check-true (tesl-equal? (raw-value (subSelf33 n)) 0) "subSelf is zero"))
     ))
   )
 
@@ -692,7 +692,7 @@
   ; property: divide by self is 1
   (for ([tesl-prop-i (in-range 30)])
     (let ([n (- (random 2000001) 1000000)])
-      (when (and (> (raw-value n) 0) (< (raw-value n) 10000)) (check-true (let/check ([tesl-checked-28 (tesl_import_Int_nonZero n)]) (let ([divisor tesl-checked-28]) (equal? (raw-value (tesl_import_Int_divide (raw-value n) divisor)) 1))) "divide by self is 1"))
+      (when (and (> (raw-value n) 0) (< (raw-value n) 10000)) (check-true (let/check ([tesl-checked-28 (tesl_import_Int_nonZero n)]) (let ([divisor tesl-checked-28]) (tesl-equal? (raw-value (tesl_import_Int_divide (raw-value n) divisor)) 1))) "divide by self is 1"))
     ))
   )
 
@@ -780,7 +780,7 @@
   ; property: sort is idempotent
   (for ([tesl-prop-i (in-range 50)])
     (let ([xs (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))])
-      (check-true (equal? (raw-value (sortedInts33 (sortedInts33 xs))) (raw-value (sortedInts33 xs))) "sort is idempotent")
+      (check-true (tesl-equal? (raw-value (sortedInts33 (sortedInts33 xs))) (raw-value (sortedInts33 xs))) "sort is idempotent")
     ))
   )
 
@@ -864,12 +864,12 @@
   ; property: length after append
   (for ([tesl-prop-i (in-range 30)])
     (let ([xs (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))] [ys (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))])
-      (check-true (equal? (raw-value (tesl_import_List_length (raw-value (tesl_import_List_append (raw-value xs) (raw-value ys))))) (+ (raw-value (tesl_import_List_length (raw-value xs))) (raw-value (tesl_import_List_length (raw-value ys))))) "length after append")
+      (check-true (tesl-equal? (raw-value (tesl_import_List_length (raw-value (tesl_import_List_append (raw-value xs) (raw-value ys))))) (+ (raw-value (tesl_import_List_length (raw-value xs))) (raw-value (tesl_import_List_length (raw-value ys))))) "length after append")
     ))
   ; property: reverse is involution
   (for ([tesl-prop-i (in-range 30)])
     (let ([xs (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))])
-      (check-true (equal? (raw-value (tesl_import_List_reverse (raw-value (tesl_import_List_reverse (raw-value xs))))) (raw-value xs)) "reverse is involution")
+      (check-true (tesl-equal? (raw-value (tesl_import_List_reverse (raw-value (tesl_import_List_reverse (raw-value xs))))) (raw-value xs)) "reverse is involution")
     ))
   )
 
@@ -895,8 +895,8 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-33-tests.tesl" 1020 (list) (lambda () (boolLiterals33)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-33-tests.tesl" 1021 (list) (lambda () (boolNegation33 #t)))) #f)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-33-tests.tesl" 1022 (list) (lambda () (boolNegation33 #f)))) #t)
-  (check-equal? (raw-value (thsl-src! "tests/critical-review-33-tests.tesl" 1023 (list) (lambda () (equal? 1 1)))) #t)
-  (check-equal? (raw-value (thsl-src! "tests/critical-review-33-tests.tesl" 1024 (list) (lambda () (equal? 1 2)))) #f)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-33-tests.tesl" 1023 (list) (lambda () (tesl-equal? 1 1)))) #t)
+  (check-equal? (raw-value (thsl-src! "tests/critical-review-33-tests.tesl" 1024 (list) (lambda () (tesl-equal? 1 2)))) #f)
   )
 
   (test-case "FIX-01a \226\128\148 case nullary constructor in test block"

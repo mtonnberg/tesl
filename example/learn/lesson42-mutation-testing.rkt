@@ -35,7 +35,7 @@
 (define-checker
   (checkDiscount [code : Integer])
   #:returns [code : Integer ::: (ValidDiscount code)]
-  (thsl-src! "example/learn/lesson42-mutation-testing.tesl" 135 (list (cons 'code *code)) (lambda () (if (equal? *code 42) (accept (ValidDiscount code) #:value *code) (reject "invalid discount code" #:http-code 422)))))
+  (thsl-src! "example/learn/lesson42-mutation-testing.tesl" 135 (list (cons 'code *code)) (lambda () (if (tesl-equal? *code 42) (accept (ValidDiscount code) #:value *code) (reject "invalid discount code" #:http-code 422)))))
 
 (module+ test
   (require rackunit)

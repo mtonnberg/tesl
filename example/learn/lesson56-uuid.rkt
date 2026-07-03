@@ -45,17 +45,17 @@
 (define/pow
   (hasVersionDigit [s : String] [expected : String])
   #:returns Boolean
-  (thsl-src! "example/learn/lesson56-uuid.tesl" 117 (list (cons 's *s) (cons 'expected *expected)) (lambda () (equal? (raw-value (tesl_import_String_slice *s 14 15)) *expected))))
+  (thsl-src! "example/learn/lesson56-uuid.tesl" 117 (list (cons 's *s) (cons 'expected *expected)) (lambda () (tesl-equal? (raw-value (tesl_import_String_slice *s 14 15)) *expected))))
 
 (define/pow
   (describeUuid [s : String])
   #:returns String
-  (let ([version (thsl-src! "example/learn/lesson56-uuid.tesl" 121 (list (cons 's *s)) (lambda () (raw-value (tesl_import_String_slice *s 14 15))))]) (thsl-src! "example/learn/lesson56-uuid.tesl" 122 (list (cons 'version *version) (cons 's *s)) (lambda () (if (equal? (raw-value version) "4") (raw-value "UUID v4 (random)") (if (equal? (raw-value version) "7") (raw-value "UUID v7 (time-ordered)") (raw-value "UUID (unknown version)")))))))
+  (let ([version (thsl-src! "example/learn/lesson56-uuid.tesl" 121 (list (cons 's *s)) (lambda () (raw-value (tesl_import_String_slice *s 14 15))))]) (thsl-src! "example/learn/lesson56-uuid.tesl" 122 (list (cons 'version *version) (cons 's *s)) (lambda () (if (tesl-equal? (raw-value version) "4") (raw-value "UUID v4 (random)") (if (tesl-equal? (raw-value version) "7") (raw-value "UUID v7 (time-ordered)") (raw-value "UUID (unknown version)")))))))
 
 (define/pow
   (checkUuidFormat [s : String])
   #:returns Boolean
-  (thsl-src! "example/learn/lesson56-uuid.tesl" 131 (list (cons 's *s)) (lambda () (equal? (raw-value (tesl_import_String_length *s)) 36))))
+  (thsl-src! "example/learn/lesson56-uuid.tesl" 131 (list (cons 's *s)) (lambda () (tesl-equal? (raw-value (tesl_import_String_length *s)) 36))))
 
 (module+ test
   (require rackunit)

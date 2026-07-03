@@ -694,7 +694,7 @@
   ; property: negating twice returns original
   (for ([tesl-prop-i (in-range 50)])
     (let ([n (- (random 2000001) 1000000)])
-      (when (and (> (raw-value n) -10000) (< (raw-value n) 10000)) (check-true (equal? (- 0 (- 0 (raw-value n))) (raw-value n)) "negating twice returns original"))
+      (when (and (> (raw-value n) -10000) (< (raw-value n) 10000)) (check-true (tesl-equal? (- 0 (- 0 (raw-value n))) (raw-value n)) "negating twice returns original"))
     ))
   )
 

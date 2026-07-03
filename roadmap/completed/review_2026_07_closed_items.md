@@ -78,9 +78,10 @@ baseline). Companion reports: `EXECUTIVE-REVIEW-2026-07.md`,
   `F-decidable-comparison` group in `test_wave2_soundness.ml` (75 cases), incl.
   `< Maybe rejected (#1)`, `== Maybe Int accepted`, `== Maybe-of-fn rejected`.
   **Residual: #2 only** — open Eq/Ord polymorphism (a generic helper
-  `fn genLt(a,b)=a<b` applied to function values) still compiles; that requires
-  qualified types (Eq/Ord classes participating in HM generalize/instantiate) and
-  is tracked in `roadmap/later/type_decidability_ord_eq.md`.
+  `fn genLt(a,b)=a<b` applied to function values) — LANDED 2026-07-03 without type
+  classes (closed built-in Ord/Eq constraints: same-module compile-time reject + runtime
+  `tesl-equal?` backstop). See `roadmap/completed/type_decidability_ord_eq.md` (cross-module
+  1b tracked in `roadmap/next/eq_ord_generic_soundness.md`).
 
 ## Robustness / consistency
 - **DRIFT-1 — `Tesl.Cli` removed entirely (config is env-vars-only).** The
