@@ -350,6 +350,37 @@ let is_attributed_kill src (m : Ast.module_form) anchor =
   let errs = error_diags (Compile.check_module src m) in
   errs <> [] && matches anchor errs
 
+(* ── Option E: surface ACCEPTED soundness-breaking mutants as candidate holes ──
+   The sweep used to `else None`-drop any mutant it didn't confirm as a kill —
+   so a mutant the checker ACCEPTS (a live hole) was invisible and the gate could
+   only guard already-closed holes.  We now surface accepts.
+
+   BUT the transforms fire on syntactic presence, not load-bearingness: dropping
+   an OVER-declared capability (SWeakenCaps) or a param proof the return never
+   used (SDropParamProof) is legitimately accepted, so a blanket "accept ⇒ fail"
+   would flood false positives.  Only [reliably_load_bearing] transforms are a
+   genuine hole on accept — SForgeProof adds a proof about a FRESH `forged`
+   subject the body can never carry, so a forgery-restricted kind MUST reject it.
+   Non-reliable accepts are tallied into a census (reported, not failed). *)
+let reliably_load_bearing = function
+  | Mutate.SForgeProof -> true
+  | Mutate.SDropParamProof | Mutate.SRetargetReturnSubject
+  | Mutate.SRetargetParamSubject | Mutate.SWidenCaps
+  | Mutate.SWeakenCaps | Mutate.SWeakenAuthVia -> false
+
+(* (rel-file, fn, transform-name) triples whose ACCEPT is known-benign. Empty
+   today; a genuine future accept is triaged into either a fix or this list. *)
+let s7_accept_allowlist : (string * string * string) list = []
+
+(* Census of non-reliable accepts, reported in the summary (not a failure). *)
+let accept_census : (string, int) Hashtbl.t = Hashtbl.create 8
+let bump_census name =
+  Hashtbl.replace accept_census name (1 + (Option.value ~default:0 (Hashtbl.find_opt accept_census name)))
+
+(* ci.sh sets this to scan the WHOLE corpus for accepts (unbudgeted); the fast
+   dune-test layer leaves it unset and stays budget-bounded. *)
+let exhaustive = Sys.getenv_opt "TESL_S7_EXHAUSTIVE" <> None
+
 (* Keep the sweep FAST and its count STABLE across machines: take a deterministic
    budget of confirmed attributed kills (files are visited in sorted order).  The
    curated seeds are the backbone; the sweep proves the property generalises. *)
@@ -378,7 +409,9 @@ let sweep_cases () : ((string * unit test_case list) list * int) =
     let count = ref 0 in
     let groups =
       List.filter_map (fun file ->
-        if !count >= sweep_budget then None else
+        (* In exhaustive mode (ci.sh) keep visiting every file so accepts are
+           scanned corpus-wide; the fast dune-test layer stays budget-bounded. *)
+        if (not exhaustive) && !count >= sweep_budget then None else
         match Compile.parse_module_file file with
         | None -> None
         | Some m ->
@@ -398,41 +431,61 @@ let sweep_cases () : ((string * unit test_case list) list * int) =
             let cases =
               List.concat_map (fun fn ->
                 List.filter_map (fun (transform, anchor) ->
-                  if !count >= sweep_budget then None else
+                  let tname = Mutate.soundness_transform_name transform in
                   match
                     Mutate.apply_soundness_transform_to_module m ~fn_name:fn transform
                   with
-                  | None -> None
+                  | None -> None                     (* transform had no site here *)
                   | Some m' ->
-                    if is_attributed_kill src m' anchor then begin
-                      incr count;
-                      let base =
-                        Printf.sprintf "%s :: %s"
-                          fn (Mutate.soundness_transform_name transform) in
-                      (* Ensure per-group test-name uniqueness (a file may declare
-                         two fns of the same name in different scopes is rare, but
-                         guard anyway). *)
-                      let name =
-                        let rec uniq i =
-                          let cand = if i = 0 then base
-                                     else Printf.sprintf "%s #%d" base i in
-                          if Hashtbl.mem seen cand then uniq (i + 1)
-                          else (Hashtbl.add seen cand (); cand)
-                        in uniq 0
-                      in
-                      (* Re-assert inside the test body so the corpus is a real
-                         regression gate, not just a build-time count. *)
-                      Some (test_case name `Quick (fun () ->
-                        let m2 = match Compile.parse_module_file file with
-                          | Some x -> x | None -> Alcotest.fail "reparse failed" in
-                        let m3 =
-                          match Mutate.apply_soundness_transform_to_module m2
-                                  ~fn_name:fn transform with
-                          | Some x -> x
-                          | None -> Alcotest.fail "transform site vanished" in
-                        Alcotest.check bool "attributed kill" true
-                          (is_attributed_kill src m3 anchor)))
-                    end else None
+                    let errs = error_diags (Compile.check_module src m') in
+                    if errs = [] then begin
+                      (* ACCEPTED a soundness-breaking transform (Option E). *)
+                      if reliably_load_bearing transform
+                         && not (List.mem (rel file, fn, tname) s7_accept_allowlist)
+                      then
+                        (* Genuine minting-gate hole — fail loudly for triage. *)
+                        Some (test_case
+                                (Printf.sprintf "CANDIDATE HOLE %s :: %s" fn tname)
+                                `Quick (fun () ->
+                          Alcotest.failf
+                            "checker ACCEPTED a %s mutant of `%s` in %s — candidate \
+                             soundness hole: a forgery-restricted kind now declares a \
+                             return proof about a fresh subject its body never received, \
+                             yet the checker did not reject it. Triage: fix the gate, or \
+                             (if genuinely benign) add to s7_accept_allowlist with a reason."
+                            tname fn (rel file)))
+                      else begin bump_census tname; None end
+                    end
+                    else if matches anchor errs then begin
+                      (* Attributed kill — record a budgeted regression case. *)
+                      if (not exhaustive) && !count >= sweep_budget then None
+                      else begin
+                        incr count;
+                        let base = Printf.sprintf "%s :: %s" fn tname in
+                        (* Ensure per-group test-name uniqueness. *)
+                        let name =
+                          let rec uniq i =
+                            let cand = if i = 0 then base
+                                       else Printf.sprintf "%s #%d" base i in
+                            if Hashtbl.mem seen cand then uniq (i + 1)
+                            else (Hashtbl.add seen cand (); cand)
+                          in uniq 0
+                        in
+                        (* Re-assert inside the test body so the corpus is a real
+                           regression gate, not just a build-time count. *)
+                        Some (test_case name `Quick (fun () ->
+                          let m2 = match Compile.parse_module_file file with
+                            | Some x -> x | None -> Alcotest.fail "reparse failed" in
+                          let m3 =
+                            match Mutate.apply_soundness_transform_to_module m2
+                                    ~fn_name:fn transform with
+                            | Some x -> x
+                            | None -> Alcotest.fail "transform site vanished" in
+                          Alcotest.check bool "attributed kill" true
+                            (is_attributed_kill src m3 anchor)))
+                      end
+                    end
+                    else None   (* killed, but not attributed to this anchor — soft drop *)
                 ) sweep_transforms
               ) fn_names
             in
@@ -470,6 +523,13 @@ let () =
   Printf.printf
     "S7 corpus: %d curated + %d swept = %d attributed-kill assertions (target >= 50)\n%!"
     curated_kills sweep_kills total_kills;
+  (* Option E: report the non-load-bearing accept census (informational — these
+     are legitimately-accepted mutations of transforms whose accept does not imply
+     a hole; reliably-load-bearing accepts are surfaced as failing tests above). *)
+  if Hashtbl.length accept_census > 0 then
+    Hashtbl.iter (fun name n ->
+      Printf.printf "S7 accept-census: %d accept(s) of %s (non-load-bearing; informational)\n%!" n name)
+      accept_census;
   let summary_group =
     ("corpus-size",
      [ test_case "at least 50 attributed-kill mutants" `Quick (fun () ->

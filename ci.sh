@@ -88,6 +88,11 @@ COMPILER_DIR="$SCRIPT_DIR/compiler"
 # Both are idempotent and harmless when the source is already writable (local).
 export TESL_OCAML_COMPILER="$COMPILER_DIR/_build/default/bin/main.exe"
 
+# Option E: run the S7 generative gate in EXHAUSTIVE mode (scan the WHOLE proof
+# corpus for accepted soundness-breaking mutants — the full detector), not the
+# fast budget-bounded mode the developer dune-test loop uses.  Overridable.
+export TESL_S7_EXHAUSTIVE="${TESL_S7_EXHAUSTIVE:-1}"
+
 if command -v raco >/dev/null 2>&1; then
     if ! raco pkg show tesl 2>/dev/null | grep -qF "link $SCRIPT_DIR"; then
         if raco pkg show tesl 2>/dev/null | grep -Eq '^[[:space:]]*tesl([[:space:]]|$)'; then
@@ -172,25 +177,49 @@ print_summary_and_exit() {
     printf "%s  CI SUMMARY%s\n" "$C_BOLD" "$C_RESET"
     printf "%s════════════════════════════════════════════%s\n" "$C_BOLD" "$C_RESET"
     local i mark colour
+    # Option E: SKIP ≠ PASS.  A soundness-required phase that SKIPs — e.g. because
+    # racket/raco/initdb was missing — used to be counted as "legitimately skipped"
+    # and the gate still printed "All good", silently masking that the entire
+    # runtime/proof-runtime layer never ran.  We now treat a SKIP of any required
+    # phase (everything except the cosmetic "Format" phase) as a gate FAILURE.
+    # Local fast-loops that intentionally skip (RKT_SUITES_SKIP=1, no racket, …)
+    # opt out with TESL_CI_ALLOW_SKIP=1.
+    local skipped_required=0
+    local allow_skip=0
+    # An explicit fast-loop skip knob (RKT_SUITES_SKIP=1) or TESL_CI_ALLOW_SKIP=1
+    # opts out of the strict SKIP-is-FAIL rule; the authoritative gate sets neither.
+    if is_truthy "${TESL_CI_ALLOW_SKIP:-}" || is_truthy "${RKT_SUITES_SKIP:-}"; then allow_skip=1; fi
     for i in "${!PHASE_NAMES[@]}"; do
-        case "${PHASE_STATUS[$i]}" in
-            OK)   mark="✓"; colour="$C_GREEN" ;;
-            SKIP) mark="⚠"; colour="$C_YELLOW" ;;
-            *)    mark="✗"; colour="$C_RED" ;;
-        esac
-        printf "  %s%s%s  [%d/%d] %-46s %-4s %ss\n" \
+        local st="${PHASE_STATUS[$i]}"
+        local nm="${PHASE_NAMES[$i]}"
+        local required=1
+        case "$nm" in *Format*) required=0 ;; esac
+        local note=""
+        if [ "$st" = "SKIP" ] && [ "$required" -eq 1 ] && [ "$allow_skip" -eq 0 ]; then
+            skipped_required=$((skipped_required + 1))
+            mark="✗"; colour="$C_RED"; note="  (required — SKIP is a FAIL)"
+        else
+            case "$st" in
+                OK)   mark="✓"; colour="$C_GREEN" ;;
+                SKIP) mark="⚠"; colour="$C_YELLOW" ;;
+                *)    mark="✗"; colour="$C_RED" ;;
+            esac
+        fi
+        printf "  %s%s%s  [%d/%d] %-46s %-4s %ss%s\n" \
             "$colour" "$mark" "$C_RESET" \
             "$((i + 1))" "$TOTAL_PHASES" \
-            "${PHASE_NAMES[$i]}" "${PHASE_STATUS[$i]}" "${PHASE_SECONDS[$i]}"
+            "${PHASE_NAMES[$i]}" "${PHASE_STATUS[$i]}" "${PHASE_SECONDS[$i]}" "$note"
     done
     printf "────────────────────────────────────────────\n"
     printf "  total %ss\n" "$total_elapsed"
-    if [ "$GATE_FAILURES" -eq 0 ]; then
+    local total_failures=$((GATE_FAILURES + skipped_required))
+    if [ "$total_failures" -eq 0 ]; then
         printf "  %s✓  All good — every phase passed (or was legitimately skipped).%s\n" "$C_GREEN" "$C_RESET"
         printf "%s════════════════════════════════════════════%s\n" "$C_BOLD" "$C_RESET"
         exit 0
     else
-        printf "  %s✗  %d phase(s) FAILED.%s\n" "$C_RED" "$GATE_FAILURES" "$C_RESET"
+        [ "$skipped_required" -gt 0 ] && printf "  %s✗  %d soundness-required phase(s) SKIPPED (missing tool? set TESL_CI_ALLOW_SKIP=1 to permit locally).%s\n" "$C_RED" "$skipped_required" "$C_RESET"
+        [ "$GATE_FAILURES" -gt 0 ] && printf "  %s✗  %d phase(s) FAILED.%s\n" "$C_RED" "$GATE_FAILURES" "$C_RESET"
         printf "%s════════════════════════════════════════════%s\n" "$C_BOLD" "$C_RESET"
         exit 1
     fi
