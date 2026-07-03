@@ -591,12 +591,15 @@ let stdlib_env : (string * scheme) list = [
   "JWT.decode", mono (t_fun [t_jwt_token] (t_dict t_string t_string));
 
   (* ── Queue / Tesl infrastructure ─────────────────────────────────────── *)
-  (* requeue: accepts any dead-job value, returns the declared return type freely.
-     Using _r2_ab so the return type _b is independent of the input type _a. *)
-  "requeue",        { vars = _r2_ab; mono = t_fun [_a] _b };
-  (* deadJobs: accepts any queue, returns List of dead jobs (different type than queue).
-     Using _r2_ab so the element type _b is independent of the queue type _a. *)
-  "deadJobs",       { vars = _r2_ab; mono = t_fun [_a] (t_list _b) };
+  (* requeue: takes a DeadJob (the concrete dead-letter entry) and returns Bool
+     (#t/#f from the runtime).  The result type is CONCRETE — an earlier scheme
+     `∀a b. a -> b` had a free result var `_b` that HM would instantiate to any
+     type at the use site, i.e. an `unsafeCoerce` (review 2.3).  Fixed. *)
+  "requeue",        mono (t_fun [TCon "DeadJob"] t_bool);
+  (* deadJobs: takes a queue (nominal per-declaration, hence polymorphic in `_a`)
+     and returns a concrete `List DeadJob`.  `_a` appears in an argument position,
+     so there is no escaping result var (review 2.3). *)
+  "deadJobs",       { vars = _r1_a; mono = t_fun [_a] (t_list (TCon "DeadJob")) };
   "pendingJobCount",{ vars = _r1_a; mono = t_fun [_a] t_int };
   "drainQueue",     { vars = _r1_a; mono = t_fun [_a] t_unit };
   "processNextJob", { vars = _r1_a; mono = t_fun [_a] _a };
@@ -621,6 +624,73 @@ let stdlib_env : (string * scheme) list = [
 (** Build an initial type environment from the stdlib list. *)
 let make_stdlib_env () : (string * scheme) list =
   stdlib_env
+
+(* ── Stdlib well-formedness: escaping result-var lint (review item 5) ─────────
+   A stdlib FUNCTION scheme is an unchecked cast ("unsafeCoerce") when a
+   quantified variable appears in the RESULT (after stripping outer
+   List/Maybe/Set) as a BARE type variable but in NO argument position — HM then
+   instantiates it to whatever the use site demands (review 2.3: requeue/deadJobs
+   were `∀a b. a -> b` / `∀a b. a -> List b`).
+   NOT flagged:
+     • polymorphic data constructors (Left/Right/Ok/Something): their result is a
+       TApp (e.g. Either a b), never a bare var;
+     • nullary polymorphic values (Nothing, Dict.empty): not functions;
+     • `decodeAs`: intentionally result-polymorphic (its type is chosen at runtime
+       from a string via the codec registry) — whitelisted. *)
+let escaping_result_var_whitelist = [ "decodeAs" ]
+
+(* Collect ALL type-variable ids (incl. negative rigid/quantified ids — unlike
+   [free_vars], which returns only positive unification ids). *)
+let all_type_vars (ty : ty) : int list =
+  let rec go acc = function
+    | TVar id                   -> if List.mem id acc then acc else id :: acc
+    | TCon _                    -> acc
+    | TApp (x, y) | TFun (x, y) -> go (go acc x) y
+  in
+  go [] ty
+
+let split_fun_type (ty : ty) : ty list * ty =
+  let rec go args = function
+    | TFun (dom, cod) -> go (dom :: args) cod
+    | res -> (List.rev args, res)
+  in
+  go [] ty
+
+let rec strip_result_containers = function
+  | TApp (TCon ("List" | "Maybe" | "Set"), inner) -> strip_result_containers inner
+  | t -> t
+
+(** Stdlib schemes whose result carries an escaping quantified var (item 5).
+    Returns (name, offending_var_ids); empty iff the table is well-formed. *)
+let stdlib_escaping_result_vars () : (string * int list) list =
+  List.filter_map (fun (name, sch) ->
+    if List.mem name escaping_result_var_whitelist then None
+    else match sch.mono with
+      | TFun _ ->
+        let (args, res) = split_fun_type sch.mono in
+        let arg_vars = List.concat_map all_type_vars args in
+        (match strip_result_containers res with
+         | TVar id when List.mem id sch.vars && not (List.mem id arg_vars) ->
+           Some (name, [id])
+         | _ -> None)
+      | _ -> None
+  ) stdlib_env
+
+(* ── Framework-reserved proof predicates (review item 6) ──────────────────────
+   Single source of truth for the structural / provenance predicate names owned
+   by the framework.  These MUST NOT be user-definable or user-mintable: they are
+   produced only by the SQL/queue layer (FromDb/FromQueue/FromDeadQueue), the
+   quantifier machinery (ForAll/MaybeForAll/ForAllValues/ForAllKeys), the
+   existential packer (Exists) and the structural id helper (Id).
+   NOTE: this is deliberately distinct from the *stdlib user-predicate* allowlists
+   (IsNonZero/IsSorted/HasKey/…), which ARE user-facing and owned by the declaring
+   Tesl.* module — do not fold those in here. *)
+let framework_proof_predicates : string list =
+  [ "ForAll"; "MaybeForAll"; "ForAllValues"; "ForAllKeys"; "Exists"
+  ; "FromDb"; "FromQueue"; "FromDeadQueue"; "Id" ]
+
+let is_framework_predicate (name : string) : bool =
+  List.mem name framework_proof_predicates
 
 (* ── Lookup helpers ───────────────────────────────────────────────────────── *)
 

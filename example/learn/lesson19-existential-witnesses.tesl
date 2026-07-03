@@ -88,11 +88,24 @@ fn generateToken() -> exists tokenId: String => tokenId: String ::: IsTokenId to
   exists tokenId =>
     validated
 
-fn shouldWork_OnlyMeansAnyStringWithAProofThatSomethingIsATokenId() -> exists tokenId: String => String ::: IsTokenId tokenId
-  requires [sessionCapability] =
-  let tokenId = generatePrefixedId "tok"
-  exists tokenId =>
-    "anyrandomString"
+# ─── REJECTED: packing a value that does NOT carry the declared proof ─────────
+# It is tempting to read `exists tokenId: String => String ::: IsTokenId tokenId`
+# as "there is SOME tokenId, so any string will do".  It does NOT mean that: the
+# packed body must actually CARRY the `IsTokenId` proof.  The function below is
+# rejected by the compiler because `"anyrandomString"` is a bare literal with no
+# proof history:
+#
+#   error[V001]: existential pack body does not carry the declared proof
+#                `IsTokenId tokenId`
+#
+# The fix is exactly what `generateToken` (above) does: validate the value with
+# `check checkTokenId` first, so it genuinely carries the proof before packing.
+#
+# fn packsAnUnprovenString() -> exists tokenId: String => String ::: IsTokenId tokenId
+#   requires [sessionCapability] =
+#   let tokenId = generatePrefixedId "tok"
+#   exists tokenId =>
+#     "anyrandomString"   # ← REJECTED: carries no IsTokenId proof
 
 # ─── Realistic example: create-session handler ────────────────────────────────
 

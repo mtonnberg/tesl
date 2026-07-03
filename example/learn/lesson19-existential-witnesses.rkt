@@ -45,12 +45,6 @@
   #:returns (Exists [tokenId : String] [tokenId : String ::: (IsTokenId tokenId)])
   (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 84 (list) (lambda () (let ([tokenId (generatePrefixedId "tok")]) (let/check ([tesl-checked-0 (checkTokenId tokenId)]) (let ([validated tesl-checked-0]) (pack ([tokenId]) validated)))))))
 
-(define/pow
-  (shouldWork_OnlyMeansAnyStringWithAProofThatSomethingIsATokenId)
-  #:capabilities [sessionCapability]
-  #:returns (Exists [tokenId : String] [_entity : String ::: (IsTokenId tokenId)])
-  (let ([tokenId (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 93 (list) (lambda () (generatePrefixedId "tok")))]) (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 94 (list (cons 'tokenId *tokenId)) (lambda () (pack ([tokenId]) "anyrandomString")))))
-
 (define-record Session
   [id : String]
   [userId : String]
@@ -73,18 +67,18 @@
 (define-auther
   (cookieAuth [request : HttpRequest])
   #:returns (? String _entity ::: (Authenticated _entity))
-  (thsl-src-control! "example/learn/lesson19-existential-witnesses.tesl" 132 (list (cons 'request *request)) (lambda () (let ([tesl-case-1 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 133 (list) (lambda () (reject "not logged in" #:http-code 401)))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 134 (list (cons 'userId userId)) (lambda () (accept (Authenticated userId) #:value *userId))))])))))
+  (thsl-src-control! "example/learn/lesson19-existential-witnesses.tesl" 145 (list (cons 'request *request)) (lambda () (let ([tesl-case-1 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 146 (list) (lambda () (reject "not logged in" #:http-code 401)))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 147 (list (cons 'userId userId)) (lambda () (accept (Authenticated userId) #:value *userId))))])))))
 
 (define-checker
   (checkSessionCreated [session : Session] [sessionId : String] [user : String ::: (Authenticated user)])
   #:returns [session : Session ::: (IsCreatedSession (Id == sessionId) user)]
-  (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 144 (list (cons 'session *session) (cons 'sessionId *sessionId) (cons 'user *user)) (lambda () (if (equal? (raw-value session.id) *sessionId) (accept (IsCreatedSession (Id == sessionId) user) #:value *session) (reject "session id does not match the witness" #:http-code 500)))))
+  (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 157 (list (cons 'session *session) (cons 'sessionId *sessionId) (cons 'user *user)) (lambda () (if (equal? (raw-value session.id) *sessionId) (accept (IsCreatedSession (Id == sessionId) user) #:value *session) (reject "session id does not match the witness" #:http-code 500)))))
 
 (define-handler
   (createSession [user : String ::: (Authenticated user)])
   #:capabilities [sessionCapability]
   #:returns (Exists [sessionId : String] [session : Session ::: (IsCreatedSession (Id == sessionId) user)])
-  (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 153 (list (cons 'user *user)) (lambda () (let ([sessionId (generatePrefixedId "session")]) (let ([session (Session #:id *sessionId #:userId *user #:createdAt (raw-value (tesl_import_Time_posixToSeconds (raw-value (nowMillis)))))]) (let/check ([tesl-checked-2 (checkSessionCreated session sessionId user)]) (let ([verifiedSession tesl-checked-2]) (pack ([sessionId]) verifiedSession))))))))
+  (thsl-src! "example/learn/lesson19-existential-witnesses.tesl" 166 (list (cons 'user *user)) (lambda () (let ([sessionId (generatePrefixedId "session")]) (let ([session (Session #:id *sessionId #:userId *user #:createdAt (raw-value (tesl_import_Time_posixToSeconds (raw-value (nowMillis)))))]) (let/check ([tesl-checked-2 (checkSessionCreated session sessionId user)]) (let ([verifiedSession tesl-checked-2]) (pack ([sessionId]) verifiedSession))))))))
 
 (define SessionServer-sse-routes '())
 (define-api SessionApi

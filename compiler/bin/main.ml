@@ -749,7 +749,12 @@ let check_json_diags filename source =
   (* Import resolution + diagnostic [file] use the logical path; the linter
      still reads the real (temp) file's edited content from disk. *)
   let diags = Compile.check_source (logical_path filename) source in
-  if List.exists (fun (d : Compile.diagnostic) -> d.source = "parser") diags then diags
+  (* Don't lint an unparseable file: on a parser OR lexer error the linter's
+     re-parse is meaningless (and used to crash the JSON entry points — the
+     LSP-crash class).  Linter.lint_file now also swallows parse failures. *)
+  if List.exists (fun (d : Compile.diagnostic) ->
+        d.source = "parser" || d.source = "lexer") diags
+  then diags
   else diags @ Linter.lint_file filename
 
 (** Print a single diagnostic to stderr.
@@ -835,7 +840,14 @@ let () =
   let args = Array.to_list Sys.argv |> List.tl in
   let root_path = find_repo_root () in
 
-  match args with
+  (* Outermost safety net (review LSP-crash class): convert ANY uncaught
+     exception into a clean `error:`/exit-1 instead of the OCaml runtime's
+     "Fatal error: exception …" + exit 2.  The editor/agent drive these entry
+     points with in-progress buffers, so a lexer/parser `Failure` (or a stale
+     partial-function guard) must never crash the process.  `exit` does not raise
+     a catchable exception, so the explicit `exit` calls in each branch are
+     unaffected. *)
+  try (match args with
   (* Handle help commands first *)
   | "--help" :: rest -> handle_help rest
   | "help" :: rest -> handle_help rest
@@ -1442,4 +1454,8 @@ let () =
        end;
        if survived > 0 then exit 1)
 
-  | _ -> print_string usage; exit 1
+  | _ -> print_string usage; exit 1)
+  with
+  | Sys_error msg -> Printf.eprintf "error: %s\n" msg; exit 1
+  | Failure msg   -> Printf.eprintf "error: %s\n" msg; exit 1
+  | e             -> Printf.eprintf "error: %s\n" (Printexc.to_string e); exit 1

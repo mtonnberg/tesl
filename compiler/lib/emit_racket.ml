@@ -3259,12 +3259,11 @@ let collect_proof_names (m : module_form) =
        not (Hashtbl.mem imported n) then
       Hashtbl.replace names n ()
   in
-  (* These are structural keywords, not proof predicates *)
-  let is_reserved_pred = function
-    | "ForAll" | "MaybeForAll" | "Exists"
-    | "FromDb" | "FromQueue" | "FromDeadQueue" | "Id" -> true
-    | _ -> false
-  in
+  (* These are structural keywords, not user proof predicates — single source of
+     truth in Type_system.framework_proof_predicates (review item 6).  Note the
+     historical list here omitted ForAllValues/ForAllKeys; the registry includes
+     them (they are equally structural and must not be registered as user preds). *)
+  let is_reserved_pred = Type_system.is_framework_predicate in
   let rec visit_proof = function
     | PredApp { pred; _ } -> if not (is_reserved_pred pred) then add pred
     | PredAnd { left; right; _ } -> visit_proof left; visit_proof right
@@ -3360,24 +3359,9 @@ let expand_import_names names =
 
 (** Convert PascalCase module name to kebab-case filename.
     E.g., Lesson07Home → lesson07-home *)
-let module_name_to_kebab name =
-  let buf = Buffer.create (String.length name + 4) in
-  String.iteri (fun i c ->
-    if i = 0 then Buffer.add_char buf (Char.lowercase_ascii c)
-    else if c >= 'A' && c <= 'Z' then begin
-      (* Always insert hyphen before uppercase letter *)
-      Buffer.add_char buf '-';
-      Buffer.add_char buf (Char.lowercase_ascii c)
-    end else
-      Buffer.add_char buf c
-  ) name;
-  Buffer.contents buf
-
-let resolve_local_import_path source_file module_name =
-  let dir = Filename.dirname source_file in
-  let kebab_path = Filename.concat dir (module_name_to_kebab module_name ^ ".tesl") in
-  if Sys.file_exists kebab_path then kebab_path
-  else Filename.concat dir (module_name ^ ".tesl")
+(* Review item 3: one canonical resolver in Validation_common (was a copy). *)
+let module_name_to_kebab = Validation_common.module_name_to_kebab
+let resolve_local_import_path = Validation_common.resolve_local_import_path
 
 let cyclic_local_import_table : (string, unit) Hashtbl.t = Hashtbl.create 16
 

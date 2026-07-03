@@ -3,6 +3,12 @@ open Location
 open Validation_common
 open Validation_structural
 
+(* Review item 1/2 (fail-open hardening): non-exhaustive matches are a COMPILE
+   ERROR in this soundness-gating module, so an explicitly-enumerated proof walker
+   fails the build when a NEW `Ast.expr` variant is added — forcing a deliberate
+   fail-closed decision here rather than a silent fall-open. *)
+[@@@ocaml.warning "@8"]
+
 let build_initial_proof_env (params : binding list) : proof_env =
   List.filter_map (fun (b : binding) ->
     match b.proof_ann with
@@ -1853,8 +1859,44 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
                        fn_name (String.concat ", " required_preds))
                    :: !errors
                  end
-               | None -> ())  (* Unknown function (stdlib/imported) — skip conservatively *)
-            | None -> ())
+               | None ->
+                 (* Unknown/stdlib named function at a ForAll return position.  It
+                    is NOT a recognised ForAll-producing combinator (those are
+                    handled above), it is not a SQL select, and we have no
+                    ForAll-carrying return spec for it — so it CANNOT discharge the
+                    pending per-element obligation.  Fail CLOSED (review 2.6):
+                    previously skipped, which let e.g. `List.reverse xs` forge
+                    `ForAll P` that it never establishes. *)
+                 if required_preds <> [] then
+                   let loc = (match e with EApp { loc; _ } -> loc | _ -> gen_loc) in
+                   errors := make_error loc
+                     ~hint:(Printf.sprintf
+                       "route the collection through `List.filterCheck <checkFn>` (or a \
+                        function whose return type declares `ForAll [%s]`) so every element is proven"
+                       (String.concat ", " required_preds))
+                     (Printf.sprintf
+                       "`%s` does not establish `ForAll [%s]`: it is not a recognised \
+                        ForAll-producing combinator (filterCheck/allCheck/emptyForAll) and \
+                        does not declare a `ForAll` return — a plain list transform \
+                        (map/reverse/take/…) carries no per-element proof"
+                       fn_name (String.concat ", " required_preds))
+                     :: !errors)
+            | None ->
+              (* Head is not a simple function name (e.g. call through a field or
+                 lambda) at a ForAll return position — likewise cannot discharge
+                 the obligation.  Fail CLOSED (review 2.6). *)
+              if required_preds <> [] then
+                let loc = (match e with EApp { loc; _ } -> loc | _ -> gen_loc) in
+                errors := make_error loc
+                  ~hint:(Printf.sprintf
+                    "route the collection through `List.filterCheck <checkFn>` so every element satisfies [%s]"
+                    (String.concat ", " required_preds))
+                  (Printf.sprintf
+                    "this expression does not establish `ForAll [%s]` — only \
+                     filterCheck/allCheck/emptyForAll, a SQL select, or a function \
+                     declaring a `ForAll` return can"
+                    (String.concat ", " required_preds))
+                  :: !errors)
          end
        | _ -> ());
       List.iter (walk forall_env None) args
@@ -2183,38 +2225,99 @@ let check_existential_proof_enforcement ?(extra_funcs = []) (decls : top_decl li
       (match fd.return_spec with
        | RetExists _ ->
          (match inner_return_proof_spec fd.return_spec with
-          | Some _ ->
-            (* A non-trivial proof is declared for the inner body.  Flag a pack
-               whose witness has NO demonstrable proof history:
-                 - a raw function parameter (no proof unless annotated), or
-                 - a `let`-bound LOCAL whose bound value is not proof-carrying
-                   (e.g. `let x = generatePrefixedId "tok"` — a plain stdlib call
-                   that attaches no proof).
-               We deliberately do NOT flag: packed literals/expressions that
-               aren't bare identifiers, case-pattern binders, or let-locals whose
-               value looks proof-carrying (check/establish/auth/insert/select/…),
-               keeping the check conservative against false positives. *)
-            let param_names =
-              List.map (fun (b : binding) -> b.name) fd.params
+          | Some declared_proof ->
+            (* The inner body of `exists … => body` MUST carry the proof declared
+               in the return spec.  This mirrors the original three-way structure
+               (raw param / raw local / other), tightened so it no longer fails
+               OPEN on non-identifier bodies (review 2.1/2.2):
+                 - a literal, record literal or plain-function result carries no
+                   proof → rejected;
+                 - a bare local we can RESOLVE to a concrete predicate set that
+                   OMITS the declared predicate is wrong-fact laundering
+                   (e.g. `IsShort` packed as `IsAdmin`) → rejected;
+                 - recognised proof-carriers (EOk / check / select / insert /
+                   attachFact / …) and binders we cannot see here (case-arm
+                   patterns carrying `FromDb`) are accepted, exactly as before.
+               All proof resolution is best-effort and crash-safe. *)
+            let param_names = List.map (fun (b : binding) -> b.name) fd.params in
+            let declared_preds = List.sort_uniq compare (proof_predicates declared_proof) in
+            let body_loc = function
+              | EVar { loc; _ } | ELit { loc; _ } | EField { loc; _ }
+              | EApp { loc; _ } | EBinop { loc; _ } | EUnop { loc; _ }
+              | EIf { loc; _ } | ECase { loc; _ } | ELet { loc; _ }
+              | ELetProof { loc; _ } | ERecord { loc; _ } | EList { loc; _ }
+              | EOk { loc; _ } | EFail { loc; _ } | EConstructor { loc; _ }
+              | ELambda { loc; _ } -> loc
+              | _ -> Location.dummy_loc "existential-pack"
+            in
+            let hint =
+              "validate the packed value with a `check`/`establish` function (or a \
+               proof-carrying DB read) so it carries the declared proof, or attach an \
+               existing proof with `value ::: proofVar`"
+            in
+            (* Best-effort, crash-safe predicate resolution for an expression. *)
+            let resolved_preds e =
+              try
+                let se = build_initial_subject_env fd.params in
+                let pe = build_initial_proof_env fd.params in
+                List.concat_map proof_predicates (proofs_of_expr "_pack" funcs se pe e)
+              with _ -> []
+            in
+            (* True only when we resolved concrete proofs that OMIT a declared one. *)
+            let is_wrong_fact carried =
+              carried <> [] &&
+              not (List.for_all (fun p -> List.mem p carried) declared_preds)
+            in
+            let param_preds name =
+              match List.find_opt (fun (b : binding) -> b.name = name) fd.params with
+              | Some { proof_ann = Some p; _ } -> proof_predicates p
+              | _ -> []
             in
             List.concat_map (fun (body, local_env) ->
               match body with
               | EVar { loc; name } when List.mem name param_names ->
-                [ make_error loc
-                    ~hint:"validate the packed value with a `check` function so it carries the proof, or attach an existing proof with `value ::: proofVar`"
-                    (Printf.sprintf
-                       "existential pack returns the raw parameter `%s` but the declared proof is not demonstrably attached to it; the inner body of `exists ... => body` must carry the proof declared in the return spec"
-                       name) ]
+                (* Raw parameter: OK only if it declares the required proof. *)
+                let pp = param_preds name in
+                if pp <> [] && List.for_all (fun p -> List.mem p pp) declared_preds then []
+                else
+                  [ make_error loc ~hint
+                      (Printf.sprintf
+                         "existential pack returns the raw parameter `%s`; the packed value must \
+                          carry the proof `%s` declared in the return spec"
+                         name (pp_proof declared_proof)) ]
               | EVar { loc; name } ->
                 (match List.assoc_opt name local_env with
-                 | Some value when not (looks_proof_carrying funcs value) ->
-                   [ make_error loc
-                       ~hint:"validate the packed value with a `check` function so it carries the proof, or attach an existing proof with `value ::: proofVar`"
-                       (Printf.sprintf
-                          "existential pack returns the raw local `%s` but the declared proof is not demonstrably attached to it; the inner body of `exists ... => body` must carry the proof declared in the return spec"
-                          name) ]
-                 | _ -> [])
-              | _ -> []
+                 | Some value ->
+                   let carried = resolved_preds value in
+                   if is_wrong_fact carried then
+                     [ make_error loc ~hint
+                         (Printf.sprintf
+                            "existential pack body carries proof(s) `%s` but must carry the proof \
+                             `%s` declared in the return spec"
+                            (String.concat ", " carried) (pp_proof declared_proof)) ]
+                   else if looks_proof_carrying funcs value then []
+                   else
+                     [ make_error loc ~hint
+                         (Printf.sprintf
+                            "existential pack returns the raw local `%s`; the packed value must \
+                             carry the proof `%s` declared in the return spec"
+                            name (pp_proof declared_proof)) ]
+                 | None ->
+                   (* A binder we cannot see here (e.g. a `case … of Something t ->`
+                      pattern binder carrying `FromDb`).  Accept conservatively, as
+                      the original did — the call-site checker guards downstream use. *)
+                   [])
+              | _ ->
+                (* Non-identifier body: accept a recognised proof-carrier
+                   (EOk / check / select / insert / attachFact / …); reject a
+                   literal, record literal or plain-function result. *)
+                if looks_proof_carrying funcs body then []
+                else
+                  [ make_error (body_loc body) ~hint
+                      (Printf.sprintf
+                         "existential pack body must carry the proof `%s` declared in the return \
+                          spec (a literal, record, or plain function result carries no proof)"
+                         (pp_proof declared_proof)) ]
             ) (packed_body_exprs_with_locals fd.body)
           | None -> [])
        | _ -> [])

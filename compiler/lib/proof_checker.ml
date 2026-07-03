@@ -6,6 +6,13 @@
     3. Proof ownership — only check/auth/establish can construct proofs with ok :::
     4. Capability checker — requires [A] must be declared; implies closure checked *)
 
+(* Review item 1/2 (fail-open hardening): non-exhaustive matches are a COMPILE
+   ERROR in this soundness-gating module.  Any walker that enumerates `Ast.expr`
+   variants explicitly (rather than a `| _ ->` catch-all) will then fail the build
+   when a NEW variant is added, forcing a deliberate keep-open/fail-closed
+   decision here instead of silently falling open. *)
+[@@@ocaml.warning "@8"]
+
 open Ast
 open Location
 
@@ -92,23 +99,14 @@ let build_cap_map (decls : top_decl list) : (string * string list) list =
     | _ -> None
   ) decls
 
-let module_name_to_kebab name =
-  let buf = Buffer.create (String.length name + 8) in
-  String.iteri (fun i ch ->
-    if ch = '.' then Buffer.add_char buf '-'
-    else if ch >= 'A' && ch <= 'Z' then begin
-      if i > 0 then Buffer.add_char buf '-';
-      Buffer.add_char buf (Char.lowercase_ascii ch)
-    end else
-      Buffer.add_char buf ch
-  ) name;
-  Buffer.contents buf
-
-let resolve_local_import_path source_file module_name =
-  let dir = Filename.dirname source_file in
-  let kebab_path = Filename.concat dir (module_name_to_kebab module_name ^ ".tesl") in
-  if Sys.file_exists kebab_path then kebab_path
-  else Filename.concat dir (module_name ^ ".tesl")
+(* Review item 3: delegate to the ONE canonical resolver in Validation_common
+   instead of a divergent local copy.  The old local copy converted `.`→`-` and
+   inserted hyphens differently from the checker/emitter copies, so the
+   proof-checker could resolve a DIFFERENT imported file than the code that gets
+   type-checked and emitted (review §6.2).  Sharing the function makes that
+   impossible by construction. *)
+let module_name_to_kebab = Validation_common.module_name_to_kebab
+let resolve_local_import_path = Validation_common.resolve_local_import_path
 
 (** Capabilities exported by each Tesl stdlib module, with their implication
     chains.  References the single source of truth in [Validation_common]
@@ -1004,6 +1002,12 @@ use the named constructor instead: `ok %s { ... } ::: ...`" b.name } :: !errors
             | None -> ());
            ignore value_name;
            check_body body
+         (* Effect-wrapper blocks are tail positions — descend so a cargo proof
+            minted inside `with database`/`transaction`/`with capabilities` is
+            still checked (review 2.7 — previously `| _ -> ()` stopped here). *)
+         | EWithDatabase { body; _ }
+         | EWithCapabilities { body; _ }
+         | EWithTransaction { body; _ } -> check_body body
          | _ -> ()
        in
        check_body fd.body;
@@ -1745,6 +1749,15 @@ supplies the wrong arguments (%s); the body must return the declared fact about 
           | _ -> None
         ) fd.params in
         (* Also check test blocks *)
+        (* NOTE (review item 3): [check_gw] is a SECONDARY, partial ghost-witness
+           walker.  The AUTHORITATIVE, fail-closed check is
+           [Validation_advanced.check_ghost_witness_predicates] (built on
+           [Ast_visitor], so it descends into every construct and cannot fall
+           open on a new AST variant).  This copy is backstopped by that one and
+           is now guarded by the module-level `[@@@ocaml.warning "@8"]` above, so
+           a new variant forces a decision here too.  When changing ghost-witness
+           rules, update the AUTHORITATIVE walker first and keep this one in sync
+           (or fold it into that pass). *)
         let check_test_param_map (test_params : (string * proof_expr) list) e =
           (* fact_names: set of names bound to Fact values (Fact-typed params + detachFact let-bindings) *)
           let init_fact_names = fact_type_params in

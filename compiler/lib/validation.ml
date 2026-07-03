@@ -81,7 +81,10 @@ let check_module (m : module_form) : validation_error list =
   @ (TProof @: check_forall_consistency ~facts decls)
   @ (TProof @: check_fact_arg_types decls)
   @ (TProof @: check_exists_bindings decls)
-  @ (TProof @: check_existential_proof_enforcement decls)
+  (* review 2.1: now given imported_funcs so an existential pack of an IMPORTED
+     proof-returning function (e.g. `insertCommentBody … ? FromDb`) is recognised
+     as proof-carrying rather than falsely rejected. *)
+  @ (TProof @: check_existential_proof_enforcement ~extra_funcs:imported_funcs decls)
   @ (TNaming @: check_case_exhaustiveness ~extra_ctors:(load_imported_ctor_info m) decls)
   @ (TNaming @: check_name_shadowing m)
   (* S5b: the reserved-generated-name check was retired — every emitter temp is now

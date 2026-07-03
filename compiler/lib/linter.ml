@@ -1310,18 +1310,28 @@ let lint_file (filename : string) : Compile.diagnostic list =
   in
   let lines = Array.of_list (String.split_on_char '\n' src) in
   let out = ref [] in
-  lint_file_structure    filename lines out;
-  lint_whitespace        filename lines out;
-  lint_naming            filename lines out;
-  lint_deprecated_syntax filename lines out;
-  lint_adt_footgun             filename lines out;
-  lint_lambda_in_arg_position  filename lines out;
-  lint_unused_imports          filename src out;
-  lint_unused_locals_and_dead_code filename src out;
-  lint_missing_email_worker    filename src out;
-  lint_unexported_signature_names filename src out;
-  lint_bare_print                 filename src out;
-  lint_int_at_wire                filename src out;
+  (* Several passes re-parse the source; on a lexer/parser-fatal buffer (a lone
+     backslash, an unterminated string, a stray non-ASCII byte — all common while
+     editing) `Parser.parse_module` raises `Failure`.  The editor/agent-facing
+     JSON entry points call this function, so an escaping exception crashed the
+     whole request (review LSP-crash class).  Swallow parse/lexer failures here:
+     linting an unparseable file is meaningless, and the parse error itself is
+     already reported by `Compile.check_source`.  Any findings accumulated by the
+     line-based passes before the failure are still returned. *)
+  (try
+    lint_file_structure    filename lines out;
+    lint_whitespace        filename lines out;
+    lint_naming            filename lines out;
+    lint_deprecated_syntax filename lines out;
+    lint_adt_footgun             filename lines out;
+    lint_lambda_in_arg_position  filename lines out;
+    lint_unused_imports          filename src out;
+    lint_unused_locals_and_dead_code filename src out;
+    lint_missing_email_worker    filename src out;
+    lint_unexported_signature_names filename src out;
+    lint_bare_print                 filename src out;
+    lint_int_at_wire                filename src out
+   with Failure _ -> ());
   (* Sort by line then col *)
   let sorted = List.sort (fun a b ->
     let c = compare a.line b.line in

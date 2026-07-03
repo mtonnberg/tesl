@@ -270,7 +270,9 @@ let raw_extra_cases =
    only a literal function parameter.  Packing such a local where the return spec
    declares a non-trivial proof is correctly rejected. *)
 let pack_local_gap () =
-  should_fail "not demonstrably attached"
+  (* Review 2.1: message widened to the shared raw_re family
+     ("must carry the proof" / "does not…satisfy"). *)
+  should_fail raw_re
     (tok_lib "RawGap01" ^ {|
 fn bad() -> exists t: String => String ::: IsTok t
   requires [random] =
@@ -379,8 +381,12 @@ fn createSession(user: String) -> exists sessionId: String => session: Session :
 
 (* exists whose return spec carries a trivial body type (no proof) — packing any
    string is allowed because nothing is claimed. *)
+(* Review 2.1/2.7: packing a bare LITERAL string while declaring `IsTok t` is a
+   FORGERY — the literal carries no proof.  This used to be accepted (the
+   existential fail-open); it is now correctly REJECTED.  (Was mistakenly a
+   should_pass "trivial-proof pack any string" — it encoded the fail-open hole.) *)
 let pos_trivial_proof () =
-  should_pass (hdr "PosH04" ^ {|
+  should_fail raw_re (hdr "PosH04" ^ {|
 import Tesl.Id exposing [generatePrefixedId]
 import Tesl.Random exposing [random]
 fact IsTok (s: String)
@@ -548,7 +554,7 @@ let () =
       test_case "POS check-validated pack" `Quick pos_check_pack;
       test_case "POS insert FromDb pack" `Quick pos_insert_pack;
       test_case "POS structural (Id == w) pack" `Quick pos_structural_pack;
-      test_case "POS trivial-proof pack any string" `Quick pos_trivial_proof;
+      test_case "REJECT trivial-proof pack any string (review 2.1/2.7)" `Quick pos_trivial_proof;
       test_case "POS select-existential pack" `Quick pos_select_existential;
       test_case "POS handler existential" `Quick pos_handler_existential;
       test_case "POS attachFact-reattached pack" `Quick pos_attachfact_pack;

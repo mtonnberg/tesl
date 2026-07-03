@@ -2338,23 +2338,9 @@ let starts_with ~prefix s =
 let is_tesl_stdlib_module_name name =
   starts_with ~prefix:"Tesl." name
 
-let module_name_to_kebab name =
-  let buf = Buffer.create (String.length name + 4) in
-  String.iteri (fun i c ->
-    if i = 0 then Buffer.add_char buf (Char.lowercase_ascii c)
-    else if c >= 'A' && c <= 'Z' then begin
-      Buffer.add_char buf '-';
-      Buffer.add_char buf (Char.lowercase_ascii c)
-    end else
-      Buffer.add_char buf c
-  ) name;
-  Buffer.contents buf
-
-let resolve_local_import_path source_file module_name =
-  let dir = Filename.dirname source_file in
-  let kebab_path = Filename.concat dir (module_name_to_kebab module_name ^ ".tesl") in
-  if Sys.file_exists kebab_path then kebab_path
-  else Filename.concat dir (module_name ^ ".tesl")
+(* Review item 3: one canonical resolver in Validation_common (was a copy). *)
+let module_name_to_kebab = Validation_common.module_name_to_kebab
+let resolve_local_import_path = Validation_common.resolve_local_import_path
 
 let strip_dotdot raw_name =
   let n = String.length raw_name in

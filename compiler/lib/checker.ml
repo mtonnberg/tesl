@@ -555,17 +555,8 @@ let collect_func_kinds (decls : top_decl list) : (string * func_kind) list =
     | _ -> None
   ) decls
 
-let module_name_to_kebab name =
-  let buf = Buffer.create (String.length name + 4) in
-  String.iteri (fun i c ->
-    if i = 0 then Buffer.add_char buf (Char.lowercase_ascii c)
-    else if c >= 'A' && c <= 'Z' then begin
-      Buffer.add_char buf '-';
-      Buffer.add_char buf (Char.lowercase_ascii c)
-    end else
-      Buffer.add_char buf c
-  ) name;
-  Buffer.contents buf
+(* Review item 3: one canonical resolver in Validation_common (was a copy). *)
+let module_name_to_kebab = Validation_common.module_name_to_kebab
 
 (* ── Lifted-stdlib source resolution (type source of truth) ───────────────────
    A small subset of the [Tesl.*] standard library has its TYPES lifted out of
@@ -630,11 +621,7 @@ let lifted_stdlib_source_path (module_name : string) : string option =
     ] in
     List.find_opt Sys.file_exists candidates
 
-let resolve_local_import_path source_file module_name =
-  let dir = Filename.dirname source_file in
-  let kebab_path = Filename.concat dir (module_name_to_kebab module_name ^ ".tesl") in
-  if Sys.file_exists kebab_path then kebab_path
-  else Filename.concat dir (module_name ^ ".tesl")
+let resolve_local_import_path = Validation_common.resolve_local_import_path
 
 (* ── Imported-module parse cache (WS4: batch / per-file amortization) ──────
    A single [check_module_*] run reads + re-parses each locally-imported
@@ -1632,40 +1619,70 @@ let rec infer_expr ctx (e : expr) : ty =
                    "type `%s` has no field `%s`" type_name field);
                  fresh ()
                               | None ->
-                  (* Not a user-defined record.  We distinguish three sub-cases:
-                     1. Newtype (.value accessor) - allowed, returns base type.
-                     2. Primitive or user ADT     - definitely no fields, emit error.
-                     3. Opaque / stdlib type      - we have no field map but the
-                        emitter may handle it (e.g. HttpRequest.cookies); stay silent. *)
+                  (* Not a user-defined record.  Sub-cases:
+                     1. Newtype — only `.value` is valid (unwraps to base type);
+                        any other field is an error (review 2.4).
+                     2. Primitive / user ADT — no fields, error.
+                     3. Opaque stdlib type (HttpRequest/HttpResponse) — the emitter
+                        handles a FIXED special-field set; any OTHER field is an
+                        error.  Previously ANY field returned a wildcard `fresh ()`
+                        that unified with any type — a T_ANY back door (review 2.4). *)
                   let is_primitive = match type_name with
                     | "Int" | "Integer" | "String" | "Bool" | "Float"
                     | "Real" | "Unit" -> true
                     | _ -> false
                   in
                   let is_user_adt = List.mem_assoc type_name ctx.adts in
-                  if field = "value" then
-                    (match List.assoc_opt type_name ctx.ctors with
-                     | Some (ctor_type_name, ctor_sch) when ctor_type_name = type_name ->
-                       (* Newtype: .value unwraps to the base type *)
-                       (match instantiate ctor_sch with
-                        | TFun (base_ty, _) -> base_ty
-                        | _ -> fresh ())
-                     | _ when is_primitive || is_user_adt ->
+                  let newtype_base =
+                    match List.assoc_opt type_name ctx.ctors with
+                    | Some (ctor_type_name, ctor_sch) when ctor_type_name = type_name ->
+                      (match instantiate ctor_sch with
+                       | TFun (base_ty, _) -> Some base_ty
+                       | _ -> Some (fresh ()))
+                    | _ -> None
+                  in
+                  let no_such_field () =
+                    add_error ctx loc (Printf.sprintf
+                      "type `%s` has no field `%s`" type_name field);
+                    fresh ()
+                  in
+                  (match newtype_base with
+                   | Some base ->
+                     (* Newtype: `.value` unwraps; no other field exists. *)
+                     if field = "value" then base else no_such_field ()
+                   | None ->
+                     if is_primitive || is_user_adt then begin
                        add_error ctx loc (Printf.sprintf
                          "cannot access field `%s` on a value of type `%s` \
                           (not a record type)"
                          field (pp_ty obj_ty_resolved));
                        fresh ()
-                     | _ -> fresh ())
-                  else if is_primitive || is_user_adt then begin
-                    add_error ctx loc (Printf.sprintf
-                      "cannot access field `%s` on a value of type `%s` \
-                       (not a record type)"
-                      field (pp_ty obj_ty_resolved));
-                    fresh ()
-                  end else
-                    (* Opaque stdlib type (e.g. HttpRequest) - defer to emitter *)
-                    fresh ())
+                     end else begin
+                       (* Only the KNOWN opaque stdlib types have a fixed,
+                          checker-side field set (the emitter's special fields).
+                          For those, error on any other field (review 2.4 — this
+                          closes the `HttpResponse.bogusField` T_ANY hole).  For
+                          ANY OTHER unresolved type — an imported entity/record
+                          (`KanelUser`, `OrgMembership`) or a qualified cross-module
+                          record (`Sandbox3.ARecord2`) whose fields we cannot
+                          resolve here — keep the permissive fallback rather than
+                          risk a false "no field" on a real record field. *)
+                       let is_known_opaque = match type_name with
+                         | "HttpRequest" | "HttpResponse"
+                         | "JwtToken" | "JwtSecret"
+                         | "Agent" | "AgentReply" | "LlmProvider"
+                         | "Conversation" | "ConversationTurn"
+                         | "Tool" | "ToolStep" -> true
+                         | _ -> false
+                       in
+                       if not is_known_opaque then fresh ()
+                       else
+                         (match field with
+                          | "value" | "cookies" | "headers" | "queryParameters"
+                          | "body" | "path" | "method_" | "method" | "status" ->
+                            fresh ()
+                          | _ -> no_such_field ())
+                     end))
             | _ ->
               add_error ctx loc (Printf.sprintf
                 "cannot access field `%s` on a value of type `%s` \
