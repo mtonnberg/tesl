@@ -302,6 +302,11 @@
               fi
             fi
 
+            # CI: skip the convenience PostgreSQL. Its PGDATA would sit in the
+            # read-only Nix store, and exporting TESL_POSTGRES_* hijacks ci.sh
+            # into reusing that fragile cluster instead of managing its own temp
+            # cluster. Interactive dev shells (CI unset) keep it.
+            if [ -z "''${CI:-}" ]; then
             export TESL_POSTGRES_HOST="127.0.0.1"
             export TESL_POSTGRES_PORT="55432"
             export TESL_POSTGRES_USER="tesl"
@@ -332,6 +337,7 @@
             echo "[postgres] Shared cluster ready at 127.0.0.1:55432 (user: tesl)"
             echo "[postgres] Databases: todo-api  admin-task-api  chat"
             echo "[postgres] Run: TESL_POSTGRES_DATABASE=todo-api tesl watch example/todo-api.tesl"
+            fi
           '';
         };
       }
