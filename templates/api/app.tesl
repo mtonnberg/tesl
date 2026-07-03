@@ -131,7 +131,7 @@ capturer todoIdCapture: String ::: TodoId todoId using stringCodec via isTodoId
 fn seedExampleData() -> Int
   requires [appDbRead, appDbWrite, time] =
   if List.isEmpty (select todo from Todo) then
-    insert Todo { id: "todo-1", title: "Read the Tesl tutorial", ownerId: "demo", status: Open, createdAt: nowMillis() }
+    insert Todo { id: "todo-1", title: "Read the Tesl tutorial", ownerId: UserId "demo", status: Open, createdAt: nowMillis() }
     1
   else
     0
