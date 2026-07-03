@@ -661,6 +661,34 @@ let check_duplicate_top_level_names (decls : top_decl list) : validation_error l
   ) decls;
   List.rev !errors
 
+(* ── Reserved framework-predicate names (2026-07-03 hole #8) ─────────────────
+   The provenance / quantifier predicates (FromDb, FromQueue, FromDeadQueue,
+   ForAll, MaybeForAll, ForAllValues, ForAllKeys, Exists, Id) are minted ONLY by
+   the framework — the SQL layer (FromDb/Id), the queue layer (FromQueue/
+   FromDeadQueue), and the `?`/`ForAll` return-spec machinery.  Their soundness
+   depends on that exclusivity: a value carrying `FromDb (Id == x)` is trusted to
+   have actually come from the DB by that key.  A user `fact FromDb (…)`
+   re-declared the name and let a check/auth/establish MINT it from thin air onto
+   a fabricated value, forging DB provenance.  The reservation was previously
+   enforced only in the emitter (runtime-name registration), never at
+   declaration, so the checker accepted the re-declaration.  Reserve the names
+   here, at the single point every fact declaration passes through. *)
+let check_reserved_predicate_names (decls : top_decl list) : validation_error list =
+  List.filter_map (function
+    | DFact ff when Type_system.is_framework_predicate ff.name ->
+      Some (make_error ff.loc
+        ~hint:(Printf.sprintf
+          "`%s` is a built-in framework predicate; pick a different name for your own \
+           fact (e.g. `%sChecked`)" ff.name ff.name)
+        (Printf.sprintf
+          "`fact %s` re-declares the reserved framework predicate `%s`; provenance and \
+           quantifier predicates (FromDb, FromQueue, FromDeadQueue, ForAll, Exists, Id, …) \
+           are minted only by the framework and may not be user-defined — allowing it would \
+           let their provenance guarantee be forged"
+          ff.name ff.name))
+    | _ -> None
+  ) decls
+
 (* ── Duplicate ADT constructors within a single ADT ────────────────────── *)
 
 let check_duplicate_adt_constructors (decls : top_decl list) : validation_error list =

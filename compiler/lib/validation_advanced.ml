@@ -18,7 +18,17 @@ let build_record_field_bindings (decls : top_decl list)
      be rejected for either. *)
   let annotated_fields (name : string) (fields : field_def list) =
     let annotated = List.filter_map (fun (f : field_def) ->
-      match f.proof_ann with
+      (* 2026-07-03 hole #4: a field's proof obligation may be written either as
+         `field: T ::: P field` (proof_ann) OR as `field: Fact (P)` (the proof in
+         the TYPE).  Collecting only proof_ann let a `Fact (B)`-typed field accept
+         a value carrying a DIFFERENT fact (or none) at construction — punning any
+         fact into any predicate, even predicates with no producing check/auth/
+         establish anywhere.  Derive the obligation from BOTH forms. *)
+      let eff_proof = match f.proof_ann with
+        | Some proof -> Some proof
+        | None -> proof_of_fact_type f.type_expr
+      in
+      match eff_proof with
       | None -> None
       | Some proof ->
         Some { name = f.name; type_expr = f.type_expr;
@@ -42,14 +52,19 @@ let build_record_field_bindings (decls : top_decl list)
     constructors with at least one proof-annotated field are included. *)
 let build_adt_ctor_field_bindings (decls : top_decl list)
     : (string * binding list) list =
+  (* 2026-07-03 hole #4: also treat `field: Fact (P)` (proof in the TYPE) as an
+     obligation, not just `field ::: P field` (proof_ann) — mirror of the record
+     path above. *)
+  let eff_proof (f : field_def) =
+    match f.proof_ann with Some p -> Some p | None -> proof_of_fact_type f.type_expr in
   List.concat_map (function
     | DType (TypeAdt { variants; _ }) ->
       List.filter_map (fun (v : adt_variant) ->
-        if not (List.exists (fun (f : field_def) -> f.proof_ann <> None) v.fields)
+        if not (List.exists (fun (f : field_def) -> eff_proof f <> None) v.fields)
         then None
         else Some (v.ctor,
           List.map (fun (f : field_def) ->
-            { name = f.name; type_expr = f.type_expr; proof_ann = f.proof_ann; loc = f.loc })
+            { name = f.name; type_expr = f.type_expr; proof_ann = eff_proof f; loc = f.loc })
             v.fields)
       ) variants
     | _ -> []
@@ -1259,8 +1274,81 @@ let check_fn_return_proof_annotations
             in
             walk type_env0 subject_env0 proof_env0 fd.body
           | _ -> ())
+       (* Review 2026-07-03 fix (hole #1, mint-outside-boundary): a `-> Fact (P x)`
+          return parses to RetPlain{ty=Fact(P x)} and was previously in the
+          NO-obligation bucket below ("RetPlain: no proof"), letting a plain fn /
+          handler / worker / deadWorker MINT an arbitrary detached fact for a
+          value that never crossed a validation boundary — the exact bypass §7.12
+          claims is closed.  We now hold RetPlain-Fact to the SAME body-carries-
+          the-proof rule as RetAttached.  Because RetPlain has no return binder,
+          the fact's declared subject is fixed (a param name / literal), so no
+          binder-rename is applied: a body that proves `IsPositive 7` cannot
+          satisfy a declared `-> Fact (IsPositive _n)` — this also closes the
+          subject-launder (hole #2). check/auth/establish are excluded by the
+          outer is_forgery_restricted_kind guard, so they may still mint. *)
+       | RetPlain { ty; loc = ret_loc }
+         when (match proof_of_fact_type ty with Some _ -> true | None -> false) ->
+         let required_proof = match proof_of_fact_type ty with
+           | Some p -> p | None -> PredApp { pred = ""; args = []; loc = ret_loc } in
+         let required_pred = match required_proof with
+           | PredApp { pred; _ } -> Some pred | PredAnd _ -> None in
+         let user_fn_names =
+           List.filter_map (function DFunc d -> Some d.name | _ -> None) decls in
+         let is_stdlib_auto = match required_pred with
+           | Some "FromDb" -> return_value_flows_from_db_site ~shadowed:user_fn_names fd.body
+           | Some ("FromQueue" | "FromDeadQueue") -> false
+           | Some p -> List.mem p stdlib_auto_preds
+           | None -> false in
+         let subject_env = build_initial_subject_env fd.params in
+         let proof_env = build_initial_proof_env fd.params in
+         let type_env0 = List.map (fun (p : binding) -> (p.name, p.type_expr)) fd.params in
+         let rec body_carries type_env subject_env proof_env (e : expr) : bool =
+           match e with
+           | ELet { name; value; body; _ } ->
+             let te, se, pe = extend_let_envs type_env subject_env proof_env name value in
+             body_carries te se pe body
+           | ELetProof { value_name; proof_name; value; body; _ } ->
+             let te, se, pe = extend_let_envs type_env subject_env proof_env value_name value in
+             let pe = let ps = proofs_of_expr value_name funcs se pe value in
+               if ps = [] then pe else (proof_name, ps) :: pe in
+             body_carries te se pe body
+           | EIf { then_; else_; _ } ->
+             body_carries type_env subject_env proof_env then_
+             && body_carries type_env subject_env proof_env else_
+           | ECase { scrut; arms; _ } ->
+             let scrut_ty = infer_expr_type type_env funcs fields_by_type ctors scrut in
+             let scrut_proofs = proofs_of_expr "_" funcs subject_env proof_env scrut in
+             arms <> [] && List.for_all (fun (arm : case_arm) ->
+               let te = pattern_bindings scrut_ty ctors arm.pattern @ type_env in
+               let pe, se = extend_case_envs subject_env proof_env scrut scrut_proofs arm.pattern in
+               body_carries te se pe arm.body) arms
+           | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+           | EWithTransaction { body; _ } -> body_carries type_env subject_env proof_env body
+           | EFail _ -> true
+           | _ ->
+             let result_subject = match subject_of_expr subject_env e with
+               | Some s -> s | None -> "_" in
+             let carried = proofs_of_expr result_subject funcs subject_env proof_env e in
+             proof_matches required_proof carried
+         in
+         if not is_stdlib_auto
+            && not (body_carries type_env0 subject_env proof_env fd.body) then begin
+           let kw = match fd.kind with
+             | HandlerKind -> "handler" | WorkerKind -> "worker"
+             | DeadWorkerKind -> "deadworker" | MainKind -> "main" | _ -> "fn" in
+           errors := make_error ret_loc
+             ~hint:(Printf.sprintf
+               "receive that `Fact (...)` on an input parameter, or validate the value \
+                with a `check`/`auth`/`establish`; a `%s` cannot introduce a fresh proof" kw)
+             (Printf.sprintf
+               "%s `%s` cannot declare a `-> Fact (%s)` return unless that proof was \
+                received on an input parameter; only `check`/`auth`/`establish` may \
+                introduce a fresh proof"
+               kw fd.name (pp_proof required_proof))
+           :: !errors
+         end
        (* All remaining return specs carry no forgery obligation in THIS gate:
-            - RetPlain: no proof.
+            - RetPlain (non-Fact): no proof (the Fact case is handled just above).
             - RetForAll / RetMaybeForAll / RetSetForAll / RetMaybeSetForAll /
               RetForAllDictValues / RetForAllDictKeys: validated by
               Validation_proof.check_forall_consistency.

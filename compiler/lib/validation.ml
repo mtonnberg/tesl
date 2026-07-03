@@ -95,8 +95,16 @@ let check_module (m : module_form) : validation_error list =
   @ (TDatabase @: check_pk_match decls)
   @ (TDatabase @: check_insert_pk_match decls)
   @ (TDatabase @: check_nonexist_named_pack_insert decls)
+  (* Fail-closed provenance-spelling gate (2026-07-03 hole #7): reject any
+     FromDb/FromQueue/FromDeadQueue return-spec predicate not written as the
+     checkable `(Column == subject)` form, so the dataflow verifiers above can
+     never be silently bypassed by a non-canonical spelling. *)
+  @ (TDatabase @: check_provenance_spelling decls)
   @ (TStructural @: check_cookies_field_access decls)
   @ (TNaming @: check_adt_variant_names decls)
+  (* 2026-07-03 hole #8: reject `fact FromDb`/`fact ForAll`/… re-declarations of
+     reserved framework provenance/quantifier predicates. *)
+  @ (TNaming @: check_reserved_predicate_names decls)
   @ (TNaming @: check_self_referential_aliases decls)
   @ (TNaming @: check_type_arities decls)
   (* Ord/Eq operand decidability is now driven from HM-resolved types at the

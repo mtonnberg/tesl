@@ -1415,7 +1415,7 @@ The standard library uses `Either`, `Maybe`, and `Result` as parameterized ADTs.
 
 Type aliases are **nominal newtypes**, not transparent aliases. `type UserId = String` creates a distinct runtime type. A value of type `String` cannot be passed where `UserId` is expected; the two types are incompatible even though both wrap `String`.
 
-**Database auto-mapping**: newtypes that wrap a built-in DB type inherit its column type automatically. For example, `PosixMillis` wraps `Integer` which maps to `BIGINT`, so `createdAt: PosixMillis` needs no `@db` annotation. Any user-defined newtype wrapping a built-in type benefits from the same rule.
+**Database auto-mapping**: newtypes that wrap a built-in DB type inherit that base type's column mapping automatically, so no `@db` annotation is needed. For example, `type UserId = String` maps to `TEXT`, and a newtype over `Int` maps to `NUMERIC` (the same as a bare `Int` — a plain integer column is one consistent type; see §11.8). The one built-in exception is `PosixMillis` (`type PosixMillis = Int`), which is a distinct 64-bit millis-timestamp type and maps to compact `BIGINT` rather than `NUMERIC`, so `createdAt: PosixMillis` gets a `BIGINT` column with no annotation.
 
 To construct a newtype value, call the type name as a constructor:
 ```tesl
@@ -1596,7 +1596,7 @@ The compiler enforces that:
 
 Entity field proof annotations are intentionally restricted. They must be simple single-field facts of the form `ProofName field`. Entity fields do not currently support `via` checkers.
 
-**`Maybe T` fields.** An entity field declared as `Maybe T` maps to a nullable SQL column of the underlying type. At runtime `Nothing` ↔ SQL `NULL` and `Something v` ↔ the column value. The `@db(...)` annotation applies to the inner type `T` as usual.
+**`Maybe T` fields.** An entity field declared as `Maybe T` maps to a **nullable** SQL column whose type is the same column type `T` maps to on its own (so `Maybe <ADT>` is a nullable `JSONB`, exactly like a bare `<ADT>` is a `NOT NULL` `JSONB` — the two differ only in nullability, never in column type). At runtime `Nothing` ↔ SQL `NULL` and `Something v` ↔ the column value. The `@db(...)` annotation applies to the inner type `T` as usual.
 
 ```tesl
 entity Issue table "kanel_issues" primaryKey id {
@@ -1613,11 +1613,20 @@ In queries, `Maybe` fields require a `case` expression or the `isAssignedTo` / h
 | Tesl field type | SQL column type | Nullable? |
 |---|---|---|
 | `String` | `TEXT` | NOT NULL |
-| `Int` | `BIGINT` | NOT NULL |
+| `Int` | `NUMERIC` | NOT NULL |
+| `Int32` | `INTEGER` (int4) | NOT NULL |
 | `Bool` | `BOOLEAN` | NOT NULL |
+| `Float` / `Real` | `DOUBLE PRECISION` | NOT NULL |
+| `Bytes` | `BYTEA` | NOT NULL |
 | `PosixMillis` | `BIGINT` | NOT NULL |
+| newtype over `Int` (e.g. `newtype Counter = Int`) | `NUMERIC` (same as bare `Int`) | NOT NULL |
+| newtype over another built-in (e.g. `newtype UserId = String`) | column type of the base | NOT NULL |
 | Any ADT | `JSONB` | NOT NULL |
-| `Maybe T` | column type of `T` | NULL |
+| `Maybe T` | column type of `T` (e.g. `Maybe Int` → `NUMERIC`, `Maybe <ADT>` → `JSONB`) | NULL |
+
+`Int` maps to `NUMERIC`, **not** `BIGINT`: `Int` is arbitrary-precision (unbounded), and `NUMERIC` stores any magnitude losslessly, so an `Int` of any size round-trips through the database with no truncation (NT-07). A newtype *over* `Int` maps to the same `NUMERIC` — a plain integer column is one consistent type regardless of whether it is a bare `Int` or a nominal newtype. `PosixMillis` is the one deliberate exception: it is a distinct 64-bit millis-timestamp type and maps to compact `BIGINT`. For a bounded integer column that must fit a JavaScript number (< 2^53) or a compact `int4`, use `Int32` (`INTEGER`); a linter warning steers wire/storage `Int` fields toward `Int32`. To store any of these under a different SQL type, use an explicit `@db(...)` annotation.
+
+**NULL comparison semantics.** Comparisons follow PostgreSQL three-valued logic on both the Postgres backend and the in-memory (test) backend, so tests are faithful to production. A comparison involving `NULL` (a `Nothing` / absent `Maybe` value) is `UNKNOWN`, and a `where` row is kept only when its predicate is `TRUE` — an `UNKNOWN` result excludes the row. In particular `field == x`, `field != x`, ordered comparisons (`<`, `<=`, `>`, `>=`), `in`, `not in`, and `like`/`ilike` all **exclude** a row whose `field` is `NULL` (even `NULL == NULL` is not a match). Use the explicit null tests to inspect `NULL`-ness: only `field` being null (`IS NULL`) / not-null (`IS NOT NULL`) yield `TRUE`/`FALSE` on a `NULL` value.
 
 ### 11.9 Databases
 **Accepted design, Implemented.**

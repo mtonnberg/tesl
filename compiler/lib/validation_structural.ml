@@ -1351,7 +1351,41 @@ let check_server_handler_binding
               "server '%s': handler '%s' expects an auth-proof parameter \
                but endpoint '%s' declares no `auth` clause"
               sv.name handler_name endpoint_name)
-            :: !errors
+            :: !errors;
+        (* 2026-07-03 hole #10: the router binds handler arguments STRICTLY
+           POSITIONALLY — the authenticated value first, then path captures in
+           order, then the body (dsl/web.rkt invoke-handler).  The checks above
+           verify the auth proof is PRESENT but not that it occupies slot 0, so a
+           handler that declares its auth-proof parameter anywhere but first has
+           the authenticated principal bound to an attacker-controlled body/
+           capture value at runtime (the auth proof then describes the wrong
+           subject).  Require the auth-proof parameter to be first.  (Auth is
+           identified by its PROOF, not its name, and there is exactly one auth
+           slot, so this is unambiguous — unlike capture ordering, which is
+           tracked separately in roadmap/next.) *)
+        (if ep_needs_auth && handler_has_auth then begin
+           let first_is_auth = match handler_params with
+             | b0 :: _ ->
+               (match b0.proof_ann with
+                | Some p -> List.exists (fun pred -> List.mem pred auth_preds) (proof_predicates p)
+                | None -> false)
+             | [] -> false
+           in
+           if not first_is_auth then
+             errors := make_error handler_loc
+               ~hint:(Printf.sprintf
+                 "make the auth-proof parameter the FIRST parameter of handler '%s'; \
+                  the router binds the authenticated value to parameter 1, then path \
+                  captures, then the body — by position, not by name"
+                 handler_name)
+               (Printf.sprintf
+                 "server '%s': endpoint '%s' authenticates via `auth`, but the auth-proof \
+                  parameter of handler '%s' is not first; arguments are bound positionally \
+                  (auth, then captures, then body), so the authenticated principal would be \
+                  bound to a capture/body value instead — an auth-integrity risk"
+                 sv.name endpoint_name handler_name)
+             :: !errors
+         end)
     end;
     (* Capture/body proof reconciliation (mirror the auth reconciliation above):
        a handler parameter that REQUIRES a proof `P x` must have that proof supplied

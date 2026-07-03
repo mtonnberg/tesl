@@ -429,3 +429,101 @@
  "inner-join combined with where: active users with profiles")
 
 )  ;; end with-capabilities
+
+;; ---------------------------------------------------------------------------
+;; Type mapping / SQL fidelity regressions (formal review §7)
+;; ---------------------------------------------------------------------------
+
+;; A user-defined newtype over Int and over String, plus an ADT, to exercise the
+;; column-type mapping directly via the (test-only) column-definition-sql export.
+(define-adt MapColor [MRed] [MGreen])
+(define-newtype MapCounter Integer)   ; newtype over Int — NOT a timestamp
+(define-newtype MapUserId String)
+
+(define-entity MappingSample
+  #:primary-key id
+  [Id id : Integer]
+  [BareInt n : Integer]
+  [Cnt c : MapCounter]
+  [Uid u : MapUserId]
+  [Col col : MapColor]
+  [MCol mcol : (Maybe MapColor)]
+  [MInt mint : (Maybe Integer)]
+  [MCnt mcnt : (Maybe MapCounter)]
+  [MStr ms : (Maybe String)])
+
+(define (field-ddl key)
+  (column-definition-sql
+   (findf (lambda (f) (eq? (field-spec-key f) key))
+          (entity-spec-fields MappingSample))))
+
+;; Finding #2: bare Int and a newtype-over-Int map to the SAME column type (NUMERIC),
+;; not the old asymmetric BIGINT — a plain integer column is one consistent type.
+(check-equal? (field-ddl 'n) "\"n\" NUMERIC NOT NULL"
+              "bare Int -> NUMERIC")
+(check-equal? (field-ddl 'c) "\"c\" NUMERIC NOT NULL"
+              "newtype-over-Int -> NUMERIC (consistent with bare Int)")
+(check-equal? (field-ddl 'mint) "\"mint\" NUMERIC"
+              "Maybe Int -> nullable NUMERIC")
+(check-equal? (field-ddl 'mcnt) "\"mcnt\" NUMERIC"
+              "Maybe newtype-over-Int -> nullable NUMERIC")
+
+;; Finding #1: Maybe <ADT> maps to a nullable JSONB, mirroring bare <ADT> -> JSONB
+;; (previously it silently fell through to TEXT).
+(check-equal? (field-ddl 'col) "\"col\" JSONB NOT NULL"
+              "bare ADT -> JSONB NOT NULL")
+(check-equal? (field-ddl 'mcol) "\"mcol\" JSONB"
+              "Maybe ADT -> nullable JSONB (matches bare ADT column type)")
+
+;; String / newtype-over-String stay TEXT.
+(check-equal? (field-ddl 'u) "\"u\" TEXT NOT NULL"
+              "newtype-over-String -> TEXT")
+(check-equal? (field-ddl 'ms) "\"ms\" TEXT"
+              "Maybe String -> nullable TEXT")
+
+;; Finding #4: the in-memory backend follows PostgreSQL three-valued logic for NULL.
+;; A NULL (Nothing) row value makes ==, !=, ordered comparisons, in/not-in and
+;; like/ilike UNKNOWN, which excludes the row; only IS NULL / IS NOT NULL inspect it.
+(define null-rows (make-parameter (make-hash)))
+(define-entity NullWidget
+  #:source (lambda () (null-rows))
+  #:primary-key id
+  [Id id : Integer]
+  [Nickname nickname : (Maybe String)]
+  [Score score : (Maybe Integer)])
+
+(null-rows
+ (make-hash
+  (list (cons 1 (hash 'id 1 'nickname (Something "alice") 'score (Something 10)))
+        (cons 2 (hash 'id 2 'nickname Nothing            'score Nothing))
+        (cons 3 (hash 'id 3 'nickname (Something "bob")  'score (Something 3))))))
+
+(define nw-nick (entity-field-ref NullWidget 'nickname))
+(define nw-score (entity-field-ref NullWidget 'score))
+
+(define (nw-ids . clauses)
+  (sort (map (lambda (r) (hash-ref (raw-value r) 'id))
+             (apply select-many (from NullWidget) clauses))
+        <))
+
+(with-capabilities (db-read)
+  (check-equal? (nw-ids (where (==. nw-nick "alice"))) '(1)
+                "== excludes NULL row (only exact match)")
+  (check-equal? (nw-ids (where (!=. nw-nick "alice"))) '(3)
+                "!= excludes NULL row (3VL UNKNOWN), returns only non-null mismatch")
+  (check-equal? (nw-ids (where (>. nw-score 5))) '(1)
+                "ordered > on Maybe field: NULL row excluded, non-matching excluded")
+  (check-equal? (nw-ids (where (>=. nw-score 3))) '(1 3)
+                "ordered >= on Maybe field excludes NULL row")
+  (check-equal? (nw-ids (where (<. nw-score 10))) '(3)
+                "ordered < on Maybe field excludes NULL row")
+  (check-equal? (nw-ids (where (null?. nw-nick))) '(2)
+                "IS NULL matches the NULL row")
+  (check-equal? (nw-ids (where (not-null?. nw-nick))) '(1 3)
+                "IS NOT NULL matches the non-null rows")
+  (check-equal? (nw-ids (where (in?. nw-nick '("alice" "bob")))) '(1 3)
+                "IN excludes NULL row")
+  (check-equal? (nw-ids (where (not-in?. nw-nick '("alice")))) '(3)
+                "NOT IN excludes NULL row (3VL) and the matching value")
+  (check-equal? (nw-ids (where (like?. nw-nick "a%"))) '(1)
+                "LIKE unwraps Maybe String and excludes NULL row"))

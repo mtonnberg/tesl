@@ -175,17 +175,28 @@ let agent_prim_of_type_expr (t : type_expr) : agent_prim option =
    (fixed in S3/S4).  They now live here so every forgery gate consults ONE
    definition; the SQL op set comes from the registry above so it cannot diverge. *)
 
-(* fn / handler / worker may use an attached (`:::`) proof return only if the
-   proof was already carried on an input parameter (or is a genuine
-   framework-produced provenance proof).  check / auth / establish are the only
-   kinds that may introduce a fresh proof at a boundary.  deadWorker is excluded
-   — its FromDeadQueue proof is infrastructure-produced and handled elsewhere. *)
+(* fn / handler / worker / deadWorker / main may use an attached (`:::`) proof
+   return only if the proof was already carried on an input parameter (or is a
+   genuine framework-produced provenance proof).  check / auth / establish are
+   the ONLY kinds that may introduce a fresh proof at a boundary — this is the
+   complete minting-kind gate (§7.12).
+
+   Review 2026-07-03 fix (hole #3, the deadWorker forge): deadWorker and main
+   were previously classified "not restricted", which let a deadWorker (and, in
+   principle, main) DECLARE an arbitrary proof-carrying return it never received
+   or validated — a silent forge, because proofs are erased at runtime.  A
+   deadWorker's legitimate FromDeadQueue proof arrives on its INPUT parameter and
+   flows through by pass-through (all_carried in check_fn_return_proof_annotations
+   already includes input proofs), so restricting the RETURN does not reject any
+   sound deadWorker.  This also makes this gate AGREE with the in-body `:::`
+   gate (validate_no_ok_in_fn), which already treats deadWorker/main as
+   restricted (they fall in its `_` bucket). *)
 let is_forgery_restricted_kind : func_kind -> bool = function
-  | FnKind | HandlerKind | WorkerKind -> true
+  | FnKind | HandlerKind | WorkerKind | DeadWorkerKind | MainKind -> true
   (* Enumerated (no wildcard) so a NEW func_kind forces an explicit soundness
      decision here under -warn-error +8 rather than silently defaulting to
      "not restricted" (fail-open).  Mirrors is_proof_introducing_kind. *)
-  | CheckKind | AuthKind | EstablishKind | DeadWorkerKind | MainKind -> false
+  | CheckKind | AuthKind | EstablishKind -> false
 
 (* A FromDb provenance proof on a fn/handler/worker return is only
    framework-produced when the body actually runs a select/insert/upsert/…
@@ -1061,9 +1072,17 @@ let load_imported_func_caps (m : module_form) : (string * string list) list =
             | ImportAll -> None
             | ImportExposing names -> Some names
           in
+          (* 2026-07-03 hole #13 (cross-module): a declared capability of the
+             IMPORTED module is never a row variable, so it must not be stripped
+             from the imported function's propagated caps — else the alias
+             launders across the module boundary. *)
+          let imported_declared_caps =
+            List.filter_map (function DCapability c -> Some c.name | _ -> None) imported.decls in
           List.concat_map (function
             | DFunc fd ->
-              let bound = Ast.func_bound_cap_vars fd in
+              let bound =
+                List.filter (fun b -> not (List.mem b imported_declared_caps))
+                  (Ast.func_bound_cap_vars fd) in
               let caps = List.filter (fun c -> not (List.mem c bound)) fd.capabilities in
               let qualified_name = imp.module_name ^ "." ^ fd.name in
               let include_plain = match requested with

@@ -304,15 +304,27 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
   (* Validation-consolidation Phase 1: iterate precomputed [mf_codecs] for the
      per-codec coverage scan (source-order preserved, byte-identical). *)
   let codecs = mf.mf_codecs in
-  let record_proofs = List.filter_map (function
-    | DRecord r ->
+  (* 2026-07-03 hole #9: this scan previously covered `DRecord` only, so a
+     proof-annotated field on an *entity* used as a request body / queue payload
+     decoded through a codec that omitted the `via` validation was accepted with
+     a checkerless decoder (fail-open at the HTTP boundary — the record form is a
+     compile error, making the entity trap invisible).  Entities carry field
+     proofs exactly like records, so they get the identical coverage check. *)
+  let named_fields_of = function
+    | DRecord r -> Some (r.name, r.fields)
+    | DEntity e -> Some (e.name, e.fields)
+    | _ -> None
+  in
+  let record_proofs = List.filter_map (fun d ->
+    match named_fields_of d with
+    | None -> None
+    | Some (name, fields) ->
       let field_proofs = List.filter_map (fun (f : field_def) ->
         match f.proof_ann with
         | Some proof -> Some (f.name, List.sort_uniq String.compare (proof_predicates proof))
         | None -> None
-      ) r.fields in
-      if field_proofs = [] then None else Some (r.name, field_proofs)
-    | _ -> None
+      ) fields in
+      if field_proofs = [] then None else Some (name, field_proofs)
   ) decls in
   let errors = ref [] in
   List.iter (fun (cf : codec_form) ->

@@ -375,7 +375,12 @@ let test_cli_check_json_parser_contract () =
 let test_cli_check_json_includes_lint_warning () =
   with_temp_file "tesl-check-json-lint-" lint_warning_src (fun path ->
     let exit_code, stdout = run_check_json path in
-    Alcotest.(check int) "exit code" 1 exit_code;
+    (* 2026-07-03: --check-json exits non-zero IFF an ERROR-severity diagnostic is
+       present (the documented AGENTS.md contract, matching `agent-context`), so a
+       WARNING-only file exits 0.  The warning is still emitted in the JSON
+       (asserted below); only the exit code changed from the old "any diagnostic
+       → 1" behaviour, which reddened warning-only files in CI/editors. *)
+    Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"cli lint version" stdout "\"version\":1";
     assert_contains ~name:"cli lint file" stdout path;
     assert_contains ~name:"cli lint source" stdout "\"source\":\"lint\"";

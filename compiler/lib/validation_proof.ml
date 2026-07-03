@@ -1748,10 +1748,93 @@ let check_forall_consistency ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
      Maps variable name → known element-level predicates it already carries.
      This lets us recognise that `filterCheck fn all` where `all` came from a
      DB select already carries `FromDb` — those don't need to come from `fn`. *)
+  (* 2026-07-03 hole #16: a `check` callback's PARAMETER proof precondition was
+     silently dropped by filterCheck/allCheck.  `check checkNarrow(n: Int ::: IsPositive n)
+     -> n ::: IsSmall n` applied via `List.filterCheck checkNarrow xs` over a plain
+     `List Int` produced a `ForAll IsSmall` collection whose elements were never
+     shown to satisfy the callback's `IsPositive` precondition — and the callback
+     body freely called proof-requiring fns on those unproven elements.  The old
+     checks only validated what the callback PRODUCES against the return type,
+     never what it REQUIRES on input, and the proof-param-callback guard was
+     kind-scoped to fn/handler (omitting check).
+
+     Fix: for every filterCheck-family call, verify the callback chain's input
+     preconditions are satisfied, LEFT-TO-RIGHT, by the collection's carried
+     ForAll preds PLUS the preds produced by EARLIER checks in the `&&` chain
+     (this preserves the legitimate proof-combining pattern
+     `filterCheck (checkA && checkB) xs`, where checkB's precondition A is
+     produced by checkA). Fail-closed: an unknown collection carries nothing. *)
+  let flatten_check_chain e =
+    let rec go acc = function
+      | EBinop { op = BAnd; left; right; _ } -> go (go acc right) left
+      | EApp { fn; _ } -> go acc fn            (* partial application → base name *)
+      | EVar { name; _ } -> name :: acc
+      | _ -> acc
+    in go [] e
+  in
+  let filtercheck_precond_errors forall_env check_expr rest loc =
+    let input_preds = match rest with
+      | EVar { name = coll; _ } :: _ ->
+        (match List.assoc_opt coll forall_env with Some p -> p | None -> [])
+      | _ -> []
+    in
+    let chain = flatten_check_chain check_expr in
+    (* Only enforce when every chain entry is a known function; unknown/invalid
+       callbacks are reported by check_filter_check_args, not duplicated here. *)
+    if chain = [] || not (List.for_all (fun n -> List.mem_assoc n funcs) chain)
+    then []
+    else begin
+      let available = ref (List.sort_uniq String.compare input_preds) in
+      let errs = ref [] in
+      List.iter (fun fn_name ->
+        match List.assoc_opt fn_name funcs with
+        | Some info ->
+          let pre =
+            List.concat_map (fun (p : binding) ->
+              match p.proof_ann with Some pr -> proof_predicates pr | None -> [])
+              info.fi_params
+            |> List.sort_uniq String.compare
+          in
+          let missing = List.filter (fun p -> not (List.mem p !available)) pre in
+          if missing <> [] then
+            errs := make_error loc
+              ~hint:(Printf.sprintf
+                "each element must already carry `ForAll [%s]` before `%s` runs — \
+                 establish it with an earlier `List.filterCheck`/`select`, put an \
+                 earlier check producing it in the `&&` chain, or annotate the input \
+                 as `List T ::: ForAll %s`"
+                (String.concat ", " missing) fn_name (String.concat " " missing))
+              (Printf.sprintf
+                "`%s` requires each element to carry proof [%s] on input, but the \
+                 collection is not known to carry `ForAll [%s]`; a check callback's \
+                 input precondition is not automatically established by filterCheck/allCheck"
+                fn_name (String.concat ", " pre) (String.concat ", " missing))
+            :: !errs;
+          available := List.sort_uniq String.compare
+                         (!available @ pred_names_of_return_spec info.fi_return)
+        | None -> ()
+      ) chain;
+      List.rev !errs
+    end
+  in
   let rec walk forall_env expected e =
     match e with
     | EApp _ ->
       let (head, args) = collect_call_head_and_args [] e in
+      (* hole #16 precondition check — fires for EVERY filterCheck-family call,
+         independent of the return type (`expected`). *)
+      (match function_name_of_expr head with
+       | Some ("List.filterCheck" | "Set.filterCheck"
+              | "List.allCheck" | "Set.allCheck"
+              | "Dict.filterCheckValues" | "Dict.filterCheckKeys") ->
+         (match args with
+          | check_expr :: rest ->
+            let loc = match e with EApp { loc; _ } -> loc | _ -> gen_loc in
+            errors := List.rev_append
+                        (filtercheck_precond_errors forall_env check_expr rest loc)
+                        !errors
+          | _ -> ())
+       | _ -> ());
       (match function_name_of_expr head, expected with
        | (Some "List.filterCheck" | Some "Set.filterCheck"
          | Some "Dict.filterCheckValues" | Some "Dict.filterCheckKeys"), Some wanted

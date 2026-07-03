@@ -3,13 +3,25 @@ open Location
 open Validation_common
 
 let build_func_capability_map (decls : top_decl list) : (string * string list) list =
+  (* 2026-07-03 hole #13: a name is a capability-ROW VARIABLE only if it is NOT a
+     declared capability.  func_bound_cap_vars already excludes the 13 builtins,
+     but a USER-declared alias (`capability clock implies time`) used as a param
+     arrow's cap-row (`f: (Int -> Int requires clock)`) was still classified as a
+     row variable and STRIPPED from this function's propagated caps — so a caller
+     inherited none of it and could `requires []` while transitively performing
+     the effect (launder).  Exclude declared user capabilities from the
+     row-variable set so a declared capability is never stripped from
+     propagation. *)
+  let declared_caps =
+    List.filter_map (function DCapability c -> Some c.name | _ -> None) decls in
   List.filter_map (function
     | DFunc fd ->
       (* Drop this function's capability-ROW variables: when the function is
          CALLED, its row variables are instantiated by the actual callback
          arguments (which the caller's body walks separately, collecting their
          caps).  Only its CONCRETE capabilities propagate to callers. *)
-      let bound = Ast.func_bound_cap_vars fd in
+      let bound =
+        List.filter (fun b -> not (List.mem b declared_caps)) (Ast.func_bound_cap_vars fd) in
       Some (fd.name, List.filter (fun c -> not (List.mem c bound)) fd.capabilities)
     | _ -> None
   ) decls
@@ -372,38 +384,53 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
          enclosing fn); the declarative block is not a DFunc, so it was never
          checked, letting an agent declaring [aiProvider] host a tool requiring
          [dbWrite]. Tool names come from the `tools: [asTool fn, …]` field. *)
-      let tool_names =
-        let from_fields fields =
-          match List.assoc_opt "tools" fields with
-          | Some (EList { elems; _ }) ->
-            List.filter_map (function
-              | EApp { fn = EVar { name = "asTool"; _ }; arg = EVar { name; _ }; _ } -> Some name
-              | _ -> None) elems
-          | _ -> []
-        in
-        match a.config_expr with
-        | Some (ERecord { fields; _ }) -> from_fields fields
-        | Some (EApp { fn = EConstructor { name = "Agent"; _ };
-                       arg = ERecord { fields; _ }; _ }) -> from_fields fields
-        | _ -> a.tools
+      (* 2026-07-03 hole #14: the previous check extracted tool names by matching
+         ONLY `asTool fn`, so a manual `tool name desc schema validate dispatch`
+         constructor's validate/dispatch capabilities were never charged — an
+         agent declaring [aiProvider] could host a manual tool performing
+         dbWrite / httpClient / any effect outside its `requires`.  Replace the
+         bespoke shape-recognizer with the CANONICAL capability dataflow
+         (collect_needed_capabilities) over the WHOLE agent config, exactly as the
+         in-function path does — it charges every capability of every function
+         referenced by any tool form (asTool AND manual `tool`), and cannot drift
+         from a hand-maintained recognizer. *)
+      (* Charge ONLY the capabilities reachable from the `tools:` field (via the
+         canonical dataflow), NOT the whole config — the provider/model config
+         may legitimately read env for an API key, which is the app's concern, not
+         a tool-authority claim.  Running collect_needed_capabilities on the tools
+         list expression charges every function referenced by any tool form
+         (`asTool fn` and manual `tool … validate v dispatch d`). *)
+      let tool_caps_from_fields fields =
+        match List.assoc_opt "tools" fields with
+        | Some tools_expr -> collect_needed_capabilities ~func_caps tools_expr
+        | None -> []
       in
-      List.iter (fun tn ->
-        match List.assoc_opt tn func_caps with
-        | Some tcaps ->
-          let missing = List.filter (fun c -> not (cap_covered a.capabilities c)) tcaps in
-          if missing <> [] then
-            errors := make_error a.loc
-              ~hint:(Printf.sprintf
-                       "add [%s] to `agent %s`'s `requires` (or a capability that implies %s)"
-                       (String.concat ", " missing) a.name (String.concat ", " missing))
-              (Printf.sprintf
-                 "agent '%s': tool '%s' requires [%s] but the agent does not declare %s — \
-                  the agent's `requires` must bound the authority of its tools"
-                 a.name tn (String.concat ", " missing)
-                 (if List.length missing = 1 then "it" else "them"))
-            :: !errors
-        | None -> ()  (* an undeclared tool fn is already reported by the checker *)
-      ) tool_names
+      let needed =
+        match a.config_expr with
+        | Some (ERecord { fields; _ }) -> tool_caps_from_fields fields
+        | Some (EApp { fn = EConstructor { name = "Agent"; _ };
+                       arg = ERecord { fields; _ }; _ }) -> tool_caps_from_fields fields
+        | _ ->
+          (* legacy: a bare list of tool-fn names *)
+          List.concat_map (fun tn ->
+            match List.assoc_opt tn func_caps with Some cs -> cs | None -> []) a.tools
+      in
+      let missing =
+        List.sort_uniq String.compare
+          (List.filter (fun c -> not (cap_covered a.capabilities c)) needed)
+      in
+      if missing <> [] then
+        errors := make_error a.loc
+          ~hint:(Printf.sprintf
+                   "add [%s] to `agent %s`'s `requires` (or a capability that implies %s)"
+                   (String.concat ", " missing) a.name (String.concat ", " missing))
+          (Printf.sprintf
+             "agent '%s' hosts tools requiring [%s] but its `requires` does not declare %s — \
+              the agent's `requires` must bound the authority of ALL its tools \
+              (both `asTool fn` and manual `tool` constructors)"
+             a.name (String.concat ", " missing)
+             (if List.length missing = 1 then "it" else "them"))
+        :: !errors
     | _ -> ()
   ) decls;
   (* ── CAP-COMPOSE (review 2026-07) ──────────────────────────────────────────
@@ -1444,6 +1471,80 @@ let build_local_cap_map (decls : top_decl list) : (string * string list) list =
     | DEmail _ -> Some ("email", [])
     | _ -> None
   ) decls
+
+(* ── Fail-closed provenance-spelling gate (review 2026-07-03 hole #7) ───────
+   The FromDb dataflow verifiers (check_pk_match / check_insert_pk_match /
+   check_nonexist_named_pack_insert) recognise ONLY the `(Col == subject)`
+   argument form.  Any other spelling in a provenance return spec — a bare
+   `FromDb todoId`, a single-`=` `FromDb (Id = todoId)`, or `FromDb (todoId)` —
+   made `fromdb_col_var` return None, so those verifiers silently SKIPPED the
+   provenance obligation (fail-open) and stamped a value fetched by the WRONG
+   column (or by no WHERE at all) as DB provenance → IDOR / cross-tenant read.
+   Because proofs are erased there is no runtime backstop.
+
+   This gate is TOTAL and fail-closed: every provenance predicate
+   (FromDb / FromQueue / FromDeadQueue) that appears anywhere in a function's
+   RETURN spec — including inside `exists`, `ForAll`, and `&&` — MUST carry at
+   least one checkable `(Column == subject)` argument.  Any other spelling is
+   rejected HERE rather than passing unverified downstream.  (Parameter proofs
+   are not scanned: a deadWorker's `FromDeadQueue (Id == jobId) job` input form
+   is framework-produced and consumed, not a provenance claim to verify.) *)
+let provenance_pred_names = [ "FromDb"; "FromQueue"; "FromDeadQueue" ]
+
+let rec provenance_predapps (p : proof_expr) : proof_expr list =
+  match p with
+  | PredApp { pred; _ } when List.mem pred provenance_pred_names -> [ p ]
+  | PredApp _ -> []
+  | PredAnd { left; right; _ } -> provenance_predapps left @ provenance_predapps right
+
+(* Every proof_expr mentioned by a return spec, descending nested `exists`. *)
+let rec return_spec_all_proofs (rs : return_spec) : proof_expr list =
+  match rs with
+  | RetAttached { binding; _ } | RetMaybeAttached { binding; _ } ->
+    (match binding.proof_ann with Some p -> [ p ] | None -> [])
+  | RetNamedPack { entity_proof; other_proof; _ } ->
+    (match entity_proof with Some p -> [ p ] | None -> [])
+    @ (match other_proof with Some p -> [ p ] | None -> [])
+  | RetForAll { proof; _ } | RetMaybeForAll { proof; _ }
+  | RetSetForAll { proof; _ } | RetMaybeSetForAll { proof; _ }
+  | RetForAllDictValues { proof; _ } | RetForAllDictKeys { proof; _ } -> [ proof ]
+  | RetExists { binding; body; _ } ->
+    (match binding.proof_ann with Some p -> [ p ] | None -> [])
+    @ return_spec_all_proofs body
+  | RetPlain { ty; _ } ->
+    (match proof_of_fact_type ty with Some p -> [ p ] | None -> [])
+
+let arg_is_col_eq (arg : string) : bool =
+  match extract_col_eq_var arg with Some _ -> true | None -> false
+
+let check_provenance_spelling (decls : top_decl list) : validation_error list =
+  let errors = ref [] in
+  List.iter (function
+    | DFunc fd ->
+      List.iter (fun proof ->
+        List.iter (function
+          | PredApp { pred; args; loc } ->
+            if not (List.exists arg_is_col_eq args) then
+              let rendered =
+                if args = [] then pred
+                else pred ^ " " ^ String.concat " " args in
+              errors := make_error loc
+                ~hint:(Printf.sprintf
+                  "write the provenance as `%s (Column == subject)` (e.g. `%s (Id == %s)`); \
+                   an unrecognised form cannot be verified and is rejected to prevent forged provenance"
+                  pred pred (match args with a :: _ -> a | [] -> "id"))
+                (Printf.sprintf
+                  "provenance predicate in the return of `%s` must be written as \
+                   `%s (Column == subject)`; the form `%s` is not a checkable provenance \
+                   spelling, so its DB origin cannot be verified"
+                  fd.name pred rendered)
+              :: !errors
+          | PredAnd _ -> ()
+        ) (provenance_predapps proof)
+      ) (return_spec_all_proofs fd.return_spec)
+    | _ -> ()
+  ) decls;
+  List.rev !errors
 
 (** Detect cycles in the capability `implies` graph using DFS.
     A cycle means a capability (transitively) implies itself, which makes the

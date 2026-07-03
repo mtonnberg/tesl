@@ -881,6 +881,42 @@ let load_imported_ctors (m : module_form) : (string * (string * scheme)) list =
           ) (exported_ctor_entries imported)
   ) m.imports
 
+(* 2026-07-03 hole #15: load imported record/entity FIELD TYPES so dotted field
+   access on an imported type (`u.email`, `w.name`) resolves to the real field
+   type.  Previously imported records/entities were never entered into
+   ctx.records, so lookup_field returned None and EField fell back to a fresh
+   unification var — an implicit T_ANY that unified with ANYTHING, silently
+   disabling structural type-checking for every `imported.field` (e.g.
+   `w.name == 42` on a String field compiled clean).  Mirrors load_imported_ctors;
+   only types actually brought into scope (named in `exposing`, or via a wildcard
+   import) are loaded. *)
+let load_imported_records (m : module_form) : (string * record_def) list =
+  let is_tesl_module name =
+    String.length name >= 5 && String.sub name 0 5 = "Tesl."
+  in
+  List.concat_map (fun (imp : import_decl) ->
+    if is_tesl_module imp.module_name then []
+    else
+      let path = resolve_local_import_path m.source_file imp.module_name in
+      match parse_local_import_module path with
+      | None | Some (Err _) -> []
+      | Some (Ok imported) ->
+        let wants name = match imp.names with
+          | ImportAll -> true
+          | ImportExposing names -> List.mem name names
+        in
+        List.filter_map (function
+          | DRecord r when wants r.name -> Some (r.name, build_record_def r)
+          | DEntity e when wants e.name ->
+            Some (e.name,
+              { rd_name = e.name;
+                rd_fields =
+                  List.map (fun (f : field_def) -> (f.name, ty_of_type_expr f.type_expr))
+                    e.fields })
+          | _ -> None
+        ) imported.decls
+  ) m.imports
+
 (* Builtin ADTs that back the typed configuration blocks.  They are seeded into
    the checker (like Maybe/Either) when the owning stdlib module is imported, so
    `connection: TcpConnection { host: ..., port: ... }` and `backoff: Exponential`
@@ -4087,6 +4123,10 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
 
   (* 1. Collect type definitions (records, ADTs, newtypes) *)
   let ctx = collect_type_defs ctx m.decls in
+  (* hole #15: bring imported record/entity field types into scope so
+     `imported.field` type-checks (local defs keep precedence — they are at the
+     front of ctx.records, imported are appended). *)
+  let ctx = { ctx with records = ctx.records @ load_imported_records m } in
   let imported_ctors = load_imported_ctors m in
   let (config_adts, config_ctors) = config_stdlib_seed m in
   let ctx = { ctx with

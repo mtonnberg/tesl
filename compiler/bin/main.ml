@@ -888,7 +888,15 @@ let () =
        let diags = check_json_diags filename source in
        print_string (Compile.diagnostics_to_json diags);
        print_newline ();
-       exit (if diags = [] then 0 else 1)
+       (* 2026-07-03 ergonomics fix: exit non-zero IFF there is an error-severity
+          diagnostic — matching the documented contract (AGENTS.md, usage: "exit
+          code is non-zero iff there are error-severity diags") and `agent-context`
+          below.  The old `diags <> []` test also failed on WARNING-only files, so
+          a CI gate or editor keyed on the exit code saw ~40/92 shipped example
+          files "fail" on nothing but lint warnings (e.g. unused-import). *)
+       let has_error =
+         List.exists (fun (d : Compile.diagnostic) -> d.severity = "error") diags in
+       exit (if has_error then 1 else 0)
      with Sys_error msg ->
        Printf.eprintf "error: %s\n" msg; exit 1)
 

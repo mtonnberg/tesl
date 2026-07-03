@@ -94,7 +94,9 @@
          ;; Exported for testing only — not part of public API
          identifier-value->string
          compile-predicate-sql
-         compile-where-sql)
+         compile-where-sql
+         column-definition-sql
+         field-db-type-annotation)
 
 (struct entity-spec (name source primary-key fields predicate table) #:transparent)
 ;; nullable? is #t for Maybe-typed fields — these map to NULL in PostgreSQL.
@@ -127,8 +129,11 @@
 (define built-in-db-type-registry
   (hash 'Boolean 'boolean
         'Bytes 'bytea
-        ;; NT-07: Int → NUMERIC (arbitrary precision, lossless for any magnitude);
-        ;; Int32 → integer/int4 (compact + JS-safe). PosixMillis stays bigint (below).
+        ;; NT-07: `Int` → NUMERIC (arbitrary precision, lossless for any magnitude).
+        ;; This is the SINGLE mapping for a plain integer column: a bare `Int` field
+        ;; AND a newtype-over-`Int` field both map to NUMERIC (see newtype-base->db-type).
+        ;; `Int32` → integer/int4 (compact + JS-safe) is the opt-in 64-bit-safe width.
+        ;; `PosixMillis` is the one deliberate BIGINT exception (entry below).
         'Integer 'numeric
         'Int32 'integer
         'Number 'double-precision
@@ -182,10 +187,15 @@
           (quote-sql-identifier (database-schema-name database) 'sql)
           (quote-sql-identifier (entity-table-name entity) 'sql)))
 
-(define (field-adt-type? field)
-  (define type-datum (field-spec-type field))
+;; #t iff a type datum names an ADT — either a bare ADT name (`Status`) or a
+;; parametric ADT application (`(Tree Int)`). Used both for a field's own type and
+;; for the inner type of a `Maybe <ADT>` field so both map to JSONB consistently.
+(define (adt-type-datum? type-datum)
   (or (adt-application-spec type-datum)
       (lookup-adt-spec type-datum #f)))
+
+(define (field-adt-type? field)
+  (adt-type-datum? (field-spec-type field)))
 
 ;; Extract the inner type of a Maybe X field type datum.
 ;; Returns the inner type if this is (list 'Maybe inner), #f otherwise.
@@ -195,14 +205,34 @@
        (eq? (car type-datum) 'Maybe)
        (cadr type-datum)))
 
-;; NT-07: resolve a newtype's BASE to its column type. A nominal newtype over
-;; `Integer` (e.g. PosixMillis — a 64-bit millis timestamp) keeps compact BIGINT
-;; storage; only the BARE arbitrary-precision `Int` (direct 'Integer match, below)
-;; widens to NUMERIC. This preserves PosixMillis → BIGINT after Int → NUMERIC.
-(define (newtype-base->db-type base)
+;; The name symbol of a newtype/type reference. A field's type datum is either a
+;; bare symbol (`Counter`) or a prefab `type-ref` (`#s(type-ref <owner> Counter)`)
+;; for a name imported from another module (e.g. `PosixMillis` from tesl/time.rkt).
+;; `type-ref` is a #:prefab struct, so we can read its name via the prefab match
+;; pattern without importing the struct definition from types.rkt.
+(define (type-datum-name type-datum)
+  (match type-datum
+    [(? symbol?) type-datum]
+    [`#s(type-ref ,_owner ,name) name]
+    [_ #f]))
+
+;; NT-07: resolve a newtype's BASE to its column type. `Int` is arbitrary-precision
+;; (A9), so BOTH a bare `Int` field AND a newtype-over-`Int` field map to the SAME
+;; column type — `NUMERIC` (lossless for any magnitude). A newtype over `Integer`
+;; must NOT silently narrow to a 64-bit `BIGINT`: that would reopen the exact NT-07
+;; silent-truncation hole for values > 2^63 (a user-defined `newtype Counter = Int`
+;; is still arbitrary-precision). `PosixMillis` is the ONE deliberate BIGINT
+;; exception — a distinct 64-bit millis-timestamp type, not an arbitrary `Int`, whose
+;; BIGINT storage is contractual (LANGUAGE-SPEC §11.8, existing PG tables + the
+;; auto-migration) — so it is special-cased BY NAME here. `type-datum` is the field's
+;; declared type (symbol or `type-ref`), used only to detect that PosixMillis case.
+;; Any other field wanting compact 64-bit storage uses `Int32` (int4) or `#:db-type`.
+(define (newtype-base->db-type base type-datum)
   (and base
-       (if (eq? base 'Integer) 'bigint
-           (hash-ref built-in-db-type-registry base #f))))
+       (cond
+         [(eq? base 'Integer)
+          (if (eq? (type-datum-name type-datum) 'PosixMillis) 'bigint 'numeric)]
+         [else (hash-ref built-in-db-type-registry base #f)])))
 
 (define (default-field-db-type-annotation field)
   (define type-datum (field-spec-type field))
@@ -210,12 +240,19 @@
   (define inner-maybe (maybe-field-inner-type type-datum))
   (if inner-maybe
       (or (hash-ref built-in-db-type-registry inner-maybe #f)
-          (newtype-base->db-type (hash-ref newtype-registry inner-maybe #f))
+          (newtype-base->db-type (hash-ref newtype-registry inner-maybe #f) inner-maybe)
+          ;; `Maybe <ADT>` maps to a NULLABLE jsonb, mirroring a bare `<ADT>` → jsonb.
+          ;; (nullable? is set separately from the type datum, so this is a plain
+          ;; `jsonb` column that PostgreSQL leaves NULL-able by default.) Without this
+          ;; a `Maybe <ADT>` field silently fell through to the `'text` default below,
+          ;; producing a TEXT column inconsistent with the non-nullable ADT mapping.
+          (and (adt-type-datum? inner-maybe) 'jsonb)
           'text)  ; fall back to text for unknown Maybe X
       (or ;; Direct match (e.g. 'String, 'Integer→numeric, 'Boolean with plain symbol keys)
           (hash-ref built-in-db-type-registry type-datum #f)
-          ;; Newtype: base type → column type (Integer-based newtypes keep BIGINT).
-          (newtype-base->db-type (hash-ref newtype-registry type-datum #f))
+          ;; Newtype: base type → column type (Integer-based newtypes → NUMERIC, like Int;
+          ;; PosixMillis is the named BIGINT exception, handled inside newtype-base->db-type).
+          (newtype-base->db-type (hash-ref newtype-registry type-datum #f) type-datum)
           ;; ADT fields default to jsonb
           (and (field-adt-type? field) 'jsonb)
           #f)))
@@ -437,7 +474,16 @@
       (ilike-predicate? value)))
 
 (define (ensure-ordered-query-value! field value who operator role)
-  (unless (or (number? value) (string? value))
+  ;; A NULL (Nothing / sql-null) is a legitimate ordered-comparison input: SQL 3VL
+  ;; makes `col <op> NULL` (and an ordered comparison against a NULL column) UNKNOWN,
+  ;; which the caller turns into "row excluded" — it is NOT a malformed value. Unwrap
+  ;; a `Something(v)` (a non-NULL Maybe-field value) so the underlying number/string is
+  ;; what gets range-checked; this also matches the Postgres path, where the operand is
+  ;; unwrapped to its inner value before binding. Anything else (an ADT, a list, …) is
+  ;; genuinely non-orderable and still errors.
+  (unless (or (sql-null-value? value)
+              (let ([inner (unwrap-non-null value)])
+                (or (number? inner) (string? inner))))
     (raise-user-error who
                       "field ~a on entity ~a does not support ordered comparison ~a for ~a value ~a; expected a string or number"
                       (field-spec-key field)
@@ -481,43 +527,83 @@
                        right
                        operator)]))
 
+;; --- In-memory backend NULL semantics: match PostgreSQL three-valued logic (3VL) ---
+;;
+;; In SQL a comparison with a NULL operand yields UNKNOWN, and a WHERE row is kept
+;; only when its predicate is TRUE — UNKNOWN (like FALSE) excludes the row. Concretely
+;; `col = x`, `col <> x`, `col < x`, `col IN (…)`, `col NOT IN (…)` are ALL UNKNOWN
+;; (row excluded) when `col` (or the operand) is NULL — even `NULL = NULL`. Only the
+;; explicit `IS NULL` / `IS NOT NULL` tests inspect NULL-ness and yield TRUE/FALSE.
+;;
+;; In the in-memory backend a SQL NULL is a `Nothing` (Maybe field) or `sql-null`.
+;; Before these helpers, `equal?`/`<`/`member` compared NULLs directly, so the test
+;; backend diverged from Postgres: `col <> x` and `NOT IN` matched NULL rows that
+;; Postgres excludes, `NULL = NULL` matched, and ordered comparisons on a Maybe field
+;; raised an error instead of excluding the row. These helpers close that gap so tests
+;; on the in-memory backend are faithful to production Postgres.
+(define (sql-null-value? v)
+  (or (Nothing? v) (sql-null? v)))
+
+;; Unwrap a `Something(v)` (a non-NULL Maybe-field value) to its inner v so it can be
+;; compared against a bare operand; leaves non-Maybe values untouched.
+(define (unwrap-non-null v)
+  (if (Something? v) (Something-value v) v))
+
 (define (predicate-matches-row? predicate row)
   (match predicate
     [(eq-predicate field operand)
      (define-values (_name operand-value _bindings)
        (resolve-query-operand field operand 'sql '==))
-     (equal? (row-field-ref row field) operand-value)]
+     (define row-value (row-field-ref row field))
+     ;; 3VL: `col = x` is UNKNOWN (row excluded) if either side is NULL — incl. NULL = NULL.
+     (and (not (sql-null-value? row-value))
+          (not (sql-null-value? operand-value))
+          (equal? (unwrap-non-null row-value) (unwrap-non-null operand-value)))]
     [(comparison-predicate field operator operand)
      (define-values (_name operand-value _bindings)
        (resolve-query-operand field operand 'sql operator))
      (define row-value (row-field-ref row field))
-     (case operator
-       [(!=) (not (equal? row-value operand-value))]
-       [else
-        (ordered-comparison-result field operator row-value operand-value 'sql)])]
+     ;; 3VL: `col <> x` and every ordered comparison is UNKNOWN (row excluded) when
+     ;; either side is NULL. Only reach the actual comparison once both are non-NULL.
+     (and (not (sql-null-value? row-value))
+          (not (sql-null-value? operand-value))
+          (let ([lhs (unwrap-non-null row-value)]
+                [rhs (unwrap-non-null operand-value)])
+            (case operator
+              [(!=) (not (equal? lhs rhs))]
+              [else
+               (ordered-comparison-result field operator lhs rhs 'sql)])))]
     [(or-predicate left right)
      (or (predicate-matches-row? left row)
          (predicate-matches-row? right row))]
     [(null-predicate field)
-     (define v (row-field-ref row field))
-     (or (Nothing? v) (sql-null? v))]
+     ;; `IS NULL` — the one place NULL-ness yields TRUE/FALSE (never UNKNOWN).
+     (sql-null-value? (row-field-ref row field))]
     [(not-null-predicate field)
-     (define v (row-field-ref row field))
-     (not (or (Nothing? v) (sql-null? v)))]
+     (not (sql-null-value? (row-field-ref row field)))]
     [(in-predicate field values)
      (define row-value (row-field-ref row field))
-     (and (member row-value values) #t)]
+     ;; 3VL: `NULL IN (…)` is UNKNOWN → row excluded (Postgres never returns TRUE here).
+     (and (not (sql-null-value? row-value))
+          (member (unwrap-non-null row-value) (map unwrap-non-null values))
+          #t)]
     [(not-in-predicate field values)
      (define row-value (row-field-ref row field))
-     (not (member row-value values))]
+     ;; 3VL: `NULL NOT IN (…)` is UNKNOWN → row excluded. (A NULL *inside* the value
+     ;; list can also make a non-matching row UNKNOWN in Postgres; the in-memory list
+     ;; is a literal set of non-NULL operands, so that finer case does not arise here.)
+     (and (not (sql-null-value? row-value))
+          (not (member (unwrap-non-null row-value) (map unwrap-non-null values))))]
     [(like-predicate field pattern)
      (define-values (_name pattern-value _bindings) (operand-name+value pattern))
-     (define row-value (row-field-ref row field))
+     ;; 3VL: `NULL LIKE p` is UNKNOWN → excluded. Unwrap a Something(v) from a Maybe
+     ;; String field so the underlying string is what the pattern matches against.
+     (define row-value (unwrap-non-null (row-field-ref row field)))
      (and (string? row-value)
           (regexp-match? (sql-pattern->regexp pattern-value #f) row-value))]
     [(ilike-predicate field pattern)
      (define-values (_name pattern-value _bindings) (operand-name+value pattern))
-     (define row-value (row-field-ref row field))
+     (define row-value (unwrap-non-null (row-field-ref row field)))
      (and (string? row-value)
           (regexp-match? (sql-pattern->regexp pattern-value #t) row-value))]
     [_
