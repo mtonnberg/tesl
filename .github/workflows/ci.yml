@@ -62,5 +62,11 @@ jobs:
           nix develop --command bash -lc '
             set -euo pipefail
             export TESL_REPO_ROOT="$PWD"
+            # The flake devShell shellHook starts a convenience PostgreSQL on
+            # :55432 with PGDATA inside the read-only Nix store (fragile — it
+            # dies mid-run) and exports TESL_POSTGRES_{HOST,PORT,USER}, which
+            # hijacks ci.sh into "reuse external cluster" mode. Unset them so
+            # ci.sh manages its own robust temp cluster (its documented design).
+            unset TESL_POSTGRES_HOST TESL_POSTGRES_PORT TESL_POSTGRES_USER TESL_POSTGRES_PASSWORD
             ./ci.sh
           '
