@@ -1,5 +1,11 @@
 # 2026-07 review — OPEN items only
 
+## Updates
+
+**Decision** Since adding type classes to the language is a large decision (on how the language will evolve and it could make the learning curve much steeper, we will wait with this since this is a language expansion)
+
+# Background
+
 Closed work has moved to `roadmap/completed/review_2026_07_closed_items.md` (and the
 per-topic files in `roadmap/completed/`). This file lists only what remains. Each is
 unblocked but touches soundness-critical or broad-impact code, so it needs its own

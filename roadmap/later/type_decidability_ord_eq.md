@@ -1,5 +1,9 @@
 # Eq/Ord open polymorphism (#2) — qualified types
 
+## Updates
+
+**Decision** Since adding type classes to the language is a large decision (on how the language will evolve and it could make the learning curve much steeper, we will wait with this since this is a language expansion)
+
 ## Status (2026-07-02)
 **#1 and #3 CLOSED; the shadow inferencer is RETIRED (Eq/Ord Stage 1).** The
 `<`/`==` operand-decidability check is now driven from the HM-resolved operand

@@ -1900,6 +1900,25 @@ let rec infer_expr ctx (e : expr) : ty =
         select_aggregate_field_type ctx args
      | EVar { name = "insert"; _ }
      | EVar { name = "insertMany"; _ } ->
+        (* NT-07 width-match: an inserted entity record must match its declared
+           field types — e.g. an `Int` written to an `Int32` column is a compile
+           error, not a silent narrowing caught only by Postgres at write time.
+           `insert Ent { .. }` flattens to `EConstructor Ent :: ERecord { .. } ::
+           _` (the outer `insert` application splits the constructor from its
+           record), and the record-construction arm above only fires on the
+           *tight* `EApp { EConstructor; ERecord }` unit — so rebuild that unit and
+           infer it, running the same field-by-field unification that guards bare
+           construction.  This arm previously short-circuited to `TCon name`,
+           leaving the record entirely unchecked. *)
+        (match args with
+         | EConstructor { name = rname; args = []; loc = cloc }
+           :: (ERecord { fields; loc = rloc; _ }) :: _
+           when List.mem_assoc rname ctx.records ->
+           ignore (infer_expr ctx
+             (EApp { fn = EConstructor { name = rname; args = []; loc = cloc };
+                     arg = ERecord { fields; type_hint = Some rname; loc = rloc };
+                     loc = rloc }))
+         | _ -> ());
         (match args with
          | EConstructor { name; _ } :: _ -> TCon name
          | _ -> fresh ())

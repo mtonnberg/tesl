@@ -81,10 +81,8 @@ capability noteService implies noteDbRead, noteDbWrite, noteTime, noteReadCookie
 
 # ─── Data types ───────────────────────────────────────────────────────────────
 
-type NoteId = String
-
 entity Note table "notes" primaryKey id {
-  id: NoteId @db(text)
+  id: String @db(text)
   title: String @db(text)
   content: String @db(text)
   authorId: String @db(text)

@@ -76,25 +76,93 @@ let check_sql_where_clauses
   let funcs = mf.mf_funcs in
   let fields_by_type = mf.mf_fields_map in
   let ctors = mf.mf_ctors in
-  (* Newtypes are transparent at JSON/SQL boundaries (spec §11.6). Build a map
-     from newtype head name to its base-type head name so SQL WHERE comparisons
-     against a newtype field can accept the underlying primitive literal. *)
-  let newtype_base : (string * string) list =
-    List.filter_map (function
-      | DType (TypeNewtype { name; base_type; _ }) ->
-        (match type_head_name base_type with
-         | Some base -> Some (name, base)
-         | None -> None)
-      | _ -> None
-    ) decls
-  in
-  let rec resolve_nt (k : string) : string =
-    match List.assoc_opt k newtype_base with
-    | Some base when base <> k -> resolve_nt base
-    | _ -> k
-  in
+  (* Newtypes are NOT coerced at SQL boundaries: a comparison or assignment
+     against a newtype column must supply that exact newtype (construct it, e.g.
+     `UserId x`), never the bare underlying primitive.  Coercion is not accepted
+     by design — see spec §11.6.  Field/RHS types are therefore compared by their
+     nominal head (`type_key`) with no base-type resolution. *)
   let errors = ref [] in
   let emit err = errors := err :: !errors in
+  (* Flatten a query expression to its atoms, descending through a WHERE-merged
+     EBinop (the query chain is on its left) as well as the EApp spine.  Mirrors
+     the walk-time flattening used for the WHERE scan. *)
+  let rec flatten_query_atoms e =
+    match e with
+    | EBinop { left; _ } -> flatten_query_atoms left
+    | EApp _ ->
+      let rec go acc = function
+        | EApp { fn; arg; _ } -> go (arg :: acc) fn
+        | hd -> hd :: acc
+      in go [] e
+    | other -> [other]
+  in
+  (* If [e] is an `update b in Entity …` / delete chain, return [binder_env]
+     extended with (b → Entity) so the following `set`/`where` statements in the
+     same sequence resolve the row binder.  Otherwise [binder_env] unchanged. *)
+  let update_binder_of e binder_env =
+    let atoms = flatten_query_atoms e in
+    match atoms with
+    | EVar { name = ("update" | "updateAndReturnOne"
+                   | "delete" | "deleteAndReturnResult"); _ } :: _ ->
+      let binder_name = match atoms with
+        | _ :: EVar { name; _ } :: _ -> Some name
+        | _ :: EField { obj = EVar { name; _ }; _ } :: _ -> Some name
+        | _ -> None
+      in
+      let entity_name =
+        let rec find_entity = function
+          | EVar { name = ("from" | "in"); _ } :: EConstructor { name; _ } :: _ -> Some name
+          | EVar { name = ("from" | "in"); _ } :: EVar { name; _ } :: _ -> Some name
+          | _ :: rest -> find_entity rest
+          | [] -> None
+        in find_entity atoms
+      in
+      (match binder_name, entity_name with
+       | Some bn, Some en -> (bn, en) :: binder_env
+       | _ -> binder_env)
+    | _ -> binder_env
+  in
+  (* NT-07 width-match at the `update … set field = value` write site.  A `set`
+     assigns [right_expr] into the column [binder.field]; the value's type must
+     match the column's declared type (e.g. an `Int` into an `Int32` column, or a
+     raw primitive into a distinct-primitive column, is a compile error rather
+     than a silent narrowing caught only by Postgres).  Uses the same field/RHS
+     comparison as the WHERE scan (strict nominal `type_key`, no newtype
+     coercion — §11.6), so writes and queries agree; Int vs Integer share a
+     `type_key` and are not a false positive. *)
+  let check_set_field tenv binder_env bound_names binder field right_expr loc =
+    match List.assoc_opt binder binder_env with
+    | None -> ()
+    | Some entity_name ->
+      (match record_fields_of_type fields_by_type (mk_name_type entity_name) with
+       | None -> ()
+       | Some efs ->
+         (match List.find_opt (fun (f : field_def) -> f.name = field) efs with
+          | None -> ()
+          | Some f ->
+            let field_ty = f.type_expr in
+            (match right_expr with
+             | EVar { name; _ }
+               when not (List.mem name bound_names)
+                 && not (List.mem_assoc name binder_env)
+                 && not (List.mem_assoc name funcs)
+                 && not (List.mem_assoc name tenv) ->
+               ()  (* unbound identifier — reported by other passes; skip here *)
+             | _ ->
+               (match infer_expr_type tenv funcs fields_by_type ctors right_expr with
+                | None -> ()
+                | Some rhs_ty ->
+                  let fk = type_key field_ty in
+                  let rk = type_key rhs_ty in
+                  if fk <> rk then
+                    emit (make_error loc
+                      ~hint:(Printf.sprintf
+                        "field `%s` is declared as `%s` — the assigned value must have the same type; convert or construct it explicitly"
+                        field (type_key field_ty))
+                      (Printf.sprintf
+                        "SQL SET clause: type mismatch for `%s.%s = <rhs>` — field type is `%s`, RHS is `%s`"
+                        binder field (type_key field_ty) (type_key rhs_ty)))))))
+  in
   let scan_predicate tenv binder_env bound_names pred =
     let check_field_rhs binder field op right_expr loc =
       match List.assoc_opt binder binder_env with
@@ -127,8 +195,8 @@ let check_sql_where_clauses
                  (match infer_expr_type tenv funcs fields_by_type ctors right_expr with
                   | None -> ()
                   | Some rhs_ty ->
-                    let fk = resolve_nt (type_key field_ty) in
-                    let rk = resolve_nt (type_key rhs_ty) in
+                    let fk = type_key field_ty in
+                    let rk = type_key rhs_ty in
                     if fk <> rk then
                       emit (make_error loc
                         ~hint:(Printf.sprintf
@@ -189,6 +257,14 @@ let check_sql_where_clauses
         in go [] e
       in
       let head, args = flat in
+      (* NT-07: a standalone `set b.field = rhs` statement (from `update … set …`)
+         flattens to head `set`, args [ b.field ; rhs ].  The row binder `b` is
+         threaded in via the ELet arm below (the update scopes over its sets). *)
+      (match head, args with
+       | EVar { name = "set"; _ },
+         EField { obj = EVar { name = b; _ }; field; loc = floc } :: rhs :: _ ->
+         check_set_field tenv binder_env bound_names b field rhs floc
+       | _ -> ());
       let binder_env' = match head with
         | EVar { name = ("selectOne" | "select" | "selectCount"
                        | "selectSum" | "selectMax" | "selectMin"
@@ -240,7 +316,10 @@ let check_sql_where_clauses
         | Some ty -> (name, ty) :: tenv
         | None -> tenv
       in
-      walk tenv' binder_env (name :: bound_names) body
+      (* An `update b in Entity …` value scopes its row binder over the following
+         `set`/`where` statements in this sequence (they parse as ELet body). *)
+      let binder_env' = update_binder_of value binder_env in
+      walk tenv' binder_env' (name :: bound_names) body
     | ELetProof { value_name; proof_name; value; body; _ } ->
       walk tenv binder_env bound_names value;
       let bound' =

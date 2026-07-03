@@ -4094,8 +4094,8 @@ let emit_func ctx (fd : func_decl) =
       emit ctx "(call-with-queue-transaction (lambda () ";
       emit_with_raw_tail body;
       emit ctx "))"
-    | EWithDatabase { body; _ } ->
-      emit ctx "(with-database (lambda () ";
+    | EWithDatabase { database_name; body; _ } ->
+      emit ctx (Printf.sprintf "(call-with-database %s (lambda () " database_name);
       emit_with_raw_tail body;
       emit ctx "))"
     | EWithCapabilities { capabilities; body; _ } ->

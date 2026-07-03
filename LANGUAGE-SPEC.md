@@ -1429,7 +1429,9 @@ fn formatId(id: UserId) -> String =
 ```
 The structural checker treats `.value` as the explicit unwrap for nominal newtypes. Other dotted field access is checked against declared record, entity, or ADT-variant fields; an unknown field or a field access on a non-record/non-entity/non-variant value is a compile-time error.
 
-At JSON/HTTP boundaries, newtypes are decoded and encoded transparently: the JSON representation is the same as the base type.
+At JSON/HTTP boundaries, newtypes are decoded and encoded transparently: the JSON representation is the same as the base type. Decoding an incoming request constructs the newtype from its primitive representation, and reading a row from the database lifts the stored primitive back into the newtype.
+
+At SQL boundaries, by contrast, newtypes are **not** coerced. An entity column declared as a newtype requires a value of that exact newtype at *every* SQL site — `insert`, `update … set`, and `where` — so supplying the bare underlying primitive is a compile-time error. Construct the newtype explicitly (e.g. `where owner == UserId(raw)`, `insert Row { owner: UserId(raw) }`). This keeps writes and queries honest: the column's declared type is enforced rather than silently accepting the wrong-typed value.
 
 For ADT fields, explicit labels are allowed via ordinary binding syntax. If a field is written only as a type expression, the current implementation generates labels such as `value`, `value2`, and so on.
 

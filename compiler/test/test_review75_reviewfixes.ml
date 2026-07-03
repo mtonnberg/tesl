@@ -190,10 +190,9 @@ api MyApi {
 (* ── FromDb provenance on the non-existential named-pack form (F1/F2) ────── *)
 
 let fromdb_entity = {|
-type UserId = String
 entity Todo table "todos" primaryKey id {
   id: String
-  ownerId: UserId @db(text)
+  ownerId: String @db(text)
   createdAt: PosixMillis
 }
 |}
@@ -522,6 +521,68 @@ fn narrow(n: Int) -> Maybe Int32 = Int32.fromInt n
 fn widen(x: Int32) -> Int = Int32.toInt x
 |}
 
+(* ── NT-07 width-match at SQL write/query sites ──────────────────────────────
+   An entity column must be written (insert / update…set) and compared (where)
+   with its EXACT declared type — coercion is not accepted at any SQL boundary
+   (spec §11.6).  An `Int` into an `Int32` column, or a raw `String` into a
+   newtype column, is a COMPILE error, not a silent narrowing caught only by
+   Postgres at write time.  These sites previously bypassed the field check. *)
+let sql_width_prelude = {|
+#lang tesl
+module SqlW exposing [f]
+import Tesl.Prelude exposing [String, Int, List]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Int32 exposing [Int32]
+type UserId = String
+entity Widget table "widgets" primaryKey id {
+  id: String
+  count: Int32
+  owner: UserId
+}
+|}
+
+let test_R75_NT07SQL_insert_int_into_int32_rejected () =
+  should_fail "unify Int with Int32\\|unify.*Int32" (sql_width_prelude ^ {|
+fn f(n: Int) -> String requires [dbWrite] =
+  insert Widget { id: "w", count: n, owner: UserId "u" }
+  "ok"
+|})
+
+let test_R75_NT07SQL_insert_string_into_newtype_rejected () =
+  should_fail "unify String with UserId\\|unify.*UserId" (sql_width_prelude ^ {|
+fn f(c: Int32, s: String) -> String requires [dbWrite] =
+  insert Widget { id: "w", count: c, owner: s }
+  "ok"
+|})
+
+let test_R75_NT07SQL_set_int_into_int32_rejected () =
+  should_fail "SET clause: type mismatch\\|field type is `Int32`" (sql_width_prelude ^ {|
+fn f(n: Int) -> String requires [dbRead, dbWrite] =
+  update w in Widget where w.id == "x" set w.count = n
+  "ok"
+|})
+
+let test_R75_NT07SQL_set_string_into_newtype_rejected () =
+  should_fail "SET clause: type mismatch\\|field type is `UserId`" (sql_width_prelude ^ {|
+fn f(s: String) -> String requires [dbRead, dbWrite] =
+  update w in Widget where w.id == "x" set w.owner = s
+  "ok"
+|})
+
+let test_R75_NT07SQL_where_string_into_newtype_rejected () =
+  should_fail "WHERE clause: type mismatch\\|field type is `UserId`" (sql_width_prelude ^ {|
+fn f(s: String) -> List Widget requires [dbRead] =
+  select w from Widget where w.owner == s
+|})
+
+let test_R75_NT07SQL_exact_types_accepted () =
+  should_pass (sql_width_prelude ^ {|
+fn f(c: Int32, u: UserId) -> List Widget requires [dbRead, dbWrite] =
+  insert Widget { id: "w", count: c, owner: u }
+  update w in Widget where w.id == "w" set w.count = c set w.owner = u
+  select w from Widget where w.owner == u
+|})
+
 (* ── S6a: an SSE endpoint cannot hold a body/response/return. It's structurally
    unrepresentable (sse_clause has no such fields); a written clause is REJECTED,
    never silently dropped. A valid SSE (subscribe only) still compiles. *)
@@ -599,6 +660,14 @@ let () =
     "nt07-int32", [
       test_case "R75_NT07 Int not usable as Int32" `Quick test_R75_NT07_int_not_int32_rejected;
       test_case "R75_NT07 Int32 conversions accepted" `Quick test_R75_NT07_int32_conversions_accepted;
+    ];
+    "nt07-sql-width", [
+      test_case "R75_NT07SQL insert Int->Int32 rejected" `Quick test_R75_NT07SQL_insert_int_into_int32_rejected;
+      test_case "R75_NT07SQL insert String->newtype rejected" `Quick test_R75_NT07SQL_insert_string_into_newtype_rejected;
+      test_case "R75_NT07SQL set Int->Int32 rejected" `Quick test_R75_NT07SQL_set_int_into_int32_rejected;
+      test_case "R75_NT07SQL set String->newtype rejected" `Quick test_R75_NT07SQL_set_string_into_newtype_rejected;
+      test_case "R75_NT07SQL where String->newtype rejected" `Quick test_R75_NT07SQL_where_string_into_newtype_rejected;
+      test_case "R75_NT07SQL exact types accepted" `Quick test_R75_NT07SQL_exact_types_accepted;
     ];
     "s6a-endpoint-sum-type", [
       test_case "R75_S6A SSE with body rejected" `Quick test_R75_S6A_sse_with_body_rejected;

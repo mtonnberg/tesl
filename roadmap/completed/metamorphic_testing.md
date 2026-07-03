@@ -1,9 +1,32 @@
 # VER-METAMORPHIC — systematic soundness hunting (fuzz + metamorphic invariance + runtime oracle)
 
-**Status:** OPEN · **Effort:** L (three sub-parts: fuzzer M, metamorphic property M, runtime
-oracle L) · **Refs:** 2026-07 review (VER-METAMORPHIC); `test_review75` (durable fixtures for the
-already-fixed forgery classes); reuse `compiler/lib/mutate.ml`, `Compile.check_module`, and the
-in-process harness in `compiler/test/test_s7_generative.ml`.
+**Status:** COMPLETED. Sub-parts 1 + 2 DELIVERED (gate-green); **sub-part 3 DECLINED by the
+maintainer (2026-07-03)** — see the banner on that section below. · **Effort:** L (three sub-parts: fuzzer M, metamorphic
+property M, runtime oracle L) · **Refs:** 2026-07 review (VER-METAMORPHIC); `test_review75`
+(durable fixtures for the already-fixed forgery classes); reuse `compiler/lib/mutate.ml`,
+`Compile.check_module`, and the in-process harness in `compiler/test/test_s7_generative.ml`.
+
+## Delivered — sub-parts 1 + 2 (`compiler/test/test_metamorphic.ml`, in the `dune test` gate)
+
+- **Sub-part 1 — grammar-valid fuzz.** Every parseable `.tesl` under `example/` + `tests/`, plus
+  each structural mutant from `Mutate.generate_mutants` (the proof/capability TCB), is run through
+  `Compile.check_module` in-process; the property is that the checker never raises (totality). ~380
+  programs fuzzed, 0 crashes.
+- **Sub-part 2 — metamorphic invariance.** Two rewrites that are semantics-preserving *by
+  construction* — insert an inert `let _ = 0` at a body head, and reorder two top-level functions —
+  must not change the accept/reject verdict, asserted over the accepted corpus AND rejected
+  fixtures (inverse direction). ~40+ invariance checks, all invariant.
+- **Load-bearing verified:** a temporary `check_module` crash canary (env-gated) made every fuzz
+  case fail as expected; reverted. The invariance property likewise fired during development,
+  correctly flagging an unsound α-rename attempt.
+- **α-rename NOT used (by design):** Tesl proofs carry variable names by string in
+  return-spec/`:::`/FromDb positions outside the ordinary expression tree, so a partial rename is
+  not meaning-preserving and manufactures false flips. A proof-aware rename (rename in body AND all
+  proof positions) is a future enhancement — the harness is structured to add transforms easily.
+- **Coverage logged + floored** (`fuzzed >= 50`, `invariance >= 40`, `crashes == 0`) so a green run
+  cannot silently mean "explored nothing".
+
+## Remaining — sub-part 3 only (needs go-ahead)
 
 ## Why
 
@@ -68,6 +91,14 @@ accepted bare but not under a wrapper, or vice versa). Reuse `mutate.ml` for the
 `Compile.check_module` for the verdict.
 
 ## Sub-part 3 — runtime proof-witness differential oracle (the erasure backstop)
+
+> **DECLINED (2026-07-03, maintainer).** Do NOT build this and do NOT reintroduce proof
+> information at runtime. Proof erasure is intentional and load-bearing (§4.3, zero-cost); a
+> retain-mode lowering that re-checks `P(v)` at run time reverses that decision. Metamorphic
+> testing's purpose here is only to confirm that **behaviour is unchanged** under
+> semantics-preserving rewrites (the checker's verdict is invariant; the runtime still works /
+> tests still pass) — NOT to re-derive erased proofs. Sub-parts 1 + 2 deliver that. The text below
+> is retained only as the record of the rejected option.
 
 Because proofs are erased on the standard (zero-cost) path, nothing at runtime re-checks a
 predicate the checker assumed. Add a **test-only** retain-mode lowering: at each site where an erased

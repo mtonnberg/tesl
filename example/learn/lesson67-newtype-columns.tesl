@@ -1,0 +1,92 @@
+#lang tesl
+module Lesson67NewtypeColumns exposing [findBySku, quantityForSku]
+
+# ─────────────────────────────────────────────
+# QUICK START — newtypes as entity columns
+# ─────────────────────────────────────────────
+# A newtype (`type Sku = String`) is a DISTINCT type from its base, even at the
+# database boundary. A `Sku` column stores as plain text, but Tesl does NOT
+# coerce: you must CONSTRUCT the newtype (`Sku "ABC"`) to write it, update it, or
+# query by it. A bare `String` where a `Sku` is declared is a COMPILE-TIME error
+# at every SQL site — insert, `update … set`, and `where` — not a silent
+# conversion caught only by the database. (Coercion is not accepted; spec §11.6.)
+#
+#   insert Product { sku: "ABC" }               # ❌ compile error: String vs Sku
+#   insert Product { sku: Sku "ABC" }           # ✅ construct the newtype
+#   update p in Product … set p.sku = Sku "X"   # ✅ constructed on assignment too
+#   select p from Product where p.sku == Sku k  # ✅ constructed in the predicate
+#
+# This lesson proves newtype columns work end-to-end at runtime: it constructs a
+# Sku, inserts it, updates it via `set`, and queries it back via `where`.
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+
+# ─── A newtype used as a column ─────────────────────────────────────────────────
+# `Sku` wraps String but is a distinct type. It is NOT interchangeable with String.
+type Sku = String
+
+entity Product table "products" primaryKey id {
+  id: String
+  sku: Sku # newtype column — stored as text, but nominally a Sku
+  quantity: Int
+}
+
+# ─── Database (in-memory, so the lesson runs with no external Postgres) ──────────
+database Warehouse = Database {
+  entities: [Product]
+  backend: Memory
+}
+
+# ─── Query by a newtype column ──────────────────────────────────────────────────
+# The predicate compares `p.sku` (a Sku) to `Sku rawSku` — the raw String is
+# lifted into a Sku explicitly. `where p.sku == rawSku` would not compile.
+fn findBySku(rawSku: String) -> List Product
+  requires [dbRead] =
+  with database Warehouse {
+    select p from Product where p.sku == Sku rawSku
+  }
+
+# ─── Read a scalar back through the newtype column ──────────────────────────────
+# Returns the quantity of the product matching the Sku, or 0 if none. `selectOne`
+# also compares the Sku column, so the raw String is lifted with `Sku` here too.
+fn quantityForSku(rawSku: String) -> Int
+  requires [dbRead] =
+  with database Warehouse {
+    let found = selectOne p from Product where p.sku == Sku rawSku
+    case found of
+      Nothing -> 0
+      Something p -> p.quantity
+  }
+
+# ─── Tests — newtype columns round-trip through insert / set / where ────────────
+
+test "insert constructs the newtype column and query finds it" requires [dbRead, dbWrite] {
+  with database Warehouse {
+    let _ = insert Product { id: "p1", sku: Sku "WIDGET-1", quantity: 10 }
+  }
+  expect quantityForSku "WIDGET-1" == 10
+}
+
+test "query by a non-existent Sku returns empty" requires [dbRead, dbWrite] {
+  with database Warehouse {
+    let _ = insert Product { id: "p2", sku: Sku "WIDGET-2", quantity: 5 }
+  }
+  expect findBySku "NO-SUCH-SKU" == []
+}
+
+test "update ... set writes the newtype column, then query finds the new value" requires [dbRead, dbWrite] {
+  with database Warehouse {
+    let _ = insert Product { id: "p3", sku: Sku "OLD-SKU", quantity: 7 }
+  }
+  with database Warehouse {
+    update p in Product
+      where p.id == "p3"
+      set p.sku = Sku "NEW-SKU"
+      set p.quantity = 99
+  }
+  expect quantityForSku "NEW-SKU" == 99
+  expect findBySku "OLD-SKU" == []
+}

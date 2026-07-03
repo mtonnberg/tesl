@@ -174,8 +174,8 @@ check checkOpen(todo: Todo) -> todo: Todo ::: IsOpen todo =
 fn seedExampleData() -> Int
   requires [todoDbRead, todoDbWrite, time] =
   if List.isEmpty (select todo from Todo) then
-    insert Todo { id: "todo-1", title: "Review the SQL layer", ownerId: "mikael", status: Open, createdAt: nowMillis() }
-    insert Todo { id: "todo-2", title: "Sketch more DSL examples", ownerId: "anna", status: Open, createdAt: nowMillis() }
+    insert Todo { id: "todo-1", title: "Review the SQL layer", ownerId: UserId "mikael", status: Open, createdAt: nowMillis() }
+    insert Todo { id: "todo-2", title: "Sketch more DSL examples", ownerId: UserId "anna", status: Open, createdAt: nowMillis() }
     2
   else
     0

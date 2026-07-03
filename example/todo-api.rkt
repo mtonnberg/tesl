@@ -175,7 +175,7 @@
   (seedExampleData)
   #:capabilities [todoDbRead todoDbWrite time]
   #:returns Integer
-  (thsl-src! "example/todo-api.tesl" 176 (list) (lambda () (if (raw-value (tesl_import_List_isEmpty (select-many (from Todo)))) (let ([_ (insert-one! Todo (hash 'id "todo-1" 'title "Review the SQL layer" 'ownerId "mikael" 'status Open 'createdAt (raw-value (nowMillis))))]) (let ([_ (insert-one! Todo (hash 'id "todo-2" 'title "Sketch more DSL examples" 'ownerId "anna" 'status Open 'createdAt (raw-value (nowMillis))))]) (raw-value 2))) (raw-value 0)))))
+  (thsl-src! "example/todo-api.tesl" 176 (list) (lambda () (if (raw-value (tesl_import_List_isEmpty (select-many (from Todo)))) (let ([_ (insert-one! Todo (hash 'id "todo-1" 'title "Review the SQL layer" 'ownerId (raw-value (UserId "mikael")) 'status Open 'createdAt (raw-value (nowMillis))))]) (let ([_ (insert-one! Todo (hash 'id "todo-2" 'title "Sketch more DSL examples" 'ownerId (raw-value (UserId "anna")) 'status Open 'createdAt (raw-value (nowMillis))))]) (raw-value 2))) (raw-value 0)))))
 
 (define-handler
   (listTest [requestUser : User ::: (Authenticated requestUser)] [newTodos : (List String)])
