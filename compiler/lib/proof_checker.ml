@@ -289,7 +289,7 @@ let is_lowercase_subject_name (name : string) : bool =
   let c = name.[0] in
   (c >= 'a' && c <= 'z') || c = '_'
 
-let rec proof_uses_existing_witness (p : proof_expr) : bool =
+let rec proof_uses_existing_witness ~(is_clean_fact_fn : string -> bool) (p : proof_expr) : bool =
   match p with
   | PredApp { pred; args = []; _ } ->
     is_lowercase_subject_name pred
@@ -302,12 +302,47 @@ let rec proof_uses_existing_witness (p : proof_expr) : bool =
   | PredApp { pred; args; _ }
     when is_lowercase_subject_name pred && args <> [] &&
          List.for_all is_lowercase_subject_name args ->
-    (* An establish function call used as inline proof: `x ::: positive n` or `x ::: nonzero n` —
-       allowed in fn context since it calls a proof-producing establish function. *)
-    true
+    (* An establish function call used as inline proof: `x ::: proveTok t`.  This is
+       sound to attach inline ONLY when the callee returns a CLEAN `Fact (...)` (a
+       total `establish`), which lowers to a detached proof that `attach-proof`
+       accepts.  A callee returning a WRAPPED / fallible result — `Maybe (Fact ...)`,
+       `Either _ (Fact ...)`, `List (Fact ...)`, or a `check`/`auth`/plain `fn` — would
+       lower to attaching a non-proof value and TRAP at runtime, so it is rejected
+       here (with a targeted diagnostic in [validate_no_ok_in_fn]).  You cannot derive
+       a proof from a wrapped result without first eliminating the wrapper. *)
+    is_clean_fact_fn pred
   | PredAnd { left; right; _ } ->
-    proof_uses_existing_witness left && proof_uses_existing_witness right
+    proof_uses_existing_witness ~is_clean_fact_fn left
+    && proof_uses_existing_witness ~is_clean_fact_fn right
   | _ -> false
+
+(** A function's return spec is a CLEAN detached `Fact (...)` — i.e. a total
+    `establish f(..) -> Fact (P x)`.  Only such a value may be attached inline with
+    `:::` in a fn/handler body; anything wrapped (`Maybe`/`Either`/`List`/…) or a
+    fallible `check`/`auth` result cannot (it is not a plain detached proof). *)
+let return_spec_is_clean_fact (rs : return_spec) : bool =
+  match rs with
+  | RetPlain { ty = TApp { head = TName { name = "Fact"; _ }; _ }; _ } -> true
+  | _ -> false
+
+(** If [p] is (or, in a conjunction, contains) an inline call `f a b …` to a
+    DECLARED function [f] that does NOT return a clean `Fact`, return [Some f].
+    Powers the targeted "eliminate the wrapper first" diagnostic for `x ::: f …`. *)
+let non_clean_fact_inline_call (p : proof_expr) (clean_fact_fns : string list)
+    (known_fns : string list) : string option =
+  let is_combinator = function
+    | "detachFact" | "detachAllFact" | "introAnd" | "andLeft" | "andRight" -> true
+    | _ -> false in
+  let rec go = function
+    | PredApp { pred; args; _ }
+      when is_lowercase_subject_name pred && args <> []
+           && not (is_combinator pred)
+           && List.mem pred known_fns
+           && not (List.mem pred clean_fact_fns) -> Some pred
+    | PredAnd { left; right; _ } ->
+      (match go left with Some x -> Some x | None -> go right)
+    | _ -> None
+  in go p
 
 (** Check that `ok expr ::: proof` is only used in check/establish/auth functions,
     unless the proof expression is merely reattaching an existing lowercase fact witness. *)
@@ -321,8 +356,13 @@ let string_of_func_kind = function
   | DeadWorkerKind -> "deadworker"
   | MainKind -> "main"
 
-let validate_no_ok_in_fn (body : expr) (kind : func_kind) (fd_loc : loc)
+let validate_no_ok_in_fn ~(funcs : func_decl list) (body : expr) (kind : func_kind) (fd_loc : loc)
     : proof_error list =
+  let clean_fact_fns =
+    List.filter_map (fun (f : func_decl) ->
+      if return_spec_is_clean_fact f.return_spec then Some f.name else None) funcs in
+  let known_fns = List.map (fun (f : func_decl) -> f.name) funcs in
+  let is_clean_fact_fn name = List.mem name clean_fact_fns in
   match kind with
   | CheckKind | AuthKind -> []  (* ok/fail allowed in check/auth *)
   | EstablishKind ->
@@ -385,12 +425,25 @@ Use an 'if' expression and return 'Nothing' for the failure case instead." }]
     (* Walk the body looking for EOk *)
     let rec walk (e : Ast.expr) =
       match e with
-      | EOk { proof; _ } when proof_uses_existing_witness proof ->
+      | EOk { proof; _ } when proof_uses_existing_witness ~is_clean_fact_fn proof ->
         []
-      | EOk { loc; _ } ->
-        [{ loc; message = Printf.sprintf
-             "ok ::: proof construction is not allowed in `%s`; use a check, auth, or establish function"
-             (string_of_func_kind kind) }]
+      | EOk { proof; loc; _ } ->
+        (match non_clean_fact_inline_call proof clean_fact_fns known_fns with
+         | Some fn_name ->
+           (* `x ::: fn …` where `fn` does not return a clean `Fact` — attaching a
+              wrapped/fallible result would trap at runtime.  Point to the sound
+              wrapper-elimination idiom instead. *)
+           [{ loc; message = Printf.sprintf
+                "`%s ...` cannot be attached inline with `:::`: `%s` does not return a clean \
+`Fact (...)` — its result is wrapped or fallible (e.g. `Maybe`/`Either`/`List`, or a \
+`check`/`auth`). Only a total `establish` returning `Fact (...)` may be attached inline. \
+Eliminate the wrapper first, then attach the extracted proof, e.g.:\n  \
+case %s ... of\n    Nothing -> <handle absence>\n    Something p -> ... (value ::: p)"
+                fn_name fn_name fn_name }]
+         | None ->
+           [{ loc; message = Printf.sprintf
+                "ok ::: proof construction is not allowed in `%s`; use a check, auth, or establish function"
+                (string_of_func_kind kind) }])
       (* Explicit leaves / DELIBERATE non-descents — preserved exactly as the
          EOk-search rule intends (EConstructor does NOT walk its args; ECase
          walks bodies but NOT guards; cache/email forms and EStartWorkers do not
@@ -1373,7 +1426,7 @@ name the proof-carrying value (a different parameter or local), not the Fact par
       ) fd.params;
 
       (* 2. Check ok ::: only in check/auth/establish *)
-      errors := validate_no_ok_in_fn fd.body fd.kind fd.loc @ !errors;
+      errors := validate_no_ok_in_fn ~funcs:all_funcs fd.body fd.kind fd.loc @ !errors;
 
       (* 3. Validate check/auth return proofs *)
       errors := validate_check_return all_funcs fd @ !errors;
@@ -1481,26 +1534,31 @@ fact constructor `%s`; the body must return the declared fact constructor"
                  fd.name declared_pred wrong }
                :: !errors
              ) wrong_ctors;
-             (* For multi-arg / literal-param facts, ALSO verify that a body use of
-                the *correct* constructor supplies the declared literal arguments.
-                `establish e -> Fact (Clamped 1 100 n) = Clamped 2 200 n` uses the
-                right constructor but the wrong literals (2/200 vs 1/100) — that
-                lies about which fact it proves, just like using a wrong ctor.
-                We only constrain positions whose DECLARED argument is a literal
-                (numeric / string / boolean), leaving subject positions (lowercase
-                identifiers like `n`) free to be bound to any value. *)
+             (* For multi-arg facts, ALSO verify that a body use of the *correct*
+                constructor supplies the declared arguments — BOTH literal-constant
+                positions AND GDP subject positions.
+                Literal example: `establish e -> Fact (Clamped 1 100 n) = Clamped 2 200 n`
+                uses the right constructor but the wrong literals (2/200 vs 1/100).
+                Subject example (GDP-EST-SUBJECT, 2026-07 review §3.1): `establish e(n,m)
+                -> Fact (P n) = P m` uses the right constructor but mints the fact about
+                the WRONG subject `m`.  Because proofs are erased at runtime there is no
+                backstop, so a subject-swapped mint hands downstream code a proof about a
+                value the caller never established it for.  `check`/`auth` already reject
+                the identical swap; `establish` must too.  We therefore constrain EVERY
+                declared argument position.  A declared SUBJECT (lowercase identifier such
+                as `n`) must be minted about that same identifier; a declared literal must
+                be reproduced verbatim.  Positions whose body argument is a compound
+                expression (e.g. `n / 2`) render to None below and stay conservatively
+                unchecked, so subject-preserving derived-value proofs are not false
+                positives. *)
              (match declared_fact_of_return fd.return_spec with
               | None -> ()
               | Some (_, declared_args) ->
-                (* Is this declared-arg position a literal constant rather than a
-                   GDP subject?  Subjects are lowercase-initial identifiers; `_`
-                   is a placeholder; everything else (digits, minus sign, string
-                   quote, uppercase) we treat as a literal we must match exactly. *)
-                let is_literal_arg a =
-                  String.length a > 0 &&
-                  not (a = "_") &&
-                  not (a = "?") &&
-                  not ((a.[0] >= 'a' && a.[0] <= 'z'))
+                (* A declared-arg position is checkable unless it is a placeholder
+                   (`_` / `?`).  Both literal constants and GDP subjects are checked;
+                   the body argument's rendered form must equal the declared arg. *)
+                let is_checked_pos a =
+                  String.length a > 0 && a <> "_" && a <> "?"
                 in
                 (* Render a body argument expression into the same surface string
                    the type-arg encoding uses: integers as digits (ELit (LInt 2)
@@ -1537,7 +1595,7 @@ fact constructor `%s`; the body must return the declared fact constructor"
                   if name = declared_pred
                      && List.length body_args = List.length declared_args then
                     List.iteri (fun i declared_a ->
-                      if is_literal_arg declared_a then
+                      if is_checked_pos declared_a then
                         match expr_arg_to_string (List.nth body_args i) with
                         | Some actual when actual <> declared_a ->
                           arg_mismatches :=
@@ -1567,7 +1625,7 @@ fact constructor `%s`; the body must return the declared fact constructor"
                 List.iter (fun detail ->
                   errors := { loc = fd.loc; message = Printf.sprintf
                     "establish '%s' declares return type `Fact (%s)` but its body's `%s` constructor \
-supplies the wrong literal arguments (%s); the body must return the declared fact"
+supplies the wrong arguments (%s); the body must return the declared fact about the declared subject"
                     fd.name (String.concat " " (declared_pred :: declared_args)) declared_pred detail }
                   :: !errors
                 ) (List.sort_uniq String.compare !arg_mismatches)))

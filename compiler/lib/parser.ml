@@ -1653,7 +1653,11 @@ and parse_telemetry s =
   let* _ = expect s LBRACE in
   skip_newlines s;
   let fields = ref [] in
-  while peek s <> RBRACE && peek s <> EOF do
+  (* A telemetry field written with `:` instead of `=` (`user.id: v`) was previously
+     SILENTLY dropped — its value expression discarded from the emitted code.  A
+     missing `=` is now a parse error (captured here, returned after the loop). *)
+  let field_err = ref None in
+  while peek s <> RBRACE && peek s <> EOF && !field_err = None do
     skip_newlines s;
     if peek s = RBRACE then ()
     else begin
@@ -1679,17 +1683,21 @@ and parse_telemetry s =
               if peek s = COMMA then advance s
             | Err _ -> ())
          | Err _ ->
-           (* EQ missing — skip to next comma or RBRACE *)
-           while peek s <> COMMA && peek s <> RBRACE && peek s <> EOF
-                 && peek s <> NEWLINE do advance s done;
-           if peek s = COMMA then advance s)
+           (* EQ missing (e.g. `user.id: v` with a `:`) — a parse error, not a
+              silent drop.  Capture the diagnostic at the offending token and stop. *)
+           field_err := Some (err s (Printf.sprintf
+             "telemetry field `%s` must be written `%s = <expr>` (with `=`, not `:`)"
+             fname fname)))
       end;
       ignore ()
     end
   done;
-  if peek s = RBRACE then advance s;
-  let loc = span loc0 (current_loc s) in
-  return (ETelemetry { name; fields = List.rev !fields; loc })
+  match !field_err with
+  | Some e -> e
+  | None ->
+    if peek s = RBRACE then advance s;
+    let loc = span loc0 (current_loc s) in
+    return (ETelemetry { name; fields = List.rev !fields; loc })
 
 and parse_pipe_right s =
   (* |> (pipe-right): f |> g = g f, left-associative, lower precedence than &&
@@ -3112,14 +3120,20 @@ let rec parse_type_form s =
          return (TypeNewtype { name; base_type = base; loc })
        end
      | IDENT _ ->
-       (* Transparent alias or tvar *)
+       (* §7.11 (review 2026-07): a single non-ADT base is a NOMINAL newtype
+          (tagged at runtime), UNIFORMLY — not a transparent alias — whether the
+          base is a named type (`String`), a type variable (`a`), or a
+          tuple/parenthesized type.  Previously tvar/tuple/paren bases became
+          transparent aliases, so §7.11's runtime nominal-tag guarantee (and the
+          `type Name = BaseType` "nominal, not transparent" wording) held only for
+          uppercase-named bases.  This makes the runtime encoding match the spec. *)
        let* base = parse_type_expr s in
        let loc = span loc0 (current_loc s) in
-       return (TypeAlias { name; base_type = base; loc })
+       return (TypeNewtype { name; base_type = base; loc })
      | _ ->
        let* base = parse_type_expr s in
        let loc = span loc0 (current_loc s) in
-       return (TypeAlias { name; base_type = base; loc }))
+       return (TypeNewtype { name; base_type = base; loc }))
   | NEWLINE | INDENT ->
     skip_newlines s;
     (* ADT with variants each on separate indented lines *)

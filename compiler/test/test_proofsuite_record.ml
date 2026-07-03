@@ -284,6 +284,23 @@ fn mk(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity, re
   OrderLine { price: price, quantity: quantity } ::: recordProof
 |} order_setup)
 
+(* ── O4c — ghost witness ABSENCE (2026-07 review §3.2, GDP-RECORD-WITNESS) ──── *)
+(* A bare construction of an invariant-bearing record with NO `::: witness` is
+   rejected.  Previously this compiled (the obligation was checked only when a
+   witness was PRESENT); the spec §11.7 promised this rejection but no pass emitted
+   it.  The field proofs (IsPositive) ARE satisfied here — the ONLY missing piece is
+   the cross-field ghost witness. *)
+let test_O4c_bare_construction_missing_witness () =
+  should_fail "requires a ghost witness for its cross-field invariant\\|ghost witness"
+    (Printf.sprintf {|
+#lang tesl
+module OGhostMissing exposing []
+import Tesl.Prelude exposing [Int, Fact]
+%s
+fn mk(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity) -> OrderLine =
+  OrderLine { price: price, quantity: quantity }
+|} order_setup)
+
 (* ── O5 — ghost witness: predicate mismatch via detachFact of a proof param ── *)
 (* detachFact of a proof-annotated PARAMETER whose predicate differs from the
    invariant is rejected by the proof checker (P001). *)
@@ -568,6 +585,9 @@ let () =
     "O4b-ghost-mismatch-matrix", to_cases (o4b_ghost_mismatch_matrix @ [
       "O4b correct 2-arg witness (positive)", test_O4b_correct_2arg_witness_positive;
     ]);
+    "O4c-ghost-witness-absence", to_cases [
+      "O4c bare construction missing witness (§3.2)", test_O4c_bare_construction_missing_witness;
+    ];
     "O5-ghost-witness-detach-param", to_cases [
       "O5 detachFact param wrong predicate", test_O5_detach_param_wrong_predicate;
     ];

@@ -76,7 +76,13 @@ record EmailJob {
 
 # ── Queue declaration ─────────────────────────────────────────────────────────
 
-queue EmailQueue requires [emailCap] = Queue {
+# A queue's `requires` is the ambient capability set every one of its workers
+# runs under — the regular worker AND the dead-letter worker.  It must therefore
+# grant everything any wired worker needs: `emailCap` for `processEmail` and
+# `deadEmailCap` for the dead-letter `handleDeadEmail`.  (The compiler enforces
+# `worker.requires ⊆ queue.requires`; a worker needing a cap the queue omits would
+# 500 at runtime with "Missing capabilities".)
+queue EmailQueue requires [emailCap, deadEmailCap] = Queue {
   database: EmailDatabase
   jobs: [Job EmailJob processEmail (Something handleDeadEmail)]
   retry: QueueRetryStrategy {

@@ -425,8 +425,18 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
        | DFunc fd -> Some (fd.name, (fd.capabilities, fd.loc)) | _ -> None) decls in
      let servers = List.filter_map (function
        | DServer s -> Some (s.name, List.map snd s.bindings) | _ -> None) decls in
+     (* Worker reachability is derived from the SURFACE queue `jobs` (regular +
+        dead-letter handlers) via the same folding desugar uses.  The parser NEVER
+        emits `DWorkers` — those are synthesized in desugar, which runs AFTER this
+        validation pass — so the old `DWorkers` match here was DEAD CODE and no worker
+        was ever capability-checked (CAP-COMPOSE, review 2026-07 §6). *)
      let workers_by_queue = List.filter_map (function
-       | DWorkers w -> Some (w.queue_name, List.map snd w.bindings) | _ -> None) decls in
+       | DQueue q ->
+         let handlers =
+           List.concat_map (fun (w : workers_form) -> List.map snd w.bindings)
+             (Desugar.folded_queue_workers q) in
+         Some (q.name, List.sort_uniq String.compare handlers)
+       | _ -> None) decls in
      let queue_caps = List.filter_map (function
        | DQueue q -> Some (q.name, (q.capabilities, q.loc)) | _ -> None) decls in
      let rec collect_apps (e : expr) : expr list =
@@ -452,9 +462,7 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
      let handler_fns =
        List.concat_map (fun sn -> match List.assoc_opt sn servers with
          | Some hs -> hs | None -> []) api_servers |> List.sort_uniq String.compare in
-     let worker_fns =
-       List.concat_map (fun qn -> match List.assoc_opt qn workers_by_queue with
-         | Some ws -> ws | None -> []) app_queues |> List.sort_uniq String.compare in
+     (* Workers are checked queue-relative below (worker ⊆ queue), not against main. *)
      let report kind name requires loc =
        let missing =
          List.filter (fun c -> not (is_granted c)) (expand_declared requires)
@@ -474,8 +482,36 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
      in
      List.iter (fun h -> match List.assoc_opt h fn_info with
        | Some (reqs, loc) -> report "handler" h reqs loc | None -> ()) handler_fns;
-     List.iter (fun w -> match List.assoc_opt w fn_info with
-       | Some (reqs, loc) -> report "worker" w reqs loc | None -> ()) worker_fns;
+     (* Each worker runs under its QUEUE's capabilities (the runtime ambient set by
+        `start-workers!`), so `worker.requires` must be ⊆ `queue.requires` — the exact
+        runtime condition.  Combined with the queue ⊆ main check below, this gives
+        worker ⊆ queue ⊆ main.  This catches BOTH a worker needing a cap `main` never
+        grants AND a worker needing a cap the queue itself does not carry — both of
+        which 500 at runtime today but previously compiled clean. *)
+     List.iter (fun qn ->
+       match List.assoc_opt qn queue_caps, List.assoc_opt qn workers_by_queue with
+       | Some (qcaps, _), Some ws ->
+         let qgrant = expand_declared qcaps in
+         List.iter (fun w -> match List.assoc_opt w fn_info with
+           | Some (reqs, loc) ->
+             let missing =
+               List.filter (fun c -> not (List.mem c qgrant)) (expand_declared reqs)
+               |> List.sort_uniq String.compare in
+             if missing <> [] then
+               errors := make_error loc
+                 ~hint:(Printf.sprintf
+                   "add [%s] to queue `%s`'s `requires` (workers run under the queue's \
+                    capabilities), or remove %s from worker `%s`"
+                   (String.concat ", " missing) qn (String.concat ", " missing) w)
+                 (Printf.sprintf
+                   "worker `%s` requires [%s], but its queue `%s` does not grant %s; a worker \
+                    runs under its queue's capabilities, so this fails at runtime with \
+                    \"Missing capabilities\""
+                   w (String.concat ", " missing) qn
+                   (if List.length missing = 1 then "it" else "them"))
+               :: !errors
+           | None -> ()) ws
+       | _ -> ()) app_queues;
      List.iter (fun qn -> match List.assoc_opt qn queue_caps with
        | Some (caps, loc) -> report "queue" qn caps loc | None -> ()) app_queues
    | _ -> ());

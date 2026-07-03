@@ -928,7 +928,22 @@ let check_fn_return_proof_annotations
         | HandlerKind -> "handler" | WorkerKind -> "worker" | _ -> "fn" in
       let check_required kind required =
         let required_pred = match required with PredApp { pred; _ } -> Some pred | _ -> None in
-        let is_stdlib_auto = match required_pred with Some pred -> List.mem pred stdlib_auto_preds | None -> false in
+        (* GDP-FROMDB-NAMEDPACK (2026-07 review §3.3): the `?` named-pack path must
+           apply the SAME producing-site gate the `:::` (RetAttached) and `Maybe`
+           (RetMaybeAttached) paths use — NOT a flat name-membership.  FromDb is
+           framework-produced only when the body runs a real select/insert/upsert
+           (body_has_db_site); FromQueue/FromDeadQueue are never body-minted; ForAll*
+           keep their dedicated flow validator (still auto here).  Without this gate a
+           plain `fn f(pk) -> E ? FromDb (Id == pk) = E { ... }` (no DB access at all)
+           minted a fabricated provenance proof consumed downstream as a real DB row. *)
+        let is_stdlib_auto = match required_pred with
+          | Some "FromDb" ->
+            let user_fn_names =
+              List.filter_map (function DFunc d -> Some d.name | _ -> None) decls in
+            body_has_db_site ~shadowed:user_fn_names fd.body
+          | Some ("FromQueue" | "FromDeadQueue") -> false
+          | Some p -> List.mem p stdlib_auto_preds
+          | None -> false in
         if not is_stdlib_auto && not (proof_matches required carried) then
           errors := make_error ret_loc
             ~hint:(Printf.sprintf
@@ -1410,7 +1425,7 @@ let check_ghost_witness_predicates (decls : top_decl list)
       let rec walk_body = function
         | EOk { value; proof; loc } ->
           (match value with
-           | EApp { fn = EConstructor { name = rname; args = []; _ }; arg = ERecord _; _ }
+           | EApp { fn = EConstructor { name = rname; args = []; _ }; arg = ERecord { fields = witnessed_fields; _ }; _ }
              when List.mem_assoc rname record_invariants ->
              let expected_pred = List.assoc rname record_invariants in
              (* Resolve the proof predicate from the ghost witness expression.
@@ -1458,7 +1473,10 @@ let check_ghost_witness_predicates (decls : top_decl list)
                     rname expected_pred actual_pred)
                 :: !errors
               | _ -> ());
-             walk_body value
+             (* Witness is present and validated above.  Recurse into the record's
+                field expressions ONLY (not the whole construction node), so the
+                bare-construction arm below does NOT re-flag this witnessed site. *)
+             List.iter (fun (_, fe) -> walk_body fe) witnessed_fields
            | _ -> walk_body value);
         (* ELet keeps its explicit arm because the `track_let_binding` side
            effect (registering an establish/check binding in `local_fact_map`)
@@ -1474,6 +1492,30 @@ let check_ghost_witness_predicates (decls : top_decl list)
            EFail.message, so keep these explicit no-ops to preserve behaviour. *)
         | EStartWorkers _ | ELit _ | EVar _ | EField _ | EFail _
         | EStartEmailWorker _ -> ()
+        (* GDP-RECORD-WITNESS (2026-07 review §3.2): a record type that declares a
+           cross-field invariant (`record R { ... } ::: Pred a b`) must be constructed
+           WITH a ghost witness — `R { ... } ::: <proofVar>` (which parses to an
+           EOk node, handled above).  A BARE construction reaches HERE as a plain
+           `EApp { EConstructor R; ERecord }` (not inside an EOk), carries no witness,
+           and — because the invariant is erased at runtime with no backstop — would
+           silently produce a value that violates the invariant.  The spec (§11.7)
+           promises this exact rejection; it was previously emitted by no pass.  This
+           also covers a bare construction nested anywhere (e.g. `Something (R {..})`),
+           since iter_children routes such sub-exprs through walk_body. *)
+        | EApp { fn = EConstructor { name = rname; args = []; _ };
+                 arg = ERecord { fields = bare_fields; _ }; loc; _ }
+          when List.mem_assoc rname record_invariants ->
+          let inv = List.assoc rname record_invariants in
+          errors := make_error loc
+            ~hint:(Printf.sprintf
+              "supply the cross-field proof as a ghost witness at the construction site: \
+               `%s { ... } ::: <proofVar>`, where `<proofVar>` carries `%s`" rname inv)
+            (Printf.sprintf
+              "constructing `%s` requires a ghost witness for its cross-field invariant `%s`; \
+               a `%s { ... }` literal must be written `%s { ... } ::: <proofVar>`"
+              rname inv rname rname)
+          :: !errors;
+          List.iter (fun (_, fe) -> walk_body fe) bare_fields
         (* Every remaining variant recurses into all child exprs with the same
            captured `errors`/`local_fact_map` refs — the shared
            {!Ast_visitor.iter_children} traversal, same children, same order. *)

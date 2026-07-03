@@ -1970,9 +1970,13 @@ record Pair {
   a: Int ::: Pos a
   b: Int ::: Pos b
 } ::: Gt a b via checkGt
-fn makeIt(a: Int ::: Pos a, b: Int ::: Pos b) -> Pair =
-  Pair { a: a, b: b }
+fn makeIt(a: Int ::: Pos a, b: Int ::: Pos b, gtProof: Fact (Gt a b)) -> Pair =
+  Pair { a: a, b: b } ::: gtProof
 |} in
+  (* NB: constructing a record with a cross-field invariant requires a ghost
+     witness (`::: gtProof`) — a bare `Pair { a; b }` is a compile error since the
+     2026-07 review §3.2 fix (GDP-RECORD-WITNESS).  This test verifies emitter output,
+     so it uses the (now-required) witnessed construction. *)
   let racket = compile_ok "regression_record_invariant" src in
   if not (contains "define-record" racket && contains "Pair" racket) then
     Alcotest.failf "regression_record_invariant: expected define-record Pair in output";

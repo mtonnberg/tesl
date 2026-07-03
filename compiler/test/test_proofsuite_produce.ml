@@ -230,11 +230,70 @@ establish e(n: Int) -> Fact (Clamped 1 100 n) =
 (* CLOSED (establish + literal-param fact): same constructor with WRONG literal
    args (`Clamped 2 200 n` vs declared `Clamped 1 100 n`) is now rejected. *)
 let test_A_GAP_establish_literal_param_wrong_args () =
-  should_fail "wrong literal arguments"
+  should_fail "wrong arguments"
     (prelude "AGapEstArgs" ^ {|
 fact Clamped (lo: Int) (hi: Int) (n: Int)
 establish e(n: Int) -> Fact (Clamped 1 100 n) =
   Clamped 2 200 n
+|})
+
+(* 2026-07 review §3.1 (GDP-EST-SUBJECT): `establish` must mint its fact about the
+   DECLARED subject, exactly like `check`/`auth`.  An establish that declares
+   `-> Fact (IsPositive n)` but mints `IsPositive m` (a different param) is now
+   rejected — previously it forged a proof about the wrong value with no runtime
+   backstop (proofs are erased). *)
+let test_A_establish_wrong_subject () =
+  should_fail "wrong arguments\\|does not match" (prelude "AEstSubj" ^ {|
+fact IsPositive (n: Int)
+establish e(n: Int, m: Int) -> Maybe (Fact (IsPositive n)) =
+  if m > 0 then
+    Something (IsPositive m)
+  else
+    Nothing
+|})
+
+(* 2026-07 review §3.3 (GDP-FROMDB-NAMEDPACK): a plain `fn` may not forge `FromDb`
+   provenance via the `?` named-pack return on a fabricated entity — the `?` path now
+   applies the same producing-site gate the `:::` path uses.  With no query in the
+   body, the FromDb claim is rejected. *)
+let test_A_fromdb_namedpack_forgery () =
+  should_fail "returns a named pack claiming\\|does not carry\\|FromDb" ({|#lang tesl
+module AFromDbForge exposing []
+import Tesl.Prelude exposing [String]
+entity Todo table "todos" primaryKey id {
+  id: String
+  title: String
+}
+fn forge(pk: String) -> Todo ? FromDb (Id == pk) =
+  Todo { id: "fabricated-not-pk", title: "never queried" }
+|})
+
+(* 2026-07 review §P1: inline attach `x ::: fn args` is sound ONLY when `fn` returns
+   a CLEAN `Fact (...)` (total establish).  A `Maybe (Fact ...)` (or Either/List/…)
+   result cannot be attached inline — the wrapper must be eliminated first — so it is
+   a compile error (previously it compiled and trapped at runtime). *)
+let test_A_inline_maybe_establish_rejected () =
+  should_fail "cannot be attached inline\\|does not return a clean" (prelude "AInlineMaybe" ^ {|
+fact IsPositive (n: Int)
+establish isPositive(n: Int) -> Maybe (Fact (IsPositive n)) =
+  if n > 0 then
+    Something (IsPositive n)
+  else
+    Nothing
+fn usePos(n: Int ::: IsPositive n) -> Int = n
+fn run_it(n: Int) -> Int =
+  usePos (n ::: isPositive n)
+|})
+
+(* Counterpart: a CLEAN total-`Fact` establish CAN be attached inline (still sound). *)
+let test_A_inline_total_establish_ok () =
+  should_pass (prelude "AInlineTotal" ^ {|
+fact IsPositive (n: Int)
+establish provePos(n: Int) -> Fact (IsPositive n) =
+  IsPositive n
+fn usePos(n: Int ::: IsPositive n) -> Int = n
+fn run_it(n: Int) -> Int =
+  usePos (n ::: provePos n)
 |})
 
 (* `auth` not producing its declared proof — wrong subject. *)
@@ -644,6 +703,10 @@ let () =
     "establish-KNOWN-GAPS", [
       test_case "A GAP establish literal-param wrong constructor" `Quick test_A_GAP_establish_literal_param_wrong_constructor;
       test_case "A GAP establish literal-param wrong args" `Quick test_A_GAP_establish_literal_param_wrong_args;
+      test_case "A establish wrong subject (§3.1)" `Quick test_A_establish_wrong_subject;
+      test_case "A FromDb named-pack forgery (§3.3)" `Quick test_A_fromdb_namedpack_forgery;
+      test_case "A inline Maybe-establish rejected (§P1)" `Quick test_A_inline_maybe_establish_rejected;
+      test_case "A inline total-establish ok (§P1)" `Quick test_A_inline_total_establish_ok;
     ];
     "auth-production", [
       test_case "A auth wrong subject" `Quick test_A_auth_wrong_subject;

@@ -527,17 +527,22 @@ fn bad(lo: Int, hi: Int, otherHi: Int) -> String =
 |} "does not statically satisfy"
 
 let test_named_pack_call_site_propagation () =
+  (* Named-pack (`?`) FromDb propagation to the caller's `let` binder.  The producer
+     must RECEIVE the FromDb proof on input (or run a real query) — a plain `task: Task`
+     re-returned as `? FromDb` is forgery, rejected since the 2026-07 review §3.3 fix
+     (GDP-FROMDB-NAMEDPACK).  This test threads a genuinely-carried proof, exercising
+     the propagation mechanic on a valid program. *)
   assert_no_compile_diagnostics {|#lang tesl
 module Foo exposing []
 import Tesl.Prelude exposing [String]
 record Task {
   id: String
 }
-fn fetchTask(id: String, task: Task) -> Task ? FromDb (Id == id) =
+fn fetchTask(id: String, task: Task ::: FromDb (Id == id) task) -> Task ? FromDb (Id == id) =
   task
 fn processTask(t: Task::: FromDb (Id == id) t, id: String) -> String =
   "ok"
-fn useTask(id: String, task: Task) -> String =
+fn useTask(id: String, task: Task ::: FromDb (Id == id) task) -> String =
   let fetched = fetchTask id task
   processTask fetched id
 |}
@@ -1242,19 +1247,30 @@ test "declared proof ok" {
 |}
 
 let test_named_pack_db_key_alias_in_test_block_ok () =
+  (* Test-block `let x: T ::: FromDb (Id == k) x = producer k` alias annotation.
+     The producer must actually query the DB — a plain `task: Task` re-returned as
+     `? FromDb` is forgery, rejected since the 2026-07 review §3.3 fix.  This uses a
+     real `selectOne` producer (the todo-api getTodo shape). *)
   assert_no_compile_diagnostics {|#lang tesl
 module T exposing []
 import Tesl.Prelude exposing [String]
-record Task {
+import Tesl.DB exposing [dbRead]
+import Tesl.Maybe exposing [Maybe(..)]
+entity Task table "tasks" primaryKey id {
   id: String
 }
-fn fetchTask(id: String, task: Task) -> Task ? FromDb (Id == id) =
-  task
+fn fetchTask(id: String) -> Task ? FromDb (Id == id)
+  requires [dbRead] =
+  let existing = selectOne task from Task where task.id == id
+  case existing of
+    Nothing ->
+      fail 404 "not found"
+    Something task ->
+      task
 
 test "named db key alias ok" {
   let queryId = "task-1"
-  let task = Task { id: queryId }
-  let fetched: Task ::: FromDb (Id == queryId) fetched = fetchTask queryId task
+  let fetched: Task ::: FromDb (Id == queryId) fetched = fetchTask queryId
   expect fetched.id == "task-1"
 }
 |}
