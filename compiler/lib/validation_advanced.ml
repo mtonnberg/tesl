@@ -662,7 +662,7 @@ let check_record_field_proof_construction
           (b.name, b.name) :: acc) subject_env params in
         let proof_env' = List.fold_left (fun acc (b : binding) ->
           match b.proof_ann with
-          | Some p -> (b.name, [p]) :: acc
+          | Some p -> (b.name, [Proof_kernel.assume_param p]) :: acc
           | None -> acc) proof_env params in
         walk_expr type_env' subject_env' proof_env' body
       | EList { elems; _ } -> List.iter (walk_expr type_env subject_env proof_env) elems
@@ -913,6 +913,7 @@ let check_fn_return_proof_annotations
         (p.name, subject)
       ) fd.params in
       let carried =
+        let carried_facts =
         let base = proofs_of_expr result_subject funcs subject_env proof_env expr in
         (* For EOk { value = EVar name; proof = p }, the check call's proofs
            are stored under "_" in proof_env (auto-unpack lets).  Supplement
@@ -929,15 +930,17 @@ let check_fn_return_proof_annotations
                 PredAnd { left = go left; right = go right; loc }
             in go p
           in
-          let fixed = List.map fix_subject all_underscore_proofs in
-          let seen_keys = ref (List.map proof_key base) in
+          let fixed = List.map (Proof_kernel.pass_through fix_subject) all_underscore_proofs in
+          let seen_keys = ref (List.map (fun p -> proof_key (Proof_kernel.fact_of p)) base) in
           let deduped = List.filter (fun p ->
-            let k = proof_key p in
+            let k = proof_key (Proof_kernel.fact_of p) in
             if List.mem k !seen_keys then false
             else (seen_keys := k :: !seen_keys; true)
           ) fixed in
           base @ deduped
         else base
+        in
+        List.map Proof_kernel.fact_of carried_facts
       in
       let kind_label = match fd.kind with
         | HandlerKind -> "handler" | WorkerKind -> "worker" | _ -> "fn" in
@@ -1091,7 +1094,8 @@ let check_fn_return_proof_annotations
            | Some ("FromQueue" | "FromDeadQueue") -> false
            | Some p -> List.mem p stdlib_auto_preds
            | None -> false in
-         let all_carried = List.concat_map snd proof_env @ field_carried in
+         let all_carried =
+           List.map Proof_kernel.fact_of (List.concat_map snd proof_env) @ field_carried in
          (* GDP-FORGE-1 fix (formal-review CRITICAL).  A `fn`/`handler`/`worker`
             may legitimately introduce its declared return proof in the body via
             `attachFact` (with an `establish`-produced Fact) or an `ok v ::: P`.
@@ -1144,7 +1148,9 @@ let check_fn_return_proof_annotations
              let result_subject = match subject_of_expr subject_env e with
                | Some s -> s | None -> b.name in
              let required_here = subst_proof [(b.name, result_subject)] required_proof in
-             let carried = proofs_of_expr result_subject funcs subject_env proof_env e in
+             let carried =
+               List.map Proof_kernel.fact_of
+                 (proofs_of_expr result_subject funcs subject_env proof_env e) in
              proof_matches required_here carried
          in
          if not is_stdlib_auto
@@ -1240,7 +1246,10 @@ let check_fn_return_proof_annotations
                        | Some fps when List.length fps = List.length fields ->
                          List.fold_left2 (fun (p, s) (fname, proof_opt) (_l, pat) ->
                            match proof_opt, pat with
-                           | Some pr, PVar var -> ((var, [subst_proof [(fname, var)] pr]) :: p, (var, var) :: s)
+                           | Some pr, PVar var ->
+                             ((var, [Proof_kernel.elaborated Proof_kernel.FieldProof
+                                       (subst_proof [(fname, var)] pr)]) :: p,
+                              (var, var) :: s)
                            | _ -> (p, s)) (pe, se) fps fields
                        | _ -> (pe, se))
                     | _ -> (pe, se) in
@@ -1261,7 +1270,9 @@ let check_fn_return_proof_annotations
                      let result_subject = match subject_of_expr subject_env payload with
                        | Some s -> s | None -> b.name in
                      let required_here = subst_proof [(b.name, result_subject)] required_proof in
-                     let carried = proofs_of_expr result_subject funcs subject_env proof_env payload in
+                     let carried =
+                       List.map Proof_kernel.fact_of
+                         (proofs_of_expr result_subject funcs subject_env proof_env payload) in
                      if not (proof_matches required_here carried) then begin
                        let kw = match fd.kind with
                          | HandlerKind -> "handler" | WorkerKind -> "worker" | _ -> "fn" in
@@ -1333,7 +1344,9 @@ let check_fn_return_proof_annotations
            | _ ->
              let result_subject = match subject_of_expr subject_env e with
                | Some s -> s | None -> "_" in
-             let carried = proofs_of_expr result_subject funcs subject_env proof_env e in
+             let carried =
+               List.map Proof_kernel.fact_of
+                 (proofs_of_expr result_subject funcs subject_env proof_env e) in
              proof_matches required_proof carried
          in
          if not is_stdlib_auto
@@ -1488,7 +1501,9 @@ let check_ghost_witness_predicates
       List.fold_left (fun acc (b : binding) ->
         if List.mem_assoc b.name acc then acc
         else match proof_of_fact_type b.type_expr with
-          | Some proof -> (b.name, [proof]) :: acc
+          (* A Fact-typed param carries its proof in its TYPE; assume it like a
+             `:::` param proof. *)
+          | Some proof -> (b.name, [Proof_kernel.assume_param proof]) :: acc
           | None -> acc
       ) base params
     in
@@ -1505,7 +1520,7 @@ let check_ghost_witness_predicates
               proof = witness; loc }
       in
       match carried_proofs_of_expr ~funcs subject_env proof_env wrapper with
-      | Some proofs -> proofs
+      | Some proofs -> List.map Proof_kernel.fact_of proofs
       | None -> []
     in
     (* Report a subject/predicate mismatch at a witnessed construction site.
@@ -1588,11 +1603,11 @@ let check_ghost_witness_predicates
         let pred_of_proof_var name =
           (* Resolve a proof variable to its predicate name via proof_env. *)
           match List.assoc_opt name proof_env with
-          | Some (p :: _) -> (match proof_predicates p with pn :: _ -> Some pn | [] -> None)
+          | Some (p :: _) -> (match proof_predicates (Proof_kernel.fact_of p) with pn :: _ -> Some pn | [] -> None)
           | _ ->
             let subj = match List.assoc_opt name subject_env with Some s -> s | None -> name in
             (match List.assoc_opt subj proof_env with
-             | Some (p :: _) -> (match proof_predicates p with pn :: _ -> Some pn | [] -> None)
+             | Some (p :: _) -> (match proof_predicates (Proof_kernel.fact_of p) with pn :: _ -> Some pn | [] -> None)
              | _ -> None)
         in
         let proof_pred = match proof with
@@ -1722,10 +1737,10 @@ let check_ghost_witness_predicates
           (b.name, b.name) :: acc) subject_env params in
         let proof_env' = List.fold_left (fun acc (b : binding) ->
           match b.proof_ann with
-          | Some p -> (b.name, [p]) :: acc
+          | Some p -> (b.name, [Proof_kernel.assume_param p]) :: acc
           | None ->
             (match proof_of_fact_type b.type_expr with
-             | Some p -> (b.name, [p]) :: acc
+             | Some p -> (b.name, [Proof_kernel.assume_param p]) :: acc
              | None -> acc)) proof_env params in
         walk_expr type_env' subject_env' proof_env' body
       | EWithDatabase { body; _ } | EWithCapabilities { body; _ }

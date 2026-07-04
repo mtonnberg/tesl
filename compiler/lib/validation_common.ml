@@ -635,7 +635,12 @@ type func_info = {
 
 type field_map = (string * field_def list) list
 type type_env = (string * type_expr) list
-type proof_env = (string * proof_expr list) list
+(* close_fail_open Option B: proof_env now holds [Proof_kernel.proven_fact]s, not raw
+   [proof_expr]s.  A fact can only enter this environment through a named kernel
+   admission rule (see proof_kernel.mli); consumers project back with
+   [Proof_kernel.fact_of].  This collapses the "what may be admitted as a proof here?"
+   trusted surface to the kernel plus the enumerable rule call sites. *)
+type proof_env = (string * Proof_kernel.proven_fact list) list
 type subject_env = (string * string) list
 type ctor_info = (string * (type_expr list * type_expr)) list
 
@@ -1862,7 +1867,7 @@ let rec normalize_proof_aliases (proof_env : proof_env) (proof : proof_expr) : p
   | PredApp ({ pred; args = []; loc } as app) ->
     (match List.assoc_opt pred proof_env with
      | Some proofs ->
-       (match combine_proof_list loc proofs with
+       (match combine_proof_list loc (List.map Proof_kernel.fact_of proofs) with
         | Some combined -> combined
         | None -> PredApp app)
      | None -> PredApp app)
@@ -1870,7 +1875,7 @@ let rec normalize_proof_aliases (proof_env : proof_env) (proof : proof_expr) : p
     (* introAnd pf1 pf2 → conjunction of all proofs from each argument *)
     let component_proofs = List.filter_map (fun arg ->
       match List.assoc_opt arg proof_env with
-      | Some proofs -> combine_proof_list loc proofs
+      | Some proofs -> combine_proof_list loc (List.map Proof_kernel.fact_of proofs)
       | None -> None
     ) args in
     (match combine_proof_list loc component_proofs with
@@ -1881,6 +1886,7 @@ let rec normalize_proof_aliases (proof_env : proof_env) (proof : proof_expr) : p
        andLeft P&&Q ⇒ P, andRight P&&Q ⇒ Q. *)
     (match List.assoc_opt pf_name proof_env with
      | Some proofs ->
+       let proofs = List.map Proof_kernel.fact_of proofs in
        let flat =
          List.concat_map
            (let rec f = function
@@ -1985,6 +1991,20 @@ let rec subject_of_expr (subject_env : subject_env) (expr : expr) : string optio
     Some occ
   | _ -> None
 
+(* close_fail_open Option B — admit the declared return proofs of a CALLED function
+   through the kernel: a check/auth/establish callee mints fresh
+   ([Proof_kernel.mint_at_boundary]); a forgery-restricted callee's declared return
+   has been verified by §7.12 to be a pass-through/framework proof, admitted as
+   [RestrictedReturn].  Total and behaviour-preserving (never drops a proof the raw
+   pre-kernel code kept). *)
+let admit_call_return (kind : func_kind) (ps : proof_expr list)
+    : Proof_kernel.proven_fact list =
+  List.map (fun p ->
+    match Proof_kernel.mint_at_boundary kind p with
+    | Some f -> f
+    | None -> Proof_kernel.elaborated Proof_kernel.RestrictedReturn p
+  ) ps
+
 (** Extract proofs from an evidence expression (second arg to attachFact).
     When [funcs] is provided, inline establish/check function calls are resolved. *)
 let rec proofs_of_evidence_expr
@@ -1992,7 +2012,7 @@ let rec proofs_of_evidence_expr
     (subject_env : subject_env)
     (proof_env : proof_env)
     (expr : expr)
-    : proof_expr list option =
+    : Proof_kernel.proven_fact list option =
   match expr with
   | EVar { name; _ } -> List.assoc_opt name proof_env
   | EBinop { op = BAnd; left; right; _ } ->
@@ -2007,7 +2027,7 @@ let rec proofs_of_evidence_expr
        Combine both. *)
     let value_proofs = proofs_of_evidence_expr ~funcs subject_env proof_env value in
     (* Resolve the proof annotation: if it's an establish function call, get its predicates *)
-    let resolve_proof_predicate p = match p with
+    let resolve_proof_predicate p : Proof_kernel.proven_fact list = match p with
       | PredApp { pred; args; _ } when funcs <> [] ->
         (match List.assoc_opt pred funcs with
          | Some info when info.fi_kind = EstablishKind ->
@@ -2020,9 +2040,14 @@ let rec proofs_of_evidence_expr
                in
                Some (param.name, subject)
            ) (zip_prefix info.fi_params args) in
-           proofs_of_return_spec "_" ~param_mapping info.fi_return
-         | _ -> flatten_proof_conj (normalize_proof_aliases proof_env p))
-      | _ -> flatten_proof_conj (normalize_proof_aliases proof_env p)
+           admit_call_return info.fi_kind
+             (proofs_of_return_spec "_" ~param_mapping info.fi_return)
+         | _ ->
+           List.map (Proof_kernel.elaborated Proof_kernel.AttachedEvidence)
+             (flatten_proof_conj (normalize_proof_aliases proof_env p)))
+      | _ ->
+        List.map (Proof_kernel.elaborated Proof_kernel.AttachedEvidence)
+          (flatten_proof_conj (normalize_proof_aliases proof_env p))
     in
     let proof_proofs = resolve_proof_predicate proof in
     (match value_proofs with
@@ -2043,7 +2068,8 @@ let rec proofs_of_evidence_expr
             | Some subject -> Some (param.name, subject)
             | None -> None
           ) (zip_prefix info.fi_params args) in
-          let preds = proofs_of_return_spec "_" ~param_mapping info.fi_return in
+          let preds = admit_call_return info.fi_kind
+            (proofs_of_return_spec "_" ~param_mapping info.fi_return) in
           if preds = [] then None else Some preds
         | None -> None)
      | _ -> None)

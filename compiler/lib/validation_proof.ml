@@ -12,7 +12,9 @@ open Validation_structural
 let build_initial_proof_env (params : binding list) : proof_env =
   List.filter_map (fun (b : binding) ->
     match b.proof_ann with
-    | Some proof -> Some (b.name, [proof])
+    (* A proof-carrying parameter's declared proof is ASSUMED inside the body;
+       sound because every call site discharges it (proof_matches). *)
+    | Some proof -> Some (b.name, [Proof_kernel.assume_param proof])
     | None -> None
   ) params
 
@@ -85,7 +87,7 @@ let check_call_proofs
      | Some expected_proof ->
        let expected_proof = subst_proof mapping expected_proof in
        let carried_fact_proofs = match proofs_of_evidence_expr ~funcs subject_env proof_env arg with
-         | Some proofs -> proofs
+         | Some proofs -> List.map Proof_kernel.fact_of proofs
          | None -> []
        in
        (match carried_fact_proofs with
@@ -140,7 +142,7 @@ let check_call_proofs
     | Some required ->
       let unresolved = unresolved_subjects formal_names mapping required in
       let carried = match carried_proofs_of_expr ~funcs subject_env proof_env arg with
-        | Some proofs -> proofs
+        | Some proofs -> List.map Proof_kernel.fact_of proofs
         | None -> []
       in
       (match subject_of_expr subject_env arg with
@@ -190,7 +192,7 @@ let check_call_proofs
                let proof_subjects =
                  match List.assoc_opt proof_var_name proof_env with
                  | Some proofs ->
-                   List.filter_map (function
+                   List.filter_map (fun pf -> match Proof_kernel.fact_of pf with
                      | PredApp { args = (_ :: _ as pargs); _ } ->
                        Some (List.nth pargs (List.length pargs - 1))
                      | _ -> None) proofs
@@ -377,7 +379,7 @@ let rec check_expr_call_proofs
              let proofs = match fact_expr with
                | EVar { name = fact_name; _ } ->
                  (match List.assoc_opt fact_name proof_env with
-                  | Some ps -> ps
+                  | Some ps -> List.map Proof_kernel.fact_of ps
                   | None -> [])
                | _ -> []
              in
@@ -497,7 +499,7 @@ let rec check_expr_call_proofs
             | ELambda _ -> []
             | EVar { name; _ } ->
               (match List.assoc_opt name proof_env with
-               | Some proofs -> forall_inner_pred_names proofs
+               | Some proofs -> forall_inner_pred_names (List.map Proof_kernel.fact_of proofs)
                | None -> [])
             | _ -> []) args
           |> List.sort_uniq String.compare
@@ -515,7 +517,9 @@ let rec check_expr_call_proofs
             List.fold_left (fun acc (b : binding) ->
               match b.proof_ann with
               | None -> acc
-              | Some proof -> (b.name, flatten_proof_conj proof) :: acc
+              | Some proof ->
+                (b.name,
+                 List.map Proof_kernel.assume_param (flatten_proof_conj proof)) :: acc
             ) proof_env lam_params
           in
           check_expr_call_proofs subject_env body_proof_env funcs lam_body
@@ -886,6 +890,7 @@ let rec check_expr_call_proofs
         normalize_required subject_env';
         normalize_required subject_env_without_name;
       ] in
+      let new_proofs = List.map Proof_kernel.fact_of new_proofs in
       if List.exists (fun required' -> proof_matches required' new_proofs) required_candidates then []
       else
         let carried =
@@ -994,13 +999,10 @@ let rec check_expr_call_proofs
          back the full compound proof — a soundness hole that lets
          `let (_ ::: p && q) = (a ::: A && B)` bind both `p` and `q` to
          `A && B` instead of to `A` and `B` separately. *)
-      let rec flatten_preds = function
-        | [] -> []
-        | PredAnd { left; right; _ } :: rest ->
-          flatten_preds [left] @ flatten_preds [right] @ flatten_preds rest
-        | p :: rest -> p :: flatten_preds rest
-      in
-      let full = flatten_preds full in
+      (* Split each carried conjunction fact into its leaf conjuncts through the
+         kernel (conjunction-elimination), so `let (x ::: p && q) = (a ::: A && B)`
+         binds p and q to A and B separately rather than both to `A && B`. *)
+      let full = List.concat_map Proof_kernel.conj_split full in
       (* Deduplicate: `let (x ::: p && q) = val` where val is `raw ::: lp && rp`
          would otherwise accumulate both the carried proofs of `raw` and the
          extra proofs on the annotation, producing duplicates that defeat
@@ -1008,7 +1010,7 @@ let rec check_expr_call_proofs
       let rec dedup_by_key seen = function
         | [] -> []
         | p :: rest ->
-          let k = proof_key p in
+          let k = proof_key (Proof_kernel.fact_of p) in
           if List.mem k seen then dedup_by_key seen rest
           else p :: dedup_by_key (k :: seen) rest
       in
@@ -1072,7 +1074,7 @@ let rec check_expr_call_proofs
              maps the proof subject correctly (Positive n, not Positive p). *)
           let scrut_proofs_for_x =
             if scrut_result_name = "_case_scrut" then
-              List.map (subst_proof [("_case_scrut", x)]) scrut_proofs
+              List.map (Proof_kernel.pass_through (subst_proof [("_case_scrut", x)])) scrut_proofs
             else scrut_proofs
           in
           let penv = if scrut_proofs_for_x <> [] then (x, scrut_proofs_for_x) :: proof_env else proof_env in
@@ -1099,7 +1101,7 @@ let rec check_expr_call_proofs
               if chain_subj = (match scrut with EVar { name; _ } -> name | _ -> "") then
                 (* Chain stopped at the scrutinee itself — try proof's last argument *)
                 let proof_subject = List.find_map (fun p ->
-                  match p with
+                  match Proof_kernel.fact_of p with
                   | PredApp { args = (_ :: _ as pargs); _ } ->
                     let last = List.nth pargs (List.length pargs - 1) in
                     (* Only use if it's a simple lowercase identifier (a subject name) *)
@@ -1131,7 +1133,8 @@ let rec check_expr_call_proofs
              List.fold_left2 (fun (penv, senv) (fname, proof_opt) (_lbl, pat) ->
                match proof_opt, pat with
                | Some proof, PVar var ->
-                 ((var, [subst_proof [(fname, var)] proof]) :: penv,
+                 ((var, [Proof_kernel.elaborated Proof_kernel.FieldProof
+                           (subst_proof [(fname, var)] proof)]) :: penv,
                   (var, var) :: senv)
                | _ -> (penv, senv)
              ) (proof_env', subject_env') fps fields
@@ -1172,7 +1175,7 @@ let rec check_expr_call_proofs
           List.exists (function
             | PredApp { pred = ("IsNonZero" | "FloatNonZero"); _ } -> true
             | _ -> false)
-            (flatten_proof p)
+            (flatten_proof (Proof_kernel.fact_of p))
         ) carried in
         if has_nonzero then []
         else
@@ -1193,7 +1196,8 @@ let rec check_expr_call_proofs
     let proof_env' = List.fold_left (fun acc (b : binding) ->
       match b.proof_ann with
       | None -> acc
-      | Some proof -> (b.name, flatten_proof_conj proof) :: acc
+      | Some proof ->
+        (b.name, List.map Proof_kernel.assume_param (flatten_proof_conj proof)) :: acc
     ) proof_env params in
     check_expr_call_proofs subject_env proof_env' funcs body
   (* Explicit no-obligation LEAVES.  EField is deliberately a leaf here (it does
@@ -1431,6 +1435,7 @@ let rec check_test_stmt_call_proofs
         normalize_required subject_env';
         normalize_required subject_env_without_name;
       ] in
+      let new_proofs = List.map Proof_kernel.fact_of new_proofs in
       if List.exists (fun required' -> proof_matches required' new_proofs) required_candidates then []
       else
         let carried =
@@ -2404,7 +2409,8 @@ let check_existential_proof_enforcement ?(extra_funcs = []) (decls : top_decl li
               try
                 let se = build_initial_subject_env fd.params in
                 let pe = build_initial_proof_env fd.params in
-                List.concat_map proof_predicates (proofs_of_expr "_pack" funcs se pe e)
+                List.concat_map proof_predicates
+                  (List.map Proof_kernel.fact_of (proofs_of_expr "_pack" funcs se pe e))
               with _ -> []
             in
             (* True only when we resolved concrete proofs that OMIT a declared one. *)
@@ -2432,7 +2438,8 @@ let check_existential_proof_enforcement ?(extra_funcs = []) (decls : top_decl li
               let se = build_initial_subject_env fd.params in
               let pe = build_initial_proof_env fd.params in
               let carried =
-                try List.concat_map proof_predicates (proofs_of_expr "_pack" funcs se pe scrut)
+                try List.concat_map proof_predicates
+                      (List.map Proof_kernel.fact_of (proofs_of_expr "_pack" funcs se pe scrut))
                 with _ -> [] in
               (carried <> [] && List.for_all (fun p -> List.mem p carried) declared_preds)
               || (is_fromdb_family

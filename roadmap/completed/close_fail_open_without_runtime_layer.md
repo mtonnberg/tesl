@@ -279,7 +279,12 @@ No runtime verification layer is required at any step. The trust does not move t
 a new large body of code — under A it becomes total and loud, under B it *shrinks*
 into a small auditable core, and under E the gate can actually detect regressions.
 
-## Progress — 2026-07-04 (A + E + discovery DONE; B remaining)
+## Progress — 2026-07-04 (A + B + E + discovery ALL DONE)
+
+> **Update:** Option B's atomic `proof_env` flip landed 2026-07-04 — see
+> "Option B — step 2 LANDED" below. All four layers (A fail-closed, B LCF kernel,
+> E gate, discovery fixpoint) are now complete and gate-green. The text below is the
+> pre-flip status kept for history.
 
 **The soundness mission of this item is complete and verified.** The 16 fail-open
 holes (and the roadmap `hole-*` + `eq_ord` instances) are ALL closed by Option-A-style
@@ -347,3 +352,59 @@ rules (`mint_at_boundary` check/auth/establish-only, `framework_provenance`,
 Because `proven_fact` is a transparent alias for `proof_expr` inside the kernel, the
 flip is purely a compile-time discipline (zero runtime/behaviour change); its payoff
 is that after it, no code outside proof_kernel.ml can mint a fact.
+
+### Option B — step 2 LANDED (2026-07-04): the atomic flip is DONE
+
+`Validation_common.proof_env` is now `(string * Proof_kernel.proven_fact list) list`.
+The whole `proof_env` producer/consumer surface across
+validation_{common,structural,proof,advanced}.ml was migrated in one gate-green
+campaign. **After this flip, no code outside `proof_kernel.ml` can construct a
+`proven_fact` — the abstract type makes it a compile error, so a bug anywhere in the
+~40k-line checker can only OVER-reject, never forge.** The fact-introduction surface
+is now a small, greppable set of named kernel-rule calls (audit:
+`grep -E 'Proof_kernel\.(mint_at_boundary|framework_provenance|assume_param|pass_through|conj_intro|conj_elim_left|conj_elim_right|conj_split|elaborated)'`).
+
+**Kernel rules as landed** (a few added beyond step-1's set, each a distinct trust
+axiom, all identity-on-`proof_expr` except `mint_at_boundary`'s fail-closed `None`):
+- `mint_at_boundary kind` — a check/auth/establish CALLEE's declared return (fresh
+  mint); `None` for every restricted kind (fail-closed).
+- `assume_param` — a proof-carrying / `Fact`-typed parameter's proof, assumed in the
+  body (also lambda-param injection).
+- `pass_through subst` — re-subject an existing fact (case-arm subst, `_`-subject fix).
+- `conj_intro` / `conj_elim_left` / `conj_elim_right` / `conj_split` — introAnd,
+  andLeft/andRight, and `&&`-decomposition binding.
+- `elaborated origin` — the residual raw-admission surface, tagged by an enumerated
+  `evidence_origin` (`FieldProof`, `AttachedEvidence`, `RestrictedReturn`,
+  `FrameworkCollection`) so each is self-documenting; this is the NEXT tightening
+  target (see below) but is fully enumerable, which is the audit property Option B
+  buys.
+- `framework_provenance` — FromDb/FromQueue provenance (kernel API; the current
+  dataflow admits FromDb return specs via the shared `admit_call_return` helper as a
+  `RestrictedReturn`, since they arrive through a return spec).
+- `fact_of` — the one-way projection consumers use for matching/rendering.
+
+Also added: `Validation_common.admit_call_return kind ps` — the shared helper that
+routes a called function's declared return proofs through `mint_at_boundary`
+(boundary) or `elaborated RestrictedReturn` (a §7.12-verified pass-through/framework
+return).
+
+**Verified (behaviour-preserving, as required by step 5):**
+- `dune build` clean (library-wide `-warn-error +8` still holds).
+- `dune test` green (all suites).
+- Exhaustive S7 (`TESL_S7_EXHAUSTIVE=1`): **2314 attributed kills, ZERO candidate
+  holes** — identical to the pre-flip fixpoint. No diagnostic changes.
+- `test_metamorphic` (meta-invariant) green (403 tests).
+- `--check-all`: example (92) + tests (38) all pass; codegen output unchanged
+  (the emitter never touches `proof_env`).
+- Full Racket `ci.sh` phases still need the Racket-9.2 environment to run here (this
+  dev shell is pinned 8.18 — a known, pre-existing mismatch, unrelated to this
+  compile-time-only refactor).
+
+**Residual / follow-up (not blocking):** `elaborated` still takes a raw
+`proof_expr -> proven_fact` for four origins. Like `framework_provenance` /
+`assume_param`, it is a named, greppable, reviewable admission (the audit property
+holds), but it is the point where a future pass could tighten further — e.g. sourcing
+`RestrictedReturn` facts from the input `proven_fact` via `pass_through` rather than
+from the declared return spec, which would remove the last raw-`proof_expr` admission
+for restricted kinds. Discovery is at a fixpoint, so this closes no currently-open
+hole; it hardens against future bugs.

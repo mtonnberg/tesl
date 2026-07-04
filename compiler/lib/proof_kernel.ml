@@ -30,4 +30,26 @@ let pass_through (subst : proof_expr -> proof_expr) (pf : proven_fact) : proven_
 let conj_intro (a : proven_fact) (b : proven_fact) : proven_fact =
   PredAnd { left = a; right = b; loc = proof_loc a }
 
+(* Project a (possibly nested, left-associated) conjunction to a leaf conjunct.  The
+   input is already a [proven_fact], so the projected leaf is a fact derived from an
+   existing one — the conjunction-elimination rule. *)
+let rec leftmost = function PredAnd { left; _ } -> leftmost left | p -> p
+let rec rightmost = function PredAnd { right; _ } -> rightmost right | p -> p
+
+let conj_elim_left (pf : proven_fact) : proven_fact = leftmost pf
+let conj_elim_right (pf : proven_fact) : proven_fact = rightmost pf
+
+let rec conj_split (pf : proven_fact) : proven_fact list =
+  match pf with
+  | PredAnd { left; right; _ } -> conj_split left @ conj_split right
+  | p -> [p]
+
+type evidence_origin =
+  | FieldProof
+  | AttachedEvidence
+  | RestrictedReturn
+  | FrameworkCollection
+
+let elaborated (_origin : evidence_origin) (p : proof_expr) : proven_fact = p
+
 let fact_of (pf : proven_fact) : proof_expr = pf

@@ -9,7 +9,7 @@ let rec carried_proofs_of_expr
     (subject_env : subject_env)
     (proof_env : proof_env)
     (expr : expr)
-    : proof_expr list option =
+    : Proof_kernel.proven_fact list option =
   match expr with
   | EVar { name; _ } ->
     (* Resolve through subject_env to find the canonical subject name.
@@ -32,8 +32,11 @@ let rec carried_proofs_of_expr
     (* For the proof annotation: try to resolve establish function calls and
        detachFact references to concrete predicates. Recurse into PredAnd. *)
     let extra =
+      (* An explicit `:::` annotation the elaborator could not trace to another fact
+         is admitted as [AttachedEvidence] (the program-text claim). *)
+      let attached p = Proof_kernel.elaborated Proof_kernel.AttachedEvidence p in
       let normalized = normalize_proof_aliases proof_env proof in
-      let rec resolve_proof_ref p =
+      let rec resolve_proof_ref p : Proof_kernel.proven_fact list =
         match p with
         | PredApp { pred = "detachFact"; args = [name]; _ } ->
           let subject = match List.assoc_opt name subject_env with Some s -> s | None -> name in
@@ -42,7 +45,7 @@ let rec carried_proofs_of_expr
            | _ ->
              (match List.assoc_opt subject proof_env with
               | Some proofs -> proofs
-              | None -> [p]))
+              | None -> [attached p]))
         | PredApp { pred; args; _ } when funcs <> [] ->
           (match List.assoc_opt pred funcs with
            | Some info when info.fi_kind = EstablishKind ->
@@ -53,8 +56,9 @@ let rec carried_proofs_of_expr
                Some (param.name, subject)
              ) (zip_prefix info.fi_params args) in
              let preds = proofs_of_return_spec "_" ~param_mapping info.fi_return in
-             if preds = [] then [p] else preds
-           | _ -> [p])
+             if preds = [] then [attached p]
+             else admit_call_return info.fi_kind preds
+           | _ -> [attached p])
         | PredApp { pred; args = []; _ } when
             String.length pred > 0 && pred.[0] >= 'a' && pred.[0] <= 'z' ->
           (* Proof variable reference (e.g. from let (_ ::: p) = ...):
@@ -66,8 +70,8 @@ let rec carried_proofs_of_expr
              let subject = match List.assoc_opt pred subject_env with Some s -> s | None -> pred in
              (match List.assoc_opt subject proof_env with
               | Some proofs when proofs <> [] -> proofs
-              | _ -> [p]))
-        | PredApp _ -> [p]
+              | _ -> [attached p]))
+        | PredApp _ -> [attached p]
         | PredAnd { left; right; _ } ->
           resolve_proof_ref left @ resolve_proof_ref right
       in
@@ -130,16 +134,15 @@ let rec carried_proofs_of_expr
           flattened proof list (left = first element, right = last). *)
        (match carried_proofs_of_expr ~funcs subject_env proof_env pf with
         | Some preds when List.length preds >= 2 ->
-          let flat =
-            List.concat_map
-              (let rec f = function
-                 | PredAnd { left; right; _ } -> f left @ f right
-                 | p -> [p]
-               in f) preds
-          in
-          if List.length flat >= 2 then
-            Some [ if proj = "andLeft" then List.hd flat
-                   else List.nth flat (List.length flat - 1) ]
+          (* Combine the carried facts into one (left-assoc) conjunction, then use the
+             kernel's conjunction-elimination to project the leftmost/rightmost leaf —
+             so the projected conjunct is still a [proven_fact] derived from an existing
+             one, and identical to the previous hd/last-of-flattened-list choice. *)
+          let conj = List.fold_left Proof_kernel.conj_intro (List.hd preds) (List.tl preds) in
+          let flat_len = List.length (flatten_proof_conj (Proof_kernel.fact_of conj)) in
+          if flat_len >= 2 then
+            Some [ if proj = "andLeft" then Proof_kernel.conj_elim_left conj
+                   else Proof_kernel.conj_elim_right conj ]
           else Some preds
         | other -> other)
      | _ -> None)
@@ -177,7 +180,8 @@ let rec carried_proofs_of_expr
              | Some s -> s
              | None -> field
            in
-           Some [subst_proof [(param_name, field_subj)] proof])
+           Some [Proof_kernel.elaborated Proof_kernel.FieldProof
+                   (subst_proof [(param_name, field_subj)] proof)])
     end
   | _ -> None
 
@@ -187,7 +191,7 @@ let proofs_of_expr
     (subject_env : subject_env)
     (proof_env : proof_env)
     (expr : expr)
-    : proof_expr list =
+    : Proof_kernel.proven_fact list =
   let direct =
     match expr with
     | EVar _ | EField _ -> carried_proofs_of_expr ~funcs subject_env proof_env expr
@@ -224,7 +228,9 @@ let proofs_of_expr
              | Some subject -> Some (param.name, subject)
              | None -> None
            ) (zip_prefix info.fi_params args) in
-           let return_proofs = proofs_of_return_spec result_name ~param_mapping info.fi_return in
+           let return_proofs =
+             admit_call_return info.fi_kind
+               (proofs_of_return_spec result_name ~param_mapping info.fi_return) in
            (* For CheckKind functions: also carry forward existing proofs from the subject arg.
               E.g. `let y = check isB x` where x already has [IsA]: y should have [IsA, IsB]. *)
            let carried_subject_proofs =
@@ -258,7 +264,7 @@ let proofs_of_expr
            (* Merge carried (old proofs) + return_proofs (new proofs), deduplicating by proof_key *)
            let seen_keys = ref [] in
            List.filter (fun p ->
-             let k = proof_key p in
+             let k = proof_key (Proof_kernel.fact_of p) in
              if List.mem k !seen_keys then false
              else (seen_keys := k :: !seen_keys; true)
            ) (carried_subject_proofs @ return_proofs)
@@ -320,7 +326,7 @@ let proofs_of_expr
                   match carried_proofs_of_expr ~funcs subject_env proof_env input_expr with
                   | Some proofs ->
                     List.filter_map (fun p ->
-                      match p with
+                      match Proof_kernel.fact_of p with
                       | PredApp { pred = "ForAll"; args = (inner :: _); _ } -> Some inner
                       | _ -> None
                     ) proofs
@@ -329,12 +335,15 @@ let proofs_of_expr
                 let combined_pred_str =
                   List.fold_left (fun acc prior -> prior ^ " && " ^ acc) new_pred_str prior_preds
                 in
-                [PredApp { pred = "ForAll"; args = [combined_pred_str; result_name]; loc = gen_loc }]
+                (* Framework collection op (List/Set filterCheck ⇒ ForAll). *)
+                [Proof_kernel.elaborated Proof_kernel.FrameworkCollection
+                   (PredApp { pred = "ForAll"; args = [combined_pred_str; result_name]; loc = gen_loc })]
               | None -> [])
            | h, (check_fn_expr :: _) when is_filtercheck_head h ->
              (match pred_str_from_check_chain check_fn_expr with
               | Some pred_str ->
-                [PredApp { pred = "ForAll"; args = [pred_str; result_name]; loc = gen_loc }]
+                [Proof_kernel.elaborated Proof_kernel.FrameworkCollection
+                   (PredApp { pred = "ForAll"; args = [pred_str; result_name]; loc = gen_loc })]
               | None -> [])
            | _ -> []))
       | None ->
@@ -363,7 +372,7 @@ let proofs_of_expr
       (* Deduplicate *)
       let seen = ref [] in
       List.filter (fun p ->
-        let k = proof_key p in
+        let k = proof_key (Proof_kernel.fact_of p) in
         if List.mem k !seen then false
         else (seen := k :: !seen; true)
       ) all
