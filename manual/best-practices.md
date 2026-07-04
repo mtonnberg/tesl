@@ -169,6 +169,35 @@ check passwordsMatch(password: String, confirm: String) -> unit ::: PasswordsMat
 
 ## Proof Management
 
+### The Trust Boundary
+
+`check`, `auth`, and `establish` are the **trusted proof-minting kinds** — Tesl's
+equivalent of a Ghosts-of-Departed-Proofs *smart constructor*. Everywhere else, the
+compiler guarantees you **cannot skip a validator**: a value that reaches a
+proof-carrying parameter without an unbroken chain back to one of these kinds (or a
+framework provenance such as `FromDb`) is a compile error. That is the real, mechanical
+guarantee, and it is strong.
+
+What the compiler **does not** do is verify that a validator body is *correct*. Inside a
+`check`/`auth`/`establish` body you are trusted:
+
+```tesl
+# The compiler ACCEPTS this — the body is trusted, and this body is WRONG.
+check checkPositive(guard: Int, payload: Int) -> payload: Int ::: Positive payload =
+  if guard > 0 then
+    ok payload ::: Positive payload   # stamps `Positive payload` while testing `guard`
+  else
+    fail 400 "not positive"
+```
+
+Tesl adds *guardrails* on top of the trust (e.g. the `ok`-value must name the binding it
+stamps; `establish` cannot invent a different subject) that catch the naive mistakes.
+These are a safety net, **not** a proof of correctness — do not read a clean build as
+"the validator is verified." Treat every `check`/`auth`/`establish` body the way you
+would a `unsafePerformIO` or a hand-written smart constructor: keep them small, named,
+localized, and **reviewed by a human**. The value Tesl delivers is that there are few of
+them and the compiler forces all trust through them.
+
 ### Attaching Proofs
 
 **✅ Do:** Attach proofs at the validation boundary:
