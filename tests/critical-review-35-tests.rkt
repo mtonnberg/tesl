@@ -275,6 +275,7 @@
 (module+ test
   (require rackunit)
   (test-case "T01 \226\128\148 correct subject proof works"
+    (call-with-fresh-memory-db '() (lambda ()
   (define a (thsl-src! "tests/critical-review-35-tests.tesl" 184 (list) (lambda () 10)))
   (define tesl-checked-20 (checkNonNeg35 a))
   (when (check-fail? tesl-checked-20)
@@ -287,9 +288,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let checkedZero: ~a" (check-fail-message tesl-checked-21)))
   (define checkedZero tesl-checked-21)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 189 (list (cons 'checkedZero checkedZero) (cons 'zero zero) (cons 'checkedA checkedA) (cons 'a a)) (lambda () (requireNonNeg35 checkedZero)))) 1)
+    ))
   )
 
   (test-case "T01b \226\128\148 check rejects negative"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-35-tests.tesl" 193 (list) (lambda ()
                           (checkNonNeg35 -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -298,9 +301,11 @@
                           (checkNonNeg35 -999))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkNonNeg35 -999"))
+    ))
   )
 
   (test-case "T02 \226\128\148 composed check first failure"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-35-tests.tesl" 218 (list) (lambda ()
                           ((check-and checkA35 checkB35) "XB"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -319,9 +324,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-22)))
   (define result tesl-checked-22)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 223 (list (cons 'result result) (cons 's s)) (lambda () (tesl_import_String_length result)))) 2)
+    ))
   )
 
   (test-case "T02b \226\128\148 reversed composition"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-35-tests.tesl" 228 (list) (lambda ()
                           ((check-and checkB35 checkA35) "AX"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -332,24 +339,30 @@
     (raise-user-error 'tesl-test "unexpected failure in let result2: ~a" (check-fail-message tesl-checked-23)))
   (define result2 tesl-checked-23)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 231 (list (cons 'result2 result2) (cons 's2 s2)) (lambda () (tesl_import_String_length result2)))) 2)
+    ))
   )
 
   (test-case "T03 \226\128\148 double filterCheck"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/critical-review-35-tests.tesl" 258 (list) (lambda () (doubleFilter35 (list 1 2 3 4 22 100 6 18)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 259 (list (cons 'result result)) (lambda () (raw-value (tesl_import_List_length (raw-value result)))))) 4)
   (define empty (thsl-src! "tests/critical-review-35-tests.tesl" 260 (list (cons 'result result)) (lambda () (doubleFilter35 (list 1 3 5 7)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 261 (list (cons 'empty empty) (cons 'result result)) (lambda () (raw-value (tesl_import_List_length (raw-value empty)))))) 0)
   (define allPass (thsl-src! "tests/critical-review-35-tests.tesl" 262 (list (cons 'empty empty) (cons 'result result)) (lambda () (doubleFilter35 (list 2 4 6)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 263 (list (cons 'allPass allPass) (cons 'empty empty) (cons 'result result)) (lambda () allPass))) (list 2 4 6))
+    ))
   )
 
   (test-case "T04 \226\128\148 establish unconditional"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 282 (list) (lambda () (useEstablish35 0)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 283 (list) (lambda () (useEstablish35 -42)))) -126)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 284 (list) (lambda () (useEstablish35 100)))) 300)
+    ))
   )
 
   (test-case "T05 \226\128\148 proof decomposition and reattachment"
+    (call-with-fresh-memory-db '() (lambda ()
   (define raw (thsl-src! "tests/critical-review-35-tests.tesl" 307 (list) (lambda () 5)))
   (define tesl-checked-24 (checkPosDecomp35 raw))
   (when (check-fail? tesl-checked-24)
@@ -362,9 +375,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let checked2: ~a" (check-fail-message tesl-checked-25)))
   (define checked2 tesl-checked-25)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 312 (list (cons 'checked2 checked2) (cons 'raw2 raw2) (cons 'checked checked) (cons 'raw raw)) (lambda () (decomposeAndReattach35 checked2)))) 101)
+    ))
   )
 
   (test-case "T06 \226\128\148 recursive ADT list"
+    (call-with-fresh-memory-db '() (lambda ()
   (define xs (thsl-src! "tests/critical-review-35-tests.tesl" 339 (list) (lambda () (raw-value (Cons35 1 (Cons35 2 (Cons35 3 Nil35)))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 340 (list (cons 'xs xs)) (lambda () (myLength35 xs)))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 341 (list (cons 'xs xs)) (lambda () (myLength35 Nil35)))) 0)
@@ -373,16 +388,20 @@
   (define ys (thsl-src! "tests/critical-review-35-tests.tesl" 344 (list (cons 'doubled doubled) (cons 'xs xs)) (lambda () (raw-value (Cons35 4 (Cons35 5 Nil35))))))
   (define combined (thsl-src! "tests/critical-review-35-tests.tesl" 345 (list (cons 'ys ys) (cons 'doubled doubled) (cons 'xs xs)) (lambda () (myAppend35 xs ys))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 346 (list (cons 'combined combined) (cons 'ys ys) (cons 'doubled doubled) (cons 'xs xs)) (lambda () (myLength35 combined)))) 5)
+    ))
   )
 
   (test-case "T07 \226\128\148 nested Maybe"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 362 (list) (lambda () (flattenMaybe35 Nothing)))) Nothing)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 363 (list) (lambda () (flattenMaybe35 (raw-value (Something Nothing)))))) Nothing)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 364 (list) (lambda () (flattenMaybe35 (raw-value (Something (raw-value (Something 42)))))))) (raw-value (Something 42)))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 365 (list) (lambda () (flattenMaybe35 (raw-value (Something (raw-value (Something 0)))))))) (raw-value (Something 0)))
+    ))
   )
 
   (test-case "T08 \226\128\148 record field proof propagation"
+    (call-with-fresh-memory-db '() (lambda ()
   (define raw (thsl-src! "tests/critical-review-35-tests.tesl" 392 (list) (lambda () "hello")))
   (define tesl-checked-27 (checkSafeTitle35 raw))
   (when (check-fail? tesl-checked-27)
@@ -390,9 +409,11 @@
   (define safe tesl-checked-27)
   (define rec (thsl-src! "tests/critical-review-35-tests.tesl" 394 (list (cons 'safe safe) (cons 'raw raw)) (lambda () (ProvenRecord35 #:title safe))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 395 (list (cons 'rec rec) (cons 'safe safe) (cons 'raw raw)) (lambda () (readAndConsume35 rec)))) 5)
+    ))
   )
 
   (test-case "T08b \226\128\148 proof boundary check"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-35-tests.tesl" 399 (list) (lambda ()
                           (checkSafeTitle35 ""))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -402,9 +423,11 @@
                           (checkSafeTitle35 long))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkSafeTitle35 long"))
+    ))
   )
 
   (test-case "T09 \226\128\148 integer identity and absorption"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 409 (list) (lambda () (+ 0 0)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 410 (list) (lambda () (* 0 12345)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 411 (list) (lambda () (* 1 1)))) 1)
@@ -414,9 +437,11 @@
   (check-true (thsl-src! "tests/critical-review-35-tests.tesl" 415 (list (cons 'maxish maxish)) (lambda () (> (raw-value maxish) 0))))
   (define minish (thsl-src! "tests/critical-review-35-tests.tesl" 416 (list (cons 'maxish maxish)) (lambda () -4611686018427387903)))
   (check-true (thsl-src! "tests/critical-review-35-tests.tesl" 417 (list (cons 'minish minish) (cons 'maxish maxish)) (lambda () (< (raw-value minish) 0))))
+    ))
   )
 
   (test-case "T09b \226\128\148 Int stdlib"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 421 (list) (lambda () (raw-value (tesl_import_Int_abs 5))))) 5)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 422 (list) (lambda () (raw-value (tesl_import_Int_abs -5))))) 5)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 423 (list) (lambda () (raw-value (tesl_import_Int_abs 0))))) 0)
@@ -436,16 +461,20 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 437 (list) (lambda () (raw-value (tesl_import_Int_sign 0))))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 438 (list) (lambda () (raw-value (tesl_import_Int_toString 42))))) "42")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 439 (list) (lambda () (raw-value (tesl_import_Int_toString -7))))) "-7")
+    ))
   )
 
   (test-case "T10 \226\128\148 float proof-total division"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 454 (list) (lambda () (safeFloatDiv35 10. 2.)))) (raw-value (Something 5.)))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 455 (list) (lambda () (safeFloatDiv35 0. 1.)))) (raw-value (Something 0.)))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 456 (list) (lambda () (safeFloatDiv35 10. 0.)))) Nothing)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 457 (list) (lambda () (safeFloatDiv35 -6. 3.)))) (raw-value (Something -2.)))
+    ))
   )
 
   (test-case "T10b \226\128\148 float stdlib"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 461 (list) (lambda () (raw-value (tesl_import_Float_round 3.7))))) 4)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 462 (list) (lambda () (raw-value (tesl_import_Float_floor 3.7))))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 463 (list) (lambda () (raw-value (tesl_import_Float_ceil 3.2))))) 4)
@@ -453,9 +482,11 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 465 (list) (lambda () (raw-value (tesl_import_Float_abs 2.5))))) 2.5)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 466 (list) (lambda () (raw-value (tesl_import_Float_isNaN 1.))))) #f)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 467 (list) (lambda () (raw-value (tesl_import_Float_isInfinite 1.))))) #f)
+    ))
   )
 
   (test-case "T11 \226\128\148 boolean logic"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 481 (list) (lambda () (xor35 #t #f)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 482 (list) (lambda () (xor35 #f #t)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 483 (list) (lambda () (xor35 #t #t)))) #f)
@@ -464,32 +495,40 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 486 (list) (lambda () (nand35 #t #f)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 487 (list) (lambda () (nand35 #f #t)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 488 (list) (lambda () (nand35 #f #f)))) #t)
+    ))
   )
 
   (test-case "T12 \226\128\148 newtype round-trip"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 502 (list) (lambda () (wrapAndUnwrap35 "user-1")))) "user-1")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 503 (list) (lambda () (wrapAndUnwrap35 "")))) "")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 504 (list) (lambda () (wrapAndUnwrap35 "abc")))) "abc")
+    ))
   )
 
   (test-case "T12b \226\128\148 newtype identity"
+    (call-with-fresh-memory-db '() (lambda ()
   (define uid1 (thsl-src! "tests/critical-review-35-tests.tesl" 508 (list) (lambda () (raw-value (UserId35 "a")))))
   (define uid2 (thsl-src! "tests/critical-review-35-tests.tesl" 509 (list (cons 'uid1 uid1)) (lambda () (raw-value (UserId35 "a")))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 510 (list (cons 'uid2 uid2) (cons 'uid1 uid1)) (lambda () uid1))) uid2)
   (define uid3 (thsl-src! "tests/critical-review-35-tests.tesl" 511 (list (cons 'uid2 uid2) (cons 'uid1 uid1)) (lambda () (raw-value (UserId35 "b")))))
   (check-not-equal? (thsl-src! "tests/critical-review-35-tests.tesl" 512 (list (cons 'uid3 uid3) (cons 'uid2 uid2) (cons 'uid1 uid1)) (lambda () uid1)) uid3)
+    ))
   )
 
   (test-case "T13 \226\128\148 case guard with bool"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 534 (list) (lambda () (classifyPrio35 Critical35 #f)))) "must do now")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 535 (list) (lambda () (classifyPrio35 Critical35 #t)))) "must do now")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 536 (list) (lambda () (classifyPrio35 High35 #t)))) "escalated")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 537 (list) (lambda () (classifyPrio35 High35 #f)))) "important")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 538 (list) (lambda () (classifyPrio35 Medium35 #f)))) "normal")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 539 (list) (lambda () (classifyPrio35 Low35 #t)))) "backlog")
+    ))
   )
 
   (test-case "T14 \226\128\148 List.foldl"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 556 (list) (lambda () (sumFold35 (list 1 2 3 4 5))))) 15)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 557 (list) (lambda () (sumFold35 (list))))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 558 (list) (lambda () (sumFold35 (list -1 1))))) 0)
@@ -499,16 +538,20 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 562 (list) (lambda () (concatFold35 (list "a" "b" "c"))))) "abc")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 563 (list) (lambda () (concatFold35 (list))))) "")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 564 (list) (lambda () (concatFold35 (list "hello"))))) "hello")
+    ))
   )
 
   (test-case "T15 \226\128\148 applyN with lambda"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 578 (list) (lambda () (applyN35 (let () (define/pow (tesl-lambda-28 [x : Integer]) #:returns Integer (+ *x 1)) tesl-lambda-28) 5 0)))) 5)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 579 (list) (lambda () (applyN35 (let () (define/pow (tesl-lambda-29 [x : Integer]) #:returns Integer (* *x 2)) tesl-lambda-29) 3 1)))) 8)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 580 (list) (lambda () (applyN35 (let () (define/pow (tesl-lambda-30 [x : Integer]) #:returns Integer x) tesl-lambda-30) 100 42)))) 42)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 581 (list) (lambda () (applyN35 (let () (define/pow (tesl-lambda-31 [x : Integer]) #:returns Integer (+ *x 10)) tesl-lambda-31) 0 5)))) 5)
+    ))
   )
 
   (test-case "T16 \226\128\148 partial application"
+    (call-with-fresh-memory-db '() (lambda ()
   (define add1 (thsl-src! "tests/critical-review-35-tests.tesl" 591 (list) (lambda () (lambda (tesl-p-32-0) (lambda (tesl-p-32-1) (add335 1 tesl-p-32-0 tesl-p-32-1))))))
   (define add1_2 (thsl-src! "tests/critical-review-35-tests.tesl" 592 (list (cons 'add1 add1)) (lambda () (add1 2))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 593 (list (cons 'add1_2 add1_2) (cons 'add1 add1)) (lambda () (add1_2 3)))) 6)
@@ -516,9 +559,11 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 595 (list (cons 'add10_20 add10_20) (cons 'add1_2 add1_2) (cons 'add1 add1)) (lambda () (add10_20 30)))) 60)
   (define addAll (thsl-src! "tests/critical-review-35-tests.tesl" 596 (list (cons 'add10_20 add10_20) (cons 'add1_2 add1_2) (cons 'add1 add1)) (lambda () (tesl_import_List_map (raw-value (lambda (tesl-p-34-0) (add335 0 0 tesl-p-34-0))) (list 1 2 3)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 597 (list (cons 'addAll addAll) (cons 'add10_20 add10_20) (cons 'add1_2 add1_2) (cons 'add1 add1)) (lambda () addAll))) (list 1 2 3))
+    ))
   )
 
   (test-case "T17 \226\128\148 sequential check accumulation"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 628 (list) (lambda () (sequentialChecks35 42)))) "valid: 42")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 629 (list) (lambda () (sequentialChecks35 1)))) "valid: 1")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 630 (list) (lambda () (sequentialChecks35 999)))) "valid: 999")
@@ -539,9 +584,11 @@
                           ((raw-value (checkSmallInt35 1000)) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (raw-value (checkSmallInt35 1000)) (list)"))
+    ))
   )
 
   (test-case "T18 \226\128\148 string edge cases"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 643 (list) (lambda () (tesl_import_String_length "")))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 644 (list) (lambda () (tesl_import_String_isEmpty "")))) #t)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 645 (list) (lambda () (tesl_import_String_trim "   ")))) "")
@@ -556,9 +603,11 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 654 (list) (lambda () (tesl_import_String_join (list "a" "b") "")))) "ab")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 655 (list) (lambda () (tesl_import_String_indexOf "hello" "ll")))) (raw-value (Something 2)))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 656 (list) (lambda () (tesl_import_String_indexOf "hello" "xyz")))) Nothing)
+    ))
   )
 
   (test-case "T18b \226\128\148 string stdlib proofs"
+    (call-with-fresh-memory-db '() (lambda ()
   (define trimmed (thsl-src! "tests/critical-review-35-tests.tesl" 660 (list) (lambda () (tesl_import_String_trim "  hello  "))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 661 (list (cons 'trimmed trimmed)) (lambda () trimmed))) "hello")
   (define upper (thsl-src! "tests/critical-review-35-tests.tesl" 662 (list (cons 'trimmed trimmed)) (lambda () (tesl_import_String_toUpper "hello"))))
@@ -567,9 +616,11 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 665 (list (cons 'lower lower) (cons 'upper upper) (cons 'trimmed trimmed)) (lambda () lower))) "hello")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 666 (list (cons 'lower lower) (cons 'upper upper) (cons 'trimmed trimmed)) (lambda () (tesl_import_String_toUpper "")))) "")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 667 (list (cons 'lower lower) (cons 'upper upper) (cons 'trimmed trimmed)) (lambda () (tesl_import_String_toLower "")))) "")
+    ))
   )
 
   (test-case "T18c \226\128\148 string interpolation with expressions"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "tests/critical-review-35-tests.tesl" 671 (list) (lambda () 42)))
   (define s (thsl-src! "tests/critical-review-35-tests.tesl" 672 (list (cons 'n n)) (lambda () (format "the answer is ~a" (tesl-display-val n)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 673 (list (cons 's s) (cons 'n n)) (lambda () s))) "the answer is 42")
@@ -577,9 +628,11 @@
   (define suffix (thsl-src! "tests/critical-review-35-tests.tesl" 675 (list (cons 'prefix prefix) (cons 's s) (cons 'n n)) (lambda () "suf")))
   (define combined (thsl-src! "tests/critical-review-35-tests.tesl" 676 (list (cons 'suffix suffix) (cons 'prefix prefix) (cons 's s) (cons 'n n)) (lambda () (format "~a-~a" (tesl-display-val prefix) (tesl-display-val suffix)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 677 (list (cons 'combined combined) (cons 'suffix suffix) (cons 'prefix prefix) (cons 's s) (cons 'n n)) (lambda () combined))) "pre-suf")
+    ))
   )
 
   (test-case "T19 \226\128\148 Dict roundtrip"
+    (call-with-fresh-memory-db '() (lambda ()
   (define d (thsl-src! "tests/critical-review-35-tests.tesl" 685 (list) (lambda () (raw-value (tesl_import_Dict_insert "a" 1 (raw-value (tesl_import_Dict_insert "b" 2 tesl_import_Dict_empty)))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 686 (list (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_size (raw-value d)))))) 2)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 687 (list (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_member "a" (raw-value d)))))) #t)
@@ -589,9 +642,11 @@
   (define d2 (thsl-src! "tests/critical-review-35-tests.tesl" 691 (list (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_insert "a" 99 (raw-value d))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 692 (list (cons 'd2 d2) (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_lookup "a" (raw-value d2)))))) (raw-value (Something 99)))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 693 (list (cons 'd2 d2) (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_size (raw-value d2)))))) 2)
+    ))
   )
 
   (test-case "T19b \226\128\148 Dict.requireKey and Dict.get"
+    (call-with-fresh-memory-db '() (lambda ()
   (define d (thsl-src! "tests/critical-review-35-tests.tesl" 697 (list) (lambda () (raw-value (tesl_import_Dict_insert "key" 42 tesl_import_Dict_empty)))))
   (define keyStr (thsl-src! "tests/critical-review-35-tests.tesl" 698 (list (cons 'd d)) (lambda () "key")))
   (define tesl-checked-36 (tesl_import_Dict_requireKey keyStr d))
@@ -604,18 +659,22 @@
                           ((raw-value (tesl_import_Dict_requireKey (raw-value missingKey) (raw-value d))) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (raw-value (tesl_import_Dict_requireKey (raw-value missingKey) (raw-value d))) (list)"))
+    ))
   )
 
   (test-case "T19c \226\128\148 Dict isEmpty and fromList"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 706 (list) (lambda () (raw-value (tesl_import_Dict_isEmpty tesl_import_Dict_empty))))) #t)
   (define d (thsl-src! "tests/critical-review-35-tests.tesl" 707 (list) (lambda () (raw-value (tesl_import_Dict_insert "x" 1 tesl_import_Dict_empty)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 708 (list (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_isEmpty (raw-value d)))))) #f)
   (define d2 (thsl-src! "tests/critical-review-35-tests.tesl" 709 (list (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_fromList (list (Tuple2 "a" 1) (Tuple2 "b" 2)))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 710 (list (cons 'd2 d2) (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_size (raw-value d2)))))) 2)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 711 (list (cons 'd2 d2) (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_lookup "a" (raw-value d2)))))) (raw-value (Something 1)))
+    ))
   )
 
   (test-case "T20 \226\128\148 Set operations"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s1 (thsl-src! "tests/critical-review-35-tests.tesl" 719 (list) (lambda () (raw-value (tesl_import_Set_fromList (list 1 2 3 2 1))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 720 (list (cons 's1 s1)) (lambda () (raw-value (tesl_import_Set_size (raw-value s1)))))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 721 (list (cons 's1 s1)) (lambda () (raw-value (tesl_import_Set_member 1 (raw-value s1)))))) #t)
@@ -630,31 +689,39 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 730 (list (cons 'diffSet diffSet) (cons 'interSet interSet) (cons 'unionSet unionSet) (cons 's2 s2) (cons 's1 s1)) (lambda () (raw-value (tesl_import_Set_size (raw-value diffSet)))))) 2)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 731 (list (cons 'diffSet diffSet) (cons 'interSet interSet) (cons 'unionSet unionSet) (cons 's2 s2) (cons 's1 s1)) (lambda () (raw-value (tesl_import_Set_member 1 (raw-value diffSet)))))) #t)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 732 (list (cons 'diffSet diffSet) (cons 'interSet interSet) (cons 'unionSet unionSet) (cons 's2 s2) (cons 's1 s1)) (lambda () (raw-value (tesl_import_Set_member 3 (raw-value diffSet)))))) #f)
+    ))
   )
 
   (test-case "T20b \226\128\148 Set edge cases"
+    (call-with-fresh-memory-db '() (lambda ()
   (define empty (thsl-src! "tests/critical-review-35-tests.tesl" 736 (list) (lambda () (raw-value (tesl_import_Set_fromList (list))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 737 (list (cons 'empty empty)) (lambda () (raw-value (tesl_import_Set_isEmpty (raw-value empty)))))) #t)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 738 (list (cons 'empty empty)) (lambda () (raw-value (tesl_import_Set_size (raw-value empty)))))) 0)
   (define single (thsl-src! "tests/critical-review-35-tests.tesl" 739 (list (cons 'empty empty)) (lambda () (raw-value (tesl_import_Set_insert 1 (raw-value empty))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 740 (list (cons 'single single) (cons 'empty empty)) (lambda () (raw-value (tesl_import_Set_size (raw-value single)))))) 1)
+    ))
   )
 
   (test-case "T21 \226\128\148 parameterized pair ADT"
+    (call-with-fresh-memory-db '() (lambda ()
   (define p (thsl-src! "tests/critical-review-35-tests.tesl" 759 (list) (lambda () (raw-value (MkPair35 42 "hello")))))
   (define swapped (thsl-src! "tests/critical-review-35-tests.tesl" 760 (list (cons 'p p)) (lambda () (swapPair35 p))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 761 (list (cons 'swapped swapped) (cons 'p p)) (lambda () swapped))) (raw-value (MkPair35 "hello" 42)))
   (define mapped (thsl-src! "tests/critical-review-35-tests.tesl" 762 (list (cons 'swapped swapped) (cons 'p p)) (lambda () (mapPair35 (let () (define/pow (tesl-lambda-37 [x : Integer]) #:returns Integer (* *x 2)) tesl-lambda-37) (let () (define/pow (tesl-lambda-38 [s : String]) #:returns String (string-append *s "!")) tesl-lambda-38) p))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 763 (list (cons 'mapped mapped) (cons 'swapped swapped) (cons 'p p)) (lambda () mapped))) (raw-value (MkPair35 84 "hello!")))
+    ))
   )
 
   (test-case "T22 \226\128\148 forgetFact and re-check"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 782 (list) (lambda () (verifyForgetAndRecheck35 5)))) (raw-value (Something 105)))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 783 (list) (lambda () (verifyForgetAndRecheck35 0)))) Nothing)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 784 (list) (lambda () (verifyForgetAndRecheck35 1)))) (raw-value (Something 101)))
+    ))
   )
 
   (test-case "T23 \226\128\148 list edge cases"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 792 (list) (lambda () (raw-value (tesl_import_List_head (list)))))) Nothing)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 793 (list) (lambda () (raw-value (tesl_import_List_head (list 1)))))) (raw-value (Something 1)))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 794 (list) (lambda () (tesl_import_List_reverse (list))))) (list))
@@ -673,9 +740,11 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 807 (list) (lambda () (raw-value (tesl_import_List_all (let () (define/pow (tesl-lambda-41 [x : Integer]) #:returns Boolean (> *x 0)) tesl-lambda-41) (list 1 2 3)))))) #t)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 808 (list) (lambda () (raw-value (tesl_import_List_all (let () (define/pow (tesl-lambda-42 [x : Integer]) #:returns Boolean (> *x 0)) tesl-lambda-42) (list 1 0 3)))))) #f)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 809 (list) (lambda () (raw-value (tesl_import_List_count (let () (define/pow (tesl-lambda-43 [x : Integer]) #:returns Boolean (> *x 0)) tesl-lambda-43) (list 1 -1 2 -2 3)))))) 3)
+    ))
   )
 
   (test-case "T23b \226\128\148 List.range and List.take/drop"
+    (call-with-fresh-memory-db '() (lambda ()
   (define raw0 (thsl-src! "tests/critical-review-35-tests.tesl" 813 (list) (lambda () 0)))
   (define raw3 (thsl-src! "tests/critical-review-35-tests.tesl" 814 (list (cons 'raw0 raw0)) (lambda () 3)))
   (define raw5 (thsl-src! "tests/critical-review-35-tests.tesl" 815 (list (cons 'raw3 raw3) (cons 'raw0 raw0)) (lambda () 5)))
@@ -696,9 +765,11 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 821 (list (cons 'n5 n5) (cons 'n3 n3) (cons 'n0 n0) (cons 'raw5 raw5) (cons 'raw3 raw3) (cons 'raw0 raw0)) (lambda () (tesl_import_List_drop n0 (list 1 2 3))))) (list 1 2 3))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 822 (list (cons 'n5 n5) (cons 'n3 n3) (cons 'n0 n0) (cons 'raw5 raw5) (cons 'raw3 raw3) (cons 'raw0 raw0)) (lambda () (tesl_import_List_drop n3 (list 1 2 3 4 5))))) (list 4 5))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 823 (list (cons 'n5 n5) (cons 'n3 n3) (cons 'n0 n0) (cons 'raw5 raw5) (cons 'raw3 raw3) (cons 'raw0 raw0)) (lambda () (tesl_import_List_take n5 (list 1 2 3))))) (list 1 2 3))
+    ))
   )
 
   (test-case "T24 \226\128\148 arithmetic properties"
+    (call-with-fresh-memory-db '() (lambda ()
   ; property: addition commutative
   (for ([tesl-prop-i (in-range 50)])
     (let ([a (- (random 2000001) 1000000)] [b (- (random 2000001) 1000000)])
@@ -714,9 +785,11 @@
     (let ([a (- (random 2000001) 1000000)] [b (- (random 2000001) 1000000)] [c (- (random 2000001) 1000000)])
       (when (and (> (raw-value a) -1000) (< (raw-value a) 1000) (> (raw-value b) -1000) (< (raw-value b) 1000) (> (raw-value c) -1000) (< (raw-value c) 1000)) (check-true (tesl-equal? (+ (+ (raw-value a) (raw-value b)) (raw-value c)) (+ (raw-value a) (+ (raw-value b) (raw-value c)))) "addition associative"))
     ))
+    ))
   )
 
   (test-case "T25 \226\128\148 list properties"
+    (call-with-fresh-memory-db '() (lambda ()
   ; property: reverse involution
   (for ([tesl-prop-i (in-range 50)])
     (let ([xs (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))])
@@ -737,9 +810,11 @@
     (let ([xs (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))] [ys (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))])
       (check-true (tesl-equal? (raw-value (tesl_import_List_length (raw-value (tesl_import_List_append (raw-value xs) (raw-value ys))))) (+ (raw-value (tesl_import_List_length (raw-value xs))) (raw-value (tesl_import_List_length (raw-value ys))))) "append length additive")
     ))
+    ))
   )
 
   (test-case "T26 \226\128\148 Either partition"
+    (call-with-fresh-memory-db '() (lambda ()
   (define xs (thsl-src! "tests/critical-review-35-tests.tesl" 866 (list) (lambda () (list (Left "e1") (Right 1) (Left "e2") (Right 2)))))
   (define result (thsl-src! "tests/critical-review-35-tests.tesl" 867 (list (cons 'xs xs)) (lambda () (raw-value (tesl_import_Either_partition (raw-value xs))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 868 (list (cons 'result result) (cons 'xs xs)) (lambda () (raw-value (tesl_import_Tuple2_first (raw-value result)))))) (list "e1" "e2"))
@@ -750,16 +825,20 @@
   (define empty (thsl-src! "tests/critical-review-35-tests.tesl" 873 (list (cons 'allLeft allLeft) (cons 'result result) (cons 'xs xs)) (lambda () (raw-value (tesl_import_Either_partition (list))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 874 (list (cons 'empty empty) (cons 'allLeft allLeft) (cons 'result result) (cons 'xs xs)) (lambda () (raw-value (tesl_import_Tuple2_first (raw-value empty)))))) (list))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 875 (list (cons 'empty empty) (cons 'allLeft allLeft) (cons 'result result) (cons 'xs xs)) (lambda () (raw-value (tesl_import_Tuple2_second (raw-value empty)))))) (list))
+    ))
   )
 
   (test-case "T27 \226\128\148 fall-through"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 898 (list) (lambda () (isWarm35 Spring35)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 899 (list) (lambda () (isWarm35 Summer35)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 900 (list) (lambda () (isWarm35 Autumn35)))) #f)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 901 (list) (lambda () (isWarm35 Winter35)))) #f)
+    ))
   )
 
   (test-case "T28 \226\128\148 Int.divide with proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (define rawDivisor (thsl-src! "tests/critical-review-35-tests.tesl" 909 (list) (lambda () 3)))
   (define tesl-checked-47 (tesl_import_Int_nonZero rawDivisor))
   (when (check-fail? tesl-checked-47)
@@ -778,40 +857,49 @@
                           ((tesl_import_Int_nonZero 0) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (tesl_import_Int_nonZero 0) (list)"))
+    ))
   )
 
   (test-case "T29 \226\128\148 allCheck"
+    (call-with-fresh-memory-db '() (lambda ()
   (define allPos (thsl-src! "tests/critical-review-35-tests.tesl" 925 (list) (lambda () (tesl_import_List_allCheck checkPosDecomp35 (list 1 2 3)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 926 (list (cons 'allPos allPos)) (lambda () allPos))) (raw-value (Something (list 1 2 3))))
   (define hasBad (thsl-src! "tests/critical-review-35-tests.tesl" 927 (list (cons 'allPos allPos)) (lambda () (tesl_import_List_allCheck checkPosDecomp35 (list 1 -1 3)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 928 (list (cons 'hasBad hasBad) (cons 'allPos allPos)) (lambda () hasBad))) Nothing)
   (define emptyList (thsl-src! "tests/critical-review-35-tests.tesl" 929 (list (cons 'hasBad hasBad) (cons 'allPos allPos)) (lambda () (tesl_import_List_allCheck checkPosDecomp35 (list)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 930 (list (cons 'emptyList emptyList) (cons 'hasBad hasBad) (cons 'allPos allPos)) (lambda () emptyList))) (raw-value (Something (list))))
+    ))
   )
 
   (test-case "T30 \226\128\148 literal patterns"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 954 (list) (lambda () (httpStatus35 200)))) "OK")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 955 (list) (lambda () (httpStatus35 404)))) "Not Found")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 956 (list) (lambda () (httpStatus35 418)))) "Unknown")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 957 (list) (lambda () (commandRouter35 "help")))) "showing help")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 958 (list) (lambda () (commandRouter35 "quit")))) "goodbye")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 959 (list) (lambda () (commandRouter35 "foo")))) "unknown: foo")
+    ))
   )
 
   (test-case "T31 \226\128\148 List.zip"
+    (call-with-fresh-memory-db '() (lambda ()
   (define zipped (thsl-src! "tests/critical-review-35-tests.tesl" 967 (list) (lambda () (raw-value (tesl_import_List_zip (list 1 2 3) (list "a" "b" "c"))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 968 (list (cons 'zipped zipped)) (lambda () (raw-value (tesl_import_List_length (raw-value zipped)))))) 3)
   (define emptyZip (thsl-src! "tests/critical-review-35-tests.tesl" 969 (list (cons 'zipped zipped)) (lambda () (raw-value (tesl_import_List_zip (list) (list))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 970 (list (cons 'emptyZip emptyZip) (cons 'zipped zipped)) (lambda () (raw-value (tesl_import_List_length (raw-value emptyZip)))))) 0)
   (define unevenZip (thsl-src! "tests/critical-review-35-tests.tesl" 971 (list (cons 'emptyZip emptyZip) (cons 'zipped zipped)) (lambda () (raw-value (tesl_import_List_zip (list 1 2) (list "a" "b" "c"))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 972 (list (cons 'unevenZip unevenZip) (cons 'emptyZip emptyZip) (cons 'zipped zipped)) (lambda () (raw-value (tesl_import_List_length (raw-value unevenZip)))))) 2)
+    ))
   )
 
   (test-case "T32 \226\128\148 nested if/else"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 992 (list) (lambda () (classify35 -5)))) "negative")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 993 (list) (lambda () (classify35 0)))) "zero")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 994 (list) (lambda () (classify35 5)))) "small")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-35-tests.tesl" 995 (list) (lambda () (classify35 100)))) "large")
+    ))
   )
 
 )

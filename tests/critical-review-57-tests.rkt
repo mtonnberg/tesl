@@ -327,6 +327,7 @@
 (module+ test
   (require rackunit)
   (test-case "R57_DP: deep 5-proof chain runtime"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 118 (list) (lambda () (buildDeepChain 5)))) 5)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 119 (list) (lambda () (buildDeepChain 100)))) 100)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 120 (list) (lambda () (buildDeepChain 1)))) 1)
@@ -350,14 +351,18 @@
                           (buildDeepChain 1001))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: buildDeepChain 1001"))
+    ))
   )
 
   (test-case "R57_PC: introAnd/andLeft/andRight"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 142 (list) (lambda () (introAndDecomposeTest 5)))) 5)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 143 (list) (lambda () (introAndDecomposeTest 99)))) 99)
+    ))
   )
 
   (test-case "R57_DA: complex detach-attach"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 164 (list) (lambda () (complexDetachAttach 5)))) 5)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-57-tests.tesl" 168 (list) (lambda ()
                           (complexDetachAttach 0))))])
@@ -377,15 +382,19 @@
                           (decomposeReattach 100))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: decomposeReattach 100"))
+    ))
   )
 
   (test-case "R57_ES: establish creates proof unconditionally"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 184 (list) (lambda () (useEstablishUnconditionally 5)))) 5)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 185 (list) (lambda () (useEstablishUnconditionally -5)))) -5)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 186 (list) (lambda () (useEstablishUnconditionally 0)))) 0)
+    ))
   )
 
   (test-case "R57_MP: multi-parameter proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 206 (list) (lambda () (processOwned "alice" 5)))) 5)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 207 (list) (lambda () (processOwned "bob" 100)))) 100)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-57-tests.tesl" 208 (list) (lambda ()
@@ -396,48 +405,60 @@
                           (processOwned "alice" -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: processOwned \"alice\" -1"))
+    ))
   )
 
   (test-case "R57_FA: ForAll tracking"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 229 (list) (lambda () (forAllSingleInline (list 1 2 3 -1 0))))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 230 (list) (lambda () (forAllSingleInline (list))))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 231 (list) (lambda () (forAllSingleInline (list 1 2 3))))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 233 (list) (lambda () (forAllCombinedViaWrapper (list 1 2 3 200 -1))))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 234 (list) (lambda () (forAllCombinedViaWrapper (list))))) 0)
+    ))
   )
 
   (test-case "R57_NP: named pack return through case"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "tests/critical-review-57-tests.tesl" 289 (list) (lambda () (buildPosTree))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 290 (list (cons 't t)) (lambda () (useMin t)))) 1)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 291 (list (cons 't t)) (lambda () (useMinAlt t)))) 1)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 292 (list (cons 't t)) (lambda () (useMin PLeaf)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 293 (list (cons 't t)) (lambda () (useMinAlt PLeaf)))) 0)
+    ))
   )
 
   (test-case "R57_LBL: labeled (literal subject) proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 307 (list) (lambda () (useTaggedLiteral 80)))) 80)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 308 (list) (lambda () (useTaggedLiteral 443)))) 443)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 309 (list) (lambda () (useTaggedVar "smtp" 25)))) 25)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 310 (list) (lambda () (useTaggedVar "imap" 143)))) 143)
+    ))
   )
 
   (test-case "R57_NT: newtype proof isolation"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 343 (list) (lambda () (processValidUser "alice123")))) "alice123")
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-57-tests.tesl" 344 (list) (lambda ()
                           (processValidUser "ab"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: processValidUser \"ab\""))
+    ))
   )
 
   (test-case "R57_B1: user functions with SQL names (BUG-1 fixed)"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 360 (list) (lambda () (useInsert 3)))) 8)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 361 (list) (lambda () (useSelect 7)))) 14)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 362 (list) (lambda () (useUpdate 5)))) 15)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 363 (list) (lambda () (useDelete 4)))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 364 (list) (lambda () (insert (select 2) 1)))) 5)
+    ))
   )
 
   (test-case "R57_B2: ForAll && combination inline (BUG-2 fixed)"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 392 (list) (lambda () (combinedFilterInline (list 1 2 3 200 -1 0))))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 393 (list) (lambda () (combinedFilterInline (list))))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 394 (list) (lambda () (combinedFilterInline (list 50 99 1))))) 3)
@@ -463,10 +484,13 @@
       (check-true (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 404 (list) (lambda () #f))))
     ]
   ))
+    ))
   )
 
   (test-case "R57_B4: random capability enforcement (BUG-4 fixed, runtime verification)"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-true (raw-value (thsl-src! "tests/critical-review-57-tests.tesl" 412 (list) (lambda () #t))))
+    ))
   )
 
 )

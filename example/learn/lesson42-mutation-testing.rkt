@@ -40,6 +40,7 @@
 (module+ test
   (require rackunit)
   (test-case "checkAge: boundary values kill all mutants"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson42-mutation-testing.tesl" 97 (list) (lambda () (raw-value (checkAge 18))))) 18)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson42-mutation-testing.tesl" 98 (list) (lambda () (raw-value (checkAge 65))))) 65)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson42-mutation-testing.tesl" 99 (list) (lambda () (raw-value (checkAge 120))))) 120)
@@ -51,9 +52,11 @@
                           (checkAge 121))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkAge 121"))
+    ))
   )
 
   (test-case "checkScore: boundary values kill all mutants"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson42-mutation-testing.tesl" 117 (list) (lambda () (raw-value (checkScore 0))))) 0)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson42-mutation-testing.tesl" 118 (list) (lambda () (raw-value (checkScore 50))))) 50)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson42-mutation-testing.tesl" 119 (list) (lambda () (raw-value (checkScore 100))))) 100)
@@ -67,9 +70,11 @@
                           (checkScore score101))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkScore score101"))
+    ))
   )
 
   (test-case "checkDiscount: equality check \226\128\148 kills == \226\134\146 != mutant"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson42-mutation-testing.tesl" 149 (list) (lambda () (raw-value (checkDiscount 42))))) 42)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson42-mutation-testing.tesl" 150 (list) (lambda ()
                           (checkDiscount 7))))])
@@ -79,6 +84,7 @@
                           (checkDiscount 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkDiscount 0"))
+    ))
   )
 
 )

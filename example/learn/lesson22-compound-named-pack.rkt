@@ -98,6 +98,7 @@
 (module+ test
   (require rackunit)
   (test-case "simple named pack"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "example/learn/lesson22-compound-named-pack.tesl" 181 (list) (lambda () 5)))
   (define tesl-checked-1 (checkIsPositive n))
   (when (check-fail? tesl-checked-1)
@@ -105,18 +106,22 @@
   (define p tesl-checked-1)
   (define result (thsl-src! "example/learn/lesson22-compound-named-pack.tesl" 183 (list (cons 'p p) (cons 'n n)) (lambda () (makePositive p))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson22-compound-named-pack.tesl" 184 (list (cons 'result result) (cons 'p p) (cons 'n n)) (lambda () result))) 5)
+    ))
   )
 
   (test-case "compound entity proofs"
+    (call-with-fresh-memory-db '() (lambda ()
   (define tesl-checked-2 ((check-and checkIsPositive checkIsSmall) 5))
   (when (check-fail? tesl-checked-2)
     (raise-user-error 'tesl-test "unexpected failure in let ps: ~a" (check-fail-message tesl-checked-2)))
   (define ps tesl-checked-2)
   (define result (thsl-src! "example/learn/lesson22-compound-named-pack.tesl" 192 (list (cons 'ps ps)) (lambda () (makePositiveAndSmall ps))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson22-compound-named-pack.tesl" 193 (list (cons 'result result) (cons 'ps ps)) (lambda () result))) 5)
+    ))
   )
 
   (test-case "entity establish with cargo"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "example/learn/lesson22-compound-named-pack.tesl" 197 (list) (lambda () 5)))
   (define tesl-checked-3 (checkIsPositive n))
   (when (check-fail? tesl-checked-3)
@@ -129,9 +134,11 @@
   (define admin tesl-checked-4)
   (define result (thsl-src! "example/learn/lesson22-compound-named-pack.tesl" 201 (list (cons 'admin admin) (cons 'adminStr adminStr) (cons 'p p) (cons 'n n)) (lambda () (makeWithAdminCargo p admin))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson22-compound-named-pack.tesl" 202 (list (cons 'result result) (cons 'admin admin) (cons 'adminStr adminStr) (cons 'p p) (cons 'n n)) (lambda () result))) 5)
+    ))
   )
 
   (test-case "establish on return line"
+    (call-with-fresh-memory-db '() (lambda ()
   (define userId (thsl-src! "example/learn/lesson22-compound-named-pack.tesl" 206 (list) (lambda () "admin")))
   (define tesl-checked-5 (checkIsAdmin userId))
   (when (check-fail? tesl-checked-5)
@@ -139,11 +146,14 @@
   (define userId_with_Proof tesl-checked-5)
   (define result (thsl-src! "example/learn/lesson22-compound-named-pack.tesl" 208 (list (cons 'userId_with_Proof userId_with_Proof) (cons 'userId userId)) (lambda () (makeWithProofOnReturnLine 42 userId_with_Proof))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson22-compound-named-pack.tesl" 209 (list (cons 'result result) (cons 'userId_with_Proof userId_with_Proof) (cons 'userId userId)) (lambda () result))) 42)
+    ))
   )
 
   (test-case "validate and return"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "example/learn/lesson22-compound-named-pack.tesl" 213 (list) (lambda () (validateAndReturn 5))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson22-compound-named-pack.tesl" 214 (list (cons 'result result)) (lambda () result))) 2)
+    ))
   )
 
 )

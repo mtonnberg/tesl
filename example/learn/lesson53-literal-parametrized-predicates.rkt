@@ -132,6 +132,7 @@
 (module+ test
   (require rackunit)
   (test-case "Part 1: integer literal predicates"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 187 (list) (lambda () (testAllBounds 10)))) 10)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 188 (list) (lambda () (testAllBounds 50)))) 50)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 189 (list) (lambda () (testAllBounds 100)))) 100)
@@ -160,18 +161,22 @@
                           (checkMin20 raw15))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkMin20 raw15"))
+    ))
   )
 
   (test-case "Part 2: string literal predicates"
+    (call-with-fresh-memory-db '() (lambda ()
   (define port80 (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 211 (list) (lambda () 80)))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 212 (list (cons 'port80 port80)) (lambda () (testStringTag port80)))) 80)
   (define port443 (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 214 (list (cons 'port80 port80)) (lambda () 443)))
   (define pf (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 215 (list (cons 'port443 port443) (cons 'port80 port80)) (lambda () (proveHttps port443))))
   (define result (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 216 (list (cons 'pf pf) (cons 'port443 port443) (cons 'port80 port80)) (lambda () (needHttps (attach-proof port443 pf)))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 217 (list (cons 'result result) (cons 'pf pf) (cons 'port443 port443) (cons 'port80 port80)) (lambda () result))) 443)
+    ))
   )
 
   (test-case "Part 3: mixed literal and variable subjects"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 221 (list) (lambda () (testClampedLet 50)))) 50)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 222 (list) (lambda () (testClampedLet 1)))) 1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 223 (list) (lambda () (testClampedLet 100)))) 100)
@@ -183,9 +188,11 @@
                           (testClampedLet 101))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: testClampedLet 101"))
+    ))
   )
 
   (test-case "Part 4: ForAll with literal-parametrized predicates"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 230 (list) (lambda () (filterInRange1to100 (list 10 20 5 30))))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 231 (list) (lambda () (filterInRange1to100 (list 1 2 13))))) 1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 232 (list) (lambda () (filterInRange1to100 (list 5 8 9))))) 0)
@@ -194,6 +201,7 @@
   (check-equal? (raw-value (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 237 (list (cons 'xs10 xs10)) (lambda () (needForAllAbove10 xs10)))) 45)
   (define xs20 (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 240 (list (cons 'xs10 xs10)) (lambda () (filterAbove20 (list 15 25 30 5)))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson53-literal-parametrized-predicates.tesl" 241 (list (cons 'xs20 xs20) (cons 'xs10 xs10)) (lambda () (needForAllAbove20 xs20)))) 2)
+    ))
   )
 
 )

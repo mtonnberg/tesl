@@ -228,6 +228,7 @@
 (module+ test
   (require rackunit)
   (test-case "findById returns named entity"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-1 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 446 (list) (lambda () (createProduct "p1" "Widget" 10 "tools"))))
     (define p (thsl-src! "example/learn/lesson21-sql-reference.tesl" 447 (list) (lambda () (findById "p1"))))
@@ -235,9 +236,11 @@
     (check-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 449 (list (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p 'price)))) 10)
     (check-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 450 (list (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p 'category)))) "tools")
     )
+    ))
   )
 
   (test-case "findByCategory returns matching rows"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-2 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 454 (list) (lambda () (createProduct "c1" "Hammer" 15 "tools"))))
     (define tesl-ignored-3 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 455 (list) (lambda () (createProduct "c2" "Nail" 2 "tools"))))
@@ -245,9 +248,11 @@
     (define results (thsl-src! "example/learn/lesson21-sql-reference.tesl" 457 (list) (lambda () (findByCategory "tools"))))
     (check-not-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 458 (list (cons 'results results)) (lambda () results)) (list))
     )
+    ))
   )
 
   (test-case "findCheapInCategory applies AND condition"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-5 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 462 (list) (lambda () (createProduct "a1" "Cheap Tool" 5 "tools"))))
     (define tesl-ignored-6 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 463 (list) (lambda () (createProduct "a2" "Expensive Tool" 50 "tools"))))
@@ -256,9 +261,11 @@
     (check-not-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 466 (list (cons 'expensive expensive) (cons 'cheap cheap)) (lambda () cheap)) (list))
     (check-not-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 467 (list (cons 'expensive expensive) (cons 'cheap cheap)) (lambda () expensive)) (list))
     )
+    ))
   )
 
   (test-case "findFeatured applies OR condition"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-7 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 471 (list) (lambda () (createProduct "f1" "Alpha" 10 "alpha"))))
     (define tesl-ignored-8 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 472 (list) (lambda () (createProduct "f2" "Beta" 10 "beta"))))
@@ -266,67 +273,83 @@
     (define results (thsl-src! "example/learn/lesson21-sql-reference.tesl" 474 (list) (lambda () (findFeatured "alpha" "beta"))))
     (check-not-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 475 (list (cons 'results results)) (lambda () results)) (list))
     )
+    ))
   )
 
   (test-case "setPrice updates the entity and returns it"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-10 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 479 (list) (lambda () (createProduct "u1" "Updatable" 100 "misc"))))
     (define updated (thsl-src! "example/learn/lesson21-sql-reference.tesl" 480 (list) (lambda () (setPrice "u1" 200))))
     (check-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 481 (list (cons 'updated updated)) (lambda () (raw-value (tesl-dot/runtime updated 'price)))) 200)
     (check-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 482 (list (cons 'updated updated)) (lambda () (raw-value (tesl-dot/runtime updated 'category)))) "recently-updated")
     )
+    ))
   )
 
   (test-case "updatePriceSilently returns unit"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-11 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 486 (list) (lambda () (createProduct "us1" "Silent" 50 "misc"))))
     (define tesl-ignored-12 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 487 (list) (lambda () (updatePriceSilently "us1" 75))))
     (define found (thsl-src! "example/learn/lesson21-sql-reference.tesl" 488 (list) (lambda () (findById "us1"))))
     (check-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 489 (list (cons 'found found)) (lambda () (raw-value (tesl-dot/runtime found 'price)))) 75)
     )
+    ))
   )
 
   (test-case "removeProduct deletes a row and returns unit"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-13 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 493 (list) (lambda () (createProduct "d1" "Deletable" 5 "misc"))))
     (define tesl-ignored-14 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 494 (list) (lambda () (removeProduct "d1"))))
     (define result (thsl-src! "example/learn/lesson21-sql-reference.tesl" 495 (list) (lambda () (let ([tesl_match (select-one (from Product) (where (==. (entity-field-ref Product 'id) "d1")))]) (if tesl_match (Something tesl_match) Nothing)))))
     (check-equal? (raw-value (thsl-src! "example/learn/lesson21-sql-reference.tesl" 496 (list (cons 'result result)) (lambda () result))) Nothing)
     )
+    ))
   )
 
   (test-case "removeProductWithResult returns NoRowDeleted when not found"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbWrite)
     (define result (thsl-src! "example/learn/lesson21-sql-reference.tesl" 500 (list) (lambda () (removeProductWithResult "nonexistent-xyz"))))
     (check-equal? (raw-value (thsl-src! "example/learn/lesson21-sql-reference.tesl" 501 (list (cons 'result result)) (lambda () result))) NoRowDeleted)
     )
+    ))
   )
 
   (test-case "removeProductWithResult returns RowsDeleted when found"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-15 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 505 (list) (lambda () (createProduct "dr1" "ToDelete" 5 "misc"))))
     (define result (thsl-src! "example/learn/lesson21-sql-reference.tesl" 506 (list) (lambda () (removeProductWithResult "dr1"))))
     (check-equal? (raw-value (thsl-src! "example/learn/lesson21-sql-reference.tesl" 507 (list (cons 'result result)) (lambda () result))) (raw-value (RowsDeleted 1)))
     )
+    ))
   )
 
   (test-case "batchCreate inserts all products"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-16 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 511 (list) (lambda () (batchCreate (list (hash 'id "b1" 'name "Batch1" 'price 10 'category "batch" 'inStock #t) (hash 'id "b2" 'name "Batch2" 'price 20 'category "batch" 'inStock #t))))))
     (define results (thsl-src! "example/learn/lesson21-sql-reference.tesl" 512 (list) (lambda () (findByCategory "batch"))))
     (check-not-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 513 (list (cons 'results results)) (lambda () results)) (list))
     )
+    ))
   )
 
   (test-case "expensiveProducts filters by price"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-17 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 517 (list) (lambda () (createProduct "e1" "Pricey" 999 "luxury"))))
     (define results (thsl-src! "example/learn/lesson21-sql-reference.tesl" 518 (list) (lambda () (expensiveProducts 500))))
     (check-not-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 519 (list (cons 'results results)) (lambda () results)) (list))
     )
+    ))
   )
 
   (test-case "findInPriceRange returns only rows in range"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-18 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 523 (list) (lambda () (createProduct "br1" "Cheap" 5 "misc"))))
     (define tesl-ignored-19 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 524 (list) (lambda () (createProduct "br2" "Mid" 25 "misc"))))
@@ -334,9 +357,11 @@
     (define results (thsl-src! "example/learn/lesson21-sql-reference.tesl" 526 (list) (lambda () (findInPriceRange 10 50))))
     (check-not-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 527 (list (cons 'results results)) (lambda () results)) (list))
     )
+    ))
   )
 
   (test-case "findInPriceRangeOrdered returns ordered results"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-21 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 531 (list) (lambda () (createProduct "bro1" "Budget" 15 "misc"))))
     (define tesl-ignored-22 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 532 (list) (lambda () (createProduct "bro2" "Premium" 45 "misc"))))
@@ -344,18 +369,22 @@
     (define results (thsl-src! "example/learn/lesson21-sql-reference.tesl" 534 (list) (lambda () (findInPriceRangeOrdered 10 50))))
     (check-not-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 535 (list (cons 'results results)) (lambda () results)) (list))
     )
+    ))
   )
 
   (test-case "upsertProduct inserts when row does not exist"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-24 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 539 (list) (lambda () (upsertProduct "up1" "NewProduct" 42))))
     (define found (thsl-src! "example/learn/lesson21-sql-reference.tesl" 540 (list) (lambda () (findById "up1"))))
     (check-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 541 (list (cons 'found found)) (lambda () (raw-value (tesl-dot/runtime found 'name)))) "NewProduct")
     (check-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 542 (list (cons 'found found)) (lambda () (raw-value (tesl-dot/runtime found 'price)))) 42)
     )
+    ))
   )
 
   (test-case "upsertProduct updates when row already exists"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-25 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 546 (list) (lambda () (upsertProduct "up2" "Original" 10))))
     (define tesl-ignored-26 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 547 (list) (lambda () (upsertProduct "up2" "Updated" 99))))
@@ -363,53 +392,65 @@
     (check-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 549 (list (cons 'found found)) (lambda () (raw-value (tesl-dot/runtime found 'name)))) "Updated")
     (check-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 550 (list (cons 'found found)) (lambda () (raw-value (tesl-dot/runtime found 'price)))) 99)
     )
+    ))
   )
 
   (test-case "searchByName with like pattern matches prefix"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-27 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 554 (list) (lambda () (createProduct "lk1" "Widget Pro" 50 "tools"))))
     (define tesl-ignored-28 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 555 (list) (lambda () (createProduct "lk2" "Gadget" 30 "tools"))))
     (define results (thsl-src! "example/learn/lesson21-sql-reference.tesl" 556 (list) (lambda () (searchByName "Widget%"))))
     (check-not-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 557 (list (cons 'results results)) (lambda () results)) (list))
     )
+    ))
   )
 
   (test-case "searchByNameInsensitive with ilike is case-insensitive"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-29 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 561 (list) (lambda () (createProduct "ilk1" "WidgetX" 50 "tools"))))
     (define results (thsl-src! "example/learn/lesson21-sql-reference.tesl" 562 (list) (lambda () (searchByNameInsensitive "widget%"))))
     (check-not-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 563 (list (cons 'results results)) (lambda () results)) (list))
     )
+    ))
   )
 
   (test-case "countProducts returns total count"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-30 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 567 (list) (lambda () (createProduct "cnt1" "CountMe1" 10 "count-test"))))
     (define tesl-ignored-31 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 568 (list) (lambda () (createProduct "cnt2" "CountMe2" 20 "count-test"))))
     (define n (thsl-src! "example/learn/lesson21-sql-reference.tesl" 569 (list) (lambda () (countProducts))))
     (check-true (thsl-src! "example/learn/lesson21-sql-reference.tesl" 570 (list (cons 'n n)) (lambda () (> (raw-value n) 0))))
     )
+    ))
   )
 
   (test-case "sumPrices returns non-negative sum"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-32 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 574 (list) (lambda () (createProduct "sum1" "SumMe1" 10 "sum-test"))))
     (define tesl-ignored-33 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 575 (list) (lambda () (createProduct "sum2" "SumMe2" 20 "sum-test"))))
     (define total (thsl-src! "example/learn/lesson21-sql-reference.tesl" 576 (list) (lambda () (sumPrices))))
     (check-true (thsl-src! "example/learn/lesson21-sql-reference.tesl" 577 (list (cons 'total total)) (lambda () (> (raw-value total) 0))))
     )
+    ))
   )
 
   (test-case "findInStockCheap filters on multiple conditions"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-34 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 581 (list) (lambda () (createProduct "is1" "Cheap In Stock" 5 "misc"))))
     (define tesl-ignored-35 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 582 (list) (lambda () (createProduct "is2" "Expensive In Stock" 500 "misc"))))
     (define results (thsl-src! "example/learn/lesson21-sql-reference.tesl" 583 (list) (lambda () (findInStockCheap 50))))
     (check-not-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 584 (list (cons 'results results)) (lambda () results)) (list))
     )
+    ))
   )
 
   (test-case "findProductsWithCategory uses innerJoin to filter"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-36 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 588 (list) (lambda () (insert-one! Category (hash 'id "tools" 'label "Tools" 'active #t)))))
     (define tesl-ignored-37 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 589 (list) (lambda () (createProduct "ij1" "Hammer" 15 "tools"))))
@@ -417,9 +458,11 @@
     (define results (thsl-src! "example/learn/lesson21-sql-reference.tesl" 592 (list) (lambda () (findProductsWithCategory 1))))
     (check-not-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 593 (list (cons 'results results)) (lambda () results)) (list))
     )
+    ))
   )
 
   (test-case "createProductWithCategory inserts both atomically"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define p (thsl-src! "example/learn/lesson21-sql-reference.tesl" 597 (list) (lambda () (createProductWithCategory "txp1" "Transactional Widget" 30 "tx-cat" "TX Category"))))
     (check-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 598 (list (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p 'name)))) "Transactional Widget")
@@ -427,9 +470,11 @@
     (define cats (thsl-src! "example/learn/lesson21-sql-reference.tesl" 601 (list (cons 'p p)) (lambda () (select-many (from Category) (where (==. (entity-field-ref Category 'id) "tx-cat"))))))
     (check-not-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 602 (list (cons 'cats cats) (cons 'p p)) (lambda () cats)) (list))
     )
+    ))
   )
 
   (test-case "swapStock updates two rows atomically"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-39 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 606 (list) (lambda () (createProduct "swap1" "SwapOut" 10 "misc"))))
     (define tesl-ignored-40 (thsl-src! "example/learn/lesson21-sql-reference.tesl" 607 (list) (lambda () (createProduct "swap2" "SwapIn" 20 "misc"))))
@@ -439,6 +484,7 @@
     (check-not-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 613 (list (cons 'inRows inRows) (cons 'outRows outRows)) (lambda () outRows)) (list))
     (check-not-equal? (thsl-src! "example/learn/lesson21-sql-reference.tesl" 614 (list (cons 'inRows inRows) (cons 'outRows outRows)) (lambda () inRows)) (list))
     )
+    ))
   )
 
 )

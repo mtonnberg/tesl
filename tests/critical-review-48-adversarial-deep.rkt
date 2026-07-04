@@ -883,7 +883,9 @@
 (module+ test
   (require rackunit)
   (test-case "C4: conjunction combinator delegation"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-48-adversarial-deep.tesl" 445 (list) (lambda () (useBothFacts 50)))) 51)
+    ))
   )
 
 )

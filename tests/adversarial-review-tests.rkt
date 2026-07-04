@@ -545,6 +545,7 @@
 (module+ test
   (require rackunit)
   (test-case "range check accepts boundary values"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n0 (thsl-src! "tests/adversarial-review-tests.tesl" 122 (list) (lambda () 0)))
   (define tesl-checked-36 (checkRange n0))
   (when (check-fail? tesl-checked-36)
@@ -563,9 +564,11 @@
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 128 (list (cons 'r50 r50) (cons 'n50 n50) (cons 'r100 r100) (cons 'n100 n100) (cons 'r0 r0) (cons 'n0 n0)) (lambda () (requiresRange r0)))) 1)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 129 (list (cons 'r50 r50) (cons 'n50 n50) (cons 'r100 r100) (cons 'n100 n100) (cons 'r0 r0) (cons 'n0 n0)) (lambda () (requiresRange r100)))) 101)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 130 (list (cons 'r50 r50) (cons 'n50 n50) (cons 'r100 r100) (cons 'n100 n100) (cons 'r0 r0) (cons 'n0 n0)) (lambda () (requiresRange r50)))) 51)
+    ))
   )
 
   (test-case "range check rejects out-of-range"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 134 (list) (lambda ()
                           (checkRange -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -582,9 +585,11 @@
                           (checkRange 1000))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkRange 1000"))
+    ))
   )
 
   (test-case "proof is attached after check"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-hpv (thsl-src! "tests/adversarial-review-tests.tesl" 147 (list) (lambda () (checkRange 50)))])
     (check-true
       (for/or ([f (in-list (facts-of tesl-hpv))])
@@ -600,9 +605,11 @@
       (for/or ([f (in-list (facts-of tesl-hpv))])
         (and (pair? f) (eq? (car f) 'InRange)))
       "expected result to carry proof InRange"))
+    ))
   )
 
   (test-case "non-empty check passes valid strings"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s1 (thsl-src! "tests/adversarial-review-tests.tesl" 168 (list) (lambda () "hello")))
   (define tesl-checked-39 (checkNonEmpty s1))
   (when (check-fail? tesl-checked-39)
@@ -621,16 +628,20 @@
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 174 (list (cons 'c c) (cons 's3 s3) (cons 'b b) (cons 's2 s2) (cons 'a a) (cons 's1 s1)) (lambda () (requiresNonEmpty a)))) 5)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 175 (list (cons 'c c) (cons 's3 s3) (cons 'b b) (cons 's2 s2) (cons 'a a) (cons 's1 s1)) (lambda () (requiresNonEmpty b)))) 1)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 176 (list (cons 'c c) (cons 's3 s3) (cons 'b b) (cons 's2 s2) (cons 'a a) (cons 's1 s1)) (lambda () (requiresNonEmpty c)))) 1)
+    ))
   )
 
   (test-case "non-empty check rejects empty string"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 180 (list) (lambda ()
                           (checkNonEmpty ""))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkNonEmpty \"\""))
+    ))
   )
 
   (test-case "email check accepts well-formed addresses"
+    (call-with-fresh-memory-db '() (lambda ()
   (define raw1 (thsl-src! "tests/adversarial-review-tests.tesl" 196 (list) (lambda () "user@example.com")))
   (define tesl-checked-42 (checkEmail raw1))
   (when (check-fail? tesl-checked-42)
@@ -643,9 +654,11 @@
   (define e2 tesl-checked-43)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 200 (list (cons 'e2 e2) (cons 'raw2 raw2) (cons 'e1 e1) (cons 'raw1 raw1)) (lambda () (tesl_import_String_length e1)))) 16)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 201 (list (cons 'e2 e2) (cons 'raw2 raw2) (cons 'e1 e1) (cons 'raw1 raw1)) (lambda () (tesl_import_String_length e2)))) 5)
+    ))
   )
 
   (test-case "email check rejects malformed addresses"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 205 (list) (lambda ()
                           (checkEmail ""))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -662,129 +675,169 @@
                           (checkEmail "a@b"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkEmail \"a@b\""))
+    ))
   )
 
   (test-case "safeDiv handles zero divisor"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 240 (list) (lambda () (safeDiv 10 0)))) (raw-value (Left "division by zero")))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 241 (list) (lambda () (safeDiv 0 0)))) (raw-value (Left "division by zero")))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 242 (list) (lambda () (safeDiv 100 5)))) (raw-value (Right 20)))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 243 (list) (lambda () (safeDiv 7 2)))) (raw-value (Right 3)))
+    ))
   )
 
   (test-case "safeDiv negative dividend"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 247 (list) (lambda () (safeDiv -10 3)))) (raw-value (Right -3)))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 248 (list) (lambda () (safeDiv -7 2)))) (raw-value (Right -3)))
+    ))
   )
 
   (test-case "clampAndAdd boundary"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 252 (list) (lambda () (clampAndAdd 0 10 -5 3)))) 3)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 253 (list) (lambda () (clampAndAdd 0 10 15 3)))) 13)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 254 (list) (lambda () (clampAndAdd 0 10 5 3)))) 8)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 255 (list) (lambda () (clampAndAdd 0 10 0 0)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 256 (list) (lambda () (clampAndAdd 0 10 10 0)))) 10)
+    ))
   )
 
   (test-case "describeColor covers all constructors"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 285 (list) (lambda () (describeColor Red)))) "red")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 286 (list) (lambda () (describeColor Green)))) "green")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 287 (list) (lambda () (describeColor Blue)))) "blue")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 288 (list) (lambda () (describeColor (Custom 255 128 0))))) "custom(255,128,0)")
+    ))
   )
 
   (test-case "describeAll handles mixed list"
+    (call-with-fresh-memory-db '() (lambda ()
   (define results (thsl-src! "tests/adversarial-review-tests.tesl" 292 (list) (lambda () (describeAll (list Red Green Blue (Custom 0 0 0))))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 293 (list (cons 'results results)) (lambda () (raw-value (tesl_import_List_length (raw-value results)))))) 4)
+    ))
   )
 
   (test-case "evaluate expression tree"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 311 (list) (lambda () (evaluate (Lit 5))))) 5)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 312 (list) (lambda () (evaluate (Add (Lit 3) (Lit 4)))))) 7)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 313 (list) (lambda () (evaluate (Mul (Lit 2) (Lit 6)))))) 12)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 314 (list) (lambda () (evaluate (Neg (Lit 3)))))) -3)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 315 (list) (lambda () (evaluate (Add (Mul (Lit 2) (Lit 3)) (Neg (Lit 1))))))) 5)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 316 (list) (lambda () (evaluate (Mul (Add (Lit 1) (Lit 2)) (Add (Lit 3) (Lit 4))))))) 21)
+    ))
   )
 
   (test-case "describeNested produces correct strings"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 326 (list) (lambda () (describeNested (Circle 5) "A")))) "A: circle with radius 5")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 327 (list) (lambda () (describeNested (Rectangle 3 4) "B")))) "B: 3x4 rectangle")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 328 (list) (lambda () (describeNested (Triangle 6 8) "C")))) "C: triangle base=6 height=8")
+    ))
   )
 
   (test-case "filterCheck produces ForAll proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (define positives (thsl-src! "tests/adversarial-review-tests.tesl" 358 (list) (lambda () (filterAndAll (list 1 -2 3 -4 5)))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 359 (list (cons 'positives positives)) (lambda () (raw-value (tesl_import_List_length (raw-value positives)))))) 3)
+    ))
   )
 
   (test-case "filterCheck with empty input"
+    (call-with-fresh-memory-db '() (lambda ()
   (define empty (thsl-src! "tests/adversarial-review-tests.tesl" 363 (list) (lambda () (filterAndAll (list)))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 364 (list (cons 'empty empty)) (lambda () (raw-value (tesl_import_List_length (raw-value empty)))))) 0)
+    ))
   )
 
   (test-case "filterCheck with all-negative input"
+    (call-with-fresh-memory-db '() (lambda ()
   (define none (thsl-src! "tests/adversarial-review-tests.tesl" 368 (list) (lambda () (filterAndAll (list -1 -5 -100)))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 369 (list (cons 'none none)) (lambda () (raw-value (tesl_import_List_length (raw-value none)))))) 0)
+    ))
   )
 
   (test-case "combined filterCheck both predicates"
+    (call-with-fresh-memory-db '() (lambda ()
   (define both (thsl-src! "tests/adversarial-review-tests.tesl" 373 (list) (lambda () (forAllChain (list 1 150 -5 50 200 99)))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 374 (list (cons 'both both)) (lambda () (raw-value (tesl_import_List_length (raw-value both)))))) 3)
+    ))
   )
 
   (test-case "allCheck returns Nothing on any failure"
+    (call-with-fresh-memory-db '() (lambda ()
   (define xs (thsl-src! "tests/adversarial-review-tests.tesl" 378 (list) (lambda () (list 1 2 3 4 5))))
   (define result (thsl-src! "tests/adversarial-review-tests.tesl" 379 (list (cons 'xs xs)) (lambda () (tesl_import_List_allCheck checkPositive (raw-value xs)))))
   (check-not-equal? (thsl-src! "tests/adversarial-review-tests.tesl" 380 (list (cons 'result result) (cons 'xs xs)) (lambda () result)) Nothing)
+    ))
   )
 
   (test-case "allCheck returns Nothing when any element fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (define xs (thsl-src! "tests/adversarial-review-tests.tesl" 384 (list) (lambda () (list 1 2 -1 4 5))))
   (define result (thsl-src! "tests/adversarial-review-tests.tesl" 385 (list (cons 'xs xs)) (lambda () (tesl_import_List_allCheck checkPositive (raw-value xs)))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 386 (list (cons 'result result) (cons 'xs xs)) (lambda () result))) Nothing)
+    ))
   )
 
   (test-case "UserId and ProjectId are distinct newtypes"
+    (call-with-fresh-memory-db '() (lambda ()
   (define uid (thsl-src! "tests/adversarial-review-tests.tesl" 409 (list) (lambda () (makeUserId "user-123"))))
   (define pid (thsl-src! "tests/adversarial-review-tests.tesl" 410 (list (cons 'uid uid)) (lambda () (makeProjectId "project-456"))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 411 (list (cons 'pid pid) (cons 'uid uid)) (lambda () (requiresUserId uid)))) "user-123-user")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 412 (list (cons 'pid pid) (cons 'uid uid)) (lambda () (requiresProjectId pid)))) "project-456-project")
+    ))
   )
 
   (test-case "newtypes round-trip through .value"
+    (call-with-fresh-memory-db '() (lambda ()
   (define uid (thsl-src! "tests/adversarial-review-tests.tesl" 416 (list) (lambda () (makeUserId "abc"))))
   (check-equal? (thsl-src! "tests/adversarial-review-tests.tesl" 417 (list (cons 'uid uid)) (lambda () (raw-value (tesl-dot/runtime uid 'value)))) "abc")
+    ))
   )
 
   (test-case "combined check passes when both pass"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "tests/adversarial-review-tests.tesl" 436 (list) (lambda () 50)))
   (define v (thsl-src! "tests/adversarial-review-tests.tesl" 437 (list (cons 'n n)) (lambda () (checkBoth n))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 438 (list (cons 'v v) (cons 'n n)) (lambda () v))) 50)
+    ))
   )
 
   (test-case "combined check fails when first fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 442 (list) (lambda ()
                           (checkBoth -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: checkBoth -1"))
+    ))
   )
 
   (test-case "combined check fails when second fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 446 (list) (lambda ()
                           (checkBoth 200))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: checkBoth 200"))
+    ))
   )
 
   (test-case "combined check at boundary: 0 and 99"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n0 (thsl-src! "tests/adversarial-review-tests.tesl" 450 (list) (lambda () 0)))
   (define zero (thsl-src! "tests/adversarial-review-tests.tesl" 451 (list (cons 'n0 n0)) (lambda () (checkBoth n0))))
   (define n99 (thsl-src! "tests/adversarial-review-tests.tesl" 452 (list (cons 'zero zero) (cons 'n0 n0)) (lambda () 99)))
   (define limit (thsl-src! "tests/adversarial-review-tests.tesl" 453 (list (cons 'n99 n99) (cons 'zero zero) (cons 'n0 n0)) (lambda () (checkBoth n99))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 454 (list (cons 'limit limit) (cons 'n99 n99) (cons 'zero zero) (cons 'n0 n0)) (lambda () zero))) 0)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 455 (list (cons 'limit limit) (cons 'n99 n99) (cons 'zero zero) (cons 'n0 n0)) (lambda () limit))) 99)
+    ))
   )
 
   (test-case "trimmed check accepts trimmed strings"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s1 (thsl-src! "tests/adversarial-review-tests.tesl" 474 (list) (lambda () "hello")))
   (define tesl-checked-44 (checkTrimmed s1))
   (when (check-fail? tesl-checked-44)
@@ -797,9 +850,11 @@
   (define b tesl-checked-45)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 478 (list (cons 'b b) (cons 's2 s2) (cons 'a a) (cons 's1 s1)) (lambda () (requiresTrimmed a)))) 5)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 479 (list (cons 'b b) (cons 's2 s2) (cons 'a a) (cons 's1 s1)) (lambda () (requiresTrimmed b)))) 14)
+    ))
   )
 
   (test-case "trimmed check rejects leading whitespace"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 483 (list) (lambda ()
                           (checkTrimmed " hello"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -808,9 +863,11 @@
                           (checkTrimmed "  leading"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkTrimmed \"  leading\""))
+    ))
   )
 
   (test-case "trimmed check rejects trailing whitespace"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 488 (list) (lambda ()
                           (checkTrimmed "trailing "))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -819,22 +876,28 @@
                           (checkTrimmed "both ends "))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkTrimmed \"both ends \""))
+    ))
   )
 
   (test-case "trimmed check rejects empty string"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 493 (list) (lambda ()
                           (checkTrimmed ""))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkTrimmed \"\""))
+    ))
   )
 
   (test-case "proof decomposition and reattachment"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 518 (list) (lambda () (decomposeThenPass 25)))) "age is 25")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 519 (list) (lambda () (decomposeThenPass 0)))) "age is 0")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 520 (list) (lambda () (decomposeThenPass 150)))) "age is 150")
+    ))
   )
 
   (test-case "decompose fails for out-of-range ages"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 524 (list) (lambda ()
                           (decomposeThenPass -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -843,9 +906,11 @@
                           (decomposeThenPass 151))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: decomposeThenPass 151"))
+    ))
   )
 
   (test-case "multi-param fact: in bounds"
+    (call-with-fresh-memory-db '() (lambda ()
   (define lo (thsl-src! "tests/adversarial-review-tests.tesl" 544 (list) (lambda () 1)))
   (define hi (thsl-src! "tests/adversarial-review-tests.tesl" 545 (list (cons 'lo lo)) (lambda () 10)))
   (define n (thsl-src! "tests/adversarial-review-tests.tesl" 546 (list (cons 'hi hi) (cons 'lo lo)) (lambda () 5)))
@@ -854,9 +919,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let x: ~a" (check-fail-message tesl-checked-46)))
   (define x tesl-checked-46)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 548 (list (cons 'x x) (cons 'n n) (cons 'hi hi) (cons 'lo lo)) (lambda () x))) 5)
+    ))
   )
 
   (test-case "multi-param fact: boundary values"
+    (call-with-fresh-memory-db '() (lambda ()
   (define lo (thsl-src! "tests/adversarial-review-tests.tesl" 552 (list) (lambda () 0)))
   (define hi (thsl-src! "tests/adversarial-review-tests.tesl" 553 (list (cons 'lo lo)) (lambda () 100)))
   (define v0 (thsl-src! "tests/adversarial-review-tests.tesl" 554 (list (cons 'hi hi) (cons 'lo lo)) (lambda () 0)))
@@ -871,9 +938,11 @@
   (define atHi tesl-checked-48)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 558 (list (cons 'atHi atHi) (cons 'atLo atLo) (cons 'v100 v100) (cons 'v0 v0) (cons 'hi hi) (cons 'lo lo)) (lambda () atLo))) 0)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 559 (list (cons 'atHi atHi) (cons 'atLo atLo) (cons 'v100 v100) (cons 'v0 v0) (cons 'hi hi) (cons 'lo lo)) (lambda () atHi))) 100)
+    ))
   )
 
   (test-case "multi-param fact: rejects out-of-bounds"
+    (call-with-fresh-memory-db '() (lambda ()
   (define lo (thsl-src! "tests/adversarial-review-tests.tesl" 563 (list) (lambda () 1)))
   (define hi (thsl-src! "tests/adversarial-review-tests.tesl" 564 (list (cons 'lo lo)) (lambda () 10)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 565 (list (cons 'hi hi) (cons 'lo lo)) (lambda ()
@@ -884,50 +953,64 @@
                           (checkInBounds lo hi 11))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkInBounds lo hi 11"))
+    ))
   )
 
   (test-case "isEven base cases"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 586 (list) (lambda () (isEven 0)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 587 (list) (lambda () (isOdd 0)))) #f)
+    ))
   )
 
   (test-case "isEven/isOdd small values"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 591 (list) (lambda () (isEven 2)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 592 (list) (lambda () (isEven 3)))) #f)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 593 (list) (lambda () (isOdd 1)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 594 (list) (lambda () (isOdd 4)))) #f)
+    ))
   )
 
   (test-case "isEven/isOdd larger values"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 598 (list) (lambda () (isEven 10)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 599 (list) (lambda () (isOdd 11)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 600 (list) (lambda () (isEven 7)))) #f)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 601 (list) (lambda () (isOdd 8)))) #f)
+    ))
   )
 
   (test-case "intBoundary"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 621 (list) (lambda () (intBoundary 1)))) "positive")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 622 (list) (lambda () (intBoundary -1)))) "negative")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 623 (list) (lambda () (intBoundary 0)))) "zero")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 624 (list) (lambda () (intBoundary 1000000)))) "positive")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 625 (list) (lambda () (intBoundary -1000000)))) "negative")
+    ))
   )
 
   (test-case "integer division truncates towards zero"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 629 (list) (lambda () (divByTwo 4)))) 2)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 630 (list) (lambda () (divByTwo 5)))) 2)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 631 (list) (lambda () (divByTwo -5)))) -2)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 632 (list) (lambda () (divByTwo 0)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 633 (list) (lambda () (divByTwo 1)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 634 (list) (lambda () (divByTwo -1)))) 0)
+    ))
   )
 
   (test-case "lambda applied to validated value"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 646 (list) (lambda () (applyValidated 5 (let () (define/pow (tesl-lambda-49 [x : Integer]) #:returns Integer (* *x 2)) tesl-lambda-49))))) 10)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 647 (list) (lambda () (applyValidated 3 (let () (define/pow (tesl-lambda-50 [x : Integer]) #:returns Integer (+ *x 10)) tesl-lambda-50))))) 13)
+    ))
   )
 
   (test-case "lambda fails if n is not positive"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 651 (list) (lambda ()
                           (applyValidated -1 (let () (define/pow (tesl-lambda-51 [x : Integer]) #:returns Integer x) tesl-lambda-51)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -936,71 +1019,95 @@
                           (applyValidated 0 (let () (define/pow (tesl-lambda-52 [x : Integer]) #:returns Integer x) tesl-lambda-52)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: applyValidated 0 (let () (define/pow (tesl-lambda-53 [x : Integer]) #:returns Integer x) tesl-lambda-53)"))
+    ))
   )
 
   (test-case "string interpolation"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 669 (list) (lambda () (buildMessage "Alice" 3)))) "Hello Alice! You have 3 items.")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 670 (list) (lambda () (buildMessage "Bob" 0)))) "Hello Bob! You have 0 items.")
+    ))
   )
 
   (test-case "single-value interpolation"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 674 (list) (lambda () (emptyInterp "test")))) "test")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 675 (list) (lambda () (emptyInterp "")))) "")
+    ))
   )
 
   (test-case "multi-value interpolation"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 679 (list) (lambda () (nestedConcat "a" "b" "c")))) "a-b-c")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 680 (list) (lambda () (nestedConcat "" "" "")))) "--")
+    ))
   )
 
   (test-case "sumList"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 697 (list) (lambda () (sumList (list))))) 0)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 698 (list) (lambda () (sumList (list 1 2 3))))) 6)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 699 (list) (lambda () (sumList (list -1 0 1))))) 0)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 700 (list) (lambda () (sumList (list 100))))) 100)
+    ))
   )
 
   (test-case "hasNegative"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 704 (list) (lambda () (hasNegative (list -1 2 3))))) #t)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 705 (list) (lambda () (hasNegative (list 1 2 3))))) #f)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 706 (list) (lambda () (hasNegative (list))))) #f)
+    ))
   )
 
   (test-case "allPositiveCheck"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 710 (list) (lambda () (allPositiveCheck (list 1 2 3))))) #t)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 711 (list) (lambda () (allPositiveCheck (list 0 1 2))))) #f)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 712 (list) (lambda () (allPositiveCheck (list))))) #t)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 713 (list) (lambda () (allPositiveCheck (list -1 2 3))))) #f)
+    ))
   )
 
   (test-case "capability-required functions exist"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (reviewService)
     (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 733 (list) (lambda () (readSomething)))) "read")
     (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 734 (list) (lambda () (readAndWrite)))) "read and write")
     )
+    ))
   )
 
   (test-case "safeHead on empty list"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 754 (list) (lambda () (safeHead (list))))) Nothing)
+    ))
   )
 
   (test-case "safeHead on non-empty list"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 758 (list) (lambda () (safeHead (list 42))))) (raw-value (Something 42)))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 759 (list) (lambda () (safeHead (list 1 2 3))))) (raw-value (Something 1)))
+    ))
   )
 
   (test-case "withDefault"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 763 (list) (lambda () (withDefault Nothing 99)))) 99)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 764 (list) (lambda () (withDefault (raw-value (Something 5)) 99)))) 5)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 765 (list) (lambda () (withDefault (raw-value (Something 0)) 99)))) 0)
+    ))
   )
 
   (test-case "chainMaybe"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 769 (list) (lambda () (chainMaybe (list 10 20))))) 10)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 770 (list) (lambda () (chainMaybe (list))))) 0)
+    ))
   )
 
   (test-case "checkAtLeastFive: precise boundary"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n5 (thsl-src! "tests/adversarial-review-tests.tesl" 796 (list) (lambda () 5)))
   (define tesl-checked-53 (checkAtLeastFive n5))
   (when (check-fail? tesl-checked-53)
@@ -1011,9 +1118,11 @@
                           (checkAtLeastFive 4))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkAtLeastFive 4"))
+    ))
   )
 
   (test-case "checkAtLeastFive: values above boundary"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n6 (thsl-src! "tests/adversarial-review-tests.tesl" 803 (list) (lambda () 6)))
   (define tesl-checked-54 (checkAtLeastFive n6))
   (when (check-fail? tesl-checked-54)
@@ -1026,9 +1135,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let w: ~a" (check-fail-message tesl-checked-55)))
   (define w tesl-checked-55)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 808 (list (cons 'w w) (cons 'n1000 n1000) (cons 'v v) (cons 'n6 n6)) (lambda () w))) 1000)
+    ))
   )
 
   (test-case "checkAtMostTen: precise boundary"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n10 (thsl-src! "tests/adversarial-review-tests.tesl" 812 (list) (lambda () 10)))
   (define tesl-checked-56 (checkAtMostTen n10))
   (when (check-fail? tesl-checked-56)
@@ -1039,9 +1150,11 @@
                           (checkAtMostTen 11))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkAtMostTen 11"))
+    ))
   )
 
   (test-case "checkAtMostTen: values below boundary"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n9 (thsl-src! "tests/adversarial-review-tests.tesl" 819 (list) (lambda () 9)))
   (define tesl-checked-57 (checkAtMostTen n9))
   (when (check-fail? tesl-checked-57)
@@ -1054,33 +1167,41 @@
     (raise-user-error 'tesl-test "unexpected failure in let w: ~a" (check-fail-message tesl-checked-58)))
   (define w tesl-checked-58)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 824 (list (cons 'w w) (cons 'nNeg nNeg) (cons 'v v) (cons 'n9 n9)) (lambda () w))) -100)
+    ))
   )
 
   (test-case "range proof: filterCheck never exceeds bounds"
+    (call-with-fresh-memory-db '() (lambda ()
   ; property: every filtered element is in 0..100
   (for ([tesl-prop-i (in-range 100)])
     (let ([n (- (random 2000001) 1000000)])
       (when (and (>= (raw-value n) 0) (<= (raw-value n) 100)) (check-true (let/check ([tesl-checked-59 (checkRange n)]) (let ([validated tesl-checked-59]) (and (>= (raw-value (requiresRange validated)) 1) (<= (raw-value (requiresRange validated)) 101)))) "every filtered element is in 0..100"))
     ))
+    ))
   )
 
   (test-case "at-least-five proof invariant"
+    (call-with-fresh-memory-db '() (lambda ()
   ; property: checkAtLeastFive succeeds for >= 5
   (for ([tesl-prop-i (in-range 50)])
     (let ([n (- (random 2000001) 1000000)])
       (when (and (>= (raw-value n) 5) (< (raw-value n) 1000)) (check-true (let/check ([tesl-checked-60 (checkAtLeastFive n)]) (let ([v tesl-checked-60]) (>= (raw-value v) 5))) "checkAtLeastFive succeeds for >= 5"))
     ))
+    ))
   )
 
   (test-case "non-empty length invariant"
+    (call-with-fresh-memory-db '() (lambda ()
   ; property: checkNonEmpty preserves length
   (for ([tesl-prop-i (in-range 100)])
     (let ([s (format "s~a" (random 1000000))])
       (when (> (raw-value (tesl_import_String_length (raw-value s))) 0) (check-true (let/check ([tesl-checked-61 (checkNonEmpty s)]) (let ([v tesl-checked-61]) (tesl-equal? (raw-value (requiresNonEmpty v)) (raw-value (tesl_import_String_length (raw-value s)))))) "checkNonEmpty preserves length"))
     ))
+    ))
   )
 
   (test-case "case guard routing"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 870 (list) (lambda () (classifyThreshold (Low -5))))) "low-negative")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 871 (list) (lambda () (classifyThreshold (Low 0))))) "low-nonneg")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 872 (list) (lambda () (classifyThreshold (Low 10))))) "low-nonneg")
@@ -1088,22 +1209,28 @@
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 874 (list) (lambda () (classifyThreshold (Mid 50))))) "mid-low")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 875 (list) (lambda () (classifyThreshold (Mid 0))))) "mid-low")
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 876 (list) (lambda () (classifyThreshold (High 999))))) "high")
+    ))
   )
 
   (test-case "countItems via foldl"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 890 (list) (lambda () (countItems (list))))) 0)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 891 (list) (lambda () (countItems (list 1))))) 1)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 892 (list) (lambda () (countItems (list 1 2 3 4 5))))) 5)
+    ))
   )
 
   (test-case "sumSquares via foldl"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 896 (list) (lambda () (sumSquares (list))))) 0)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 897 (list) (lambda () (sumSquares (list 1 2 3))))) 14)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 898 (list) (lambda () (sumSquares (list 0 0 0))))) 0)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 899 (list) (lambda () (sumSquares (list 3 4))))) 25)
+    ))
   )
 
   (test-case "bounded: boundary values accepted"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n1 (thsl-src! "tests/adversarial-review-tests.tesl" 923 (list) (lambda () 1)))
   (define tesl-checked-62 (checkBounded n1))
   (when (check-fail? tesl-checked-62)
@@ -1116,9 +1243,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let v999: ~a" (check-fail-message tesl-checked-63)))
   (define v999 tesl-checked-63)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 928 (list (cons 'v999 v999) (cons 'n999 n999) (cons 'v1 v1) (cons 'n1 n1)) (lambda () (requiresBounded v999)))) 1998)
+    ))
   )
 
   (test-case "bounded: out-of-range rejected"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 932 (list) (lambda ()
                           (checkBounded 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -1135,18 +1264,22 @@
                           (checkBounded 9999))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkBounded 9999"))
+    ))
   )
 
   (test-case "bounded: midpoint accepted"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n500 (thsl-src! "tests/adversarial-review-tests.tesl" 939 (list) (lambda () 500)))
   (define tesl-checked-64 (checkBounded n500))
   (when (check-fail? tesl-checked-64)
     (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl-checked-64)))
   (define v tesl-checked-64)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 941 (list (cons 'v v) (cons 'n500 n500)) (lambda () (requiresBounded v)))) 1000)
+    ))
   )
 
   (test-case "pos+small: only values in (0,100) pass"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n1 (thsl-src! "tests/adversarial-review-tests.tesl" 977 (list) (lambda () 1)))
   (define v1 (thsl-src! "tests/adversarial-review-tests.tesl" 978 (list (cons 'n1 n1)) (lambda () (checkPosAndSmall n1))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 979 (list (cons 'v1 v1) (cons 'n1 n1)) (lambda () (requiresPosAndSmall v1)))) 1)
@@ -1171,44 +1304,56 @@
   (define posP (detach-all-proof tesl-proof-bind-69))
   (define smallP (detach-all-proof tesl-proof-bind-69))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 989 (list (cons 'int1 int1) (cons '_ _) (cons '_ _) (cons 'v99 v99) (cons 'n99 n99) (cons 'v1 v1) (cons 'n1 n1)) (lambda () (requiresPosAndSmall (attach-proof int1 (list posP smallP)))))) 99)
+    ))
   )
 
   (test-case "pos+small: zero fails (not positive)"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1001 (list) (lambda ()
                           (checkPosAndSmall 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: checkPosAndSmall 0"))
+    ))
   )
 
   (test-case "pos+small: 100 fails (not small)"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1005 (list) (lambda ()
                           (checkPosAndSmall 100))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: checkPosAndSmall 100"))
+    ))
   )
 
   (test-case "pos+small: negative fails (not positive)"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1009 (list) (lambda ()
                           (checkPosAndSmall -5))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: checkPosAndSmall -5"))
+    ))
   )
 
   (test-case "TaggedInt round-trips"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "tests/adversarial-review-tests.tesl" 1024 (list) (lambda () (makeTagged 42))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1025 (list (cons 't t)) (lambda () (requiresTagged t)))) 42)
   (define t2 (thsl-src! "tests/adversarial-review-tests.tesl" 1026 (list (cons 't t)) (lambda () (makeTagged 0))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1027 (list (cons 't2 t2) (cons 't t)) (lambda () (requiresTagged t2)))) 0)
   (define t3 (thsl-src! "tests/adversarial-review-tests.tesl" 1028 (list (cons 't2 t2) (cons 't t)) (lambda () (makeTagged -7))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1029 (list (cons 't3 t3) (cons 't2 t2) (cons 't t)) (lambda () (requiresTagged t3)))) -7)
+    ))
   )
 
   (test-case "TaggedInt from large value"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "tests/adversarial-review-tests.tesl" 1033 (list) (lambda () (makeTagged 2147483647))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1034 (list (cons 't t)) (lambda () (requiresTagged t)))) 2147483647)
+    ))
   )
 
   (test-case "ascii check accepts non-empty strings"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s1 (thsl-src! "tests/adversarial-review-tests.tesl" 1053 (list) (lambda () "hello")))
   (define tesl-checked-70 (checkAscii s1))
   (when (check-fail? tesl-checked-70)
@@ -1221,16 +1366,20 @@
     (raise-user-error 'tesl-test "unexpected failure in let v2: ~a" (check-fail-message tesl-checked-71)))
   (define v2 tesl-checked-71)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1058 (list (cons 'v2 v2) (cons 's2 s2) (cons 'v1 v1) (cons 's1 s1)) (lambda () (requiresAscii v2)))) 1)
+    ))
   )
 
   (test-case "ascii check rejects empty string"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1062 (list) (lambda ()
                           (checkAscii ""))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkAscii \"\""))
+    ))
   )
 
   (test-case "proof survives fn wrapper"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n5 (thsl-src! "tests/adversarial-review-tests.tesl" 1074 (list) (lambda () 5)))
   (define tesl-checked-72 (checkPositiveMsg n5))
   (when (check-fail? tesl-checked-72)
@@ -1242,9 +1391,11 @@
   (define vb tesl-checked-73)
   (define w (thsl-src! "tests/adversarial-review-tests.tesl" 1077 (list (cons 'vb vb) (cons 'v v) (cons 'n5 n5)) (lambda () (requiresBounded vb))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1078 (list (cons 'w w) (cons 'vb vb) (cons 'v v) (cons 'n5 n5)) (lambda () w))) 10)
+    ))
   )
 
   (test-case "fn wrapper rejects bad input"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1082 (list) (lambda ()
                           (checkPositiveMsg 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -1253,15 +1404,19 @@
                           (checkPositiveMsg -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkPositiveMsg -1"))
+    ))
   )
 
   (test-case "detach-reattach round-trip"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1100 (list) (lambda () (wrapAndUnwrap 5)))) 10)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1101 (list) (lambda () (wrapAndUnwrap 1)))) 2)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1102 (list) (lambda () (wrapAndUnwrap 99)))) 198)
+    ))
   )
 
   (test-case "detach-reattach fails on non-positive input"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1106 (list) (lambda ()
                           (wrapAndUnwrap 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -1270,32 +1425,44 @@
                           (wrapAndUnwrap -10))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: wrapAndUnwrap -10"))
+    ))
   )
 
   (test-case "safe reciprocal of 2.0"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1122 (list) (lambda () (safeRecip 2.)))) 0.5)
+    ))
   )
 
   (test-case "safe reciprocal of -4.0"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1126 (list) (lambda () (safeRecip -4.)))) (- 0.25))
+    ))
   )
 
   (test-case "safe reciprocal rejects 0.0"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1130 (list) (lambda ()
                           (safeRecip 0.))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: safeRecip 0."))
+    ))
   )
 
   (test-case "safeSqrt of 0.0"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1134 (list) (lambda () (safeSqrt 0.)))) 0.)
+    ))
   )
 
   (test-case "safeSqrt of negative (uses abs)"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1138 (list) (lambda () (safeSqrt -9.)))) 3.)
+    ))
   )
 
   (test-case "slug: accepts short non-empty string"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s1 (thsl-src! "tests/adversarial-review-tests.tesl" 1160 (list) (lambda () "my-slug")))
   (define tesl-checked-74 (checkSlug s1))
   (when (check-fail? tesl-checked-74)
@@ -1308,32 +1475,40 @@
     (raise-user-error 'tesl-test "unexpected failure in let v2: ~a" (check-fail-message tesl-checked-75)))
   (define v2 tesl-checked-75)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1165 (list (cons 'v2 v2) (cons 's2 s2) (cons 'v1 v1) (cons 's1 s1)) (lambda () (requiresSlug v2)))) 1)
+    ))
   )
 
   (test-case "slug: rejects empty string"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1169 (list) (lambda ()
                           (checkSlug ""))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkSlug \"\""))
+    ))
   )
 
   (test-case "slug: accepts exactly 64 chars"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s64 (thsl-src! "tests/adversarial-review-tests.tesl" 1173 (list) (lambda () "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))
   (define tesl-checked-76 (checkSlug s64))
   (when (check-fail? tesl-checked-76)
     (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl-checked-76)))
   (define v tesl-checked-76)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1175 (list (cons 'v v) (cons 's64 s64)) (lambda () (requiresSlug v)))) 64)
+    ))
   )
 
   (test-case "slug: rejects 65 chars"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1179 (list) (lambda ()
                           (checkSlug "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkSlug \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""))
+    ))
   )
 
   (test-case "identityProof preserves InRange"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n50 (thsl-src! "tests/adversarial-review-tests.tesl" 1190 (list) (lambda () 50)))
   (define tesl-checked-77 (checkRange n50))
   (when (check-fail? tesl-checked-77)
@@ -1341,9 +1516,11 @@
   (define v tesl-checked-77)
   (define out (thsl-src! "tests/adversarial-review-tests.tesl" 1192 (list (cons 'v v) (cons 'n50 n50)) (lambda () (identityProof v))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1193 (list (cons 'out out) (cons 'v v) (cons 'n50 n50)) (lambda () (requiresRange out)))) 51)
+    ))
   )
 
   (test-case "nonNegStr: all strings have non-negative length"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s1 (thsl-src! "tests/adversarial-review-tests.tesl" 1211 (list) (lambda () "")))
   (define tesl-checked-78 (checkNonNegStr s1))
   (when (check-fail? tesl-checked-78)
@@ -1356,273 +1533,372 @@
     (raise-user-error 'tesl-test "unexpected failure in let v2: ~a" (check-fail-message tesl-checked-79)))
   (define v2 tesl-checked-79)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1216 (list (cons 'v2 v2) (cons 's2 s2) (cons 'v1 v1) (cons 's1 s1)) (lambda () (requiresNonNegStr v2)))) 11)
+    ))
   )
 
   (test-case "tree depth: leaf"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1239 (list) (lambda () (treeDepth Leaf)))) 0)
+    ))
   )
 
   (test-case "tree depth: single node"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "tests/adversarial-review-tests.tesl" 1243 (list) (lambda () (raw-value (Node Leaf 42 Leaf)))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1244 (list (cons 't t)) (lambda () (treeDepth t)))) 1)
+    ))
   )
 
   (test-case "tree depth: balanced depth-2 tree"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "tests/adversarial-review-tests.tesl" 1248 (list) (lambda () (raw-value (Node (Node Leaf 1 Leaf) 2 (Node Leaf 3 Leaf))))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1249 (list (cons 't t)) (lambda () (treeDepth t)))) 2)
+    ))
   )
 
   (test-case "tree depth: right-skewed depth-3"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "tests/adversarial-review-tests.tesl" 1253 (list) (lambda () (raw-value (Node Leaf 1 (Node Leaf 2 (Node Leaf 3 Leaf)))))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1254 (list (cons 't t)) (lambda () (treeDepth t)))) 3)
+    ))
   )
 
   (test-case "tree depth: left-heavy"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "tests/adversarial-review-tests.tesl" 1258 (list) (lambda () (raw-value (Node (Node (Node Leaf 1 Leaf) 2 Leaf) 3 Leaf)))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1259 (list (cons 't t)) (lambda () (treeDepth t)))) 3)
+    ))
   )
 
   (test-case "factorial base cases"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1283 (list) (lambda () (factorial 0)))) 1)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1284 (list) (lambda () (factorial 1)))) 1)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1285 (list) (lambda () (factorial -5)))) 1)
+    ))
   )
 
   (test-case "factorial small values"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1289 (list) (lambda () (factorial 2)))) 2)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1290 (list) (lambda () (factorial 3)))) 6)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1291 (list) (lambda () (factorial 4)))) 24)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1292 (list) (lambda () (factorial 5)))) 120)
+    ))
   )
 
   (test-case "fibonacci base cases"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1296 (list) (lambda () (fibonacci 0)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1297 (list) (lambda () (fibonacci 1)))) 1)
+    ))
   )
 
   (test-case "fibonacci small values"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1301 (list) (lambda () (fibonacci 2)))) 1)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1302 (list) (lambda () (fibonacci 3)))) 2)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1303 (list) (lambda () (fibonacci 4)))) 3)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1304 (list) (lambda () (fibonacci 5)))) 5)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1305 (list) (lambda () (fibonacci 6)))) 8)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1306 (list) (lambda () (fibonacci 10)))) 55)
+    ))
   )
 
   (test-case "conjunct both pass: 1"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1320 (list) (lambda () (conjunctSatisfied 1)))) "done")
+    ))
   )
 
   (test-case "conjunct both pass: 50"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1324 (list) (lambda () (conjunctSatisfied 50)))) "done")
+    ))
   )
 
   (test-case "conjunct fails: 0 (not positive)"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1328 (list) (lambda ()
                           (conjunctSatisfied 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: conjunctSatisfied 0"))
+    ))
   )
 
   (test-case "conjunct fails: 100 (not small)"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1332 (list) (lambda ()
                           (conjunctSatisfied 100))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: conjunctSatisfied 100"))
+    ))
   )
 
   (test-case "foldl sum is commutative for pairs"
+    (call-with-fresh-memory-db '() (lambda ()
   (define xs1 (thsl-src! "tests/adversarial-review-tests.tesl" 1344 (list) (lambda () (list 1 2 3 4 5))))
   (define xs2 (thsl-src! "tests/adversarial-review-tests.tesl" 1345 (list (cons 'xs1 xs1)) (lambda () (list 5 4 3 2 1))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1346 (list (cons 'xs2 xs2) (cons 'xs1 xs1)) (lambda () (sumList2 xs1)))) (sumList2 xs2))
+    ))
   )
 
   (test-case "foldl sum of singleton is identity"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1350 (list) (lambda () (sumList2 (list 42))))) 42)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1351 (list) (lambda () (sumList2 (list -7))))) -7)
+    ))
   )
 
   (test-case "foldl sum with 50 random"
+    (call-with-fresh-memory-db '() (lambda ()
   ; property: sum ≥ min
   (for ([tesl-prop-i (in-range 50)])
     (let ([n (- (random 2000001) 1000000)])
       (when (and (>= (raw-value n) 1) (<= (raw-value n) 1000)) (check-true (>= (raw-value (sumList2 (list n))) 1) "sum \226\137\165 min"))
     ))
+    ))
   )
 
   (test-case "toUpper preserves length on ASCII"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1371 (list) (lambda () (upperLengthPreserved "hello")))) #t)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1372 (list) (lambda () (upperLengthPreserved "")))) #t)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1373 (list) (lambda () (upperLengthPreserved "HELLO WORLD")))) #t)
+    ))
   )
 
   (test-case "toLower preserves length on ASCII"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1377 (list) (lambda () (lowerLengthPreserved "HELLO")))) #t)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1378 (list) (lambda () (lowerLengthPreserved "mixed Case String")))) #t)
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1379 (list) (lambda () (lowerLengthPreserved "")))) #t)
+    ))
   )
 
   (test-case "filter idempotence: empty list"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1394 (list) (lambda () (raw-value (tesl_import_List_length (raw-value (filterPositiveTwice (list)))))))) 0)
+    ))
   )
 
   (test-case "filter idempotence: all positive"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1398 (list) (lambda () (raw-value (tesl_import_List_length (raw-value (filterPositiveTwice (list 1 2 3)))))))) (raw-value (tesl_import_List_length (raw-value (filterPositiveOnce (list 1 2 3))))))
+    ))
   )
 
   (test-case "filter idempotence: mixed"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1402 (list) (lambda () (raw-value (tesl_import_List_length (raw-value (filterPositiveTwice (list 1 -2 3 -4 5)))))))) (raw-value (tesl_import_List_length (raw-value (filterPositiveOnce (list 1 -2 3 -4 5))))))
+    ))
   )
 
   (test-case "inBounds: all values between lo and hi pass"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1436 (list) (lambda () (checkInBounds1020 15)))) "15 is in [10, 20]")
+    ))
   )
 
   (test-case "inBounds: lo == hi is a valid range"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1440 (list) (lambda () (checkInBoundsEqual 5)))) "5 is in [5, 5]")
+    ))
   )
 
   (test-case "inBounds: negative range works"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1444 (list) (lambda () (checkInBoundsNeg -5)))) "-5 is in [-10, -1]")
+    ))
   )
 
   (test-case "inBounds: value at lo boundary"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1448 (list) (lambda () (checkInBoundsLo 0)))) "0 is in [0, 100]")
+    ))
   )
 
   (test-case "inBounds: value just below lo fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (define lo (thsl-src! "tests/adversarial-review-tests.tesl" 1452 (list) (lambda () 5)))
   (define hi (thsl-src! "tests/adversarial-review-tests.tesl" 1453 (list (cons 'lo lo)) (lambda () 15)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1454 (list (cons 'hi hi) (cons 'lo lo)) (lambda ()
                           (checkInBounds lo hi 4))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkInBounds lo hi 4"))
+    ))
   )
 
   (test-case "parseAndValidate: short non-empty string"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1471 (list) (lambda () (parseAndValidate "hi")))) (raw-value (Right 2)))
+    ))
   )
 
   (test-case "parseAndValidate: exactly 9 chars"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1475 (list) (lambda () (parseAndValidate "123456789")))) (raw-value (Right 9)))
+    ))
   )
 
   (test-case "parseAndValidate: 10 chars rejected as too long"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1479 (list) (lambda () (parseAndValidate "1234567890")))) (raw-value (Left "too long")))
+    ))
   )
 
   (test-case "parseAndValidate: empty string fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1484 (list) (lambda ()
                           (parseAndValidate ""))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: parseAndValidate \"\""))
+    ))
   )
 
   (test-case "eval: neg of neg"
+    (call-with-fresh-memory-db '() (lambda ()
   (define e (thsl-src! "tests/adversarial-review-tests.tesl" 1501 (list) (lambda () (raw-value (Neg (Neg (Lit 5)))))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1502 (list (cons 'e e)) (lambda () (evalNested e)))) 5)
+    ))
   )
 
   (test-case "eval: (2 + 3) * (4 + 1)"
+    (call-with-fresh-memory-db '() (lambda ()
   (define e (thsl-src! "tests/adversarial-review-tests.tesl" 1506 (list) (lambda () (raw-value (Mul (Add (Lit 2) (Lit 3)) (Add (Lit 4) (Lit 1)))))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1507 (list (cons 'e e)) (lambda () (evalNested e)))) 25)
+    ))
   )
 
   (test-case "eval: deeply nested add"
+    (call-with-fresh-memory-db '() (lambda ()
   (define e (thsl-src! "tests/adversarial-review-tests.tesl" 1511 (list) (lambda () (raw-value (Add (Add (Add (Lit 1) (Lit 2)) (Lit 3)) (Lit 4))))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1512 (list (cons 'e e)) (lambda () (evalNested e)))) 10)
+    ))
   )
 
   (test-case "eval: multiply by zero"
+    (call-with-fresh-memory-db '() (lambda ()
   (define e (thsl-src! "tests/adversarial-review-tests.tesl" 1516 (list) (lambda () (raw-value (Mul (Lit 0) (Add (Lit 100) (Lit 200)))))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1517 (list (cons 'e e)) (lambda () (evalNested e)))) 0)
+    ))
   )
 
   (test-case "proof independence: both positive, both in bounds"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1539 (list) (lambda () (proofIndependenceCorrect 5 10)))) 30)
+    ))
   )
 
   (test-case "proof independence: first fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1543 (list) (lambda ()
                           (proofIndependenceCorrect 0 5))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: proofIndependenceCorrect 0 5"))
+    ))
   )
 
   (test-case "proof independence: second fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1547 (list) (lambda ()
                           (proofIndependenceCorrect 5 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: proofIndependenceCorrect 5 0"))
+    ))
   )
 
   (test-case "proof independence: first out of bounds"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1551 (list) (lambda ()
                           (proofIndependenceCorrect 1000 5))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: proofIndependenceCorrect 1000 5"))
+    ))
   )
 
   (test-case "proof independence: both out of bounds"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1555 (list) (lambda ()
                           (proofIndependenceCorrect 1000 2000))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: proofIndependenceCorrect 1000 2000"))
+    ))
   )
 
   (test-case "Bug1: maxRec returns larger of two, first larger"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1573 (list) (lambda () (maxRec 5 3)))) 5)
+    ))
   )
 
   (test-case "Bug1: maxRec returns larger of two, second larger"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1577 (list) (lambda () (maxRec 2 9)))) 9)
+    ))
   )
 
   (test-case "Bug1: maxRec with equal values"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1581 (list) (lambda () (maxRec 7 7)))) 7)
+    ))
   )
 
   (test-case "Bug1: maxRec with negative numbers"
+    (call-with-fresh-memory-db '() (lambda ()
   (define a (thsl-src! "tests/adversarial-review-tests.tesl" 1585 (list) (lambda () -3)))
   (define b (thsl-src! "tests/adversarial-review-tests.tesl" 1586 (list (cons 'a a)) (lambda () -1)))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1587 (list (cons 'b b) (cons 'a a)) (lambda () (maxRec a b)))) b)
+    ))
   )
 
   (test-case "Bug2: fn wrapping check passes for valid value"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "tests/adversarial-review-tests.tesl" 1605 (list) (lambda () 42)))
   (define v (thsl-src! "tests/adversarial-review-tests.tesl" 1606 (list (cons 'n n)) (lambda () (fnWrapsCheck n))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1607 (list (cons 'v v) (cons 'n n)) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "Bug2: fn wrapping check fails for invalid value"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "tests/adversarial-review-tests.tesl" 1611 (list) (lambda () 0)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1612 (list (cons 'n n)) (lambda ()
                           (fnWrapsCheck n))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: fnWrapsCheck n"))
+    ))
   )
 
   (test-case "Bug2: fn wrapping check fails for out-of-range value"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "tests/adversarial-review-tests.tesl" 1616 (list) (lambda () 100)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/adversarial-review-tests.tesl" 1617 (list (cons 'n n)) (lambda ()
                           (fnWrapsCheck n))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: fnWrapsCheck n"))
+    ))
   )
 
   (test-case "Bug7: filterCheck result satisfies ForAll Positive"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/adversarial-review-tests.tesl" 1635 (list) (lambda () (filteredPositives (list 1 2 3 -1 -2)))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1636 (list (cons 'result result)) (lambda () (raw-value (tesl_import_List_length (raw-value result)))))) 3)
+    ))
   )
 
   (test-case "Bug7: filterCheck all positive"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/adversarial-review-tests.tesl" 1640 (list) (lambda () (filteredPositives (list 10 20 30)))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1641 (list (cons 'result result)) (lambda () (raw-value (tesl_import_List_length (raw-value result)))))) 3)
+    ))
   )
 
   (test-case "Bug7: filterCheck all negative gives empty list"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/adversarial-review-tests.tesl" 1645 (list) (lambda () (filteredPositives (list -1 -2 -3)))))
   (check-equal? (raw-value (thsl-src! "tests/adversarial-review-tests.tesl" 1646 (list (cons 'result result)) (lambda () (raw-value (tesl_import_List_length (raw-value result)))))) 0)
+    ))
   )
 
 )

@@ -203,15 +203,18 @@
 (module+ test
   (require rackunit)
   (test-case "tool reads order status from the database (grounded, not fabricated)"
+    (call-with-fresh-memory-db (list ConversationDb) (lambda ()
     (with-capabilities (convService)
     (define seed (thsl-src! "example/ai-conversation-service.tesl" 302 (list) (lambda () (list (hash 'id "ord-1" 'status "shipped")))))
     (insert-many! (from Order) seed)
     (check-equal? (raw-value (thsl-src! "example/ai-conversation-service.tesl" 304 (list (cons 'seed seed)) (lambda () (lookupOrderStatus "ord-1")))) "shipped")
     (check-equal? (raw-value (thsl-src! "example/ai-conversation-service.tesl" 305 (list (cons 'seed seed)) (lambda () (lookupOrderStatus "ord-unknown")))) "no such order")
     )
+    ))
   )
 
   (test-case "a streamed turn calls the DB tool and returns the reply"
+    (call-with-fresh-memory-db (list ConversationDb) (lambda ()
     (with-capabilities (convService)
     (define seed (thsl-src! "example/ai-conversation-service.tesl" 311 (list) (lambda () (list (hash 'id "ord-2" 'status "delivered")))))
     (insert-many! (from Order) seed)
@@ -221,9 +224,11 @@
     (define reply (thsl-src! "example/ai-conversation-service.tesl" 316 (list (cons 'agent agent) (cons 'final final) (cons 'call call) (cons 'seed seed)) (lambda () (replyTurn agent (Consumer #:id "alice" #:provider "claude" #:apiKey "test-key") "conv-tool" "where is ord-2?"))))
     (check-equal? (raw-value (thsl-src! "example/ai-conversation-service.tesl" 317 (list (cons 'reply reply) (cons 'agent agent) (cons 'final final) (cons 'call call) (cons 'seed seed)) (lambda () reply))) "Order ord-2 has been delivered.")
     )
+    ))
   )
 
   (test-case "a consumer resumes their own conversation across calls (cross-instance)"
+    (call-with-fresh-memory-db (list ConversationDb) (lambda ()
     (with-capabilities (convService)
     (define agent (thsl-src! "example/ai-conversation-service.tesl" 323 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "Hi Alice." "Sure \u2014 more."))) (raw-value "sys") (raw-value 256)) (list)))))
     (define alice (thsl-src! "example/ai-conversation-service.tesl" 324 (list (cons 'agent agent)) (lambda () (Consumer #:id "alice" #:provider "claude" #:apiKey "test-key"))))
@@ -232,9 +237,11 @@
     (define r2 (thsl-src! "example/ai-conversation-service.tesl" 327 (list (cons 'r1 r1) (cons 'alice alice) (cons 'agent agent)) (lambda () (replyTurn agent alice "conv-1" "tell me more"))))
     (check-equal? (raw-value (thsl-src! "example/ai-conversation-service.tesl" 328 (list (cons 'r2 r2) (cons 'r1 r1) (cons 'alice alice) (cons 'agent agent)) (lambda () r2))) "Sure \u2014 more.")
     )
+    ))
   )
 
   (test-case "a consumer cannot access another consumer's conversation (isolation)"
+    (call-with-fresh-memory-db (list ConversationDb) (lambda ()
     (with-capabilities (convService)
     (define agent (thsl-src! "example/ai-conversation-service.tesl" 334 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "secret for alice"))) (raw-value "sys") (raw-value 256)) (list)))))
     (define alice (thsl-src! "example/ai-conversation-service.tesl" 335 (list (cons 'agent agent)) (lambda () (Consumer #:id "alice" #:provider "claude" #:apiKey "test-key"))))
@@ -243,6 +250,7 @@
     (define bobConv (thsl-src! "example/ai-conversation-service.tesl" 338 (list (cons 'bob bob) (cons 'alice alice) (cons 'agent agent)) (lambda () (loadConversation agent bob "shared-id"))))
     (check-equal? (raw-value (thsl-src! "example/ai-conversation-service.tesl" 339 (list (cons 'bobConv bobConv) (cons 'bob bob) (cons 'alice alice) (cons 'agent agent)) (lambda () (raw-value (conversationLength (raw-value bobConv)))))) 0)
     )
+    ))
   )
 
 )

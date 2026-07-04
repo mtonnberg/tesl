@@ -74,75 +74,99 @@
 (module+ test
   (require rackunit)
   (test-case "circleArea"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 139 (list) (lambda () (raw-value (tesl_import_Float_round (raw-value (circleArea 1.))))))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 141 (list) (lambda () (raw-value (tesl_import_Float_round (raw-value (circleArea 2.))))))) 13)
+    ))
   )
 
   (test-case "hypotenuse - classic 3-4-5 triangle"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 145 (list) (lambda () (raw-value (tesl_import_Float_round (raw-value (hypotenuse 3. 4.))))))) 5)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 146 (list) (lambda () (raw-value (tesl_import_Float_round (raw-value (hypotenuse 5. 12.))))))) 13)
+    ))
   )
 
   (test-case "clampUnit"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 150 (list) (lambda () (clampUnit 0.5)))) 0.5)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 151 (list) (lambda () (raw-value (tesl_import_Float_round (* (raw-value (clampUnit 1.5)) 10.)))))) 10)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 152 (list) (lambda () (clampUnit 0.)))) 0.)
+    ))
   )
 
   (test-case "sumFloats using Float.add as higher-order function"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 156 (list) (lambda () (raw-value (tesl_import_Float_round (raw-value (sumFloats (list 1.5 2.5 3.)))))))) 7)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 157 (list) (lambda () (raw-value (tesl_import_Float_round (raw-value (sumFloats (list)))))))) 0)
+    ))
   )
 
   (test-case "safeAverage"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-not-equal? (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 161 (list) (lambda () (safeAverage 2. 4. 2.))) Nothing)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 162 (list) (lambda () (safeAverage 2. 4. 0.)))) Nothing)
+    ))
   )
 
   (test-case "Float.sqrt"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 166 (list) (lambda () (raw-value (tesl_import_Float_round (raw-value (tesl_import_Float_sqrt 4.))))))) 2)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 167 (list) (lambda () (raw-value (tesl_import_Float_round (raw-value (tesl_import_Float_sqrt 9.))))))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 168 (list) (lambda () (raw-value (tesl_import_Float_round (* (raw-value (tesl_import_Float_sqrt 2.)) 100.)))))) 141)
+    ))
   )
 
   (test-case "Float.pow"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 172 (list) (lambda () (raw-value (tesl_import_Float_round (raw-value (tesl_import_Float_pow 2. 10.))))))) 1024)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 173 (list) (lambda () (raw-value (tesl_import_Float_round (raw-value (tesl_import_Float_pow 3. 3.))))))) 27)
+    ))
   )
 
   (test-case "rounding"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 177 (list) (lambda () (raw-value (tesl_import_Float_floor 2.9))))) 2)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 178 (list) (lambda () (raw-value (tesl_import_Float_ceil 2.1))))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 179 (list) (lambda () (raw-value (tesl_import_Float_toInt 3.9))))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 180 (list) (lambda () (raw-value (tesl_import_Float_toInt (- 3.9)))))) -3)
+    ))
   )
 
   (test-case "Float.parse"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-not-equal? (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 184 (list) (lambda () (raw-value (tesl_import_Float_parse "3.14")))) Nothing)
   (check-not-equal? (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 185 (list) (lambda () (raw-value (tesl_import_Float_parse "-1.5")))) Nothing)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 186 (list) (lambda () (raw-value (tesl_import_Float_parse "not-a-number"))))) Nothing)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 187 (list) (lambda () (raw-value (tesl_import_Float_parse ""))))) Nothing)
+    ))
   )
 
   (test-case "isValidReading"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 191 (list) (lambda () (isValidReading 1.5)))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 192 (list) (lambda () (isValidReading tesl_import_Float_nan)))) #f)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 193 (list) (lambda () (isValidReading tesl_import_Float_infinity)))) #f)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 194 (list) (lambda () (isValidReading (- 1.))))) #t)
+    ))
   )
 
   (test-case "Float.isPositive / isNegative / isZero"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 198 (list) (lambda () (raw-value (tesl_import_Float_isPositive 3.14))))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 199 (list) (lambda () (raw-value (tesl_import_Float_isNegative (- 1.)))))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 200 (list) (lambda () (raw-value (tesl_import_Float_isZero 0.))))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 201 (list) (lambda () (raw-value (tesl_import_Float_isZero 0.001))))) #f)
+    ))
   )
 
   (test-case "Float.abs / min / max"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 205 (list) (lambda () (raw-value (tesl_import_Float_round (raw-value (tesl_import_Float_abs (- 2.5)))))))) 2)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 206 (list) (lambda () (raw-value (tesl_import_Float_round (raw-value (tesl_import_Float_abs (- 3.5)))))))) 4)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 207 (list) (lambda () (raw-value (tesl_import_Float_round (raw-value (tesl_import_Float_min 1. 2.))))))) 1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 208 (list) (lambda () (raw-value (tesl_import_Float_round (raw-value (tesl_import_Float_max 1. 2.))))))) 2)
+    ))
   )
 
 )

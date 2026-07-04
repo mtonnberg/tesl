@@ -129,6 +129,7 @@
 (module+ test
   (require rackunit)
   (test-case "ageDescription"
+    (call-with-fresh-memory-db (list TimedDatabase) (lambda ()
   (define base (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 311 (list) (lambda () (raw-value (tesl_import_Time_secondsToPosix 1000)))))
   (define fiveMinLater (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 313 (list (cons 'base base)) (lambda () (addMs (raw-value base) (* (* 5 60) 1000)))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 314 (list (cons 'fiveMinLater fiveMinLater) (cons 'base base)) (lambda () (ageDescription base fiveMinLater)))) "5m ago")
@@ -136,26 +137,33 @@
   (check-equal? (raw-value (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 317 (list (cons 'twoHrLater twoHrLater) (cons 'fiveMinLater fiveMinLater) (cons 'base base)) (lambda () (ageDescription base twoHrLater)))) "2h ago")
   (define almostNow (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 319 (list (cons 'twoHrLater twoHrLater) (cons 'fiveMinLater fiveMinLater) (cons 'base base)) (lambda () (addMs (raw-value base) 500))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 320 (list (cons 'almostNow almostNow) (cons 'twoHrLater twoHrLater) (cons 'fiveMinLater fiveMinLater) (cons 'base base)) (lambda () (ageDescription base almostNow)))) "just now")
+    ))
   )
 
   (test-case "createdRecently"
+    (call-with-fresh-memory-db (list TimedDatabase) (lambda ()
   (define nowTs (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 324 (list) (lambda () (raw-value (tesl_import_Time_secondsToPosix 1000)))))
   (define recent (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 325 (list (cons 'nowTs nowTs)) (lambda () (subtractMs (raw-value nowTs) 500))))
   (define old (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 326 (list (cons 'recent recent) (cons 'nowTs nowTs)) (lambda () (subtractMs (raw-value nowTs) 2000))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 327 (list (cons 'old old) (cons 'recent recent) (cons 'nowTs nowTs)) (lambda () (createdRecently recent nowTs 1000)))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 328 (list (cons 'old old) (cons 'recent recent) (cons 'nowTs nowTs)) (lambda () (createdRecently old nowTs 1000)))) #f)
+    ))
   )
 
   (test-case "formatPublishedAt basics"
+    (call-with-fresh-memory-db (list TimedDatabase) (lambda ()
   (define formatted (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 333 (list) (lambda () (formatPublishedAt (raw-value (tesl_import_Time_secondsToPosix 0)) "UTC"))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 334 (list (cons 'formatted formatted)) (lambda () (tesl_import_String_startsWith (raw-value formatted) "1970-01-01")))) #t)
+    ))
   )
 
   (test-case "diffMs and addMs"
+    (call-with-fresh-memory-db (list TimedDatabase) (lambda ()
   (define t1 (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 339 (list) (lambda () (raw-value (tesl_import_Time_secondsToPosix 1000)))))
   (define t2 (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 340 (list (cons 't1 t1)) (lambda () (addMs (raw-value t1) 1500))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 341 (list (cons 't2 t2) (cons 't1 t1)) (lambda () (diffMs (raw-value t1) (raw-value t2))))) 1500)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson26-time-and-posix.tesl" 343 (list (cons 't2 t2) (cons 't1 t1)) (lambda () (diffMs (raw-value t1) (addMs (raw-value t1) 500))))) 500)
+    ))
   )
 
 )

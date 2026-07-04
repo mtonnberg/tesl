@@ -83,11 +83,15 @@
 (module+ test
   (require rackunit)
   (test-case "validateAndProcess"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson51-proof-combining.tesl" 183 (list) (lambda () (validateAndProcess "Alice")))) "Alice / Alice")
+    ))
   )
 
   (test-case "validateEmail"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson51-proof-combining.tesl" 187 (list) (lambda () (validateEmail "alice@example.com")))) "alice@example.com / alice@example.com")
+    ))
   )
 
 )

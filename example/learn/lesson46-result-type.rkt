@@ -106,77 +106,111 @@
 (module+ test
   (require rackunit)
   (test-case "Ok carries the success value"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 186 (list) (lambda () (okIntOrDefault (divide 10 2) 0)))) 5)
+    ))
   )
 
   (test-case "Err carries the failure description"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 190 (list) (lambda () (errMsgOrEmpty (divide 10 0))))) "division by zero")
+    ))
   )
 
   (test-case "divide 10 by 2 is Ok"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 194 (list) (lambda () (isOkResult (divide 10 2))))) #t)
+    ))
   )
 
   (test-case "divide by zero is Err"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 198 (list) (lambda () (isErr (divide 10 0))))) #t)
+    ))
   )
 
   (test-case "parseInt succeeds on a valid number"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 202 (list) (lambda () (okIntOrDefault (parseInt "42") 0)))) 42)
+    ))
   )
 
   (test-case "parseInt fails on empty string"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 206 (list) (lambda () (errMsgOrEmpty (parseInt ""))))) "input is empty")
+    ))
   )
 
   (test-case "parseInt fails on non-numeric input"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 210 (list) (lambda () (isErr (parseInt "hello"))))) #t)
+    ))
   )
 
   (test-case "validateAge rejects negatives"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 214 (list) (lambda () (isErr (validateAge -1))))) #t)
+    ))
   )
 
   (test-case "validateAge rejects unrealistic values"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 218 (list) (lambda () (isErr (validateAge 200))))) #t)
+    ))
   )
 
   (test-case "validateAge accepts a normal value"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 222 (list) (lambda () (okIntOrDefault (validateAge 30) 0)))) 30)
+    ))
   )
 
   (test-case "processAge chains parse then validate"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 226 (list) (lambda () (okIntOrDefault (processAge "25") 0)))) 25)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 227 (list) (lambda () (isErr (processAge "abc"))))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 228 (list) (lambda () (isErr (processAge "-5"))))) #t)
+    ))
   )
 
   (test-case "fetchUser ok returns the userId"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "example/learn/lesson46-result-type.tesl" 232 (list) (lambda () (fetchUser "bob" "alice"))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 233 (list (cons 'r r)) (lambda () (isErrUserResult r)))) #f)
+    ))
   )
 
   (test-case "fetchUser empty userId is Err"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "example/learn/lesson46-result-type.tesl" 237 (list) (lambda () (fetchUser "" "alice"))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 238 (list (cons 'r r)) (lambda () (isErrUserResult r)))) #t)
+    ))
   )
 
   (test-case "fetchUser ghost is Err (not found)"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "example/learn/lesson46-result-type.tesl" 242 (list) (lambda () (fetchUser "ghost" "alice"))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 243 (list (cons 'r r)) (lambda () (isErrUserResult r)))) #t)
+    ))
   )
 
   (test-case "safeDivideOrDefault uses fallback on error"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 247 (list) (lambda () (safeDivideOrDefault 10 0 99)))) 99)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 248 (list) (lambda () (safeDivideOrDefault 10 2 99)))) 5)
+    ))
   )
 
   (test-case "runPipeline end-to-end success"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 252 (list) (lambda () (isErrStrResult (runPipeline "25" "alice"))))) #f)
+    ))
   )
 
   (test-case "runPipeline fails on underage"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 256 (list) (lambda () (isErrStrResult (runPipeline "15" "alice"))))) #t)
+    ))
   )
 
 )

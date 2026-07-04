@@ -126,6 +126,7 @@
 (module+ test
   (require rackunit)
   (test-case "checkSafeTitle valid"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s1 (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 124 (list) (lambda () "hello")))
   (define tesl-checked-3 (checkSafeTitle s1))
   (when (check-fail? tesl-checked-3)
@@ -138,16 +139,20 @@
     (raise-user-error 'tesl-test "unexpected failure in let y: ~a" (check-fail-message tesl-checked-4)))
   (define y tesl-checked-4)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 129 (list (cons 'y y) (cons 's2 s2) (cons 'x x) (cons 's1 s1)) (lambda () y))) "a")
+    ))
   )
 
   (test-case "checkSafeTitle rejects"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 133 (list) (lambda ()
                           (checkSafeTitle ""))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkSafeTitle \"\""))
+    ))
   )
 
   (test-case "checkLength valid"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s1 (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 137 (list) (lambda () "")))
   (define tesl-checked-5 (checkLength s1))
   (when (check-fail? tesl-checked-5)
@@ -160,9 +165,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let x: ~a" (check-fail-message tesl-checked-6)))
   (define x tesl-checked-6)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 142 (list (cons 'x x) (cons 's2 s2) (cons 'y y) (cons 's1 s1)) (lambda () x))) "hello")
+    ))
   )
 
   (test-case "createMessage valid"
+    (call-with-fresh-memory-db '() (lambda ()
   (define rawTitle (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 146 (list) (lambda () "My Title")))
   (define tesl-checked-7 (checkSafeTitle rawTitle))
   (when (check-fail? tesl-checked-7)
@@ -176,9 +183,11 @@
   (define msg (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 150 (list (cons 'b b) (cons 'rawBody rawBody) (cons 't t) (cons 'rawTitle rawTitle)) (lambda () (createMessage t b))))
   (check-equal? (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 151 (list (cons 'msg msg) (cons 'b b) (cons 'rawBody rawBody) (cons 't t) (cons 'rawTitle rawTitle)) (lambda () (raw-value (tesl-dot/runtime msg 'title)))) "My Title")
   (check-equal? (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 152 (list (cons 'msg msg) (cons 'b b) (cons 'rawBody rawBody) (cons 't t) (cons 'rawTitle rawTitle)) (lambda () (raw-value (tesl-dot/runtime msg 'body)))) "Some body text")
+    ))
   )
 
   (test-case "valid OrderLine"
+    (call-with-fresh-memory-db '() (lambda ()
   (define rawP (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 265 (list) (lambda () 10)))
   (define tesl-checked-9 (checkPositiveInt rawP))
   (when (check-fail? tesl-checked-9)
@@ -197,9 +206,11 @@
   (define orderAlt (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 271 (list (cons 'order order) (cons 'pq pq) (cons 'q q) (cons 'rawQ rawQ) (cons 'p p) (cons 'rawP rawP)) (lambda () (attach-proof (OrderLine #:price p #:quantity q) (detach-all-proof pq)))))
   (check-equal? (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 272 (list (cons 'orderAlt orderAlt) (cons 'order order) (cons 'pq pq) (cons 'q q) (cons 'rawQ rawQ) (cons 'p p) (cons 'rawP rawP)) (lambda () (raw-value (tesl-dot/runtime order 'price)))) 10)
   (check-equal? (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 273 (list (cons 'orderAlt orderAlt) (cons 'order order) (cons 'pq pq) (cons 'q q) (cons 'rawQ rawQ) (cons 'p p) (cons 'rawP rawP)) (lambda () (raw-value (tesl-dot/runtime order 'quantity)))) 3)
+    ))
   )
 
   (test-case "checkPriceExceedsQuantity rejects price <= quantity"
+    (call-with-fresh-memory-db '() (lambda ()
   (define rawP (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 279 (list) (lambda () 3)))
   (define tesl-checked-12 (checkPositiveInt rawP))
   (when (check-fail? tesl-checked-12)
@@ -214,6 +225,7 @@
                           (checkPriceExceedsQuantity p q))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkPriceExceedsQuantity p q"))
+    ))
   )
 
 )

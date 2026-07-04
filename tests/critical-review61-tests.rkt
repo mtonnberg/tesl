@@ -368,40 +368,53 @@
 (module+ test
   (require rackunit)
   (test-case "R61_CH01 6-check accumulation chain works end-to-end"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 197 (list) (lambda () (build6Chain 10))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 198 (list (cons 'r r)) (lambda () r))) 10)
+    ))
   )
 
   (test-case "R61_CH02 7-check accumulation chain works end-to-end"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 202 (list) (lambda () (build7Chain 10))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 203 (list (cons 'r r)) (lambda () r))) 10)
+    ))
   )
 
   (test-case "R61_CH03 6-check chain fails at step 1 if first check fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review61-tests.tesl" 207 (list) (lambda ()
                           ((build6Chain 0) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (build6Chain 0) (list)"))
+    ))
   )
 
   (test-case "R61_CH04 6-check chain fails at step 3 if middle check fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review61-tests.tesl" 211 (list) (lambda ()
                           ((build6Chain 2) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (build6Chain 2) (list)"))
+    ))
   )
 
   (test-case "R61_FA01 Set.filterCheck produces ForAll (IsPositive) \226\128\148 succeeds"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s (thsl-src! "tests/critical-review61-tests.tesl" 241 (list) (lambda () (tesl_import_Set_filterCheck checkPos (raw-value (tesl_import_Set_fromList (list 1 2 3 -1 0)))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 242 (list (cons 's s)) (lambda () (raw-value (tesl_import_Set_size (raw-value s)))))) 3)
+    ))
   )
 
   (test-case "R61_FA02 Dict.filterCheckValues produces ForAllValues (IsPositive)"
+    (call-with-fresh-memory-db '() (lambda ()
   (define d (thsl-src! "tests/critical-review61-tests.tesl" 246 (list) (lambda () (raw-value (tesl_import_Dict_filterCheckValues checkPos (raw-value (tesl_import_Dict_fromList (list (Tuple2 "a" 1) (Tuple2 "b" -1) (Tuple2 "c" 2)))))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 247 (list (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_size (raw-value d)))))) 2)
+    ))
   )
 
   (test-case "R61_FA03 List.allCheck with conjunction returns Something if all pass"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 251 (list) (lambda () (allSmall (list 1 2 3)))))
   (let ([*tesl-case-30 (raw-value 
     r)]) (cond
@@ -417,9 +430,11 @@
       )
     ]
   ))
+    ))
   )
 
   (test-case "R61_FA04 List.allCheck with conjunction returns Nothing if any fail"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 258 (list) (lambda () (allSmall (list 1 2 200)))))
   (let ([*tesl-case-31 (raw-value 
     r)]) (cond
@@ -433,157 +448,211 @@
                     "expected failure: (+ 1 1) (list)"))
     ]
   ))
+    ))
   )
 
   (test-case "R61_FA05 ForAll propagates through fn call chain (positives -> narrowToSmall)"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/critical-review61-tests.tesl" 265 (list) (lambda () (forAllPipeline (list 1 2 50 200 -1)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 266 (list (cons 'result result)) (lambda () (raw-value (tesl_import_List_length (raw-value result)))))) 3)
+    ))
   )
 
   (test-case "R61_FA06 List.emptyForAll produces empty ForAll list"
+    (call-with-fresh-memory-db '() (lambda ()
   (define empty (thsl-src! "tests/critical-review61-tests.tesl" 270 (list) (lambda () (tesl_import_List_emptyForAll checkPos))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 271 (list (cons 'empty empty)) (lambda () (raw-value (tesl_import_List_length (raw-value empty)))))) 0)
+    ))
   )
 
   (test-case "R61_SF01 String.trim returns IsTrimmed proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 295 (list) (lambda () (trimAndUse "  hello  "))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 296 (list (cons 'r r)) (lambda () r))) "hello")
+    ))
   )
 
   (test-case "R61_SF02 String.toUpper returns IsUpperCase proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 300 (list) (lambda () (upperAndUse "hello"))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 301 (list (cons 'r r)) (lambda () r))) "HELLO")
+    ))
   )
 
   (test-case "R61_SF03 List.sort returns IsSorted proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 305 (list) (lambda () (sortAndUse (list 3 1 2)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 306 (list (cons 'r r)) (lambda () (raw-value (tesl_import_List_length (raw-value r)))))) 3)
+    ))
   )
 
   (test-case "R61_RC01 record with 3 proof-annotated fields: construction succeeds"
+    (call-with-fresh-memory-db '() (lambda ()
   (define item (thsl-src! "tests/critical-review61-tests.tesl" 326 (list) (lambda () (buildSafeTriple "hello" 5 3))))
   (check-equal? (thsl-src! "tests/critical-review61-tests.tesl" 327 (list (cons 'item item)) (lambda () (raw-value (tesl-dot/runtime item 'score)))) 3)
+    ))
   )
 
   (test-case "R61_RC02 record with 3 proof-annotated fields: construction fails if count out of range"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review61-tests.tesl" 331 (list) (lambda ()
                           ((buildSafeTriple "hello" -1 3) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (buildSafeTriple \"hello\" -1 3) (list)"))
+    ))
   )
 
   (test-case "R61_IM01 introAnd with 5 proofs + andLeft extracts first proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 364 (list) (lambda () (combine5Proofs 5))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 365 (list (cons 'r r)) (lambda () r))) 5)
+    ))
   )
 
   (test-case "R61_IM02 andLeft and andRight round-trip"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 369 (list) (lambda () (andLeftRightRoundTrip 5))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 370 (list (cons 'r r)) (lambda () r))) 10)
+    ))
   )
 
   (test-case "R61_EM01 establish Maybe returns Something when proof holds"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 396 (list) (lambda () (tryUseRange 1 10 5))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 397 (list (cons 'r r)) (lambda () r))) 5)
+    ))
   )
 
   (test-case "R61_EM02 establish Maybe returns Nothing when proof doesn't hold"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 401 (list) (lambda () (tryUseRange 1 10 20))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 402 (list (cons 'r r)) (lambda () r))) -1)
+    ))
   )
 
   (test-case "R61_MR01 mutual recursion with check: even 4 + odd 3 = 7"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 436 (list) (lambda () (testMutualRec 4 3))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 437 (list (cons 'r r)) (lambda () r))) 7)
+    ))
   )
 
   (test-case "R61_MR02 mutual recursion: odd number fails checkEven"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review61-tests.tesl" 441 (list) (lambda ()
                           ((raw-value (checkOdd 2)) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (raw-value (checkOdd 2)) (list)"))
+    ))
   )
 
   (test-case "R61_MR03 mutual recursion: even number fails checkOdd"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review61-tests.tesl" 445 (list) (lambda ()
                           ((raw-value (checkOdd 4)) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (raw-value (checkOdd 4)) (list)"))
+    ))
   )
 
   (test-case "R61_DI01 Int.divide with IsNonZero proof succeeds"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 457 (list) (lambda () (safeDivide 10 2))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 458 (list (cons 'r r)) (lambda () r))) 5)
+    ))
   )
 
   (test-case "R61_DI02 Int.nonZero fails for zero denominator"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review61-tests.tesl" 462 (list) (lambda ()
                           ((safeDivide 10 0) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (safeDivide 10 0) (list)"))
+    ))
   )
 
   (test-case "R61_FG01 forgetFact followed by re-check works"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 476 (list) (lambda () (forgetAndRe 5))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 477 (list (cons 'r r)) (lambda () r))) 5)
+    ))
   )
 
   (test-case "R61_NA01 nested ADT exhaustiveness: all constructors covered"
+    (call-with-fresh-memory-db '() (lambda ()
   (define c (thsl-src! "tests/critical-review61-tests.tesl" 509 (list) (lambda () (raw-value (Filled (Circle 5) 3)))))
   (define desc (thsl-src! "tests/critical-review61-tests.tesl" 510 (list (cons 'c c)) (lambda () (describeContainer c))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 511 (list (cons 'desc desc) (cons 'c c)) (lambda () desc))) "circle")
+    ))
   )
 
   (test-case "R61_NA02 nested ADT: Rectangle"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 515 (list) (lambda () (describeContainer (Filled (Rectangle 4 3) 1)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 516 (list (cons 'r r)) (lambda () r))) "rect")
+    ))
   )
 
   (test-case "R61_NA03 nested ADT: Triangle"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 520 (list) (lambda () (describeContainer (Filled (Triangle 3 4) 2)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 521 (list (cons 'r r)) (lambda () r))) "triangle")
+    ))
   )
 
   (test-case "R61_NA04 nested ADT: Empty container"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 525 (list) (lambda () (describeContainer Empty))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 526 (list (cons 'r r)) (lambda () r))) "empty")
+    ))
   )
 
   (test-case "R61_PP01 call-site proof: B && A required, A && B carried \226\128\148 works (commutative)"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 541 (list) (lambda () (testConjunctionOrder 5))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 542 (list (cons 'r r)) (lambda () r))) 5)
+    ))
   )
 
   (test-case "R61_LM01 lambda with proof-annotated param works in List.map on ForAll list"
+    (call-with-fresh-memory-db '() (lambda ()
   (define positives (thsl-src! "tests/critical-review61-tests.tesl" 557 (list) (lambda () (tesl_import_List_filterCheck checkPos (list 1 2 3)))))
   (define doubled (thsl-src! "tests/critical-review61-tests.tesl" 558 (list (cons 'positives positives)) (lambda () (mapPositives positives))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 559 (list (cons 'doubled doubled) (cons 'positives positives)) (lambda () (raw-value (tesl_import_List_length (raw-value doubled)))))) 3)
+    ))
   )
 
   (test-case "R61_LM02 direct filterCheck (no lambda) produces ForAll list"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review61-tests.tesl" 563 (list) (lambda () (tesl_import_List_filterCheck checkPos (list 1 -1 2 -2 3)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 564 (list (cons 'r r)) (lambda () (raw-value (tesl_import_List_length (raw-value r)))))) 3)
+    ))
   )
 
   (test-case "R61_CO01 ok conjunction order normalised: Y && X accepted for X && Y return"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "tests/critical-review61-tests.tesl" 592 (list) (lambda () 5)))
   (define tesl-checked-32 (checkXY n))
   (when (check-fail? tesl-checked-32)
     (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl-checked-32)))
   (define v tesl-checked-32)
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 594 (list (cons 'v v) (cons 'n n)) (lambda () (requiresXY v)))) 5)
+    ))
   )
 
   (test-case "R61_CO02 ok conjunction order normalised: Z && X && Y accepted for X && Y && Z"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "tests/critical-review61-tests.tesl" 598 (list) (lambda () 5)))
   (define tesl-checked-33 (checkXYZ n))
   (when (check-fail? tesl-checked-33)
     (raise-user-error 'tesl-test "unexpected failure in let v: ~a" (check-fail-message tesl-checked-33)))
   (define v tesl-checked-33)
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 600 (list (cons 'v v) (cons 'n n)) (lambda () (requiresXYZ v)))) 5)
+    ))
   )
 
   (test-case "R61_CO03 reversed-order check can be used in call-site with original order"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "tests/critical-review61-tests.tesl" 604 (list) (lambda () 5)))
   (define tesl-checked-34 (checkXY n))
   (when (check-fail? tesl-checked-34)
@@ -594,6 +663,7 @@
     (raise-user-error 'tesl-test "unexpected failure in let w: ~a" (check-fail-message tesl-checked-35)))
   (define w tesl-checked-35)
   (check-equal? (raw-value (thsl-src! "tests/critical-review61-tests.tesl" 607 (list (cons 'w w) (cons 'v v) (cons 'n n)) (lambda () (+ (raw-value (requiresXY v)) (raw-value (requiresXYZ w)))))) 10)
+    ))
   )
 
 )

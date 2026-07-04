@@ -140,69 +140,88 @@
 (module+ test
   (require rackunit)
   (test-case "R59_DC01 five-check deep chain works with valid input"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 113 (list) (lambda () 5)))
   (define result (thsl-src! "tests/critical-review59-tests.tesl" 114 (list (cons 'r1 r1)) (lambda () (doChain5 r1))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 115 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
+    ))
   )
 
   (test-case "R59_DC02 five-check deep chain rejects first check failure"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 119 (list) (lambda () 0)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review59-tests.tesl" 120 (list (cons 'r1 r1)) (lambda ()
                           ((let () (define/pow (tesl-lambda-11) #:returns Integer (doChain5 r1)) tesl-lambda-11) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (let () (define/pow (tesl-lambda-12) #:returns Integer (doChain5 r1)) tesl-lambda-12) (list)"))
+    ))
   )
 
   (test-case "R59_DC03 five-check deep chain rejects mid-chain failure"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 124 (list) (lambda () 42)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review59-tests.tesl" 125 (list (cons 'r1 r1)) (lambda ()
                           ((let () (define/pow (tesl-lambda-12) #:returns Integer (doChain5 r1)) tesl-lambda-12) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (let () (define/pow (tesl-lambda-13) #:returns Integer (doChain5 r1)) tesl-lambda-13) (list)"))
+    ))
   )
 
   (test-case "R59_IA01 introAnd andLeft with establish proofs works"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 140 (list) (lambda () 5)))
   (define result (thsl-src! "tests/critical-review59-tests.tesl" 141 (list (cons 'r1 r1)) (lambda () (introAndLeft r1))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 142 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
+    ))
   )
 
   (test-case "R59_IA02 introAnd andRight with establish proofs works"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 155 (list) (lambda () 5)))
   (define result (thsl-src! "tests/critical-review59-tests.tesl" 156 (list (cons 'r1 r1)) (lambda () (introAndRight r1))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 157 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
+    ))
   )
 
   (test-case "R59_DT01 detachFact with single proof and reattach"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 170 (list) (lambda () 5)))
   (define result (thsl-src! "tests/critical-review59-tests.tesl" 171 (list (cons 'r1 r1)) (lambda () (singleDetach r1))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 172 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
+    ))
   )
 
   (test-case "R59_MP01 detachFact fails at runtime with multiple proofs"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 184 (list) (lambda () 5)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review59-tests.tesl" 185 (list (cons 'r1 r1)) (lambda ()
                           ((let () (define/pow (tesl-lambda-13) #:returns Integer (multiProofDetach r1)) tesl-lambda-13) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (let () (define/pow (tesl-lambda-14) #:returns Integer (multiProofDetach r1)) tesl-lambda-14) (list)"))
+    ))
   )
 
   (test-case "R59_MR01 mutual recursion isEven/isOdd"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 203 (list) (lambda () (isEven 4)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 204 (list) (lambda () (isEven 3)))) #f)
   (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 205 (list) (lambda () (isOdd 3)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 206 (list) (lambda () (isOdd 4)))) #f)
   (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 207 (list) (lambda () (isEven 0)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 208 (list) (lambda () (isOdd 0)))) #f)
+    ))
   )
 
   (test-case "R59_PD01 proof decomp with andLeft now works correctly (fix 1.1)"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 231 (list) (lambda () 5)))
   (define result (thsl-src! "tests/critical-review59-tests.tesl" 232 (list (cons 'r1 r1)) (lambda () (proofDecompChain r1))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 233 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
+    ))
   )
 
   (test-case "R59_PD02 andRight also works on accumulated proofs"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 237 (list) (lambda () 5)))
   (define tesl-checked-14 (checkA r1))
   (when (check-fail? tesl-checked-14)
@@ -221,6 +240,7 @@
   (define withB (thsl-src! "tests/critical-review59-tests.tesl" 242 (list (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (attach-proof v pB))))
   (define result (thsl-src! "tests/critical-review59-tests.tesl" 243 (list (cons 'withB withB) (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (needsB withB))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 244 (list (cons 'result result) (cons 'withB withB) (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () result))) 5)
+    ))
   )
 
 )

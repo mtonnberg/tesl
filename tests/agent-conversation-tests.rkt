@@ -26,6 +26,7 @@
 (module+ test
   (require rackunit)
   (test-case "converse threads turn 1 history into turn 2"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-conversation-tests.tesl" 37 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "First reply about cats" "Second reply still about cats"))) (raw-value "You are a helpful bot.") (raw-value 128)) (list)))))
     (define conv0 (thsl-src! "tests/agent-conversation-tests.tesl" 39 (list (cons 'agent agent)) (lambda () (raw-value (newConversation (raw-value agent))))))
@@ -42,9 +43,11 @@
     (check-true (raw-value (thsl-src! "tests/agent-conversation-tests.tesl" 59 (list (cons 'history history) (cons 'conv2 conv2) (cons 'turn2 turn2) (cons 'conv1 conv1) (cons 'turn1 turn1) (cons 'conv0 conv0) (cons 'agent agent)) (lambda () (tesl_import_String_contains (raw-value history) "First reply about cats")))))
     (check-true (raw-value (thsl-src! "tests/agent-conversation-tests.tesl" 60 (list (cons 'history history) (cons 'conv2 conv2) (cons 'turn2 turn2) (cons 'conv1 conv1) (cons 'turn1 turn1) (cons 'conv0 conv0) (cons 'agent agent)) (lambda () (tesl_import_String_contains (raw-value history) "What did I just ask about?")))))
     )
+    ))
   )
 
   (test-case "conversationFrom restores a serialized thread and continues it"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-conversation-tests.tesl" 66 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "Reply one" "Reply two"))) (raw-value "x") (raw-value 64)) (list)))))
     (define conv0 (thsl-src! "tests/agent-conversation-tests.tesl" 68 (list (cons 'agent agent)) (lambda () (raw-value (newConversation (raw-value agent))))))
@@ -61,6 +64,7 @@
     (check-true (raw-value (thsl-src! "tests/agent-conversation-tests.tesl" 83 (list (cons 'history2 history2) (cons 'conv2 conv2) (cons 'turn2 turn2) (cons 'reloaded reloaded) (cons 'saved saved) (cons 'conv1 conv1) (cons 'turn1 turn1) (cons 'conv0 conv0) (cons 'agent agent)) (lambda () (tesl_import_String_contains (raw-value history2) "first question")))))
     (check-true (raw-value (thsl-src! "tests/agent-conversation-tests.tesl" 84 (list (cons 'history2 history2) (cons 'conv2 conv2) (cons 'turn2 turn2) (cons 'reloaded reloaded) (cons 'saved saved) (cons 'conv1 conv1) (cons 'turn1 turn1) (cons 'conv0 conv0) (cons 'agent agent)) (lambda () (tesl_import_String_contains (raw-value history2) "Reply one")))))
     )
+    ))
   )
 
 )

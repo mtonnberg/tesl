@@ -98,36 +98,48 @@
 (module+ test
   (require rackunit)
   (test-case "List.map with proof-requiring named function (via lambda wrapper)"
+    (call-with-fresh-memory-db '() (lambda ()
   (define src (thsl-src! "example/learn/lesson30-forall-set-proofs.tesl" 144 (list) (lambda () (tesl_import_List_filterCheck isPositive (list 1 2 3 -1)))))
   (define doubled (thsl-src! "example/learn/lesson30-forall-set-proofs.tesl" 145 (list (cons 'src src)) (lambda () (doublePositive src))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson30-forall-set-proofs.tesl" 146 (list (cons 'doubled doubled) (cons 'src src)) (lambda () (raw-value (tesl_import_List_length (raw-value doubled)))))) 3)
+    ))
   )
 
   (test-case "List.map with inline proof-annotated lambda"
+    (call-with-fresh-memory-db '() (lambda ()
   (define src (thsl-src! "example/learn/lesson30-forall-set-proofs.tesl" 150 (list) (lambda () (tesl_import_List_filterCheck isPositive (list 5 10 15)))))
   (define doubled (thsl-src! "example/learn/lesson30-forall-set-proofs.tesl" 151 (list (cons 'src src)) (lambda () (mapDoubledInline src))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson30-forall-set-proofs.tesl" 152 (list (cons 'doubled doubled) (cons 'src src)) (lambda () (raw-value (tesl_import_List_length (raw-value doubled)))))) 3)
+    ))
   )
 
   (test-case "mapAndReprove re-attaches proof after map"
+    (call-with-fresh-memory-db '() (lambda ()
   (define src (thsl-src! "example/learn/lesson30-forall-set-proofs.tesl" 156 (list) (lambda () (tesl_import_List_filterCheck isPositive (list 1 2 3)))))
   (define result (thsl-src! "example/learn/lesson30-forall-set-proofs.tesl" 157 (list (cons 'src src)) (lambda () (mapAndReprove src))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson30-forall-set-proofs.tesl" 158 (list (cons 'result result) (cons 'src src)) (lambda () (raw-value (tesl_import_List_length (raw-value result)))))) 3)
+    ))
   )
 
   (test-case "mapAndCount counts correctly"
+    (call-with-fresh-memory-db '() (lambda ()
   (define src (thsl-src! "example/learn/lesson30-forall-set-proofs.tesl" 162 (list) (lambda () (tesl_import_List_filterCheck isPositive (list 10 20 30)))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson30-forall-set-proofs.tesl" 163 (list (cons 'src src)) (lambda () (mapAndCount src)))) 3)
+    ))
   )
 
   (test-case "Set.filterCheck produces ForAll annotated set"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s (thsl-src! "example/learn/lesson30-forall-set-proofs.tesl" 167 (list) (lambda () (raw-value (tesl_import_Set_fromList (list 1 2 -1 3 -2))))))
   (define pos (thsl-src! "example/learn/lesson30-forall-set-proofs.tesl" 168 (list (cons 's s)) (lambda () (filterPositiveSet s))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson30-forall-set-proofs.tesl" 169 (list (cons 'pos pos) (cons 's s)) (lambda () (raw-value (tesl_import_Set_size (raw-value pos)))))) 3)
+    ))
   )
 
   (test-case "run end-to-end"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson30-forall-set-proofs.tesl" 173 (list) (lambda () (run)))) 3)
+    ))
   )
 
 )

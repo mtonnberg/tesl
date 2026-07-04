@@ -50,6 +50,7 @@
 (module+ test
   (require rackunit)
   (test-case "checkInRange valid"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n1 (thsl-src! "example/learn/lesson09-proof-composition.tesl" 117 (list) (lambda () 1)))
   (define tesl-checked-1 (checkInRange n1))
   (when (check-fail? tesl-checked-1)
@@ -66,9 +67,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let r3: ~a" (check-fail-message tesl-checked-3)))
   (define r3 tesl-checked-3)
   (check-equal? (thsl-src! "example/learn/lesson09-proof-composition.tesl" 123 (list (cons 'r3 r3) (cons 'n3 n3) (cons 'r2 r2) (cons 'n2 n2) (cons 'r1 r1) (cons 'n1 n1)) (lambda () 1)) 1)
+    ))
   )
 
   (test-case "checkInRange rejects"
+    (call-with-fresh-memory-db '() (lambda ()
   (define zero (thsl-src! "example/learn/lesson09-proof-composition.tesl" 127 (list) (lambda () 0)))
   (define oneOhOne (thsl-src! "example/learn/lesson09-proof-composition.tesl" 128 (list (cons 'zero zero)) (lambda () 101)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson09-proof-composition.tesl" 129 (list (cons 'oneOhOne oneOhOne) (cons 'zero zero)) (lambda ()
@@ -79,9 +82,11 @@
                           (checkInRange oneOhOne))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkInRange oneOhOne"))
+    ))
   )
 
   (test-case "checkNonEmpty valid"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s1 (thsl-src! "example/learn/lesson09-proof-composition.tesl" 134 (list) (lambda () "a")))
   (define tesl-checked-4 (checkNonEmpty s1))
   (when (check-fail? tesl-checked-4)
@@ -93,17 +98,21 @@
     (raise-user-error 'tesl-test "unexpected failure in let r2: ~a" (check-fail-message tesl-checked-5)))
   (define r2 tesl-checked-5)
   (check-equal? (thsl-src! "example/learn/lesson09-proof-composition.tesl" 138 (list (cons 'r2 r2) (cons 's2 s2) (cons 'r1 r1) (cons 's1 s1)) (lambda () 1)) 1)
+    ))
   )
 
   (test-case "checkNonEmpty rejects"
+    (call-with-fresh-memory-db '() (lambda ()
   (define empty (thsl-src! "example/learn/lesson09-proof-composition.tesl" 142 (list) (lambda () "")))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson09-proof-composition.tesl" 143 (list (cons 'empty empty)) (lambda ()
                           (checkNonEmpty empty))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkNonEmpty empty"))
+    ))
   )
 
   (test-case "processRangedNonEmpty"
+    (call-with-fresh-memory-db '() (lambda ()
   (define rawN (thsl-src! "example/learn/lesson09-proof-composition.tesl" 147 (list) (lambda () 5)))
   (define tesl-checked-6 (checkInRange rawN))
   (when (check-fail? tesl-checked-6)
@@ -116,6 +125,7 @@
   (define label tesl-checked-7)
   (define r1 (thsl-src! "example/learn/lesson09-proof-composition.tesl" 151 (list (cons 'label label) (cons 'rawLabel rawLabel) (cons 'n n) (cons 'rawN rawN)) (lambda () (processRangedNonEmpty n label))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson09-proof-composition.tesl" 152 (list (cons 'r1 r1) (cons 'label label) (cons 'rawLabel rawLabel) (cons 'n n) (cons 'rawN rawN)) (lambda () r1))) "5: item")
+    ))
   )
 
 )

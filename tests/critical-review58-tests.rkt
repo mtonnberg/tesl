@@ -283,16 +283,21 @@
 (module+ test
   (require rackunit)
   (test-case "R58_CJ01 proof conjunction is commutative (A&&B satisfies B&&A)"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/critical-review58-tests.tesl" 163 (list) (lambda () (testCommutativeAB 5))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 164 (list (cons 'result result)) (lambda () result))) 5)
+    ))
   )
 
   (test-case "R58_CJ02 deep conjunction commutativity (A&&B&&C satisfies C&&B&&A)"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/critical-review58-tests.tesl" 168 (list) (lambda () (testCommutativeDeep 5))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 169 (list (cons 'result result)) (lambda () result))) 5)
+    ))
   )
 
   (test-case "R58_CH01 7-proof sequential chain works correctly"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/critical-review58-tests.tesl" 185 (list) (lambda () (build7ProofChain 5))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 186 (list (cons 'result result)) (lambda () result))) 5)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review58-tests.tesl" 187 (list (cons 'result result)) (lambda ()
@@ -319,9 +324,11 @@
                           (build7ProofChain 1001))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: build7ProofChain 1001"))
+    ))
   )
 
   (test-case "R58_AND01 4-check && chain proves all 4 simultaneously"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/critical-review58-tests.tesl" 228 (list) (lambda () (check4Combined 5))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 229 (list (cons 'result result)) (lambda () result))) 5)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review58-tests.tesl" 230 (list (cons 'result result)) (lambda ()
@@ -340,17 +347,21 @@
                           (check4Combined 1500))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check4Combined 1500"))
+    ))
   )
 
   (test-case "R58_FA01 combined filterCheck produces ForAll (P && Q) proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 243 (list) (lambda () (filterBoth (list 1 50 200 -3 80))))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 244 (list) (lambda () (filterBoth (list))))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 245 (list) (lambda () (filterBoth (list -1 -2 -3))))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 246 (list) (lambda () (filterBoth (list 200 300 400))))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 247 (list) (lambda () (filterBoth (list 50 99 1))))) 3)
+    ))
   )
 
   (test-case "R58_AC01 allCheck with named return type preserves ForAll via let"
+    (call-with-fresh-memory-db '() (lambda ()
   (define m1 (thsl-src! "tests/critical-review58-tests.tesl" 256 (list) (lambda () (allCheckCombined58 (list 5 10 50)))))
   (let ([*tesl-case-18 (raw-value 
     m1)]) (cond
@@ -385,9 +396,11 @@
       )
     ]
   ))
+    ))
   )
 
   (test-case "R58_DA01 detach and re-attach to same subject works"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/critical-review58-tests.tesl" 282 (list) (lambda () (detachAndReattach 5))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 283 (list (cons 'result result)) (lambda () result))) 5)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review58-tests.tesl" 284 (list (cons 'result result)) (lambda ()
@@ -398,19 +411,25 @@
                           (detachAndReattach -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: detachAndReattach -1"))
+    ))
   )
 
   (test-case "R58_IC01 introAnd combines Facts, attachFact applies combined proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/critical-review58-tests.tesl" 308 (list) (lambda () (introAndTest 5))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 309 (list (cons 'result result)) (lambda () result))) 5)
+    ))
   )
 
   (test-case "R58_IC02 andLeft/andRight decompose correctly"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/critical-review58-tests.tesl" 313 (list) (lambda () (andDecomposeTest 5))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 314 (list (cons 'result result)) (lambda () result))) 5)
+    ))
   )
 
   (test-case "R58_MP01 multi-parameter proofs in correct order work"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 328 (list) (lambda () (testInBounds 5)))) 5)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review58-tests.tesl" 329 (list) (lambda ()
                           (testInBounds 0))))])
@@ -421,30 +440,39 @@
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: testInBounds 11"))
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 331 (list) (lambda () (testOwnership "alice" 42)))) 42)
+    ))
   )
 
   (test-case "R58_ES01 establish is unconditional trusted boundary"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 349 (list) (lambda () (useEstablishFreedom -5)))) -5)
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 350 (list) (lambda () (useEstablishFreedom 0)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 351 (list) (lambda () (useEstablishFreedom 999)))) 999)
+    ))
   )
 
   (test-case "R58_GC01 exhaustive case with all constructors covered"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 376 (list) (lambda () (describeColor Red)))) "red")
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 377 (list) (lambda () (describeColor Green)))) "green")
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 378 (list) (lambda () (describeColor Blue)))) "blue")
+    ))
   )
 
   (test-case "R58_SF01 sequential filterCheck accumulates ForAll proofs (fixed)"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/critical-review58-tests.tesl" 392 (list) (lambda () (seqFilterAccumulated (list -1 2 3 200 50)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 393 (list (cons 'result result)) (lambda () result))) 3)
+    ))
   )
 
   (test-case "R58_SF02 emptyForAll produces empty list satisfying ForAll"
+    (call-with-fresh-memory-db '() (lambda ()
   (define emptyPos (thsl-src! "tests/critical-review58-tests.tesl" 397 (list) (lambda () (tesl_import_List_emptyForAll checkPos))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 398 (list (cons 'emptyPos emptyPos)) (lambda () (needsForAllPos emptyPos)))) 0)
   (define emptyBoth (thsl-src! "tests/critical-review58-tests.tesl" 399 (list (cons 'emptyPos emptyPos)) (lambda () (tesl_import_List_emptyForAll (check-and checkPos checkSmall)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review58-tests.tesl" 400 (list (cons 'emptyBoth emptyBoth) (cons 'emptyPos emptyPos)) (lambda () (needsForAllBoth emptyBoth)))) 0)
+    ))
   )
 
 )

@@ -185,43 +185,54 @@
 (module+ test
   (require rackunit)
   (test-case "R51_P01 check+needPositive round trip"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 227 (list) (lambda () (p01_flow 5)))) 5)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-51-tests.tesl" 228 (list) (lambda ()
                           (p01_flow (- 0 5)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: p01_flow (- 0 5)"))
+    ))
   )
 
   (test-case "R51_P02 decompose-reattach preserves proof subject"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 232 (list) (lambda () (p02_roundtrip 7)))) 7)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-51-tests.tesl" 233 (list) (lambda ()
                           (p02_roundtrip 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: p02_roundtrip 0"))
+    ))
   )
 
   (test-case "R51_P03 multi-param proof flow"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 237 (list) (lambda () (p03_multi_param 1 10 5)))) 5)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-51-tests.tesl" 238 (list) (lambda ()
                           (p03_multi_param 1 10 99))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: p03_multi_param 1 10 99"))
+    ))
   )
 
   (test-case "R51_P04 attach sugar"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 242 (list) (lambda () (p04_attach_sugar 3)))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 243 (list) (lambda () (p04_attach_sugar 0)))) 0)
+    ))
   )
 
   (test-case "R51_P05 forget+recheck"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 247 (list) (lambda () (p05_forget_then_recheck 8)))) 8)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-51-tests.tesl" 248 (list) (lambda ()
                           (p05_forget_then_recheck 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: p05_forget_then_recheck 0"))
+    ))
   )
 
   (test-case "R51_P06 composite && on single value"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 252 (list) (lambda () (p06_composite 4)))) 4)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-51-tests.tesl" 253 (list) (lambda ()
                           (p06_composite 3))))])
@@ -231,79 +242,106 @@
                           (p06_composite (- 0 2)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: p06_composite (- 0 2)"))
+    ))
   )
 
   (test-case "R51_T01 two-element list has length 2"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 258 (list) (lambda () (t01_tuple_as_list)))) 2)
+    ))
   )
 
   (test-case "R51_T02 parameterised tree"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 262 (list) (lambda () (t02_tree_size MkLeaf)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 263 (list) (lambda () (t02_tree_size (MkNode MkLeaf 1 MkLeaf))))) 1)
+    ))
   )
 
   (test-case "R51_T03 newtype unwrap"
+    (call-with-fresh-memory-db '() (lambda ()
   (define uid (thsl-src! "tests/critical-review-51-tests.tesl" 267 (list) (lambda () (raw-value (UserId "u-1")))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 268 (list (cons 'uid uid)) (lambda () (t03_unwrap uid)))) "u-1")
+    ))
   )
 
   (test-case "R51_C01 nested constructor with paren around nullary"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 272 (list) (lambda () (c01_nested_paren (MkWrap (raw-value (Something 9))))))) 9)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 273 (list) (lambda () (c01_nested_paren (MkWrap Nothing))))) 0)
+    ))
   )
 
   (test-case "R51_C02 where guard exercises the clamp branch"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 277 (list) (lambda () (c02_where_guard Nothing)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 278 (list) (lambda () (c02_where_guard (raw-value (Something 50)))))) 50)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 279 (list) (lambda () (c02_where_guard (raw-value (Something 1000)))))) 100)
+    ))
   )
 
   (test-case "R51_N01 nested bare nullary pattern"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 283 (list) (lambda () (n01_bare_nullary Nothing)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 284 (list) (lambda () (n01_bare_nullary (raw-value (Something Nothing)))))) 1)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 285 (list) (lambda () (n01_bare_nullary (raw-value (Something (raw-value (Something 42)))))))) 42)
+    ))
   )
 
   (test-case "R51_N02 case expr scrutinee"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 289 (list) (lambda () (n02_case_cmp 5)))) 1)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 290 (list) (lambda () (n02_case_cmp 0)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 291 (list) (lambda () (n02_case_cmp (- 0 3))))) 0)
+    ))
   )
 
   (test-case "R51_N03 case with boolean conjunction"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 295 (list) (lambda () (n03_case_conj 1 2)))) 1)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 296 (list) (lambda () (n03_case_conj 0 2)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 297 (list) (lambda () (n03_case_conj 1 0)))) 0)
+    ))
   )
 
   (test-case "R51_N04 case with arithmetic scrutinee"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 301 (list) (lambda () (n04_case_arith 0 0)))) 100)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 302 (list) (lambda () (n04_case_arith 1 1)))) 0)
+    ))
   )
 
   (test-case "R51_N05 record update still works on known field"
+    (call-with-fresh-memory-db '() (lambda ()
   (define origin (thsl-src! "tests/critical-review-51-tests.tesl" 306 (list) (lambda () (Point #:x 0 #:y 0))))
   (define moved (thsl-src! "tests/critical-review-51-tests.tesl" 307 (list (cons 'origin origin)) (lambda () (n05_record_update_known origin 10))))
   (check-equal? (thsl-src! "tests/critical-review-51-tests.tesl" 308 (list (cons 'moved moved) (cons 'origin origin)) (lambda () (raw-value (tesl-dot/runtime moved 'x)))) 10)
   (check-equal? (thsl-src! "tests/critical-review-51-tests.tesl" 309 (list (cons 'moved moved) (cons 'origin origin)) (lambda () (raw-value (tesl-dot/runtime moved 'y)))) 0)
+    ))
   )
 
   (test-case "R51_N06 proof-free fn alias via let"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 313 (list) (lambda () (n06_proof_free_alias 5 7)))) 12)
+    ))
   )
 
   (test-case "R51_N07 forget+recheck chain"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 317 (list) (lambda () (n07_forget_recheck_chain 9)))) 9)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-51-tests.tesl" 318 (list) (lambda ()
                           (n07_forget_recheck_chain 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: n07_forget_recheck_chain 0"))
+    ))
   )
 
   (test-case "R51_N09 int case with literals and catch-all"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 322 (list) (lambda () (n09_int_case 200)))) "ok")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 323 (list) (lambda () (n09_int_case 404)))) "not found")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-51-tests.tesl" 324 (list) (lambda () (n09_int_case 500)))) "other")
+    ))
   )
 
 )

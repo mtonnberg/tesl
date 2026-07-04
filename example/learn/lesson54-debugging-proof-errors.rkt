@@ -58,18 +58,23 @@
 (module+ test
   (require rackunit)
   (test-case "diagnoseCommonMistakes processes valid score"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "example/learn/lesson54-debugging-proof-errors.tesl" 164 (list) (lambda () (diagnoseCommonMistakes 75))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson54-debugging-proof-errors.tesl" 165 (list (cons 'result result)) (lambda () result))) "score: 75")
+    ))
   )
 
   (test-case "diagnoseCommonMistakes rejects invalid score"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson54-debugging-proof-errors.tesl" 169 (list) (lambda ()
                           ((diagnoseCommonMistakes 150) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (diagnoseCommonMistakes 150) (list)"))
+    ))
   )
 
   (test-case "halveScore preserves proof without revalidation"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "example/learn/lesson54-debugging-proof-errors.tesl" 173 (list) (lambda () 80)))
   (define tesl-checked-2 (checkScore n))
   (when (check-fail? tesl-checked-2)
@@ -77,11 +82,14 @@
   (define validated tesl-checked-2)
   (define result (thsl-src! "example/learn/lesson54-debugging-proof-errors.tesl" 175 (list (cons 'validated validated) (cons 'n n)) (lambda () (halveAndShow validated))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson54-debugging-proof-errors.tesl" 176 (list (cons 'result result) (cons 'validated validated) (cons 'n n)) (lambda () result))) "score: 40")
+    ))
   )
 
   (test-case "roundtripProof works"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "example/learn/lesson54-debugging-proof-errors.tesl" 180 (list) (lambda () (roundtripProof 50))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson54-debugging-proof-errors.tesl" 181 (list (cons 'result result)) (lambda () result))) "score: 50")
+    ))
   )
 
 )

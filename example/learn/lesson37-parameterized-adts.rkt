@@ -125,22 +125,27 @@
 (module+ test
   (require rackunit)
   (test-case "Box"
+    (call-with-fresh-memory-db '() (lambda ()
   (define b (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 67 (list) (lambda () (wrap 42))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 68 (list (cons 'b b)) (lambda () (unwrap b)))) 42)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 69 (list (cons 'b b)) (lambda () (unwrap (mapBox b (let () (define/pow (tesl-lambda-14 [x : Integer]) #:returns Integer (+ *x 1)) tesl-lambda-14)))))) 43)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 70 (list (cons 'b b)) (lambda () (unwrap (MkBox 0))))) 0)
+    ))
   )
 
   (test-case "Option"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 100 (list) (lambda () (fromOption (Some 7) 0)))) 7)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 101 (list) (lambda () (fromOption None 99)))) 99)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 102 (list) (lambda () (fromOption (mapOption (Some 5) (let () (define/pow (tesl-lambda-15 [x : Integer]) #:returns Integer (* *x 2)) tesl-lambda-15)) 0)))) 10)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 103 (list) (lambda () (fromOption (mapOption None (let () (define/pow (tesl-lambda-16 [x : Integer]) #:returns Integer (* *x 2)) tesl-lambda-16)) 0)))) 0)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 104 (list) (lambda () (fromOption (bindOption (Some 4) (let () (define/pow (tesl-lambda-17 [x : Integer]) #:returns Any (raw-value (Some (+ *x 1)))) tesl-lambda-17)) 0)))) 5)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 105 (list) (lambda () (fromOption (bindOption None (let () (define/pow (tesl-lambda-18 [x : Integer]) #:returns Any (raw-value (Some (+ *x 1)))) tesl-lambda-18)) 0)))) 0)
+    ))
   )
 
   (test-case "Either"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 144 (list) (lambda () (fromRight (Right 42) 0)))) 42)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 145 (list) (lambda () (fromRight (Left "oops") 0)))) 0)
   (define doubled (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 147 (list) (lambda () (mapRight (Right 5) (let () (define/pow (tesl-lambda-19 [x : Integer]) #:returns Integer (* *x 2)) tesl-lambda-19)))))
@@ -149,9 +154,11 @@
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 151 (list (cons 'unchanged unchanged) (cons 'doubled doubled)) (lambda () (fromRight unchanged 0)))) 0)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 153 (list (cons 'unchanged unchanged) (cons 'doubled doubled)) (lambda () (fromRight (safeDivide 10 2) -1)))) 5)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 154 (list (cons 'unchanged unchanged) (cons 'doubled doubled)) (lambda () (fromRight (safeDivide 10 0) -1)))) -1)
+    ))
   )
 
   (test-case "Tree"
+    (call-with-fresh-memory-db '() (lambda ()
   (define empty (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 215 (list) (lambda () Leaf)))
   (define t1 (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 216 (list (cons 'empty empty)) (lambda () (treeInsert empty 5))))
   (define t2 (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 217 (list (cons 't1 t1) (cons 'empty empty)) (lambda () (treeInsert t1 3))))
@@ -171,6 +178,7 @@
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 234 (list (cons 't4 t4) (cons 't3 t3) (cons 't2 t2) (cons 't1 t1) (cons 'empty empty)) (lambda () (treeContains t4 5)))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 235 (list (cons 't4 t4) (cons 't3 t3) (cons 't2 t2) (cons 't1 t1) (cons 'empty empty)) (lambda () (treeContains t3 99)))) #f)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson37-parameterized-adts.tesl" 236 (list (cons 't4 t4) (cons 't3 t3) (cons 't2 t2) (cons 't1 t1) (cons 'empty empty)) (lambda () (treeContains Leaf 1)))) #f)
+    ))
   )
 
 )

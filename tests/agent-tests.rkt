@@ -31,20 +31,25 @@
 (module+ test
   (require rackunit)
   (test-case "ask returns the mock provider's scripted reply"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-tests.tesl" 40 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "hello from mock"))) (raw-value "x") (raw-value 100)) (list)))))
     (define reply (thsl-src! "tests/agent-tests.tesl" 41 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "hi")))))
     (check-equal? (raw-value (thsl-src! "tests/agent-tests.tesl" 42 (list (cons 'reply reply) (cons 'agent agent)) (lambda () reply))) "hello from mock")
     )
+    ))
   )
 
   (test-case "ask through a wrapper handler returns the scripted reply"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (check-equal? (raw-value (thsl-src! "tests/agent-tests.tesl" 46 (list) (lambda () (askMock "anything")))) "hello from mock")
     )
+    ))
   )
 
   (test-case "successive asks walk the mock script by call index"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-tests.tesl" 50 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "first" "second"))) (raw-value "x") (raw-value 50)) (list)))))
     (define r1 (thsl-src! "tests/agent-tests.tesl" 51 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "a")))))
@@ -52,6 +57,7 @@
     (check-equal? (raw-value (thsl-src! "tests/agent-tests.tesl" 53 (list (cons 'r2 r2) (cons 'r1 r1) (cons 'agent agent)) (lambda () r1))) "first")
     (check-equal? (raw-value (thsl-src! "tests/agent-tests.tesl" 54 (list (cons 'r2 r2) (cons 'r1 r1) (cons 'agent agent)) (lambda () r2))) "second")
     )
+    ))
   )
 
 )

@@ -130,79 +130,105 @@
 (module+ test
   (require rackunit)
   (test-case "safeHead"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 80 (list) (lambda () (safeHead (list 10 20 30))))) (raw-value (Something 10)))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 81 (list) (lambda () (safeHead (list))))) Nothing)
+    ))
   )
 
   (test-case "safeTail"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 85 (list) (lambda () (safeTail (list 10 20 30))))) (raw-value (Something (list 20 30))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 86 (list) (lambda () (safeTail (list 42))))) (raw-value (Something (list))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 87 (list) (lambda () (safeTail (list))))) Nothing)
+    ))
   )
 
   (test-case "firstOrDefault"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 91 (list) (lambda () (firstOrDefault (list 5 6 7) 99)))) 5)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 92 (list) (lambda () (firstOrDefault (list) 99)))) 99)
+    ))
   )
 
   (test-case "sumRecursive"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 125 (list) (lambda () (sumRecursive (list 1 2 3 4))))) 10)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 126 (list) (lambda () (sumRecursive (list))))) 0)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 127 (list) (lambda () (sumRecursive (list 5))))) 5)
+    ))
   )
 
   (test-case "productRecursive"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 131 (list) (lambda () (productRecursive (list 2 3 4))))) 24)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 132 (list) (lambda () (productRecursive (list))))) 1)
+    ))
   )
 
   (test-case "myLength"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 136 (list) (lambda () (myLength (list 1 2 3))))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 137 (list) (lambda () (myLength (list))))) 0)
+    ))
   )
 
   (test-case "myReverse"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 156 (list) (lambda () (myReverse (list 1 2 3))))) (list 3 2 1))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 157 (list) (lambda () (myReverse (list))))) (list))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 158 (list) (lambda () (myReverse (list 42))))) (list 42))
+    ))
   )
 
   (test-case "mapIncrement"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 182 (list) (lambda () (mapIncrement (list 1 2 3))))) (list 2 3 4))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 183 (list) (lambda () (mapIncrement (list))))) (list))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 184 (list) (lambda () (mapIncrement (list -1 0 1))))) (list 0 1 2))
+    ))
   )
 
   (test-case "keepPositive"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 188 (list) (lambda () (keepPositive (list -2 -1 0 1 2))))) (list 1 2))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 189 (list) (lambda () (keepPositive (list))))) (list))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 190 (list) (lambda () (keepPositive (list 1 2 3))))) (list 1 2 3))
+    ))
   )
 
   (test-case "pairHeads"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 210 (list) (lambda () (pairHeads (list 10 20) (list 1 2))))) (raw-value (Something 11)))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 211 (list) (lambda () (pairHeads (list) (list 1 2))))) Nothing)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 212 (list) (lambda () (pairHeads (list 10) (list))))) Nothing)
+    ))
   )
 
   (test-case "splitAt"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 249 (list) (lambda () (splitAt (list 1 2 3 4 5) 3)))) (list 1 2 3))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 250 (list) (lambda () (splitAt (list 1 2) 10)))) (list 1 2))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 251 (list) (lambda () (splitAt (list) 3)))) (list))
+    ))
   )
 
   (test-case "chunksOf"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 255 (list) (lambda () (chunksOf (list 1 2 3 4 5 6) 2)))) (list (list 1 2) (list 3 4) (list 5 6)))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 256 (list) (lambda () (chunksOf (list 1 2 3) 2)))) (list (list 1 2)))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 257 (list) (lambda () (chunksOf (list) 3)))) (list))
+    ))
   )
 
   (test-case "describeList"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 285 (list) (lambda () (describeList (list))))) "empty")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 286 (list) (lambda () (describeList (list 1))))) "one element")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 287 (list) (lambda () (describeList (list 1 2))))) "exactly two elements")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 288 (list) (lambda () (describeList (list 1 2 3))))) "three or more elements")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson35-list-decomposition.tesl" 289 (list) (lambda () (describeList (list 1 2 3 4 5))))) "three or more elements")
+    ))
   )
 
 )

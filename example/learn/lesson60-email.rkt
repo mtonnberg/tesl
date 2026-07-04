@@ -64,51 +64,65 @@
 (module+ test
   (require rackunit)
   (test-case "sendWelcomeEmail compiles and runs without error"
+    (call-with-fresh-memory-db (list AppDB) (lambda ()
     (with-capabilities (email)
     (define tesl-ignored-0 (thsl-src! "example/learn/lesson60-email.tesl" 214 (list) (lambda () (sendWelcomeEmail "alice@example.com" "Alice"))))
     (check-equal? (raw-value (thsl-src! "example/learn/lesson60-email.tesl" 215 (list) (lambda () #t))) #t)
     )
+    ))
   )
 
   (test-case "sendPasswordReset compiles and runs without error"
+    (call-with-fresh-memory-db (list AppDB) (lambda ()
     (with-capabilities (email)
     (define tesl-ignored-1 (thsl-src! "example/learn/lesson60-email.tesl" 219 (list) (lambda () (sendPasswordReset "bob@example.com" "https://example.com/reset?token=abc123"))))
     (check-equal? (raw-value (thsl-src! "example/learn/lesson60-email.tesl" 220 (list) (lambda () #t))) #t)
     )
+    ))
   )
 
   (test-case "sendNotification with plain text"
+    (call-with-fresh-memory-db (list AppDB) (lambda ()
     (with-capabilities (email)
     (define tesl-ignored-2 (thsl-src! "example/learn/lesson60-email.tesl" 224 (list) (lambda () (sendNotification "ops@example.com" "Deployment completed successfully."))))
     (check-equal? (raw-value (thsl-src! "example/learn/lesson60-email.tesl" 225 (list) (lambda () #t))) #t)
     )
+    ))
   )
 
   (test-case "sendHtmlNewsletter with HTML content"
+    (call-with-fresh-memory-db (list AppDB) (lambda ()
     (with-capabilities (email)
     (define tesl-ignored-3 (thsl-src! "example/learn/lesson60-email.tesl" 229 (list) (lambda () (sendHtmlNewsletter "newsletter@example.com" "<h1>June Update</h1><p>Here's what's new.</p>"))))
     (check-equal? (raw-value (thsl-src! "example/learn/lesson60-email.tesl" 230 (list) (lambda () #t))) #t)
     )
+    ))
   )
 
   (test-case "multiple emails can be queued in sequence"
+    (call-with-fresh-memory-db (list AppDB) (lambda ()
     (with-capabilities (email)
     (define tesl-ignored-4 (thsl-src! "example/learn/lesson60-email.tesl" 234 (list) (lambda () (sendWelcomeEmail "user1@example.com" "User1"))))
     (define tesl-ignored-5 (thsl-src! "example/learn/lesson60-email.tesl" 235 (list) (lambda () (sendWelcomeEmail "user2@example.com" "User2"))))
     (define tesl-ignored-6 (thsl-src! "example/learn/lesson60-email.tesl" 236 (list) (lambda () (sendWelcomeEmail "user3@example.com" "User3"))))
     (check-equal? (raw-value (thsl-src! "example/learn/lesson60-email.tesl" 237 (list) (lambda () #t))) #t)
     )
+    ))
   )
 
   (test-case "email with special characters in body"
+    (call-with-fresh-memory-db (list AppDB) (lambda ()
     (with-capabilities (email)
     (define tesl-ignored-7 (thsl-src! "example/learn/lesson60-email.tesl" 241 (list) (lambda () (sendNotification "test@example.com" "Reset link: https://example.com/reset?token=abc&user=1"))))
     (check-equal? (raw-value (thsl-src! "example/learn/lesson60-email.tesl" 242 (list) (lambda () #t))) #t)
     )
+    ))
   )
 
   (test-case "startEmailWorker function compiles"
+    (call-with-fresh-memory-db (list AppDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson60-email.tesl" 260 (list) (lambda () #t))) #t)
+    ))
   )
 
 )

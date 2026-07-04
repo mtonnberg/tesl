@@ -166,159 +166,231 @@
 (module+ test
   (require rackunit)
   (test-case "List.map doubles all elements"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 245 (list) (lambda () (doubleAll (list 1 2 3))))) (list 2 4 6))
+    ))
   )
 
   (test-case "List.map works on empty list"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 249 (list) (lambda () (doubleAll (list))))) (list))
+    ))
   )
 
   (test-case "List.map with named function (String.length)"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 253 (list) (lambda () (toUpperLength (list "hi" "hello"))))) (list 2 5))
+    ))
   )
 
   (test-case "List.filter keeps only positives"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 257 (list) (lambda () (keepPositive (list -2 0 1 3 -1))))) (list 1 3))
+    ))
   )
 
   (test-case "List.filter short words"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 261 (list) (lambda () (shortWords (list "hi" "hello" "fig"))))) (list "hi" "fig"))
+    ))
   )
 
   (test-case "List.concatMap expands each element"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 265 (list) (lambda () (neighbours (list 10 20))))) (list 9 11 19 21))
+    ))
   )
 
   (test-case "List.concatMap on empty list"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 269 (list) (lambda () (neighbours (list))))) (list))
+    ))
   )
 
   (test-case "List.concatMap drops empty-result elements"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 273 (list) (lambda () (flattenTags (list "rust" "" "go" ""))))) (list "rust" "go"))
+    ))
   )
 
   (test-case "List.filterMap skips Nothings"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 277 (list) (lambda () (parseInts (list "1" "x" "3" ""))))) (list 1 3))
+    ))
   )
 
   (test-case "List.filterMap on all non-numbers"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 281 (list) (lambda () (parseInts (list "a" "b"))))) (list))
+    ))
   )
 
   (test-case "List.foldl sums a list"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 285 (list) (lambda () (total (list 1 2 3 4))))) 10)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 286 (list) (lambda () (total (list))))) 0)
+    ))
   )
 
   (test-case "List.foldl join words"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 290 (list) (lambda () (joinWords (list "hello" "world"))))) "hello world")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 291 (list) (lambda () (joinWords (list))))) "")
+    ))
   )
 
   (test-case "List.member returns True when present"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 295 (list) (lambda () (hasAdmin (list "editor" "admin" "viewer"))))) #t)
+    ))
   )
 
   (test-case "List.member returns False when absent"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 299 (list) (lambda () (hasAdmin (list "editor" "viewer"))))) #f)
+    ))
   )
 
   (test-case "List.any finds a negative"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 303 (list) (lambda () (anyNegative (list 1 -1 2))))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 304 (list) (lambda () (anyNegative (list 1 2 3))))) #f)
+    ))
   )
 
   (test-case "List.all checks every element"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 308 (list) (lambda () (allPositive (list 1 2 3))))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 309 (list) (lambda () (allPositive (list 1 -1 3))))) #f)
+    ))
   )
 
   (test-case "List.find returns first match"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 313 (list) (lambda () (findFirst (list 1 5 10 20) 8)))) (raw-value (Something 10)))
+    ))
   )
 
   (test-case "List.find returns Nothing when no match"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 317 (list) (lambda () (findFirst (list 1 2 3) 100)))) Nothing)
+    ))
   )
 
   (test-case "List.unique removes duplicates"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 321 (list) (lambda () (raw-value (tesl_import_List_length (raw-value (dedup (list 1 2 1 3 2)))))))) 3)
+    ))
   )
 
   (test-case "List.zip pairs elements"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 325 (list) (lambda () (raw-value (tesl_import_List_length (raw-value (zipPairs (list "alice" "bob") (list 90 80)))))))) 2)
+    ))
   )
 
   (test-case "List.zip stops at shorter list"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 329 (list) (lambda () (raw-value (tesl_import_List_length (raw-value (tesl_import_List_zip (list 1 2 3) (list "a" "b")))))))) 2)
+    ))
   )
 
   (test-case "List.range builds integers"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 333 (list) (lambda () (buildRange 1 5)))) (list 1 2 3 4 5))
+    ))
   )
 
   (test-case "List.repeat fills a list"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 337 (list) (lambda () (fillWith 0 4)))) (list 0 0 0 0))
+    ))
   )
 
   (test-case "List.take limits list length"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 341 (list) (lambda () (firstThree (list 10 20 30 40))))) (list 10 20 30))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 342 (list) (lambda () (firstThree (list 1 2))))) (list 1 2))
+    ))
   )
 
   (test-case "List.drop skips elements"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 346 (list) (lambda () (skipFirst (list 1 2 3 4) 2)))) (list 3 4))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 347 (list) (lambda () (skipFirst (list 1 2) 5)))) (list))
+    ))
   )
 
   (test-case "List.sort ascending"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 351 (list) (lambda () (sortInts (list 3 1 2))))) (list 1 2 3))
+    ))
   )
 
   (test-case "List.sortBy key function"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 355 (list) (lambda () (raw-value (tesl_import_List_head (raw-value (sortByLength (list "banana" "fig" "apple")))))))) (raw-value (Something "fig")))
+    ))
   )
 
   (test-case "List.maximum and minimum"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 359 (list) (lambda () (highestScore (list 3 7 2))))) (raw-value (Something 7)))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 360 (list) (lambda () (lowestPrice (list 5 1 9))))) (raw-value (Something 1)))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 361 (list) (lambda () (highestScore (list))))) Nothing)
+    ))
   )
 
   (test-case "List.sum"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 365 (list) (lambda () (raw-value (tesl_import_List_sum (list 1 2 3 4 5)))))) 15)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 366 (list) (lambda () (raw-value (tesl_import_List_sum (list)))))) 0)
+    ))
   )
 
   (test-case "List.reverse"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 370 (list) (lambda () (reversed (list 1 2 3))))) (list 3 2 1))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 371 (list) (lambda () (reversed (list))))) (list))
+    ))
   )
 
   (test-case "List.append merges lists"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 375 (list) (lambda () (merged (list 1 2) (list 3 4))))) (list 1 2 3 4))
+    ))
   )
 
   (test-case "List.concat flattens one level"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 379 (list) (lambda () (flatten (list (list 1 2) (list 3) (list 4 5)))))) (list 1 2 3 4 5))
+    ))
   )
 
   (test-case "List.isEmpty"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 383 (list) (lambda () (raw-value (tesl_import_List_isEmpty (list)))))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 384 (list) (lambda () (raw-value (tesl_import_List_isEmpty (list 1)))))) #f)
+    ))
   )
 
   (test-case "List.head and tail"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 388 (list) (lambda () (raw-value (tesl_import_List_head (list 10 20 30)))))) (raw-value (Something 10)))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 389 (list) (lambda () (raw-value (tesl_import_List_head (list)))))) Nothing)
+    ))
   )
 
   (test-case "groupByPrefix filters by start"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 393 (list) (lambda () (raw-value (tesl_import_List_length (raw-value (groupByPrefix (list "apple" "apricot" "banana" "avocado") "a"))))))) 3)
+    ))
   )
 
   (test-case "topPositive pipeline end-to-end"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson47-list-functions.tesl" 397 (list) (lambda () (topPositive (list "3" "x" "1" "9" "-2" "5"))))) (list 9 5 3))
+    ))
   )
 
 )

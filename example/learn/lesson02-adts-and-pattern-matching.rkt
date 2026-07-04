@@ -124,47 +124,61 @@
 (module+ test
   (require rackunit)
   (test-case "colorName"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 96 (list) (lambda () (colorName Red)))) "red")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 97 (list) (lambda () (colorName Green)))) "green")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 98 (list) (lambda () (colorName Blue)))) "blue")
+    ))
   )
 
   (test-case "isWeekend"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-true (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 102 (list) (lambda () (isWeekend Sat)))))
   (check-true (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 103 (list) (lambda () (isWeekend Sun)))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 104 (list) (lambda () (isWeekend Mon)))) #f)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 105 (list) (lambda () (isWeekend Fri)))) #f)
+    ))
   )
 
   (test-case "opposite"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 109 (list) (lambda () (opposite North)))) South)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 110 (list) (lambda () (opposite South)))) North)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 111 (list) (lambda () (opposite East)))) West)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 112 (list) (lambda () (opposite West)))) East)
+    ))
   )
 
   (test-case "safeDivide"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 116 (list) (lambda () (safeDivide 10 2)))) (raw-value (Something 5)))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 117 (list) (lambda () (safeDivide 7 0)))) Nothing)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 118 (list) (lambda () (safeDivide 0 5)))) (raw-value (Something 0)))
+    ))
   )
 
   (test-case "Shape area"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 265 (list) (lambda () (area (Circle 5))))) 25)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 266 (list) (lambda () (area (Rectangle 3 4))))) 12)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 267 (list) (lambda () (area Point)))) 0)
+    ))
   )
 
   (test-case "MyMaybe"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 271 (list) (lambda () (myFromDefault MyNothing 99)))) 99)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 272 (list) (lambda () (myFromDefault (MyJust 7) 99)))) 7)
+    ))
   )
 
   (test-case "statusCode"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 276 (list) (lambda () (statusCode (Success "ok"))))) 200)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 277 (list) (lambda () (statusCode NotFound)))) 404)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 278 (list) (lambda () (statusCode Unauthorized)))) 401)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson02-adts-and-pattern-matching.tesl" 279 (list) (lambda () (statusCode (ServerError "oops"))))) 500)
+    ))
   )
 
 )

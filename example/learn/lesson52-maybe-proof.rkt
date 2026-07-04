@@ -183,36 +183,45 @@
 (module+ test
   (require rackunit)
   (test-case "insertRaw: builds a non-empty tree"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t0 (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 228 (list) (lambda () Leaf)))
   (define t1 (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 229 (list (cons 't0 t0)) (lambda () (insertRaw t0 5))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 230 (list (cons 't1 t1) (cons 't0 t0)) (lambda () (treeSize t1)))) 1)
+    ))
   )
 
   (test-case "insertRaw: inserting multiple values"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t0 (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 234 (list) (lambda () Leaf)))
   (define t1 (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 235 (list (cons 't0 t0)) (lambda () (insertRaw t0 3))))
   (define t2 (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 236 (list (cons 't1 t1) (cons 't0 t0)) (lambda () (insertRaw t1 1))))
   (define t3 (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 237 (list (cons 't2 t2) (cons 't1 t1) (cons 't0 t0)) (lambda () (insertRaw t2 5))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 238 (list (cons 't3 t3) (cons 't2 t2) (cons 't1 t1) (cons 't0 t0)) (lambda () (treeSize t3)))) 3)
+    ))
   )
 
   (test-case "insertRaw: rejects non-positive value"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t0 (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 242 (list) (lambda () Leaf)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 243 (list (cons 't0 t0)) (lambda ()
                           (insertRaw t0 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: insertRaw t0 0"))
+    ))
   )
 
   (test-case "insertRaw: rejects negative value"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t0 (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 247 (list) (lambda () Leaf)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 248 (list (cons 't0 t0)) (lambda ()
                           (insertRaw t0 -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: insertRaw t0 -1"))
+    ))
   )
 
   (test-case "findMin: empty tree returns Left"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 252 (list) (lambda () Leaf)))
   (define m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 253 (list (cons 't t)) (lambda () (findMin t))))
   (let ([*tesl-case-13 (raw-value 
@@ -224,9 +233,11 @@
       (check-true (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 256 (list) (lambda () #f))))
     ]
   ))
+    ))
   )
 
   (test-case "findMin: single-node tree"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 260 (list) (lambda () (insertRaw Leaf 7))))
   (define m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 261 (list (cons 't t)) (lambda () (findMin t))))
   (let ([*tesl-case-14 (raw-value 
@@ -240,9 +251,11 @@
       )
     ]
   ))
+    ))
   )
 
   (test-case "findMin: returns smallest value with IsPositive proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 269 (list) (lambda () (insertRaw (insertRaw (insertRaw Leaf 3) 1) 5))))
   (define m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 270 (list (cons 't t)) (lambda () (findMin t))))
   (define mAlt (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 271 (list (cons 'm m) (cons 't t)) (lambda () (findMinAlt t))))
@@ -269,9 +282,11 @@
       )
     ]
   ))
+    ))
   )
 
   (test-case "findMax: returns largest value with IsPositive proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 285 (list) (lambda () (insertRaw (insertRaw (insertRaw Leaf 3) 1) 5))))
   (define m (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 286 (list (cons 't t)) (lambda () (findMax t))))
   (let ([*tesl-case-17 (raw-value 
@@ -286,29 +301,39 @@
       )
     ]
   ))
+    ))
   )
 
   (test-case "doubleMin: uses Maybe arm value"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 295 (list) (lambda () (exampleTree))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 296 (list (cons 't t)) (lambda () (doubleMin t)))) 2)
+    ))
   )
 
   (test-case "sumMinMax: combines min and max"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 300 (list) (lambda () (exampleTree))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 301 (list (cons 't t)) (lambda () (sumMinMax t)))) 6)
+    ))
   )
 
   (test-case "treeSize: counts all nodes"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 305 (list) (lambda () (exampleTree))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 306 (list (cons 't t)) (lambda () (treeSize t)))) 4)
+    ))
   )
 
   (test-case "treeSum: sums all values"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 310 (list) (lambda () (exampleTree))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 311 (list (cons 't t)) (lambda () (treeSum t)))) 11)
+    ))
   )
 
   (test-case "proof isolation: two independent trees"
+    (call-with-fresh-memory-db '() (lambda ()
   (define ta (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 315 (list) (lambda () (insertRaw Leaf 10))))
   (define tb (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 316 (list (cons 'ta ta)) (lambda () (insertRaw Leaf 20))))
   (define ma (thsl-src! "example/learn/lesson52-maybe-proof.tesl" 317 (list (cons 'tb tb) (cons 'ta ta)) (lambda () (findMin ta))))
@@ -338,6 +363,7 @@
       )
     ]
   ))
+    ))
   )
 
 )

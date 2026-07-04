@@ -66,34 +66,42 @@
 (module+ test
   (require rackunit)
   (test-case "named db result preserves proof"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define t (thsl-src! "example/learn/lesson20-named-db-results.tesl" 169 (list) (lambda () (seedAndFetch "test-1"))))
     (check-equal? (thsl-src! "example/learn/lesson20-named-db-results.tesl" 172 (list (cons 't t)) (lambda () (raw-value (tesl-dot/runtime t 'title)))) "task: test-1")
     (check-equal? (thsl-src! "example/learn/lesson20-named-db-results.tesl" 173 (list (cons 't t)) (lambda () (raw-value (tesl-dot/runtime t 'status)))) "open")
     )
+    ))
   )
 
   (test-case "proof annotation verifies entity came from db"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define queryId (thsl-src! "example/learn/lesson20-named-db-results.tesl" 180 (list) (lambda () "test-proof")))
     (define t (thsl-src! "example/learn/lesson20-named-db-results.tesl" 181 (list (cons 'queryId queryId)) (lambda () (seedAndFetch queryId))))
     (check-equal? (thsl-src! "example/learn/lesson20-named-db-results.tesl" 182 (list (cons 't t) (cons 'queryId queryId)) (lambda () (raw-value (tesl-dot/runtime t 'title)))) "task: test-proof")
     )
+    ))
   )
 
   (test-case "processTask receives named entity"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-3 (thsl-src! "example/learn/lesson20-named-db-results.tesl" 189 (list) (lambda () (seedAndFetch "test-2"))))
     (define result (thsl-src! "example/learn/lesson20-named-db-results.tesl" 190 (list) (lambda () (fetchAndProcess "test-2"))))
     (check-equal? (raw-value (thsl-src! "example/learn/lesson20-named-db-results.tesl" 191 (list (cons 'result result)) (lambda () result))) "task: test-2 status=open")
     )
+    ))
   )
 
   (test-case "seedAndProcess chains fetch and process"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define result (thsl-src! "example/learn/lesson20-named-db-results.tesl" 195 (list) (lambda () (seedAndProcess "test-3"))))
     (check-equal? (raw-value (thsl-src! "example/learn/lesson20-named-db-results.tesl" 196 (list (cons 'result result)) (lambda () result))) "task: test-3 status=open")
     )
+    ))
   )
 
 )

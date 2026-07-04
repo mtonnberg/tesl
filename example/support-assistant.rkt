@@ -65,6 +65,7 @@
 (module+ test
   (require rackunit)
   (test-case "lookup tool: derived-schema args reach the typed fn and the loop returns a reply"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define call (thsl-src! "example/support-assistant.tesl" 117 (list) (lambda () (raw-value (toolUseStep "lookupOrder" "call_1" "{\"orderId\":\"A-100\"}")))))
     (define final (thsl-src! "example/support-assistant.tesl" 118 (list (cons 'call call)) (lambda () (raw-value (textStep "Your order A-100 has shipped.")))))
@@ -73,9 +74,11 @@
     (check-equal? (raw-value (thsl-src! "example/support-assistant.tesl" 121 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'call call)) (lambda () (raw-value (replyText (raw-value reply)))))) "Your order A-100 has shipped.")
     (check-equal? (raw-value (thsl-src! "example/support-assistant.tesl" 122 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'call call)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
+    ))
   )
 
   (test-case "refund tool: confirmed=true issues the refund"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define call (thsl-src! "example/support-assistant.tesl" 128 (list) (lambda () (raw-value (toolUseStep "refundOrder" "call_1" "{\"orderId\":\"A-200\",\"confirmed\":true}")))))
     (define final (thsl-src! "example/support-assistant.tesl" 129 (list (cons 'call call)) (lambda () (raw-value (textStep "Done \u2014 your refund is on its way.")))))
@@ -84,9 +87,11 @@
     (check-equal? (raw-value (thsl-src! "example/support-assistant.tesl" 132 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'call call)) (lambda () (raw-value (replyText (raw-value reply)))))) "Done \u2014 your refund is on its way.")
     (check-equal? (raw-value (thsl-src! "example/support-assistant.tesl" 133 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'call call)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
+    ))
   )
 
   (test-case "refund tool: confirmed=false refuses the mutation but the loop continues"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define call (thsl-src! "example/support-assistant.tesl" 140 (list) (lambda () (raw-value (toolUseStep "refundOrder" "call_1" "{\"orderId\":\"A-300\",\"confirmed\":false}")))))
     (define final (thsl-src! "example/support-assistant.tesl" 141 (list (cons 'call call)) (lambda () (raw-value (textStep "I can't refund without confirmation.")))))
@@ -95,9 +100,11 @@
     (check-equal? (raw-value (thsl-src! "example/support-assistant.tesl" 144 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'call call)) (lambda () (raw-value (replyText (raw-value reply)))))) "I can't refund without confirmation.")
     (check-equal? (raw-value (thsl-src! "example/support-assistant.tesl" 145 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'call call)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
+    ))
   )
 
   (test-case "multi-step: lookup then refund is exactly two tool round-trips"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define lookup (thsl-src! "example/support-assistant.tesl" 151 (list) (lambda () (raw-value (toolUseStep "lookupOrder" "call_1" "{\"orderId\":\"A-400\"}")))))
     (define refund (thsl-src! "example/support-assistant.tesl" 152 (list (cons 'lookup lookup)) (lambda () (raw-value (toolUseStep "refundOrder" "call_2" "{\"orderId\":\"A-400\",\"confirmed\":true}")))))
@@ -107,9 +114,11 @@
     (check-equal? (raw-value (thsl-src! "example/support-assistant.tesl" 156 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'refund refund) (cons 'lookup lookup)) (lambda () (raw-value (replyText (raw-value reply)))))) "Looked it up and refunded order A-400.")
     (check-equal? (raw-value (thsl-src! "example/support-assistant.tesl" 157 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'refund refund) (cons 'lookup lookup)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 2)
     )
+    ))
   )
 
   (test-case "malformed tool args become an is_error tool_result, not an exception"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define call (thsl-src! "example/support-assistant.tesl" 165 (list) (lambda () (raw-value (toolUseStep "lookupOrder" "call_1" "{\"wrong\":\"shape\"}")))))
     (define final (thsl-src! "example/support-assistant.tesl" 166 (list (cons 'call call)) (lambda () (raw-value (textStep "Sorry, I couldn't find that order.")))))
@@ -118,31 +127,38 @@
     (check-equal? (raw-value (thsl-src! "example/support-assistant.tesl" 169 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'call call)) (lambda () (raw-value (replyText (raw-value reply)))))) "Sorry, I couldn't find that order.")
     (check-equal? (raw-value (thsl-src! "example/support-assistant.tesl" 170 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'call call)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
+    ))
   )
 
   (test-case "structured output: classifyTicket decodes a typed Triage on the first reply"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define mock (thsl-src! "example/support-assistant.tesl" 176 (list) (lambda () (raw-value (mockProvider (list "{\"category\":\"billing\",\"priority\":2}"))))))
     (define triage (thsl-src! "example/support-assistant.tesl" 177 (list (cons 'mock mock)) (lambda () (classifyTicket mock "I was double-charged"))))
     (check-equal? (thsl-src! "example/support-assistant.tesl" 178 (list (cons 'triage triage) (cons 'mock mock)) (lambda () (raw-value (tesl-dot/runtime triage 'category)))) "billing")
     (check-equal? (thsl-src! "example/support-assistant.tesl" 179 (list (cons 'triage triage) (cons 'mock mock)) (lambda () (raw-value (tesl-dot/runtime triage 'priority)))) 2)
     )
+    ))
   )
 
   (test-case "structured output: classifyTicket retries past a bad reply then decodes"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define mock (thsl-src! "example/support-assistant.tesl" 185 (list) (lambda () (raw-value (mockProvider (list "not json at all" "{\"category\":\"shipping\",\"priority\":1}"))))))
     (define triage (thsl-src! "example/support-assistant.tesl" 186 (list (cons 'mock mock)) (lambda () (classifyTicket mock "Where is my package?"))))
     (check-equal? (thsl-src! "example/support-assistant.tesl" 187 (list (cons 'triage triage) (cons 'mock mock)) (lambda () (raw-value (tesl-dot/runtime triage 'category)))) "shipping")
     (check-equal? (thsl-src! "example/support-assistant.tesl" 188 (list (cons 'triage triage) (cons 'mock mock)) (lambda () (raw-value (tesl-dot/runtime triage 'priority)))) 1)
     )
+    ))
   )
 
   (test-case "plain ask returns the scripted reply"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "example/support-assistant.tesl" 193 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "Hi! How can I help?"))) (raw-value "x") (raw-value 64)) (list)))))
     (check-equal? (raw-value (thsl-src! "example/support-assistant.tesl" 194 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "hello"))))) "Hi! How can I help?")
     )
+    ))
   )
 
 )

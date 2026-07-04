@@ -56,36 +56,47 @@
 (module+ test
   (require rackunit)
   (test-case "add"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 114 (list) (lambda () (add 3 7)))) 10)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 115 (list) (lambda () (add 0 0)))) 0)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 116 (list) (lambda () (add -5 5)))) 0)
+    ))
   )
 
   (test-case "double and triple"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 120 (list) (lambda () (double 5)))) 10)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 121 (list) (lambda () (double 0)))) 0)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 122 (list) (lambda () (triple 3)))) 9)
+    ))
   )
 
   (test-case "increment and decrement"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 126 (list) (lambda () (increment 4)))) 5)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 127 (list) (lambda () (increment 0)))) 1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 128 (list) (lambda () (decrement 5)))) 4)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 129 (list) (lambda () (decrement 0)))) -1)
+    ))
   )
 
   (test-case "pipeline"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 133 (list) (lambda () (pipeline 3)))) 12)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 134 (list) (lambda () (pipeline 1)))) 4)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 135 (list) (lambda () (pipeline 0)))) 0)
+    ))
   )
 
   (test-case "pipeline2"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 139 (list) (lambda () (pipeline2 2)))) 12)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 140 (list) (lambda () (pipeline2 1)))) 6)
+    ))
   )
 
   (test-case "partial application"
+    (call-with-fresh-memory-db '() (lambda ()
   ; property: increment n == n + 1
   (for ([tesl-prop-i (in-range 50)])
     (let ([n (- (random 2000001) 1000000)])
@@ -95,6 +106,7 @@
   (for ([tesl-prop-i (in-range 50)])
     (let ([n (- (random 2000001) 1000000)])
       (check-true (tesl-equal? (raw-value (decrement n)) (- (raw-value n) 1)) "decrement n == n - 1")
+    ))
     ))
   )
 

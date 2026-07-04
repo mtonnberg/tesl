@@ -436,70 +436,90 @@
 (module+ test
   (require rackunit)
   (test-case "UUID.validate accepts a valid v4 UUID"
+    (call-with-fresh-memory-db (list UserDatabase) (lambda ()
   (define v4 (thsl-src! "example/user-service-api.tesl" 530 (list) (lambda () "550e8400-e29b-41d4-a716-446655440000")))
   (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 531 (list (cons 'v4 v4)) (lambda () (raw-value (tesl_import_UUID_validate (raw-value v4)))))) v4)
+    ))
   )
 
   (test-case "UUID.validate accepts a valid v7 UUID"
+    (call-with-fresh-memory-db (list UserDatabase) (lambda ()
   (define v7 (thsl-src! "example/user-service-api.tesl" 535 (list) (lambda () "018e7a30-a1b2-7c3d-8e4f-123456789abc")))
   (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 536 (list (cons 'v7 v7)) (lambda () (raw-value (tesl_import_UUID_validate (raw-value v7)))))) v7)
+    ))
   )
 
   (test-case "UUID.validate accepts a v4 UUID"
+    (call-with-fresh-memory-db (list UserDatabase) (lambda ()
   (define v4 (thsl-src! "example/user-service-api.tesl" 541 (list) (lambda () "550e8400-e29b-41d4-a716-446655440000")))
   (define result (thsl-src! "example/user-service-api.tesl" 542 (list (cons 'v4 v4)) (lambda () (raw-value (tesl_import_UUID_validate (raw-value v4))))))
   (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 543 (list (cons 'result result) (cons 'v4 v4)) (lambda () result))) v4)
+    ))
   )
 
   (test-case "UUID.validate accepts a v7 UUID"
+    (call-with-fresh-memory-db (list UserDatabase) (lambda ()
   (define v7 (thsl-src! "example/user-service-api.tesl" 547 (list) (lambda () "018e7a30-a1b2-7c3d-8e4f-123456789abc")))
   (define result (thsl-src! "example/user-service-api.tesl" 548 (list (cons 'v7 v7)) (lambda () (raw-value (tesl_import_UUID_validate (raw-value v7))))))
   (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 549 (list (cons 'result result) (cons 'v7 v7)) (lambda () result))) v7)
+    ))
   )
 
   (test-case "JwtToken.value retrieves the inner string"
+    (call-with-fresh-memory-db (list UserDatabase) (lambda ()
   (define raw (thsl-src! "example/user-service-api.tesl" 554 (list) (lambda () "eyJhbGciOiJIUzI1NiJ9.payload.sig")))
   (define token (thsl-src! "example/user-service-api.tesl" 555 (list (cons 'raw raw)) (lambda () (raw-value (JwtToken (raw-value raw))))))
   (check-equal? (thsl-src! "example/user-service-api.tesl" 556 (list (cons 'token token) (cons 'raw raw)) (lambda () (raw-value (tesl-dot/runtime token 'value)))) raw)
+    ))
   )
 
   (test-case "JwtSecret.value retrieves the inner key"
+    (call-with-fresh-memory-db (list UserDatabase) (lambda ()
   (define key (thsl-src! "example/user-service-api.tesl" 560 (list) (lambda () "my-signing-key")))
   (define secret (thsl-src! "example/user-service-api.tesl" 561 (list (cons 'key key)) (lambda () (raw-value (JwtSecret (raw-value key))))))
   (check-equal? (thsl-src! "example/user-service-api.tesl" 562 (list (cons 'secret secret) (cons 'key key)) (lambda () (raw-value (tesl-dot/runtime secret 'value)))) key)
+    ))
   )
 
   (test-case "JwtToken wrapping preserves the string"
+    (call-with-fresh-memory-db (list UserDatabase) (lambda ()
   (define t1 (thsl-src! "example/user-service-api.tesl" 568 (list) (lambda () (raw-value (JwtToken "a.b.c")))))
   (define t2 (thsl-src! "example/user-service-api.tesl" 569 (list (cons 't1 t1)) (lambda () (raw-value (JwtToken "x.y.z")))))
   (check-not-equal? (thsl-src! "example/user-service-api.tesl" 570 (list (cons 't2 t2) (cons 't1 t1)) (lambda () (raw-value (tesl-dot/runtime t1 'value)))) (raw-value (tesl-dot/runtime t2 'value)))
+    ))
   )
 
   (test-case "checkEmail accepts a valid email address"
+    (call-with-fresh-memory-db (list UserDatabase) (lambda ()
   (define addr (thsl-src! "example/user-service-api.tesl" 575 (list) (lambda () "alice@example.com")))
   (define tesl-checked-8 (checkEmail addr))
   (when (check-fail? tesl-checked-8)
     (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-8)))
   (define result tesl-checked-8)
   (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 577 (list (cons 'result result) (cons 'addr addr)) (lambda () result))) addr)
+    ))
   )
 
   (test-case "checkUsername accepts a 2-character username"
+    (call-with-fresh-memory-db (list UserDatabase) (lambda ()
   (define name (thsl-src! "example/user-service-api.tesl" 581 (list) (lambda () "al")))
   (define tesl-checked-9 (checkUsername name))
   (when (check-fail? tesl-checked-9)
     (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-9)))
   (define result tesl-checked-9)
   (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 583 (list (cons 'result result) (cons 'name name)) (lambda () result))) name)
+    ))
   )
 
   (test-case "checkPassword accepts an 8-character password"
+    (call-with-fresh-memory-db (list UserDatabase) (lambda ()
   (define pwd (thsl-src! "example/user-service-api.tesl" 587 (list) (lambda () "secure42")))
   (define tesl-checked-10 (checkPassword pwd))
   (when (check-fail? tesl-checked-10)
     (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-10)))
   (define result tesl-checked-10)
   (check-equal? (raw-value (thsl-src! "example/user-service-api.tesl" 589 (list (cons 'result result) (cons 'pwd pwd)) (lambda () result))) pwd)
+    ))
   )
 
 )

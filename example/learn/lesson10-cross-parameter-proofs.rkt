@@ -38,6 +38,7 @@
 (module+ test
   (require rackunit)
   (test-case "checkValidRange valid"
+    (call-with-fresh-memory-db '() (lambda ()
   (define lo1 (thsl-src! "example/learn/lesson10-cross-parameter-proofs.tesl" 105 (list) (lambda () 1)))
   (define hi1 (thsl-src! "example/learn/lesson10-cross-parameter-proofs.tesl" 106 (list (cons 'lo1 lo1)) (lambda () 10)))
   (define tesl-checked-1 (checkValidRange lo1 hi1))
@@ -59,9 +60,11 @@
   (check-equal? (raw-value (thsl-src! "example/learn/lesson10-cross-parameter-proofs.tesl" 114 (list (cons 'r3 r3) (cons 'hi3 hi3) (cons 'lo3 lo3) (cons 'r2 r2) (cons 'hi2 hi2) (cons 'lo2 lo2) (cons 'r1 r1) (cons 'hi1 hi1) (cons 'lo1 lo1)) (lambda () r1))) 1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson10-cross-parameter-proofs.tesl" 115 (list (cons 'r3 r3) (cons 'hi3 hi3) (cons 'lo3 lo3) (cons 'r2 r2) (cons 'hi2 hi2) (cons 'lo2 lo2) (cons 'r1 r1) (cons 'hi1 hi1) (cons 'lo1 lo1)) (lambda () r2))) -5)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson10-cross-parameter-proofs.tesl" 116 (list (cons 'r3 r3) (cons 'hi3 hi3) (cons 'lo3 lo3) (cons 'r2 r2) (cons 'hi2 hi2) (cons 'lo2 lo2) (cons 'r1 r1) (cons 'hi1 hi1) (cons 'lo1 lo1)) (lambda () r3))) 0)
+    ))
   )
 
   (test-case "checkValidRange rejects equal/inverted"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson10-cross-parameter-proofs.tesl" 120 (list) (lambda ()
                           (checkValidRange 5 5))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -70,9 +73,11 @@
                           (checkValidRange 10 1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkValidRange 10 1"))
+    ))
   )
 
   (test-case "safePair clamps correctly"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r1 (thsl-src! "example/learn/lesson10-cross-parameter-proofs.tesl" 125 (list) (lambda () (safePair 0 10 5))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson10-cross-parameter-proofs.tesl" 126 (list (cons 'r1 r1)) (lambda () r1))) 5)
   (define r2 (thsl-src! "example/learn/lesson10-cross-parameter-proofs.tesl" 127 (list (cons 'r1 r1)) (lambda () (safePair 0 10 -3))))
@@ -83,6 +88,7 @@
   (check-equal? (raw-value (thsl-src! "example/learn/lesson10-cross-parameter-proofs.tesl" 132 (list (cons 'r4 r4) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () r4))) 3)
   (define r5 (thsl-src! "example/learn/lesson10-cross-parameter-proofs.tesl" 133 (list (cons 'r4 r4) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () (safePair 3 7 7))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson10-cross-parameter-proofs.tesl" 134 (list (cons 'r5 r5) (cons 'r4 r4) (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () r5))) 7)
+    ))
   )
 
 )

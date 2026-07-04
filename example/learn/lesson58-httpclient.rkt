@@ -59,49 +59,63 @@
 (module+ test
   (require rackunit)
   (test-case "classifyStatusCode: 200-series are success"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 154 (list) (lambda () (classifyStatusCode 200)))) "success")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 155 (list) (lambda () (classifyStatusCode 201)))) "success")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 156 (list) (lambda () (classifyStatusCode 204)))) "success")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 157 (list) (lambda () (classifyStatusCode 299)))) "success")
+    ))
   )
 
   (test-case "classifyStatusCode: 4xx are client-error"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 161 (list) (lambda () (classifyStatusCode 400)))) "client-error")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 162 (list) (lambda () (classifyStatusCode 404)))) "client-error")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 163 (list) (lambda () (classifyStatusCode 422)))) "client-error")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 164 (list) (lambda () (classifyStatusCode 429)))) "client-error")
+    ))
   )
 
   (test-case "classifyStatusCode: 5xx are server-error"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 168 (list) (lambda () (classifyStatusCode 500)))) "server-error")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 169 (list) (lambda () (classifyStatusCode 502)))) "server-error")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 170 (list) (lambda () (classifyStatusCode 503)))) "server-error")
+    ))
   )
 
   (test-case "classifyStatusCode: redirects and info"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 174 (list) (lambda () (classifyStatusCode 301)))) "redirect-or-info")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 175 (list) (lambda () (classifyStatusCode 302)))) "redirect-or-info")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 176 (list) (lambda () (classifyStatusCode 100)))) "redirect-or-info")
+    ))
   )
 
   (test-case "isSuccessCode identifies 2xx"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 180 (list) (lambda () (isSuccessCode 200)))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 181 (list) (lambda () (isSuccessCode 201)))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 182 (list) (lambda () (isSuccessCode 204)))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 183 (list) (lambda () (isSuccessCode 399)))) #f)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 184 (list) (lambda () (isSuccessCode 404)))) #f)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 185 (list) (lambda () (isSuccessCode 500)))) #f)
+    ))
   )
 
   (test-case "buildBearerHeader creates correct Authorization header"
+    (call-with-fresh-memory-db '() (lambda ()
   (define h (thsl-src! "example/learn/lesson58-httpclient.tesl" 189 (list) (lambda () (buildBearerHeader "mytoken123"))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 190 (list (cons 'h h)) (lambda () (raw-value (tesl_import_Tuple2_first (raw-value h)))))) "Authorization")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 191 (list (cons 'h h)) (lambda () (raw-value (tesl_import_Tuple2_second (raw-value h)))))) "Bearer mytoken123")
+    ))
   )
 
   (test-case "buildBearerHeader with API key token"
+    (call-with-fresh-memory-db '() (lambda ()
   (define h (thsl-src! "example/learn/lesson58-httpclient.tesl" 195 (list) (lambda () (buildBearerHeader "sk-abc123xyz"))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson58-httpclient.tesl" 196 (list (cons 'h h)) (lambda () (raw-value (tesl_import_Tuple2_second (raw-value h)))))) "Bearer sk-abc123xyz")
+    ))
   )
 
 )

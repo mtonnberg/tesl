@@ -41,6 +41,7 @@
 (module+ test
   (require rackunit)
   (test-case "the model calls a typed tool; its String arg is decoded and dispatched"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (myAi)
     (define call (thsl-src! "example/learn/lesson62-ai-agents.tesl" 93 (list) (lambda () (raw-value (toolUseStep "getWeather" "c1" "{\"city\":\"Paris\"}")))))
     (define final (thsl-src! "example/learn/lesson62-ai-agents.tesl" 94 (list (cons 'call call)) (lambda () (raw-value (textStep "It is sunny in Paris right now.")))))
@@ -49,9 +50,11 @@
     (check-equal? (raw-value (thsl-src! "example/learn/lesson62-ai-agents.tesl" 97 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'call call)) (lambda () (raw-value (replyText (raw-value reply)))))) "It is sunny in Paris right now.")
     (check-equal? (raw-value (thsl-src! "example/learn/lesson62-ai-agents.tesl" 98 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'call call)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
+    ))
   )
 
   (test-case "a multi-parameter tool decodes each argument by type"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (myAi)
     (define call (thsl-src! "example/learn/lesson62-ai-agents.tesl" 104 (list) (lambda () (raw-value (toolUseStep "bookTable" "c1" "{\"restaurant\":\"Chez Tesl\",\"guests\":4}")))))
     (define final (thsl-src! "example/learn/lesson62-ai-agents.tesl" 105 (list (cons 'call call)) (lambda () (raw-value (textStep "All set!")))))
@@ -60,9 +63,11 @@
     (check-equal? (raw-value (thsl-src! "example/learn/lesson62-ai-agents.tesl" 108 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'call call)) (lambda () (raw-value (replyText (raw-value reply)))))) "All set!")
     (check-equal? (raw-value (thsl-src! "example/learn/lesson62-ai-agents.tesl" 109 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'call call)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
+    ))
   )
 
   (test-case "malformed tool arguments do not reach the function and do not crash the run"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (myAi)
     (define call (thsl-src! "example/learn/lesson62-ai-agents.tesl" 115 (list) (lambda () (raw-value (toolUseStep "getWeather" "c1" "{\"wrong\":\"field\"}")))))
     (define final (thsl-src! "example/learn/lesson62-ai-agents.tesl" 116 (list (cons 'call call)) (lambda () (raw-value (textStep "I could not look that up.")))))
@@ -71,6 +76,7 @@
     (check-equal? (raw-value (thsl-src! "example/learn/lesson62-ai-agents.tesl" 119 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'call call)) (lambda () (raw-value (replyText (raw-value reply)))))) "I could not look that up.")
     (check-equal? (raw-value (thsl-src! "example/learn/lesson62-ai-agents.tesl" 120 (list (cons 'reply reply) (cons 'mock mock) (cons 'final final) (cons 'call call)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
+    ))
   )
 
 )

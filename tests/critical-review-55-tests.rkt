@@ -227,28 +227,35 @@
 (module+ test
   (require rackunit)
   (test-case "R55_LA: parenthesized lambda in application position"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 66 (list) (lambda () (r55_la01_map_with_paren_lambda (list 1 2 3))))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 67 (list) (lambda () (r55_la01_map_with_paren_lambda (list))))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 69 (list) (lambda () (r55_la02_filter_with_paren_lambda (list 1 2 -3))))) (list 2 3))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 70 (list) (lambda () (r55_la02_filter_with_paren_lambda (list -1 -2))))) (list))
+    ))
   )
 
   (test-case "R55_TU: Tuple access and proof via variable"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 86 (list) (lambda () (r55_tu01_tuple_proof_via_var 5)))) 5)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-55-tests.tesl" 87 (list) (lambda ()
                           (r55_tu01_tuple_proof_via_var -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: r55_tu01_tuple_proof_via_var -1"))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 89 (list) (lambda () (r55_tu02_tuple_first_raw 3)))) 8)
+    ))
   )
 
   (test-case "R55_FM: ForAll proof correctness"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 105 (list) (lambda () (r55_fm01_forall_via_filtercheck (list 1 2 -3 4))))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 106 (list) (lambda () (r55_fm01_forall_via_filtercheck (list -1 -2))))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 108 (list) (lambda () (r55_fm02_forall_lost_through_map_runtime (list 1 2 3))))) 3)
+    ))
   )
 
   (test-case "R55_CH: combined check && operator"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 122 (list) (lambda () (r55_ch01_combined_check 5)))) 5)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 123 (list) (lambda () (r55_ch01_combined_check 999)))) 999)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-55-tests.tesl" 124 (list) (lambda ()
@@ -260,9 +267,11 @@
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: r55_ch01_combined_check 1001"))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 127 (list) (lambda () (r55_ch02_combined_in_filtercheck (list 1 2 -3 1500))))) 2)
+    ))
   )
 
   (test-case "R55_MP: 5-step proof chains"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 189 (list) (lambda () (r55_mp01_five_step 30)))) 30)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 190 (list) (lambda () (r55_mp01_five_step 60)))) 60)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-55-tests.tesl" 191 (list) (lambda ()
@@ -278,9 +287,11 @@
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: r55_mp01_five_step 7"))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 195 (list) (lambda () (r55_mp02_five_conjunct_selective 30)))) 30)
+    ))
   )
 
   (test-case "R55_GW: ghost witness correct usage"
+    (call-with-fresh-memory-db '() (lambda ()
   (define lo (thsl-src! "tests/critical-review-55-tests.tesl" 214 (list) (lambda () 1)))
   (define hi (thsl-src! "tests/critical-review-55-tests.tesl" 215 (list (cons 'lo lo)) (lambda () 100)))
   (define rawVal (thsl-src! "tests/critical-review-55-tests.tesl" 216 (list (cons 'hi hi) (cons 'lo lo)) (lambda () 50)))
@@ -290,9 +301,11 @@
   (define posVal tesl-checked-24)
   (define bounded (thsl-src! "tests/critical-review-55-tests.tesl" 218 (list (cons 'posVal posVal) (cons 'rawVal rawVal) (cons 'hi hi) (cons 'lo lo)) (lambda () (makeBoundedInt lo hi posVal))))
   (check-equal? (thsl-src! "tests/critical-review-55-tests.tesl" 219 (list (cons 'bounded bounded) (cons 'posVal posVal) (cons 'rawVal rawVal) (cons 'hi hi) (cons 'lo lo)) (lambda () (raw-value (tesl-dot/runtime bounded 'value)))) 50)
+    ))
   )
 
   (test-case "R55_LI: named variable bounds for multi-param proofs"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 241 (list) (lambda () (r55_li01_named_bounds 50)))) 50)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 242 (list) (lambda () (r55_li01_named_bounds 1)))) 1)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 243 (list) (lambda () (r55_li01_named_bounds 100)))) 100)
@@ -304,20 +317,26 @@
                           (r55_li01_named_bounds 101))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: r55_li01_named_bounds 101"))
+    ))
   )
 
   (test-case "R55_SP: stdlib proof propagation"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 262 (list) (lambda () (r55_sp03_use_trimmed "  hello  ")))) 5)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 263 (list) (lambda () (r55_sp03_use_trimmed "hello")))) 5)
+    ))
   )
 
   (test-case "R55_DC: unique constructor names"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 280 (list) (lambda () (r55_dc01_unique_ctors TrafficRed)))) "stop")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 281 (list) (lambda () (r55_dc01_unique_ctors TrafficYellow)))) "caution")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 282 (list) (lambda () (r55_dc01_unique_ctors TrafficGreen)))) "go")
+    ))
   )
 
   (test-case "R55_MC: mixed patterns and fall-through"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 308 (list) (lambda () (r55_mc01_literal_and_ctor Nothing)))) "nothing")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 309 (list) (lambda () (r55_mc01_literal_and_ctor (raw-value (Something 0)))))) "zero")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 310 (list) (lambda () (r55_mc01_literal_and_ctor (raw-value (Something 1)))))) "one")
@@ -325,6 +344,7 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 313 (list) (lambda () (r55_mc02_fallthrough_arms Status2Active)))) "completed")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 314 (list) (lambda () (r55_mc02_fallthrough_arms Status2Done)))) "completed")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-55-tests.tesl" 315 (list) (lambda () (r55_mc02_fallthrough_arms Status2Cancelled)))) "cancelled")
+    ))
   )
 
 )

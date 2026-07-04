@@ -31,6 +31,7 @@
 (module+ test
   (require rackunit)
   (test-case "checkOrgName: accepts valid names"
+    (call-with-fresh-memory-db '() (lambda ()
   (define tesl-checked-0 (checkOrgName "Acme Corp"))
   (when (check-fail? tesl-checked-0)
     (raise-user-error 'tesl-test "unexpected failure in let n1: ~a" (check-fail-message tesl-checked-0)))
@@ -41,9 +42,11 @@
   (define n2 tesl-checked-1)
   (check-true (thsl-src! "example/kanel/KanelTests.tesl" 38 (list (cons 'n2 n2) (cons 'n1 n1)) (lambda () (>= (raw-value (tesl_import_String_length n1)) 2))))
   (check-equal? (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 39 (list (cons 'n2 n2) (cons 'n1 n1)) (lambda () (tesl_import_String_length n2)))) 2)
+    ))
   )
 
   (test-case "checkOrgName: rejects empty string"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/kanel/KanelTests.tesl" 43 (list) (lambda ()
                           (checkOrgName ""))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -52,9 +55,11 @@
                           (checkOrgName "   "))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkOrgName \"   \""))
+    ))
   )
 
   (test-case "checkOrgName: rejects names that are too long"
+    (call-with-fresh-memory-db '() (lambda ()
   (define tooLong (thsl-src! "example/kanel/KanelTests.tesl" 49 (list) (lambda () "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffffffffff gggggggggg hhhhhhh")))
   (if (> (raw-value (tesl_import_String_length (raw-value tooLong))) 80)
       (let ()
@@ -66,9 +71,11 @@
       (let ()
         (check-true (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 53 (list) (lambda () #t))))
       ))
+    ))
   )
 
   (test-case "checkSlug: accepts valid slugs"
+    (call-with-fresh-memory-db '() (lambda ()
   (define raw1 (thsl-src! "example/kanel/KanelTests.tesl" 57 (list) (lambda () "acme-corp")))
   (define tesl-checked-2 (checkSlug raw1))
   (when (check-fail? tesl-checked-2)
@@ -81,25 +88,31 @@
   (define s2 tesl-checked-3)
   (check-true (thsl-src! "example/kanel/KanelTests.tesl" 61 (list (cons 's2 s2) (cons 'raw2 raw2) (cons 's1 s1) (cons 'raw1 raw1)) (lambda () (>= (raw-value (tesl_import_String_length s1)) 2))))
   (check-true (thsl-src! "example/kanel/KanelTests.tesl" 62 (list (cons 's2 s2) (cons 'raw2 raw2) (cons 's1 s1) (cons 'raw1 raw1)) (lambda () (>= (raw-value (tesl_import_String_length s2)) 2))))
+    ))
   )
 
   (test-case "checkSlug: rejects empty"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/kanel/KanelTests.tesl" 66 (list) (lambda ()
                           (checkSlug ""))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkSlug \"\""))
+    ))
   )
 
   (test-case "checkEmail: accepts valid email"
+    (call-with-fresh-memory-db '() (lambda ()
   (define rawEmail (thsl-src! "example/kanel/KanelTests.tesl" 70 (list) (lambda () "user@example.com")))
   (define tesl-checked-4 (checkEmail rawEmail))
   (when (check-fail? tesl-checked-4)
     (raise-user-error 'tesl-test "unexpected failure in let e: ~a" (check-fail-message tesl-checked-4)))
   (define e tesl-checked-4)
   (check-true (thsl-src! "example/kanel/KanelTests.tesl" 72 (list (cons 'e e) (cons 'rawEmail rawEmail)) (lambda () (> (raw-value (tesl_import_String_length e)) 0))))
+    ))
   )
 
   (test-case "checkEmail: rejects missing @"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/kanel/KanelTests.tesl" 76 (list) (lambda ()
                           (checkEmail "notanemail"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -108,9 +121,11 @@
                           (checkEmail ""))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkEmail \"\""))
+    ))
   )
 
   (test-case "checkTitle: basic validation"
+    (call-with-fresh-memory-db '() (lambda ()
   (define rawTitle (thsl-src! "example/kanel/KanelTests.tesl" 81 (list) (lambda () "Fix the login bug")))
   (define tesl-checked-5 (checkTitle rawTitle))
   (when (check-fail? tesl-checked-5)
@@ -121,18 +136,22 @@
                           (checkTitle ""))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkTitle \"\""))
+    ))
   )
 
   (test-case "checkDescription: accepts empty description"
+    (call-with-fresh-memory-db '() (lambda ()
   (define rawDesc (thsl-src! "example/kanel/KanelTests.tesl" 89 (list) (lambda () "")))
   (define tesl-checked-6 (checkDescription rawDesc))
   (when (check-fail? tesl-checked-6)
     (raise-user-error 'tesl-test "unexpected failure in let d: ~a" (check-fail-message tesl-checked-6)))
   (define d tesl-checked-6)
   (check-equal? (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 91 (list (cons 'd d) (cons 'rawDesc rawDesc)) (lambda () (tesl_import_String_length d)))) 0)
+    ))
   )
 
   (test-case "checkEstimate: accepts zero and positive"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n0 (thsl-src! "example/kanel/KanelTests.tesl" 95 (list) (lambda () 0)))
   (define tesl-checked-7 (checkEstimate n0))
   (when (check-fail? tesl-checked-7)
@@ -151,9 +170,11 @@
   (check-equal? (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 101 (list (cons 'e2 e2) (cons 'n2 n2) (cons 'e1 e1) (cons 'n1 n1) (cons 'e0 e0) (cons 'n0 n0)) (lambda () e0))) 0)
   (check-equal? (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 102 (list (cons 'e2 e2) (cons 'n2 n2) (cons 'e1 e1) (cons 'n1 n1) (cons 'e0 e0) (cons 'n0 n0)) (lambda () e1))) 60)
   (check-equal? (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 103 (list (cons 'e2 e2) (cons 'n2 n2) (cons 'e1 e1) (cons 'n1 n1) (cons 'e0 e0) (cons 'n0 n0)) (lambda () e2))) 480)
+    ))
   )
 
   (test-case "checkEstimate: rejects negative"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/kanel/KanelTests.tesl" 107 (list) (lambda ()
                           (checkEstimate -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -162,9 +183,11 @@
                           (checkEstimate -100))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkEstimate -100"))
+    ))
   )
 
   (test-case "checkPositiveMinutes: valid range"
+    (call-with-fresh-memory-db '() (lambda ()
   (define raw1 (thsl-src! "example/kanel/KanelTests.tesl" 112 (list) (lambda () 1)))
   (define tesl-checked-10 (checkPositiveMinutes raw1))
   (when (check-fail? tesl-checked-10)
@@ -182,9 +205,11 @@
   (define m3 tesl-checked-12)
   (check-equal? (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 118 (list (cons 'm3 m3) (cons 'raw3 raw3) (cons 'm2 m2) (cons 'raw2 raw2) (cons 'm1 m1) (cons 'raw1 raw1)) (lambda () m1))) 1)
   (check-equal? (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 119 (list (cons 'm3 m3) (cons 'raw3 raw3) (cons 'm2 m2) (cons 'raw2 raw2) (cons 'm1 m1) (cons 'raw1 raw1)) (lambda () m3))) 1440)
+    ))
   )
 
   (test-case "checkPositiveMinutes: rejects zero and above 24h"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/kanel/KanelTests.tesl" 123 (list) (lambda ()
                           (checkPositiveMinutes 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -197,25 +222,31 @@
                           (checkPositiveMinutes 1441))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkPositiveMinutes 1441"))
+    ))
   )
 
   (test-case "checkCommentBody: accepts non-empty"
+    (call-with-fresh-memory-db '() (lambda ()
   (define rawBody (thsl-src! "example/kanel/KanelTests.tesl" 129 (list) (lambda () "This is a comment.")))
   (define tesl-checked-13 (checkCommentBody rawBody))
   (when (check-fail? tesl-checked-13)
     (raise-user-error 'tesl-test "unexpected failure in let b: ~a" (check-fail-message tesl-checked-13)))
   (define b tesl-checked-13)
   (check-true (thsl-src! "example/kanel/KanelTests.tesl" 131 (list (cons 'b b) (cons 'rawBody rawBody)) (lambda () (> (raw-value (tesl_import_String_length b)) 0))))
+    ))
   )
 
   (test-case "checkCommentBody: rejects empty"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/kanel/KanelTests.tesl" 135 (list) (lambda ()
                           (checkCommentBody ""))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkCommentBody \"\""))
+    ))
   )
 
   (test-case "valid transitions from Backlog"
+    (call-with-fresh-memory-db '() (lambda ()
   (define from1 (thsl-src! "example/kanel/KanelTests.tesl" 143 (list) (lambda () Backlog)))
   (define to1 (thsl-src! "example/kanel/KanelTests.tesl" 144 (list (cons 'from1 from1)) (lambda () Todo)))
   (define tesl-checked-14 (checkTransition from1 to1))
@@ -229,9 +260,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let t2: ~a" (check-fail-message tesl-checked-15)))
   (define t2 tesl-checked-15)
   (check-true (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 149 (list (cons 't2 t2) (cons 'to2 to2) (cons 'from2 from2) (cons 't1 t1) (cons 'to1 to1) (cons 'from1 from1)) (lambda () #t))))
+    ))
   )
 
   (test-case "valid transitions from Todo"
+    (call-with-fresh-memory-db '() (lambda ()
   (define from1 (thsl-src! "example/kanel/KanelTests.tesl" 153 (list) (lambda () Todo)))
   (define to1 (thsl-src! "example/kanel/KanelTests.tesl" 154 (list (cons 'from1 from1)) (lambda () InProgress)))
   (define tesl-checked-16 (checkTransition from1 to1))
@@ -251,9 +284,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let t3: ~a" (check-fail-message tesl-checked-18)))
   (define t3 tesl-checked-18)
   (check-true (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 162 (list (cons 't3 t3) (cons 'to3 to3) (cons 'from3 from3) (cons 't2 t2) (cons 'to2 to2) (cons 'from2 from2) (cons 't1 t1) (cons 'to1 to1) (cons 'from1 from1)) (lambda () #t))))
+    ))
   )
 
   (test-case "valid transitions from InProgress"
+    (call-with-fresh-memory-db '() (lambda ()
   (define from1 (thsl-src! "example/kanel/KanelTests.tesl" 166 (list) (lambda () InProgress)))
   (define to1 (thsl-src! "example/kanel/KanelTests.tesl" 167 (list (cons 'from1 from1)) (lambda () InReview)))
   (define tesl-checked-19 (checkTransition from1 to1))
@@ -267,9 +302,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let t2: ~a" (check-fail-message tesl-checked-20)))
   (define t2 tesl-checked-20)
   (check-true (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 172 (list (cons 't2 t2) (cons 'to2 to2) (cons 'from2 from2) (cons 't1 t1) (cons 'to1 to1) (cons 'from1 from1)) (lambda () #t))))
+    ))
   )
 
   (test-case "valid transitions from InReview"
+    (call-with-fresh-memory-db '() (lambda ()
   (define from1 (thsl-src! "example/kanel/KanelTests.tesl" 176 (list) (lambda () InReview)))
   (define to1 (thsl-src! "example/kanel/KanelTests.tesl" 177 (list (cons 'from1 from1)) (lambda () Done)))
   (define tesl-checked-21 (checkTransition from1 to1))
@@ -283,9 +320,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let t2: ~a" (check-fail-message tesl-checked-22)))
   (define t2 tesl-checked-22)
   (check-true (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 182 (list (cons 't2 t2) (cons 'to2 to2) (cons 'from2 from2) (cons 't1 t1) (cons 'to1 to1) (cons 'from1 from1)) (lambda () #t))))
+    ))
   )
 
   (test-case "valid transition from Cancelled"
+    (call-with-fresh-memory-db '() (lambda ()
   (define from1 (thsl-src! "example/kanel/KanelTests.tesl" 186 (list) (lambda () Cancelled)))
   (define to1 (thsl-src! "example/kanel/KanelTests.tesl" 187 (list (cons 'from1 from1)) (lambda () Backlog)))
   (define tesl-checked-23 (checkTransition from1 to1))
@@ -293,30 +332,38 @@
     (raise-user-error 'tesl-test "unexpected failure in let t1: ~a" (check-fail-message tesl-checked-23)))
   (define t1 tesl-checked-23)
   (check-true (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 189 (list (cons 't1 t1) (cons 'to1 to1) (cons 'from1 from1)) (lambda () #t))))
+    ))
   )
 
   (test-case "invalid: cannot jump from Backlog to Done directly"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/kanel/KanelTests.tesl" 193 (list) (lambda ()
                           (checkTransition Backlog Done))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkTransition Backlog Done"))
+    ))
   )
 
   (test-case "invalid: cannot jump from Backlog to InProgress"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/kanel/KanelTests.tesl" 197 (list) (lambda ()
                           (checkTransition Backlog InProgress))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkTransition Backlog InProgress"))
+    ))
   )
 
   (test-case "invalid: cannot jump from Backlog to InReview"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/kanel/KanelTests.tesl" 201 (list) (lambda ()
                           (checkTransition Backlog InReview))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkTransition Backlog InReview"))
+    ))
   )
 
   (test-case "invalid: Done is terminal"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/kanel/KanelTests.tesl" 205 (list) (lambda ()
                           (checkTransition Done Backlog))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -341,23 +388,29 @@
                           (checkTransition Done Done))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkTransition Done Done"))
+    ))
   )
 
   (test-case "invalid: cannot skip to Done from Todo"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/kanel/KanelTests.tesl" 214 (list) (lambda ()
                           (checkTransition Todo Done))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkTransition Todo Done"))
+    ))
   )
 
   (test-case "invalid: cannot skip to Done from InProgress"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/kanel/KanelTests.tesl" 218 (list) (lambda ()
                           (checkTransition InProgress Done))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkTransition InProgress Done"))
+    ))
   )
 
   (test-case "invalid: Cancelled can only go to Backlog"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/kanel/KanelTests.tesl" 222 (list) (lambda ()
                           (checkTransition Cancelled Todo))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -370,71 +423,89 @@
                           (checkTransition Cancelled Done))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkTransition Cancelled Done"))
+    ))
   )
 
   (test-case "property: checkOrgName always returns non-empty"
+    (call-with-fresh-memory-db '() (lambda ()
   ; property: non-empty names within length are valid
   (for ([tesl-prop-i (in-range 100)])
     (let ([n (- (random 2000001) 1000000)])
       (when (and (>= (raw-value n) 2) (<= (raw-value n) 80)) (check-true (>= (raw-value (tesl_import_String_length "x")) 0) "non-empty names within length are valid"))
     ))
+    ))
   )
 
   (test-case "property: checkEmail accepts user@domain"
+    (call-with-fresh-memory-db '() (lambda ()
   ; property: email with @ is valid
   (for ([tesl-prop-i (in-range 50)])
     (let ([n (- (random 2000001) 1000000)])
       (when (and (> (raw-value n) 0) (< (raw-value n) 100)) (check-true (> (raw-value n) 0) "email with @ is valid"))
     ))
+    ))
   )
 
   (test-case "property: checkEstimate is identity on non-negative"
+    (call-with-fresh-memory-db '() (lambda ()
   ; property: valid estimates are returned unchanged
   (for ([tesl-prop-i (in-range 100)])
     (let ([n (- (random 2000001) 1000000)])
       (when (>= (raw-value n) 0) (check-true (tesl-equal? (raw-value (checkEstimate n)) (raw-value n)) "valid estimates are returned unchanged"))
     ))
+    ))
   )
 
   (test-case "property: checkPositiveMinutes in range 1-1440"
+    (call-with-fresh-memory-db '() (lambda ()
   ; property: valid minute counts are returned unchanged
   (for ([tesl-prop-i (in-range 100)])
     (let ([n (- (random 2000001) 1000000)])
       (when (and (>= (raw-value n) 1) (<= (raw-value n) 1440)) (check-true (tesl-equal? (raw-value (checkPositiveMinutes n)) (raw-value n)) "valid minute counts are returned unchanged"))
     ))
+    ))
   )
 
   (test-case "property: addition is commutative (billing base)"
+    (call-with-fresh-memory-db '() (lambda ()
   ; property: a + b == b + a
   (for ([tesl-prop-i (in-range 50)])
     (let ([a (- (random 2000001) 1000000)] [b (- (random 2000001) 1000000)])
       (when (and (and (>= (raw-value a) 0) (< (raw-value a) 1000)) (and (>= (raw-value b) 0) (< (raw-value b) 1000))) (check-true (tesl-equal? (+ (raw-value a) (raw-value b)) (+ (raw-value b) (raw-value a))) "a + b == b + a"))
     ))
+    ))
   )
 
   (test-case "property: total minutes calculation is correct"
+    (call-with-fresh-memory-db '() (lambda ()
   (define entries (thsl-src! "example/kanel/KanelTests.tesl" 257 (list) (lambda () (list 30 60 45 120 15))))
   (define total (thsl-src! "example/kanel/KanelTests.tesl" 258 (list (cons 'entries entries)) (lambda () (tesl_import_List_foldl addMinutesRaw 0 (raw-value entries)))))
   (check-equal? (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 259 (list (cons 'total total) (cons 'entries entries)) (lambda () total))) 270)
+    ))
   )
 
   (test-case "property: estimates are non-negative"
+    (call-with-fresh-memory-db '() (lambda ()
   ; property: estimate non-negative
   (for ([tesl-prop-i (in-range 50)])
     (let ([n (- (random 2000001) 1000000)])
       (when (and (>= (raw-value n) 0) (< (raw-value n) 10000)) (check-true (>= (raw-value (checkEstimate n)) 0) "estimate non-negative"))
     ))
+    ))
   )
 
   (test-case "checkOrgName produces ValidOrgName proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (define tesl-checked-24 (checkOrgName "Test Organization"))
   (when (check-fail? tesl-checked-24)
     (raise-user-error 'tesl-test "unexpected failure in let validName: ~a" (check-fail-message tesl-checked-24)))
   (define validName tesl-checked-24)
   (check-true (thsl-src! "example/kanel/KanelTests.tesl" 282 (list (cons 'validName validName)) (lambda () (> (raw-value (tesl_import_String_length validName)) 0))))
+    ))
   )
 
   (test-case "checkTransition produces ValidTransition proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (define from (thsl-src! "example/kanel/KanelTests.tesl" 288 (list) (lambda () Todo)))
   (define to (thsl-src! "example/kanel/KanelTests.tesl" 289 (list (cons 'from from)) (lambda () InProgress)))
   (define tesl-checked-25 (checkTransition from to))
@@ -442,9 +513,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let newStatus: ~a" (check-fail-message tesl-checked-25)))
   (define newStatus tesl-checked-25)
   (check-equal? (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 291 (list (cons 'newStatus newStatus) (cons 'to to) (cons 'from from)) (lambda () newStatus))) InProgress)
+    ))
   )
 
   (test-case "check combination: both proofs are required"
+    (call-with-fresh-memory-db '() (lambda ()
   (define rawTitle (thsl-src! "example/kanel/KanelTests.tesl" 297 (list) (lambda () "Implement user auth")))
   (define tesl-checked-26 (checkTitle rawTitle))
   (when (check-fail? tesl-checked-26)
@@ -462,9 +535,11 @@
   (define validDesc tesl-checked-28)
   (check-true (thsl-src! "example/kanel/KanelTests.tesl" 304 (list (cons 'validDesc validDesc) (cons 'rawDesc rawDesc) (cons 'validEstimate validEstimate) (cons 'rawEstimate rawEstimate) (cons 'validTitle validTitle) (cons 'rawTitle rawTitle)) (lambda () (> (raw-value (tesl_import_String_length validTitle)) 0))))
   (check-equal? (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 305 (list (cons 'validDesc validDesc) (cons 'rawDesc rawDesc) (cons 'validEstimate validEstimate) (cons 'rawEstimate rawEstimate) (cons 'validTitle validTitle) (cons 'rawTitle rawTitle)) (lambda () validEstimate))) 120)
+    ))
   )
 
   (test-case "invoice total is sum of time entries"
+    (call-with-fresh-memory-db '() (lambda ()
   (define raw1 (thsl-src! "example/kanel/KanelTests.tesl" 314 (list) (lambda () 30)))
   (define tesl-checked-29 (checkPositiveMinutes raw1))
   (when (check-fail? tesl-checked-29)
@@ -482,31 +557,39 @@
   (define minutes3 tesl-checked-31)
   (define total (thsl-src! "example/kanel/KanelTests.tesl" 320 (list (cons 'minutes3 minutes3) (cons 'raw3 raw3) (cons 'minutes2 minutes2) (cons 'raw2 raw2) (cons 'minutes1 minutes1) (cons 'raw1 raw1)) (lambda () (+ (+ (raw-value minutes1) (raw-value minutes2)) (raw-value minutes3)))))
   (check-equal? (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 321 (list (cons 'total total) (cons 'minutes3 minutes3) (cons 'raw3 raw3) (cons 'minutes2 minutes2) (cons 'raw2 raw2) (cons 'minutes1 minutes1) (cons 'raw1 raw1)) (lambda () total))) 180)
+    ))
   )
 
   (test-case "zero unbilled entries should not create invoice"
+    (call-with-fresh-memory-db '() (lambda ()
   (define emptyList (thsl-src! "example/kanel/KanelTests.tesl" 328 (list) (lambda () (list))))
   (check-equal? (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 329 (list (cons 'emptyList emptyList)) (lambda () (raw-value (tesl_import_List_length (raw-value emptyList)))))) 0)
+    ))
   )
 
   (test-case "invoice total minutes calculation"
+    (call-with-fresh-memory-db '() (lambda ()
   (define m1 (thsl-src! "example/kanel/KanelTests.tesl" 334 (list) (lambda () 30)))
   (define m2 (thsl-src! "example/kanel/KanelTests.tesl" 335 (list (cons 'm1 m1)) (lambda () 60)))
   (define m3 (thsl-src! "example/kanel/KanelTests.tesl" 336 (list (cons 'm2 m2) (cons 'm1 m1)) (lambda () 45)))
   (define total (thsl-src! "example/kanel/KanelTests.tesl" 337 (list (cons 'm3 m3) (cons 'm2 m2) (cons 'm1 m1)) (lambda () (+ (+ (raw-value m1) (raw-value m2)) (raw-value m3)))))
   (check-equal? (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 338 (list (cons 'total total) (cons 'm3 m3) (cons 'm2 m2) (cons 'm1 m1)) (lambda () total))) 135)
+    ))
   )
 
   (test-case "slug must be lowercase"
+    (call-with-fresh-memory-db '() (lambda ()
   (define rawSlug (thsl-src! "example/kanel/KanelTests.tesl" 348 (list) (lambda () "my-project")))
   (define tesl-checked-32 (checkSlug rawSlug))
   (when (check-fail? tesl-checked-32)
     (raise-user-error 'tesl-test "unexpected failure in let s: ~a" (check-fail-message tesl-checked-32)))
   (define s tesl-checked-32)
   (check-true (thsl-src! "example/kanel/KanelTests.tesl" 350 (list (cons 's s) (cons 'rawSlug rawSlug)) (lambda () (> (raw-value (tesl_import_String_length s)) 0))))
+    ))
   )
 
   (test-case "long but valid title"
+    (call-with-fresh-memory-db '() (lambda ()
   (define longTitle (thsl-src! "example/kanel/KanelTests.tesl" 355 (list) (lambda () "This is a very long title that describes the issue in great detail and should be accepted by the validation function for the purpose of testing")))
   (if (<= (raw-value (tesl_import_String_length (raw-value longTitle))) 200)
       (let ()
@@ -519,38 +602,47 @@
       (let ()
         (check-true (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 360 (list) (lambda () #t))))
       ))
+    ))
   )
 
   (test-case "boundary: estimate of 0 is valid"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "example/kanel/KanelTests.tesl" 365 (list) (lambda () 0)))
   (define tesl-checked-34 (checkEstimate n))
   (when (check-fail? tesl-checked-34)
     (raise-user-error 'tesl-test "unexpected failure in let e: ~a" (check-fail-message tesl-checked-34)))
   (define e tesl-checked-34)
   (check-equal? (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 367 (list (cons 'e e) (cons 'n n)) (lambda () e))) 0)
+    ))
   )
 
   (test-case "boundary: 1440 minutes is valid (24 hours exactly)"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "example/kanel/KanelTests.tesl" 371 (list) (lambda () 1440)))
   (define tesl-checked-35 (checkPositiveMinutes n))
   (when (check-fail? tesl-checked-35)
     (raise-user-error 'tesl-test "unexpected failure in let m: ~a" (check-fail-message tesl-checked-35)))
   (define m tesl-checked-35)
   (check-equal? (raw-value (thsl-src! "example/kanel/KanelTests.tesl" 373 (list (cons 'm m) (cons 'n n)) (lambda () m))) 1440)
+    ))
   )
 
   (test-case "boundary: 1441 minutes is invalid (exceeds 24h)"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/kanel/KanelTests.tesl" 377 (list) (lambda ()
                           (checkPositiveMinutes 1441))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkPositiveMinutes 1441"))
+    ))
   )
 
   (test-case "comment body length boundary"
+    (call-with-fresh-memory-db '() (lambda ()
   ; property: single char comment accepted
   (for ([tesl-prop-i (in-range 1)])
     (let ([n (- (random 2000001) 1000000)])
       (when (> (raw-value n) 0) (check-true (tesl-equal? (raw-value (tesl_import_String_length "x")) 1) "single char comment accepted"))
+    ))
     ))
   )
 

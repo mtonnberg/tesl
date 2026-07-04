@@ -87,15 +87,20 @@
 (module+ test
   (require rackunit)
   (test-case "checkInBounds: value in range (via wrapper)"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 230 (list) (lambda () (describeInBounds 1 10 5)))) "5 is in [1, 10]")
+    ))
   )
 
   (test-case "checkInBounds: boundary values (via wrapper)"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 234 (list) (lambda () (describeInBounds 0 100 0)))) "0 is in [0, 100]")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 235 (list) (lambda () (describeInBounds 0 100 100)))) "100 is in [0, 100]")
+    ))
   )
 
   (test-case "checkInBounds: rejects out-of-range"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 239 (list) (lambda ()
                           (checkInBounds 0 10 -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -104,22 +109,28 @@
                           (checkInBounds 0 10 11))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkInBounds 0 10 11"))
+    ))
   )
 
   (test-case "describeInBounds: full round-trip"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 244 (list) (lambda () (describeInBounds 1 10 7)))) "7 is in [1, 10]")
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 245 (list) (lambda ()
                           (describeInBounds 1 5 6))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: describeInBounds 1 5 6"))
+    ))
   )
 
   (test-case "checkBudget: first-param proof, under budget"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 249 (list) (lambda () (approvedDescription 80 100)))) "approved 80 of 100")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 250 (list) (lambda () (approvedDescription 100 100)))) "approved 100 of 100")
+    ))
   )
 
   (test-case "checkBudget: rejects over budget"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 254 (list) (lambda ()
                           (checkBudget 101 100))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -128,13 +139,17 @@
                           (checkBudget 200 50))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkBudget 200 50"))
+    ))
   )
 
   (test-case "checkInWindow: timestamp in window"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 259 (list) (lambda () (pairDescription 100 50 120 150)))) "120 is in window [100, 150] and 150 is in window [100, 150]")
+    ))
   )
 
   (test-case "checkInWindow: rejects outside window"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 263 (list) (lambda ()
                           (checkInWindow 100 50 99))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -143,24 +158,32 @@
                           (checkInWindow 100 50 151))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkInWindow 100 50 151"))
+    ))
   )
 
   (test-case "checkSortedPair: sorted in-range pair (via wrapper)"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 270 (list) (lambda () (describeSortedPair 10 90)))) "10 \u2264 90 (both in range)")
+    ))
   )
 
   (test-case "checkSortedPair: equal values are valid (via wrapper)"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 274 (list) (lambda () (describeSortedPair 50 50)))) "50 \u2264 50 (both in range)")
+    ))
   )
 
   (test-case "checkSortedPair: rejects unsorted"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 278 (list) (lambda ()
                           (checkSortedPair 90 10))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkSortedPair 90 10"))
+    ))
   )
 
   (test-case "checkSortedPair: rejects out-of-range"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson44-multi-param-proofs.tesl" 282 (list) (lambda ()
                           (checkSortedPair -1 50))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -169,6 +192,7 @@
                           (checkSortedPair 10 101))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkSortedPair 10 101"))
+    ))
   )
 
 )

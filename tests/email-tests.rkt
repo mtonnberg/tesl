@@ -86,103 +86,153 @@
 (module+ test
   (require rackunit)
   (test-case "email block compiles"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 116 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "multiple email blocks compile"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 120 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "sendWelcome function compiles"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 124 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "sendSimple function compiles"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 128 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "sendTextOnly function compiles"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 132 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "sendHtmlOnly function compiles"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 136 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "sendMarketing uses MarketingEmail"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 140 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "sendMultiple calls Email.send twice"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 144 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "startEmailServices calls startEmailWorker"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 148 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "startAllEmailServices sends and starts worker"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 152 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "email capability recognized in requires clause"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 156 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "NoTlsEmail with port 25 compiles"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 160 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "Email.send without text compiles"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 164 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "Email.send without html compiles"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 168 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "Email.send in let _ = binding compiles"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 172 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "email block with env() for smtp params"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 176 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "email block with port 465 compiles"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 180 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "startEmailWorker in function body"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 184 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "Email.send with string literal to"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 188 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "Email.send with variable to"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 192 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "Email.send with concatenated subject"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 196 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "two email declarations in module"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 200 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "email and NoTlsEmail coexist"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 204 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "sendWelcome uses email capability"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 208 (list) (lambda () #t))) #t)
+    ))
   )
 
   (test-case "email feature integrates with test blocks"
+    (call-with-fresh-memory-db (list TestDB) (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/email-tests.tesl" 212 (list) (lambda () #t))) #t)
+    ))
   )
 
 )

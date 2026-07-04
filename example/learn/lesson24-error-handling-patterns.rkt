@@ -68,53 +68,65 @@
 (module+ test
   (require rackunit)
   (test-case "valid email passes check"
+    (call-with-fresh-memory-db '() (lambda ()
   (define email (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 122 (list) (lambda () "user@example.com")))
   (define tesl-checked-5 (checkEmail email))
   (when (check-fail? tesl-checked-5)
     (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-5)))
   (define result tesl-checked-5)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 124 (list (cons 'result result) (cons 'email email)) (lambda () result))) "user@example.com")
+    ))
   )
 
   (test-case "invalid email is rejected"
+    (call-with-fresh-memory-db '() (lambda ()
   (define email (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 128 (list) (lambda () "notanemail")))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 129 (list (cons 'email email)) (lambda ()
                           ((raw-value (checkEmail email)) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (raw-value (checkEmail email)) (list)"))
+    ))
   )
 
   (test-case "valid age passes check"
+    (call-with-fresh-memory-db '() (lambda ()
   (define age (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 133 (list) (lambda () 25)))
   (define tesl-checked-6 (checkAge age))
   (when (check-fail? tesl-checked-6)
     (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-6)))
   (define result tesl-checked-6)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 135 (list (cons 'result result) (cons 'age age)) (lambda () result))) 25)
+    ))
   )
 
   (test-case "negative age is rejected"
+    (call-with-fresh-memory-db '() (lambda ()
   (define age (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 139 (list) (lambda () -1)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 140 (list (cons 'age age)) (lambda ()
                           ((raw-value (checkAge age)) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (raw-value (checkAge age)) (list)"))
+    ))
   )
 
   (test-case "age above 150 is rejected"
+    (call-with-fresh-memory-db '() (lambda ()
   (define age (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 144 (list) (lambda () 200)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 145 (list (cons 'age age)) (lambda ()
                           ((raw-value (checkAge age)) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (raw-value (checkAge age)) (list)"))
+    ))
   )
 
   (test-case "parseAndValidate rejects non-numeric string"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 149 (list) (lambda () "notanumber")))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 150 (list (cons 's s)) (lambda ()
                           ((raw-value (parseAndValidate s)) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (raw-value (parseAndValidate s)) (list)"))
+    ))
   )
 
 )

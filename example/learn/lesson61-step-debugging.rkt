@@ -38,33 +38,40 @@
 (module+ test
   (require rackunit)
   (test-case "checkScore accepts valid score 0"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "example/learn/lesson61-step-debugging.tesl" 172 (list) (lambda () 0)))
   (define tesl-checked-1 (checkScore n))
   (when (check-fail? tesl-checked-1)
     (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-1)))
   (define result tesl-checked-1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson61-step-debugging.tesl" 174 (list (cons 'result result) (cons 'n n)) (lambda () result))) 0)
+    ))
   )
 
   (test-case "checkScore accepts valid score 100"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "example/learn/lesson61-step-debugging.tesl" 178 (list) (lambda () 100)))
   (define tesl-checked-2 (checkScore n))
   (when (check-fail? tesl-checked-2)
     (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-2)))
   (define result tesl-checked-2)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson61-step-debugging.tesl" 180 (list (cons 'result result) (cons 'n n)) (lambda () result))) 100)
+    ))
   )
 
   (test-case "checkScore accepts mid-range score"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "example/learn/lesson61-step-debugging.tesl" 184 (list) (lambda () 75)))
   (define tesl-checked-3 (checkScore n))
   (when (check-fail? tesl-checked-3)
     (raise-user-error 'tesl-test "unexpected failure in let result: ~a" (check-fail-message tesl-checked-3)))
   (define result tesl-checked-3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson61-step-debugging.tesl" 186 (list (cons 'result result) (cons 'n n)) (lambda () result))) 75)
+    ))
   )
 
   (test-case "checkScore rejects negative score"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "example/learn/lesson61-step-debugging.tesl" 190 (list) (lambda () -10)))
   (define y (thsl-src! "example/learn/lesson61-step-debugging.tesl" 191 (list (cons 'n n)) (lambda () "doo")))
   (define z (thsl-src! "example/learn/lesson61-step-debugging.tesl" 192 (list (cons 'y y) (cons 'n n)) (lambda () 2.32)))
@@ -72,30 +79,41 @@
                           ((raw-value (checkScore n)) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (raw-value (checkScore n)) (list)"))
+    ))
   )
 
   (test-case "checkScore rejects score over 100"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n (thsl-src! "example/learn/lesson61-step-debugging.tesl" 197 (list) (lambda () 150)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson61-step-debugging.tesl" 198 (list (cons 'n n)) (lambda ()
                           ((raw-value (checkScore n)) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (raw-value (checkScore n)) (list)"))
+    ))
   )
 
   (test-case "computeGrade returns A for 95"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson61-step-debugging.tesl" 202 (list) (lambda () (computeGrade 95)))) "A")
+    ))
   )
 
   (test-case "computeGrade returns B for 85"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson61-step-debugging.tesl" 206 (list) (lambda () (computeGrade 85)))) "B")
+    ))
   )
 
   (test-case "computeGrade returns C for 75"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson61-step-debugging.tesl" 210 (list) (lambda () (computeGrade 75)))) "C")
+    ))
   )
 
   (test-case "computeGrade returns F for 55"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson61-step-debugging.tesl" 214 (list) (lambda () (computeGrade 55)))) "F")
+    ))
   )
 
 )

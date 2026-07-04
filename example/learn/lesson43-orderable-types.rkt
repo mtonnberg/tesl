@@ -89,30 +89,37 @@
 (module+ test
   (require rackunit)
   (test-case "clampScore: in range"
+    (call-with-fresh-memory-db '() (lambda ()
   (define lo (thsl-src! "example/learn/lesson43-orderable-types.tesl" 193 (list) (lambda () (makeScore 0))))
   (define hi (thsl-src! "example/learn/lesson43-orderable-types.tesl" 194 (list (cons 'lo lo)) (lambda () (makeScore 100))))
   (define mid (thsl-src! "example/learn/lesson43-orderable-types.tesl" 195 (list (cons 'hi hi) (cons 'lo lo)) (lambda () (makeScore 50))))
   (define s (thsl-src! "example/learn/lesson43-orderable-types.tesl" 196 (list (cons 'mid mid) (cons 'hi hi) (cons 'lo lo)) (lambda () (clampScore mid lo hi))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 197 (list (cons 's s) (cons 'mid mid) (cons 'hi hi) (cons 'lo lo)) (lambda () (scoreToInt s)))) 50)
+    ))
   )
 
   (test-case "clampScore: below lo is clamped up"
+    (call-with-fresh-memory-db '() (lambda ()
   (define lo (thsl-src! "example/learn/lesson43-orderable-types.tesl" 201 (list) (lambda () (makeScore 0))))
   (define hi (thsl-src! "example/learn/lesson43-orderable-types.tesl" 202 (list (cons 'lo lo)) (lambda () (makeScore 100))))
   (define low (thsl-src! "example/learn/lesson43-orderable-types.tesl" 203 (list (cons 'hi hi) (cons 'lo lo)) (lambda () (makeScore -10))))
   (define s (thsl-src! "example/learn/lesson43-orderable-types.tesl" 204 (list (cons 'low low) (cons 'hi hi) (cons 'lo lo)) (lambda () (clampScore low lo hi))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 205 (list (cons 's s) (cons 'low low) (cons 'hi hi) (cons 'lo lo)) (lambda () (scoreToInt s)))) 0)
+    ))
   )
 
   (test-case "clampScore: above hi is clamped down"
+    (call-with-fresh-memory-db '() (lambda ()
   (define lo (thsl-src! "example/learn/lesson43-orderable-types.tesl" 209 (list) (lambda () (makeScore 0))))
   (define hi (thsl-src! "example/learn/lesson43-orderable-types.tesl" 210 (list (cons 'lo lo)) (lambda () (makeScore 100))))
   (define over (thsl-src! "example/learn/lesson43-orderable-types.tesl" 211 (list (cons 'hi hi) (cons 'lo lo)) (lambda () (makeScore 200))))
   (define s (thsl-src! "example/learn/lesson43-orderable-types.tesl" 212 (list (cons 'over over) (cons 'hi hi) (cons 'lo lo)) (lambda () (clampScore over lo hi))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 213 (list (cons 's s) (cons 'over over) (cons 'hi hi) (cons 'lo lo)) (lambda () (scoreToInt s)))) 100)
+    ))
   )
 
   (test-case "clampScore: at boundary values"
+    (call-with-fresh-memory-db '() (lambda ()
   (define lo (thsl-src! "example/learn/lesson43-orderable-types.tesl" 217 (list) (lambda () (makeScore 5))))
   (define hi (thsl-src! "example/learn/lesson43-orderable-types.tesl" 218 (list (cons 'lo lo)) (lambda () (makeScore 10))))
   (define atLo (thsl-src! "example/learn/lesson43-orderable-types.tesl" 219 (list (cons 'hi hi) (cons 'lo lo)) (lambda () (makeScore 5))))
@@ -121,51 +128,64 @@
   (define sHi (thsl-src! "example/learn/lesson43-orderable-types.tesl" 222 (list (cons 'sLo sLo) (cons 'atHi atHi) (cons 'atLo atLo) (cons 'hi hi) (cons 'lo lo)) (lambda () (clampScore atHi lo hi))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 223 (list (cons 'sHi sHi) (cons 'sLo sLo) (cons 'atHi atHi) (cons 'atLo atLo) (cons 'hi hi) (cons 'lo lo)) (lambda () (scoreToInt sLo)))) 5)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 224 (list (cons 'sHi sHi) (cons 'sLo sLo) (cons 'atHi atHi) (cons 'atLo atLo) (cons 'hi hi) (cons 'lo lo)) (lambda () (scoreToInt sHi)))) 10)
+    ))
   )
 
   (test-case "higherRank: returns the greater rank"
+    (call-with-fresh-memory-db '() (lambda ()
   (define a (thsl-src! "example/learn/lesson43-orderable-types.tesl" 228 (list) (lambda () (makeRank (makeScore 3)))))
   (define b (thsl-src! "example/learn/lesson43-orderable-types.tesl" 229 (list (cons 'a a)) (lambda () (makeRank (makeScore 7)))))
   (define r1 (thsl-src! "example/learn/lesson43-orderable-types.tesl" 230 (list (cons 'b b) (cons 'a a)) (lambda () (higherRank a b))))
   (define r2 (thsl-src! "example/learn/lesson43-orderable-types.tesl" 231 (list (cons 'r1 r1) (cons 'b b) (cons 'a a)) (lambda () (higherRank b a))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 232 (list (cons 'r2 r2) (cons 'r1 r1) (cons 'b b) (cons 'a a)) (lambda () (rankToInt r1)))) 7)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 233 (list (cons 'r2 r2) (cons 'r1 r1) (cons 'b b) (cons 'a a)) (lambda () (rankToInt r2)))) 7)
+    ))
   )
 
   (test-case "higherRank: tie returns first"
+    (call-with-fresh-memory-db '() (lambda ()
   (define a (thsl-src! "example/learn/lesson43-orderable-types.tesl" 237 (list) (lambda () (makeRank (makeScore 5)))))
   (define b (thsl-src! "example/learn/lesson43-orderable-types.tesl" 238 (list (cons 'a a)) (lambda () (makeRank (makeScore 5)))))
   (define r (thsl-src! "example/learn/lesson43-orderable-types.tesl" 239 (list (cons 'b b) (cons 'a a)) (lambda () (higherRank a b))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 240 (list (cons 'r r) (cons 'b b) (cons 'a a)) (lambda () (rankToInt r)))) 5)
+    ))
   )
 
   (test-case "moreUrgent: lower priority number wins"
+    (call-with-fresh-memory-db '() (lambda ()
   (define p1 (thsl-src! "example/learn/lesson43-orderable-types.tesl" 244 (list) (lambda () (makePriority 1))))
   (define p2 (thsl-src! "example/learn/lesson43-orderable-types.tesl" 245 (list (cons 'p1 p1)) (lambda () (makePriority 5))))
   (define u1 (thsl-src! "example/learn/lesson43-orderable-types.tesl" 246 (list (cons 'p2 p2) (cons 'p1 p1)) (lambda () (moreUrgent p1 p2))))
   (define u2 (thsl-src! "example/learn/lesson43-orderable-types.tesl" 247 (list (cons 'u1 u1) (cons 'p2 p2) (cons 'p1 p1)) (lambda () (moreUrgent p2 p1))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 248 (list (cons 'u2 u2) (cons 'u1 u1) (cons 'p2 p2) (cons 'p1 p1)) (lambda () (priorityToInt u1)))) 1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 249 (list (cons 'u2 u2) (cons 'u1 u1) (cons 'p2 p2) (cons 'p1 p1)) (lambda () (priorityToInt u2)))) 1)
+    ))
   )
 
   (test-case "sortedPair: plain Int ordering"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 253 (list) (lambda () (sortedPair 3 7)))) (list 3 7))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 254 (list) (lambda () (sortedPair 7 3)))) (list 3 7))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 255 (list) (lambda () (sortedPair 5 5)))) (list 5 5))
+    ))
   )
 
   (test-case "isAffordable: Float ordering"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 259 (list) (lambda () (isAffordable 9.99 10.)))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 260 (list) (lambda () (isAffordable 10. 10.)))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 261 (list) (lambda () (isAffordable 10.01 10.)))) #f)
+    ))
   )
 
   (test-case "createdBefore: PosixMillis ordering"
+    (call-with-fresh-memory-db '() (lambda ()
   (define earlier (thsl-src! "example/learn/lesson43-orderable-types.tesl" 265 (list) (lambda () (raw-value (tesl_import_Time_secondsToPosix 1000)))))
   (define later (thsl-src! "example/learn/lesson43-orderable-types.tesl" 266 (list (cons 'earlier earlier)) (lambda () (raw-value (tesl_import_Time_secondsToPosix 2000)))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 267 (list (cons 'later later) (cons 'earlier earlier)) (lambda () (createdBefore earlier later)))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 268 (list (cons 'later later) (cons 'earlier earlier)) (lambda () (createdBefore later earlier)))) #f)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson43-orderable-types.tesl" 269 (list (cons 'later later) (cons 'earlier earlier)) (lambda () (createdBefore earlier earlier)))) #f)
+    ))
   )
 
 )

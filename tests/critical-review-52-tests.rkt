@@ -143,6 +143,7 @@
 (module+ test
   (require rackunit)
   (test-case "R52_P01 lambda+check legitimately works"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 205 (list) (lambda () (p01_lambda_with_checked_arg 5)))) 5)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-52-tests.tesl" 206 (list) (lambda ()
                           (p01_lambda_with_checked_arg 0))))])
@@ -152,9 +153,11 @@
                           (p01_lambda_with_checked_arg (- 0 9)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: p01_lambda_with_checked_arg (- 0 9)"))
+    ))
   )
 
   (test-case "R52_P02 triple chain runs when all checks pass"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 211 (list) (lambda () (p02_triple_chain 4)))) 4)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-52-tests.tesl" 212 (list) (lambda ()
                           (p02_triple_chain 3))))])
@@ -168,49 +171,61 @@
                           (p02_triple_chain 200))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: p02_triple_chain 200"))
+    ))
   )
 
   (test-case "R52_P03 triple predicate commutativity"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 218 (list) (lambda () (p03_triple_commutes 6)))) 6)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-52-tests.tesl" 219 (list) (lambda ()
                           (p03_triple_commutes 7))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: p03_triple_commutes 7"))
+    ))
   )
 
   (test-case "R52_P04 forget + recheck keeps the final value"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 223 (list) (lambda () (p04_forget_recheck 11)))) 11)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-52-tests.tesl" 224 (list) (lambda ()
                           (p04_forget_recheck 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: p04_forget_recheck 0"))
+    ))
   )
 
   (test-case "R52_D01 single decompose+reattach is identity"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 228 (list) (lambda () (d01_single_decompose 3)))) 3)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-52-tests.tesl" 229 (list) (lambda ()
                           (d01_single_decompose (- 0 1)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: d01_single_decompose (- 0 1)"))
+    ))
   )
 
   (test-case "R52_D02 pair decomposition survives reattach"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 233 (list) (lambda () (d02_pair_decompose 4)))) 4)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-52-tests.tesl" 234 (list) (lambda ()
                           (d02_pair_decompose 200))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: d02_pair_decompose 200"))
+    ))
   )
 
   (test-case "R52_D03 triple decomposition projects the even proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 238 (list) (lambda () (d03_triple_discard 8)))) 8)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-52-tests.tesl" 239 (list) (lambda ()
                           (d03_triple_discard 7))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: d03_triple_discard 7"))
+    ))
   )
 
   (test-case "R52_M01 in-range check + use"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 243 (list) (lambda () (m01_multi_param 1 10 5)))) 5)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-52-tests.tesl" 244 (list) (lambda ()
                           (m01_multi_param 1 10 99))))])
@@ -220,43 +235,56 @@
                           (m01_multi_param 10 20 5))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: m01_multi_param 10 20 5"))
+    ))
   )
 
   (test-case "R52_M02 decompose + reattach of 3-arg fact"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 249 (list) (lambda () (m02_multi_decomp 0 100 42)))) 42)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-52-tests.tesl" 250 (list) (lambda ()
                           (m02_multi_decomp 0 100 1000))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: m02_multi_decomp 0 100 1000"))
+    ))
   )
 
   (test-case "R52_F01 filterCheck keeps only positives"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 254 (list) (lambda () (f01_filter_check (list 1 2 3))))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 255 (list) (lambda () (f01_filter_check (list (- 0 1) 2 (- 0 3)))))) 1)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 259 (list) (lambda () (f01_filter_check (list))))) 0)
+    ))
   )
 
   (test-case "R52_F02 allCheck short-circuits on any failure"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 263 (list) (lambda () (f02_all_check (list 1 2 3))))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 264 (list) (lambda () (f02_all_check (list 1 (- 0 2) 3))))) (- 0 1))
+    ))
   )
 
   (test-case "R52_C01 guard + catch-all case"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 268 (list) (lambda () (c01_guard_with_catchall Nothing)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 269 (list) (lambda () (c01_guard_with_catchall (raw-value (Something 10)))))) 10)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 270 (list) (lambda () (c01_guard_with_catchall (raw-value (Something 0)))))) (- 0 1))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 271 (list) (lambda () (c01_guard_with_catchall (raw-value (Something (- 0 5))))))) (- 0 1))
+    ))
   )
 
   (test-case "R52_C03 case scrutinee arithmetic"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 275 (list) (lambda () (c03_case_arith 2 3)))) 5)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 276 (list) (lambda () (c03_case_arith 10 (- 0 10))))) 100)
+    ))
   )
 
   (test-case "R52_C04 nested bare-nullary constructor pattern"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 280 (list) (lambda () (c04_nested_nullary Nothing)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 281 (list) (lambda () (c04_nested_nullary (raw-value (Something Nothing)))))) 1)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-52-tests.tesl" 282 (list) (lambda () (c04_nested_nullary (raw-value (Something (raw-value (Something 42)))))))) 42)
+    ))
   )
 
 )

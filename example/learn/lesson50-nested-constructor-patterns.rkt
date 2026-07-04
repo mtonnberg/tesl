@@ -70,31 +70,39 @@
 (module+ test
   (require rackunit)
   (test-case "describeShape"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 154 (list) (lambda () (describeShape (Circle 5))))) "circle r=5")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 155 (list) (lambda () (describeShape (ColoredCircle "red" 3))))) "red circle r=3")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 156 (list) (lambda () (describeShape (Wrapped (raw-value (Something 42))))))) "wrapped value: 42")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 157 (list) (lambda () (describeShape (Wrapped Nothing))))) "empty wrapper")
+    ))
   )
 
   (test-case "evalExpr"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 161 (list) (lambda () (evalExpr (Lit 7))))) 7)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 162 (list) (lambda () (evalExpr (Neg (Lit 3)))))) -3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 163 (list) (lambda () (evalExpr (Neg (Add (Lit 1) (Lit 2))))))) -3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 164 (list) (lambda () (evalExpr (Add (Lit 1) (Lit 2)))))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 165 (list) (lambda () (evalExpr (Add (Neg (Lit 5)) (Lit 10)))))) 5)
+    ))
   )
 
   (test-case "describeResult"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 169 (list) (lambda () (describeResult Nothing)))) "no result")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 170 (list) (lambda () (describeResult (raw-value (Something (Success 42))))))) "success: 42")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 171 (list) (lambda () (describeResult (raw-value (Something (Failure "oops"))))))) "failure: oops")
+    ))
   )
 
   (test-case "countSomethings"
+    (call-with-fresh-memory-db '() (lambda ()
   (define xs (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 175 (list) (lambda () (list (raw-value (Something 1)) Nothing (raw-value (Something 2)) Nothing (raw-value (Something 3))))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 176 (list (cons 'xs xs)) (lambda () (countSomethings xs)))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 177 (list (cons 'xs xs)) (lambda () (countSomethings (list Nothing Nothing))))) 0)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson50-nested-constructor-patterns.tesl" 178 (list (cons 'xs xs)) (lambda () (countSomethings (list))))) 0)
+    ))
   )
 
 )

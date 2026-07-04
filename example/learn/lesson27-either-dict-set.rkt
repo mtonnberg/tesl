@@ -131,31 +131,40 @@
 (module+ test
   (require rackunit)
   (test-case "either parseAge success"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 307 (list) (lambda () (parseAge "25")))) (raw-value (Right 25)))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 308 (list) (lambda () (parseAge "0")))) (raw-value (Right 0)))
+    ))
   )
 
   (test-case "either parseAge errors"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 318 (list) (lambda () (isLeft (parseAge ""))))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 319 (list) (lambda () (isLeft (parseAge "abc"))))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 320 (list) (lambda () (isLeft (parseAge "-1"))))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 321 (list) (lambda () (isLeft (parseAge "200"))))) #t)
+    ))
   )
 
   (test-case "either andThen chain"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 325 (list) (lambda () (parseAdultAge "25")))) (raw-value (Right 25)))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 326 (list) (lambda () (isLeft (parseAdultAge "16"))))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 327 (list) (lambda () (isLeft (parseAdultAge "abc"))))) #t)
+    ))
   )
 
   (test-case "either map"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 331 (list) (lambda () (ageCategory "17")))) (raw-value (Right "minor")))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 332 (list) (lambda () (ageCategory "30")))) (raw-value (Right "adult")))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 333 (list) (lambda () (ageCategory "70")))) (raw-value (Right "senior")))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 334 (list) (lambda () (isLeftStr (ageCategory "abc"))))) #t)
+    ))
   )
 
   (test-case "dict basics"
+    (call-with-fresh-memory-db '() (lambda ()
   (define d (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 338 (list) (lambda () (raw-value (tesl_import_Dict_fromList (list (Tuple2 "a" 1) (Tuple2 "b" 2) (Tuple2 "c" 3)))))))
   (define keyB (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 339 (list (cons 'd d)) (lambda () "b")))
   (define tesl-checked-3 (tesl_import_Dict_requireKey keyB d))
@@ -168,18 +177,22 @@
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 344 (list (cons 'checkedB checkedB) (cons 'keyB keyB) (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_get (raw-value keyB) checkedB))))) 2)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 345 (list (cons 'checkedB checkedB) (cons 'keyB keyB) (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_member "a" (raw-value d)))))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 346 (list (cons 'checkedB checkedB) (cons 'keyB keyB) (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_member "z" (raw-value d)))))) #f)
+    ))
   )
 
   (test-case "dict insert and remove"
+    (call-with-fresh-memory-db '() (lambda ()
   (define d (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 350 (list) (lambda () (raw-value (tesl_import_Dict_singleton "x" 42)))))
   (define d2 (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 351 (list (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_insert "y" 99 (raw-value d))))))
   (define d3 (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 352 (list (cons 'd2 d2) (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_remove "x" (raw-value d2))))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 353 (list (cons 'd3 d3) (cons 'd2 d2) (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_size (raw-value d2)))))) 2)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 354 (list (cons 'd3 d3) (cons 'd2 d2) (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_size (raw-value d3)))))) 1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 355 (list (cons 'd3 d3) (cons 'd2 d2) (cons 'd d)) (lambda () (raw-value (tesl_import_Dict_member "x" (raw-value d3)))))) #f)
+    ))
   )
 
   (test-case "dict union"
+    (call-with-fresh-memory-db '() (lambda ()
   (define d1 (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 359 (list) (lambda () (raw-value (tesl_import_Dict_fromList (list (Tuple2 "a" 1) (Tuple2 "b" 2)))))))
   (define d2 (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 360 (list (cons 'd1 d1)) (lambda () (raw-value (tesl_import_Dict_fromList (list (Tuple2 "b" 99) (Tuple2 "c" 3)))))))
   (define u (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 361 (list (cons 'd2 d2) (cons 'd1 d1)) (lambda () (raw-value (tesl_import_Dict_union (raw-value d1) (raw-value d2))))))
@@ -201,9 +214,11 @@
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 368 (list (cons 'checkedC checkedC) (cons 'checkedB checkedB) (cons 'checkedA checkedA) (cons 'keyC keyC) (cons 'keyB keyB) (cons 'keyA keyA) (cons 'u u) (cons 'd2 d2) (cons 'd1 d1)) (lambda () (raw-value (tesl_import_Dict_get (raw-value keyA) checkedA))))) 1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 369 (list (cons 'checkedC checkedC) (cons 'checkedB checkedB) (cons 'checkedA checkedA) (cons 'keyC keyC) (cons 'keyB keyB) (cons 'keyA keyA) (cons 'u u) (cons 'd2 d2) (cons 'd1 d1)) (lambda () (raw-value (tesl_import_Dict_get (raw-value keyB) checkedB))))) 2)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 370 (list (cons 'checkedC checkedC) (cons 'checkedB checkedB) (cons 'checkedA checkedA) (cons 'keyC keyC) (cons 'keyB keyB) (cons 'keyA keyA) (cons 'u u) (cons 'd2 d2) (cons 'd1 d1)) (lambda () (raw-value (tesl_import_Dict_get (raw-value keyC) checkedC))))) 3)
+    ))
   )
 
   (test-case "countByStatus"
+    (call-with-fresh-memory-db '() (lambda ()
   (define counts (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 374 (list) (lambda () (countByStatus (list "active" "inactive" "active" "pending")))))
   (define active (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 375 (list (cons 'counts counts)) (lambda () "active")))
   (define inactive (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 376 (list (cons 'active active) (cons 'counts counts)) (lambda () "inactive")))
@@ -223,9 +238,11 @@
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 381 (list (cons 'checkedPending checkedPending) (cons 'checkedInactive checkedInactive) (cons 'checkedActive checkedActive) (cons 'pending pending) (cons 'inactive inactive) (cons 'active active) (cons 'counts counts)) (lambda () (raw-value (tesl_import_Dict_get (raw-value active) checkedActive))))) 2)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 382 (list (cons 'checkedPending checkedPending) (cons 'checkedInactive checkedInactive) (cons 'checkedActive checkedActive) (cons 'pending pending) (cons 'inactive inactive) (cons 'active active) (cons 'counts counts)) (lambda () (raw-value (tesl_import_Dict_get (raw-value inactive) checkedInactive))))) 1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 383 (list (cons 'checkedPending checkedPending) (cons 'checkedInactive checkedInactive) (cons 'checkedActive checkedActive) (cons 'pending pending) (cons 'inactive inactive) (cons 'active active) (cons 'counts counts)) (lambda () (raw-value (tesl_import_Dict_get (raw-value pending) checkedPending))))) 1)
+    ))
   )
 
   (test-case "ForAllValues \226\128\148 getVerifiedScores keeps only positive values"
+    (call-with-fresh-memory-db '() (lambda ()
   (define raw (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 387 (list) (lambda () (raw-value (tesl_import_Dict_fromList (list (Tuple2 "alice" 95) (Tuple2 "bob" 0) (Tuple2 "carol" -5) (Tuple2 "dave" 80)))))))
   (define scores (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 388 (list (cons 'raw raw)) (lambda () (getVerifiedScores raw))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 390 (list (cons 'scores scores) (cons 'raw raw)) (lambda () (raw-value (tesl_import_Dict_size (raw-value scores)))))) 2)
@@ -233,49 +250,62 @@
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 392 (list (cons 'scores scores) (cons 'raw raw)) (lambda () (raw-value (tesl_import_Dict_member "bob" (raw-value scores)))))) #f)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 393 (list (cons 'scores scores) (cons 'raw raw)) (lambda () (raw-value (tesl_import_Dict_member "carol" (raw-value scores)))))) #f)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 394 (list (cons 'scores scores) (cons 'raw raw)) (lambda () (raw-value (tesl_import_Dict_member "dave" (raw-value scores)))))) #t)
+    ))
   )
 
   (test-case "ForAllValues \226\128\148 empty input gives empty output"
+    (call-with-fresh-memory-db '() (lambda ()
   (define raw (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 398 (list) (lambda () (raw-value (tesl_import_Dict_fromList (list))))))
   (define scores (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 399 (list (cons 'raw raw)) (lambda () (getVerifiedScores raw))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 400 (list (cons 'scores scores) (cons 'raw raw)) (lambda () (raw-value (tesl_import_Dict_size (raw-value scores)))))) 0)
+    ))
   )
 
   (test-case "ForAllKeys \226\128\148 getByValidKeys drops empty-string keys"
+    (call-with-fresh-memory-db '() (lambda ()
   (define raw (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 404 (list) (lambda () (raw-value (tesl_import_Dict_fromList (list (Tuple2 "" 1) (Tuple2 "x" 2) (Tuple2 "y" 3)))))))
   (define good (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 405 (list (cons 'raw raw)) (lambda () (getByValidKeys raw))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 407 (list (cons 'good good) (cons 'raw raw)) (lambda () (raw-value (tesl_import_Dict_size (raw-value good)))))) 2)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 408 (list (cons 'good good) (cons 'raw raw)) (lambda () (raw-value (tesl_import_Dict_member "x" (raw-value good)))))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 409 (list (cons 'good good) (cons 'raw raw)) (lambda () (raw-value (tesl_import_Dict_member "y" (raw-value good)))))) #t)
+    ))
   )
 
   (test-case "set basics"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 413 (list) (lambda () (raw-value (tesl_import_Set_fromList (list 1 2 3 2 1))))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 414 (list (cons 's s)) (lambda () (raw-value (tesl_import_Set_size (raw-value s)))))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 415 (list (cons 's s)) (lambda () (raw-value (tesl_import_Set_member 1 (raw-value s)))))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 416 (list (cons 's s)) (lambda () (raw-value (tesl_import_Set_member 9 (raw-value s)))))) #f)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 417 (list (cons 's s)) (lambda () (raw-value (tesl_import_Set_isEmpty (raw-value s)))))) #f)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 418 (list (cons 's s)) (lambda () (raw-value (tesl_import_Set_isEmpty tesl_import_Set_empty))))) #t)
+    ))
   )
 
   (test-case "set operations"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s1 (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 422 (list) (lambda () (raw-value (tesl_import_Set_fromList (list 1 2 3))))))
   (define s2 (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 423 (list (cons 's1 s1)) (lambda () (raw-value (tesl_import_Set_fromList (list 2 3 4))))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 424 (list (cons 's2 s2) (cons 's1 s1)) (lambda () (raw-value (tesl_import_Set_size (raw-value (tesl_import_Set_union (raw-value s1) (raw-value s2)))))))) 4)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 425 (list (cons 's2 s2) (cons 's1 s1)) (lambda () (raw-value (tesl_import_Set_size (raw-value (tesl_import_Set_intersection (raw-value s1) (raw-value s2)))))))) 2)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 426 (list (cons 's2 s2) (cons 's1 s1)) (lambda () (raw-value (tesl_import_Set_size (raw-value (tesl_import_Set_difference (raw-value s1) (raw-value s2)))))))) 1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 427 (list (cons 's2 s2) (cons 's1 s1)) (lambda () (raw-value (tesl_import_Set_member 1 (raw-value (tesl_import_Set_difference (raw-value s1) (raw-value s2)))))))) #t)
+    ))
   )
 
   (test-case "uniqueRoles"
+    (call-with-fresh-memory-db '() (lambda ()
   (define roles (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 431 (list) (lambda () (uniqueRoles (list "admin" "member" "admin" "guest" "member")))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 432 (list (cons 'roles roles)) (lambda () (raw-value (tesl_import_Set_size (raw-value roles)))))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 433 (list (cons 'roles roles)) (lambda () (raw-value (tesl_import_Set_member "admin" (raw-value roles)))))) #t)
+    ))
   )
 
   (test-case "lookupUser"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 437 (list) (lambda () (lookupUser "usr-1")))) (raw-value (Something "alice")))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson27-either-dict-set.tesl" 438 (list) (lambda () (lookupUser "usr-99")))) Nothing)
+    ))
   )
 
 )

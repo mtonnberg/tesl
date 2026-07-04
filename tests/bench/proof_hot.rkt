@@ -33,6 +33,7 @@
 (module+ test
   (require rackunit)
   (test-case "hot path sums three bounded values"
+    (call-with-fresh-memory-db '() (lambda ()
   (define one (thsl-src! "tests/bench/proof_hot.tesl" 32 (list) (lambda () 1)))
   (define two (thsl-src! "tests/bench/proof_hot.tesl" 33 (list (cons 'one one)) (lambda () 2)))
   (define three (thsl-src! "tests/bench/proof_hot.tesl" 34 (list (cons 'two two) (cons 'one one)) (lambda () 3)))
@@ -49,6 +50,7 @@
     (raise-user-error 'tesl-test "unexpected failure in let c: ~a" (check-fail-message tesl-checked-2)))
   (define c tesl-checked-2)
   (check-equal? (raw-value (thsl-src! "tests/bench/proof_hot.tesl" 38 (list (cons 'c c) (cons 'b b) (cons 'a a) (cons 'three three) (cons 'two two) (cons 'one one)) (lambda () (hotPath a b c)))) 6)
+    ))
   )
 
 )

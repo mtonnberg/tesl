@@ -174,6 +174,7 @@
 (module+ test
   (require rackunit)
   (test-case "R56_LI: literal proof subject runtime correctness"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-56-tests.tesl" 93 (list) (lambda () (li01_literal_min_correct 10)))) 10)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-56-tests.tesl" 94 (list) (lambda () (li01_literal_min_correct 50)))) 50)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-56-tests.tesl" 95 (list) (lambda ()
@@ -202,9 +203,11 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-56-tests.tesl" 110 (list) (lambda () (li05_capped_literal 42)))) 42)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-56-tests.tesl" 111 (list) (lambda () (li05_capped_literal 0)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-56-tests.tesl" 113 (list) (lambda () (li06_mixed_lit_var_bounds 50)))) 50)
+    ))
   )
 
   (test-case "R56_GW: ghost witness construction"
+    (call-with-fresh-memory-db '() (lambda ()
   (define price100 (thsl-src! "tests/critical-review-56-tests.tesl" 139 (list) (lambda () 100)))
   (define qty50 (thsl-src! "tests/critical-review-56-tests.tesl" 140 (list (cons 'price100 price100)) (lambda () 50)))
   (define tesl-checked-9 (checkPos price100))
@@ -227,9 +230,11 @@
                           (checkPQ badPrice badQty))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkPQ badPrice badQty"))
+    ))
   )
 
   (test-case "R56_FP: field proof passthrough runtime"
+    (call-with-fresh-memory-db '() (lambda ()
   (define rawSerial (thsl-src! "tests/critical-review-56-tests.tesl" 170 (list) (lambda () 42)))
   (define tesl-checked-12 (checkPos rawSerial))
   (when (check-fail? tesl-checked-12)
@@ -250,15 +255,19 @@
   (define item (thsl-src! "tests/critical-review-56-tests.tesl" 179 (list (cons 'sv sv) (cons 'pv pv) (cons 'rawVal rawVal) (cons 'extracted extracted) (cons 'payload payload) (cons 'posSerial posSerial) (cons 'rawSerial rawSerial)) (lambda () (ValidItem #:value sv))))
   (define v (thsl-src! "tests/critical-review-56-tests.tesl" 180 (list (cons 'item item) (cons 'sv sv) (cons 'pv pv) (cons 'rawVal rawVal) (cons 'extracted extracted) (cons 'payload payload) (cons 'posSerial posSerial) (cons 'rawSerial rawSerial)) (lambda () (extractValue item))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-56-tests.tesl" 181 (list (cons 'v v) (cons 'item item) (cons 'sv sv) (cons 'pv pv) (cons 'rawVal rawVal) (cons 'extracted extracted) (cons 'payload payload) (cons 'posSerial posSerial) (cons 'rawSerial rawSerial)) (lambda () (needBoth v)))) 5)
+    ))
   )
 
   (test-case "R56_FA: ForAll without literal args works"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-56-tests.tesl" 192 (list) (lambda () (fa01_forall_no_literals (list 1 2 -3 4))))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-56-tests.tesl" 193 (list) (lambda () (fa01_forall_no_literals (list -1 -2 -3))))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-56-tests.tesl" 194 (list) (lambda () (fa01_forall_no_literals (list 1 2 3))))) 3)
+    ))
   )
 
   (test-case "R56_CH: combined literal predicate checks"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-56-tests.tesl" 205 (list) (lambda () (ch01_combined_literal_preds 10)))) 10)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-56-tests.tesl" 206 (list) (lambda () (ch01_combined_literal_preds 55)))) 55)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-56-tests.tesl" 207 (list) (lambda () (ch01_combined_literal_preds 100)))) 100)
@@ -270,6 +279,7 @@
                           (ch01_combined_literal_preds 101))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: ch01_combined_literal_preds 101"))
+    ))
   )
 
 )

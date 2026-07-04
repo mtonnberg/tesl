@@ -54,24 +54,29 @@
 (module+ test
   (require rackunit)
   (test-case "askFor decodes a typed Priority from the model's JSON"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (assistantAi)
     (define mock (thsl-src! "example/learn/lesson63-ai-structured-output.tesl" 92 (list) (lambda () (raw-value (mockProvider (list "{\"level\":1,\"reason\":\"production outage\"}"))))))
     (define p (thsl-src! "example/learn/lesson63-ai-structured-output.tesl" 93 (list (cons 'mock mock)) (lambda () (classifyPriority mock "the site is down"))))
     (check-equal? (thsl-src! "example/learn/lesson63-ai-structured-output.tesl" 94 (list (cons 'p p) (cons 'mock mock)) (lambda () (raw-value (tesl-dot/runtime p 'level)))) 1)
     (check-equal? (thsl-src! "example/learn/lesson63-ai-structured-output.tesl" 95 (list (cons 'p p) (cons 'mock mock)) (lambda () (raw-value (tesl-dot/runtime p 'reason)))) "production outage")
     )
+    ))
   )
 
   (test-case "askFor retries past a malformed reply, then decodes"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (assistantAi)
     (define mock (thsl-src! "example/learn/lesson63-ai-structured-output.tesl" 101 (list) (lambda () (raw-value (mockProvider (list "not json" "{\"level\":3,\"reason\":\"cosmetic typo\"}"))))))
     (define p (thsl-src! "example/learn/lesson63-ai-structured-output.tesl" 102 (list (cons 'mock mock)) (lambda () (classifyPriority mock "there's a small typo on the about page"))))
     (check-equal? (thsl-src! "example/learn/lesson63-ai-structured-output.tesl" 103 (list (cons 'p p) (cons 'mock mock)) (lambda () (raw-value (tesl-dot/runtime p 'level)))) 3)
     (check-equal? (thsl-src! "example/learn/lesson63-ai-structured-output.tesl" 104 (list (cons 'p p) (cons 'mock mock)) (lambda () (raw-value (tesl-dot/runtime p 'reason)))) "cosmetic typo")
     )
+    ))
   )
 
   (test-case "the same agent runs against different per-user providers (BYOK)"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (assistantAi)
     (define alice (thsl-src! "example/learn/lesson63-ai-structured-output.tesl" 110 (list) (lambda () (raw-value (mockProvider (list "Hello Alice!"))))))
     (define bob (thsl-src! "example/learn/lesson63-ai-structured-output.tesl" 111 (list (cons 'alice alice)) (lambda () (raw-value (mockProvider (list "Hello Bob!"))))))
@@ -80,6 +85,7 @@
     (check-equal? (raw-value (thsl-src! "example/learn/lesson63-ai-structured-output.tesl" 114 (list (cons 'replyB replyB) (cons 'replyA replyA) (cons 'bob bob) (cons 'alice alice)) (lambda () (raw-value (replyText (raw-value replyA)))))) "Hello Alice!")
     (check-equal? (raw-value (thsl-src! "example/learn/lesson63-ai-structured-output.tesl" 115 (list (cons 'replyB replyB) (cons 'replyA replyA) (cons 'bob bob) (cons 'alice alice)) (lambda () (raw-value (replyText (raw-value replyB)))))) "Hello Bob!")
     )
+    ))
   )
 
 )

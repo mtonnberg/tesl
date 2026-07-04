@@ -76,33 +76,47 @@
 (module+ test
   (require rackunit)
   (test-case "safeHead returns Nothing for empty list"
+    (call-with-fresh-memory-db '() (lambda ()
   (define xs (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 108 (list) (lambda () (list))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 109 (list (cons 'xs xs)) (lambda () (safeHead xs)))) Nothing)
+    ))
   )
 
   (test-case "safeDivideInt returns Nothing for zero divisor"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 113 (list) (lambda () (safeDivideInt 10 0)))) Nothing)
+    ))
   )
 
   (test-case "safeDivideInt returns result for nonzero divisor"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 117 (list) (lambda () (safeDivideInt 10 2))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 118 (list (cons 'result result)) (lambda () result))) (raw-value (Something 5)))
+    ))
   )
 
   (test-case "combineOptionals returns Nothing if first is Nothing"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 122 (list) (lambda () (combineOptionals Nothing (raw-value (Something 5)))))) Nothing)
+    ))
   )
 
   (test-case "combineOptionals returns Nothing if second is Nothing"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 126 (list) (lambda () (combineOptionals (raw-value (Something 3)) Nothing)))) Nothing)
+    ))
   )
 
   (test-case "combineOptionals returns sum when both present"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 130 (list) (lambda () (combineOptionals (raw-value (Something 3)) (raw-value (Something 4)))))) (raw-value (Something 7)))
+    ))
   )
 
   (test-case "getUserName returns fallback for Nothing"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 134 (list) (lambda () (getUserName Nothing)))) "unknown")
+    ))
   )
 
 )

@@ -32,15 +32,18 @@
 (module+ test
   (require rackunit)
   (test-case "processRawInput valid inputs"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r1 (thsl-src! "example/learn/lesson07-consumer.tesl" 79 (list) (lambda () (processRawInput 5 "hello"))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson07-consumer.tesl" 80 (list (cons 'r1 r1)) (lambda () r1))) "processing 5: hello")
   (define r2 (thsl-src! "example/learn/lesson07-consumer.tesl" 81 (list (cons 'r1 r1)) (lambda () (processRawInput 0 ""))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson07-consumer.tesl" 82 (list (cons 'r2 r2) (cons 'r1 r1)) (lambda () r2))) "processing 0: ")
   (define r3 (thsl-src! "example/learn/lesson07-consumer.tesl" 83 (list (cons 'r2 r2) (cons 'r1 r1)) (lambda () (processRawInput 1000 "max"))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson07-consumer.tesl" 84 (list (cons 'r3 r3) (cons 'r2 r2) (cons 'r1 r1)) (lambda () r3))) "processing 1000: max")
+    ))
   )
 
   (test-case "processRawInput invalid n"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson07-consumer.tesl" 88 (list) (lambda ()
                           (processRawInput -1 "hello"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -49,6 +52,7 @@
                           (processRawInput 1001 "hello"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: processRawInput 1001 \"hello\""))
+    ))
   )
 
 )

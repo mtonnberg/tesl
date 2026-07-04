@@ -5337,7 +5337,7 @@ let emit_agent ctx (_decls : Ast.top_decl list) (a : Ast.agent_form) =
   emit_line ctx "))";
   emit_nl ctx
 
-let emit_test ctx (t : test_form) =
+let emit_test ctx ~(database_names : string list) (t : test_form) =
   Hashtbl.clear ctx.proof_locals;
   let property_runs = match t.runs with Some n -> n | None -> 200 in
   let rec proof_datum = function
@@ -5729,6 +5729,18 @@ let emit_test ctx (t : test_form) =
      All DTest blocks for a file are batched together to avoid rackunit side-effects
      from multiple (require rackunit) calls in separate submodule fragments. *)
   emit_line ctx (Printf.sprintf "  (test-case %S" t.description);
+  (* Isolate every test-case's in-memory database state (reset before AND after via
+     dynamic-wind), exactly as api-test/load-test already do. Without this, plain
+     `test` blocks in one module share the in-memory entity stores, so a row/seed
+     from one block leaks into the next — a test that passes standalone fails when
+     co-run (bug-report #12; and the "passes isolated, fails in full app" reports
+     for #3/#5). Only Memory-backed stores are cleared; Postgres entities are a
+     no-op. *)
+  if database_names = [] then
+    emit_line ctx "    (call-with-fresh-memory-db '() (lambda ()"
+  else
+    emit_line ctx (Printf.sprintf "    (call-with-fresh-memory-db (list %s) (lambda ()"
+      (String.concat " " database_names));
   (* Optional `with database X` header clause binds X for the test body (queries run
      against X's configured backend).  Absent ⇒ the default in-memory store, in which
      case nothing extra is emitted (byte-identical to a test with no clause). *)
@@ -5756,6 +5768,7 @@ let emit_test ctx (t : test_form) =
   (match t.database with
    | Some _ -> emit_line ctx "    ))"   (* close (lambda () and (call-with-database *)
    | None -> ());
+  emit_line ctx "    ))";   (* close (lambda () and (call-with-fresh-memory-db *)
   emit_line ctx "  )"
 
 type api_test_template_part =
@@ -6525,7 +6538,7 @@ let emit_module ctx (m : module_form) =
     emit_line ctx "  (require rackunit)";
     List.iter (fun (t : test_form) ->
       sm_region ctx ~form:(Printf.sprintf "test %S" t.description) t.loc
-        (fun () -> emit_test ctx t);
+        (fun () -> emit_test ctx ~database_names t);
       emit_nl ctx) plain_tests;
     emit_line ctx ")";
     emit_nl ctx

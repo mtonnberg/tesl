@@ -125,73 +125,94 @@
 (module+ test
   (require rackunit)
   (test-case "string basic"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 314 (list) (lambda () (tesl_import_String_length "hello")))) 5)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 315 (list) (lambda () (tesl_import_String_length "")))) 0)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 316 (list) (lambda () (tesl_import_String_isEmpty "")))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 317 (list) (lambda () (tesl_import_String_isEmpty "x")))) #f)
+    ))
   )
 
   (test-case "string trim returns proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 321 (list) (lambda () (tesl_import_String_trim "  hello  "))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 322 (list (cons 't t)) (lambda () (tesl_import_String_isEmpty (raw-value t))))) #f)
+    ))
   )
 
   (test-case "string predicates"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 326 (list) (lambda () (tesl_import_String_startsWith "hello" "hel")))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 327 (list) (lambda () (tesl_import_String_startsWith "hello" "world")))) #f)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 328 (list) (lambda () (tesl_import_String_endsWith "hello" "llo")))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 329 (list) (lambda () (tesl_import_String_endsWith "hello" "hel")))) #f)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 330 (list) (lambda () (tesl_import_String_contains "hello world" "world")))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 331 (list) (lambda () (tesl_import_String_contains "hello world" "xyz")))) #f)
+    ))
   )
 
   (test-case "string split and join"
+    (call-with-fresh-memory-db '() (lambda ()
   (define parts (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 335 (list) (lambda () (tesl_import_String_split "a,b,c" ","))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 336 (list (cons 'parts parts)) (lambda () (raw-value (tesl_import_List_length (raw-value parts)))))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 337 (list (cons 'parts parts)) (lambda () (tesl_import_String_join (list "a" "b" "c") ",")))) "a,b,c")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 338 (list (cons 'parts parts)) (lambda () (tesl_import_String_join (list "x") "-")))) "x")
+    ))
   )
 
   (test-case "string pad and replace"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 342 (list) (lambda () (tesl_import_String_padLeft "42" 5 "0")))) "00042")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 343 (list) (lambda () (tesl_import_String_padRight "hi" 5 " ")))) "hi   ")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 344 (list) (lambda () (tesl_import_String_replace "hello world" "world" "there")))) "hello there")
+    ))
   )
 
   (test-case "string toInt"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 348 (list) (lambda () (tesl_import_String_toInt "42")))) (raw-value (Something 42)))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 349 (list) (lambda () (tesl_import_String_toInt "abc")))) Nothing)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 350 (list) (lambda () (tesl_import_String_toInt "-7")))) (raw-value (Something -7)))
+    ))
   )
 
   (test-case "list basics"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 354 (list) (lambda () (raw-value (tesl_import_List_length (list 1 2 3)))))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 355 (list) (lambda () (raw-value (tesl_import_List_length (list)))))) 0)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 356 (list) (lambda () (raw-value (tesl_import_List_isEmpty (list)))))) #t)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 357 (list) (lambda () (raw-value (tesl_import_List_isEmpty (list 1)))))) #f)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 358 (list) (lambda () (raw-value (tesl_import_List_head (list 10 20)))))) (raw-value (Something 10)))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 359 (list) (lambda () (raw-value (tesl_import_List_head (list)))))) Nothing)
+    ))
   )
 
   (test-case "list map filter sum"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 363 (list) (lambda () (tesl_import_List_map double (list 1 2 3))))) (list 2 4 6))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 364 (list) (lambda () (tesl_import_List_filter isPositive (list -1 0 1 2))))) (list 1 2))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 365 (list) (lambda () (raw-value (tesl_import_List_sum (list 1 2 3 4)))))) 10)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 366 (list) (lambda () (raw-value (tesl_import_List_sum (list)))))) 0)
+    ))
   )
 
   (test-case "list sort"
+    (call-with-fresh-memory-db '() (lambda ()
   (define sorted (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 370 (list) (lambda () (tesl_import_List_sort (list 3 1 4 1 5)))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 371 (list (cons 'sorted sorted)) (lambda () (raw-value (tesl_import_List_head (raw-value sorted)))))) (raw-value (Something 1)))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 372 (list (cons 'sorted sorted)) (lambda () (raw-value (tesl_import_List_length (raw-value sorted)))))) 5)
+    ))
   )
 
   (test-case "list range and unique"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 376 (list) (lambda () (tesl_import_List_range 1 5)))) (list 1 2 3 4))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 377 (list) (lambda () (raw-value (tesl_import_List_length (raw-value (tesl_import_List_unique (list 1 2 1 3 2)))))))) 3)
+    ))
   )
 
   (test-case "int basics"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 381 (list) (lambda () (raw-value (tesl_import_Int_abs -5))))) 5)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 382 (list) (lambda () (raw-value (tesl_import_Int_abs 5))))) 5)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 383 (list) (lambda () (raw-value (tesl_import_Int_min 3 7))))) 3)
@@ -199,9 +220,11 @@
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 385 (list) (lambda () (raw-value (tesl_import_Int_clamp 15 0 10))))) 10)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 386 (list) (lambda () (raw-value (tesl_import_Int_clamp -5 0 10))))) 0)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 387 (list) (lambda () (raw-value (tesl_import_Int_clamp 5 0 10))))) 5)
+    ))
   )
 
   (test-case "int pow and predicates"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 391 (list) (lambda () (raw-value (tesl_import_Int_pow 2 10))))) 1024)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 392 (list) (lambda () (raw-value (tesl_import_Int_pow 3 0))))) 1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 393 (list) (lambda () (raw-value (tesl_import_Int_isEven 4))))) #t)
@@ -210,29 +233,36 @@
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 396 (list) (lambda () (raw-value (tesl_import_Int_sign 5))))) 1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 397 (list) (lambda () (raw-value (tesl_import_Int_sign -5))))) -1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 398 (list) (lambda () (raw-value (tesl_import_Int_sign 0))))) 0)
+    ))
   )
 
   (test-case "safe division"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 402 (list) (lambda () (safeDivide 10 2)))) (raw-value (Something 5)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 403 (list) (lambda ()
                           (safeDivide 10 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: safeDivide 10 0"))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 404 (list) (lambda () (safeDivide 7 3)))) (raw-value (Something 2)))
+    ))
   )
 
   (test-case "count words"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 408 (list) (lambda () (countWords "hello,world,foo")))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 409 (list) (lambda () (countWords "a, b ,  c  ")))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 410 (list) (lambda () (countWords "")))) 0)
+    ))
   )
 
   (test-case "++ string concatenation"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 414 (list) (lambda () (buildPath "https://api.example.com" "users" "42")))) "https://api.example.com/users/42")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 415 (list) (lambda () (formatRecord "name" "Alice")))) "name: Alice")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 417 (list) (lambda () (string-append (string-append "a" "b") "c")))) "abc")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 419 (list) (lambda () (string-append "" "hello")))) "hello")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson25-standard-library-strings-lists-ints.tesl" 420 (list) (lambda () (string-append "hello" "")))) "hello")
+    ))
   )
 
 )

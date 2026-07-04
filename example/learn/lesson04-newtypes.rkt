@@ -52,13 +52,17 @@
 (module+ test
   (require rackunit)
   (test-case "makeUserId round-trips"
+    (call-with-fresh-memory-db '() (lambda ()
   (define uid (thsl-src! "example/learn/lesson04-newtypes.tesl" 104 (list) (lambda () (makeUserId "user-123"))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson04-newtypes.tesl" 105 (list (cons 'uid uid)) (lambda () (userId uid)))) "user-123")
+    ))
   )
 
   (test-case "makeProjectId round-trips"
+    (call-with-fresh-memory-db '() (lambda ()
   (define pid (thsl-src! "example/learn/lesson04-newtypes.tesl" 109 (list) (lambda () (makeProjectId "proj-456"))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson04-newtypes.tesl" 110 (list (cons 'pid pid)) (lambda () (projectId pid)))) "proj-456")
+    ))
   )
 
 )

@@ -75,6 +75,7 @@
 (module+ test
   (require rackunit)
   (test-case "extractRaw returns bare Int"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n42 (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 222 (list) (lambda () 42)))
   (define tesl-checked-7 (checkScore n42))
   (when (check-fail? tesl-checked-7)
@@ -93,9 +94,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let s100: ~a" (check-fail-message tesl-checked-9)))
   (define s100 tesl-checked-9)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 230 (list (cons 's100 s100) (cons 'n100 n100) (cons 's0 s0) (cons 'n0 n0) (cons 's s) (cons 'n42 n42)) (lambda () (extractRaw s100)))) 100)
+    ))
   )
 
   (test-case "showScore formats string"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n75 (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 234 (list) (lambda () 75)))
   (define tesl-checked-10 (checkScore n75))
   (when (check-fail? tesl-checked-10)
@@ -108,9 +111,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let s0: ~a" (check-fail-message tesl-checked-11)))
   (define s0 tesl-checked-11)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 239 (list (cons 's0 s0) (cons 'n0 n0) (cons 's s) (cons 'n75 n75)) (lambda () (showScore s0)))) "score is 0")
+    ))
   )
 
   (test-case "reattachAndUse passes proof through"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n30 (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 243 (list) (lambda () 30)))
   (define tesl-checked-12 (checkScore n30))
   (when (check-fail? tesl-checked-12)
@@ -123,27 +128,33 @@
     (raise-user-error 'tesl-test "unexpected failure in let s99: ~a" (check-fail-message tesl-checked-13)))
   (define s99 tesl-checked-13)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 248 (list (cons 's99 s99) (cons 'n99 n99) (cons 's s) (cons 'n30 n30)) (lambda () (reattachAndUse s99)))) "score: 99")
+    ))
   )
 
   (test-case "justTheProof extracts proof without value"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n50 (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 252 (list) (lambda () 50)))
   (define tesl-checked-14 (checkScore n50))
   (when (check-fail? tesl-checked-14)
     (raise-user-error 'tesl-test "unexpected failure in let s: ~a" (check-fail-message tesl-checked-14)))
   (define s tesl-checked-14)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 254 (list (cons 's s) (cons 'n50 n50)) (lambda () (justTheProof s)))) "proof extracted")
+    ))
   )
 
   (test-case "stripAndDescribe combines both halves"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n7 (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 258 (list) (lambda () 7)))
   (define tesl-checked-15 (checkScore n7))
   (when (check-fail? tesl-checked-15)
     (raise-user-error 'tesl-test "unexpected failure in let s: ~a" (check-fail-message tesl-checked-15)))
   (define s tesl-checked-15)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 260 (list (cons 's s) (cons 'n7 n7)) (lambda () (stripAndDescribe s)))) "raw value: 7 (score: 7)")
+    ))
   )
 
   (test-case "decomposeThenCall uses both decomposed values"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n88 (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 264 (list) (lambda () 88)))
   (define tesl-checked-16 (checkScore n88))
   (when (check-fail? tesl-checked-16)
@@ -155,9 +166,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let t: ~a" (check-fail-message tesl-checked-17)))
   (define t tesl-checked-17)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 268 (list (cons 't t) (cons 'tagStr tagStr) (cons 's s) (cons 'n88 n88)) (lambda () (decomposeThenCall s t)))) "tag: player = score: 88")
+    ))
   )
 
   (test-case "checkScore validates range"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n0 (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 272 (list) (lambda () 0)))
   (define n50 (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 273 (list (cons 'n0 n0)) (lambda () 50)))
   (define n100 (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 274 (list (cons 'n50 n50) (cons 'n0 n0)) (lambda () 100)))
@@ -176,9 +189,11 @@
   (check-equal? (raw-value (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 278 (list (cons 'n100_p n100_p) (cons 'n50_p n50_p) (cons 'no_p no_p) (cons 'n100 n100) (cons 'n50 n50) (cons 'n0 n0)) (lambda () (showScore no_p)))) "score is 0")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 279 (list (cons 'n100_p n100_p) (cons 'n50_p n50_p) (cons 'no_p no_p) (cons 'n100 n100) (cons 'n50 n50) (cons 'n0 n0)) (lambda () (showScore n50_p)))) "score is 50")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 280 (list (cons 'n100_p n100_p) (cons 'n50_p n50_p) (cons 'no_p no_p) (cons 'n100 n100) (cons 'n50 n50) (cons 'n0 n0)) (lambda () (showScore n100_p)))) "score is 100")
+    ))
   )
 
   (test-case "checkScore rejects out-of-range"
+    (call-with-fresh-memory-db '() (lambda ()
   (define nNeg1 (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 284 (list) (lambda () -1)))
   (define n101 (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 285 (list (cons 'nNeg1 nNeg1)) (lambda () 101)))
   (define nNeg100 (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 286 (list (cons 'n101 n101) (cons 'nNeg1 nNeg1)) (lambda () -100)))
@@ -194,9 +209,11 @@
                           (checkScore nNeg100))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkScore nNeg100"))
+    ))
   )
 
   (test-case "checkTag validates non-empty short strings"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n1 (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 293 (list) (lambda () 1)))
   (define tesl-checked-21 (checkScore n1))
   (when (check-fail? tesl-checked-21)
@@ -214,9 +231,11 @@
   (define t2 tesl-checked-23)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 299 (list (cons 't2 t2) (cons 't1 t1) (cons 'tagHello tagHello) (cons 'tagA tagA) (cons 'score score) (cons 'n1 n1)) (lambda () (decomposeThenCall score t1)))) "tag: a = score: 1")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 300 (list (cons 't2 t2) (cons 't1 t1) (cons 'tagHello tagHello) (cons 'tagA tagA) (cons 'score score) (cons 'n1 n1)) (lambda () (decomposeThenCall score t2)))) "tag: hello = score: 1")
+    ))
   )
 
   (test-case "checkTag rejects invalid strings"
+    (call-with-fresh-memory-db '() (lambda ()
   (define empty (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 304 (list) (lambda () "")))
   (define tooLong (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 305 (list (cons 'empty empty)) (lambda () "this-tag-is-way-too-long-to-be-valid")))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 306 (list (cons 'tooLong tooLong) (cons 'empty empty)) (lambda ()
@@ -227,6 +246,7 @@
                           (checkTag tooLong))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkTag tooLong"))
+    ))
   )
 
 )

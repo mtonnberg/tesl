@@ -142,111 +142,140 @@
 (module+ test
   (require rackunit)
   (test-case "ask returns the mock's first scripted reply"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 185 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "hello"))) (raw-value "x") (raw-value 100)) (list)))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 186 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "hi"))))) "hello")
     )
+    ))
   )
 
   (test-case "ask returns the exact scripted string verbatim"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 190 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "The answer is 42."))) (raw-value "x") (raw-value 100)) (list)))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 191 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "q"))))) "The answer is 42.")
     )
+    ))
   )
 
   (test-case "ask through a wrapper handler returns the scripted reply"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 195 (list) (lambda () (askMock "anything")))) "wrapped reply")
     )
+    ))
   )
 
   (test-case "successive asks walk the mock script by call index"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 199 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "first" "second" "third"))) (raw-value "x") (raw-value 50)) (list)))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 200 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "a"))))) "first")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 201 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "b"))))) "second")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 202 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "c"))))) "third")
     )
+    ))
   )
 
   (test-case "ask ignores the prompt content \226\128\148 mock is prompt-independent"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 206 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "fixed"))) (raw-value "x") (raw-value 50)) (list)))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 207 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "totally different prompt"))))) "fixed")
     )
+    ))
   )
 
   (test-case "ask works with an empty system prompt"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 211 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "ok"))) (raw-value "") (raw-value 32)) (list)))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 212 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "hi"))))) "ok")
     )
+    ))
   )
 
   (test-case "ask returns an empty scripted reply unchanged"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 216 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list ""))) (raw-value "x") (raw-value 32)) (list)))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 217 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "hi"))))) "")
     )
+    ))
   )
 
   (test-case "ask preserves unicode in the scripted reply"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 221 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "caf\u00e9 \u2014 na\u00efve \u2713"))) (raw-value "x") (raw-value 64)) (list)))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 222 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "hi"))))) "caf\u00e9 \u2014 na\u00efve \u2713")
     )
+    ))
   )
 
   (test-case "two distinct agents keep independent mock scripts"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define a1 (thsl-src! "tests/agent-feature-tests.tesl" 226 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "from a1"))) (raw-value "x") (raw-value 32)) (list)))))
     (define a2 (thsl-src! "tests/agent-feature-tests.tesl" 227 (list (cons 'a1 a1)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "from a2"))) (raw-value "x") (raw-value 32)) (list)))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 228 (list (cons 'a2 a2) (cons 'a1 a1)) (lambda () (raw-value (ask (raw-value a1) "hi"))))) "from a1")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 229 (list (cons 'a2 a2) (cons 'a1 a1)) (lambda () (raw-value (ask (raw-value a2) "hi"))))) "from a2")
     )
+    ))
   )
 
   (test-case "askReply replyText matches the scripted text"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 237 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "reply body"))) (raw-value "x") (raw-value 64)) (list)))))
     (define reply (thsl-src! "tests/agent-feature-tests.tesl" 238 (list (cons 'agent agent)) (lambda () (raw-value (askReply (raw-value agent) "hi")))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 239 (list (cons 'reply reply) (cons 'agent agent)) (lambda () (raw-value (replyText (raw-value reply)))))) "reply body")
     )
+    ))
   )
 
   (test-case "askReply with no tools reports zero tool calls"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 243 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "plain"))) (raw-value "x") (raw-value 64)) (list)))))
     (define reply (thsl-src! "tests/agent-feature-tests.tesl" 244 (list (cons 'agent agent)) (lambda () (raw-value (askReply (raw-value agent) "hi")))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 245 (list (cons 'reply reply) (cons 'agent agent)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 0)
     )
+    ))
   )
 
   (test-case "askReply replyTokens is non-negative"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 249 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "counts"))) (raw-value "x") (raw-value 64)) (list)))))
     (define reply (thsl-src! "tests/agent-feature-tests.tesl" 250 (list (cons 'agent agent)) (lambda () (raw-value (askReply (raw-value agent) "hi")))))
     (check-true (thsl-src! "tests/agent-feature-tests.tesl" 251 (list (cons 'reply reply) (cons 'agent agent)) (lambda () (>= (raw-value (replyTokens (raw-value reply))) 0))))
     )
+    ))
   )
 
   (test-case "askReply replyText equals ask result for the same script"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define a1 (thsl-src! "tests/agent-feature-tests.tesl" 255 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "same"))) (raw-value "x") (raw-value 64)) (list)))))
     (define a2 (thsl-src! "tests/agent-feature-tests.tesl" 256 (list (cons 'a1 a1)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "same"))) (raw-value "x") (raw-value 64)) (list)))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 257 (list (cons 'a2 a2) (cons 'a1 a1)) (lambda () (raw-value (replyText (raw-value (askReply (raw-value a1) "hi"))))))) (raw-value (ask (raw-value a2) "hi")))
     )
+    ))
   )
 
   (test-case "ask still returns plain text through the loop machinery"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 261 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "plain text"))) (raw-value "x") (raw-value 64)) (list)))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 262 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "hi"))))) "plain text")
     )
+    ))
   )
 
   (test-case "tool loop dispatches with validated args and returns final text"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define weatherTool (thsl-src! "tests/agent-feature-tests.tesl" 270 (list) (lambda () (raw-value (tool "get_weather" "Look up the weather for a city" "{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"]}" validateWeather dispatchWeather)))))
     (define step1 (thsl-src! "tests/agent-feature-tests.tesl" 276 (list (cons 'weatherTool weatherTool)) (lambda () (raw-value (toolUseStep "get_weather" "call_1" "{\"city\":\"Malmo\"}")))))
@@ -256,9 +285,11 @@
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 280 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyText (raw-value reply)))))) "It is sunny.")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 281 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
+    ))
   )
 
   (test-case "tool loop with two tool calls counts both round-trips"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define weatherTool (thsl-src! "tests/agent-feature-tests.tesl" 285 (list) (lambda () (raw-value (tool "get_weather" "weather" "{}" validateWeather dispatchWeather)))))
     (define step1 (thsl-src! "tests/agent-feature-tests.tesl" 286 (list (cons 'weatherTool weatherTool)) (lambda () (raw-value (toolUseStep "get_weather" "call_1" "{\"city\":\"Oslo\"}")))))
@@ -269,9 +300,11 @@
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 291 (list (cons 'reply reply) (cons 'agent agent) (cons 'step3 step3) (cons 'step2 step2) (cons 'step1 step1) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyText (raw-value reply)))))) "Both checked.")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 292 (list (cons 'reply reply) (cons 'agent agent) (cons 'step3 step3) (cons 'step2 step2) (cons 'step1 step1) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 2)
     )
+    ))
   )
 
   (test-case "tool loop with three tool calls counts three"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define weatherTool (thsl-src! "tests/agent-feature-tests.tesl" 296 (list) (lambda () (raw-value (tool "get_weather" "weather" "{}" validateWeather dispatchWeather)))))
     (define s1 (thsl-src! "tests/agent-feature-tests.tesl" 297 (list (cons 'weatherTool weatherTool)) (lambda () (raw-value (toolUseStep "get_weather" "c1" "{\"city\":\"A\"}")))))
@@ -282,9 +315,11 @@
     (define reply (thsl-src! "tests/agent-feature-tests.tesl" 302 (list (cons 'agent agent) (cons 's4 s4) (cons 's3 s3) (cons 's2 s2) (cons 's1 s1) (cons 'weatherTool weatherTool)) (lambda () (raw-value (askReply (raw-value agent) "three")))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 303 (list (cons 'reply reply) (cons 'agent agent) (cons 's4 s4) (cons 's3 s3) (cons 's2 s2) (cons 's1 s1) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 3)
     )
+    ))
   )
 
   (test-case "tool loop dispatches an Int-typed validated arg"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define addTool (thsl-src! "tests/agent-feature-tests.tesl" 307 (list) (lambda () (raw-value (tool "add" "add two ints" "{}" validateAdd dispatchAdd)))))
     (define step1 (thsl-src! "tests/agent-feature-tests.tesl" 308 (list (cons 'addTool addTool)) (lambda () (raw-value (toolUseStep "add" "call_1" "{\"a\":0,\"b\":0}")))))
@@ -294,9 +329,11 @@
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 312 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'addTool addTool)) (lambda () (raw-value (replyText (raw-value reply)))))) "Computed.")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 313 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'addTool addTool)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
+    ))
   )
 
   (test-case "tool loop dispatches a Bool-typed validated arg (true)"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define flagTool (thsl-src! "tests/agent-feature-tests.tesl" 317 (list) (lambda () (raw-value (tool "set_flag" "set a flag" "{}" validateFlag dispatchFlag)))))
     (define step1 (thsl-src! "tests/agent-feature-tests.tesl" 318 (list (cons 'flagTool flagTool)) (lambda () (raw-value (toolUseStep "set_flag" "call_1" "{\"on\":true}")))))
@@ -306,9 +343,11 @@
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 322 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'flagTool flagTool)) (lambda () (raw-value (replyText (raw-value reply)))))) "Set.")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 323 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'flagTool flagTool)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
+    ))
   )
 
   (test-case "tool loop dispatches a Bool-typed validated arg (false)"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define flagTool (thsl-src! "tests/agent-feature-tests.tesl" 327 (list) (lambda () (raw-value (tool "set_flag" "set a flag" "{}" validateFlag dispatchFlag)))))
     (define step1 (thsl-src! "tests/agent-feature-tests.tesl" 328 (list (cons 'flagTool flagTool)) (lambda () (raw-value (toolUseStep "set_flag" "call_1" "{\"on\":false}")))))
@@ -318,9 +357,11 @@
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 332 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'flagTool flagTool)) (lambda () (raw-value (replyText (raw-value reply)))))) "Cleared.")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 333 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'flagTool flagTool)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
+    ))
   )
 
   (test-case "tool loop with no tool calls (text only) reports zero"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define weatherTool (thsl-src! "tests/agent-feature-tests.tesl" 337 (list) (lambda () (raw-value (tool "get_weather" "weather" "{}" validateWeather dispatchWeather)))))
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 338 (list (cons 'weatherTool weatherTool)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockToolProvider (list (raw-value (textStep "no tools needed"))))) (raw-value "x") (raw-value 64)) (list weatherTool)))))
@@ -328,9 +369,11 @@
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 340 (list (cons 'reply reply) (cons 'agent agent) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyText (raw-value reply)))))) "no tools needed")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 341 (list (cons 'reply reply) (cons 'agent agent) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 0)
     )
+    ))
   )
 
   (test-case "an agent with multiple tools still resolves the called one"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define weatherTool (thsl-src! "tests/agent-feature-tests.tesl" 345 (list) (lambda () (raw-value (tool "get_weather" "weather" "{}" validateWeather dispatchWeather)))))
     (define addTool (thsl-src! "tests/agent-feature-tests.tesl" 346 (list (cons 'weatherTool weatherTool)) (lambda () (raw-value (tool "add" "add" "{}" validateAdd dispatchAdd)))))
@@ -341,9 +384,11 @@
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 351 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'addTool addTool) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyText (raw-value reply)))))) "picked add")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 352 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'addTool addTool) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
+    ))
   )
 
   (test-case "malformed tool args (missing field) become is_error and loop continues"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define weatherTool (thsl-src! "tests/agent-feature-tests.tesl" 360 (list) (lambda () (raw-value (tool "get_weather" "weather" "{}" validateWeather dispatchWeather)))))
     (define step1 (thsl-src! "tests/agent-feature-tests.tesl" 361 (list (cons 'weatherTool weatherTool)) (lambda () (raw-value (toolUseStep "get_weather" "call_1" "{\"wrong\":\"field\"}")))))
@@ -353,9 +398,11 @@
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 365 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyText (raw-value reply)))))) "Sorry, could not look that up.")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 366 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
+    ))
   )
 
   (test-case "malformed args (wrong type) are rejected as is_error, no exception"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define addTool (thsl-src! "tests/agent-feature-tests.tesl" 370 (list) (lambda () (raw-value (tool "add" "add" "{}" validateAdd dispatchAdd)))))
     (define step1 (thsl-src! "tests/agent-feature-tests.tesl" 371 (list (cons 'addTool addTool)) (lambda () (raw-value (toolUseStep "add" "call_1" "{\"a\":\"not-a-number\",\"b\":2}")))))
@@ -365,9 +412,11 @@
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 375 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'addTool addTool)) (lambda () (raw-value (replyText (raw-value reply)))))) "recovered")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 376 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'addTool addTool)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
+    ))
   )
 
   (test-case "malformed args (empty object) are rejected as is_error"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define weatherTool (thsl-src! "tests/agent-feature-tests.tesl" 380 (list) (lambda () (raw-value (tool "get_weather" "weather" "{}" validateWeather dispatchWeather)))))
     (define step1 (thsl-src! "tests/agent-feature-tests.tesl" 381 (list (cons 'weatherTool weatherTool)) (lambda () (raw-value (toolUseStep "get_weather" "call_1" "{}")))))
@@ -377,9 +426,11 @@
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 385 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyText (raw-value reply)))))) "no city given")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 386 (list (cons 'reply reply) (cons 'agent agent) (cons 'step2 step2) (cons 'step1 step1) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
+    ))
   )
 
   (test-case "a bad tool call followed by a good one still completes"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define weatherTool (thsl-src! "tests/agent-feature-tests.tesl" 390 (list) (lambda () (raw-value (tool "get_weather" "weather" "{}" validateWeather dispatchWeather)))))
     (define bad (thsl-src! "tests/agent-feature-tests.tesl" 391 (list (cons 'weatherTool weatherTool)) (lambda () (raw-value (toolUseStep "get_weather" "c1" "{\"nope\":1}")))))
@@ -390,102 +441,126 @@
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 396 (list (cons 'reply reply) (cons 'agent agent) (cons 'final final) (cons 'good good) (cons 'bad bad) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyText (raw-value reply)))))) "Looked up Lund.")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 397 (list (cons 'reply reply) (cons 'agent agent) (cons 'final final) (cons 'good good) (cons 'bad bad) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 2)
     )
+    ))
   )
 
   (test-case "askFor decodes a typed value on the first reply"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 405 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "{\"title\":\"All good\",\"score\":42}"))) (raw-value "JSON.") (raw-value 128)) (list)))))
     (define summary (thsl-src! "tests/agent-feature-tests.tesl" 406 (list (cons 'agent agent)) (lambda () (raw-value (askFor (raw-value agent) "summarize" decodeSummary 2)))))
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 407 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'title)))) "All good")
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 408 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'score)))) 42)
     )
+    ))
   )
 
   (test-case "askFor decodes a single-field record"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 412 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "{\"label\":\"positive\"}"))) (raw-value "JSON.") (raw-value 64)) (list)))))
     (define s (thsl-src! "tests/agent-feature-tests.tesl" 413 (list (cons 'agent agent)) (lambda () (raw-value (askFor (raw-value agent) "classify" decodeSentiment 2)))))
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 414 (list (cons 's s) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime s 'label)))) "positive")
     )
+    ))
   )
 
   (test-case "askFor through a wrapper handler decodes the value"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define s (thsl-src! "tests/agent-feature-tests.tesl" 418 (list) (lambda () (classify "great product"))))
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 419 (list (cons 's s)) (lambda () (raw-value (tesl-dot/runtime s 'label)))) "positive")
     )
+    ))
   )
 
   (test-case "askFor succeeds with maxRetries of 1 when the first reply is valid"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 423 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "{\"title\":\"One shot\",\"score\":1}"))) (raw-value "JSON.") (raw-value 64)) (list)))))
     (define summary (thsl-src! "tests/agent-feature-tests.tesl" 424 (list (cons 'agent agent)) (lambda () (raw-value (askFor (raw-value agent) "x" decodeSummary 1)))))
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 425 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'title)))) "One shot")
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 426 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'score)))) 1)
     )
+    ))
   )
 
   (test-case "askFor decodes a negative integer field"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 430 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "{\"title\":\"Cold\",\"score\":-5}"))) (raw-value "JSON.") (raw-value 64)) (list)))))
     (define summary (thsl-src! "tests/agent-feature-tests.tesl" 431 (list (cons 'agent agent)) (lambda () (raw-value (askFor (raw-value agent) "x" decodeSummary 2)))))
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 432 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'score)))) -5)
     )
+    ))
   )
 
   (test-case "askFor retries after one decode failure then succeeds"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 440 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "not json at all" "{\"title\":\"Recovered\",\"score\":7}"))) (raw-value "JSON.") (raw-value 128)) (list)))))
     (define summary (thsl-src! "tests/agent-feature-tests.tesl" 441 (list (cons 'agent agent)) (lambda () (raw-value (askFor (raw-value agent) "summarize" decodeSummary 2)))))
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 442 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'title)))) "Recovered")
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 443 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'score)))) 7)
     )
+    ))
   )
 
   (test-case "askFor retries twice (two bad replies) then succeeds on the third"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 447 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "garbage" "{\"oops\":true}" "{\"title\":\"Third\",\"score\":3}"))) (raw-value "JSON.") (raw-value 128)) (list)))))
     (define summary (thsl-src! "tests/agent-feature-tests.tesl" 448 (list (cons 'agent agent)) (lambda () (raw-value (askFor (raw-value agent) "x" decodeSummary 3)))))
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 449 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'title)))) "Third")
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 450 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'score)))) 3)
     )
+    ))
   )
 
   (test-case "askFor retry recovers a single-field decoder"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 454 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "bad" "{\"label\":\"neutral\"}"))) (raw-value "JSON.") (raw-value 64)) (list)))))
     (define s (thsl-src! "tests/agent-feature-tests.tesl" 455 (list (cons 'agent agent)) (lambda () (raw-value (askFor (raw-value agent) "x" decodeSentiment 2)))))
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 456 (list (cons 's s) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime s 'label)))) "neutral")
     )
+    ))
   )
 
   (test-case "askFor retry consumes the bad reply before the good one"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define a1 (thsl-src! "tests/agent-feature-tests.tesl" 462 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "nope" "{\"title\":\"A\",\"score\":1}"))) (raw-value "JSON.") (raw-value 64)) (list)))))
     (define a2 (thsl-src! "tests/agent-feature-tests.tesl" 463 (list (cons 'a1 a1)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "{\"title\":\"B\",\"score\":2}"))) (raw-value "JSON.") (raw-value 64)) (list)))))
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 464 (list (cons 'a2 a2) (cons 'a1 a1)) (lambda () (raw-value (tesl-dot/runtime (raw-value (askFor (raw-value a1) "x" decodeSummary 2)) 'title)))) "A")
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 465 (list (cons 'a2 a2) (cons 'a1 a1)) (lambda () (raw-value (tesl-dot/runtime (raw-value (askFor (raw-value a2) "y" decodeSummary 2)) 'title)))) "B")
     )
+    ))
   )
 
   (test-case "askWith uses the BYOK provider override, not the agent default"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 473 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "default reply"))) (raw-value "x") (raw-value 64)) (list)))))
     (define byok (thsl-src! "tests/agent-feature-tests.tesl" 474 (list (cons 'agent agent)) (lambda () (raw-value (mockProvider (list "override reply"))))))
     (define reply (thsl-src! "tests/agent-feature-tests.tesl" 475 (list (cons 'byok byok) (cons 'agent agent)) (lambda () (raw-value (askWith (raw-value agent) "hi" (raw-value byok))))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 476 (list (cons 'reply reply) (cons 'byok byok) (cons 'agent agent)) (lambda () (raw-value (replyText (raw-value reply)))))) "override reply")
     )
+    ))
   )
 
   (test-case "askWith ignores the agent's bound provider entirely"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 480 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "WRONG" "ALSO WRONG"))) (raw-value "x") (raw-value 64)) (list)))))
     (define byok (thsl-src! "tests/agent-feature-tests.tesl" 481 (list (cons 'agent agent)) (lambda () (raw-value (mockProvider (list "right"))))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 482 (list (cons 'byok byok) (cons 'agent agent)) (lambda () (raw-value (replyText (raw-value (askWith (raw-value agent) "hi" (raw-value byok)))))))) "right")
     )
+    ))
   )
 
   (test-case "askWith with a fresh override each call walks each override script"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 486 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "unused"))) (raw-value "x") (raw-value 64)) (list)))))
     (define r1 (thsl-src! "tests/agent-feature-tests.tesl" 487 (list (cons 'agent agent)) (lambda () (raw-value (askWith (raw-value agent) "a" (raw-value (mockProvider (list "o1"))))))))
@@ -493,17 +568,21 @@
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 489 (list (cons 'r2 r2) (cons 'r1 r1) (cons 'agent agent)) (lambda () (raw-value (replyText (raw-value r1)))))) "o1")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 490 (list (cons 'r2 r2) (cons 'r1 r1) (cons 'agent agent)) (lambda () (raw-value (replyText (raw-value r2)))))) "o2")
     )
+    ))
   )
 
   (test-case "askWith reports zero tool calls for a plain text override"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 494 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "x"))) (raw-value "x") (raw-value 64)) (list)))))
     (define reply (thsl-src! "tests/agent-feature-tests.tesl" 495 (list (cons 'agent agent)) (lambda () (raw-value (askWith (raw-value agent) "hi" (raw-value (mockProvider (list "text only"))))))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 496 (list (cons 'reply reply) (cons 'agent agent)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 0)
     )
+    ))
   )
 
   (test-case "converse threads turn 1 history into turn 2"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 504 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "First reply about cats" "Second reply still about cats"))) (raw-value "bot.") (raw-value 128)) (list)))))
     (define conv0 (thsl-src! "tests/agent-feature-tests.tesl" 505 (list (cons 'agent agent)) (lambda () (raw-value (newConversation (raw-value agent))))))
@@ -520,26 +599,32 @@
     (check-true (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 516 (list (cons 'history history) (cons 'conv2 conv2) (cons 'turn2 turn2) (cons 'conv1 conv1) (cons 'turn1 turn1) (cons 'conv0 conv0) (cons 'agent agent)) (lambda () (tesl_import_String_contains (raw-value history) "First reply about cats")))))
     (check-true (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 517 (list (cons 'history history) (cons 'conv2 conv2) (cons 'turn2 turn2) (cons 'conv1 conv1) (cons 'turn1 turn1) (cons 'conv0 conv0) (cons 'agent agent)) (lambda () (tesl_import_String_contains (raw-value history) "What did I just ask about?")))))
     )
+    ))
   )
 
   (test-case "newConversation starts empty (length 0)"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 521 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "x"))) (raw-value "x") (raw-value 32)) (list)))))
     (define conv0 (thsl-src! "tests/agent-feature-tests.tesl" 522 (list (cons 'agent agent)) (lambda () (raw-value (newConversation (raw-value agent))))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 523 (list (cons 'conv0 conv0) (cons 'agent agent)) (lambda () (raw-value (conversationLength (raw-value conv0)))))) 0)
     )
+    ))
   )
 
   (test-case "one converse turn records exactly two entries"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 527 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "reply"))) (raw-value "x") (raw-value 64)) (list)))))
     (define conv0 (thsl-src! "tests/agent-feature-tests.tesl" 528 (list (cons 'agent agent)) (lambda () (raw-value (newConversation (raw-value agent))))))
     (define turn1 (thsl-src! "tests/agent-feature-tests.tesl" 529 (list (cons 'conv0 conv0) (cons 'agent agent)) (lambda () (raw-value (converse (raw-value conv0) "question")))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 530 (list (cons 'turn1 turn1) (cons 'conv0 conv0) (cons 'agent agent)) (lambda () (raw-value (conversationLength (raw-value (turnConversation (raw-value turn1)))))))) 2)
     )
+    ))
   )
 
   (test-case "conversationLength grows by two each turn"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 534 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "r1" "r2" "r3"))) (raw-value "x") (raw-value 64)) (list)))))
     (define c0 (thsl-src! "tests/agent-feature-tests.tesl" 535 (list (cons 'agent agent)) (lambda () (raw-value (newConversation (raw-value agent))))))
@@ -550,9 +635,11 @@
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 540 (list (cons 'c3 c3) (cons 'c2 c2) (cons 'c1 c1) (cons 'c0 c0) (cons 'agent agent)) (lambda () (raw-value (conversationLength (raw-value c2)))))) 4)
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 541 (list (cons 'c3 c3) (cons 'c2 c2) (cons 'c1 c1) (cons 'c0 c0) (cons 'agent agent)) (lambda () (raw-value (conversationLength (raw-value c3)))))) 6)
     )
+    ))
   )
 
   (test-case "turnReply text matches the scripted reply for that turn"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 545 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "alpha" "beta"))) (raw-value "x") (raw-value 64)) (list)))))
     (define c0 (thsl-src! "tests/agent-feature-tests.tesl" 546 (list (cons 'agent agent)) (lambda () (raw-value (newConversation (raw-value agent))))))
@@ -561,9 +648,11 @@
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 549 (list (cons 't2 t2) (cons 't1 t1) (cons 'c0 c0) (cons 'agent agent)) (lambda () (raw-value (replyText (raw-value (turnReply (raw-value t1)))))))) "alpha")
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 550 (list (cons 't2 t2) (cons 't1 t1) (cons 'c0 c0) (cons 'agent agent)) (lambda () (raw-value (replyText (raw-value (turnReply (raw-value t2)))))))) "beta")
     )
+    ))
   )
 
   (test-case "conversationJson contains every user prompt across turns"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 554 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "r1" "r2"))) (raw-value "x") (raw-value 64)) (list)))))
     (define c0 (thsl-src! "tests/agent-feature-tests.tesl" 555 (list (cons 'agent agent)) (lambda () (raw-value (newConversation (raw-value agent))))))
@@ -573,9 +662,11 @@
     (check-true (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 559 (list (cons 'j j) (cons 'c2 c2) (cons 'c1 c1) (cons 'c0 c0) (cons 'agent agent)) (lambda () (tesl_import_String_contains (raw-value j) "first ask")))))
     (check-true (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 560 (list (cons 'j j) (cons 'c2 c2) (cons 'c1 c1) (cons 'c0 c0) (cons 'agent agent)) (lambda () (tesl_import_String_contains (raw-value j) "second ask")))))
     )
+    ))
   )
 
   (test-case "conversationJson contains every assistant reply across turns"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 564 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "reply one" "reply two"))) (raw-value "x") (raw-value 64)) (list)))))
     (define c0 (thsl-src! "tests/agent-feature-tests.tesl" 565 (list (cons 'agent agent)) (lambda () (raw-value (newConversation (raw-value agent))))))
@@ -585,9 +676,11 @@
     (check-true (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 569 (list (cons 'j j) (cons 'c2 c2) (cons 'c1 c1) (cons 'c0 c0) (cons 'agent agent)) (lambda () (tesl_import_String_contains (raw-value j) "reply one")))))
     (check-true (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 570 (list (cons 'j j) (cons 'c2 c2) (cons 'c1 c1) (cons 'c0 c0) (cons 'agent agent)) (lambda () (tesl_import_String_contains (raw-value j) "reply two")))))
     )
+    ))
   )
 
   (test-case "history is accumulated, not reset, on the second turn"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 574 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "A" "B"))) (raw-value "x") (raw-value 64)) (list)))))
     (define c0 (thsl-src! "tests/agent-feature-tests.tesl" 575 (list (cons 'agent agent)) (lambda () (raw-value (newConversation (raw-value agent))))))
@@ -595,9 +688,11 @@
     (define c2 (thsl-src! "tests/agent-feature-tests.tesl" 577 (list (cons 'c1 c1) (cons 'c0 c0) (cons 'agent agent)) (lambda () (raw-value (turnConversation (raw-value (converse (raw-value c1) "and me")))))))
     (check-true (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 579 (list (cons 'c2 c2) (cons 'c1 c1) (cons 'c0 c0) (cons 'agent agent)) (lambda () (tesl_import_String_contains (raw-value (conversationJson (raw-value c2))) "keep me")))))
     )
+    ))
   )
 
   (test-case "conversationFrom restores a serialized thread and continues it"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 587 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "Reply one" "Reply two"))) (raw-value "x") (raw-value 64)) (list)))))
     (define conv0 (thsl-src! "tests/agent-feature-tests.tesl" 588 (list (cons 'agent agent)) (lambda () (raw-value (newConversation (raw-value agent))))))
@@ -613,9 +708,11 @@
     (check-true (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 598 (list (cons 'history2 history2) (cons 'conv2 conv2) (cons 'turn2 turn2) (cons 'reloaded reloaded) (cons 'saved saved) (cons 'conv1 conv1) (cons 'conv0 conv0) (cons 'agent agent)) (lambda () (tesl_import_String_contains (raw-value history2) "first question")))))
     (check-true (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 599 (list (cons 'history2 history2) (cons 'conv2 conv2) (cons 'turn2 turn2) (cons 'reloaded reloaded) (cons 'saved saved) (cons 'conv1 conv1) (cons 'conv0 conv0) (cons 'agent agent)) (lambda () (tesl_import_String_contains (raw-value history2) "Reply one")))))
     )
+    ))
   )
 
   (test-case "conversationFrom round-trips the length exactly"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 603 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "r1" "r2"))) (raw-value "x") (raw-value 64)) (list)))))
     (define c0 (thsl-src! "tests/agent-feature-tests.tesl" 604 (list (cons 'agent agent)) (lambda () (raw-value (newConversation (raw-value agent))))))
@@ -625,9 +722,11 @@
     (define reloaded (thsl-src! "tests/agent-feature-tests.tesl" 608 (list (cons 'saved saved) (cons 'c2 c2) (cons 'c1 c1) (cons 'c0 c0) (cons 'agent agent)) (lambda () (raw-value (conversationFrom (raw-value agent) (raw-value saved))))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 609 (list (cons 'reloaded reloaded) (cons 'saved saved) (cons 'c2 c2) (cons 'c1 c1) (cons 'c0 c0) (cons 'agent agent)) (lambda () (raw-value (conversationLength (raw-value reloaded)))))) (raw-value (conversationLength (raw-value c2))))
     )
+    ))
   )
 
   (test-case "conversationFrom preserves the serialized prompts and replies"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 613 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "only reply"))) (raw-value "x") (raw-value 64)) (list)))))
     (define c0 (thsl-src! "tests/agent-feature-tests.tesl" 614 (list (cons 'agent agent)) (lambda () (raw-value (newConversation (raw-value agent))))))
@@ -637,62 +736,78 @@
     (check-true (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 618 (list (cons 'j j) (cons 'reloaded reloaded) (cons 'c1 c1) (cons 'c0 c0) (cons 'agent agent)) (lambda () (tesl_import_String_contains (raw-value j) "only question")))))
     (check-true (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 619 (list (cons 'j j) (cons 'reloaded reloaded) (cons 'c1 c1) (cons 'c0 c0) (cons 'agent agent)) (lambda () (tesl_import_String_contains (raw-value j) "only reply")))))
     )
+    ))
   )
 
   (test-case "conversationFrom on an empty thread yields length 0"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 623 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "x"))) (raw-value "x") (raw-value 32)) (list)))))
     (define empty (thsl-src! "tests/agent-feature-tests.tesl" 624 (list (cons 'agent agent)) (lambda () (raw-value (conversationJson (raw-value (newConversation (raw-value agent))))))))
     (define reloaded (thsl-src! "tests/agent-feature-tests.tesl" 625 (list (cons 'empty empty) (cons 'agent agent)) (lambda () (raw-value (conversationFrom (raw-value agent) (raw-value empty))))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 626 (list (cons 'reloaded reloaded) (cons 'empty empty) (cons 'agent agent)) (lambda () (raw-value (conversationLength (raw-value reloaded)))))) 0)
     )
+    ))
   )
 
   (test-case "capability flows: ask under supportBot"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 635 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "cap ok"))) (raw-value "x") (raw-value 32)) (list)))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 636 (list (cons 'agent agent)) (lambda () (raw-value (ask (raw-value agent) "hi"))))) "cap ok")
     )
+    ))
   )
 
   (test-case "capability flows: askReply under supportBot"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 640 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "cap reply"))) (raw-value "x") (raw-value 32)) (list)))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 641 (list (cons 'agent agent)) (lambda () (raw-value (replyText (raw-value (askReply (raw-value agent) "hi"))))))) "cap reply")
     )
+    ))
   )
 
   (test-case "capability flows: askWith under supportBot"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 645 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "unused"))) (raw-value "x") (raw-value 32)) (list)))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 646 (list (cons 'agent agent)) (lambda () (raw-value (replyText (raw-value (askWith (raw-value agent) "hi" (raw-value (mockProvider (list "byok ok")))))))))) "byok ok")
     )
+    ))
   )
 
   (test-case "capability flows: askFor under supportBot"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 650 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "{\"label\":\"ok\"}"))) (raw-value "x") (raw-value 32)) (list)))))
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 651 (list (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime (raw-value (askFor (raw-value agent) "hi" decodeSentiment 2)) 'label)))) "ok")
     )
+    ))
   )
 
   (test-case "capability flows: converse under supportBot"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 655 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "cap converse"))) (raw-value "x") (raw-value 32)) (list)))))
     (define turn (thsl-src! "tests/agent-feature-tests.tesl" 656 (list (cons 'agent agent)) (lambda () (raw-value (converse (raw-value (newConversation (raw-value agent))) "hi")))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 657 (list (cons 'turn turn) (cons 'agent agent)) (lambda () (raw-value (replyText (raw-value (turnReply (raw-value turn)))))))) "cap converse")
     )
+    ))
   )
 
   (test-case "decodeAs standalone decodes a JSON string to a typed value"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define s (thsl-src! "tests/agent-feature-tests.tesl" 665 (list) (lambda () (decodeSummary "{\"title\":\"direct\",\"score\":9}"))))
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 666 (list (cons 's s)) (lambda () (raw-value (tesl-dot/runtime s 'title)))) "direct")
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 667 (list (cons 's s)) (lambda () (raw-value (tesl-dot/runtime s 'score)))) 9)
     )
+    ))
   )
 
   (test-case "tool loop then a separate structured-output ask compose"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define weatherTool (thsl-src! "tests/agent-feature-tests.tesl" 671 (list) (lambda () (raw-value (tool "get_weather" "weather" "{}" validateWeather dispatchWeather)))))
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 672 (list (cons 'weatherTool weatherTool)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockToolProvider (list (raw-value (toolUseStep "get_weather" "c1" "{\"city\":\"Paris\"}")) (raw-value (textStep "checked"))))) (raw-value "x") (raw-value 256)) (list weatherTool)))))
@@ -701,9 +816,11 @@
     (define s (thsl-src! "tests/agent-feature-tests.tesl" 675 (list (cons 'reply reply) (cons 'agent agent) (cons 'weatherTool weatherTool)) (lambda () (classify "ok"))))
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 676 (list (cons 's s) (cons 'reply reply) (cons 'agent agent) (cons 'weatherTool weatherTool)) (lambda () (raw-value (tesl-dot/runtime s 'label)))) "positive")
     )
+    ))
   )
 
   (test-case "converse reply feeds a downstream structured decode of the same shape"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 680 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "{\"label\":\"happy\"}"))) (raw-value "x") (raw-value 64)) (list)))))
     (define turn (thsl-src! "tests/agent-feature-tests.tesl" 681 (list (cons 'agent agent)) (lambda () (raw-value (converse (raw-value (newConversation (raw-value agent))) "classify mood")))))
@@ -711,14 +828,17 @@
     (define s (thsl-src! "tests/agent-feature-tests.tesl" 683 (list (cons 'txt txt) (cons 'turn turn) (cons 'agent agent)) (lambda () (decodeSentiment txt))))
     (check-equal? (thsl-src! "tests/agent-feature-tests.tesl" 684 (list (cons 's s) (cons 'txt txt) (cons 'turn turn) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime s 'label)))) "happy")
     )
+    ))
   )
 
   (test-case "a listed tool the model never calls leaves the reply unchanged"
+    (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (supportBot)
     (define weatherTool (thsl-src! "tests/agent-feature-tests.tesl" 688 (list) (lambda () (raw-value (tool "get_weather" "weather" "{}" validateWeather dispatchWeather)))))
     (define agent (thsl-src! "tests/agent-feature-tests.tesl" 689 (list (cons 'weatherTool weatherTool)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockToolProvider (list (raw-value (textStep "no call"))))) (raw-value "x") (raw-value 64)) (list weatherTool)))))
     (check-equal? (raw-value (thsl-src! "tests/agent-feature-tests.tesl" 690 (list (cons 'agent agent) (cons 'weatherTool weatherTool)) (lambda () (raw-value (replyText (raw-value (askReply (raw-value agent) "hi"))))))) "no call")
     )
+    ))
   )
 
 )

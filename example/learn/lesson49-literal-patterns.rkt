@@ -54,36 +54,46 @@
 (module+ test
   (require rackunit)
   (test-case "describeInt"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 125 (list) (lambda () (describeInt 0)))) "zero")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 126 (list) (lambda () (describeInt 1)))) "one")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 127 (list) (lambda () (describeInt 2)))) "two")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 128 (list) (lambda () (describeInt 99)))) "many (99)")
+    ))
   )
 
   (test-case "httpStatusText"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 132 (list) (lambda () (httpStatusText 200)))) "OK")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 133 (list) (lambda () (httpStatusText 404)))) "Not Found")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 134 (list) (lambda () (httpStatusText 999)))) "Unknown")
+    ))
   )
 
   (test-case "parseCommand"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 138 (list) (lambda () (parseCommand "help")))) "show help")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 139 (list) (lambda () (parseCommand "version")))) "show version")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 140 (list) (lambda () (parseCommand "deploy")))) "unknown command: deploy")
+    ))
   )
 
   (test-case "classifyChar"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 144 (list) (lambda () (classifyChar "a")))) "vowel")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 145 (list) (lambda () (classifyChar "b")))) "consonant or other")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 146 (list) (lambda () (classifyChar "i")))) "vowel")
+    ))
   )
 
   (test-case "discountForTier"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 150 (list) (lambda () (discountForTier Enterprise "any")))) 40)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 151 (list) (lambda () (discountForTier Gold "any")))) 25)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 152 (list) (lambda () (discountForTier Free "WELCOME10")))) 10)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 153 (list) (lambda () (discountForTier Free "SUMMER20")))) 20)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson49-literal-patterns.tesl" 154 (list) (lambda () (discountForTier Free "INVALID")))) 0)
+    ))
   )
 
 )

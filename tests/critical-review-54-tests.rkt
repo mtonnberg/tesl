@@ -246,6 +246,7 @@
 (module+ test
   (require rackunit)
   (test-case "R54_A: proof chain compilation and runtime correctness"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 104 (list) (lambda () (a01_three_step_chain 6)))) 6)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 105 (list) (lambda () (a01_three_step_chain 4)))) 4)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-54-tests.tesl" 106 (list) (lambda ()
@@ -275,26 +276,32 @@
                           (a04_string_multi_param "hello" "goodbye"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: a04_string_multi_param \"hello\" \"goodbye\""))
+    ))
   )
 
   (test-case "R54_E: establish and Maybe proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 142 (list) (lambda () (e01_establish_direct_use 42)))) 42)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 143 (list) (lambda () (e01_establish_direct_use -5)))) -5)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 145 (list) (lambda () (e02_establish_maybe_case 50)))) 50)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 146 (list) (lambda () (e02_establish_maybe_case 0)))) -1)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 147 (list) (lambda () (e02_establish_maybe_case 101)))) -1)
+    ))
   )
 
   (test-case "R54_F: forgetFact preservation"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 165 (list) (lambda () (f01_forget_recheck_same_value 7)))) 7)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-54-tests.tesl" 166 (list) (lambda ()
                           (f01_forget_recheck_same_value -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: f01_forget_recheck_same_value -1"))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 168 (list) (lambda () (f02_forget_establish_reattach 3)))) 3)
+    ))
   )
 
   (test-case "R54_D: detach/attach proof flows"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 200 (list) (lambda () (d01_triple_decompose_selective 6)))) 6)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-54-tests.tesl" 201 (list) (lambda ()
                           (d01_triple_decompose_selective -1))))])
@@ -314,9 +321,11 @@
                           (d03_andleft_andright_conservative 1001))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: d03_andleft_andright_conservative 1001"))
+    ))
   )
 
   (test-case "R54_G: guard cases"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 238 (list) (lambda () (g01_partial_guard_with_catchall Red 5)))) 1)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 239 (list) (lambda () (g01_partial_guard_with_catchall Red -1)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 240 (list) (lambda () (g01_partial_guard_with_catchall Yellow 0)))) 2)
@@ -327,9 +336,11 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 247 (list) (lambda () (g03_mixed_guards_with_default Nothing 5)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 248 (list) (lambda () (g03_mixed_guards_with_default (raw-value (Something 10)) 5)))) 10)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 249 (list) (lambda () (g03_mixed_guards_with_default (raw-value (Something 3)) 5)))) 5)
+    ))
   )
 
   (test-case "R54_L: lambda with proof params"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 267 (list) (lambda () (l01_lambda_with_proof_param 42)))) 42)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-54-tests.tesl" 268 (list) (lambda ()
                           (l01_lambda_with_proof_param -1))))])
@@ -337,9 +348,11 @@
                 "expected failure: l01_lambda_with_proof_param -1"))
   (define g (thsl-src! "tests/critical-review-54-tests.tesl" 270 (list) (lambda () (l02_lambda_captures_proof 5))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 271 (list (cons 'g g)) (lambda () (l03_lambda_partial_apply g 3)))) 8)
+    ))
   )
 
   (test-case "R54_N: nested type access"
+    (call-with-fresh-memory-db '() (lambda ()
   (define rawContent (thsl-src! "tests/critical-review-54-tests.tesl" 301 (list) (lambda () "hello")))
   (define tesl-checked-42 (checkNonEmpty rawContent))
   (when (check-fail? tesl-checked-42)
@@ -356,9 +369,11 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 310 (list (cons 'rawEmpty rawEmpty) (cons 'outer outer) (cons 'inner inner) (cons 'safeContent safeContent) (cons 'rawContent rawContent)) (lambda () (n02_three_level_case Nothing)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 311 (list (cons 'rawEmpty rawEmpty) (cons 'outer outer) (cons 'inner inner) (cons 'safeContent safeContent) (cons 'rawContent rawContent)) (lambda () (n02_three_level_case (raw-value (Something Nothing)))))) -1)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 312 (list (cons 'rawEmpty rawEmpty) (cons 'outer outer) (cons 'inner inner) (cons 'safeContent safeContent) (cons 'rawContent rawContent)) (lambda () (n02_three_level_case (raw-value (Something (raw-value (Something 42)))))))) 42)
+    ))
   )
 
   (test-case "R54_P: stdlib proof-total functions"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 330 (list) (lambda () (p01_safe_divide 10 2)))) 5)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 331 (list) (lambda () (p01_safe_divide 7 3)))) 2)
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-54-tests.tesl" 332 (list) (lambda ()
@@ -367,9 +382,11 @@
                 "expected failure: p01_safe_divide 5 0"))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 334 (list) (lambda () (p03_filter_check_creates_forall (list 1 2 -3 4 -5))))) 3)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 335 (list) (lambda () (p03_filter_check_creates_forall (list -1 -2 -3))))) 0)
+    ))
   )
 
   (test-case "R54_C: case and pattern matching"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 363 (list) (lambda () (c01_proof_flows_through_some_arm Nothing)))) 0)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 364 (list) (lambda () (c01_proof_flows_through_some_arm (raw-value (Something 42)))))) 42)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 366 (list) (lambda () (c02_proof_after_three_way_case 5)))) "positive")
@@ -379,6 +396,7 @@
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 371 (list) (lambda () (c03_literal_pattern_with_catchall 404)))) "not found")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 372 (list) (lambda () (c03_literal_pattern_with_catchall 500)))) "server error")
   (check-equal? (raw-value (thsl-src! "tests/critical-review-54-tests.tesl" 373 (list) (lambda () (c03_literal_pattern_with_catchall 301)))) "other")
+    ))
   )
 
 )

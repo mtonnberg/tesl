@@ -44,6 +44,7 @@
 (module+ test
   (require rackunit)
   (test-case "isValidPort accepts valid ports"
+    (call-with-fresh-memory-db '() (lambda ()
   (define port1 (thsl-src! "example/learn/lesson05-intro-to-proofs.tesl" 112 (list) (lambda () 1)))
   (define tesl-checked-0 (isValidPort port1))
   (when (check-fail? tesl-checked-0)
@@ -65,9 +66,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let x4: ~a" (check-fail-message tesl-checked-3)))
   (define x4 tesl-checked-3)
   (check-equal? (thsl-src! "example/learn/lesson05-intro-to-proofs.tesl" 120 (list (cons 'x4 x4) (cons 'port4 port4) (cons 'x3 x3) (cons 'port3 port3) (cons 'x2 x2) (cons 'port2 port2) (cons 'x1 x1) (cons 'port1 port1)) (lambda () 1)) 1)
+    ))
   )
 
   (test-case "isValidPort result carries ValidPort proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (define port1 (thsl-src! "example/learn/lesson05-intro-to-proofs.tesl" 124 (list) (lambda () 80)))
   (define tesl-checked-4 (isValidPort port1))
   (when (check-fail? tesl-checked-4)
@@ -80,9 +83,11 @@
   (define p2 tesl-checked-5)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson05-intro-to-proofs.tesl" 128 (list (cons 'p2 p2) (cons 'port2 port2) (cons 'p1 p1) (cons 'port1 port1)) (lambda () (listenOnPort p1)))) "listening on port 80")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson05-intro-to-proofs.tesl" 129 (list (cons 'p2 p2) (cons 'port2 port2) (cons 'p1 p1) (cons 'port1 port1)) (lambda () (listenOnPort p2)))) "listening on port 8080")
+    ))
   )
 
   (test-case "isValidPort rejects invalid ports"
+    (call-with-fresh-memory-db '() (lambda ()
   (define port0 (thsl-src! "example/learn/lesson05-intro-to-proofs.tesl" 133 (list) (lambda () 0)))
   (define port65536 (thsl-src! "example/learn/lesson05-intro-to-proofs.tesl" 134 (list (cons 'port0 port0)) (lambda () 65536)))
   (define portNeg1 (thsl-src! "example/learn/lesson05-intro-to-proofs.tesl" 135 (list (cons 'port65536 port65536) (cons 'port0 port0)) (lambda () -1)))
@@ -98,9 +103,11 @@
                           (isValidPort portNeg1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check isValidPort portNeg1"))
+    ))
   )
 
   (test-case "isPositive accepts positives"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n1 (thsl-src! "example/learn/lesson05-intro-to-proofs.tesl" 142 (list) (lambda () 1)))
   (define tesl-checked-6 (isPositive n1))
   (when (check-fail? tesl-checked-6)
@@ -112,9 +119,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let x2: ~a" (check-fail-message tesl-checked-7)))
   (define x2 tesl-checked-7)
   (check-equal? (thsl-src! "example/learn/lesson05-intro-to-proofs.tesl" 146 (list (cons 'x2 x2) (cons 'n2 n2) (cons 'x1 x1) (cons 'n1 n1)) (lambda () 1)) 1)
+    ))
   )
 
   (test-case "isPositive rejects non-positives"
+    (call-with-fresh-memory-db '() (lambda ()
   (define zero (thsl-src! "example/learn/lesson05-intro-to-proofs.tesl" 150 (list) (lambda () 0)))
   (define negFive (thsl-src! "example/learn/lesson05-intro-to-proofs.tesl" 151 (list (cons 'zero zero)) (lambda () -5)))
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson05-intro-to-proofs.tesl" 152 (list (cons 'negFive negFive) (cons 'zero zero)) (lambda ()
@@ -125,6 +134,7 @@
                           (isPositive negFive))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check isPositive negFive"))
+    ))
   )
 
 )

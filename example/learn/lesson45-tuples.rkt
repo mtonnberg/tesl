@@ -94,81 +94,107 @@
 (module+ test
   (require rackunit)
   (test-case "makePoint / pointX / pointY"
+    (call-with-fresh-memory-db '() (lambda ()
   (define p (thsl-src! "example/learn/lesson45-tuples.tesl" 194 (list) (lambda () (makePoint 3 4))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 195 (list (cons 'p p)) (lambda () (pointX p)))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 196 (list (cons 'p p)) (lambda () (pointY p)))) 4)
+    ))
   )
 
   (test-case "swap reverses a 2-tuple"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "example/learn/lesson45-tuples.tesl" 200 (list) (lambda () (raw-value (Tuple2 10 20)))))
   (define s (thsl-src! "example/learn/lesson45-tuples.tesl" 201 (list (cons 't t)) (lambda () (swap t))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 202 (list (cons 's s) (cons 't t)) (lambda () (raw-value (tesl_import_Tuple2_first (raw-value s)))))) 20)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 203 (list (cons 's s) (cons 't t)) (lambda () (raw-value (tesl_import_Tuple2_second (raw-value s)))))) 10)
+    ))
   )
 
   (test-case "addPoints adds component-wise"
+    (call-with-fresh-memory-db '() (lambda ()
   (define p (thsl-src! "example/learn/lesson45-tuples.tesl" 207 (list) (lambda () (makePoint 1 2))))
   (define q (thsl-src! "example/learn/lesson45-tuples.tesl" 208 (list (cons 'p p)) (lambda () (makePoint 3 4))))
   (define r (thsl-src! "example/learn/lesson45-tuples.tesl" 209 (list (cons 'q q) (cons 'p p)) (lambda () (addPoints p q))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 210 (list (cons 'r r) (cons 'q q) (cons 'p p)) (lambda () (pointX r)))) 4)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 211 (list (cons 'r r) (cons 'q q) (cons 'p p)) (lambda () (pointY r)))) 6)
+    ))
   )
 
   (test-case "describePoint formats correctly"
+    (call-with-fresh-memory-db '() (lambda ()
   (define p (thsl-src! "example/learn/lesson45-tuples.tesl" 215 (list) (lambda () (makePoint 7 9))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 216 (list (cons 'p p)) (lambda () (describePoint p)))) "(7, 9)")
+    ))
   )
 
   (test-case "makeRGB / accessors"
+    (call-with-fresh-memory-db '() (lambda ()
   (define c (thsl-src! "example/learn/lesson45-tuples.tesl" 220 (list) (lambda () (makeRGB 255 128 0))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 221 (list (cons 'c c)) (lambda () (rgbRed c)))) 255)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 222 (list (cons 'c c)) (lambda () (rgbGreen c)))) 128)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 223 (list (cons 'c c)) (lambda () (rgbBlue c)))) 0)
+    ))
   )
 
   (test-case "describeRGB formats correctly"
+    (call-with-fresh-memory-db '() (lambda ()
   (define c (thsl-src! "example/learn/lesson45-tuples.tesl" 227 (list) (lambda () (makeRGB 0 128 255))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 228 (list (cons 'c c)) (lambda () (describeRGB c)))) "rgb(0, 128, 255)")
+    ))
   )
 
   (test-case "taggedLengths sums label and value lengths"
+    (call-with-fresh-memory-db '() (lambda ()
   (define labels (thsl-src! "example/learn/lesson45-tuples.tesl" 232 (list) (lambda () (list "key" "id"))))
   (define values (thsl-src! "example/learn/lesson45-tuples.tesl" 233 (list (cons 'labels labels)) (lambda () (list "hello" "42"))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 234 (list (cons 'values values) (cons 'labels labels)) (lambda () (taggedLengths labels values)))) (list 8 4))
+    ))
   )
 
   (test-case "pairFirsts extracts first components"
+    (call-with-fresh-memory-db '() (lambda ()
   (define xs (thsl-src! "example/learn/lesson45-tuples.tesl" 238 (list) (lambda () (list 1 2 3))))
   (define ys (thsl-src! "example/learn/lesson45-tuples.tesl" 239 (list (cons 'xs xs)) (lambda () (list 10 20 30))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 240 (list (cons 'ys ys) (cons 'xs xs)) (lambda () (pairFirsts xs ys)))) (list 1 2 3))
+    ))
   )
 
   (test-case "classifyPair: equal"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "example/learn/lesson45-tuples.tesl" 244 (list) (lambda () (raw-value (Tuple2 5 5)))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 245 (list (cons 't t)) (lambda () (classifyPair t)))) "equal")
+    ))
   )
 
   (test-case "classifyPair: ascending"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "example/learn/lesson45-tuples.tesl" 249 (list) (lambda () (raw-value (Tuple2 3 7)))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 250 (list (cons 't t)) (lambda () (classifyPair t)))) "ascending")
+    ))
   )
 
   (test-case "classifyPair: descending"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "example/learn/lesson45-tuples.tesl" 254 (list) (lambda () (raw-value (Tuple2 9 2)))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 255 (list (cons 't t)) (lambda () (classifyPair t)))) "descending")
+    ))
   )
 
   (test-case "Tuple2.first and Tuple2.second on literal tuples"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "example/learn/lesson45-tuples.tesl" 259 (list) (lambda () (raw-value (Tuple2 42 99)))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 260 (list (cons 't t)) (lambda () (raw-value (tesl_import_Tuple2_first (raw-value t)))))) 42)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 261 (list (cons 't t)) (lambda () (raw-value (tesl_import_Tuple2_second (raw-value t)))))) 99)
+    ))
   )
 
   (test-case "Tuple3 accessors"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "example/learn/lesson45-tuples.tesl" 265 (list) (lambda () (raw-value (Tuple3 1 2 3)))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 266 (list (cons 't t)) (lambda () (raw-value (tesl_import_Tuple3_first (raw-value t)))))) 1)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 267 (list (cons 't t)) (lambda () (raw-value (tesl_import_Tuple3_second (raw-value t)))))) 2)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson45-tuples.tesl" 268 (list (cons 't t)) (lambda () (raw-value (tesl_import_Tuple3_third (raw-value t)))))) 3)
+    ))
   )
 
 )

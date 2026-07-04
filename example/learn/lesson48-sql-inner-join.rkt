@@ -79,6 +79,7 @@
 (module+ test
   (require rackunit)
   (test-case "innerJoin filters out orders with no matching customer"
+    (call-with-fresh-memory-db (list JoinDatabase) (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-0 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 159 (list) (lambda () (insert-one! Customer (hash 'id "c1" 'name "Alice" 'country "SE")))))
     (define tesl-ignored-1 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 160 (list) (lambda () (insert-one! Order (hash 'id "o1" 'customerId "c1" 'amount 50 'status "new")))))
@@ -86,9 +87,11 @@
     (define results (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 164 (list) (lambda () (findOrderWithCustomer "c1"))))
     (check-not-equal? (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 165 (list (cons 'results results)) (lambda () results)) (list))
     )
+    ))
   )
 
   (test-case "innerJoin returns only orders for the given customer"
+    (call-with-fresh-memory-db (list JoinDatabase) (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-3 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 170 (list) (lambda () (insert-one! Customer (hash 'id "c2" 'name "Bob" 'country "US")))))
     (define tesl-ignored-4 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 171 (list) (lambda () (insert-one! Customer (hash 'id "c3" 'name "Carol" 'country "UK")))))
@@ -97,9 +100,11 @@
     (define results (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 175 (list) (lambda () (findOrderWithCustomer "c2"))))
     (check-not-equal? (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 176 (list (cons 'results results)) (lambda () results)) (list))
     )
+    ))
   )
 
   (test-case "cheapOrdersByCountry returns results when orders with customers exist"
+    (call-with-fresh-memory-db (list JoinDatabase) (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-7 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 181 (list) (lambda () (insert-one! Customer (hash 'id "c4" 'name "Dave" 'country "DE")))))
     (define tesl-ignored-8 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 182 (list) (lambda () (insert-one! Order (hash 'id "o5" 'customerId "c4" 'amount 10 'status "new")))))
@@ -107,9 +112,11 @@
     (define results (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 185 (list) (lambda () (cheapOrdersByCountry 5))))
     (check-not-equal? (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 186 (list (cons 'results results)) (lambda () results)) (list))
     )
+    ))
   )
 
   (test-case "findOrderItemsByOrderId uses innerJoin to filter items"
+    (call-with-fresh-memory-db (list JoinDatabase) (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-10 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 191 (list) (lambda () (insert-one! Customer (hash 'id "c5" 'name "Eve" 'country "FR")))))
     (define tesl-ignored-11 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 192 (list) (lambda () (insert-one! Order (hash 'id "o7" 'customerId "c5" 'amount 75 'status "processing")))))
@@ -118,14 +125,17 @@
     (define items (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 197 (list) (lambda () (findOrderItemsByOrderId "o7"))))
     (check-not-equal? (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 198 (list (cons 'items items)) (lambda () items)) (list))
     )
+    ))
   )
 
   (test-case "innerJoin with no matching customer returns empty list"
+    (call-with-fresh-memory-db (list JoinDatabase) (lambda ()
     (with-capabilities (dbRead dbWrite)
     (define tesl-ignored-14 (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 204 (list) (lambda () (insert-one! Order (hash 'id "orphan1" 'customerId "missing-customer" 'amount 999 'status "new")))))
     (define results (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 206 (list) (lambda () (findOrderWithCustomer "missing-customer"))))
     (check-equal? (raw-value (thsl-src! "example/learn/lesson48-sql-inner-join.tesl" 207 (list (cons 'results results)) (lambda () results))) (list))
     )
+    ))
   )
 
 )

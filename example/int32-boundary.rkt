@@ -38,19 +38,27 @@
 (module+ test
   (require rackunit)
   (test-case "in-range value round-trips unchanged"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/int32-boundary.tesl" 34 (list) (lambda () (roundTrip 1000 (- 0 1))))) 1000)
+    ))
   )
 
   (test-case "the int32 max boundary is in range"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/int32-boundary.tesl" 38 (list) (lambda () (roundTrip 2147483647 (- 0 1))))) 2147483647)
+    ))
   )
 
   (test-case "a value above the int32 max is out of range"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/int32-boundary.tesl" 42 (list) (lambda () (roundTrip 2147483648 (- 0 1))))) (- 0 1))
+    ))
   )
 
   (test-case "a large Int (> 2^53) is out of int32 range"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/int32-boundary.tesl" 46 (list) (lambda () (roundTrip 9007199254740993 (- 0 1))))) (- 0 1))
+    ))
   )
 
 )

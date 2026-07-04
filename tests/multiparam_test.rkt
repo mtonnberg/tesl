@@ -33,6 +33,7 @@
 (module+ test
   (require rackunit)
   (test-case "full round-trip: check then require"
+    (call-with-fresh-memory-db '() (lambda ()
   (define lo (thsl-src! "tests/multiparam_test.tesl" 18 (list) (lambda () 1)))
   (define hi (thsl-src! "tests/multiparam_test.tesl" 19 (list (cons 'lo lo)) (lambda () 10)))
   (define n (thsl-src! "tests/multiparam_test.tesl" 20 (list (cons 'hi hi) (cons 'lo lo)) (lambda () 5)))
@@ -41,6 +42,7 @@
     (raise-user-error 'tesl-test "unexpected failure in let x: ~a" (check-fail-message tesl-checked-0)))
   (define x tesl-checked-0)
   (check-equal? (raw-value (thsl-src! "tests/multiparam_test.tesl" 22 (list (cons 'x x) (cons 'n n) (cons 'hi hi) (cons 'lo lo)) (lambda () (requiresInBounds lo hi x)))) "5 is in [1, 10]")
+    ))
   )
 
 )

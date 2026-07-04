@@ -35,6 +35,7 @@
 (module+ test
   (require rackunit)
   (test-case "checkInBounds valid"
+    (call-with-fresh-memory-db '() (lambda ()
   (define n1 (thsl-src! "example/learn/lesson07-home.tesl" 85 (list) (lambda () 0)))
   (define tesl-checked-0 (checkInBounds n1))
   (when (check-fail? tesl-checked-0)
@@ -51,9 +52,11 @@
     (raise-user-error 'tesl-test "unexpected failure in let r3: ~a" (check-fail-message tesl-checked-2)))
   (define r3 tesl-checked-2)
   (check-equal? (thsl-src! "example/learn/lesson07-home.tesl" 91 (list (cons 'r3 r3) (cons 'n3 n3) (cons 'r2 r2) (cons 'n2 n2) (cons 'r1 r1) (cons 'n1 n1)) (lambda () 1)) 1)
+    ))
   )
 
   (test-case "checkInBounds rejects out-of-range"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson07-home.tesl" 95 (list) (lambda ()
                           (checkInBounds -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
@@ -62,9 +65,11 @@
                           (checkInBounds 1001))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkInBounds 1001"))
+    ))
   )
 
   (test-case "sanitize valid"
+    (call-with-fresh-memory-db '() (lambda ()
   (define s1 (thsl-src! "example/learn/lesson07-home.tesl" 100 (list) (lambda () "")))
   (define tesl-checked-3 (sanitize s1))
   (when (check-fail? tesl-checked-3)
@@ -76,13 +81,16 @@
     (raise-user-error 'tesl-test "unexpected failure in let r2: ~a" (check-fail-message tesl-checked-4)))
   (define r2 tesl-checked-4)
   (check-equal? (thsl-src! "example/learn/lesson07-home.tesl" 104 (list (cons 'r2 r2) (cons 's2 s2) (cons 'r1 r1) (cons 's1 s1)) (lambda () 1)) 1)
+    ))
   )
 
   (test-case "sanitize rejects too-long"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson07-home.tesl" 108 (list) (lambda ()
                           (sanitize "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check sanitize \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""))
+    ))
   )
 
 )

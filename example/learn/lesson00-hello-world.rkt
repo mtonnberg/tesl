@@ -31,14 +31,18 @@
 (module+ test
   (require rackunit)
   (test-case "greet"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson00-hello-world.tesl" 32 (list) (lambda () (greet "World")))) "Hello, World!")
   (check-equal? (raw-value (thsl-src! "example/learn/lesson00-hello-world.tesl" 33 (list) (lambda () (greet "Tesl")))) "Hello, Tesl!")
+    ))
   )
 
   (test-case "add"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "example/learn/lesson00-hello-world.tesl" 37 (list) (lambda () (add 1 2)))) 3)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson00-hello-world.tesl" 38 (list) (lambda () (add 0 0)))) 0)
   (check-equal? (raw-value (thsl-src! "example/learn/lesson00-hello-world.tesl" 39 (list) (lambda () (add 10 -3)))) 7)
+    ))
   )
 
 )

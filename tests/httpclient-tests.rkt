@@ -119,52 +119,70 @@
 (module+ test
   (require rackunit)
   (test-case "getStatusClass for success codes"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 142 (list) (lambda () (getStatusClass 200)))) "success")
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 143 (list) (lambda () (getStatusClass 201)))) "success")
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 144 (list) (lambda () (getStatusClass 204)))) "success")
+    ))
   )
 
   (test-case "getStatusClass for client error codes"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 148 (list) (lambda () (getStatusClass 400)))) "client-error")
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 149 (list) (lambda () (getStatusClass 404)))) "client-error")
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 150 (list) (lambda () (getStatusClass 422)))) "client-error")
+    ))
   )
 
   (test-case "getStatusClass for server error codes"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 154 (list) (lambda () (getStatusClass 500)))) "server-error")
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 155 (list) (lambda () (getStatusClass 503)))) "server-error")
+    ))
   )
 
   (test-case "getStatusClass for other codes"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 159 (list) (lambda () (getStatusClass 100)))) "other")
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 160 (list) (lambda () (getStatusClass 301)))) "other")
+    ))
   )
 
   (test-case "buildAuthHeader creates correct tuple"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 164 (list) (lambda () (raw-value (tesl_import_Tuple2_first (raw-value (buildAuthHeader "Bearer abc"))))))) "Authorization")
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 165 (list) (lambda () (raw-value (tesl_import_Tuple2_second (raw-value (buildAuthHeader "Bearer abc"))))))) "Bearer abc")
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 166 (list) (lambda () (raw-value (tesl_import_Tuple2_second (raw-value (buildAuthHeader ""))))))) "")
+    ))
   )
 
   (test-case "extractFirstHeader with empty list returns Nothing"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 170 (list) (lambda () (extractFirstHeader (list))))) Nothing)
+    ))
   )
 
   (test-case "extractFirstHeader with non-empty list returns Something"
+    (call-with-fresh-memory-db '() (lambda ()
   (define headers (thsl-src! "tests/httpclient-tests.tesl" 174 (list) (lambda () (list (Tuple2 "Content-Type" "application/json")))))
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 175 (list (cons 'headers headers)) (lambda () (extractFirstHeader headers)))) (raw-value (Something "Content-Type")))
+    ))
   )
 
   (test-case "hasHeader returns correct results"
+    (call-with-fresh-memory-db '() (lambda ()
   (define headers (thsl-src! "tests/httpclient-tests.tesl" 179 (list) (lambda () (list (Tuple2 "Authorization" "Bearer token") (Tuple2 "Accept" "application/json")))))
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 180 (list (cons 'headers headers)) (lambda () (hasHeader "Authorization" headers)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 181 (list (cons 'headers headers)) (lambda () (hasHeader "Accept" headers)))) #t)
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 182 (list (cons 'headers headers)) (lambda () (hasHeader "X-Custom" headers)))) #f)
+    ))
   )
 
   (test-case "hasHeader with empty headers is always False"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 186 (list) (lambda () (hasHeader "Authorization" (list))))) #f)
   (check-equal? (raw-value (thsl-src! "tests/httpclient-tests.tesl" 187 (list) (lambda () (hasHeader "Content-Type" (list))))) #f)
+    ))
   )
 
 )

@@ -401,641 +401,915 @@
 (module+ test
   (require rackunit)
   (test-case "T1a: filter of all-negative list yields empty list"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 121 (list) (lambda () (vacuousForAll)))) 0)
+    ))
   )
 
   (test-case "T1b: filter of empty input yields empty ForAll list"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/critical-review-26-tests.tesl" 125 (list) (lambda () (filterAlwaysFails (list)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 126 (list (cons 'result result)) (lambda () (raw-value (tesl_import_List_length (raw-value result)))))) 0)
+    ))
   )
 
   (test-case "T1c: filter of all-positive list yields full list"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/critical-review-26-tests.tesl" 130 (list) (lambda () (filterAlwaysFails (list 1 2 3)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 131 (list (cons 'result result)) (lambda () (raw-value (tesl_import_List_length (raw-value result)))))) 3)
+    ))
   )
 
   (test-case "T1d: mixed list: only positives pass"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/critical-review-26-tests.tesl" 135 (list) (lambda () (filterAlwaysFails (list 1 -1 2 -2 3)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 136 (list (cons 'result result)) (lambda () (raw-value (tesl_import_List_length (raw-value result)))))) 3)
+    ))
   )
 
   (test-case "T2a: both values positive \226\128\148 independent proofs"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 163 (list) (lambda () (proofFromA 3 5)))) 16)
+    ))
   )
 
   (test-case "T2b: first value fails \226\128\148 check propagates failure"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 167 (list) (lambda ()
                           (proofFromA 0 5))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: proofFromA 0 5"))
+    ))
   )
 
   (test-case "T2c: second value fails \226\128\148 check propagates failure"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 171 (list) (lambda ()
                           (proofFromA 3 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: proofFromA 3 0"))
+    ))
   )
 
   (test-case "T2d: both fail"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 175 (list) (lambda ()
                           (proofFromA -1 -2))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: proofFromA -1 -2"))
+    ))
   )
 
   (test-case "T2e: zero is not positive"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 179 (list) (lambda ()
                           (proofFromA 0 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: proofFromA 0 0"))
+    ))
   )
 
   (test-case "T3a: all non-negative passes"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 209 (list) (lambda () (allNonNegPasses (list 0 1 2 3))))) #t)
+    ))
   )
 
   (test-case "T3b: one negative causes whole batch to fail"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 213 (list) (lambda () (allNonNegPasses (list 1 2 -1 4))))) #f)
+    ))
   )
 
   (test-case "T3c: empty list always passes allCheck"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 217 (list) (lambda () (allNonNegPasses (list))))) #t)
+    ))
   )
 
   (test-case "T3d: single failing element returns Nothing"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 221 (list) (lambda () (allNonNegPasses (list -1))))) #f)
+    ))
   )
 
   (test-case "T3e: cardinality preserved \226\128\148 allCheck on [2,4,6] returns 3 elements"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 225 (list) (lambda () (allNonNegCount (list 2 4 6))))) 3)
+    ))
   )
 
   (test-case "T4a: forgetFact then re-validate positive number"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 249 (list) (lambda () (forgetAndCheck 5)))) 10)
+    ))
   )
 
   (test-case "T4b: forgetFact then re-validate: fails for non-positive"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 253 (list) (lambda ()
                           (forgetAndCheck 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: forgetAndCheck 0"))
+    ))
   )
 
   (test-case "T4c: forgetFact returns same value (not zero/default)"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 257 (list) (lambda () (forgetAndCheck 7)))) 14)
+    ))
   )
 
   (test-case "T5a: literal"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 281 (list) (lambda () (evalExpr (Lit 42))))) 42)
+    ))
   )
 
   (test-case "T5b: add"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 285 (list) (lambda () (evalExpr (Add (Lit 3) (Lit 4)))))) 7)
+    ))
   )
 
   (test-case "T5c: double negate"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 289 (list) (lambda () (evalExpr (Negate (Negate (Lit 5))))))) 5)
+    ))
   )
 
   (test-case "T5d: (2 + 3) * (4 - 1)"
+    (call-with-fresh-memory-db '() (lambda ()
   (define e (thsl-src! "tests/critical-review-26-tests.tesl" 293 (list) (lambda () (raw-value (Mul (Add (Lit 2) (Lit 3)) (Sub (Lit 4) (Lit 1)))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 294 (list (cons 'e e)) (lambda () (evalExpr e)))) 15)
+    ))
   )
 
   (test-case "T5e: deeply nested: ((1+2)*3 - (4-5))"
+    (call-with-fresh-memory-db '() (lambda ()
   (define inner (thsl-src! "tests/critical-review-26-tests.tesl" 298 (list) (lambda () (raw-value (Sub (Mul (Add (Lit 1) (Lit 2)) (Lit 3)) (Sub (Lit 4) (Lit 5)))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 299 (list (cons 'inner inner)) (lambda () (evalExpr inner)))) 10)
+    ))
   )
 
   (test-case "T5f: negate of add"
+    (call-with-fresh-memory-db '() (lambda ()
   (define e (thsl-src! "tests/critical-review-26-tests.tesl" 303 (list) (lambda () (raw-value (Negate (Add (Lit 10) (Lit 5)))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 304 (list (cons 'e e)) (lambda () (evalExpr e)))) -15)
+    ))
   )
 
   (test-case "T5g: multiply by zero short-circuits to zero"
+    (call-with-fresh-memory-db '() (lambda ()
   (define e (thsl-src! "tests/critical-review-26-tests.tesl" 308 (list) (lambda () (raw-value (Mul (Lit 0) (Add (Lit 100) (Lit 200)))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 309 (list (cons 'e e)) (lambda () (evalExpr e)))) 0)
+    ))
   )
 
   (test-case "T6a: MyInt ordering: 5 > 3"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 343 (list) (lambda () (myIntGt (makeMyInt 5) (makeMyInt 3))))) #t)
+    ))
   )
 
   (test-case "T6b: MyInt ordering: 3 not > 5"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 347 (list) (lambda () (myIntGt (makeMyInt 3) (makeMyInt 5))))) #f)
+    ))
   )
 
   (test-case "T6c: MyInt ordering: equal"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 351 (list) (lambda () (myIntGt (makeMyInt 4) (makeMyInt 4))))) #f)
+    ))
   )
 
   (test-case "T6d: median of three MyInt values"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 355 (list) (lambda () (myIntSort (makeMyInt 1) (makeMyInt 2) (makeMyInt 3))))) (makeMyInt 2))
+    ))
   )
 
   (test-case "T6e: median with reverse order"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 359 (list) (lambda () (myIntSort (makeMyInt 3) (makeMyInt 2) (makeMyInt 1))))) (makeMyInt 3))
+    ))
   )
 
   (test-case "T7a: 42 passes all four checks"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 423 (list) (lambda () (useAll4 42)))) "ok: 42")
+    ))
   )
 
   (test-case "T7b: 0 fails FactA (not > 0)"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 427 (list) (lambda ()
                           (useAll4 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: useAll4 0"))
+    ))
   )
 
   (test-case "T7c: 100 fails FactB (not < 100)"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 431 (list) (lambda ()
                           (useAll4 100))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: useAll4 100"))
+    ))
   )
 
   (test-case "T7d: 13 fails FactC (unlucky)"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 435 (list) (lambda ()
                           (useAll4 13))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: useAll4 13"))
+    ))
   )
 
   (test-case "T7e: 3 fails FactD (not even)"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 439 (list) (lambda ()
                           (useAll4 3))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: useAll4 3"))
+    ))
   )
 
   (test-case "T7f: 2 passes all four checks"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 443 (list) (lambda () (useAll4 2)))) "ok: 2")
+    ))
   )
 
   (test-case "T8a: map preserves length"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 459 (list) (lambda () (mapDoesNotProve (list 1 2 3))))) 3)
+    ))
   )
 
   (test-case "T8b: map on empty list"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 463 (list) (lambda () (mapDoesNotProve (list))))) 0)
+    ))
   )
 
   (test-case "T8c: map doubles each element"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/critical-review-26-tests.tesl" 467 (list) (lambda () (doubleList (list 1 2 3)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 468 (list (cons 'result result)) (lambda () (raw-value (tesl_import_List_length (raw-value result)))))) 3)
+    ))
   )
 
   (test-case "T8d: map on negative numbers"
+    (call-with-fresh-memory-db '() (lambda ()
   (define result (thsl-src! "tests/critical-review-26-tests.tesl" 472 (list) (lambda () (doubleList (list -1 -2 -3)))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 473 (list (cons 'result result)) (lambda () (raw-value (tesl_import_List_length (raw-value result)))))) 3)
+    ))
   )
 
   (test-case "T9a: partial application: addThree 5 10 1 = 16"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 490 (list) (lambda () (addThreePartial 5)))) 16)
+    ))
   )
 
   (test-case "T9b: partial application: addThree 0 10 1 = 11"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 494 (list) (lambda () (addThreePartial 0)))) 11)
+    ))
   )
 
   (test-case "T9c: partial application: addThree -5 10 1 = 6"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 498 (list) (lambda () (addThreePartial -5)))) 6)
+    ))
   )
 
   (test-case "T10a: zero is neither positive nor negative"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 515 (list) (lambda () (intEdge 0)))) 0)
+    ))
   )
 
   (test-case "T10b: 1 is positive"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 519 (list) (lambda () (intEdge 1)))) 1)
+    ))
   )
 
   (test-case "T10c: -1 is negative"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 523 (list) (lambda () (intEdge -1)))) -1)
+    ))
   )
 
   (test-case "T10d: very large positive number"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 527 (list) (lambda () (intEdge 999999999)))) 1)
+    ))
   )
 
   (test-case "T10e: very large negative number"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 531 (list) (lambda () (intEdge -999999999)))) -1)
+    ))
   )
 
   (test-case "T10f: min representable positive"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 535 (list) (lambda () (intEdge 1)))) 1)
+    ))
   )
 
   (test-case "T11a: interpolation unwraps proof-carrying string"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 559 (list) (lambda () (describeViaCheck "Alice")))) "Hello, Alice!")
+    ))
   )
 
   (test-case "T11b: interpolation with multi-word name"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 563 (list) (lambda () (describeViaCheck "Bob Smith")))) "Hello, Bob Smith!")
+    ))
   )
 
   (test-case "T11c: min-length name"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 567 (list) (lambda () (describeViaCheck "AB")))) "Hello, AB!")
+    ))
   )
 
   (test-case "T11d: too-short name fails check"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 571 (list) (lambda ()
                           (describeViaCheck "X"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: describeViaCheck \"X\""))
+    ))
   )
 
   (test-case "T12a: Active"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 590 (list) (lambda () (describeStatus3 Active)))) "active")
+    ))
   )
 
   (test-case "T12b: Inactive"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 594 (list) (lambda () (describeStatus3 Inactive)))) "inactive")
+    ))
   )
 
   (test-case "T12c: Suspended with reason"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 598 (list) (lambda () (describeStatus3 (Suspended "policy violation"))))) "suspended: policy violation")
+    ))
   )
 
   (test-case "T12d: Suspended with empty reason"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 602 (list) (lambda () (describeStatus3 (Suspended ""))))) "suspended: ")
+    ))
   )
 
   (test-case "T13a: all non-negative passes"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 617 (list) (lambda () (strictBatch (list 0 1 2 100))))) 1)
+    ))
   )
 
   (test-case "T13b: one negative fails the batch"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 621 (list) (lambda () (strictBatch (list 1 2 -1 4))))) -1)
+    ))
   )
 
   (test-case "T13c: single -1 fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 625 (list) (lambda () (strictBatch (list -1))))) -1)
+    ))
   )
 
   (test-case "T13d: single 0 passes"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 629 (list) (lambda () (strictBatch (list 0))))) 1)
+    ))
   )
 
   (test-case "T13e: empty list passes vacuously"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 633 (list) (lambda () (strictBatch (list))))) 1)
+    ))
   )
 
   (test-case "T13f: last element negative kills the batch"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 637 (list) (lambda () (strictBatch (list 1 2 3 4 -1))))) -1)
+    ))
   )
 
   (test-case "T14a: positive float"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 651 (list) (lambda () (floatEdge 1.)))) "positive")
+    ))
   )
 
   (test-case "T14b: zero is not positive"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 655 (list) (lambda () (floatEdge 0.)))) "non-positive")
+    ))
   )
 
   (test-case "T14c: negative float is not positive"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 659 (list) (lambda () (floatEdge -1.)))) "non-positive")
+    ))
   )
 
   (test-case "T14d: very small positive float"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 663 (list) (lambda () (floatEdge 0.0001)))) "positive")
+    ))
   )
 
   (test-case "T14e: Float.sqrt of 0 is 0 (non-positive)"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 667 (list) (lambda () (floatEdge (raw-value (tesl_import_Float_sqrt 0.)))))) "non-positive")
+    ))
   )
 
   (test-case "T14f: Float.sqrt of 4 is 2 (positive)"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 671 (list) (lambda () (floatEdge (raw-value (tesl_import_Float_sqrt 4.)))))) "positive")
+    ))
   )
 
   (test-case "T14g: Float.abs of negative is positive"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 675 (list) (lambda () (floatEdge (raw-value (tesl_import_Float_abs -5.)))))) "positive")
+    ))
   )
 
   (test-case "T15a: 0 is even"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 696 (list) (lambda () (isEven2 0)))) #t)
+    ))
   )
 
   (test-case "T15b: 1 is odd"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 700 (list) (lambda () (isOdd2 1)))) #t)
+    ))
   )
 
   (test-case "T15c: 2 is even"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 704 (list) (lambda () (isEven2 2)))) #t)
+    ))
   )
 
   (test-case "T15d: 7 is odd"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 708 (list) (lambda () (isOdd2 7)))) #t)
+    ))
   )
 
   (test-case "T15e: 10 is even"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 712 (list) (lambda () (isEven2 10)))) #t)
+    ))
   )
 
   (test-case "T15f: 0 is not odd"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 716 (list) (lambda () (isOdd2 0)))) #f)
+    ))
   )
 
   (test-case "T16a: pipeline: filter then count"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 732 (list) (lambda () (countProven (list 1 -1 2 -2 3))))) 3)
+    ))
   )
 
   (test-case "T16b: pipeline: all pass"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 736 (list) (lambda () (countProven (list 5 10 15))))) 3)
+    ))
   )
 
   (test-case "T16c: pipeline: none pass"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 740 (list) (lambda () (countProven (list -1 -2 -3))))) 0)
+    ))
   )
 
   (test-case "T17a: round-trip preserves value"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 754 (list) (lambda () (roundTripProof 7)))) 14)
+    ))
   )
 
   (test-case "T17b: round-trip preserves behaviour"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 758 (list) (lambda () (roundTripProof 1)))) 2)
+    ))
   )
 
   (test-case "T17c: round-trip fails for non-positive"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 762 (list) (lambda ()
                           (roundTripProof 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: roundTripProof 0"))
+    ))
   )
 
   (test-case "T17d: round-trip with large value"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 766 (list) (lambda () (roundTripProof 500)))) 1000)
+    ))
   )
 
   (test-case "T18a: valid email passes check"
+    (call-with-fresh-memory-db '() (lambda ()
   (define tesl-checked-31 (checkEmail2 "a@b.com"))
   (when (check-fail? tesl-checked-31)
     (raise-user-error 'tesl-test "unexpected failure in let e: ~a" (check-fail-message tesl-checked-31)))
   (define e tesl-checked-31)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 790 (list (cons 'e e)) (lambda () (requiresEmail2 e)))) "email ok")
+    ))
   )
 
   (test-case "T18b: email without @ fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 794 (list) (lambda ()
                           (checkEmail2 "notanemail"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkEmail2 \"notanemail\""))
+    ))
   )
 
   (test-case "T18c: too-short email fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 798 (list) (lambda ()
                           (checkEmail2 "a@b"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkEmail2 \"a@b\""))
+    ))
   )
 
   (test-case "T18d: exactly minimum length with @"
+    (call-with-fresh-memory-db '() (lambda ()
   (define tesl-checked-32 (checkEmail2 "a@b.c"))
   (when (check-fail? tesl-checked-32)
     (raise-user-error 'tesl-test "unexpected failure in let e: ~a" (check-fail-message tesl-checked-32)))
   (define e tesl-checked-32)
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 803 (list (cons 'e e)) (lambda () (requiresEmail2 e)))) "email ok")
+    ))
   )
 
   (test-case "T19a: 5 is positive and small"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 831 (list) (lambda () (checkPosAndSmall2 5)))) "ok: 5")
+    ))
   )
 
   (test-case "T19b: 0 is not positive \226\128\148 left fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 835 (list) (lambda ()
                           (checkPosAndSmall2 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: checkPosAndSmall2 0"))
+    ))
   )
 
   (test-case "T19c: 50 is not small \226\128\148 right fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 839 (list) (lambda ()
                           (checkPosAndSmall2 50))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: checkPosAndSmall2 50"))
+    ))
   )
 
   (test-case "T19d: -10 fails both"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 843 (list) (lambda ()
                           (checkPosAndSmall2 -10))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: checkPosAndSmall2 -10"))
+    ))
   )
 
   (test-case "T19e: 49 is positive and small"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 847 (list) (lambda () (checkPosAndSmall2 49)))) "ok: 49")
+    ))
   )
 
   (test-case "T19f: 1 is positive and small"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 851 (list) (lambda () (checkPosAndSmall2 1)))) "ok: 1")
+    ))
   )
 
   (test-case "T20a: found returns value"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 866 (list) (lambda () (lookupWithDefault (list 1 2 3) 2)))) 2)
+    ))
   )
 
   (test-case "T20b: not found returns -999"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 870 (list) (lambda () (lookupWithDefault (list 1 2 3) 9)))) -999)
+    ))
   )
 
   (test-case "T20c: empty list returns -999"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 874 (list) (lambda () (lookupWithDefault (list) 1)))) -999)
+    ))
   )
 
   (test-case "T20d: found first element"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 878 (list) (lambda () (lookupWithDefault (list 5 6 7) 5)))) 5)
+    ))
   )
 
   (test-case "T21a: long name function works"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 890 (list) (lambda () (aVeryLongFunctionNameThatTestsIfTheLexerHandlesLongIdentifiersCorrectly 41)))) 42)
+    ))
   )
 
   (test-case "T21b: long name with zero"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 894 (list) (lambda () (aVeryLongFunctionNameThatTestsIfTheLexerHandlesLongIdentifiersCorrectly 0)))) 1)
+    ))
   )
 
   (test-case "T22a: lambda folds filtered list"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 910 (list) (lambda () (applyLambdaToFiltered (list 1 2 3 -1 -2))))) 6)
+    ))
   )
 
   (test-case "T22b: lambda fold on empty after filter"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 914 (list) (lambda () (applyLambdaToFiltered (list -1 -2 -3))))) 0)
+    ))
   )
 
   (test-case "T22c: lambda fold all positive"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 918 (list) (lambda () (applyLambdaToFiltered (list 10 20 30))))) 60)
+    ))
   )
 
   (test-case "T23a: valid title creates record"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review-26-tests.tesl" 946 (list) (lambda () (checkSafeRecord "Hello World"))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 947 (list (cons 'r r)) (lambda () (requiresSafeRecord r)))) "Hello World")
+    ))
   )
 
   (test-case "T23b: too-short title fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 951 (list) (lambda ()
                           (checkSafeRecord "Hi"))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: checkSafeRecord \"Hi\""))
+    ))
   )
 
   (test-case "T23c: exact min length creates record"
+    (call-with-fresh-memory-db '() (lambda ()
   (define r (thsl-src! "tests/critical-review-26-tests.tesl" 955 (list) (lambda () (checkSafeRecord "ABC"))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 956 (list (cons 'r r)) (lambda () (requiresSafeRecord r)))) "ABC")
+    ))
   )
 
   (test-case "T24a: Ok result returned for valid input"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 984 (list) (lambda () (parseIntOk "hi")))) 2)
+    ))
   )
 
   (test-case "T24b: Err for empty input"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 988 (list) (lambda () (parseIntErr "")))) #t)
+    ))
   )
 
   (test-case "T24c: Ok carries correct value"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 992 (list) (lambda () (parseIntOk "abc")))) 3)
+    ))
   )
 
   (test-case "T24d: Err for too-long input"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 996 (list) (lambda () (parseIntErr "toolong")))) #t)
+    ))
   )
 
   (test-case "T25a: forget value, keep proof, reattach to same raw int"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1012 (list) (lambda () (forgetOnlyLeft 8)))) 16)
+    ))
   )
 
   (test-case "T25b: for value 1"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1016 (list) (lambda () (forgetOnlyLeft 1)))) 2)
+    ))
   )
 
   (test-case "T25c: non-positive fails at original check"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 1020 (list) (lambda ()
                           (forgetOnlyLeft 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: forgetOnlyLeft 0"))
+    ))
   )
 
   (test-case "T26a: even number gets proof"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1044 (list) (lambda () (checkOrEstablish 4)))) "even: 4")
+    ))
   )
 
   (test-case "T26b: odd number gets Nothing"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1048 (list) (lambda () (checkOrEstablish 3)))) "not even")
+    ))
   )
 
   (test-case "T26c: zero is even"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1052 (list) (lambda () (checkOrEstablish 0)))) "even: 0")
+    ))
   )
 
   (test-case "T26d: negative even"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1056 (list) (lambda () (checkOrEstablish -2)))) "even: -2")
+    ))
   )
 
   (test-case "T27a: Empty returns -1"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1075 (list) (lambda () (guardedProof Empty 10)))) -1)
+    ))
   )
 
   (test-case "T27b: Wrap 15 with threshold 10 returns 15"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1079 (list) (lambda () (guardedProof (Wrap 15) 10)))) 15)
+    ))
   )
 
   (test-case "T27c: Wrap 5 with threshold 10 falls through to 0"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1083 (list) (lambda () (guardedProof (Wrap 5) 10)))) 0)
+    ))
   )
 
   (test-case "T27d: Wrap 10 with threshold 10 is NOT > 10, falls to 0"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1087 (list) (lambda () (guardedProof (Wrap 10) 10)))) 0)
+    ))
   )
 
   (test-case "T27e: Wrap 11 with threshold 10 is > 10"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1091 (list) (lambda () (guardedProof (Wrap 11) 10)))) 11)
+    ))
   )
 
   (test-case "T28a: single leaf"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1109 (list) (lambda () (treeSum (Leaf 5))))) 5)
+    ))
   )
 
   (test-case "T28b: two-leaf tree"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "tests/critical-review-26-tests.tesl" 1113 (list) (lambda () (raw-value (Branch (Leaf 3) (Leaf 4))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1114 (list (cons 't t)) (lambda () (treeSum t)))) 7)
+    ))
   )
 
   (test-case "T28c: three-level tree"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "tests/critical-review-26-tests.tesl" 1118 (list) (lambda () (raw-value (Branch (Branch (Leaf 1) (Leaf 2)) (Branch (Leaf 3) (Leaf 4)))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1119 (list (cons 't t)) (lambda () (treeSum t)))) 10)
+    ))
   )
 
   (test-case "T28d: unbalanced tree"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "tests/critical-review-26-tests.tesl" 1123 (list) (lambda () (raw-value (Branch (Leaf 10) (Branch (Leaf 1) (Branch (Leaf 2) (Leaf 3))))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1124 (list (cons 't t)) (lambda () (treeSum t)))) 16)
+    ))
   )
 
   (test-case "T28e: all-zero leaves"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "tests/critical-review-26-tests.tesl" 1128 (list) (lambda () (raw-value (Branch (Leaf 0) (Branch (Leaf 0) (Leaf 0)))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1129 (list (cons 't t)) (lambda () (treeSum t)))) 0)
+    ))
   )
 
   (test-case "T28f: negative leaves"
+    (call-with-fresh-memory-db '() (lambda ()
   (define t (thsl-src! "tests/critical-review-26-tests.tesl" 1133 (list) (lambda () (raw-value (Branch (Leaf -1) (Leaf -2))))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1134 (list (cons 't t)) (lambda () (treeSum t)))) -3)
+    ))
   )
 
   (test-case "T29a: 5 in [1, 10]"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1158 (list) (lambda () (useInRange3 1 10 5)))) "5 in [1, 10]")
+    ))
   )
 
   (test-case "T29b: at lower bound"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1162 (list) (lambda () (useInRange3 1 10 1)))) "1 in [1, 10]")
+    ))
   )
 
   (test-case "T29c: at upper bound"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1166 (list) (lambda () (useInRange3 1 10 10)))) "10 in [1, 10]")
+    ))
   )
 
   (test-case "T29d: below lower bound fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 1170 (list) (lambda ()
                           (useInRange3 1 10 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: useInRange3 1 10 0"))
+    ))
   )
 
   (test-case "T29e: above upper bound fails"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 1174 (list) (lambda ()
                           (useInRange3 1 10 11))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: useInRange3 1 10 11"))
+    ))
   )
 
   (test-case "T29f: lo == hi, exact match"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1178 (list) (lambda () (useInRange3 5 5 5)))) "5 in [5, 5]")
+    ))
   )
 
   (test-case "T29g: negative range"
+    (call-with-fresh-memory-db '() (lambda ()
   (define lo (thsl-src! "tests/critical-review-26-tests.tesl" 1182 (list) (lambda () (- 0 10))))
   (define hi (thsl-src! "tests/critical-review-26-tests.tesl" 1183 (list (cons 'lo lo)) (lambda () (- 0 1))))
   (define n (thsl-src! "tests/critical-review-26-tests.tesl" 1184 (list (cons 'hi hi) (cons 'lo lo)) (lambda () (- 0 5))))
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1185 (list (cons 'n n) (cons 'hi hi) (cons 'lo lo)) (lambda () (useInRange3 lo hi n)))) "-5 in [-10, -1]")
+    ))
   )
 
   (test-case "T30a: discard both halves, return original + 1"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1199 (list) (lambda () (discardBothHalves 5)))) 6)
+    ))
   )
 
   (test-case "T30b: discard both halves, n = 1"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1203 (list) (lambda () (discardBothHalves 1)))) 2)
+    ))
   )
 
   (test-case "T30c: check still propagates failure even with discarded binding"
+    (call-with-fresh-memory-db '() (lambda ()
   (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review-26-tests.tesl" 1207 (list) (lambda ()
                           (discardBothHalves 0))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: discardBothHalves 0"))
+    ))
   )
 
   (test-case "T30d: large value"
+    (call-with-fresh-memory-db '() (lambda ()
   (check-equal? (raw-value (thsl-src! "tests/critical-review-26-tests.tesl" 1211 (list) (lambda () (discardBothHalves 100)))) 101)
+    ))
   )
 
 )
