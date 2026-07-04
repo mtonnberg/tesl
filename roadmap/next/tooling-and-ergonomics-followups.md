@@ -63,3 +63,34 @@ the single-line `if cond then a else b`, which E000 rejects). Add a docs test th
 extracts fenced ```tesl blocks marked as runnable and compiles them in CI, so the
 manual can't drift from the language. (Ungated prose blocks that are intentionally
 illustrative should be marked so the extractor skips them.)
+
+## Progress — 2026-07-04
+
+- **T1 (LSP rename corruption) — DONE** (commit e082c45). Synthetic `#>` doctest decls
+  are excluded from occurrence collection, so a rename no longer writes a line-0 edit.
+  Regression: `test_cli_occurrences_json_doctest_no_line0` (test_diagnostics.ml).
+- **T3 (check-json vs agent-context JSON shape) — DONE** (commit 3a41a18, document).
+  The two carry the same diagnostics in two intentional shapes (compact-flat vs IR-2/LSP
+  nested-span); AGENTS.md now states this explicitly (reconciling would break two
+  established API contracts — the item allows documenting).
+- **E2 (codec double-declaration tax) — DONE for the actionable half** (commit 44b7d1e).
+  Verified a plain response record already auto-derives its JSON encoder (compiles AND
+  emits with no `codec` block), so E2's "derive default codec from shape" is already
+  supported for the common case; the over-teaching was purely documentation, now
+  corrected in best-practices ("write a codec only for the decode side / to override").
+
+- **T2 (fmt owns indentation → fmt/lint fixpoint) — REMAINING.** Formatter-internals
+  work (a layout/indentation pass) that must not regress the 68 exact-match `.rkt`/fmt
+  snapshots (ci.sh phase 6) — a focused formatter task.
+- **E1 (implicit Prelude / auto-prune imports) — REMAINING.** A user-facing language
+  change (implicit always-in-scope primitives changes name resolution across
+  parser/checker/every example; and/or a new `--lint --fix`/fmt auto-prune action). No
+  `--fix` exists today. A deliberate feature with design choices (which primitives are
+  implicit; opt-out), best decided with the maintainer.
+- **E3 (docs compile-test) — REMAINING.** The manual-coherence test
+  (`manual/tests/test_embedded_docs.ml`) already SYNTAX-lints every `tesl` fence ("no
+  D1-class syntax rot"); E3 wants FULL compilation of *runnable* blocks. That needs a
+  runnable/illustrative marker convention + a compiler-backed (shell-out) extractor, plus
+  marking the existing illustrative blocks — a bounded but non-trivial test-infra add.
+
+Non-soundness item; the tree is green (`ci.sh` 11/11 under 9.2) with the above done.
