@@ -71,6 +71,7 @@ let check_module (m : module_form) : validation_error list =
   @ (TDatabase @: check_sql_field_names ~facts decls)
   @ (TCodec @: check_codec_target_types ~facts decls)
   @ (TCodec @: check_codec_proof_coverage ~facts decls)
+  @ (TCodec @: check_codec_alt_completeness ~facts decls)
   @ (TCodec @: check_codec_field_types ~facts decls)
   @ (TProof @: check_call_site_proofs ~facts decls)
   @ (TProof @: check_record_field_proof_construction ~facts decls)

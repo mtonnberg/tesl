@@ -405,6 +405,57 @@ let check_codec_proof_coverage ?facts ?(extra_funcs=[]) (decls : top_decl list) 
   ) codecs;
   List.rev !errors
 
+(* ── 2c. fromJson alternative completeness ─────────────────────────────────
+   Each `{ ... }` block in `fromJson [ ... ]` is a complete decode ALTERNATIVE,
+   tried first-success at runtime — NOT a group of fields that get merged. An
+   alternative that maps only SOME of the target record's fields decodes to an
+   incomplete record, which then fails its own body type at the HTTP/api-test
+   boundary with a confusing runtime 400 (issue #3: a user who put each field in
+   its own `{ }` block got two one-field alternatives instead of one two-field
+   record). Reject the incomplete alternative at compile time and point at the
+   one-block form. A field populated by a codec DEFAULT counts as covered. *)
+let check_codec_alt_completeness ?facts ?(extra_funcs=[]) (decls : top_decl list) : validation_error list =
+  let mf = facts_or_compute ?facts ~extra_funcs decls in
+  let codecs = mf.mf_codecs in
+  let named_fields_of = function
+    | DRecord r -> Some (r.name, List.map (fun (f : field_def) -> f.name) r.fields)
+    | DEntity e -> Some (e.name, List.map (fun (f : field_def) -> f.name) e.fields)
+    | _ -> None
+  in
+  let record_fields = List.filter_map named_fields_of decls in
+  let errors = ref [] in
+  List.iter (fun (cf : codec_form) ->
+    match List.assoc_opt cf.type_name record_fields with
+    | None -> ()
+    | Some all_fields ->
+      (match cf.from_json with
+       | FromJsonForbidden | FromJsonAdt -> ()
+       | FromJsonAlts alts ->
+         List.iteri (fun i alt ->
+           let covered = List.filter_map (function
+             | DecodeField { field_name; _ } -> Some field_name
+             | DecodeDefault { field_name; _ } -> Some field_name
+             | DecodeCrossCheck _ -> None) alt in
+           let missing = List.filter (fun f -> not (List.mem f covered)) all_fields in
+           if missing <> [] then begin
+             let alt_loc = match alt with
+               | DecodeField { loc; _ } :: _
+               | DecodeDefault { loc; _ } :: _
+               | DecodeCrossCheck { loc; _ } :: _ -> loc
+               | [] -> cf.loc in
+             errors := make_error alt_loc
+               ~hint:(Printf.sprintf
+                 "each `{ … }` in `fromJson [ … ]` is a COMPLETE decode alternative (tried first-success), not merged — put all fields of `%s` in ONE `{ }` block"
+                 cf.type_name)
+               (Printf.sprintf
+                 "codec '%s': fromJson alternative %d does not decode field(s) %s of `%s`; every alternative must produce a complete `%s`"
+                 cf.name (i + 1) (String.concat ", " missing) cf.type_name cf.type_name)
+               :: !errors
+           end
+         ) alts)
+  ) codecs;
+  List.rev !errors
+
 (* ── 3b. Codec field type vs codec type ───────────────────────────────────
    Builtin codecs (stringCodec, intCodec, boolCodec, floatCodec) must match
    the declared field type.  User-defined codec names (e.g. `Priority`) must

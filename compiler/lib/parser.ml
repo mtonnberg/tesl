@@ -3581,6 +3581,33 @@ let parse_codec_form s name type_name =
                       (match peek s with
                        | BACKARROW ->
                          advance s;
+                         (match peek s with
+                          (* `field <- default <literal>`: the field is populated
+                             from a constant at construction, not decoded from JSON.
+                             Without this branch the whole entry was silently
+                             dropped (expect_string failed on `default`), yielding a
+                             decoder that omits the field — an incomplete record that
+                             traps at the boundary. *)
+                          | IDENT "default" ->
+                            advance s;
+                            (match parse_expr s with
+                             | Ok lit_e ->
+                               let racket = (match lit_e with
+                                 | ELit { lit = LInt n; _ } -> Some (string_of_int n)
+                                 | ELit { lit = LBool b; _ } -> Some (if b then "#t" else "#f")
+                                 | ELit { lit = LString str; _ } -> Some (Printf.sprintf "%S" str)
+                                 | ELit { lit = LFloat f; _ } -> Some (Float_fmt.to_faithful_literal f)
+                                 | _ -> None) in
+                               (match racket with
+                                | Some default_expr ->
+                                  let e = DecodeDefault { field_name = fname; default_expr;
+                                    loc = span entry_loc0 (current_loc s) } in
+                                  entries := e :: !entries;
+                                  skip_layout s;
+                                  if peek s = COMMA then advance s
+                                | None -> ())
+                             | Err _ -> ())
+                          | _ ->
                          (match expect_string s with
                           | Ok jkey ->
                             (match expect s WITH_CODEC with
@@ -3601,7 +3628,7 @@ let parse_codec_form s name type_name =
                                   if peek s = COMMA then advance s
                                 | Err _ -> ())
                              | Err _ -> ())
-                          | Err _ -> ())
+                          | Err _ -> ()))
                        | _ -> advance s (* skip unknown *))
                     | Err _ ->
                       (* Not an identifier/keyword name — skip one token to make progress. *)
