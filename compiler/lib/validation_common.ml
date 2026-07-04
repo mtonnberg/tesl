@@ -1054,6 +1054,242 @@ let load_imported_func_info (m : module_form) : (string * func_info) list =
     nothing here.  Capability-ROW variables are dropped (mirroring
     {!Validation_capabilities.build_func_capability_map}) — only a function's
     concrete declared capabilities propagate to callers. *)
+
+(* ── Capability-effect analysis (relocated 2026-07-04, hole #12) ──────────────
+   Moved here from validation_capabilities.ml so load_imported_func_caps (below)
+   can RE-VERIFY an imported function's declared `requires` against its body
+   instead of trusting it.  validation_capabilities `open`s this module, so its
+   own callers are unaffected. *)
+let build_func_capability_map (decls : top_decl list) : (string * string list) list =
+  (* 2026-07-03 hole #13: a name is a capability-ROW VARIABLE only if it is NOT a
+     declared capability.  func_bound_cap_vars already excludes the 13 builtins,
+     but a USER-declared alias (`capability clock implies time`) used as a param
+     arrow's cap-row (`f: (Int -> Int requires clock)`) was still classified as a
+     row variable and STRIPPED from this function's propagated caps — so a caller
+     inherited none of it and could `requires []` while transitively performing
+     the effect (launder).  Exclude declared user capabilities from the
+     row-variable set so a declared capability is never stripped from
+     propagation. *)
+  let declared_caps =
+    List.filter_map (function DCapability c -> Some c.name | _ -> None) decls in
+  List.filter_map (function
+    | DFunc fd ->
+      (* Drop this function's capability-ROW variables: when the function is
+         CALLED, its row variables are instantiated by the actual callback
+         arguments (which the caller's body walks separately, collecting their
+         caps).  Only its CONCRETE capabilities propagate to callers. *)
+      let bound =
+        List.filter (fun b -> not (List.mem b declared_caps)) (Ast.func_bound_cap_vars fd) in
+      Some (fd.name, List.filter (fun c -> not (List.mem c bound)) fd.capabilities)
+    | _ -> None
+  ) decls
+
+(** Capability rows introduced by a function's function-typed parameters:
+    `f: (A -> B requires c)` ⇒ `("f", ["c"])`.  Calling such a parameter in the
+    body requires its row variable(s), which the enclosing function must declare. *)
+let build_param_capability_map (fd : func_decl) : (string * string list) list =
+  List.filter_map (fun (b : binding) ->
+    match func_bound_cap_vars_of_params [b] with
+    | [] -> None
+    | caps -> Some (b.name, caps)
+  ) fd.params
+
+(** Capability ENFORCEMENT table for the runtime/effect expression forms.
+
+    Wave-2 reduce_language_size step: the per-effect-form capability requirement
+    used to be spelled out inline in {!collect_needed_capabilities}'s match arms
+    (one arm per form prepending a literal token list).  That enforcement is now
+    RELOCATED here as data — one row per effect form, giving the fixed capability
+    token(s) the form's own primitive requires.  The match arm in
+    {!collect_needed_capabilities} consults this table and then recurses into the
+    form's sub-expressions, so the WHAT (which capability each effect demands) is
+    declarative and the HOW (tree walk + transitive closure + handler/worker
+    denial in {!check_handler_capabilities}) is unchanged.
+
+    Enforcement is NOT dropped: every token a form produced before still flows
+    through the identical {!check_handler_capabilities} denial path, so a
+    capability-denied effect still fails to compile.  Cache forms stay inline
+    because their required token is data-dependent (the cache_name is
+    interpolated into the token), not a fixed string. *)
+let effect_form_fixed_caps : (string * string list) list = [
+  "EEnqueue",          ["queueWrite"];
+  "EPublish",          ["pubsub"];
+  "ETelemetry",        [];          (* needs only what its field exprs need *)
+  "ESendEmail",        ["email"];
+  "EStartEmailWorker", ["email"];
+]
+
+let effect_caps key =
+  match List.assoc_opt key effect_form_fixed_caps with Some c -> c | None -> []
+
+(** Check whether an expression body uses any DB or queue/pubsub operations,
+    or calls any functions that require capabilities.
+    Returns a list of capability names needed.
+
+    Wave-2 visitor migration: this is a pure fold over an expression's children
+    whose result is ONLY ever consumed through [List.sort_uniq String.compare]
+    (every caller dedups + sorts immediately), so accumulation ORDER is
+    irrelevant downstream.  The mechanical descent — every variant that
+    contributes nothing of its own beyond what its child exprs need — is now
+    delegated to the single shared {!Ast_visitor.fold_children} traversal,
+    mirroring {!Linter.collect_expr_names}.  Only the THREE semantically
+    load-bearing classes of arm remain explicit:
+
+      1. [EVar] / [EField] capability LOOKUP (SQL keywords, time/random/jwt/
+         httpClient primitives, user-function caps) — the leaf that introduces a
+         requirement out of a bare name.
+      2. The fixed-token EFFECT forms ([EEnqueue]/[EPublish]/[ETelemetry]/
+         [ESendEmail]/[EStartEmailWorker]) which prepend their {!effect_caps}
+         token and THEN recurse into children.
+      3. The CACHE forms, whose required token is data-dependent (the token is
+         the cache name interpolated after a 'cache ' prefix) and so cannot live
+         in the static data table.
+
+    Sharing one descent means a new {!Ast.expr} variant cannot silently escape
+    capability analysis.  An internal accumulator threads the list; the list-
+    concatenation-vs-prepend difference is invisible to callers because they
+    sort_uniq the result. *)
+let collect_needed_capabilities
+    ?(func_caps : (string * string list) list = [])
+    ?(param_caps : (string * string list) list = [])
+    ?(bound : string list = [])
+    (e : expr)
+    : string list =
+  (* CAP-A1 fix: read/write classification comes from the single SQL registry
+     (Validation_common) so it cannot drift from the set the emitter lowers to
+     DB calls.  The old inline write-set omitted insertMany/updateAndReturnOne/
+     deleteAndReturnResult, statically inferring no dbWrite for handlers that
+     used them — a real capability-soundness hole. *)
+  (* var_caps: the capability(ies) a bare referenced name introduces, given the
+     names [bound] in lexical scope at the use site (a bound name shadows the
+     builtin and introduces nothing). *)
+  let var_caps bound name =
+    (* A function-typed PARAMETER (`f: (A -> B requires c)`) shadows everything:
+       calling it requires its capability-row variable(s), which the enclosing
+       function declares in its own `requires`. *)
+    if List.mem_assoc name param_caps then
+      (match List.assoc_opt name param_caps with Some caps -> caps | None -> [])
+    else
+    (* BUG-1 fix: Check user-defined functions FIRST.
+       A user function named `insert`, `select`, `update`, or `delete` must NOT be
+       treated as a SQL operation. `List.mem_assoc` returns true even for functions
+       with empty capabilities (requires []), correctly shadowing the SQL keywords. *)
+    if List.mem_assoc name func_caps then
+      (match List.assoc_opt name func_caps with
+       | Some caps -> caps
+       | None -> [])
+    (* A plain local binding (value param, let, lambda/case binder) named like a
+       stdlib effect function (env/nowMillis/randomInt/…) SHADOWS it and introduces
+       NO capability — checked after param_caps/func_caps so function-typed params
+       and user functions keep their own rows. *)
+    else if List.mem name bound then []
+    else if is_sql_read_builtin name then ["dbRead"]
+    else if is_sql_write_builtin name then ["dbWrite"]
+    (* A2-3: every other effect→capability decision is DERIVED from the single
+       source of truth in type_system (queue/time/random/env/jwt/httpClient/uuid/
+       aiProvider). SQL stays structural above because a user fn may legitimately
+       shadow those keyword spellings. Pure stdlib fns (PosixMillis arithmetic,
+       constructors, accessors) are absent from the registry → []. *)
+    else Type_system.stdlib_capabilities_of name
+  in
+  (* Names bound by a pattern (PVar / nested PCon fields) — the per-arm binder
+     set, mirroring what the old fn_bound_names collected for the whole function. *)
+  let rec pat_names acc = function
+    | PVar n -> n :: acc
+    | PCon { fields; _ } -> List.fold_left (fun acc (_, p) -> pat_names acc p) acc fields
+    | _ -> acc
+  in
+  (* acc is threaded left-to-right; result order is irrelevant (caller sort_uniqs).
+     [bound] is the set of names in LEXICAL scope at this expression — the
+     function parameters plus the let / let-proof / lambda / case binders of
+     ENCLOSING scopes.  A name in [bound] shadows the stdlib effect/SQL builtin
+     of the same name ONLY within the scope it is bound in.  This is the fix for
+     the `requires []` capability-suppression hole: previously every binder
+     anywhere in the function (e.g. a `delete` bound in one case arm) suppressed
+     the capability function-wide, so a binder in a disjoint scope could hide a
+     real effect.  Threading [bound] lexically makes the capability checker agree
+     with the typechecker's own scoping (checker.ml routes a name to the SQL/
+     builtin path only when it is NOT locally bound). *)
+  let rec go (bound : string list) (acc : string list) (e : expr) : string list =
+    match e with
+    | EVar { name; _ } -> var_caps bound name @ acc
+    (* A qualified call `M.f` parses as an EField on the module-name constructor/var.
+       It is charged the SAME as the unqualified call `f`:
+       - a qualified stdlib call (JWT.sign, HttpClient.get, UUID.v4/v7, …) from the
+         single-source registry (A2-3) — this is what makes `UUID.v7()` require
+         `uuid` (CAP-UUID);
+       - a qualified call to an IMPORTED user function (`Mod.fn`) from func_caps,
+         which holds the `Module.fn` key with the callee's declared capabilities.
+         Without this, `Mod.fn()` escaped the transitive charge while the bare
+         `fn()` was charged — the asymmetry CAP-01 closes.
+       The module-name obj carries no further capability, so it is not recursed
+       into. Non-capability field accesses (record fields) map to [] and fall
+       through to the generic descent below. *)
+    | EField { obj = (EConstructor { name = m; _ } | EVar { name = m; _ }); field; _ }
+      when (let q = m ^ "." ^ field in
+            Type_system.stdlib_capabilities_of q <> [] || List.mem_assoc q func_caps) ->
+      let q = m ^ "." ^ field in
+      (match List.assoc_opt q func_caps with
+       | Some caps -> caps
+       | None -> Type_system.stdlib_capabilities_of q) @ acc
+    (* Effect forms: prepend the fixed data-table token, then descend into
+       children via the shared traversal. *)
+    | EEnqueue _ | EPublish _ | ETelemetry _ | ESendEmail _ ->
+      let key = match e with
+        | EEnqueue _ -> "EEnqueue" | EPublish _ -> "EPublish"
+        | ETelemetry _ -> "ETelemetry" | _ -> "ESendEmail" in
+      Ast_visitor.fold_children_env go bound (effect_caps key @ acc) e
+    | EStartEmailWorker _ ->
+      (* CAP-4 fix: descend into child exprs after prepending the fixed token,
+         exactly like the EEnqueue/EPublish/ETelemetry/ESendEmail arm above — a
+         child expression can itself carry effects and must be walked. *)
+      Ast_visitor.fold_children_env go bound (effect_caps "EStartEmailWorker" @ acc) e
+    (* CAP-1 fix: EConstructor is NO LONGER a no-capability leaf.  The previous
+       explicit `EConstructor _ -> acc` arm dropped constructor ARGUMENTS, so an
+       effect wrapped in a built-in args-carrying constructor (e.g.
+       `Something (insert ...)`, `Something (env key)`) escaped capability
+       analysis entirely.  By removing the arm, EConstructor now falls through to
+       the shared `_ -> Ast_visitor.fold_children_env ...` catch-all below, which
+       walks its args identically to every other node.  (The JWT/HttpClient
+       `EField { obj = EConstructor ... }` arms above still match first and are
+       unaffected — they match EField, not a bare EConstructor.) *)
+    (* Binder forms: extend [bound] with the names each binder introduces, but
+       ONLY for the sub-scope that binder governs (value exprs are evaluated in
+       the enclosing scope; bodies/arms see the new name). *)
+    | ELet { name; value; body; _ } ->
+      let acc = go bound acc value in
+      go (name :: bound) acc body
+    | ELetProof { value_name; proof_name; value; body; _ } ->
+      let acc = go bound acc value in
+      go (value_name :: proof_name :: bound) acc body
+    | ELambda { params; body; _ } ->
+      go (List.map (fun (b : binding) -> b.name) params @ bound) acc body
+    (* ECase descends into the scrutinee, each arm GUARD, and each arm BODY.
+       B-GUARD-CAP-ESCAPE (review §5.2): the arm guard was previously skipped on
+       the unenforced assumption "guards are pure boolean tests", so a privileged
+       effect hidden in a `where` guard (e.g. a `deleteAndReturnResult`, an `env`
+       read) escaped the capability charge entirely — a read-only handler could
+       write undeclared.  The guard is an ordinary expression that runs at request
+       time, so it must be folded exactly like the body.  Both see the arm's
+       pattern binders. *)
+    | ECase { scrut; arms; _ } ->
+      let acc = go bound acc scrut in
+      List.fold_left (fun acc (arm : case_arm) ->
+        let arm_bound = pat_names bound arm.pattern in
+        let acc = match arm.guard with Some g -> go arm_bound acc g | None -> acc in
+        go arm_bound acc arm.body) acc arms
+    (* Cache forms: data-dependent token, then descend into key/value/ttl/prefix. *)
+    | ECacheGet { cache_name; _ } | ECacheSet { cache_name; _ }
+    | ECacheDelete { cache_name; _ } | ECacheInvalidate { cache_name; _ } ->
+      Ast_visitor.fold_children_env go bound (("cacheCap " ^ cache_name) :: acc) e
+    (* Purely-mechanical variants: descend into child exprs in the same scope.
+       Includes EField (non-special obj), EApp, EBinop, EUnop, EIf, ERecord,
+       EList, EOk, EWithDatabase/EWithCapabilities/EWithTransaction, EServe, and
+       the no-capability leaves (ELit, EFail, EStartWorkers). *)
+    | _ -> Ast_visitor.fold_children_env go bound acc e
+  in
+  go bound [] e
+
 let load_imported_func_caps (m : module_form) : (string * string list) list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
