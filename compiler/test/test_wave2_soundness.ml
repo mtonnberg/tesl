@@ -373,6 +373,30 @@ fn genEq(a: a, b: a) -> Bool = a == b
 fn good() -> Bool = genEq 3 4
 |})
 
+(* Layer 1b (cross-module): an IMPORTED generic comparator misused at a function
+   type is rejected at COMPILE time.  `List.member` compares its element parameter
+   with `==`, so `List.member f fs` where `f : Int -> Int` reaches a generic `==`
+   on a function type — the S14b residual, now closed across the module boundary. *)
+let test_f_import_member_fn_rejected () =
+  should_fail "reaches a generic" {|#lang tesl
+module T exposing []
+import Tesl.Prelude exposing [Bool(..), Int, List]
+import Tesl.List exposing [List.member]
+fn bad(fs: List (Int -> Int), f: Int -> Int) -> Bool =
+  List.member f fs
+|}
+
+(* …but the same imported comparator at an equatable type still compiles (no
+   over-rejection of the legitimate `member`/`contains` corpus). *)
+let test_f_import_member_int_accepted () =
+  should_pass {|#lang tesl
+module T exposing []
+import Tesl.Prelude exposing [Bool(..), Int, List]
+import Tesl.List exposing [List.member]
+fn good(xs: List Int, x: Int) -> Bool =
+  List.member x xs
+|}
+
 (* Record literals: `<` is a runtime-crashing bypass (HM-2) → rejected;
    `==` is structurally decidable → accepted. *)
 let test_f_lt_record_rejected () =
@@ -703,6 +727,8 @@ let () =
       test_case "generic == call at fn rejected" `Quick test_f_generic_eq_call_at_fn_rejected;
       test_case "generic < call at Int accepted" `Quick test_f_generic_ord_call_at_int_accepted;
       test_case "generic == call at Int accepted" `Quick test_f_generic_eq_call_at_int_accepted;
+      test_case "imported List.member fn rejected (Layer 1b)" `Quick test_f_import_member_fn_rejected;
+      test_case "imported List.member Int accepted (Layer 1b)" `Quick test_f_import_member_int_accepted;
       test_case "< record literal rejected (HM-2)" `Quick test_f_lt_record_rejected;
       test_case "== record accepted" `Quick test_f_eq_record_accepted;
       test_case "< newtype-of-Int accepted" `Quick test_f_newtype_int_orderable_accepted;

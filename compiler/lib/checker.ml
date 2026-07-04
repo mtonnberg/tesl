@@ -4215,6 +4215,100 @@ let check_api_decl_types ctx (m : module_form) =
     | _ -> ()
   ) m.decls
 
+(* Eq/Ord Layer 1b (2026-07-04, eq_ord_generic_soundness) — harvest closed
+   Ord/Eq obligations from IMPORTED generic comparators, so a misuse like
+   `List.member fn xs` is rejected at COMPILE time rather than only fail-closed at
+   runtime (Layer 1 covered same-module callees only; the cross-module case was
+   left to the Layer-2 runtime backstop because the importer rebuilds the callee's
+   scheme from its annotation without re-checking the body).
+
+   We re-parse each import (exactly as [load_imported_func_sigs] does) and, for
+   every imported `fn`, record an Eq/Ord obligation for each `<`/`==` operand that
+   is a bare PARAMETER of a generic (type-variable) type — expressed in the callee
+   scheme's rigid vars via the same [constraint_to_rigid] map [finalize_ord_eq_
+   constraints] uses, and keyed by the qualified name (`List.member`) plus the
+   plain name when exposed.  [check_ord_eq_calls] then discharges these against a
+   recorded call's argument types identically to the same-module case.
+
+   Scope: this closes comparators that compare a bare PARAMETER (e.g. `member`:
+   `x == first`).  A comparator whose operands are case/let binders rather than
+   parameters (e.g. `List.maximum`/`minimum`, which compare list ELEMENTS) is not
+   harvested here — statically that needs full body re-inference of the import —
+   and remains fail-closed at RUNTIME via the loud `<` crash / `tesl-equal?`
+   backstop (Layer 2).  Purely additive: it only ADDS obligations for imported
+   callees; it never relaxes an existing check. *)
+let harvest_fd_ord_eq (fd : func_decl) : (ord_eq_pred * ty) list =
+  let param_ty =
+    List.map (fun (b : binding) -> (b.name, ty_of_type_expr b.type_expr)) fd.params in
+  let acc = ref [] in
+  let add pred = function
+    | EVar { name; _ } ->
+      (match List.assoc_opt name param_ty with
+       | Some t -> acc := (pred, t) :: !acc
+       | None -> ())
+    | _ -> ()
+  in
+  let rec walk (e : expr) =
+    (match e with
+     | EBinop { op = (BEq | BNeq); left; right; _ } -> add PEq left; add PEq right
+     | EBinop { op = (BLt | BLe | BGt | BGe); left; right; _ } -> add POrd left; add POrd right
+     | _ -> ());
+    Ast_visitor.iter_children walk e
+  in
+  walk fd.body;
+  let param_tvars =
+    List.concat_map (fun (b : binding) -> collect_tvar_names b.type_expr) fd.params in
+  let ret_tvars = collect_ret_spec_tvar_names fd.return_spec in
+  let all_tvars = List.sort_uniq String.compare (param_tvars @ ret_tvars) in
+  let params_map = List.mapi (fun i n -> (n, -(i + 1))) all_tvars in
+  List.sort_uniq compare
+    (List.filter_map (fun (pred, t) ->
+       match constraint_to_rigid params_map t with
+       | Some t' -> Some (pred, t')
+       | None -> None)
+       !acc)
+
+let load_imported_ord_eq_constraints (m : module_form)
+    : (string * (ord_eq_pred * ty) list) list =
+  let is_tesl_module name =
+    String.length name >= 5 && String.sub name 0 5 = "Tesl." in
+  List.concat_map (fun (imp : import_decl) ->
+    let parsed =
+      if is_tesl_module imp.module_name then
+        (match lifted_stdlib_source_path imp.module_name with
+         | Some path -> parse_local_import_module path
+         | None -> None)
+      else
+        parse_local_import_module (resolve_local_import_path m.source_file imp.module_name)
+    in
+    match parsed with
+    | None | Some (Err _) -> []
+    | Some (Ok imported) ->
+      let short_mod =
+        match String.rindex_opt imp.module_name '.' with
+        | Some i -> String.sub imp.module_name (i + 1) (String.length imp.module_name - i - 1)
+        | None -> imp.module_name in
+      let strip_dotdot s =
+        let n = String.length s in
+        if n > 4 && String.sub s (n - 4) 4 = "(..)" then String.sub s 0 (n - 4) else s in
+      let requested = match imp.names with
+        | ImportAll -> None
+        | ImportExposing names -> Some (List.map strip_dotdot names) in
+      List.concat_map (function
+        | DFunc fd ->
+          (match harvest_fd_ord_eq fd with
+           | [] -> []
+           | obligations ->
+             let dotted = short_mod ^ "." ^ fd.name in
+             let include_plain = match requested with
+               | Some names -> List.mem fd.name names || List.mem dotted names
+               | None -> false in
+             (if include_plain then [ (fd.name, obligations) ] else [])
+             @ [ (dotted, obligations) ])
+        | _ -> []
+      ) imported.decls
+  ) m.imports
+
 (* Eq/Ord Stage 3 — discharge.  Run AFTER every fn body is checked (so
    [ord_eq_constraints] is complete).  For each recorded direct call to a fn that
    carries an Eq/Ord obligation, re-instantiate the callee's scheme, bind its
@@ -4552,6 +4646,14 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
     | _ -> ()  (* codecs, databases, etc. — skip for Phase 2 *)
   ) m.decls;
   check_api_decl_types ctx m;
+  (* Eq/Ord Layer 1b: fold in IMPORTED generic comparators' obligations (keyed by
+     qualified/plain name) before discharge, so a cross-module `List.member fn xs`
+     is rejected at compile time.  Local obligations (already in the table) take
+     precedence — never overwrite a same-module entry. *)
+  List.iter (fun (name, obligations) ->
+    if not (Hashtbl.mem ctx.ord_eq_constraints name) then
+      Hashtbl.replace ctx.ord_eq_constraints name obligations)
+    (load_imported_ord_eq_constraints m);
   (* Eq/Ord Stage 3: discharge every recorded generic-comparison call now that
      all fns' obligations are known. *)
   check_ord_eq_calls ctx;
