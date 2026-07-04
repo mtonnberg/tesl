@@ -50,3 +50,22 @@ Thread the receiver's resolved type into the field-proof lookup:
 - Rename control still passes.
 - Full corpus (92 files) + `dune test` stay green; the `title`/`body`/`user`
   proof-carrying reads in the lesson corpus must still type-check.
+
+## Status: DONE — 2026-07-04
+Closed in commit `396923f`. `field_proof_registry` / `build_field_proof_map` re-keyed
+`((declaring_type, field) -> (param_name, proof))`. The `EField` arm of
+`carried_proofs_of_expr` (validation_structural.ml) now resolves the receiver's type
+via `infer_expr_type` (through a per-fn `field_proof_type_ctx` set at every registry
+set/reset site in the proof + advanced passes) and credits only the matching
+`(type, field)` entry — fail-closed on an unresolved/different receiver, silent on a
+field with no registered proof anywhere (no mass over-reject of shared field names).
+
+`infer_expr_type` was extended to see through the three construction shapes the field
+read runs off: record construction `Ctor { .. }`, record update `{ base | .. }`
+(`#record-update#`), and `decodeAs "T" j` — without which the fail-closed arm
+over-rejected legit reads (R60_RF02 / R63_RW01 / R54_RU01 / AISuite S-POS).
+
+**Verify:** forge rejected (PN10 `should_fail`), rename/same-type control credited
+(PC06 `should_pass`); 130-file corpus 0 errors; `dune test` green (only the known
+Racket 8.18/9.2 app-server `.zo` version-mismatch integration flakes remain — see
+`align-dev-shell-racket-9.2.md`); S7 = 135 kills, zero candidate holes.

@@ -50,3 +50,29 @@ false-rejecting the working auth corpus needs care.
 - HTTP analogue rejected.
 - The working auth corpus (todo-api cookieAuth `Authenticated requestUser`, the
   capturer `via` examples) stays green — the subject correspondence holds there.
+
+## Status: DONE — 2026-07-04
+Closed in commit `29321c0`. New `check_endpoint_proof_subject_binding`
+(validation_structural.ml, registered validation.ml) + helper
+`endpoint_proof_subject_mismatches`.
+
+**Simplification vs. the deferred plan:** no args-aware comparison against the
+via-fn's return spec is needed. An endpoint `auth <b> ::: P <s> via <f>` binds the
+auther's result to `<b>`; the auther is invoked with the request alone
+(dsl/web.rkt:1272,1881) and proves `P` about the value it RETURNS — i.e. `P <b>`,
+the only proof transferred to the handler. So the handler's `P <s>` obligation is
+discharged iff `<s>` == `<b>`. The check compares each required predicate's SUBJECT
+(final arg — the subject-is-last convention) against the binding name and rejects a
+differing clean-identifier subject, fail-closed, for both `auth` and `capture`
+endpoint clauses. Literal / parenthesised / dotted subjects are left alone. Auth-fn
+DEFINITIONS (`auth foo(..) -> x ::: P x`) are untouched — the check only iterates
+`DApi` endpoints.
+
+**Verify:** auth forge (`Authenticated roomId` bound to `user`) and capture forge
+(`Positive otherId` bound to `taskId`) both reject with "relational proof forgery —
+cross-subject authorization bypass"; control 0 errors. Regression PN12/PN13 (reject)
++ PC08 (subject=binding compiles) in test_proof_negatives.ml. Corpus `--check-all`:
+example 92/92, tests 38/38 (no over-rejection — every corpus clause has
+subject=binding). S7 = 135 kills. `dune test` green bar the known Racket 8.18/9.2
+app-server `.zo` version-mismatch integration flakes (see
+`align-dev-shell-racket-9.2.md`).

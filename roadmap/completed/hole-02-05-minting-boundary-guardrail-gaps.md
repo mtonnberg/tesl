@@ -58,3 +58,32 @@ the analysis can't see the proof).
 
 See close_fail_open_without_runtime_layer.md — all three are instances of the same
 "decide-by-spelling / fail-open-on-uncertainty on a minting boundary" class.
+
+## Status: DONE — 2026-07-04
+All three residual gaps closed:
+
+- **#2 (establish delegation)** — commit `346802f`. `validate_check_return`
+  (proof_checker.ml) now resolves a tail-call delegate whose declared return is
+  `Fact (declared_pred …)`, substitutes the callee's params with the call args, and
+  rejects a subject mismatch; fail-closed on an unresolvable delegate. Regression
+  PN09 (reject) + PC05 (subject-preserving delegation compiles).
+
+- **#5 residual `Fact`-typed-param fail-open** — commit `396923f`. When no carried
+  proof is present, `check_call_proofs` (validation_proof.ml) falls back to the
+  argument's declared `Fact` TYPE (via `infer_expr_type` + `proof_of_fact_type`) and
+  rejects a head/subject mismatch, instead of skipping the check on the empty-carried
+  branch. lesson12's legit `Fact`-typed params are unaffected (they resolve via the
+  carried branch). Regression PN11 (`Fact(A)->Fact(B)` rejected) + PC07 (matching
+  param forwards).
+
+- **#5 check-side honesty** — commit `9402c00`. best-practices "Trust Boundary"
+  subsection states the compiler ensures you cannot SKIP a validator but does not
+  verify a validator body is correct.
+
+**Consciously deferred (non-soundness, explicitly optional in this item):** the
+dataflow *warning* for `ok v ::: P v` where `v` is not guard-constrained. It is opt-in
+guidance, not a soundness guarantee (a wrong validator body is inherent GDP trust), and
+the doc now sets the correct expectation. Not worth the false-positive noise.
+
+**Verify:** PN09/PN11 reject, PC05/PC07 compile; 130-file corpus 0 errors; `dune test`
+green (bar the known Racket 8.18/9.2 app-server `.zo` flakes); S7 = 135 kills.
