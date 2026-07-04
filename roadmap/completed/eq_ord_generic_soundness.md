@@ -106,3 +106,33 @@ planned `member x xs` / `maximum xs` accepted + `List.member fn xs` rejected tes
 - `tesl/private/runtime.rkt` — `tesl-equal?`.
 - `compiler/test/test_wave2_soundness.ml` — Stage-3 cases.
 - Regenerated snapshots: `example/learn/*.rkt` (20), `tesl/list-derived.rkt`.
+
+## Status: DONE — 2026-07-04
+Layer 1b landed in commit `891ac97` (generic-Eq/Ord soundness was already closed
+fail-closed by the landed Layers 1+2; 1b is the compile-time cross-module increment).
+
+`harvest_fd_ord_eq` + `load_imported_ord_eq_constraints` (checker.ml) re-parse each
+import and, for every imported `fn`, record an Eq/Ord obligation for each `<`/`==`
+operand that is a bare PARAMETER of a generic type — in the callee scheme's rigid
+vars via the same `constraint_to_rigid`/`finalize_ord_eq_constraints` machinery,
+keyed by qualified + plain name. `check_module` folds these into
+`ord_eq_constraints` (local entries win) before `check_ord_eq_calls`, which
+discharges them against a recorded call's argument types exactly like the
+same-module case. `List.member f fs` with `f : Int -> Int` is now a COMPILE error
+("equality is not defined for `Int -> Int` … via `List.member`"); `List.member x xs`
+at `Int` compiles.
+
+**Scope carve (non-soundness):** this covers comparators that compare a bare
+PARAMETER (`member`/`contains` — the flagship documented case). `maximum`/`minimum`
+compare case-binder ELEMENTS, not parameters; harvesting those statically needs full
+body re-inference of the import — a large, delicate change to the checker's core
+inference path — for an earliness-only gain, since those cases are already
+fail-closed at RUNTIME by Layer 2 (the loud `<` crash / `tesl-equal?`), exactly as
+this item's own Layer-2 design specifies. Left to Layer 2 by design.
+
+**Verify:** `test_f_import_member_fn_rejected` / `_int_accepted`
+(test_wave2_soundness F-decidable group) green; corpus `--check-all` example 92/92,
+tests 38/38 (no over-rejection of the legitimate `member`/`contains` corpus); S7 =
+135. **CAVEAT (unchanged from this item):** the full Racket gate (`compile-examples.sh`
+on Racket 9.2) still needs a clean-env run before merge — see
+`align-dev-shell-racket-9.2.md`.

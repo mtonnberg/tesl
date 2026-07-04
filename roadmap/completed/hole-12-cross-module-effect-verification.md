@@ -53,3 +53,29 @@ broader "cross-module = re-check or confine" principle.
 - App2.tesl → V001 (caller must declare dbWrite, or Evil rejected).
 - httpClient egress variant and 2-hop chain → rejected.
 - The legitimate multi-module corpus (example/kanel/*, example/chat/*) stays green.
+
+## Status: DONE — 2026-07-04
+Fix (A) — verified-caps propagation — landed in two commits:
+
+- `f8b4b67` (behaviour-preserving): relocated `collect_needed_capabilities`,
+  `build_func_capability_map`, `build_param_capability_map` and the effect tables
+  from `validation_capabilities.ml` into `validation_common.ml`, resolving the
+  circular `open` that blocked the loader from computing an imported body's caps.
+- `c47bee2` (the fix): `load_imported_func_caps` now RE-VERIFIES each imported
+  function — computes its body's ACTUAL capabilities via
+  `collect_needed_capabilities` and UNIONs them with the declared row, iterated to a
+  FIXPOINT over the imported module's own call graph (the 2-hop lie) and recursively
+  through its transitive imports (cycle-guarded by a `visited` set). A lying
+  `requires []` now contributes its real effect to the caller, which must declare it.
+
+**Verify:** direct lie (`App2` importing `Evil.sneakyRead`, `requires []` + `env`) and
+the 2-hop chain (`App3`/`EvilChain`) are REJECTED ("uses privileged operations and
+callees requiring [envRead] but does not declare them"); the honest passthrough
+(`AppOk`) and the declared-capability remediation (`App2Fixed`) COMPILE — the
+diagnostic leads to fixable code, not a dead-end (the importer additionally imports
+`Tesl.Env exposing [envRead]` to bring the capability into scope, the pre-existing
+P001 rule). Committed test `test_hole12_cross_module_caps.ml` (writes imported +
+importer to a temp dir; in-process compile). Corpus `--check-all`: example 92/92,
+tests 38/38 (no over-rejection of the honest multi-module corpus — kanel/chat).
+`dune test` green bar the known Racket 8.18/9.2 app-server `.zo` version-mismatch
+integration flakes (see `align-dev-shell-racket-9.2.md`). S7 = 135 kills.
