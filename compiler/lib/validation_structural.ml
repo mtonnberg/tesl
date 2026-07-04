@@ -143,22 +143,42 @@ let rec carried_proofs_of_expr
           else Some preds
         | other -> other)
      | _ -> None)
-  | EField { field; _ } ->
+  | EField { obj; field; _ } ->
     (* When a proof-annotated record field is accessed, propagate the field's
-       declared proof with its subject substituted to the field-access subject.
-       BSUBJ-1 (review §4.1): the subject is the FIELD-QUALIFIED key `obj.field`
-       (exactly what [subject_of_expr] now yields for this same node), so the
-       carried proof lines up with the requirement side, which also qualifies by
-       field.  Using the bare object subject here would make `doc.title`'s proof
-       read as `NonEmpty doc` while the requirement reads `NonEmpty doc.title`. *)
-    (match List.assoc_opt field !field_proof_registry with
-     | None -> None
-     | Some (param_name, proof) ->
-       let field_subj = match subject_of_expr subject_env expr with
-         | Some s -> s
-         | None -> field
-       in
-       Some [subst_proof [(param_name, field_subj)] proof])
+       declared proof with its subject substituted to the field-access subject
+       (BSUBJ-1: the subject is the FIELD-QUALIFIED key `obj.field`, matching
+       [subject_of_expr]).
+       2026-07-04 (hole #6): the registry is now keyed (declaring_type, field),
+       so credit the proof ONLY when the RECEIVER's resolved type is the type
+       that declares it.  Fail-closed: if the field carries a proof on SOME type
+       but this receiver's type is unresolved OR is a DIFFERENT type, return None
+       (no credit) — this rejects reading `Public.token` to satisfy a proof
+       declared on `Privileged.token`.  A field with no registered proof anywhere
+       returns None silently (no reject) — plain / newtype fields, e.g. `.value`. *)
+    let field_registered =
+      List.exists (fun ((_, fn), _) -> fn = field) !field_proof_registry in
+    if not field_registered then None
+    else begin
+      let receiver_type =
+        match !field_proof_type_ctx with
+        | Some (tenv, fmap, ctors) ->
+          (match infer_expr_type tenv funcs fmap ctors obj with
+           | Some ty -> type_head_name ty
+           | None -> None)
+        | None -> None
+      in
+      match receiver_type with
+      | None -> None   (* receiver type unresolved → fail-closed, do not credit *)
+      | Some tyname ->
+        (match List.assoc_opt (tyname, field) !field_proof_registry with
+         | None -> None  (* this type does not declare a proof for `field` *)
+         | Some (param_name, proof) ->
+           let field_subj = match subject_of_expr subject_env expr with
+             | Some s -> s
+             | None -> field
+           in
+           Some [subst_proof [(param_name, field_subj)] proof])
+    end
   | _ -> None
 
 let proofs_of_expr

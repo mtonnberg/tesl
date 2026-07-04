@@ -1043,6 +1043,11 @@ let check_fn_return_proof_annotations
      Validation_common (in scope via `open`). *)
   List.iter (function
     | DFunc fd when is_forgery_restricted_kind fd.kind ->
+      (* #6 (2026-07-04): set the per-fn type context so the EField arm of
+         carried_proofs_of_expr (reached via body_carries below) can resolve a
+         field receiver's type — e.g. `extractValue(item: ValidItem) = item.value`. *)
+      field_proof_type_ctx :=
+        Some (fn_type_env funcs fields_by_type ctors fd, fields_by_type, ctors);
       (match fd.return_spec with
        | RetAttached { binding = b; loc = ret_loc }
          when is_forgery_restricted_kind fd.kind && b.proof_ann <> None ->
@@ -1365,6 +1370,7 @@ let check_fn_return_proof_annotations
     | _ -> ()
   ) decls;
   field_proof_registry := [];
+  field_proof_type_ctx := None;
   List.rev !errors
 
 (** Check that top-level value bindings ([DConst]) do not form cycles.
@@ -1756,9 +1762,15 @@ let check_ghost_witness_predicates
         let type_env = List.map (fun (b : binding) -> (b.name, b.type_expr)) fd.params in
         let subject_env = build_initial_subject_env fd.params in
         let proof_env = initial_proof_env fd.params in
+        (* #6 (2026-07-04): per-fn type context for the EField arm reached via
+           walk_expr's carried_proofs_of_expr / proofs_of_expr calls. *)
+        field_proof_type_ctx :=
+          Some (fn_type_env funcs fields_by_type ctors fd, fields_by_type, ctors);
         walk_expr type_env subject_env proof_env fd.body
       | _ -> ()
     ) decls;
+    field_proof_registry := [];
+    field_proof_type_ctx := None;
     List.rev !errors
 
 (** Check that handler functions are never called directly from code.

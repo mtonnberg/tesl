@@ -325,6 +325,69 @@ establish factFor(n: Int) -> Fact (IsPositive n) =
   prove(n)
 |}
 
+(* Hole #6 (2026-07-04): a proof declared on one type's field must NOT be credited
+   when reading a same-named field of an UNRELATED type.  `Public.token` (no proof)
+   cannot satisfy an `Admin` requirement declared on `Privileged.token`. *)
+let test_PN10_field_proof_cross_type_forge () =
+  should_fail "does not statically satisfy declared proof" {|
+module FieldProofForge exposing [forge]
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.String exposing [String.length]
+fact Admin (s: String)
+check checkAdmin(s: String) -> s: String ::: Admin s =
+  if String.length s > 3 then
+    ok s ::: Admin s
+  else
+    fail 403 "no"
+record Privileged { token: String ::: Admin token }
+record Public { token: String }
+fn needAdmin(s: String ::: Admin s) -> String = "admin ${s}"
+fn forge(evil: String) -> String =
+  let p = Public { token: evil }
+  needAdmin p.token
+|}
+
+(* Positive companion to PN10: reading the field of the type that ACTUALLY declares
+   the proof still credits it. *)
+let test_PC06_field_proof_same_type_ok () =
+  should_pass {|
+module FieldProofOk exposing [useReal]
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.String exposing [String.length]
+fact Admin (s: String)
+check checkAdmin(s: String) -> s: String ::: Admin s =
+  if String.length s > 3 then
+    ok s ::: Admin s
+  else
+    fail 403 "no"
+record Privileged { token: String ::: Admin token }
+fn needAdmin(s: String ::: Admin s) -> String = "admin ${s}"
+fn useReal(pv: Privileged) -> String = needAdmin pv.token
+|}
+
+(* Hole #5-Fact-param (2026-07-04): a `Fact (A)` argument must NOT launder where a
+   `Fact (B)` parameter is required (the checker unifies Fact heads, and the
+   value-side evidence is opaque, so only the arg's declared Fact TYPE catches it). *)
+let test_PN11_fact_typed_param_launder () =
+  should_fail "proof mismatch" {|
+module FactParamForge exposing [launder]
+import Tesl.Prelude exposing [String, Fact]
+fact FactA (s: String)
+fact FactB (s: String)
+fn needB(s: String, _pf: Fact (FactB s)) -> String = s
+fn launder(s: String, evA: Fact (FactA s)) -> String = needB s evA
+|}
+
+(* Positive companion to PN11: forwarding a MATCHING Fact-typed param compiles. *)
+let test_PC07_fact_typed_param_match_ok () =
+  should_pass {|
+module FactParamOk exposing [passthru]
+import Tesl.Prelude exposing [String, Fact]
+fact FactB (s: String)
+fn needB(s: String, _pf: Fact (FactB s)) -> String = s
+fn passthru(s: String, evB: Fact (FactB s)) -> String = needB s evB
+|}
+
 let () =
   run "proof-negatives" [
     "proofs", [
@@ -337,6 +400,8 @@ let () =
       test_case "PN07 return binder cannot retype an input"       `Quick test_PN07_binder_reuse_different_type;
       test_case "PN08 attaching unrelated fact cannot forge return proof" `Quick test_PN08_attach_unrelated_fact_forgery;
       test_case "PN09 establish cannot delegate to a wrong-subject prove-fn" `Quick test_PN09_establish_delegate_wrong_subject;
+      test_case "PN10 field proof not credited across unrelated types" `Quick test_PN10_field_proof_cross_type_forge;
+      test_case "PN11 Fact-typed param cannot launder a different fact" `Quick test_PN11_fact_typed_param_launder;
     ];
     "capabilities", [
       test_case "CN01 capability use must be declared (leak)"     `Quick test_CN01_capability_leak;
@@ -349,5 +414,7 @@ let () =
       test_case "PC03 declared capability compiles"               `Quick test_PC03_declared_capability_ok;
       test_case "PC04 attaching matching fact compiles"           `Quick test_PC04_attach_matching_fact_ok;
       test_case "PC05 subject-preserving establish delegation compiles" `Quick test_PC05_establish_delegate_same_subject;
+      test_case "PC06 same-type field proof still credited" `Quick test_PC06_field_proof_same_type_ok;
+      test_case "PC07 matching Fact-typed param forwards" `Quick test_PC07_fact_typed_param_match_ok;
     ];
   ]

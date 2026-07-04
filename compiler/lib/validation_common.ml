@@ -1383,6 +1383,23 @@ let rec infer_expr_type
      | None -> None)
   | EApp _ ->
     let (head, args) = collect_call_head_and_args [] e in
+    (match head, args with
+     (* Record construction `Ctor { … }` parses as EApp(EConstructor cn, ERecord …);
+        the constructed value's type is the record/entity type named by `cn`.
+        (2026-07-04 hole #6: a proof-annotated field read off a let-bound
+        construction must resolve to the DECLARING type, not fail-close.) *)
+     | EConstructor { name = cn; _ }, _ when List.mem_assoc cn fields_by_type ->
+       Some (mk_name_type cn)
+     (* Record update `{ base | … }` parses as
+        EApp(EVar "#record-update#", ERecord{("__base__",base)::_}); the updated
+        value keeps `base`'s type. *)
+     | EVar { name = "#record-update#"; _ },
+       [ ERecord { fields = ("__base__", base_expr) :: _; _ } ] ->
+       infer_expr_type env funcs fields_by_type ctors base_expr
+     (* `decodeAs "TypeName" json` decodes JSON to the named type. *)
+     | EVar { name = "decodeAs"; _ }, (ELit { lit = LString tyname; _ } :: _) ->
+       Some (mk_name_type tyname)
+     | _ ->
     (match function_name_of_expr head with
     | Some fn_name ->
       (* Check user-defined functions first, then known SQL built-in return types. *)
@@ -1433,7 +1450,7 @@ let rec infer_expr_type
             Some (mk_app_type (mk_name_type "Maybe") (mk_var_type "a"))
           | "upsert" -> Some (mk_name_type "Unit")
           | _ -> None)))
-    | None -> None)
+    | None -> None))
   | ECacheGet _ -> Some (mk_app_type (mk_name_type "Maybe") (mk_name_type "a"))
   | ECacheSet _ | ECacheDelete _ | ECacheInvalidate _ -> Some (mk_name_type "Unit")
   | ESendEmail _ | EStartEmailWorker _ -> Some (mk_name_type "Unit")
@@ -1757,30 +1774,63 @@ let rec proofs_of_evidence_expr
      | _ -> None)
   | _ -> None
 
-(** Module-level registry of field-name → (param_name, proof_expr) for all
-    proof-annotated record/entity fields.  Set by [check_call_site_proofs] before
-    the traversal so that [carried_proofs_of_expr] can look up field proofs without
-    threading an extra parameter through every call site. *)
-let field_proof_registry : (string * (string * proof_expr)) list ref = ref []
+(** Registry of proof-annotated record/entity fields, keyed by
+    (declaring_type, field) → (field_param_name, proof_expr).  Set by each pass
+    before it walks a fn body so [carried_proofs_of_expr] can look up field proofs
+    without threading an extra parameter through every call site.
 
-(** Build a flat map from field name to (field_param_name, proof_expr) for all
-    proof-annotated record/entity fields in [decls]. *)
-let build_field_proof_map (decls : top_decl list) : (string * (string * proof_expr)) list =
+    2026-07-04 (hole #6): the key was the BARE field name, which credited a proof
+    declared on `Privileged.token` when reading `Public.token` (an unrelated type
+    with a same-named field) — a cross-type forgery.  Keying by the declaring type
+    closes it; the EField reader resolves the receiver's type and looks up
+    (receiver_type, field). *)
+let field_proof_registry : ((string * string) * (string * proof_expr)) list ref = ref []
+
+(** Per-fn type context for the EField (#6) and Fact-param (#5) credit decisions:
+    the enclosing fn's (params + let-bindings) name→type env plus the module
+    field/ctor maps.  Set by each pass alongside [field_proof_registry] before it
+    walks a fn body; None outside a fn walk (a reader that finds None must NOT
+    credit — fail-closed). *)
+let field_proof_type_ctx : (type_env * field_map * ctor_info) option ref = ref None
+
+(** Build the (type,field)-keyed field-proof map for [decls]. *)
+let build_field_proof_map (decls : top_decl list) : ((string * string) * (string * proof_expr)) list =
+  let of_fields (tyname : string) (fields : field_def list) =
+    List.filter_map (fun (f : field_def) ->
+      match f.proof_ann with
+      | Some p -> Some ((tyname, f.name), (f.name, p))
+      | None -> None
+    ) fields
+  in
   List.concat_map (function
-    | DRecord r ->
-      List.filter_map (fun (f : field_def) ->
-        match f.proof_ann with
-        | Some p -> Some (f.name, (f.name, p))
-        | None -> None
-      ) r.fields
-    | DEntity e ->
-      List.filter_map (fun (f : field_def) ->
-        match f.proof_ann with
-        | Some p -> Some (f.name, (f.name, p))
-        | None -> None
-      ) e.fields
+    | DRecord r -> of_fields r.name r.fields
+    | DEntity e -> of_fields e.name e.fields
     | _ -> []
   ) decls
+
+(** Build the enclosing-fn name→type env used to resolve an EField receiver
+    (#6) or a Fact-typed argument (#5): the params, plus the body's linear
+    let-chain (each let value typed via [infer_expr_type]).  Covers a param
+    receiver (`extractValue(item: ValidItem) = item.value`) and a let-bound one
+    (`let p = Public {…} … p.token`). *)
+let fn_type_env funcs (fields_by_type : field_map) (ctors : ctor_info)
+    (fd : func_decl) : type_env =
+  let base = List.map (fun (b : binding) -> (b.name, b.type_expr)) fd.params in
+  let rec go env (e : expr) =
+    match e with
+    | ELet { name; value; body; _ } ->
+      let env' = match infer_expr_type env funcs fields_by_type ctors value with
+        | Some ty -> (name, ty) :: env | None -> env in
+      go env' body
+    | ELetProof { value_name; value; body; _ } ->
+      let env' = match infer_expr_type env funcs fields_by_type ctors value with
+        | Some ty -> (value_name, ty) :: env | None -> env in
+      go env' body
+    | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+    | EWithTransaction { body; _ } -> go env body
+    | _ -> env
+  in
+  go base fd.body
 
 (** ADT-constructor field proofs, POSITIONAL (review 2026-07 PFC-2 part a).
     `ctor -> [(field_name, proof_ann option)]` in declaration order, for variants
@@ -1817,7 +1867,7 @@ type module_facts = {
   mf_funcs : (string * func_info) list;       (* build_func_info decls @ extra_funcs *)
   mf_fields_map : field_map;                  (* build_fields_map decls *)
   mf_ctors : ctor_info;                       (* build_ctor_info decls *)
-  mf_field_proof_map : (string * (string * proof_expr)) list; (* build_field_proof_map decls *)
+  mf_field_proof_map : ((string * string) * (string * proof_expr)) list; (* build_field_proof_map decls, keyed (type,field) *)
   mf_ctor_field_proof_map : (string * (string * proof_expr option) list) list; (* build_ctor_field_proof_map decls *)
   (* Validation-consolidation Phase 1: per-decl projections extracted ONCE here
      instead of being re-filtered out of [decls] by every structural/codec pass.

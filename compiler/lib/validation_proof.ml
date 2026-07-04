@@ -88,19 +88,52 @@ let check_call_proofs
          | Some proofs -> proofs
          | None -> []
        in
-       if carried_fact_proofs <> [] && not (proof_matches expected_proof carried_fact_proofs) then
-         let carried_desc =
-           carried_fact_proofs
-           |> List.concat_map flatten_proof
-           |> List.map pp_proof
-           |> String.concat ", "
-         in
-         let expected_desc = pp_proof expected_proof in
-         errors := make_error loc
-           ~hint:(Printf.sprintf "the proof carried by the argument does not match the                    required `Fact (%s)` evidence" expected_desc)
-           (Printf.sprintf "proof mismatch: argument to `%s` parameter `%s` carries proof(s)                   `%s`, but `Fact (%s)` is required"
-              func_name param.name carried_desc expected_desc)
-         :: !errors
+       (match carried_fact_proofs with
+        | _ :: _ ->
+          if not (proof_matches expected_proof carried_fact_proofs) then
+            let carried_desc =
+              carried_fact_proofs
+              |> List.concat_map flatten_proof
+              |> List.map pp_proof
+              |> String.concat ", "
+            in
+            let expected_desc = pp_proof expected_proof in
+            errors := make_error loc
+              ~hint:(Printf.sprintf "the proof carried by the argument does not match the                    required `Fact (%s)` evidence" expected_desc)
+              (Printf.sprintf "proof mismatch: argument to `%s` parameter `%s` carries proof(s)                   `%s`, but `Fact (%s)` is required"
+                 func_name param.name carried_desc expected_desc)
+            :: !errors
+        | [] ->
+          (* #5-Fact-param (2026-07-04): the value-side evidence is opaque (the arg
+             is not in proof_env — e.g. an opaque Fact-typed variable), so the old
+             `carried <> []` guard skipped the check and let a Fact(A) launder where
+             Fact(B) is required (the type checker unifies Fact heads).  Fall back to
+             the arg's declared/inferred Fact TYPE and compare its predicate to the
+             required one.  Fires ONLY on a resolvable Fact-typed arg, so it does not
+             over-reject lesson12's `detachFact pq` (which resolves via proof_env into
+             the branch above) or exotic non-Fact-typed shapes. *)
+          let arg_fact =
+            match !field_proof_type_ctx with
+            | Some (tenv, fmap, ctors) ->
+              (match infer_expr_type tenv funcs fmap ctors arg with
+               | Some ty -> proof_of_fact_type ty
+               | None -> None)
+            | None -> None
+          in
+          (match arg_fact with
+           | Some ap ->
+             let ap' = subst_proof mapping ap in
+             if not (proof_matches expected_proof [ap']) then
+               errors := make_error loc
+                 ~hint:(Printf.sprintf
+                   "the argument's fact `%s` does not match the required fact `%s`"
+                   (pp_proof ap') (pp_proof expected_proof))
+                 (Printf.sprintf
+                   "proof mismatch: argument to `%s` parameter `%s` has type `Fact (%s)`, \
+                    but `Fact (%s)` is required"
+                   func_name param.name (pp_proof ap') (pp_proof expected_proof))
+               :: !errors
+           | None -> ()))
      | None -> ());
     match param.proof_ann with
     | None -> ()
@@ -1531,6 +1564,12 @@ let check_call_site_proofs ?facts ?(extra_funcs=[]) (decls : top_decl list) : va
     | DFunc fd ->
       let subject_env = build_initial_subject_env fd.params in
       let proof_env = build_initial_proof_env fd.params in
+      (* #6/#5 (2026-07-04): set the per-fn type context (params + let-chain +
+         module field/ctor maps) so the EField arm can resolve a receiver's type
+         and the Fact-param check can resolve an argument's Fact type. *)
+      field_proof_type_ctx :=
+        Some (fn_type_env funcs mf.mf_fields_map mf.mf_ctors fd,
+              mf.mf_fields_map, mf.mf_ctors);
       errors := check_expr_call_proofs subject_env proof_env funcs fd.body @ !errors
     | DTest tf ->
       errors := check_test_stmts_call_proofs [] [] funcs tf.stmts @ !errors
@@ -1546,6 +1585,7 @@ let check_call_site_proofs ?facts ?(extra_funcs=[]) (decls : top_decl list) : va
   ) decls;
   field_proof_registry := [];
   ctor_field_proof_registry := [];
+  field_proof_type_ctx := None;
   List.rev !errors
 
 (** Validate that every argument passed to filterCheck/allCheck/filterCheckValues/
