@@ -519,6 +519,12 @@ let encode_expr_of_annotated_ir_type ty proof_ann value_expr =
 
 type elm_fact_kind =
   | FkElmSmart of { checker : string; base_type : type_expr; constraints : Ir.ir_constraint list }
+  (* A single-value `check` whose predicate cannot be inlined into Elm (it calls a
+     helper fn). Rather than SILENTLY dropping the smart constructor (issue #13 —
+     which then breaks `elm make` with a confusing "does not expose fooOk"), emit
+     the constructor delegating the predicate to a user-managed `ApiHelpers.<check>`
+     Elm function. If the user hasn't written it, `elm make` fails LOUD and clear. *)
+  | FkElmHelper of { checker : string; base_type : type_expr }
   | FkAuth of { checker : string; base_type : type_expr }
   | FkServerOnly of { checker : string option; base_type : type_expr }
 
@@ -644,8 +650,48 @@ let classify_fact fact_name
             | Some constraints ->
               (match all_elm_conditions "input" constraints with
                | Some _ -> FkElmSmart { checker = func.name; base_type; constraints }
+               (* The predicate IS visible but only PARTIALLY translatable (e.g. a
+                  nested guard). Stay server-only — manufacturing a client proof
+                  from the partial subset would accept values the full predicate
+                  rejects (soundness). *)
                | None -> FkServerOnly { checker = Some func.name; base_type })
-            | None -> FkServerOnly { checker = Some func.name; base_type })
+            (* No flat constraints extracted. Delegate to `ApiHelpers.<check>` ONLY
+               when the predicate CALLS A USER-DEFINED `fn` (the issue #13 scenario:
+               a validator factored into a helper). An unconditional check (`ok x`)
+               or a stdlib-only nested guard has no user helper to reimplement, so it
+               stays server-only — don't force an ApiHelpers module on it. *)
+            | None ->
+              let user_fn_names =
+                List.filter_map (function
+                  | DFunc f when f.kind = FnKind -> Some f.name | _ -> None) decls in
+              let rec calls_user_fn e =
+                let head_name e =
+                  let rec go = function
+                    | EApp { fn; _ } -> go fn
+                    | EVar { name; _ } -> Some name
+                    | _ -> None
+                  in go e in
+                match e with
+                | EVar { name; _ } -> List.mem name user_fn_names
+                | EApp { fn; arg; _ } ->
+                  (match head_name fn with Some n when List.mem n user_fn_names -> true | _ -> false)
+                  || calls_user_fn fn || calls_user_fn arg
+                | EIf { cond; then_; else_; _ } ->
+                  calls_user_fn cond || calls_user_fn then_ || calls_user_fn else_
+                | EBinop { left; right; _ } -> calls_user_fn left || calls_user_fn right
+                | EUnop { arg; _ } -> calls_user_fn arg
+                | ELet { value; body; _ } | ELetProof { value; body; _ } ->
+                  calls_user_fn value || calls_user_fn body
+                | ECase { scrut; arms; _ } ->
+                  calls_user_fn scrut
+                  || List.exists (fun (a : case_arm) -> calls_user_fn a.body) arms
+                | EOk { value; _ } -> calls_user_fn value
+                | _ -> false
+              in
+              if calls_user_fn func.body then
+                FkElmHelper { checker = func.name; base_type }
+              else
+                FkServerOnly { checker = Some func.name; base_type })
        | _ -> FkServerOnly { checker = Some func.name; base_type })
     | _ -> FkServerOnly { checker = None; base_type }
   end
@@ -665,7 +711,7 @@ let rec validation_chain ~fact_kind_of proof_ctor facts indent =
   | [] -> indent ^ "D.succeed (axiom (" ^ proof_ctor ^ ") v)"
   | fact_name :: rest ->
     match fact_kind_of fact_name with
-    | FkElmSmart _ ->
+    | FkElmSmart _ | FkElmHelper _ ->
       indent ^ "case " ^ smart_constructor_name fact_name ^ " v of\n"
       ^ indent ^ "    Just _ ->\n"
       ^ validation_chain ~fact_kind_of proof_ctor rest (indent ^ "        ") ^ "\n"
@@ -1018,7 +1064,7 @@ let emit_elm ?module_name_override (m : module_form) : string =
       let kind = fact_kind_of fd.name in
       let base = [fd.name; fact_decoder_name fd.name] in
       Some (match kind with
-        | FkElmSmart _ -> base @ [smart_constructor_name fd.name]
+        | FkElmSmart _ | FkElmHelper _ -> base @ [smart_constructor_name fd.name]
         | FkAuth _ | FkServerOnly _ -> base)
     | _ -> None
   ) m.decls |> List.concat in
@@ -1045,6 +1091,15 @@ let emit_elm ?module_name_override (m : module_form) : string =
 
 " source_base;
 
+  (* A check whose predicate can't be inlined delegates to a user-managed
+     `ApiHelpers.<check>`. Only import ApiHelpers when at least one such check
+     exists, so projects with only inlinable checks never have to create the
+     module (issue #13). *)
+  let uses_api_helpers =
+    List.exists (function
+      | DFact fd -> (match fact_kind_of fd.name with FkElmHelper _ -> true | _ -> false)
+      | _ -> false) m.decls
+  in
   (* ── Imports ── *)
   add "import Http\n";
   add "import Json.Decode as D\n";
@@ -1053,6 +1108,14 @@ let emit_elm ?module_name_override (m : module_form) : string =
     add "import Dict exposing (Dict)\n";
   if uses_refinement_proofs then
     add "import RefinementProofs.Theory exposing (Proven, axiom, exorcise, And, and)\n";
+  if uses_api_helpers then begin
+    add "\n";
+    add "{- This client references ApiHelpers.<check> : <base> -> Bool for each `check`\n";
+    add "   whose predicate calls a helper fn (not inlinable). Provide an ApiHelpers.elm\n";
+    add "   module implementing them, kept in sync with the Tesl checks. The server\n";
+    add "   re-validates, so ApiHelpers is a client-side convenience, not a trust point. -}\n";
+    add "import ApiHelpers\n"
+  end;
   add "\n\n";
   if uses_refinement_proofs then begin
     add "type ForAll p\n    = ForAll\n\n";
@@ -1091,6 +1154,7 @@ let emit_elm ?module_name_override (m : module_form) : string =
       let kind = fact_kind_of fact_name in
       let base_type = match kind with
         | FkElmSmart { base_type; _ }
+        | FkElmHelper { base_type; _ }
         | FkAuth { base_type; _ }
         | FkServerOnly { base_type; _ } -> base_type
       in
@@ -1113,6 +1177,31 @@ let emit_elm ?module_name_override (m : module_form) : string =
            add "    else\n";
            add "        Nothing\n\n"
          end;
+         addf "%s : D.Decoder (Proven %s %s)\n" (fact_decoder_name fact_name) elm_base fact_name;
+         addf "%s =\n" (fact_decoder_name fact_name);
+         addf "    %s\n" (decode_expr_of_type base_type);
+         add "        |> D.andThen\n";
+         add "            (\\v ->\n";
+         addf "                case %s v of\n" smart_name;
+         add "                    Just x ->\n";
+         add "                        D.succeed x\n";
+         add "                    Nothing ->\n";
+         addf "                        D.fail %S\n            )\n\n" ("Failed proof: " ^ fact_name)
+       | FkElmHelper { checker; _ } ->
+         (* The check's predicate calls a Tesl helper fn we can't inline into Elm.
+            Emit the smart constructor + decoder, delegating the predicate to a
+            user-provided `ApiHelpers.<check> : <base> -> Bool`. If it is missing,
+            `elm make` fails loudly (issue #13) instead of the generator silently
+            dropping the constructor. The user keeps ApiHelpers in sync with the
+            Tesl check; the server remains authoritative, so a divergence is only a
+            UX issue, never a soundness hole. *)
+         let smart_name = smart_constructor_name fact_name in
+         addf "%s : %s -> Maybe (Proven %s %s)\n" smart_name elm_base elm_base fact_name;
+         addf "%s input =\n" smart_name;
+         addf "    if ApiHelpers.%s input then\n" checker;
+         addf "        Just (axiom %s input)\n" fact_name;
+         add "    else\n";
+         add "        Nothing\n\n";
          addf "%s : D.Decoder (Proven %s %s)\n" (fact_decoder_name fact_name) elm_base fact_name;
          addf "%s =\n" (fact_decoder_name fact_name);
          addf "    %s\n" (decode_expr_of_type base_type);
