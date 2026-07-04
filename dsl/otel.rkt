@@ -14,6 +14,8 @@
  current-telemetry-consumers
  make-console-telemetry-consumer
  make-otlp-http-consumer
+ parse-otlp-headers-env
+ merge-otlp-headers
  telemetry-events->otlp-logs-jsexpr
  telemetry-value->otlp-any-value
  init-opentelemetry!
@@ -191,6 +193,35 @@
       (post url header-list body))
     (void)))
 
+;; Parse the standard OTEL env var `OTEL_EXPORTER_OTLP_HEADERS` — a
+;; comma-separated list of `key=value` pairs (e.g.
+;; "x-oneuptime-token=abc,x-honeycomb-team=xyz") — into a list of (key . value)
+;; string pairs.  This is how OTLP backends receive auth (OneUptime, Honeycomb,
+;; Grafana Cloud, Dash0, …) without a collector in between (issue #14). Malformed
+;; entries (no `=`, empty key) are skipped rather than aborting telemetry. Only
+;; the first `=` splits, so values may contain `=`.
+(define (parse-otlp-headers-env)
+  (define raw (getenv "OTEL_EXPORTER_OTLP_HEADERS"))
+  (if (or (not raw) (string=? (string-trim raw) ""))
+      '()
+      (filter-map
+       (lambda (kv)
+         (define t (string-trim kv))
+         (define eq (for/first ([c (in-string t)] [i (in-naturals)] #:when (char=? c #\=)) i))
+         (cond
+           [(or (not eq) (= eq 0)) #f]
+           [else (cons (string-trim (substring t 0 eq))
+                       (string-trim (substring t (add1 eq))))]))
+       (string-split raw ","))))
+
+;; Merge explicit headers with env headers; explicit ones win on a
+;; case-insensitive key clash (env is the fallback source).
+(define (merge-otlp-headers explicit env-hdrs)
+  (define (key h) (string-downcase (car h)))
+  (define explicit-keys (map key explicit))
+  (append explicit
+          (filter (lambda (h) (not (member (key h) explicit-keys))) env-hdrs)))
+
 (define (make-otlp-http-consumer #:endpoint endpoint
                                  #:headers [headers '()]
                                  #:timeout [_timeout-ms 5000]
@@ -267,10 +298,13 @@
   ;; A configured endpoint activates the exporter (opt-in by config); the sentinel
   ;; "in-memory" is treated as "no remote export" for local/example use.  Console
   ;; emission is independent and controlled by #:console?.
+  ;; Fold in OTEL_EXPORTER_OTLP_HEADERS so token-gated OTLP backends authenticate
+  ;; with no collector hop (issue #14). Explicit #:otlp-headers win over env.
+  (define effective-otlp-headers (merge-otlp-headers otlp-headers (parse-otlp-headers-env)))
   (define otlp-consumers
     (if (and endpoint (not (member endpoint '("in-memory" ""))))
         (list (make-otlp-http-consumer #:endpoint endpoint
-                                       #:headers otlp-headers
+                                       #:headers effective-otlp-headers
                                        #:timeout otlp-timeout-ms
                                        #:batch-size otlp-batch-size
                                        #:flush-interval-ms otlp-flush-interval-ms))
