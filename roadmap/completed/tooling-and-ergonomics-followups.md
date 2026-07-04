@@ -94,3 +94,28 @@ illustrative should be marked so the extractor skips them.)
   marking the existing illustrative blocks — a bounded but non-trivial test-infra add.
 
 Non-soundness item; the tree is green (`ci.sh` 11/11 under 9.2) with the above done.
+
+## Status: DONE — 2026-07-04
+All actionable follow-ups shipped; E1 carved to `roadmap/later/e1-import-ergonomics.md`
+per the maintainer's "bounded infra only" decision (E1 is a language-design change,
+not a bug-fix).
+
+- **T1** (LSP rename corruption) — DONE (e082c45): doctest snippets excluded from
+  occurrence collection; regression test.
+- **T2** (fmt owns indentation) — DONE (5154183): `format_source` normalizes odd
+  indent→even (linter's W011 rule, continuation-aware) so fmt→lint is a fixpoint;
+  idempotent, 0 corpus churn; regression tests.
+- **T3** (check-json vs agent-context shape) — DONE (3a41a18, document): AGENTS.md
+  states the two intentional shapes explicitly.
+- **E2** (codec double-declaration) — DONE (44b7d1e): verified a plain response record
+  auto-derives its JSON encoder (compiles + emits); best-practices corrected to stop
+  over-teaching `toJson`.
+- **E3** (non-compiling snippets) — DONE (2280eda): fixed 10 correct-intent
+  single-line-if snippets (tour / intro / LANGUAGE-SPEC) + a BLOCK-AWARE single-line-if
+  regression lint in the manual-coherence test that skips intentional counter-example
+  fences (`# WRONG` / `# Rejected`).
+- **E1** (import ceremony) — CARVED to `roadmap/later/e1-import-ergonomics.md` (implicit
+  Prelude vs `--lint --fix` auto-prune — a deliberate design choice).
+
+`dune test` green (integration suites included, now on fresh 9.2 `.zo`); manual-coherence
+PASS; `ci.sh` was green under 9.2 before these doc/formatter/test-only changes.
