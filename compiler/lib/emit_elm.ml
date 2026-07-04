@@ -52,6 +52,7 @@ let rec elm_type_of_type_expr te =
   | TName { name = "Real"; _ } -> "Float"
   | TName { name = "Bool"; _ } -> "Bool"
   | TName { name = "PosixMillis"; _ } -> "Int"
+  | TName { name = "Unit"; _ } -> "()"
   | TName { name = "Set"; _ } -> "List value"
   | TName { name; _ } -> name
   | TApp { head = TName { name = "List"; _ }; arg; _ } ->
@@ -249,6 +250,7 @@ let rec decode_expr_of_type te =
   | TName { name = "Real"; _ } -> "D.float"
   | TName { name = "Bool"; _ } -> "D.bool"
   | TName { name = "PosixMillis"; _ } -> "D.int"
+  | TName { name = "Unit"; _ } -> "(D.succeed ())"
   | TName { name; _ } -> decoder_fn_name name
   | TApp { head = TName { name = "List"; _ }; arg; _ } ->
     "(D.list " ^ decode_expr_arg arg ^ ")"
@@ -272,6 +274,7 @@ let rec encode_expr_of_type te value_expr =
   | TName { name = "Real"; _ } -> "E.float " ^ value_expr
   | TName { name = "Bool"; _ } -> "E.bool " ^ value_expr
   | TName { name = "PosixMillis"; _ } -> "E.int " ^ value_expr
+  | TName { name = "Unit"; _ } -> "E.null"
   | TName { name; _ } -> encoder_fn_name name ^ " " ^ value_expr
   | TApp { head = TName { name = "List"; _ }; arg; _ }
   | TApp { head = TName { name = "Set"; _ }; arg; _ } ->
@@ -290,6 +293,7 @@ and encode_fn_of_type te =
   | TName { name = "Real"; _ } -> "E.float"
   | TName { name = "Bool"; _ } -> "E.bool"
   | TName { name = "PosixMillis"; _ } -> "E.int"
+  | TName { name = "Unit"; _ } -> "(\\_ -> E.null)"
   | TName { name; _ } -> encoder_fn_name name
   | TApp { head = TName { name = "List"; _ }; arg; _ }
   | TApp { head = TName { name = "Set"; _ }; arg; _ } ->
@@ -311,6 +315,7 @@ let rec elm_type_of_ir_type (ty : Ir.ir_type) =
   | Ir.IRFloat -> "Float"
   | Ir.IRBool -> "Bool"
   | Ir.IRPosixMillis -> "Int"
+  | Ir.IRNamed "Unit" -> "()"
   | Ir.IRNamed name -> name
   | Ir.IRVar name -> name
   | Ir.IRList arg -> elm_type_application "List" (elm_type_text_arg (elm_type_of_ir_type arg))
@@ -370,6 +375,7 @@ let rec decode_expr_of_ir_type (ty : Ir.ir_type) =
   | Ir.IRFloat -> "D.float"
   | Ir.IRBool -> "D.bool"
   | Ir.IRPosixMillis -> "D.int"
+  | Ir.IRNamed "Unit" -> "(D.succeed ())"
   | Ir.IRNamed name -> decoder_fn_name name
   | Ir.IRVar _ -> "D.value"
   | Ir.IRList arg -> "(D.list " ^ wrap_decoder_arg (decode_expr_of_ir_type arg) ^ ")"
@@ -393,6 +399,7 @@ let rec encode_expr_of_ir_type ty value_expr =
   | Ir.IRFloat -> "E.float " ^ value_expr
   | Ir.IRBool -> "E.bool " ^ value_expr
   | Ir.IRPosixMillis -> "E.int " ^ value_expr
+  | Ir.IRNamed "Unit" -> "E.null"
   | Ir.IRNamed name -> encoder_fn_name name ^ " " ^ value_expr
   | Ir.IRList arg
   | Ir.IRSet arg -> "(E.list " ^ encode_fn_of_ir_type arg ^ ") " ^ value_expr
@@ -444,6 +451,7 @@ and encode_fn_of_ir_type ty =
   | Ir.IRFloat -> "E.float"
   | Ir.IRBool -> "E.bool"
   | Ir.IRPosixMillis -> "E.int"
+  | Ir.IRNamed "Unit" -> "(\\_ -> E.null)"
   | Ir.IRNamed name -> encoder_fn_name name
   | _ -> "(\\value -> " ^ (encode_expr_of_ir_type ty "value") ^ ")"
 
