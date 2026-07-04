@@ -1702,6 +1702,18 @@ let rec collect_occurrences_in_top_decl env target (decl : Ast.top_decl) =
          @ List.concat_map (fun (capture : Ast.api_capture) -> collect_occurrences_in_binding env target capture.binding) endpoint.captures
          @ collect_occurrences_in_return_spec env target (ep_return_spec endpoint)
       ) api.endpoints
+  | Ast.DTest test
+    when (let p = "doctest: " in
+          String.length test.description >= String.length p
+          && String.sub test.description 0 (String.length p) = p) ->
+    (* T1 (2026-07-04): synthetic doctest decls are parsed by [parse_expr_snippet]
+       as standalone snippets, so their expression locs are LOCAL to the snippet
+       (line 0), not the real comment position.  Emitting occurrences from them
+       makes an LSP rename write a corrupting edit at line 0.  A comment-embedded
+       doctest snippet has no reliable editable source position, so exclude it from
+       occurrence collection entirely (references/documentHighlight/rename consume
+       this list). *)
+    []
   | Ast.DTest test -> collect_occurrences_in_test_stmts env [] target test.stmts
   | Ast.DApiTest test ->
     List.concat_map (collect_occurrences_in_expr env [] target) test.seed_stmts

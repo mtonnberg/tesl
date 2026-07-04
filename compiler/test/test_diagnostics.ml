@@ -193,6 +193,22 @@ fn value() -> Int =
   alias
 |}
 
+(* T1 (2026-07-04): a `#>` doctest snippet is parsed with snippet-LOCAL locs
+   (line 0).  If its occurrences are collected, an LSP rename of the doctested
+   symbol writes a corrupting edit at line 0.  This fixture references `triple`
+   from a `#> triple 5` doctest; occurrence collection must yield only the real
+   def + call-site positions, never a line-0 edit. *)
+let doctest_occurrences_src = {|#lang tesl
+module Main exposing [triple, caller]
+import Tesl.Prelude exposing [Int]
+#> triple 5
+#= 15
+fn triple(n: Int) -> Int =
+  n + n + n
+fn caller() -> Int =
+  triple 4
+|}
+
 let codec_via_occurrences_src = {|#lang tesl
 module Main exposing [Msg, nonEmpty]
 import Tesl.Prelude exposing [Int, String, Bool, List, Fact, detachFact]
@@ -484,6 +500,22 @@ let test_cli_occurrences_json_top_level_contract () =
     assert_contains ~name:"occurrences helper def line" stdout "\"line\":3";
     assert_contains ~name:"occurrences helper use line" stdout "\"line\":8")
 
+let test_cli_occurrences_json_doctest_no_line0 () =
+  with_temp_file "tesl-occurrences-doctest-" doctest_occurrences_src (fun path ->
+    (* query `triple` at its definition (0-based line 5, col 3) *)
+    let exit_code, stdout = run_occurrences_json path 5 3 in
+    Alcotest.(check int) "exit code" 0 exit_code;
+    assert_contains ~name:"doctest occ: def" stdout "\"line\":5,\"col\":3";
+    assert_contains ~name:"doctest occ: call site" stdout "\"line\":8,\"col\":2";
+    (* T1 regression: the `#> triple 5` doctest must NOT contribute a line-0
+       occurrence (LSP rename would corrupt line 0). *)
+    let has_line0 =
+      try ignore (Str.search_forward (Str.regexp_string "\"line\":0") stdout 0); true
+      with Not_found -> false
+    in
+    if has_line0 then
+      Alcotest.failf "doctest produced a corrupting line-0 occurrence:\n%s" stdout)
+
 let test_cli_occurrences_json_local_contract () =
   with_temp_file "tesl-occurrences-local-" local_definition_src (fun path ->
     let exit_code, stdout = run_occurrences_json path 5 2 in
@@ -650,6 +682,7 @@ let () =
       Alcotest.test_case "cli definition parser failure" `Quick test_cli_definition_json_parser_contract;
       Alcotest.test_case "cli occurrences top-level" `Quick test_cli_occurrences_json_top_level_contract;
       Alcotest.test_case "cli occurrences local" `Quick test_cli_occurrences_json_local_contract;
+      Alcotest.test_case "cli occurrences doctest no line-0 (T1)" `Quick test_cli_occurrences_json_doctest_no_line0;
       Alcotest.test_case "cli occurrences precise top-level range" `Quick test_cli_occurrences_json_precise_top_level_range_contract;
       Alcotest.test_case "cli occurrences rhs picks called symbol" `Quick test_cli_occurrences_json_rhs_picks_called_symbol_contract;
       Alcotest.test_case "cli occurrences codec via precise range" `Quick test_cli_occurrences_json_codec_via_precise_range_contract;
