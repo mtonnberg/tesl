@@ -1059,11 +1059,19 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
 
 (* ── B8. Undefined proof predicates ─────────────────────────────────────── *)
 
-(** Predicate names from the standard library that are always valid. *)
+(** Predicate names that are always in scope.
+    The framework provenance / quantifier predicates come from the SINGLE source
+    of truth [Type_system.framework_proof_predicates] (FromDb, FromQueue,
+    FromDeadQueue, ForAll, MaybeForAll, ForAllValues, ForAllKeys, Exists, Id) so
+    this list can no longer drift from it — the drift is exactly what left
+    `FromDeadQueue` (used by every dead-letter worker) reported "not in scope"
+    while `FromDb`/`FromQueue` were fine (bug-report #7). The remaining names are
+    the user-facing stdlib predicates plus the always-available `Authenticated`/
+    `Fact`. *)
 let stdlib_predicates : string list =
-  [ "IsNonZero"; "IsNonNegative"; "IsNonEmpty"; "IsUpperCase"; "IsLowerCase"
-  ; "IsTrimmed"; "IsSorted"; "HasKey"; "ForAll"; "FromDb"; "FromQueue"
-  ; "Authenticated"; "Fact"; "FloatNonZero" ]
+  Type_system.framework_proof_predicates
+  @ [ "IsNonZero"; "IsNonNegative"; "IsNonEmpty"; "IsUpperCase"; "IsLowerCase"
+    ; "IsTrimmed"; "IsSorted"; "HasKey"; "Authenticated"; "Fact"; "FloatNonZero" ]
 
 (** Collect predicate names produced by check/auth/establish functions in imported modules. *)
 let load_imported_predicates (m : module_form) : string list =

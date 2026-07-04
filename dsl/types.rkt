@@ -96,6 +96,7 @@
  tesl-type-codec-decode
  tesl-json-string-codec
  tesl-json-int-codec
+ tesl-json-int32-codec
  tesl-json-bool-codec
  tesl-json-float-codec
  tesl-json-posix-millis-codec
@@ -106,6 +107,7 @@
  ;; the emitter inlines direct calls to these from per-type codecs)
  tesl-encode-prim-string
  tesl-encode-prim-int
+ tesl-encode-prim-int32
  tesl-encode-prim-bool
  tesl-encode-prim-float
  tesl-encode-prim-posix-millis
@@ -114,6 +116,7 @@
  tesl-encode-prim-set
  tesl-decode-prim-string
  tesl-decode-prim-int
+ tesl-decode-prim-int32
  tesl-decode-prim-bool
  tesl-decode-prim-float
  tesl-decode-prim-posix-millis
@@ -2119,6 +2122,16 @@
   (if (string? (raw-value v)) (raw-value v) (error "expected String, got ~a" v)))
 (define (tesl-encode-prim-int v)
   (if (integer? (raw-value v)) (raw-value v) (error "expected Int, got ~a" v)))
+;; Int32: JS-safe 32-bit-bounded integer. Same wire shape as Int (a JSON number),
+;; but the decode boundary REJECTS values outside [-2^31, 2^31) rather than
+;; silently wrapping — mirroring int32? in tesl/int32.rkt (constants inlined here
+;; because int32.rkt requires this file, so the dependency cannot be reversed).
+(define TESL-INT32-MIN (- (expt 2 31)))
+(define TESL-INT32-MAX (sub1 (expt 2 31)))
+(define (tesl-int32-in-range? n) (and (exact-integer? n) (>= n TESL-INT32-MIN) (<= n TESL-INT32-MAX)))
+(define (tesl-encode-prim-int32 v)
+  (define raw (raw-value v))
+  (if (tesl-int32-in-range? raw) raw (error "expected Int32 (in [-2^31, 2^31)), got ~a" v)))
 (define (tesl-encode-prim-bool v)
   (if (boolean? (raw-value v)) (raw-value v) (error "expected Bool, got ~a" v)))
 (define (tesl-encode-prim-float v)
@@ -2143,6 +2156,11 @@
   (if (string? j) j (error "expected JSON string, got ~a" j)))
 (define (tesl-decode-prim-int j)
   (if (integer? j) j (error "expected JSON integer, got ~a" j)))
+(define (tesl-decode-prim-int32 j)
+  (cond
+    [(not (integer? j)) (error "expected JSON integer for Int32, got ~a" j)]
+    [(not (tesl-int32-in-range? j)) (error "expected Int32 in [-2^31, 2^31), got ~a" j)]
+    [else j]))
 (define (tesl-decode-prim-bool j)
   (if (boolean? j) j (error "expected JSON boolean, got ~a" j)))
 (define (tesl-decode-prim-float j)
@@ -2162,6 +2180,7 @@
 ;; decoder: jsexpr-compatible -> raw value (raises on type mismatch)
 (define tesl-json-string-codec       (cons tesl-encode-prim-string       tesl-decode-prim-string))
 (define tesl-json-int-codec          (cons tesl-encode-prim-int          tesl-decode-prim-int))
+(define tesl-json-int32-codec        (cons tesl-encode-prim-int32        tesl-decode-prim-int32))
 (define tesl-json-bool-codec         (cons tesl-encode-prim-bool         tesl-decode-prim-bool))
 (define tesl-json-float-codec        (cons tesl-encode-prim-float        tesl-decode-prim-float))
 (define tesl-json-posix-millis-codec (cons tesl-encode-prim-posix-millis tesl-decode-prim-posix-millis))

@@ -360,8 +360,12 @@ tesl run api.tesl
 ### 6. Test
 
 ```bash
-# Run tests (mutation testing runs as part of the test suite)
+# Run tests
 tesl test tests.tesl
+
+# Mutation testing is a separate command: it mutates your validation logic and
+# checks that your tests catch it. Pass the file to mutate, plus any extra test files.
+tesl mutate api.tesl tests.tesl
 ```
 
 ---

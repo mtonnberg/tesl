@@ -45,7 +45,7 @@
 (define/pow
   (extractRaw [score : Integer ::: (ValidScore score)])
   #:returns Integer
-  (let ([raw (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 80 (list (cons 'score *score)) (lambda () score))]) (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 81 (list (cons 'raw *raw) (cons 'score *score)) (lambda () raw))))
+  (let ([raw (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 80 (list (cons 'score *score)) (lambda () score))]) (thsl-src! "example/learn/lesson38-proof-decomposition.tesl" 81 (list (cons 'raw *raw) (cons 'score *score)) (lambda () (raw-value raw)))))
 
 (define/pow
   (showScore [score : Integer ::: (ValidScore score)])

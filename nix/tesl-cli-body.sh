@@ -150,14 +150,32 @@ _tesl_port_in_use() {
   return 1
 }
 
-# Does OUR managed cluster (at $PGDATA) own the listener on <port>?  True when
-# pg_ctl reports the cluster running with that port in its command line.
+# Does OUR managed cluster (at $PGDATA) own the listener on <port>?  rc 0 = yes.
+#
+# Reads $PGDATA/postmaster.pid FIRST (line 1 = PID, line 4 = port) so ownership
+# can be decided WITHOUT the postgres binaries. This matters because
+# _tesl_effective_managed_port runs before _tesl_pg_resolve: in a nix-managed
+# project pg_ctl is not yet on PATH, so the old pg_ctl-only check always failed
+# and our own running cluster was mistaken for a FOREIGN process holding the
+# port — the resolver then picked a different (dead) port and `tesl run` timed
+# out against it.  The pid file is written by postgres itself and needs no tools.
 _tesl_pg_owns_port() {
   local pgdata="$1" port="$2"
+  local pidfile="$pgdata/postmaster.pid"
+  if [ -f "$pidfile" ]; then
+    local pid pport
+    pid="$(sed -n '1p' "$pidfile" 2>/dev/null)"
+    pport="$(sed -n '4p' "$pidfile" 2>/dev/null)"
+    # Stale pid file (process gone) => we do NOT own the port.
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
+    [ "$pport" = "$port" ] && return 0
+    return 1
+  fi
+  # No pid file: fall back to pg_ctl (only meaningful once pg is resolved).
   local status
   status="$(_pg pg_ctl -D "$pgdata" status 2>/dev/null)" || return 1
   echo "$status" | grep -q -- "-p\" \"$port\"\|-p $port\| $port " && return 0
-  # Fallback: if our cluster is running at all, assume it owns its own port.
+  # Last resort: if our cluster is running at all, assume it owns its own port.
   _pg pg_ctl -D "$pgdata" status >/dev/null 2>&1
 }
 
@@ -444,6 +462,7 @@ _tesl_init_agents_md() {
 # debug session connects without a separate `tesl db start`.
 _tesl_init_vscode() {
   local dest="$1" pgmode="$2" pgport="$3" pguser="$4" pgdb="$5"
+  local pghost="${6:-localhost}" pgpass="${7:-app}"
   mkdir -p "$dest/.vscode"
   # Always set TESL_DAP_LOG=stderr so a debug session emits verbose diagnostics
   # (compiler/dap resolution, breakpoints, DB connect) to the Debug Console —
@@ -452,10 +471,10 @@ _tesl_init_vscode() {
   if [ "$pgmode" = "managed" ] || [ "$pgmode" = "existing" ]; then
     pg_vars=$(cat <<EOF
 ,
-        "TESL_POSTGRES_HOST": "127.0.0.1",
+        "TESL_POSTGRES_HOST": "$pghost",
         "TESL_POSTGRES_PORT": "$pgport",
         "TESL_POSTGRES_USER": "$pguser",
-        "TESL_POSTGRES_PASSWORD": "",
+        "TESL_POSTGRES_PASSWORD": "$pgpass",
         "TESL_POSTGRES_DATABASE": "$pgdb"
 EOF
 )
@@ -501,6 +520,10 @@ _tesl_init() {
       --postgres) PGMODE="${2:?--postgres needs a value}"; shift 2 ;;
       --yes|-y)   YES=1; shift ;;
       --no-git)   NOGIT=1; shift ;;
+      --help|-h)
+        echo "Usage: tesl init [name] [--template api|minimal] [--postgres managed|existing|none] [--yes] [--no-git]"
+        echo "  Scaffold a new Tesl project. With no flags, prompts interactively."
+        return 0 ;;
       -*)         echo "tesl init: unknown flag $1" >&2; return 1 ;;
       *)          if [ -z "$NAME" ]; then NAME="$1"; else echo "tesl init: unexpected arg $1" >&2; return 1; fi; shift ;;
     esac
@@ -604,11 +627,17 @@ _tesl_init() {
 
   # VSCode/VSCodium debug + test profiles so F5 and the test codelens work
   # out of the box (no manual launch.json copy).
-  local VSC_PORT VSC_USER VSC_DB
+  # Derive ALL connection vars from tesl.toml so launch.json agrees with
+  # .env/tesl.toml — hardcoding host=127.0.0.1 / password="" here disagreed with
+  # the manifest (localhost / app) and made a debug session fail auth against an
+  # `existing` (password-protected) database.
+  local VSC_PORT VSC_USER VSC_DB VSC_HOST VSC_PASS
   VSC_PORT="$(tesl_manifest_get "$DEST/tesl.toml" env TESL_POSTGRES_PORT 2>/dev/null || true)"; VSC_PORT="${VSC_PORT:-5432}"
   VSC_USER="$(tesl_manifest_get "$DEST/tesl.toml" env TESL_POSTGRES_USER 2>/dev/null || true)"; VSC_USER="${VSC_USER:-app}"
   VSC_DB="$(tesl_manifest_get "$DEST/tesl.toml" env TESL_POSTGRES_DATABASE 2>/dev/null || true)"; VSC_DB="${VSC_DB:-app}"
-  _tesl_init_vscode "$DEST" "$PGMODE" "$VSC_PORT" "$VSC_USER" "$VSC_DB"
+  VSC_HOST="$(tesl_manifest_get "$DEST/tesl.toml" env TESL_POSTGRES_HOST 2>/dev/null || true)"; VSC_HOST="${VSC_HOST:-localhost}"
+  VSC_PASS="$(tesl_manifest_get "$DEST/tesl.toml" env TESL_POSTGRES_PASSWORD 2>/dev/null || true)"; VSC_PASS="${VSC_PASS:-app}"
+  _tesl_init_vscode "$DEST" "$PGMODE" "$VSC_PORT" "$VSC_USER" "$VSC_DB" "$VSC_HOST" "$VSC_PASS"
 
   if [ "$NOGIT" != "1" ] && command -v git >/dev/null 2>&1; then
     ( cd "$DEST" && git init -q && git add -A && git commit -q -m "tesl init: scaffold $NAME ($TEMPLATE)" 2>/dev/null ) || true
@@ -1057,6 +1086,15 @@ case "$CMD" in
     done
     exit "$RET"
     ;;
+  mutate)
+    # Mutation testing: perturb the program and confirm the tests catch it.
+    # Forwards to the compiler's `--mutate <file> [extra-test-files…]`, which
+    # compiles + runs each mutant and prints a "Mutation score" report. This is
+    # the first-class command the docs (best-practices) reference as `tesl mutate`.
+    [ $# -gt 0 ] || { echo "Usage: tesl mutate <file.tesl> [more-test-files.tesl ...]" >&2; exit 1; }
+    _tesl_require_compiler
+    exec "$TESL_OCAML_COMPILER" --mutate "$@"
+    ;;
   watch)
     FILE="${1:?Usage: tesl watch <file.tesl>}"
     shift
@@ -1157,6 +1195,12 @@ case "$CMD" in
     ;;
   build)
     _tesl_build "$@"
+    ;;
+  version|--version|-v)
+    # A stable version string plus the resolved compiler path — the latter's Nix
+    # store hash disambiguates which of several installed store builds is running.
+    echo "tesl ${TESL_VERSION:-dev}"
+    [ -n "${TESL_OCAML_COMPILER:-}" ] && echo "compiler: $TESL_OCAML_COMPILER"
     ;;
   help|--help|-h)
     if [ -n "$1" ]; then

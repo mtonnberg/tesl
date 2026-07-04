@@ -2306,17 +2306,21 @@ and parse_record_literal s =
 and parse_list_literal s =
   let loc0 = current_loc s in
   let* _ = expect s LBRACKET in
-  skip_newlines s;
+  (* skip_layout (not skip_newlines): the lexer emits INDENT/DEDENT around an
+     indented list body and brackets do NOT suppress layout, so a multi-line
+     `[ … ]` (as the manual writes `jobs:`/`entities:`) inserts an INDENT after
+     the `[` that a NEWLINE-only skip would trip over ("expected } but got …"). *)
+  skip_layout s;
   let elems = ref [] in
   let parse_err = ref None in
   while !parse_err = None && peek s <> RBRACKET && peek s <> EOF do
-    skip_newlines s;
+    skip_layout s;
     if peek s = RBRACKET then ()
     else begin
       match parse_expr s with
       | Ok e ->
         elems := e :: !elems;
-        skip_newlines s;
+        skip_layout s;
         if peek s = COMMA then advance s
       | Err e ->
         (* A list element failed to parse. Advance one token to avoid an
@@ -3434,11 +3438,19 @@ let parse_capability_form s =
       advance s;
       let caps = ref [] in
       let continue_ = ref true in
+      (* Parse the implied-capability list with the SAME [parse_cap_name] the
+         `requires [...]` list uses, so the two never diverge. That parser accepts
+         plain idents, the `email` keyword token (EMAIL), and `cacheCap <Name>` —
+         all of which are valid capabilities. Doing it by hand here previously
+         missed `email` (`capability X implies email` misparsed the leftover
+         `email` as an `email …` declaration) and `cacheCap`. *)
       while !continue_ do
         match peek s with
-        | IDENT n -> advance s; caps := n :: !caps;
-          if peek s = COMMA then advance s
-          else continue_ := false
+        | IDENT _ | EMAIL ->
+          (match parse_cap_name s with
+           | Ok n -> caps := n :: !caps;
+             if peek s = COMMA then advance s else continue_ := false
+           | Err _ -> continue_ := false)
         | _ -> continue_ := false
       done;
       return (List.rev !caps)

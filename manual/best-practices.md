@@ -458,10 +458,10 @@ Tesl supports several types of tests, each serving a different purpose:
 | Test Type | Command | Purpose | When to Use |
 |-----------|---------|---------|-------------|
 | **Unit Tests** | `test` / `expect` | Test individual functions in isolation | Pure functions, validation logic |
-| **Property Tests** | `property-test` | Verify properties hold across many inputs | Validation invariants, business rules |
+| **Property Tests** | `test … with N runs` + `property` | Verify properties hold across many inputs | Validation invariants, business rules |
 | **API Tests** | `api-test` | Test HTTP endpoints | Integration, endpoint behavior |
-| **Queue Tests** | `queue-test` | Test background job processing | Queue message handling |
-| **SSE/PubSub Tests** | `sse-test` | Test real-time event streams | Server-Sent Events, pub/sub |
+| **Queue Tests** | `api-test` + queue helpers | Test background job processing | Queue message handling |
+| **SSE/PubSub Tests** | `api-test` + `subscribe`/`collect` | Test real-time event streams | Server-Sent Events, pub/sub |
 | **Load Tests** | `load-test` | Test performance under load | Performance-critical endpoints |
 | **Mutation Tests** | `tesl mutate` | Verify validation functions | Critical check/establish/auth functions |
 
@@ -574,141 +574,98 @@ api-test "GET /todos/:id returns specific todo" for TodoServer {
 
 **Key patterns:**
 - Use `api-test` with a server name (e.g., `for TodoServer`)
-- The server must be defined in your code with `server TodoServer impl TodoApi on <port>`
+- The server must be defined in your code with `server TodoServer for TodoApi` (the port is set on the `App` record, not on the `server`)
 - Test the full HTTP cycle: request → handler → response
 - Test both success and error responses
 - Verify status codes, response bodies, and headers
 
 ### 4. Queue Tests
 
-Test background job processing. Queue tests verify that your queue handlers process messages correctly.
+Background job processing is tested from inside an `api-test` — there is no separate
+`queue-test` kind. Inside an `api-test` the queue workers run **synchronously**, so
+HTTP → queue flows stay deterministic. Drive the queue with the `Tesl.ApiTest` helpers
+`processNextJob`, `processNextDeadJob`, `drainQueue`, and `pendingJobCount`.
 
 **✅ Do:**
 ```tesl
-queue-test "ProcessUserRegistration handles valid registration" for TodoServer {
-  -- Setup: define what should be in the queue
-  let registration = ProcessUserRegistration {
-    userId: "user-123",
-    email: "test@example.com",
-    name: "Test User"
-  }
-  
-  -- Enqueue the message
-  enqueue registration
-  
-  -- Wait for processing (automatic in tests)
-  
-  -- Verify the result
-  let user = selectOne user from User where user.id == "user-123"
-  expect user.isSome == true
-  let someUser = user.force
-  expect someUser.email == "test@example.com"
-}
+api-test "posting a registration enqueues and processes a job" for RegistrationServer {
+  # The endpoint enqueues a job as a side effect of handling the request.
+  let posted = post "/registrations" body { userId: "user-123", email: "test@example.com" }
+  expect statusOk posted.status
+  expect pendingJobCount RegistrationQueue == 1
 
-queue-test "ProcessUserRegistration handles validation errors" for TodoServer {
-  let invalidRegistration = ProcessUserRegistration {
-    userId: "",  -- Invalid ID
-    email: "test@example.com",
-    name: "Test User"
-  }
-  
-  enqueue invalidRegistration
-  
-  -- Verify error handling (e.g., dead letter queue or error log)
-  let errors = select count(*) from QueueErrors
-  expect errors > 0
+  # Run the next worker synchronously, then assert on the job and DB state.
+  let done = processNextJob RegistrationQueue
+  let job = expectJobOk done
+  expect job.userId == "user-123"
+  expect pendingJobCount RegistrationQueue == 0
 }
 ```
 
 **Key patterns:**
-- Use `queue-test` with a server name
-- Use `enqueue` to add messages to the test queue
-- The queue processor runs automatically in the test context
-- Verify both successful processing and error handling
-- Check database state after queue processing
+- Test queues inside `api-test` (there is no `queue-test` kind)
+- Trigger enqueues through the endpoint under test (or an `enqueue` statement in a handler)
+- Run workers with `processNextJob <Queue>` or `drainQueue <Queue>`; assert queue depth with `pendingJobCount <Queue>`
+- Drain the dead-letter queue with `processNextDeadJob <Queue>`
+- Check database state after processing
 
 ### 5. SSE/PubSub Tests
 
-Test real-time event streams and server-sent events.
+Real-time event streams are also tested inside an `api-test` — there is no separate
+`sse-test` kind. Open a stream with `subscribe`, trigger a publish (typically through an
+endpoint), then read the delivered events with `collect`. A bounded `collect` requires a
+`count` and a `timeout`.
 
 **✅ Do:**
 ```tesl
-sse-test "Subscribing to todo updates receives events" for ChatServer {
-  -- Setup: create initial state
-  let todoId = createTestTodo()
-  
-  -- Subscribe to updates
-  let subscription = subscribe ("/todos/" ++ todoId ++ "/updates")
-  
-  -- Trigger an update
-  updateTodo todoId { completed: true }
-  
-  -- Wait for and verify the event
-  let event = awaitNextEvent subscription
-  expect event.type == "todo-updated"
-  expect event.data.completed == true
-  expect event.data.id == todoId
-}
+api-test "subscribers receive published room events" for ChatServer {
+  let stream = subscribe "/events/rooms/room-1"
 
-sse-test "Multiple subscribers receive broadcast events" for ChatServer {
-  let sub1 = subscribe "/chat/messages"
-  let sub2 = subscribe "/chat/messages"
-  
-  -- Send a message
-  sendChatMessage { text: "Hello world" }
-  
-  -- Both subscribers should receive it
-  let event1 = awaitNextEvent sub1
-  let event2 = awaitNextEvent sub2
-  
-  expect event1.data.text == "Hello world"
-  expect event2.data.text == "Hello world"
+  # Publishing happens as a side effect of handling the request.
+  let posted = post "/rooms/room-1/messages" body { text: "Hello world" }
+  expect statusOk posted.status
+
+  # Read the delivered events; count + timeout bound the collect.
+  let events = collect stream count 1 timeout 2000ms
+  expect hasLength 1 events
+  let first = arrayAt 0 events
+  expect first.fields.text == "Hello world"
 }
 ```
 
 **Key patterns:**
-- Use `sse-test` for Server-Sent Events tests
-- Use `subscribe` to create test subscribers
-- Use `awaitNextEvent` to wait for and receive events
-- Verify event types, data, and timing
-- Test both unicast and broadcast scenarios
+- Test SSE inside `api-test` (there is no `sse-test` kind)
+- Open a subscription with `subscribe "<route>"`
+- Read events with `collect <stream> count <n> timeout <ms>` (both clauses required)
+- Trigger publishes through the endpoint under test
+- Assert on event order (positional) and content
 
 ### 6. Load Tests
 
-Test performance under load. Useful for identifying bottlenecks and ensuring your API scales.
+Test throughput and latency against a compiled server. `load-test` uses an open workload
+model (a fixed arrival `rate`) and reuses the same request syntax as `api-test`.
 
 **✅ Do:**
 ```tesl
-load-test "API handles 100 concurrent requests" for TodoServer {
-  let requests = List.replicate 100 { title: "Load test todo", description: "Test" }
-  
-  -- Send all requests concurrently
-  let results = sendConcurrentRequests "/todos" requests
-  
-  -- Verify all succeeded
-  expect List.length results == 100
-  let successes = List.filter (fun r -> r.status == 201) results
-  expect List.length successes == 100
-}
+load-test "list todos throughput" for TodoServer
+  rate 100rps
+  duration 10s
+  requires [dbRead] {
+  get "/todos"
 
-load-test "Database queries perform under load" for TodoServer {
-  -- Create test data
-  let todoIds = List.map (fun i -> createTodo ("Todo " ++ Int.toString i)) (List.range 0 1000)
-  
-  -- Query concurrently
-  let results = List.map (fun id -> get ("/todos/" ++ id)) todoIds
-  
-  -- Verify all returned successfully
-  expect List.all (fun r -> r.status == 200) results
+  assert p99 < 200ms
+  assert p95 < 80ms
+  assert errorRate < 0.01
+  assert throughput > 80rps
 }
 ```
 
 **Key patterns:**
-- Use `load-test` for performance testing
-- Use `sendConcurrentRequests` to simulate load
-- Test with realistic data volumes
-- Measure response times and success rates
-- Verify system stability under load
+- Declare the arrival `rate` (`Nrps`) and measurement `duration` (`Ns`)
+- Put a single `api-test`-style request in the body
+- `assert` on histogram percentiles (`p50`/`p95`/`p99`/`p99.9`), `errorRate`, and `throughput`
+- Compare against a stored baseline with `assert regressionVsBaseline <metric> < <n>`
+- Reserve load tests for performance-critical endpoints
 
 ### 7. Mutation Testing
 
@@ -800,7 +757,7 @@ api-test "POST /users returns 400 when email is invalid"
 test "isValidEmail returns Ok for valid emails"
 
 -- Good: describes the scenario
-queue-test "ProcessPayment handles insufficient funds"
+api-test "ProcessPayment handles insufficient funds"
 ```
 
 **❌ Don't:**

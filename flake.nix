@@ -192,6 +192,7 @@
         # directory lookup (equivalent to "@") finds the pre-compiled .zo files
         # in the Nix store automatically and is fast (≈2 s).
         runtimePreamble = ''
+          export TESL_VERSION="0.1.0"
           export TESL_OCAML_COMPILER="${tesl-compiler}/bin/tesl-compiler"
           export PLTCOLLECTS="${pkgs.racket}/share/racket/collects:${tesl-racket}/share/tesl-collections''${PLTCOLLECTS:+:$PLTCOLLECTS}"
 

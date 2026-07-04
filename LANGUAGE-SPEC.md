@@ -1064,8 +1064,11 @@ Worker functions receive a proof-bearing job value (`FromQueue` proof, analogous
 ```tesl
 worker sendEmailWorker(job: SendEmail ::: FromQueue (Id == jobId) job)
   requires [smtpSend] =
-  sendMail(job.to, job.subject, job.body)
+  let _ = sendMail(job.to, job.subject, job.body)
+  job   # a worker body must return the job value
 ```
+
+A worker (and `deadWorker`) body **must return the job value** — its declared return type *is* the job type (`SendEmail` here). End the body with `job` (which marks the job done) or with `fail …` (which marks it failed and eligible for retry). Returning any other value — for example the `HttpResponse` from an HTTP call made inside the worker — is a `T001` type error; bind such intermediate results with `let _ = …` and end the body with `job`.
 
 `FromQueue (Id == jobId) job` follows the same 2-arg pattern as `FromDb (Id == pk) entity` — both the job's primary key subject and the job entity subject are in the proof.
 

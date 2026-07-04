@@ -824,7 +824,7 @@ let tesl_module_exports : (string * string list) list = [
   ( "Tesl.Env",
     [ "env"; "envInt"; "envString"; "requireEnv"; "envRead" ] );
   ( "Tesl.Json",
-    [ "stringCodec"; "intCodec"; "boolCodec"; "floatCodec"; "posixMillisCodec";
+    [ "stringCodec"; "intCodec"; "int32Codec"; "boolCodec"; "floatCodec"; "posixMillisCodec";
       "listCodec"; "dictCodec"; "setCodec" ] );
   ( "Tesl.ApiTest",
     [ "HttpResponse"; "JsonValue"; "JsonNull"; "SseStream";

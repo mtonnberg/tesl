@@ -616,18 +616,17 @@ _drop_transient() {
 mapfile -t LEARN_FILES < <(_drop_transient example/learn/*.tesl)
 mapfile -t KANEL_FILES < <(_drop_transient example/kanel/*.tesl)
 
+# Glob EVERY shipped example (top-level example/*.tesl + example/chat/) rather
+# than a hand-maintained list, so a newly-added or previously-forgotten example
+# can no longer silently escape `tesl validate` (check+lint+fmt) and the test
+# sweep. The old hardcoded list omitted example/queue-api.tesl, int32-boundary,
+# and debug-test — exactly the "CI should tesl-check every shipped example" gap
+# in bug-report #10. (KANEL_FILES stays a separate glob; learn is globbed above.)
+mapfile -t EXAMPLE_TOP_FILES < <(_drop_transient example/*.tesl)
+mapfile -t CHAT_FILES < <(_drop_transient example/chat/*.tesl)
 EXAMPLE_FILES=(
-    example/sandbox.tesl
-    example/sandbox2.tesl
-    example/sandbox2.test.tesl
-    example/sandbox3.tesl
-    example/admin-task-api.tesl
-    example/todo-api.tesl
-    example/chat/chat-backend.tesl
-    example/support-assistant.tesl
-    example/ai-live-check.tesl
-    example/ai-conversation-service.tesl
-    example/user-service-api.tesl
+    "${EXAMPLE_TOP_FILES[@]}"
+    "${CHAT_FILES[@]}"
     "${KANEL_FILES[@]}"
 )
 

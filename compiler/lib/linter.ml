@@ -26,7 +26,7 @@
       W062  unreachable code after `fail`
       W063  redundant re-check of an already-validated value (proof footgun)
       W064  discarded `check`/`auth` validation result (proof footgun)
-      W070  email declared but startEmailWorker never called
+      W070  email declared but not activated in main's App { email: [...] }
       W080  exported function references unexported type or proof predicate
       W090  bare `print` call bypasses telemetry capability
 *)
@@ -1093,10 +1093,11 @@ let lint_unused_locals_and_dead_code filename (source : string) (out : lint_diag
       | _ -> ()
     ) m.decls
 
-(** W070 — email declared but never started.
-    For every [DEmail] declaration in a module, check that at least one
-    [EStartEmailWorker] call with that email name appears somewhere in the
-    module (any function body).  If not, queued emails will never be
+(** W070 — email declared but never activated.
+    For every [DEmail] declaration in a module, check that the email name is
+    activated — listed in the `App { … email: [Name …] }` record returned by
+    `main` (the modern activation, §11.13), or (legacy) named by an
+    [EStartEmailWorker] call.  If neither, queued emails will never be
     delivered. *)
 
 let rec collect_start_email_workers (acc : string list) (e : Ast.expr) : string list =
@@ -1137,15 +1138,41 @@ let lint_missing_email_worker filename (source : string) (out : lint_diag list r
       | _ -> None
     ) m.decls in
     if email_decls <> [] then begin
-      (* 2. Walk every function body to find EStartEmailWorker calls. *)
-      let started_names = List.fold_left (fun acc decl ->
+      (* 2. Collect the emails activated by the modern `App { … email: [Name …] }`
+         record returned by `main` — this is the real activation mechanism since
+         `startEmailWorker` was removed from the language (§11.13). Listing the
+         email block there starts its delivery worker. We mirror the validator's
+         App-record detection (validation_structural.ml) so an email activated the
+         documented way is not falsely reported as un-started. The legacy
+         EStartEmailWorker collection is kept for any stragglers. *)
+      let ctor_name = function
+        | Ast.EConstructor { name; _ } -> Some name
+        | Ast.EVar { name; _ } -> Some name
+        | _ -> None in
+      let names_of = function
+        | Ast.EList { elems; _ } -> List.filter_map ctor_name elems
+        | _ -> [] in
+      let rec tail = function
+        | Ast.ELet { body; _ } | Ast.ELetProof { body; _ } -> tail body
+        | e -> e in
+      let app_email_fields = function
+        | Ast.ERecord { type_hint = Some "App"; fields; _ }
+        | Ast.EApp { fn = Ast.EConstructor { name = "App"; _ };
+                     arg = Ast.ERecord { fields; _ }; _ } ->
+          (match List.assoc_opt "email" fields with Some v -> names_of v | None -> [])
+        | _ -> [] in
+      let activated_names = List.fold_left (fun acc decl ->
         match decl with
-        | Ast.DFunc fd -> collect_start_email_workers acc fd.body
+        | Ast.DFunc fd ->
+          let acc = collect_start_email_workers acc fd.body in
+          (match fd.kind with
+           | Ast.MainKind -> app_email_fields (tail fd.body) @ acc
+           | _ -> acc)
         | _ -> acc
       ) [] m.decls in
-      (* 3. Warn for each email that is never started. *)
+      (* 3. Warn for each email that is never activated. *)
       List.iter (fun (name, (loc : Location.loc)) ->
-        if not (List.mem name started_names) then
+        if not (List.mem name activated_names) then
           out := {
             file     = filename;
             line     = loc.start.line;
@@ -1153,10 +1180,9 @@ let lint_missing_email_worker filename (source : string) (out : lint_diag list r
             severity = "warning";
             code     = "W070";
             message  = Printf.sprintf
-              "email `%s` is declared but `startEmailWorker %s` is never called — \
-queued emails will not be delivered; add `startEmailWorker %s` in your \
-`main` function or server setup"
-              name name name;
+              "email `%s` is declared but never activated — queued emails will not \
+be delivered; list it in your `main` function's `App { … email: [%s] }` record"
+              name name;
             fix      = None;
           } :: !out
       ) email_decls

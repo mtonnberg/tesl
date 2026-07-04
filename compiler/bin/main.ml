@@ -464,10 +464,21 @@ let string_contains substring str =
 let search_docs query =
   init_paths ();
   let query_lower = String.lowercase_ascii query in
+  (* Order-insensitive match: a line matches when it contains every
+     whitespace-separated query word (in any order), rather than the exact
+     phrase.  So "client generate" and "generate client" both match a line that
+     mentions both words.  A single-word (or empty) query behaves as before. *)
+  let query_words =
+    String.split_on_char ' ' query_lower
+    |> List.filter (fun w -> w <> "")
+  in
+  let line_matches line_lower =
+    List.for_all (fun w -> string_contains w line_lower) query_words
+  in
   let search_content key content acc =
     let lines = String.split_on_char '\n' content in
     let matching_lines = List.filter (fun line ->
-      string_contains query_lower (String.lowercase_ascii line)
+      line_matches (String.lowercase_ascii line)
     ) lines in
     if matching_lines <> [] then (key, matching_lines) :: acc
     else acc
@@ -491,10 +502,19 @@ let search_docs query =
   (* Search disk files first *)
   let disk_results = search_dir !root_path [] in
   let disk_keys = List.map fst disk_results in
-  (* Also search embedded content that wasn't found on disk *)
+  (* De-duplicate by document identity: the same manual doc can be found on disk
+     (an absolute path key) and in the embedded bundle (a repo-relative key like
+     "manual/best-practices.md").  Skip the embedded copy when a disk file
+     resolves to the same relative path (its absolute key ends with "/" ^ key),
+     so the doc is not listed twice under two path forms. *)
+  let is_on_disk k =
+    List.exists
+      (fun dk -> dk = k || String.ends_with ~suffix:(Filename.dir_sep ^ k) dk)
+      disk_keys
+  in
   let embedded_results =
     Embedded_docs.files
-    |> List.filter (fun (k, _) -> not (List.mem k disk_keys))
+    |> List.filter (fun (k, _) -> not (is_on_disk k))
     |> List.fold_left (fun acc (k, content) -> search_content k content acc) []
   in
   disk_results @ embedded_results
@@ -607,7 +627,7 @@ let display_manual section_spec =
           print_string content; exit 0))
   | None ->
     Printf.eprintf "Error: Manual section '%s' not found.\n" section;
-    Printf.eprintf "Available sections: getting-started, overview, language-spec, examples, best-practices, faq, anchors, dev\n";
+    Printf.eprintf "Available sections: getting-started, overview, tour, language-spec, examples, best-practices, ai-testing, deploy, tesl-manifest, faq, intro, anchors, dev\n";
     Printf.eprintf "Use 'tesl help' for command line usage; 'tesl help codes' for the diagnostic-code index.\n";
     exit 1
 

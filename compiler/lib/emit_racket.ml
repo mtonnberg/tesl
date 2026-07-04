@@ -150,6 +150,7 @@ let cap_list_str caps = String.concat " " (List.map cap_ident caps)
 let codec_name = function
   | "stringCodec"     -> "tesl-json-string-codec"
   | "intCodec"        -> "tesl-json-int-codec"
+  | "int32Codec"      -> "tesl-json-int32-codec"
   | "boolCodec"       -> "tesl-json-bool-codec"
   | "floatCodec"      -> "tesl-json-float-codec"
   | "posixMillisCodec"-> "tesl-json-posix-millis-codec"
@@ -179,6 +180,7 @@ let codec_name = function
 let prim_encode_helper = function
   | "stringCodec"      -> Some "tesl-encode-prim-string"
   | "intCodec"         -> Some "tesl-encode-prim-int"
+  | "int32Codec"       -> Some "tesl-encode-prim-int32"
   | "boolCodec"        -> Some "tesl-encode-prim-bool"
   | "floatCodec"       -> Some "tesl-encode-prim-float"
   | "posixMillisCodec" -> Some "tesl-encode-prim-posix-millis"
@@ -222,6 +224,7 @@ let codec_encode_field_call codec field_name =
 let prim_decode_helper = function
   | "stringCodec"      -> Some "tesl-decode-prim-string"
   | "intCodec"         -> Some "tesl-decode-prim-int"
+  | "int32Codec"       -> Some "tesl-decode-prim-int32"
   | "boolCodec"        -> Some "tesl-decode-prim-bool"
   | "floatCodec"       -> Some "tesl-decode-prim-float"
   | "posixMillisCodec" -> Some "tesl-decode-prim-posix-millis"
@@ -4000,46 +4003,85 @@ let emit_func ctx (fd : func_decl) =
       | _ -> None
     in go body
   in
+  let get_head e = let rec go = function EApp { fn; _ } -> go fn | e -> e in go e in
+  (* SQL scalar/Maybe aggregates (selectSum/Count/Max/Min) return a PLAIN value
+     that carries no proof. Let-binding one and returning it must be raw-tailed
+     exactly like a stdlib call: otherwise the runtime binds the name to a GDP
+     gensym symbol whose evidence env has unwound by the time the return-type
+     check runs, so `selectSum` (an Int) fails "does not satisfy declared return
+     type Integer" — while returning it directly (no let) works (bug-report #1).
+     NOT `select`/`selectOne`: those carry FromDb proofs and have their own tail
+     handling. *)
+  let let_rhs_is_sql_agg name =
+    (* Use extract_select_query (not a naive head-peel): the RHS
+       `selectSum e.n from E where e.id != ""` parses as EBinop("!=", …), whose
+       head is not the selectSum EApp, so a head-only check would miss it. *)
+    match find_let_value name fd.body with
+    | Some v ->
+      (match extract_select_query v with
+       | Some (seed, _) ->
+         (match seed.kind with
+          | SelectSum _ | SelectCount | SelectMax _ | SelectMin _ -> true
+          | _ -> false)
+       | None -> false)
+    | None -> false
+  in
+  let name_tail_ok name =
+    String.length name > 0 && name.[0] >= 'a' && name.[0] <= 'z' &&
+    not (Hashtbl.mem stdlib_plain_imports name) &&
+    not (Hashtbl.mem stdlib_name_map name) &&
+    not (Hashtbl.mem qualified_imports name) &&
+    not (List.mem name param_names)
+  in
+  let let_rhs_is_check_call name = match find_let_value name fd.body with
+    | Some (EApp _ as app) ->
+      (match get_head app with EVar { name = "check"; _ } -> true | _ -> false)
+    | _ -> false
+  in
+  (* CLASS of bug-report #1: a let bound to a value that carries NO GDP proof at
+     runtime is gensym-bound by wrap-runtime-named-binding, so returning the bare
+     name in tail leaks the gensym symbol and the runtime return-type check fails
+     ("does not satisfy declared return type") — even though returning the SAME
+     expression directly (no let) works. The fix is to raw-tail [star-name = the
+     raw value] any such plain-value binding. This is NOT selectSum-specific: hit
+     literals, arithmetic, stdlib calls, and SQL aggregates, in BOTH plain fns and
+     handlers/workers. We enumerate only forms whose runtime value provably has no
+     proof to strip (literal / arithmetic / logic / stdlib call / SQL scalar
+     aggregate), so raw-tailing never drops a proof. Proof-carrying forms
+     (select/selectOne, user-fn calls, check results, case/if arms) keep the bare
+     name — the runtime already keeps those as the wrapped value, not a gensym. *)
+  let let_rhs_is_plain_producer name =
+    match find_let_value name fd.body with
+    | Some (ELit _) -> true
+    | Some (EBinop _) | Some (EUnop _) -> true
+    | Some (EField _) -> true   (* record field read → raw value (proofs are compile-time) *)
+    | Some (EApp _ as app) ->
+      (* is_stdlib_fn handles both EVar and qualified `Mod.fn` (EField) heads and
+         the plain-import table, so a qualified stdlib call like `String.length` is
+         recognised too. *)
+      let_rhs_is_sql_agg name || is_stdlib_fn (get_head app)
+    | _ -> false
+  in
+  (* A plainly-typed return (`-> T`, no proof/pack/forall) CANNOT carry a proof,
+     so returning the raw value [star-name] of ANY let-bound tail is always
+     correct and never strips a proof. This is the clean closure of the
+     bug-report #1 class: it covers user-fn calls, case/if, field reads, etc. in
+     one rule for both plain fns and handlers/workers. For proof-carrying returns
+     we stay conservative and only raw-tail provably proof-free producers, so a
+     proof the return spec demands is never dropped. *)
+  let is_plain_return = match fd.return_spec with RetPlain _ -> true | _ -> false in
   let is_local_var_tail = match tail, fd.kind with
-    | EVar { name; _ }, FnKind
-      when String.length name > 0 && name.[0] >= 'a' && name.[0] <= 'z' &&
-           not (Hashtbl.mem stdlib_plain_imports name) &&
-           not (Hashtbl.mem stdlib_name_map name) &&
-           not (Hashtbl.mem qualified_imports name) &&
-           not (List.mem name param_names) ->
-      (* Trigger raw-tail for:
-         1. Literals and stdlib calls (already raw values)
-         2. check-call bindings (`let x = check f arg`): the check
-            machinery wraps the value as a named-value; tail position
-            in a plain-return fn should strip that wrapper via *name. *)
+    | EVar { name; _ }, FnKind when name_tail_ok name ->
       (match find_let_value name fd.body with
-       | Some (ELit _) | Some (EApp _ ) ->
-         let rec get_head = function EApp { fn; _ } -> get_head fn | e -> e in
-         let is_check_call = match find_let_value name fd.body with
-           | Some (EApp _ as app) ->
-             (match get_head app with
-              | EVar { name = "check"; _ } -> true
-              | _ -> false)
-           | _ -> false
-         in
-         (* Check if it's a non-user-defined call (stdlib or literal) *)
-         let is_user_call = match find_let_value name fd.body with
-           | Some (EApp _ as app) ->
-             (match get_head app with
-              | EVar { name = fn_name; _ } ->
-                not (Hashtbl.mem stdlib_plain_imports fn_name) &&
-                not (is_stdlib_fn (get_head app))
-              | _ -> false)
-           | _ -> false
-         in
-         is_check_call || not is_user_call
-       (* A let bound to a case/if produces a plain value that, when returned in
-          tail position of a plain-return fn, must be raw-value'd — i.e. resolved
-          out of its GDP-named binding while that binding is still in scope.
-          Otherwise the bare name symbol escapes as the return value and fails the
-          return-type check (the evidence env that would resolve it has unwound). *)
        | Some (ECase _) | Some (EIf _) -> true
-       | _ -> false)
+       | Some _ ->
+         is_plain_return || let_rhs_is_check_call name || let_rhs_is_plain_producer name
+       | None -> false)
+    | EVar { name; _ }, (HandlerKind | WorkerKind | DeadWorkerKind)
+      when name_tail_ok name ->
+      (match find_let_value name fd.body with
+       | Some _ -> is_plain_return || let_rhs_is_plain_producer name
+       | None -> false)
     | _ -> false
   in
   (* emit_establish_proof_ctor: emit a proof constructor expression for use inside
@@ -4990,6 +5032,7 @@ let emit_capture ctx (c : capture_form) =
   let parser_fn = match c.parser with
     | "stringCodec" -> "string-segment"
     | "intCodec"    -> "integer-segment"
+    | "int32Codec"  -> "int32-segment"
     | other         -> other
   in
   emit ctx (Printf.sprintf "]
@@ -5024,6 +5067,7 @@ let sse_key_capture_expr (ep : api_endpoint) : string =
           let parser = match codec with
             | "stringCodec" -> "string-segment"
             | "intCodec"    -> "integer-segment"
+            | "int32Codec"  -> "int32-segment"
             | other         -> other in
           let checker = match c.inline_check with Some chk -> chk | None -> "#f" in
           Printf.sprintf "(lambda (key-str) (apply-checker-to-value '%s (%s key-str) %s))"

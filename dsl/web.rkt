@@ -66,6 +66,7 @@
  json-response
  error-response
  integer-segment
+ int32-segment
  string-segment
  ;; Security: static-file path-traversal segment guard (exported for the suite)
  static-path-segments-safe?
@@ -1156,6 +1157,18 @@
   (if (and maybe-number (integer? maybe-number))
       maybe-number
       (check-fail (format "Expected an integer path segment, got ~a" segment) 400 '())))
+
+;; Int32 path segment: an integer that also fits [-2^31, 2^31). Out-of-range is a
+;; 400 (fail-closed) rather than a silently-wrapped value — same boundary as the
+;; int32Codec JSON decoder (dsl/types.rkt).
+(define (int32-segment segment)
+  (define maybe-number (string->number segment))
+  (cond
+    [(not (and maybe-number (exact-integer? maybe-number)))
+     (check-fail (format "Expected an integer path segment, got ~a" segment) 400 '())]
+    [(not (and (>= maybe-number (- (expt 2 31))) (<= maybe-number (sub1 (expt 2 31)))))
+     (check-fail (format "Expected an Int32 path segment (in [-2^31, 2^31)), got ~a" segment) 400 '())]
+    [else maybe-number]))
 
 (define (string-segment segment)
   segment)

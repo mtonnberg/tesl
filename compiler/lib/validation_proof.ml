@@ -2346,7 +2346,25 @@ let packed_body_exprs_with_locals (e : expr)
     | EApp {
         fn = EVar { name = "make-witness"; _ };
         arg = EApp { arg = body; _ };
-        _ } -> [(body, let_env, case_env)]
+        _ } ->
+      (* The packed value is the TAIL of `body`, which may be wrapped in block
+         constructs (`transaction`/`with database`/`with capabilities`) and/or a
+         let-chain. Unwrap them to the tail expression — threading `let`/`letproof`
+         bindings into let_env — so the proof carried by the tail (e.g. `insert …`
+         inside a `transaction { … }`) is seen. Without this the pack body was the
+         raw `EWithTransaction` node, which no proof-carrier check recognises, so
+         "insert-two-rows-atomically-and-return-the-proof-carrying-one" was
+         rejected (bug-report #2). The tail still gets the SAME proof scrutiny, so
+         a fabricated tail is still rejected — no forgery is admitted. *)
+      let rec unwrap le = function
+        | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+        | EWithTransaction { body; _ } -> unwrap le body
+        | ELet { name; value; body; _ } -> unwrap ((name, value) :: le) body
+        | ELetProof { value_name; value; body; _ } -> unwrap ((value_name, value) :: le) body
+        | e -> (e, le)
+      in
+      let (tail, le') = unwrap let_env body in
+      [(tail, le', case_env)]
     | EIf { then_; else_; _ } -> go let_env case_env then_ @ go let_env case_env else_
     | ECase { scrut; arms; _ } ->
       (* Resolve a let-bound scrutinee to its value so provenance (e.g. `let x =

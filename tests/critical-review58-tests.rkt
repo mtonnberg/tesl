@@ -257,7 +257,7 @@
 (define/pow
   (useEstablishFreedom [n : Integer])
   #:returns Integer
-  (let ([pA (thsl-src! "tests/critical-review58-tests.tesl" 341 (list (cons 'n *n)) (lambda () (alwaysProveA n)))]) (let ([proven (thsl-src! "tests/critical-review58-tests.tesl" 342 (list (cons 'pA *pA) (cons 'n *n)) (lambda () (attach-proof n pA)))]) (let ([raw (thsl-src! "tests/critical-review58-tests.tesl" 344 (list (cons 'proven *proven) (cons 'pA *pA) (cons 'n *n)) (lambda () proven))]) (thsl-src! "tests/critical-review58-tests.tesl" 345 (list (cons 'raw *raw) (cons 'proven *proven) (cons 'pA *pA) (cons 'n *n)) (lambda () raw))))))
+  (let ([pA (thsl-src! "tests/critical-review58-tests.tesl" 341 (list (cons 'n *n)) (lambda () (alwaysProveA n)))]) (let ([proven (thsl-src! "tests/critical-review58-tests.tesl" 342 (list (cons 'pA *pA) (cons 'n *n)) (lambda () (attach-proof n pA)))]) (let ([raw (thsl-src! "tests/critical-review58-tests.tesl" 344 (list (cons 'proven *proven) (cons 'pA *pA) (cons 'n *n)) (lambda () proven))]) (thsl-src! "tests/critical-review58-tests.tesl" 345 (list (cons 'raw *raw) (cons 'proven *proven) (cons 'pA *pA) (cons 'n *n)) (lambda () (raw-value raw)))))))
 
 (define-adt Color
   [Red]

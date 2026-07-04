@@ -649,6 +649,7 @@ type ctor_info = (string * (type_expr list * type_expr)) list
 let builtin_codec_type : (string * string) list = [
   "stringCodec",      "String";
   "intCodec",         "Int";
+  "int32Codec",       "Int32";
   "boolCodec",        "Bool";
   "floatCodec",       "Float";
   "posixMillisCodec", "PosixMillis";
