@@ -148,6 +148,21 @@ codec NewTodo {
 }
 ```
 
+**Don't hand-write a `toJson` for a plain response record.** A record used only as a
+response auto-derives its JSON *encoder* from its shape — you do **not** need a `codec`
+block at all:
+```tesl
+# This compiles and serializes as {"id":…, "name":…} with NO codec block:
+record TodoView { id: Int, name: String }
+
+handler getTodo() -> TodoView =
+  TodoView { id: 1, name: "buy milk" }
+```
+Write an explicit `codec` only when you need the *decode* side (`fromJson`, to validate
+incoming request data and mint proofs `via` a check — as in `NewTodo` above), or to
+override the default field-name/format mapping. Restating every field in a `toJson`
+that just mirrors the record shape is redundant.
+
 ### Cross-Field Validation
 
 **✅ Do:** Use `check` for cross-field validation:
