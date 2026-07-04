@@ -48,7 +48,7 @@ Use these for a *specific* question — never dump a whole module into context.
 
 | Command | Answers |
 |---|---|
-| `tesl --check-json <file>` | full diagnostics (codes + fixes), same data agent-context summarises |
+| `tesl --check-json <file>` | full diagnostics (codes + fixes) — the **same diagnostics** as `agent-context`, but in the IR-2/LSP schema (see note below) |
 | `tesl --type-at-json <file> L C` | the type of the expression at L:C |
 | `tesl --field-at-json <file> L C` | the record/field type at L:C |
 | `tesl --signature-help-json <file> L C` | callee param labels/types + active-param index at a call site |
@@ -65,6 +65,21 @@ Use these for a *specific* question — never dump a whole module into context.
 > Cross-file navigation (project-wide definition/references/rename, workspace symbol)
 > is **not** available yet — it needs the IR-1 multi-file index (see
 > `roadmap/later/further_editor_improvements.md`). The queries above are same-file.
+
+> **Diagnostic JSON shapes differ by design.** `agent-context` and `--check-json`
+> carry the **same diagnostics** (same `code`/`severity`/`message`/`fix`), but in
+> two shapes for two audiences:
+> - **`agent-context`** — a *flat, compact* diagnostic for the AI edit loop:
+>   `{code, severity, message, line, col, end_line, end_col, fix?}` (positions
+>   inline, no per-diagnostic `file` since the snapshot is single-file).
+> - **`--check-json`** — the *IR-2 / LSP* diagnostic: `{file, start:{line,col},
+>   end:{line,col}, severity, code, message, fix, source}` (nested spans, an
+>   explicit `file`, and a `source` — `lint`/`type`/…). This is the shape LSP-style
+>   tooling consumes.
+>
+> Both use **0-based** line/col. Consume `agent-context` for the edit loop and
+> `--check-json` when you need the LSP span/`source` shape; do not expect them to be
+> byte-identical.
 
 ---
 
