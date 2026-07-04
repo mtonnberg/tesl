@@ -316,3 +316,34 @@ fixpoint); it hardens against FUTURE bugs. Recommended next step: add
 `proof_kernel.ml`/`.mli` and migrate minting innermost-first
 (`validation_common → structural → proof → capabilities/advanced → proof_checker`), each
 site gate-green, `fact_of` keeping all `proof_matches` consumers unchanged.
+
+### Option B — step 1 landed (2026-07-04, commit 9cd7588); atomic flip remains
+
+`compiler/lib/proof_kernel.ml`/`.mli` added: the abstract `proven_fact` + admission
+rules (`mint_at_boundary` check/auth/establish-only, `framework_provenance`,
+`assume_param`, `pass_through`, `conj_intro`, `fact_of`). Inert so far — the design
++ interface (the crux) is locked, gate-green.
+
+**Remaining (the atomic flip — one focused gate-green campaign):**
+1. Change `Validation_common.proof_env` element type from `proof_expr` to
+   `Proof_kernel.proven_fact` (`type proof_env = (string * proven_fact list) list`).
+   This is ATOMIC: `proof_env` has ~324 references across
+   validation_{common,structural,proof,advanced}.ml, so the build only goes green
+   once every one is migrated — it lands as a single campaign, not incrementally.
+2. Route every PRODUCER through a kernel rule (the `-warn-error`/type errors pinpoint
+   each): check/auth/establish return admission → `mint_at_boundary fd.kind`;
+   FromDb/FromQueue grants → `framework_provenance`; a proof-carrying param's proof →
+   `assume_param`; `carried_proofs_of_expr` subject-subst → `pass_through`; `introAnd`
+   → `conj_intro`. A catch-all/unrecognized shape now yields "no `proven_fact` → no
+   admission" (fail-closed) by construction.
+3. Route every CONSUMER through `fact_of` (proof_matches / pp_proof / proof_key all
+   keep taking `proof_expr`, so they read `fact_of pf`).
+4. `andLeft`/`andRight` need a `conj_elim_left`/`conj_elim_right` kernel rule — add to
+   the kernel when that site is migrated.
+5. Verify: `dune test` + exhaustive S7 (kills must stay ≥ 2314) + `ci.sh` under 9.2;
+   the migration must be behaviour-preserving (proven_fact = proof_expr under the
+   hood), so no diagnostic changes — only the trusted surface shrinks.
+
+Because `proven_fact` is a transparent alias for `proof_expr` inside the kernel, the
+flip is purely a compile-time discipline (zero runtime/behaviour change); its payoff
+is that after it, no code outside proof_kernel.ml can mint a fact.
