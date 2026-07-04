@@ -1290,12 +1290,13 @@ let collect_needed_capabilities
   in
   go bound [] e
 
-let load_imported_func_caps (m : module_form) : (string * string list) list =
+let rec load_imported_func_caps ?(visited : string list = []) (m : module_form)
+    : (string * string list) list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
   in
   List.concat_map (fun (imp : import_decl) ->
-    if is_tesl_module imp.module_name then []
+    if is_tesl_module imp.module_name || List.mem imp.module_name visited then []
     else
       let path = resolve_local_import_path m.source_file imp.module_name in
       if not (Sys.file_exists path) then []
@@ -1314,12 +1315,50 @@ let load_imported_func_caps (m : module_form) : (string * string list) list =
              launders across the module boundary. *)
           let imported_declared_caps =
             List.filter_map (function DCapability c -> Some c.name | _ -> None) imported.decls in
+          (* Hole #12 (2026-07-04): the importer must NOT trust the imported
+             function's DECLARED `requires` — a body that lies (`requires []` while
+             it `insert`s / reads env / calls httpClient) laundered an ungoverned
+             effect through the import boundary, because this loader propagated only
+             the declared row.  Re-verify: compute each imported function's ACTUAL
+             capabilities from its body (collect_needed_capabilities, now colocated
+             here) and UNION with the declared row.  The importer's caller then sees
+             the real effect and is forced to declare it.  The imported module's own
+             transitive imports are resolved recursively (cycle-guarded by [visited]),
+             and intra-module transitive calls (the 2-hop lie) are closed by iterating
+             to a fixpoint over the module's own function-cap map. *)
+          let imported_imports_caps =
+            load_imported_func_caps ~visited:(imp.module_name :: visited) imported in
+          let fd_by_name =
+            List.filter_map (function DFunc fd -> Some (fd.name, fd) | _ -> None) imported.decls in
+          (* Declared (row-var-stripped) plain map — the trust-me baseline. *)
+          let decl_map = build_func_capability_map imported.decls in
+          let strip_bound (fd : func_decl) caps =
+            let bound =
+              List.filter (fun b -> not (List.mem b imported_declared_caps))
+                (Ast.func_bound_cap_vars fd) in
+            List.filter (fun c -> not (List.mem c bound)) caps
+          in
+          let step verified =
+            List.map (fun (name, cur) ->
+              match List.assoc_opt name fd_by_name with
+              | None -> (name, cur)
+              | Some fd ->
+                let func_caps = verified @ imported_imports_caps in
+                let param_caps = build_param_capability_map fd in
+                let needed =
+                  collect_needed_capabilities ~func_caps ~param_caps
+                    ~bound:(List.map (fun (b : binding) -> b.name) fd.params) fd.body in
+                (name, List.sort_uniq compare (cur @ strip_bound fd needed))
+            ) verified
+          in
+          let rec fixpoint n v =
+            if n <= 0 then v else let v' = step v in if v' = v then v else fixpoint (n - 1) v'
+          in
+          let verified = fixpoint (List.length fd_by_name + 1) decl_map in
           List.concat_map (function
             | DFunc fd ->
-              let bound =
-                List.filter (fun b -> not (List.mem b imported_declared_caps))
-                  (Ast.func_bound_cap_vars fd) in
-              let caps = List.filter (fun c -> not (List.mem c bound)) fd.capabilities in
+              let caps = match List.assoc_opt fd.name verified with
+                | Some c -> c | None -> [] in
               let qualified_name = imp.module_name ^ "." ^ fd.name in
               let include_plain = match requested with
                 | Some names -> List.mem fd.name names
