@@ -194,6 +194,19 @@ let test_proof_annotation_collapses_extra_spaces () =
   check string "::: collapses surrounding runs to single spaces"
     "#lang tesl\nok x ::: Active x\n" out
 
+(* T2 (2026-07-04): fmt OWNS indentation — an odd indent is rounded to even so
+   `fmt` then `--lint` is a W011 fixpoint (the linter uses the same indent-1 fix). *)
+let test_normalizes_odd_indentation () =
+  let out = fmt "#lang tesl\nfn f(x: Int) -> Int =\n   x\n" in
+  check string "3-space body indent normalised to 2"
+    "#lang tesl\nfn f(x: Int) -> Int =\n  x\n" out
+
+(* Continuation lines (prev line ends with `,`/`(`/`[`) are left alone, matching
+   the linter's W011 predicate — an argument-list continuation keeps its indent. *)
+let test_indentation_skips_continuation () =
+  let src = "#lang tesl\nfn f(\n   x: Int) -> Int =\n  x\n" in
+  check string "continuation line indent untouched" src (fmt src)
+
 let test_fat_arrow_spacing () =
   let out = fmt "#lang tesl\nlet p = forall x=>Q x\n" in
   check string "=> gets surrounding spaces"
@@ -351,6 +364,8 @@ let () =
       test_case "proof annotation + colon + arrow spacing"   `Quick test_proof_annotation_spacing;
       test_case "::: collapses extra spaces"                 `Quick test_proof_annotation_collapses_extra_spaces;
       test_case "=> fat arrow spacing"                       `Quick test_fat_arrow_spacing;
+      test_case "normalizes odd indentation (T2)"            `Quick test_normalizes_odd_indentation;
+      test_case "indentation skips continuation (T2)"        `Quick test_indentation_skips_continuation;
       test_case "-> and = collapse extra spaces"             `Quick test_arrow_spacing_collapses;
     ];
     "exposing-lists", [

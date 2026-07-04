@@ -686,11 +686,51 @@ let reflow_exposing_lists ?(max_len = 80) (lines : string list) : string list =
   done;
   List.rev !result
 
+(* T2 (2026-07-04): make `fmt` OWN indentation so `fmt` then `--lint` is a
+   fixpoint.  The formatter preserved a line's source leading whitespace, so an
+   odd indent survived formatting and W011 ("indentation should be a multiple of
+   2") still fired after `--fmt`.  Apply the SAME normalization the linter's W011
+   fix uses (round an odd indent down to the next even — `indent - 1`), on exactly
+   the lines W011 flags: non-blank, non-comment lines whose preceding non-blank
+   line does NOT end with `,`/`(`/`[` (continuation lines are left alone, matching
+   linter.ml's W011 predicate).  Even-indented lines are untouched, so this is a
+   no-op / idempotent on already-formatted source. *)
+let normalize_indentation (lines : string list) : string list =
+  let arr = Array.of_list lines in
+  let is_blank s = String.trim s = "" in
+  let leading_spaces s =
+    let n = ref 0 in
+    while !n < String.length s && s.[!n] = ' ' do incr n done;
+    !n
+  in
+  Array.to_list (Array.mapi (fun i line ->
+    let stripped = String.trim line in
+    if stripped = "" || stripped.[0] = '#' then line
+    else
+      let ind = leading_spaces line in
+      if ind mod 2 = 0 then line
+      else
+        let is_continuation =
+          let prev = ref (i - 1) in
+          while !prev >= 0 && is_blank arr.(!prev) do decr prev done;
+          if !prev < 0 then false
+          else
+            let p = String.trim arr.(!prev) in
+            let len = String.length p in
+            len > 0 && (let c = p.[len - 1] in c = ',' || c = '(' || c = '[')
+        in
+        if is_continuation then line
+        else
+          let even = max 0 (ind - 1) in
+          String.make even ' ' ^ String.sub line ind (String.length line - ind)
+  ) arr)
+
 let format_source (src : string) : string =
   let lines = cleanup_lines src in
   let lines = reflow_exposing_lists lines in
   let formatted = List.map format_line_tokens lines in
   let formatted = List.map collapse_internal_spaces formatted in
+  let formatted = normalize_indentation formatted in
   String.concat "\n" formatted ^ "\n"
 
 let format_file (filename : string) : (unit, string) result =
