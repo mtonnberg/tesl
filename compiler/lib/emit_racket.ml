@@ -4682,6 +4682,37 @@ let emit_func ctx (fd : func_decl) =
       (* Terminal leaf of a peelable body: one checkpoint, release emission. *)
       emit_checkpoint_tail locals other
   in
+  (* bug/issue #5 (whole class): a let bound to a SQL scalar/Maybe aggregate
+     (selectSum/Count/Max/Min) holds a PLAIN, proof-free value that the runtime
+     GDP-gensyms. EVERY reference to it in the body must resolve to the raw value
+     (`*name`), else the bare gensym escapes — most subtly when the value is
+     returned from a `case`/`if` arm or used in an expression, not just the direct
+     tail. Registering these names as raw_locals for the WHOLE body emission makes
+     all references emit `*name` through the normal path, independent of the
+     peeled/non-peeled/arm code path. Aggregates carry no proof, so `*name` never
+     strips one. *)
+  let sql_agg_let_names =
+    let acc = ref [] in
+    let rec go e =
+      (match e with
+       | ELet { name; value; body; _ } ->
+         (match extract_select_query value with
+          | Some (seed, _) ->
+            (match seed.kind with
+             | SelectSum _ | SelectCount | SelectMax _ | SelectMin _ ->
+               if name <> "_" then acc := name :: !acc
+             | _ -> ())
+          | None -> ());
+         go body
+       | ELetProof { body; _ } -> go body
+       | EIf { then_; else_; _ } -> go then_; go else_
+       | ECase { arms; _ } -> List.iter (fun (a : Ast.case_arm) -> go a.body) arms
+       | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+       | EWithTransaction { body; _ } -> go body
+       | _ -> ())
+    in go fd.body; !acc
+  in
+  List.iter (fun n -> Hashtbl.replace ctx.raw_locals n ()) sql_agg_let_names;
   (* Record the body's emitted line range against the body's source span so a
      runtime trace into this function resolves to the body, refining the
      form-level entry recorded by emit_module's dispatch. *)
@@ -4692,6 +4723,7 @@ let emit_func ctx (fd : func_decl) =
     (* Non-peelable: emit the whole body via the release path under one
        function-entry checkpoint (correct for SQL / special forms). *)
     emit_checkpoint_tail param_locals fd.body);
+  List.iter (fun n -> Hashtbl.remove ctx.raw_locals n) sql_agg_let_names;
   ctx.func_kind <- old_kind;
   ctx.func_return_spec <- old_return_spec;
   ctx.auth_return_binding <- old_auth_return_binding;
