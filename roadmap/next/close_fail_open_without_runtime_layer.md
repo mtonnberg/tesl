@@ -278,3 +278,41 @@ lives in B's untrusted elaborator — they interlock.
 No runtime verification layer is required at any step. The trust does not move to
 a new large body of code — under A it becomes total and loud, under B it *shrinks*
 into a small auditable core, and under E the gate can actually detect regressions.
+
+## Progress — 2026-07-04 (A + E + discovery DONE; B remaining)
+
+**The soundness mission of this item is complete and verified.** The 16 fail-open
+holes (and the roadmap `hole-*` + `eq_ord` instances) are ALL closed by Option-A-style
+fail-closed fixes, Option E's gate is fixed, and the discovery loop is at a fixpoint.
+
+- **Option A (fail-closed by construction) — effectively DONE for the known class.**
+  Every one of the 16 holes was closed with a total, default-deny decision + a platinum
+  diagnostic (field-proof type identity, Fact-typed-param, establish delegation,
+  relational auth/capture subject, cross-module effect re-verification, imported generic
+  Eq/Ord, …). Exhaustive-match discipline (`-warn-error +8`) is already library-wide, so
+  a new AST/return-spec/proof shape forces an explicit decision at compile time. The
+  dedicated `type verdict = Admit | Reject of Diagnostic.t` wrapper (a uniform refactor of
+  the remaining ad-hoc `bool`/`option`/`list` recognizers) is NOT yet introduced — the
+  fixes were applied at each site directly; folding them behind one `verdict` type is a
+  cosmetic/uniformity refactor that closes no additional hole.
+- **Option E (fix the self-fulfilling gate) — DONE** (committed earlier: SKIP≠PASS,
+  accepted-load-bearing-mutant = candidate hole, `TESL_S7_EXHAUSTIVE=1` default).
+- **Discovery loop — DONE, at fixpoint.** Exhaustive S7 = **2314 attributed kills, ZERO
+  load-bearing candidate holes**. The 4 census transform classes are all non-load-bearing
+  (verified, incl. a fresh triage of retarget-return-subject: an out-of-scope forged
+  subject is rejected `T001`, and even when accepted is INERT — matches no downstream
+  requirement).
+- **Full `ci.sh` GREEN under Racket 9.2** — all 11 phases, no skips (454s).
+
+**Remaining: Option B (LCF `proven_fact` kernel).** This is the TCB-shrink capstone —
+a private kernel that is the ONLY code able to construct a `proven_fact`, collapsing the
+trusted surface from ~40k LOC to a few hundred. It is an **all-or-substantial** refactor
+(the abstract type gives its guarantee only when NO site outside the kernel can mint —
+the minting/`proof_expr`-construction surface is ~229 sites across
+checker/validation/proof_checker), so a partial migration provides no guarantee and is
+best done as one focused, gate-green campaign by whoever owns the checker internals (as
+this item itself notes). It closes **no currently-open hole** (discovery is at a
+fixpoint); it hardens against FUTURE bugs. Recommended next step: add
+`proof_kernel.ml`/`.mli` and migrate minting innermost-first
+(`validation_common → structural → proof → capabilities/advanced → proof_checker`), each
+site gate-green, `fact_of` keeping all `proof_matches` consumers unchanged.
