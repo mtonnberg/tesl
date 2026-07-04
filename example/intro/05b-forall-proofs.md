@@ -68,8 +68,10 @@ If the list carries `ForAll IsPositive`, every element the lambda receives alrea
 fact IsPositive (n: Int)
 
 check checkPositive(n: Int) -> n: Int ::: IsPositive n =
-  if n > 0 then ok n ::: IsPositive n
-  else fail 400 "must be positive"
+  if n > 0 then
+    ok n ::: IsPositive n
+  else
+    fail 400 "must be positive"
 
 fn doublePositive(n: Int ::: IsPositive n) -> Int =
   n * 2

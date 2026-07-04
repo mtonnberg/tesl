@@ -10,8 +10,10 @@ Basic proof stamps validate one value in isolation. But some invariants are inhe
 fact ValidRange (lo: Int, hi: Int)   # the proposition: lo < hi
 
 check checkValidRange(lo: Int, hi: Int) -> lo: Int ::: ValidRange lo hi =
-  if lo < hi then ok lo ::: ValidRange lo hi
-  else fail 400 "lo must be less than hi"
+  if lo < hi then
+    ok lo ::: ValidRange lo hi
+  else
+    fail 400 "lo must be less than hi"
 ```
 
 The proof predicate `ValidRange lo hi` mentions *both* values. When `lo` carries this proof, it doesn't just say "lo was validated" — it says "lo was validated *relative to this specific hi*."
@@ -22,9 +24,12 @@ The proof predicate `ValidRange lo hi` mentions *both* values. When `lo` carries
 
 ```tesl
 fn clampToRange(lo: Int ::: ValidRange lo hi, hi: Int, value: Int) -> Int =
-  if value < lo then lo
-  else if value > hi then hi
-  else value
+  if value < lo then
+    lo
+  else if value > hi then
+    hi
+  else
+    value
 ```
 
 `clampToRange` can only be called when `lo` carries `ValidRange lo hi` for the *same* `hi` passed as the second argument. Passing a `lo` that was validated against a different `hi` is a compile error — the proof subjects don't match.
@@ -60,8 +65,10 @@ The `:::` after the closing brace is a cross-field invariant: "an `OrderLine` is
 ```tesl
 check checkPriceExceedsQuantity(price: Int, quantity: Int)
     -> price: Int ::: PriceExceedsQuantity price quantity =
-  if price > quantity then ok price ::: PriceExceedsQuantity price quantity
-  else fail 422 "price must exceed quantity"
+  if price > quantity then
+    ok price ::: PriceExceedsQuantity price quantity
+  else
+    fail 422 "price must exceed quantity"
 
 codec OrderLine {
   fromJson [

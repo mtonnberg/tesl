@@ -399,10 +399,65 @@ let () =
   let re_tesl_db = Str.regexp_string "Tesl.Db" in     (* mis-case; correct is Tesl.DB *)
   let re_impl = Str.regexp "impl[^A-Za-z]" in          (* excludes `implies` / `implement` *)
   let re_on_port = Str.regexp "on[ \t]+[0-9]" in
+  (* E3 (2026-07-04): the single-line `if cond then a else b` form is rejected by
+     the parser (E000 — the then/else bodies must be on their own indented lines).
+     Flag a fence line where the word `then` is followed by a token on the SAME
+     line, EXCEPT (a) `then` followed only by whitespace + a `#` comment (the body
+     is on the next line — valid), and (b) `then` inside a string literal (an even
+     number of double-quote chars precede it), e.g. a test name that contains the
+     word then. *)
+  let re_single_line_if = Str.regexp "\\bthen\\b[ \t]+[^ \t#]" in
+  let single_line_if ln =
+    let t = String.trim ln in
+    if t <> "" && t.[0] = '#' then false   (* whole-line comment — `then` is prose *)
+    else
+    try
+      let idx = Str.search_forward re_single_line_if ln 0 in
+      let quotes = ref 0 in
+      for i = 0 to idx - 1 do if ln.[i] = '"' then incr quotes done;
+      !quotes mod 2 = 0
+    with Not_found -> false
+  in
   let rot_of_line ln =
     (if re_search re_tesl_db ln then ["`Tesl.Db` mis-case (the module is `Tesl.DB`)"] else [])
     @ (if Str.string_match re_predicate ln 0 then ["`predicate` as a declaration keyword (use `check` / `fact`)"] else [])
     @ (if re_search re_impl ln && re_search re_on_port ln then ["old `server … impl … on PORT` syntax"] else [])
+  in
+  (* Block-aware single-line-if detection: a fence that DEMONSTRATES the rejected
+     form as a counter-example labels it with a `#` marker (WRONG / Rejected / not
+     supported / …), so skip the whole block; only CORRECT-intent blocks are held to
+     the multi-line rule. *)
+  let block_has_rejection_marker lines =
+    List.exists (fun (_, ln) ->
+      let t = String.trim ln in
+      if t = "" || t.[0] <> '#' then false
+      else
+        let lc = String.lowercase_ascii t in
+        let has s = re_search (Str.regexp_string s) lc in
+        has "wrong" || has "reject" || has "not supported" || has "error"
+        || has "bad" || has "don't" || has "avoid" || has "illegal") lines
+  in
+  (* Group consecutive in-fence line pairs into blocks (fence markers are absent
+     from the pair list, so a gap in line numbers separates blocks). *)
+  let group_blocks pairs =
+    let rec go acc cur last = function
+      | [] -> List.rev (if cur = [] then acc else List.rev cur :: acc)
+      | (n, ln) :: rest ->
+        if last >= 0 && n = last + 1 then go acc ((n, ln) :: cur) n rest
+        else go (if cur = [] then acc else List.rev cur :: acc) [ (n, ln) ] n rest
+    in
+    go [] [] (-2) pairs
+  in
+  let single_line_if_offenders pairs =
+    group_blocks pairs
+    |> List.concat_map (fun block ->
+         if block_has_rejection_marker block then []
+         else
+           List.filter_map (fun (n, ln) ->
+             if single_line_if ln then
+               Some (n, "single-line `if … then a` (E000 — put the then/else bodies \
+                         on their own indented lines)", String.trim ln)
+             else None) block)
   in
   let dir_md dir =
     let d = Filename.concat repo_root dir in
@@ -419,10 +474,12 @@ let () =
     |> List.filter (fun (_, abs) -> Sys.file_exists abs)
   in
   List.iter (fun (rel, abs) ->
+    let pairs = tesl_fence_lines (read_abs abs) in
     let offenders =
-      tesl_fence_lines (read_abs abs)
-      |> List.concat_map (fun (n, ln) ->
-           List.map (fun why -> (n, why, String.trim ln)) (rot_of_line ln))
+      (pairs
+       |> List.concat_map (fun (n, ln) ->
+            List.map (fun why -> (n, why, String.trim ln)) (rot_of_line ln)))
+      @ single_line_if_offenders pairs
     in
     check (Printf.sprintf "no D1-class syntax rot in tesl fences of %s" rel)
       (offenders = [])

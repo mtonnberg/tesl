@@ -686,8 +686,10 @@ meaningful: you cannot construct one by accident or malice anywhere outside the 
 
 ```tesl
 check isValidPort(p: Int) -> p: Int ::: ValidPort p =
-  if 1 <= p && p <= 65535 then ok p ::: ValidPort p
-  else fail 400 "port out of range"
+  if 1 <= p && p <= 65535 then
+    ok p ::: ValidPort p
+  else
+    fail 400 "port out of range"
 ```
 
 - **`establish f(x) -> Fact (P x)`** — total proof: always succeeds, returning a `Fact` value. Used
@@ -703,7 +705,10 @@ For conditional proofs where the caller already holds the value, return `Maybe (
 
 ```tesl
 establish validPort(p: Int) -> Maybe (Fact (ValidPort p)) =
-  if 1 <= p && p <= 65535 then Something (ValidPort p) else Nothing
+  if 1 <= p && p <= 65535 then
+    Something (ValidPort p)
+  else
+    Nothing
 ```
 
 When the value and its proof are produced together inside the function, use the `Maybe (v: T ::: P v)`

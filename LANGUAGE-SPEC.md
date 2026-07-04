@@ -374,8 +374,10 @@ api MyApi {
 
 ```tesl
 check isSafeTitle(title: String) -> title: String ::: TitleSafe title =
-  if String.length(title) <= 120 then ok title ::: TitleSafe title
-  else fail 400 "title too long"
+  if String.length(title) <= 120 then
+    ok title ::: TitleSafe title
+  else
+    fail 400 "title too long"
 ```
 
 The `?` operator is for cases where the value is already proof-carrying and the caller needs to receive it named. For non-optional validation, `check` is preferred.
@@ -399,7 +401,8 @@ check checkAllPositive(t: Tree) -> t: Tree ::: AllPositive t =
   case t of
     Leaf -> ok t ::: AllPositive t
     Node l v r ->
-      if v <= 0 then fail 400 "node value not positive"
+      if v <= 0 then
+        fail 400 "node value not positive"
       else
         let l2 = check checkAllPositive l
         let r2 = check checkAllPositive r
@@ -1282,8 +1285,10 @@ The `establish`, `check`, and `auth` kinds establish **proof predicate ownership
 module Ports exposing [isValidPort, ValidPort]
 
 check isValidPort(p: Int) -> p: Int ::: ValidPort p =
-  if 1 <= p && p <= 65535 then ok p ::: ValidPort p
-  else fail 400 "port out of range"
+  if 1 <= p && p <= 65535 then
+    ok p ::: ValidPort p
+  else
+    fail 400 "port out of range"
 ```
 
 A consuming module names the predicate explicitly in its imports before using it in its own annotations:
@@ -2091,7 +2096,10 @@ establish provePositive(n: Int) -> Fact (IsPositive n) =
   IsPositive n
 
 establish validatePort(p: Int) -> Maybe (Fact (ValidPort p)) =
-  if 1 <= p && p <= 65535 then Something (ValidPort p) else Nothing
+  if 1 <= p && p <= 65535 then
+    Something (ValidPort p)
+  else
+    Nothing
 ```
 
 **`establish` is total.** Unlike `check` functions, `establish` functions cannot use `fail` — they must always return a value. If the proof cannot be established, return `Nothing` (for `Maybe (Fact P)` return types). An `establish` body that uses `fail` is a compile-time error.
