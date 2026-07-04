@@ -388,6 +388,100 @@ fn needB(s: String, _pf: Fact (FactB s)) -> String = s
 fn passthru(s: String, evB: Fact (FactB s)) -> String = needB s evB
 |}
 
+(* Hole #11 (2026-07-04): endpoint auth/capture proof reconciliation compared
+   predicate NAMES only, dropping the subject.  A clause that BINDS one value but
+   declares its proof about a DIFFERENT subject attaches a proof the via-validator
+   (invoked with the request alone) never established about that subject — the SSE
+   cross-tenant / HTTP auth-subject laundering bypass.  PN12/PN13 reject the auth-
+   and capture-side forgeries; PC08 keeps the subject=binding corpus shape green. *)
+let test_PN12_auth_subject_launder () =
+  should_fail "relational proof forgery" {|
+module Hole11AuthForge exposing []
+import Tesl.Prelude exposing [String]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+fact Authenticated (u: String)
+auth simpleAuth(request: HttpRequest) -> user: String ::: Authenticated user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "no user"
+    Something userId ->
+      ok userId ::: Authenticated user
+handler getThing(user: String ::: Authenticated user) -> String =
+  user
+api ThingApi {
+  get "/thing/:roomId"
+    auth user: String ::: Authenticated roomId via simpleAuth
+    -> String
+}
+|}
+
+let test_PN13_capture_subject_launder () =
+  should_fail "relational proof forgery" {|
+module Hole11CapForge exposing []
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Json exposing [stringCodec]
+import Tesl.String exposing [String.length]
+fact Authenticated (u: String)
+fact ValidId (s: String)
+auth simpleAuth(request: HttpRequest) -> user: String ::: Authenticated user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "no user"
+    Something userId ->
+      ok userId ::: Authenticated user
+check isValidId(noteId: String) -> noteId: String ::: ValidId noteId =
+  if String.length noteId > 0 then
+    ok noteId ::: ValidId noteId
+  else
+    fail 400 "bad id"
+capturer noteIdCapture: String ::: ValidId noteId using stringCodec via isValidId
+handler getNote(user: String ::: Authenticated user, noteId: String ::: ValidId noteId) -> String =
+  noteId
+api NoteApi {
+  get "/notes/:noteId"
+    auth user: String ::: Authenticated user via simpleAuth
+    capture noteId: String ::: ValidId wrongId via noteIdCapture
+    -> String
+}
+|}
+
+(* Positive companion: subject = binding on both auth and capture compiles (the
+   entire working auth corpus has this shape). *)
+let test_PC08_endpoint_subject_binding_ok () =
+  should_pass {|
+module Hole11Control exposing []
+import Tesl.Prelude exposing [String, Bool(..)]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Json exposing [stringCodec]
+import Tesl.String exposing [String.length]
+fact Authenticated (u: String)
+fact ValidId (s: String)
+auth simpleAuth(request: HttpRequest) -> user: String ::: Authenticated user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "no user"
+    Something userId ->
+      ok userId ::: Authenticated user
+check isValidId(noteId: String) -> noteId: String ::: ValidId noteId =
+  if String.length noteId > 0 then
+    ok noteId ::: ValidId noteId
+  else
+    fail 400 "bad id"
+capturer noteIdCapture: String ::: ValidId noteId using stringCodec via isValidId
+handler getNote(user: String ::: Authenticated user, noteId: String ::: ValidId noteId) -> String =
+  noteId
+api NoteApi {
+  get "/notes/:noteId"
+    auth user: String ::: Authenticated user via simpleAuth
+    capture noteId: String ::: ValidId noteId via noteIdCapture
+    -> String
+}
+|}
+
 let () =
   run "proof-negatives" [
     "proofs", [
@@ -402,6 +496,8 @@ let () =
       test_case "PN09 establish cannot delegate to a wrong-subject prove-fn" `Quick test_PN09_establish_delegate_wrong_subject;
       test_case "PN10 field proof not credited across unrelated types" `Quick test_PN10_field_proof_cross_type_forge;
       test_case "PN11 Fact-typed param cannot launder a different fact" `Quick test_PN11_fact_typed_param_launder;
+      test_case "PN12 auth clause cannot declare a cross-subject proof" `Quick test_PN12_auth_subject_launder;
+      test_case "PN13 capture clause cannot declare a cross-subject proof" `Quick test_PN13_capture_subject_launder;
     ];
     "capabilities", [
       test_case "CN01 capability use must be declared (leak)"     `Quick test_CN01_capability_leak;
@@ -416,5 +512,6 @@ let () =
       test_case "PC05 subject-preserving establish delegation compiles" `Quick test_PC05_establish_delegate_same_subject;
       test_case "PC06 same-type field proof still credited" `Quick test_PC06_field_proof_same_type_ok;
       test_case "PC07 matching Fact-typed param forwards" `Quick test_PC07_fact_typed_param_match_ok;
+      test_case "PC08 endpoint subject=binding compiles" `Quick test_PC08_endpoint_subject_binding_ok;
     ];
   ]

@@ -1155,6 +1155,74 @@ let check_auth_proof_via
     | _ -> []
   ) decls
 
+(* Hole #11 (2026-07-04): endpoint↔auther/capturer proof reconciliation compared
+   predicate NAME sets (proof_predicates), discarding the SUBJECT — so a relational
+   proof about one subject satisfied a clause requiring it about a DIFFERENT subject
+   (the SSE cross-tenant bypass: an auther proving `ChannelOwner session` accepted
+   for an endpoint requiring `ChannelOwner roomId`).
+
+   The sound rule needs no via-fn lookup.  An endpoint `auth <b> ::: P <s> via <f>`
+   binds the auther's RESULT to `<b>`; the auther is invoked with the request alone
+   (dsl/web.rkt:1272,1881) and proves `P` about the value it returns, i.e. `P <b>`.
+   That is the ONLY proof transferred to the handler.  So the handler's obligation
+   `P <s>` is discharged only when `<s>` IS `<b>`.  A clause whose declared subject
+   differs from what it binds attaches the proof to a value the validator never
+   established it about — reject fail-closed.  (Every endpoint auth/capture clause
+   in the corpus has subject = binding; only the forgery has subject <> binding.)
+
+   We compare the SUBJECT (final arg — the codebase-wide "subject is last, leading
+   args are content" convention) of each required predicate against the binding
+   name.  Literal / parenthesised / dotted subjects are left alone (not a bare
+   cross-subject variable, so not this class). *)
+let endpoint_proof_subject_mismatches (binding_name : string) (proof : proof_expr)
+    : (string * string) list =
+  let clean_var s =
+    String.length s > 0 && s.[0] >= 'a' && s.[0] <= 'z'
+    && not (String.contains s '(') && not (String.contains s '#')
+    && not (String.contains s '.')
+  in
+  let rec go = function
+    | PredApp { pred; args; _ } when args <> [] ->
+      let subj = List.nth args (List.length args - 1) in
+      if clean_var subj && subj <> binding_name then [(pred, subj)] else []
+    | PredApp _ -> []
+    | PredAnd { left; right; _ } -> go left @ go right
+  in
+  go proof
+
+let check_endpoint_proof_subject_binding (decls : top_decl list)
+    : validation_error list =
+  let clause_errors kind_word (b : binding) ep_name =
+    match b.proof_ann with
+    | None -> []
+    | Some proof ->
+      List.map (fun (pred, subj) ->
+        make_error b.loc
+          ~hint:(Printf.sprintf
+            "declare the proof about `%s` (the value this `%s` clause binds and \
+             the validator authorizes): `%s %s`.  A `via` validator receives the \
+             request only and cannot establish `%s %s` about the unrelated `%s`."
+            b.name kind_word pred b.name pred b.name subj)
+          (Printf.sprintf
+            "endpoint `%s`: %s clause binds `%s` but declares proof `%s %s` about a \
+             DIFFERENT subject `%s`; the validator establishes `%s %s`, not `%s %s` \
+             (relational proof forgery — cross-subject authorization bypass)"
+            ep_name kind_word b.name pred subj subj pred b.name pred subj))
+        (endpoint_proof_subject_mismatches b.name proof)
+  in
+  List.concat_map (function
+    | DApi api ->
+      List.concat_map (fun (ep : api_endpoint) ->
+        (match ep.auth with
+         | Some a -> clause_errors "auth" a.binding ep.name
+         | None -> [])
+        @ List.concat_map
+            (fun (c : api_capture) -> clause_errors "capture" c.binding ep.name)
+            ep.captures
+      ) api.endpoints
+    | _ -> []
+  ) decls
+
 let check_server_handler_binding
     (handlers : (string * handler_decl_ref) list)
     (auth_preds : string list)
