@@ -438,6 +438,12 @@ agent SupportAgent requires [supportAi] = Agent {
 let answer = ask SupportAgent "Where is order ord-42?"
 ```
 
+For a chat UI, `converseStreaming conv message publish` runs a turn and calls `publish` with each
+event as it happens — `tool: <name>` as a tool is dispatched, `text-delta: <part>` for each token of
+the answer as the model generates it (real providers use the streaming API; the mock synthesizes
+chunks), then `text: <reply>` at the end. Forward those to an `sseChannel` and a browser `EventSource`
+renders the answer incrementally ("live typing"); a consumer that only reads `text:` still works.
+
 A tool that reads the database does so through the same proof-carrying SQL boundary as the rest of
 your code, so a tool answer is grounded in real rows, never fabricated. Tests run against a
 deterministic `mockProvider` / `mockToolProvider` — no key, no network. Real providers (`anthropic` /

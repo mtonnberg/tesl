@@ -47,8 +47,11 @@ import Tesl.Agent exposing [
 # * Tool use grounded in the database: the model can call `lookupOrderStatus`, a
 #   typed Tesl function that reads a proof-carrying row from PostgreSQL, so an
 #   answer about an order is grounded in real data, never fabricated.
-# * Streaming: the handler streams the tool-use / thought process / final reply
-#   over SSE as the turn runs (converseStreaming publishes each step).
+# * Streaming: the handler streams the turn over SSE as it runs. converseStreaming
+#   publishes `tool: <name>` as each tool is dispatched, `text-delta: <part>` for
+#   each token/chunk of the answer AS the model generates it (live typing), then
+#   `text: <reply>` once the turn finishes. A browser EventSource renders the
+#   answer incrementally by handling `text-delta:`.
 # * Cross-instance + isolated: the transcript lives in PostgreSQL, every load/save
 #   query is owner-scoped, and the read-modify-write of a turn is wrapped in a
 #   transaction so concurrent turns can't interleave.
@@ -125,7 +128,8 @@ database ConversationDb = Database {
   })
 }
 
-# Each streamed step event (tool-use, thought, or final text).
+# One streamed event: a `tool: <name>` dispatch, a `text-delta: <part>` token
+# chunk of the answer, or the final `text: <reply>`.
 type ChatEvent
   = Chunk content: String
 
@@ -225,8 +229,9 @@ fn publishChunk(conversationId: String, event: String) -> Unit
   publish ChatStream(conversationId) Chunk { content: event }
 
 # ── One turn ───────────────────────────────────────────────────────────────────
-# Load (or start) the caller's conversation, run the turn STREAMING each step over
-# the conversation's SSE channel, persist the advanced transcript, return the reply.
+# Load (or start) the caller's conversation, run the turn STREAMING each event
+# (tool dispatches + per-token `text-delta:` chunks + the final `text:`) over the
+# conversation's SSE channel, persist the advanced transcript, return the reply.
 # Parameterised over the agent so the served handler passes the consumer's real
 # agent (Claude/Mistral) while tests pass a mock one.
 fn replyTurn(agent: Agent, requestUser: Consumer, conversationId: String, message: String) -> String
@@ -371,8 +376,8 @@ test "a consumer cannot access another consumer's conversation (isolation)" requ
 #   curl -s localhost:8089/chat/alice-1 -b 'consumerId=bob;provider=mistral' \
 #        -d '{"message":"what did the other user ask?"}'
 #
-#   # stream the tool-use / thought process / reply for a turn over SSE (subscribe,
-#   # then POST in another shell): events arrive as "tool: lookupOrderStatus" then
-#   # "text: <reply>".
+#   # stream a turn over SSE (subscribe, then POST in another shell): events arrive
+#   # as "tool: lookupOrderStatus" (if a tool runs), then "text-delta: <part>" per
+#   # token as the model generates, then "text: <reply>" at the end.
 #   curl -N localhost:8089/chat/alice-1/events -b 'consumerId=alice;provider=claude'
 # ──────────────────────────────────────────────────────────────────────────────
