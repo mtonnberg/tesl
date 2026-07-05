@@ -24,12 +24,12 @@ catch-all and, if so, whether that catch-all is an active hole or only latent.
 
 ## Scope
 
-These are the **non-discharge** judgments in `proof_checker.ml`. The discharge /
-mint judgment itself (`validate_check_return`, `validate_ok_expr`, and the ForAll/
-Dict/MaybeAttached string-matching) is tracked separately under the discharge-
-unification work (see [[discharge-refactor-plan]]) — its spelling→structural
-upgrade (`normalize_conj_str` / `pp_proof` equality → structural `proof_key`) is
-part of folding mint into the fail-closed discharge judgment, NOT these siblings.
+The primary focus is the **non-discharge** judgments in `proof_checker.ml`. The
+discharge / mint judgment itself (`validate_check_return`, `validate_ok_expr`) also
+matches by string rather than structure — that is `fail_closed_mint_matching_structural.md`
+below (discharge-side; see also [[discharge-refactor-plan]]). It is logged here as the
+same fail-closed-consistency class but flagged **robustness, not a demonstrated hole**
+(2026-07-06 investigation found no exploit).
 
 ## Audit map (2026-07-06)
 
@@ -42,6 +42,7 @@ part of folding mint into the fail-closed discharge judgment, NOT these siblings
 | `fail_closed_undefined_predicates_decl_wildcard.md` | `check_undefined_predicates` (1142) | latent decl-wildcard | P4 |
 | `fail_closed_proof_no_dotted_path.md` | `check_proof_no_dotted_path` (478) | already fail-closed | none |
 | `fail_closed_import_parse_errors.md` | `collect_import_parse_errors` (1106) | already fail-closed | none |
+| `fail_closed_mint_matching_structural.md` | `validate_check_return` (594) | string-not-structural match; **robustness, not a proven hole** | P5 |
 
 ## Cross-cutting fix pattern
 
