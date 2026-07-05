@@ -484,12 +484,67 @@ let check_fn_return_proof_annotations
          field receiver's type — e.g. `extractValue(item: ValidItem) = item.value`. *)
       field_proof_type_ctx :=
         Some (fn_type_env funcs fields_by_type ctors fd, fields_by_type, ctors);
+      (* Shared scalar-Carry leaf walker for the two pure single-value forms —
+         RetAttached (`-> b: T ::: P b`) and RetPlain carrying a `Fact (…)` type.
+         They discharge identically: every returning leaf (through
+         let/letproof/if/case/with/fail) must CONTENT-CARRY the required proof at
+         its own subject; `fail` never returns.  They differ only in the binder:
+         RetAttached renames the declared binder to each leaf's subject; the
+         Fact-return form has no binder (subject fixed).  [~binder:(Some b)] gives
+         the RetAttached behaviour, [~binder:None] the Fact-return behaviour —
+         reproducing the two former walkers (body_carries_required / body_carries)
+         exactly.  This is the first step of routing all Carry forms through one
+         leaf judgment. *)
+      let scalar_carry_ok ~binder (required_proof : proof_expr) : bool =
+        let subject_env = build_initial_subject_env fd.params in
+        let proof_env = build_initial_proof_env fd.params in
+        let type_env0 = List.map (fun (p : binding) -> (p.name, p.type_expr)) fd.params in
+        let default_subj = match binder with Some b -> b | None -> "_" in
+        let rec walk type_env subject_env proof_env (e : expr) : bool =
+          match e with
+          | ELet { name; value; body; _ } ->
+            let te, se, pe = extend_let_envs type_env subject_env proof_env name value in
+            walk te se pe body
+          | ELetProof { value_name; proof_name; value; body; _ } ->
+            let te, se, pe = extend_let_envs type_env subject_env proof_env value_name value in
+            let pe =
+              let ps = proofs_of_expr value_name funcs se pe value in
+              if ps = [] then pe else (proof_name, ps) :: pe
+            in
+            walk te se pe body
+          | EIf { then_; else_; _ } ->
+            walk type_env subject_env proof_env then_
+            && walk type_env subject_env proof_env else_
+          | ECase { scrut; arms; _ } ->
+            let scrut_ty = infer_expr_type type_env funcs fields_by_type ctors scrut in
+            let scrut_proofs = proofs_of_expr "_" funcs subject_env proof_env scrut in
+            arms <> [] && List.for_all (fun (arm : case_arm) ->
+              let te = pattern_bindings scrut_ty ctors arm.pattern @ type_env in
+              let pe, se = extend_case_envs subject_env proof_env scrut scrut_proofs arm.pattern in
+              walk te se pe arm.body
+            ) arms
+          | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
+          | EWithTransaction { body; _ } ->
+            walk type_env subject_env proof_env body
+          | EFail _ -> true  (* never returns — no proof obligation on this path *)
+          | _ ->
+            let result_subject = match subject_of_expr subject_env e with
+              | Some s -> s | None -> default_subj in
+            let required_here = match binder with
+              | Some b -> subst_proof [(b, result_subject)] required_proof
+              | None -> required_proof in
+            let carried =
+              List.map Proof_kernel.fact_of
+                (proofs_of_expr result_subject funcs subject_env proof_env e) in
+            proof_matches required_here carried
+        in
+        walk type_env0 subject_env proof_env fd.body
+      in
       (match fd.return_spec with
        | RetAttached { binding = b; loc = ret_loc }
          when is_forgery_restricted_kind fd.kind && b.proof_ann <> None ->
          (* The guard `b.proof_ann <> None` ensures Some here; use Option.get with safe fallback *)
          let required_proof = match b.proof_ann with Some p -> p | None -> PredApp { pred = ""; args = []; loc = ret_loc } in
-         let proof_env = build_initial_proof_env fd.params in
          let subject_env = build_initial_subject_env fd.params in
          let binding_subject = match List.assoc_opt b.name subject_env with Some s -> s | None -> b.name in
          let required_norm = subst_proof [(b.name, binding_subject)] required_proof in
@@ -541,47 +596,8 @@ let check_fn_return_proof_annotations
             producing-site gate [is_stdlib_auto]).  Fail-closed: an unrecognised
             return shape falls through to the leaf, which requires the returned
             expression itself to carry the declared proof. *)
-         let type_env0 =
-           List.map (fun (p : binding) -> (p.name, p.type_expr)) fd.params in
-         let rec body_carries_required type_env subject_env proof_env (e : expr) : bool =
-           match e with
-           | ELet { name; value; body; _ } ->
-             let te, se, pe = extend_let_envs type_env subject_env proof_env name value in
-             body_carries_required te se pe body
-           | ELetProof { value_name; proof_name; value; body; _ } ->
-             let te, se, pe = extend_let_envs type_env subject_env proof_env value_name value in
-             let pe =
-               let proofs = proofs_of_expr value_name funcs se pe value in
-               if proofs = [] then pe else (proof_name, proofs) :: pe
-             in
-             body_carries_required te se pe body
-           | EIf { then_; else_; _ } ->
-             (* Every return path must carry the proof. *)
-             body_carries_required type_env subject_env proof_env then_
-             && body_carries_required type_env subject_env proof_env else_
-           | ECase { scrut; arms; _ } ->
-             let scrut_ty = infer_expr_type type_env funcs fields_by_type ctors scrut in
-             let scrut_proofs = proofs_of_expr "_" funcs subject_env proof_env scrut in
-             arms <> [] && List.for_all (fun (arm : case_arm) ->
-               let te = pattern_bindings scrut_ty ctors arm.pattern @ type_env in
-               let pe, se = extend_case_envs subject_env proof_env scrut scrut_proofs arm.pattern in
-               body_carries_required te se pe arm.body
-             ) arms
-           | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
-           | EWithTransaction { body; _ } ->
-             body_carries_required type_env subject_env proof_env body
-           | EFail _ -> true  (* never returns — no proof obligation on this path *)
-           | _ ->
-             let result_subject = match subject_of_expr subject_env e with
-               | Some s -> s | None -> b.name in
-             let required_here = subst_proof [(b.name, result_subject)] required_proof in
-             let carried =
-               List.map Proof_kernel.fact_of
-                 (proofs_of_expr result_subject funcs subject_env proof_env e) in
-             proof_matches required_here carried
-         in
          if not is_stdlib_auto
-            && not (body_carries_required type_env0 subject_env proof_env fd.body) then begin
+            && not (scalar_carry_ok ~binder:(Some b.name) required_proof) then begin
            let proof_str = pp_proof required_proof in
            let kw = match fd.kind with
              | HandlerKind -> "handler" | WorkerKind -> "worker" | _ -> "fn" in
@@ -741,42 +757,8 @@ let check_fn_return_proof_annotations
            | Some ("FromQueue" | "FromDeadQueue") -> false
            | Some p -> List.mem p stdlib_auto_preds
            | None -> false in
-         let subject_env = build_initial_subject_env fd.params in
-         let proof_env = build_initial_proof_env fd.params in
-         let type_env0 = List.map (fun (p : binding) -> (p.name, p.type_expr)) fd.params in
-         let rec body_carries type_env subject_env proof_env (e : expr) : bool =
-           match e with
-           | ELet { name; value; body; _ } ->
-             let te, se, pe = extend_let_envs type_env subject_env proof_env name value in
-             body_carries te se pe body
-           | ELetProof { value_name; proof_name; value; body; _ } ->
-             let te, se, pe = extend_let_envs type_env subject_env proof_env value_name value in
-             let pe = let ps = proofs_of_expr value_name funcs se pe value in
-               if ps = [] then pe else (proof_name, ps) :: pe in
-             body_carries te se pe body
-           | EIf { then_; else_; _ } ->
-             body_carries type_env subject_env proof_env then_
-             && body_carries type_env subject_env proof_env else_
-           | ECase { scrut; arms; _ } ->
-             let scrut_ty = infer_expr_type type_env funcs fields_by_type ctors scrut in
-             let scrut_proofs = proofs_of_expr "_" funcs subject_env proof_env scrut in
-             arms <> [] && List.for_all (fun (arm : case_arm) ->
-               let te = pattern_bindings scrut_ty ctors arm.pattern @ type_env in
-               let pe, se = extend_case_envs subject_env proof_env scrut scrut_proofs arm.pattern in
-               body_carries te se pe arm.body) arms
-           | EWithDatabase { body; _ } | EWithCapabilities { body; _ }
-           | EWithTransaction { body; _ } -> body_carries type_env subject_env proof_env body
-           | EFail _ -> true
-           | _ ->
-             let result_subject = match subject_of_expr subject_env e with
-               | Some s -> s | None -> "_" in
-             let carried =
-               List.map Proof_kernel.fact_of
-                 (proofs_of_expr result_subject funcs subject_env proof_env e) in
-             proof_matches required_proof carried
-         in
          if not is_stdlib_auto
-            && not (body_carries type_env0 subject_env proof_env fd.body) then begin
+            && not (scalar_carry_ok ~binder:None required_proof) then begin
            let kw = match fd.kind with
              | HandlerKind -> "handler" | WorkerKind -> "worker"
              | DeadWorkerKind -> "deadworker" | MainKind -> "main" | _ -> "fn" in
