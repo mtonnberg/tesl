@@ -29,15 +29,17 @@
 #    1. Build                 dune build                              (compiler/)
 #    2. Dune test             OCaml alcotest suite, ID-keyed waivers   (compiler/)
 #    3. Lifted-stdlib snaps   scripts/gen-stdlib-rkt.sh --check
-#    4. Format                tesl fmt (in place), bounded xargs -P pool
-#    5. Validate              tesl validate (check+lint+fmt), xargs -P pool
-#    6. Exact-match snaps     byte-exact re-emit vs committed example/learn/*.rkt
-#    7. Tesl test files       generated Racket test submodules (batch runner)
-#    8. Mutation              tesl --mutate lesson42
-#    9. Integration           httpclient + email alcotest integration exes
-#   10. Racket suites         debugger / headless-inspect / MCP / lifted-stdlib
+#    4. Embedded-docs sync    embedded_docs.ml matches manual/+example/ (promote)
+#    5. Format                tesl fmt (in place), bounded xargs -P pool
+#    6. Validate              tesl validate (check+lint+fmt), xargs -P pool
+#    7. Exact-match snaps     byte-exact re-emit vs committed example/learn/*.rkt
+#    8. Tesl test files       generated Racket test submodules (batch runner)
+#    9. Mutation              tesl --mutate lesson42
+#   10. Integration           httpclient + email alcotest integration exes
+#   11. Racket suites         debugger / headless-inspect / MCP / lifted-stdlib
 #                             + AI (Tesl.Agent) mock feature/runtime suites
-#   11. Racket aggregate      tests/all.rkt (shared PostgreSQL when available)
+#   12. Racket aggregate      tests/all.rkt (shared PostgreSQL when available)
+#   13. Boot smoke            tesl run app.tesl — activation-path banner check
 #
 # A per-phase progress line is printed as each phase STARTS and again when it
 # finishes:  [N/T] <phase> … OK/FAIL/SKIP (Xs).  Output stays clean (no colour,
@@ -126,7 +128,7 @@ phase_started_at=$SECONDS
 
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=12
+TOTAL_PHASES=13
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -757,6 +759,27 @@ elif bash "$SCRIPT_DIR/scripts/gen-stdlib-rkt.sh" --check; then
     phase_end OK
 else
     printf "  %s✗%s  lifted-stdlib snapshot drift (run scripts/gen-stdlib-rkt.sh and commit)\n" "$C_RED" "$C_RESET"
+    phase_end FAIL
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Embedded-docs sync (compiler/lib/embedded_docs.ml matches manual/ + example/)
+# ══════════════════════════════════════════════════════════════════════════════
+# embedded_docs.ml bakes the manual/ and example/ files into the binary for
+# `tesl help manual` / examples.  A `(mode promote)` dune rule regenerates it on
+# every build (the Build phase above), writing the fresh copy back to the source
+# tree.  So if a manual/example edit was committed WITHOUT the regenerated
+# snapshot, the Build phase just promoted a different version and the tracked
+# file is now dirty.  Fail so a stale embedded copy (out-of-date `tesl help`)
+# cannot ship.  Depends on the Build phase having run `dune build` first.
+phase_begin "Embedded-docs sync (embedded_docs.ml up to date)"
+if ! command -v git >/dev/null 2>&1 || ! git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf "  %s⚠%s  git unavailable / not a work tree — skipping\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+elif git -C "$SCRIPT_DIR" diff --quiet -- compiler/lib/embedded_docs.ml; then
+    phase_end OK
+else
+    printf "  %s✗%s  embedded_docs.ml is stale vs manual/ + example/ — run 'dune build' (it promotes the snapshot) and commit compiler/lib/embedded_docs.ml\n" "$C_RED" "$C_RESET"
     phase_end FAIL
 fi
 
