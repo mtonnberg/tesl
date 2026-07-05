@@ -840,7 +840,7 @@ test "property: record" with 20 runs {
   property "field available" (n: AnIntRecord) { n.someProp >= -1000000 }
 }
 |} in
-  check_contains "property record generator" src "[n (AnIntRecord #:someProp (- (random 2000001) 1000000))]"
+  check_contains "property record generator" src "[n (AnIntRecord #:someProp (- (tesl-prop-random 2000001) 1000000))]"
 
 let test_stdlib_check_binding_uses_let_check () =
   let src = {|#lang tesl

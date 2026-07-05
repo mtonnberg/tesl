@@ -99,12 +99,12 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: increment n == n + 1
   (for ([tesl-prop-i (in-range 50)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (check-true (tesl-equal? (raw-value (increment n)) (+ (raw-value n) 1)) "increment n == n + 1")
     ))
   ; property: decrement n == n - 1
   (for ([tesl-prop-i (in-range 50)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (check-true (tesl-equal? (raw-value (decrement n)) (- (raw-value n) 1)) "decrement n == n - 1")
     ))
     ))

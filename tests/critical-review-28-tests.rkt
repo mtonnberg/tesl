@@ -584,7 +584,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: height non-negative
   (for ([tesl-prop-i (in-range 30)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (check-true (> (raw-value (treeHeight28 (Node28 Leaf28 n Leaf28))) 0) "height non-negative")
     ))
     ))
@@ -860,7 +860,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: integer division
   (for ([tesl-prop-i (in-range 30)])
-    (let ([a (- (random 2000001) 1000000)] [b (- (random 2000001) 1000000)])
+    (let ([a (- (tesl-prop-random 2000001) 1000000)] [b (- (tesl-prop-random 2000001) 1000000)])
       (check-true (if (tesl-equal? (raw-value b) 0) (tesl-equal? (raw-value (safeDivide28 a b)) (raw-value (Left "division by zero"))) (not (tesl-equal? (raw-value (safeDivide28 a b)) (raw-value (Left "division by zero"))))) "integer division")
     ))
     ))
@@ -895,7 +895,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: commutativity
   (for ([tesl-prop-i (in-range 100)])
-    (let ([x (- (random 2000001) 1000000)] [y (- (random 2000001) 1000000)])
+    (let ([x (- (tesl-prop-random 2000001) 1000000)] [y (- (tesl-prop-random 2000001) 1000000)])
       (check-true (tesl-equal? (+ (raw-value x) (raw-value y)) (+ (raw-value y) (raw-value x))) "commutativity")
     ))
     ))
@@ -905,7 +905,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: distributivity
   (for ([tesl-prop-i (in-range 50)])
-    (let ([a (- (random 2000001) 1000000)] [b (- (random 2000001) 1000000)] [c (- (random 2000001) 1000000)])
+    (let ([a (- (tesl-prop-random 2000001) 1000000)] [b (- (tesl-prop-random 2000001) 1000000)] [c (- (tesl-prop-random 2000001) 1000000)])
       (check-true (tesl-equal? (* (raw-value a) (+ (raw-value b) (raw-value c))) (+ (* (raw-value a) (raw-value b)) (* (raw-value a) (raw-value c)))) "distributivity")
     ))
     ))
@@ -1247,7 +1247,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: length is non-negative
   (for ([tesl-prop-i (in-range 200)])
-    (let ([xs (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))])
+    (let ([xs (tesl-prop-build-list (tesl-prop-random 8) (lambda () (- (tesl-prop-random 2000001) 1000000)))])
       (check-true (listLengthNonNeg28 xs) "length is non-negative")
     ))
     ))
@@ -1257,7 +1257,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: sum equals sum of reversed
   (for ([tesl-prop-i (in-range 200)])
-    (let ([xs (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))])
+    (let ([xs (tesl-prop-build-list (tesl-prop-random 8) (lambda () (- (tesl-prop-random 2000001) 1000000)))])
       (check-true (listSumReverseSame28 xs) "sum equals sum of reversed")
     ))
     ))
@@ -1267,7 +1267,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: append length
   (for ([tesl-prop-i (in-range 200)])
-    (let ([xs (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))] [ys (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))])
+    (let ([xs (tesl-prop-build-list (tesl-prop-random 8) (lambda () (- (tesl-prop-random 2000001) 1000000)))] [ys (tesl-prop-build-list (tesl-prop-random 8) (lambda () (- (tesl-prop-random 2000001) 1000000)))])
       (check-true (tesl-equal? (raw-value (tesl_import_List_length (raw-value (tesl_import_List_append (raw-value xs) (raw-value ys))))) (+ (raw-value (tesl_import_List_length (raw-value xs))) (raw-value (tesl_import_List_length (raw-value ys))))) "append length")
     ))
     ))

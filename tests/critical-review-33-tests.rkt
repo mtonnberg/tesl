@@ -511,7 +511,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: even and odd are complementary
   (for ([tesl-prop-i (in-range 30)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (>= (raw-value n) 0) (< (raw-value n) 50)) (check-true (not (tesl-equal? (raw-value (isEven33 n)) (raw-value (isOdd33 n)))) "even and odd are complementary"))
     ))
     ))
@@ -579,17 +579,17 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: addZero identity
   (for ([tesl-prop-i (in-range 50)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (> (raw-value n) -1000000) (< (raw-value n) 1000000)) (check-true (tesl-equal? (raw-value (addZero33 n)) (raw-value n)) "addZero identity"))
     ))
   ; property: mulOne identity
   (for ([tesl-prop-i (in-range 50)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (> (raw-value n) -1000000) (< (raw-value n) 1000000)) (check-true (tesl-equal? (raw-value (mulOne33 n)) (raw-value n)) "mulOne identity"))
     ))
   ; property: subSelf is zero
   (for ([tesl-prop-i (in-range 50)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (> (raw-value n) -1000000) (< (raw-value n) 1000000)) (check-true (tesl-equal? (raw-value (subSelf33 n)) 0) "subSelf is zero"))
     ))
     ))
@@ -627,7 +627,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: interpolated length is positive
   (for ([tesl-prop-i (in-range 20)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (>= (raw-value n) 0) (< (raw-value n) 1000)) (check-true (> (raw-value (tesl_import_String_length (raw-value (interpolateComplex33 n)))) 0) "interpolated length is positive"))
     ))
     ))
@@ -752,7 +752,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: divide by self is 1
   (for ([tesl-prop-i (in-range 30)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (> (raw-value n) 0) (< (raw-value n) 10000)) (check-true (let/check ([tesl-checked-28 (tesl_import_Int_nonZero n)]) (let ([divisor tesl-checked-28]) (tesl-equal? (raw-value (tesl_import_Int_divide (raw-value n) divisor)) 1))) "divide by self is 1"))
     ))
     ))
@@ -854,7 +854,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: sort is idempotent
   (for ([tesl-prop-i (in-range 50)])
-    (let ([xs (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))])
+    (let ([xs (tesl-prop-build-list (tesl-prop-random 8) (lambda () (- (tesl-prop-random 2000001) 1000000)))])
       (check-true (tesl-equal? (raw-value (sortedInts33 (sortedInts33 xs))) (raw-value (sortedInts33 xs))) "sort is idempotent")
     ))
     ))
@@ -923,7 +923,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: trim length <= original
   (for ([tesl-prop-i (in-range 30)])
-    (let ([s (format "s~a" (random 1000000))])
+    (let ([s (tesl-prop-gen-string)])
       (check-true (<= (raw-value (tesl_import_String_length (raw-value (tesl_import_String_trim (raw-value s))))) (raw-value (tesl_import_String_length (raw-value s)))) "trim length <= original")
     ))
     ))
@@ -952,12 +952,12 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: length after append
   (for ([tesl-prop-i (in-range 30)])
-    (let ([xs (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))] [ys (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))])
+    (let ([xs (tesl-prop-build-list (tesl-prop-random 8) (lambda () (- (tesl-prop-random 2000001) 1000000)))] [ys (tesl-prop-build-list (tesl-prop-random 8) (lambda () (- (tesl-prop-random 2000001) 1000000)))])
       (check-true (tesl-equal? (raw-value (tesl_import_List_length (raw-value (tesl_import_List_append (raw-value xs) (raw-value ys))))) (+ (raw-value (tesl_import_List_length (raw-value xs))) (raw-value (tesl_import_List_length (raw-value ys))))) "length after append")
     ))
   ; property: reverse is involution
   (for ([tesl-prop-i (in-range 30)])
-    (let ([xs (map (lambda (_) (- (random 2000001) 1000000)) (make-list (random 8) #f))])
+    (let ([xs (tesl-prop-build-list (tesl-prop-random 8) (lambda () (- (tesl-prop-random 2000001) 1000000)))])
       (check-true (tesl-equal? (raw-value (tesl_import_List_reverse (raw-value (tesl_import_List_reverse (raw-value xs))))) (raw-value xs)) "reverse is involution")
     ))
     ))

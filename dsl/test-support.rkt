@@ -27,7 +27,30 @@
          lookup-api-test-dead-workers
          api-test-subscribe
          api-test-collect
-         api-test-json-match?)
+         api-test-json-match?
+         tesl-prop-random
+         tesl-prop-gen-string
+         tesl-prop-build-list)
+
+;; #12: the property-test generators are compiler-EMITTED into the USER module's
+;; namespace, so any Racket builtin they name by a bare identifier can be shadowed
+;; by a user binding of the same name — an `import Tesl.Random exposing [random]`
+;; (rebinds `random` to the capability object), or a top-level `fn map`, `fn
+;; format`, etc.  When that happens the generator draws a non-number / calls the
+;; wrong function and a tautological property spuriously fails ("assertion did not
+;; hold").  Route every shadowable primitive the generators use through helpers
+;; defined HERE, where the names resolve to racket/base (bound via explicit rename
+;; so nothing — not even a transitive require in this file — can shadow them).
+;; `zero?`, `make-list`, `-`, `if` need no helper: they are not valid Tesl
+;; identifiers, so no user binding can shadow them.
+(require (only-in racket/base
+                  [random tesl-builtin-random]
+                  [format tesl-builtin-format]
+                  [build-list tesl-builtin-build-list]))
+(define (tesl-prop-random n) (tesl-builtin-random n))
+(define (tesl-prop-gen-string) (tesl-builtin-format "s~a" (tesl-builtin-random 1000000)))
+(define (tesl-prop-build-list n thunk)
+  (tesl-builtin-build-list n (lambda (_) (thunk))))
 
 (struct api-test-sse-stream (name event-channel backlog) #:transparent)
 

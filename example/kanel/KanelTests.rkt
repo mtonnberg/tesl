@@ -430,7 +430,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: non-empty names within length are valid
   (for ([tesl-prop-i (in-range 100)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (>= (raw-value n) 2) (<= (raw-value n) 80)) (check-true (>= (raw-value (tesl_import_String_length "x")) 0) "non-empty names within length are valid"))
     ))
     ))
@@ -440,7 +440,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: email with @ is valid
   (for ([tesl-prop-i (in-range 50)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (> (raw-value n) 0) (< (raw-value n) 100)) (check-true (> (raw-value n) 0) "email with @ is valid"))
     ))
     ))
@@ -450,7 +450,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: valid estimates are returned unchanged
   (for ([tesl-prop-i (in-range 100)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (>= (raw-value n) 0) (check-true (tesl-equal? (raw-value (checkEstimate n)) (raw-value n)) "valid estimates are returned unchanged"))
     ))
     ))
@@ -460,7 +460,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: valid minute counts are returned unchanged
   (for ([tesl-prop-i (in-range 100)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (>= (raw-value n) 1) (<= (raw-value n) 1440)) (check-true (tesl-equal? (raw-value (checkPositiveMinutes n)) (raw-value n)) "valid minute counts are returned unchanged"))
     ))
     ))
@@ -470,7 +470,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: a + b == b + a
   (for ([tesl-prop-i (in-range 50)])
-    (let ([a (- (random 2000001) 1000000)] [b (- (random 2000001) 1000000)])
+    (let ([a (- (tesl-prop-random 2000001) 1000000)] [b (- (tesl-prop-random 2000001) 1000000)])
       (when (and (and (>= (raw-value a) 0) (< (raw-value a) 1000)) (and (>= (raw-value b) 0) (< (raw-value b) 1000))) (check-true (tesl-equal? (+ (raw-value a) (raw-value b)) (+ (raw-value b) (raw-value a))) "a + b == b + a"))
     ))
     ))
@@ -488,7 +488,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: estimate non-negative
   (for ([tesl-prop-i (in-range 50)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (>= (raw-value n) 0) (< (raw-value n) 10000)) (check-true (>= (raw-value (checkEstimate n)) 0) "estimate non-negative"))
     ))
     ))
@@ -640,7 +640,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: single char comment accepted
   (for ([tesl-prop-i (in-range 1)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (> (raw-value n) 0) (check-true (tesl-equal? (raw-value (tesl_import_String_length "x")) 1) "single char comment accepted"))
     ))
     ))

@@ -5411,25 +5411,28 @@ let emit_test ctx ~(database_names : string list) (t : test_form) =
     match ty, proof with
     | TName { name = ("Int" | "Integer"); _ }, PredApp { pred; _ } ->
       let pred_lc = String.lowercase_ascii pred in
-      if pred_lc = "ispositive" then Some "(+ 1 (random 1000000))"
+      if pred_lc = "ispositive" then Some "(+ 1 (tesl-prop-random 1000000))"
       else if pred_lc = "isnonnegative" || pred_lc = "nonnegative" || pred_lc = "non_negative" then
-        Some "(random 1000000)"
+        Some "(tesl-prop-random 1000000)"
       else if pred_lc = "nonzero" || pred_lc = "isnonzero" || pred_lc = "non_zero" then
-        Some "(let ([v (- (random 2000001) 1000000)]) (if (= v 0) 1 v))"
+        Some "(let ([v (- (tesl-prop-random 2000001) 1000000)]) (if (= v 0) 1 v))"
       else None
     | _, _ -> None
   and random_expr_for_type ty =
     match ty with
-    | TName { name = ("Int" | "Integer"); _ } -> "(- (random 2000001) 1000000)"
-    | TName { name = "Bool"; _ } -> "(zero? (random 2))"
-    | TName { name = "String"; _ } -> "(format \"s~a\" (random 1000000))"
+    | TName { name = ("Int" | "Integer"); _ } -> "(- (tesl-prop-random 2000001) 1000000)"
+    | TName { name = "Bool"; _ } -> "(zero? (tesl-prop-random 2))"
+    (* #12: `format`/`map` are bare Racket builtins a user `fn format`/`fn map`
+       would shadow in the emitted generator, so route them through non-shadowable
+       test-support helpers. *)
+    | TName { name = "String"; _ } -> "(tesl-prop-gen-string)"
     | TApp { head = TName { name = "List"; _ }; arg = elem_ty; _ } ->
       (* Generate a random-length list (0–7 elements) of the element type *)
       let elem_gen = random_expr_for_type elem_ty in
-      Printf.sprintf "(map (lambda (_) %s) (make-list (random 8) #f))" elem_gen
+      Printf.sprintf "(tesl-prop-build-list (tesl-prop-random 8) (lambda () %s))" elem_gen
     | TApp { head = TName { name = "Maybe"; _ }; arg = elem_ty; _ } ->
       let elem_gen = random_expr_for_type elem_ty in
-      Printf.sprintf "(if (zero? (random 2)) (Nothing) (Something %s))" elem_gen
+      Printf.sprintf "(if (zero? (tesl-prop-random 2)) (Nothing) (Something %s))" elem_gen
     | TName { name = type_name; _ } ->
       (match List.find_opt (fun (n, _, _) -> n = type_name) ctx.record_meta with
        | Some (_, fields, _invariant) ->

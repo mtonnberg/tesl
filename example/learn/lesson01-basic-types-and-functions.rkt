@@ -83,7 +83,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: result is always in range
   (for ([tesl-prop-i (in-range 200)])
-    (let ([lo (- (random 2000001) 1000000)] [hi (- (random 2000001) 1000000)] [n (- (random 2000001) 1000000)])
+    (let ([lo (- (tesl-prop-random 2000001) 1000000)] [hi (- (tesl-prop-random 2000001) 1000000)] [n (- (tesl-prop-random 2000001) 1000000)])
       (when (<= (raw-value lo) (raw-value hi)) (check-true (and (>= (raw-value (clamp lo hi n)) (raw-value lo)) (<= (raw-value (clamp lo hi n)) (raw-value hi))) "result is always in range"))
     ))
     ))

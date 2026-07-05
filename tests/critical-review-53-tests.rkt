@@ -357,7 +357,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: pos+small+even chain
   (for ([tesl-prop-i (in-range 20)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (> (raw-value n) 0) (< (raw-value n) 1000) (tesl-equal? (remainder (raw-value n) 2) 0)) (check-true (tesl-equal? (raw-value (a03_four_predicates n)) (raw-value n)) "pos+small+even chain"))
     ))
     ))

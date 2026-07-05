@@ -820,7 +820,7 @@ test "pos" {
 |} in
   let racket = compile_ok src "prop_known_proof" in
   assert_contains ~name:"tesl-test-proof-field for IsPositive" racket "tesl-test-proof-field";
-  assert_contains ~name:"positive generator used" racket "(+ 1 (random"
+  assert_contains ~name:"positive generator used" racket "(+ 1 (tesl-prop-random"
 
 let test_property_unknown_proof_no_fabrication () =
   (* Unknown predicates should NOT use tesl-test-proof-field — no fabrication. *)

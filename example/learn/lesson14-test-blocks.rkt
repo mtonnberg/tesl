@@ -93,17 +93,17 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: result is always in range
   (for ([tesl-prop-i (in-range 200)])
-    (let ([lo (- (random 2000001) 1000000)] [hi (- (random 2000001) 1000000)] [n (- (random 2000001) 1000000)])
+    (let ([lo (- (tesl-prop-random 2000001) 1000000)] [hi (- (tesl-prop-random 2000001) 1000000)] [n (- (tesl-prop-random 2000001) 1000000)])
       (when (<= (raw-value lo) (raw-value hi)) (check-true (and (>= (raw-value (clamp lo hi n)) (raw-value lo)) (<= (raw-value (clamp lo hi n)) (raw-value hi))) "result is always in range"))
     ))
   ; property: idempotent: clamping twice is same as once
   (for ([tesl-prop-i (in-range 200)])
-    (let ([lo (- (random 2000001) 1000000)] [hi (- (random 2000001) 1000000)] [n (- (random 2000001) 1000000)])
+    (let ([lo (- (tesl-prop-random 2000001) 1000000)] [hi (- (tesl-prop-random 2000001) 1000000)] [n (- (tesl-prop-random 2000001) 1000000)])
       (when (<= (raw-value lo) (raw-value hi)) (check-true (tesl-equal? (raw-value (clamp lo hi (clamp lo hi n))) (raw-value (clamp lo hi n))) "idempotent: clamping twice is same as once"))
     ))
   ; property: clamp lo lo n == lo for any n
   (for ([tesl-prop-i (in-range 200)])
-    (let ([lo (- (random 2000001) 1000000)] [n (- (random 2000001) 1000000)])
+    (let ([lo (- (tesl-prop-random 2000001) 1000000)] [n (- (tesl-prop-random 2000001) 1000000)])
       (check-true (tesl-equal? (raw-value (clamp lo lo n)) (raw-value lo)) "clamp lo lo n == lo for any n")
     ))
     ))
@@ -113,7 +113,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: factorial(n) > 0 for n >= 0
   (for ([tesl-prop-i (in-range 20)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (>= (raw-value n) 0) (< (raw-value n) 10)) (check-true (> (raw-value (factorial n)) 0) "factorial(n) > 0 for n >= 0"))
     ))
     ))

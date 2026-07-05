@@ -808,7 +808,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: positive check succeeds for positive ints
   (for ([tesl-prop-i (in-range 100)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (> (raw-value n) 0) (< (raw-value n) 10000)) (check-true (let/check ([tesl-checked-29 (checkPositive48 n)]) (let ([v tesl-checked-29]) (> (raw-value (requiresPositive48 v)) 0))) "positive check succeeds for positive ints"))
     ))
     ))
@@ -818,7 +818,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: string length is never negative
   (for ([tesl-prop-i (in-range 100)])
-    (let ([s (format "s~a" (random 1000000))])
+    (let ([s (tesl-prop-gen-string)])
       (check-true (>= (raw-value (tesl_import_String_length (raw-value s))) 0) "string length is never negative")
     ))
     ))
@@ -828,7 +828,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: negating twice returns original
   (for ([tesl-prop-i (in-range 50)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (> (raw-value n) -10000) (< (raw-value n) 10000)) (check-true (tesl-equal? (- 0 (- 0 (raw-value n))) (raw-value n)) "negating twice returns original"))
     ))
     ))

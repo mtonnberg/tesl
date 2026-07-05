@@ -1174,7 +1174,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: every filtered element is in 0..100
   (for ([tesl-prop-i (in-range 100)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (>= (raw-value n) 0) (<= (raw-value n) 100)) (check-true (let/check ([tesl-checked-59 (checkRange n)]) (let ([validated tesl-checked-59]) (and (>= (raw-value (requiresRange validated)) 1) (<= (raw-value (requiresRange validated)) 101)))) "every filtered element is in 0..100"))
     ))
     ))
@@ -1184,7 +1184,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: checkAtLeastFive succeeds for >= 5
   (for ([tesl-prop-i (in-range 50)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (>= (raw-value n) 5) (< (raw-value n) 1000)) (check-true (let/check ([tesl-checked-60 (checkAtLeastFive n)]) (let ([v tesl-checked-60]) (>= (raw-value v) 5))) "checkAtLeastFive succeeds for >= 5"))
     ))
     ))
@@ -1194,7 +1194,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: checkNonEmpty preserves length
   (for ([tesl-prop-i (in-range 100)])
-    (let ([s (format "s~a" (random 1000000))])
+    (let ([s (tesl-prop-gen-string)])
       (when (> (raw-value (tesl_import_String_length (raw-value s))) 0) (check-true (let/check ([tesl-checked-61 (checkNonEmpty s)]) (let ([v tesl-checked-61]) (tesl-equal? (raw-value (requiresNonEmpty v)) (raw-value (tesl_import_String_length (raw-value s)))))) "checkNonEmpty preserves length"))
     ))
     ))
@@ -1654,7 +1654,7 @@
     (call-with-fresh-memory-db '() (lambda ()
   ; property: sum ≥ min
   (for ([tesl-prop-i (in-range 50)])
-    (let ([n (- (random 2000001) 1000000)])
+    (let ([n (- (tesl-prop-random 2000001) 1000000)])
       (when (and (>= (raw-value n) 1) (<= (raw-value n) 1000)) (check-true (>= (raw-value (sumList2 (list n))) 1) "sum \226\137\165 min"))
     ))
     ))
