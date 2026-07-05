@@ -44,6 +44,49 @@ _tesl_check() {
   "$TESL_OCAML_COMPILER" --check "$@"
 }
 
+# #18: a cheap, stable identity for the CURRENT compiler build. In nix the binary
+# lives at an immutable per-revision store path (so the resolved path changes on a
+# flake bump); in a dev shell the path is stable but the binary's size+mtime move
+# on every rebuild. Combining resolved-path + size + mtime changes the id exactly
+# when the compiler does, under both install modes.
+_tesl_compiler_id() {
+  _tesl_require_compiler
+  local real; real="$(readlink -f "$TESL_OCAML_COMPILER" 2>/dev/null || echo "$TESL_OCAML_COMPILER")"
+  local meta; meta="$(stat -c '%s-%Y' "$real" 2>/dev/null || echo unknown)"
+  printf '%s|%s' "$real" "$meta"
+}
+
+# #18: Racket caches an emitted module's bytecode in <dir>/compiled/<name>_rkt.zo
+# and reuses it by mtime. After a Tesl compiler UPGRADE, `tesl run`'s "only rewrite
+# .rkt when the bytes changed" optimization can preserve the old .rkt mtime (so the
+# old .zo stays valid), or the .zo can otherwise outlive the compiler that built it
+# — so `tesl run` silently executes the PREVIOUS compiler's codegen even though a
+# fix landed. Key artifact freshness on the compiler build id: when it changes,
+# drop the stale .zo/.dep for this artifact so Racket rebuilds it, and say why.
+# Call AFTER the .rkt has been (re)written and BEFORE racket runs it.
+_tesl_freshen_bytecode() {
+  local rkt="$1"
+  [ -n "$rkt" ] || return 0
+  local dir base id_file cur prev mangled
+  dir="$(dirname "$rkt")"
+  base="$(basename "$rkt")"                 # e.g. app.rkt
+  id_file="$dir/compiled/.tesl-buildid-${base}"
+  cur="$(_tesl_compiler_id)"
+  prev=""
+  [ -f "$id_file" ] && prev="$(cat "$id_file" 2>/dev/null)"
+  if [ "$prev" != "$cur" ]; then
+    if [ -n "$prev" ]; then
+      mangled="$(printf '%s' "$base" | sed 's/\.rkt$/_rkt/; s/\./_/g')"
+      if [ -f "$dir/compiled/${mangled}.zo" ] || [ -f "$dir/compiled/${mangled}.dep" ]; then
+        rm -f "$dir/compiled/${mangled}.zo" "$dir/compiled/${mangled}.dep"
+        echo "[tesl] compiler changed since $base was last built — recompiling (dropped stale bytecode cache)" >&2
+      fi
+    fi
+    mkdir -p "$dir/compiled" 2>/dev/null || true
+    printf '%s' "$cur" > "$id_file" 2>/dev/null || true
+  fi
+}
+
 # Locate the templates dir (holds minimal/ api/ docker/).
 # Prefer a live repo checkout (dev), else the store path baked by the preamble.
 _tesl_templates_dir() {
@@ -1020,6 +1063,8 @@ case "$CMD" in
           echo "error: Failed to compile dependency: $DEP" >&2
           rm -f "$DEP_RKT"
           RET=1
+        else
+          _tesl_freshen_bytecode "$DEP_RKT"   # #18: drop stale .zo on compiler change
         fi
       fi
     done
@@ -1033,6 +1078,9 @@ case "$CMD" in
         else
           rm -f "$OUT_TMP"
         fi
+        # #18: even when the .rkt bytes are unchanged, a compiler upgrade must not
+        # reuse bytecode built by the previous compiler — invalidate it here.
+        _tesl_freshen_bytecode "$OUT"
         echo "[tesl] Starting..." >&2
         if [ "${TESL_VERBOSE:-0}" = "1" ]; then
           racket "$OUT" "$@"; RET=$?
@@ -1077,6 +1125,7 @@ case "$CMD" in
       fi
       if [ $? -eq 0 ]; then
         mv "$OUT_TMP" "$OUT"
+        _tesl_freshen_bytecode "$OUT"   # #18: drop stale .zo on compiler change
         if [ "${TESL_VERBOSE:-0}" = "1" ]; then
           raco test "$OUT" || RET=$?
         else
