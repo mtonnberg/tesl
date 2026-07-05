@@ -373,6 +373,13 @@
           'breakpointsHit (length snapshots)
           'snapshots snapshots))
 
+;; Emit ONE newline-delimited JSON object (flushed) to `out`. Used by the
+;; persistent server mode to stream a snapshot the instant each breakpoint fires.
+(define (emit-ndjson-line out obj)
+  (write-string (jsexpr->string obj) out)
+  (write-string "\n" out)
+  (flush-output out))
+
 (define (run-headless-inspect compiled-path src-path bps [mode "program"] #:continue? [continue? #f])
   (putenv "TESL_DEBUG" "1")
   (define specs
@@ -404,6 +411,9 @@
   ;; where we stop after an idle window and report completed=#f).
   (define snapshots-box (box '()))
   (define completed-box (box #f))
+  ;; #t once the persistent server mode has streamed its output directly to
+  ;; real-out (so `main` must not also write a final JSON object).
+  (define streamed?-box (box #f))
   (define idle-secs
     (let ([e (getenv "TESL_DEBUG_INSPECT_IDLE_MS")])
       (cond [(and e (string->number e)) (/ (string->number e) 1000.0)]
@@ -434,38 +444,67 @@
               ;; Program finished without hitting the breakpoint.
               (semaphore-post done)))))
        (set-box! prog-thread t)
-       (if continue?
-           ;; CONTINUE (headless F5): stop at each breakpoint in turn, capture a
-           ;; snapshot (while the world is frozen), RESUME the parked thread, and
-           ;; repeat until the program completes.  An idle window bounds a program
-           ;; that never finishes (a `serve`d app) so the tool can't hang.
-           (let loop ()
-             (define r
-               (sync/timeout idle-secs
-                 (handle-evt event-ch (lambda (evt) (cons 'stop evt)))
-                 (handle-evt (semaphore-peek-evt done) (lambda (_) 'done))))
-             (cond
-               [(eq? r 'done) (set-box! completed-box #t)]
-               [(not r) (void)]  ; idle: program still running (e.g. server) — stop, completed=#f
-               [(and (pair? r) (eq? (car r) 'stop))
-                (define evt (cdr r))
-                (define sqlc
-                  (with-handlers ([exn:fail? (lambda (_e) #f)])
-                    (or (sql-capture-for-thread t) (most-recent-sql-capture))))
-                (set-box! snapshots-box
-                          (cons (build-result-json evt src-path specs "stopped" sqlc)
-                                (unbox snapshots-box)))
-                ;; Resume: 'continue thaws the world and runs to the next stop.
-                (channel-put paused-ch 'continue)
-                (loop)]))
-           ;; ONE-SHOT: wait for EITHER the first stopped event OR completion.
-           (sync (handle-evt event-ch
-                             (lambda (evt) (set-box! captured-event evt)))
-                 (handle-evt (semaphore-peek-evt done) (lambda (_) (void)))))]))
+       (define (capture-sql)
+         (with-handlers ([exn:fail? (lambda (_e) #f)])
+           (or (sql-capture-for-thread t) (most-recent-sql-capture))))
+       (cond
+         ;; PERSISTENT server (program + continue): the backend must STAY UP after
+         ;; each response so an agent driving a browser (Playwright) can make many
+         ;; requests / hit many breakpoints in one session. Stream one NDJSON
+         ;; snapshot the instant each breakpoint fires, resume, and NEVER tear the
+         ;; server down on idle — run until the process is killed. (A program that
+         ;; does terminate emits a final "exited" line and returns.)
+         [(and continue? (equal? mode "program"))
+          (set-box! streamed?-box #t)
+          (emit-ndjson-line real-out
+            (hasheq 'version headless-version 'event "session-started"
+                    'breakpoints (bp-specs->json specs)))
+          (let loop ()
+            (sync
+             (handle-evt event-ch
+               (lambda (evt)
+                 ;; Tag with event:"stopped" so the NDJSON stream is uniformly
+                 ;; discriminable (session-started / stopped / exited).
+                 (emit-ndjson-line real-out
+                   (hash-set (build-result-json evt src-path specs "stopped" (capture-sql))
+                             'event "stopped"))
+                 (channel-put paused-ch 'continue)   ; resume → response completes, server keeps serving
+                 (loop)))
+             (handle-evt (semaphore-peek-evt done)
+               (lambda (_)
+                 (emit-ndjson-line real-out
+                   (hasheq 'version headless-version 'event "exited"))))))]
+         ;; CONTINUE for a COMPLETING program (test / program-that-exits): stop at
+         ;; each breakpoint in turn, snapshot, resume, until completion; then emit
+         ;; one batched result. An idle window bounds a non-terminating program.
+         [continue?
+          (let loop ()
+            (define r
+              (sync/timeout idle-secs
+                (handle-evt event-ch (lambda (evt) (cons 'stop evt)))
+                (handle-evt (semaphore-peek-evt done) (lambda (_) 'done))))
+            (cond
+              [(eq? r 'done) (set-box! completed-box #t)]
+              [(not r) (void)]  ; idle: still running — stop, completed=#f
+              [(and (pair? r) (eq? (car r) 'stop))
+               (set-box! snapshots-box
+                         (cons (build-result-json (cdr r) src-path specs "stopped" (capture-sql))
+                               (unbox snapshots-box)))
+               (channel-put paused-ch 'continue)
+               (loop)]))]
+         ;; ONE-SHOT: wait for EITHER the first stopped event OR completion.
+         [else
+          (sync (handle-evt event-ch
+                            (lambda (evt) (set-box! captured-event evt)))
+                (handle-evt (semaphore-peek-evt done) (lambda (_) (void))))])]))
 
   (define result
-    (if continue?
-        (build-continue-result (reverse (unbox snapshots-box)) (unbox completed-box))
+    (cond
+      ;; Persistent server mode already streamed everything to real-out.
+      [(unbox streamed?-box) 'streamed]
+      [continue?
+        (build-continue-result (reverse (unbox snapshots-box)) (unbox completed-box))]
+      [else
         (let* ([evt (unbox captured-event)]
                ;; Capture SQL while the world is still frozen (bp thread parked on
                ;; paused-ch, stop-the-world active), per-thread with a most-recent
@@ -476,7 +515,7 @@
                       (most-recent-sql-capture)))])
           (build-result-json evt src-path specs
                              (if evt "stopped" "breakpoint-not-hit")
-                             sql-cap))))
+                             sql-cap))]))
   ;; Tear down: kill the (parked or running) debuggee thread so no further user
   ;; output can race our JSON write and the process can exit promptly.  The
   ;; suspended background threads are torn down with the process on exit.
@@ -533,10 +572,12 @@
   (define continue? (for/or ([a (in-vector argv)]) (equal? a "continue")))
   (define-values (result real-out)
     (run-headless-inspect compiled src bps mode #:continue? continue?))
-  ;; Emit EXACTLY one JSON object (+ trailing newline) on the real stdout.  The
-  ;; write-string results are voided so the module-top-level printer can't append
-  ;; their char counts to the protocol stream.
-  (void (write-string (jsexpr->string result) real-out))
-  (void (write-string "\n" real-out))
-  (flush-output real-out)
+  ;; Persistent server mode (result = 'streamed) already wrote its NDJSON lines to
+  ;; real-out AS breakpoints fired — nothing to emit here. Otherwise emit EXACTLY
+  ;; one JSON object (+ trailing newline). write-string results are voided so the
+  ;; module-top-level printer can't append their char counts to the protocol stream.
+  (unless (eq? result 'streamed)
+    (void (write-string (jsexpr->string result) real-out))
+    (void (write-string "\n" real-out))
+    (flush-output real-out))
   (exit 0))
