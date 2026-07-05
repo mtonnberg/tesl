@@ -1723,9 +1723,26 @@ let rec emit_expr ctx e =
     in
     if is_init_telemetry then begin
       emit ctx "(init-opentelemetry!";
+      (* #19: `initTelemetry` uses a keyword-argument surface (`service V endpoint V
+         console V`), but it parses as a plain left-assoc application, so a VALUE
+         that is itself a call — `endpoint ep()` — flattens into the arg stream as
+         `endpoint, ep, ()` rather than staying grouped as `ep()`.  The old
+         `EVar kw :: v :: rest` pairing then bound `#:endpoint ep` (the function
+         VALUE, uncalled) and hit its catch-all on the leftover `()`, silently
+         DROPPING the rest (`console True`) — telemetry inert with no error.
+         Fix: the keyword names are fixed, so collect each keyword's value as ALL
+         tokens up to the next known keyword and re-fold them into an application,
+         so `ep ()` becomes the call `(ep)` and `f x y` becomes `(f x y)`. *)
+      let known_kw = function "service" | "endpoint" | "console" -> true | _ -> false in
       let rec emit_kw_args = function
         | [] -> ()
-        | EVar { name = kw; _ } :: v :: rest ->
+        | EVar { name = kw; _ } :: rest when known_kw kw ->
+          let rec take_value acc = function
+            | (EVar { name = k; _ } :: _) as more when known_kw k -> (List.rev acc, more)
+            | x :: more -> take_value (x :: acc) more
+            | [] -> (List.rev acc, [])
+          in
+          let (val_toks, more) = take_value [] rest in
           let racket_kw = match kw with
             | "service" -> "service-name"
             | "endpoint" -> "endpoint"
@@ -1733,12 +1750,23 @@ let rec emit_expr ctx e =
             | other -> other
           in
           emit ctx (Printf.sprintf " #:%s " racket_kw);
-          (match v with
-           | ELit { lit = LBool true; _ } -> emit ctx "#t"
-           | ELit { lit = LBool false; _ } -> emit ctx "#f"
-           | _ -> emit_expr_simple ctx v);
-          emit_kw_args rest
-        | _ -> ()
+          (match val_toks with
+           | [] -> ()  (* keyword with no value — leave the kw dangling (arity error surfaces) *)
+           | [ ELit { lit = LBool true; _ } ] -> emit ctx "#t"
+           | [ ELit { lit = LBool false; _ } ] -> emit ctx "#f"
+           | [ single ] -> emit_expr_simple ctx single
+           | fn_tok :: arg_toks ->
+             (* re-fold the flattened `f a b …` into a left-assoc application so the
+                call is emitted (zero-arg `ep ()`, multi-arg, raw-value wrapping all
+                handled by the normal application path). *)
+             let app =
+               List.fold_left
+                 (fun f a -> EApp { fn = f; arg = a; loc = Checker.expr_loc f })
+                 fn_tok arg_toks
+             in
+             emit_expr_simple ctx app);
+          emit_kw_args more
+        | _ :: rest -> emit_kw_args rest
       in
       emit_kw_args args;
       emit ctx ")"
