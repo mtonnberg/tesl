@@ -500,6 +500,28 @@
   (check-equal? (hash-ref blk 'content) "42")
   (check-equal? (hash-ref blk 'is_error) #f))
 
+(test-case "anthropic tool-result turn is sent as role:user with a tool_result block (#21)"
+  ;; The runtime's canonical transcript uses OpenAI's `role: "tool"` for a tool
+  ;; result. Anthropic has no "tool" role — it must arrive as `role: "user"` with a
+  ;; tool_result content block, or the API returns HTTP 400. Passing the role
+  ;; through verbatim made `asTool` unusable on the anthropic provider.
+  (define rb (box #f))
+  (normalize anthropic-of anthropic-text-body #:req-box rb
+             #:request (hash 'system "s" 'max-tokens 10
+                             'messages (list (hash 'role "tool"
+                                                   'content (list (hash 'kind 'tool-result
+                                                                        'id "tr1"
+                                                                        'content "42"
+                                                                        'is-error #f))))
+                             'tools '()))
+  (define j (string->jsexpr (unbox rb)))
+  (define m (last (hash-ref j 'messages)))
+  (check-equal? (hash-ref m 'role) "user")   ; NOT "tool"
+  (define blk (first (hash-ref m 'content)))
+  (check-equal? (hash-ref blk 'type) "tool_result")
+  (check-equal? (hash-ref blk 'tool_use_id) "tr1")
+  (check-equal? (hash-ref blk 'content) "42"))
+
 (test-case "openai tool-result block becomes a role:tool message"
   (define rb (box #f))
   (normalize openai-of openai-text-body #:req-box rb

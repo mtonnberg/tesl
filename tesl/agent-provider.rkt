@@ -166,9 +166,20 @@
 
 ;; Normalized messages -> Anthropic content blocks.  A normalized message whose
 ;; content is a list already carries provider-agnostic block hashes (kind tagged).
+;;
+;; #21: the runtime's canonical transcript uses OpenAI's convention — a tool
+;; result is its own message with `role: "tool"` (see run-loop + openai-messages).
+;; Anthropic has no "tool" role: a tool_result is a content block sent back under
+;; `role: "user"` (the two allowed roles are "user"/"assistant").  Passing "tool"
+;; through verbatim made every tool-use turn fail with HTTP 400
+;; ("Unexpected role \"tool\""), so `asTool` was unusable on the anthropic
+;; provider.  Remap "tool" -> "user" here; the tool_result content block itself is
+;; already emitted correctly by [anthropic-block].
+(define (anthropic-role role)
+  (if (equal? role "tool") "user" role))
 (define (anthropic-messages messages)
   (for/list ([m (in-list messages)])
-    (define role (hash-ref m 'role))
+    (define role (anthropic-role (hash-ref m 'role)))
     (define content (hash-ref m 'content))
     (cond
       [(string? content) (hash 'role role 'content content)]
