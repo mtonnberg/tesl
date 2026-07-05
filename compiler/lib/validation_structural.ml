@@ -585,6 +585,35 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
                   separate `sse` endpoints"
                  ep_id (List.length (ep_subscribes ep)))
            | _ -> ());
+          (* Issue #17: the `subscribe Ch(arg)` argument keys the stream on a
+             path segment, so `arg` MUST name a `:param` of the path.  If it does
+             not, the emitter cannot locate the key segment (key-index #f) and the
+             stream silently keys on nothing — the bug this issue reports at the
+             wrong-segment end.  A missing argument is allowed only when the path
+             has exactly one `:param` (unambiguous). *)
+          (match ep_subscribe_key ep with
+           | Some k when not (List.mem k path_params) ->
+             add_hint
+               (Printf.sprintf
+                 "the `subscribe` argument must be a path parameter; add `:%s` to \
+                  the path, or key on an existing parameter (%s)"
+                 k (if path_params = [] then "none declared"
+                    else String.concat ", " (List.map (fun p -> ":" ^ p) path_params)))
+               (Printf.sprintf
+                 "endpoint %s: `subscribe` keys on `%s`, but `:%s` is not a path \
+                  parameter" ep_id k k)
+           | None when List.length path_params > 1 ->
+             add_hint
+               (Printf.sprintf
+                 "write `subscribe %s(%s)` to say which segment keys the stream"
+                 (match ep_subscribes ep with c :: _ -> c | [] -> "Channel")
+                 (List.hd path_params))
+               (Printf.sprintf
+                 "endpoint %s: the path has %d parameters (%s) but `subscribe` \
+                  gives no argument — the key segment is ambiguous"
+                 ep_id (List.length path_params)
+                 (String.concat ", " (List.map (fun p -> ":" ^ p) path_params)))
+           | _ -> ());
           (* S6a: an SSE endpoint STRUCTURALLY cannot hold a body/response/return
              (they're not fields of [sse_clause]); the parser records which such
              clauses were written so we still reject them here rather than dropping
@@ -614,11 +643,13 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
                 ep_id)
         end;
 
-        (* The remaining two checks apply only to HTTP endpoints: SSE routes
-           are emitted by [emit_sse_route], which strips `:param` segments and
-           never emits a `(Capture …)` form, so a missing/codec capture on an
-           SSE route is harmless at runtime. *)
-        if ep.method_ <> SSE then begin
+        (* Issue #17: these checks now apply to SSE routes too.  [emit_sse_route]
+           used to STRIP `:param` segments (so a missing/codec capture was
+           "harmless" only because the whole segment was dropped — and the route
+           404'd).  It now emits the full path pattern and a per-`:param` capture
+           validator, so a missing/codec capture is a real crash/soundness hole
+           on an SSE route exactly as on an HTTP route.  Validate both. *)
+        begin
 
         (* Every `:param` path segment must have a matching `capture` clause.
            Without one the emitter invents an undefined capture name
@@ -633,7 +664,7 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
             add_hint
               (Printf.sprintf
                 "add a capture clause before `->`: either the inline form \
-                 `capture %s: String with stringCodec` (no separate declaration), \
+                 `capture %s: String using stringCodec` (no separate declaration), \
                  or `capture %s: String via %sCapture` with a top-level \
                  `capturer %sCapture: String using stringCodec`"
                 param param param param)
@@ -649,7 +680,7 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
            identifier type-checks but fails at `tesl run` because the emitted
            route names a binding that is not a `define-capture`. *)
         List.iter (fun (c : api_capture) ->
-          (* The inline form (`capture x: T with <codec> [via <check>]`) carries
+          (* The inline form (`capture x: T using <codec> [via <check>]`) carries
              its own codec, so it needs no top-level `capturer` reference. Only
              the reference form (`via <capturer>`) must name a declared capturer. *)
           if c.inline_codec = None
@@ -659,7 +690,7 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
             add_hint
               (Printf.sprintf
                 "`via %s` must name a top-level `capturer`, or use the inline \
-                 form `capture %s: %s with stringCodec`; to use a capturer declare \
+                 form `capture %s: %s using stringCodec`; to use a capturer declare \
                  `capturer %s: %s: String using stringCodec` and write \
                  `capture %s: String via %s`%s"
                 c.via_fn c.binding.name c.binding.name
@@ -671,7 +702,7 @@ let check_api_endpoint_structure ?facts ?(extra_funcs=[]) (decls : top_decl list
               (Printf.sprintf
                 "endpoint %s: capture `%s` uses `via %s`, but `%s` is not a \
                  declared `capturer` (it may be a codec or undefined); use the \
-                 inline form `capture %s: %s with <codec>` or reference a `capturer`"
+                 inline form `capture %s: %s using <codec>` or reference a `capturer`"
                 ep_id c.binding.name c.via_fn c.via_fn c.binding.name c.binding.name)
         ) ep.captures
 

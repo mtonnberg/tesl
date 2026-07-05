@@ -24,6 +24,10 @@
 
 (provide AgentRunServer)
 
+(define-capture __inline_capturer_runId_1
+  [runId : String]
+  #:parser string-segment)
+
 (define-capability runRead (implies dbRead))
 
 (define-capability runWrite (implies dbWrite))
@@ -124,7 +128,7 @@
   (let ([echoTool (thsl-src! "tests/agent-run-tests.tesl" 165 (list (cons 'job *job)) (lambda () (raw-value (tool "echo" "Echo back some text" "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}" validateEcho dispatchEcho))))]) (let ([steps (thsl-src! "tests/agent-run-tests.tesl" 166 (list (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () (list (raw-value (toolUseStep "echo" "call_1" "{\"text\":\"hi\"}")) (raw-value (textStep "All done.")))))]) (let ([agent (thsl-src! "tests/agent-run-tests.tesl" 167 (list (cons 'steps *steps) (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockToolProvider (raw-value steps))) (raw-value "You are a runner.") (raw-value 256)) (list *echoTool))))]) (let ([reply (thsl-src! "tests/agent-run-tests.tesl" 168 (list (cons 'agent *agent) (cons 'steps *steps) (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () (raw-value (agentRun (raw-value agent) (raw-value job.prompt) publishStep))))]) (thsl-src! "tests/agent-run-tests.tesl" 169 (list (cons 'reply *reply) (cons 'agent *agent) (cons 'steps *steps) (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () *job)))))))
 
 (define AgentRunServer-sse-routes
-  (list (list (list "events" "runs") #f RunSteps #f)))
+  (list (list (list "events" "runs" #f) #f RunSteps 2 (list (cons 2 (sse-key-capture __inline_capturer_runId_1))))))
 (define-api AgentRunApi
   [startRun :
     "runs"

@@ -249,7 +249,7 @@
   (let ([_ (thsl-src! "example/chat/chat-backend.tesl" 331 (list (cons 'job *job)) (lambda () (telemetry-event! "notify.dead" #:attributes (["sender" (raw-value job.senderName)] ["room" (raw-value job.roomName)]))))]) (let ([_ (thsl-src! "example/chat/chat-backend.tesl" 332 (list (cons 'job *job)) (lambda () (publish-event! RoomMessages (format "~a" (raw-value job.roomName)) (NotifyFailed (raw-value job.senderName) (raw-value job.roomName)))))]) (thsl-src! "example/chat/chat-backend.tesl" 333 (list (cons 'job *job)) (lambda () *job)))))
 
 (define ChatServer-sse-routes
-  (list (list (list "events" "rooms") cookieAuth RoomMessages (sse-key-capture roomIdCapture))))
+  (list (list (list "events" "rooms" #f) cookieAuth RoomMessages 2 (list (cons 2 (sse-key-capture roomIdCapture))))))
 (define-api ChatApi
   [seedUser :
     "users"

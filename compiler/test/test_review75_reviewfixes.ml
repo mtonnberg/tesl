@@ -601,8 +601,9 @@ let test_R75_S6A_valid_sse_accepted () =
 #lang tesl
 module S6aOk exposing [EvApi]
 import Tesl.Prelude exposing [String]
+import Tesl.Json exposing [stringCodec]
 api EvApi {
-  sse "/events/:userId" capture userId: String subscribe UserEvents(userId)
+  sse "/events/:userId" capture userId: String using stringCodec subscribe UserEvents(userId)
 }
 |}
 

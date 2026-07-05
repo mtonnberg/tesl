@@ -212,7 +212,7 @@ sseChannel Notices(userId: String) = SseChannel {
 handler getValue() -> String requires [] = "ok"
 api DemoApi {
   sse "/events/:userId"
-    capture userId: String via stringCodec
+    capture userId: String using stringCodec
     subscribe Notices(userId)
   get "/value"
     -> String

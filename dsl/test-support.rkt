@@ -200,12 +200,14 @@
 (define (lookup-api-test-dead-workers queue-s)
   (hash-ref api-test-dead-worker-registry queue-s '()))
 
+;; Issue #17: mirror the production matcher (find-sse-match) — match the full
+;; path pattern where #f is a `:param` wildcard, exact length.
 (define (find-api-test-sse-route sse-routes path)
   (for/or ([route (in-list sse-routes)])
-    (define prefix (first route))
-    (and (>= (length path) (add1 (length prefix)))
-         (for/and ([seg (in-list prefix)] [p (in-list path)])
-           (equal? seg p))
+    (define pattern (first route))
+    (and (= (length path) (length pattern))
+         (for/and ([seg (in-list pattern)] [p (in-list path)])
+           (or (not seg) (equal? seg p)))
          route)))
 
 (define (api-test-subscribe sse-routes path
@@ -222,14 +224,14 @@
     (raise-user-error 'subscribe
                       "subscribe could not match SSE route ~a"
                       (or name path)))
-  (define prefix    (first route))
   (define auth-fn   (second route))
   (define channel-s (third route))
-  ;; CONC-1: 4th element is the per-key validator (or #f) — see emit_sse_route /
-  ;; handle-sse-request.  Enforce it here too so the api-test path matches the
-  ;; production path (and so the per-key check is actually exercised by tests).
-  (define key-capture (and (>= (length route) 4) (fourth route)))
-  (define key-str   (list-ref path (length prefix)))
+  ;; Issue #17: 4th element is the key-index, 5th the list of (index . validator)
+  ;; for every declared capture check — see emit_sse_route / handle-sse-request.
+  ;; Enforce them here too so the api-test path matches the production path.
+  (define key-index (and (>= (length route) 4) (fourth route)))
+  (define captures  (if (>= (length route) 5) (fifth route) '()))
+  (define key-str   (and key-index (list-ref path key-index)))
   (define req       (make-request "GET" path #:headers final-headers))
   (when auth-fn
     (define auth-result (auth-fn req))
@@ -238,8 +240,8 @@
                         "subscribe failed for ~a: ~a"
                         (or name path)
                         (check-fail-message auth-result))))
-  (when key-capture
-    (define checked (key-capture key-str))
+  (for ([cv (in-list captures)])
+    (define checked ((cdr cv) (list-ref path (car cv))))
     (when (check-fail? checked)
       (raise-user-error 'subscribe
                         "subscribe failed for ~a: ~a"

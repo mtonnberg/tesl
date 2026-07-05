@@ -5074,46 +5074,50 @@ let emit_capture ctx (c : capture_form) =
    | None -> emit_line ctx ")");
   emit_nl ctx
 
-(* CONC-1: the validator for an SSE channel key.  The key is the first `:param`
-   path segment; if the endpoint declares a `capture` for it, emit a runtime
-   key-validator so the declared check is ENFORCED (fail-closed) at subscribe
-   time instead of being silently dropped (an IDOR/BOLA gap).  A capturer-backed
-   capture (`via someCapturer`) resolves through the `sse-key-capture` macro
-   (mirrors the HTTP `Capture` path); an inline capture emits the parser+check
-   directly.  No capture ⇒ `#f` (auth-only, the documented fallback). *)
-let sse_key_capture_expr (ep : api_endpoint) : string =
-  let param =
-    List.find_map (fun seg ->
-      if String.length seg > 1 && seg.[0] = ':'
-      then Some (String.sub seg 1 (String.length seg - 1)) else None)
-      (String.split_on_char '/' ep.path)
-  in
-  match param with
-  | None -> "#f"
-  | Some p ->
-    (match List.find_opt (fun (c : api_capture) -> c.binding.name = p) ep.captures with
-     | Some c when c.via_fn <> "" -> Printf.sprintf "(sse-key-capture %s)" c.via_fn
-     | Some c ->
-       (match c.inline_codec with
-        | Some codec ->
-          let parser = match codec with
-            | "stringCodec" -> "string-segment"
-            | "intCodec"    -> "integer-segment"
-            | "int32Codec"  -> "int32-segment"
-            | other         -> other in
-          let checker = match c.inline_check with Some chk -> chk | None -> "#f" in
-          Printf.sprintf "(lambda (key-str) (apply-checker-to-value '%s (%s key-str) %s))"
-            p parser checker
-        | None -> "#f")
-     | None -> "#f")
+(* CONC-1: a runtime validator for a single SSE path capture.  If the capture
+   declares a check it is ENFORCED (fail-closed) at subscribe time instead of
+   being silently dropped (an IDOR/BOLA gap).  A capturer-backed capture (`via
+   someCapturer`) resolves through the `sse-key-capture` macro (mirrors the HTTP
+   `Capture` path); an inline capture emits the parser+check directly.  No check
+   ⇒ `#f` (skipped). *)
+let sse_capture_validator_expr (c : api_capture) : string =
+  if c.via_fn <> "" then Printf.sprintf "(sse-key-capture %s)" c.via_fn
+  else
+    match c.inline_codec with
+    | Some codec ->
+      let parser = match codec with
+        | "stringCodec" -> "string-segment"
+        | "intCodec"    -> "integer-segment"
+        | "int32Codec"  -> "int32-segment"
+        | other         -> other in
+      let checker = match c.inline_check with Some chk -> chk | None -> "#f" in
+      Printf.sprintf "(lambda (key-str) (apply-checker-to-value '%s (%s key-str) %s))"
+        c.binding.name parser checker
+    | None -> "#f"
 
+(* Issue #17: emit the FULL path pattern (literal segments as strings, `:param`
+   slots as #f) so a parameterized SSE route actually matches at runtime.  The
+   old emitter STRIPPED every `:param` segment, so /rooms/:roomId/events was
+   emitted as ("rooms" "events") and every real request 404'd.  The tuple is
+   `(pattern auth channel key-index captures)`:
+     - pattern    : per-segment, "literal" | #f (a capture slot matches any)
+     - auth       : the auth via-fn, or #f
+     - channel    : the subscribed channel spec
+     - key-index  : index of the segment the `subscribe Ch(arg)` keys on (or #f);
+                    picked from the subscribe argument, not "the segment after
+                    the prefix", so a key that is not the last segment works
+     - captures   : (list (cons index validator) ...) — EVERY `:param` with a
+                    declared check, validated fail-closed (not only the key). *)
 let emit_sse_route ctx (ep : api_endpoint) =
+  let segs = String.split_on_char '/' ep.path |> List.filter (fun s -> s <> "") in
+  let is_param s = String.length s > 1 && s.[0] = ':' in
+  let param_name s = String.sub s 1 (String.length s - 1) in
+  let indexed = List.mapi (fun i s -> (i, s)) segs in
   emit ctx "(list (list";
-  let path_parts = String.split_on_char '/' ep.path |> List.filter (fun s -> s <> "" && s.[0] <> ':') in
-  List.iter (fun part ->
+  List.iter (fun s ->
     emit ctx " ";
-    emit ctx (Printf.sprintf "%S" part)
-  ) path_parts;
+    if is_param s then emit ctx "#f" else emit ctx (Printf.sprintf "%S" s)
+  ) segs;
   emit ctx ") ";
   (match ep.auth with
    | Some auth -> emit ctx auth.via_fn
@@ -5122,10 +5126,31 @@ let emit_sse_route ctx (ep : api_endpoint) =
   (match (ep_subscribes ep) with
    | channel_name :: _ -> emit ctx channel_name
    | [] -> emit ctx "#f");
-  (* CONC-1: 4th element — the channel-key validator (or #f). *)
   emit ctx " ";
-  emit ctx (sse_key_capture_expr ep);
-  emit ctx ")"
+  (* key-index: which `:param` segment carries the channel key.  Prefer the
+     explicit `subscribe Ch(arg)` argument; fall back to the sole param if there
+     is exactly one; else #f. *)
+  let param_index name =
+    List.find_map (fun (i, s) -> if is_param s && param_name s = name then Some i else None) indexed in
+  let key_index =
+    match ep_subscribe_key ep with
+    | Some k -> param_index k
+    | None ->
+      (match List.filter (fun (_, s) -> is_param s) indexed with
+       | [ (i, _) ] -> Some i
+       | _ -> None)
+  in
+  (match key_index with Some i -> emit ctx (string_of_int i) | None -> emit ctx "#f");
+  emit ctx " (list";
+  List.iter (fun (i, s) ->
+    if is_param s then
+      match List.find_opt (fun (c : api_capture) -> c.binding.name = param_name s) ep.captures with
+      | Some c ->
+        let v = sse_capture_validator_expr c in
+        if v <> "#f" then emit ctx (Printf.sprintf " (cons %d %s)" i v)
+      | None -> ()
+  ) indexed;
+  emit ctx "))"
 
 let rec emit_api ctx ?(server_name="") ?(server_bindings=[]) (api : api_form) =
   let http_endpoints = List.filter (fun (ep : api_endpoint) -> ep.method_ <> SSE) api.endpoints in

@@ -1869,25 +1869,31 @@
 ;; Matches GET requests whose path starts with path-prefix-parts.
 ;; The first segment AFTER the prefix is used as the channel key.
 
+;; Issue #17: match the FULL path pattern.  A pattern entry is either a literal
+;; string (must match the request segment) or #f (a `:param` capture slot —
+;; matches any single segment).  Exact length: /rooms/:roomId/events matches
+;; ("rooms" "r1" "events") but not ("rooms" "r1") or ("rooms" "r1" "events" "x").
 (define (find-sse-match sse-routes req)
   (and (string=? (dsl-request-method req) "GET")
        (let ([path (dsl-request-path req)])
          (for/or ([route (in-list sse-routes)])
-           (define prefix (first route))
-           (and (>= (length path) (add1 (length prefix)))
-                (for/and ([seg (in-list prefix)] [p (in-list path)])
-                  (equal? seg p))
+           (define pattern (first route))
+           (and (= (length path) (length pattern))
+                (for/and ([seg (in-list pattern)] [p (in-list path)])
+                  (or (not seg) (equal? seg p)))
                 route)))))
 
 (define (handle-sse-request route dsl-req)
-  (define prefix     (first route))
+  (define pattern    (first route))
   (define auth-fn    (second route))
   (define channel-s  (third route))
-  ;; CONC-1: 4th element is the channel-key validator (or #f).  Older 3-element
-  ;; routes (none after a recompile) degrade to #f = no key validation.
-  (define key-capture (and (>= (length route) 4) (fourth route)))
+  ;; Issue #17: 4th element is the key-index (which path segment carries the
+  ;; channel key, or #f = auth-only no-key channel); 5th is the list of
+  ;; (index . validator) for EVERY declared `:param` capture check.
+  (define key-index  (and (>= (length route) 4) (fourth route)))
+  (define captures   (if (>= (length route) 5) (fifth route) '()))
   (define path       (dsl-request-path dsl-req))
-  (define key-str    (list-ref path (length prefix)))
+  (define key-str    (and key-index (list-ref path key-index)))
 
   ;; Run auth if present — reject 401 if it fails
   (when auth-fn
@@ -1900,13 +1906,14 @@
       ;; stack trace.  Raising the value lets that guard render a clean 401.
       (raise auth-result)))
 
-  ;; CONC-1: enforce the declared per-key capture (e.g. `capture roomId :::
-  ;; ValidRoomId roomId via roomIdCapture`) BEFORE registering the listener.
-  ;; Fail-closed: a rejected key raises the check-fail, which `serve` renders as
-  ;; the check's HTTP status — the same discipline as the HTTP route path and
-  ;; the auth check above.  Previously this declared check was silently dropped.
-  (when key-capture
-    (define checked (key-capture key-str))
+  ;; CONC-1 / issue #17: enforce EVERY declared path-capture check (e.g. `capture
+  ;; roomId ::: ValidRoomId roomId via roomIdCapture`, and non-key captures such
+  ;; as `capture orgId ::: IdSafe orgId`) BEFORE registering the listener.
+  ;; Fail-closed: a rejected segment raises the check-fail, which `serve` renders
+  ;; as the check's HTTP status — the same discipline as the HTTP route path and
+  ;; the auth check above.  Previously these declared checks were silently dropped.
+  (for ([cv (in-list captures)])
+    (define checked ((cdr cv) (list-ref path (car cv))))
     (when (check-fail? checked)
       (raise checked)))
 

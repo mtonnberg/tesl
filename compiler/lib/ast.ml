@@ -475,6 +475,15 @@ type http_clause = {
 
 type sse_clause = {
   subscribes : string list;       (** the channel(s) an SSE endpoint streams *)
+  (** The channel-key argument of the `subscribe Ch(arg)` clause — the path
+      parameter the stream keys on (e.g. `conversationId` in
+      `subscribe ChatStream(conversationId)`).  [None] when the subscribe has no
+      argument (a channel with no key parameter).  The emitter uses this to pick
+      WHICH `:param` segment carries the channel key; before it was recorded the
+      key was assumed to be the segment right after the literal prefix, so a key
+      that was not the last segment (e.g. `/rooms/:roomId/events`) keyed on the
+      wrong segment. *)
+  subscribe_key : string option;
   (** S6a: an SSE endpoint may NOT declare body/response/return clauses. The parser
       records which such clauses were WRITTEN (breadcrumbs only — never the body/
       response VALUES, so emit still cannot use them) so validation rejects them
@@ -508,6 +517,8 @@ let ep_response_encoder ep = match ep.kind with Http h -> h.response_encoder | S
 let ep_has_explicit_return ep = match ep.kind with Http h -> h.has_explicit_return | Sse _ -> false
 let ep_has_clause_after_return ep = match ep.kind with Http h -> h.has_clause_after_return | Sse _ -> false
 let ep_subscribes ep = match ep.kind with Sse s -> s.subscribes | Http _ -> []
+(** The channel-key argument of an SSE endpoint's `subscribe Ch(arg)`; [None] for HTTP. *)
+let ep_subscribe_key ep = match ep.kind with Sse s -> s.subscribe_key | Http _ -> None
 (** Illegal clauses an SSE endpoint declared (body/response/return); [] for HTTP. *)
 let ep_sse_illegal_clauses ep = match ep.kind with Sse s -> s.illegal_clauses | Http _ -> []
 (** The return spec of an HTTP endpoint; [None] for SSE (which has no response). *)

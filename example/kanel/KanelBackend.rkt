@@ -101,7 +101,7 @@
   #:parser string-segment #:check checkTargetUserId)
 
 (define KanelServer-sse-routes
-  (list (list (list "events" "users") cookieAuth UserNotifications (sse-key-capture userCapture))))
+  (list (list (list "events" "users" #f) cookieAuth UserNotifications 2 (list (cons 2 (sse-key-capture userCapture))))))
 (define-api KanelApi
   [registerHandler :
     "auth"

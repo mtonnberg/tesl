@@ -3906,6 +3906,7 @@ let parse_api_form s =
           let captures : api_capture list ref = ref [] in
           let return_spec = ref (RetPlain { ty = TName { name = "Unit"; loc = ep_loc0 }; loc = ep_loc0 }) in
           let subscribes = ref [] in
+          let subscribe_key = ref None in
           let continue_ = ref true in
           let return_seen = ref false in
           let clause_after_return = ref false in
@@ -4008,7 +4009,23 @@ let parse_api_form s =
              | SUBSCRIBE ->
                 advance s;
                 (match peek s with
-                 | UIDENT ch | IDENT ch -> advance s; subscribes := ch :: !subscribes
+                 | UIDENT ch | IDENT ch ->
+                   advance s; subscribes := ch :: !subscribes;
+                   (* Record the channel-key argument `subscribe Ch(arg)` so the
+                      emitter can pick which `:param` segment carries the key
+                      (it need not be the last segment).  Parens optional: a
+                      channel with no key parameter is `subscribe Ch`. *)
+                   (match peek s with
+                    | LPAREN ->
+                      advance s;
+                      (match peek s with
+                       | IDENT arg | UIDENT arg ->
+                         advance s;
+                         if !subscribe_key = None then subscribe_key := Some arg;
+                         (match peek s with RPAREN -> advance s | _ -> ())
+                       | RPAREN -> advance s
+                       | _ -> ())
+                    | _ -> ())
                  | _ -> ())
              | ARROW ->
                advance s;
@@ -4036,7 +4053,7 @@ let parse_api_form s =
                 @ (if !resp_wire <> None || !resp_enc <> None then ["response"] else [])
                 @ (if !return_seen then ["-> ReturnType"] else [])
               in
-              Sse { subscribes = !subscribes; illegal_clauses }
+              Sse { subscribes = !subscribes; subscribe_key = !subscribe_key; illegal_clauses }
             else Http {
               body = !body;
               body_wire_type = !body_wire; body_decoder = !body_dec;

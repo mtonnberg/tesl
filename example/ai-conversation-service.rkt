@@ -181,7 +181,7 @@
   (thsl-src! "example/ai-conversation-service.tesl" 265 (list (cons 'requestUser *requestUser) (cons 'conversationId *conversationId) (cons 'req *req)) (lambda () (replyTurn (agentFor requestUser) requestUser conversationId (raw-value req.message)))))
 
 (define ChatServer-sse-routes
-  (list (list (list "chat" "events") consumerAuth ChatStream (sse-key-capture conversationIdCapture))))
+  (list (list (list "chat" #f "events") consumerAuth ChatStream 1 (list (cons 1 (sse-key-capture conversationIdCapture))))))
 (define-api ChatApi
   [sendMessage :
     (Auth [requestUser : Consumer ::: (Authenticated requestUser)] #:via consumerAuth)

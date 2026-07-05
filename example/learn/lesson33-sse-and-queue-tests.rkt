@@ -91,7 +91,7 @@
   (let ([_ (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 110 (list (cons 'req *req)) (lambda () (enqueue! Lesson33Queue (NotifyJob #:userId (raw-value req.userId) #:message (raw-value req.message)))))]) (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 111 (list (cons 'req *req)) (lambda () "queued"))))
 
 (define Lesson33Server-sse-routes
-  (list (list (list "events") #f Lesson33Events (sse-key-capture userIdCapture))))
+  (list (list (list "events" #f) #f Lesson33Events 1 (list (cons 1 (sse-key-capture userIdCapture))))))
 (define-api Lesson33Api
   [sendNotice :
     "send"
