@@ -492,6 +492,28 @@ let check_fn_return_proof_annotations
          field receiver's type — e.g. `extractValue(item: ValidItem) = item.value`. *)
       field_proof_type_ctx :=
         Some (fn_type_env funcs fields_by_type ctors fd, fields_by_type, ctors);
+      (* Single framework-provenance gate — the obligation model's [mode = Framework]
+         made concrete.  A declared FromDb/FromQueue/FromDeadQueue (or other stdlib-
+         auto predicate) is NOT content-carried by an ordinary value: it is produced
+         by a real DB/queue site.  FromDb is a DATAFLOW judgment (the RETURNED value
+         must flow from the select/insert site, else a discarded select forges
+         provenance); FromQueue/FromDeadQueue can never be minted in a body; other
+         stdlib-auto preds are name-checked.  This was previously copied verbatim in
+         three arms (RetAttached / RetMaybeAttached / RetPlain-Fact) — a soundness-
+         critical decision that must not drift, now decided in ONE place per the
+         [mode_of_proof]/[is_framework_pred] classification above.  [required] carries
+         the same predicate NAME regardless of subject substitution, so the un-normed
+         proof is exact here. *)
+      let user_fn_names =
+        List.filter_map (function DFunc d -> Some d.name | _ -> None) decls in
+      let is_framework_produced (required : proof_expr) : bool =
+        match required with
+        | PredApp { pred = "FromDb"; _ } ->
+          return_value_flows_from_db_site ~shadowed:user_fn_names fd.body
+        | PredApp { pred = ("FromQueue" | "FromDeadQueue"); _ } -> false
+        | PredApp { pred; _ } -> List.mem pred stdlib_auto_preds
+        | PredAnd _ -> false
+      in
       (* Shared scalar-Carry leaf walker for the two pure single-value forms —
          RetAttached (`-> b: T ::: P b`) and RetPlain carrying a `Fact (…)` type.
          They discharge identically: every returning leaf (through
@@ -528,25 +550,7 @@ let check_fn_return_proof_annotations
          when is_forgery_restricted_kind fd.kind && b.proof_ann <> None ->
          (* The guard `b.proof_ann <> None` ensures Some here; use Option.get with safe fallback *)
          let required_proof = match b.proof_ann with Some p -> p | None -> PredApp { pred = ""; args = []; loc = ret_loc } in
-         let subject_env = build_initial_subject_env fd.params in
-         let binding_subject = match List.assoc_opt b.name subject_env with Some s -> s | None -> b.name in
-         let required_norm = subst_proof [(b.name, binding_subject)] required_proof in
-         let required_pred = match required_norm with PredApp { pred; _ } -> Some pred | _ -> None in
-         let is_stdlib_auto = match required_pred with
-           (* FromDb on a `:::` return is framework-produced ONLY when the body
-              actually runs a select/insert/upsert; with no DB site it forges
-              provenance. FromQueue/FromDeadQueue can never be minted in a body. *)
-           | Some "FromDb" ->
-             (* PROOF-2: exclude user-defined top-level functions so a `fn select`
-                cannot masquerade as the SQL builtin and forge DB provenance. *)
-             let user_fn_names =
-               List.filter_map (function DFunc d -> Some d.name | _ -> None) decls in
-             (* GDP-FROMDB-DATAFLOW: dataflow, not presence — the RETURNED value
-               must flow from the DB site, else a discarded select forges FromDb. *)
-            return_value_flows_from_db_site ~shadowed:user_fn_names fd.body
-           | Some ("FromQueue" | "FromDeadQueue") -> false
-           | Some p -> List.mem p stdlib_auto_preds
-           | None -> false in
+         let is_stdlib_auto = is_framework_produced required_proof in
          (* GDP-FORGE-1 fix (formal-review CRITICAL).  A `fn`/`handler`/`worker`
             may legitimately introduce its declared return proof in the body via
             `attachFact` (with an `establish`-produced Fact) or an `ok v ::: P`.
@@ -624,15 +628,7 @@ let check_fn_return_proof_annotations
               | Some { params = p :: _; _ } -> type_name_of p.type_expr
               | _ -> None)
            | None -> None in
-         let is_stdlib_auto = match pred_name with
-           | Some "FromDb" ->
-             let user_fn_names = List.filter_map (function DFunc d -> Some d.name | _ -> None) decls in
-             (* GDP-FROMDB-DATAFLOW: dataflow, not presence — the RETURNED value
-               must flow from the DB site, else a discarded select forges FromDb. *)
-            return_value_flows_from_db_site ~shadowed:user_fn_names fd.body
-           | Some ("FromQueue" | "FromDeadQueue") -> false
-           | Some p -> List.mem p stdlib_auto_preds
-           | None -> false in
+         let is_stdlib_auto = is_framework_produced required_proof in
          (* Skip conservatively when we cannot resolve the inner type (compound /
             unknown predicate) or the proof is framework-auto — no false positives. *)
          (match inner_tyname with
@@ -731,15 +727,7 @@ let check_fn_return_proof_annotations
          when (match proof_of_fact_type ty with Some _ -> true | None -> false) ->
          let required_proof = match proof_of_fact_type ty with
            | Some p -> p | None -> PredApp { pred = ""; args = []; loc = ret_loc } in
-         let required_pred = match required_proof with
-           | PredApp { pred; _ } -> Some pred | PredAnd _ -> None in
-         let user_fn_names =
-           List.filter_map (function DFunc d -> Some d.name | _ -> None) decls in
-         let is_stdlib_auto = match required_pred with
-           | Some "FromDb" -> return_value_flows_from_db_site ~shadowed:user_fn_names fd.body
-           | Some ("FromQueue" | "FromDeadQueue") -> false
-           | Some p -> List.mem p stdlib_auto_preds
-           | None -> false in
+         let is_stdlib_auto = is_framework_produced required_proof in
          if not is_stdlib_auto
             && not (scalar_carry_ok ~binder:None required_proof) then begin
            let kw = match fd.kind with
