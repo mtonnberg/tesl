@@ -1082,11 +1082,29 @@ case "$CMD" in
         # reuse bytecode built by the previous compiler — invalidate it here.
         _tesl_freshen_bytecode "$OUT"
         echo "[tesl] Starting..." >&2
+        # #20: run the server as a background child and forward stop signals to
+        # it, then wait. A supervisor that stops the server with `kill <run-pid>`
+        # (SIGTERM/SIGINT/SIGHUP) previously killed only this wrapper and ORPHANED
+        # the racket server — it kept holding its port. Now the signal is
+        # forwarded to the child and we block until it has actually exited (so the
+        # port is freed before `tesl run` returns). Interactive Ctrl-C already
+        # worked (the TTY signals the whole group); this fixes the non-foreground
+        # supervisor case.
         if [ "${TESL_VERBOSE:-0}" = "1" ]; then
-          racket "$OUT" "$@"; RET=$?
+          racket "$OUT" "$@" &
+          _tesl_srv=$!
+          trap 'kill -TERM "$_tesl_srv" 2>/dev/null' TERM INT HUP
+          wait "$_tesl_srv"; RET=$?
+          [ "$RET" -gt 128 ] && { wait "$_tesl_srv" 2>/dev/null; RET=$?; }
+          trap - TERM INT HUP
         else
           STDERR_TMP="$(mktemp)"
-          racket "$OUT" "$@" 2>"$STDERR_TMP"; RET=$?
+          racket "$OUT" "$@" 2>"$STDERR_TMP" &
+          _tesl_srv=$!
+          trap 'kill -TERM "$_tesl_srv" 2>/dev/null' TERM INT HUP
+          wait "$_tesl_srv"; RET=$?
+          [ "$RET" -gt 128 ] && { wait "$_tesl_srv" 2>/dev/null; RET=$?; }
+          trap - TERM INT HUP
           grep -Ev "^raco (setup|make|link|test):" "$STDERR_TMP" >&2 || true
           rm -f "$STDERR_TMP"
         fi
