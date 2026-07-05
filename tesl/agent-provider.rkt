@@ -49,7 +49,10 @@
          make-anthropic-provider
          make-openai-provider
          make-local-provider
-         call-provider)
+         call-provider
+         ;; #23: SSE token-stream parsers (exported for offline unit tests).
+         anthropic-parse-stream
+         openai-parse-stream)
 
 ;;; A single tool invocation requested by the model.
 ;;;   id   : String  — provider-assigned call id (echoed back in tool_result)
@@ -89,7 +92,7 @@
                "scripted response must be a String or llm-response, got ~e" r)])))
   (define total (length script))
   (define calls 0)
-  (lambda (_request)
+  (lambda (request)
     (when (>= calls total)
       (raise-user-error
        'mockProvider
@@ -97,6 +100,15 @@
        (add1 calls) total))
     (define resp (list-ref script calls))
     (set! calls (add1 calls))
+    ;; #23: simulate token streaming so a streaming chat UI (and tests) exercise
+    ;; the delta path with no real API.  Split the reply into word/space chunks
+    ;; (concatenation reproduces the text exactly) and emit each as a delta.  Only
+    ;; for a text turn — a tool-use step streams no user-facing text, like a real
+    ;; provider.
+    (define on-delta (and (hash? request) (hash-ref request 'on-delta #f)))
+    (when (and on-delta (llm-response? resp) (null? (llm-response-tool-calls resp)))
+      (for ([chunk (in-list (regexp-match* #px"\\s+|\\S+" (llm-response-text resp)))])
+        (on-delta chunk)))
     resp))
 
 ;;; ── HTTP plumbing shared by the real providers ───────────────────────────────
@@ -130,6 +142,154 @@
 (define (jref h key [default #f])
   (if (hash? h) (hash-ref h key default) default))
 
+;;; ── #23: token streaming (Server-Sent Events) ────────────────────────────────
+;;;
+;;; When a request carries an `on-delta` callback (set by the agentic loop for the
+;;; converseStreaming / agentRun path), the real providers request the streaming
+;;; API (`stream: true`) and invoke `on-delta` with each text delta as the model
+;;; generates it — so an SSE chat UI can render incremental output.  The parsers
+;;; accumulate the deltas back into the SAME `llm-response` a blocking call would
+;;; return (text + tool-calls + usage + stop-reason), so the agentic loop, tool
+;;; dispatch, and transcript threading are all unchanged.  Parsers are pure over
+;;; an input port, so they unit-test against canned SSE bytes (no network).
+
+;; Open a streaming POST and hand the response body port to `parse`, which reads
+;; SSE and returns an llm-response.  The port is closed when parsing finishes.
+(define (stream-post who url headers-alist body-jsexpr parse)
+  (define post-stream (dynamic-require http-client-source 'http-post-stream))
+  (define header-list (for/list ([h (in-list headers-alist)]) (list (car h) (cdr h))))
+  (define-values (status port)
+    (post-stream url header-list (jsexpr->string body-jsexpr)))
+  (dynamic-wind
+   void
+   (lambda ()
+     (when (>= status 400)
+       (raise-user-error who "API error (HTTP ~a): ~a" status (port->string port)))
+     (parse port))
+   (lambda () (with-handlers ([exn:fail? void]) (close-input-port port)))))
+
+;; Call (on-data payload-string) for each SSE `data:` line, stopping at EOF or a
+;; `[DONE]` sentinel (OpenAI).  `event:`/`id:`/comment/blank lines are skipped.
+(define (for-each-sse-data port on-data)
+  (let loop ()
+    (define line (read-line port 'any))
+    (unless (eof-object? line)
+      (define t (string-trim line))
+      (cond
+        [(string=? t "") (loop)]
+        [(and (>= (string-length t) 5) (string=? (substring t 0 5) "data:"))
+         (define payload (string-trim (substring t 5)))
+         (unless (string=? payload "[DONE]")
+           (on-data payload)
+           (loop))]
+        [else (loop)]))))
+
+;; Parse an Anthropic streaming response (message_start / content_block_delta
+;; text_delta + input_json_delta / message_delta) into an llm-response.
+(define (anthropic-parse-stream port on-delta)
+  (define text-acc (open-output-string))
+  (define tool-blocks (make-hash))   ; index -> mutable hash: 'id 'name 'json(output-string)
+  (define tool-order '())
+  (define usage (box (hash 'input 0 'output 0 'cache-read 0 'cache-write 0)))
+  (define stop (box 'other))
+  (define (bump-usage u)
+    (define a (unbox usage))
+    (set-box! usage
+              (hash 'input       (max (hash-ref a 'input 0)       (jref u 'input_tokens 0))
+                    'output      (max (hash-ref a 'output 0)      (jref u 'output_tokens 0))
+                    'cache-read  (max (hash-ref a 'cache-read 0)  (jref u 'cache_read_input_tokens 0))
+                    'cache-write (max (hash-ref a 'cache-write 0) (jref u 'cache_creation_input_tokens 0)))))
+  (for-each-sse-data port
+    (lambda (payload)
+      (define j (with-handlers ([exn:fail? (lambda (_e) #f)]) (string->jsexpr payload)))
+      (when (hash? j)
+        (define ty (jref j 'type))
+        (cond
+          [(equal? ty "message_start")
+           (bump-usage (jref (jref j 'message (hash)) 'usage (hash)))]
+          [(equal? ty "content_block_start")
+           (define cb (jref j 'content_block (hash)))
+           (when (equal? (jref cb 'type) "tool_use")
+             (define idx (jref j 'index 0))
+             (hash-set! tool-blocks idx
+                        (hash 'id (jref cb 'id "") 'name (jref cb 'name "")
+                              'json (open-output-string)))
+             (set! tool-order (append tool-order (list idx))))]
+          [(equal? ty "content_block_delta")
+           (define d (jref j 'delta (hash)))
+           (cond
+             [(equal? (jref d 'type) "text_delta")
+              (define t (jref d 'text ""))
+              (write-string t text-acc)
+              (on-delta t)]
+             [(equal? (jref d 'type) "input_json_delta")
+              (define blk (hash-ref tool-blocks (jref j 'index 0) #f))
+              (when blk (write-string (jref d 'partial_json "") (hash-ref blk 'json)))])]
+          [(equal? ty "message_delta")
+           (define sr (jref (jref j 'delta (hash)) 'stop_reason))
+           (when sr (set-box! stop (anthropic-stop-reason sr)))
+           (bump-usage (jref j 'usage (hash)))]
+          [else (void)]))))
+  (define tool-calls
+    (for/list ([idx (in-list tool-order)])
+      (define blk (hash-ref tool-blocks idx))
+      (define js (string-trim (get-output-string (hash-ref blk 'json))))
+      (define args (if (> (string-length js) 0)
+                       (with-handlers ([exn:fail? (lambda (_e) (hash))]) (string->jsexpr js))
+                       (hash)))
+      (tool-call (hash-ref blk 'id) (hash-ref blk 'name) args)))
+  (llm-response (get-output-string text-acc) (unbox usage) tool-calls (unbox stop)))
+
+;; Parse an OpenAI streaming response (choices[].delta.content / .tool_calls,
+;; finish_reason, optional usage) into an llm-response.
+(define (openai-parse-stream port on-delta)
+  (define text-acc (open-output-string))
+  (define tool-blocks (make-hash))   ; index -> mutable hash: 'id 'name 'args(output-string)
+  (define tool-order '())
+  (define stop (box 'other))
+  (define usage (box (hash 'input 0 'output 0 'cache-read 0 'cache-write 0)))
+  (for-each-sse-data port
+    (lambda (payload)
+      (define j (with-handlers ([exn:fail? (lambda (_e) #f)]) (string->jsexpr payload)))
+      (when (hash? j)
+        (define cs (jref j 'choices '()))
+        (define choice (if (pair? cs) (first cs) (hash)))
+        (define delta (jref choice 'delta (hash)))
+        (define content (jref delta 'content #f))
+        (when (and (string? content) (> (string-length content) 0))
+          (write-string content text-acc)
+          (on-delta content))
+        (for ([tc (in-list (jref delta 'tool_calls '()))])
+          (define idx (jref tc 'index 0))
+          (unless (hash-has-key? tool-blocks idx)
+            (hash-set! tool-blocks idx (hash 'id "" 'name "" 'args (open-output-string)))
+            (set! tool-order (append tool-order (list idx))))
+          (define blk (hash-ref tool-blocks idx))
+          (define fn (jref tc 'function (hash)))
+          (when (jref tc 'id)   (hash-set! tool-blocks idx (hash-set blk 'id (jref tc 'id))))
+          (define blk2 (hash-ref tool-blocks idx))
+          (when (jref fn 'name) (hash-set! tool-blocks idx (hash-set blk2 'name (jref fn 'name))))
+          (define blk3 (hash-ref tool-blocks idx))
+          (define a (jref fn 'arguments))
+          (when (string? a) (write-string a (hash-ref blk3 'args))))
+        (define fr (jref choice 'finish_reason))
+        (when fr (set-box! stop (openai-stop-reason fr (positive? (hash-count tool-blocks)))))
+        (define u (jref j 'usage #f))
+        (when (hash? u)
+          (set-box! usage
+                    (hash 'input (jref u 'prompt_tokens 0)
+                          'output (jref u 'completion_tokens 0)
+                          'cache-read 0 'cache-write 0))))))
+  (define tool-calls
+    (for/list ([idx (in-list tool-order)])
+      (define blk (hash-ref tool-blocks idx))
+      (define js (string-trim (get-output-string (hash-ref blk 'args))))
+      (define args (if (> (string-length js) 0)
+                       (with-handlers ([exn:fail? (lambda (_e) (hash))]) (string->jsexpr js))
+                       (hash)))
+      (tool-call (hash-ref blk 'id) (hash-ref blk 'name) args)))
+  (llm-response (get-output-string text-acc) (unbox usage) tool-calls (unbox stop)))
+
 ;;; ── Anthropic provider ────────────────────────────────────────────────────────
 ;;;
 ;;; POST https://api.anthropic.com/v1/messages
@@ -141,22 +301,28 @@
 (define (make-anthropic-provider api-key model
                                  [endpoint "https://api.anthropic.com/v1/messages"])
   (lambda (request)
-    (define body
+    (define on-delta (and (hash? request) (hash-ref request 'on-delta #f)))
+    (define headers
+      (list (cons "x-api-key" api-key)
+            (cons "anthropic-version" anthropic-version)
+            (cons "content-type" "application/json")))
+    (define base-body
       (hash 'model model
             'max_tokens (hash-ref request 'max-tokens 1024)
             'system (hash-ref request 'system "")
             'messages (anthropic-messages (hash-ref request 'messages '()))
             'tools (anthropic-tools (hash-ref request 'tools '()))))
-    (define-values (status raw)
-      (http-post-json endpoint
-                      (list (cons "x-api-key" api-key)
-                            (cons "anthropic-version" anthropic-version)
-                            (cons "content-type" "application/json"))
-                      body))
-    (define j (parse-json-body 'anthropic raw))
-    (when (>= status 400)
-      (raise-user-error 'anthropic "API error (HTTP ~a): ~a" status raw))
-    (anthropic-normalize j)))
+    (cond
+      ;; #23: token streaming — request stream:true and forward text deltas.
+      [on-delta
+       (stream-post 'anthropic endpoint headers (hash-set base-body 'stream #t)
+                    (lambda (port) (anthropic-parse-stream port on-delta)))]
+      [else
+       (define-values (status raw) (http-post-json endpoint headers base-body))
+       (define j (parse-json-body 'anthropic raw))
+       (when (>= status 400)
+         (raise-user-error 'anthropic "API error (HTTP ~a): ~a" status raw))
+       (anthropic-normalize j)])))
 
 (define (anthropic-tools tools)
   (for/list ([t (in-list tools)])
@@ -234,21 +400,29 @@
 (define (make-openai-provider api-key model
                               [endpoint "https://api.openai.com/v1/chat/completions"])
   (lambda (request)
-    (define body
+    (define on-delta (and (hash? request) (hash-ref request 'on-delta #f)))
+    (define headers
+      (list (cons "authorization" (string-append "Bearer " api-key))
+            (cons "content-type" "application/json")))
+    (define base-body
       (hash 'model model
             'max_tokens (hash-ref request 'max-tokens 1024)
             'messages (openai-messages (hash-ref request 'system "")
                                        (hash-ref request 'messages '()))
             'tools (openai-tools (hash-ref request 'tools '()))))
-    (define-values (status raw)
-      (http-post-json endpoint
-                      (list (cons "authorization" (string-append "Bearer " api-key))
-                            (cons "content-type" "application/json"))
-                      body))
-    (define j (parse-json-body 'openai raw))
-    (when (>= status 400)
-      (raise-user-error 'openai "API error (HTTP ~a): ~a" status raw))
-    (openai-normalize j)))
+    (cond
+      ;; #23: token streaming — stream:true + ask for usage in the final chunk.
+      [on-delta
+       (stream-post 'openai endpoint headers
+                    (hash-set* base-body 'stream #t
+                               'stream_options (hash 'include_usage #t))
+                    (lambda (port) (openai-parse-stream port on-delta)))]
+      [else
+       (define-values (status raw) (http-post-json endpoint headers base-body))
+       (define j (parse-json-body 'openai raw))
+       (when (>= status 400)
+         (raise-user-error 'openai "API error (HTTP ~a): ~a" status raw))
+       (openai-normalize j)])))
 
 (define (openai-tools tools)
   (for/list ([t (in-list tools)])

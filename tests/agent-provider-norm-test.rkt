@@ -748,3 +748,88 @@
   (define ot (first (llm-response-tool-calls o)))
   (check-equal? (tool-call-name at) (tool-call-name ot))
   (check-jsexpr=? (tool-call-args at) (tool-call-args ot)))
+
+;;; ── #23: SSE token-stream parsers (offline, canned bytes) ─────────────────────
+;;;
+;;; The streaming providers request the vendor streaming API and feed the
+;;; response body port to these parsers, which forward each text delta via a
+;;; callback and reassemble the SAME llm-response a blocking call returns. Both
+;;; are pure over an input port, so they test against canned SSE with no network.
+
+(define anthropic-sse
+  (string-append
+   "event: message_start\n"
+   "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10}}}\n\n"
+   "event: content_block_start\n"
+   "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"
+   "event: content_block_delta\n"
+   "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello \"}}\n\n"
+   "event: content_block_delta\n"
+   "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"world\"}}\n\n"
+   "event: content_block_stop\n"
+   "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+   "event: content_block_start\n"
+   "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"addTool\",\"input\":{}}}\n\n"
+   "event: content_block_delta\n"
+   "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"a\\\":2,\"}}\n\n"
+   "event: content_block_delta\n"
+   "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"b\\\":3}\"}}\n\n"
+   "event: content_block_stop\n"
+   "data: {\"type\":\"content_block_stop\",\"index\":1}\n\n"
+   "event: message_delta\n"
+   "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":7}}\n\n"
+   "event: message_stop\n"
+   "data: {\"type\":\"message_stop\"}\n\n"))
+
+(test-case "anthropic-parse-stream forwards text deltas + reassembles response (#23)"
+  (define deltas (box '()))
+  (define r (anthropic-parse-stream (open-input-string anthropic-sse)
+                                    (lambda (d) (set-box! deltas (cons d (unbox deltas))))))
+  (check-equal? (reverse (unbox deltas)) (list "Hello " "world") "per-token deltas, in order")
+  (check-equal? (llm-response-text r) "Hello world" "deltas reassemble the full text")
+  (check-equal? (llm-response-stop-reason r) 'tool-use)
+  (define tc (first (llm-response-tool-calls r)))
+  (check-equal? (tool-call-id tc) "t1")
+  (check-equal? (tool-call-name tc) "addTool")
+  (check-equal? (tool-call-args tc) (hasheq 'a 2 'b 3) "streamed input_json_delta reassembles")
+  (define u (llm-response-usage r))
+  (check-equal? (hash-ref u 'input) 10)
+  (check-equal? (hash-ref u 'output) 7))
+
+(define openai-sse
+  (string-append
+   "data: {\"choices\":[{\"delta\":{\"content\":\"Hi \"}}]}\n\n"
+   "data: {\"choices\":[{\"delta\":{\"content\":\"there\"}}]}\n\n"
+   "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"addTool\",\"arguments\":\"{\\\"a\\\":1\"}}]}}]}\n\n"
+   "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\",\\\"b\\\":2}\"}}]}}]}\n\n"
+   "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3}}\n\n"
+   "data: [DONE]\n\n"))
+
+(test-case "openai-parse-stream forwards text deltas + reassembles response (#23)"
+  (define deltas (box '()))
+  (define r (openai-parse-stream (open-input-string openai-sse)
+                                 (lambda (d) (set-box! deltas (cons d (unbox deltas))))))
+  (check-equal? (reverse (unbox deltas)) (list "Hi " "there"))
+  (check-equal? (llm-response-text r) "Hi there")
+  (check-equal? (llm-response-stop-reason r) 'tool-use)
+  (define tc (first (llm-response-tool-calls r)))
+  (check-equal? (tool-call-id tc) "c1")
+  (check-equal? (tool-call-name tc) "addTool")
+  (check-equal? (tool-call-args tc) (hasheq 'a 1 'b 2) "streamed argument fragments reassemble")
+  (define u (llm-response-usage r))
+  (check-equal? (hash-ref u 'input) 5)
+  (check-equal? (hash-ref u 'output) 3))
+
+(test-case "a text-only turn streams deltas and no tool calls (#23)"
+  (define n (box 0))
+  (define r (anthropic-parse-stream
+             (open-input-string
+              (string-append
+               "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"one \"}}\n\n"
+               "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"two\"}}\n\n"
+               "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n"))
+             (lambda (_d) (set-box! n (add1 (unbox n))))))
+  (check-equal? (unbox n) 2 "two text deltas")
+  (check-equal? (llm-response-text r) "one two")
+  (check-equal? (llm-response-tool-calls r) '())
+  (check-equal? (llm-response-stop-reason r) 'end-turn))

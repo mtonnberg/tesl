@@ -422,7 +422,7 @@
 ;;; step with a step-event String (a tool dispatch, then the final text).  This
 ;;; is how agentRun streams progress: the developer's callback publishes each
 ;;; event to a channel.  on-step never holds a DB connection.
-(define (run-loop a provider initial-messages [on-step #f])
+(define (run-loop a provider initial-messages [on-step #f] [stream-tokens? #f])
   (define max-iters 16) ; defensive bound against a runaway provider
   (define (step! s) (when on-step (on-step s)))
   (let loop ([messages initial-messages]
@@ -431,11 +431,23 @@
              [iters 0])
     (when (>= iters max-iters)
       (raise-user-error 'askReply "tool-calling loop exceeded ~a iterations" max-iters))
-    (define request
+    (define base-request
       (hash 'system (agent-system a)
             'max-tokens (agent-max-tokens a)
             'messages messages
             'tools (agent-tool-decls a)))
+    ;; #23: token streaming — opt-in via `stream-tokens?` (converseStreaming sets
+    ;; it).  Hand the provider an `on-delta` so it requests the streaming API and
+    ;; forwards each text delta as a `text-delta:` event AS the model generates —
+    ;; a streaming chat UI renders incremental output.  The final `text: <full
+    ;; reply>` step still fires below (completion marker / backward compat).
+    ;; agentRun keeps its documented "once per loop step" contract (stream-tokens?
+    ;; #f), and non-streaming callers (ask/converse) set no callback at all.
+    (define request
+      (if (and on-step stream-tokens?)
+          (hash-set base-request 'on-delta
+                    (lambda (partial) (step! (format "text-delta: ~a" partial))))
+          base-request))
     (define resp (call-provider provider request))
     (define usage* (merge-usage usage (llm-response-usage resp)))
     (define calls (llm-response-tool-calls resp))
@@ -492,7 +504,8 @@
 ;;; transcript so far) plus this turn's user prompt; returns BOTH the reply and
 ;;; the FULL transcript (prior + this turn's user/assistant/tool turns).  This is
 ;;; the single place ask/askReply/askWith/converse/agentRun route through.
-(define (run-the-loop/transcript the-agent prompt override-provider prior-messages on-step)
+(define (run-the-loop/transcript the-agent prompt override-provider prior-messages on-step
+                                 [stream-tokens? #f])
   (define a (raw-value the-agent))
   (unless (agent? a)
     (raise-user-error 'ask "first argument is not an Agent: ~e" a))
@@ -502,7 +515,7 @@
   (define initial
     (append prior-messages
             (list (hash 'role "user" 'content (raw-value prompt)))))
-  (run-loop a provider initial on-step))
+  (run-loop a provider initial on-step stream-tokens?))
 
 ;;; AgentReply accessors.
 (define (replyText r)
@@ -600,10 +613,17 @@
   (conv-turn reply (conversation a transcript)))
 
 ;;; converseStreaming : Conversation -> String -> (String -> Unit) -> ConversationTurn
-;;; Like converse, but calls `publish` once per loop step with a step-event String
-;;; ("tool: <name>" as each tool is invoked, "text: <reply>" for the final assistant
-;;; text), so a handler can stream the tool-use / thought process / reply over SSE
-;;; while still threading the full conversation history into the turn.
+;;; Like converse, but calls `publish` with step-event Strings so a handler can
+;;; stream the reply over SSE while still threading the full conversation history:
+;;;   "tool: <name>"      — as each tool is dispatched
+;;;   "text-delta: <part>"— #23: each token/chunk of the assistant text AS the
+;;;                         model generates it (real providers request the
+;;;                         streaming API; the mock provider synthesizes chunks),
+;;;                         so an SSE chat UI renders incremental "live typing"
+;;;   "text: <reply>"     — the COMPLETE assistant text once the turn finishes
+;;;                         (completion marker; kept for backward compatibility)
+;;; A UI opts into live typing by handling "text-delta:"; older consumers that
+;;; only read "text:" keep working (they ignore the unknown prefix).
 (define (converseStreaming conv prompt publish)
   (require-capabilities! (list aiProvider))
   (define c (raw-value conv))
@@ -615,7 +635,7 @@
                       "third argument must be a function String -> Unit, got ~e" pub))
   (define a (conversation-agent c))
   (define-values (reply transcript)
-    (run-the-loop/transcript a prompt #f (conversation-messages c) (lambda (s) (pub s))))
+    (run-the-loop/transcript a prompt #f (conversation-messages c) (lambda (s) (pub s)) #t))
   (conv-turn reply (conversation a transcript)))
 
 ;;; turnReply : ConversationTurn -> AgentReply

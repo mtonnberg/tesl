@@ -298,7 +298,52 @@
      (with-ai
        (define agent (defineAgent (mockProvider (list "x")) "sys" 64))
        (check-exn exn:fail?
-                  (lambda () (conversationFrom agent "{not json")))))))
+                  (lambda () (conversationFrom agent "{not json")))))
+
+   ;; #23: converseStreaming forwards per-token text deltas AS the reply is
+   ;; generated (the mock provider synthesizes deltas), while the final whole-
+   ;; reply step still fires for backward compatibility.
+   (test-case "converseStreaming emits token deltas that reassemble the reply (#23)"
+     (with-ai
+       (define agent (defineAgent (mockProvider (list "Hello streaming world")) "sys" 64))
+       (define events (box '()))
+       (define turn (converseStreaming (newConversation agent) "hi"
+                                       (lambda (e) (set-box! events (cons e (unbox events))))))
+       (define evs (reverse (unbox events)))
+       (define deltas (filter (lambda (e) (string-prefix? e "text-delta: ")) evs))
+       (check-true (> (length deltas) 1) "more than one incremental token delta")
+       (define joined
+         (apply string-append
+                (map (lambda (e) (substring e (string-length "text-delta: "))) deltas)))
+       (check-equal? joined "Hello streaming world" "deltas reassemble the full reply")
+       (check-not-false (member "text: Hello streaming world" evs)
+                        "final whole-reply step still emitted")
+       (check-equal? (replyText (turnReply turn)) "Hello streaming world")))
+
+   ;; #23: TOOL USE is streamed to the consumer too — a "tool: <name>" event tells
+   ;; the UI which tool is being used, BEFORE the streamed final answer.
+   (test-case "converseStreaming streams tool-use events then the answer's deltas (#23)"
+     (with-ai
+       (define provider
+         (mockToolProvider
+          (list (toolUseStep "get_weather" "k1" "{\"city\":\"Oslo\"}")
+                (textStep "Oslo is cold today."))))
+       (define events (box '()))
+       (define turn (converseStreaming (newConversation (tool-agent provider)) "weather in Oslo?"
+                                       (lambda (e) (set-box! events (cons e (unbox events))))))
+       (define evs (reverse (unbox events)))
+       ;; the tool-use is visible in the stream, and names WHICH tool
+       (check-not-false (member "tool: get_weather" evs) "tool-use event streamed")
+       ;; the final answer streams incrementally
+       (define deltas (filter (lambda (e) (string-prefix? e "text-delta: ")) evs))
+       (check-true (> (length deltas) 1) "answer streamed as token deltas")
+       ;; ordering: the tool event precedes the answer's text deltas
+       (define tool-idx (index-of evs "tool: get_weather"))
+       (define first-delta-idx
+         (for/first ([e (in-list evs)] [i (in-naturals)]
+                     #:when (string-prefix? e "text-delta: ")) i))
+       (check-true (< tool-idx first-delta-idx) "tool event precedes the streamed answer")
+       (check-equal? (replyText (turnReply turn)) "Oslo is cold today.")))))
 
 ;;; The developer's OWN entity for persisting a conversation thread (Pillar 2 DB).
 (define-entity ConversationRow

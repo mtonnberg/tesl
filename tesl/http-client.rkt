@@ -23,6 +23,8 @@
          HttpClient.post
          HttpClient.put
          HttpClient.delete
+         ;; #23: streaming POST (SSE) for provider token streaming.
+         http-post-stream
          ;; Security: outbound header CRLF guard (exported for the regression suite)
          http-header-field-safe?)
 
@@ -171,6 +173,47 @@
   (HttpResponse #:status status-code
                 #:body body-str
                 #:headers headers-list))
+
+;;; #23: streaming POST for provider token streaming (Server-Sent Events).  Same
+;;; capability gate and CR/LF header guard as [do-http-request], but returns the
+;;; response body PORT so the caller can read SSE `data:` lines incrementally as
+;;; the model generates, instead of buffering the whole completion.  Returns
+;;; (values status-code input-port).  No DoS body cap here: SSE bodies are read
+;;; and discarded line-by-line by the caller (the parser bounds accumulation), and
+;;; the connection is caller-owned (closed when the parse ends).
+(define (http-post-stream url-str req-headers body-str)
+  (require-capabilities! (list httpClient))
+  (define-values (host port path-str use-ssl?) (parse-url-parts url-str))
+  (define (no-crlf field s)
+    (unless (http-header-field-safe? s)
+      (raise-user-error 'HttpClient
+                        "outbound ~a contains a CR/LF newline — header injection rejected"
+                        field))
+    s)
+  (define header-bytes
+    (for/list ([h (in-list req-headers)])
+      (define name-str (if (list? h) (first h) h))
+      (define val-str  (if (list? h) (second h) ""))
+      (string->bytes/utf-8
+       (string-append (no-crlf "header name" name-str) ": "
+                      (no-crlf "header value" val-str)))))
+  (define-values (status-line _resp-headers resp-port)
+    (with-handlers ([exn:fail?
+                     (lambda (e)
+                       (raise-user-error 'HttpClient
+                                         "streaming POST to ~a failed: ~a"
+                                         url-str (exn-message e)))])
+      (http-sendrecv host path-str
+                     #:ssl? use-ssl?
+                     #:port port
+                     #:method "POST"
+                     #:headers header-bytes
+                     #:data (string->bytes/utf-8 body-str))))
+  (define status-code
+    (let* ([line (if (bytes? status-line) (bytes->string/utf-8 status-line) status-line)]
+           [parts (string-split line " ")])
+      (if (>= (length parts) 2) (or (string->number (second parts)) 0) 0)))
+  (values status-code resp-port))
 
 ;;; --- Public API ---
 
