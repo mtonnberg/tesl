@@ -1268,7 +1268,7 @@ fn fetchTask(id: String) -> Task ? FromDb (Id == id)
     Something task ->
       task
 
-test "named db key alias ok" {
+test "named db key alias ok" requires [dbRead] {
   let queryId = "task-1"
   let fetched: Task ::: FromDb (Id == queryId) fetched = fetchTask queryId
   expect fetched.id == "task-1"

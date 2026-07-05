@@ -86,6 +86,54 @@ let cap_check_kind_info (k : func_kind) : (string * (string -> string -> string)
         "main '%s' reads the environment (directly or through a declarative config block) \
          but does not declare the required capability [%s]" n caps)
 
+(* Collect the capabilities a `test` body actually needs, threading lexical
+   binders so a `let`/property/case binder never suppresses a capability. Test
+   blocks were NEVER capability-checked (only DFunc kinds were), yet the runtime
+   wraps a test in `with-capabilities (declared)` and enforces it — so a body
+   calling e.g. `ask` (aiProvider), `insert` (dbWrite), or `publish` (pubsub)
+   beyond its `requires [...]` compiled clean and then trapped at RUNTIME with
+   "Missing capabilities". This mirrors the fn/handler check onto test bodies. *)
+let collect_test_body_caps ~func_caps (stmts : test_stmt list) : string list =
+  let acc = ref [] in
+  let add e bound = acc := collect_needed_capabilities ~func_caps ~bound e @ !acc in
+  let rec pat_binders = function
+    | PVar n when n <> "_" -> [n]
+    | PCon { fields; _ } -> List.concat_map (fun (_, sub) -> pat_binders sub) fields
+    | _ -> []
+  in
+  let rec go bound = function
+    | TsLet { name; value; _ } ->
+      add value bound; (if name = "_" then bound else name :: bound)
+    | TsLetProof { value_name; value; _ } -> add value bound; value_name :: bound
+    | TsExpect { left; right; _ } ->
+      add left bound; (match right with Some r -> add r bound | None -> ()); bound
+    | TsExpectFail { fn; arg; _ } | TsExpectHasProof { fn; arg; _ } ->
+      add fn bound; add arg bound; bound
+    | TsProperty { params; body; _ } ->
+      let pbound =
+        List.filter_map (fun (p : property_param) ->
+          if p.binding.name = "_" then None else Some p.binding.name) params
+        @ bound in
+      List.iter (fun (p : property_param) ->
+        match p.where_clause with Some w -> add w pbound | None -> ()) params;
+      add body pbound; bound
+    | TsIf { cond; then_stmts; else_stmts; _ } ->
+      add cond bound;
+      ignore (List.fold_left go bound then_stmts);
+      ignore (List.fold_left go bound else_stmts);
+      bound
+    | TsCase { scrut; arms; _ } ->
+      add scrut bound;
+      List.iter (fun (a : ts_case_arm) ->
+        let abound = pat_binders a.ts_pattern @ bound in
+        (match a.ts_guard with Some g -> add g abound | None -> ());
+        ignore (List.fold_left go abound a.ts_body)) arms;
+      bound
+    | TsExpr { e; _ } -> add e bound; bound
+  in
+  ignore (List.fold_left go [] stmts);
+  List.sort_uniq String.compare !acc
+
 let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : top_decl list) : validation_error list =
   (* Local callee→caps first (a local name shadows an imported one); then
      imported functions' declared `requires`, so a transitive call into an
@@ -147,6 +195,19 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
                       (String.concat ", " missing) label)
              (msg fd.name (String.concat ", " missing))
              :: !errors)
+    | DTest t ->
+      (* Same capability enforcement as fns/handlers, extended to `test`/`api-test`
+         etc. bodies (previously unchecked → runtime "Missing capabilities"). *)
+      let needed = collect_test_body_caps ~func_caps t.stmts in
+      let declared = t.capabilities in
+      let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
+      if missing <> [] then
+        errors := make_error t.loc
+          ~hint:(Printf.sprintf "add `requires [%s]` to the test" (String.concat ", " missing))
+          (Printf.sprintf
+             "test '%s' uses [%s] but does not declare the required capabilities"
+             t.description (String.concat ", " missing))
+          :: !errors
     | DAgent a ->
       (* A2-4: a declarative `agent X = Agent { … } requires [caps]` block must
          bound the authority of its tools — each tool's declared capabilities must
