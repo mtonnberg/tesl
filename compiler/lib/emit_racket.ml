@@ -1554,6 +1554,19 @@ let rec emit_expr ctx e =
      | EVar { name = "asTool"; _ }, [EVar { name; _ }] ->
        emit_tool_from_fd ctx (Hashtbl.find ctx.fn_tool_decls name)
      | _ -> failwith "emit_racket: asTool guard passed but returned None — compiler invariant violation; please report this bug")
+  (* Issue #24 (2026-07-05): any `asTool` application NOT matched by the bare-
+     reference tool-form case above (a partial application `asTool (fn arg)`, a
+     qualified/unknown reference) is a form codegen cannot lower — `asTool` has no
+     runtime binding, so emitting it verbatim yields a module that fails to LOAD.
+     Fail loudly instead of emitting an unbound identifier.  The checker rejects
+     these first (checker.ml `check_malformed_tool_forms`); this is defense-in-
+     depth for `tesl compile` paths that do not run full validation. *)
+  | EApp _ as app when (match flatten_app_expr [] app with
+                        | EVar { name = "asTool"; _ }, _ -> true | _ -> false) ->
+    failwith "emit_racket: `asTool` supports only a bare function reference \
+              (`asTool myFn`); a partial application or non-function argument cannot \
+              be lowered to a tool. This should have been rejected at check time \
+              (checker.ml check_malformed_tool_forms) — please report this bug."
   | EApp _ as app when (match parse_insert_many_expr app with Some _ -> true | None -> false) ->
     (match parse_insert_many_expr app with
      | Some (list_var, entity) -> emit_sql_insert_many list_var entity

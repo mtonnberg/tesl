@@ -517,8 +517,48 @@ fn buildAgent(sys: String) -> Agent =
 
 let to_cases lst = List.map (fun (n, f) -> test_case n `Quick f) lst
 
+(* ── Issue #24: asTool must fail closed on a non-bare-reference ───────────────
+   `asTool (fn arg)` (partial application) used to type-check but codegen emitted
+   an unbound `asTool` identifier, so the module failed to LOAD (check-passes /
+   test-fails divergence).  The checker now rejects it; the bare form still
+   compiles.  Also covers the const-bound (`name = Agent { … }`) agent form, whose
+   tool list previously escaped agent-tool validation entirely. *)
+let test_issue24_partial_astool_rejected () =
+  should_fail "asTool` supports only a bare function reference" {|#lang tesl
+module Issue24Partial exposing [demoAgent]
+import Tesl.Prelude exposing [Bool(..), Int, List, String, Unit]
+import Tesl.Agent exposing [Agent, asTool, mockProvider]
+fn tool2(a: String, b: String) -> String =
+  a ++ ":" ++ b
+demoAgent = Agent {
+  provider: mockProvider ["ok"]
+  systemPrompt: "s"
+  tools: [asTool (tool2 "bound")]
+  maxTokens: 64
+}
+|}
+
+let test_issue24_bare_astool_ok () =
+  should_pass {|#lang tesl
+module Issue24Bare exposing [demoAgent]
+import Tesl.Prelude exposing [Bool(..), Int, List, String, Unit]
+import Tesl.Agent exposing [Agent, asTool, mockProvider]
+fn tool2(a: String, b: String) -> String =
+  a ++ ":" ++ b
+demoAgent = Agent {
+  provider: mockProvider ["ok"]
+  systemPrompt: "s"
+  tools: [asTool tool2]
+  maxTokens: 64
+}
+|}
+
 let () =
   run "AiSuite-Capability" [
+    "N5-issue24-asTool-fail-closed", to_cases [
+      "N5 partial-application asTool rejected", test_issue24_partial_astool_rejected;
+      "P5 bare asTool (const-bound agent) compiles", test_issue24_bare_astool_ok;
+    ];
     "N1-negative-matrix (ai-fn × consumer × insufficient-grant)",
       to_cases neg_matrix;
     "P1-positive-matrix (ai-fn × consumer × sufficient-grant)",

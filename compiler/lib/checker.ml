@@ -4464,6 +4464,34 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
         | _ -> None) elems
     | _ -> []
   in
+  (* Issue #24 (2026-07-05): `asTool` expands ONLY for a bare function reference
+     (`asTool myFn`).  Applied to anything else — most importantly a partial
+     application `asTool (myFn arg)` — the tools-list extractor above silently
+     DROPPED the element (`| _ -> None`), so it type-checked, yet codegen has no
+     `asTool` runtime binding and emitted the expression verbatim → the module
+     failed to LOAD (`tesl test` ran zero tests).  A checker that accepts a form
+     codegen cannot lower is the same fail-open class this compiler is being
+     hardened against.  Fail closed: reject a malformed `asTool` at check time
+     with an actionable message. *)
+  let check_malformed_tool_forms agent_label fields =
+    match List.assoc_opt "tools" fields with
+    | Some (Ast.EList { elems; _ }) ->
+      List.iter (function
+        | Ast.EApp { fn = Ast.EVar { name = "asTool"; _ }; arg; loc } ->
+          (match arg with
+           | Ast.EVar _ -> ()   (* the one supported form: a bare reference *)
+           | _ ->
+             add_error ctx loc (Printf.sprintf
+               "%s: `asTool` supports only a bare function reference (`asTool myFn`); \
+                a partial application like `asTool (myFn arg)` is not supported — codegen \
+                cannot derive the tool's JSON schema from it, so the emitted module would \
+                fail to load. Define a wrapper `fn myTool(...) = myFn boundValue ...` that \
+                closes over the bound value in its body, and pass `asTool myTool`."
+               agent_label))
+        | _ -> ()   (* manual `tool { … }` and other tool forms are validated elsewhere *)
+      ) elems
+    | _ -> ()
+  in
   let check_agent_tool_refs agent_label tool_refs =
     List.iter (fun (tn, tloc) ->
       match List.find_opt (function DFunc fd -> fd.name = tn | _ -> false) m.decls with
@@ -4506,6 +4534,7 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
             | Ast.ERecord { fields; _ } -> fields
             | Ast.EApp { fn = Ast.EConstructor _; arg = Ast.ERecord { fields; _ }; _ } -> fields
             | _ -> []) in
+          check_malformed_tool_forms (Printf.sprintf "agent '%s'" a.name) fields;
           agent_tool_refs_of_fields fields
         | None -> List.map (fun n -> (n, a.loc)) a.tools
       in
@@ -4514,13 +4543,22 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
   (* AGENT-2: expression-position `Agent { … }` (BYOK) anywhere in a function body. *)
   let rec walk_agents_in_expr label (e : Ast.expr) : unit =
     (match agent_fields_of_expr e with
-     | Some fields -> check_agent_tool_refs label (agent_tool_refs_of_fields fields)
+     | Some fields ->
+       check_malformed_tool_forms label fields;
+       check_agent_tool_refs label (agent_tool_refs_of_fields fields)
      | None -> ());
     ignore (Ast_visitor.fold_children (fun () c -> walk_agents_in_expr label c) () e)
   in
   List.iter (function
     | DFunc fd ->
       walk_agents_in_expr (Printf.sprintf "agent expression in `%s`" fd.name) fd.body
+    (* Issue #24 (2026-07-05): a top-level value binding `name = Agent { … }`
+       (a DConst, the idiomatic function-first agent form) was walked by NEITHER
+       the DAgent path above NOR this expression walk (which only covered DFunc
+       bodies), so its tool forms escaped both the AGENT-1/2 param checks and the
+       malformed-`asTool` check.  Walk DConst values too. *)
+    | DConst c ->
+      walk_agents_in_expr (Printf.sprintf "agent expression in `%s`" c.name) c.value
     | _ -> ()) m.decls;
 
   (* 4. Type-check each declaration *)
