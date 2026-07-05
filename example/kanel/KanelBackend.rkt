@@ -609,7 +609,7 @@
 )
 
 (module+ main
-  (thsl-src! "example/kanel/KanelBackend.tesl" 828 (list) (lambda () (with-capabilities (kanelDbRead kanelDbWrite kanelQueue kanelPubSub random time notifyWorkerCap envRead) (call-with-database KanelDatabase (lambda () (let ([port (raw-value (envInt "KANEL_PORT" 8080))]) (begin (start-workers! KanelNotifyQueueWorkers (list notifyWorkerCap kanelPubSub) #:concurrency 2) (begin (start-dead-workers! KanelNotifyQueueDeadWorkers (list notifyWorkerCap kanelPubSub) #:concurrency 2) (serve KanelServer #:port port #:capabilities (list kanelDbRead kanelDbWrite kanelQueue kanelPubSub random time notifyWorkerCap envRead) #:static-dir "example/kanel/frontend" #:sse-routes KanelServer-sse-routes))))))))))
+  (thsl-src! "example/kanel/KanelBackend.tesl" 828 (list) (lambda () (with-capabilities (kanelDbRead kanelDbWrite kanelQueue kanelPubSub random time notifyWorkerCap envRead) (call-with-database KanelDatabase (lambda () (let ([port (raw-value (envInt "KANEL_PORT" 8080))]) (begin (start-workers! KanelNotifyQueueWorkers (list notifyWorkerCap kanelPubSub) #:concurrency 2) (begin (start-dead-workers! KanelNotifyQueueDeadWorkers (list notifyWorkerCap kanelPubSub)) (serve KanelServer #:port port #:capabilities (list kanelDbRead kanelDbWrite kanelQueue kanelPubSub random time notifyWorkerCap envRead) #:static-dir "example/kanel/frontend" #:sse-routes KanelServer-sse-routes))))))))))
 
 (define KanelNotifyQueueWorkers
   (list (cons KanelNotifyQueue notifyWorker)))

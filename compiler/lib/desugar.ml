@@ -154,8 +154,13 @@ let lower_expr (queues : (string, string) Hashtbl.t) (e : expr) : expr =
     Buffer.add_string buf (Printf.sprintf "(%s %s (list" runtime_fn workers_name);
     List.iter (fun cap -> Buffer.add_string buf (Printf.sprintf " %s" cap)) capabilities;
     Buffer.add_string buf ")";
+    (* `numberOfWorkers` (concurrency) applies ONLY to the normal worker starter.
+       Dead-letter workers are always single-threaded and `start-dead-workers!`
+       takes no `#:concurrency` keyword — passing it there crashed at App boot on
+       any queue that had BOTH a dead worker and `numberOfWorkers` (issue #15). *)
     (match concurrency with
-     | Some n when n <> 1 -> Buffer.add_string buf (Printf.sprintf " #:concurrency %d" n)
+     | Some n when n <> 1 && not is_dead ->
+       Buffer.add_string buf (Printf.sprintf " #:concurrency %d" n)
      | _ -> ());
     Buffer.add_string buf ")";
     ERuntimeCall { segments = [ RLit (Buffer.contents buf) ]; loc }

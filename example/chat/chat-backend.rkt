@@ -468,7 +468,7 @@
 )
 
 (module+ main
-  (thsl-src! "example/chat/chat-backend.tesl" 540 (list) (lambda () (with-capabilities (chatService notifyCap deadLetterCap envRead) (call-with-database ChatDatabase (lambda () (let ([_ (init-opentelemetry! #:service-name "chat-backend" #:endpoint "in-memory" #:console? #t)]) (let ([port (raw-value (envInt "CHAT_PORT" 3000))]) (begin (start-workers! NotificationQueueWorkers (list notifyCap deadLetterCap) #:concurrency 3) (begin (start-dead-workers! NotificationQueueDeadWorkers (list notifyCap deadLetterCap) #:concurrency 3) (serve ChatServer #:port port #:capabilities (list chatService notifyCap deadLetterCap envRead) #:static-dir "example/chat/frontend" #:sse-routes ChatServer-sse-routes)))))))))))
+  (thsl-src! "example/chat/chat-backend.tesl" 540 (list) (lambda () (with-capabilities (chatService notifyCap deadLetterCap envRead) (call-with-database ChatDatabase (lambda () (let ([_ (init-opentelemetry! #:service-name "chat-backend" #:endpoint "in-memory" #:console? #t)]) (let ([port (raw-value (envInt "CHAT_PORT" 3000))]) (begin (start-workers! NotificationQueueWorkers (list notifyCap deadLetterCap) #:concurrency 3) (begin (start-dead-workers! NotificationQueueDeadWorkers (list notifyCap deadLetterCap)) (serve ChatServer #:port port #:capabilities (list chatService notifyCap deadLetterCap envRead) #:static-dir "example/chat/frontend" #:sse-routes ChatServer-sse-routes)))))))))))
 
 (define NotificationQueueWorkers
   (list (cons NotificationQueue notifyWorker)))

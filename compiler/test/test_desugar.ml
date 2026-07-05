@@ -163,12 +163,20 @@ let () =
     (is_rlit_only "(start-workers! W (list))" (loc_at 40)
        (Desugar.desugar_expr empty_queues (mk_workers ())));
 
-  (* 3b. dead workers + concurrency render variants. *)
-  check "EStartWorkers dead + concurrency renders start-dead-workers! #:concurrency"
-    (is_rlit_only "(start-dead-workers! W (list ReadCap) #:concurrency 4)" (loc_at 40)
+  (* 3b. dead workers + concurrency render variants. `numberOfWorkers` applies
+     ONLY to the normal starter; dead workers are single-threaded and
+     start-dead-workers! takes no #:concurrency (issue #15 — passing it crashed
+     App boot). *)
+  check "EStartWorkers dead + concurrency drops #:concurrency (single-threaded)"
+    (is_rlit_only "(start-dead-workers! W (list ReadCap))" (loc_at 40)
        (Desugar.desugar_expr empty_queues
           (EStartWorkers { workers_name = "W"; capabilities = ["ReadCap"];
                            concurrency = Some 4; is_dead = true; loc = loc_at 40 })));
+  check "EStartWorkers normal + concurrency keeps #:concurrency"
+    (is_rlit_only "(start-workers! W (list ReadCap) #:concurrency 4)" (loc_at 40)
+       (Desugar.desugar_expr empty_queues
+          (EStartWorkers { workers_name = "W"; capabilities = ["ReadCap"];
+                           concurrency = Some 4; is_dead = false; loc = loc_at 40 })));
 
   (* 4. EServe → (serve NAME #:port <RArg port> ...sse-routes), loc preserved. *)
   (match Desugar.desugar_expr empty_queues (mk_serve ()) with

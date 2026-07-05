@@ -83,7 +83,7 @@
 )
 
 (module+ main
-  (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 165 (list) (lambda () (with-capabilities (fullService emailCap deadEmailCap enqueueEmail envRead) (call-with-database EmailDatabase (lambda () (let ([port 8090]) (begin (start-workers! EmailQueueWorkers (list emailCap deadEmailCap) #:concurrency 4) (begin (start-dead-workers! EmailQueueDeadWorkers (list emailCap deadEmailCap) #:concurrency 4) (serve ConcurrencyServer #:port port #:capabilities (list fullService emailCap deadEmailCap enqueueEmail envRead) #:sse-routes ConcurrencyServer-sse-routes))))))))))
+  (thsl-src! "example/learn/lesson31-worker-concurrency.tesl" 165 (list) (lambda () (with-capabilities (fullService emailCap deadEmailCap enqueueEmail envRead) (call-with-database EmailDatabase (lambda () (let ([port 8090]) (begin (start-workers! EmailQueueWorkers (list emailCap deadEmailCap) #:concurrency 4) (begin (start-dead-workers! EmailQueueDeadWorkers (list emailCap deadEmailCap)) (serve ConcurrencyServer #:port port #:capabilities (list fullService emailCap deadEmailCap enqueueEmail envRead) #:sse-routes ConcurrencyServer-sse-routes))))))))))
 
 (define EmailQueueWorkers
   (list (cons EmailQueue processEmail)))
