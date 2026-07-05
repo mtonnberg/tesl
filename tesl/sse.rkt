@@ -16,7 +16,7 @@
 
 (require "queue.rkt"
          (only-in "../dsl/types.rkt" runtime-value->jsexpr)
-         (only-in "../tesl/logging.rkt" tesl-verbose? tesl-log!)
+         (only-in "../tesl/logging.rkt" tesl-log-active? tesl-log!)
          json
          racket/format)
 
@@ -43,7 +43,7 @@
     (hash-set! listeners channel-key
                (cons on-event (hash-ref listeners channel-key '())))
 
-    (when tesl-verbose?
+    (when (tesl-log-active?)
       (tesl-log! "SSE" (format "connect ~a(~a)"
                                 (channel-spec-name channel-spec) channel-key)))
 
@@ -82,6 +82,6 @@
     (define current (hash-ref listeners channel-key '()))
     (hash-set! listeners channel-key (remove on-event current))
 
-    (when tesl-verbose?
+    (when (tesl-log-active?)
       (tesl-log! "SSE" (format "disconnect ~a(~a)"
                                 (channel-spec-name channel-spec) channel-key)))))

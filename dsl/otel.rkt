@@ -3,6 +3,9 @@
 (require json
          racket/runtime-path
          (only-in "private/domain-registry.rkt" register-background-thread!)
+         ;; #22: install the framework-log -> telemetry bridge sink. logging.rkt
+         ;; requires nothing, so this one-way edge introduces no require cycle.
+         (only-in "../tesl/logging.rkt" set-telemetry-log-sink!)
          (for-syntax racket/base syntax/parse))
 
 (provide
@@ -315,6 +318,19 @@
            (if console?
                (list (make-console-telemetry-consumer #:port console-port))
                '())))
+  ;; #22: bridge the framework's own HTTP/SQL/queue/pubsub instrumentation into
+  ;; the telemetry pipeline when a real OTLP endpoint is configured, so remote
+  ;; observability isn't near-empty unless every handler is hand-instrumented.
+  ;; The sink funnels each framework log event through the SAME emit path as an
+  ;; explicit `telemetry "…"` statement (reaching every configured consumer).
+  ;; Gated on a real endpoint (otlp-consumers present); cleared for
+  ;; in-memory/console-only/#f so the stderr-only path is preserved for local and
+  ;; example use (and tests stay unaffected).
+  (set-telemetry-log-sink!
+   (if (pair? otlp-consumers)
+       (lambda (category message attrs)
+         (emit-telemetry-event! message (cons (cons 'log.category category) attrs)))
+       #f))
   (set-box! global-telemetry-log '())
   (void))
 

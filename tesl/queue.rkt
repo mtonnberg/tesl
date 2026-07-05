@@ -28,7 +28,7 @@
          racket/list
          racket/match
          (only-in "logging.rkt"
-                  tesl-verbose?
+                  tesl-log-active?
                   tesl-log-enqueue!
                   tesl-log-dequeue!
                   tesl-log-worker-done!
@@ -577,7 +577,7 @@
     (raise-user-error 'enqueue! "expected a queue-spec, got ~a" queue-s))
   (define raw-payload (raw-value payload))
   (define job-type-name
-    (and tesl-verbose?
+    (and (tesl-log-active?)
          (if (record-value? raw-payload)
              (symbol->string (record-value-type raw-payload))
              (~a raw-payload))))
@@ -601,13 +601,13 @@
      (if deferred-sem
          (set-box! deferred-sem (cons (queue-spec-semaphore queue-s) (unbox deferred-sem)))
          (semaphore-post (queue-spec-semaphore queue-s)))
-     (when tesl-verbose? (tesl-log-enqueue! job-type-name job-id))
+     (when (tesl-log-active?) (tesl-log-enqueue! job-type-name job-id))
      job-id]
     [else
      (define job-id (make-job-id))
      (hash-set! (queue-spec-store queue-s) job-id (job-entry raw-payload))
      (semaphore-post (queue-spec-semaphore queue-s))
-     (when tesl-verbose? (tesl-log-enqueue! job-type-name job-id))
+     (when (tesl-log-active?) (tesl-log-enqueue! job-type-name job-id))
      job-id]))
 
 ;; ── dequeue-next! ────────────────────────────────────────────────────────────
@@ -727,16 +727,16 @@
             [attempts  (third result)])
         (define current-attempt (add1 attempts))
         (define job-type-name
-          (and tesl-verbose?
+          (and (tesl-log-active?)
                (let ([raw (raw-value named-job)])
                  (if (record-value? raw)
                      (symbol->string (record-value-type raw))
                      (~a (queue-spec-name queue-s))))))
-        (when tesl-verbose?
+        (when (tesl-log-active?)
           (tesl-log-dequeue! job-type-name job-id current-attempt (queue-spec-max-attempts queue-s)))
         (with-handlers ([exn:fail? (lambda (e)
                                      (fail-job! queue-s job-id)
-                                     (when tesl-verbose?
+                                     (when (tesl-log-active?)
                                        (tesl-log-worker-fail! job-type-name job-id current-attempt
                                                                 (queue-spec-max-attempts queue-s)
                                                                 (exn-message e)))
@@ -745,14 +745,14 @@
           (if (check-fail? handler-result)
               (begin
                 (fail-job! queue-s job-id)
-                (when tesl-verbose?
+                (when (tesl-log-active?)
                   (tesl-log-worker-fail! job-type-name job-id current-attempt
                                           (queue-spec-max-attempts queue-s)
                                           (check-fail-message handler-result)))
                 #f)
               (begin
                 (complete-job! queue-s job-id)
-                (when tesl-verbose?
+                (when (tesl-log-active?)
                   (tesl-log-worker-done! job-type-name job-id))
                 #t))))))
 
@@ -765,16 +765,16 @@
             [attempts  (third result)])
         (define current-attempt (add1 attempts))
         (define job-type-name
-          (and tesl-verbose?
+          (and (tesl-log-active?)
                (let ([raw (raw-value named-job)])
                  (if (record-value? raw)
                      (symbol->string (record-value-type raw))
                      (~a (queue-spec-name queue-s))))))
-        (when tesl-verbose?
+        (when (tesl-log-active?)
           (tesl-log-dequeue! job-type-name job-id current-attempt (queue-spec-max-attempts queue-s)))
         (with-handlers ([exn:fail? (lambda (e)
                                      (fail-job! queue-s job-id)
-                                     (when tesl-verbose?
+                                     (when (tesl-log-active?)
                                        (tesl-log-worker-fail! job-type-name job-id current-attempt
                                                                 (queue-spec-max-attempts queue-s)
                                                                 (exn-message e)))
@@ -783,7 +783,7 @@
           (if (check-fail? handler-result)
               (begin
                 (fail-job! queue-s job-id)
-                (when tesl-verbose?
+                (when (tesl-log-active?)
                   (tesl-log-worker-fail! job-type-name job-id current-attempt
                                           (queue-spec-max-attempts queue-s)
                                           (check-fail-message handler-result)))
@@ -792,7 +792,7 @@
                                    (check-fail-status handler-result)))
               (begin
                 (complete-job! queue-s job-id)
-                (when tesl-verbose?
+                (when (tesl-log-active?)
                   (tesl-log-worker-done! job-type-name job-id))
                 (job-ok-result named-job)))))))
 
@@ -920,7 +920,7 @@
 (define (call-in-memory-listeners channel-s key-str event-value [outbox-id #f])
   (define listeners (channel-spec-listeners channel-s))
   (define cbs (hash-ref listeners key-str '()))
-  (when (and tesl-verbose? (pair? cbs))
+  (when (and (tesl-log-active?) (pair? cbs))
     (tesl-log-deliver! (channel-spec-name channel-s) key-str
                         (or outbox-id "direct") (length cbs)))
   (for ([cb (in-list cbs)])
@@ -933,7 +933,7 @@
   (require-capabilities! (list pubsub))
   (unless (channel-spec? channel-s)
     (raise-user-error 'publish-event! "expected a channel-spec, got ~a" channel-s))
-  (when tesl-verbose?
+  (when (tesl-log-active?)
     (tesl-log-publish! (channel-spec-name channel-s) key-str))
   (cond
     [(pg-active?)

@@ -16,7 +16,7 @@
                   sql-capture-pending!
                   sql-capture-executed!)
          (only-in "../tesl/logging.rkt"
-                  tesl-verbose?
+                  tesl-log-active?
                   tesl-log-sql!)
          (for-syntax racket/base
                      racket/list
@@ -1437,7 +1437,7 @@
             order-sql
             limit-sql
             offset-sql))
-  (when tesl-verbose? (tesl-log-sql! sql params))
+  (when (tesl-log-active?) (tesl-log-sql! sql params))
   (define rows
     (with-sql-capture sql params (capture-table-name entity) 'select-many
       (lambda () (apply query-rows (database-runtime-connection runtime) sql params))
@@ -1460,7 +1460,7 @@
             (qualified-table-name (database-runtime-database runtime) entity)
             where-sql
             order-sql))
-  (when tesl-verbose? (tesl-log-sql! sql params))
+  (when (tesl-log-active?) (tesl-log-sql! sql params))
   (define row
     (with-sql-capture sql params (capture-table-name entity) 'select-one
       (lambda () (apply query-maybe-row (database-runtime-connection runtime) sql params))
@@ -1489,7 +1489,7 @@
       (field-runtime-value->db-value field
                                      (row-field-ref row field)
                                      'insert-one!)))
-  (when tesl-verbose? (tesl-log-sql! sql params))
+  (when (tesl-log-active?) (tesl-log-sql! sql params))
   (define inserted
     (with-sql-capture sql params (capture-table-name entity) 'insert-one!
       (lambda () (apply query-row (database-runtime-connection runtime) sql params))
@@ -1533,7 +1533,7 @@
   (define params
     (for/list ([field (in-list fields)])
       (field-runtime-value->db-value field (row-field-ref row field) 'upsert-one!)))
-  (when tesl-verbose? (tesl-log-sql! sql params))
+  (when (tesl-log-active?) (tesl-log-sql! sql params))
   (define upserted
     (with-sql-capture sql params (capture-table-name entity) 'upsert-one!
       (lambda () (apply query-row (database-runtime-connection runtime) sql params))
@@ -1566,7 +1566,7 @@
                                              (cdr pair)
                                              'update-many!))
             where-params))
-  (when tesl-verbose? (tesl-log-sql! sql params))
+  (when (tesl-log-active?) (tesl-log-sql! sql params))
   (define rows
     (with-sql-capture sql params (capture-table-name entity) 'update-many!
       (lambda () (apply query-rows (database-runtime-connection runtime) sql params))
@@ -1579,7 +1579,7 @@
     (compile-where-sql predicates))
   (define sql
     (format "delete from ~a~a" (qualified-table-name (database-runtime-database runtime) entity) where-sql))
-  (when tesl-verbose? (tesl-log-sql! sql params))
+  (when (tesl-log-active?) (tesl-log-sql! sql params))
   ;; query-exec returns no row count in db-lib's simple form, so the count stays #f.
   (with-sql-capture sql params (capture-table-name entity) 'delete-many!
     (lambda () (apply query-exec (database-runtime-connection runtime) sql params))
@@ -1589,7 +1589,7 @@
 (define (postgres-delete-many-with-count! runtime entity predicates)
   (define-values (where-sql params _next-index)
     (compile-where-sql predicates))
-  (when tesl-verbose? (tesl-log-sql! (format "delete from ~a~a (with count)"
+  (when (tesl-log-active?) (tesl-log-sql! (format "delete from ~a~a (with count)"
                                               (qualified-table-name (database-runtime-database runtime) entity)
                                               where-sql) params))
   ;; Capture the ACTUAL parameterized statement the driver runs (the counting CTE),
@@ -1662,7 +1662,7 @@
           (format "select count(*) from ~a~a"
                   (qualified-table-name (database-runtime-database runtime) entity)
                   where-sql))
-        (when tesl-verbose? (tesl-log-sql! sql params))
+        (when (tesl-log-active?) (tesl-log-sql! sql params))
         (define result
           (with-sql-capture sql params (capture-table-name entity) 'select-count
             (lambda () (apply query-value (database-runtime-connection runtime) sql params))
@@ -1694,7 +1694,7 @@
                   col
                   (qualified-table-name (database-runtime-database runtime) entity)
                   where-sql))
-        (when tesl-verbose? (tesl-log-sql! sql params))
+        (when (tesl-log-active?) (tesl-log-sql! sql params))
         (define result
           (with-sql-capture sql params (capture-table-name entity) 'select-sum
             (lambda () (apply query-value (database-runtime-connection runtime) sql params))
@@ -1724,7 +1724,7 @@
                   col
                   (qualified-table-name (database-runtime-database runtime) entity)
                   where-sql))
-        (when tesl-verbose? (tesl-log-sql! sql params))
+        (when (tesl-log-active?) (tesl-log-sql! sql params))
         (define result
           (with-sql-capture sql params (capture-table-name entity) 'select-max
             (lambda () (apply query-value (database-runtime-connection runtime) sql params))
@@ -1754,7 +1754,7 @@
                   col
                   (qualified-table-name (database-runtime-database runtime) entity)
                   where-sql))
-        (when tesl-verbose? (tesl-log-sql! sql params))
+        (when (tesl-log-active?) (tesl-log-sql! sql params))
         (define result
           (with-sql-capture sql params (capture-table-name entity) 'select-min
             (lambda () (apply query-value (database-runtime-connection runtime) sql params))

@@ -16,6 +16,7 @@
          "private/proof-utils.rkt"
          (only-in "../tesl/logging.rkt"
                   tesl-verbose?
+                  tesl-log-active?
                   tesl-log-http-request!
                   tesl-log-http-response!)
          (only-in "../tesl/sse.rkt" make-sse-connection-handler)
@@ -1758,8 +1759,8 @@
     (format "req-~a-~a" (current-seconds) (random 1000000)))
   (define path-string
     (string-append "/" (string-join (dsl-request-path req) "/")))
-  (define start-ms (and tesl-verbose? (current-inexact-milliseconds)))
-  (when tesl-verbose?
+  (define start-ms (and (tesl-log-active?) (current-inexact-milliseconds)))
+  (when (tesl-log-active?)
     (tesl-log-http-request! (dsl-request-method req) path-string))
 
   (define (route-context route auth-value)
@@ -1851,7 +1852,7 @@
     (if (eq? response 'route-not-found)
         (error-response 404 "Route not found")
         response))
-  (when tesl-verbose?
+  (when (tesl-log-active?)
     (define elapsed-ms
       (inexact->exact (round (- (current-inexact-milliseconds) start-ms))))
     (tesl-log-http-response! (dsl-request-method req) path-string

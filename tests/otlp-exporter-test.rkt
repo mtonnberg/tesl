@@ -23,7 +23,9 @@
 (require racket/tcp
          json
          rackunit
-         "../dsl/otel.rkt")
+         "../dsl/otel.rkt"
+         (only-in "../tesl/logging.rkt"
+                  tesl-log-active? tesl-log-http-response! tesl-log-sql!))
 
 ;;; ── 1. UNIT: pure event → OTLP/JSON mapping ──────────────────────────────────
 
@@ -241,3 +243,36 @@
   (check-equal? (length (current-telemetry-consumers)) 0)
   (init-opentelemetry! #:service-name "s" #:endpoint #f #:console? #t)
   (check-equal? (length (current-telemetry-consumers)) 1 "only the console consumer"))
+
+;;; ── 4. #22: framework HTTP/SQL/queue/pubsub logs bridge to telemetry ──────────
+;;;
+;;; With a real OTLP endpoint configured, the framework's own instrumentation
+;;; (previously eprintf-to-stderr only) must flow through the SAME emit path as
+;;; an explicit `telemetry "…"` statement, so it reaches every consumer. With an
+;;; in-memory/console-only endpoint it must NOT (stderr-only, tests unaffected).
+;;; The endpoint here is unreachable (127.0.0.1:9) — the OTLP consumer's POST
+;;; fails harmlessly; a custom capture consumer proves the bridge synchronously.
+
+(test-case "framework logs bridge to telemetry on a real endpoint (#22)"
+  (define captured (box '()))
+  (init-opentelemetry!
+   #:service-name "fw" #:endpoint "http://127.0.0.1:9/otlp"
+   #:consumers (list (lambda (ev) (set-box! captured (cons ev (unbox captured))))))
+  (check-true (tesl-log-active?) "bridge active when a real endpoint is configured")
+  (tesl-log-http-response! "GET" "/ping" 200 5)
+  (tesl-log-sql! "select 1" '())
+  (define evs (reverse (unbox captured)))
+  (check-equal? (length evs) 2 "both framework events reached the pipeline")
+  (define http-ev (first evs))
+  (define attrs (telemetry-event-attributes http-ev))
+  (check-equal? (cdr (assq 'log.category attrs)) "HTTP")
+  (check-equal? (cdr (assq 'http.status attrs)) 200)
+  (check-equal? (cdr (assq 'log.category (telemetry-event-attributes (second evs)))) "SQL"))
+
+(test-case "framework logs do NOT bridge under in-memory (#22)"
+  (init-opentelemetry! #:service-name "fw" #:endpoint "in-memory" #:console? #f)
+  (drain-telemetry!) ; clear
+  (tesl-log-http-response! "GET" "/ping" 200 5)
+  (tesl-log-sql! "select 1" '())
+  (check-equal? (length (drain-telemetry!)) 0
+                "no framework events recorded when no real endpoint is configured"))
