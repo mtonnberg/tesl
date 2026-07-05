@@ -1233,11 +1233,29 @@ let collect_needed_capabilities
        through to the generic descent below. *)
     | EField { obj = (EConstructor { name = m; _ } | EVar { name = m; _ }); field; _ }
       when (let q = m ^ "." ^ field in
-            Type_system.stdlib_capabilities_of q <> [] || List.mem_assoc q func_caps) ->
+            Type_system.stdlib_capabilities_of q <> []
+            || List.mem_assoc q func_caps
+            (* CAP-QUALIFIED (2026-07-05 fresh review): a module-qualified stdlib
+               call whose registry key is the BARE exposed name — `Time.nowMillis`,
+               `Time.durationMs`, `Random.randomInt`, `Env.env` — must charge the
+               SAME capability as the bare call.  Previously the lookup used only
+               the `Module.name` key, which is registered for the always-qualified
+               stdlib fns (JWT/HttpClient/UUID) but NOT for the bare-exposed ones,
+               so `import Tesl.Time` + `Time.nowMillis` under `requires []` silently
+               bypassed the `time` capability (the qualified analog of the
+               cross-module type-identity hole).  Gated on `m` being a known Tesl
+               stdlib module so a record field access (`someRecord.env`) is never
+               mischarged. *)
+            || (Type_system.is_known_tesl_module ("Tesl." ^ m)
+                && Type_system.stdlib_capabilities_of field <> [])) ->
       let q = m ^ "." ^ field in
       (match List.assoc_opt q func_caps with
        | Some caps -> caps
-       | None -> Type_system.stdlib_capabilities_of q) @ acc
+       | None ->
+         (match Type_system.stdlib_capabilities_of q with
+          | [] when Type_system.is_known_tesl_module ("Tesl." ^ m) ->
+            Type_system.stdlib_capabilities_of field
+          | qcaps -> qcaps)) @ acc
     (* Effect forms: prepend the fixed data-table token, then descend into
        children via the shared traversal. *)
     | EEnqueue _ | EPublish _ | ETelemetry _ | ESendEmail _ ->

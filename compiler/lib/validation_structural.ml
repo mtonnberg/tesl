@@ -1660,19 +1660,45 @@ let check_server_completeness ?(extra_funcs = []) (decls : top_decl list) : vali
     ) decls
     @ List.map (fun (name, info) -> (name, ImportedHandler info)) extra_funcs
   in
-  let auth_preds = collect_auth_predicates decls extra_funcs in
-  (* Per-auth-function produced predicates, so we can check that an endpoint's
-     specific `auth via <fn>` produces exactly the predicate the handler requires
-     — not merely *some* predicate from the module-global auth union. Closes the
+  (* C4 (2026-07-05 fresh review): the auth-wiring integrity checks (auth-drop,
+     positional-slot-first, predicate over-declaration/mismatch) are all gated on
+     `auth_preds <> []`, and auth predicates were collected ONLY from `AuthKind`
+     functions.  But the compiler BLESSES `check` functions as an endpoint's
+     `auth ... via` producer (see [check_auth_proof_via]).  An app that
+     authenticates via a `check` therefore had `auth_preds = []`, silently
+     DISABLING every auth check — including a positional-slot IDOR.  The fix keys
+     the gate on what ENDPOINTS DECLARE, not on the producer's kind: seed
+     [auth_preds] with the predicates declared on every endpoint `auth` clause,
+     and let [auth_fn_preds] resolve `check` producers too (any `check`/`auth`
+     function may appear as an auth `via`). *)
+  let endpoint_auth_preds =
+    List.concat_map (fun (_, (api : api_form)) ->
+      List.concat_map (fun (ep : api_endpoint) ->
+        match ep.auth with
+        | Some a -> (match a.binding.proof_ann with Some p -> proof_predicates p | None -> [])
+        | None -> []
+      ) api.endpoints
+    ) apis
+  in
+  let auth_preds =
+    List.sort_uniq String.compare
+      (collect_auth_predicates decls extra_funcs @ endpoint_auth_preds)
+  in
+  (* Per-producer predicates, so we can check that an endpoint's specific
+     `auth via <fn>` produces exactly the predicate the handler requires — not
+     merely *some* predicate from the module-global auth union. Closes the
      cross-predicate privilege-escalation hole (endpoint runs cookieAuth →
-     Authenticated, handler requires IsAdmin). *)
+     Authenticated, handler requires IsAdmin).  Includes `check` producers (C4)
+     since an auth `via` may reference a check function. *)
   let auth_fn_preds : (string * string list) list =
     List.filter_map (function
-      | DFunc fd when fd.kind = AuthKind -> Some (fd.name, pred_names_of_return_spec fd.return_spec)
+      | DFunc fd when fd.kind = AuthKind || fd.kind = CheckKind ->
+        Some (fd.name, pred_names_of_return_spec fd.return_spec)
       | _ -> None
     ) decls
     @ List.filter_map (fun (name, info : string * func_info) ->
-        if info.fi_kind = AuthKind then Some (name, pred_names_of_return_spec info.fi_return) else None
+        if info.fi_kind = AuthKind || info.fi_kind = CheckKind
+        then Some (name, pred_names_of_return_spec info.fi_return) else None
       ) extra_funcs
   in
   let errors = ref [] in

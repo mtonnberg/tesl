@@ -912,35 +912,40 @@ let check_fn_return_proof_annotations
         let subject = match List.assoc_opt p.name subject_env with Some s -> s | None -> p.name in
         (p.name, subject)
       ) fd.params in
+      (* ROOT A / C2 (2026-07-05 fresh review): named-pack discharge counts the
+         proofs the RETURNED expression carries at its own subject.
+
+         The former code ALSO harvested every proof stored under the `_` key
+         (produced by anonymous `let (_ ::: p) = check f arg` destructurings) and
+         re-subjected them onto the returned value via [fix_subject] — laundering a
+         fact about a validated-but-DISCARDED value onto an unrelated returned
+         value (`fn f(dummy,a,b) -> Int ? IsPositive = let (_ ::: p) = check c (a+b)
+         in dummy`).  That harvest is deleted: a proof discharged onto a `_` binding
+         was explicitly thrown away and must not resurface on the return. *)
       let carried =
-        let carried_facts =
-        let base = proofs_of_expr result_subject funcs subject_env proof_env expr in
-        (* For EOk { value = EVar name; proof = p }, the check call's proofs
-           are stored under "_" in proof_env (auto-unpack lets).  Supplement
-           carried proofs with those entries, substituting "_" subjects. *)
-        let all_underscore_proofs = List.concat (
-          List.filter_map (fun (k, v) -> if k = "_" then Some v else None) proof_env
-        ) in
-        if all_underscore_proofs <> [] then
-          let fix_subject p =
-            let rec go = function
-              | PredApp { pred; args; loc } ->
-                PredApp { pred; args = List.map (fun a -> if a = "_" then result_subject else a) args; loc }
-              | PredAnd { left; right; loc } ->
-                PredAnd { left = go left; right = go right; loc }
-            in go p
-          in
-          let fixed = List.map (Proof_kernel.pass_through fix_subject) all_underscore_proofs in
-          let seen_keys = ref (List.map (fun p -> proof_key (Proof_kernel.fact_of p)) base) in
-          let deduped = List.filter (fun p ->
-            let k = proof_key (Proof_kernel.fact_of p) in
-            if List.mem k !seen_keys then false
-            else (seen_keys := k :: !seen_keys; true)
-          ) fixed in
-          base @ deduped
-        else base
-        in
-        List.map Proof_kernel.fact_of carried_facts
+        List.map Proof_kernel.fact_of
+          (proofs_of_expr result_subject funcs subject_env proof_env expr)
+      in
+      (* Subject-precise guard for the `value ::: <foreign fact>` (EOk) return
+         form (ROOT A / C2, pl-npdirect).  `dummy ::: detachFact proven` attaches
+         `proven`'s fact onto the unrelated `dummy`; §7.7 says re-attachment does
+         NOT retarget a proof, so the returned value does not actually carry it.
+         When the body is an explicit attach whose value-subject is a plain
+         parameter that carries no proof of its own, the entity/cargo proof must
+         hold for THAT subject exactly — the all-subjects search below is
+         suppressed so a fact about a sibling value cannot be laundered in. *)
+      let attached_value_subject =
+        match expr with
+        | EOk { value; _ } -> subject_of_expr subject_env value
+        | _ -> None
+      in
+      let param_subjects =
+        List.filter_map (fun (p : binding) -> List.assoc_opt p.name subject_env) fd.params
+      in
+      let is_bare_param_attach =
+        match attached_value_subject with
+        | Some s -> List.mem s param_subjects
+        | None -> false
       in
       let kind_label = match fd.kind with
         | HandlerKind -> "handler" | WorkerKind -> "worker" | _ -> "fn" in
@@ -979,10 +984,24 @@ let check_fn_return_proof_annotations
          let expanded = expand_entity_proof_group proof in
          let required = subst_proof (("_entity", result_subject) :: param_mapping) expanded in
          if not (proof_matches required carried) then begin
-           (* When subject_of_expr failed (result_subject = "__named_pack_result"),
-              try each unique subject name from the carried proofs as the entity subject.
-              The entity proof says "the returned value has this proof" — if the carried
-              proofs use a specific name, that's the actual entity identity. *)
+           (* When subject_of_expr could not pin the returned value's subject
+              (result_subject = "__named_pack_result"), OR the naive entity-append
+              placed `_entity` in the wrong argument slot for a multi-arg fact
+              (`BoundedBy (n, limit)` returned as `? BoundedBy lim`), recover by
+              trying the returned expression's OWN carried-proof subjects as the
+              entity subject and by permuting argument positions.
+
+              ROOT A / C2 (2026-07-05): this subject-search is what a `? P` launder
+              abused — `dummy ::: detachFact proven` returns the bare parameter
+              `dummy` while carrying a fact about the sibling `proven`, and the
+              search happily bound `_entity := proven`.  §7.7 (re-attachment does
+              not retarget) means the returned value does NOT carry that fact, so
+              when the body is exactly that shape ([is_bare_param_attach]: an
+              explicit `param ::: <foreign fact>`) the search is SUPPRESSED and the
+              proof must hold for the parameter's own subject — which it does not,
+              so the launder is rejected.  Legit passthroughs (a bare variable, a
+              check-call, or `local ::: establishedFact` where the local is derived
+              from the input) keep the search. *)
            let flat_carried = List.concat_map flatten_proof_conj carried in
            let carried_subjects =
              List.filter_map (fun (p : proof_expr) ->
@@ -991,8 +1010,6 @@ let check_fn_return_proof_annotations
                | _ -> None
              ) flat_carried
            in
-           (* Also collect subjects from ALL argument positions, not just last,
-              since the entity may appear in any position depending on the fact declaration *)
            let all_arg_subjects =
              List.concat_map (fun (p : proof_expr) ->
                match p with
@@ -1001,17 +1018,16 @@ let check_fn_return_proof_annotations
              ) flat_carried
            in
            let unique_subjects = List.sort_uniq String.compare (carried_subjects @ all_arg_subjects) in
-           let found_match = List.exists (fun subj ->
-             let alt_required = subst_proof (("_entity", subj) :: param_mapping) expanded in
-             proof_matches alt_required carried
-           ) unique_subjects in
-           (* If still no match, try normalising carried proofs to entity-proof arg order:
-              explicit args first, entity subject last (matching expand_entity_proof_group) *)
-           let found_match = found_match || (
+           let found_match =
+             (not is_bare_param_attach)
+             && List.exists (fun subj ->
+               let alt_required = subst_proof (("_entity", subj) :: param_mapping) expanded in
+               proof_matches alt_required carried
+             ) unique_subjects in
+           let found_match = found_match || ((not is_bare_param_attach) && (
              let reorder_to_entity_order (p : proof_expr) =
                match p with
                | PredApp { pred; args; loc } when List.length args >= 2 ->
-                 (* For each possible entity position, try moving it to last *)
                  let n = List.length args in
                  let try_pos i =
                    let entity_val = List.nth args i in
@@ -1027,7 +1043,7 @@ let check_fn_return_proof_annotations
                let alt_required = subst_proof (("_entity", subj) :: param_mapping) expanded in
                proof_matches alt_required reordered_variants
              ) unique_subjects
-           ) in
+           )) in
            if not found_match then
              check_required "entity" required
          end
@@ -1058,24 +1074,6 @@ let check_fn_return_proof_annotations
          let required_proof = match b.proof_ann with Some p -> p | None -> PredApp { pred = ""; args = []; loc = ret_loc } in
          let proof_env = build_initial_proof_env fd.params in
          let subject_env = build_initial_subject_env fd.params in
-         let record_field_map = List.filter_map (function
-           | DRecord r -> Some (r.name, r.fields)
-           | DEntity e -> Some (e.name, e.fields)
-           | _ -> None
-         ) decls in
-         let param_type_names = List.filter_map (fun (p : binding) ->
-           match p.type_expr with
-           | TName { name; _ } -> Some name
-           | _ -> None
-         ) fd.params in
-         let field_carried = List.concat_map (fun tn ->
-           match List.assoc_opt tn record_field_map with
-           | None -> []
-           | Some fields ->
-             List.filter_map (fun (f : field_def) ->
-               match f.proof_ann with Some p -> Some p | None -> None
-             ) fields
-         ) param_type_names in
          let binding_subject = match List.assoc_opt b.name subject_env with Some s -> s | None -> b.name in
          let required_norm = subst_proof [(b.name, binding_subject)] required_proof in
          let required_pred = match required_norm with PredApp { pred; _ } -> Some pred | _ -> None in
@@ -1094,8 +1092,6 @@ let check_fn_return_proof_annotations
            | Some ("FromQueue" | "FromDeadQueue") -> false
            | Some p -> List.mem p stdlib_auto_preds
            | None -> false in
-         let all_carried =
-           List.map Proof_kernel.fact_of (List.concat_map snd proof_env) @ field_carried in
          (* GDP-FORGE-1 fix (formal-review CRITICAL).  A `fn`/`handler`/`worker`
             may legitimately introduce its declared return proof in the body via
             `attachFact` (with an `establish`-produced Fact) or an `ok v ::: P`.
@@ -1113,7 +1109,21 @@ let check_fn_return_proof_annotations
             which resolve `attachFact value evidence` to the evidence's actual
             predicate) and require every returning leaf to CARRY the declared
             predicate.  A body that only attaches an unrelated fact no longer
-            escapes the forgery rejection. *)
+            escapes the forgery rejection.
+
+            GDP-FORGE-2 fix (2026-07-05 fresh review, ROOT A).  The previous gate
+            ALSO accepted the body whenever the required proof was merely PRESENT
+            among the flat set of all in-scope carried proofs (parameter proofs +
+            proofs declared on fields of parameter types), regardless of what the
+            body actually RETURNS.  Naming the return binder to collide with an
+            in-scope subject (e.g. `fn f(x: Int ::: IsPositive x) -> x: Int :::
+            IsPositive x = 0 - 999`) forged the fact onto an arbitrary value.
+            That flat `proof_matches required_norm all_carried` short-circuit is
+            deleted: discharge now flows SOLELY through [body_carries_required],
+            the subject-identity-precise dataflow walk below (or the FromDb
+            producing-site gate [is_stdlib_auto]).  Fail-closed: an unrecognised
+            return shape falls through to the leaf, which requires the returned
+            expression itself to carry the declared proof. *)
          let type_env0 =
            List.map (fun (p : binding) -> (p.name, p.type_expr)) fd.params in
          let rec body_carries_required type_env subject_env proof_env (e : expr) : bool =
@@ -1154,7 +1164,6 @@ let check_fn_return_proof_annotations
              proof_matches required_here carried
          in
          if not is_stdlib_auto
-            && not (proof_matches required_norm all_carried)
             && not (body_carries_required type_env0 subject_env proof_env fd.body) then begin
            let proof_str = pp_proof required_proof in
            let kw = match fd.kind with

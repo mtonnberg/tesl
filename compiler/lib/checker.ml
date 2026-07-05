@@ -925,15 +925,30 @@ let load_imported_records (m : module_form) : (string * record_def) list =
           | ImportAll -> true
           | ImportExposing names -> List.mem name names
         in
-        List.filter_map (function
-          | DRecord r when wants r.name -> Some (r.name, build_record_def r)
-          | DEntity e when wants e.name ->
-            Some (e.name,
+        (* C6 (2026-07-05 fresh review): register each imported record/entity under
+           BOTH its bare name AND its module-qualified name (`Module.Type`).  A
+           module-qualified type reference (`x: Sandbox3.ARecord2`, valid after any
+           `import Sandbox3`) parses to `TCon "Sandbox3.ARecord2"`, but only bare
+           keys existed — so qualified field access fell through to the `fresh ()`
+           T_ANY wildcard, silently disabling type-checking (`w.name + 1` on a
+           String field compiled clean).  The qualified key is per-module, so two
+           modules that both define `ARecord2` (Sandbox2 with `foo2`, Sandbox3 with
+           `foo3`) resolve to their OWN fields instead of colliding under the bare
+           name.  The bare key is kept (gated on `wants`) for the exposing-import
+           access style. *)
+        let qualify name = imp.module_name ^ "." ^ name in
+        List.concat_map (function
+          | DRecord r ->
+            let rd = build_record_def r in
+            (qualify r.name, rd) :: (if wants r.name then [(r.name, rd)] else [])
+          | DEntity e ->
+            let rd =
               { rd_name = e.name;
                 rd_fields =
                   List.map (fun (f : field_def) -> (f.name, ty_of_type_expr f.type_expr))
-                    e.fields })
-          | _ -> None
+                    e.fields } in
+            (qualify e.name, rd) :: (if wants e.name then [(e.name, rd)] else [])
+          | _ -> []
         ) imported.decls
   ) m.imports
 

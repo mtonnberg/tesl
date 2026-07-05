@@ -997,12 +997,20 @@ let stdlib_home_module_of (name : string) : string option =
       them, since a user function may legitimately shadow those spellings.
 
     Pure stdlib functions deliberately absent (no capability): the PosixMillis
-    arithmetic ops `durationMs`/`diffMs`/`addMs`/`subtractMs`/`formatTime`/
-    `secondsToPosix`/`posixToMillis` (only clock *reads* — `nowMillis`/`now` — take
-    `time`); constructors and accessors of every module. *)
+    arithmetic ops `diffMs`/`addMs`/`subtractMs`/`formatTime`/`secondsToPosix`/
+    `posixToMillis` (clock *reads* — `nowMillis`/`now`/`durationMs`, the last of
+    which computes "elapsed since a past timestamp" and so reads NOW — take
+    `time`); constructors and accessors of every module.
+
+    Drift note (2026-07-05 fresh review): `durationMs` was in the "deliberately
+    absent" list above, but its runtime (`tesl/time.rkt:42-43`) calls
+    `require-capabilities! (list time)`.  A handler declaring `requires []` could
+    therefore read the wall clock — the compile-time table must mirror the runtime
+    self-checks.  This table is a hand-maintained mirror of the per-module
+    `require-capabilities!` calls; when adding a clock/IO stdlib op, update BOTH. *)
 let stdlib_capabilities : (string * string list) list = [
   (* Time — reading the wall clock is an effect. *)
-  "now", ["time"]; "nowMillis", ["time"];
+  "now", ["time"]; "nowMillis", ["time"]; "durationMs", ["time"];
   (* Random *)
   "randomInt", ["random"]; "randomFloat", ["random"];
   "generatePrefixedId", ["random"];

@@ -23,7 +23,10 @@ let check name ok =
    [Type_system.stdlib_capabilities] must agree with it EXACTLY (both directions),
    so adding/removing a capability-bearing name without updating the intent fails. *)
 let oracle = [
-  "now", ["time"]; "nowMillis", ["time"];
+  (* durationMs computes "elapsed since a past timestamp" and so READS the wall
+     clock — its runtime (tesl/time.rkt:42-43) calls `require-capabilities! time`.
+     C4/cap drift-fix (2026-07-05): it must charge `time`, like now/nowMillis. *)
+  "now", ["time"]; "nowMillis", ["time"]; "durationMs", ["time"];
   "randomInt", ["random"]; "randomFloat", ["random"]; "generatePrefixedId", ["random"];
   "env", ["envRead"]; "envInt", ["envRead"];
   "envString", ["envRead"]; "requireEnv", ["envRead"];
@@ -58,9 +61,9 @@ let () =
   List.iter (fun n ->
     check (Printf.sprintf "pure `%s` introduces no capability" n)
       (Type_system.stdlib_capabilities_of n = []))
-    [ "durationMs"; "diffMs"; "addMs"; "subtractMs"; "formatTime";
+    [ "diffMs"; "addMs"; "subtractMs"; "formatTime";
       "secondsToPosix"; "posixToMillis";
-      "Time.durationMs"; "Time.diffMs"; "Time.now"; "Time.nowMillis" ];
+      "Time.diffMs" ];
 
   (* 5. every capability the registry mentions is a real capability token. *)
   let known_caps =

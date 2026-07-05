@@ -572,6 +572,16 @@ let check_name_shadowing (m : module_form) : validation_error list =
       errors := parameter_shadow_errors seed_names fd.params @ !errors;
       errors := check_name_shadowing_expr seen fd.body @ !errors;
       errors := check_exists_witness_shadowing [] fd.body @ !errors
+    | DConst c ->
+      (* C7 (2026-07-05 fresh review): §7.4 no-shadowing is PROGRAM-WIDE, but the
+         RHS of a top-level value binding (`name = expr`) was never traversed —
+         it fell into the `_ -> ()` arm below — so a `let`/`case`/lambda binder in
+         a top-level const could shadow top-level names, sibling binders, and even
+         `check`/`auth`/`establish` function names (e.g. `bar = (fn(foo: Int) -> …)`
+         with a top-level `foo`).  Traverse the const RHS with the same seed as a
+         function body so the invariant holds for every binder in the program. *)
+      errors := check_name_shadowing_expr seed_names c.value @ !errors;
+      errors := check_exists_witness_shadowing [] c.value @ !errors
     | DTest tf ->
       errors := check_name_shadowing_test_stmts seed_names tf.stmts @ !errors
     | DApiTest atf ->

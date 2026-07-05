@@ -2512,15 +2512,59 @@ let check_existential_proof_enforcement ?(extra_funcs = []) (decls : top_decl li
                    tests and must keep compiling.) *)
                 []
               | _ ->
-                (* Non-identifier body: accept a recognised proof-carrier
-                   (EOk / check / select / insert / attachFact / …); reject a
-                   literal, record literal or plain-function result. *)
-                if looks_proof_carrying funcs body then []
+                (* C5 (2026-07-05 fresh review): fail-CLOSED, decide by PROOF
+                   CONTENT.  The former gate accepted any body that merely
+                   `looks_proof_carrying` (EOk / check / select / insert /
+                   attachFact / bare constructor) WITHOUT checking WHICH fact it
+                   carried, so `exists w => check tagWithUnrelatedFact v` and even
+                   `exists w => SomeConstructor` forged the declared proof (incl.
+                   FromDb provenance) on unvalidated data.  We now accept only when
+                   the body PROVABLY carries the declared predicate(s): either the
+                   proof engine resolves them on the body, or — for framework
+                   provenance not modelled as a first-class proof — the returned
+                   value flows from a real DB/queue site.  Anything else (wrong
+                   fact, unresolved, literal, record, plain result, or a
+                   proof-shaped call carrying the wrong predicate) is rejected. *)
+                let carried =
+                  (* Resolve the body's predicates threading the enclosing `let`
+                     bindings, so an attached proof VARIABLE (`let p = pp n in
+                     v ::: p`, where `pp` is an establish) resolves to its
+                     underlying predicate rather than the bare proof-var spelling.
+                     [resolved_preds] alone uses a params-only env and would read
+                     `n ::: p` as carrying `p`. *)
+                  let se = build_initial_subject_env fd.params in
+                  let pe =
+                    List.fold_left (fun pe (nm, ve) ->
+                      let ps = (try proofs_of_expr nm funcs se pe ve with _ -> []) in
+                      if ps = [] then pe else (nm, ps) :: pe)
+                      (build_initial_proof_env fd.params) (List.rev local_env)
+                  in
+                  (try List.concat_map proof_predicates
+                         (List.map Proof_kernel.fact_of (proofs_of_expr "_pack" funcs se pe body))
+                   with _ -> [])
+                in
+                let user_fn_names =
+                  List.filter_map (function DFunc d -> Some d.name | _ -> None) decls in
+                let is_fromdb_family =
+                  List.exists (fun p -> List.mem p ["FromDb"; "FromQueue"; "FromDeadQueue"])
+                    declared_preds in
+                if carried <> [] && List.for_all (fun p -> List.mem p carried) declared_preds
+                then []
+                else if is_fromdb_family
+                        && return_value_flows_from_db_site ~shadowed:user_fn_names body
+                then []
+                else if is_wrong_fact carried then
+                  [ make_error (body_loc body) ~hint
+                      (Printf.sprintf
+                         "existential pack body carries proof(s) `%s` but must carry the proof \
+                          `%s` declared in the return spec"
+                         (String.concat ", " carried) (pp_proof declared_proof)) ]
                 else
                   [ make_error (body_loc body) ~hint
                       (Printf.sprintf
                          "existential pack body must carry the proof `%s` declared in the return \
-                          spec (a literal, record, or plain function result carries no proof)"
+                          spec (a literal, record, plain function result, or a proof-carrying \
+                          value that does not establish this fact carries no such proof)"
                          (pp_proof declared_proof)) ]
             ) (packed_body_exprs_with_locals fd.body)
           | None -> [])

@@ -404,10 +404,19 @@ let extract_col_eq_var (arg : string) : (string * string) option =
 let extract_id_eq_var (arg : string) : string option =
   Option.map snd (extract_col_eq_var arg)
 
-(** Extract the variable from a FromDb proof's (Id == X) argument. *)
+(** Extract the variable from a FromDb proof's (Id == X) argument.
+
+    C3 (2026-07-05 fresh review): scan ALL args, not only the single-arg spelling.
+    The canonical two-argument entity form `FromDb (Id == pk) entity` (§7.13) put
+    the `(Id == pk)` in arg 0 and the entity subject in arg 1, so a `[arg]`-only
+    match returned None and the pk/WHERE verifier was silently SKIPPED — forging
+    provenance.  This now mirrors the admitting gate ({!check_provenance_spelling}
+    accepts if ANY arg is a `Col == subject` form), so what is ADMITTED is exactly
+    what is CHECKED.  [extract_id_eq_var] returns None for the bare entity-subject
+    arg, so [find_map] selects the `(Id == pk)` arg. *)
 let fromdb_pk_var (proof : proof_expr) : string option =
   match proof with
-  | PredApp { pred = "FromDb"; args = [arg]; _ } -> extract_id_eq_var arg
+  | PredApp { pred = "FromDb"; args; _ } -> List.find_map extract_id_eq_var args
   | _ -> None
 
 (** Extract the (column, rhs) pair from a FromDb proof, descending PredAnd to
@@ -419,7 +428,9 @@ let fromdb_pk_var (proof : proof_expr) : string option =
     string. *)
 let rec fromdb_col_var (proof : proof_expr) : (string * string) option =
   match proof with
-  | PredApp { pred = "FromDb"; args = [arg]; _ } -> extract_col_eq_var arg
+  (* C3 (2026-07-05): scan ALL args so the two-argument entity spelling
+     `FromDb (Col == x) entity` is unified, not skipped (see {!fromdb_pk_var}). *)
+  | PredApp { pred = "FromDb"; args; _ } -> List.find_map extract_col_eq_var args
   | PredAnd { left; right; _ } ->
     (match fromdb_col_var left with
      | Some _ as r -> r
