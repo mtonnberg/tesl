@@ -126,7 +126,7 @@ phase_started_at=$SECONDS
 
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=11
+TOTAL_PHASES=12
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -1142,6 +1142,55 @@ else
         aggregate_fail=1
         phase_end FAIL
     fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Phase 12 — Boot smoke (App activation path)
+# ══════════════════════════════════════════════════════════════════════════════
+# `tesl check` and `tesl test` never run `main`, so a codegen bug in the App
+# ACTIVATION path (start-workers! / start-dead-workers! / serve / sse) crashes only
+# at `tesl run` — invisible to the rest of the gate. This is exactly how issue #15
+# (start-dead-workers! handed #:concurrency) slipped through. Boot an activation-
+# heavy fixture (queue + single-threaded dead-letter worker + numberOfWorkers +
+# serve) and confirm it reaches the serving banner, which is printed only AFTER
+# every activation call. A boot crash exits before the banner → FAIL.
+phase_begin "Boot smoke (App activation via tesl run)"
+boot_smoke_src="$SCRIPT_DIR/scripts/boot-smoke/app.tesl"
+if ! command -v racket >/dev/null 2>&1; then
+    printf "  %s⚠%s  racket not on PATH — skipping boot smoke\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+elif [ ! -x "$_main_exe" ]; then
+    printf "  %s⚠%s  compiler binary missing — skipping boot smoke\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+elif [ ! -f "$boot_smoke_src" ]; then
+    printf "  %s⚠%s  boot-smoke fixture missing — skipping\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+else
+    boot_rkt="$(mktemp "${TMPDIR:-/tmp}/tesl-boot-smoke.XXXXXX.rkt")"
+    boot_out="$(mktemp "${TMPDIR:-/tmp}/tesl-boot-out.XXXXXX")"
+    boot_err="$(mktemp "${TMPDIR:-/tmp}/tesl-boot-err.XXXXXX")"
+    boot_port="${TESL_BOOT_SMOKE_PORT:-8199}"
+    if ! TESL_REPO_ROOT="$SCRIPT_DIR" "$_main_exe" "$boot_smoke_src" > "$boot_rkt" 2>"$boot_err"; then
+        printf "  %s✗%s  boot-smoke fixture failed to compile\n" "$C_RED" "$C_RESET"
+        sed 's/^/      /' "$boot_err" | head -n 20
+        phase_end FAIL
+    else
+        # Run under `timeout -s KILL` so a healthy (blocking) server is force-killed
+        # and can never hang the gate; a boot crash exits on its own before then.
+        # The serving banner is the positive signal (printed after all activation).
+        PORT="$boot_port" TESL_REPO_ROOT="$SCRIPT_DIR" \
+          run_with_optional_nix_shell timeout -s KILL 12 racket "$boot_rkt" \
+          > "$boot_out" 2>"$boot_err" || true
+        if grep -q "Web application is running at" "$boot_out"; then
+            printf "  %s✓%s  App booted past activation (queue+dead-worker+numberOfWorkers+serve)\n" "$C_GREEN" "$C_RESET"
+            phase_end OK
+        else
+            printf "  %s✗%s  App crashed on boot (activation path) — never reached serving\n" "$C_RED" "$C_RESET"
+            sed 's/^/      /' "$boot_err" | tail -n 20
+            phase_end FAIL
+        fi
+    fi
+    rm -f "$boot_rkt" "$boot_out" "$boot_err"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════

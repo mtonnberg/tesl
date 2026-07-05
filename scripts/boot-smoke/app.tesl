@@ -1,0 +1,31 @@
+#lang tesl
+# Boot-smoke fixture for ci.sh: exercises the App ACTIVATION path (queue worker +
+# single-threaded dead-letter worker + numberOfWorkers + serve) that `tesl check`
+# and `tesl test` never run — only `tesl run` (main → App) does. A codegen bug in
+# activation (e.g. issue #15: start-dead-workers! given #:concurrency) crashes at
+# boot; the CI phase boots this and polls /health to catch that class.
+module App exposing [S]
+import Tesl.Prelude exposing [String, Int, Bool(..)]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Env exposing [envInt, envRead]
+import Tesl.Queue exposing [Queue, Job, FromQueue, FromDeadQueue]
+import Tesl.App exposing [App]
+
+database DB = Database { schema: "app" entities: [] backend: Memory }
+
+record J { x: String }
+worker w(job: J ::: FromQueue (Id == jobId) job) requires [] =
+  job
+deadWorker d(job: J ::: FromDeadQueue (Id == jobId) job) requires [] =
+  job
+queue Q = Queue { database: DB  jobs: [Job J w (Something d)]  numberOfWorkers: 4 }
+
+handler health() -> Int requires [] =
+  1
+api A { get "/health" -> Int }
+server S for A { health = health }
+
+main() -> App requires [envRead] =
+  let port = envInt "PORT" 8199
+  App { database: DB  api: S  port: port  queues: [Q] }
