@@ -1179,6 +1179,11 @@ case "$CMD" in
     RACKET_PID=""
     PREV_SNAP=""
     trap '[ -n "$RACKET_PID" ] && kill "$RACKET_PID" 2>/dev/null' EXIT
+    # #20 (same class): a bare SIGTERM/SIGINT/SIGHUP to `tesl watch` would
+    # otherwise terminate the shell WITHOUT running the EXIT trap, orphaning the
+    # backgrounded server. Route these signals through `exit` so the EXIT cleanup
+    # above runs and the child server is stopped.
+    trap 'exit' TERM INT HUP
 
     _tesl_dep_snapshot() {
       local f="$1" deps
