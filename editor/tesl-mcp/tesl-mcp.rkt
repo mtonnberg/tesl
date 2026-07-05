@@ -151,9 +151,16 @@
   (define base (list "debug-inspect" file))
   (define with-bps
     (append base (append-map (lambda (s) (list "--break-at" s)) specs)))
-  (if (and (string? mode) (member mode '("program" "test")))
-      (append with-bps (list "--mode" mode))
-      with-bps))
+  (define with-mode
+    (if (and (string? mode) (member mode '("program" "test")))
+        (append with-bps (list "--mode" mode))
+        with-bps))
+  ;; `continue: true` → headless F5: stop at each breakpoint in turn, resume after
+  ;; each, and let the program finish (issue #16). Result becomes
+  ;; {mode:"continue", snapshots:[…], completed}. Absent → one-shot first-stop dump.
+  (if (eq? (arg-ref args 'continue) #t)
+      (append with-mode (list "--continue"))
+      with-mode))
 
 ;; ── proof_obligations: derive from --agent-context-json ────────────────────────
 
@@ -269,7 +276,12 @@
                   "'breakpoints' (list of {line, condition?, hit?}). condition is a "
                   "boolean over locals (e.g. \"n == -10\"); hit is a hit-count spec "
                   "(==|>=|<=|>|<|% N). Optional 'mode' is \"program\" (default) or "
-                  "\"test\" to run inside the file's test blocks.")
+                  "\"test\" to run inside the file's test blocks. Set 'continue': true "
+                  "for headless F5 — stop at EACH breakpoint in turn, resume after "
+                  "each, and let the program finish; the result then has "
+                  "{mode:\"continue\", snapshots:[…], completed} instead of a single "
+                  "first-stop dump (so multiple breakpoints all fire and a handler's "
+                  "response actually completes).")
     'inputSchema
     (schema
      (hasheq
@@ -281,7 +293,9 @@
                                                   'condition str-prop
                                                   'hit str-prop)
                                           '("line")))
-      'mode (hasheq 'type "string" 'enum '("program" "test")))
+      'mode (hasheq 'type "string" 'enum '("program" "test"))
+      'continue (hasheq 'type "boolean"
+                        'description "Headless F5: run through every breakpoint (resume after each) until the program completes; result is {mode:\"continue\", snapshots:[…], completed}."))
      '("file"))
     'run (lambda (compiler args)
            (compiler-json-result compiler (debug-inspect-args args))))))

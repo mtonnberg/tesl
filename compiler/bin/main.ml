@@ -1289,8 +1289,9 @@ let () =
   | "debug-inspect" :: filename :: rest
     when not (String.length filename > 2 && filename.[0] = '-') ->
     let inspect_usage () =
-      Printf.eprintf "usage: tesl debug-inspect <file.tesl> --break-at SPEC [--break-at SPEC ...] [--when EXPR] [--hit SPEC] [--mode program|test]\n";
-      Printf.eprintf "  SPEC := LINE | LINE:COL | \"LINE: <cond-expr>\" | \"LINE: <hit-spec>\" | L1,L2,L3\n"
+      Printf.eprintf "usage: tesl debug-inspect <file.tesl> --break-at SPEC [--break-at SPEC ...] [--when EXPR] [--hit SPEC] [--mode program|test] [--continue]\n";
+      Printf.eprintf "  SPEC := LINE | LINE:COL | \"LINE: <cond-expr>\" | \"LINE: <hit-spec>\" | L1,L2,L3\n";
+      Printf.eprintf "  --continue : stop at each breakpoint in turn, resume after each, and let the program finish (headless F5); emits {snapshots:[...],completed}\n"
     in
     (* A single --break-at spec may carry several comma-separated bare lines OR one
        conditional/hit breakpoint.  We classify the text after the first ':' the
@@ -1346,6 +1347,7 @@ let () =
              let part = String.trim part in
              if part = "" then None else parse_chunk part)
     in
+    let continue_mode = ref false in
     let rec parse_opts bps when_opt hit_opt mode = function
       | [] -> (List.rev bps, when_opt, hit_opt, mode)
       | "--break-at" :: spec :: tl ->
@@ -1359,6 +1361,9 @@ let () =
       | "--when" :: w :: tl -> parse_opts bps (Some w) hit_opt mode tl
       | "--hit"  :: h :: tl -> parse_opts bps when_opt (Some h) mode tl
       | "--mode" :: m :: tl -> parse_opts bps when_opt hit_opt (Some m) tl
+      (* Headless F5: stop at each breakpoint in turn, resume after each, and let
+         the program finish — instead of one-shot (issue #16). *)
+      | ("--continue" | "--step-through") :: tl -> continue_mode := true; parse_opts bps when_opt hit_opt mode tl
       | other :: _ ->
         Printf.eprintf "%serror%s: unexpected argument to debug-inspect: %s\n"
           (col "1;31") (col "0") other;
@@ -1387,7 +1392,7 @@ let () =
           (col "1;31") (col "0") bad;
         exit 2
     in
-    (match Compile.debug_inspect ~root_path ~breakpoints ~mode filename with
+    (match Compile.debug_inspect ~root_path ~continue_mode:!continue_mode ~breakpoints ~mode filename with
      | Compile.InspectDiags diags -> List.iter print_diagnostic diags; exit 1
      | Compile.InspectErr msg ->
        Printf.eprintf "%serror%s: %s\n" (col "1;31") (col "0") msg; exit 1)

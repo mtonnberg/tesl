@@ -362,7 +362,18 @@
 ;; reports it as stopped=false with a reason instead.
 ;; `bps` is a list of bp-spec (the agent's requested breakpoints) OR — for
 ;; back-compat with the legacy single-line callers — a bare integer line.
-(define (run-headless-inspect compiled-path src-path bps [mode "program"])
+;; Continue-mode result: one snapshot per breakpoint HIT (in order), plus whether
+;; the program ran to completion. This is the headless equivalent of DAP F5 — the
+;; program is RESUMED after each stop (not killed), so multiple --break-at all
+;; fire and the computation / HTTP response actually completes (issue #16).
+(define (build-continue-result snapshots completed?)
+  (hasheq 'version   headless-version
+          'mode      "continue"
+          'completed completed?
+          'breakpointsHit (length snapshots)
+          'snapshots snapshots))
+
+(define (run-headless-inspect compiled-path src-path bps [mode "program"] #:continue? [continue? #f])
   (putenv "TESL_DEBUG" "1")
   (define specs
     (cond [(list? bps) bps]
@@ -388,6 +399,15 @@
   (define captured-event (box #f))
   (define prog-thread (box #f))
   (define done (make-semaphore 0))
+  ;; Continue-mode state: snapshots accumulated newest-first, and whether the
+  ;; program finished (vs. still running — e.g. a `serve`d app that never returns,
+  ;; where we stop after an idle window and report completed=#f).
+  (define snapshots-box (box '()))
+  (define completed-box (box #f))
+  (define idle-secs
+    (let ([e (getenv "TESL_DEBUG_INSPECT_IDLE_MS")])
+      (cond [(and e (string->number e)) (/ (string->number e) 1000.0)]
+            [else 15.0])))
 
   ;; The debuggee's stdout/stderr are routed to nowhere for the WHOLE lifetime of
   ;; the run — user prints (and the rackunit test runner's summary lines) must
@@ -414,23 +434,49 @@
               ;; Program finished without hitting the breakpoint.
               (semaphore-post done)))))
        (set-box! prog-thread t)
-       ;; Wait for EITHER the first stopped event OR program completion.
-       (sync (handle-evt event-ch
-                         (lambda (evt) (set-box! captured-event evt)))
-             (handle-evt (semaphore-peek-evt done) (lambda (_) (void))))]))
+       (if continue?
+           ;; CONTINUE (headless F5): stop at each breakpoint in turn, capture a
+           ;; snapshot (while the world is frozen), RESUME the parked thread, and
+           ;; repeat until the program completes.  An idle window bounds a program
+           ;; that never finishes (a `serve`d app) so the tool can't hang.
+           (let loop ()
+             (define r
+               (sync/timeout idle-secs
+                 (handle-evt event-ch (lambda (evt) (cons 'stop evt)))
+                 (handle-evt (semaphore-peek-evt done) (lambda (_) 'done))))
+             (cond
+               [(eq? r 'done) (set-box! completed-box #t)]
+               [(not r) (void)]  ; idle: program still running (e.g. server) — stop, completed=#f
+               [(and (pair? r) (eq? (car r) 'stop))
+                (define evt (cdr r))
+                (define sqlc
+                  (with-handlers ([exn:fail? (lambda (_e) #f)])
+                    (or (sql-capture-for-thread t) (most-recent-sql-capture))))
+                (set-box! snapshots-box
+                          (cons (build-result-json evt src-path specs "stopped" sqlc)
+                                (unbox snapshots-box)))
+                ;; Resume: 'continue thaws the world and runs to the next stop.
+                (channel-put paused-ch 'continue)
+                (loop)]))
+           ;; ONE-SHOT: wait for EITHER the first stopped event OR completion.
+           (sync (handle-evt event-ch
+                             (lambda (evt) (set-box! captured-event evt)))
+                 (handle-evt (semaphore-peek-evt done) (lambda (_) (void)))))]))
 
-  (define evt (unbox captured-event))
-  ;; Capture the SQL while the world is still frozen (the bp thread is parked on
-  ;; paused-ch and stop-the-world is active).  For the program thread we read the
-  ;; per-thread capture with a most-recent fallback, just like dap-server.
-  (define sql-cap
-    (with-handlers ([exn:fail? (lambda (_e) #f)])
-      (or (let ([t (unbox prog-thread)]) (and t (sql-capture-for-thread t)))
-          (most-recent-sql-capture))))
   (define result
-    (build-result-json evt src-path specs
-                       (if evt "stopped" "breakpoint-not-hit")
-                       sql-cap))
+    (if continue?
+        (build-continue-result (reverse (unbox snapshots-box)) (unbox completed-box))
+        (let* ([evt (unbox captured-event)]
+               ;; Capture SQL while the world is still frozen (bp thread parked on
+               ;; paused-ch, stop-the-world active), per-thread with a most-recent
+               ;; fallback — exactly like dap-server.
+               [sql-cap
+                (with-handlers ([exn:fail? (lambda (_e) #f)])
+                  (or (let ([t (unbox prog-thread)]) (and t (sql-capture-for-thread t)))
+                      (most-recent-sql-capture)))])
+          (build-result-json evt src-path specs
+                             (if evt "stopped" "breakpoint-not-hit")
+                             sql-cap))))
   ;; Tear down: kill the (parked or running) debuggee thread so no further user
   ;; output can race our JSON write and the process can exit promptly.  The
   ;; suspended background threads are torn down with the process on exit.
@@ -480,8 +526,13 @@
                (let ([j (string->jsexpr (vector-ref argv 3))]) (if (list? j) j '())))
              '()))
        (values m (filter values (bp-specs-from-json arr)))]))
+  ;; Optional trailing token "continue" enables headless F5 (run through every
+  ;; breakpoint, resuming after each, until the program completes). Absent/"once"
+  ;; keeps the one-shot behaviour. Scanning argv keeps it position-tolerant; no
+  ;; mode / bp-json / path ever equals "continue".
+  (define continue? (for/or ([a (in-vector argv)]) (equal? a "continue")))
   (define-values (result real-out)
-    (run-headless-inspect compiled src bps mode))
+    (run-headless-inspect compiled src bps mode #:continue? continue?))
   ;; Emit EXACTLY one JSON object (+ trailing newline) on the real stdout.  The
   ;; write-string results are voided so the module-top-level printer can't append
   ;; their char counts to the protocol stream.

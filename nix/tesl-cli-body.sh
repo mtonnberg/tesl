@@ -900,6 +900,16 @@ case "$CMD" in
     _tesl_require_compiler
     exec "$TESL_OCAML_COMPILER" --debug "$@"
     ;;
+  debug-inspect)
+    # Headless step-debugger: run to breakpoint(s) and dump paused state as JSON.
+    # Forward all args (--break-at/--when/--hit/--mode and --continue for headless
+    # F5) to the compiler, which drives dsl/debug/headless-inspect.rkt. The verb
+    # was previously unrouted here, so `tesl debug-inspect` reported "unknown
+    # command" even though the compiler implements it.
+    [ $# -gt 0 ] || { echo "Usage: tesl debug-inspect <file.tesl> --break-at SPEC [...] [--continue]" >&2; exit 1; }
+    _tesl_require_compiler
+    exec "$TESL_OCAML_COMPILER" debug-inspect "$@"
+    ;;
   compile)
     FILE="${1:?Usage: tesl compile <file.tesl>}"
     OUT="${FILE%.tesl}.rkt"

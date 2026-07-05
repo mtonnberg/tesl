@@ -3761,7 +3761,7 @@ let find_racket_binary () : string option =
     and the JSON's "breakpoint" field reports which.  [mode] is "program" (run the
     `main` block) or "test" (run the `test` blocks).  On success this execs the
     Racket driver and never returns; the JSON appears on the inherited stdout. *)
-let debug_inspect ?(root_path=default_root_path ()) ~breakpoints ~mode filename
+let debug_inspect ?(root_path=default_root_path ()) ?(continue_mode=false) ~breakpoints ~mode filename
   : debug_inspect_result =
   if not (Sys.file_exists filename) then
     InspectErr (Printf.sprintf "%s: No such file" filename)
@@ -3827,8 +3827,12 @@ let debug_inspect ?(root_path=default_root_path ()) ~breakpoints ~mode filename
                 in
                 "[" ^ String.concat "," (List.map one breakpoints) ^ "]"
               in
+              (* Trailing "continue" enables headless F5 (run through every
+                 breakpoint, resuming after each, until completion); "once" keeps
+                 the one-shot dump. *)
               let argv =
-                [| racket_bin; driver; tmp_rkt; abs_src; mode; bp_json |]
+                [| racket_bin; driver; tmp_rkt; abs_src; mode; bp_json;
+                   (if continue_mode then "continue" else "once") |]
               in
               flush stdout; flush stderr;
               (* exec replaces this process: the driver's single JSON object is
