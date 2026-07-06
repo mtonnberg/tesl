@@ -2657,7 +2657,7 @@ let time_phase enabled label (f : unit -> 'a) : 'a =
    logic (including the bare-record-literal quick-fix) without duplicating it. *)
 let type_diags_of source (m : Ast.module_form) : diagnostic list =
   let source_lines = Array.of_list (String.split_on_char '\n' source) in
-  let _, _, _, bare_hints, type_errors = Checker.check_module_with_metadata m in
+  let _, _, _, bare_hints, _, type_errors = Checker.check_module_with_metadata m in
   List.map (fun (e : Type_system.type_error) ->
     let base = diag_of_type_error e in
     if starts_with ~prefix:"bare record literal" e.message then
@@ -3011,7 +3011,7 @@ let scheme_json (sch : Type_system.scheme) =
 let semantic_json_of_module (m : Ast.module_form) : string =
   let source_text = (try In_channel.with_open_text m.source_file (fun ic -> In_channel.input_all ic) with _ -> "") in
   (* Run the checker to obtain the full context. *)
-  let local_bindings, expr_types, _field_accesses, _bare_hints, _errors = Checker.check_module_with_metadata m in
+  let local_bindings, expr_types, _field_accesses, _bare_hints, _server_tools_sites, _errors = Checker.check_module_with_metadata m in
 
   (* Build the checker context for declaration-level info. *)
   let ctx0 = Checker.make_ctx ~filename:m.source_file ~env:[] in

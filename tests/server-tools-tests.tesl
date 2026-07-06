@@ -1,0 +1,263 @@
+#lang tesl
+module ServerToolsTests exposing [
+  NotesServer,
+  User,
+  Authenticated,
+  Admin,
+  plainTools,
+  adminTools,
+  mkUser,
+  mkAdmin,
+]
+
+import Tesl.Prelude exposing [Int, String, Bool, List]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.concat, String.length, String.startsWith]
+import Tesl.List exposing [List.length]
+import Tesl.Agent exposing [
+  aiProvider,
+  Agent,
+  Tool,
+  serverTools,
+  mockToolProvider,
+  toolUseStep,
+  textStep,
+  askWith,
+  replyText,
+  replyToolCalls,
+]
+
+# ────────────────────────────────────────────────────────────────────────────
+# serverTools: every (included) endpoint of a server becomes an agent tool,
+# preauthenticated with the proof-carrying user value — the agent acts strictly
+# on the user's behalf because the tools ARE the endpoint handlers partially
+# applied with that value.  Inclusion is per call site: an endpoint is exposed
+# iff the user's declared proof annotation covers the endpoint's auth
+# predicates, so the admin-gated endpoint below only exists for a user that
+# also proves `Admin`.  All deterministic and mock-only: no keys, no network.
+# ────────────────────────────────────────────────────────────────────────────
+
+capability notesBot implies aiProvider
+
+record User {
+  id: String
+  role: String
+}
+
+fact Authenticated (u: User)
+fact Admin (u: User)
+fact NoteId (noteId: String)
+fact TextSafe (text: String)
+
+auth cookieAuth(request: HttpRequest) -> u: User ::: Authenticated u =
+  case Dict.lookup "user" request.cookies of
+    Something userId -> ok (User { id: userId, role: "user" }) ::: Authenticated u
+    Nothing -> fail 401 "Missing user cookie"
+
+auth adminAuth(request: HttpRequest) -> u: User ::: Authenticated u && Admin u =
+  case Dict.lookup "admin" request.cookies of
+    Something userId -> ok (User { id: userId, role: "admin" }) ::: Authenticated u && Admin u
+    Nothing -> fail 401 "Missing admin cookie"
+
+check isNoteId(noteId: String) -> noteId: String ::: NoteId noteId =
+  if String.startsWith noteId "note-" then
+    ok noteId ::: NoteId noteId
+  else
+    fail 400 "Malformed note id"
+
+capturer noteIdCapture: String ::: NoteId noteId using stringCodec via isNoteId
+
+check isSafeText(text: String) -> text: String ::: TextSafe text =
+  if String.length text <= 20 then
+    ok text ::: TextSafe text
+  else
+    fail 400 "Text too long"
+
+record NewNote {
+  text: String ::: TextSafe text
+}
+
+codec NewNote {
+  toJson_forbidden
+  fromJson [
+    {
+      text <- "text" with_codec stringCodec via isSafeText
+    }
+  ]
+}
+
+# Greet the authenticated user by id.
+handler greet(u: User ::: Authenticated u) -> String =
+  String.concat "hello " u.id
+
+# Store a validated note for the authenticated user.
+handler createNote(u: User ::: Authenticated u, note: NewNote) -> String =
+  String.concat (String.concat u.id ":") note.text
+
+# Read one note by its id.
+handler getNote(u: User ::: Authenticated u, noteId: String ::: NoteId noteId) -> String =
+  String.concat "note " noteId
+
+# Do something only unblocked users may do.
+handler guarded(u: User ::: Authenticated u) -> String =
+  if u.id == "blocked" then
+    fail 403 "blocked user"
+  else
+    "ok"
+
+# Wipe everything. Admin only.
+handler adminWipe(u: User ::: Authenticated u && Admin u) -> String =
+  "wiped"
+
+api NotesApi {
+  get "/greet"
+    auth u: User ::: Authenticated u via cookieAuth
+    -> String
+
+  post "/notes"
+    auth u: User ::: Authenticated u via cookieAuth
+    body note: NewNote
+    -> String
+
+  get "/notes/:noteId"
+    auth u: User ::: Authenticated u via cookieAuth
+    capture noteId: String ::: NoteId noteId via noteIdCapture
+    -> String
+
+  get "/guarded"
+    auth u: User ::: Authenticated u via cookieAuth
+    -> String
+
+  post "/admin/wipe"
+    auth u: User ::: Authenticated u && Admin u via adminAuth
+    -> String
+}
+
+server NotesServer for NotesApi {
+  greet = greet
+  createNote = createNote
+  getNote = getNote
+  guarded = guarded
+  adminWipe = adminWipe
+}
+
+# Proof minting for tests (no HTTP request in sight): the same check-boundary
+# discipline the runtime uses — you cannot conjure `Authenticated`.
+check mkUser(u: User) -> u: User ::: Authenticated u =
+  ok u ::: Authenticated u
+
+check mkAdmin(u: User) -> u: User ::: Authenticated u && Admin u =
+  ok u ::: Authenticated u && Admin u
+
+fn plainTools(u: User ::: Authenticated u) -> List Tool =
+  serverTools NotesServer u
+
+fn adminTools(u: User ::: Authenticated u && Admin u) -> List Tool =
+  serverTools NotesServer u
+
+fn plainAgent(u: User ::: Authenticated u) -> Agent =
+  Agent {
+    provider: mockToolProvider []
+    systemPrompt: "You manage the user's notes with the provided tools."
+    maxTokens: 256
+    tools: serverTools NotesServer u
+  }
+
+fn adminAgent(u: User ::: Authenticated u && Admin u) -> Agent =
+  Agent {
+    provider: mockToolProvider []
+    systemPrompt: "You administer the notes service."
+    maxTokens: 256
+    tools: serverTools NotesServer u
+  }
+
+# (1) INCLUSION: a plainly-authenticated user exposes only the 4 Authenticated
+# endpoints; the admin-gated one is NOT a tool for them.
+test "plain user gets only the Authenticated endpoints as tools" {
+  let rawUser = User { id: "alice", role: "user" }
+  let user = check mkUser rawUser
+  expect (List.length (plainTools user)) == 4
+}
+
+# (2) INCLUSION: a user that ALSO proves Admin additionally gets the
+# admin-gated endpoint.
+test "admin user additionally gets the admin-gated endpoint" {
+  let rawAdmin = User { id: "root", role: "admin" }
+  let admin = check mkAdmin rawAdmin
+  expect (List.length (adminTools admin)) == 5
+}
+
+# (3) Dispatch: the model calls an endpoint tool with no extra args; the
+# handler runs partially applied with the authenticated user and the loop
+# returns the final reply after exactly one tool round-trip.
+test "endpoint tool dispatches the handler on the user's behalf" requires [notesBot] {
+  let rawUser = User { id: "alice", role: "user" }
+  let user = check mkUser rawUser
+  let call = toolUseStep "greet" "call_1" "{}"
+  let final = textStep "Greeted you."
+  let reply = askWith (plainAgent user) "greet me" (mockToolProvider [call, final])
+  expect (replyText reply) == "Greeted you."
+  expect (replyToolCalls reply) == 1
+}
+
+# (4) Body endpoint: the model's nested body argument is decoded through the
+# SAME codec + via-check path an HTTP body uses, then reaches the handler.
+test "body endpoint tool decodes the model's body argument" requires [notesBot] {
+  let rawUser = User { id: "alice", role: "user" }
+  let user = check mkUser rawUser
+  let call = toolUseStep "createNote" "call_1" "{\"note\":{\"text\":\"buy milk\"}}"
+  let final = textStep "Saved your note."
+  let reply = askWith (plainAgent user) "note: buy milk" (mockToolProvider [call, final])
+  expect (replyText reply) == "Saved your note."
+  expect (replyToolCalls reply) == 1
+}
+
+# (5) Capture endpoint: the capture argument runs the capturer's check
+# (`isNoteId`) exactly like a path segment.
+test "capture endpoint tool validates the capture argument" requires [notesBot] {
+  let rawUser = User { id: "alice", role: "user" }
+  let user = check mkUser rawUser
+  let call = toolUseStep "getNote" "call_1" "{\"noteId\":\"note-7\"}"
+  let final = textStep "Found it."
+  let reply = askWith (plainAgent user) "show note-7" (mockToolProvider [call, final])
+  expect (replyText reply) == "Found it."
+  expect (replyToolCalls reply) == 1
+}
+
+# (6) A body that FAILS the via-check (21 chars > 20) becomes an is_error
+# tool_result — the loop continues to the final reply instead of raising.
+test "invalid body argument is rejected as is_error and the loop continues" requires [notesBot] {
+  let rawUser = User { id: "alice", role: "user" }
+  let user = check mkUser rawUser
+  let call = toolUseStep "createNote" "call_1" "{\"note\":{\"text\":\"aaaaaaaaaaaaaaaaaaaaa\"}}"
+  let final = textStep "That note is too long."
+  let reply = askWith (plainAgent user) "note" (mockToolProvider [call, final])
+  expect (replyText reply) == "That note is too long."
+  expect (replyToolCalls reply) == 1
+}
+
+# (7) A handler `fail 403` is the agent-level analogue of the HTTP error
+# response: is_error tool_result, loop alive.
+test "handler fail becomes an is_error tool_result, not an exception" requires [notesBot] {
+  let rawUser = User { id: "blocked", role: "user" }
+  let user = check mkUser rawUser
+  let call = toolUseStep "guarded" "call_1" "{}"
+  let final = textStep "You are not allowed to do that."
+  let reply = askWith (plainAgent user) "do it" (mockToolProvider [call, final])
+  expect (replyText reply) == "You are not allowed to do that."
+  expect (replyToolCalls reply) == 1
+}
+
+# (8) The admin-gated endpoint dispatches for an admin-proved user.
+test "admin tool dispatches for an admin-proved user" requires [notesBot] {
+  let rawAdmin = User { id: "root", role: "admin" }
+  let admin = check mkAdmin rawAdmin
+  let call = toolUseStep "adminWipe" "call_1" "{}"
+  let final = textStep "Wiped."
+  let reply = askWith (adminAgent admin) "wipe it all" (mockToolProvider [call, final])
+  expect (replyText reply) == "Wiped."
+  expect (replyToolCalls reply) == 1
+}

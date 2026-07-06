@@ -574,6 +574,27 @@ and ts_case_arm = {
   ts_loc     : loc;
 }
 
+(** All expressions contained in a test statement, recursing into nested
+    statement blocks — for module walks that scan test bodies for a syntactic
+    form (e.g. the `serverTools` lowering/require detection). *)
+let rec test_stmt_exprs (s : test_stmt) : expr list =
+  match s with
+  | TsLet { value; _ } -> [value]
+  | TsLetProof { value; _ } -> [value]
+  | TsExpect { left; right; _ } ->
+    left :: (match right with Some r -> [r] | None -> [])
+  | TsExpectFail { fn; arg; _ } -> [fn; arg]
+  | TsExpectHasProof { fn; arg; _ } -> [fn; arg]
+  | TsProperty { body; _ } -> [body]
+  | TsIf { cond; then_stmts; else_stmts; _ } ->
+    cond :: (List.concat_map test_stmt_exprs then_stmts
+             @ List.concat_map test_stmt_exprs else_stmts)
+  | TsCase { scrut; arms; _ } ->
+    scrut :: List.concat_map (fun (a : ts_case_arm) ->
+      (match a.ts_guard with Some g -> [g] | None -> [])
+      @ List.concat_map test_stmt_exprs a.ts_body) arms
+  | TsExpr { e; _ } -> [e]
+
 type test_form = {
   description  : string;
   stmts        : test_stmt list;

@@ -1159,6 +1159,7 @@ let collect_needed_capabilities
     ?(func_caps : (string * string list) list = [])
     ?(param_caps : (string * string list) list = [])
     ?(bound : string list = [])
+    ?(server_tools_caps : (string * string list) list = [])
     (e : expr)
     : string list =
   (* CAP-A1 fix: read/write classification comes from the single SQL registry
@@ -1256,6 +1257,25 @@ let collect_needed_capabilities
           | [] when Type_system.is_known_tesl_module ("Tesl." ^ m) ->
             Type_system.stdlib_capabilities_of field
           | qcaps -> qcaps)) @ acc
+    (* serverTools S user — the agent gets the server's endpoints as tools, so
+       the site is charged the UNION of the bound handlers' declared
+       capabilities (the loop dispatches those handlers synchronously in this
+       function's dynamic extent).  [server_tools_caps] maps server name → that
+       union; empty for callers that have no module context (their walk then
+       charges only the user-argument sub-expression — the declaring module's
+       own compile enforces the full charge).  Decide-by-resolution: a locally
+       bound or user-declared `serverTools` falls through to the generic arms. *)
+    | EApp { fn = EApp { fn = EVar { name = "serverTools"; _ }; arg = server_ref; _ };
+             arg = user_arg; _ }
+      when not (List.mem "serverTools" bound)
+        && not (List.mem_assoc "serverTools" func_caps) ->
+      let scaps = (match server_ref with
+        | EConstructor { name; args = []; _ } | EVar { name; _ } ->
+          (match List.assoc_opt name server_tools_caps with
+           | Some cs -> cs
+           | None -> [])
+        | _ -> []) in
+      go bound (scaps @ acc) user_arg
     (* Effect forms: prepend the fixed data-table token, then descend into
        children via the shared traversal. *)
     | EEnqueue _ | EPublish _ | ETelemetry _ | ESendEmail _ ->

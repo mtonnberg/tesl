@@ -75,7 +75,13 @@
  (struct-out dsl-request)
  (struct-out dsl-response)
  current-handler-error-port
- tesl-establish-param-proof)
+ tesl-establish-param-proof
+ ;; serverTools (tesl/server-tools.rkt): the agent endpoint-tool builder reuses
+ ;; the EXACT boundary pipeline pieces the HTTP dispatcher uses, so tool-arg
+ ;; validation and result encoding can never diverge from the HTTP boundary.
+ instantiate-binder-proof
+ prepare-json
+ validate-handler-return)
 
 (struct dsl-request (method path headers body cookies query raw-request) #:transparent)
 

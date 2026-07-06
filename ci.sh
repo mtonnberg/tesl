@@ -1080,7 +1080,8 @@ else
     ai_tmp="$(mktemp -d)"
     AI_TESL=( "tests/agent-feature-tests.tesl" "tests/agent-tests.tesl" \
               "tests/agent-tools-tests.tesl" "tests/agent-conversation-tests.tesl" \
-              "tests/agent-run-tests.tesl" "example/support-assistant.tesl" \
+              "tests/agent-run-tests.tesl" "tests/server-tools-tests.tesl" \
+              "example/support-assistant.tesl" \
               "example/ai-conversation-service.tesl" )
     AI_RKT=( "tests/agent-provider-norm-test.rkt" "tests/agent-runtime-tests.rkt" \
              "tests/agent-conversation-pg-test.rkt" )

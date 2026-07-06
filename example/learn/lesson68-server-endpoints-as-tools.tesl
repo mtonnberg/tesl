@@ -1,0 +1,269 @@
+#lang tesl
+module Lesson68ServerEndpointsAsTools exposing [
+  NotesServer,
+  User,
+  Authenticated,
+  Admin,
+]
+
+import Tesl.Prelude exposing [Int, String, List]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.concat, String.length]
+import Tesl.List exposing [List.append, List.length]
+import Tesl.Agent exposing [
+  aiProvider,
+  Agent,
+  serverTools,
+  asTool,
+  mockToolProvider,
+  toolUseStep,
+  textStep,
+  askWith,
+  replyText,
+  replyToolCalls,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 68 — Server endpoints as agent tools (`serverTools`)
+#
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# You already have a typed HTTP api and a server binding handlers to it. Give an
+# agent ALL of those endpoints as tools in one expression:
+#
+#   handler assistant(user: User ::: Authenticated user, q: NewNote) -> String
+#     requires [notesAi] =
+#     let agent = Agent {
+#       provider:     anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
+#       systemPrompt: "You manage the user's notes with the provided tools."
+#       maxTokens:    512
+#       tools:        serverTools NotesServer user     # every endpoint, for free
+#     }
+#     ask agent q.text
+#
+# `serverTools MyServer user : List Tool` derives one tool per endpoint,
+# PREAUTHENTICATED with the proof-carrying `user` value: the tools ARE the same
+# handler functions your HTTP API dispatches to, partially applied with that
+# value. The agent can only do what the user can do — every ownership and
+# authorization check in your handler bodies runs unchanged, and you cannot even
+# call `serverTools` without a value proving `Authenticated` (there is no session
+# forwarding and no token minting; the proof system carries the identity).
+#
+# What the compiler does for you, per endpoint:
+#   * tool NAME        — the server-binding name (`createNote = createNote`);
+#   * tool DESCRIPTION — the handler's doc-comment (else "METHOD /path");
+#   * tool JSON SCHEMA — one required property per `capture` plus one for the
+#     `body` binder, derived from the body record's fromJson codec;
+#   * tool VALIDATION  — the model's arguments run the endpoint's OWN boundary
+#     pipeline (capture checks, body codec + `via` checks), so a tool argument is
+#     never validated more weakly than the HTTP boundary;
+#   * tool RESULTS     — encoded through the same JSON path as an HTTP response;
+#     a handler `fail 403 ...` becomes a retryable tool error, never a crash.
+#
+# WHO GETS WHICH ENDPOINTS? Inclusion is decided per call site from the user
+# variable's DECLARED proof annotation: an endpoint is exposed iff the annotation
+# covers the endpoint's `auth` predicates. A `u ::: Authenticated u` user exposes
+# the plain endpoints; a `u ::: Authenticated u && Admin u` user additionally
+# exposes the admin-gated ones. That is how "a user that is also an admin has
+# access to the admin endpoints" — and a plain user simply does not have those
+# tools at all.
+# ─────────────────────────────────────────────────────────────────────────────
+
+capability notesAi implies aiProvider
+
+record User {
+  id: String
+  role: String
+}
+
+fact Authenticated (u: User)
+fact Admin (u: User)
+fact TextSafe (text: String)
+
+# The same auth functions your HTTP endpoints already use. `serverTools` never
+# calls them — the handler receives YOUR already-proven user value instead — but
+# the api declaration below still names them for the HTTP boundary.
+auth cookieAuth(request: HttpRequest) -> u: User ::: Authenticated u =
+  case Dict.lookup "user" request.cookies of
+    Something userId -> ok (User { id: userId, role: "user" }) ::: Authenticated u
+    Nothing -> fail 401 "Missing user cookie"
+
+auth adminAuth(request: HttpRequest) -> u: User ::: Authenticated u && Admin u =
+  case Dict.lookup "admin" request.cookies of
+    Something userId -> ok (User { id: userId, role: "admin" }) ::: Authenticated u && Admin u
+    Nothing -> fail 401 "Missing admin cookie"
+
+check isSafeText(text: String) -> text: String ::: TextSafe text =
+  if String.length text <= 80 then
+    ok text ::: TextSafe text
+  else
+    fail 400 "Text too long"
+
+record NewNote {
+  text: String ::: TextSafe text
+}
+
+codec NewNote {
+  toJson_forbidden
+  fromJson [
+    {
+      text <- "text" with_codec stringCodec via isSafeText
+    }
+  ]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE API — ordinary handlers, api, server. Nothing here is agent-specific.
+# The doc-comment above each handler doubles as the tool description the model
+# reads when choosing a tool.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Greet the authenticated user by id.
+handler greet(u: User ::: Authenticated u) -> String =
+  String.concat "hello " u.id
+
+# Store a note for the authenticated user.
+handler createNote(u: User ::: Authenticated u, note: NewNote) -> String =
+  String.concat (String.concat u.id " noted: ") note.text
+
+# Delete ALL notes in the service. Admin only.
+handler wipeNotes(u: User ::: Authenticated u && Admin u) -> String =
+  "all notes wiped"
+
+api NotesApi {
+  get "/greet"
+    auth u: User ::: Authenticated u via cookieAuth
+    -> String
+
+  post "/notes"
+    auth u: User ::: Authenticated u via cookieAuth
+    body note: NewNote
+    -> String
+
+  post "/admin/wipe"
+    auth u: User ::: Authenticated u && Admin u via adminAuth
+    -> String
+}
+
+server NotesServer for NotesApi {
+  greet = greet
+  createNote = createNote
+  wipeNotes = wipeNotes
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COMBINING server endpoints WITH CUSTOM AGENT-ONLY TOOLS
+# ─────────────────────────────────────────────────────────────────────────────
+# `serverTools` returns a plain `List Tool`, so it composes with the `asTool`
+# tools you already know from lesson 62: append the endpoint tools and any
+# functions you want the agent to have but that are NOT customer-facing HTTP
+# endpoints (internal lookups, computations, glue).
+
+# Summarize a note text in a fixed style (agent-only helper, not an endpoint).
+fn summarize(text: String) -> String =
+  String.concat "summary: " text
+
+fn assistantFor(u: User ::: Authenticated u) -> Agent =
+  Agent {
+    provider: mockToolProvider []
+    systemPrompt: "You manage the user's notes with the provided tools."
+    maxTokens: 256
+    tools: List.append (serverTools NotesServer u) [asTool summarize]
+  }
+
+# The admin variant: the SAME expression, but because `u` is declared
+# `Authenticated u && Admin u`, the `wipeNotes` endpoint is included too.
+fn adminAssistantFor(u: User ::: Authenticated u && Admin u) -> Agent =
+  Agent {
+    provider: mockToolProvider []
+    systemPrompt: "You administer the notes service."
+    maxTokens: 256
+    tools: List.append (serverTools NotesServer u) [asTool summarize]
+  }
+
+# Proof minting for the tests below (no HTTP request in sight): the usual
+# check-boundary discipline — you cannot conjure `Authenticated` out of thin air.
+check mkUser(u: User) -> u: User ::: Authenticated u =
+  ok u ::: Authenticated u
+
+check mkAdmin(u: User) -> u: User ::: Authenticated u && Admin u =
+  ok u ::: Authenticated u && Admin u
+
+fn userToolCount(u: User ::: Authenticated u) -> Int =
+  List.length (List.append (serverTools NotesServer u) [asTool summarize])
+
+fn adminToolCount(u: User ::: Authenticated u && Admin u) -> Int =
+  List.length (List.append (serverTools NotesServer u) [asTool summarize])
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DETERMINISTIC TESTS — no API key, no network, no cost (see lesson 62)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# A plain user's agent has greet + createNote from the server, plus the custom
+# summarize tool — and does NOT have the admin-gated wipeNotes.
+test "plain user: server tools + custom tools, no admin endpoint" {
+  let rawUser = User { id: "alice", role: "user" }
+  let user = check mkUser rawUser
+  expect (userToolCount user) == 3
+}
+
+# An admin additionally gets the admin-gated endpoint as a tool.
+test "admin user: the admin endpoint joins the tool list" {
+  let rawAdmin = User { id: "root", role: "admin" }
+  let admin = check mkAdmin rawAdmin
+  expect (adminToolCount admin) == 4
+}
+
+# The model calls an ENDPOINT tool: the handler runs on the user's behalf and
+# the loop returns the final reply after one tool round-trip.
+test "an endpoint tool dispatches the handler on the user's behalf" requires [notesAi] {
+  let rawUser = User { id: "alice", role: "user" }
+  let user = check mkUser rawUser
+  let call = toolUseStep "createNote" "c1" "{\"note\":{\"text\":\"buy milk\"}}"
+  let final = textStep "Saved your note."
+  let mock = mockToolProvider [call, final]
+  let reply = askWith (assistantFor user) "note: buy milk" mock
+  expect (replyText reply) == "Saved your note."
+  expect (replyToolCalls reply) == 1
+}
+
+# The model calls the CUSTOM tool from the same list — both kinds coexist.
+test "a custom asTool tool works alongside the endpoint tools" requires [notesAi] {
+  let rawUser = User { id: "alice", role: "user" }
+  let user = check mkUser rawUser
+  let call = toolUseStep "summarize" "c1" "{\"text\":\"buy milk\"}"
+  let final = textStep "Here is the summary."
+  let mock = mockToolProvider [call, final]
+  let reply = askWith (assistantFor user) "summarize my note" mock
+  expect (replyText reply) == "Here is the summary."
+  expect (replyToolCalls reply) == 1
+}
+
+# A body that fails the endpoint's `via` check (81 chars > 80) is rejected by the
+# SAME validation the HTTP boundary runs: a retryable tool error, loop alive.
+test "endpoint validation applies to tool arguments too" requires [notesAi] {
+  let rawUser = User { id: "alice", role: "user" }
+  let user = check mkUser rawUser
+  let call = toolUseStep "createNote" "c1" "{\"note\":{\"text\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}"
+  let final = textStep "That note is too long."
+  let mock = mockToolProvider [call, final]
+  let reply = askWith (assistantFor user) "note" mock
+  expect (replyText reply) == "That note is too long."
+  expect (replyToolCalls reply) == 1
+}
+
+# The admin's agent can dispatch the admin-gated endpoint.
+test "the admin endpoint tool dispatches for an admin-proved user" requires [notesAi] {
+  let rawAdmin = User { id: "root", role: "admin" }
+  let admin = check mkAdmin rawAdmin
+  let call = toolUseStep "wipeNotes" "c1" "{}"
+  let final = textStep "Wiped."
+  let mock = mockToolProvider [call, final]
+  let reply = askWith (adminAssistantFor admin) "wipe everything" mock
+  expect (replyText reply) == "Wiped."
+  expect (replyToolCalls reply) == 1
+}

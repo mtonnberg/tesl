@@ -268,6 +268,18 @@ type ctx = {
     (** declared-function name → its decl — for `asTool fn`, which derives a Tool's
         JSON schema + arg decode from the function's parameter types (the same wrapping
         the declarative `agent` block applies to its `tools:` list). *)
+  server_tools_meta : (string, (string * string * string) list) Hashtbl.t;
+    (** server name → per non-SSE endpoint (tool name, description, JSON schema)
+        — the compile-time metadata `serverTools S user` passes to the runtime
+        tool builder.  Tool name = the server-binding LHS name; description = the
+        bound handler's doc-comment (else "METHOD /path"); schema derived from the
+        endpoint's captures + body codec (same registry family as `asTool`). *)
+  server_tools_site_tbl : (int * int, string * string list) Hashtbl.t;
+    (** (line, col) of a `serverTools` call site → (server name, endpoint tool
+        names INCLUDED at that site).  Populated from the checker metadata pass
+        (like [field_access_type_tbl]): inclusion is the checker's per-call-site
+        proof-annotation decision — an admin-gated endpoint is present only when
+        the user value's declared facts cover its auth predicates. *)
   mutable preserve_case_payload_names : bool;
     (** when true, constructor case payload bindings should remain named values instead of raw payloads *)
   proof_locals : (string, unit) Hashtbl.t;
@@ -326,6 +338,8 @@ let mk_ctx ?(root_path=default_root_path ()) ?(record_fields=[]) ?(record_meta=[
   { buf = Buffer.create 4096; case_counter = 0; root_path; record_fields; record_meta; func_kind = None; func_return_spec = None;
     fn_names = Hashtbl.create 16; fn_arities = Hashtbl.create 16;
     fn_tool_decls = Hashtbl.create 8;
+    server_tools_meta = Hashtbl.create 4;
+    server_tools_site_tbl = Hashtbl.create 8;
     preserve_case_payload_names = false;
     proof_locals = Hashtbl.create 16; raw_locals = Hashtbl.create 16;
     fact_locals = Hashtbl.create 8; ctor_fields = Hashtbl.create 8;
@@ -1266,6 +1280,114 @@ let emit_tool_from_fd ctx (fd : Ast.func_decl) =
   emit ctx ")))";
   emit ctx (Printf.sprintf " (lambda (_decoded) (apply %s _decoded)))" fd.name)
 
+(* ── serverTools: endpoint → tool metadata (compile time) ───────────────────
+   `serverTools S user` lowers to `(__tst_server-tools S user <metadata>)`; the
+   runtime builder pairs each metadata row with the server's route-spec of the
+   same operation name and reuses the endpoint's OWN boundary pipeline (capture
+   parser + via check + proof attach, body codec decode) for tool-arg
+   validation, so a tool argument can never be validated more weakly than the
+   HTTP boundary.  The schema below is model GUIDANCE only — best-effort, with
+   `{}` (accept anything) for shapes it cannot describe; the decode stays
+   authoritative. *)
+
+(* Best-effort JSON Schema for a request-body type: agent-prims directly,
+   `List a` as arrays, records via their fromJson codec (first alternative). *)
+let rec server_tools_body_schema (codecs : Ast.codec_form list) (t : Ast.type_expr) : string =
+  match Validation_common.agent_prim_of_type_expr t with
+  | Some p -> Validation_common.agent_prim_schema_prop p
+  | None ->
+    (match t with
+     | TApp { head = TName { name = "List"; _ }; arg; _ } ->
+       Printf.sprintf {|{"type":"array","items":%s}|}
+         (server_tools_body_schema codecs arg)
+     | TName { name; _ } ->
+       (match List.find_opt (fun (c : Ast.codec_form) -> c.type_name = name) codecs with
+        | Some cf -> server_tools_codec_schema codecs cf
+        | None -> "{}")
+     | _ -> "{}")
+
+and server_tools_codec_schema (codecs : Ast.codec_form list) (cf : Ast.codec_form) : string =
+  match cf.from_json with
+  | FromJsonAlts (alt :: _) ->
+    let fields = List.filter_map (function
+      | Ast.DecodeField { json_key; codec; _ } -> Some (json_key, codec)
+      | _ -> None) alt in
+    let prop_of_codec c =
+      match c with
+      | "stringCodec" -> {|{"type":"string"}|}
+      | "intCodec" -> {|{"type":"integer"}|}
+      | "floatCodec" -> {|{"type":"number"}|}
+      | "boolCodec" -> {|{"type":"boolean"}|}
+      | _ ->
+        (match List.find_opt
+                 (fun (c2 : Ast.codec_form) -> c2.name = c || c2.type_name = c)
+                 codecs with
+         | Some c2 -> server_tools_codec_schema codecs c2
+         | None -> "{}")
+    in
+    let props = List.map (fun (k, c) ->
+      Printf.sprintf "%S:%s" k (prop_of_codec c)) fields in
+    let required = List.map (fun (k, _) -> Printf.sprintf "%S" k) fields in
+    Printf.sprintf {|{"type":"object","properties":{%s},"required":[%s]}|}
+      (String.concat "," props) (String.concat "," required)
+  | _ -> "{}"
+
+(* One tool-input schema per endpoint: a required property per capture (agent
+   prim — enforced by the checker) plus one for the body binder, in handler
+   argument order. *)
+let server_tools_endpoint_schema (codecs : Ast.codec_form list) (ep : Ast.api_endpoint) : string =
+  let capture_props = List.map (fun (c : Ast.api_capture) ->
+    (c.binding.name, agent_arg_schema_prop c.binding.type_expr)) ep.captures in
+  let body_props = match Ast.ep_body ep with
+    | Some (b : Ast.binding) -> [(b.name, server_tools_body_schema codecs b.type_expr)]
+    | None -> [] in
+  let all = capture_props @ body_props in
+  Printf.sprintf {|{"type":"object","properties":{%s},"required":[%s]}|}
+    (String.concat "," (List.map (fun (n, s) -> Printf.sprintf "%S:%s" n s) all))
+    (String.concat "," (List.map (fun (n, _) -> Printf.sprintf "%S" n) all))
+
+(* server → per-endpoint (tool name, description, schema); tool name = the
+   server-binding LHS (paired positionally with the api's non-SSE endpoints,
+   exactly as [emit_api] pairs them); description = the bound handler's
+   doc-comment, else "METHOD /path". *)
+let build_server_tools_meta (decls : Ast.top_decl list) (srv : Ast.server_form)
+  : (string * string * string) list =
+  let api_opt = List.find_map (function
+    | Ast.DApi (a : Ast.api_form) when a.name = srv.api_name -> Some a
+    | _ -> None) decls in
+  match api_opt with
+  | None -> []
+  | Some api ->
+    let codecs = List.filter_map (function
+      | Ast.DCodec (c : Ast.codec_form) -> Some c
+      | _ -> None) decls in
+    let non_sse = List.filter (fun (ep : Ast.api_endpoint) -> ep.method_ <> SSE)
+        api.endpoints in
+    let bnames = List.map fst srv.bindings in
+    let paired =
+      if List.length bnames = List.length non_sse
+      then List.combine bnames non_sse
+      else List.map (fun (ep : Ast.api_endpoint) -> (ep.name, ep)) non_sse in
+    let method_str = function
+      | Ast.GET -> "GET" | Ast.POST -> "POST" | Ast.PUT -> "PUT"
+      | Ast.DELETE -> "DELETE" | Ast.PATCH -> "PATCH" | Ast.SSE -> "SSE" in
+    List.map (fun (bname, (ep : Ast.api_endpoint)) ->
+      let desc =
+        match List.assoc_opt bname srv.bindings with
+        | Some handler_name ->
+          (match List.find_map (function
+             | Ast.DFunc (fd : Ast.func_decl) when fd.name = handler_name -> Some fd
+             | _ -> None) decls with
+           | Some fd ->
+             (match fd.doc with
+              | Some d when String.trim d <> "" -> d
+              | _ -> Printf.sprintf "%s %s" (method_str ep.method_) ep.path)
+           | None -> Printf.sprintf "%s %s" (method_str ep.method_) ep.path)
+        | None -> Printf.sprintf "%s %s" (method_str ep.method_) ep.path
+      in
+      (bname, desc, server_tools_endpoint_schema codecs ep)
+    ) paired
+
 let rec emit_expr ctx e =
   let sql_op_name = function
     | BEq -> "==." | BNeq -> "!=" ^ "." | BLt -> "<." | BLe -> "<=."
@@ -1577,6 +1699,49 @@ let rec emit_expr ctx e =
               (`asTool myFn`); a partial application or non-function argument cannot \
               be lowered to a tool. This should have been rejected at check time \
               (checker.ml check_malformed_tool_forms) — please report this bug."
+  (* `serverTools S user` — lower every INCLUDED endpoint of the server to an
+     agent tool preauthenticated with `user`.  Inclusion is the checker's
+     per-call-site decision (server_tools_site_tbl): an endpoint is present iff
+     the user variable's declared proof annotation covers its auth predicates,
+     so an admin-annotated user gets the admin-gated endpoints and a plain
+     authenticated user does not. *)
+  | EApp { fn = EApp { fn = EVar { name = "serverTools"; _ }; arg = server_ref; _ };
+           arg = user_expr; loc } ->
+    let sname = (match server_ref with
+      | EConstructor { name; args = []; _ } | EVar { name; _ } -> name
+      | _ ->
+        failwith "emit_racket: `serverTools` takes a bare server reference \
+                  (`serverTools MyServer user`). This should have been rejected at \
+                  check time — please report this bug.") in
+    let meta = (match Hashtbl.find_opt ctx.server_tools_meta sname with
+      | Some meta -> meta
+      | None ->
+        failwith (Printf.sprintf
+          "emit_racket: `serverTools %s` — no such server/api pair in this module. \
+           This should have been rejected at check time — please report this bug."
+          sname)) in
+    let included = (match Hashtbl.find_opt ctx.server_tools_site_tbl
+                            (loc.Location.start.line, loc.Location.start.col) with
+      | Some (s, names) when s = sname -> names
+      | _ ->
+        (* Fail CLOSED: without the checker's inclusion decision no endpoint may
+           be exposed; a compile path that reaches emit with checker errors
+           should already have aborted. *)
+        failwith (Printf.sprintf
+          "emit_racket: `serverTools %s` call site has no checker inclusion \
+           metadata — please report this bug." sname)) in
+    let selected = List.filter (fun (n, _, _) -> List.mem n included) meta in
+    emit ctx (Printf.sprintf "(__tst_server-tools %s " sname);
+    emit_expr_simple ctx user_expr;
+    emit ctx " (list";
+    List.iter (fun (n, d, s) ->
+      emit ctx (Printf.sprintf " (list %S %S %S)" n d s)) selected;
+    emit ctx "))"
+  | EApp _ as app when (match flatten_app_expr [] app with
+                        | EVar { name = "serverTools"; _ }, _ -> true | _ -> false) ->
+    failwith "emit_racket: `serverTools` supports only the fully-applied form \
+              `serverTools MyServer user`. This should have been rejected at check \
+              time — please report this bug."
   | EApp _ as app when (match parse_insert_many_expr app with Some _ -> true | None -> false) ->
     (match parse_insert_many_expr app with
      | Some (list_var, entity) -> emit_sql_insert_many list_var entity
@@ -2731,8 +2896,16 @@ and emit_expr_simple ctx e =
       | EVar { name = "asTool"; _ }, [EVar { name; _ }] -> Hashtbl.mem ctx.fn_tool_decls name
       | _ -> false
     in
+    (* serverTools must reach the dedicated emit_expr arm (it lowers to
+       __tst_server-tools with compile-time metadata), never the generic
+       application fallback, which would emit an unbound `serverTools`. *)
+    let is_server_tools = match flatten_app_expr [] app with
+      | EVar { name = "serverTools"; _ }, _ -> true
+      | _ -> false
+    in
     if is_typename_record
        || is_tool_from
+       || is_server_tools
        || (match extract_select_query app with Some _ -> true | None -> false)
        || (match parse_insert_expr app with Some _ -> true | None -> false)
        || (match parse_insert_many_expr app with Some _ -> true | None -> false)
@@ -3639,6 +3812,29 @@ let emit_requires ctx (m : module_form) =
     emit_line ctx "  (only-in tesl/tesl/env with-env-bootstrap)";
   if has_agent || uses_agent_constructors then
     emit_line ctx "  (prefix-in __tart_ (only-in tesl/tesl/agent defineAgent withTools tool anthropic openai mistral local tesl-agent-decode-args))";
+  (* `serverTools S user` lowers to the runtime endpoint-tool builder.  Detect by
+     WALKING the module for the application head (an exposing-list check is not
+     enough: like `asTool`, the form also works via the always-available stdlib
+     surface).  Private prefix for the same no-collision reason as __tart_. *)
+  let uses_server_tools =
+    let found = ref false in
+    let rec walk (e : Ast.expr) : unit =
+      (match e with
+       | Ast.EApp { fn = Ast.EApp { fn = Ast.EVar { name = "serverTools"; _ }; _ }; _ } ->
+         found := true
+       | _ -> ());
+      Ast_visitor.fold_children (fun () c -> walk c) () e
+    in
+    List.iter (function
+      | Ast.DFunc (fd : Ast.func_decl) -> walk fd.body
+      | Ast.DConst (c : Ast.const_form) -> walk c.value
+      | Ast.DTest (tf : Ast.test_form) ->
+        List.iter (fun s -> List.iter walk (Ast.test_stmt_exprs s)) tf.stmts
+      | _ -> ()) m.decls;
+    !found
+  in
+  if uses_server_tools then
+    emit_line ctx "  (prefix-in __tst_ (only-in tesl/tesl/server-tools server-tools))";
   if needs_runtime_path then
     emit_line ctx "  racket/runtime-path";
 
@@ -3740,8 +3936,10 @@ let emit_requires ctx (m : module_form) =
           "Exponential"; "Fixed"; "Linear";
           "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job"; "Cache";
           (* `asTool fn` is a compile-time form: it lowers to `__tart_tool …`
-             (schema derived from the fn's types) and has no runtime binding. *)
-          "asTool" ] in
+             (schema derived from the fn's types) and has no runtime binding.
+             `serverTools S user` likewise lowers to `__tst_server-tools …`
+             (per-endpoint metadata derived at compile time). *)
+          "asTool"; "serverTools" ] in
       let expanded = List.filter (fun n -> not (List.mem n config_only_names)) expanded in
       let qualified = List.filter (fun n -> String.contains n '.') expanded in
       let plain = List.filter (fun n -> not (String.contains n '.')) expanded in
@@ -6529,6 +6727,15 @@ let emit_module ctx (m : module_form) =
     | _ -> ()
   ) m.decls;
 
+  (* serverTools: per-server endpoint tool metadata (name/description/schema),
+     consumed by the `serverTools S user` emit arm. *)
+  List.iter (function
+    | DServer (srv : Ast.server_form) ->
+      Hashtbl.replace ctx.server_tools_meta srv.name
+        (build_server_tools_meta m.decls srv)
+    | _ -> ()
+  ) m.decls;
+
   emit_requires ctx m;
   emit_provide ctx m;
 
@@ -6771,7 +6978,7 @@ let compile_to_string ?(root_path=default_root_path ()) ?(cyclic_local_import_pa
   let ctx = mk_ctx ~root_path () in
   (* Populate expr_type_tbl (lambda #:returns) and field_access_type_tbl (dot
      type hints, GitHub #26) from a single checker metadata pass. *)
-  (let _lb, expr_types, field_accesses, _anchors, _errs =
+  (let _lb, expr_types, field_accesses, _anchors, server_tools_sites, _errs =
      Checker.check_module_with_metadata m in
    List.iter (fun (info : Checker.expr_type_info) ->
      let key = (info.loc.Location.start.line, info.loc.Location.start.col) in
@@ -6780,7 +6987,11 @@ let compile_to_string ?(root_path=default_root_path ()) ?(cyclic_local_import_pa
    List.iter (fun (fa : Checker.field_access_info) ->
      let key = (fa.fa_loc.Location.start.line, fa.fa_loc.Location.start.col) in
      Hashtbl.replace ctx.field_access_type_tbl key fa.fa_record_type
-   ) field_accesses);
+   ) field_accesses;
+   List.iter (fun (loc, (server, included)) ->
+     let key = (loc.Location.start.line, loc.Location.start.col) in
+     Hashtbl.replace ctx.server_tools_site_tbl key (server, included)
+   ) server_tools_sites);
   Hashtbl.clear qualified_imports;
   Hashtbl.clear stdlib_plain_imports;
   Hashtbl.clear job_type_to_queue;

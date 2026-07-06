@@ -55,6 +55,17 @@ type field_access_info = {
   fa_field_type  : string;  (** display type of the field, e.g. "String" *)
 }
 
+(* serverTools (server endpoints as agent tools): one non-SSE endpoint of the
+   server's api, as seen by the `serverTools S user` inclusion decision. *)
+type server_tools_endpoint = {
+  ste_binding : string;
+  (** the server-binding name for this endpoint — the tool's model-facing name *)
+  ste_preds : (string * string list) list;
+  (** the endpoint's `auth` predicates, normalized: (predicate name, args with
+      the auth binder replaced by "§").  [] = endpoint without an auth line
+      (public), included for every caller. *)
+}
+
 (* Eq/Ord Stage-3 (compile-time constraint threading).  A closed, built-in
    predicate set — no user classes/instances, no surface syntax.  POrd/PEq mark a
    type variable that a function's body compares with </== ; captured per-fn from
@@ -94,6 +105,28 @@ type ctx = {
   ord_eq_calls : (string * ty list * Location.loc) list ref;
   (** Module-wide: (callee-name, resolved arg types, call loc) recorded at each
       direct call, discharged after the module is checked. *)
+  server_tools_env : (string * (string option * server_tools_endpoint list)) list;
+  (** `serverTools` static surface: server name → (the user TYPE name bound by
+      the api's `auth` lines (None when no non-SSE endpoint declares auth), the
+      non-SSE endpoints with their tool names + normalized auth predicates).
+      Server names are declarative configuration, not expression values (the
+      same reason `App { api: S }` skips body type-checking), so the
+      `serverTools S user` application is typed structurally against this env.
+      Endpoint-shape rules live in [check_module]'s serverTools walk; capability
+      charging in {!Validation_capabilities}; lowering in {!Emit_racket}. *)
+  server_tools_sites : (Location.loc * (string * string list)) list ref;
+  (** Every `serverTools S user` call site → (server name, the endpoint tool
+      names INCLUDED for that site).  An endpoint is included iff the user
+      variable's declared proof annotation covers the endpoint's auth
+      predicates — so `u ::: Authenticated u` exposes the plain endpoints and
+      `u ::: Authenticated u && Admin u` additionally exposes the admin-gated
+      ones.  Sound because a declared annotation is itself checker-verified
+      (params by call-site discharge, let/check bindings by their own rules).
+      Threaded into the emitter (like [field_accesses]) so codegen builds
+      exactly the included tools. *)
+  server_tools_shadowed : bool;
+  (** true when this module declares its own `serverTools` fn/value — the builtin
+      arms stand down (decide-by-resolution, not by spelling). *)
 }
 
 let make_ctx ~filename ~env = {
@@ -119,6 +152,9 @@ let make_ctx ~filename ~env = {
   ord_eq_acc = ref [];
   ord_eq_constraints = Hashtbl.create 64;
   ord_eq_calls = ref [];
+  server_tools_env = [];
+  server_tools_sites = ref [];
+  server_tools_shadowed = false;
 }
 
 let add_error ctx loc msg =
@@ -1604,6 +1640,20 @@ let ord_eq_callee_name (fn_expr : expr) : string option =
 
 (** Infer the type of an expression. Returns the inferred type;
     errors are accumulated in ctx. *)
+(* serverTools: flatten a proof annotation into normalized predicates —
+   (predicate name, args with [subject] replaced by "§") — the shape both sides
+   of the endpoint-inclusion comparison are put into.  Comparing the FULL
+   normalized predicate (not just the name) keeps `HasRole u "admin"` from
+   matching `HasRole u "viewer"`. *)
+let normalized_preds_of_proof (subject : string) (p : proof_expr)
+  : (string * string list) list =
+  let rec go acc = function
+    | PredApp { pred; args; _ } ->
+      (pred, List.map (fun a -> if a = subject then "\xc2\xa7" else a) args) :: acc
+    | PredAnd { left; right; _ } -> go (go acc left) right
+  in
+  List.sort_uniq compare (go [] p)
+
 let rec infer_expr ctx (e : expr) : ty =
   let inferred = match e with
 
@@ -1627,6 +1677,94 @@ let rec infer_expr ctx (e : expr) : ty =
     t_string
 
   | ELit { lit; loc = _ } -> infer_lit lit
+
+  (* ── serverTools: server endpoints as agent tools ──────────────────────────
+     `serverTools MyServer user : List Tool` derives one agent tool per non-SSE
+     endpoint of the server's api, partially applied with the proof-carrying
+     authenticated user value so the agent acts strictly on the user's behalf.
+     Typed structurally here because a server name is declarative configuration,
+     not an expression value.  INCLUSION is per call site: an endpoint becomes a
+     tool iff the user variable's declared proof annotation covers the endpoint's
+     auth predicates — so an `Authenticated`-only user gets the plain endpoints
+     while an `Authenticated && Admin` user additionally gets the admin-gated
+     ones.  Sound because declared annotations are themselves checker-verified
+     (params by call-site discharge, let/check bindings by their own rules) —
+     the tool never fabricates a proof the value does not carry.  All arms stand
+     down when the module declares its own `serverTools` (decide-by-resolution,
+     not by spelling). *)
+  | EApp { fn = EApp { fn = EVar { name = "serverTools"; _ }; arg = server_ref; _ };
+           arg = user_arg; loc }
+    when not ctx.server_tools_shadowed ->
+    (match server_ref with
+     | EConstructor { name = sname; args = []; _ } | EVar { name = sname; _ } ->
+       (match List.assoc_opt sname ctx.server_tools_env with
+        | Some (auth_ty_opt, endpoints) ->
+          let user_ty = infer_expr ctx user_arg in
+          (match auth_ty_opt with
+           | Some auth_ty_name ->
+             unify_at ctx (expr_loc user_arg) user_ty
+               (ty_of_type_expr (TName { name = auth_ty_name; loc }))
+           | None -> ());
+          (match user_arg with
+           | EVar { name = uname; _ } ->
+             let user_preds =
+               match List.assoc_opt uname ctx.binding_meta_env with
+               | Some (AttachedProofBinding p) -> normalized_preds_of_proof uname p
+               | _ -> []
+             in
+             let included = List.filter (fun (ep : server_tools_endpoint) ->
+               List.for_all (fun pr -> List.mem pr user_preds) ep.ste_preds
+             ) endpoints in
+             let has_authed = List.exists (fun ep -> ep.ste_preds <> []) endpoints in
+             let included_authed = List.exists (fun ep -> ep.ste_preds <> []) included in
+             if has_authed && not included_authed then
+               add_error ctx (expr_loc user_arg) (Printf.sprintf
+                 "`serverTools %s %s`: `%s` carries no declared proof matching any \
+                  endpoint's `auth` line, so no authenticated endpoint would become a \
+                  tool. Pass a value whose declared annotation covers the api's auth \
+                  predicates (e.g. a handler parameter `%s: T ::: %s %s`)"
+                 sname uname uname uname
+                 (match List.find_opt (fun ep -> ep.ste_preds <> []) endpoints with
+                  | Some ep -> fst (List.hd ep.ste_preds)
+                  | None -> "Authenticated")
+                 uname)
+             else
+               ctx.server_tools_sites :=
+                 (loc, (sname, List.map (fun ep -> ep.ste_binding) included))
+                 :: !(ctx.server_tools_sites)
+           | _ ->
+             add_error ctx (expr_loc user_arg)
+               "`serverTools` takes the authenticated user as a bare variable whose \
+                declared proof annotation decides which endpoints become tools — \
+                bind the value first (e.g. a proof-annotated handler parameter, or \
+                `let admin = requireAdmin user`) and pass that name")
+        | None ->
+          ignore (infer_expr ctx user_arg);
+          add_error ctx loc (Printf.sprintf
+            "`serverTools` argument `%s` is not a server declared in this module — \
+             it takes a bare reference to a `server` block (`serverTools MyServer user`)"
+            sname))
+     | _ ->
+       ignore (infer_expr ctx user_arg);
+       add_error ctx loc
+         "`serverTools` supports only a bare reference to a server declared in this \
+          module (`serverTools MyServer user`) — an arbitrary expression cannot be \
+          lowered to the server's endpoint tools");
+    t_list t_tool
+
+  | EApp { fn = EVar { name = "serverTools"; _ }; loc; _ }
+    when not ctx.server_tools_shadowed ->
+    add_error ctx loc
+      "`serverTools` must be fully applied: `serverTools MyServer user` (a server \
+       and the proof-carrying authenticated user the tools act on behalf of); a \
+       partial application cannot be lowered";
+    t_list t_tool
+
+  | EVar { name = "serverTools"; loc } when not ctx.server_tools_shadowed ->
+    add_error ctx loc
+      "`serverTools` cannot be passed around as a value — apply it directly to a \
+       server and an authenticated user: `serverTools MyServer user`";
+    t_list t_tool
 
   | EVar { name; loc } ->
     (match lookup_name ctx name with
@@ -3100,6 +3238,11 @@ use the `Tuple3 a b c` constructor instead";
     (match base_fn with
      | EVar { name = "initTelemetry" | "check" | "make-witness" | "selectOne" | "select" | "selectCount" | "selectSum" | "selectMax" | "selectMin" | "insert" | "insertMany" | "upsert" | "update" | "updateAndReturnOne" | "returning" | "where" | "set" | "onConflict" | "doUpdate" | "delete" | "deleteAndReturnResult" | "one" | "#record-update#"; _ } ->
        fallback ()
+     | EVar { name = "serverTools"; _ } when not ctx.server_tools_shadowed ->
+       (* serverTools is typed structurally by its infer_expr arms (a server
+          name is not an expression value); the generic head-inference below
+          would misreport it. *)
+       fallback ()
      | EBinop _ ->
        (* Multi-line SQL: order/limit/offset merged as EApp args onto a where-EBinop.
           Delegate to infer_expr which correctly classifies the merged SQL expression. *)
@@ -4444,7 +4587,7 @@ let check_ord_eq_calls ctx =
          ) constraints)
   ) !(ctx.ord_eq_calls)
 
-let check_module_with_metadata (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * type_error list =
+let check_module_with_metadata (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * type_error list =
   reset_counter ();
   let import_errors = check_stdlib_import_names m in
   let import_errors = import_errors @ check_local_import_names m in
@@ -4522,6 +4665,59 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
       | _ -> None
     ) m.decls in
     { ctx with env = agent_bindings @ cache_bindings @ ctx.env }
+  in
+
+  (* serverTools static env (see the [server_tools_env] doc on [ctx]): for each
+     server, the auth user type its api binds and the non-SSE endpoints as
+     (tool name, normalized auth predicates).  Tool names are the server-binding
+     LHS names, paired positionally with the api's non-SSE endpoints exactly as
+     the emitter pairs them (endpoint names in the AST are synthetic). *)
+  let ctx =
+    let api_of name = List.find_map (function
+      | DApi (a : Ast.api_form) when a.name = name -> Some a
+      | _ -> None) m.decls in
+    let server_tools_env = List.filter_map (function
+      | DServer (srv : Ast.server_form) ->
+        (match api_of srv.api_name with
+         | None -> Some (srv.name, (None, []))
+         | Some api ->
+           let non_sse =
+             List.filter (fun (ep : Ast.api_endpoint) -> ep.method_ <> SSE)
+               api.endpoints in
+           let binding_names = List.map fst srv.bindings in
+           let paired =
+             if List.length binding_names = List.length non_sse then
+               List.combine binding_names non_sse
+             else
+               (* Mismatched server ↔ api (its own validation error elsewhere);
+                  fall back to the synthetic endpoint names so checking can
+                  continue without pretending to know the tool names. *)
+               List.map (fun (ep : Ast.api_endpoint) -> (ep.name, ep)) non_sse
+           in
+           let endpoints = List.map (fun (bname, (ep : Ast.api_endpoint)) ->
+             { ste_binding = bname;
+               ste_preds =
+                 (match ep.auth with
+                  | Some (a : Ast.api_auth) ->
+                    (match a.binding.proof_ann with
+                     | Some p -> normalized_preds_of_proof a.binding.name p
+                     | None -> [])
+                  | None -> []) }
+           ) paired in
+           let auth_ty = List.find_map (fun (ep : Ast.api_endpoint) ->
+             match ep.auth with
+             | Some (a : Ast.api_auth) ->
+               (match a.binding.type_expr with
+                | TName { name; _ } -> Some name
+                | _ -> None)
+             | None -> None) non_sse in
+           Some (srv.name, (auth_ty, endpoints)))
+      | _ -> None) m.decls in
+    let server_tools_shadowed = List.exists (function
+      | DFunc (fd : Ast.func_decl) -> fd.name = "serverTools"
+      | DConst (c : Ast.const_form) -> c.name = "serverTools"
+      | _ -> false) m.decls in
+    { ctx with server_tools_env; server_tools_shadowed }
   in
 
   (* 3c. Validate agent tool parameters: every tool must resolve to a local `fn`
@@ -4636,6 +4832,82 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
     | DConst c ->
       walk_agents_in_expr (Printf.sprintf "agent expression in `%s`" c.name) c.value
     | _ -> ()) m.decls;
+
+  (* 3d. serverTools endpoint-shape rules, validated once per server a
+     `serverTools` expression actually references:
+       - every capture parameter must be an agent-prim (the model supplies it as
+         JSON; same single-source whitelist as `asTool` params);
+       - every authed endpoint must bind the SAME user type (one value is
+         partially applied to all included handlers).
+     Per-endpoint predicate INCLUSION (who gets the admin-gated endpoints) is
+     decided at each call site by the infer_expr arm; these are the rules that
+     do not depend on the caller. *)
+  (if not ctx.server_tools_shadowed then begin
+    let method_str = function
+      | Ast.GET -> "get" | Ast.POST -> "post" | Ast.PUT -> "put"
+      | Ast.DELETE -> "delete" | Ast.PATCH -> "patch" | Ast.SSE -> "sse" in
+    let used_servers : (string * Location.loc) list ref = ref [] in
+    let rec walk_st (e : Ast.expr) : unit =
+      (match e with
+       | EApp { fn = EApp { fn = EVar { name = "serverTools"; _ }; arg = server_ref; _ }; loc; _ } ->
+         (match server_ref with
+          | EConstructor { name; args = []; _ } | EVar { name; _ } ->
+            if not (List.mem_assoc name !used_servers) then
+              used_servers := (name, loc) :: !used_servers
+          | _ -> ())
+       | _ -> ());
+      Ast_visitor.fold_children (fun () c -> walk_st c) () e
+    in
+    List.iter (function
+      | DFunc (fd : Ast.func_decl) -> walk_st fd.body
+      | DConst (c : Ast.const_form) -> walk_st c.value
+      | DTest (tf : Ast.test_form) ->
+        List.iter (fun s -> List.iter walk_st (Ast.test_stmt_exprs s)) tf.stmts
+      | _ -> ()) m.decls;
+    List.iter (fun (sname, uloc) ->
+      let srv_opt = List.find_map (function
+        | DServer (s : Ast.server_form) when s.name = sname -> Some s
+        | _ -> None) m.decls in
+      let api_opt = match srv_opt with
+        | Some srv -> List.find_map (function
+            | DApi (a : Ast.api_form) when a.name = srv.api_name -> Some a
+            | _ -> None) m.decls
+        | None -> None in
+      match api_opt with
+      | None -> ()  (* unknown server / dangling api: reported elsewhere *)
+      | Some api ->
+        let eps = List.filter (fun (ep : Ast.api_endpoint) -> ep.method_ <> SSE)
+            api.endpoints in
+        (* one user type across all authed endpoints *)
+        let auth_tys = List.filter_map (fun (ep : Ast.api_endpoint) ->
+          match ep.auth with
+          | Some (a : Ast.api_auth) ->
+            Some (ep, (match a.binding.type_expr with
+                       | TName { name; _ } -> name
+                       | _ -> "?"))
+          | None -> None) eps in
+        (match auth_tys with
+         | (_, first_ty) :: rest ->
+           List.iter (fun ((ep : Ast.api_endpoint), ty) ->
+             if ty <> first_ty then
+               add_error ctx uloc (Printf.sprintf
+                 "serverTools %s: endpoint `%s %s` authenticates a `%s` but other \
+                  endpoints authenticate a `%s` — serverTools partially applies ONE \
+                  user value, so every authed endpoint of the api must bind the same \
+                  user type"
+                 sname (method_str ep.method_) ep.path ty first_ty)) rest
+         | [] -> ());
+        (* capture params arrive as model JSON — agent-prim whitelist (B4) *)
+        List.iter (fun (ep : Ast.api_endpoint) ->
+          List.iter (fun (c : Ast.api_capture) ->
+            if Validation_common.agent_prim_of_type_expr c.binding.type_expr = None then
+              add_error ctx uloc (Printf.sprintf
+                "serverTools %s: endpoint `%s %s` capture `%s` must be %s — an agent \
+                 tool argument is decoded from the model's JSON"
+                sname (method_str ep.method_) ep.path c.binding.name
+                Validation_common.agent_prim_whitelist_english)) ep.captures) eps
+    ) !used_servers
+  end);
 
   (* 4. Type-check each declaration *)
   (* Top-level fn names that may shadow a SQL builtin — threaded into the §7.12
@@ -4963,20 +5235,21 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
    List.rev !(ctx.expr_types),
    List.rev !(ctx.field_accesses),
    List.rev !(ctx.bare_record_hints),
+   List.rev !(ctx.server_tools_sites),
    import_errors @ export_errors @ fact_ownership_errors @ List.rev !(ctx.errors))
 
 let check_module_with_local_bindings (m : module_form) : local_binding_info list * type_error list =
-  let local_bindings, _, _, _, errors = check_module_with_metadata m in
+  let local_bindings, _, _, _, _, errors = check_module_with_metadata m in
   (local_bindings, errors)
 
 let check_module_with_expr_types (m : module_form) : expr_type_info list * type_error list =
-  let _, expr_types, _, _, errors = check_module_with_metadata m in
+  let _, expr_types, _, _, _, errors = check_module_with_metadata m in
   (expr_types, errors)
 
 let check_module (m : module_form) : type_error list =
-  let _, _, _, _, errors = check_module_with_metadata m in
+  let _, _, _, _, _, errors = check_module_with_metadata m in
   errors
 
 let check_module_with_field_accesses (m : module_form) : field_access_info list * type_error list =
-  let _, _, field_accesses, _, errors = check_module_with_metadata m in
+  let _, _, field_accesses, _, _, errors = check_module_with_metadata m in
   (field_accesses, errors)

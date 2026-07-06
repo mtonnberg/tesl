@@ -1144,6 +1144,54 @@ fn agentForConsumer(c: Consumer) -> Agent requires [supportAi] =
   }
 ```
 
+**Server endpoints as tools (`serverTools`).** `serverTools MyServer user : List Tool`
+derives one tool per non-SSE endpoint of the server's api, **preauthenticated** with the
+proof-carrying authenticated user value — the tools are the same handler functions the
+HTTP API dispatches to, partially applied with that value, so the agent acts strictly on
+the user's behalf and every authorization check in the handler bodies runs unchanged.
+No session forwarding or token minting is involved; the proof system makes "on behalf of
+the user" a static requirement.
+
+```tesl
+handler assistant(user: User ::: Authenticated user, q: Question) -> String
+  requires [todoWebService, supportAi] =
+  let agent = Agent {
+    provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
+    systemPrompt: "You act on the user's todos via the provided tools."
+    maxTokens: 512
+    tools: serverTools TodoServer user   # every endpoint, for free
+  }
+  ask agent q.text
+```
+
+Statics (all compile errors when violated):
+
+- Both arguments are structural: a **bare reference** to a `server` declared in the
+  module, and a **bare variable** holding the user.
+- **Per-endpoint inclusion is decided at each call site** from the user variable's
+  declared proof annotation: an endpoint becomes a tool iff the annotation covers the
+  endpoint's `auth` predicates. A `u ::: Authenticated u` user exposes the plainly
+  authenticated endpoints; a `u ::: Authenticated u && Admin u` user (a handler
+  parameter, or a `let admin = check requireAdmin u` upgrade) additionally exposes the
+  admin-gated ones. A user value matching **no** authed endpoint is rejected. Endpoints
+  without an `auth` line are always included; SSE endpoints never are.
+- Every authed endpoint of the api must bind the same user type (one value is applied
+  to all of them), and every `capture` parameter must be an agent-prim (same whitelist
+  as `asTool` parameters).
+- The enclosing function is charged the union of the bound handlers' declared
+  capabilities — exposing a server to an agent means the agent may do anything those
+  handlers can.
+
+Each tool's name is the server-binding name, its description is the bound handler's
+doc-comment (falling back to `"METHOD /path"`), and its input schema has one required
+property per capture plus one for the `body` binder (an object derived from the body
+record's `fromJson` codec). At runtime the tool reuses the endpoint's own boundary
+pipeline — capture parser + `via` check + proof attach, body codec decode — so a tool
+argument can never be validated more weakly than the HTTP boundary; a handler
+`fail status "msg"` (or a runtime error) comes back to the model as an `is_error`
+tool_result, the agent-loop analogue of the HTTP error response, and results are
+JSON-encoded through the same path as HTTP responses.
+
 Running inference requires the `aiProvider` capability (from `Tesl.Agent`; it implies
 `httpClient` because real providers perform outbound HTTP). The agent API:
 

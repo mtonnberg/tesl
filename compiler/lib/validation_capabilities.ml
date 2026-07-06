@@ -93,9 +93,10 @@ let cap_check_kind_info (k : func_kind) : (string * (string -> string -> string)
    calling e.g. `ask` (aiProvider), `insert` (dbWrite), or `publish` (pubsub)
    beyond its `requires [...]` compiled clean and then trapped at RUNTIME with
    "Missing capabilities". This mirrors the fn/handler check onto test bodies. *)
-let collect_test_body_caps ~func_caps (stmts : test_stmt list) : string list =
+let collect_test_body_caps ~func_caps ?(server_tools_caps=[]) (stmts : test_stmt list) : string list =
   let acc = ref [] in
-  let add e bound = acc := collect_needed_capabilities ~func_caps ~bound e @ !acc in
+  let add e bound =
+    acc := collect_needed_capabilities ~func_caps ~server_tools_caps ~bound e @ !acc in
   let rec pat_binders = function
     | PVar n when n <> "_" -> [n]
     | PCon { fields; _ } -> List.concat_map (fun (_, sub) -> pat_binders sub) fields
@@ -139,6 +140,17 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
      imported functions' declared `requires`, so a transitive call into an
      imported effecting function is enforced across the module boundary. *)
   let func_caps = build_func_capability_map decls @ imported_func_caps in
+  (* serverTools: server name → union of its bound handlers' declared caps, so a
+     fn/test whose body exposes a server's endpoints to an agent must declare
+     everything those handlers may do (V001 with the standard hint). *)
+  let server_tools_caps = List.filter_map (function
+    | DServer (srv : server_form) ->
+      let caps = List.concat_map (fun (_, handler) ->
+        match List.assoc_opt handler func_caps with
+        | Some cs -> cs
+        | None -> []) srv.bindings in
+      Some (srv.name, List.sort_uniq String.compare caps)
+    | _ -> None) decls in
   let config_reads_env = module_config_reads_env decls in
   (* Full transitive closure: expand a set of declared capabilities to everything they
      imply, recursively. Uses the same algorithm as expand_caps in proof_checker.ml. *)
@@ -183,7 +195,7 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
              (* Seed [bound] with the function parameters (in scope for the whole
                 body); collect_needed_capabilities extends it lexically per inner
                 binder so a disjoint binder can no longer suppress a capability. *)
-             collect_needed_capabilities ~func_caps ~param_caps
+             collect_needed_capabilities ~func_caps ~param_caps ~server_tools_caps
                ~bound:(List.map (fun (b : binding) -> b.name) fd.params) fd.body
              |> List.sort_uniq String.compare
          in
@@ -198,7 +210,7 @@ let check_handler_capabilities ?(cap_map=[]) ?(imported_func_caps=[]) (decls : t
     | DTest t ->
       (* Same capability enforcement as fns/handlers, extended to `test`/`api-test`
          etc. bodies (previously unchecked → runtime "Missing capabilities"). *)
-      let needed = collect_test_body_caps ~func_caps t.stmts in
+      let needed = collect_test_body_caps ~func_caps ~server_tools_caps t.stmts in
       let declared = t.capabilities in
       let missing = List.filter (fun cap -> not (cap_covered declared cap)) needed in
       if missing <> [] then
