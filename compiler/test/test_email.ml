@@ -154,55 +154,55 @@ let test_parse_email_smtp_tls () =
 (** 1.8 Email.send parses and emits send-email! *)
 let test_parse_email_send () =
   let src = module_ ~extra:(with_db email_block)
-    "fn sendWelcome(addr: String) -> Unit requires [email] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hello\"\n    body: TextBody \"Welcome!\"\n  }\n" in
+    "fn sendWelcome(addr: String) -> Unit requires [emailCap] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hello\"\n    body: TextBody \"Welcome!\"\n  }\n" in
   check_contains "parse_email_send" src "send-email!"
 
 (** 1.9 Email.send emits email name *)
 let test_parse_email_send_name () =
   let src = module_ ~extra:(with_db email_block)
-    "fn sendWelcome(addr: String) -> Unit requires [email] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hello\"\n    body: TextBody \"Welcome!\"\n  }\n" in
+    "fn sendWelcome(addr: String) -> Unit requires [emailCap] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hello\"\n    body: TextBody \"Welcome!\"\n  }\n" in
   check_contains "email_send_name" src "AppEmail"
 
 (** 1.10 Email.send emits #:to *)
 let test_parse_email_send_to () =
   let src = module_ ~extra:(with_db email_block)
-    "fn sendWelcome(addr: String) -> Unit requires [email] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hello\"\n    body: TextBody \"Welcome!\"\n  }\n" in
+    "fn sendWelcome(addr: String) -> Unit requires [emailCap] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hello\"\n    body: TextBody \"Welcome!\"\n  }\n" in
   check_contains "email_send_to" src "#:to"
 
 (** 1.11 Email.send emits #:subject *)
 let test_parse_email_send_subject () =
   let src = module_ ~extra:(with_db email_block)
-    "fn sendWelcome(addr: String) -> Unit requires [email] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hello\"\n    body: TextBody \"Welcome!\"\n  }\n" in
+    "fn sendWelcome(addr: String) -> Unit requires [emailCap] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hello\"\n    body: TextBody \"Welcome!\"\n  }\n" in
   check_contains "email_send_subject" src "#:subject"
 
 (** 1.12 Email.send with TextBody emits make-text-body *)
 let test_parse_email_send_text () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(addr: String) -> Unit requires [email] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hi\"\n    body: TextBody \"body text\"\n  }\n" in
+    "fn f(addr: String) -> Unit requires [emailCap] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hi\"\n    body: TextBody \"body text\"\n  }\n" in
   check_contains "email_send_text" src "#:body"
 
 (** 1.13 Email.send with HtmlBody emits make-html-body *)
 let test_parse_email_send_html () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(addr: String) -> Unit requires [email] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hi\"\n    body: HtmlBody \"<h1>Hi</h1>\"\n  }\n" in
+    "fn f(addr: String) -> Unit requires [emailCap] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hi\"\n    body: HtmlBody \"<h1>Hi</h1>\"\n  }\n" in
   check_contains "email_send_html" src "#:body"
 
 (** 1.14 Email.send with RichBody emits #:body *)
 let test_parse_email_send_no_text_is_false () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(addr: String) -> Unit requires [email] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hi\"\n    body: RichBody \"plain\" \"<b>html</b>\"\n  }\n" in
+    "fn f(addr: String) -> Unit requires [emailCap] =\n  Email.send AppEmail {\n    to: addr\n    subject: \"Hi\"\n    body: RichBody \"plain\" \"<b>html</b>\"\n  }\n" in
   check_contains "email_send_rich_body" src "#:body"
 
 (** 1.15 startEmailWorker parses and emits start-email-worker! *)
 let test_parse_start_email_worker () =
   let src = module_ ~extra:(with_db email_block)
-    "fn start() -> Unit requires [email] =\n  startEmailWorker AppEmail\n" in
+    "fn start() -> Unit requires [emailCap] =\n  startEmailWorker AppEmail\n" in
   check_contains "parse_start_email_worker" src "start-email-worker!"
 
 (** 1.16 startEmailWorker emits the email name *)
 let test_parse_start_email_worker_name () =
   let src = module_ ~extra:(with_db email_block)
-    "fn start() -> Unit requires [email] =\n  startEmailWorker AppEmail\n" in
+    "fn start() -> Unit requires [emailCap] =\n  startEmailWorker AppEmail\n" in
   check_contains "start_email_worker_name" src "AppEmail"
 
 (** 1.17 Multiple email blocks parse correctly *)
@@ -215,7 +215,7 @@ let test_parse_multiple_email_blocks () =
 (** 1.18 Email.send in let binding is valid *)
 let test_parse_email_send_let () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(addr: String) -> Unit requires [email] =\n\
+    "fn f(addr: String) -> Unit requires [emailCap] =\n\
      let _ = Email.send AppEmail { to: addr subject: \"Hi\" body: TextBody \"Hi\" }\n\
      Email.send AppEmail { to: addr subject: \"Bye\" body: TextBody \"Bye\" }\n" in
   ignore (compile_ok "email_send_let" src)
@@ -236,20 +236,20 @@ let test_parse_email_tls_false () =
 (** 2.1 Email.send returns Unit *)
 let test_type_email_send_unit () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(addr: String) -> Unit requires [email] =\n\
+    "fn f(addr: String) -> Unit requires [emailCap] =\n\
      Email.send AppEmail { to: addr subject: \"Hi\" body: TextBody \"Hello\" }\n" in
   ignore (compile_ok "type_email_send_unit" src)
 
 (** 2.2 startEmailWorker returns Unit *)
 let test_type_start_worker_unit () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f() -> Unit requires [email] =\n  startEmailWorker AppEmail\n" in
+    "fn f() -> Unit requires [emailCap] =\n  startEmailWorker AppEmail\n" in
   ignore (compile_ok "type_start_worker_unit" src)
 
 (** 2.3 `to` field must be String — passing Int should produce type error *)
 let test_type_to_must_be_string () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f() -> Unit requires [email] =\n\
+    "fn f() -> Unit requires [emailCap] =\n\
      Email.send AppEmail { to: 42 subject: \"Hi\" body: TextBody \"x\" }\n" in
   (* Type error expected: 42 is not a String *)
   let diags = Compile.check_source "<test>" src in
@@ -258,28 +258,28 @@ let test_type_to_must_be_string () =
 (** 2.4 `subject` field must be String *)
 let test_type_subject_must_be_string () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(addr: String) -> Unit requires [email] =\n\
+    "fn f(addr: String) -> Unit requires [emailCap] =\n\
      Email.send AppEmail { to: addr subject: \"Hello\" body: TextBody \"Hi\" }\n" in
   ignore (compile_ok "type_subject_string" src)
 
 (** 2.5 TextBody is a valid EmailBody *)
 let test_type_text_optional_string () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(addr: String, bodyText: String) -> Unit requires [email] =\n\
+    "fn f(addr: String, bodyText: String) -> Unit requires [emailCap] =\n\
      Email.send AppEmail { to: addr subject: \"Hi\" body: TextBody bodyText }\n" in
   ignore (compile_ok "type_text_body" src)
 
 (** 2.6 HtmlBody is a valid EmailBody *)
 let test_type_html_optional_string () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(addr: String, h: String) -> Unit requires [email] =\n\
+    "fn f(addr: String, h: String) -> Unit requires [emailCap] =\n\
      Email.send AppEmail { to: addr subject: \"Hi\" body: HtmlBody h }\n" in
   ignore (compile_ok "type_html_body" src)
 
 (** 2.7 Email.send in sequence after let _ = is valid Unit *)
 let test_type_email_send_in_sequence () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(addr: String) -> Unit requires [email] =\n\
+    "fn f(addr: String) -> Unit requires [emailCap] =\n\
      let _ = Email.send AppEmail { to: addr subject: \"A\" body: TextBody \"A\" }\n\
      Email.send AppEmail { to: addr subject: \"B\" body: TextBody \"B\" }\n" in
   ignore (compile_ok "type_email_seq" src)
@@ -287,7 +287,7 @@ let test_type_email_send_in_sequence () =
 (** 2.8 Email.send with RichBody (both text and html) *)
 let test_type_email_both_bodies () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(addr: String) -> Unit requires [email] =\n\
+    "fn f(addr: String) -> Unit requires [emailCap] =\n\
      Email.send AppEmail {\n\
        to: addr\n\
        subject: \"Hi\"\n\
@@ -298,28 +298,28 @@ let test_type_email_both_bodies () =
 (** 2.9 String interpolation in `to` field *)
 let test_type_email_interp_to () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(user: String) -> Unit requires [email] =\n\
+    "fn f(user: String) -> Unit requires [emailCap] =\n\
      Email.send AppEmail { to: user subject: \"Hi\" body: TextBody \"Hi\" }\n" in
   ignore (compile_ok "type_email_interp_to" src)
 
 (** 2.10 Email.send with string literal to *)
 let test_type_email_literal_to () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f() -> Unit requires [email] =\n\
+    "fn f() -> Unit requires [emailCap] =\n\
      Email.send AppEmail { to: \"user@example.com\" subject: \"Hi\" body: TextBody \"Hi\" }\n" in
   ignore (compile_ok "type_email_literal_to" src)
 
 (** 2.11 Email block name is in scope for Email.send *)
 let test_type_email_name_in_scope () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(addr: String) -> Unit requires [email] =\n\
+    "fn f(addr: String) -> Unit requires [emailCap] =\n\
      Email.send AppEmail { to: addr subject: \"Hi\" body: TextBody \"Hi\" }\n" in
   ignore (compile_ok "type_email_name_scope" src)
 
 (** 2.12 Two Email.send calls in sequence *)
 let test_type_two_sends () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(a: String, b: String) -> Unit requires [email] =\n\
+    "fn f(a: String, b: String) -> Unit requires [emailCap] =\n\
      let _ = Email.send AppEmail { to: a subject: \"To A\" body: TextBody \"A\" }\n\
      Email.send AppEmail { to: b subject: \"To B\" body: TextBody \"B\" }\n" in
   ignore (compile_ok "type_two_sends" src)
@@ -327,13 +327,13 @@ let test_type_two_sends () =
 (** 2.13 startEmailWorker in main-like function *)
 let test_type_start_worker_in_main () =
   let src = module_ ~extra:(with_db email_block)
-    "fn start() -> Unit requires [email] =\n  startEmailWorker AppEmail\n" in
+    "fn start() -> Unit requires [emailCap] =\n  startEmailWorker AppEmail\n" in
   ignore (compile_ok "type_start_worker_main" src)
 
 (** 2.14 startEmailWorker after other statements *)
 let test_type_start_worker_sequence () =
   let src = module_ ~extra:(with_db email_block)
-    "fn start() -> Unit requires [email] =\n\
+    "fn start() -> Unit requires [emailCap] =\n\
      let _ = Email.send AppEmail { to: \"a@b.com\" subject: \"Hi\" body: TextBody \"Hi\" }\n\
      startEmailWorker AppEmail\n" in
   ignore (compile_ok "type_start_worker_seq" src)
@@ -420,45 +420,45 @@ let test_structural_plaintext_password () =
 
 (* ── 4. Capability tests ─────────────────────────────────────────────────── *)
 
-(** 4.1 Email.send requires [email] capability *)
+(** 4.1 Email.send requires [emailCap] capability *)
 let test_cap_email_send_requires_email () =
   let src = module_ ~extra:(with_db email_block)
     "fn f(addr: String) -> Unit =\n\
      Email.send AppEmail { to: addr subject: \"Hi\" body: TextBody \"Hi\" }\n" in
   check_err_contains "cap_email_send_no_cap" src "email"
 
-(** 4.2 Email.send with [email] capability does not error *)
+(** 4.2 Email.send with [emailCap] capability does not error *)
 let test_cap_email_send_with_capability () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(addr: String) -> Unit requires [email] =\n\
+    "fn f(addr: String) -> Unit requires [emailCap] =\n\
      Email.send AppEmail { to: addr subject: \"Hi\" body: TextBody \"Hi\" }\n" in
   ignore (compile_ok "cap_email_send_with_cap" src)
 
-(** 4.3 startEmailWorker requires [email] *)
+(** 4.3 startEmailWorker requires [emailCap] *)
 let test_cap_start_worker_requires_email () =
   let src = module_ ~extra:(with_db email_block)
     "fn f() -> Unit =\n  startEmailWorker AppEmail\n" in
   check_err_contains "cap_start_worker_no_cap" src "email"
 
-(** 4.4 startEmailWorker with [email] capability does not error *)
+(** 4.4 startEmailWorker with [emailCap] capability does not error *)
 let test_cap_start_worker_with_capability () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f() -> Unit requires [email] =\n  startEmailWorker AppEmail\n" in
+    "fn f() -> Unit requires [emailCap] =\n  startEmailWorker AppEmail\n" in
   ignore (compile_ok "cap_start_worker_with_cap" src)
 
 (** 4.5 email capability is a valid capability name *)
 let test_cap_email_is_valid_capability () =
   let src = module_ ~extra:(with_db email_block)
-    "fn f(addr: String) -> Unit requires [email] =\n\
+    "fn f(addr: String) -> Unit requires [emailCap] =\n\
      Email.send AppEmail { to: addr subject: \"Hi\" body: TextBody \"Hi\" }\n" in
   ignore (compile_ok "cap_email_valid" src)
 
 (** 4.6 Capability propagates through function calls *)
 let test_cap_email_propagates () =
   let src = module_ ~extra:(with_db email_block)
-    "fn send(addr: String) -> Unit requires [email] =\n\
+    "fn send(addr: String) -> Unit requires [emailCap] =\n\
      Email.send AppEmail { to: addr subject: \"Hi\" body: TextBody \"Hi\" }\n\
-     fn run(addr: String) -> Unit requires [email] =\n\
+     fn run(addr: String) -> Unit requires [emailCap] =\n\
      send addr\n" in
   ignore (compile_ok "cap_email_propagates" src)
 
@@ -466,13 +466,13 @@ let test_cap_email_propagates () =
 let test_cap_email_decl_defines_capability () =
   let src = module_ (with_db email_block) in
   let racket = compile_ok "cap_email_decl_defines" src in
-  (* The email capability should be usable in requires [email] *)
+  (* The email capability should be usable in requires [emailCap] *)
   ignore racket
 
 (** 4.8 Missing email capability in caller causes error *)
 let test_cap_email_missing_in_caller () =
   let src = module_ ~extra:(with_db email_block)
-    "fn sendEmail(addr: String) -> Unit requires [email] =\n\
+    "fn sendEmail(addr: String) -> Unit requires [emailCap] =\n\
      Email.send AppEmail { to: addr subject: \"Hi\" body: TextBody \"Hi\" }\n\
      fn main() -> Unit =\n\
      sendEmail \"user@example.com\"\n" in
@@ -489,7 +489,7 @@ let test_cap_wrong_capability () =
 let test_cap_email_not_cache_style () =
   (* Email uses a flat "email" cap, not "email AppEmail" style like cache *)
   let src = module_ ~extra:(with_db email_block)
-    "fn f(addr: String) -> Unit requires [email] =\n\
+    "fn f(addr: String) -> Unit requires [emailCap] =\n\
      Email.send AppEmail { to: addr subject: \"Hi\" body: TextBody \"Hi\" }\n" in
   ignore (compile_ok "cap_email_not_cache_style" src)
 
@@ -553,7 +553,7 @@ let () =
     "lint_w070", [
       test_case "W070: email without startEmailWorker"       `Quick (fun () ->
         should_lint (module_ ~extra:(with_db email_block) {|
-fn setup() -> Unit requires [email] =
+fn setup() -> Unit requires [emailCap] =
   Email.send AppEmail {
     to: "a@b.com"
     subject: "hi"
@@ -562,7 +562,7 @@ fn setup() -> Unit requires [email] =
 |}) "W070");
       test_case "W070 not emitted when startEmailWorker present" `Quick (fun () ->
         should_not_lint (module_ ~extra:(with_db email_block) {|
-fn main() -> Unit requires [email] =
+fn main() -> Unit requires [emailCap] =
   startEmailWorker AppEmail
 |}) "W070");
       test_case "W070 not emitted for empty module"           `Quick (fun () ->
@@ -570,7 +570,7 @@ fn main() -> Unit requires [email] =
       test_case "W070: message names the undeclared email"   `Quick (fun () ->
         let diags = lint_diags_for
           (module_ ~extra:(with_db email_block) {|
-fn setup() -> Unit requires [email] =
+fn setup() -> Unit requires [emailCap] =
   Email.send AppEmail {
     to: "a@b.com"
     subject: "hi"
@@ -588,7 +588,7 @@ fn setup() -> Unit requires [email] =
           "email AppEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: \"h\"\n    port: 587\n    username: \"u\"\n    password: \"p\"\n    tls: false\n  }\n}\n\
            email NotifyEmail = Email {\n  database: MainDB\n  smtp: SmtpConfig {\n    host: \"h\"\n    port: 587\n    username: \"u\"\n    password: \"p\"\n    tls: false\n  }\n}\n" in
         let src = module_ ~extra:(with_db two_emails) {|
-fn main() -> Unit requires [email] =
+fn main() -> Unit requires [emailCap] =
   startEmailWorker AppEmail
 |} in
         let diags = lint_diags_for src in
@@ -601,7 +601,7 @@ fn main() -> Unit requires [email] =
          | _ -> Alcotest.failf "expected exactly one W070, got %d" (List.length w70)));
       test_case "W070: startEmailWorker in nested let clears warning"  `Quick (fun () ->
         should_not_lint (module_ ~extra:(with_db email_block) {|
-fn main() -> Unit requires [email] =
+fn main() -> Unit requires [emailCap] =
   let _ = "setup"
   startEmailWorker AppEmail
 |}) "W070");

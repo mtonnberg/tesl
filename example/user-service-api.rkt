@@ -221,7 +221,7 @@
 
 (define-handler
   (register [body : RegisterRequest])
-  #:capabilities [userDbRead userDbWrite userTime userRandom userJwt email]
+  #:capabilities [userDbRead userDbWrite userTime userRandom userJwt emailCap]
   #:returns AuthResponse
   (let ([existing (thsl-src! "example/user-service-api.tesl" 363 (list (cons 'body *body)) (lambda () (let ([tesl_match (select-one (from User) (where (==. (entity-field-ref User 'emailAddress) (raw-value body.emailAddr))))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/user-service-api.tesl" 364 (list (cons 'existing *existing) (cons 'body *body)) (lambda () (let ([tesl-case-2 (raw-value existing)]) (cond [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Something)) (thsl-src! "example/user-service-api.tesl" 366 (list) (lambda () (reject "Email is already registered" #:http-code 409)))] [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 370 (list) (lambda () (let ([userId (generatePrefixedId "user")]) (let ([passwordHash (string-append "hash:" (raw-value body.password))]) (let ([token (makeToken userId)]) (let ([userEmail (raw-value body.emailAddr)]) (let ([displayName (raw-value body.username)]) (let ([_ (insert-one! User (hash 'id userId 'username displayName 'emailAddress userEmail 'passwordHash passwordHash 'bio "" 'avatarUrl "" 'createdAt (raw-value (nowMillis))))]) (begin (send-email! UserServiceMail #:to userEmail #:subject "Welcome to UserService!" #:body (raw-value (TextBody (raw-value displayName)))) (AuthResponse #:token (raw-value token.value) #:userId *userId))))))))))]))))))
 
@@ -245,7 +245,7 @@
 
 (define-handler
   (forgotPassword [body : ForgotPasswordRequest])
-  #:capabilities [userDbRead email]
+  #:capabilities [userDbRead emailCap]
   #:returns String
   (let ([found (thsl-src! "example/user-service-api.tesl" 469 (list (cons 'body *body)) (lambda () (let ([tesl_match (select-one (from User) (where (==. (entity-field-ref User 'emailAddress) (raw-value body.emailAddr))))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/user-service-api.tesl" 470 (list (cons 'found *found) (cons 'body *body)) (lambda () (let ([tesl-case-7 (raw-value found)]) (cond [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Nothing)) (thsl-src! "example/user-service-api.tesl" 473 (list) (lambda () "If that email is registered, a reset link has been sent."))] [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Something)) (let ([user (hash-ref (adt-value-fields *tesl-case-7) 'value)]) (thsl-src! "example/user-service-api.tesl" 476 (list (cons 'user user)) (lambda () (let ([resetAddr (raw-value body.emailAddr)]) (begin (send-email! UserServiceMail #:to resetAddr #:subject "Reset your UserService password" #:body (raw-value (TextBody (raw-value user.id)))) "If that email is registered, a reset link has been sent.")))))]))))))
 
@@ -295,8 +295,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (with-capabilities (userDbRead userDbWrite userTime userRandom userJwt email)
-              (define resp (dispatch-api-test-request UserServer 'post (list "register") #:headers (hash) #:body (hash (string->symbol "username") "alice" (string->symbol "email") "alice@example.com" (string->symbol "password") "securepass") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt email)))
+            (with-capabilities (userDbRead userDbWrite userTime userRandom userJwt emailCap)
+              (define resp (dispatch-api-test-request UserServer 'post (list "register") #:headers (hash) #:body (hash (string->symbol "username") "alice" (string->symbol "email") "alice@example.com" (string->symbol "password") "securepass") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt emailCap)))
               (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
             )
           ))
@@ -328,8 +328,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (with-capabilities (userDbRead email)
-              (define resp (dispatch-api-test-request UserServer 'post (list "forgot-password") #:headers (hash) #:body (hash (string->symbol "email") "alice@example.com") #:capabilities (list userDbRead email)))
+            (with-capabilities (userDbRead emailCap)
+              (define resp (dispatch-api-test-request UserServer 'post (list "forgot-password") #:headers (hash) #:body (hash (string->symbol "email") "alice@example.com") #:capabilities (list userDbRead emailCap)))
               (check-true (raw-value (statusOk (raw-value (api-test-field-access-ref resp 'status)))))
             )
           ))
@@ -376,8 +376,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (with-capabilities (userDbRead userDbWrite userTime userRandom userJwt email)
-              (define resp (dispatch-api-test-request UserServer 'post (list "register") #:headers (hash) #:body (hash (string->symbol "username") "bob" (string->symbol "email") "not-an-email" (string->symbol "password") "securepass") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt email)))
+            (with-capabilities (userDbRead userDbWrite userTime userRandom userJwt emailCap)
+              (define resp (dispatch-api-test-request UserServer 'post (list "register") #:headers (hash) #:body (hash (string->symbol "username") "bob" (string->symbol "email") "not-an-email" (string->symbol "password") "securepass") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt emailCap)))
               (check-true (raw-value (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))
             )
           ))
@@ -392,8 +392,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (with-capabilities (userDbRead userDbWrite userTime userRandom userJwt email)
-              (define resp (dispatch-api-test-request UserServer 'post (list "register") #:headers (hash) #:body (hash (string->symbol "username") "bob" (string->symbol "email") "bob@example.com" (string->symbol "password") "short") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt email)))
+            (with-capabilities (userDbRead userDbWrite userTime userRandom userJwt emailCap)
+              (define resp (dispatch-api-test-request UserServer 'post (list "register") #:headers (hash) #:body (hash (string->symbol "username") "bob" (string->symbol "email") "bob@example.com" (string->symbol "password") "short") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt emailCap)))
               (check-true (raw-value (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))
             )
           ))
@@ -408,8 +408,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (with-capabilities (userDbRead userDbWrite userTime userRandom userJwt email)
-              (define resp (dispatch-api-test-request UserServer 'post (list "register") #:headers (hash) #:body (hash (string->symbol "username") "x" (string->symbol "email") "x@example.com" (string->symbol "password") "securepass") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt email)))
+            (with-capabilities (userDbRead userDbWrite userTime userRandom userJwt emailCap)
+              (define resp (dispatch-api-test-request UserServer 'post (list "register") #:headers (hash) #:body (hash (string->symbol "username") "x" (string->symbol "email") "x@example.com" (string->symbol "password") "securepass") #:capabilities (list userDbRead userDbWrite userTime userRandom userJwt emailCap)))
               (check-true (raw-value (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))
             )
           ))

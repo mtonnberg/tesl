@@ -62,7 +62,7 @@ import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify]
 import Tesl.Cache exposing [Cache]
 
 # 4. Email: outbox-pattern email sending.
-#    `email` can appear directly in `requires [email]` after declaring an email block.
+#    `email` can appear directly in `requires [emailCap]` after declaring an email block.
 #    (Email block declared below after the database.)
 
 # 5. HttpClient: outbound HTTP calls for webhook notification.
@@ -359,7 +359,7 @@ fn notifyWebhook(userId: String) -> HttpResponse
 #           userRandom (ID generation), userJwt (sign token), email (welcome email).
 handler register(body: RegisterRequest)
   -> AuthResponse
-  requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, email] =
+  requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, emailCap] =
   let existing = selectOne u from User where u.emailAddress == body.emailAddr
   case existing of
     Something _ ->
@@ -465,7 +465,7 @@ handler updateProfile(
 # Requires: userDbRead (email lookup), email (reset email).
 handler forgotPassword(body: ForgotPasswordRequest)
   -> String
-  requires [userDbRead, email] =
+  requires [userDbRead, emailCap] =
   let found = selectOne u from User where u.emailAddress == body.emailAddr
   case found of
     Nothing ->
@@ -598,7 +598,7 @@ test "checkPassword accepts an 8-character password" {
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Public endpoints are reachable without authentication.
-api-test "POST /register succeeds with valid body" for UserServer requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, email] {
+api-test "POST /register succeeds with valid body" for UserServer requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, emailCap] {
   let resp = post "/register" body {
     "username": "alice",
     "email": "alice@example.com",
@@ -618,7 +618,7 @@ api-test "POST /login succeeds with valid body" for UserServer requires [userDbR
   expect statusOk resp.status
 }
 
-api-test "POST /forgot-password succeeds with valid body" for UserServer requires [userDbRead, email] {
+api-test "POST /forgot-password succeeds with valid body" for UserServer requires [userDbRead, emailCap] {
   let resp = post "/forgot-password" body {
     "email": "alice@example.com"
   }
@@ -637,7 +637,7 @@ api-test "PUT /me returns 401 without Authorization header" for UserServer requi
 }
 
 # Validation errors return 400 for malformed input.
-api-test "POST /register with invalid email returns 400" for UserServer requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, email] {
+api-test "POST /register with invalid email returns 400" for UserServer requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, emailCap] {
   let resp = post "/register" body {
     "username": "bob",
     "email": "not-an-email",
@@ -646,7 +646,7 @@ api-test "POST /register with invalid email returns 400" for UserServer requires
   expect statusClientError resp.status
 }
 
-api-test "POST /register with short password returns 400" for UserServer requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, email] {
+api-test "POST /register with short password returns 400" for UserServer requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, emailCap] {
   let resp = post "/register" body {
     "username": "bob",
     "email": "bob@example.com",
@@ -655,7 +655,7 @@ api-test "POST /register with short password returns 400" for UserServer require
   expect statusClientError resp.status
 }
 
-api-test "POST /register with short username returns 400" for UserServer requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, email] {
+api-test "POST /register with short username returns 400" for UserServer requires [userDbRead, userDbWrite, userTime, userRandom, userJwt, emailCap] {
   let resp = post "/register" body {
     "username": "x",
     "email": "x@example.com",

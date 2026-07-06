@@ -1121,8 +1121,8 @@ let effect_form_fixed_caps : (string * string list) list = [
   "EEnqueue",          ["queueWrite"];
   "EPublish",          ["pubsub"];
   "ETelemetry",        [];          (* needs only what its field exprs need *)
-  "ESendEmail",        ["email"];
-  "EStartEmailWorker", ["email"];
+  "ESendEmail",        ["emailCap"];
+  "EStartEmailWorker", ["emailCap"];
 ]
 
 let effect_caps key =
@@ -1410,6 +1410,12 @@ let tesl_stdlib_cap_map : (string * (string * string list) list) list = [
   "Tesl.JWT",        [("jwt", [])];
   "Tesl.HttpClient", [("httpClient", [])];
   "Tesl.Agent",      [("aiProvider", ["httpClient"])];
+  (* email_capability_not_composable (2026-07-06): the email capability had NO
+     stdlib provider row, so `import Tesl.Email exposing [emailCap]` was accepted
+     as an import but the capability silently vanished — a library `fn … requires
+     [emailCap]` and `capability X implies emailCap` were both rejected.  With
+     this row, emailCap composes exactly like dbRead. *)
+  "Tesl.Email",      [("emailCap", [])];
 ]
 
 let load_imported_cap_map (m : module_form) : (string * string list) list =

@@ -11,11 +11,11 @@
 
     - The email module loads at runtime without unbound-identifier errors, by
       starting a real Tesl App that declares an `email` block and serving it.
-    - Email.send runs inside the App's auto-granted `[email]` scope (no
+    - Email.send runs inside the App's auto-granted `[emailCap]` scope (no
       `with capabilities`) — exercised by hitting an App endpoint whose handler
       calls Email.send (TextBody / HtmlBody / RichBody variants).
     - The email capability gate is enforced at compile time (a fn calling
-      Email.send without `requires [email]` is rejected by --check).
+      Email.send without `requires [emailCap]` is rejected by --check).
     - Direct SMTP delivery to a live MailHog SMTP server works, and MailHog
       records the correct subject and recipient.
 
@@ -253,7 +253,7 @@ server EmailTestServer for EmailTestApi {
 %s
 }
 
-main() -> App requires [email] =
+main() -> App requires [emailCap] =
   App {
     database: EmailTestDb
     email: [EmailTestMail]
@@ -274,11 +274,11 @@ handler emailLoaded() -> String requires [] =
     (app_tail ~endpoints:[("emailLoaded", "/loaded")] app_port)
 
 (** App whose endpoint sends a TextBody email via Email.send (auto-granted
-    [email] capability) and returns a marker. *)
+    [emailCap] capability) and returns a marker. *)
 let tesl_email_send_app ~module_name smtp_port app_port recipient =
   Printf.sprintf {|%s
 
-handler queueEmail() -> String requires [email] =
+handler queueEmail() -> String requires [emailCap] =
   let _ = Email.send EmailTestMail {
     to: "%s"
     subject: "Integration Test Subject"
@@ -294,7 +294,7 @@ handler queueEmail() -> String requires [email] =
 let tesl_email_html_app ~module_name smtp_port app_port =
   Printf.sprintf {|%s
 
-handler sendHtml() -> String requires [email] =
+handler sendHtml() -> String requires [emailCap] =
   let _ = Email.send EmailTestMail {
     to: "html@example.com"
     subject: "HTML Email Test"
@@ -309,7 +309,7 @@ handler sendHtml() -> String requires [email] =
 let tesl_email_rich_app ~module_name smtp_port app_port =
   Printf.sprintf {|%s
 
-handler sendRich() -> String requires [email] =
+handler sendRich() -> String requires [emailCap] =
   let _ = Email.send EmailTestMail {
     to: "rich@example.com"
     subject: "Rich Email Test"
@@ -321,7 +321,7 @@ handler sendRich() -> String requires [email] =
     (app_tail ~endpoints:[("sendRich", "/rich")] app_port)
 
 (** Build module name + source for a Tesl program where a fn calls Email.send
-    WITHOUT `requires [email]`.  No main is needed — the point is that the
+    WITHOUT `requires [emailCap]`.  No main is needed — the point is that the
     compiler rejects the missing-capability call. *)
 let tesl_email_no_cap_src module_name =
   (module_name, Printf.sprintf {|#lang tesl
@@ -484,7 +484,7 @@ let test_email_module_loads () =
       Alcotest.failf "Email module load: expected 'EMAIL-MODULE-LOADED' in response, got: %S" out
   )
 
-(** Test 2: Email.send runs inside the App's auto-granted [email] scope. *)
+(** Test 2: Email.send runs inside the App's auto-granted [emailCap] scope. *)
 let test_email_send_queues () =
   let mn = fresh_module_name "TeslEmailSend" in
   let app_port = pick_free_port () in
@@ -520,12 +520,12 @@ let test_email_rich_body () =
       Alcotest.failf "RichBody: expected 'RICH-EMAIL-QUEUED' in response, got: %S" out
   )
 
-(** Test 5: Capability gate — Email.send without requires [email] fails compile. *)
+(** Test 5: Capability gate — Email.send without requires [emailCap] fails compile. *)
 let test_email_capability_gate () =
   let mn = fresh_module_name "TeslEmailNoCap" in
   let (module_name, src) = tesl_email_no_cap_src mn in
   if not (compile_tesl_check_fails ~module_name src) then
-    Alcotest.failf "Expected --check to fail for Email.send without requires [email]"
+    Alcotest.failf "Expected --check to fail for Email.send without requires [emailCap]"
 
 (** Test 6: Multiple Email.send calls run without error — the App endpoint can be
     hit repeatedly and Email.send keeps succeeding (the outbox handles >1). *)
@@ -659,7 +659,7 @@ let () =
     "tesl-app", [
       Alcotest.test_case "email module loads in a running App"   `Slow
         (guarded_test "email-module-loads"   test_email_module_loads);
-      Alcotest.test_case "Email.send runs in App [email] scope"  `Slow
+      Alcotest.test_case "Email.send runs in App [emailCap] scope"  `Slow
         (guarded_test "email-send-queues"    test_email_send_queues);
       Alcotest.test_case "HtmlBody compiles and runs"            `Slow
         (guarded_test "html-body"            test_email_html_body);
@@ -669,7 +669,7 @@ let () =
         (guarded_test "multi-queue"          test_multiple_emails_queued);
     ];
     "capability", [
-      Alcotest.test_case "missing requires [email] causes compile error" `Quick
+      Alcotest.test_case "missing requires [emailCap] causes compile error" `Quick
         (guarded_test "no-cap-error"         test_email_capability_gate);
     ];
     "racket-runtime", [

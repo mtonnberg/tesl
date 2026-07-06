@@ -16,7 +16,7 @@ module Lesson60Email exposing [
 #
 # Step 1: Declare an `email` block with database and SMTP config.
 # Step 2: Call `Email.send EmailName { to: ... subject: ... }` in any
-#         function that requires [email].
+#         function that requires [emailCap].
 # Step 3: List the email block in your App root's `email: [EmailName]`
 #         field to activate the background delivery thread.
 #
@@ -38,7 +38,7 @@ module Lesson60Email exposing [
 #              RichBody "plain text" "<h1>…"   — both (recommended)
 #
 # Returns: Unit — fire-and-queue
-# Requires: [email] capability
+# Requires: [emailCap] capability
 #
 # The EmailBody ADT makes no-body emails impossible to construct.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -101,7 +101,7 @@ email AppEmail = Email {
 # Welcome email: sent after a user registers.
 # Uses both text and html bodies — all major clients handle both.
 fn sendWelcomeEmail(recipientAddr: String, firstName: String) -> Unit
-  requires [email] =
+  requires [emailCap] =
   Email.send AppEmail {
     to: recipientAddr
     subject: "Welcome to our service!"
@@ -110,7 +110,7 @@ fn sendWelcomeEmail(recipientAddr: String, firstName: String) -> Unit
 
 # Password reset: sends a link. The link should be pre-signed or time-limited.
 fn sendPasswordReset(recipientAddr: String, resetLink: String) -> Unit
-  requires [email] =
+  requires [emailCap] =
   Email.send AppEmail {
     to: recipientAddr
     subject: "Password Reset Request"
@@ -119,7 +119,7 @@ fn sendPasswordReset(recipientAddr: String, resetLink: String) -> Unit
 
 # Plain text notification — no HTML.
 fn sendNotification(addr: String, message: String) -> Unit
-  requires [email] =
+  requires [emailCap] =
   Email.send AppEmail {
     to: addr
     subject: "Notification"
@@ -128,7 +128,7 @@ fn sendNotification(addr: String, message: String) -> Unit
 
 # HTML-only newsletter.
 fn sendHtmlNewsletter(addr: String, htmlContent: String) -> Unit
-  requires [email] =
+  requires [emailCap] =
   Email.send AppEmail {
     to: addr
     subject: "Monthly Newsletter"
@@ -173,7 +173,7 @@ fn sendHtmlNewsletter(addr: String, htmlContent: String) -> Unit
 # The background delivery thread is activated by listing the email block in
 # your application root's `email:` field. In production, an App looks like:
 #
-#   main() -> App requires [email, myService] =
+#   main() -> App requires [emailCap, myService] =
 #     App {
 #       database: AppDB
 #       api: MyServer
@@ -199,8 +199,8 @@ fn sendHtmlNewsletter(addr: String, htmlContent: String) -> Unit
 # Rationale: most apps have one email provider; name-specific capabilities
 # would add friction for the common case. If you need to restrict access to
 # a specific email config, use separate capability declarations:
-#   capability marketingEmailCap implies email
-#   capability transactionalEmailCap implies email
+#   capability marketingEmailCap implies emailCap
+#   capability transactionalEmailCap implies emailCap
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # TESTS
@@ -210,34 +210,34 @@ fn sendHtmlNewsletter(addr: String, htmlContent: String) -> Unit
 # The tests below verify that Email.send compiles and runs without error
 # (it inserts into the in-memory outbox store in test mode, no SMTP needed).
 
-test "sendWelcomeEmail compiles and runs without error" requires [email] {
+test "sendWelcomeEmail compiles and runs without error" requires [emailCap] {
   let _ = sendWelcomeEmail "alice@example.com" "Alice"
   expect True == True
 }
 
-test "sendPasswordReset compiles and runs without error" requires [email] {
+test "sendPasswordReset compiles and runs without error" requires [emailCap] {
   let _ = sendPasswordReset "bob@example.com" "https://example.com/reset?token=abc123"
   expect True == True
 }
 
-test "sendNotification with plain text" requires [email] {
+test "sendNotification with plain text" requires [emailCap] {
   let _ = sendNotification "ops@example.com" "Deployment completed successfully."
   expect True == True
 }
 
-test "sendHtmlNewsletter with HTML content" requires [email] {
+test "sendHtmlNewsletter with HTML content" requires [emailCap] {
   let _ = sendHtmlNewsletter "newsletter@example.com" "<h1>June Update</h1><p>Here's what's new.</p>"
   expect True == True
 }
 
-test "multiple emails can be queued in sequence" requires [email] {
+test "multiple emails can be queued in sequence" requires [emailCap] {
   let _ = sendWelcomeEmail "user1@example.com" "User1"
   let _ = sendWelcomeEmail "user2@example.com" "User2"
   let _ = sendWelcomeEmail "user3@example.com" "User3"
   expect True == True
 }
 
-test "email with special characters in body" requires [email] {
+test "email with special characters in body" requires [emailCap] {
   let _ = sendNotification "test@example.com" "Reset link: https://example.com/reset?token=abc&user=1"
   expect True == True
 }
@@ -253,7 +253,7 @@ test "email with special characters in body" requires [email] {
 # the App root lowers to; you normally don't call it directly.
 # ─────────────────────────────────────────────────────────────────────────────
 
-fn startEmailDelivery() -> Unit requires [email] =
+fn startEmailDelivery() -> Unit requires [emailCap] =
   startEmailWorker AppEmail
 
 test "startEmailWorker function compiles" {

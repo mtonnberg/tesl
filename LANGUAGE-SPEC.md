@@ -3300,12 +3300,12 @@ Multiple `email` blocks can coexist, each backed by the same or a different data
 
 ### 20.2 Capability
 
-The capability is `email` — a single shared token, not name-specific. Any function that calls `Email.send` must declare `requires [email]`:
+The capability is `emailCap` — a single shared token, not name-specific. Any function that calls `Email.send` must declare `requires [emailCap]`:
 
 ```tesl
-capability appService implies email
+capability appService implies emailCap
 
-fn sendWelcomeEmail(to: String) -> Unit requires [email] =
+fn sendWelcomeEmail(to: String) -> Unit requires [emailCap] =
   Email.send AppEmail {
     to: to
     subject: "Welcome!"
@@ -3336,7 +3336,7 @@ The ADT makes a no-body email impossible to construct. `Email.send` inserts a ro
 **Activation.** The background delivery thread is started by listing the email block in the `App.email` field of the `App` record returned by `main` (§11.13) — there is no `startEmailWorker` statement. Without listing it, rows accumulate in the outbox but are never delivered.
 
 ```tesl
-main() -> App requires [appService, email] =
+main() -> App requires [appService, emailCap] =
   App {
     database: MainDB
     api: MyServer
@@ -3359,7 +3359,7 @@ After 5 failed attempts a row is marked `dead` and is no longer retried. Dead ro
 `Email.send` inside a `transaction` block is part of the same database transaction. If the transaction rolls back, the row is never inserted and the email is never sent. This prevents sending notifications for events that did not actually persist.
 
 ```tesl
-handler registerUser(req: RegistrationRequest) -> User requires [dbWrite, email] =
+handler registerUser(req: RegistrationRequest) -> User requires [dbWrite, emailCap] =
   transaction {
     let user = insert User { id: newId, email: req.email }
     Email.send AppEmail {

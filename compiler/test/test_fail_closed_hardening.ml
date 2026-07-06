@@ -215,6 +215,86 @@ test "declared cap" requires [myCap] {
 |}
     "requires undeclared capability"
 
+(* ── emailCap composability (email_capability_not_composable) ────────────── *)
+
+(* A library fn can `requires [emailCap]` when Tesl.Email is imported — the
+   capability composes like dbRead now that it has a stdlib provider row. *)
+let t_emailcap_library_requires_ok () =
+  assert_no_error_containing
+    {|#lang tesl
+module ELib exposing [helper]
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Email exposing [emailCap]
+fn helper(msg: String) -> Int requires [emailCap] =
+  1
+|}
+    "undeclared capability"
+
+(* A domain capability may `implies emailCap` when Tesl.Email is imported. *)
+let t_emailcap_implies_ok () =
+  assert_no_error_containing
+    {|#lang tesl
+module EImpl exposing [notify]
+import Tesl.Prelude exposing [Int, String]
+import Tesl.Email exposing [emailCap]
+capability notifier implies emailCap
+fn notify(msg: String) -> Int requires [notifier] =
+  1
+|}
+    "unknown capability"
+
+(* Control: `requires [emailCap]` with NO import and no email block is still
+   rejected — deny-by-default is intact, the fix only added a provider, not an
+   ambient grant. *)
+let t_emailcap_no_import_rejected () =
+  assert_proof_error
+    {|#lang tesl
+module ENone exposing [helper]
+import Tesl.Prelude exposing [Int, String]
+fn helper(msg: String) -> Int requires [emailCap] =
+  1
+|}
+    "requires undeclared capability 'emailCap'"
+
+(* ── Capability-table drift seam (email_capability_not_composable) ───────────
+
+   The email bug was a DRIFT: `email`/`emailCap` was a concrete builtin
+   capability (Ast.builtin_capability_names) and exposable from Tesl.Email
+   (Type_system import allowlist), but had NO provider row in
+   Validation_common.tesl_stdlib_cap_map — so it typed as importable yet the
+   capability silently vanished, uncomposable in a library `requires`/`implies`.
+
+   This seam pins the invariant that would have caught it at build time: the set
+   of concrete builtin capabilities is EXACTLY the set of capabilities provided
+   by the stdlib cap-map.  A new builtin capability that forgets its provider
+   row (or a provider row for a non-builtin) fails here. *)
+let stdlib_provided_caps =
+  List.concat_map (fun (_m, caps) -> List.map fst caps)
+    Validation_common.tesl_stdlib_cap_map
+  |> List.sort_uniq String.compare
+
+let builtin_caps =
+  List.sort_uniq String.compare Ast.builtin_capability_names
+
+let t_builtin_caps_all_have_provider () =
+  let missing =
+    List.filter (fun b -> not (List.mem b stdlib_provided_caps)) builtin_caps in
+  if missing <> [] then
+    Alcotest.failf
+      "builtin capability(ies) %s have no Tesl stdlib provider row in \
+       tesl_stdlib_cap_map — they type as usable but cannot be imported/composed \
+       (this is the email_capability_not_composable drift class)"
+      (String.concat ", " missing)
+
+let t_provided_caps_all_builtin () =
+  let extra =
+    List.filter (fun p -> not (List.mem p builtin_caps)) stdlib_provided_caps in
+  if extra <> [] then
+    Alcotest.failf
+      "stdlib cap-map provides %s, which is not in Ast.builtin_capability_names \
+       — the two capability tables have drifted"
+      (String.concat ", " extra)
+
 (* ── Runner ──────────────────────────────────────────────────────────────── *)
 
 let () =
@@ -246,5 +326,17 @@ let () =
             t_test_requires_undeclared_cap;
           Alcotest.test_case "test requires declared cap accepted" `Quick
             t_test_requires_declared_cap_ok;
+        ] );
+      ( "emailCap composability + cap-table drift seam",
+        [ Alcotest.test_case "library requires [emailCap] via import accepted" `Quick
+            t_emailcap_library_requires_ok;
+          Alcotest.test_case "capability implies emailCap accepted" `Quick
+            t_emailcap_implies_ok;
+          Alcotest.test_case "emailCap with no import still rejected" `Quick
+            t_emailcap_no_import_rejected;
+          Alcotest.test_case "every builtin capability has a stdlib provider" `Quick
+            t_builtin_caps_all_have_provider;
+          Alcotest.test_case "every stdlib-provided cap is a known builtin" `Quick
+            t_provided_caps_all_builtin;
         ] );
     ]

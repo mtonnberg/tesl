@@ -94,8 +94,10 @@ let build_cap_map (decls : top_decl list) : (string * string list) list =
     | DCapability c -> Some (c.name, c.implies)
     (* Cache declarations implicitly define a "cacheCap <Name>" capability *)
     | DCache (c : Ast.cache_form) -> Some ("cacheCap " ^ c.name, [])
-    (* Email declarations implicitly define an "email" capability *)
-    | DEmail _ -> Some ("email", [])
+    (* Email declarations implicitly define the "emailCap" capability (renamed
+       from the overloaded "email", which clashed with the `email X = Email {…}`
+       declaration keyword — mirrors the cache → cacheCap rename). *)
+    | DEmail _ -> Some ("emailCap", [])
     | _ -> None
   ) decls
 

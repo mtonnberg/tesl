@@ -37,49 +37,49 @@
 
 (define/pow
   (sendWelcome [addr : String])
-  #:capabilities [email]
+  #:capabilities [emailCap]
   #:returns Unit
   (thsl-src! "tests/email-tests.tesl" 68 (list (cons 'addr *addr)) (lambda () (send-email! AppEmail #:to addr #:subject "Welcome!" #:body (raw-value (RichBody "Hello!" "<h1>Hello!</h1>"))))))
 
 (define/pow
   (sendSimple [addr : String] [subj : String])
-  #:capabilities [email]
+  #:capabilities [emailCap]
   #:returns Unit
   (thsl-src! "tests/email-tests.tesl" 75 (list (cons 'addr *addr) (cons 'subj *subj)) (lambda () (send-email! AppEmail #:to addr #:subject subj #:body (raw-value (TextBody "Hello from Tesl"))))))
 
 (define/pow
   (sendTextOnly [addr : String] [bodyText : String])
-  #:capabilities [email]
+  #:capabilities [emailCap]
   #:returns Unit
   (thsl-src! "tests/email-tests.tesl" 82 (list (cons 'addr *addr) (cons 'bodyText *bodyText)) (lambda () (send-email! AppEmail #:to addr #:subject "Notification" #:body (raw-value (TextBody *bodyText))))))
 
 (define/pow
   (sendHtmlOnly [addr : String] [html : String])
-  #:capabilities [email]
+  #:capabilities [emailCap]
   #:returns Unit
   (thsl-src! "tests/email-tests.tesl" 89 (list (cons 'addr *addr) (cons 'html *html)) (lambda () (send-email! AppEmail #:to addr #:subject "HTML Email" #:body (raw-value (HtmlBody *html))))))
 
 (define/pow
   (sendMarketing [addr : String])
-  #:capabilities [email]
+  #:capabilities [emailCap]
   #:returns Unit
   (thsl-src! "tests/email-tests.tesl" 96 (list (cons 'addr *addr)) (lambda () (send-email! MarketingEmail #:to addr #:subject "Special Offer" #:body (raw-value (RichBody "Check out our deals" "<p>Check out our deals</p>"))))))
 
 (define/pow
   (sendMultiple [a : String] [b : String])
-  #:capabilities [email]
+  #:capabilities [emailCap]
   #:returns Unit
   (let ([_ (thsl-src! "tests/email-tests.tesl" 103 (list (cons 'a *a) (cons 'b *b)) (lambda () (send-email! AppEmail #:to a #:subject "First" #:body (raw-value (TextBody "Hello")))))]) (thsl-src! "tests/email-tests.tesl" 104 (list (cons 'a *a) (cons 'b *b)) (lambda () (send-email! AppEmail #:to b #:subject "Second" #:body (raw-value (TextBody "Bye")))))))
 
 (define/pow
   (startEmailServices)
-  #:capabilities [email]
+  #:capabilities [emailCap]
   #:returns Unit
   (thsl-src! "tests/email-tests.tesl" 107 (list) (lambda () (start-email-worker! AppEmail))))
 
 (define/pow
   (startAllEmailServices)
-  #:capabilities [email]
+  #:capabilities [emailCap]
   #:returns Unit
   (let ([_ (thsl-src! "tests/email-tests.tesl" 110 (list) (lambda () (send-email! AppEmail #:to "admin@example.com" #:subject "Starting" #:body (raw-value (TextBody "Services starting")))))]) (thsl-src! "tests/email-tests.tesl" 111 (list) (lambda () (start-email-worker! AppEmail)))))
 

@@ -699,7 +699,7 @@ type module_form = {
 let builtin_capability_names : string list =
   [ "dbRead"; "dbWrite"; "time"; "random"; "envRead";
     "queueRead"; "queueWrite"; "pubsub"; "uuid"; "jwt";
-    "httpClient"; "aiProvider"; "email" ]
+    "httpClient"; "aiProvider"; "emailCap" ]
 
 let func_bound_cap_vars_of_params (params : binding list) : string list =
   let rec from_type acc (t : type_expr) =

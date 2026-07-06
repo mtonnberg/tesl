@@ -843,7 +843,7 @@ let tesl_module_exports : (string * string list) list = [
       (* config-block type (typed config block) *)
       "Cache" ] );
   ( "Tesl.Email",
-    [ "email"; "EmailBody"; "TextBody"; "HtmlBody"; "RichBody";
+    [ "emailCap"; "EmailBody"; "TextBody"; "HtmlBody"; "RichBody";
       "Email.send"; "startEmailWorker";
       (* config-block types (typed config blocks) *)
       "Email"; "SmtpConfig" ] );

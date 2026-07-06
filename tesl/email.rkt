@@ -15,7 +15,8 @@
 ;;;   - Delivered rows are deleted after 24 hours by a cleanup thread.
 ;;;   - In-memory fallback (no DB) stores emails in a list for tests.
 ;;;
-;;; Capability: "email" (not name-specific, unlike cache).
+;;; Capability: "emailCap" (not name-specific, unlike cache; renamed from the
+;;; overloaded "email", which clashed with the `email X = Email {…}` decl keyword).
 
 (require db
          net/smtp
@@ -44,7 +45,7 @@
 
 (provide
  ;; Capability
- email
+ emailCap
  ;; Macro to declare an email configuration
  define-email
  ;; EmailBody ADT constructors (Racket-facing names, used by the emitter)
@@ -67,7 +68,7 @@
 
 ;; ── Capability ───────────────────────────────────────────────────────────────
 
-(define-capability email)
+(define-capability emailCap)
 
 ;; ── Data structures ───────────────────────────────────────────────────────────
 
@@ -166,7 +167,7 @@
 ;; store (tests/dev). Non-blocking.
 
 (define (send-email! email-s #:to to #:subject subject #:body body)
-  (require-capabilities! (list email))
+  (require-capabilities! (list emailCap))
   (define raw-to (if (named-value? to) (raw-value to) to))
   (define raw-subj (if (named-value? subject) (raw-value subject) subject))
   (define to-str (~a raw-to))
@@ -257,7 +258,7 @@
 ;; Thread 1 — Poller (every 5s): dequeues pending rows, delivers, marks sent/dead.
 ;; Thread 2 — Cleanup (every 1h): deletes sent rows older than 24h.
 (define (start-email-worker! email-s)
-  (require-capabilities! (list email))
+  (require-capabilities! (list emailCap))
   (define db-runtime (current-database-runtime))
 
   ;; Poller thread
@@ -269,7 +270,7 @@
      (let loop ()
        (sleep 5)
        (with-handlers ([exn:fail? void])
-         (parameterize ([current-capabilities (list email)]
+         (parameterize ([current-capabilities (list emailCap)]
                         [current-database-runtime db-runtime])
            (cond
              [(pg-active?)

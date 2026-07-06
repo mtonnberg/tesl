@@ -64,49 +64,49 @@ email NoTlsEmail = Email {
 
 # ── Helper functions ───────────────────────────────────────────────────────
 
-fn sendWelcome(addr: String) -> Unit requires [email] =
+fn sendWelcome(addr: String) -> Unit requires [emailCap] =
   Email.send AppEmail {
     to: addr
     subject: "Welcome!"
     body: RichBody "Hello!" "<h1>Hello!</h1>"
   }
 
-fn sendSimple(addr: String, subj: String) -> Unit requires [email] =
+fn sendSimple(addr: String, subj: String) -> Unit requires [emailCap] =
   Email.send AppEmail {
     to: addr
     subject: subj
     body: TextBody "Hello from Tesl"
   }
 
-fn sendTextOnly(addr: String, bodyText: String) -> Unit requires [email] =
+fn sendTextOnly(addr: String, bodyText: String) -> Unit requires [emailCap] =
   Email.send AppEmail {
     to: addr
     subject: "Notification"
     body: TextBody bodyText
   }
 
-fn sendHtmlOnly(addr: String, html: String) -> Unit requires [email] =
+fn sendHtmlOnly(addr: String, html: String) -> Unit requires [emailCap] =
   Email.send AppEmail {
     to: addr
     subject: "HTML Email"
     body: HtmlBody html
   }
 
-fn sendMarketing(addr: String) -> Unit requires [email] =
+fn sendMarketing(addr: String) -> Unit requires [emailCap] =
   Email.send MarketingEmail {
     to: addr
     subject: "Special Offer"
     body: RichBody "Check out our deals" "<p>Check out our deals</p>"
   }
 
-fn sendMultiple(a: String, b: String) -> Unit requires [email] =
+fn sendMultiple(a: String, b: String) -> Unit requires [emailCap] =
   let _ = Email.send AppEmail { to: a subject: "First" body: TextBody "Hello" }
   Email.send AppEmail { to: b subject: "Second" body: TextBody "Bye" }
 
-fn startEmailServices() -> Unit requires [email] =
+fn startEmailServices() -> Unit requires [emailCap] =
   startEmailWorker AppEmail
 
-fn startAllEmailServices() -> Unit requires [email] =
+fn startAllEmailServices() -> Unit requires [emailCap] =
   let _ = Email.send AppEmail { to: "admin@example.com" subject: "Starting" body: TextBody "Services starting" }
   startEmailWorker AppEmail
 
