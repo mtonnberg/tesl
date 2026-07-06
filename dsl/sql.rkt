@@ -544,10 +544,20 @@
 (define (sql-null-value? v)
   (or (Nothing? v) (sql-null? v)))
 
-;; Unwrap a `Something(v)` (a non-NULL Maybe-field value) to its inner v so it can be
-;; compared against a bare operand; leaves non-Maybe values untouched.
+;; Unwrap a `Something(v)` (a non-NULL Maybe-field value) AND a `newtype-value`
+;; (e.g. PosixMillis over Int) to the underlying comparable base, so a query
+;; operand/row-value can be matched against a bare value.  Leaves plain values
+;; untouched.  GitHub #28: without the newtype strip, an ordered comparison
+;; (`>= / <= / < / >`) on a newtype column/operand (PosixMillis, a Sku newtype,
+;; …) reached `ensure-ordered-query-value!` still wrapped and raised "does not
+;; support ordered comparison … expected a string or number" — while `==`
+;; (eq-predicate, which skips the ordered check and compares via `equal?`)
+;; happened to work, matching the reported ==-works / >=-traps behaviour.
 (define (unwrap-non-null v)
-  (if (Something? v) (Something-value v) v))
+  (cond
+    [(Something? v) (unwrap-non-null (Something-value v))]
+    [(newtype-value? v) (newtype-value-value v)]
+    [else v]))
 
 (define (predicate-matches-row? predicate row)
   (match predicate

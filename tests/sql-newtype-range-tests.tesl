@@ -1,0 +1,36 @@
+#lang tesl
+module Sql_newtype_range_tests exposing []
+
+# Regression for GitHub #28: an ordered comparison (>= / <= / < / >) in a
+# select-where on a NEWTYPE column/operand (here PosixMillis over Int) trapped at
+# runtime ("does not support ordered comparison … expected a string or number")
+# because the query operand was not unwrapped from its newtype-value before the
+# ordered check — while `==` worked. Fixed by unwrapping newtypes in
+# unwrap-non-null (dsl/sql.rkt).
+
+import Tesl.Prelude exposing [Bool(..), Int, List, String]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Time exposing [PosixMillis, nowMillis, time, addMs, subtractMs]
+import Tesl.List exposing [List.length]
+
+entity Ev table "ev_range" primaryKey id { id: String at: PosixMillis }
+
+fn inWindow(lo: PosixMillis, hi: PosixMillis) -> Int requires [dbRead] =
+  let hits = select e from Ev where e.at >= lo && e.at <= hi
+  List.length hits
+
+test "PosixMillis range in select-where works (was a runtime trap, #28)" requires [dbRead, dbWrite, time] {
+  let now = nowMillis()
+  let _ = insert Ev { id: "a", at: now }
+  let lo = subtractMs now 1000
+  let hi = addMs now 1000
+  expect inWindow lo hi == 1
+}
+
+test "PosixMillis range excludes out-of-window rows (#28)" requires [dbRead, dbWrite, time] {
+  let now = nowMillis()
+  let _ = insert Ev { id: "b", at: now }
+  let lo = addMs now 5000
+  let hi = addMs now 9000
+  expect inWindow lo hi == 0
+}

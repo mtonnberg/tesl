@@ -145,7 +145,7 @@
 (define/pow
   (extractSerial [payload : ValidPayload])
   #:returns [serial : Integer ::: (IsPositive serial)]
-  (thsl-src! "tests/critical-review-56-tests.tesl" 158 (list (cons 'payload *payload)) (lambda () (tesl-dot/runtime payload 'serial))))
+  (thsl-src! "tests/critical-review-56-tests.tesl" 158 (list (cons 'payload *payload)) (lambda () (tesl-dot/runtime payload 'serial 'ValidPayload))))
 
 (define-record ValidItem
   [value : Integer ::: ((IsPositive value) && (IsSmall value))]
@@ -154,7 +154,7 @@
 (define/pow
   (extractValue [item : ValidItem])
   #:returns [value : Integer ::: ((IsPositive value) && (IsSmall value))]
-  (thsl-src! "tests/critical-review-56-tests.tesl" 165 (list (cons 'item *item)) (lambda () (tesl-dot/runtime item 'value))))
+  (thsl-src! "tests/critical-review-56-tests.tesl" 165 (list (cons 'item *item)) (lambda () (tesl-dot/runtime item 'value 'ValidItem))))
 
 (define/pow
   (needBoth [n : Integer ::: ((IsPositive n) && (IsSmall n))])

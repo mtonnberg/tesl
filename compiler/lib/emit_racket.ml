@@ -1499,16 +1499,6 @@ let rec emit_expr ctx e =
          | None -> Some (import_rename full))
       | _ -> None
     in
-    (* GitHub #26: the checker-resolved record/entity type of [obj], emitted as a
-       runtime dot type HINT so a field read on an entity row resolves by the
-       declared type rather than ambiguously by structure. Empty when unknown
-       (special fields / module-qualified / newtype .value carry no entry). *)
-    let dot_type_hint =
-      match Hashtbl.find_opt ctx.field_access_type_tbl
-              (loc.Location.start.line, loc.Location.start.col) with
-      | Some ty when ty <> "" -> Printf.sprintf " '%s" ty
-      | _ -> ""
-    in
     (match qual_name with
      | Some renamed -> emit ctx renamed
      | None ->
@@ -1539,14 +1529,12 @@ let rec emit_expr ctx e =
           (* In function context, emit without raw-value so proof-bearing
              named-values propagate to callee parameter bindings.
              In test/top-level context, wrap in raw-value for equality checks. *)
-          if ctx.func_kind <> None then begin
-            emit ctx "(tesl-dot/runtime ";
-            emit_field_inner ctx obj;
-            emit ctx (Printf.sprintf " '%s%s)" field dot_type_hint)
-          end else begin
-            emit ctx "(raw-value (tesl-dot/runtime ";
-            emit_field_inner ctx obj;
-            emit ctx (Printf.sprintf " '%s%s))" field dot_type_hint)
+          if ctx.func_kind <> None then
+            emit_field_dot ctx obj field loc
+          else begin
+            emit ctx "(raw-value ";
+            emit_field_dot ctx obj field loc;
+            emit ctx ")"
           end))
   | EApp { fn = EVar { name = "make-witness"; _ };
            arg = EApp { fn = EVar { name = witness_name; _ }; arg = body; _ }; _ } ->
@@ -2675,6 +2663,24 @@ let rec emit_expr ctx e =
 (** Emit an expression for use as the object in field-access-ref.
     For a nested field access (EField), emit as another field-access-ref (no outer raw-value).
     For variables, emit the name directly (they're GDP named values). *)
+(* Single source for lowering a field read to the runtime dot resolver.  Emits
+   `(tesl-dot/runtime <obj> 'field ['Type])`, threading the checker's resolved
+   record/entity type (keyed by the EField's [loc]) as a hint when known.  ALL
+   field-read emit paths must go through this — a bare 2-arg `tesl-dot/runtime`
+   (no hint) resolves structurally at runtime and TRAPS ("ambiguous dot access")
+   when two entities/records share the field name (GitHub #26/#27; the runtime
+   cannot disambiguate because entity predicates are superset checks). *)
+and emit_field_dot ctx obj field (loc : Location.loc) =
+  let hint =
+    match Hashtbl.find_opt ctx.field_access_type_tbl
+            (loc.start.line, loc.start.col) with
+    | Some ty when ty <> "" -> Printf.sprintf " '%s" ty
+    | _ -> ""
+  in
+  emit ctx "(tesl-dot/runtime ";
+  emit_field_inner ctx obj;
+  emit ctx (Printf.sprintf " '%s%s)" field hint)
+
 and emit_field_inner ctx e =
   match e with
   | EVar { name; _ } -> emit ctx (resolve_name name)
@@ -2691,18 +2697,8 @@ and emit_field_inner ctx e =
        emit_field_inner ctx obj;
        emit ctx (Printf.sprintf ".%s" field)
      | _ ->
-       (* Nested field access: use tesl-dot/runtime to handle gensym symbols.
-          This correctly resolves GDP-tracked variables (e.g. task.meta in FnKind).
-          Thread the checker's record/entity type hint (GitHub #26). *)
-       let dot_type_hint =
-         match Hashtbl.find_opt ctx.field_access_type_tbl
-                 (loc.Location.start.line, loc.Location.start.col) with
-         | Some ty when ty <> "" -> Printf.sprintf " '%s" ty
-         | _ -> ""
-       in
-       emit ctx "(tesl-dot/runtime ";
-       emit_field_inner ctx obj;
-       emit ctx (Printf.sprintf " '%s%s)" field dot_type_hint))
+       (* Nested field access: route through the shared hinted dot emitter. *)
+       emit_field_dot ctx obj field loc)
   | _ -> emit_expr ctx e  (* complex expr — pass as-is (GDP named value) *)
 
 (** Emit an expression in "bare" position — used for the object in obj.field.
@@ -2949,7 +2945,7 @@ and emit_raw_value ctx e =
       emit ctx ("*" ^ (resolve_name name))
     else
       emit ctx (Printf.sprintf "(raw-value %s)" (resolve_name name))
-  | EField { obj; field; _ } ->
+  | EField { obj; field; loc } ->
     (match obj with
      | EConstructor { name = modname; args = []; _ } ->
        let full = modname ^ "." ^ field in
@@ -2958,11 +2954,10 @@ and emit_raw_value ctx e =
        in
        emit ctx renamed
      | _ ->
-       (* Use tesl-dot/runtime so gensym params are resolved via evidence-env.
-          This mirrors emit_expr's field access strategy. *)
-       emit ctx "(tesl-dot/runtime ";
-       emit_field_inner ctx obj;
-       emit ctx (Printf.sprintf " '%s)" field))
+       (* Route through the shared hinted dot emitter (GitHub #26/#27) so a
+          field read reaching a raw-value context still resolves by declared
+          type, not structurally. *)
+       emit_field_dot ctx obj field loc)
   | EApp _ when (
       let rec fn_of = function EApp { fn; _ } -> fn_of fn | e -> e in
       is_stdlib_fn (fn_of e)) ->
@@ -4584,10 +4579,8 @@ let emit_func ctx (fd : func_decl) =
     | _ when fd.kind = EstablishKind -> emit_with_raw_tail e
     | _ when has_forall_return ->
       (match e with
-       | EField { obj; field; _ } when (match obj with EVar _ -> true | _ -> false) ->
-         emit ctx "(tesl-dot/runtime ";
-         emit_field_inner ctx obj;
-         emit ctx (Printf.sprintf " '%s)" field)
+       | EField { obj; field; loc } when (match obj with EVar _ -> true | _ -> false) ->
+         emit_field_dot ctx obj field loc
        | _ -> emit_expr ctx e)
     | _ -> emit_expr ctx e
   in

@@ -169,7 +169,7 @@
 (define-checker
   (checkOpen [todo : Todo])
   #:returns [todo : Todo ::: (IsOpen todo)]
-  (thsl-src-control! "example/todo-api.tesl" 170 (list (cons 'todo *todo)) (lambda () (let ([tesl-case-5 (tesl-dot/runtime todo 'status)]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Open)) (thsl-src! "example/todo-api.tesl" 171 (list) (lambda () (accept (IsOpen todo) #:value *todo)))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Done)) (thsl-src! "example/todo-api.tesl" 172 (list) (lambda () (reject "todo is already completed" #:http-code 422)))])))))
+  (thsl-src-control! "example/todo-api.tesl" 170 (list (cons 'todo *todo)) (lambda () (let ([tesl-case-5 (tesl-dot/runtime todo 'status 'Todo)]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Open)) (thsl-src! "example/todo-api.tesl" 171 (list) (lambda () (accept (IsOpen todo) #:value *todo)))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Done)) (thsl-src! "example/todo-api.tesl" 172 (list) (lambda () (reject "todo is already completed" #:http-code 422)))])))))
 
 (define/pow
   (seedExampleData)

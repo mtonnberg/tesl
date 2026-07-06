@@ -72,7 +72,7 @@
 (define/pow
   (flipDimensions [r : Rectangle])
   #:returns Rectangle
-  (thsl-src! "example/learn/lesson03-records.tesl" 81 (list (cons 'r *r)) (lambda () (tesl-record-update *r (hash 'width (tesl-dot/runtime r 'height) 'height (tesl-dot/runtime r 'width))))))
+  (thsl-src! "example/learn/lesson03-records.tesl" 81 (list (cons 'r *r)) (lambda () (tesl-record-update *r (hash 'width (tesl-dot/runtime r 'height 'Rectangle) 'height (tesl-dot/runtime r 'width 'Rectangle))))))
 
 (module+ test
   (require rackunit)
