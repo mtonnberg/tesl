@@ -100,6 +100,47 @@ api LongApi {
 }
 |}
 
+(* GitHub #25: Elm's D.mapN stops at map8; a record/entity with 9+ fields used
+   to emit `D.map8` over the first 8 fields and reference the rest as unbound
+   names (module did not compile).  9+ fields must use the applicative
+   pipeline `D.succeed Ctor |> D.map2 (|>) …`; 8 fields keep D.map8. *)
+let nine_fields = {|#lang tesl
+module NineWide exposing []
+import Tesl.Prelude exposing [String, Int, Bool(..)]
+record Nine {
+  f1: String
+  f2: String
+  f3: String
+  f4: String
+  f5: String
+  f6: String
+  f7: String
+  f8: String
+  f9: String
+}
+api NineApi {
+  post "/nine" body payload: String -> String
+}
+|}
+
+let eight_fields = {|#lang tesl
+module EightWide exposing []
+import Tesl.Prelude exposing [String, Int, Bool(..)]
+record Eight {
+  f1: String
+  f2: String
+  f3: String
+  f4: String
+  f5: String
+  f6: String
+  f7: String
+  f8: String
+}
+api EightApi {
+  post "/eight" body payload: String -> String
+}
+|}
+
 (* ── tests ────────────────────────────────────────────────────────────────── *)
 let gen_rejects_invalid flag () =
   with_src type_invalid (fun p ->
@@ -136,6 +177,30 @@ let elm_full_capture_smart () =
     if not (contains "String.length input >= 3" out) then
       failf "expected the full predicate in the smart constructor:\n%s" out)
 
+(* GitHub #25 regression: 9-field record decoder must be the arity-unlimited
+   pipeline (no D.map8, no unbound field names); every field decoded. *)
+let elm_nine_fields_pipeline () =
+  with_src nine_fields (fun p ->
+    let code, out = run_cc ["--generate-elm"; p] in
+    if code <> 0 then failf "generate-elm failed on a 9-field record:\n%s" out;
+    if contains "D.map8" out then
+      failf "9-field decoder still uses D.map8 (GitHub #25 regression):\n%s" out;
+    if not (contains "D.succeed Nine" out) then
+      failf "expected the applicative pipeline decoder for Nine:\n%s" out;
+    List.iter (fun f ->
+      let step = Printf.sprintf "|> D.map2 (|>) (D.field \"%s\"" f in
+      if not (contains step out) then
+        failf "field %s missing from the pipeline decoder:\n%s" f out)
+      ["f1";"f2";"f3";"f4";"f5";"f6";"f7";"f8";"f9"])
+
+(* Control: exactly 8 fields keeps the direct D.map8 form (snapshot-stable). *)
+let elm_eight_fields_map8 () =
+  with_src eight_fields (fun p ->
+    let code, out = run_cc ["--generate-elm"; p] in
+    if code <> 0 then failf "generate-elm failed on an 8-field record:\n%s" out;
+    if not (contains "D.map8 Eight" out) then
+      failf "expected D.map8 for exactly 8 fields:\n%s" out)
+
 let () =
   run "B1-Client-Generation" [
     "checker bypass (a)", [
@@ -153,5 +218,11 @@ let () =
         elm_nested_guard_no_manufacture;
       test_case "fully-captured check keeps a sound smart constructor" `Quick
         elm_full_capture_smart;
+    ];
+    "decoder arity (GitHub #25)", [
+      test_case "9-field record uses the applicative pipeline" `Quick
+        elm_nine_fields_pipeline;
+      test_case "8-field record keeps D.map8" `Quick
+        elm_eight_fields_map8;
     ];
   ]

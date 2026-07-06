@@ -771,26 +771,18 @@ let decoder_for_fields ~fact_kind_of ~has_fact_decoder type_name (fields : field
     Printf.sprintf "D.map%d %s\n%s" n type_name
       (String.concat "\n" field_decoders)
   | _ ->
-    let first_8 = List.filteri (fun i _ -> i < 8) fields in
-    let rest_note = List.filteri (fun i _ -> i >= 8) fields
-                    |> List.map (fun (f : field_def) -> Printf.sprintf " -- extra: %s" f.name)
-                    |> String.concat "" in
-    let first_decoders = List.map (fun (f : field_def) ->
-      Printf.sprintf "        (D.field %S %s)"
+    (* Elm's built-in D.mapN family stops at D.map8.  For 9+ fields, build the
+       decoder applicatively: `D.succeed Ctor |> D.map2 (|>) dec1 |> …` — each
+       step supplies the record constructor's next positional argument, so this
+       handles ANY field count with no helper definition.  (GitHub #25: the old
+       branch emitted D.map8 over the first 8 fields and referenced the
+       remaining field names unbound, so the generated module did not compile.) *)
+    let steps = List.map (fun (f : field_def) ->
+      Printf.sprintf "        |> D.map2 (|>) (D.field %S %s)"
         f.name
         (decode_expr_of_annotated_type ~fact_kind_of ~has_fact_decoder f.type_expr f.proof_ann)
-    ) first_8 in
-    Printf.sprintf "D.map8 (\\a b c d e f g h -> { %s })%s\n%s"
-      (String.concat ", "
-         (List.mapi (fun i (fd : field_def) ->
-            let v = if i < 8 then
-              let letters = [|"a";"b";"c";"d";"e";"f";"g";"h"|] in
-              letters.(i)
-            else fd.name in
-            Printf.sprintf "%s = %s" fd.name v
-          ) fields))
-      rest_note
-      (String.concat "\n" first_decoders)
+    ) fields in
+    Printf.sprintf "D.succeed %s\n%s" type_name (String.concat "\n" steps)
 
 (* ── Return type helpers ─────────────────────────────────────────────────── *)
 
