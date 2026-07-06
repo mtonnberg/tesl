@@ -74,6 +74,29 @@ fn describeFirstProject(needle: String) -> String requires [dbRead] =
   assert_not_contains ~name:"no bare untyped dot for p.name"
     out "(tesl-dot/runtime p 'name)"
 
+(* GitHub #27: the interpolation sibling of #26. A shared field read inside a
+   string interpolation `"${p.name}"` used to emit bare dot-notation
+   `(raw-value p.name)`, which traps at runtime ("ambiguous dot access") across
+   entities sharing the field. It must route through the hinted dot too. *)
+let test_issue27_interpolated_field_read_typed_dot_hint () =
+  let src = {|#lang tesl
+module Interp exposing []
+import Tesl.Prelude exposing [Bool(..), Int, List, String]
+entity Org table "orgs" primaryKey id { id: String  name: String }
+entity Proj table "projs" primaryKey id { id: String  name: String  client: String }
+fn describe(p: Proj) -> String = "name=${p.name} id=${p.id}"
+|} in
+  let out = compile_ok src "issue-27 interpolation typed dot" in
+  assert_contains ~name:"interpolated p.name carries the 'Proj hint"
+    out "(tesl-dot/runtime p 'name 'Proj)";
+  assert_contains ~name:"interpolated p.id carries the 'Proj hint"
+    out "(tesl-dot/runtime p 'id 'Proj)";
+  (* the pre-fix bare dot-notation must be gone *)
+  assert_not_contains ~name:"no bare dot-notation for interpolated p.name"
+    out "(raw-value p.name)";
+  assert_not_contains ~name:"no bare dot-notation for interpolated p.id"
+    out "(raw-value p.id)"
+
 (* ── Require block tests ─────────────────────────────────────────────────── *)
 
 let test_require_block () =
@@ -1168,5 +1191,6 @@ let () =
     ];
     "issue-26-ambiguous-dot", [
       Alcotest.test_case "field read on select-bound entity emits typed dot hint" `Quick test_issue26_field_read_typed_dot_hint;
+      Alcotest.test_case "interpolated shared field read emits typed dot hint (#27)" `Quick test_issue27_interpolated_field_read_typed_dot_hint;
     ];
   ]

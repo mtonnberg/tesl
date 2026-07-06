@@ -121,7 +121,7 @@
 (define/pow
   (processOrder [order : OrderLine])
   #:returns String
-  (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 262 (list (cons 'order *order)) (lambda () (format "order: price=~a, qty=~a" (tesl-display-val (raw-value order.price)) (tesl-display-val (raw-value order.quantity))))))
+  (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 262 (list (cons 'order *order)) (lambda () (format "order: price=~a, qty=~a" (tesl-display-val (tesl-dot/runtime order 'price 'OrderLine)) (tesl-display-val (tesl-dot/runtime order 'quantity 'OrderLine))))))
 
 (module+ test
   (require rackunit)

@@ -2811,10 +2811,15 @@ and emit_interp ctx segs =
              emit ctx (Printf.sprintf "(tesl-display-val *%s)" name)
            else
              emit ctx (Printf.sprintf "(tesl-display-val %s)" (resolve_name name))
-         | EField { obj = EVar { name; _ }; field; _ } when ctx.func_kind <> None ->
-           (* name.field in function context: dot notation *)
-           emit ctx (Printf.sprintf "(tesl-display-val (raw-value %s.%s))" name field)
          | _ ->
+           (* Field reads (and everything else) route through the unified EField
+              emitter (emit_expr), which threads the checker's record/entity type
+              hint into `(tesl-dot/runtime obj 'field 'Type)`.  A prior special
+              case emitted bare dot-notation `name.field` here, which resolves
+              structurally at runtime and TRAPS ("ambiguous dot access") when the
+              field name is shared across entities — GitHub #27, the interpolation
+              sibling of #26.  Special request fields (req.status/…) still lower to
+              dot-notation via emit_expr's own special-field branch. *)
            emit ctx "(tesl-display-val ";
            emit_expr ctx e;
            emit ctx ")")
