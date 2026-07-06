@@ -5,6 +5,18 @@
 > other rejection judgments that live in `proof_checker.ml`. This doc is the map;
 > the work lives in the sibling docs. It is not itself a work unit.
 
+> **CLOSED 2026-07-06.** All seven audited judgments resolved (5 fixed, 2
+> audited-no-action with the one follow-up confirmed). Antagonistic coverage in
+> `compiler/test/test_fail_closed_hardening.ml`; gate green (dune test +
+> ci.sh 13/13). Two verdict corrections against the original audit:
+> `check_capabilities` was ACTIVE (not latent) — `DQueue`/`DAgent`/`DTest`/
+> `DApiTest`/`DLoadTest` requires-lists were unchecked, reproduced on `test` —
+> and P1's return-subject validation is correctly OWNED only for
+> signature-scoped forms (pack/quantifier subjects may name body locals; their
+> deferral to discharge is documented per-arm and pinned by an end-to-end
+> test). P5 (mint-side string-vs-structural) remains in roadmap/later. New
+> sibling finding filed separately: [[email_capability_not_composable]].
+
 ## Thesis
 
 A soundness checker must **fail closed**: an unrecognized or unhandled shape is
@@ -33,16 +45,16 @@ same fail-closed-consistency class but flagged **robustness, not a demonstrated 
 
 ## Audit map (2026-07-06)
 
-| Sibling doc | Function | Verdict | Priority |
-|---|---|---|---|
-| `fail_closed_param_proof_subjects.md` | `validate_param_proof_subjects` (173) | **ACTIVE fail-open** | P1 |
-| `fail_closed_ghost_witness_totality.md` | `check_gw` in `check_module` (1842) | non-total; false `@8` claim; mitigated | P2 |
-| `fail_closed_no_ok_in_fn.md` | `validate_no_ok_in_fn` (357) | residual escapes (constructor args / case guards) | P3 |
-| `fail_closed_capabilities_decl_wildcard.md` | `check_capabilities` (1027) | latent decl-wildcard | P4 |
-| `fail_closed_undefined_predicates_decl_wildcard.md` | `check_undefined_predicates` (1142) | latent decl-wildcard | P4 |
-| `fail_closed_proof_no_dotted_path.md` | `check_proof_no_dotted_path` (478) | already fail-closed | none |
-| `fail_closed_import_parse_errors.md` | `collect_import_parse_errors` (1106) | already fail-closed | none |
-| `fail_closed_mint_matching_structural.md` | `validate_check_return` (594) | string-not-structural match; **robustness, not a proven hole** | P5 |
+| Sibling doc | Function | Verdict | Priority | Outcome (2026-07-06) |
+|---|---|---|---|---|
+| `fail_closed_param_proof_subjects.md` | `validate_param_proof_subjects` (173) | **ACTIVE fail-open** | P1 | FIXED (signature-scoped forms owned; pack/quantifier deferred to discharge, pinned) |
+| `fail_closed_ghost_witness_totality.md` | `check_gw` in `check_module` (1842) | non-total; false `@8` claim; mitigated | P2 | FIXED (full structural descent + honest comment + case/let-proof witness state) |
+| `fail_closed_no_ok_in_fn.md` | `validate_no_ok_in_fn` (357) | residual escapes (constructor args / case guards) | P3 | FIXED (all non-descents deleted; fold_children everywhere) |
+| `fail_closed_capabilities_decl_wildcard.md` | `check_capabilities` (1027) | latent decl-wildcard | P4 | FIXED — was ACTIVE (test/queue/agent/apiTest/loadTest requires unchecked) |
+| `fail_closed_undefined_predicates_decl_wildcard.md` | `check_undefined_predicates` (1142) | latent decl-wildcard | P4 | FIXED (enumerated; DCapture/DApi ownership documented) |
+| `fail_closed_proof_no_dotted_path.md` | `check_proof_no_dotted_path` (478) | already fail-closed | none | no action (audit record) |
+| `fail_closed_import_parse_errors.md` | `collect_import_parse_errors` (1106) | already fail-closed | none | follow-up confirmed (missing import → V001) |
+| `fail_closed_mint_matching_structural.md` | `validate_check_return` (594) | string-not-structural match; **robustness, not a proven hole** | P5 | remains in roadmap/later |
 
 ## Cross-cutting fix pattern
 

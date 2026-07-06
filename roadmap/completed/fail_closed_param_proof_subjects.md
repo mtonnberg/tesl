@@ -1,5 +1,18 @@
 # Fail-closed: `validate_param_proof_subjects` skips non-RetAttached returns (P1)
 
+> **DONE 2026-07-06.** Return-spec match is now exhaustive (no `| _ ->`); the
+> `RetMaybeAttached` binding and `RetExists` binder(s) joined `valid_names` and
+> their annotations are subject-checked. **Scope refinement found during
+> verification:** subject-vs-parameter validation is only OWNED here for the
+> signature-scoped forms (RetAttached / RetMaybeAttached / the RetExists
+> binder's own annotation). Pack/quantifier forms (RetNamedPack, ForAll family,
+> RetExists BODY) may legitimately name body locals (ProofSuite-H PosH11:
+> `exists accId: String => Account ::: IsOpened acc` with `acc` let-bound), so
+> those arms are explicit documented DEFERRALS to the discharge judgment — and
+> the deferral is pinned end-to-end by a test proving discharge rejects a bogus
+> named-pack subject. Tests: `test_fail_closed_hardening.ml` ("return-proof
+> subjects" group). Gate: dune test + ci.sh green.
+
 Sibling of [[fail_closed_checker_hardening]] (umbrella). **The one ACTIVE
 fail-open of the seven.**
 

@@ -1,5 +1,16 @@
 # Fail-closed: `check_capabilities` latent decl-wildcard (P4, latent)
 
+> **DONE 2026-07-06 — and the "latent" verdict was WRONG: this was ACTIVE.**
+> The audit claim "only DFunc carries a .capabilities list" missed that
+> `DQueue` / `DAgent` / `DTest` / `DApiTest` / `DLoadTest` all carry a
+> `requires [...]` list; a bogus capability in a `test` requires was reproduced
+> as silently accepted. The decl match is now enumerated (no wildcard): the
+> five carrying kinds get the same undeclared-capability check as DFunc (minus
+> param-bound row variables, which only functions can bind), the rest get
+> explicit `()` arms. Red→green in `test_fail_closed_hardening.ml`
+> ("capability requires beyond DFunc"). Related NEW finding filed while
+> verifying: [[email_capability_not_composable]].
+
 Sibling of [[fail_closed_checker_hardening]] (umbrella).
 
 ## Why (the pattern)

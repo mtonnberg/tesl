@@ -174,12 +174,20 @@ let validate_param_proof_subjects (fd : func_decl) : proof_error list =
   let errors = ref [] in
   (* Collect valid subject names: all parameter names *)
   let param_names = List.map (fun (b : binding) -> b.name) fd.params in
-  (* Also include the return binding name if there is one *)
-  let return_binding = match fd.return_spec with
+  (* Also include every return-spec binder name: the RetAttached /
+     RetMaybeAttached binding and any RetExists binder (recursing into the
+     existential body).  RetNamedPack and the ForAll/Dict families bind no
+     name, so they contribute nothing here. *)
+  let rec ret_binder_names (spec : return_spec) : string list =
+    match spec with
     | RetAttached { binding = b; _ } -> [b.name]
-    | _ -> []
+    | RetMaybeAttached { binding = b; _ } -> [b.name]
+    | RetExists { binding = b; body; _ } -> b.name :: ret_binder_names body
+    | RetNamedPack _ | RetForAll _ | RetMaybeForAll _
+    | RetSetForAll _ | RetMaybeSetForAll _
+    | RetForAllDictValues _ | RetForAllDictKeys _ | RetPlain _ -> []
   in
-  let valid_names = param_names @ return_binding in
+  let valid_names = param_names @ ret_binder_names fd.return_spec in
 
   (* Check each parameter's proof annotation *)
   List.iter (fun (b : binding) ->
@@ -199,23 +207,56 @@ let validate_param_proof_subjects (fd : func_decl) : proof_error list =
       ) subjects
   ) fd.params;
 
-  (* Check return spec proof subjects *)
+  (* Check return-spec proof subjects.  The match below is exhaustive over
+     [return_spec] with no wildcard, so a new (possibly proof-bearing)
+     constructor is a build error here (`@8`) until someone decides whether
+     its subjects need validating.
+
+     Subject-vs-parameter validation is only OWNED here for the forms whose
+     proof subjects live in SIGNATURE scope (a binder or a parameter): the
+     top-level RetAttached / RetMaybeAttached binding and a RetExists binder's
+     own annotation.  The other proof-bearing forms are explicitly DEFERRED,
+     with the reason stated per arm — their subjects may legitimately
+     reference the packed/quantified value (including a body LOCAL, e.g.
+     `exists accId: String => Account ::: IsOpened acc` where `acc` is a
+     `let`-bound body name), so "is a parameter name" is the wrong judgment;
+     for those forms a bogus subject is rejected by the discharge judgment
+     ({!Proof_discharge}), which must find an actual return leaf carrying the
+     proof at that subject. *)
+  let check_return_proof loc proof =
+    List.iter (fun subj ->
+      if not (List.mem subj valid_names) then
+        errors := {
+          loc;
+          message = Printf.sprintf
+            "return proof subject '%s' is not a parameter name (valid: %s)"
+            subj (String.concat ", " valid_names)
+        } :: !errors
+    ) (proof_subjects proof)
+  in
+  let check_return_proof_opt loc = function
+    | None -> ()
+    | Some p -> check_return_proof loc p
+  in
   (match fd.return_spec with
-   | RetAttached { binding = b; _ } ->
-     (match b.proof_ann with
-      | None -> ()
-      | Some proof ->
-        let subjects = proof_subjects proof in
-        List.iter (fun subj ->
-          if not (List.mem subj valid_names) then
-            errors := {
-              loc = b.loc;
-              message = Printf.sprintf
-                "return proof subject '%s' is not a parameter name (valid: %s)"
-                subj (String.concat ", " valid_names)
-            } :: !errors
-        ) subjects)
-   | _ -> ());
+   | RetAttached { binding = b; _ } -> check_return_proof_opt b.loc b.proof_ann
+   | RetMaybeAttached { binding = b; _ } -> check_return_proof_opt b.loc b.proof_ann
+   | RetExists { binding = b; body = _; _ } ->
+     (* The binder's own annotation is about the witness it names; its
+        subjects are signature-scoped.  The BODY's proof subjects may name
+        body locals (see above) — deferred to discharge. *)
+     check_return_proof_opt b.loc b.proof_ann
+   | RetNamedPack _ ->
+     (* `T ? P` subjects are implicit (the returned entity) or structural
+        (`Column == subject`); named-pack claims are checked structurally by
+        [validate_check_return] / discharge, not by parameter-name spelling. *)
+     ()
+   | RetForAll _ | RetMaybeForAll _ | RetSetForAll _ | RetMaybeSetForAll _
+   | RetForAllDictValues _ | RetForAllDictKeys _ ->
+     (* Quantified element proofs range over the elements, not the parameter
+        list; their consistency is owned by the ForAll checks + discharge. *)
+     ()
+   | RetPlain _ -> ()  (* carries no proof, so no subject to validate *));
 
   List.rev !errors
 
@@ -383,38 +424,14 @@ let validate_no_ok_in_fn ~(funcs : func_decl list) (body : expr) (kind : func_ki
         [{ loc; message = "establish functions cannot call 'check' (or 'auth') functions — \
 establish must be total and check/auth can fail with HTTP errors at runtime. \
 Use an 'if' expression and return 'Nothing' for the failure case instead." }]
-      (* Explicit leaves / DELIBERATE non-descents — these arms are semantically
-         load-bearing and must NOT be routed through the shared visitor, because
-         the canonical "all children" traversal would search MORE subtrees for a
-         forbidden `ok`/`fail`/`check` than this establish-totality check
-         intends.  Each deliberate omission below is preserved exactly:
-           - EConstructor: does NOT descend into its args (the original arm
-             returned []).  A proof constructor's arguments are not a control
-             path the establish-totality rule inspects.
-           - ECase: walks the scrutinee and each arm BODY but NOT the arm guards
-             (guards are pure boolean tests, not establish return paths).
-           - The cache forms and the email forms return [] without descending.
-           - EStartWorkers returns []. *)
-      | ELit _ | EVar _ | EConstructor _ -> []
-      | ECase { scrut; arms; _ } ->
-        walk scrut @ List.concat_map (fun (a : Ast.case_arm) -> walk a.body) arms
-      | EStartWorkers _ -> []
-      | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> []
-      | ESendEmail _ | EStartEmailWorker _ -> []
-      (* ECacheSet is kept EXPLICIT: the original arm descended ONLY into the
-         [value] child, not [key]/[ttl].  fold_children would descend into all
-         three, so we preserve the original single-child descent to keep the
-         analysed set (and thus the verdict) byte-identical. *)
-      | ECacheSet { value; _ } -> walk value
-      (* Purely-MECHANICAL full descent into every immediate child — migrated
-         onto the shared {!Ast_visitor.fold_children} (Wave-2 visitor
-         consolidation).  Covers EField (into obj), EApp, EBinop, EUnop, EIf,
-         ELet, ELetProof, ERecord, EList, ETelemetry, EEnqueue, EPublish,
-         EWithDatabase/EWithCapabilities/EWithTransaction, EServe, ELambda.
-         For every one of these the original arm already descended into EXACTLY
-         the set of children fold_children visits, in the SAME left-to-right
-         order, so the concatenated error order is preserved.  A new
-         full-descent {!Ast.expr} variant is now traversed automatically here. *)
+      (* Fail-closed structural descent: EVERY other form is walked via the
+         shared {!Ast_visitor.fold_children} — including constructor
+         arguments, case guards, cache/email operand positions and
+         string-interpolation segments, all of which used to be deliberate
+         non-descents ([[fail_closed_no_ok_in_fn]], 2026-07-06).  A forbidden
+         `ok`/`fail`/`check` can therefore no longer hide in ANY child
+         position, and a new {!Ast.expr} variant is traversed automatically
+         instead of silently skipped. *)
       | _ -> Ast_visitor.fold_children (fun acc c -> acc @ walk c) [] e
     in
     ignore fd_loc;
@@ -423,8 +440,10 @@ Use an 'if' expression and return 'Nothing' for the failure case instead." }]
     (* Walk the body looking for EOk *)
     let rec walk (e : Ast.expr) =
       match e with
-      | EOk { proof; _ } when proof_uses_existing_witness ~is_clean_fact_fn proof ->
-        []
+      | EOk { value; proof; _ } when proof_uses_existing_witness ~is_clean_fact_fn proof ->
+        (* This `ok` re-attaches an existing witness — allowed — but its VALUE
+           subtree could still hide a fresh mint, so descend into it. *)
+        walk value
       | EOk { proof; loc; _ } ->
         (match non_clean_fact_inline_call proof clean_fact_fns known_fns with
          | Some fn_name ->
@@ -442,25 +461,15 @@ case %s ... of\n    Nothing -> <handle absence>\n    Something p -> ... (value :
            [{ loc; message = Printf.sprintf
                 "ok ::: proof construction is not allowed in `%s`; use a check, auth, or establish function"
                 (string_of_func_kind kind) }])
-      (* Explicit leaves / DELIBERATE non-descents — preserved exactly as the
-         EOk-search rule intends (EConstructor does NOT walk its args; ECase
-         walks bodies but NOT guards; cache/email forms and EStartWorkers do not
-         descend).  Routing these through the shared visitor would search more
-         subtrees and could change the verdict, so they stay explicit. *)
-      | ELit _ | EVar _ | EConstructor _ | EFail _ -> []
-      | ECase { scrut; arms; _ } ->
-        walk scrut @ List.concat_map (fun (a : Ast.case_arm) -> walk a.body) arms
-      | EStartWorkers _ -> []
-      | ECacheGet _ | ECacheDelete _ | ECacheInvalidate _ -> []
-      | ESendEmail _ | EStartEmailWorker _ -> []
-      (* ECacheSet stays EXPLICIT: original descended ONLY into [value]. *)
-      | ECacheSet { value; _ } -> walk value
-      (* Purely-MECHANICAL full descent — migrated onto {!Ast_visitor.fold_children}.
-         Covers EField (into obj), EApp, EBinop, EUnop, EIf, ELet, ELetProof,
-         ERecord, EList, ETelemetry, EEnqueue, EPublish, EWithDatabase/
-         EWithCapabilities/EWithTransaction, EServe, ELambda — each of which
-         already descended into EXACTLY fold_children's children, in the same
-         left-to-right order, so error order is preserved. *)
+      (* Fail-closed structural descent: EVERY other form is walked via the
+         shared {!Ast_visitor.fold_children} — including constructor
+         arguments (`Something (ok v ::: P v)`), case guards, cache/email
+         operand positions, `fail` message interpolations and
+         string-interpolation segments, all of which used to be deliberate
+         non-descents ([[fail_closed_no_ok_in_fn]], 2026-07-06).  A minting
+         `ok` can therefore no longer hide in ANY child position, and a new
+         {!Ast.expr} variant is traversed automatically instead of silently
+         skipped. *)
       | _ -> Ast_visitor.fold_children (fun acc c -> acc @ walk c) [] e
     in
     ignore fd_loc;
@@ -1029,6 +1038,20 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
   let cap_map = build_cap_map decls @ extra_caps in
   let declared_caps = List.map fst cap_map in
 
+  (* Shared rule for every non-DFunc decl kind that carries a `requires [...]`
+     list: each listed name must be a declared/imported capability.  (Only a
+     FUNCTION's parameters can bind a capability-row variable, so no
+     [func_bound_cap_vars] exception here.) *)
+  let check_requires ~what ~name ~loc caps =
+    List.iter (fun cap ->
+      if not (List.mem cap declared_caps) then
+        errors := { loc;
+          message = Printf.sprintf
+            "%s '%s' requires undeclared capability '%s'" what name cap
+        } :: !errors
+    ) caps
+  in
+
   (* Check each capability declaration: all implied caps must be known *)
   List.iter (fun decl ->
     match decl with
@@ -1052,7 +1075,25 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
               "function '%s' requires undeclared capability '%s'" fd.name cap
           } :: !errors
       ) fd.capabilities
-    | _ -> ()
+    (* Decl kinds that CARRY a `requires [...]` list but were skipped by the
+       old blanket `| _ -> ()` — an undeclared capability in a queue / agent /
+       test / apiTest / loadTest requires-list was silently accepted
+       ([[fail_closed_capabilities_decl_wildcard]], 2026-07-06; the DTest case
+       was reproduced, so this was an ACTIVE fail-open, not latent). *)
+    | DQueue q -> check_requires ~what:"queue" ~name:q.name ~loc:q.loc q.capabilities
+    | DAgent a -> check_requires ~what:"agent" ~name:a.name ~loc:a.loc a.capabilities
+    | DTest t -> check_requires ~what:"test" ~name:t.description ~loc:t.loc t.capabilities
+    | DApiTest t ->
+      check_requires ~what:"apiTest" ~name:t.description ~loc:t.loc t.capabilities
+    | DLoadTest lt ->
+      check_requires ~what:"loadTest" ~name:lt.description ~loc:lt.loc lt.capabilities
+    (* Decl kinds with NO `requires` clause today — nothing to check.
+       Enumerated (no wildcard) so `@8` forces a decision here the day a new
+       or existing kind gains a capability requirement.  DCapability / DCache /
+       DEmail capability DEFINITIONS are folded into [build_cap_map] above. *)
+    | DType _ | DRecord _ | DEntity _ | DFact _ | DCodec _ | DDatabase _
+    | DConst _ | DChannel _ | DWorkers _ | DCache _ | DEmail _ | DCapture _
+    | DApi _ | DServer _ -> ()
   ) decls;
 
   List.rev !errors
@@ -1294,7 +1335,21 @@ before this function, or import it from the module that declares it"
               } :: !errors
           ) (pred_arg_names_in_proof p)
       ) ef.fields
-    | _ -> ()
+    (* Remaining decl kinds, enumerated (no wildcard) so `@8` forces a
+       decision here the day a new decl kind gains a proof-bearing position
+       ([[fail_closed_undefined_predicates_decl_wildcard]], 2026-07-06):
+       - DCapture and DApi DO carry proof-annotated bindings (`capture x: T
+         ::: P x via chk`, endpoint `auth`); their predicate consistency is
+         owned by the dedicated pipeline-1 passes ([check_capture_proof_via],
+         the api/server structural checks), which tie each annotation to the
+         minting `via` checker — a stronger guarantee than the name-scope
+         check here.
+       - Expression-level proofs inside test bodies are validated by the
+         expression passes, not this declaration walk.
+       - The rest carry no proof annotation at all. *)
+    | DType _ | DFact _ | DCodec _ | DDatabase _ | DCapability _ | DConst _
+    | DQueue _ | DChannel _ | DWorkers _ | DCache _ | DAgent _ | DEmail _
+    | DCapture _ | DApi _ | DServer _ | DTest _ | DApiTest _ | DLoadTest _ -> ()
   ) m.decls;
   List.rev !errors
 
@@ -1827,15 +1882,22 @@ supplies the wrong arguments (%s); the body must return the declared fact about 
           | _ -> None
         ) fd.params in
         (* Also check test blocks *)
-        (* NOTE (review item 3): [check_gw] is a SECONDARY, partial ghost-witness
-           walker.  The AUTHORITATIVE, fail-closed check is
+        (* NOTE: [check_gw] is a SECONDARY ghost-witness walker.  The
+           AUTHORITATIVE check is
            [Validation_advanced.check_ghost_witness_predicates] (built on
            [Ast_visitor], so it descends into every construct and cannot fall
-           open on a new AST variant).  This copy is backstopped by that one and
-           is now guarded by the module-level `[@@@ocaml.warning "@8"]` above, so
-           a new variant forces a decision here too.  When changing ghost-witness
-           rules, update the AUTHORITATIVE walker first and keep this one in sync
-           (or fold it into that pass). *)
+           open on a new AST variant).  This walk is now total as well: the
+           explicit arms below are only the ones that thread binding state
+           (ECase extends [param_map]; ELet extends [fact_names]) plus the
+           EOk-of-record shapes the check actually fires on; EVERYTHING else
+           descends structurally via [Ast_visitor.iter_children], so a ghost
+           witness nested in an EApp argument / list / record — or under a
+           future expr variant — is traversed rather than silently skipped.
+           (Precision note: the module-level `@8` guard does NOT protect this
+           match — the trailing catch-all makes it exhaustive.  Totality here
+           rests on the catch-all DESCENDING; never change it back to a bare
+           `()`.)  When changing ghost-witness rules, update the AUTHORITATIVE
+           walker first and keep this one in sync (or fold it into that pass). *)
         let check_test_param_map (test_params : (string * proof_expr) list) e =
           (* fact_names: set of names bound to Fact values (Fact-typed params + detachFact let-bindings) *)
           let init_fact_names = fact_type_params in
@@ -1908,9 +1970,8 @@ supplies the wrong arguments (%s); the body must return the declared fact about 
                        to provide a Fact value for the invariant `%s`"
                       type_name (pp_proof invariant_proof) }
                     :: !errors))
-            | EIf { then_; else_; _ } ->
-              check_gw param_map fact_names then_; check_gw param_map fact_names else_
-            | ECase { arms; _ } ->
+            | ECase { scrut; arms; _ } ->
+              check_gw param_map fact_names scrut;
               List.iter (fun (a : case_arm) ->
                 let arm_map = match a.pattern with
                   | PCon { fields; _ } ->
@@ -1923,7 +1984,22 @@ supplies the wrong arguments (%s); the body must return the declared fact about 
                     ) fields @ param_map
                   | _ -> param_map
                 in
-                check_gw arm_map fact_names a.body) arms
+                (* A case-pattern binding may destructure a Fact out of a
+                   wrapper (`Something proof -> R { … } ::: proof`), so every
+                   pattern-bound name is accepted as a POSSIBLE witness by
+                   this secondary walk (no type info here); the authoritative
+                   pipeline-1 walker validates the witness precisely. *)
+                let rec pat_vars = function
+                  | PVar v -> [v]
+                  | PCon { fields; _ } ->
+                    List.concat_map (fun (_, sp) -> pat_vars sp) fields
+                  | PWild | PNullary _ | PLit _ -> []
+                in
+                let arm_fact_names = pat_vars a.pattern @ fact_names in
+                (match a.guard with
+                 | Some g -> check_gw arm_map arm_fact_names g
+                 | None -> ());
+                check_gw arm_map arm_fact_names a.body) arms
             | ELet { name; value; body; _ } ->
               check_gw param_map fact_names value;
               (* If this let binds a detachFact result, add to fact_names *)
@@ -1932,12 +2008,19 @@ supplies the wrong arguments (%s); the body must return the declared fact about 
                 else fact_names
               in
               check_gw param_map fact_names' body
-            | ELetProof { value; body; _ } ->
+            | ELetProof { proof_name; value; body; _ } ->
+              (* `let (v ::: p) = …` binds `p` to the decomposed proof — a
+                 legitimate ghost-witness source for the body. *)
               check_gw param_map fact_names value;
-              check_gw param_map fact_names body
-            | EWithTransaction { body; _ } | EWithDatabase { body; _ }
-            | EWithCapabilities { body; _ } -> check_gw param_map fact_names body
-            | _ -> ()
+              check_gw param_map (proof_name :: fact_names) body
+            | _ ->
+              (* Structural catch-all: descend into every immediate child
+                 (EIf branches AND condition, EApp fn+args, EList, ERecord,
+                 non-record EOk values, let-proof, with-blocks, interpolation
+                 segments, …) with unchanged state.  This is what keeps the
+                 walk total — a bare `()` here would silently skip nested
+                 ghost witnesses. *)
+              Ast_visitor.iter_children (fun c -> check_gw param_map fact_names c) e
           in
           check_gw test_params init_fact_names e
         in

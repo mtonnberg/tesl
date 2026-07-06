@@ -1,5 +1,13 @@
 # Fail-closed: `validate_no_ok_in_fn` residual non-descents (P3)
 
+> **DONE 2026-07-06.** All deliberate non-descent arms deleted in BOTH walkers;
+> everything but the semantic arms (EOk/EFail/check-call) now routes through
+> the `Ast_visitor.fold_children` catch-all — which already visits constructor
+> args, case guards, cache/email operands and string-interpolation segments.
+> The allowed re-attach arm (`EOk` with existing witness) additionally descends
+> into its VALUE. Red→green: `Something (ok v ::: P v)` and an `ok` inside a
+> case guard rejected in a `fn` (`test_fail_closed_hardening.ml`).
+
 Sibling of [[fail_closed_checker_hardening]] (umbrella).
 
 ## Why (the pattern)

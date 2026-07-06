@@ -1,5 +1,15 @@
 # Fail-closed: ghost-witness walker `check_gw` is non-total + misleading comment (P2)
 
+> **DONE 2026-07-06 (full option).** The `| _ -> ()` is now a structural
+> descent via `Ast_visitor.iter_children`; only the state-carrying arms (ECase
+> extends param_map/fact_names, ELet tracks detachFact, ELetProof binds the
+> decomposed proof) stay explicit, and the false `@8` comment was replaced with
+> the truth (totality rests on the catch-all DESCENDING). The deeper walk
+> exposed two missing witness sources the old walker never saw (case-pattern
+> bindings `Something proof ->`, and `let (v ::: p)`), now tracked in
+> `fact_names`. Red→green: bad witness nested in a list rejected, good
+> case-bound witness accepted (`test_fail_closed_hardening.ml`).
+
 Sibling of [[fail_closed_checker_hardening]] (umbrella).
 
 ## Why (the pattern)

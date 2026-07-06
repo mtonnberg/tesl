@@ -1,5 +1,14 @@
 # Fail-closed: `check_undefined_predicates` latent decl-wildcard (P4, latent)
 
+> **DONE 2026-07-06.** Outer decl loop enumerated (no wildcard). One precision
+> found during the audit: DCapture and DApi DO carry proof-annotated bindings
+> (`capture x: T ::: P x via chk`, endpoint `auth`) — their predicate
+> consistency is owned by the dedicated pipeline-1 passes
+> (`check_capture_proof_via`, api/server structural checks), which tie each
+> annotation to the minting `via` checker; the enumerated arm states this
+> explicitly instead of implying "no proofs live there". `check_ret` untouched
+> (already the exhaustive reference).
+
 Sibling of [[fail_closed_checker_hardening]] (umbrella).
 
 ## Why (the pattern)
