@@ -1974,7 +1974,7 @@ let rec infer_expr ctx (e : expr) : ty =
            If so, use the SQL type classifier to infer the return type.
            Otherwise fall through to the check-chain logic. *)
         (match classify_lowered_query base_fn with
-         | Some ty -> ty
+         | Some ty -> record_sql_operand_field_accesses ctx base_fn; ty
          | None ->
            let check_fns = flatten_check_chain_expr [] base_fn in
            if List.length check_fns >= 2 then begin
@@ -2049,7 +2049,7 @@ let rec infer_expr ctx (e : expr) : ty =
            are merged by the parser as EApp args onto a where-EBinop.
            Classify the underlying select expression to infer the return type. *)
         (match classify_lowered_query base_fn with
-         | Some ty -> ty
+         | Some ty -> record_sql_operand_field_accesses ctx base_fn; ty
          | None -> infer_direct_call base_fn args)
      | EConstructor { name; _ }
        when ctx.in_establish &&
@@ -2090,7 +2090,7 @@ let rec infer_expr ctx (e : expr) : ty =
         infer_direct_call base_fn args)
   | EBinop _ as binop ->
     (match classify_lowered_query binop with
-     | Some ty -> ty
+     | Some ty -> record_sql_operand_field_accesses ctx binop; ty
      | None ->
        let rec infer_check_chain_value = function
          | EBinop { op = BAnd; left; right; loc } ->
@@ -2485,6 +2485,82 @@ let rec infer_expr ctx (e : expr) : ty =
   let expr_meta = match binding_meta_of_expr ctx e with Some m -> m | None -> PlainBinding in
   record_expr_type_with_meta ctx (expr_loc e) inferred expr_meta;
   inferred
+
+(* Ambiguous-dot where-clause hint (issue #26/#27 follow-up): a lowered SQL
+   query with a `where` comparison is EBinop-headed and typed structurally by
+   [classify_lowered_query], which never infers the comparison operands — so a
+   field read in a VALUE operand (`where o.name == pr.name` → `pr.name`) gets
+   no [field_accesses] entry, the emitter's field_access_type_tbl misses, and
+   [emit_field_dot] emits the bare 2-arg `(tesl-dot/runtime pr 'name)`, which
+   traps at runtime when the field name is shared across entities/records.
+   This pass re-walks the lowered query, binds the select binder to its entity
+   type, and infers every field read on the VALUE side of each comparison —
+   for the [field_accesses] side effect only (errors rolled back, so it can
+   never reject a program).  The COLUMN side (comparison left) is emitted as
+   `entity-field-ref` and needs no hint, so it is skipped. *)
+and record_sql_operand_field_accesses ctx query =
+  (* Binder + entity of the lowered query, mirroring the emitter's
+     parse_select_seed / parse_update_start / parse_delete_seed shapes. *)
+  let entity_name_of = function
+    | EConstructor { name; args = []; _ } | EVar { name; _ } -> Some name
+    | _ -> None
+  in
+  let rec binder_entity e =
+    match e with
+    | EBinop { left; right; _ } ->
+      (match binder_entity left with
+       | Some r -> Some r
+       | None -> binder_entity right)
+    | _ ->
+      (match flatten_app_expr [] e with
+       | (EBinop _ as base), _ :: _ -> binder_entity base
+       | EVar { name = ("select" | "selectOne" | "selectCount"); _ },
+         EVar { name = binder; _ } :: EVar { name = "from"; _ } :: entity_expr :: _
+       | EVar { name = ("delete" | "deleteAndReturnResult"); _ },
+         EVar { name = binder; _ } :: EVar { name = "from"; _ } :: entity_expr :: _
+       | EVar { name = ("update" | "updateAndReturnOne"); _ },
+         EVar { name = binder; _ } :: EVar { name = "in"; _ } :: entity_expr :: _
+       | EVar { name = ("selectSum" | "selectMax" | "selectMin"); _ },
+         EField { obj = EVar { name = binder; _ }; _ }
+         :: EVar { name = "from"; _ } :: entity_expr :: _ ->
+         Option.map (fun entity -> (binder, entity)) (entity_name_of entity_expr)
+       | _ -> None)
+  in
+  match binder_entity query with
+  | Some (binder, entity) when List.mem_assoc entity ctx.records ->
+    let ctx' = { ctx with env = env_extend binder (mono (TCon entity)) ctx.env } in
+    (* Infer only the EField nodes of a value operand — inferring the whole
+       `col == value` would re-enter classify_lowered_query and skip the value
+       side again.  Outermost EField per subtree suffices: inferring it infers
+       (and records) any nested field reads. *)
+    let record_fields_in value =
+      let rec walk e =
+        match e with
+        | EField _ ->
+          let saved_errors = !(ctx'.errors) in
+          ignore (infer_expr ctx' e);
+          ctx'.errors := saved_errors
+        | _ -> Ast_visitor.iter_children walk e
+      in
+      walk value
+    in
+    let rec scan e =
+      match e with
+      | EBinop { op = (BAnd | BOr | BAdd); left; right; _ } ->
+        scan left; scan right
+      | EBinop { op = (BEq | BNeq | BLt | BLe | BGt | BGe); left; right; _ } ->
+        scan left;              (* left is the column or the select app-chain *)
+        record_fields_in right  (* right is the VALUE operand *)
+      | EApp _ ->
+        (* Multi-line SQL: modifier clauses merged as EApp args onto the
+           where-EBinop — recurse into the EBinop base. *)
+        (match flatten_app_expr [] e with
+         | (EBinop _ as base), _ :: _ -> scan base
+         | _ -> ())
+      | _ -> ()
+    in
+    scan query
+  | _ -> ()
 
 and infer_lit = function
   | LInt _    -> t_int

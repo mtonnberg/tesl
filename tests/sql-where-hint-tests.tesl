@@ -1,0 +1,52 @@
+#lang tesl
+module Sql_where_hint_tests exposing []
+
+# Regression for the ambiguous-dot where-clause gap (the real GitHub #27 cause,
+# roadmap/next/ambiguous_dot_where_clause_hint.md): a field read in a SQL
+# where-clause VALUE operand (`where o.name == pr.name`) was typed by
+# classify_lowered_query, which never inferred the operand — so no
+# field_accesses hint was recorded and the emitter produced the bare
+# `(tesl-dot/runtime pr 'name)`. When the field name is shared by 2+ entities
+# whose fields superset-match the value's row, the structural resolver saw
+# multiple candidates and trapped "ambiguous dot access" at runtime.
+# Fixed by record_sql_operand_field_accesses (checker.ml): the value side of
+# every where comparison is inferred for the field_accesses side effect, so the
+# emit carries the type hint `(tesl-dot/runtime pr 'name 'ProjW)`.
+
+import Tesl.Prelude exposing [Bool(..), Int, List, String]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.List exposing [List.length]
+
+# Two entities sharing the SAME field set: an OrgW row {id,name} structurally
+# matches ProjW {id,name} and vice versa — the ambiguous case.
+entity OrgW table "orgw" primaryKey id { id: String name: String }
+entity ProjW table "projw" primaryKey id { id: String name: String }
+
+fn findOrg(pr: ProjW) -> Maybe OrgW requires [dbRead] =
+  selectOne o from OrgW where o.name == pr.name
+
+fn countBoth(pr: ProjW) -> Int requires [dbRead] =
+  let hits = select o from OrgW where o.id == pr.id && o.name == pr.name
+  List.length hits
+
+test "shared-field read in where value operand does not trap (#27)" requires [dbRead, dbWrite] {
+  let _ = insert OrgW { id: "o1", name: "acme" }
+  let pr = ProjW { id: "p1", name: "acme" }
+  expect (case findOrg pr of
+    Something o -> o.id == "o1"
+    Nothing -> False)
+}
+
+test "compound where with two shared-field value operands (#27)" requires [dbRead, dbWrite] {
+  let _ = insert OrgW { id: "same", name: "beta" }
+  let pr = ProjW { id: "same", name: "beta" }
+  expect countBoth pr == 1
+}
+
+test "no match returns Nothing without trapping (#27)" requires [dbRead, dbWrite] {
+  let pr = ProjW { id: "px", name: "no-such-org" }
+  expect (case findOrg pr of
+    Something _ -> False
+    Nothing -> True)
+}

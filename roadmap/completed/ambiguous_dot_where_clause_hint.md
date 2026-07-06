@@ -1,5 +1,30 @@
 # Ambiguous-dot: SQL where-clause operand field reads are not type-hinted
 
+**COMPLETED 2026-07-06.** Fixed exactly as diagnosed below:
+`record_sql_operand_field_accesses` (checker.ml, in the `infer_expr` rec
+group) is called at all three sites where `classify_lowered_query` succeeds on
+an EBinop-headed lowered query. It extracts the binder + entity (mirroring the
+emitter's seed parses, incl. the `selectSum`/`selectMax`/`selectMin`
+EField-first and `update … in` shapes), binds the binder to the entity type,
+and infers every `EField` on the VALUE side of each `where` comparison for the
+`field_accesses` side effect only (errors rolled back; the COLUMN side is
+skipped — it emits as `entity-field-ref` and needs no hint). No emit change.
+
+Verification (all green):
+- Red→green: the repro below emitted bare `(tesl-dot/runtime pr 'name)` on the
+  pre-fix binary, `(tesl-dot/runtime pr 'name 'Proj)` after.
+- `bug_repro.tesl` (the real #27 app): all `r.orgId`/`r.projectId` selectSum
+  where-operands now hinted `'CostRate`; ZERO bare 2-arg dot emits remain.
+- New emit regression: `test_where_clause_operand_typed_dot_hint`
+  (compiler/test/test_emit.ml) — single BEq, compound BAnd, selectSum shapes,
+  plus column-side-unaffected assertion.
+- New runtime regression: tests/sql-where-hint-tests.tesl (+ committed .rkt)
+  — two entities sharing the full {id,name} field set; seeds a row and reads
+  shared fields in where value operands without trapping.
+- Latent-safe shipped examples now hinted (snapshots regenerated):
+  example/ai-conversation-service.rkt (`requestUser.id 'Consumer`),
+  example/kanel/KanelDB.rkt + KanelOrg.rkt (`m.orgId 'OrgMembership`).
+
 The systemic follow-up to [[issue_26_ambiguous_dot]] / [[issue_27_ambiguous_dot_interpolation]].
 After unifying every EXPRESSION-level field-read emit path through one hinted
 emitter (`emit_field_dot`, 2026-07-06 — see below), one field-read context still

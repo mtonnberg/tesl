@@ -97,6 +97,48 @@ fn describe(p: Proj) -> String = "name=${p.name} id=${p.id}"
   assert_not_contains ~name:"no bare dot-notation for interpolated p.id"
     out "(raw-value p.id)"
 
+(* The where-clause sibling (the real #27 cause): a shared field read in a SQL
+   where-clause VALUE operand (`where o.name == pr.name`) is typed by
+   classify_lowered_query, which used to skip operand inference entirely — no
+   field_accesses entry, so emit_field_dot produced the bare
+   `(tesl-dot/runtime pr 'name)` and trapped at runtime when the operand's row
+   superset-matches a second entity. record_sql_operand_field_accesses
+   (checker.ml) now infers the value side of every where comparison for the
+   field_accesses side effect, so the hint is threaded like every other
+   field-read position. *)
+let test_where_clause_operand_typed_dot_hint () =
+  let src = {|#lang tesl
+module WhereHint exposing []
+import Tesl.Prelude exposing [Bool(..), Int, List, String]
+import Tesl.DB exposing [dbRead]
+import Tesl.List exposing [List.length]
+import Tesl.Maybe exposing [Maybe(..)]
+entity Org table "orgs" primaryKey id { id: String  name: String }
+entity Proj table "projs" primaryKey id { id: String  name: String }
+fn findOrg(pr: Proj) -> Maybe Org requires [dbRead] =
+  selectOne o from Org where o.name == pr.name
+fn countBoth(pr: Proj) -> Int requires [dbRead] =
+  let hits = select o from Org where o.id == pr.id && o.name == pr.name
+  List.length hits
+fn sumWide(pr: Proj) -> Int requires [dbRead] =
+  selectSum o.id from Org where o.name == pr.name
+|} in
+  let out = compile_ok src "where-clause operand typed dot" in
+  (* single-comparison where (EBinop BEq-headed select) *)
+  assert_contains ~name:"single where value operand pr.name carries the 'Proj hint"
+    out "(tesl-dot/runtime pr 'name 'Proj)";
+  (* compound where (EBinop BAnd-headed select) — both value operands *)
+  assert_contains ~name:"compound where value operand pr.id carries the 'Proj hint"
+    out "(tesl-dot/runtime pr 'id 'Proj)";
+  (* aggregate select (selectSum EField-first arg shape) *)
+  assert_not_contains ~name:"no bare untyped dot for pr.name"
+    out "(tesl-dot/runtime pr 'name)";
+  assert_not_contains ~name:"no bare untyped dot for pr.id"
+    out "(tesl-dot/runtime pr 'id)";
+  (* the COLUMN side must stay an entity-field-ref, not a hinted runtime dot *)
+  assert_contains ~name:"column side unaffected"
+    out "(entity-field-ref Org 'name)"
+
 (* ── Require block tests ─────────────────────────────────────────────────── *)
 
 let test_require_block () =
@@ -1192,5 +1234,6 @@ let () =
     "issue-26-ambiguous-dot", [
       Alcotest.test_case "field read on select-bound entity emits typed dot hint" `Quick test_issue26_field_read_typed_dot_hint;
       Alcotest.test_case "interpolated shared field read emits typed dot hint (#27)" `Quick test_issue27_interpolated_field_read_typed_dot_hint;
+      Alcotest.test_case "where-clause value operand emits typed dot hint (#27 root)" `Quick test_where_clause_operand_typed_dot_hint;
     ];
   ]
