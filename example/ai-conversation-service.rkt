@@ -110,19 +110,19 @@
   (claudeAgentFor [c : Consumer])
   #:capabilities [convAi convRead]
   #:returns Agent
-  (thsl-src! "example/ai-conversation-service.tesl" 175 (list (cons 'c *c)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (anthropic (tesl-dot/runtime c 'apiKey) "claude-opus-4-8")) (raw-value "You are a concise support assistant. Use lookupOrderStatus for order questions.") (raw-value 512)) (list (__tart_tool "lookupOrderStatus" "\226\148\128\226\148\128 Tool: a typed function the model may call, grounded in the database \226\148\128\226\148\128\226\148\128\226\148\128\226\148\128\226\148\128\226\148\128\226\148\128 The result is derived ONLY from a row fetched through the trusted SQL boundary, which carries a FromDb proof \226\128\148 so the model cannot make the tool assert a status for an order that isn't in the database (data integrity by construction)." "{\"type\":\"object\",\"properties\":{\"orderId\":{\"type\":\"string\"}},\"required\":[\"orderId\"]}" (lambda (_args) (__tart_tesl-agent-decode-args _args (list (cons "orderId" 'string)))) (lambda (_decoded) (apply lookupOrderStatus _decoded))))))))
+  (thsl-src! "example/ai-conversation-service.tesl" 175 (list (cons 'c *c)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (anthropic (tesl-dot/runtime c 'apiKey 'Consumer) "claude-opus-4-8")) (raw-value "You are a concise support assistant. Use lookupOrderStatus for order questions.") (raw-value 512)) (list (__tart_tool "lookupOrderStatus" "\226\148\128\226\148\128 Tool: a typed function the model may call, grounded in the database \226\148\128\226\148\128\226\148\128\226\148\128\226\148\128\226\148\128\226\148\128\226\148\128 The result is derived ONLY from a row fetched through the trusted SQL boundary, which carries a FromDb proof \226\128\148 so the model cannot make the tool assert a status for an order that isn't in the database (data integrity by construction)." "{\"type\":\"object\",\"properties\":{\"orderId\":{\"type\":\"string\"}},\"required\":[\"orderId\"]}" (lambda (_args) (__tart_tesl-agent-decode-args _args (list (cons "orderId" 'string)))) (lambda (_decoded) (apply lookupOrderStatus _decoded))))))))
 
 (define/pow
   (agentFor [c : Consumer])
   #:capabilities [convAi convRead]
   #:returns Agent
-  (thsl-src! "example/ai-conversation-service.tesl" 186 (list (cons 'c *c)) (lambda () (if (tesl-equal? (tesl-dot/runtime c 'provider) "mistral") (raw-value MistralAgent) (raw-value (claudeAgentFor c))))))
+  (thsl-src! "example/ai-conversation-service.tesl" 186 (list (cons 'c *c)) (lambda () (if (tesl-equal? (tesl-dot/runtime c 'provider 'Consumer) "mistral") (raw-value MistralAgent) (raw-value (claudeAgentFor c))))))
 
 (define/pow
   (loadConversation [agent : Agent] [requestUser : Consumer] [conversationId : String])
   #:capabilities [convRead]
   #:returns Conversation
-  (thsl-src-control! "example/ai-conversation-service.tesl" 197 (list (cons 'agent *agent) (cons 'requestUser *requestUser) (cons 'conversationId *conversationId)) (lambda () (let ([tesl-case-4 (raw-value (let ([tesl_match (select-one (from ConversationRecord) (where (==. (entity-field-ref ConversationRecord 'id) conversationId)) (where (==. (entity-field-ref ConversationRecord 'ownerId) (tesl-dot/runtime requestUser 'id))))]) (if tesl_match (Something tesl_match) Nothing)))]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Something)) (let ([r (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "example/ai-conversation-service.tesl" 198 (list (cons 'r r)) (lambda () (raw-value (raw-value (conversationFrom *agent (tesl-dot/runtime r 'transcript)))))))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Nothing)) (thsl-src! "example/ai-conversation-service.tesl" 199 (list) (lambda () (raw-value (raw-value (newConversation *agent)))))])))))
+  (thsl-src-control! "example/ai-conversation-service.tesl" 197 (list (cons 'agent *agent) (cons 'requestUser *requestUser) (cons 'conversationId *conversationId)) (lambda () (let ([tesl-case-4 (raw-value (let ([tesl_match (select-one (from ConversationRecord) (where (==. (entity-field-ref ConversationRecord 'id) conversationId)) (where (==. (entity-field-ref ConversationRecord 'ownerId) (tesl-dot/runtime requestUser 'id))))]) (if tesl_match (Something tesl_match) Nothing)))]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Something)) (let ([r (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "example/ai-conversation-service.tesl" 198 (list (cons 'r r)) (lambda () (raw-value (raw-value (conversationFrom *agent (tesl-dot/runtime r 'transcript 'ConversationRecord)))))))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Nothing)) (thsl-src! "example/ai-conversation-service.tesl" 199 (list) (lambda () (raw-value (raw-value (newConversation *agent)))))])))))
 
 (define/pow
   (updateTranscript [requestUser : Consumer] [conversationId : String] [json : String])
@@ -134,7 +134,7 @@
   (insertTranscript [requestUser : Consumer] [conversationId : String] [json : String])
   #:capabilities [convWrite]
   #:returns Unit
-  (let ([rows (thsl-src! "example/ai-conversation-service.tesl" 209 (list (cons 'requestUser *requestUser) (cons 'conversationId *conversationId) (cons 'json *json)) (lambda () (list (hash 'id *conversationId 'ownerId (tesl-dot/runtime requestUser 'id) 'transcript *json))))]) (thsl-src! "example/ai-conversation-service.tesl" 210 (list (cons 'rows *rows) (cons 'requestUser *requestUser) (cons 'conversationId *conversationId) (cons 'json *json)) (lambda () (raw-value (insert-many! (from ConversationRecord) rows))))))
+  (let ([rows (thsl-src! "example/ai-conversation-service.tesl" 209 (list (cons 'requestUser *requestUser) (cons 'conversationId *conversationId) (cons 'json *json)) (lambda () (list (hash 'id *conversationId 'ownerId (tesl-dot/runtime requestUser 'id 'Consumer) 'transcript *json))))]) (thsl-src! "example/ai-conversation-service.tesl" 210 (list (cons 'rows *rows) (cons 'requestUser *requestUser) (cons 'conversationId *conversationId) (cons 'json *json)) (lambda () (raw-value (insert-many! (from ConversationRecord) rows))))))
 
 (define/pow
   (saveConversation [requestUser : Consumer] [conversationId : String] [conv : Conversation])

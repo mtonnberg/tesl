@@ -265,7 +265,7 @@
 (define/pow
   (readSafeField [item : SafeItem48])
   #:returns Integer
-  (thsl-src! "tests/critical-review-48-tests.tesl" 674 (list (cons 'item *item)) (lambda () (raw-value (requiresValidTitle48 (tesl-dot/runtime item 'title))))))
+  (thsl-src! "tests/critical-review-48-tests.tesl" 674 (list (cons 'item *item)) (lambda () (raw-value (requiresValidTitle48 (tesl-dot/runtime item 'title 'SafeItem48))))))
 
 (define-record OrderedPair
   [lo : Integer]

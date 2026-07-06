@@ -55,7 +55,7 @@
 (define/pow
   (dispatchWeather [args : WeatherArgs])
   #:returns String
-  (thsl-src! "tests/agent-tools-tests.tesl" 83 (list (cons 'args *args)) (lambda () (raw-value (tesl_import_String_concat "weather in " (tesl-dot/runtime args 'city))))))
+  (thsl-src! "tests/agent-tools-tests.tesl" 83 (list (cons 'args *args)) (lambda () (raw-value (tesl_import_String_concat "weather in " (tesl-dot/runtime args 'city 'WeatherArgs))))))
 
 (define/pow
   (decodeSummary [j : String])
@@ -115,8 +115,8 @@
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-tools-tests.tesl" 158 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "{\"title\":\"All good\",\"score\":42}"))) (raw-value "Reply with JSON.") (raw-value 128)) (list)))))
     (define summary (thsl-src! "tests/agent-tools-tests.tesl" 159 (list (cons 'agent agent)) (lambda () (raw-value (askFor (raw-value agent) "summarize" decodeSummary 2)))))
-    (check-equal? (thsl-src! "tests/agent-tools-tests.tesl" 160 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'title)))) "All good")
-    (check-equal? (thsl-src! "tests/agent-tools-tests.tesl" 161 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'score)))) 42)
+    (check-equal? (thsl-src! "tests/agent-tools-tests.tesl" 160 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'title 'Summary)))) "All good")
+    (check-equal? (thsl-src! "tests/agent-tools-tests.tesl" 161 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'score 'Summary)))) 42)
     )
     ))
   )
@@ -126,8 +126,8 @@
     (with-capabilities (supportBot)
     (define agent (thsl-src! "tests/agent-tools-tests.tesl" 171 (list) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockProvider (list "not json at all" "{\"title\":\"Recovered\",\"score\":7}"))) (raw-value "Reply with JSON.") (raw-value 128)) (list)))))
     (define summary (thsl-src! "tests/agent-tools-tests.tesl" 172 (list (cons 'agent agent)) (lambda () (raw-value (askFor (raw-value agent) "summarize" decodeSummary 2)))))
-    (check-equal? (thsl-src! "tests/agent-tools-tests.tesl" 173 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'title)))) "Recovered")
-    (check-equal? (thsl-src! "tests/agent-tools-tests.tesl" 174 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'score)))) 7)
+    (check-equal? (thsl-src! "tests/agent-tools-tests.tesl" 173 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'title 'Summary)))) "Recovered")
+    (check-equal? (thsl-src! "tests/agent-tools-tests.tesl" 174 (list (cons 'summary summary) (cons 'agent agent)) (lambda () (raw-value (tesl-dot/runtime summary 'score 'Summary)))) 7)
     )
     ))
   )

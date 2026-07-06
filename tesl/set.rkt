@@ -14,6 +14,7 @@
  Set.singleton
  Set.insert
  Set.remove
+ Set.delete
  Set.member
  Set.size
  Set.isEmpty
@@ -57,6 +58,10 @@
 
 (define (Set.remove x s)
   (set-remove (raw-set s 'Set.remove) (raw-value x)))
+
+;; `Set.delete` is a synonym of `Set.remove` (declared as an alias in the type
+;; table; was importable but had no runtime binding → unbound at load).
+(define Set.delete Set.remove)
 
 (define (Set.member x s)
   (set-member? (raw-set s 'Set.member) (raw-value x)))

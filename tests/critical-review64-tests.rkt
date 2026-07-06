@@ -369,7 +369,7 @@
 (define/pow
   (readTitle [doc : SafeDoc])
   #:returns String
-  (thsl-src! "tests/critical-review64-tests.tesl" 786 (list (cons 'doc *doc)) (lambda () (raw-value (needsNonEmpty (tesl-dot/runtime doc 'title))))))
+  (thsl-src! "tests/critical-review64-tests.tesl" 786 (list (cons 'doc *doc)) (lambda () (raw-value (needsNonEmpty (tesl-dot/runtime doc 'title 'SafeDoc))))))
 
 (define/pow
   (updateWordCount [doc : SafeDoc] [newCount : Integer])

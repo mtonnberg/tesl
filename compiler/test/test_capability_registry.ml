@@ -27,7 +27,11 @@ let oracle = [
      clock — its runtime (tesl/time.rkt:42-43) calls `require-capabilities! time`.
      C4/cap drift-fix (2026-07-05): it must charge `time`, like now/nowMillis. *)
   "now", ["time"]; "nowMillis", ["time"]; "durationMs", ["time"];
-  "randomInt", ["random"]; "randomFloat", ["random"]; "generatePrefixedId", ["random"];
+  "randomInt", ["random"]; "randomFloat", ["random"];
+  (* generateId / generatePrefixedId both mint a random id → charge `random`
+     (2026-07-06: generateId's charge was added when its runtime binding landed;
+     see roadmap stdlib_surface_binding_drift). *)
+  "generateId", ["random"]; "generatePrefixedId", ["random"];
   "env", ["envRead"]; "envInt", ["envRead"];
   "envString", ["envRead"]; "requireEnv", ["envRead"];
   "deadJobs", ["queueRead"]; "requeue", ["queueWrite"];

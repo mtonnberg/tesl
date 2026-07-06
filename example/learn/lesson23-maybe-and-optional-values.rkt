@@ -41,7 +41,7 @@
 (define/pow
   (hasId [targetId : Integer] [u : User])
   #:returns Boolean
-  (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 51 (list (cons 'targetId *targetId) (cons 'u *u)) (lambda () (tesl-equal? (tesl-dot/runtime u 'id) *targetId))))
+  (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 51 (list (cons 'targetId *targetId) (cons 'u *u)) (lambda () (tesl-equal? (tesl-dot/runtime u 'id 'User) *targetId))))
 
 (define/pow
   (findUser [users : (List User)] [userId : Integer])
@@ -51,7 +51,7 @@
 (define/pow
   (isActive [u : User])
   #:returns Boolean
-  (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 58 (list (cons 'u *u)) (lambda () (tesl-dot/runtime u 'active))))
+  (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 58 (list (cons 'u *u)) (lambda () (tesl-dot/runtime u 'active 'User))))
 
 (define/pow
   (firstActiveUser [users : (List User)])
@@ -71,7 +71,7 @@
 (define/pow
   (getUserName [mu : (Maybe User)])
   #:returns String
-  (thsl-src-control! "example/learn/lesson23-maybe-and-optional-values.tesl" 80 (list (cons 'mu *mu)) (lambda () (let ([tesl-case-4 *mu]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Something)) (let ([u (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 81 (list (cons 'u u)) (lambda () (raw-value (tesl-dot/runtime u 'name)))))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Nothing)) (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 82 (list) (lambda () (raw-value "unknown")))])))))
+  (thsl-src-control! "example/learn/lesson23-maybe-and-optional-values.tesl" 80 (list (cons 'mu *mu)) (lambda () (let ([tesl-case-4 *mu]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Something)) (let ([u (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 81 (list (cons 'u u)) (lambda () (raw-value (tesl-dot/runtime u 'name 'User)))))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Nothing)) (thsl-src! "example/learn/lesson23-maybe-and-optional-values.tesl" 82 (list) (lambda () (raw-value "unknown")))])))))
 
 (module+ test
   (require rackunit)

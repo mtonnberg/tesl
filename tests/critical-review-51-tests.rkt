@@ -155,7 +155,7 @@
 (define/pow
   (n05_record_update_known [p : Point] [dx : Integer])
   #:returns Point
-  (thsl-src! "tests/critical-review-51-tests.tesl" 187 (list (cons 'p *p) (cons 'dx *dx)) (lambda () (tesl-record-update *p (hash 'x (raw-value (+ (tesl-dot/runtime p 'x) *dx)))))))
+  (thsl-src! "tests/critical-review-51-tests.tesl" 187 (list (cons 'p *p) (cons 'dx *dx)) (lambda () (tesl-record-update *p (hash 'x (raw-value (+ (tesl-dot/runtime p 'x 'Point) *dx)))))))
 
 (define/pow
   (simpleAdd [a : Integer] [b : Integer])
@@ -315,8 +315,8 @@
     (call-with-fresh-memory-db '() (lambda ()
   (define origin (thsl-src! "tests/critical-review-51-tests.tesl" 306 (list) (lambda () (Point #:x 0 #:y 0))))
   (define moved (thsl-src! "tests/critical-review-51-tests.tesl" 307 (list (cons 'origin origin)) (lambda () (n05_record_update_known origin 10))))
-  (check-equal? (thsl-src! "tests/critical-review-51-tests.tesl" 308 (list (cons 'moved moved) (cons 'origin origin)) (lambda () (raw-value (tesl-dot/runtime moved 'x)))) 10)
-  (check-equal? (thsl-src! "tests/critical-review-51-tests.tesl" 309 (list (cons 'moved moved) (cons 'origin origin)) (lambda () (raw-value (tesl-dot/runtime moved 'y)))) 0)
+  (check-equal? (thsl-src! "tests/critical-review-51-tests.tesl" 308 (list (cons 'moved moved) (cons 'origin origin)) (lambda () (raw-value (tesl-dot/runtime moved 'x 'Point)))) 10)
+  (check-equal? (thsl-src! "tests/critical-review-51-tests.tesl" 309 (list (cons 'moved moved) (cons 'origin origin)) (lambda () (raw-value (tesl-dot/runtime moved 'y 'Point)))) 0)
     ))
   )
 

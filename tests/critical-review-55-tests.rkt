@@ -300,7 +300,7 @@
     (raise-user-error 'tesl-test "unexpected failure in let posVal: ~a" (check-fail-message tesl-checked-24)))
   (define posVal tesl-checked-24)
   (define bounded (thsl-src! "tests/critical-review-55-tests.tesl" 218 (list (cons 'posVal posVal) (cons 'rawVal rawVal) (cons 'hi hi) (cons 'lo lo)) (lambda () (makeBoundedInt lo hi posVal))))
-  (check-equal? (thsl-src! "tests/critical-review-55-tests.tesl" 219 (list (cons 'bounded bounded) (cons 'posVal posVal) (cons 'rawVal rawVal) (cons 'hi hi) (cons 'lo lo)) (lambda () (raw-value (tesl-dot/runtime bounded 'value)))) 50)
+  (check-equal? (thsl-src! "tests/critical-review-55-tests.tesl" 219 (list (cons 'bounded bounded) (cons 'posVal posVal) (cons 'rawVal rawVal) (cons 'hi hi) (cons 'lo lo)) (lambda () (raw-value (tesl-dot/runtime bounded 'value 'BoundedInt)))) 50)
     ))
   )
 

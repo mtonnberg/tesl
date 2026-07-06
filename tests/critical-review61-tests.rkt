@@ -489,7 +489,7 @@
   (test-case "R61_RC01 record with 3 proof-annotated fields: construction succeeds"
     (call-with-fresh-memory-db '() (lambda ()
   (define item (thsl-src! "tests/critical-review61-tests.tesl" 326 (list) (lambda () (buildSafeTriple "hello" 5 3))))
-  (check-equal? (thsl-src! "tests/critical-review61-tests.tesl" 327 (list (cons 'item item)) (lambda () (raw-value (tesl-dot/runtime item 'score)))) 3)
+  (check-equal? (thsl-src! "tests/critical-review61-tests.tesl" 327 (list (cons 'item item)) (lambda () (raw-value (tesl-dot/runtime item 'score 'SafeTriple)))) 3)
     ))
   )
 

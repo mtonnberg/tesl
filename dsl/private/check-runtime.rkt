@@ -185,7 +185,13 @@
     [else
      (field-access-type-for-value (raw-value value))]))
 
-(define (tesl-dot/runtime target field-name)
+;; [type-hint], when non-#f, is the statically-resolved record/entity type of
+;; [target] (emitted by the compiler from the checker's field_accesses, GitHub
+;; #26).  It OVERRIDES the structural `value-field-access-type` fallback, which
+;; returns #f (→ ambiguous) when a row satisfies more than one entity type
+;; (entity predicates are superset checks, so a Project row also matches an
+;; Organization{id,name}).  With the hint the declared type disambiguates.
+(define (tesl-dot/runtime target field-name [type-hint #f])
   (define-values (raw expected-type)
     (cond
       [(named-value? target)
@@ -204,7 +210,7 @@
       [else
        (values (raw-value target)
                (value-field-access-type target))]))
-  (field-access-ref raw field-name expected-type 'dot))
+  (field-access-ref raw field-name (or type-hint expected-type) 'dot))
 
 (define (instantiate-proof-template datum [name-env (current-name-env)])
   (cond

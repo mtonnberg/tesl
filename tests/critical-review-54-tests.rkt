@@ -206,7 +206,7 @@
 (define/pow
   (n01_nested_record_field_proof [o : OuterRec])
   #:returns String
-  (thsl-src! "tests/critical-review-54-tests.tesl" 290 (list (cons 'o *o)) (lambda () (raw-value (needNonEmpty (tesl-dot/runtime (tesl-dot/runtime o 'inner) 'content))))))
+  (thsl-src! "tests/critical-review-54-tests.tesl" 290 (list (cons 'o *o)) (lambda () (raw-value (needNonEmpty (tesl-dot/runtime (tesl-dot/runtime o 'inner 'OuterRec) 'content 'InnerRec))))))
 
 (define/pow
   (n02_three_level_case [m : (Maybe (Maybe Integer))])

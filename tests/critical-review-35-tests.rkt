@@ -145,7 +145,7 @@
 (define/pow
   (readAndConsume35 [rec : ProvenRecord35])
   #:returns Integer
-  (thsl-src! "tests/critical-review-35-tests.tesl" 389 (list (cons 'rec *rec)) (lambda () (raw-value (requiresSafeTitle35 (tesl-dot/runtime rec 'title))))))
+  (thsl-src! "tests/critical-review-35-tests.tesl" 389 (list (cons 'rec *rec)) (lambda () (raw-value (requiresSafeTitle35 (tesl-dot/runtime rec 'title 'ProvenRecord35))))))
 
 (define/pow
   (safeFloatDiv35 [a : Real] [b : Real])

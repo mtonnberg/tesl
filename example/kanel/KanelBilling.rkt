@@ -35,7 +35,7 @@
 (define/pow
   (addMinutes [acc : Integer] [entry : TimeEntry])
   #:returns Integer
-  (thsl-src! "example/kanel/KanelBilling.tesl" 63 (list (cons 'acc *acc) (cons 'entry *entry)) (lambda () (+ *acc (tesl-dot/runtime entry 'minutes)))))
+  (thsl-src! "example/kanel/KanelBilling.tesl" 63 (list (cons 'acc *acc) (cons 'entry *entry)) (lambda () (+ *acc (tesl-dot/runtime entry 'minutes 'TimeEntry)))))
 
 (define-handler
   (createInvoiceHandler [session : KanelSession ::: (Authenticated session)] [orgId : String ::: (ValidOrgId orgId)] [req : NewInvoiceRequest])

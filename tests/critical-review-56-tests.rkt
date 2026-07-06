@@ -136,7 +136,7 @@
 (define/pow
   (getPrice [ol : OrderLine])
   #:returns Integer
-  (thsl-src! "tests/critical-review-56-tests.tesl" 136 (list (cons 'ol *ol)) (lambda () (tesl-dot/runtime ol 'price))))
+  (thsl-src! "tests/critical-review-56-tests.tesl" 136 (list (cons 'ol *ol)) (lambda () (tesl-dot/runtime ol 'price 'OrderLine))))
 
 (define-record ValidPayload
   [serial : Integer ::: (IsPositive serial)]

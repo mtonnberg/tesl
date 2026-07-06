@@ -396,7 +396,7 @@
 (define/pow
   (readTitle [p : SafePost])
   #:returns String
-  (thsl-src! "tests/critical-review63-tests.tesl" 654 (list (cons 'p *p)) (lambda () (raw-value (requiresTrimmed (tesl-dot/runtime p 'title))))))
+  (thsl-src! "tests/critical-review63-tests.tesl" 654 (list (cons 'p *p)) (lambda () (raw-value (requiresTrimmed (tesl-dot/runtime p 'title 'SafePost))))))
 
 (define/pow
   (updateCountPreservesProof [p : SafePost] [newCount : Integer])

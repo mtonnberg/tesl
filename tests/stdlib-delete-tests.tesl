@@ -1,0 +1,55 @@
+#lang tesl
+module Stdlib_delete_tests exposing []
+
+# Regression for the stdlib surface-drift class (roadmap:
+# stdlib_surface_binding_drift). These names were importable and type-checked
+# but had NO runtime binding (or a wrong-arity one), so any use crashed at
+# Racket load / call. Now bound:
+#   - Dict.delete / Set.delete : synonyms of .remove (were unbound)
+#   - randomInt lo hi          : 2-arg [lo,hi) (was 1-arg, arity crash)
+#   - randomFloat()            : [0,1) fresh float (was unbound)
+#   - generateId()             : fresh id (was unbound; taught in the manual)
+
+import Tesl.Prelude exposing [Int, String, Bool(..)]
+import Tesl.Float exposing [Float]
+import Tesl.Dict exposing [
+  Dict,
+  Dict.empty,
+  Dict.insert,
+  Dict.delete,
+  Dict.member,
+]
+import Tesl.Set exposing [Set, Set.empty, Set.insert, Set.delete, Set.member]
+import Tesl.Random exposing [random, randomInt, randomFloat]
+import Tesl.Id exposing [generateId]
+
+fn dropKey(k: String) -> Bool =
+  let d = Dict.insert k 1 (Dict.empty)
+  let d2 = Dict.delete k d
+  Dict.member k d2
+
+fn dropElem(x: Int) -> Bool =
+  let s = Set.insert x (Set.empty)
+  let s2 = Set.delete x s
+  Set.member x s2
+
+fn rollInRange() -> Int requires [random] =
+  randomInt 5 6
+
+fn frac() -> Float requires [random] =
+  randomFloat()
+
+fn freshId() -> String requires [random] =
+  generateId()
+
+test "Dict.delete removes the key (was unbound at runtime)" {
+  expect dropKey "a" == False
+}
+
+test "Set.delete removes the element (was unbound at runtime)" {
+  expect dropElem 7 == False
+}
+
+test "randomInt lo hi returns a value in [lo, hi) (was 1-arg arity crash)" runs 20 requires [random] {
+  expect rollInRange() == 5
+}

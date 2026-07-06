@@ -139,12 +139,12 @@
 (define/pow
   (useItemTitle [item : SafeItem])
   #:returns String
-  (thsl-src! "tests/critical-review60-tests.tesl" 154 (list (cons 'item *item)) (lambda () (raw-value (needsTitle (tesl-dot/runtime item 'title))))))
+  (thsl-src! "tests/critical-review60-tests.tesl" 154 (list (cons 'item *item)) (lambda () (raw-value (needsTitle (tesl-dot/runtime item 'title 'SafeItem))))))
 
 (define/pow
   (useItemCount [item : SafeItem])
   #:returns Integer
-  (thsl-src! "tests/critical-review60-tests.tesl" 157 (list (cons 'item *item)) (lambda () (raw-value (needsPos (tesl-dot/runtime item 'count))))))
+  (thsl-src! "tests/critical-review60-tests.tesl" 157 (list (cons 'item *item)) (lambda () (raw-value (needsPos (tesl-dot/runtime item 'count 'SafeItem))))))
 
 (define/pow
   (doublePos [n : Integer ::: (IsPositive n)])
@@ -204,7 +204,7 @@
 (define/pow
   (plainFieldLoss [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review60-tests.tesl" 322 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-19 (checkPos raw)]) (let ([pos tesl-checked-19]) (let ([pair (PlainPair #:n *pos #:s "x")]) (let/check ([tesl-checked-20 (checkPos (tesl-dot/runtime pair 'n))]) (let ([reproved tesl-checked-20]) (raw-value (needsPos reproved))))))))))
+  (thsl-src! "tests/critical-review60-tests.tesl" 322 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-19 (checkPos raw)]) (let ([pos tesl-checked-19]) (let ([pair (PlainPair #:n *pos #:s "x")]) (let/check ([tesl-checked-20 (checkPos (tesl-dot/runtime pair 'n 'PlainPair))]) (let ([reproved tesl-checked-20]) (raw-value (needsPos reproved))))))))))
 
 (define/pow
   (updateTitle [item : SafeItem] [newTitle : String])

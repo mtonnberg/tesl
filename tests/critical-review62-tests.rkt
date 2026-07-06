@@ -639,14 +639,14 @@
     (call-with-fresh-memory-db '() (lambda ()
   (define p (thsl-src! "tests/critical-review62-tests.tesl" 559 (list) (lambda () (buildSafePost "Hello" 1))))
   (define p2 (thsl-src! "tests/critical-review62-tests.tesl" 560 (list (cons 'p p)) (lambda () (updateCount p 5))))
-  (check-equal? (thsl-src! "tests/critical-review62-tests.tesl" 561 (list (cons 'p2 p2) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p2 'title)))) "Hello")
+  (check-equal? (thsl-src! "tests/critical-review62-tests.tesl" 561 (list (cons 'p2 p2) (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p2 'title 'SafePost)))) "Hello")
     ))
   )
 
   (test-case "R62_RU02 record construction with valid title succeeds"
     (call-with-fresh-memory-db '() (lambda ()
   (define p (thsl-src! "tests/critical-review62-tests.tesl" 565 (list) (lambda () (buildSafePost "Valid title" 0))))
-  (check-equal? (thsl-src! "tests/critical-review62-tests.tesl" 566 (list (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p 'count)))) 0)
+  (check-equal? (thsl-src! "tests/critical-review62-tests.tesl" 566 (list (cons 'p p)) (lambda () (raw-value (tesl-dot/runtime p 'count 'SafePost)))) 0)
     ))
   )
 

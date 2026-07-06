@@ -56,12 +56,12 @@
 (define/pow
   (shouldWork7 [x : Sandbox3.ARecord2])
   #:returns Integer
-  (thsl-src! "example/sandbox.tesl" 37 (list (cons 'x *x)) (lambda () (tesl-dot/runtime x 'foo3))))
+  (thsl-src! "example/sandbox.tesl" 37 (list (cons 'x *x)) (lambda () (tesl-dot/runtime x 'foo3 'Sandbox3.ARecord2))))
 
 (define/pow
   (shouldWork8 [x : Sandbox2.ARecord2])
   #:returns Integer
-  (thsl-src! "example/sandbox.tesl" 39 (list (cons 'x *x)) (lambda () (tesl-dot/runtime x 'foo2))))
+  (thsl-src! "example/sandbox.tesl" 39 (list (cons 'x *x)) (lambda () (tesl-dot/runtime x 'foo2 'Sandbox2.ARecord2))))
 
 (define/pow
   (shouldWork9 [x : Integer] [y : Integer])

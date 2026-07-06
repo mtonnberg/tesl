@@ -288,6 +288,12 @@ type ctx = {
   mutable expr_type_tbl : (int * int, string) Hashtbl.t;
     (** Maps (start_line, start_col) → display_ty for each expression, used to emit
         correct #:returns types for lambdas. *)
+  mutable field_access_type_tbl : (int * int, string) Hashtbl.t;
+    (** Maps (start_line, start_col) of an [EField] → the checker-resolved
+        record/entity type of its object (e.g. "Project").  Threaded into the
+        runtime dot emit as a type HINT so `p.id` on an entity row resolves by
+        the declared type instead of ambiguously by structure when two entities
+        share the field (GitHub #26). *)
   fn_return_specs : (string, Ast.return_spec) Hashtbl.t;
     (** function name → return_spec, for detecting proof-carrying call results *)
   proof_carrier_lets : (string, unit) Hashtbl.t;
@@ -325,6 +331,7 @@ let mk_ctx ?(root_path=default_root_path ()) ?(record_fields=[]) ?(record_meta=[
     fact_locals = Hashtbl.create 8; ctor_fields = Hashtbl.create 8;
     entity_names = Hashtbl.create 4; param_names = Hashtbl.create 8;
     expr_type_tbl = Hashtbl.create 64;
+    field_access_type_tbl = Hashtbl.create 64;
     plain_param_names = Hashtbl.create 8;
     fn_return_specs = Hashtbl.create 16;
     proof_carrier_lets = Hashtbl.create 8;
@@ -555,9 +562,9 @@ let gdp_returning_stdlib : (string, unit) Hashtbl.t =
   List.iter (fun k -> Hashtbl.replace h k ())
     [
      (* Set functions returning ForAll-annotated sets *)
-     "tesl_import_Set_filterCheck"; "tesl_import_Set_allCheck"; "tesl_import_Set_mapCheck";
+     "tesl_import_Set_filterCheck"; "tesl_import_Set_allCheck";
      (* List functions returning ForAll-annotated lists *)
-     "tesl_import_List_filterCheck"; "tesl_import_List_allCheck"; "tesl_import_List_mapCheck";
+     "tesl_import_List_filterCheck"; "tesl_import_List_allCheck";
      "tesl_import_List_emptyForAll";
      (* String functions returning GDP-named values (no raw-value in let bindings) *)
      "tesl_import_String_trim"; "tesl_import_String_toLower"; "tesl_import_String_toUpper";
@@ -586,7 +593,12 @@ let gdp_returning_stdlib : (string, unit) Hashtbl.t =
    a nullary runtime fn → arity mismatch. *)
 let stdlib_zero_arg_names : (string, unit) Hashtbl.t =
   let h = Hashtbl.create 8 in
-  List.iter (fun k -> Hashtbl.replace h k ()) ["nowMillis"; "UUID.v4"; "UUID.v7"]; h
+  List.iter (fun k -> Hashtbl.replace h k ())
+    ["nowMillis"; "UUID.v4"; "UUID.v7";
+     (* 2026-07-06: effectful fresh-value builtins, called as `f()` and lowered
+        to `(f)` (same idiom as UUID.v4) — a per-call fresh value, not a
+        once-evaluated constant. *)
+     "randomFloat"; "generateId"]; h
 
 let job_type_to_queue : (string, string) Hashtbl.t = Hashtbl.create 16
 
@@ -1477,7 +1489,7 @@ let rec emit_expr ctx e =
       else
         emit ctx (resolve_name name)
     end
-  | EField { obj; field; _ } ->
+  | EField { obj; field; loc } ->
     (* Check if this is a module-qualified name: Module.function *)
     let qual_name = match obj with
       | EConstructor { name = modname; args = []; _ } ->
@@ -1486,6 +1498,16 @@ let rec emit_expr ctx e =
          | Some renamed -> Some renamed
          | None -> Some (import_rename full))
       | _ -> None
+    in
+    (* GitHub #26: the checker-resolved record/entity type of [obj], emitted as a
+       runtime dot type HINT so a field read on an entity row resolves by the
+       declared type rather than ambiguously by structure. Empty when unknown
+       (special fields / module-qualified / newtype .value carry no entry). *)
+    let dot_type_hint =
+      match Hashtbl.find_opt ctx.field_access_type_tbl
+              (loc.Location.start.line, loc.Location.start.col) with
+      | Some ty when ty <> "" -> Printf.sprintf " '%s" ty
+      | _ -> ""
     in
     (match qual_name with
      | Some renamed -> emit ctx renamed
@@ -1520,11 +1542,11 @@ let rec emit_expr ctx e =
           if ctx.func_kind <> None then begin
             emit ctx "(tesl-dot/runtime ";
             emit_field_inner ctx obj;
-            emit ctx (Printf.sprintf " '%s)" field)
+            emit ctx (Printf.sprintf " '%s%s)" field dot_type_hint)
           end else begin
             emit ctx "(raw-value (tesl-dot/runtime ";
             emit_field_inner ctx obj;
-            emit ctx (Printf.sprintf " '%s))" field)
+            emit ctx (Printf.sprintf " '%s%s))" field dot_type_hint)
           end))
   | EApp { fn = EVar { name = "make-witness"; _ };
            arg = EApp { fn = EVar { name = witness_name; _ }; arg = body; _ }; _ } ->
@@ -2656,7 +2678,7 @@ let rec emit_expr ctx e =
 and emit_field_inner ctx e =
   match e with
   | EVar { name; _ } -> emit ctx (resolve_name name)
-  | EField { obj; field; _ } ->
+  | EField { obj; field; loc } ->
     (match obj with
      | EConstructor { name = modname; args = []; _ } ->
        let full = modname ^ "." ^ field in
@@ -2670,10 +2692,17 @@ and emit_field_inner ctx e =
        emit ctx (Printf.sprintf ".%s" field)
      | _ ->
        (* Nested field access: use tesl-dot/runtime to handle gensym symbols.
-          This correctly resolves GDP-tracked variables (e.g. task.meta in FnKind). *)
+          This correctly resolves GDP-tracked variables (e.g. task.meta in FnKind).
+          Thread the checker's record/entity type hint (GitHub #26). *)
+       let dot_type_hint =
+         match Hashtbl.find_opt ctx.field_access_type_tbl
+                 (loc.Location.start.line, loc.Location.start.col) with
+         | Some ty when ty <> "" -> Printf.sprintf " '%s" ty
+         | _ -> ""
+       in
        emit ctx "(tesl-dot/runtime ";
        emit_field_inner ctx obj;
-       emit ctx (Printf.sprintf " '%s)" field))
+       emit ctx (Printf.sprintf " '%s%s)" field dot_type_hint))
   | _ -> emit_expr ctx e  (* complex expr — pass as-is (GDP named value) *)
 
 (** Emit an expression in "bare" position — used for the object in obj.field.
@@ -4473,7 +4502,6 @@ let emit_func ctx (fd : func_decl) =
     match fn_racket with
     | "tesl_import_Set_filterCheck" | "tesl_import_List_filterCheck"
     | "tesl_import_Set_allCheck" | "tesl_import_List_allCheck"
-    | "tesl_import_Set_mapCheck" | "tesl_import_List_mapCheck"
     | "tesl_import_List_emptyForAll" -> true
     | _ -> false
   in
@@ -6743,13 +6771,18 @@ let emit_module ctx (m : module_form) =
 
 let compile_to_string ?(root_path=default_root_path ()) ?(cyclic_local_import_paths=[]) (m : module_form) =
   let ctx = mk_ctx ~root_path () in
-  (* Populate expr_type_tbl from the type checker so lambdas can emit correct
-     #:returns types instead of always using Unit. *)
-  (let expr_types, _ = Checker.check_module_with_expr_types m in
+  (* Populate expr_type_tbl (lambda #:returns) and field_access_type_tbl (dot
+     type hints, GitHub #26) from a single checker metadata pass. *)
+  (let _lb, expr_types, field_accesses, _anchors, _errs =
+     Checker.check_module_with_metadata m in
    List.iter (fun (info : Checker.expr_type_info) ->
      let key = (info.loc.Location.start.line, info.loc.Location.start.col) in
      Hashtbl.replace ctx.expr_type_tbl key info.display_ty
-   ) expr_types);
+   ) expr_types;
+   List.iter (fun (fa : Checker.field_access_info) ->
+     let key = (fa.fa_loc.Location.start.line, fa.fa_loc.Location.start.col) in
+     Hashtbl.replace ctx.field_access_type_tbl key fa.fa_record_type
+   ) field_accesses);
   Hashtbl.clear qualified_imports;
   Hashtbl.clear stdlib_plain_imports;
   Hashtbl.clear job_type_to_queue;

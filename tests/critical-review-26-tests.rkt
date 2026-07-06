@@ -321,7 +321,7 @@
 (define/pow
   (requiresSafeRecord [r : SafeRecord])
   #:returns String
-  (thsl-src! "tests/critical-review-26-tests.tesl" 943 (list (cons 'r *r)) (lambda () (tesl-dot/runtime r 'title))))
+  (thsl-src! "tests/critical-review-26-tests.tesl" 943 (list (cons 'r *r)) (lambda () (tesl-dot/runtime r 'title 'SafeRecord))))
 
 (define/pow
   (parsePositiveInt [s : String])

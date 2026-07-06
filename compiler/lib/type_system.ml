@@ -457,7 +457,9 @@ let stdlib_env : (string * scheme) list = [
   "nowMillis",     mono t_posix;
   "Time.posixToSeconds", mono (t_fun [t_posix] t_int);
   "Time.secondsToPosix", mono (t_fun [t_int] t_posix);
-  "Time.millisToSeconds", mono (t_fun [t_posix] t_int);
+  (* Time.millisToSeconds removed 2026-07-06: it was importable + typed but had
+     no runtime binding (unbound at load); redundant with posixToSeconds.
+     See roadmap/completed/stdlib_surface_binding_drift.md. *)
   "formatTime",    mono (t_fun [t_posix; t_string; t_string] t_string);
   "durationMs",    mono (t_fun [t_posix] t_int);
   "addMs",         mono (t_fun [t_posix; t_int] t_posix);
@@ -506,7 +508,9 @@ let stdlib_env : (string * scheme) list = [
   (* ── ID generation ───────────────────────────────────────────────────── *)
   "generateId",          mono t_string;
   "generatePrefixedId",  mono (t_fun [t_string] t_string);
-  "newId",               mono t_string;
+  (* newId removed 2026-07-06: importable + typed but no runtime binding, and
+     redundant with the Tesl.UUID module (UUID.v4/v7).
+     See roadmap/completed/stdlib_surface_binding_drift.md. *)
 
   (* ── Env ─────────────────────────────────────────────────────────────── *)
   "env",       mono (t_fun [t_string] (t_maybe t_string));
@@ -766,7 +770,7 @@ let tesl_module_exports : (string * string list) list = [
   ( "Tesl.List",
     [ "IsSorted";
       "List.isEmpty"; "List.length"; "List.head"; "List.tail"; "List.last"; "List.nth";
-      "List.map"; "List.filter"; "List.filterCheck"; "List.allCheck"; "List.mapCheck";
+      "List.map"; "List.filter"; "List.filterCheck"; "List.allCheck";
       "List.filterMap"; "List.foldl"; "List.foldr"; "List.append"; "List.concat";
       "List.reverse"; "List.sort"; "List.sortBy"; "List.contains"; "List.find";
       "List.findIndex"; "List.take"; "List.drop"; "List.zip"; "List.zipWith";
@@ -807,7 +811,7 @@ let tesl_module_exports : (string * string list) list = [
       "Set.size"; "Set.isEmpty"; "Set.toList"; "Set.fromList"; "Set.union";
       "Set.intersection"; "Set.difference"; "Set.isSubset"; "Set.map";
       "Set.filter"; "Set.foldl"; "Set.any"; "Set.all"; "Set.partition";
-      "Set.filterCheck"; "Set.allCheck"; "Set.mapCheck"; "Set.delete" ] );
+      "Set.filterCheck"; "Set.allCheck"; "Set.delete" ] );
   ( "Tesl.Tuple",
     [ "Tuple2"; "Tuple3";
       "Tuple2.first"; "Tuple2.second";
@@ -815,7 +819,7 @@ let tesl_module_exports : (string * string list) list = [
   ( "Tesl.Time",
     [ "PosixMillis"; "nowMillis"; "time"; "formatTime"; "durationMs";
       "addMs"; "subtractMs"; "diffMs";
-      "Time.posixToSeconds"; "Time.secondsToPosix"; "Time.millisToSeconds" ] );
+      "Time.posixToSeconds"; "Time.secondsToPosix" ] );
   ( "Tesl.Random",
     [ "randomInt"; "randomFloat"; "random" ] );
   ( "Tesl.UUID",
@@ -922,7 +926,7 @@ let stdlib_bare_home_module : (string * string) list = [
   "env", "Tesl.Env"; "envInt", "Tesl.Env"; "envString", "Tesl.Env";
   "requireEnv", "Tesl.Env";
   (* Id *)
-  "generateId", "Tesl.Id"; "generatePrefixedId", "Tesl.Id"; "newId", "Tesl.Id";
+  "generateId", "Tesl.Id"; "generatePrefixedId", "Tesl.Id";
   (* Random *)
   "randomInt", "Tesl.Random"; "randomFloat", "Tesl.Random";
   (* Time *)
@@ -1013,7 +1017,7 @@ let stdlib_capabilities : (string * string list) list = [
   "now", ["time"]; "nowMillis", ["time"]; "durationMs", ["time"];
   (* Random *)
   "randomInt", ["random"]; "randomFloat", ["random"];
-  "generatePrefixedId", ["random"];
+  "generateId", ["random"]; "generatePrefixedId", ["random"];
   (* Env *)
   "env", ["envRead"]; "envInt", ["envRead"];
   "envString", ["envRead"]; "requireEnv", ["envRead"];

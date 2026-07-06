@@ -40,6 +40,40 @@ let compile_ok src name =
   | Ok r -> r
   | Error msg -> Alcotest.failf "%s compile error: %s" name msg
 
+(* ── GitHub #26: ambiguous dot on a select-bound entity ──────────────────── *)
+
+(* Two entities sharing {id, name}: a field read on a `select Project`-bound row
+   inside a fn used to emit a bare structural `(tesl-dot/runtime p 'id)`, which
+   traps at runtime ("ambiguous dot access … (Organization Project)") because a
+   Project row also satisfies Organization's superset predicate. The checker
+   knows `p : Project`, so the emit must carry the type hint
+   `(tesl-dot/runtime p 'id 'Project)`. *)
+let test_issue26_field_read_typed_dot_hint () =
+  let src = {|#lang tesl
+module AmbiguousDot exposing []
+import Tesl.Prelude exposing [Bool(..), Int, List, String]
+import Tesl.DB exposing [dbRead]
+import Tesl.List exposing [List.head]
+import Tesl.Maybe exposing [Maybe(..)]
+entity Organization table "organizations" primaryKey id { id: String  name: String }
+entity Project table "projects" primaryKey id { id: String  name: String  client: String }
+fn describeFirstProject(needle: String) -> String requires [dbRead] =
+  let hits = select p from Project where ilike p.name needle
+  case List.head hits of
+    Nothing -> "no match"
+    Something p -> p.id ++ " " ++ p.name
+|} in
+  let out = compile_ok src "issue-26 typed dot" in
+  assert_contains ~name:"p.id carries the 'Project type hint"
+    out "(tesl-dot/runtime p 'id 'Project)";
+  assert_contains ~name:"p.name carries the 'Project type hint"
+    out "(tesl-dot/runtime p 'name 'Project)";
+  (* the untyped 2-arg forms (the pre-fix ambiguous emit) must be gone *)
+  assert_not_contains ~name:"no bare untyped dot for p.id"
+    out "(tesl-dot/runtime p 'id)";
+  assert_not_contains ~name:"no bare untyped dot for p.name"
+    out "(tesl-dot/runtime p 'name)"
+
 (* ── Require block tests ─────────────────────────────────────────────────── *)
 
 let test_require_block () =
@@ -1131,5 +1165,8 @@ let () =
     "eok-proof", [
       Alcotest.test_case "EOk check-value strips check wrapper" `Quick test_eok_check_value_strips_check_wrapper;
       Alcotest.test_case "checkout (user fn) not treated as check keyword" `Quick test_eok_checkout_not_stripped;
+    ];
+    "issue-26-ambiguous-dot", [
+      Alcotest.test_case "field read on select-bound entity emits typed dot hint" `Quick test_issue26_field_read_typed_dot_hint;
     ];
   ]

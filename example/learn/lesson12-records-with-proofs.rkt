@@ -181,8 +181,8 @@
     (raise-user-error 'tesl-test "unexpected failure in let b: ~a" (check-fail-message tesl-checked-8)))
   (define b tesl-checked-8)
   (define msg (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 150 (list (cons 'b b) (cons 'rawBody rawBody) (cons 't t) (cons 'rawTitle rawTitle)) (lambda () (createMessage t b))))
-  (check-equal? (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 151 (list (cons 'msg msg) (cons 'b b) (cons 'rawBody rawBody) (cons 't t) (cons 'rawTitle rawTitle)) (lambda () (raw-value (tesl-dot/runtime msg 'title)))) "My Title")
-  (check-equal? (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 152 (list (cons 'msg msg) (cons 'b b) (cons 'rawBody rawBody) (cons 't t) (cons 'rawTitle rawTitle)) (lambda () (raw-value (tesl-dot/runtime msg 'body)))) "Some body text")
+  (check-equal? (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 151 (list (cons 'msg msg) (cons 'b b) (cons 'rawBody rawBody) (cons 't t) (cons 'rawTitle rawTitle)) (lambda () (raw-value (tesl-dot/runtime msg 'title 'SafeMessage)))) "My Title")
+  (check-equal? (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 152 (list (cons 'msg msg) (cons 'b b) (cons 'rawBody rawBody) (cons 't t) (cons 'rawTitle rawTitle)) (lambda () (raw-value (tesl-dot/runtime msg 'body 'SafeMessage)))) "Some body text")
     ))
   )
 
@@ -204,8 +204,8 @@
   (define pq tesl-checked-11)
   (define order (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 270 (list (cons 'pq pq) (cons 'q q) (cons 'rawQ rawQ) (cons 'p p) (cons 'rawP rawP)) (lambda () (makeOrderLine p q (detach-all-proof pq)))))
   (define orderAlt (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 271 (list (cons 'order order) (cons 'pq pq) (cons 'q q) (cons 'rawQ rawQ) (cons 'p p) (cons 'rawP rawP)) (lambda () (attach-proof (OrderLine #:price p #:quantity q) (detach-all-proof pq)))))
-  (check-equal? (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 272 (list (cons 'orderAlt orderAlt) (cons 'order order) (cons 'pq pq) (cons 'q q) (cons 'rawQ rawQ) (cons 'p p) (cons 'rawP rawP)) (lambda () (raw-value (tesl-dot/runtime order 'price)))) 10)
-  (check-equal? (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 273 (list (cons 'orderAlt orderAlt) (cons 'order order) (cons 'pq pq) (cons 'q q) (cons 'rawQ rawQ) (cons 'p p) (cons 'rawP rawP)) (lambda () (raw-value (tesl-dot/runtime order 'quantity)))) 3)
+  (check-equal? (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 272 (list (cons 'orderAlt orderAlt) (cons 'order order) (cons 'pq pq) (cons 'q q) (cons 'rawQ rawQ) (cons 'p p) (cons 'rawP rawP)) (lambda () (raw-value (tesl-dot/runtime order 'price 'OrderLine)))) 10)
+  (check-equal? (thsl-src! "example/learn/lesson12-records-with-proofs.tesl" 273 (list (cons 'orderAlt orderAlt) (cons 'order order) (cons 'pq pq) (cons 'q q) (cons 'rawQ rawQ) (cons 'p p) (cons 'rawP rawP)) (lambda () (raw-value (tesl-dot/runtime order 'quantity 'OrderLine)))) 3)
     ))
   )
 

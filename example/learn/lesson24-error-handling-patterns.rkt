@@ -48,7 +48,7 @@
 (define/pow
   (createUser [req : NewUserRequest])
   #:returns UserRecord
-  (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 63 (list (cons 'req *req)) (lambda () (let/check ([tesl-checked-0 (checkEmail (tesl-dot/runtime req 'email))]) (let ([validEmail tesl-checked-0]) (let/check ([tesl-checked-1 (checkAge (tesl-dot/runtime req 'age))]) (let ([validAge tesl-checked-1]) (UserRecord #:email validEmail #:age validAge))))))))
+  (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 63 (list (cons 'req *req)) (lambda () (let/check ([tesl-checked-0 (checkEmail (tesl-dot/runtime req 'email 'NewUserRequest))]) (let ([validEmail tesl-checked-0]) (let/check ([tesl-checked-1 (checkAge (tesl-dot/runtime req 'age 'NewUserRequest))]) (let ([validAge tesl-checked-1]) (UserRecord #:email validEmail #:age validAge))))))))
 
 (define-checker
   (parseAndValidate [ageStr : String])
@@ -63,7 +63,7 @@
 (define/pow
   (processRequest [req : NewUserRequest])
   #:returns String
-  (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 90 (list (cons 'req *req)) (lambda () (let/check ([tesl-checked-3 ((check-and checkEmail checkNonEmpty) (tesl-dot/runtime req 'email))]) (let ([email tesl-checked-3]) (let/check ([tesl-checked-4 (checkAge (tesl-dot/runtime req 'age))]) (let ([age tesl-checked-4]) (format "processed ~a age ~a" (tesl-display-val *email) (tesl-display-val *age)))))))))
+  (thsl-src! "example/learn/lesson24-error-handling-patterns.tesl" 90 (list (cons 'req *req)) (lambda () (let/check ([tesl-checked-3 ((check-and checkEmail checkNonEmpty) (tesl-dot/runtime req 'email 'NewUserRequest))]) (let ([email tesl-checked-3]) (let/check ([tesl-checked-4 (checkAge (tesl-dot/runtime req 'age 'NewUserRequest))]) (let ([age tesl-checked-4]) (format "processed ~a age ~a" (tesl-display-val *email) (tesl-display-val *age)))))))))
 
 (module+ test
   (require rackunit)

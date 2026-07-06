@@ -19,6 +19,7 @@
  Dict.insert
  Dict.insertWith
  Dict.remove
+ Dict.delete
  Dict.lookup
  Dict.requireKey
  Dict.get
@@ -98,6 +99,10 @@
 ;; Remove a key (no-op if absent)
 (define (Dict.remove k d)
   (hash-remove (raw-dict d 'Dict.remove) (raw-key k)))
+
+;; `Dict.delete` is a synonym of `Dict.remove` (the type table declares it as an
+;; alias; it was importable but had no runtime binding → unbound at load).
+(define Dict.delete Dict.remove)
 
 ;; Returns Something(value) or Nothing
 (define (Dict.lookup k d)

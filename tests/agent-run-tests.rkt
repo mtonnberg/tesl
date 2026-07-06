@@ -107,7 +107,7 @@
 (define/pow
   (dispatchEcho [args : EchoArgs])
   #:returns String
-  (thsl-src! "tests/agent-run-tests.tesl" 142 (list (cons 'args *args)) (lambda () (raw-value (tesl_import_String_concat "echo: " (tesl-dot/runtime args 'text))))))
+  (thsl-src! "tests/agent-run-tests.tesl" 142 (list (cons 'args *args)) (lambda () (raw-value (tesl_import_String_concat "echo: " (tesl-dot/runtime args 'text 'EchoArgs))))))
 
 (define/pow
   (publishStep [event : String])
