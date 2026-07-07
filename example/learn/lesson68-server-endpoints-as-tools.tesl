@@ -61,8 +61,13 @@ import Tesl.Agent exposing [
 #   * tool VALIDATION  — the model's arguments run the endpoint's OWN boundary
 #     pipeline (capture checks, body codec + `via` checks), so a tool argument is
 #     never validated more weakly than the HTTP boundary;
-#   * tool RESULTS     — encoded through the same JSON path as an HTTP response;
-#     a handler `fail 403 ...` becomes a retryable tool error, never a crash.
+#   * tool RESULTS     — encoded through the same JSON path as an HTTP response
+#     (with one agent-only nicety: every PosixMillis renders as
+#     {"epochMillis": ..., "iso": "..."} so the model reads real dates);
+#     a handler `fail 403 ...` becomes a retryable tool error, never a crash;
+#   * tool CAPABILITIES — each endpoint tool delegates its handler's declared
+#     `requires` to execution inside the agent loop, so the server does not
+#     even have to be mounted for its handlers' capabilities to be granted.
 #
 # WHO GETS WHICH ENDPOINTS? Inclusion is decided per call site from the user
 # variable's DECLARED proof annotation: an endpoint is exposed iff the annotation
@@ -71,6 +76,14 @@ import Tesl.Agent exposing [
 # exposes the admin-gated ones. That is how "a user that is also an admin has
 # access to the admin endpoints" — and a plain user simply does not have those
 # tools at all.
+#
+# CURATING TOOLS — THE TWO-API PATTERN. Tools are derived from the SERVER's
+# endpoint list, so a second api/server pair that binds the SAME handler
+# functions but lists only a subset of endpoints is a compile-time tool
+# allowlist: your user-facing server keeps the full HTTP surface, and an
+# agent-facing server (it never needs to be mounted) decides exactly which of
+# those handlers the model may call. Two `serverTools` call sites in one module
+# never interact — see tests/two-api-server-tools-tests.tesl for the pattern.
 # ─────────────────────────────────────────────────────────────────────────────
 
 capability notesAi implies aiProvider

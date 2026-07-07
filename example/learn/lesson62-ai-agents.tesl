@@ -55,6 +55,17 @@ capability myAi implies aiProvider
 # Each tool is a normal function. Its parameters must be JSON-decodable primitives
 # (String / Int / Float / Bool / PosixMillis). The leading doc-comment becomes the
 # tool description the model reads when choosing a tool.
+#
+# A tool fn's `requires` travels with it: the capabilities are checked where the
+# agent is BUILT and delegated to the tool when it EXECUTES inside the agent
+# loop, so a tool that type-checks cannot trap on a missing capability on a live
+# turn. A tool body that still raises comes back to the model as a retryable
+# `is_error` tool result — it never kills the loop.
+#
+# Dates: a `PosixMillis` parameter's derived schema tells the model it is epoch
+# MILLISECONDS (not seconds, not a date), and a `PosixMillis` anywhere in a tool
+# RESULT is rendered as {"epochMillis": ..., "iso": "2026-07-11T21:11:28Z"} so
+# the model reads the real calendar date instead of guessing one from digits.
 
 # Look up the current weather for a city.
 fn getWeather(city: String) -> String =

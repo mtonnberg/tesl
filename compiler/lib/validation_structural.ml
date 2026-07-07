@@ -1781,8 +1781,13 @@ let config_block_schema = function
      postgres-specific requirement is enforced in check_typed_config_blocks. *)
   | "Database" -> [ "schema", VStr, false; "entities", VEntityList, true;
                     "backend", VBackend, true ]
+  (* Issue #31: `poolSize` (optional) is the connection-pool size — the max
+     number of simultaneously open PostgreSQL connections (runtime default 10).
+     VInt so both a literal and `envInt "VAR" default` work, matching the other
+     env-backed config fields. *)
   | "PostgresConfig" -> [ "dbName", VStr, true; "user", VStr, true;
-                          "password", VStr, true; "connection", VConn, true ]
+                          "password", VStr, true; "connection", VConn, true;
+                          "poolSize", VInt, false ]
   (* The two PostgresConnection shapes — validated internally via [check_record]'s
      "__Tcp"/"__Socket" rows; listed here so the LSP config-context query can
      offer field completion/hover inside a `connection: TcpConnection { … }`. *)

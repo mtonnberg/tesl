@@ -327,8 +327,11 @@ let desugar_database_config (d : database_form) : database_form =
              | _ -> [])
           | None -> []
         in
+        (* Issue #31: `poolSize` keeps its surface spelling here; the emitter
+           maps it to the runtime's `#:max-connections` keyword (same pattern
+           as `host` → `#:server`). *)
         scalar "dbName" "database" @ scalar "user" "user"
-        @ scalar "password" "password" @ conn
+        @ scalar "password" "password" @ scalar "poolSize" "poolSize" @ conn
       | None -> []
     in
     { d with backend; schema; entities; postgres; config_expr = None }

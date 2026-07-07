@@ -369,6 +369,13 @@ database TodoDatabase = Database {
 }
 ```
 
+`PostgresConfig` also takes an optional `poolSize: Int` (default 10) — the maximum number of
+simultaneously open connections; `poolSize: envInt "PG_POOL_SIZE" 20` makes it deployment-tunable.
+When every pooled connection is busy, a request **waits** (bounded, 10s default,
+`TESL_PG_POOL_LEASE_TIMEOUT_MS` overrides) for a freed connection instead of failing immediately;
+a timed-out wait answers `503 Service Unavailable`, so brief bursts queue and succeed while genuine
+sustained overload surfaces as a clear retryable signal.
+
 This is intentionally optimistic for development — spin up a fresh database and `tesl run` just works.
 For production, a dedicated migration tool is on the roadmap. The current approach is: Tesl owns the
 schema declaration; you own the migration strategy. If you add a column to an entity, Tesl tells you
@@ -490,6 +497,25 @@ Which endpoints become tools is decided per call site from the user's declared p
 descriptions (handler doc-comments), and JSON schemas are derived; tool arguments run the endpoint's
 own boundary validation (capture checks, body codecs). See LANGUAGE-SPEC §11.1 and
 [lesson68](../example/learn/lesson68-server-endpoints-as-tools.tesl).
+
+**Curating which tools the model gets (the two-api pattern).** `serverTools` derives tools from the
+server's endpoint list, so a second `api`/`server` pair binding the *same handler functions* but
+listing only a subset of endpoints is a compile-time tool allowlist: the user-facing server keeps the
+full HTTP surface, the agent-facing server (it never needs to be mounted) decides exactly which
+handlers the model may call.
+
+**Capabilities travel with the tools.** A tool function's `requires` (and a `serverTools` endpoint's
+handler `requires`) is checked where the agent is *built* and then delegated to the tool when it
+*executes* inside the agent loop — so an agent that type-checks cannot have its tools trap on a
+missing capability on a live turn. A tool body that still raises comes back to the model as an
+`is_error` tool_result and the turn continues; it never kills the loop.
+
+**Dates the model can read.** In agent tool results every `PosixMillis` renders as
+`{"epochMillis": 1783804288000, "iso": "2026-07-11T21:11:28Z"}` instead of a bare integer — the model
+gets the real calendar date instead of guessing one from epoch digits (a classic hallucination
+source). Tool *parameters* typed `PosixMillis` likewise carry an epoch-milliseconds description in
+their derived schema. HTTP responses are unchanged, and generated Elm/TypeScript clients decode
+either shape.
 
 For a chat UI, `converseStreaming conv message publish` runs a turn and calls `publish` with each
 event as it happens — `tool: <name>` as a tool is dispatched, `text-delta: <part>` for each token of

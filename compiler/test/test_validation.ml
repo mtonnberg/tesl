@@ -222,6 +222,39 @@ server S for DemoApi {
 }
 |}
 
+(* ── Issue #31: PostgresConfig poolSize (optional connection-pool size) ────── *)
+
+let pool_size_db_src pool_size_line = Printf.sprintf {|#lang tesl
+module Foo exposing []
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Env exposing [env, envInt]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+database EventDatabase = Database {
+  schema: "events"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "demo"
+    user: "demo"
+    password: "demo"
+%s    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
+}
+|} pool_size_line
+
+let test_database_pool_size_literal_accepted () =
+  assert_no_errors (pool_size_db_src "    poolSize: 25\n")
+
+let test_database_pool_size_env_int_accepted () =
+  assert_no_errors (pool_size_db_src "    poolSize: envInt \"PG_POOL_SIZE\" 10\n")
+
+let test_database_pool_size_omitted_accepted () =
+  (* poolSize is OPTIONAL — existing programs without it stay valid. *)
+  assert_no_errors (pool_size_db_src "")
+
+let test_database_pool_size_wrong_type_rejected () =
+  assert_validation_error (pool_size_db_src "    poolSize: \"twenty\"\n")
+    "must be an Int"
+
 let test_imported_adt_constructors_are_visible () =
   let suffix = string_of_int (abs (Hashtbl.hash "imported_adt_ctors")) in
   let module_name = "TempImport" ^ suffix in
@@ -1673,6 +1706,13 @@ let () =
     "import-validation", [
       Alcotest.test_case "duplicate function import" `Quick test_duplicate_function_import_rejected;
       Alcotest.test_case "adt and dotdot import overlap" `Quick test_duplicate_adt_dotdot_import_rejected;
+    ];
+    (* Issue #31: poolSize field on PostgresConfig *)
+    "database-pool-size", [
+      Alcotest.test_case "poolSize literal accepted" `Quick test_database_pool_size_literal_accepted;
+      Alcotest.test_case "poolSize envInt accepted" `Quick test_database_pool_size_env_int_accepted;
+      Alcotest.test_case "poolSize omitted accepted" `Quick test_database_pool_size_omitted_accepted;
+      Alcotest.test_case "poolSize wrong type rejected" `Quick test_database_pool_size_wrong_type_rejected;
     ];
     "field-validation", [
       Alcotest.test_case "valid field access" `Quick test_valid_field_access;

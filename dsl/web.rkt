@@ -30,7 +30,9 @@
                   database-runtime-connection
                   database-runtime-database
                   database-spec-backend
-                  database-schema-name)
+                  database-schema-name
+                  ;; issue #31: pool-lease timeout maps to 503, not 500
+                  exn:fail:tesl:pool-timeout?)
          db
          (rename-in "private/trusted.rkt"
                     [trusted-proof trusted-proof/trusted])
@@ -1805,7 +1807,27 @@
       (call-with-telemetry-context
        (route-context route auth-value)
        (lambda ()
-         (with-handlers ([exn:fail? (lambda (exn)
+         (with-handlers ([exn:fail:tesl:pool-timeout?
+                          (lambda (exn)
+                            ;; issue #31: a pool-lease timeout means the server is
+                            ;; SATURATED, not broken — every pooled DB connection
+                            ;; stayed busy for the whole bounded wait.  503 tells
+                            ;; clients and load balancers "retry later", unlike the
+                            ;; generic 500 below.  Same logging discipline: full
+                            ;; message server-side, echoed to the client only under
+                            ;; TESL_VERBOSE.
+                            (fprintf (handler-error-port) "~a\n"
+                                     (tesl-render-handler-failure
+                                      (route-spec-operation route)
+                                      (dsl-request-method req)
+                                      (string-append "/" (string-join (dsl-request-path req) "/"))
+                                      (exn-message exn)))
+                            (error-response 503
+                                            "Service unavailable: database connection pool exhausted"
+                                            #:details (if tesl-verbose?
+                                                          (list (exn-message exn))
+                                                          '())))]
+                         [exn:fail? (lambda (exn)
                                       ;; A2: render the failure at the originating Tesl
                                       ;; construct (the handler/operation), classified by
                                       ;; category, instead of an opaque "handler error".

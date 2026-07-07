@@ -100,6 +100,13 @@
          (struct-out database-spec)
          (struct-out database-runtime)
          database-schema-name
+         ;; Pool-lease waiting (issue #31): the timeout error is exported so the
+         ;; HTTP layer can map it to 503 instead of a generic 500; the connector
+         ;; builder is exported so the pool behaviour is testable without a live
+         ;; PostgreSQL (tests/pg-pool-tests.rkt).
+         (struct-out exn:fail:tesl:pool-timeout)
+         make-pool-lease-connector
+         pool-lease-timeout-ms
          ;; Exported for testing only — not part of public API
          identifier-value->string
          compile-predicate-sql
@@ -2031,6 +2038,45 @@
       (postgres-delete-many-with-count! runtime entity predicates)
       (in-memory-delete-many-with-count! entity predicates)))
 
+;; ── Pool-lease waiting (issue #31) ───────────────────────────────────────────
+;; Racket's `connection-pool-lease` raises "connection pool limit reached"
+;; IMMEDIATELY when every slot is leased, so a short burst of concurrent
+;; requests (a single page load can issue several) 500s instead of queueing for
+;; the next freed connection.  The db library already has the right primitive:
+;; leasing with `#:timeout` parks the request in the pool manager's lease
+;; channel — the manager only accepts it once a slot is free — and calls
+;; `#:fail` only after the bounded wait expires.  The timeout raises a
+;; DISTINGUISHABLE exception (below) so the HTTP layer can answer 503 Service
+;; Unavailable ("saturated, retry") instead of a generic 500 ("broken").
+(struct exn:fail:tesl:pool-timeout exn:fail () #:transparent)
+
+;; How long a lease waits for a freed connection before giving up.  10s is well
+;; above any healthy query's latency but still bounded, so a genuinely wedged
+;; pool surfaces as a clear error rather than hung requests.  Overridable via
+;; TESL_PG_POOL_LEASE_TIMEOUT_MS (same env-knob pattern as TESL_MAX_BODY_BYTES).
+(define pool-lease-timeout-ms
+  (let ([v (getenv "TESL_PG_POOL_LEASE_TIMEOUT_MS")])
+    (or (and v (string->number v)) 10000)))
+
+;; Connector thunk for `virtual-connection`: leases from `pool`, waiting up to
+;; `timeout-ms` for a slot.  virtual-connection calls this at most once per
+;; thread (it maps thread → actual connection) and releases the lease when the
+;; thread dies — the same lifecycle as passing the pool directly, minus the
+;; fail-fast lease.  The explicit `thread-dead-evt` key reproduces the default
+;; lease key; it is spelled out because `connection-pool-lease`'s contract
+;; accepts only custodians/evts, not threads.
+(define (make-pool-lease-connector pool db-name timeout-ms)
+  (lambda ()
+    (connection-pool-lease
+     pool
+     (thread-dead-evt (current-thread))
+     #:timeout (/ timeout-ms 1000.0)
+     #:fail (lambda ()
+              (raise (exn:fail:tesl:pool-timeout
+                      (format "database '~a': connection pool lease timed out after ~ams — every pooled connection stayed busy; raise `poolSize` in PostgresConfig (default 10) or investigate long-running queries"
+                              db-name timeout-ms)
+                      (current-continuation-marks)))))))
+
 (define (connect-database database #:migrate? [migrate? #f])
   (unless (database-spec? database)
     (raise-user-error 'connect-database "expected a database-spec, got ~a" database))
@@ -2064,11 +2110,26 @@
                              #:server   (unwrap-maybe (postgres-spec-server config))
                              #:port     (unwrap-maybe (postgres-spec-port config))
                              #:socket   (unwrap-maybe (postgres-spec-socket config)))))
+     ;; Issue #31: surface `poolSize` (via envInt) can carry a bad env value;
+     ;; fail fast with the field name rather than via connection-pool's
+     ;; opaque contract error.
+     (define max-conns (unwrap-maybe (postgres-spec-max-connections config)))
+     (unless (exact-positive-integer? max-conns)
+       (raise-user-error 'connect-database
+         "database '~a': poolSize must be a positive integer, got ~a"
+         (database-spec-name database) max-conns))
      (define pool
        (connection-pool connector
-                        #:max-connections (postgres-spec-max-connections config)
+                        #:max-connections max-conns
                         #:max-idle-connections (postgres-spec-max-idle-connections config)))
-     (define runtime (database-runtime database (virtual-connection pool)))
+     ;; Issue #31: lease through the bounded-wait connector instead of handing
+     ;; the pool to virtual-connection directly (which leases fail-fast).
+     (define runtime
+       (database-runtime database
+                         (virtual-connection
+                          (make-pool-lease-connector pool
+                                                     (database-spec-name database)
+                                                     pool-lease-timeout-ms))))
      (when (or migrate? (postgres-spec-auto-migrate? config))
        (ensure-database-ready! runtime))
      runtime]
@@ -2191,24 +2252,31 @@
   (syntax-parse stx
     [(_ database-name:id
         #:backend (~datum postgres)
-        #:database database-expr:expr
-        #:user user-expr:expr
-        (~optional (~seq #:password password-expr:expr)
-                   #:defaults ([password-expr #'#f]))
-        (~optional (~seq #:server server-expr:expr)
-                   #:defaults ([server-expr #'"127.0.0.1"]))
-        (~optional (~seq #:port port-expr:expr)
-                   #:defaults ([port-expr #'5432]))
-        (~optional (~seq #:socket socket-expr:expr)
-                   #:defaults ([socket-expr #'#f]))
-        (~optional (~seq #:schema schema-name:sql-name)
-                   #:defaults ([schema-name.value #'"public"]))
-        (~optional (~seq #:max-connections max-connections-expr:expr)
-                   #:defaults ([max-connections-expr #'10]))
-        (~optional (~seq #:max-idle-connections max-idle-connections-expr:expr)
-                   #:defaults ([max-idle-connections-expr #'10]))
-        (~optional (~seq #:auto-migrate? auto-migrate-expr:expr)
-                   #:defaults ([auto-migrate-expr #'#t]))
+        ;; Issue #31: the connection keywords accept ANY order (~alt), not the
+        ;; fixed sequence they historically required.  The compiler emits new
+        ;; optional fields (e.g. surface `poolSize` → #:max-connections) in the
+        ;; middle of the keyword run, and hand-written callers shouldn't have
+        ;; to memorize an ordering either.  ~once keeps #:database/#:user
+        ;; required; ~optional inside ~alt still means at-most-once.
+        (~alt (~once (~seq #:database database-expr:expr))
+              (~once (~seq #:user user-expr:expr))
+              (~optional (~seq #:password password-expr:expr)
+                         #:defaults ([password-expr #'#f]))
+              (~optional (~seq #:server server-expr:expr)
+                         #:defaults ([server-expr #'"127.0.0.1"]))
+              (~optional (~seq #:port port-expr:expr)
+                         #:defaults ([port-expr #'5432]))
+              (~optional (~seq #:socket socket-expr:expr)
+                         #:defaults ([socket-expr #'#f]))
+              (~optional (~seq #:schema schema-name:sql-name)
+                         #:defaults ([schema-name.value #'"public"]))
+              (~optional (~seq #:max-connections max-connections-expr:expr)
+                         #:defaults ([max-connections-expr #'10]))
+              (~optional (~seq #:max-idle-connections max-idle-connections-expr:expr)
+                         #:defaults ([max-idle-connections-expr #'10]))
+              (~optional (~seq #:auto-migrate? auto-migrate-expr:expr)
+                         #:defaults ([auto-migrate-expr #'#t])))
+        ...
         #:entities entity:id ...)
      #'(define database-name
          (database-spec 'database-name

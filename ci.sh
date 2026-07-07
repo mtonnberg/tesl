@@ -1051,6 +1051,8 @@ else
         "tests/check-test.rkt"
         "tests/sql-test.rkt"
         "tests/sql-group-by-pg-test.rkt"
+        # Issue #31: pool-lease waiting + 503 mapping (fake connections, no PG)
+        "tests/pg-pool-tests.rkt"
         "tests/timezone-zones-test.rkt"
         "tests/web-test.rkt"
         "tests/exists-test.rkt"

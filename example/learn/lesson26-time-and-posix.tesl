@@ -46,6 +46,11 @@ module Lesson26TimeAndPosix exposing [
 #
 #   formatTime(post.publishedAt, "UTC", "%Y-%m-%dT%H:%M:%S.%3NZ")
 #   → "2026-03-16T14:32:07.456Z"
+#
+# AI agents read PosixMillis correctly for free: in agent TOOL results (lesson
+# 62/68) a PosixMillis renders as {"epochMillis": ..., "iso": "..."} so the
+# model never guesses a date from epoch digits; HTTP responses stay bare Int
+# millis, and generated Elm/TypeScript clients decode either shape.
 
 import Tesl.Prelude exposing [Bool(..), Int, String, List]
 import Tesl.Json exposing [stringCodec, intCodec]

@@ -190,6 +190,21 @@
 (define (pg-schema)
   (database-schema-name (database-runtime-database (current-database-runtime))))
 
+;; Issue #31: the shared database connection is a `virtual-connection` — each
+;; thread that queries through it leases one pooled connection and keeps it
+;; until the THREAD DIES.  Background queue threads never die, so after their
+;; first query the poller and every SKIP-LOCKED worker would each pin a pool
+;; slot forever (a queue with numberOfWorkers 4 silently eats half the default
+;; 10-slot pool, and request handlers start timing out).  `disconnect` on a
+;; virtual connection releases only the CURRENT thread's lease back to the pool
+;; (the same trick the SSE path in dsl/web.rkt uses); the next query simply
+;; re-leases.  Call this whenever a background thread goes idle.
+(define (release-pool-lease! db-runtime)
+  (define conn (and db-runtime (database-runtime-connection db-runtime)))
+  (when conn
+    (with-handlers ([exn:fail? void])
+      (disconnect conn))))
+
 ;; Quoted "schema"."table" string for SQL
 (define (pg-table schema table)
   (~a "\"" schema "\".\"" table "\""))
@@ -845,7 +860,10 @@
                                (database-schema-name
                                 (database-runtime-database db-runtime))
                                "tesl_jobs"))
-                      (symbol->string (queue-spec-name queue-s)))))
+                      (symbol->string (queue-spec-name queue-s))))
+                   ;; Issue #31: this thread sweeps once a minute and then
+                   ;; sleeps — don't pin a pool slot in between.
+                   (release-pool-lease! db-runtime))
                  (loop (add1 n))))))
 
     ;; Thread 2: LISTEN connection (PostgreSQL only)
@@ -890,6 +908,11 @@
                                           [current-database-runtime db-runtime])
                              (process-next-job! queue-s handler-fn))))
                        (when ok? (work)))
+                     ;; Issue #31: the queue is drained — release this worker's
+                     ;; pool lease while it blocks on the semaphore (kept for
+                     ;; the whole burst above; re-leased on the next job).
+                     (when use-pg?
+                       (release-pool-lease! db-runtime))
                      (loop))))))
       (set-box! worker-threads (cons wt (unbox worker-threads)))))
 

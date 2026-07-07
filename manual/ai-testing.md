@@ -94,6 +94,21 @@ back and can recover. The run does not throw. You assert this deterministically 
 scripting bad args followed by a recovery text reply, then checking you still got a
 normal final reply and that the (failed) call still counted as one round-trip.
 
+The same containment applies to the tool *body*: an exception raised during
+dispatch comes back as a `tool failed: …` `is_error` tool_result instead of
+killing the loop. And a tool function's `requires` is delegated from the
+agent-construction site to the tool's execution inside the loop, so a
+capability-requiring tool that passes `tesl check` cannot trap on a live turn —
+what your mock-driven test exercises is what production runs.
+
+### Dates in tool results
+
+Every `PosixMillis` in a tool result reaches the model as
+`{"epochMillis": <int>, "iso": "<UTC ISO-8601>"}` rather than a bare integer, so
+an agent never guesses a calendar date from epoch digits. Assert on the reply
+text as usual; if a scripted step needs to reference a timestamp argument, pass
+the plain integer — tool *arguments* are still bare epoch millis.
+
 ### Guarded mutating tools
 
 Put the guard *inside* the validated value (e.g. a `confirmed: Bool` field) and let

@@ -1121,7 +1121,26 @@ JSON Schema is derived from the function's parameter types and the model's tool-
 arguments are decoded into those parameters under the hood — no hand-written schema or
 validator. (For full manual control the lower-level `tool name desc schema validate
 dispatch` constructor is still available.) Tool functions take only `String`, `Int`,
-`Float`, `Bool`, or `PosixMillis` parameters.
+`Float`, `Bool`, or `PosixMillis` parameters. A `PosixMillis` parameter's derived
+schema carries an epoch-milliseconds description so the model never mistakes the
+integer for seconds or a formatted date.
+
+**Tool capability delegation.** A tool function's `requires` is charged statically to
+the site that wires it into an agent (the enclosing function, or the declarative
+`agent` block's own `requires`) — but the tool *executes* later, inside the agent
+loop, whose ambient capability set is the caller's, not the construction site's. The
+emitted tool dispatch therefore **delegates the function's own declared
+capabilities** around the call (and a `define`-d function passed to the manual `tool`
+constructor delegates its registered `requires` the same way), so a tool that
+type-checks cannot trap on a missing capability on a live turn. Delegation grants
+exactly the declared `requires` of the wrapped function, nothing more, and only at
+the tool boundary — ordinary calls still assert against the ambient grant.
+
+**Tool failure containment.** Any exception raised by a tool body — including a
+capability trap in a hand-built `tool` dispatch — is contained as an `is_error`
+tool_result (`tool failed: …`), the agent-loop analogue of an HTTP 500: the model
+sees the failure and the loop continues, matching the containment `serverTools`
+endpoint tools have always had.
 
 ```tesl
 fn lookupOrderStatus(orderId: String) -> String requires [dbRead] =
@@ -1185,6 +1204,19 @@ Statics (all compile errors when violated):
   capabilities — exposing a server to an agent means the agent may do anything those
   handlers can.
 
+At runtime each endpoint tool also **delegates its bound handler's declared
+capabilities** around the dispatch (the same delegation `asTool` tools get), so the
+server does not have to be mounted for its handlers' capabilities to be granted on a
+live agent turn.
+
+**Curated agent api (the two-api pattern).** Because `serverTools` derives tools from
+the *server's* endpoint list, a second `api`/`server` pair that binds the **same
+handler functions** but lists only a subset of endpoints acts as a compile-time tool
+allowlist: the user-facing server keeps the full HTTP surface, the agent-facing server
+(typically never mounted) decides exactly which of those handlers the model may call.
+Tool derivation is per server — two `serverTools` call sites in one module do not
+interact.
+
 Each tool's name is the server-binding name, its description is the bound handler's
 doc-comment (falling back to `"METHOD /path"`), and its input schema has one required
 property per capture plus one for the `body` binder (an object derived from the body
@@ -1193,7 +1225,14 @@ pipeline — capture parser + `via` check + proof attach, body codec decode — 
 argument can never be validated more weakly than the HTTP boundary; a handler
 `fail status "msg"` (or a runtime error) comes back to the model as an `is_error`
 tool_result, the agent-loop analogue of the HTTP error response, and results are
-JSON-encoded through the same path as HTTP responses.
+JSON-encoded through the same path as HTTP responses — with one agent-only
+difference: every `PosixMillis` value in a tool result is rendered as a
+self-describing `{"epochMillis": <int>, "iso": "<UTC ISO-8601>"}` object instead of a
+bare integer, so the model never has to (mis)guess a calendar date from epoch digits.
+The HTTP wire format is unchanged, and a response type with a user-written `codec`
+block keeps its authored shape. Generated Elm and TypeScript clients decode
+`PosixMillis` tolerantly (bare integer or the enriched object), so both shapes are
+always parseable client-side.
 
 Running inference requires the `aiProvider` capability (from `Tesl.Agent`; it implies
 `httpClient` because real providers perform outbound HTTP). The agent API:
@@ -1703,6 +1742,7 @@ A `database` declaration is a folded record assigned with `=`:
                          "dbName"     ":" <expr>
                          "user"       ":" <expr>
                          "password"   ":" <expr>
+                         [ "poolSize"  ":" <expr> ]
                          "connection" ":" <connection>
                        "}" ")"
                      | "Memory"
@@ -1728,6 +1768,8 @@ database MyDatabase = Database {
 ```
 
 The `backend` is either `Postgres (PostgresConfig { ... })` or `Memory`. The `port` in a `TcpConnection` carries a port-validity obligation: a literal must be in `1..65535` (or use `envInt "VAR" default`), otherwise it is a compile-time error.
+
+The optional `poolSize` is the connection-pool size: the maximum number of simultaneously open PostgreSQL connections (default 10). It is an `Int` field, so a literal or `envInt "VAR" default` both work — e.g. `poolSize: envInt "PG_POOL_SIZE" 20`. When every pooled connection is busy, a request waits (bounded, 10s by default, `TESL_PG_POOL_LEASE_TIMEOUT_MS` overrides) for a freed connection instead of failing immediately; if the wait times out the HTTP layer answers `503 Service Unavailable`.
 
 ### 11.10 Capture declarations
 **Accepted design, Implemented.**

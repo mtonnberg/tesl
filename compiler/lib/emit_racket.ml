@@ -5447,6 +5447,9 @@ let postgres_key_to_racket = function
   | "host" -> "server"
   | "port" -> "port"
   | "socket" -> "socket"
+  (* Issue #31: surface `poolSize` is the connection-pool size — the runtime's
+     define-database takes it as `#:max-connections` (default 10 there). *)
+  | "poolSize" -> "max-connections"
   | other -> other
 
 let emit_database ctx (d : database_form) =

@@ -1016,6 +1016,43 @@ fn sc(n: Int ::: P n) -> Int ::: P n =
   assert_not_contains ~name:"checkout is not treated as the check keyword"
     racket "(check-and"
 
+(* ── Issue #31: PostgresConfig poolSize → define-database #:max-connections ── *)
+
+let pool_size_src pool_size_line = Printf.sprintf {|#lang tesl
+module Psz exposing []
+import Tesl.Prelude exposing [String, Int]
+import Tesl.Env exposing [env, envInt]
+import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
+database PoolDB = Database {
+  schema: "pool_app"
+  entities: []
+  backend: Postgres (PostgresConfig {
+    dbName: "demo"
+    user: "demo"
+    password: "demo"
+%s    connection: TcpConnection { host: "localhost"  port: 5432 }
+  })
+}
+|} pool_size_line
+
+let test_pool_size_literal_emits_max_connections () =
+  let racket = compile_ok (pool_size_src "    poolSize: 25\n") "pool_size_literal" in
+  assert_contains ~name:"poolSize literal lowers to #:max-connections"
+    racket "#:max-connections 25"
+
+let test_pool_size_env_int_emits_max_connections () =
+  let racket = compile_ok (pool_size_src "    poolSize: envInt \"PG_POOL_SIZE\" 10\n")
+                 "pool_size_env_int" in
+  assert_contains ~name:"poolSize envInt lowers to #:max-connections tesl-env-int-raw"
+    racket "#:max-connections (tesl-env-int-raw \"PG_POOL_SIZE\" 10)"
+
+let test_pool_size_omitted_emits_no_max_connections () =
+  (* No poolSize ⇒ no keyword emitted; define-database's own default (10) applies,
+     so existing emitted programs are byte-identical. *)
+  let racket = compile_ok (pool_size_src "") "pool_size_omitted" in
+  assert_not_contains ~name:"no #:max-connections without poolSize"
+    racket "#:max-connections"
+
 (* ── Test-header `with database X` clause (with_cleanup change C) ──────────── *)
 
 let test_db_clause_src body = {|#lang tesl
@@ -1227,6 +1264,12 @@ let () =
       Alcotest.test_case "with database clause wraps test body" `Quick test_with_database_clause_wraps_test_body;
       Alcotest.test_case "plain test has no database wrapper" `Quick test_plain_test_has_no_database_wrapper;
       Alcotest.test_case "with database combines with requires" `Quick test_with_database_clause_combines_with_requires;
+    ];
+    (* Issue #31: poolSize field on PostgresConfig *)
+    "database-pool-size", [
+      Alcotest.test_case "poolSize literal emits #:max-connections" `Quick test_pool_size_literal_emits_max_connections;
+      Alcotest.test_case "poolSize envInt emits #:max-connections" `Quick test_pool_size_env_int_emits_max_connections;
+      Alcotest.test_case "omitted poolSize emits no #:max-connections" `Quick test_pool_size_omitted_emits_no_max_connections;
     ];
     "test-kind-filter", [
       Alcotest.test_case "name+kind selects one test and suppresses others" `Quick test_kind_filter_selects_and_suppresses;
