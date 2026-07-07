@@ -771,7 +771,7 @@ let lint_unused_imports filename (source : string) (out : lint_diag list ref) =
       match imp.names with
       | ImportAll -> ()
       | ImportExposing names ->
-        List.iter (fun raw_name ->
+        let is_unused raw_name =
           let n = String.length raw_name in
           let is_dot_dot = n > 4 && String.sub raw_name (n - 4) 4 = "(..)" in
           let name =
@@ -782,14 +782,34 @@ let lint_unused_imports filename (source : string) (out : lint_diag list ref) =
              cannot determine which import provides them, so suppress the
              warning to avoid false positives (e.g. Bool(..) when only
              True/False are used in expression position). *)
-          if not (Hashtbl.mem used_set name)
-             && not (is_dot_dot && has_orphan_ctors)
-             && not (starts_with name "Is")
-             && not (starts_with name "Has")
-             && not (starts_with name "From")
-             && not (starts_with name "Float")
-             && name <> "Fact"
-          then
+          not (Hashtbl.mem used_set name)
+          && not (is_dot_dot && has_orphan_ctors)
+          && not (starts_with name "Is")
+          && not (starts_with name "Has")
+          && not (starts_with name "From")
+          && not (starts_with name "Float")
+          && name <> "Fact"
+        in
+        let unused_raw = List.filter is_unused names in
+        if unused_raw <> [] then begin
+          (* E1: every W050 on this import carries the SAME edit — the import
+             statement rewritten without ALL of its unused names (or deleted
+             outright when nothing remains).  Identical sibling edits let the
+             LSP dedupe them safely in `source.fixAll` / organizeImports. *)
+          let kept = List.filter (fun r -> not (List.mem r unused_raw)) names in
+          let fix = Some (Compile.Replace_span {
+            start_line  = imp.loc.start.line;
+            end_line    = imp.loc.stop.line;
+            replacement =
+              if kept = [] then ""
+              else Import_suggest.render_import imp.module_name kept;
+          }) in
+          List.iter (fun raw_name ->
+            let n = String.length raw_name in
+            let name =
+              if n > 4 && String.sub raw_name (n - 4) 4 = "(..)"
+              then String.sub raw_name 0 (n - 4) else raw_name
+            in
             out := {
               file     = filename;
               line     = imp.loc.start.line;
@@ -799,9 +819,10 @@ let lint_unused_imports filename (source : string) (out : lint_diag list ref) =
               message  = Printf.sprintf
                 "unused import: `%s` from `%s` is never referenced"
                 name imp.module_name;
-              fix      = None;
+              fix;
             } :: !out
-        ) names
+          ) unused_raw
+        end
     ) m.imports
 
 (** R51_F05 / R51_F06 — warn about unused `let` bindings and unused function

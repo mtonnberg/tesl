@@ -295,9 +295,21 @@ let pp_scheme (sch : scheme) : string =
 
 (* ── Type errors ─────────────────────────────────────────────────────────── *)
 
+(** A machine-applicable edit a diagnostic can carry (E1 import ergonomics).
+    Lives here (not in Compile) so [type_error] can carry one; Compile re-exports
+    it via a type equation.  All line numbers are 0-based, matching diagnostic
+    positions on the JSON wire. *)
+type diagnostic_fix =
+  | Replace_line of { line : int; replacement : string }
+  | Insert_line  of { line : int; text : string }
+      (** insert [text] as a new line BEFORE [line] *)
+  | Replace_span of { start_line : int; end_line : int; replacement : string }
+      (** replace the inclusive line range; [replacement = ""] deletes it *)
+
 type type_error = {
   loc     : loc;
   message : string;
+  fix     : diagnostic_fix option;
 }
 
 let fmt_error (e : type_error) : string =

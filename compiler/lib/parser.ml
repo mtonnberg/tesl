@@ -62,6 +62,15 @@ let current_loc s =
     make_loc s.filename t.line t.col t.line (t.col + 1)
   else dummy_loc s.filename
 
+(* Location of the most recently consumed token — the precise END of a
+   just-parsed form (current_loc would give the NEXT token instead, which for a
+   statement ending at end-of-line points past the statement). *)
+let last_consumed_loc s =
+  if s.pos > 0 && s.pos - 1 < Array.length s.tokens then
+    let t = s.tokens.(s.pos - 1) in
+    make_loc s.filename t.line t.col t.line (t.col + 1)
+  else dummy_loc s.filename
+
 let advance s =
   if s.pos < Array.length s.tokens then s.pos <- s.pos + 1
 
@@ -4753,6 +4762,7 @@ let parse_module_header s =
 let rec parse_imports s acc =
   skip_layout s;
   if peek s = IMPORT then begin
+    let import_kw_loc = current_loc s in
     advance s;
     (* Module name may be dotted: Tesl.Dict, Tesl.Maybe, etc. *)
     let* module_name = parse_module_path s in
@@ -4793,7 +4803,13 @@ let rec parse_imports s acc =
       end else
         return ImportAll
     in
-    let loc = current_loc s in
+    (* Span the whole statement: `import` keyword through the last token of the
+       exposing list (or module path) — multi-line exposing lists included.
+       This is what W050 positions and the LSP import quickfix edits anchor on. *)
+    let stop_loc = last_consumed_loc s in
+    let loc = make_loc s.filename
+        import_kw_loc.start.line import_kw_loc.start.col
+        stop_loc.stop.line stop_loc.stop.col in
     let decl = { module_name; names; loc } in
     skip_layout s;
     parse_imports s (decl :: acc)

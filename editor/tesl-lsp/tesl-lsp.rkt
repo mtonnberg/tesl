@@ -1963,20 +1963,45 @@
       [(hash? h) (loop (hash-ref h (car p) #f) (cdr p))]
       [else #f])))
 
-;; Extract the single TextEdit a diagnostic's `fix` implies (replace_line), or #f.
+;; Extract the single TextEdit a diagnostic's `fix` implies, or #f.
+;; Kinds (mirroring Compile.diagnostic_fix):
+;;   replace_line — replace one whole line
+;;   insert_line  — insert a new line BEFORE `line` (E1 add-missing-import)
+;;   replace_span — replace the inclusive line range start_line..end_line;
+;;                  an empty replacement deletes the lines outright (E1 W050)
 (define (diag->fix-edit text diag)
   (define data (hash-ref diag 'data (hash)))
   (define fix (if (hash? data) (hash-ref data 'fix 'null) 'null))
+  (define lines (if text (string-split text "\n" #:trim? #f) '()))
+  (define (line-length line)
+    (if (and (>= line 0) (< line (length lines)))
+        (string-length (list-ref lines line)) 0))
   (and (hash? fix)
-       (equal? (hash-ref fix 'kind #f) "replace_line")
-       (let* ([line (hash-ref fix 'line 0)]
-              [replacement (hash-ref fix 'replacement "")]
-              [lines (if text (string-split text "\n") '())]
-              [current-line (if (and (>= line 0) (< line (length lines)))
-                                (list-ref lines line) "")])
-         (hash 'range (hash 'start (hash 'line line 'character 0)
-                            'end   (hash 'line line 'character (string-length current-line)))
-               'newText replacement))))
+       (case (hash-ref fix 'kind #f)
+         [("replace_line")
+          (let ([line (hash-ref fix 'line 0)])
+            (hash 'range (hash 'start (hash 'line line 'character 0)
+                               'end   (hash 'line line 'character (line-length line)))
+                  'newText (hash-ref fix 'replacement "")))]
+         [("insert_line")
+          (let ([line (hash-ref fix 'line 0)])
+            (hash 'range (hash 'start (hash 'line line 'character 0)
+                               'end   (hash 'line line 'character 0))
+                  'newText (string-append (hash-ref fix 'text "") "\n")))]
+         [("replace_span")
+          (let* ([start-line (hash-ref fix 'start_line 0)]
+                 [end-line (hash-ref fix 'end_line 0)]
+                 [replacement (hash-ref fix 'replacement "")])
+            (if (string=? replacement "")
+                ;; delete the whole line range, trailing newline included
+                (hash 'range (hash 'start (hash 'line start-line 'character 0)
+                                   'end   (hash 'line (add1 end-line) 'character 0))
+                      'newText "")
+                (hash 'range (hash 'start (hash 'line start-line 'character 0)
+                                   'end   (hash 'line end-line
+                                                'character (line-length end-line)))
+                      'newText replacement)))]
+         [else #f])))
 
 ;; Is this diagnostic an import-related fix (its message offers an `import …`)?
 ;; Used to pull the relevant edits into a `source.organizeImports` action.
@@ -2005,9 +2030,15 @@
             (and (string? k) (string-prefix? kind k))))
         (lambda (_kind) #t)))
   (define quickfixes (filter values (map (lambda (d) (diag->code-action uri text d)) diagnostics)))
-  (define all-edits (filter values (map (lambda (d) (diag->fix-edit text d)) diagnostics)))
+  ;; Dedupe identical edits: sibling diagnostics deliberately carry the SAME
+  ;; edit (e.g. every W050 on one import rewrites that whole import statement),
+  ;; and a client rejects a WorkspaceEdit with overlapping duplicates.
+  (define all-edits
+    (remove-duplicates
+     (filter values (map (lambda (d) (diag->fix-edit text d)) diagnostics))))
   (define import-edits
-    (filter values (map (lambda (d) (and (import-fix? d) (diag->fix-edit text d))) diagnostics)))
+    (remove-duplicates
+     (filter values (map (lambda (d) (and (import-fix? d) (diag->fix-edit text d))) diagnostics))))
   (define (aggregate title kind edits diags)
     (and (pair? edits)
          (hash 'title title

@@ -20,7 +20,7 @@ let reset () = Type_system.reset_counter ()
 let parse_and_check src =
   match Parser.parse_module "<test>" src with
   | Ok m -> Checker.check_module m
-  | Err e -> [{ loc = e.loc; message = e.msg }]
+  | Err e -> [{ loc = e.loc; message = e.msg; fix = None }]
 
 let assert_no_errors src =
   let errs = parse_and_check src in

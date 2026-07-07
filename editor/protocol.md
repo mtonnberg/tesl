@@ -101,6 +101,16 @@ Version 1 supports a minimal edit-oriented shape. Example:
 }
 ```
 
+Three kinds exist (all line numbers 0-based):
+
+- `replace_line` — `{ "kind": "replace_line", "line": int, "replacement": string }`:
+  replace one whole line.
+- `insert_line` — `{ "kind": "insert_line", "line": int, "text": string }`:
+  insert `text` as a new line before `line` (E1: add a missing import).
+- `replace_span` — `{ "kind": "replace_span", "start_line": int, "end_line": int, "replacement": string }`:
+  replace the inclusive line range; an empty `replacement` deletes the lines
+  (E1: prune or remove an unused import). `replacement` may contain newlines.
+
 Rules:
 
 - unknown `fix.kind` values must be ignored by the editor

@@ -27,9 +27,13 @@ let json_encode_string s =
   Buffer.add_char buf '"';
   Buffer.contents buf
 
-(** A unified diagnostic that can come from the parser or the type checker. *)
-type diagnostic_fix =
+(** A unified diagnostic that can come from the parser or the type checker.
+    The fix type itself lives in {!Type_system} (so type errors can carry one);
+    re-exported here so existing [Compile.Replace_line] consumers keep working. *)
+type diagnostic_fix = Type_system.diagnostic_fix =
   | Replace_line of { line : int; replacement : string }
+  | Insert_line  of { line : int; text : string }
+  | Replace_span of { start_line : int; end_line : int; replacement : string }
 
 type diagnostic = {
   file     : string;
@@ -104,7 +108,7 @@ let diag_of_type_error (e : Type_system.type_error) : diagnostic = {
   severity   = "error";
   code       = "T001";
   message    = e.message;
-  fix        = None;
+  fix        = e.fix;
   source     = "type-checker";
   manual     = None;
 }
@@ -131,6 +135,12 @@ let fix_to_json = function
   | Some (Replace_line { line; replacement }) ->
       Printf.sprintf {|{"kind":"replace_line","line":%d,"replacement":%s}|}
         line (json_encode_string replacement)
+  | Some (Insert_line { line; text }) ->
+      Printf.sprintf {|{"kind":"insert_line","line":%d,"text":%s}|}
+        line (json_encode_string text)
+  | Some (Replace_span { start_line; end_line; replacement }) ->
+      Printf.sprintf {|{"kind":"replace_span","start_line":%d,"end_line":%d,"replacement":%s}|}
+        start_line end_line (json_encode_string replacement)
 
 let diag_to_json (d : diagnostic) : string =
   Printf.sprintf
@@ -1876,32 +1886,8 @@ let field_at_file filename line col =
 
 (* ── Shared module-walking helpers for the position queries below ───────────── *)
 
-(* The source span of a top-level declaration. *)
-let top_decl_loc (decl : Ast.top_decl) : Location.loc =
-  match decl with
-  | Ast.DFunc fd -> fd.loc
-  | Ast.DType (Ast.TypeNewtype { loc; _ })
-  | Ast.DType (Ast.TypeAlias { loc; _ })
-  | Ast.DType (Ast.TypeAdt { loc; _ }) -> loc
-  | Ast.DRecord r -> r.loc
-  | Ast.DEntity e -> e.loc
-  | Ast.DFact f -> f.loc
-  | Ast.DCodec c -> c.loc
-  | Ast.DDatabase d -> d.loc
-  | Ast.DCapability c -> c.loc
-  | Ast.DConst c -> c.loc
-  | Ast.DQueue q -> q.loc
-  | Ast.DChannel c -> c.loc
-  | Ast.DWorkers w -> w.loc
-  | Ast.DCache c -> c.loc
-  | Ast.DEmail e -> e.loc
-  | Ast.DAgent a -> a.loc
-  | Ast.DCapture c -> c.loc
-  | Ast.DApi a -> a.loc
-  | Ast.DServer s -> s.loc
-  | Ast.DTest t -> t.loc
-  | Ast.DApiTest t -> t.loc
-  | Ast.DLoadTest t -> t.loc
+(* The source span of a top-level declaration (moved to Ast for E1 reuse). *)
+let top_decl_loc = Ast.top_decl_loc
 
 (* ── Config-block context (LSP hover + completion for config fields) ─────────
    Given a cursor position, return the most-specific typed configuration block
@@ -2414,7 +2400,7 @@ let legacy_bool_diag source_lines loc ~old_text ~replacement ~message = {
   manual     = None;
 }
 
-let missing_bool_import_diag loc ~is_ctor =
+let missing_bool_import_diag (m : module_form) loc ~is_ctor =
   let message =
     if is_ctor then
       "`True`/`False` come from `Tesl.Prelude`; add `import Tesl.Prelude exposing [Bool(..)]`"
@@ -2430,7 +2416,8 @@ let missing_bool_import_diag loc ~is_ctor =
     severity   = "error";
     code       = "VBOOL002";
     message;
-    fix        = None;
+    fix        = Import_suggest.build_fix m ~target_module:"Tesl.Prelude"
+                   ~expose_name:"Bool(..)";
     source     = "validation";
     manual     = None;
   }
@@ -2541,10 +2528,10 @@ let legacy_bool_diagnostics _filename source (m : module_form) =
     | _ -> ()
   ) m.decls;
   (match !first_bool_type_use with
-   | Some loc when not bool_type_imported -> diags := missing_bool_import_diag loc ~is_ctor:false :: !diags
+   | Some loc when not bool_type_imported -> diags := missing_bool_import_diag m loc ~is_ctor:false :: !diags
    | _ -> ());
   (match !first_bool_ctor_use with
-   | Some loc when not bool_ctor_imported -> diags := missing_bool_import_diag loc ~is_ctor:true :: !diags
+   | Some loc when not bool_ctor_imported -> diags := missing_bool_import_diag m loc ~is_ctor:true :: !diags
    | _ -> ());
   List.rev !diags
 

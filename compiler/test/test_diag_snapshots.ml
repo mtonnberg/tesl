@@ -283,8 +283,10 @@ let lint_w022_expected =
 (* ── Linter: W050 (unused import) ───────────────────────────────────────────── *)
 let lint_w050_src =
   "#lang tesl\nmodule Main exposing [value]\nimport Tesl.Prelude exposing [Int, String]\nfn value() -> Int = 1\n"
+(* E1: import_decl.loc now spans the whole statement, so W050 anchors at the
+   `import` keyword (2:0) instead of the old point-loc just past the `]`. *)
 let lint_w050_expected =
-  "[W050] warning @ lint 2:42-2:42\n\
+  "[W050] warning @ lint 2:0-2:0\n\
   \  unused import: `String` from `Tesl.Prelude` is never referenced"
 
 (* ════════════════════════════════════════════════════════════════════════════

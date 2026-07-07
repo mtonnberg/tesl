@@ -2145,6 +2145,7 @@ let test_linter_w010_provides_replace_line_fix () =
   | Some (Compile.Replace_line { line; replacement }) ->
       Alcotest.(check int) "fix line" 1 line;
       Alcotest.(check string) "fix replacement" "module Foo exposing []" replacement
+  | Some _ -> Alcotest.fail "expected W010 fix to be a Replace_line"
   | None -> Alcotest.fail "expected W010 to provide a fix"
 
 let test_linter_w011_provides_replace_line_fix () =
@@ -2155,6 +2156,7 @@ let test_linter_w011_provides_replace_line_fix () =
   | Some (Compile.Replace_line { line; replacement }) ->
       Alcotest.(check int) "fix line" 3 line;
       Alcotest.(check string) "fix replacement" "  42" replacement
+  | Some _ -> Alcotest.fail "expected W011 fix to be a Replace_line"
   | None -> Alcotest.fail "expected W011 to provide a fix"
 
 let test_linter_w040_fires_on_single_line_adt () =

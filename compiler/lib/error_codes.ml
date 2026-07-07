@@ -257,7 +257,9 @@ let registry : entry list = [
   { code = "W050"; category = Lint;
     title = "unused import";
     explanation = "An imported name is never used. Remove it from the `exposing` \
-       list to keep imports honest.";
+       list to keep imports honest. The diagnostic carries a structured fix \
+       (the import rewritten without its unused names), so editors offer it \
+       as a quickfix and via `source.organizeImports`.";
     manual = Some "best-practices" };
   { code = "W060"; category = Lint;
     title = "unused `let` binding";

@@ -127,6 +127,9 @@ type ctx = {
   server_tools_shadowed : bool;
   (** true when this module declares its own `serverTools` fn/value — the builtin
       arms stand down (decide-by-resolution, not by spelling). *)
+  import_suggest : string -> Import_suggest.suggestion option;
+  (** E1: unbound name → "which import would bind it" hint + quickfix.  Seeded
+      per-module in {!check_module_with_metadata}; the default suggests nothing. *)
 }
 
 let make_ctx ~filename ~env = {
@@ -155,10 +158,24 @@ let make_ctx ~filename ~env = {
   server_tools_env = [];
   server_tools_sites = ref [];
   server_tools_shadowed = false;
+  import_suggest = (fun _ -> None);
 }
 
 let add_error ctx loc msg =
-  ctx.errors := { loc; message = msg } :: !(ctx.errors)
+  ctx.errors := { loc; message = msg; fix = None } :: !(ctx.errors)
+
+(* E1: an error that carries a machine-applicable import fix (LSP quickfix). *)
+let add_error_fix ctx loc msg fix =
+  ctx.errors := { loc; message = msg; fix } :: !(ctx.errors)
+
+(* E1: "unknown name/constructor: x", with the import that would bind it (stdlib
+   or a sibling module in the folder tree) appended as a hint + quickfix. *)
+let add_unknown_name_error ctx loc ~what name =
+  match ctx.import_suggest name with
+  | Some (s : Import_suggest.suggestion) ->
+    add_error_fix ctx loc
+      (Printf.sprintf "unknown %s: %s%s" what name s.sug_hint) s.sug_fix
+  | None -> add_error ctx loc (Printf.sprintf "unknown %s: %s" what name)
 
 let current_subst ctx = !(ctx.subst)
 
@@ -1483,7 +1500,7 @@ let resolve_constructor_type ctx name loc =
         | Some sch -> KnownConstructor (instantiate sch)
         | None ->
           if not (List.mem name known_qualifier_modules) && not ctx.in_establish then
-            add_error ctx loc (Printf.sprintf "unknown constructor: %s" name);
+            add_unknown_name_error ctx loc ~what:"constructor" name;
           if ctx.in_establish then ProofPredicateConstructor
           else KnownConstructor (fresh ())))
 
@@ -1851,12 +1868,12 @@ let rec infer_expr ctx (e : expr) : ty =
         | None ->
           (* D8 idiom-transfer hint: `return x` is a common transfer mistake —
              Tesl has no `return`; a function body IS its value. *)
-          add_error ctx loc
-            (if name = "return" then
+          (if name = "return" then
+             add_error ctx loc
                "unknown name: `return` — Tesl has no `return` statement; a function \
                 body IS its return value, so write the value as the last expression \
                 (e.g. `x` instead of `return x`)"
-             else Printf.sprintf "unknown name: %s" name);
+           else add_unknown_name_error ctx loc ~what:"name" name);
           fresh ()))
 
   | EField { obj; field; loc } ->
@@ -2905,7 +2922,7 @@ and bind_pattern_vars ctx scrut_ty (pat : pattern) : (string * scheme) list =
          else
            fresh_field_bindings fields
        | exception TypeMismatch _ ->
-         add_error ctx loc (Printf.sprintf "unknown constructor: %s" ctor);
+         add_unknown_name_error ctx loc ~what:"constructor" ctor;
          fresh_field_bindings fields)
   in
   match pat with
@@ -3584,7 +3601,8 @@ let check_stdlib_import_names (m : module_form) : type_error list =
              message = Printf.sprintf
                "unknown stdlib module `%s`; \
                 check the module name or remove this import"
-               imp.module_name }]
+               imp.module_name;
+             fix = None }]
         else
           []
       | ImportExposing names ->
@@ -3597,7 +3615,8 @@ let check_stdlib_import_names (m : module_form) : type_error list =
                 message = Printf.sprintf
                   "unknown stdlib module `%s`; \
                    check the module name or remove this import"
-                  imp.module_name }]
+                  imp.module_name;
+                fix = None }]
            else
              []  (* known internal module — accept all names loosely *)
          | Some exports ->
@@ -3613,7 +3632,8 @@ let check_stdlib_import_names (m : module_form) : type_error list =
              else Some { loc = imp.loc;
                          message = Printf.sprintf
                            "module `%s` does not export `%s`"
-                           imp.module_name name }
+                           imp.module_name name;
+                         fix = None }
            ) names)
   ) m.imports
 
@@ -3673,18 +3693,21 @@ let check_local_import_names (m : module_form) : type_error list =
                              message = Printf.sprintf
                                "module `%s` does not expose constructors of `%s`; \
                                 it is exported as an opaque type"
-                               imp.module_name name }
+                               imp.module_name name;
+                             fix = None }
                  else Some { loc = imp.loc;
                              message = Printf.sprintf
                                "module `%s` does not expose `%s`"
-                               imp.module_name name }
+                               imp.module_name name;
+                             fix = None }
                end else begin
                  let all_exported = exported_names @ exported_ctors in
                  if List.mem name all_exported || List.mem base_name all_exported then None
                  else Some { loc = imp.loc;
                              message = Printf.sprintf
                                "module `%s` does not expose `%s`"
-                               imp.module_name name }
+                               imp.module_name name;
+                             fix = None }
                end
              ) names)
   ) m.imports
@@ -3763,26 +3786,13 @@ let type_names_of_return_spec (rs : return_spec) : (string * Location.loc) list 
   go rs
 
 (** Hint about where to import a type from. *)
-let import_hint (name : string) : string =
-  let known = [
-    ("Unit",    "Tesl.Prelude"); ("Bool",   "Tesl.Prelude"); ("Int",    "Tesl.Prelude");
-    ("Integer", "Tesl.Prelude"); ("String", "Tesl.Prelude"); ("List",   "Tesl.Prelude");
-    ("Fact",    "Tesl.Prelude"); ("Char",   "Tesl.Prelude");
-    ("Float",   "Tesl.Float");
-    ("Maybe",   "Tesl.Maybe");
-    ("Either",  "Tesl.Either");
-    ("Dict",    "Tesl.Dict");
-    ("Set",     "Tesl.Set");
-    ("Tuple2",  "Tesl.Tuple"); ("Tuple3", "Tesl.Tuple");
-    ("PosixMillis", "Tesl.Time");
-    ("DeleteResult", "Tesl.DB"); ("NoRowDeleted", "Tesl.DB"); ("RowsDeleted", "Tesl.DB");
-  ] in
-  match List.assoc_opt name known with
-  | Some m -> Printf.sprintf " Try: import %s exposing [%s]" m name
-  | None   -> ""
-
-(** Validate that every type name used in declarations is explicitly in scope. *)
-let check_type_names_in_scope (m : module_form) : type_error list =
+(** Validate that every type name used in declarations is explicitly in scope.
+    [suggest] (E1) resolves an out-of-scope name to the import that would bind
+    it — every stdlib export plus sibling modules in the folder tree — and
+    carries the LSP quickfix.  (Generalizes the old hardcoded 17-name
+    `import_hint` list to the whole {!Type_system.tesl_module_exports} table.) *)
+let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion option)
+    (m : module_form) : type_error list =
   let in_scope = collect_in_scope_type_names m in
   (* A name is ok if: in scope, or qualified (contains '.'), or type-variable (lowercase) *)
   let is_ok name =
@@ -3792,8 +3802,13 @@ let check_type_names_in_scope (m : module_form) : type_error list =
   in
   let make_err (name, loc) =
     if is_ok name then None
-    else Some { loc; message = Printf.sprintf
-      "type `%s` is not in scope; add it to an import.%s" name (import_hint name) }
+    else
+      let hint, fix = match suggest name with
+        | Some (s : Import_suggest.suggestion) -> s.sug_hint, s.sug_fix
+        | None -> "", None
+      in
+      Some { loc; message = Printf.sprintf
+        "type `%s` is not in scope; add it to an import.%s" name hint; fix }
   in
   (* Collect errors for unsupported tuple arities. *)
   let rec check_tuple_arities (te : type_expr) : type_error list =
@@ -3807,7 +3822,7 @@ let check_type_names_in_scope (m : module_form) : type_error list =
                     else if n = 1 then "1-element tuple type is not supported; use the type directly"
                     else Printf.sprintf "%d-element tuple type is not supported; only Tuple2 and Tuple3 are available" n
           in
-          [{ loc; message = msg }]
+          [{ loc; message = msg; fix = None }]
       in
       arity_err @ List.concat_map check_tuple_arities elems
     | TApp { head; arg; _ } -> check_tuple_arities head @ check_tuple_arities arg
@@ -4115,7 +4130,9 @@ let check_stdlib_fn_import_scope (m : module_form) : type_error list =
         in
         Some { loc; message = Printf.sprintf
           "function `%s` requires `import %s` (or `import %s exposing [%s]`)%s"
-          qname tesl_module tesl_module qname hint }
+          qname tesl_module tesl_module qname hint;
+          fix = Import_suggest.build_fix m ~target_module:tesl_module
+                  ~expose_name:qname }
   ) (collect_stdlib_fn_uses m)
 
 (** Check that stdlib proof predicates used in annotations are explicitly imported.
@@ -4139,14 +4156,20 @@ let check_proof_predicate_scope (m : module_form) : type_error list =
     else begin
       Hashtbl.add seen pred ();
       (* Find which module exports this predicate *)
-      let module_hint = match List.find_opt (fun (_, preds) -> List.mem pred preds) tesl_module_predicate_exports with
+      let owner = List.find_opt (fun (_, preds) -> List.mem pred preds)
+          tesl_module_predicate_exports in
+      let module_hint = match owner with
         | Some (mod_name, _) ->
           Printf.sprintf " To use it, add it to an explicit import: `import %s exposing [%s]`" mod_name pred
         | None -> ""
       in
       Some { loc; message = Printf.sprintf
         "proof predicate `%s` is not in scope; \
-         a plain module import does not expose proof predicates.%s" pred module_hint }
+         a plain module import does not expose proof predicates.%s" pred module_hint;
+        fix = (match owner with
+          | Some (mod_name, _) ->
+            Import_suggest.build_fix m ~target_module:mod_name ~expose_name:pred
+          | None -> None) }
     end
   ) uses
 
@@ -4249,7 +4272,7 @@ let check_fact_name_distinctness (m : module_form) : type_error list =
                module's `%s` could satisfy another's obligation. Import `%s` from a \
                single owning module." name owners_str name name
         in
-        { loc; message = msg } :: acc
+        { loc; message = msg; fix = None } :: acc
       | _ -> acc
     ) owners []
   in
@@ -4262,7 +4285,7 @@ let check_fact_name_distinctness (m : module_form) : type_error list =
         Some { loc; message = Printf.sprintf
           "fact `%s` shadows the imported stdlib proof predicate `%s`; a proof \
            predicate has a single owning module. Drop the local `fact %s` and use \
-           the imported one, or rename this fact." name name name }
+           the imported one, or rename this fact." name name name; fix = None }
       else None
     ) local_facts
   in
@@ -4371,10 +4394,10 @@ let check_api_test_scope ctx (m : module_form) seed_stmts stmts =
     match e with
     | EVar { name; loc } ->
       if not (List.mem name locals || List.mem name known_names) then
-        add_error ctx loc (Printf.sprintf "unknown name: %s" name)
+        add_unknown_name_error ctx loc ~what:"name" name
     | EConstructor { name; args; loc } ->
       if not (List.mem name locals || List.mem name known_names) then
-        add_error ctx loc (Printf.sprintf "unknown constructor: %s" name);
+        add_unknown_name_error ctx loc ~what:"constructor" name;
       List.iter (check_expr locals) args
     | EField { obj; _ } ->
       check_expr locals obj
@@ -4679,14 +4702,19 @@ let check_ord_eq_calls ctx =
 
 let check_module_with_metadata (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * type_error list =
   reset_counter ();
+  (* E1: one lazy folder-tree index per checked module — the scan only runs if
+     an unbound-name error is actually emitted. *)
+  let local_index = Import_suggest.build_local_index m in
+  let suggest = Import_suggest.suggest m ~local_index in
   let import_errors = check_stdlib_import_names m in
   let import_errors = import_errors @ check_local_import_names m in
-  let import_errors = import_errors @ check_type_names_in_scope m in
+  let import_errors = import_errors @ check_type_names_in_scope ~suggest m in
   let import_errors = import_errors @ check_proof_predicate_scope m in
   let import_errors = import_errors @ check_fact_name_distinctness m in
   let import_errors = import_errors @ check_stdlib_fn_import_scope m in
   let initial_env = make_stdlib_env () in
   let ctx = make_ctx ~filename:m.source_file ~env:initial_env in
+  let ctx = { ctx with import_suggest = suggest } in
 
   (* 1. Collect type definitions (records, ADTs, newtypes) *)
   let ctx = collect_type_defs ctx m.decls in
@@ -5285,7 +5313,8 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
           in
           Some { loc; message = Printf.sprintf
             "fact ownership violation: `%s` can only be produced \
-             (via check/establish/auth) in the module that declares it.%s" pred hint }
+             (via check/establish/auth) in the module that declares it.%s" pred hint;
+            fix = None }
       ) (extract_produced_preds_with_loc fd)
     | _ -> []
   ) m.decls in
@@ -5304,7 +5333,7 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
         [ { loc = Location.dummy_loc m.source_file;
             message = Printf.sprintf
               "module exposes duplicate name `%s` (first declared for export at line %d)"
-              n (first_loc.start.line + 1) } ]
+              n (first_loc.start.line + 1); fix = None } ]
       | None ->
         Hashtbl.replace seen_exports n (Location.dummy_loc m.source_file);
         []
@@ -5314,7 +5343,8 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
       else [ {
         loc = Location.dummy_loc m.source_file;
         message = Printf.sprintf "module exposes unknown or non-local name `%s` \
-                                  (only locally-defined names can be exported)" n
+                                  (only locally-defined names can be exported)" n;
+        fix = None
       } ]
     in
     duplicate_error @ unknown_error

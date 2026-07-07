@@ -688,6 +688,33 @@ type top_decl =
   | DApiTest    of api_test_form
   | DLoadTest   of load_test_form
 
+(* The source span of a top-level declaration. *)
+let top_decl_loc (decl : top_decl) : loc =
+  match decl with
+  | DFunc fd -> fd.loc
+  | DType (TypeNewtype { loc; _ })
+  | DType (TypeAlias { loc; _ })
+  | DType (TypeAdt { loc; _ }) -> loc
+  | DRecord r -> r.loc
+  | DEntity e -> e.loc
+  | DFact f -> f.loc
+  | DCodec c -> c.loc
+  | DDatabase d -> d.loc
+  | DCapability c -> c.loc
+  | DConst c -> c.loc
+  | DQueue q -> q.loc
+  | DChannel c -> c.loc
+  | DWorkers w -> w.loc
+  | DCache c -> c.loc
+  | DEmail e -> e.loc
+  | DAgent a -> a.loc
+  | DCapture c -> c.loc
+  | DApi a -> a.loc
+  | DServer s -> s.loc
+  | DTest t -> t.loc
+  | DApiTest t -> t.loc
+  | DLoadTest t -> t.loc
+
 (* ─── Module ─────────────────────────────────────────────────────────────── *)
 
 type module_form = {
