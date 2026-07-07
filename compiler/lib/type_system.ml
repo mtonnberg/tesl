@@ -900,8 +900,7 @@ let tesl_module_exports : (string * string list) list = [
       "Conversation"; "Conversation?"; "ConversationTurn"; "ConversationTurn?";
       "newConversation"; "conversationFrom"; "converse"; "converseStreaming"; "turnReply";
       "turnConversation"; "conversationJson"; "conversationLength"; "agentRun" ] );
-  (* Tesl.Http, Tesl.DB, Tesl.Bool, Tesl.Uuid, Tesl.Crypto, Tesl.Map, Tesl.Logging,
-     Tesl.Queue, Tesl.Channel, Tesl.Sse —
+  (* Tesl.Http, Tesl.DB, Tesl.Uuid, Tesl.Logging, Tesl.Queue, Tesl.Sse —
      internal modules; imports validated loosely (unknown names accepted)
      Note: Tesl.UUID (uppercase) now has a full export list above. *)
 ]
@@ -1068,13 +1067,18 @@ let stdlib_capabilities_of (name : string) : string list =
     that have runtime files but no registered export list).
     Used to reject `import Tesl.Unknown` with a compile-time error. *)
 let tesl_known_module_names : string list = [
-  "Tesl.Prelude"; "Tesl.String"; "Tesl.Int"; "Tesl.Int32"; "Tesl.Float"; "Tesl.Bool";
+  "Tesl.Prelude"; "Tesl.String"; "Tesl.Int"; "Tesl.Int32"; "Tesl.Float";
   "Tesl.List"; "Tesl.ListPrim"; "Tesl.Dict"; "Tesl.Maybe"; "Tesl.Either"; "Tesl.EitherPrim"; "Tesl.Result";
   "Tesl.Http"; "Tesl.HttpClient"; "Tesl.Json"; "Tesl.DB"; "Tesl.Time"; "Tesl.Random";
-  "Tesl.Uuid"; "Tesl.UUID"; "Tesl.Crypto"; "Tesl.Set"; "Tesl.Map"; "Tesl.Env";
+  "Tesl.Uuid"; "Tesl.UUID"; "Tesl.Set"; "Tesl.Env";
   "Tesl.Telemetry"; "Tesl.ApiTest"; "Tesl.Tuple"; "Tesl.Id";
-  "Tesl.Queue"; "Tesl.Channel"; "Tesl.Sql"; "Tesl.Sse"; "Tesl.Logging";
+  "Tesl.Queue"; "Tesl.Sse"; "Tesl.Logging";
   "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database"; "Tesl.SSE"; "Tesl.App"; "Tesl.Agent";
+  (* Tesl.Bool / Tesl.Crypto / Tesl.Map / Tesl.Channel / Tesl.Sql were removed
+     2026-07-07: they had NO runtime .rkt file, so `import Tesl.Crypto`
+     typechecked and then crashed at Racket load ("cannot open module file").
+     Rejecting the import at compile time is the fail-closed behaviour;
+     test_stdlib_runtime_binding.ml pins every remaining module to a real file. *)
 ]
 
 (** Returns [true] when [name] is a known Tesl.* stdlib module. *)

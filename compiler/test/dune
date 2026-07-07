@@ -168,3 +168,14 @@
  (names test_racket_discover)
  (modules test_racket_discover)
  (libraries str unix))
+
+; Stdlib binding-existence seam test (stdlib-surface-drift class closer): every
+; name the checker accepts an import of must resolve to a REAL runtime provide
+; (via racket module->exports), and every module_path_table row must point to a
+; file that exists.  The racket-backed case self-skips (loudly) when racket is
+; not on PATH; the table/file checks always run:
+;   dune exec test/test_stdlib_runtime_binding.exe
+(tests
+ (names test_stdlib_runtime_binding)
+ (modules test_stdlib_runtime_binding)
+ (libraries tesl_compiler_lib alcotest str unix))

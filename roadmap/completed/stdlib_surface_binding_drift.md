@@ -6,8 +6,10 @@
 > `test_capability_registry.ml` updated for the `generateId` charge. Gate green.
 > The **durable binding-existence seam test** (the guard that closes this class
 > by construction) is carved out into its own item —
-> [[stdlib_binding_existence_seam_test]] in roadmap/next — because it is a
-> separate, non-trivial cross-language deliverable, not part of the remediation.
+> [[stdlib_binding_existence_seam_test]] (LANDED 2026-07-07 as
+> `test_stdlib_runtime_binding.ml`; it immediately caught 13 more live
+> instances, all fixed) — because it is a separate, non-trivial cross-language
+> deliverable, not part of the remediation.
 > Class-B (ApiTest queue-cap consistency) stays recorded here as NOT exploitable.
 
 Found 2026-07-06 by a fail-open audit spun off the email-capability fix

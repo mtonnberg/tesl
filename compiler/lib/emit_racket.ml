@@ -89,7 +89,6 @@ let module_path_table : (string, string) Hashtbl.t =
   add "Tesl.Int"       "tesl/int.rkt";
   add "Tesl.Int32"     "tesl/int32.rkt";
   add "Tesl.Float"     "tesl/float.rkt";
-  add "Tesl.Bool"      "tesl/bool.rkt";
   add "Tesl.List"      "tesl/list.rkt";
   add "Tesl.ListPrim"  "tesl/list-prim.rkt";
   add "Tesl.Dict"      "tesl/dict.rkt";
@@ -98,22 +97,20 @@ let module_path_table : (string, string) Hashtbl.t =
   add "Tesl.EitherPrim" "tesl/either-prim.rkt";
   add "Tesl.Result"    "tesl/result.rkt";
   add "Tesl.Http"      "tesl/http.rkt";
-  add "Tesl.Json"      "tesl/json.rkt";
+  (* Tesl.Json deliberately ABSENT: its codec names are lowered inline by the
+     emitter and emit_requires skips the module wholesale — a path row here
+     would claim a runtime file (tesl/json.rkt) that does not exist. *)
   add "Tesl.DB"        "tesl/db.rkt";
   add "Tesl.Time"      "tesl/time.rkt";
   add "Tesl.Random"    "tesl/random.rkt";
   add "Tesl.Uuid"      "tesl/uuid.rkt";
-  add "Tesl.Crypto"    "tesl/crypto.rkt";
   add "Tesl.Set"       "tesl/set.rkt";
-  add "Tesl.Map"       "tesl/map.rkt";
   add "Tesl.Env"       "tesl/env.rkt";
   add "Tesl.Telemetry" "tesl/telemetry.rkt";
   add "Tesl.ApiTest"   "tesl/api-test.rkt";
   add "Tesl.Tuple"     "tesl/tuple.rkt";
   add "Tesl.Id"        "tesl/id.rkt";
   add "Tesl.Queue"     "tesl/queue.rkt";
-  add "Tesl.Channel"   "tesl/channel.rkt";
-  add "Tesl.Sql"       "tesl/sql.rkt";
   add "Tesl.Sse"       "tesl/sse.rkt";
   add "Tesl.SSE"       "tesl/sse.rkt";
   add "Tesl.Database"  "tesl/db.rkt";
@@ -3840,6 +3837,40 @@ let collect_qualified_uses_for_module short_name (m : module_form) : string list
   ) m.decls;
   Hashtbl.fold (fun k () acc -> k :: acc) seen []
 
+(** Import names that are compile-time only: config-block types consumed by the
+    desugar pass, forms lowered inline by the emitter (`asTool`/`serverTools`,
+    the TimeZone constructors).  They never appear in emitted Racket, so
+    importing them must NOT emit a `require` binding — the runtime modules do
+    not (and must not) provide them.  Single source: [emit_requires] filters
+    imports through this list, and test_stdlib_runtime_binding.ml excludes the
+    same list when asserting every remaining importable name has a real
+    runtime `provide`. *)
+let config_only_import_names : string list =
+  [ "Database"; "DatabaseBackend"; "Postgres"; "Memory"; "PostgresConfig";
+    "PostgresConnection"; "TcpConnection"; "SocketConnection";
+    "Queue"; "QueueRetryStrategy"; "QueueRetryConfig"; "QueueRetryBackoff";
+    "Exponential"; "Fixed"; "Linear";
+    "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job"; "Cache";
+    (* `asTool fn` is a compile-time form: it lowers to `__tart_tool …`
+       (schema derived from the fn's types) and has no runtime binding.
+       `serverTools S user` likewise lowers to `__tst_server-tools …`
+       (per-endpoint metadata derived at compile time). *)
+    "asTool"; "serverTools";
+    (* Cache and Email surface forms are parser-rewritten, never runtime vars:
+       `cache` is the config-block keyword (DCache); `Cache.get/set/delete/
+       invalidate NAME (k)` parse to ECache* nodes; `Email.send NAME to: …`
+       parses to ESendEmail; `startEmailWorker` is a statement keyword
+       (EStartEmailWorker); `EmailBody` is type-only (its TextBody/HtmlBody/
+       RichBody constructors ARE runtime values and stay required).
+       2026-07-07: importing any of these typechecked then crashed the
+       generated module at load ("identifier not included in nested require
+       spec") — found by test_stdlib_runtime_binding.ml. *)
+    "cache"; "Cache.get"; "Cache.set"; "Cache.delete"; "Cache.invalidate";
+    "EmailBody"; "Email.send"; "startEmailWorker";
+    (* the TimeZone ADT lowers inline to the __ttz_ constructors *)
+    "TimeZone"; "Utc"; "FixedOffset" ]
+  @ Tz_zones.ctor_names
+
 let emit_requires ctx (m : module_form) =
   let lazy_local_imports : (string * (string * string) list) list ref = ref [] in
   let needs_runtime_path =
@@ -4037,25 +4068,10 @@ let emit_requires ctx (m : module_form) =
         else
           expand_local_import_names m.source_file imp.module_name names
       in
-      (* Config-block types (database/queue/email/sse) are compile-time only:
-         the desugar pass consumes the config record literal and they never
-         appear in emitted Racket, so importing them must NOT emit a `require`
-         for runtime bindings that don't exist. *)
-      let config_only_names =
-        [ "Database"; "DatabaseBackend"; "Postgres"; "Memory"; "PostgresConfig";
-          "PostgresConnection"; "TcpConnection"; "SocketConnection";
-          "Queue"; "QueueRetryStrategy"; "QueueRetryConfig"; "QueueRetryBackoff";
-          "Exponential"; "Fixed"; "Linear";
-          "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job"; "Cache";
-          (* `asTool fn` is a compile-time form: it lowers to `__tart_tool …`
-             (schema derived from the fn's types) and has no runtime binding.
-             `serverTools S user` likewise lowers to `__tst_server-tools …`
-             (per-endpoint metadata derived at compile time). *)
-          "asTool"; "serverTools";
-          (* the TimeZone ADT lowers inline to the __ttz_ constructors *)
-          "TimeZone"; "Utc"; "FixedOffset" ]
-        @ Tz_zones.ctor_names in
-      let expanded = List.filter (fun n -> not (List.mem n config_only_names)) expanded in
+      (* Config-block types (database/queue/email/sse) and inline-lowered forms
+         are compile-time only — see {!config_only_import_names}. *)
+      let expanded =
+        List.filter (fun n -> not (List.mem n config_only_import_names)) expanded in
       let qualified = List.filter (fun n -> String.contains n '.') expanded in
       let plain = List.filter (fun n -> not (String.contains n '.')) expanded in
       (* Register plain names from Tesl stdlib modules as stdlib functions *)

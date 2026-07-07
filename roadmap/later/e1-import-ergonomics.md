@@ -25,18 +25,8 @@ TS/C#/Java developer.
   formatter/linter, careful with multi-line `exposing` lists — `reflow_exposing_lists`
   already handles their layout).
 - **(c) Both.**
+- **(d) Give guiding error messages and LSP autoactions** to keep the explicitness but make it easier to work with.
 
-## Why deferred
-Not a soundness item, and not a bounded fix: (a) is a name-resolution semantics change
-touching the checker + every example; (b) is a new `--fix` codepath. Both warrant a
-deliberate decision on scope/opt-out before implementation. The rest of the review's
-tooling follow-ups (T1 occurrences-line-0, T2 fmt→lint fixpoint, T3 JSON-shape docs,
-E2 codec over-teaching, E3 docs single-line-if + block-aware lint) shipped 2026-07-04.
+## Decision
 
-## When picked up
-Decide (a) vs (b) vs (c) with the maintainer. If (b): add a `--lint --fix` (or a
-`--fmt` pass) that prunes W050 imports and adds unbound-primitive imports, reusing
-`reflow_exposing_lists` for layout; guard with a test that an over-broad import list
-fmt-fixes to the minimal set. If (a): seed the implicit primitives in the checker's
-base env, exempt them from the import-scope + W050 checks, and re-baseline the example
-corpus's import lists.
+We will go with option d. The import help should not only be for standard libs but be smart and check other files in the foldertree.
