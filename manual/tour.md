@@ -320,6 +320,34 @@ the ceremony.
 timestamp is expected. It auto-maps to `BIGINT` in PostgreSQL with no annotation, and `Date.now()` on
 the frontend reads it directly — no conversion layer, no timezone surprises.
 
+**Grouped aggregates and time bucketing.** `selectCount`/`selectSum`/`selectMax`/`selectMin` return
+one scalar; `selectCountBy`/`selectSumBy … groupBy <key>` return **one row per group** as a
+`List (Tuple2 key aggregate)`, ordered by key — the server-side series a chart wants.
+`Time.truncHour/Day/Week/Month/Year zone ts` give the calendar bucket (ISO Monday weeks) both as
+the `groupBy` key and as a plain function for computing range bounds. `TimeZone` is a **fixed
+ADT**: `Utc`, `FixedOffset minutes`, or one of the 489 baked IANA zone constructors
+(`EuropeStockholm`, `AmericaNewYork`, …) — a typo is a compile error, completion lists every zone,
+and zone constructors are **DST-correct per instant**, so nobody tracks summer/winter time by hand:
+
+```tesl
+# per-day minutes for one org, in the org's zone — one (dayStart, sum) row per day,
+# correct across DST transitions
+selectSumBy e.minutes from Entry
+  where e.orgId == orgId
+  groupBy (Time.truncDay EuropeStockholm e.startedAt)   # List (Tuple2 PosixMillis Int)
+
+# "revenue today" needs no SQL bucketing: trunc client-side, range where (index-friendly)
+let dayStart = Time.truncDay EuropeStockholm (nowMillis())
+selectSum s.price from Sale where s.soldAt >= dayStart
+
+Time.offsetAt EuropeStockholm (nowMillis())   # the offset right now, if you need it
+```
+
+The bucket is computed in the database (integer arithmetic for fixed offsets, PostgreSQL's own
+tzdata via `AT TIME ZONE` for zone keys — the column stays BIGINT millis, the key stays
+`PosixMillis`) and the Memory test backend uses the same reference engine, parity-tested against
+PostgreSQL per zone and unit.
+
 ### Schema and migrations
 
 Tesl derives the database schema directly from your `entity` and `database` declarations. On first
@@ -437,6 +465,31 @@ agent SupportAgent requires [supportAi] = Agent {
 # one-shot, or a full multi-turn conversation you persist yourself:
 let answer = ask SupportAgent "Where is order ord-42?"
 ```
+
+**Your whole API as tools, preauthenticated (`serverTools`).** Instead of listing tools one by one,
+give an agent every endpoint of a server in one expression — partially applied with the
+proof-carrying authenticated user, so the agent acts strictly on the user's behalf (the tools ARE
+your endpoint handlers; every ownership check in them runs unchanged, and there is no session
+forwarding or token minting):
+
+```tesl
+handler assistant(user: User ::: Authenticated user, q: Question) -> String
+  requires [todoWebService, supportAi] =
+  let agent = Agent {
+    provider: anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
+    systemPrompt: "You act on the user's todos via the provided tools."
+    maxTokens: 512
+    tools: List.append (serverTools TodoServer user) [asTool internalHelper]
+  }
+  ask agent q.text
+```
+
+Which endpoints become tools is decided per call site from the user's declared proof: a
+`u ::: Authenticated u` user gets the plainly-authenticated endpoints, a
+`u ::: Authenticated u && Admin u` user additionally gets the admin-gated ones. Tool names,
+descriptions (handler doc-comments), and JSON schemas are derived; tool arguments run the endpoint's
+own boundary validation (capture checks, body codecs). See LANGUAGE-SPEC §11.1 and
+[lesson68](../example/learn/lesson68-server-endpoints-as-tools.tesl).
 
 For a chat UI, `converseStreaming conv message publish` runs a turn and calls `publish` with each
 event as it happens — `tool: <name>` as a tool is dispatched, `text-delta: <part>` for each token of

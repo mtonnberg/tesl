@@ -687,6 +687,15 @@ type sql_select_kind =
   | SelectSum of string
   | SelectMax of string
   | SelectMin of string
+  | SelectCountBy                (* grouped: List (Tuple2 K Int), GitHub #29 *)
+  | SelectSumBy of string        (* grouped: List (Tuple2 K V) over the field *)
+
+(* A `groupBy` bucket key (GitHub #29).  Fail-closed structural surface: a bare
+   binder field, or one of the five Time.trunc* calendar buckets applied to a
+   PosixMillis field (unit, offset-minutes expression, field). *)
+type sql_group_key =
+  | GField of string
+  | GTimeTrunc of string * expr * string
 
 type sql_select_seed = {
   kind : sql_select_kind;
@@ -697,9 +706,18 @@ type sql_select_seed = {
   limit : int option;
   offset : int option;
   static_clauses : sql_clause list;
-  group_by : string list;
+  group_by : sql_group_key list;
   joins : sql_join list;
 }
+
+(* Time.trunc* head → the runtime bucket unit symbol. *)
+let trunc_unit_of_name = function
+  | "truncHour" -> Some "hour"
+  | "truncDay" -> Some "day"
+  | "truncWeek" -> Some "week"
+  | "truncMonth" -> Some "month"
+  | "truncYear" -> Some "year"
+  | _ -> None
 
 type sql_insert = {
   entity : string;
@@ -808,9 +826,22 @@ let rec parse_select_tail binder where_field order limit offset group_by static_
     (match int_literal_value offset_expr with
      | Some n -> parse_select_tail binder where_field order limit (Some n) group_by static_clauses joins rest
      | None -> None)
-  | EVar { name = "groupBy"; _ } :: field_expr :: rest ->
-    (match field_name_for_binder binder field_expr with
-     | Some field -> parse_select_tail binder where_field order limit offset (group_by @ [field]) static_clauses joins rest
+  | EVar { name = "groupBy"; _ } :: key_expr :: rest ->
+    let key =
+      match field_name_for_binder binder key_expr with
+      | Some field -> Some (GField field)
+      | None ->
+        (* Time.truncX offsetExpr binder.field — the calendar bucket key. *)
+        (match flatten_app_expr [] key_expr with
+         | EField { obj = (EConstructor { name = "Time"; args = []; _ } | EVar { name = "Time"; _ });
+                    field = trunc_name; _ }, [off_expr; field_expr] ->
+           (match trunc_unit_of_name trunc_name, field_name_for_binder binder field_expr with
+            | Some unit, Some field -> Some (GTimeTrunc (unit, off_expr, field))
+            | _ -> None)
+         | _ -> None)
+    in
+    (match key with
+     | Some key -> parse_select_tail binder where_field order limit offset (group_by @ [key]) static_clauses joins rest
      | None -> None)
   (* innerJoin EntityName on binder.mainField EntityName.joinField *)
   | EVar { name = "innerJoin"; _ } :: join_entity_expr :: EVar { name = "on"; _ } :: main_field_expr :: join_field_expr :: rest ->
@@ -873,6 +904,8 @@ let parse_select_seed e =
   | EVar { name = "selectSum"; _ }, args -> parse_sum args
   | EVar { name = "selectMax"; _ }, args -> parse_minmax (fun f -> SelectMax f) args
   | EVar { name = "selectMin"; _ }, args -> parse_minmax (fun f -> SelectMin f) args
+  | EVar { name = "selectCountBy"; _ }, args -> parse_plain SelectCountBy args
+  | EVar { name = "selectSumBy"; _ }, args -> parse_minmax (fun f -> SelectSumBy f) args
   | _ -> None
 
 let parse_insert_expr e =
@@ -1457,6 +1490,18 @@ let rec emit_expr ctx e =
   in
   let emit_sql_select (seed : sql_select_seed) clauses =
     let all_clauses = seed.static_clauses @ clauses in
+    (* GitHub #29: the grouped forms take the bucket key as their FIRST runtime
+       argument; the key's offset expression is an ordinary Tesl expression
+       (bound as a SQL parameter by the runtime). *)
+    let emit_group_key (k : sql_group_key) =
+      match k with
+      | GField f ->
+        emit ctx (Printf.sprintf "(sql-group-key 'field 0 (entity-field-ref %s '%s))" seed.entity f)
+      | GTimeTrunc (unit, off, f) ->
+        emit ctx (Printf.sprintf "(sql-group-key '%s " unit);
+        emit_raw_value ctx off;
+        emit ctx (Printf.sprintf " (entity-field-ref %s '%s))" seed.entity f)
+    in
     let emit_core () =
       (match seed.kind with
        | SelectMany | SelectOne ->
@@ -1470,7 +1515,27 @@ let rec emit_expr ctx e =
        | SelectMax field ->
          emit ctx (Printf.sprintf "(select-max (entity-field-ref %s '%s) (from %s)" seed.entity field seed.entity)
        | SelectMin field ->
-         emit ctx (Printf.sprintf "(select-min (entity-field-ref %s '%s) (from %s)" seed.entity field seed.entity));
+         emit ctx (Printf.sprintf "(select-min (entity-field-ref %s '%s) (from %s)" seed.entity field seed.entity)
+       | SelectCountBy ->
+         (match seed.group_by with
+          | [key] ->
+            emit ctx "(select-count-by ";
+            emit_group_key key;
+            emit ctx (Printf.sprintf " (from %s)" seed.entity)
+          | _ ->
+            failwith "emit_racket: selectCountBy requires exactly one groupBy \
+                      clause — the checker should have rejected this; please \
+                      report this bug.")
+       | SelectSumBy field ->
+         (match seed.group_by with
+          | [key] ->
+            emit ctx "(select-sum-by ";
+            emit_group_key key;
+            emit ctx (Printf.sprintf " (entity-field-ref %s '%s) (from %s)" seed.entity field seed.entity)
+          | _ ->
+            failwith "emit_racket: selectSumBy requires exactly one groupBy \
+                      clause — the checker should have rejected this; please \
+                      report this bug."));
       emit_sql_where_clauses seed.entity all_clauses;
       List.iter (fun (j : sql_join) ->
         emit ctx (Printf.sprintf " (inner-join %s (entity-field-ref %s '%s) (entity-field-ref %s '%s))"
@@ -1488,15 +1553,19 @@ let rec emit_expr ctx e =
          (match seed.offset with
           | Some n -> emit ctx (Printf.sprintf " (offset %d)" n)
           | None -> ())
-       | SelectCount | SelectSum _ | SelectMax _ | SelectMin _ -> ());
-      (match seed.group_by with
-       | [] -> ()
-       | fields ->
-         emit ctx " (group-by";
-         List.iter (fun f ->
-           emit ctx (Printf.sprintf " (entity-field-ref %s '%s)" seed.entity f)
-         ) fields;
-         emit ctx ")");
+       | SelectCount | SelectSum _ | SelectMax _ | SelectMin _
+       | SelectCountBy | SelectSumBy _ -> ());
+      (* Legacy `groupBy` on the non-grouped forms is a COMPILE ERROR now
+         (GitHub #29 fail-closed sweep); the grouped forms consume the key
+         above.  Nothing is ever silently dropped again — reaching here with a
+         leftover key is a compiler bug. *)
+      (match seed.kind, seed.group_by with
+       | (SelectCountBy | SelectSumBy _), _ -> ()
+       | _, [] -> ()
+       | _, _ :: _ ->
+         failwith "emit_racket: `groupBy` on a non-grouped select form — the \
+                   checker should have rejected this (use selectCountBy / \
+                   selectSumBy); please report this bug.");
       emit ctx ")"
     in
     match seed.kind with
@@ -1504,7 +1573,8 @@ let rec emit_expr ctx e =
       emit ctx "(let ([tesl_match ";
       emit_core ();
       emit ctx "]) (if tesl_match (Something tesl_match) Nothing))"
-    | SelectMany | SelectCount | SelectSum _ | SelectMax _ | SelectMin _ ->
+    | SelectMany | SelectCount | SelectSum _ | SelectMax _ | SelectMin _
+    | SelectCountBy | SelectSumBy _ ->
       emit_core ()
   in
   let emit_sql_insert (insert : sql_insert) =
@@ -1800,6 +1870,20 @@ let rec emit_expr ctx e =
        ) other_fields;
        emit ctx "))"
      | None -> emit ctx "()"  (* should not happen *))
+  (* TimeZone ADT (fixed set): `Utc`, `FixedOffset n`, and one constructor per
+     baked IANA zone (compiler/lib/tz_zones.ml) — lowered inline to the runtime
+     tesl-tz constructors; the zone name string never appears in Tesl source
+     (a typo is an unknown-constructor compile error). *)
+  | EConstructor { name = "Utc"; args = []; _ } ->
+    emit ctx "(__ttz_tesl-tz-utc)"
+  | EConstructor { name; args = []; _ } when Tz_zones.iana_of_ctor name <> None ->
+    (match Tz_zones.iana_of_ctor name with
+     | Some iana -> emit ctx (Printf.sprintf "(__ttz_tesl-tz-named %S)" iana)
+     | None -> failwith "emit_racket: tz ctor guard invariant — please report this bug")
+  | EApp { fn = EConstructor { name = "FixedOffset"; args = []; _ }; arg; _ } ->
+    emit ctx "(__ttz_tesl-tz-fixed ";
+    emit_raw_value ctx arg;
+    emit ctx ")"
   (* Agent { provider, systemPrompt, maxTokens, tools } — the agent constructor,
      usable as a top-level `agent X = Agent { … }` block AND as a plain expression
      (e.g. a per-request BYOK agent). Lowers to the runtime defineAgent + withTools
@@ -2903,9 +2987,15 @@ and emit_expr_simple ctx e =
       | EVar { name = "serverTools"; _ }, _ -> true
       | _ -> false
     in
+    (* FixedOffset lowers inline to (__ttz_tesl-tz-fixed …) — same reason. *)
+    let is_fixed_offset = match app with
+      | EApp { fn = EConstructor { name = "FixedOffset"; args = []; _ }; _ } -> true
+      | _ -> false
+    in
     if is_typename_record
        || is_tool_from
        || is_server_tools
+       || is_fixed_offset
        || (match extract_select_query app with Some _ -> true | None -> false)
        || (match parse_insert_expr app with Some _ -> true | None -> false)
        || (match parse_insert_many_expr app with Some _ -> true | None -> false)
@@ -3835,6 +3925,28 @@ let emit_requires ctx (m : module_form) =
   in
   if uses_server_tools then
     emit_line ctx "  (prefix-in __tst_ (only-in tesl/tesl/server-tools server-tools))";
+  (* TimeZone constructors lower to the tesl-tz runtime builders. *)
+  let uses_timezone =
+    let found = ref false in
+    let rec walk (e : Ast.expr) : unit =
+      (match e with
+       | Ast.EConstructor { name; _ }
+         when name = "Utc" || name = "FixedOffset"
+              || Tz_zones.iana_of_ctor name <> None ->
+         found := true
+       | _ -> ());
+      Ast_visitor.fold_children (fun () c -> walk c) () e
+    in
+    List.iter (function
+      | Ast.DFunc (fd : Ast.func_decl) -> walk fd.body
+      | Ast.DConst (c : Ast.const_form) -> walk c.value
+      | Ast.DTest (tf : Ast.test_form) ->
+        List.iter (fun st -> List.iter walk (Ast.test_stmt_exprs st)) tf.stmts
+      | _ -> ()) m.decls;
+    !found
+  in
+  if uses_timezone then
+    emit_line ctx "  (prefix-in __ttz_ (only-in tesl/tesl/time tesl-tz-utc tesl-tz-fixed tesl-tz-named))";
   if needs_runtime_path then
     emit_line ctx "  racket/runtime-path";
 
@@ -3939,7 +4051,10 @@ let emit_requires ctx (m : module_form) =
              (schema derived from the fn's types) and has no runtime binding.
              `serverTools S user` likewise lowers to `__tst_server-tools …`
              (per-endpoint metadata derived at compile time). *)
-          "asTool"; "serverTools" ] in
+          "asTool"; "serverTools";
+          (* the TimeZone ADT lowers inline to the __ttz_ constructors *)
+          "TimeZone"; "Utc"; "FixedOffset" ]
+        @ Tz_zones.ctor_names in
       let expanded = List.filter (fun n -> not (List.mem n config_only_names)) expanded in
       let qualified = List.filter (fun n -> String.contains n '.') expanded in
       let plain = List.filter (fun n -> not (String.contains n '.')) expanded in
@@ -4215,8 +4330,10 @@ let emit_func ctx (fd : func_decl) =
          let is_upper = String.length name > 0 && name.[0] >= 'A' && name.[0] <= 'Z' in
          let is_sql_runtime = match name with
            | "select" | "selectOne" | "selectCount" | "selectSum"
+           | "selectCountBy" | "selectSumBy"
            | "insert" | "update" | "delete" | "where" | "set" | "returning"
            | "select-one" | "select-many" | "select-count" | "select-sum"
+           | "select-count-by" | "select-sum-by"
            | "insert-one!" | "update-many!" | "delete-many!" -> true
            | _ -> false
          in
@@ -4964,7 +5081,8 @@ let emit_func ctx (fd : func_decl) =
          (match extract_select_query value with
           | Some (seed, _) ->
             (match seed.kind with
-             | SelectSum _ | SelectCount | SelectMax _ | SelectMin _ ->
+             | SelectSum _ | SelectCount | SelectMax _ | SelectMin _
+             | SelectCountBy | SelectSumBy _ ->
                if name <> "_" then acc := name :: !acc
              | _ -> ())
           | None -> ());

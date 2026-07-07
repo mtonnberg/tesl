@@ -1487,6 +1487,21 @@ let resolve_constructor_type ctx name loc =
           if ctx.in_establish then ProofPredicateConstructor
           else KnownConstructor (fresh ())))
 
+(* GitHub #29: the flattened "spine" atoms of a query expression — the select
+   head, binder/field/entity/keyword atoms, and any modifier atoms the parser
+   merged onto an outer where-EBinop (order/limit/groupBy/...).  Comparison
+   VALUE operands (the right side of a where) are not spine atoms. *)
+let rec query_spine_atoms e =
+  match e with
+  | EBinop { op = (BEq | BNeq | BLt | BLe | BGt | BGe | BAnd | BOr | BAdd); left; _ } ->
+    query_spine_atoms left
+  | EApp _ ->
+    let (base, args) = flatten_app_expr [] e in
+    (match base with
+     | EBinop _ -> query_spine_atoms base @ args
+     | _ -> base :: args)
+  | other -> [other]
+
 let rec classify_lowered_query e =
   match e with
   | EBinop { op = (BEq | BNeq | BLt | BLe | BGt | BGe); left; _ } ->
@@ -1504,6 +1519,10 @@ let rec classify_lowered_query e =
     | EVar { name = "selectSum"; _ }
     | EVar { name = "selectMax"; _ }
     | EVar { name = "selectMin"; _ } -> Some t_int  (* field type refined in infer_expr *)
+    | EVar { name = ("selectCountBy" | "selectSumBy"); _ } ->
+      (* grouped aggregates (GitHub #29): List (Tuple2 K V); K/V are refined by
+         [grouped_query_type] at the infer sites (needs ctx + the FULL expr) *)
+      Some (t_list (t_tuple2 (fresh ()) (fresh ())))
     | EVar { name = "update"; _ } when args <> [] && (match List.hd args with EConstructor _ | EVar _ -> true | _ -> false) -> Some t_unit
     | EVar { name = "updateAndReturnOne"; _ } -> Some (fresh ())
     | EVar { name = "delete"; _ } when args <> [] && (match List.hd args with EConstructor _ | EVar _ -> true | _ -> false) -> Some t_unit
@@ -1655,6 +1674,62 @@ let normalized_preds_of_proof (subject : string) (p : proof_expr)
   List.sort_uniq compare (go [] p)
 
 let rec infer_expr ctx (e : expr) : ty =
+  (* GitHub #29: type a grouped aggregate (selectCountBy / selectSumBy) from
+     the FULL query expression: List (Tuple2 K V) where K is the groupBy key
+     type (a declared column's type, or PosixMillis for a Time.trunc* bucket —
+     whose offset expression is inferred against Int here) and V is Int for
+     count / the summed column's declared type for sum.  Shape/field
+     completeness rules live in Validation_advanced; this is only typing.
+     Decide-by-resolution: stands down when the head is user-defined. *)
+  let grouped_query_type full =
+    match query_spine_atoms full with
+    | EVar { name = ("selectCountBy" | "selectSumBy" as head); _ } :: atoms
+      when lookup_name ctx head = None ->
+      let entity_opt = List.find_map (function
+        | EConstructor { name; _ } -> Some name
+        | _ -> None) atoms in
+      let field_ty_of field =
+        match entity_opt with
+        | Some en ->
+          (match List.assoc_opt en ctx.records with
+           | Some rd ->
+             (match List.assoc_opt field rd.rd_fields with
+              | Some ty -> ty
+              | None -> fresh ())
+           | None -> fresh ())
+        | None -> fresh ()
+      in
+      let rec find_key = function
+        | EVar { name = "groupBy"; _ } :: key :: _ -> Some key
+        | _ :: rest -> find_key rest
+        | [] -> None
+      in
+      let key_ty =
+        match find_key atoms with
+        | Some (EField { field; _ }) -> field_ty_of field
+        | Some key ->
+          (match flatten_app_expr [] key with
+           | EField { obj = (EConstructor { name = "Time"; args = []; _ }
+                            | EVar { name = "Time"; _ });
+                      field = ("truncHour" | "truncDay" | "truncWeek"
+                              | "truncMonth" | "truncYear"); _ },
+             [off; _field] ->
+             let off_ty = infer_expr ctx off in
+             unify_at ctx (expr_loc off) off_ty t_timezone;
+             t_posix
+           | _ -> fresh ())
+        | None -> fresh ()
+      in
+      let value_ty =
+        if head = "selectCountBy" then t_int
+        else
+          (match atoms with
+           | EField { field; _ } :: _ -> field_ty_of field
+           | _ -> t_int)
+      in
+      Some (t_list (t_tuple2 key_ty value_ty))
+    | _ -> None
+  in
   let inferred = match e with
 
   | ELit { lit = LInterp segs; loc = _ } ->
@@ -2111,7 +2186,10 @@ let rec infer_expr ctx (e : expr) : ty =
            that may have order/limit/etc. modifier args appended after merge.
            If so, use the SQL type classifier to infer the return type.
            Otherwise fall through to the check-chain logic. *)
-        (match classify_lowered_query base_fn with
+        (match grouped_query_type app with
+         | Some ty -> record_sql_operand_field_accesses ctx base_fn; ty
+         | None ->
+        match classify_lowered_query base_fn with
          | Some ty -> record_sql_operand_field_accesses ctx base_fn; ty
          | None ->
            let check_fns = flatten_check_chain_expr [] base_fn in
@@ -2132,7 +2210,8 @@ let rec infer_expr ctx (e : expr) : ty =
         `delete`, `upsert` must be type-checked as normal function calls when they appear
         in ctx.env (user-defined). Only treat them as SQL operations when NOT user-defined. *)
      | EVar { name = ("select" | "selectOne" | "selectCount" | "selectSum" | "selectMax"
-                     | "selectMin" | "insert" | "update" | "delete" | "upsert" as name); _ }
+                     | "selectMin" | "selectCountBy" | "selectSumBy"
+                     | "insert" | "update" | "delete" | "upsert" as name); _ }
        when lookup_name ctx name <> None ->
         infer_direct_call base_fn args
      | EVar { name = "selectOne"; _ } ->
@@ -2145,6 +2224,10 @@ let rec infer_expr ctx (e : expr) : ty =
      | EVar { name = "selectMax"; _ }
      | EVar { name = "selectMin"; _ } ->
         select_aggregate_field_type ctx args
+     | EVar { name = ("selectCountBy" | "selectSumBy"); _ } ->
+        (match grouped_query_type app with
+         | Some ty -> ty
+         | None -> t_list (t_tuple2 (fresh ()) (fresh ())))
      | EVar { name = "insert"; _ }
      | EVar { name = "insertMany"; _ } ->
         (* NT-07 width-match: an inserted entity record must match its declared
@@ -2186,7 +2269,10 @@ let rec infer_expr ctx (e : expr) : ty =
         (* Multi-line SQL: SQL modifier clauses (order, limit, offset, groupBy, etc.)
            are merged by the parser as EApp args onto a where-EBinop.
            Classify the underlying select expression to infer the return type. *)
-        (match classify_lowered_query base_fn with
+        (match grouped_query_type app with
+         | Some ty -> record_sql_operand_field_accesses ctx base_fn; ty
+         | None ->
+         match classify_lowered_query base_fn with
          | Some ty -> record_sql_operand_field_accesses ctx base_fn; ty
          | None -> infer_direct_call base_fn args)
      | EConstructor { name; _ }
@@ -2227,7 +2313,10 @@ let rec infer_expr ctx (e : expr) : ty =
      | _ ->
         infer_direct_call base_fn args)
   | EBinop _ as binop ->
-    (match classify_lowered_query binop with
+    (match grouped_query_type binop with
+     | Some ty -> record_sql_operand_field_accesses ctx binop; ty
+     | None ->
+    match classify_lowered_query binop with
      | Some ty -> record_sql_operand_field_accesses ctx binop; ty
      | None ->
        let rec infer_check_chain_value = function
@@ -3236,7 +3325,7 @@ use the `Tuple3 a b c` constructor instead";
   | EApp _ as app ->
     let base_fn, args = flatten_app_expr [] app in
     (match base_fn with
-     | EVar { name = "initTelemetry" | "check" | "make-witness" | "selectOne" | "select" | "selectCount" | "selectSum" | "selectMax" | "selectMin" | "insert" | "insertMany" | "upsert" | "update" | "updateAndReturnOne" | "returning" | "where" | "set" | "onConflict" | "doUpdate" | "delete" | "deleteAndReturnResult" | "one" | "#record-update#"; _ } ->
+     | EVar { name = "initTelemetry" | "check" | "make-witness" | "selectOne" | "select" | "selectCount" | "selectSum" | "selectMax" | "selectMin" | "selectCountBy" | "selectSumBy" | "insert" | "insertMany" | "upsert" | "update" | "updateAndReturnOne" | "returning" | "where" | "set" | "onConflict" | "doUpdate" | "delete" | "deleteAndReturnResult" | "one" | "#record-update#"; _ } ->
        fallback ()
      | EVar { name = "serverTools"; _ } when not ctx.server_tools_shadowed ->
        (* serverTools is typed structurally by its infer_expr arms (a server
@@ -4217,6 +4306,7 @@ let check_api_test_scope ctx (m : module_form) seed_stmts stmts =
     "ms"; "s"; "rps";
     (* DB/SQL DSL keywords *)
     "select"; "selectOne"; "selectCount"; "selectSum"; "selectMax"; "selectMin";
+    "selectCountBy"; "selectSumBy";
     "insert"; "insertMany"; "upsert"; "onConflict"; "doUpdate";
     "update"; "updateAndReturnOne";
     "delete"; "deleteAndReturnResult";

@@ -40,6 +40,7 @@ let t_bool    = TCon "Bool"
 let t_float   = TCon "Float"
 let t_unit    = TCon "Unit"
 let t_posix   = TCon "PosixMillis"
+let t_timezone = TCon "TimeZone"
 let t_fact    = TCon "Fact"
 let t_delete_result = TCon "DeleteResult"
 let t_jwt_token  = TCon "JwtToken"
@@ -465,6 +466,23 @@ let stdlib_env : (string * scheme) list = [
   "addMs",         mono (t_fun [t_posix; t_int] t_posix);
   "diffMs",        mono (t_fun [t_posix; t_posix] t_int);
   "subtractMs",    mono (t_fun [t_posix; t_int] t_posix);
+  (* Calendar truncation (GitHub #29): bucket-start instant for the wall clock
+     in a TimeZone (a FIXED ADT — `Utc`, `FixedOffset minutes`, or one of the
+     baked IANA zone constructors like `EuropeStockholm`, which are DST-correct
+     per instant).  Pure functions — and the only PosixMillis operations the
+     query DSL accepts as a `groupBy` bucket key. *)
+  "Time.truncHour",  mono (t_fun [t_timezone; t_posix] t_posix);
+  "Time.truncDay",   mono (t_fun [t_timezone; t_posix] t_posix);
+  "Time.truncWeek",  mono (t_fun [t_timezone; t_posix] t_posix);
+  "Time.truncMonth", mono (t_fun [t_timezone; t_posix] t_posix);
+  "Time.truncYear",  mono (t_fun [t_timezone; t_posix] t_posix);
+  (* the zone's UTC offset in minutes AT an instant (DST-correct) *)
+  "Time.offsetAt",   mono (t_fun [t_timezone; t_posix] t_int);
+  (* TimeZone constructors: Utc, FixedOffset, + one per baked IANA zone
+     (appended below from the generated Tz_zones table — a typo'd zone is a
+     compile error and completion lists every zone). *)
+  "Utc",             mono t_timezone;
+  "FixedOffset",     mono (t_fun [t_int] t_timezone);
 
   (* ── Either ─────────────────────────────────────────────────────────── *)
   (* The two ADT CONSTRUCTORS stay here (they are leaves).  The 10 pure Either
@@ -650,6 +668,8 @@ let stdlib_env : (string * scheme) list = [
   "const",   { vars = _r2_ab; mono = t_fun [_a; _b] _a };
   "print",   { vars = _r1_a; mono = t_fun [_a] t_unit };
 ]
+(* the 312 baked IANA zone constructors, each : TimeZone *)
+@ List.map (fun c -> (c, mono t_timezone)) Tz_zones.ctor_names
 
 (** Build an initial type environment from the stdlib list. *)
 let make_stdlib_env () : (string * scheme) list =
@@ -819,7 +839,11 @@ let tesl_module_exports : (string * string list) list = [
   ( "Tesl.Time",
     [ "PosixMillis"; "nowMillis"; "time"; "formatTime"; "durationMs";
       "addMs"; "subtractMs"; "diffMs";
-      "Time.posixToSeconds"; "Time.secondsToPosix" ] );
+      "Time.posixToSeconds"; "Time.secondsToPosix";
+      "Time.truncHour"; "Time.truncDay"; "Time.truncWeek";
+      "Time.truncMonth"; "Time.truncYear"; "Time.offsetAt";
+      "TimeZone"; "Utc"; "FixedOffset" ]
+    @ Tz_zones.ctor_names );
   ( "Tesl.Random",
     [ "randomInt"; "randomFloat"; "random" ] );
   ( "Tesl.UUID",

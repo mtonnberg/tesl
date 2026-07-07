@@ -18,6 +18,12 @@
          (only-in "../tesl/logging.rkt"
                   tesl-log-active?
                   tesl-log-sql!)
+         ;; Grouped aggregates (GitHub #29): rows are Tuple2 values, and the
+         ;; Memory backend buckets through the SAME calendar engine the emitted
+         ;; PostgreSQL expressions are tested against.
+         (only-in "../tesl/tuple.rkt" Tuple2)
+         (only-in "private/time-trunc.rkt"
+                  tesl-time-trunc tesl-tz? tesl-tz-kind tesl-tz-payload)
          (for-syntax racket/base
                      racket/list
                      racket/syntax
@@ -66,6 +72,9 @@
          select-many
          select-count
          select-sum
+         sql-group-key
+         select-count-by
+         select-sum-by
          select-max
          select-min
          row-field-ref
@@ -1774,6 +1783,183 @@
         (if (null? rows) #f
             (apply min (map (lambda (row) (row-field-ref row field 0)) rows))))))
 
+
+
+;; ── Grouped aggregates + calendar bucket keys (GitHub #29) ───────────────────
+;;
+;; `selectCountBy` / `selectSumBy … groupBy <key>` return ONE ROW PER GROUP as a
+;; List of `Tuple2 key aggregate`, ordered by key ascending.  The key is either
+;; a plain column ('field) or a calendar bucket ('hour/'day/'week/'month/'year)
+;; of a PosixMillis column at a fixed UTC offset in minutes.  On PostgreSQL the
+;; bucket is computed server-side: hour/day/week as exact integer floor
+;; arithmetic on the BIGINT millis column, month/year via date_trunc on the
+;; UTC-shifted timestamp — both matching `tesl-time-trunc` (tesl/time.rkt), the
+;; single semantic reference the Memory backend calls directly.
+
+(struct sql-group-key-spec (unit tz field) #:transparent)
+
+;; sql-group-key : unit-symbol × TimeZone (Tesl value; ignored for 'field) × field -> spec
+(define (sql-group-key unit tz field-accessor)
+  (define field (if (field-spec? field-accessor) field-accessor (field-accessor)))
+  (unless (field-spec? field)
+    (raise-user-error 'groupBy "expected a field reference, got ~a" field))
+  (unless (memq unit '(field hour day week month year))
+    (raise-user-error 'groupBy "unknown bucket unit: ~a" unit))
+  (define zone
+    (and (not (eq? unit 'field))
+         (let ([v (raw-value tz)])
+           (unless (tesl-tz? v)
+             (raise-user-error 'groupBy
+                               "Time.trunc* takes a TimeZone (Utc / FixedOffset n / a zone constructor), got ~e" v))
+           v)))
+  (sql-group-key-spec unit zone field))
+
+;; The key's SQL expression (+ its params), given the next free $ index.
+;;
+;; Fixed-offset zones (Utc / FixedOffset): exact integer arithmetic on the
+;; BIGINT millis column — hour/day/week as floor((col + off) / n) * n - off via
+;; the sign-safe modulo `x - (((x % n) + n) % n)` (the week floor shifts by +3
+;; days first: epoch day 0 = Thursday, ISO weeks start Monday); month/year via
+;; date_trunc on the UTC-shifted timestamp.
+;;
+;; Named zones (the TimeZone zone constructors): PostgreSQL's own tzdata does
+;; the DST-correct work — date_trunc('<unit>', ts AT TIME ZONE $z) AT TIME ZONE
+;; $z — mirroring tesl-time-trunc's two-step semantics (the parity suite is the
+;; oracle).  PG's date_trunc('week') is the ISO Monday week, same as the engine.
+(define (group-key-sql key idx)
+  (define col (quote-sql-identifier (field-column-name (sql-group-key-spec-field key)) 'sql))
+  (define unit (sql-group-key-spec-unit key))
+  (define tz (sql-group-key-spec-tz key))
+  (define (fixed-sql off-min)
+    (define off-ms (* off-min 60000))
+    (define p (format "$~a" idx))
+    (define (floor-mult x n) (format "(~a - (((~a % ~a) + ~a) % ~a))" x x n n n))
+    (define x (format "(~a + ~a)" col p))
+    (define text
+      (case unit
+        [(hour) (format "(~a - ~a)" (floor-mult x 3600000) p)]
+        [(day)  (format "(~a - ~a)" (floor-mult x 86400000) p)]
+        [(week)
+         (define shifted (format "(~a + 259200000)" x))
+         (format "((~a - 259200000) - ~a)" (floor-mult shifted 604800000) p)]
+        [(month year)
+         (format "((extract(epoch from date_trunc('~a', to_timestamp((~a)::double precision / 1000.0) at time zone 'UTC'))::bigint * 1000) - ~a)"
+                 unit x p)]))
+    (values text (list off-ms) (add1 idx)))
+  (cond
+    [(eq? unit 'field) (values col '() idx)]
+    [(eq? (tesl-tz-kind tz) 'named)
+     (define p (format "$~a" idx))
+     (values
+      (format "(extract(epoch from (date_trunc('~a', to_timestamp((~a)::double precision / 1000.0) at time zone ~a) at time zone ~a))::bigint * 1000)"
+              unit col p p)
+      (list (tesl-tz-payload tz))
+      (add1 idx))]
+    [(eq? (tesl-tz-kind tz) 'utc) (fixed-sql 0)]
+    [else (fixed-sql (tesl-tz-payload tz))]))
+
+;; Memory backend: the bucket value for one row, decoded through the SAME
+;; field codec the PostgreSQL row path uses (so a PosixMillis bucket comes back
+;; as a PosixMillis newtype on both backends).
+(define (group-key-value key row)
+  (define field (sql-group-key-spec-field key))
+  (define v (row-field-ref row field #f))
+  (case (sql-group-key-spec-unit key)
+    [(field) v]
+    [else
+     (define ms
+       (let loop ([x (unwrap-non-null v)])
+         (if (newtype-value? x) (loop (newtype-value-value x)) x)))
+     (unless (exact-integer? ms)
+       (raise-user-error 'groupBy "Time.trunc* bucket needs a PosixMillis value, got ~e" v))
+     (field-db-value->runtime-value
+      field
+      (tesl-time-trunc (sql-group-key-spec-unit key)
+                       (sql-group-key-spec-tz key)
+                       ms))]))
+
+;; Deterministic key order (ascending), across the runtime key representations.
+(define (group-key<? a b)
+  (define (strip x)
+    (let loop ([v (unwrap-non-null x)])
+      (if (newtype-value? v) (loop (newtype-value-value v)) v)))
+  (define x (strip a))
+  (define y (strip b))
+  (cond
+    [(and (number? x) (number? y)) (< x y)]
+    [(and (string? x) (string? y)) (string<? x y)]
+    [(and (boolean? x) (boolean? y)) (and (not x) y)]
+    [else (string<? (format "~a" x) (format "~a" y))]))
+
+;; Shared Memory-backend grouping: bucket the matching rows, aggregate each
+;; group with [agg-of], return sorted (Tuple2 key agg) rows.
+(define (in-memory-grouped entity predicates key agg-of)
+  (define groups (make-hash))
+  (for ([row (in-list (in-memory-select-many entity predicates))])
+    (hash-update! groups (group-key-value key row) (lambda (l) (cons row l)) '()))
+  (for/list ([k (in-list (sort (hash-keys groups) group-key<?))])
+    (Tuple2 k (agg-of (hash-ref groups k)))))
+
+;; Shared PostgreSQL runner for both grouped forms: SELECT <key>, <agg> ...
+;; GROUP BY 1 ORDER BY 1, decoding the key through the field codec.
+(define (postgres-grouped runtime entity predicates key agg-sql op)
+  (define-values (where-sql wparams next-idx) (compile-where-sql predicates))
+  (define-values (key-sql kparams _next) (group-key-sql key next-idx))
+  (define params (append wparams kparams))
+  (define sql
+    (format "select ~a, ~a from ~a~a group by 1 order by 1"
+            key-sql agg-sql
+            (qualified-table-name (database-runtime-database runtime) entity)
+            where-sql))
+  (when (tesl-log-active?) (tesl-log-sql! sql params))
+  (define rows
+    (with-sql-capture sql params (capture-table-name entity) op
+      (lambda () (apply query-rows (database-runtime-connection runtime) sql params))
+      (lambda (r) (length r))))
+  (define kfield (sql-group-key-spec-field key))
+  (for/list ([row (in-list rows)])
+    (Tuple2 (field-db-value->runtime-value kfield (vector-ref row 0))
+            (let ([v (vector-ref row 1)])
+              (if (exact-integer? v) v (inexact->exact v))))))
+
+;; COUNT(*) per group — List (Tuple2 key Int), ordered by key.
+(define (select-count-by key source . clauses)
+  (require-capabilities! (list db-read))
+  (unless (sql-group-key-spec? key)
+    (raise-user-error 'select-count-by "expected a groupBy key, got ~a" key))
+  (unless (from-clause? source)
+    (raise-user-error 'select-count-by "expected a from clause, got ~a" source))
+  (define entity (from-clause-entity source))
+  (define predicates (query-predicates clauses))
+  (define runtime (database-runtime-for-entity entity))
+  (if runtime
+      (postgres-grouped runtime entity predicates key "count(*)" 'select-count-by)
+      (in-memory-grouped entity predicates key length)))
+
+;; SUM(field) per group — List (Tuple2 key V), ordered by key; empty groups
+;; cannot occur (a group exists because rows matched).
+(define (select-sum-by key field-accessor source . clauses)
+  (require-capabilities! (list db-read))
+  (unless (sql-group-key-spec? key)
+    (raise-user-error 'select-sum-by "expected a groupBy key, got ~a" key))
+  (define field (if (field-spec? field-accessor) field-accessor (field-accessor)))
+  (unless (field-spec? field)
+    (raise-user-error 'select-sum-by "expected a field-spec from a field accessor, got ~a" field))
+  (unless (from-clause? source)
+    (raise-user-error 'select-sum-by "expected a from clause, got ~a" source))
+  (define entity (from-clause-entity source))
+  (define predicates (query-predicates clauses))
+  (define runtime (database-runtime-for-entity entity))
+  (if runtime
+      (postgres-grouped runtime entity predicates key
+                        (format "coalesce(sum(~a), 0)"
+                                (quote-sql-identifier (field-column-name field) 'sql))
+                        'select-sum-by)
+      (in-memory-grouped entity predicates key
+                         (lambda (rows)
+                           (for/sum ([row (in-list rows)])
+                             (define v (row-field-ref row field 0))
+                             (if (number? v) (inexact->exact v) 0))))))
 
 (define (insert-one! entity value)
   (require-capabilities! (list db-write))

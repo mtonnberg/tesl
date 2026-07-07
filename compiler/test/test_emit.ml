@@ -881,13 +881,17 @@ fn getExample() -> Int =
   assert_contains ~name:"pattern emitted" racket "\"%@example.com\""
 
 let test_sql_select_group_by_emitted () =
+  (* GitHub #29: `groupBy` lives on the GROUPED forms only (selectCountBy /
+     selectSumBy — one (key, aggregate) row per group); on plain select it is
+     a compile error and emit fails closed rather than silently dropping it. *)
   let src = {|#lang tesl
 module Foo exposing []
 fn getUsersByRole() -> Int =
-  select u from User groupBy u.role
+  selectCountBy u from User groupBy u.role
 |} in
   let racket = compile_ok src "sql_groupby" in
-  assert_contains ~name:"group-by emitted" racket "group-by";
+  assert_contains ~name:"grouped head emitted" racket "select-count-by";
+  assert_contains ~name:"group key emitted" racket "(sql-group-key 'field";
   assert_contains ~name:"role field ref emitted" racket "'role"
 
 let test_sql_inner_join_emitted () =

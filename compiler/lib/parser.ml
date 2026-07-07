@@ -2518,7 +2518,8 @@ and is_select_expr e =
     | other -> other
   in
   match head e with
-  | EVar { name = "select" | "selectOne" | "selectCount" | "selectSum" | "selectMax" | "selectMin"; _ } -> true
+  | EVar { name = "select" | "selectOne" | "selectCount" | "selectSum" | "selectMax" | "selectMin"
+                | "selectCountBy" | "selectSumBy"; _ } -> true
   | _ -> false
 
 (* Merge a continuation expression (SQL modifier on a new line) into the base select expression.

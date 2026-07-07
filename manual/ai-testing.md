@@ -144,6 +144,5 @@ companion note rather than a `test` block.)
 - [`tests/agent-tools-tests.tesl`](../tests/agent-tools-tests.tesl) — the tool-calling loop, validation, and retry primitives in isolation.
 - [`tests/agent-conversation-tests.tesl`](../tests/agent-conversation-tests.tesl) — multi-turn `converse` and history persistence.
 - [`tests/agent-run-tests.tesl`](../tests/agent-run-tests.tesl) — `agentRun` on a worker, streaming step events to subscribers.
-- [`tests/server-tools-tests.tesl`](../tests/server-tools-tests.tesl) — `serverTools`: HTTP endpoints as preauthenticated agent tools, incl. per-user endpoint inclusion (admin vs plain) and boundary-validation parity, all mock-driven.
-- [`example/learn/lesson68-server-endpoints-as-tools.tesl`](../example/learn/lesson68-server-endpoints-as-tools.tesl) — the `serverTools` lesson, combining endpoint tools with custom `asTool` tools.
+- [`example/learn/lesson68-server-endpoints-as-tools.tesl`](../example/learn/lesson68-server-endpoints-as-tools.tesl) — the `serverTools` lesson: HTTP endpoints as preauthenticated agent tools (incl. per-user admin inclusion), combined with custom `asTool` tools, all mock-driven.
 - [best-practices.md](best-practices.md) — capability and validation patterns.

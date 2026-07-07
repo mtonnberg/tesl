@@ -3,6 +3,9 @@
 (require "../dsl/capability.rkt"
          "../dsl/check.rkt"
          "../dsl/types.rkt"
+         (only-in "../dsl/private/time-trunc.rkt"
+                  tesl-time-trunc tesl-tz-utc tesl-tz-fixed tesl-tz-named
+                  tesl-tz? tesl-tz-offset-minutes)
          "private/runtime.rkt")
 
 ;; PosixMillis — the canonical Tesl timestamp type.
@@ -15,7 +18,16 @@
 (define-newtype PosixMillis Integer)
 
 (provide time nowMillis PosixMillis formatTime durationMs addMs subtractMs diffMs
-         Time.posixToSeconds Time.secondsToPosix)
+         Time.posixToSeconds Time.secondsToPosix
+         Time.truncHour Time.truncDay Time.truncWeek Time.truncMonth Time.truncYear
+         Time.offsetAt
+         ;; TimeZone runtime constructors (the Tesl `TimeZone` ADT lowers to
+         ;; these; re-provided for Racket-level tests and the query DSL)
+         tesl-tz-utc tesl-tz-fixed tesl-tz-named
+         ;; internal: the shared calendar-bucket engine — the ONE semantic
+         ;; reference; the query DSL's Memory backend calls it directly and the
+         ;; generated PostgreSQL expressions must agree with it (tested).
+         tesl-time-trunc)
 
 (define-capability time)
 
@@ -112,3 +124,34 @@
         [("Z")  (if (date*? d) (date*-time-zone-name d) "UTC")]
         [("%")  "%"]
         [else match]))))
+
+;; ── Calendar truncation (GitHub #29: server-side time bucketing) ─────────────
+;;
+;; Time.truncHour/Day/Week/Month/Year : offsetMinutes × PosixMillis -> PosixMillis
+;; return the BUCKET-START INSTANT for the wall clock at a fixed UTC offset in
+;; minutes (0 = UTC, positive = east).  The result stays PosixMillis — the
+;; calendar exists only inside the computation.  Week = ISO week (Monday start).
+;;
+;; The engine lives in dsl/private/time-trunc.rkt (dependency-free) so the query
+;; DSL's Memory backend uses the SAME arithmetic and the generated PostgreSQL
+;; bucket expressions are tested against it — one semantic reference.
+
+(define (tz-value v)
+  (define raw (raw-value v))
+  (unless (tesl-tz? raw)
+    (raise-user-error 'TimeZone "expected a TimeZone (Utc / FixedOffset n / a zone constructor), got ~e" raw))
+  raw)
+
+(define ((make-trunc unit) tz ts)
+  (PosixMillis (tesl-time-trunc unit (tz-value tz) (posix-ms-value ts))))
+
+;; Time.offsetAt : TimeZone -> PosixMillis -> Int — the zone's UTC offset in
+;; minutes AT that instant (DST-correct for zone constructors).
+(define (Time.offsetAt tz ts)
+  (tesl-tz-offset-minutes (tz-value tz) (posix-ms-value ts)))
+
+(define Time.truncHour  (make-trunc 'hour))
+(define Time.truncDay   (make-trunc 'day))
+(define Time.truncWeek  (make-trunc 'week))
+(define Time.truncMonth (make-trunc 'month))
+(define Time.truncYear  (make-trunc 'year))

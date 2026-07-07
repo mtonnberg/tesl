@@ -58,6 +58,7 @@ type sql_effect = SqlRead | SqlWrite
 type sql_op =
   | SqlSelect | SqlSelectOne | SqlSelectCount | SqlSelectSum | SqlSelectMax
   | SqlSelectMin | SqlSelectMany
+  | SqlSelectCountBy | SqlSelectSumBy
   | SqlInsert | SqlInsertMany | SqlUpsert
   | SqlUpdate | SqlUpdateAndReturnOne
   | SqlDelete | SqlDeleteAndReturnResult
@@ -70,6 +71,8 @@ let sql_op_of_name : string -> sql_op option = function
   | "selectMax"            -> Some SqlSelectMax
   | "selectMin"            -> Some SqlSelectMin
   | "selectMany"           -> Some SqlSelectMany
+  | "selectCountBy"        -> Some SqlSelectCountBy
+  | "selectSumBy"          -> Some SqlSelectSumBy
   | "insert"               -> Some SqlInsert
   | "insertMany"           -> Some SqlInsertMany
   | "upsert"               -> Some SqlUpsert
@@ -84,14 +87,16 @@ let sql_op_of_name : string -> sql_op option = function
    compile. *)
 let sql_op_effect : sql_op -> sql_effect = function
   | SqlSelect | SqlSelectOne | SqlSelectCount | SqlSelectSum | SqlSelectMax
-  | SqlSelectMin | SqlSelectMany -> SqlRead
+  | SqlSelectMin | SqlSelectMany
+  | SqlSelectCountBy | SqlSelectSumBy -> SqlRead
   | SqlInsert | SqlInsertMany | SqlUpsert
   | SqlUpdate | SqlUpdateAndReturnOne
   | SqlDelete | SqlDeleteAndReturnResult -> SqlWrite
 
 let all_sql_ops : sql_op list =
   [ SqlSelect; SqlSelectOne; SqlSelectCount; SqlSelectSum; SqlSelectMax;
-    SqlSelectMin; SqlSelectMany; SqlInsert; SqlInsertMany; SqlUpsert;
+    SqlSelectMin; SqlSelectMany; SqlSelectCountBy; SqlSelectSumBy;
+    SqlInsert; SqlInsertMany; SqlUpsert;
     SqlUpdate; SqlUpdateAndReturnOne; SqlDelete; SqlDeleteAndReturnResult ]
 
 let sql_op_name : sql_op -> string = function
@@ -99,6 +104,7 @@ let sql_op_name : sql_op -> string = function
   | SqlSelectCount -> "selectCount" | SqlSelectSum -> "selectSum"
   | SqlSelectMax -> "selectMax" | SqlSelectMin -> "selectMin"
   | SqlSelectMany -> "selectMany"
+  | SqlSelectCountBy -> "selectCountBy" | SqlSelectSumBy -> "selectSumBy"
   | SqlInsert -> "insert" | SqlInsertMany -> "insertMany" | SqlUpsert -> "upsert"
   | SqlUpdate -> "update" | SqlUpdateAndReturnOne -> "updateAndReturnOne"
   | SqlDelete -> "delete" | SqlDeleteAndReturnResult -> "deleteAndReturnResult"

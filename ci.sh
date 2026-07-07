@@ -1050,6 +1050,8 @@ else
         "tests/body-proof-test.rkt"
         "tests/check-test.rkt"
         "tests/sql-test.rkt"
+        "tests/sql-group-by-pg-test.rkt"
+        "tests/timezone-zones-test.rkt"
         "tests/web-test.rkt"
         "tests/exists-test.rkt"
         "tests/jwt-test.rkt"

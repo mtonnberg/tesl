@@ -70,7 +70,7 @@ parameters.
 ### Database
 20. **[lesson18-database-sql-and-proofs.tesl](../example/learn/lesson18-database-sql-and-proofs.tesl)** - Database operations with proofs
 21. **[lesson20-named-db-results.tesl](../example/learn/lesson20-named-db-results.tesl)** - Named database results
-22. **[lesson21-sql-reference.tesl](../example/learn/lesson21-sql-reference.tesl)** - SQL reference and examples
+22. **[lesson21-sql-reference.tesl](../example/learn/lesson21-sql-reference.tesl)** - SQL reference and examples (incl. grouped aggregates `selectCountBy`/`selectSumBy` and time bucketing)
 
 ### Forall Proofs
 23. **[lesson29-forall-list-proofs.tesl](../example/learn/lesson29-forall-list-proofs.tesl)** - Forall proofs with lists
@@ -97,6 +97,14 @@ parameters.
 |------|-------------|
 | [`lesson24-pubsub-sse.md`](../example/learn/lesson24-pubsub-sse.md) | Server-Sent Events pub/sub |
 | [`chat/chat-backend.tesl`](../example/chat/chat-backend.tesl) | Complete chat application |
+
+### AI Agents
+| File | Description |
+|------|-------------|
+| [`lesson62-ai-agents.tesl`](../example/learn/lesson62-ai-agents.tesl) | Agents and typed-function tools (`asTool`) |
+| [`lesson63-ai-structured-output.tesl`](../example/learn/lesson63-ai-structured-output.tesl) | Typed structured output (`askFor` / `decodeAs`) |
+| [`lesson68-server-endpoints-as-tools.tesl`](../example/learn/lesson68-server-endpoints-as-tools.tesl) | `serverTools`: your HTTP endpoints as preauthenticated agent tools, combined with custom tools |
+| [`support-assistant.tesl`](../example/support-assistant.tesl) | Complete capability-bounded support assistant with deterministic tests |
 
 ### Testing
 | File | Description |

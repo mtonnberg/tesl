@@ -1,0 +1,199 @@
+#lang tesl
+module SqlGroupByTests exposing []
+
+import Tesl.Prelude exposing [Int, String, List]
+import Tesl.Time exposing [
+  PosixMillis,
+  Time.secondsToPosix,
+  Time.posixToSeconds,
+  Time.truncHour,
+  Time.truncDay,
+  Time.truncWeek,
+  Time.truncMonth,
+  Time.truncYear,
+  Time.offsetAt,
+  TimeZone,
+  Utc,
+  FixedOffset,
+  EuropeStockholm,
+]
+import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.length, List.head]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+
+# ────────────────────────────────────────────────────────────────────────────
+# GitHub #29 — server-side time bucketing + grouped-aggregate rows.
+#
+# `Time.truncHour/Day/Week/Month/Year zone ts` return the BUCKET-START instant
+# for the wall clock in a `TimeZone` — a FIXED ADT: `Utc`, `FixedOffset minutes`,
+# or one of the baked IANA zone constructors (`EuropeStockholm`, …), which are
+# DST-correct per instant.  Ordinary pure functions, usable client-side (WHERE
+# bounds, folds) and as the `groupBy` key of the grouped forms:
+#
+#   selectSumBy e.minutes from Entry where … groupBy (Time.truncDay Utc e.startedAt)
+#     : List (Tuple2 PosixMillis Int)      — one (bucket, sum) row per group
+#   selectCountBy e from Entry groupBy e.orgId
+#     : List (Tuple2 String Int)           — plain-column keys work too
+#
+# Rows are ordered by key ascending.  These tests run on the Memory backend,
+# which buckets through the SAME engine (tesl-time-trunc) the emitted
+# PostgreSQL expressions are tested against in sql-group-by-pg-test.rkt.
+# ────────────────────────────────────────────────────────────────────────────
+
+entity Entry table "entries" primaryKey id {
+  id: String
+  orgId: String
+  minutes: Int
+  startedAt: PosixMillis
+}
+
+database GroupByTestDb = Database {
+  schema: "sql_group_by_tests"
+  entities: [Entry]
+  backend: Memory
+}
+
+# Instants (UTC): e1/e2 2026-03-01 (10:00, 23:30), e3 2026-03-02 01:00,
+# e4 2026-04-01 00:30, e5 another org on 2026-03-01.
+fn seed() -> Int requires [dbWrite] =
+  insert Entry { id: "e1", orgId: "acme", minutes: 60, startedAt: Time.secondsToPosix 1772359200 }
+  insert Entry { id: "e2", orgId: "acme", minutes: 30, startedAt: Time.secondsToPosix 1772407800 }
+  insert Entry { id: "e3", orgId: "acme", minutes: 45, startedAt: Time.secondsToPosix 1772413200 }
+  insert Entry { id: "e4", orgId: "acme", minutes: 15, startedAt: Time.secondsToPosix 1775003400 }
+  insert Entry { id: "e5", orgId: "other", minutes: 999, startedAt: Time.secondsToPosix 1772359200 }
+  5
+
+fn minutesPerDay(orgId: String, tz: TimeZone) -> List (Tuple2 PosixMillis Int)
+  requires [dbRead] =
+  selectSumBy e.minutes from Entry
+    where e.orgId == orgId
+    groupBy (Time.truncDay tz e.startedAt)
+
+fn entriesPerMonth(orgId: String) -> List (Tuple2 PosixMillis Int)
+  requires [dbRead] =
+  selectCountBy e from Entry
+    where e.orgId == orgId
+    groupBy (Time.truncMonth Utc e.startedAt)
+
+fn perOrg() -> List (Tuple2 String Int) requires [dbRead] =
+  selectCountBy e from Entry
+    groupBy e.orgId
+
+# Case analysis lives in helper fns (test blocks assert on scalar results).
+fn firstKeySeconds(rows: List (Tuple2 PosixMillis Int)) -> Int =
+  case List.head rows of
+    Something row -> Time.posixToSeconds (Tuple2.first row)
+    Nothing -> 0 - 1
+
+fn firstValue(rows: List (Tuple2 PosixMillis Int)) -> Int =
+  case List.head rows of
+    Something row -> Tuple2.second row
+    Nothing -> 0 - 1
+
+fn firstOrgKey(rows: List (Tuple2 String Int)) -> String =
+  case List.head rows of
+    Something row -> Tuple2.first row
+    Nothing -> "<empty>"
+
+fn firstOrgValue(rows: List (Tuple2 String Int)) -> Int =
+  case List.head rows of
+    Something row -> Tuple2.second row
+    Nothing -> 0 - 1
+
+# ── The trunc functions as plain values (the issue thread's known instants) ──
+
+test "truncDay/Month/Year at UTC on 2023-11-14T22:13:20Z" {
+  let t = Time.secondsToPosix 1700000000
+  expect Time.posixToSeconds (Time.truncHour Utc t) == 1699999200
+  expect Time.posixToSeconds (Time.truncDay Utc t) == 1699920000
+  expect Time.posixToSeconds (Time.truncMonth Utc t) == 1698796800
+  expect Time.posixToSeconds (Time.truncYear Utc t) == 1672531200
+}
+
+test "truncWeek is the Monday of the ISO week" {
+  # 2023-11-14 is a Tuesday; its ISO week starts Monday 2023-11-13T00:00Z.
+  let t = Time.secondsToPosix 1700000000
+  expect Time.posixToSeconds (Time.truncWeek Utc t) == 1699833600
+  # The epoch (Thursday) belongs to the week of Monday 1969-12-29.
+  let epoch = Time.secondsToPosix 0
+  expect Time.posixToSeconds (Time.truncWeek Utc epoch) == 0 - 259200
+}
+
+test "a fixed offset rolls a late-evening instant into the next local day" {
+  # 2023-11-14T23:30:00Z is already Nov 15 at UTC+2: the local day starts
+  # Nov 14T22:00Z, i.e. the bucket-start INSTANT is 22:00Z.
+  let lateEvening = Time.secondsToPosix 1700004600
+  expect Time.posixToSeconds (Time.truncDay (FixedOffset 120) lateEvening) == 1699999200
+  # At UTC the same instant is still Nov 14.
+  expect Time.posixToSeconds (Time.truncDay Utc lateEvening) == 1699920000
+}
+
+test "zone constructors are DST-correct per instant (no summer-time bookkeeping)" {
+  # Stockholm is CET (+60) in winter and CEST (+120) in summer — the SAME
+  # TimeZone value resolves the right offset for each instant.
+  let winter = Time.secondsToPosix 1767225600
+  let summer = Time.secondsToPosix 1750000000
+  expect (Time.offsetAt EuropeStockholm winter) == 60
+  expect (Time.offsetAt EuropeStockholm summer) == 120
+  # 2026-03-29 is the spring-forward day: 00:30Z (01:30 CET) and 12:00Z
+  # (14:00 CEST) land in the SAME local day, starting at 23:00Z on the 28th.
+  let early = Time.secondsToPosix 1774744200
+  let later = Time.secondsToPosix 1774785600
+  expect Time.posixToSeconds (Time.truncDay EuropeStockholm early) == 1774738800
+  expect Time.posixToSeconds (Time.truncDay EuropeStockholm later) == 1774738800
+}
+
+test "leap day truncates to Feb 2020 / Jan 2020 / its own day" {
+  let leap = Time.secondsToPosix 1582934400
+  expect Time.posixToSeconds (Time.truncDay Utc leap) == 1582934400
+  expect Time.posixToSeconds (Time.truncMonth Utc leap) == 1580515200
+  expect Time.posixToSeconds (Time.truncYear Utc leap) == 1577836800
+}
+
+# ── Grouped-aggregate queries (Memory backend) ───────────────────────────────
+
+test "selectSumBy day buckets: per-day sums, ordered, exact values" requires [dbRead, dbWrite] {
+  let _ = seed()
+  let days = minutesPerDay "acme" Utc
+  expect (List.length days) == 3
+  # 2026-03-01T00:00Z bucket sums e1+e2
+  expect (firstKeySeconds days) == 1772323200
+  expect (firstValue days) == 90
+}
+
+test "selectCountBy month buckets: March has 3 acme entries, April 1" requires [dbRead, dbWrite] {
+  let _ = seed()
+  let months = entriesPerMonth "acme"
+  expect (List.length months) == 2
+  expect (firstKeySeconds months) == 1772323200
+  expect (firstValue months) == 3
+}
+
+test "a zone offset moves a row across the day boundary" requires [dbRead, dbWrite] {
+  let _ = seed()
+  # At UTC+2, e2 (23:30Z) rolls into local March 2 — joining e3's bucket:
+  # buckets become Mar1(60), Mar2(30+45), Apr1(15).
+  let days = minutesPerDay "acme" (FixedOffset 120)
+  expect (List.length days) == 3
+  expect (firstValue days) == 60
+}
+
+test "plain-column group key counts per org" requires [dbRead, dbWrite] {
+  let _ = seed()
+  let orgs = perOrg()
+  expect (List.length orgs) == 2
+  # "acme" < "other" — rows are ordered by key
+  expect (firstOrgKey orgs) == "acme"
+  expect (firstOrgValue orgs) == 4
+}
+
+test "a zone-keyed grouped query buckets by the zone's wall clock" requires [dbRead, dbWrite] {
+  let _ = seed()
+  # In March, Stockholm is CET (+60): e2 (23:30Z) is already local March 2,
+  # same as the fixed +60 result — but written with NO offset bookkeeping.
+  let days = minutesPerDay "acme" EuropeStockholm
+  expect (List.length days) == 3
+  expect (firstValue days) == 60
+}

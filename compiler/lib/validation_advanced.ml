@@ -446,6 +446,180 @@ let check_sql_where_clauses
     annotations declared on the fields being assigned.  This ensures that
     `SafeReq { count: rawInt }` cannot pass a non-validated Int to a field
     declared as `count: Int ::: IsPositive count`. *)
+(* ── groupBy rules (GitHub #29, fail-closed sweep) ───────────────────────────
+   Before #29, `groupBy` was accepted on every select form and then either
+   silently DROPPED by the aggregate runtimes (one whole-set scalar came back)
+   or, for a non-field key expression, emitted a module that failed to LOAD
+   (`groupBy: unbound identifier`) — checker-accepts-what-codegen-cannot-lower.
+   Now:
+     - `groupBy` is ONLY legal on the grouped forms selectCountBy/selectSumBy,
+       which require EXACTLY ONE groupBy clause;
+     - the key must be `binder.field` (a declared column) or
+       `Time.truncHour/Day/Week/Month/Year offsetExpr binder.field` on a
+       declared PosixMillis column;
+     - order/limit/offset/innerJoin are rejected on the grouped forms (the
+       result is ordered by key ascending by definition).
+   Decide-by-resolution: a user-declared fn with a select-form name stands the
+   whole rule down for that head. *)
+let check_group_by_rules (decls : top_decl list) : validation_error list =
+  let errors = ref [] in
+  let emit err = errors := err :: !errors in
+  let user_fn_names =
+    List.filter_map (function DFunc (fd : func_decl) -> Some fd.name | _ -> None) decls in
+  let entity_fields name =
+    List.find_map (function
+      | DEntity (e : entity_form) when e.name = name -> Some e.fields
+      | _ -> None) decls
+  in
+  (* the query spine: select head + keyword/field atoms, including modifier
+     atoms the parser merged onto an outer where-EBinop *)
+  let rec spine_atoms e =
+    match e with
+    | EBinop { op = (BEq | BNeq | BLt | BLe | BGt | BGe | BAnd | BOr | BAdd); left; _ } ->
+      spine_atoms left
+    | EApp _ ->
+      let rec go acc = function
+        | EApp { fn; arg; _ } -> go (arg :: acc) fn
+        | hd -> (hd, acc)
+      in
+      let (base, args) = go [] e in
+      (match base with
+       | EBinop _ -> spine_atoms base @ args
+       | _ -> base :: args)
+    | other -> [other]
+  in
+  let seen_heads : (Location.loc, unit) Hashtbl.t = Hashtbl.create 16 in
+  let field_decl entity_opt field =
+    match entity_opt with
+    | Some en ->
+      (match entity_fields en with
+       | Some fs -> List.find_opt (fun (f : field_def) -> f.name = field) fs
+       | None -> None)
+    | None -> None
+  in
+  let validate_root head_name head_loc atoms =
+    let entity_opt =
+      let rec find_entity = function
+        | EVar { name = "from"; _ } :: EConstructor { name; _ } :: _ -> Some name
+        | EVar { name = "from"; _ } :: EVar { name; _ } :: _ -> Some name
+        | _ :: rest -> find_entity rest
+        | [] -> None
+      in find_entity atoms
+    in
+    let group_keys =
+      let rec collect acc = function
+        | EVar { name = "groupBy"; _ } :: key :: rest -> collect (key :: acc) rest
+        | _ :: rest -> collect acc rest
+        | [] -> List.rev acc
+      in collect [] atoms
+    in
+    let is_grouped = head_name = "selectCountBy" || head_name = "selectSumBy" in
+    if not is_grouped then begin
+      match group_keys with
+      | [] -> ()
+      | _ ->
+        emit (make_error head_loc
+          ~hint:(if head_name = "select" || head_name = "selectOne" then
+                   "grouping only makes sense with an aggregate; use \
+                    selectCountBy/selectSumBy for per-group rows, or drop the \
+                    groupBy"
+                 else
+                   Printf.sprintf
+                     "use `%sBy ... groupBy <key>` to get one (key, aggregate) \
+                      row per group as a List (Tuple2 key value)"
+                     head_name)
+          (Printf.sprintf
+             "`groupBy` is not supported on `%s` — the per-group breakdown \
+              would be lost (the scalar form aggregates the whole matching set)"
+             head_name))
+    end else begin
+      (match group_keys with
+       | [key] ->
+         let check_field_key ~want_posix field floc =
+           match field_decl entity_opt field with
+           | None ->
+             emit (make_error floc
+               ~hint:"the groupBy key must be a declared column of the queried entity"
+               (Printf.sprintf
+                  "`groupBy`: field `%s` does not exist on entity `%s`"
+                  field (Option.value entity_opt ~default:"?")))
+           | Some f ->
+             if want_posix then
+               (match f.type_expr with
+                | TName { name = "PosixMillis"; _ } -> ()
+                | _ ->
+                  emit (make_error floc
+                    ~hint:"Time.trunc* buckets a PosixMillis column; use the bare \
+                           field as the key for other column types"
+                    (Printf.sprintf
+                       "`groupBy`: Time.trunc* requires a PosixMillis column, but \
+                        `%s` is declared as a different type" field)))
+         in
+         (match key with
+          | EField { obj = EVar _; field; loc = floc } ->
+            check_field_key ~want_posix:false field floc
+          | _ ->
+            let rec flat acc = function
+              | EApp { fn; arg; _ } -> flat (arg :: acc) fn
+              | hd -> (hd, acc)
+            in
+            (match flat [] key with
+             | EField { obj = (EConstructor { name = "Time"; args = []; _ }
+                              | EVar { name = "Time"; _ });
+                        field = ("truncHour" | "truncDay" | "truncWeek"
+                                | "truncMonth" | "truncYear"); _ },
+               [_off; EField { obj = EVar _; field; loc = floc }] ->
+               check_field_key ~want_posix:true field floc
+             | _ ->
+               emit (make_error head_loc
+                 ~hint:"supported keys: `e.field`, or \
+                        `Time.truncHour/Day/Week/Month/Year offsetMinutes e.field` \
+                        on a PosixMillis column"
+                 (Printf.sprintf
+                    "`%s`: unsupported `groupBy` key expression" head_name))))
+       | [] ->
+         emit (make_error head_loc
+           ~hint:"add `groupBy e.field` or `groupBy (Time.truncDay offsetMinutes e.field)`"
+           (Printf.sprintf
+              "`%s` requires exactly one `groupBy` clause (it returns one row \
+               per group)" head_name))
+       | _ ->
+         emit (make_error head_loc
+           ~hint:"combine into a single key, or aggregate twice"
+           (Printf.sprintf
+              "`%s` supports exactly ONE `groupBy` clause" head_name)));
+      let rec reject_modifiers = function
+        | EVar { name = ("order" | "limit" | "offset" | "innerJoin") as m; loc = mloc } :: _ ->
+          emit (make_error mloc
+            ~hint:"grouped results are ordered by key ascending by definition"
+            (Printf.sprintf
+               "`%s` is not supported on `%s`" m head_name))
+        | _ :: rest -> reject_modifiers rest
+        | [] -> ()
+      in
+      reject_modifiers atoms
+    end
+  in
+  let rec walk e =
+    (match spine_atoms e with
+     | EVar { name = ("select" | "selectOne" | "selectCount" | "selectSum"
+                     | "selectMax" | "selectMin" | "selectCountBy"
+                     | "selectSumBy" as head_name); loc = head_loc } :: atoms
+       when not (List.mem head_name user_fn_names)
+         && not (Hashtbl.mem seen_heads head_loc) ->
+       Hashtbl.replace seen_heads head_loc ();
+       validate_root head_name head_loc atoms
+     | _ -> ());
+    Ast_visitor.fold_children (fun () c -> walk c) () e
+  in
+  List.iter (function
+    | DFunc (fd : func_decl) -> walk fd.body
+    | DConst (c : const_form) -> walk c.value
+    | DTest (tf : test_form) ->
+      List.iter (fun st -> List.iter walk (test_stmt_exprs st)) tf.stmts
+    | _ -> ()) decls;
+  List.rev !errors
+
 let check_record_field_proof_construction
     ?facts
     ?(extra_funcs : (string * func_info) list = [])

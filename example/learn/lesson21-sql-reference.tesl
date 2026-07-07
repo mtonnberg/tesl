@@ -63,8 +63,8 @@ module Lesson21SqlReference exposing [
 #   selectSum p.field from Entity where ...     -- returns same type as field
 #   selectMax p.field from Entity where ...     -- returns same type as field
 #   selectMin p.field from Entity where ...     -- returns same type as field
-#   selectCount p from Entity groupBy p.field   -- count per group
-#   selectSum p.field from Entity groupBy p.cat -- sum per category
+#   selectCountBy p from Entity groupBy p.field   -- List (Tuple2 key Int)
+#   selectSumBy p.field from Entity groupBy p.cat  -- List (Tuple2 key value)
 #
 # Inner join (filter by related entity):
 #   select p from Entity
@@ -93,6 +93,21 @@ module Lesson21SqlReference exposing [
 #   This shows the exact SQL that Tesl generates, including parameterized values.
 
 import Tesl.Prelude exposing [Bool(..), Int, List, String, Unit]
+import Tesl.Tuple exposing [Tuple2]
+import Tesl.List exposing [List.length]
+import Tesl.Time exposing [
+  PosixMillis,
+  Time.secondsToPosix,
+  Time.truncDay,
+  Time.truncWeek,
+  Time.truncMonth,
+  Time.offsetAt,
+  TimeZone,
+  Utc,
+  FixedOffset,
+  EuropeStockholm,
+  addMs,
+]
 import Tesl.DB exposing [dbRead, dbWrite, DeleteResult(..)]
 
 # ─────────────────────────────────────────────
@@ -329,7 +344,7 @@ fn searchByNameInsensitive(prefix: String) -> List Product requires [dbRead] =
 # "selectSum p.field from Entity" returns the sum of a numeric field (Int or Float).
 # "selectMax p.field from Entity" returns the maximum value of a numeric field.
 # "selectMin p.field from Entity" returns the minimum value of a numeric field.
-# All four support where, groupBy, order, limit modifiers.
+# All four support the where modifier (order/limit make no sense on one scalar).
 
 fn countProducts() -> Int requires [dbRead] =
   selectCount p from Product
@@ -351,10 +366,83 @@ fn minPriceInCategory(cat: String) -> Int requires [dbRead] =
   selectMin p.price from Product
   where p.category == cat
 
-# "groupBy p.field" partitions rows by field value for PostgreSQL GROUP BY.
-# In Tesl, selectCount and selectSum with groupBy return the aggregate for the
-# whole matching set (group-by affects the generated SQL ORDER/GROUP on Postgres).
-# Use groupBy with `select` to retrieve entities sorted/partitioned by field.
+# GROUPED aggregates (GitHub #29): "selectCountBy"/"selectSumBy … groupBy key"
+# return ONE ROW PER GROUP as a List (Tuple2 key aggregate), ordered by key
+# ascending. The key is a declared column — or a calendar bucket of a
+# PosixMillis column via Time.truncHour/Day/Week/Month/Year with a TimeZone
+# (a fixed ADT: Utc, FixedOffset minutes, or an IANA zone constructor like
+# EuropeStockholm — DST-correct per instant). Section 16b below is the full
+# worked tour of time and timezone queries.
+# `groupBy` on the SCALAR forms (selectCount/selectSum/selectMax/selectMin) or
+# on plain select is a COMPILE error — the per-group breakdown would be lost.
+
+fn countPerCategory() -> List (Tuple2 String Int) requires [dbRead] =
+  selectCountBy p from Product
+    groupBy p.category
+
+fn stockValuePerCategory() -> List (Tuple2 String Int) requires [dbRead] =
+  selectSumBy p.price from Product
+    groupBy p.category
+
+# ─── 16b. TIME AND TIMEZONE QUERIES ───────────────────────────────────────────
+#
+# Timestamps are PosixMillis (ms since epoch, BIGINT in PostgreSQL). Calendar
+# logic uses a TimeZone — a FIXED ADT, so there are no zone-name strings to
+# typo and completion lists every zone:
+#
+#   Utc                    -- +00:00
+#   FixedOffset 330        -- a constant offset in minutes east of UTC (+5:30)
+#   EuropeStockholm, AmericaNewYork, AsiaKolkata, ...
+#                          -- IANA zone constructors, DST-CORRECT PER INSTANT:
+#                             the same value is +60 for a January timestamp and
+#                             +120 for a July one. Nobody tracks summer time.
+#
+# Time.truncHour/Day/Week/Month/Year zone ts -> PosixMillis returns the
+# BUCKET-START instant of the wall-clock hour/day/week/month/year containing
+# `ts` in that zone (weeks are ISO weeks, Monday start). They are ordinary pure
+# functions AND the only expressions the query DSL accepts as a time-bucket
+# groupBy key. Time.offsetAt zone ts -> Int gives the offset at an instant.
+
+entity TimeEntry table "time_entries" primaryKey id {
+  id: String
+  orgId: String
+  minutes: Int
+  startedAt: PosixMillis
+}
+
+# THE SERIES PATTERN — "break the period down per day, server-side".
+# One (dayStart, minutesSum) row per local day, ordered by day: exactly what a
+# chart wants, computed by PostgreSQL GROUP BY (only the buckets cross the wire).
+fn minutesPerDay(orgId: String, zone: TimeZone) -> List (Tuple2 PosixMillis Int)
+  requires [dbRead] =
+  selectSumBy e.minutes from TimeEntry
+    where e.orgId == orgId
+    groupBy (Time.truncDay zone e.startedAt)
+
+# Entries per calendar month (a count series works the same way).
+fn entriesPerMonth(orgId: String, zone: TimeZone) -> List (Tuple2 PosixMillis Int)
+  requires [dbRead] =
+  selectCountBy e from TimeEntry
+    where e.orgId == orgId
+    groupBy (Time.truncMonth zone e.startedAt)
+
+# THE FILTER PATTERN — "all rows for today / this week / the last N days".
+# No SQL bucketing needed: compute the zone-aware boundary CLIENT-side with the
+# same trunc functions, then use a plain range where. The bounds are constants,
+# so an index on startedAt keeps driving the scan.
+fn entriesOnDay(orgId: String, zone: TimeZone, anyInstantThatDay: PosixMillis) -> List TimeEntry
+  requires [dbRead] =
+  let dayStart = Time.truncDay zone anyInstantThatDay
+  let dayEnd = addMs dayStart 86400000
+  select e from TimeEntry
+    where e.orgId == orgId && e.startedAt >= dayStart && e.startedAt < dayEnd
+
+# "minutes this ISO week" — same shape, week boundary.
+fn minutesThisWeek(orgId: String, zone: TimeZone, now: PosixMillis) -> Int
+  requires [dbRead] =
+  let weekStart = Time.truncWeek zone now
+  selectSum e.minutes from TimeEntry
+    where e.orgId == orgId && e.startedAt >= weekStart
 
 fn countByCategory(cat: String) -> Int requires [dbRead] =
   selectCount p from Product
@@ -612,4 +700,41 @@ test "swapStock updates two rows atomically" requires [dbRead, dbWrite] {
   let inRows = select p from Product where p.id == "swap2"
   expect outRows != []
   expect inRows != []
+}
+
+# ─── Time / timezone query tests ──────────────────────────────────────────────
+
+# UTC instants: te1/te2 on 2026-03-01 (10:00Z, 23:30Z), te3 on 2026-03-02 01:00Z.
+fn seedTimeEntries() -> Int requires [dbWrite] =
+  insert TimeEntry { id: "te1", orgId: "acme", minutes: 60, startedAt: Time.secondsToPosix 1772359200 }
+  insert TimeEntry { id: "te2", orgId: "acme", minutes: 30, startedAt: Time.secondsToPosix 1772407800 }
+  insert TimeEntry { id: "te3", orgId: "acme", minutes: 45, startedAt: Time.secondsToPosix 1772413200 }
+  3
+
+test "per-day series: UTC buckets differ from Stockholm buckets" requires [dbRead, dbWrite] {
+  let _ = seedTimeEntries()
+  # At UTC, te2 (23:30Z) is still March 1 — two buckets: Mar1(90), Mar2(45).
+  let utcDays = minutesPerDay "acme" Utc
+  expect (List.length utcDays) == 2
+  # In Stockholm (CET, +60 in March), te2 is already local March 2 —
+  # still two buckets but split Mar1(60), Mar2(75). Same data, zone-true days.
+  let sthlmDays = minutesPerDay "acme" EuropeStockholm
+  expect (List.length sthlmDays) == 2
+}
+
+test "filter pattern: all rows for one Stockholm day" requires [dbRead, dbWrite] {
+  insert TimeEntry { id: "te4", orgId: "acme2", minutes: 10, startedAt: Time.secondsToPosix 1772359200 }
+  insert TimeEntry { id: "te5", orgId: "acme2", minutes: 20, startedAt: Time.secondsToPosix 1772407800 }
+  # te5 (23:30Z) belongs to local March 2 in Stockholm, so "March 1" finds only te4.
+  let probe = Time.secondsToPosix 1772359200
+  let rows = entriesOnDay "acme2" EuropeStockholm probe
+  expect (List.length rows) == 1
+}
+
+test "offsetAt is DST-correct per instant" {
+  # Stockholm: CET (+60) in winter, CEST (+120) in summer — one TimeZone value.
+  expect (Time.offsetAt EuropeStockholm (Time.secondsToPosix 1767225600)) == 60
+  expect (Time.offsetAt EuropeStockholm (Time.secondsToPosix 1750000000)) == 120
+  expect (Time.offsetAt (FixedOffset 330) (Time.secondsToPosix 0)) == 330
+  expect (Time.offsetAt Utc (Time.secondsToPosix 0)) == 0
 }

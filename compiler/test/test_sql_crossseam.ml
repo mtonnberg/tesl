@@ -79,6 +79,8 @@ let sql_op_racket_head : sql_op -> string = function
   | SqlSelectSum -> "select-sum"
   | SqlSelectMax -> "select-max"
   | SqlSelectMin -> "select-min"
+  | SqlSelectCountBy -> "select-count-by"
+  | SqlSelectSumBy -> "select-sum-by"
   | SqlInsert -> "insert-one!"
   | SqlInsertMany -> "insert-many!"
   | SqlUpsert -> "upsert-one!"
