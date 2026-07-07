@@ -150,9 +150,16 @@ let agent_prim_decode_tag : agent_prim -> string = function
   | APString -> "string" | APInt -> "int" | APPosixMillis -> "int"
   | APFloat -> "float" | APBool -> "bool"
 
-(* TOTAL: the JSON Schema property fragment for this primitive *)
+(* TOTAL: the JSON Schema property fragment for this primitive.
+   PosixMillis carries a semantic description: without it the model sees a bare
+   integer, guesses the calendar date from the digits, and hallucinates — the
+   date-confusion class behind issue #30's user-side workarounds.  The schema
+   is the one channel that reaches the model for every tool, so the meaning
+   rides along here. *)
 let agent_prim_schema_prop : agent_prim -> string = function
-  | APInt | APPosixMillis -> {|{"type":"integer"}|}
+  | APInt -> {|{"type":"integer"}|}
+  | APPosixMillis ->
+    {|{"type":"integer","description":"Unix epoch timestamp in MILLISECONDS since 1970-01-01T00:00:00Z (13 digits for current dates) - NOT seconds and NOT a human-readable date; never guess the calendar date from the digits"}|}
   | APFloat -> {|{"type":"number"}|}
   | APBool  -> {|{"type":"boolean"}|}
   | APString -> {|{"type":"string"}|}

@@ -553,11 +553,69 @@ demoAgent = Agent {
 }
 |}
 
+(* ── Issue #30: the emitted `asTool` dispatch must DELEGATE the tool fn's
+   declared capabilities.  The checker charges the Agent-construction site with
+   every tool fn's `requires`, but the tool EXECUTES later inside the agent
+   loop, whose ambient capability set need not include them (a live handler
+   turn runs under the serve grant, which only covers handlers/workers).
+   Without delegation the fn's own capability assertion traps at dispatch time
+   — passes `tesl test` (the test's `requires` fills ambient), fails live.
+   The emitter now wraps the dispatch in `(with-capabilities (<caps>) …)`;
+   a capability-free tool fn keeps the bare `(apply fn _decoded)` form. *)
+let issue30_delegation_src = {|#lang tesl
+module Issue30Delegation exposing [fmtLabel, plainTool, stampTool]
+
+import Tesl.Prelude exposing [Int, String, List]
+import Tesl.Time exposing [PosixMillis, Time.secondsToPosix, formatTime, time]
+import Tesl.Agent exposing [aiProvider, Agent, asTool, mockProvider]
+
+fn fmtLabel(epochMillis: Int) -> String
+  requires [time] =
+  formatTime (Time.secondsToPosix (epochMillis / 1000)) "UTC" "%Y-%m-%d"
+
+fn plainTool(x: Int) -> Int =
+  x + 1
+
+fn stampTool(ts: PosixMillis) -> String
+  requires [time] =
+  formatTime ts "UTC" "%Y-%m-%d"
+
+fn probe() -> Agent
+  requires [aiProvider, time] =
+  Agent {
+    provider: mockProvider []
+    systemPrompt: "s"
+    maxTokens: 64
+    tools: [asTool fmtLabel, asTool plainTool, asTool stampTool]
+  }
+|}
+
+let assert_contains what needle out =
+  let re = Str.regexp_string needle in
+  try ignore (Str.search_forward re out 0)
+  with Not_found -> failf "%s: emitted Racket does not contain %S:\n%s" what needle out
+
+let test_issue30_astool_delegates_caps () =
+  with_temp_file issue30_delegation_src (fun path ->
+    let code, out = run_compiler [path] in
+    if code <> 0 then failf "emit failed (exit %d):\n%s" code out;
+    assert_contains "capability-requiring tool fn"
+      "(lambda (_decoded) (with-capabilities (time) (apply fmtLabel _decoded)))" out;
+    assert_contains "capability-free tool fn keeps the bare dispatch"
+      "(lambda (_decoded) (apply plainTool _decoded))" out;
+    (* Date-confusion follow-up: a PosixMillis tool parameter's schema must
+       carry the epoch-millis semantics to the model, not a bare integer. *)
+    assert_contains "PosixMillis param schema carries epoch-millis description"
+      "Unix epoch timestamp in MILLISECONDS" out)
+
 let () =
   run "AiSuite-Capability" [
     "N5-issue24-asTool-fail-closed", to_cases [
       "N5 partial-application asTool rejected", test_issue24_partial_astool_rejected;
       "P5 bare asTool (const-bound agent) compiles", test_issue24_bare_astool_ok;
+    ];
+    "P6-issue30-asTool-capability-delegation", to_cases [
+      "P6 asTool dispatch delegates declared caps", test_issue30_astool_delegates_caps;
     ];
     "N1-negative-matrix (ai-fn × consumer × insufficient-grant)",
       to_cases neg_matrix;

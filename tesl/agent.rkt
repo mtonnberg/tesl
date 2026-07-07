@@ -101,9 +101,11 @@
 ;;;   AgentReply  — an `agent-reply` struct
 ;;;   Tool        — a `tool-spec` struct
 
-(require (only-in "../dsl/capability.rkt" define-capability require-capabilities!)
+(require (only-in "../dsl/capability.rkt" define-capability require-capabilities!
+                  call-with-delegated-capabilities)
          (only-in "../dsl/private/evidence.rkt" raw-value)
-         (only-in "../dsl/types.rkt" tesl-type-codec-decode register-runtime-type/runtime!)
+         (only-in "../dsl/types.rkt" tesl-type-codec-decode register-runtime-type/runtime!
+                  newtype-value-value posix-millis-newtype? posix-millis-agent-jsexpr)
          (only-in "../dsl/check.rkt" check-fail? check-fail-message)
          json
          "agent-provider.rkt")
@@ -273,6 +275,16 @@
   (agent p (raw-value system-prompt) (raw-value max-tokens) '() #f))
 
 ;;; tool : name description schema validator dispatch -> Tool
+;;; Issue #30: validator/dispatch execute LATER, inside the agent loop, whose
+;;; ambient capability set need not include the fns' own `requires` (which the
+;;; static checker charged HERE, at the construction site).  Delegate each fn's
+;;; registered declared capabilities around its deferred call so execution
+;;; carries the statically-verified authority.  A plain lambda (unregistered)
+;;; passes through unchanged.
+(define (delegate-tool-fn f)
+  (lambda args
+    (call-with-delegated-capabilities f (lambda () (apply f args)))))
+
 (define (tool name description schema validator dispatch)
   (define v (raw-value validator))
   (define d (raw-value dispatch))
@@ -280,7 +292,8 @@
     (raise-user-error 'tool "validator must be a function String -> a, got ~e" v))
   (unless (procedure? d)
     (raise-user-error 'tool "dispatch must be a function a -> String, got ~e" d))
-  (tool-spec (raw-value name) (raw-value description) (raw-value schema) v d))
+  (tool-spec (raw-value name) (raw-value description) (raw-value schema)
+             (delegate-tool-fn v) (delegate-tool-fn d)))
 
 ;;; tesl-agent-decode-args : args-json-string × (listof (cons key type-tag)) -> (listof value)
 ;;; The validator the declarative `agent { tools: [fn...] }` lowering installs for a
@@ -378,21 +391,41 @@
         (tool-result-block (tool-call-id tc)
                            (format "invalid arguments: ~a" (cdr validated)) #t)]
        [else
+        ;; Issue #30: contain a dispatch exception as an is_error tool_result —
+        ;; the same HTTP-500 parity `serverTools` endpoint dispatch already has.
+        ;; Without this, one raising tool body (e.g. a capability trap) killed
+        ;; the WHOLE agent loop instead of letting the model see the failure
+        ;; and continue.
         (define result
-          (with-tool-db a (lambda () ((tool-spec-dispatch t) (cdr validated)))))
+          (with-handlers ([exn:fail? (lambda (e) (cons 'raised (exn-message e)))])
+            (cons 'value
+                  (with-tool-db a (lambda () ((tool-spec-dispatch t) (cdr validated)))))))
         ;; AGENT-4: a tool body that returns a `check-fail` (a domain validation
         ;; that did not hold — e.g. the `refundOrder confirmed:false` guard) must
         ;; be surfaced to the model as an is_error tool_result, NOT stringified
         ;; into a normal (success) result.  Otherwise the model is told the tool
         ;; succeeded and reports a fabricated outcome.
-        (if (check-fail? result)
-            (tool-result-block (tool-call-id tc)
-                               (format "tool failed: ~a" (check-fail-message result)) #t)
-            (tool-result-block (tool-call-id tc) (->result-string result) #f))])]))
+        (cond
+          [(eq? (car result) 'raised)
+           (tool-result-block (tool-call-id tc)
+                              (format "tool failed: ~a" (cdr result)) #t)]
+          [(check-fail? (cdr result))
+           (tool-result-block (tool-call-id tc)
+                              (format "tool failed: ~a" (check-fail-message (cdr result))) #t)]
+          [else
+           (tool-result-block (tool-call-id tc) (->result-string (cdr result)) #f)])])]))
 
 (define (->result-string v)
   (define r (raw-value v))
-  (if (string? r) r (format "~a" r)))
+  (cond
+    [(string? r) r]
+    ;; A PosixMillis tool result reaches the MODEL: render the self-describing
+    ;; {epochMillis, iso} object instead of the bare integer the model would
+    ;; misread as a date (and instead of the struct's opaque print form).
+    [(and (posix-millis-newtype? r)
+          (exact-integer? (newtype-value-value r)))
+     (jsexpr->string (posix-millis-agent-jsexpr (newtype-value-value r)))]
+    [else (format "~a" r)]))
 
 (define (tool-result-block id content is-error?)
   (hash 'kind 'tool-result 'id id 'content content 'is-error is-error?))

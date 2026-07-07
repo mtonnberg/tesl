@@ -40,6 +40,7 @@
          "../dsl/sql.rkt"
          "../dsl/types.rkt"
          "../tesl/agent.rkt"
+         (only-in "../tesl/time.rkt" PosixMillis)
          "private/postgres-test-support.rkt")
 
 ;;; ── Shared deterministic fixtures ───────────────────────────────────────────
@@ -670,6 +671,197 @@
        (check-equal? (ask a1 "x") "one")
        (check-equal? (ask a2 "x") "two")))))
 
+;;; ════════════════════════════════════════════════════════════════════════════
+;;; PILLAR 6 — issue #30: tool DISPATCH failure containment + capability
+;;;            delegation.  A live agent turn runs under the caller's ambient
+;;;            capability set, which need not include a wired tool fn's own
+;;;            `requires` — before the fix, the fn's capability assertion (or
+;;;            ANY raise in a dispatch body) killed the whole agent loop
+;;;            instead of becoming an is_error tool_result the model can see
+;;;            (the containment `serverTools` endpoint dispatch always had).
+;;;            The emitter now also wraps every `asTool fn` dispatch in
+;;;            (with-capabilities (<fn's requires>) …), delegating the
+;;;            statically-charged construction-site authority to execution.
+;;; ════════════════════════════════════════════════════════════════════════════
+
+;; The capability a tool fn would declare via `requires [...]`.
+(define-capability issue30-cap)
+
+;; A provider that CAPTURES each request's messages so a test can inspect the
+;; tool_result blocks the loop sent back to the model.
+(define (capturing-provider steps captured-box)
+  (define n 0)
+  (lambda (request)
+    (set-box! captured-box
+              (append (unbox captured-box) (list (hash-ref request 'messages))))
+    (begin0 (list-ref steps n) (set! n (add1 n)))))
+
+;; dispatch raises a plain runtime error.
+(define (boom-tool)
+  (tool "boom" "always raises" "{\"type\":\"object\"}"
+        (lambda (args-json) 'ok)
+        (lambda (_) (error 'boom "kapow"))))
+
+;; dispatch asserts a capability — the shape of a compiled `fn … requires [c]`
+;; body — WITHOUT any delegation wrapper (the pre-fix emitted form).
+(define (cap-asserting-tool)
+  (tool "needs_cap" "asserts issue30-cap" "{\"type\":\"object\"}"
+        (lambda (args-json) 'ok)
+        (lambda (_)
+          (call-with-declared-capabilities (list issue30-cap)
+                                           (lambda () "held")))))
+
+;; dispatch delegates the fn's declared capability exactly like the emitter's
+;; post-fix `asTool` lowering: (with-capabilities (c) (apply fn _decoded)).
+(define (delegating-tool)
+  (tool "delegated" "grants issue30-cap around the assertion" "{\"type\":\"object\"}"
+        (lambda (args-json) 'ok)
+        (lambda (_)
+          (with-capabilities (issue30-cap)
+            (call-with-declared-capabilities (list issue30-cap)
+                                             (lambda () "delegated-ok"))))))
+
+(define (issue30-agent t provider)
+  (withTools (defineAgent provider "sys" 64) (list t)))
+
+;; The tool message of the SECOND provider request carries the tool_result the
+;; loop produced for the first request's tool_use.
+(define (second-request-tool-results captured-box)
+  (define msgs (cadr (unbox captured-box)))
+  (hash-ref (last msgs) 'content))
+
+(define tool-dispatch-containment-tests
+  (test-suite
+   "issue #30 — dispatch containment + capability delegation"
+
+   (test-case "a RAISING dispatch becomes an is_error tool_result; loop survives"
+     (define captured (box '()))
+     (define provider
+       (capturing-provider
+        (list (toolUseStep "boom" "c1" "{}") (textStep "survived"))
+        captured))
+     (with-capabilities (aiProvider)
+       (define reply (askReply (issue30-agent (boom-tool) provider) "go"))
+       (check-equal? (replyText reply) "survived")
+       (check-equal? (replyToolCalls reply) 1))
+     (define results (second-request-tool-results captured))
+     (check-equal? (length results) 1)
+     (check-true (hash-ref (car results) 'is-error))
+     (check-regexp-match #rx"tool failed: .*kapow"
+                         (hash-ref (car results) 'content)))
+
+   ;; The exact live failure of issue #30: the tool fn's capability assertion
+   ;; trips because the loop's ambient set lacks it.  Must be CONTAINED, not a
+   ;; loop-killing raise.
+   (test-case "a capability trap in dispatch is contained as is_error"
+     (define captured (box '()))
+     (define provider
+       (capturing-provider
+        (list (toolUseStep "needs_cap" "c1" "{}") (textStep "recovered"))
+        captured))
+     (with-capabilities (aiProvider)   ; ambient LACKS issue30-cap
+       (define reply (askReply (issue30-agent (cap-asserting-tool) provider) "go"))
+       (check-equal? (replyText reply) "recovered"))
+     (define results (second-request-tool-results captured))
+     (check-true (hash-ref (car results) 'is-error))
+     (check-regexp-match #rx"Missing capabilities.*issue30-cap"
+                         (hash-ref (car results) 'content)))
+
+   ;; The runtime registry seam: a define/pow-family fn REGISTERS its declared
+   ;; capability values on the procedure; the `tool` constructor delegates them
+   ;; around the deferred call.  So a registered fn used as a manual `tool`
+   ;; dispatch succeeds with no ambient grant — same guarantee as the emitted
+   ;; asTool wrapper, for fns passed by reference.
+   (test-case "a registered dispatch fn is delegated its declared caps by `tool`"
+     (define (needs-cap-fn _)
+       (call-with-declared-capabilities (list issue30-cap) (lambda () "held")))
+     (register-procedure-capabilities! needs-cap-fn (list issue30-cap))
+     (define captured (box '()))
+     (define provider
+       (capturing-provider
+        (list (toolUseStep "registered" "c1" "{}") (textStep "fin"))
+        captured))
+     (define t (tool "registered" "registered fn" "{\"type\":\"object\"}"
+                     (lambda (args-json) 'ok)
+                     needs-cap-fn))
+     (with-capabilities (aiProvider)   ; ambient LACKS issue30-cap
+       (define reply (askReply (issue30-agent t provider) "go"))
+       (check-equal? (replyText reply) "fin"))
+     (define results (second-request-tool-results captured))
+     (check-false (hash-ref (car results) 'is-error))
+     (check-equal? (hash-ref (car results) 'content) "held"))
+
+   ;; The post-fix emitted `asTool` dispatch shape: delegation makes the SAME
+   ;; call succeed with no ambient grant — live turns behave like `tesl test`.
+   (test-case "the delegating (emitted asTool) dispatch succeeds without ambient cap"
+     (define captured (box '()))
+     (define provider
+       (capturing-provider
+        (list (toolUseStep "delegated" "c1" "{}") (textStep "done"))
+        captured))
+     (with-capabilities (aiProvider)   ; ambient still LACKS issue30-cap
+       (define reply (askReply (issue30-agent (delegating-tool) provider) "go"))
+       (check-equal? (replyText reply) "done")
+       (check-equal? (replyToolCalls reply) 1))
+     (define results (second-request-tool-results captured))
+     (check-false (hash-ref (car results) 'is-error))
+     (check-equal? (hash-ref (car results) 'content) "delegated-ok"))))
+
+;;; ════════════════════════════════════════════════════════════════════════════
+;;; PILLAR 7 — agent-facing PosixMillis enrichment (date-confusion class).
+;;;            A bare epoch-millis integer in a tool result makes the model
+;;;            hallucinate calendar dates.  At the agent boundary ONLY, a
+;;;            PosixMillis renders as {epochMillis, iso}; the HTTP wire format
+;;;            is untouched (parameter default #f).
+;;; ════════════════════════════════════════════════════════════════════════════
+
+;; A non-PosixMillis newtype control: enrichment must not touch it.
+(define-newtype Pillar7Id String)
+
+(define posix-enrichment-tests
+  (test-suite
+   "agent-facing PosixMillis enrichment"
+
+   (test-case "HTTP default: PosixMillis encodes as the bare integer"
+     (check-equal? (runtime-value->jsexpr (PosixMillis 1783804288000))
+                   1783804288000))
+
+   (test-case "agent boundary: PosixMillis encodes as {epochMillis, iso} (UTC)"
+     (parameterize ([current-agent-posix-enrichment? #t])
+       (check-equal? (runtime-value->jsexpr (PosixMillis 1783804288000))
+                     (hash 'epochMillis 1783804288000
+                           'iso "2026-07-11T21:11:28Z"))))
+
+   (test-case "enrichment reaches nested values (list elements)"
+     (parameterize ([current-agent-posix-enrichment? #t])
+       (check-equal? (runtime-value->jsexpr (list (PosixMillis 0)))
+                     (list (hash 'epochMillis 0 'iso "1970-01-01T00:00:00Z")))))
+
+   (test-case "other newtypes still unwrap to their base value"
+     (parameterize ([current-agent-posix-enrichment? #t])
+       ;; PosixMillis is the ONLY enriched newtype; anything else unwraps.
+       (check-equal? (runtime-value->jsexpr (Pillar7Id "abc")) "abc")))
+
+   ;; asTool result path: a tool fn returning PosixMillis reaches the model as
+   ;; the enriched JSON object string, not the struct's opaque print form.
+   (test-case "tool dispatch returning PosixMillis yields enriched tool_result"
+     (define captured (box '()))
+     (define provider
+       (capturing-provider
+        (list (toolUseStep "now" "c1" "{}") (textStep "done"))
+        captured))
+     (define t (tool "now" "current time" "{\"type\":\"object\"}"
+                     (lambda (args-json) 'ok)
+                     (lambda (_) (PosixMillis 1783804288000))))
+     (with-capabilities (aiProvider)
+       (define reply (askReply (issue30-agent t provider) "when"))
+       (check-equal? (replyText reply) "done"))
+     (define results (second-request-tool-results captured))
+     (check-false (hash-ref (car results) 'is-error))
+     (check-equal? (string->jsexpr (hash-ref (car results) 'content))
+                   (hasheq 'epochMillis 1783804288000
+                           'iso "2026-07-11T21:11:28Z")))))
+
 ;;; ── Run order: pure-runtime suites first, then the DB-gated pillars. ─────────
 
 (define (run-all)
@@ -679,6 +871,8 @@
   (run-tests agentrun-publish-tests)
   (run-tests capability-gating-tests)
   (run-tests mock-discipline-tests)
+  (run-tests tool-dispatch-containment-tests)
+  (run-tests posix-enrichment-tests)
 
   ;; DB-gated pillars: skip cleanly when PostgreSQL tooling is unavailable.
   (cond

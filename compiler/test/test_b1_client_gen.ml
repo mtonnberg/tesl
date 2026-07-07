@@ -141,6 +141,22 @@ api EightApi {
 }
 |}
 
+(* A PosixMillis field crosses the wire as a bare epoch-millis int over HTTP,
+   but the agent boundary renders it as {"epochMillis": <int>, "iso": "…"}
+   (types.rkt enrichment).  The Elm decoder must accept BOTH shapes. *)
+let posix_field = {|#lang tesl
+module PosixWide exposing []
+import Tesl.Prelude exposing [String, Int, Bool(..)]
+import Tesl.Time exposing [PosixMillis]
+record Meeting {
+  title: String
+  startsAt: PosixMillis
+}
+api MeetingApi {
+  post "/meeting" body payload: String -> String
+}
+|}
+
 (* ── tests ────────────────────────────────────────────────────────────────── *)
 let gen_rejects_invalid flag () =
   with_src type_invalid (fun p ->
@@ -201,6 +217,15 @@ let elm_eight_fields_map8 () =
     if not (contains "D.map8 Eight" out) then
       failf "expected D.map8 for exactly 8 fields:\n%s" out)
 
+(* PosixMillis decoder tolerance: bare int (HTTP) OR the agent-enriched
+   {"epochMillis": …} object; encoding stays a bare int. *)
+let elm_posix_field_tolerant_decoder () =
+  with_src posix_field (fun p ->
+    let code, out = run_cc ["--generate-elm"; p] in
+    if code <> 0 then failf "generate-elm failed on a PosixMillis field:\n%s" out;
+    if not (contains {|(D.oneOf [ D.int, D.field "epochMillis" D.int ])|} out) then
+      failf "expected the tolerant PosixMillis decoder (bare int OR {epochMillis}):\n%s" out)
+
 let () =
   run "B1-Client-Generation" [
     "checker bypass (a)", [
@@ -224,5 +249,9 @@ let () =
         elm_nine_fields_pipeline;
       test_case "8-field record keeps D.map8" `Quick
         elm_eight_fields_map8;
+    ];
+    "PosixMillis decoder tolerance", [
+      test_case "PosixMillis field decodes bare int OR {epochMillis}" `Quick
+        elm_posix_field_tolerant_decoder;
     ];
   ]

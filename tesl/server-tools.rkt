@@ -39,6 +39,7 @@
                   instantiate-binder-proof
                   prepare-json
                   validate-handler-return)
+         (only-in "../dsl/types.rkt" current-agent-posix-enrichment?)
          (only-in "../dsl/types.rkt"
                   auth-spec-binder auth-spec-proof
                   capture-spec? capture-spec-name capture-spec-proof
@@ -55,6 +56,7 @@
                   attach ensure-named named-value?
                   check-fail check-fail? check-fail-message check-fail-status)
          (only-in "../dsl/private/evidence.rkt" raw-value)
+         (only-in "../dsl/capability.rkt" call-with-delegated-capabilities)
          (only-in "agent.rkt" tool)
          json)
 
@@ -176,10 +178,20 @@
                      (lambda (e) (check-fail (exn-message e) 500 '()))])
       (define auth-value (and auth (bind-auth-user auth user)))
       (define auth-args (if auth-value (list auth-value) '()))
+      ;; Issue #30 class: this tool executes inside the agent loop, whose
+      ;; ambient capability set need not include the handler's `requires` —
+      ;; e.g. on an UNMOUNTED server (a common pattern: a second agent-facing
+      ;; server sharing handlers with the user-facing one) CAP-COMPOSE never
+      ;; forces main's grant to cover them.  Delegate the handler's OWN
+      ;; registered declared capabilities, statically charged to the
+      ;; `serverTools` call site by the checker.
+      (define handler (route-spec-handler route))
       (define result
         (validate-handler-return
          route auth-value arg-values
-         (apply (route-spec-handler route) (append auth-args arg-values))))
+         (call-with-delegated-capabilities
+          handler
+          (lambda () (apply handler (append auth-args arg-values))))))
       (cond
         [(check-fail? result)
          ;; keep the HTTP status visible to the model in the is_error text
@@ -188,11 +200,18 @@
                              (check-fail-status result))
                      (check-fail-status result) '())]
         [else
+         ;; Agent-facing PosixMillis enrichment (see types.rkt): a tool result
+         ;; is read by the MODEL, so epoch-millis values are rendered as
+         ;; {epochMillis, iso} objects instead of bare integers the model
+         ;; would misread.  Enrichment happens in the generic encode walk; a
+         ;; response with a user-written codec keeps its authored shape (the
+         ;; encoder consumes the plain prepared jsexpr, same as HTTP).
          (define encoded
-           (let ([prepared (prepare-json result)])
-             (if (route-spec-response-encoder route)
-                 (prepare-json ((route-spec-response-encoder route) prepared))
-                 prepared)))
+           (if (route-spec-response-encoder route)
+               (let ([prepared (prepare-json result)])
+                 (prepare-json ((route-spec-response-encoder route) prepared)))
+               (parameterize ([current-agent-posix-enrichment? #t])
+                 (prepare-json result))))
          (jsexpr->string encoded)]))))
 
 ;; server-tools : server-spec × user × (listof (list name description schema))

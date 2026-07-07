@@ -7,6 +7,10 @@
          "../dsl/check.rkt"
          "../dsl/web.rkt"
          "../dsl/otel.rkt"
+         (only-in "../dsl/capability.rkt" current-capabilities)
+         (only-in "../tesl/queue.rkt"
+                  channel-spec channel-spec-listeners publish-event! pubsub)
+         (only-in "../tesl/sse.rkt" make-sse-connection-handler)
          "../example/document-api.rkt")
 
 (define-runtime-path check-rkt "../dsl/check.rkt")
@@ -795,3 +799,126 @@
 (define/pow (d12plain [a : Integer] [b : Integer]) #:returns Integer (+ *a *b))")
    'd12plain))
 (check-equal? (d12plain-fn 2 3) 5 "D12: proof-free fn behaves unchanged")
+
+;; ── Issue #32: SSE listeners must not leak, publish must not block on them ───
+;; Two coupled defects:
+;;   1. The listener registered on SSE connect was only removed by code AFTER
+;;      the event loop — but the web server tears connections down by custodian
+;;      shutdown, which KILLS the handler thread without running that code, so
+;;      listeners accumulated forever (109 observed on one key after a day).
+;;   2. Delivery did (sync/timeout 1 (channel-put-evt ...)) per listener, so
+;;      every stale listener cost the PUBLISHER up to 1 s — publish runs inside
+;;      request handlers, so N stale listeners hung unrelated requests ~N s.
+;; Fixes: kill-safe janitor thread unregisters on ALL exit paths; the listener
+;; callback is a non-blocking put into a bounded per-connection async buffer.
+
+(define (sse32-listener-count ch key)
+  (length (hash-ref (channel-spec-listeners ch) key '())))
+
+;; Poll a predicate for up to `ms` — the janitor cleanup is asynchronous
+;; (microseconds normally), so counts are asserted with a bounded wait.
+(define (sse32-poll-until pred [ms 5000])
+  (let loop ([n (quotient ms 10)])
+    (cond [(pred) #t]
+          [(zero? n) #f]
+          [else (sleep 0.01) (loop (sub1 n))])))
+
+(define (sse32-publish! ch key evt)
+  (parameterize ([current-capabilities (list pubsub)])
+    (publish-event! ch key evt)))
+
+;; (a) orderly disconnect (write failure → loop exit) removes the listener.
+(let ()
+  (define ch (channel-spec 'Issue32Chan (make-hash) (make-hash)))
+  (define-values (in out) (make-pipe))
+  (define conn (thread (lambda () ((make-sse-connection-handler ch "room-1") out))))
+  (define drain (thread (lambda () (let loop () (unless (eof-object? (read-line in)) (loop))))))
+  (check-true (sse32-poll-until (lambda () (= 1 (sse32-listener-count ch "room-1"))))
+              "issue #32a: SSE connect registers exactly one listener")
+  ;; Simulate client disconnect: further writes fail.  Publish once so the
+  ;; loop wakes immediately (instead of at the next 10 s heartbeat), hits the
+  ;; failed write, and exits.
+  (close-output-port out)
+  (sse32-publish! ch "room-1" (hash 'n 1))
+  (check-true (sse32-poll-until (lambda () (= 0 (sse32-listener-count ch "room-1"))))
+              "issue #32a: listener count returns to previous value after disconnect")
+  (kill-thread drain)
+  (check-true (sse32-poll-until (lambda () (thread-dead? conn)))
+              "issue #32a: handler thread exits after disconnect"))
+
+;; (a′) custodian-shutdown path: kill-thread runs NO dynamic-wind post-thunks —
+;; this is the exact path that leaked before the janitor fix.
+(let ()
+  (define ch (channel-spec 'Issue32Kill (make-hash) (make-hash)))
+  (define-values (in out) (make-pipe))
+  (define conn (thread (lambda () ((make-sse-connection-handler ch "room-k") out))))
+  (check-true (sse32-poll-until (lambda () (= 1 (sse32-listener-count ch "room-k"))))
+              "issue #32a': listener registered before kill")
+  (kill-thread conn)
+  (check-true (sse32-poll-until (lambda () (= 0 (sse32-listener-count ch "room-k"))))
+              "issue #32a': killed handler thread (custodian shutdown) is unregistered"))
+
+;; (b) publish latency must not scale with stale listeners.  Each consumer is
+;; wedged in its very first write (pipe capacity 1 byte, nobody reading), so
+;; none is parked on its event channel — exactly the state in which the old
+;; rendezvous put blocked 1 s PER LISTENER (K listeners ⇒ ~K s publish).
+(let ()
+  (define K 20)
+  (define ch (channel-spec 'Issue32Slow (make-hash) (make-hash)))
+  (define conns
+    (for/list ([i (in-range K)])
+      (define-values (in out) (make-pipe 1))
+      (thread (lambda () ((make-sse-connection-handler ch "hot") out)))))
+  (check-true (sse32-poll-until (lambda () (= K (sse32-listener-count ch "hot"))))
+              "issue #32b: all wedged listeners registered")
+  (define t0 (current-inexact-milliseconds))
+  (sse32-publish! ch "hot" (hash 'n 1))
+  (define elapsed (- (current-inexact-milliseconds) t0))
+  ;; Old behavior: ≥ K × 1000 ms.  Fixed behavior: sub-millisecond.  The 2 s
+  ;; bound is 10× slack for CI jitter while still 10× under the old K seconds.
+  (check-true (< elapsed 2000)
+              (format "issue #32b: publish to ~a wedged listeners took ~a ms (must not scale ~a s)"
+                      K elapsed K))
+  ;; Janitor sweep at scale: killing every consumer empties the registry.
+  (for-each kill-thread conns)
+  (check-true (sse32-poll-until (lambda () (= 0 (sse32-listener-count ch "hot"))))
+              "issue #32b: all killed listeners unregistered"))
+
+;; (c) a live subscriber still receives events, and a momentarily-stuck LIVE
+;; consumer keeps its grace: events published while it is wedged mid-write are
+;; buffered (bounded, 64) and delivered once it drains — the fix must not turn
+;; "slow" into "silently dropped".
+(let ()
+  (define ch (channel-spec 'Issue32Live (make-hash) (make-hash)))
+  ;; Pipe capacity 8: the 6-byte ": ok" preamble fits, the first data line
+  ;; does not — so the consumer wedges mid-first-event until we drain.
+  (define-values (in out) (make-pipe 8))
+  (define conn (thread (lambda () ((make-sse-connection-handler ch "live-1") out))))
+  (check-true (sse32-poll-until (lambda () (= 1 (sse32-listener-count ch "live-1"))))
+              "issue #32c: live subscriber registered")
+  ;; Publish 5 events at a wedged consumer — publisher must not block.
+  (define t0 (current-inexact-milliseconds))
+  (for ([n (in-range 5)])
+    (sse32-publish! ch "live-1" (hash 'n n)))
+  (check-true (< (- (current-inexact-milliseconds) t0) 2000)
+              "issue #32c: publishing at a wedged live consumer does not block")
+  ;; Now drain: all 5 events must come through (buffered, not dropped).
+  (define data-lines (box '()))
+  (define drain
+    (thread (lambda ()
+              (let loop ()
+                (define l (read-line in))
+                (unless (eof-object? l)
+                  (when (regexp-match? #rx"^data:" l)
+                    (set-box! data-lines (cons l (unbox data-lines))))
+                  (loop))))))
+  (check-true (sse32-poll-until (lambda () (= 5 (length (unbox data-lines)))))
+              "issue #32c: slow-but-live consumer receives ALL buffered events")
+  (check-true (for/and ([l (in-list (unbox data-lines))])
+                (string-contains? l "\"channel\":\"Issue32Live\""))
+              "issue #32c: delivered events carry the channel envelope")
+  (close-output-port out)
+  (sse32-publish! ch "live-1" (hash 'n 99))
+  (check-true (sse32-poll-until (lambda () (= 0 (sse32-listener-count ch "live-1"))))
+              "issue #32c: live subscriber cleanly unregistered on disconnect")
+  (kill-thread drain))

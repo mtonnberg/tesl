@@ -1297,7 +1297,22 @@ let agent_tool_schema_json (params : Ast.binding list) : string =
     (String.concat "," props) (String.concat "," required)
 
 (* Emit `(__tart_tool name desc schema validator dispatch)` for a tool function.
-   description = the fn's harvested doc-comment, else its name. *)
+   description = the fn's harvested doc-comment, else its name.
+
+   Issue #30: the dispatch DELEGATES the fn's declared capabilities.  The static
+   checker already charges every `asTool fn` wiring site (fn body or declarative
+   agent block, A2-4) with the tool fn's `requires`, so whoever constructed the
+   Agent value provably held them — but the tool executes LATER, inside the
+   agent loop, whose ambient capability set need not include them (a live
+   handler turn runs under the serve grant, which CAP-COMPOSE only guarantees
+   covers handlers/workers, not agent tools).  Without the grant the fn's own
+   `call-with-declared-capabilities` assertion traps at dispatch time — a
+   "passes `tesl test`, fails live" gap, because a test's `requires` puts the
+   caps in ambient while the live turn's context does not.  Wrapping the
+   dispatch in `with-capabilities` carries the statically-verified authority to
+   execution, exactly like the emitted worker bodies do.  Capability-row
+   VARIABLES are compile-time only (no runtime value) and are excluded, same as
+   `#:capabilities` on the fn's own definition. *)
 let emit_tool_from_fd ctx (fd : Ast.func_decl) =
   let schema = agent_tool_schema_json fd.params in
   let desc = match fd.doc with Some d when String.trim d <> "" -> d | _ -> fd.name in
@@ -1308,7 +1323,15 @@ let emit_tool_from_fd ctx (fd : Ast.func_decl) =
     | Some tag -> emit ctx (Printf.sprintf " (cons %S '%s)" b.name tag)
     | None -> ()) fd.params;
   emit ctx ")))";
-  emit ctx (Printf.sprintf " (lambda (_decoded) (apply %s _decoded)))" fd.name)
+  let bound_vars = Ast.func_bound_cap_vars fd in
+  let concrete_caps =
+    List.filter (fun c -> not (List.mem c bound_vars)) fd.capabilities in
+  if concrete_caps = [] then
+    emit ctx (Printf.sprintf " (lambda (_decoded) (apply %s _decoded)))" fd.name)
+  else
+    emit ctx (Printf.sprintf
+                " (lambda (_decoded) (with-capabilities (%s) (apply %s _decoded))))"
+                (cap_list_str concrete_caps) fd.name)
 
 (* ── serverTools: endpoint → tool metadata (compile time) ───────────────────
    `serverTools S user` lowers to `(__tst_server-tools S user <metadata>)`; the

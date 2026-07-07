@@ -249,7 +249,12 @@ let rec decode_expr_of_type te =
   | TName { name = "Float"; _ }
   | TName { name = "Real"; _ } -> "D.float"
   | TName { name = "Bool"; _ } -> "D.bool"
-  | TName { name = "PosixMillis"; _ } -> "D.int"
+  (* PosixMillis arrives as a bare epoch-millis integer over HTTP, but the
+     agent-facing boundary renders it as {"epochMillis": <int>, "iso": "…"}
+     (types.rkt agent enrichment).  Accept BOTH so a client decoder never
+     breaks on whichever shape a payload carries. *)
+  | TName { name = "PosixMillis"; _ } ->
+    {|(D.oneOf [ D.int, D.field "epochMillis" D.int ])|}
   | TName { name = "Unit"; _ } -> "(D.succeed ())"
   | TName { name; _ } -> decoder_fn_name name
   | TApp { head = TName { name = "List"; _ }; arg; _ } ->
@@ -374,7 +379,10 @@ let rec decode_expr_of_ir_type (ty : Ir.ir_type) =
   | Ir.IRInt -> "D.int"
   | Ir.IRFloat -> "D.float"
   | Ir.IRBool -> "D.bool"
-  | Ir.IRPosixMillis -> "D.int"
+  (* Same tolerant shape as decode_expr_of_type: bare int (HTTP) OR the
+     agent-enriched {"epochMillis": <int>, …} object. *)
+  | Ir.IRPosixMillis ->
+    {|(D.oneOf [ D.int, D.field "epochMillis" D.int ])|}
   | Ir.IRNamed "Unit" -> "(D.succeed ())"
   | Ir.IRNamed name -> decoder_fn_name name
   | Ir.IRVar _ -> "D.value"

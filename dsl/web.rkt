@@ -649,7 +649,13 @@
              (lambda ()
                (let* (erased-arg-clause ...)
                  (let ([result body-expr])
-                   (validate-signature-return signature-id result)))))))))
+                   (validate-signature-return signature-id result))))))
+          ;; Issue #30: expose the declared capability VALUES on the procedure
+          ;; so a deferred-execution boundary (agent tool dispatch, serverTools)
+          ;; can delegate the statically-charged authority at execution time.
+          #,@(if (null? cap-stxs)
+                 '()
+                 (list #'(register-procedure-capabilities! name (list cap-id ...)))))))
 
   (define (parse-auth-piece piece-stx outer-bound-names)
     (define parts (syntax->list piece-stx))

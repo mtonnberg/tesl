@@ -8,7 +8,10 @@
  with-capabilities
  expand-capabilities
  require-capabilities!
- call-with-declared-capabilities)
+ call-with-declared-capabilities
+ register-procedure-capabilities!
+ procedure-declared-capabilities
+ call-with-delegated-capabilities)
 
 (struct capability-value (name implies-thunk))
 
@@ -75,6 +78,41 @@
   ;; with no narrowing.
   (require-capabilities! declared-caps)
   (thunk))
+
+;; ── Capability delegation at deferred-execution boundaries (issue #30) ───────
+;; A Tesl function's declared `requires` is charged STATICALLY at every site
+;; that wires it somewhere (agent tool lists, serverTools endpoints), but the
+;; function EXECUTES later — inside an agent loop whose ambient capability set
+;; need not include those caps (the serve grant only covers wired handlers and
+;; workers).  Each define/pow-family definition registers its own declared
+;; capability VALUES against the defined procedure; a deferred-execution
+;; boundary then delegates exactly those caps around the call, carrying the
+;; statically-verified authority to execution time.  This is a per-procedure
+;; grant of the procedure's OWN declaration — never a widening beyond what the
+;; static checker already charged the wiring site with.
+(define procedure-capability-registry (make-weak-hasheq))
+
+(define (register-procedure-capabilities! proc caps)
+  (unless (procedure? proc)
+    (raise-user-error 'capabilities
+                      "capability registration expects a procedure, got ~a" proc))
+  (unless (null? caps)
+    (hash-set! procedure-capability-registry proc
+               (ensure-capability-list 'capabilities caps))))
+
+(define (procedure-declared-capabilities proc)
+  (hash-ref procedure-capability-registry proc '()))
+
+;; Run `thunk` with `proc`'s registered declared capabilities granted IN
+;; ADDITION to the ambient set.  A procedure with no registration (a plain
+;; lambda, a non-Tesl fn) runs unchanged.
+(define (call-with-delegated-capabilities proc thunk)
+  (define caps (procedure-declared-capabilities proc))
+  (if (null? caps)
+      (thunk)
+      (parameterize ([current-capabilities
+                      (expand-capabilities (append caps (current-capabilities)))])
+        (thunk))))
 
 (define-syntax (define-capability stx)
   (syntax-parse stx

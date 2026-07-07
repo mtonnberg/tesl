@@ -1,0 +1,166 @@
+#lang tesl
+module TwoApiServerToolsTests exposing [
+  UserFacingServer,
+  AgentFacingServer,
+  User,
+  Authenticated,
+  userFacingTools,
+  agentFacingTools,
+  mkUser,
+]
+
+import Tesl.Prelude exposing [String, List]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.concat]
+import Tesl.List exposing [List.length]
+import Tesl.Agent exposing [
+  aiProvider,
+  Agent,
+  Tool,
+  serverTools,
+  mockToolProvider,
+  toolUseStep,
+  textStep,
+  askWith,
+  replyText,
+  replyToolCalls,
+]
+
+# ────────────────────────────────────────────────────────────────────────────
+# TWO api types in ONE app, SHARING the same handler functions:
+#
+#   • UserFacingApi  — the full HTTP surface end users hit
+#   • AgentFacingApi — a curated SUBSET of the same endpoints, defined solely
+#     so `serverTools AgentFacingServer user` hands the model only the tools
+#     the developer wants it to have
+#
+# The agent-facing server is typically never mounted; it exists as a
+# compile-time tool allowlist.  These tests pin the guarantees that make the
+# pattern work: per-server tool derivation (no cross-talk between the two
+# `serverTools` call sites), shared-handler dispatch, and the subset actually
+# excluding the endpoints left off the agent api.
+# ────────────────────────────────────────────────────────────────────────────
+
+capability supportAi implies aiProvider
+
+record User {
+  id: String
+}
+
+fact Authenticated (u: User)
+
+auth cookieAuth(request: HttpRequest) -> u: User ::: Authenticated u =
+  case Dict.lookup "user" request.cookies of
+    Something userId -> ok (User { id: userId }) ::: Authenticated u
+    Nothing -> fail 401 "Missing user cookie"
+
+# ── The SHARED handlers — bound by BOTH servers ─────────────────────────────
+
+# Greet the authenticated user.
+handler greet(u: User ::: Authenticated u) -> String =
+  String.concat "hello " u.id
+
+# Summarize the user's account.
+handler accountSummary(u: User ::: Authenticated u) -> String =
+  String.concat "summary for " u.id
+
+# Delete the user's account — deliberately NOT exposed to the agent.
+handler deleteAccount(u: User ::: Authenticated u) -> String =
+  String.concat "deleted " u.id
+
+api UserFacingApi {
+  get "/greet"
+    auth u: User ::: Authenticated u via cookieAuth
+    -> String
+
+  get "/account"
+    auth u: User ::: Authenticated u via cookieAuth
+    -> String
+
+  post "/account/delete"
+    auth u: User ::: Authenticated u via cookieAuth
+    -> String
+}
+
+# The agent-facing api reuses the SAME handlers but lists only the endpoints
+# the model may call: no deleteAccount here.
+api AgentFacingApi {
+  get "/greet"
+    auth u: User ::: Authenticated u via cookieAuth
+    -> String
+
+  get "/account"
+    auth u: User ::: Authenticated u via cookieAuth
+    -> String
+}
+
+server UserFacingServer for UserFacingApi {
+  greet = greet
+  accountSummary = accountSummary
+  deleteAccount = deleteAccount
+}
+
+server AgentFacingServer for AgentFacingApi {
+  greet = greet
+  accountSummary = accountSummary
+}
+
+check mkUser(u: User) -> u: User ::: Authenticated u =
+  ok u ::: Authenticated u
+
+fn userFacingTools(u: User ::: Authenticated u) -> List Tool =
+  serverTools UserFacingServer u
+
+fn agentFacingTools(u: User ::: Authenticated u) -> List Tool =
+  serverTools AgentFacingServer u
+
+fn supportAgent(u: User ::: Authenticated u) -> Agent =
+  Agent {
+    provider: mockToolProvider []
+    systemPrompt: "You help the user with their account using the provided tools."
+    maxTokens: 256
+    tools: serverTools AgentFacingServer u
+  }
+
+# (1) The agent-facing server derives tools from ITS endpoint list only:
+# 2 tools, not the user-facing server's 3 — deleteAccount stays HTTP-only.
+test "agent-facing server exposes only its curated endpoint subset" {
+  let rawUser = User { id: "alice" }
+  let user = check mkUser rawUser
+  expect (List.length (agentFacingTools user)) == 2
+}
+
+# (2) The user-facing server is unaffected by the second `serverTools` call
+# site in the same module: it still derives its full endpoint set.
+test "user-facing server still derives its full endpoint set" {
+  let rawUser = User { id: "alice" }
+  let user = check mkUser rawUser
+  expect (List.length (userFacingTools user)) == 3
+}
+
+# (3) Dispatch through the agent-facing server runs the SHARED handler — the
+# same function the user-facing HTTP surface dispatches to.
+test "agent-facing tool dispatches the shared handler" requires [supportAi] {
+  let rawUser = User { id: "alice" }
+  let user = check mkUser rawUser
+  let call = toolUseStep "greet" "call_1" "{}"
+  let final = textStep "Greeted."
+  let reply = askWith (supportAgent user) "greet me" (mockToolProvider [call, final])
+  expect (replyText reply) == "Greeted."
+  expect (replyToolCalls reply) == 1
+}
+
+# (4) The excluded endpoint is NOT callable through the agent-facing tools:
+# the model asking for it gets an unknown-tool is_error and the loop recovers
+# — the allowlist holds at dispatch time, not just in the tool count.
+test "excluded endpoint is unknown to the agent and dispatch is refused" requires [supportAi] {
+  let rawUser = User { id: "alice" }
+  let user = check mkUser rawUser
+  let call = toolUseStep "deleteAccount" "call_1" "{}"
+  let final = textStep "I cannot do that."
+  let reply = askWith (supportAgent user) "delete my account" (mockToolProvider [call, final])
+  expect (replyText reply) == "I cannot do that."
+  expect (replyToolCalls reply) == 1
+}

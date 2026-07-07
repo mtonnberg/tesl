@@ -72,7 +72,12 @@ let rec zod_of_ir_type (fact_schemas : (string, unit) Hashtbl.t) (ty : Ir.ir_typ
   | Ir.IRInt -> "z.number().int()"
   | Ir.IRFloat -> "z.number()"
   | Ir.IRBool -> "z.boolean()"
-  | Ir.IRPosixMillis -> "z.number().int()"
+  (* PosixMillis arrives as a bare epoch-millis integer over HTTP, but the
+     agent-facing boundary renders it as {"epochMillis": <int>, "iso": "…"}
+     (types.rkt agent enrichment).  Accept BOTH shapes, normalized to the bare
+     integer so the TS-side type stays `number` (mirrors the Elm decoder). *)
+  | Ir.IRPosixMillis ->
+    "z.union([z.number().int(), z.object({ epochMillis: z.number().int() }).transform((v) => v.epochMillis)])"
   | Ir.IRNamed name ->
     if Hashtbl.mem fact_schemas name then name ^ "Schema"
     else name ^ "Schema"
@@ -150,7 +155,10 @@ let base_zod_schema_for_type name =
   | "Int" | "Integer" -> "z.number().int()"
   | "Float" | "Real" -> "z.number()"
   | "Bool" -> "z.boolean()"
-  | "PosixMillis" -> "z.number().int()"
+  (* Same tolerant shape as zod_of_ir_type: bare int (HTTP) OR the
+     agent-enriched {"epochMillis": <int>, …} object. *)
+  | "PosixMillis" ->
+    "z.union([z.number().int(), z.object({ epochMillis: z.number().int() }).transform((v) => v.epochMillis)])"
   | _ -> "z.string()"  (* fallback for unknown custom types *)
 
 (* ── Constraint → Zod method ─────────────────────────────────────────────── *)

@@ -250,16 +250,31 @@ web server chunked-response path.
 ```racket
 (define (make-sse-connection-handler channel-spec channel-key)
   (lambda (out)
-    (define event-ch (make-channel))
+    ; Bounded per-connection event buffer (issue #32): the publisher must
+    ; NEVER block on this connection.  A slow consumer gets up to 64 queued
+    ; events of grace; only a consumer a whole buffer behind drops events.
+    (define event-ch (make-async-channel 64))
 
-    ; Listener callback: non-blocking (sync/timeout 1) so the delivery
-    ; thread never blocks on a dead connection whose loop has already exited.
+    ; Listener callback: O(1), never blocks the publisher.
+    ; #f result (buffer full → drop) is intentional.
     (define (on-event evt)
-      (sync/timeout 1 (channel-put-evt event-ch evt)))
+      (sync/timeout 0 (async-channel-put-evt event-ch evt)))
 
-    ; Register listener for this (channel, key) pair
-    (hash-set! (channel-spec-listeners channel-spec) channel-key
-               (cons on-event (hash-ref ... channel-key '())))
+    ; Janitor thread (issue #32): owns register/unregister for this
+    ; connection.  Runs under a module-level custodian, so it SURVIVES the
+    ; connection custodian: the web server kills the handler thread by
+    ; custodian shutdown, which runs no dynamic-wind post-thunks — cleanup
+    ; placed after the loop leaked one listener per disconnect.  The janitor
+    ; unregisters when the handler thread dies for ANY reason (or promptly
+    ; when the loop exits, via the `done` semaphore).  All registry mutations
+    ; are serialized by a lock that only janitor threads take (kill-safe).
+    (parameterize ([current-custodian sse-janitor-custodian])
+      (thread (lambda ()
+                (register-listener! listeners channel-key on-event)
+                (semaphore-post registered)
+                (sync (thread-dead-evt conn-thread) done)
+                (unregister-listener! listeners channel-key on-event))))
+    (semaphore-wait registered)
 
     ; Send initial ": ok" comment immediately so the browser fires onopen
     ; without waiting for the first 10-second heartbeat timeout.
@@ -278,10 +293,16 @@ web server chunked-response path.
               (begin (write-bytes (format-sse-event ...) out) (flush-output out) #t))))
       (when ok? (loop)))
 
-    ; Cleanup: remove listener
-    (hash-set! (channel-spec-listeners channel-spec) channel-key
-               (remove on-event (hash-ref ... channel-key '())))))
+    ; Orderly exit: wake the janitor, which removes the listener.
+    (semaphore-post done)))
 ```
+
+Delivery cost per listener is O(1): the old callback did
+`(sync/timeout 1 (channel-put-evt ...))` on a rendezvous channel, so every
+listener not already parked in `sync` — in particular every stale one — cost
+the **publisher** up to 1 second per publish. With `publish` running inside
+request handlers, N stale listeners hung unrelated requests ~N seconds
+(issue #32).
 
 ### Connection stability: `connection-close? #f`
 
@@ -332,13 +353,16 @@ valid and other threads are unaffected.
   ; listeners: hash key-string → list-of-listener-fns
 ```
 
-Each SSE connection registers a listener function in `sse.rkt`:
+Each SSE connection registers a listener function in `sse.rkt` (via its
+janitor thread — see the SSE section above; the registry read-modify-write is
+serialized by `listeners-lock`):
 
 ```racket
-; In sse.rkt when a client connects:
+; In sse.rkt when a client connects (on the kill-safe janitor thread):
 (hash-set! (channel-spec-listeners ch) channel-key
            (cons (lambda (evt)
-                   (sync/timeout 1 (channel-put-evt event-ch evt)))
+                   ; non-blocking put into the connection's bounded buffer
+                   (sync/timeout 0 (async-channel-put-evt event-ch evt)))
                  (hash-ref (channel-spec-listeners ch) channel-key '())))
 ```
 

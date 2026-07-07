@@ -45,6 +45,9 @@
  record-invariant-registry
  runtime-type-satisfied?
  runtime-value->jsexpr
+ current-agent-posix-enrichment?
+ posix-millis-agent-jsexpr
+ posix-millis-newtype?
  jsexpr->typed-value
  jsexpr->typed-value/result
  type-datum-display
@@ -647,12 +650,45 @@
               #:when (eq? (adt-variant-spec-name candidate) variant-name))
     candidate))
 
+;; ── Agent-facing PosixMillis enrichment ──────────────────────────────────────
+;; A bare epoch-millis integer in a tool result makes the model guess the
+;; calendar date from the digits and hallucinate (the date-confusion class from
+;; issue #30's user workarounds).  At the AGENT boundary only — never HTTP
+;; responses, whose wire format is developer-owned — a PosixMillis value is
+;; rendered as a self-describing object carrying both the raw integer and its
+;; UTC ISO-8601 rendering.  Opt-in via this parameter, set by the agent tool
+;; result encoders (serverTools dispatch, asTool result path).  Limitation:
+;; a record with a user-written `codec` block keeps its authored wire shape —
+;; only the generic (entity / codec-less record / list / ADT) walk enriches.
+(define current-agent-posix-enrichment? (make-parameter #f))
+
+(define (posix-ms->iso-utc ms)
+  (define s (floor (/ ms 1000)))
+  (define d (seconds->date s #f))
+  (define (pad2 n) (if (< n 10) (format "0~a" n) (number->string n)))
+  (format "~a-~a-~aT~a:~a:~aZ"
+          (date-year d) (pad2 (date-month d)) (pad2 (date-day d))
+          (pad2 (date-hour d)) (pad2 (date-minute d)) (pad2 (date-second d))))
+
+(define (posix-millis-agent-jsexpr ms)
+  (hash 'epochMillis ms 'iso (posix-ms->iso-utc ms)))
+
+;; A newtype's type token is either a bare symbol or a `type-ref` carrying the
+;; defining module — compare by resolved NAME so both spellings match.
+(define (posix-millis-newtype? value)
+  (and (newtype-value? value)
+       (eq? (type-key-name (newtype-value-type-name value)) 'PosixMillis)))
+
 (define (runtime-value->jsexpr value)
   (cond
     [(named-value? value)
      (runtime-value->jsexpr (named-value-value value))]
     [(check-ok? value)
      (runtime-value->jsexpr (check-ok-value value))]
+    [(and (posix-millis-newtype? value)
+          (current-agent-posix-enrichment?)
+          (exact-integer? (newtype-value-value value)))
+     (posix-millis-agent-jsexpr (newtype-value-value value))]
     [(newtype-value? value)
      (runtime-value->jsexpr (newtype-value-value value))]
     [(adt-value? value)

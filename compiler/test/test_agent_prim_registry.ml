@@ -33,7 +33,12 @@ let tag_oracle = function
   | APString -> "string" | APInt | APPosixMillis -> "int"
   | APFloat -> "float" | APBool -> "bool"
 let schema_oracle = function
-  | APInt | APPosixMillis -> {|{"type":"integer"}|}
+  | APInt -> {|{"type":"integer"}|}
+  (* PosixMillis deliberately carries the epoch-millis semantics to the model
+     (date-confusion class, issue #30 follow-up) — the description is part of
+     the contract, so the oracle pins its exact bytes. *)
+  | APPosixMillis ->
+    {|{"type":"integer","description":"Unix epoch timestamp in MILLISECONDS since 1970-01-01T00:00:00Z (13 digits for current dates) - NOT seconds and NOT a human-readable date; never guess the calendar date from the digits"}|}
   | APFloat -> {|{"type":"number"}|}
   | APBool -> {|{"type":"boolean"}|}
   | APString -> {|{"type":"string"}|}
