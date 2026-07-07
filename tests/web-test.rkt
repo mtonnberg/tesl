@@ -745,3 +745,53 @@
              "CONC-1: a valid SSE channel key is accepted")
 (check-true (check-fail? (conc1-sse-validate ""))
             "CONC-1: an invalid (empty) SSE channel key is rejected fail-closed")
+
+;; ── D12: proof-free fns must not emit the all-arg bindings hash ─────────────
+;; The `~a-erased-all-arg-bindings` table exists solely so a param proof can
+;; resolve sibling subjects (tesl-establish-param-proof's 4th argument).  A
+;; function with NO proof-annotated params never reads it, so emitting it is a
+;; dead (hash …) allocation on every call — the one artifact contradicting the
+;; erased-proof design's "proof-free params are zero-alloc" rule (§2a).  Guard:
+;; proof-free expansions must not contain the identifier at all; proof-carrying
+;; expansions must keep it (cross-param proofs depend on it).
+(define (d12-module-source defn)
+  (format "#lang racket\n(require (file ~s) (file ~s))\n~a\n"
+          (path->string check-rkt) (path->string web-rkt) defn))
+
+(define (expand-module-source source)
+  (define in (open-input-string source))
+  (port-count-lines! in)
+  (define stx (parameterize ([read-accept-reader #t]) (read-syntax 'd12 in)))
+  (parameterize ([current-namespace (make-base-namespace)])
+    (expand stx)))
+
+(define (datum-mentions-erased-bindings? d)
+  (cond [(symbol? d) (regexp-match? #rx"erased-all-arg-bindings" (symbol->string d))]
+        [(pair? d) (or (datum-mentions-erased-bindings? (car d))
+                       (datum-mentions-erased-bindings? (cdr d)))]
+        [(vector? d) (for/or ([x (in-vector d)]) (datum-mentions-erased-bindings? x))]
+        [else #f]))
+
+(check-false
+ (datum-mentions-erased-bindings?
+  (syntax->datum
+   (expand-module-source
+    (d12-module-source
+     "(define/pow (d12plain [a : Integer] [b : Integer]) #:returns Integer (+ *a *b))"))))
+ "D12: proof-free fn expansion carries no all-arg bindings hash")
+
+(check-true
+ (datum-mentions-erased-bindings?
+  (syntax->datum
+   (expand-module-source
+    (d12-module-source
+     "(define/pow (d12proved [a : Integer ::: (Positive a)]) #:returns Integer *a)"))))
+ "D12: proof-carrying fn expansion keeps the all-arg bindings hash")
+
+;; and the suppressed-hash function still runs (no unbound identifier left behind)
+(define d12plain-fn
+  (run-temp-module
+   (d12-module-source "(provide d12plain)
+(define/pow (d12plain [a : Integer] [b : Integer]) #:returns Integer (+ *a *b))")
+   'd12plain))
+(check-equal? (d12plain-fn 2 3) 5 "D12: proof-free fn behaves unchanged")

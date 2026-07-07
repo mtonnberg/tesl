@@ -1144,7 +1144,7 @@ let rec check_expr_call_proofs
       check_expr_call_proofs subject_env' proof_env' funcs arm.body
     ) arms in
     scrut_errors @ arm_errors
-  | EBinop { op = (BDiv | BMod) as op; left; right; loc } ->
+  | EBinop { op = (BDiv | BMod) as op; left; right; loc; _ } ->
     let child_errors =
       check_expr_call_proofs subject_env proof_env funcs left
       @ check_expr_call_proofs subject_env proof_env funcs right

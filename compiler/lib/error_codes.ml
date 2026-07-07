@@ -120,7 +120,10 @@ let registry : entry list = [
       "The parser could not make sense of the source at this position. This is \
        a structural problem (a missing keyword, an unexpected token, a \
        single-line function body, bad indentation, …) rather than a type or \
-       proof problem. Read the message for the specific cause.";
+       proof problem. Read the message for the specific cause. Some parse \
+       errors with a mechanical rewrite (e.g. a single-line \
+       `if cond then a else b`) carry a structured machine-applicable fix, \
+       surfaced in editors as a quickfix.";
     manual = Some "language-spec" };
 
   (* ── Type checker ─────────────────────────────────────────────────────── *)
@@ -131,7 +134,9 @@ let registry : entry list = [
        a value was used at the wrong type, a name/type is not in scope, or a \
        function body does not match its declared return type. The message names \
        the conflicting types and (where possible) the expectation chain that \
-       led there.";
+       led there. Errors with a mechanical rewrite (a missing import, \
+       `return x`, `+` on strings) carry a structured machine-applicable fix, \
+       surfaced in editors as a quickfix.";
     manual = Some "overview#core-principles" };
 
   (* ── Proof checker / GDP reasoning ────────────────────────────────────── *)

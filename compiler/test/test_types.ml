@@ -260,7 +260,7 @@ let test_generalize_with_env_free () =
 
 let make_ctx () =
   reset ();
-  make_ctx ~filename:"<test>" ~env:(make_stdlib_env ())
+  make_ctx ~filename:"<test>" ~env:(make_stdlib_env ()) ()
 
 let infer src_expr =
   let src = Printf.sprintf

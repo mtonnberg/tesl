@@ -247,7 +247,7 @@ let check_sql_where_clauses
                     binder field field (type_key f.type_expr)))))
     in
     match pred with
-    | EBinop { op = (BEq | BNeq | BLt | BLe | BGt | BGe) as op; left; right; loc } ->
+    | EBinop { op = (BEq | BNeq | BLt | BLe | BGt | BGe) as op; left; right; loc; _ } ->
       (match left with
        | EField { obj = EVar { name = b; _ }; field; _ } ->
          let op_str = match op with
@@ -359,7 +359,7 @@ let check_sql_where_clauses
       List.iter (fun (_, v) -> walk tenv binder_env bound_names v) fields
     | EList { elems; _ } ->
       List.iter (walk tenv binder_env bound_names) elems
-    | EBinop { op = (BEq | BNeq | BLt | BLe | BGt | BGe) as op; left; right; loc } ->
+    | EBinop { op = (BEq | BNeq | BLt | BLe | BGt | BGe) as op; left; right; loc; op_loc } ->
       walk tenv binder_env bound_names left;
       walk tenv binder_env bound_names right;
       (* Detect SQL WHERE comparison: the top-level EBinop's LEFT is a
@@ -401,7 +401,7 @@ let check_sql_where_clauses
               | BEq -> "==" | BNeq -> "!=" | BLt -> "<" | BLe -> "<="
               | BGt -> ">" | BGe -> ">=" | _ -> "?"
             in
-            let fake_pred = EBinop { op; left = last_atom; right; loc } in
+            let fake_pred = EBinop { op; left = last_atom; right; loc; op_loc } in
             let _ = op_str in
             scan_predicate tenv binder_env' bound_names fake_pred;
             (* Also scan for isNull on the last atom if it appears via EApp *)

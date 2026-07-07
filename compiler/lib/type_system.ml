@@ -295,16 +295,24 @@ let pp_scheme (sch : scheme) : string =
 
 (* ── Type errors ─────────────────────────────────────────────────────────── *)
 
-(** A machine-applicable edit a diagnostic can carry (E1 import ergonomics).
-    Lives here (not in Compile) so [type_error] can carry one; Compile re-exports
-    it via a type equation.  All line numbers are 0-based, matching diagnostic
-    positions on the JSON wire. *)
-type diagnostic_fix =
+(** A machine-applicable edit a diagnostic can carry (E1 import ergonomics,
+    D9 structured fixes).  The type itself lives in the dependency-leaf
+    {!Diag_fix} (so the parser can carry one too); re-exported here via a type
+    equation so [type_error] producers keep writing [Replace_line { ... }].
+    All line numbers are 0-based, matching diagnostic positions on the JSON
+    wire; [Replace_range] columns are half-open ([end_col] exclusive). *)
+type diagnostic_fix = Diag_fix.t =
   | Replace_line of { line : int; replacement : string }
   | Insert_line  of { line : int; text : string }
       (** insert [text] as a new line BEFORE [line] *)
   | Replace_span of { start_line : int; end_line : int; replacement : string }
       (** replace the inclusive line range; [replacement = ""] deletes it *)
+  | Replace_range of { start_line : int; start_col : int;
+                       end_line : int; end_col : int; replacement : string }
+      (** column-precise replacement of [start_line:start_col ..
+          end_line:end_col) *)
+  | Multi of diagnostic_fix list
+      (** several non-overlapping edits applied together *)
 
 type type_error = {
   loc     : loc;

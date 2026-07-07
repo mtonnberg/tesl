@@ -13,6 +13,9 @@ open Token
 type parse_error = {
   msg : string;
   loc : loc;
+  fix : Diag_fix.t option;
+  (** D9: machine-applicable edit when the parser knows the exact rewrite
+      (e.g. the single-line-`if` reformat).  [None] for every other error. *)
 }
 
 type 'a result = Ok of 'a | Err of parse_error
@@ -84,7 +87,11 @@ let tok_loc s tok_record =
   make_loc s.filename tok_record.Lexer.line tok_record.Lexer.col
     tok_record.Lexer.line (tok_record.Lexer.col + 1)
 
-let err s msg = Err { msg; loc = current_loc s }
+let err s msg = Err { msg; loc = current_loc s; fix = None }
+
+(* D9: an error that carries a machine-applicable fix (the parser-side twin of
+   Checker.add_error_fix). *)
+let err_fix s msg fix = Err { msg; loc = current_loc s; fix }
 
 let tok_to_string t =
   let buf = Buffer.create 16 in
@@ -1147,7 +1154,7 @@ and parse_if s =
   skip_newlines s;
   let then_loc = current_loc s in
   let* _ = expect s THEN in
-  let* then_ = parse_body_require_indent s then_loc "then" in
+  let* then_ = parse_body_require_indent s then_loc "then" ~base_col:loc0.start.col in
   skip_newlines s;
   let else_loc = current_loc s in
   let* _ = expect s ELSE in
@@ -1157,13 +1164,19 @@ and parse_if s =
     if peek s = IF then
       parse_if s
     else
-      parse_body_require_indent s else_loc "else"
+      parse_body_require_indent s else_loc "else" ~base_col:loc0.start.col
   in
   let loc = span loc0 (current_loc s) in
   return (EIf { cond; then_; else_; loc })
 
-(** Parse a body that MUST be indented (multi-line). *)
-and parse_body_require_indent s _kw_loc kw_name =
+(** Parse a body that MUST be indented (multi-line).  [kw_loc] is the
+    `then`/`else` keyword token, [base_col] the owning `if`'s column.  On the
+    single-line-`if` error this builds a machine-applicable fix (D9) that moves
+    the body — and a mid-line `else` keyword itself — onto correctly indented
+    lines; applying the fixes in sequence converges to the indented form the
+    message describes.  The fix is pure location arithmetic (keyword-token
+    start + known keyword length); no source text is needed. *)
+and parse_body_require_indent s kw_loc kw_name ~base_col =
   skip_newlines s;
   if peek s = INDENT then begin
     advance s;  (* consume INDENT *)
@@ -1171,8 +1184,61 @@ and parse_body_require_indent s _kw_loc kw_name =
     skip_newlines s;
     if peek s = DEDENT then advance s;  (* consume DEDENT *)
     return e
-  end else
-    err s (Printf.sprintf "the `%s` body must be on an indented new line. Single-line `if cond then a else b` is not supported — put `then` and `else` on their own indented lines:\n    if cond then\n        a\n    else\n        b" kw_name)
+  end else begin
+    let body_loc = current_loc s in
+    let kw_len = String.length kw_name in
+    let indent n = String.make (max 0 n) ' ' in
+    (* `if c then 1 else 2` — the `else` trails on the body's own line; the fix
+       must split there too or the applied result (`1 else 2` as the indented
+       body) is a new, UNfixable error.  The token stream is all here, so scan
+       the body line for it. *)
+    let same_line_else_col () =
+      let n = Array.length s.tokens in
+      let rec go i =
+        if i >= n then None
+        else
+          let t = s.tokens.(i) in
+          if t.Lexer.line <> body_loc.start.line then None
+          else if t.Lexer.tok = ELSE then Some t.Lexer.col
+          else go (i + 1)
+      in
+      go s.pos
+    in
+    let body_relocation () =
+      Diag_fix.Replace_range {
+        start_line = kw_loc.start.line; start_col = kw_loc.start.col + kw_len;
+        end_line = body_loc.start.line; end_col = body_loc.start.col;
+        replacement = "\n" ^ indent (base_col + 4) }
+    in
+    let fix =
+      match peek s with
+      | EOF | DEDENT -> None  (* no body token to move — message only *)
+      | _ ->
+        if kw_name = "else" && body_loc.start.line = kw_loc.start.line
+           && kw_loc.start.col <> base_col then
+          (* `… 1 else 2` — the keyword itself sits mid-line: move `else` to
+             its own line at the `if`'s column, the body to the next. *)
+          Some (Diag_fix.Replace_range {
+            start_line = kw_loc.start.line; start_col = kw_loc.start.col;
+            end_line = body_loc.start.line; end_col = body_loc.start.col;
+            replacement = "\n" ^ indent base_col ^ "else\n" ^ indent (base_col + 4) })
+        else if (body_loc.start.line = kw_loc.start.line
+                 && body_loc.start.col >= kw_loc.start.col + kw_len)
+                || body_loc.start.line > kw_loc.start.line then
+          (match (if kw_name = "then" then same_line_else_col () else None) with
+           | Some else_col ->
+             Some (Diag_fix.Multi [
+               body_relocation ();
+               (* zero-width range = insert a line break before the `else` *)
+               Diag_fix.Replace_range {
+                 start_line = body_loc.start.line; start_col = else_col;
+                 end_line = body_loc.start.line; end_col = else_col;
+                 replacement = "\n" ^ indent base_col } ])
+           | None -> Some (body_relocation ()))
+        else None
+    in
+    err_fix s (Printf.sprintf "the `%s` body must be on an indented new line. Single-line `if cond then a else b` is not supported — put `then` and `else` on their own indented lines:\n    if cond then\n        a\n    else\n        b" kw_name) fix
+  end
 
 (** Parse a body that may be on the same line OR indented on next line. *)
 and parse_body_or_inline s =
@@ -1750,22 +1816,25 @@ and parse_logic s =
   let* left = parse_comparison s in
   match peek s with
   | DOUBLE_AMP ->
+    let op_loc = current_loc s in
     advance s;
     let* right = parse_logic s in
     let loc = span (expr_loc left) (expr_loc right) in
-    return (EBinop { op = BAnd; left; right; loc })
+    return (EBinop { op = BAnd; left; right; loc; op_loc })
   | DOUBLE_PIPE ->
     (* || — logical OR (booleans only, not proofs) *)
+    let op_loc = current_loc s in
     advance s;
     let* right = parse_logic s in
     let loc = span (expr_loc left) (expr_loc right) in
-    return (EBinop { op = BOr; left; right; loc })
+    return (EBinop { op = BOr; left; right; loc; op_loc })
   | _ -> return left
 
 and parse_comparison s =
   let* left = parse_additive s in
   match peek s with
   | EQ_EQ | NEQ | LT | LE | GT | GE as op_tok ->
+    let op_loc = current_loc s in
     advance s;
     let op = match op_tok with
       | EQ_EQ -> BEq | NEQ -> BNeq | LT -> BLt | LE -> BLe
@@ -1773,7 +1842,7 @@ and parse_comparison s =
     in
     let* right = parse_additive s in
     let loc = span (expr_loc left) (expr_loc right) in
-    return (EBinop { op; left; right; loc })
+    return (EBinop { op; left; right; loc; op_loc })
   | _ -> return left
 
 and parse_additive s =
@@ -1781,20 +1850,23 @@ and parse_additive s =
   let rec loop left =
     match peek s with
     | PLUS ->
+      let op_loc = current_loc s in
       advance s;
       let* right = parse_multiplicative s in
       let loc = span (expr_loc left) (expr_loc right) in
-      loop (EBinop { op = BAdd; left; right; loc })
+      loop (EBinop { op = BAdd; left; right; loc; op_loc })
     | MINUS ->
+      let op_loc = current_loc s in
       advance s;
       let* right = parse_multiplicative s in
       let loc = span (expr_loc left) (expr_loc right) in
-      loop (EBinop { op = BSub; left; right; loc })
+      loop (EBinop { op = BSub; left; right; loc; op_loc })
     | PLUS_PLUS ->
+      let op_loc = current_loc s in
       advance s;
       let* right = parse_multiplicative s in
       let loc = span (expr_loc left) (expr_loc right) in
-      loop (EBinop { op = BConcat; left; right; loc })
+      loop (EBinop { op = BConcat; left; right; loc; op_loc })
     | _ -> return left
   in
   loop left
@@ -1804,20 +1876,23 @@ and parse_multiplicative s =
   let rec loop left =
     match peek s with
     | STAR ->
+      let op_loc = current_loc s in
       advance s;
       let* right = parse_unary s in
       let loc = span (expr_loc left) (expr_loc right) in
-      loop (EBinop { op = BMul; left; right; loc })
+      loop (EBinop { op = BMul; left; right; loc; op_loc })
     | SLASH ->
+      let op_loc = current_loc s in
       advance s;
       let* right = parse_unary s in
       let loc = span (expr_loc left) (expr_loc right) in
-      loop (EBinop { op = BDiv; left; right; loc })
+      loop (EBinop { op = BDiv; left; right; loc; op_loc })
     | PERCENT ->
+      let op_loc = current_loc s in
       advance s;
       let* right = parse_unary s in
       let loc = span (expr_loc left) (expr_loc right) in
-      loop (EBinop { op = BMod; left; right; loc })
+      loop (EBinop { op = BMod; left; right; loc; op_loc })
     | _ -> return left
   in
   loop left
@@ -2024,10 +2099,10 @@ and parse_app s =
            let is_simple_var = match e with EVar _ -> true | _ -> false in
            (* Check: is this really an application argument? *)
            (match peek s with
-            | COLON | EQ | ARROW -> s.pos <- saved; Err { msg = ""; loc = dummy_loc "" }
+            | COLON | EQ | ARROW -> s.pos <- saved; Err { msg = ""; loc = dummy_loc ""; fix = None }
             | PROOF_ANNOT when is_simple_var ->
-              s.pos <- saved; Err { msg = ""; loc = dummy_loc "" }
-            | _ when starts_statement -> s.pos <- saved; Err { msg = ""; loc = dummy_loc "" }
+              s.pos <- saved; Err { msg = ""; loc = dummy_loc ""; fix = None }
+            | _ when starts_statement -> s.pos <- saved; Err { msg = ""; loc = dummy_loc ""; fix = None }
             | _ -> Ok e)
          | Err e -> Err e) with
        | Ok (Some arg) ->
@@ -2061,8 +2136,8 @@ and parse_app s =
               to fail: `n` was not consumed, leaving `check f` with a missing
               argument and creating a spurious bare-check ELet. *)
            (match peek s with
-            | COLON | EQ | ARROW -> s.pos <- saved; Err { msg = ""; loc = dummy_loc "" }
-            | _ when starts_statement -> s.pos <- saved; Err { msg = ""; loc = dummy_loc "" }
+            | COLON | EQ | ARROW -> s.pos <- saved; Err { msg = ""; loc = dummy_loc ""; fix = None }
+            | _ when starts_statement -> s.pos <- saved; Err { msg = ""; loc = dummy_loc ""; fix = None }
             | _ -> Ok e)
          | Err e -> Err e) with
        | Ok (Some arg) ->
@@ -2085,14 +2160,14 @@ and parse_app s =
              | _ -> false
            in
            (match peek s with
-            | COLON | EQ | ARROW | PROOF_ANNOT -> s.pos <- saved; Err { msg = ""; loc = dummy_loc "" }
-            | PLUS | MINUS | STAR | SLASH | PERCENT -> s.pos <- saved; Err { msg = ""; loc = dummy_loc "" }
+            | COLON | EQ | ARROW | PROOF_ANNOT -> s.pos <- saved; Err { msg = ""; loc = dummy_loc ""; fix = None }
+            | PLUS | MINUS | STAR | SLASH | PERCENT -> s.pos <- saved; Err { msg = ""; loc = dummy_loc ""; fix = None }
             | NEWLINE | DEDENT | EOF when fn_is_bare_literal ->
-              s.pos <- saved; Err { msg = ""; loc = dummy_loc "" }
+              s.pos <- saved; Err { msg = ""; loc = dummy_loc ""; fix = None }
             | RBRACE | RBRACKET | RPAREN | COMMA when fn_is_bare_literal ->
-              s.pos <- saved; Err { msg = ""; loc = dummy_loc "" }
+              s.pos <- saved; Err { msg = ""; loc = dummy_loc ""; fix = None }
             | EQ_EQ | NEQ | LT | LE | GT | GE when fn_is_bare_literal ->
-              s.pos <- saved; Err { msg = ""; loc = dummy_loc "" }
+              s.pos <- saved; Err { msg = ""; loc = dummy_loc ""; fix = None }
             | _ -> Ok e)
          | Err e -> Err e) with
        | Ok (Some arg) ->
@@ -2543,19 +2618,19 @@ and merge_sql_continuation select_e continuation =
     | head -> head :: acc
   in
   match continuation with
-  | EBinop { op = BAnd; left; right; loc } ->
+  | EBinop { op = BAnd; left; right; loc; op_loc } ->
     (* Compound AND: merge left side (e.g. "where p.x >= lo") with select_e first,
        then wrap result in BAnd with the right side (e.g. "p.x <= hi").
        This preserves the structure expected by collect_sql_clauses/extract_select_query. *)
     (match merge_sql_continuation select_e left with
-     | Some merged_left -> Some (EBinop { op = BAnd; left = merged_left; right; loc })
+     | Some merged_left -> Some (EBinop { op = BAnd; left = merged_left; right; loc; op_loc })
      | None -> None)
-  | EBinop { op; left; right; loc } ->
+  | EBinop { op; left; right; loc; op_loc } ->
     (* Simple comparison or || OR: flatten left's EApp atoms and merge with select *)
     let atoms = get_atoms [] left in
     let merged_left = List.fold_left
       (fun fn arg -> EApp { fn; arg; loc = dummy }) select_e atoms in
-    Some (EBinop { op; left = merged_left; right; loc })
+    Some (EBinop { op; left = merged_left; right; loc; op_loc })
   | EApp _ ->
     (* order/limit/offset/groupBy/innerJoin/where-predicate: flatten and append atoms *)
     let atoms = get_atoms [] continuation in
@@ -3696,7 +3771,7 @@ let parse_codec_form s name type_name =
              Add `toJson { … }` or `toJson_forbidden`, and `fromJson [ … ]` or \
              `fromJson_forbidden` (or use `adtJson` for an ADT type)."
             name missing;
-          loc = loc0 }
+          loc = loc0; fix = None }
   else
     return { name; type_name; to_json = !to_json; from_json = !from_json; loc }
 
@@ -3957,7 +4032,7 @@ let parse_api_form s =
                        ep_parse_err := Some {
                          msg = "auth clause requires `via <authFunction>` \
                                 (e.g. `auth user: User ::: Authenticated user via cookieAuth`)";
-                         loc = current_loc s })
+                         loc = current_loc s; fix = None })
                 | Err e ->
                   if !ep_parse_err = None then ep_parse_err := Some e)
              | IDENT "body" ->
@@ -4276,7 +4351,10 @@ and parse_test_stmt_items s =
                 | NEQ -> BNeq | LT -> BLt | LE -> BLe | GT -> BGt | GE -> BGe
                 | _ -> failwith "unreachable comparator"
               in
-              let cmp = EBinop { op; left; right; loc = span (expr_loc left) (expr_loc right) } in
+              let cmp =
+                let loc = span (expr_loc left) (expr_loc right) in
+                EBinop { op; left; right; loc; op_loc = loc }
+              in
               TsExpect { left = cmp; right = None; loc = span loc0 (current_loc s) }
             | Err _ -> TsExpect { left; right = None; loc = span loc0 (current_loc s) })
          | _ -> TsExpect { left; right = None; loc = span loc0 (current_loc s) }

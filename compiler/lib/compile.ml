@@ -34,6 +34,9 @@ type diagnostic_fix = Type_system.diagnostic_fix =
   | Replace_line of { line : int; replacement : string }
   | Insert_line  of { line : int; text : string }
   | Replace_span of { start_line : int; end_line : int; replacement : string }
+  | Replace_range of { start_line : int; start_col : int;
+                       end_line : int; end_col : int; replacement : string }
+  | Multi of diagnostic_fix list
 
 type diagnostic = {
   file     : string;
@@ -80,7 +83,7 @@ let diag_of_parse_error (e : parse_error) : diagnostic = {
   severity   = "error";
   code       = "E000";
   message    = e.msg;
-  fix        = None;
+  fix        = e.fix;
   source     = "parser";
   manual     = None;
 }
@@ -130,7 +133,7 @@ let diag_of_validation_error (e : Validation.validation_error) : diagnostic = {
   manual     = Error_codes.manual_for ~topic:e.topic ~code:"V001" ~message:e.message ();
 }
 
-let fix_to_json = function
+let rec fix_to_json = function
   | None -> "null"
   | Some (Replace_line { line; replacement }) ->
       Printf.sprintf {|{"kind":"replace_line","line":%d,"replacement":%s}|}
@@ -141,6 +144,12 @@ let fix_to_json = function
   | Some (Replace_span { start_line; end_line; replacement }) ->
       Printf.sprintf {|{"kind":"replace_span","start_line":%d,"end_line":%d,"replacement":%s}|}
         start_line end_line (json_encode_string replacement)
+  | Some (Replace_range { start_line; start_col; end_line; end_col; replacement }) ->
+      Printf.sprintf {|{"kind":"replace_range","start_line":%d,"start_col":%d,"end_line":%d,"end_col":%d,"replacement":%s}|}
+        start_line start_col end_line end_col (json_encode_string replacement)
+  | Some (Multi edits) ->
+      Printf.sprintf {|{"kind":"multi","edits":[%s]}|}
+        (String.concat "," (List.map (fun e -> fix_to_json (Some e)) edits))
 
 let diag_to_json (d : diagnostic) : string =
   Printf.sprintf
@@ -2644,7 +2653,7 @@ let time_phase enabled label (f : unit -> 'a) : 'a =
    logic (including the bare-record-literal quick-fix) without duplicating it. *)
 let type_diags_of source (m : Ast.module_form) : diagnostic list =
   let source_lines = Array.of_list (String.split_on_char '\n' source) in
-  let _, _, _, bare_hints, _, type_errors = Checker.check_module_with_metadata m in
+  let _, _, _, bare_hints, _, type_errors = Checker.check_module_with_metadata ~source_lines m in
   List.map (fun (e : Type_system.type_error) ->
     let base = diag_of_type_error e in
     if starts_with ~prefix:"bare record literal" e.message then
@@ -2842,7 +2851,7 @@ let completions_source filename source line col =
         (match record_name with
          | None -> []
          | Some name ->
-           let ctx0 = Checker.make_ctx ~filename ~env:[] in
+           let ctx0 = Checker.make_ctx ~filename ~env:[] () in
            let ctx1 = Checker.collect_type_defs ctx0 m.decls in
            match List.assoc_opt name ctx1.Checker.records with
            | None -> []
@@ -2853,7 +2862,7 @@ let completions_source filename source line col =
                ci_kind   = "field";
              }) rd.Checker.rd_fields)
     end else begin
-      let ctx0 = Checker.make_ctx ~filename ~env:(Type_system.make_stdlib_env ()) in
+      let ctx0 = Checker.make_ctx ~filename ~env:(Type_system.make_stdlib_env ()) () in
       let ctx1 = Checker.collect_type_defs ctx0 m.decls in
       let env = Checker.load_imported_func_sigs m @ ctx1.Checker.env in
       let ctx = Checker.collect_func_sigs { ctx1 with Checker.env = env } m.decls in
@@ -3001,7 +3010,7 @@ let semantic_json_of_module (m : Ast.module_form) : string =
   let local_bindings, expr_types, _field_accesses, _bare_hints, _server_tools_sites, _errors = Checker.check_module_with_metadata m in
 
   (* Build the checker context for declaration-level info. *)
-  let ctx0 = Checker.make_ctx ~filename:m.source_file ~env:[] in
+  let ctx0 = Checker.make_ctx ~filename:m.source_file ~env:[] () in
   let ctx1 = Checker.collect_type_defs ctx0 m.decls in
   let env   = Checker.load_imported_func_sigs m @ ctx1.env in
   let ctx   = { ctx1 with Checker.env = env } in

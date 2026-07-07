@@ -1963,45 +1963,67 @@
       [(hash? h) (loop (hash-ref h (car p) #f) (cdr p))]
       [else #f])))
 
-;; Extract the single TextEdit a diagnostic's `fix` implies, or #f.
+;; Extract the TextEdit list a diagnostic's `fix` implies ('() when none).
 ;; Kinds (mirroring Compile.diagnostic_fix):
-;;   replace_line — replace one whole line
-;;   insert_line  — insert a new line BEFORE `line` (E1 add-missing-import)
-;;   replace_span — replace the inclusive line range start_line..end_line;
-;;                  an empty replacement deletes the lines outright (E1 W050)
-(define (diag->fix-edit text diag)
+;;   replace_line  — replace one whole line
+;;   insert_line   — insert a new line BEFORE `line` (E1 add-missing-import)
+;;   replace_span  — replace the inclusive line range start_line..end_line;
+;;                   an empty replacement deletes the lines outright (E1 W050)
+;;   replace_range — column-precise replacement of start_line:start_col ..
+;;                   end_line:end_col (end col exclusive) — D9 token-level
+;;                   fixes (`return x` → `x`, `+` → `++`)
+;;   multi         — several of the above applied together (D9 single-line-`if`
+;;                   split); flattened into this action's TextEdit list
+(define (diag->fix-edits text diag)
   (define data (hash-ref diag 'data (hash)))
   (define fix (if (hash? data) (hash-ref data 'fix 'null) 'null))
   (define lines (if text (string-split text "\n" #:trim? #f) '()))
   (define (line-length line)
     (if (and (>= line 0) (< line (length lines)))
         (string-length (list-ref lines line)) 0))
-  (and (hash? fix)
-       (case (hash-ref fix 'kind #f)
-         [("replace_line")
-          (let ([line (hash-ref fix 'line 0)])
-            (hash 'range (hash 'start (hash 'line line 'character 0)
-                               'end   (hash 'line line 'character (line-length line)))
+  (define (fix->edits fix)
+    (if (not (hash? fix))
+        '()
+        (case (hash-ref fix 'kind #f)
+          [("replace_line")
+           (let ([line (hash-ref fix 'line 0)])
+             (list
+              (hash 'range (hash 'start (hash 'line line 'character 0)
+                                 'end   (hash 'line line 'character (line-length line)))
+                    'newText (hash-ref fix 'replacement ""))))]
+          [("insert_line")
+           (let ([line (hash-ref fix 'line 0)])
+             (list
+              (hash 'range (hash 'start (hash 'line line 'character 0)
+                                 'end   (hash 'line line 'character 0))
+                    'newText (string-append (hash-ref fix 'text "") "\n"))))]
+          [("replace_span")
+           (let* ([start-line (hash-ref fix 'start_line 0)]
+                  [end-line (hash-ref fix 'end_line 0)]
+                  [replacement (hash-ref fix 'replacement "")])
+             (list
+              (if (string=? replacement "")
+                  ;; delete the whole line range, trailing newline included
+                  (hash 'range (hash 'start (hash 'line start-line 'character 0)
+                                     'end   (hash 'line (add1 end-line) 'character 0))
+                        'newText "")
+                  (hash 'range (hash 'start (hash 'line start-line 'character 0)
+                                     'end   (hash 'line end-line
+                                                  'character (line-length end-line)))
+                        'newText replacement))))]
+          [("replace_range")
+           ;; The only kind that carries its own columns — trust them verbatim
+           ;; (the producer verified them against the source snapshot).
+           (list
+            (hash 'range (hash 'start (hash 'line (hash-ref fix 'start_line 0)
+                                            'character (hash-ref fix 'start_col 0))
+                               'end   (hash 'line (hash-ref fix 'end_line 0)
+                                            'character (hash-ref fix 'end_col 0)))
                   'newText (hash-ref fix 'replacement "")))]
-         [("insert_line")
-          (let ([line (hash-ref fix 'line 0)])
-            (hash 'range (hash 'start (hash 'line line 'character 0)
-                               'end   (hash 'line line 'character 0))
-                  'newText (string-append (hash-ref fix 'text "") "\n")))]
-         [("replace_span")
-          (let* ([start-line (hash-ref fix 'start_line 0)]
-                 [end-line (hash-ref fix 'end_line 0)]
-                 [replacement (hash-ref fix 'replacement "")])
-            (if (string=? replacement "")
-                ;; delete the whole line range, trailing newline included
-                (hash 'range (hash 'start (hash 'line start-line 'character 0)
-                                   'end   (hash 'line (add1 end-line) 'character 0))
-                      'newText "")
-                (hash 'range (hash 'start (hash 'line start-line 'character 0)
-                                   'end   (hash 'line end-line
-                                                'character (line-length end-line)))
-                      'newText replacement)))]
-         [else #f])))
+          [("multi")
+           (append-map fix->edits (hash-ref fix 'edits '()))]
+          [else '()])))
+  (fix->edits fix))
 
 ;; Is this diagnostic an import-related fix (its message offers an `import …`)?
 ;; Used to pull the relevant edits into a `source.organizeImports` action.
@@ -2011,12 +2033,12 @@
          (regexp-match? #px"(?i:\\bimport\\b)" msg))))
 
 (define (diag->code-action uri text diag)
-  (let ([edit (diag->fix-edit text diag)])
-    (and edit
+  (let ([edits (diag->fix-edits text diag)])
+    (and (pair? edits)
          (hash 'title (format "Apply fix for ~a" (hash-ref diag 'code "diagnostic"))
                'kind "quickfix"
                'diagnostics (list diag)
-               'edit (hash 'changes (hash (uri->json-key uri) (list edit)))))))
+               'edit (hash 'changes (hash (uri->json-key uri) edits))))))
 
 ;; Build the full code-action set for a request: the per-diagnostic quickfixes,
 ;; plus aggregate `source.fixAll` (every fixable edit) and
@@ -2035,10 +2057,10 @@
   ;; and a client rejects a WorkspaceEdit with overlapping duplicates.
   (define all-edits
     (remove-duplicates
-     (filter values (map (lambda (d) (diag->fix-edit text d)) diagnostics))))
+     (append-map (lambda (d) (diag->fix-edits text d)) diagnostics)))
   (define import-edits
     (remove-duplicates
-     (filter values (map (lambda (d) (and (import-fix? d) (diag->fix-edit text d))) diagnostics))))
+     (append-map (lambda (d) (if (import-fix? d) (diag->fix-edits text d) '())) diagnostics)))
   (define (aggregate title kind edits diags)
     (and (pair? edits)
          (hash 'title title
@@ -2986,6 +3008,51 @@
     (check-equal? (hash-ref edit 'newText) "import Tesl.Prelude exposing [Int]")
     (check-equal? (hash-ref (hash-ref edit 'range) 'start) (hash 'line 2 'character 0)))
 
+  ;; replace_range (D9): column-precise edit — cols come from the fix verbatim
+  (let* ([uri "file:///tmp/range-fix.tesl"]
+         [text (string-join
+                '("#lang tesl"
+                  "module Main exposing [greet]"
+                  "fn greet(a: String, b: String) -> String = a + b")
+                "\n")]
+         [diag (hash
+                'code "T001"
+                'data (hash 'fix (hash 'kind "replace_range"
+                                       'start_line 2 'start_col 45
+                                       'end_line 2 'end_col 46
+                                       'replacement "++")))]
+         [action (diag->code-action uri text diag)]
+         [changes (hash-ref (hash-ref action 'edit) 'changes)]
+         [edit (car (hash-ref changes (uri->json-key uri)))])
+    (check-not-false action)
+    (check-equal? (hash-ref edit 'newText) "++")
+    (check-equal? (hash-ref (hash-ref edit 'range) 'start) (hash 'line 2 'character 45))
+    (check-equal? (hash-ref (hash-ref edit 'range) 'end)   (hash 'line 2 'character 46)))
+
+  ;; multi (D9): one code action carrying several TextEdits (single-line-`if` split)
+  (let* ([uri "file:///tmp/multi-fix.tesl"]
+         [text "#lang tesl\nfn h(n: Int) -> Int =\n    if n > 0 then 1 else 2\n"]
+         [diag (hash
+                'code "E000"
+                'data (hash 'fix (hash 'kind "multi"
+                                       'edits (list
+                                               (hash 'kind "replace_range"
+                                                     'start_line 2 'start_col 17
+                                                     'end_line 2 'end_col 18
+                                                     'replacement "\n        ")
+                                               (hash 'kind "replace_range"
+                                                     'start_line 2 'start_col 20
+                                                     'end_line 2 'end_col 20
+                                                     'replacement "\n    ")))))]
+         [action (diag->code-action uri text diag)]
+         [changes (hash-ref (hash-ref action 'edit) 'changes)]
+         [edits (hash-ref changes (uri->json-key uri))])
+    (check-not-false action)
+    (check-equal? (length edits) 2)
+    (check-equal? (hash-ref (car edits) 'newText) "\n        ")
+    (check-equal? (hash-ref (hash-ref (cadr edits) 'range) 'start)
+                  (hash 'line 2 'character 20)))
+
   (check-true (hash-has-key? stdlib-sigs "telemetry"))
   (check-true (hash-has-key? stdlib-sigs "initTelemetry"))
 
@@ -3386,8 +3453,8 @@
          [plain-diag (hash 'code "W001" 'message "unused binding"
                            'data (hash 'fix (hash 'kind "replace_line" 'line 2 'replacement "fn f() -> Int = 2")))]
          [no-fix-diag (hash 'code "E999" 'message "no fix" 'data (hash))])
-    (check-not-false (diag->fix-edit text import-diag))
-    (check-false (diag->fix-edit text no-fix-diag))
+    (check-true (pair? (diag->fix-edits text import-diag)))
+    (check-equal? (diag->fix-edits text no-fix-diag) '())
     (check-true (import-fix? import-diag))
     (check-false (import-fix? plain-diag))
     ;; full code-action set with no `only` filter: 2 quickfixes + fixAll + organizeImports

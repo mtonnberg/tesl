@@ -130,9 +130,14 @@ type ctx = {
   import_suggest : string -> Import_suggest.suggestion option;
   (** E1: unbound name → "which import would bind it" hint + quickfix.  Seeded
       per-module in {!check_module_with_metadata}; the default suggests nothing. *)
+  source_lines : string array;
+  (** D9: the source text being checked, split on '\n' — lets a diagnostic ship
+      a source-VERIFIED machine-applicable fix ({!Diag_fix}).  [||] (callers
+      without source, e.g. completion contexts) fail closed: the error is still
+      emitted, just without a fix. *)
 }
 
-let make_ctx ~filename ~env = {
+let make_ctx ?(source_lines = [||]) ~filename ~env () = {
   env;
   records  = [];
   adts     = [];
@@ -159,6 +164,7 @@ let make_ctx ~filename ~env = {
   server_tools_sites = ref [];
   server_tools_shadowed = false;
   import_suggest = (fun _ -> None);
+  source_lines;
 }
 
 let add_error ctx loc msg =
@@ -1867,12 +1873,17 @@ let rec infer_expr ctx (e : expr) : ty =
         | Some (_, ctor_sch) -> instantiate ctor_sch
         | None ->
           (* D8 idiom-transfer hint: `return x` is a common transfer mistake —
-             Tesl has no `return`; a function body IS its value. *)
+             Tesl has no `return`; a function body IS its value.  D9: the loc
+             isolates the `return` token (start of `return` .. start of the
+             following token), so deleting it IS the fix — shipped only when
+             the source snapshot confirms `return` sits there. *)
           (if name = "return" then
-             add_error ctx loc
+             add_error_fix ctx loc
                "unknown name: `return` — Tesl has no `return` statement; a function \
                 body IS its return value, so write the value as the last expression \
                 (e.g. `x` instead of `return x`)"
+               (Diag_fix.verified_delete ~source_lines:ctx.source_lines loc
+                  ~expect:"return")
            else add_unknown_name_error ctx loc ~what:"name" name);
           fresh ()))
 
@@ -2337,7 +2348,7 @@ let rec infer_expr ctx (e : expr) : ty =
      | Some ty -> record_sql_operand_field_accesses ctx binop; ty
      | None ->
        let rec infer_check_chain_value = function
-         | EBinop { op = BAnd; left; right; loc } ->
+         | EBinop { op = BAnd; left; right; loc; _ } ->
             (match infer_check_chain_value left, infer_check_chain_value right with
              | Some left_ty, Some right_ty ->
                 let arg_ty = fresh () in
@@ -2359,11 +2370,11 @@ let rec infer_expr ctx (e : expr) : ty =
             | _ -> None
        in
        (match binop with
-        | EBinop { op = BAnd; left; right; loc } ->
+        | EBinop { op = BAnd; left; right; loc; op_loc } ->
            (match infer_check_chain_value binop with
             | Some ty -> ty
-            | None -> infer_binop ctx loc BAnd left right)
-        | EBinop { op; left; right; loc } -> infer_binop ctx loc op left right
+            | None -> infer_binop ctx loc ~op_loc BAnd left right)
+        | EBinop { op; left; right; loc; op_loc } -> infer_binop ctx loc ~op_loc op left right
         | _ -> fresh ()))
 
   | EUnop { op; arg; loc } ->
@@ -2814,7 +2825,7 @@ and infer_lit = function
   | LString _ -> t_string
   | LInterp _ -> t_string  (* interpolated strings are always String *)
 
-and infer_binop ctx loc op left right =
+and infer_binop ctx loc ~op_loc op left right =
   let lt = infer_expr ctx left in
   let rt = infer_expr ctx right in
   match op with
@@ -2824,11 +2835,16 @@ and infer_binop ctx loc op left right =
     (* D8 idiom-transfer hint: `+` on a String is the classic TS/Python/Java
        transfer mistake.  Emit ONE clear "use `++`" error and short-circuit to
        [String] so the caller does not then see three cascading "unify String
-       with Int" errors. *)
+       with Int" errors.  D9: the binop loc covers the whole `a + b` expression
+       and the `+` token has no loc of its own, so the fix relocates it in the
+       source — the first `+` strictly between the operands — and ships only
+       when that verification succeeds. *)
     if op = BAdd && (lt' = TCon "String" || rt' = TCon "String") then begin
-      add_error ctx loc
+      add_error_fix ctx loc
         "operator `+` is not defined for `String`; use `++` for string \
-         concatenation (Tesl reserves `+` for numeric addition)";
+         concatenation (Tesl reserves `+` for numeric addition)"
+        (Diag_fix.verified_token_replace ~source_lines:ctx.source_lines
+           ~at:op_loc.start ~token:"+" ~replacement:"++");
       t_string
     end else begin
       let num_ty = match lt', rt' with
@@ -4700,7 +4716,7 @@ let check_ord_eq_calls ctx =
          ) constraints)
   ) !(ctx.ord_eq_calls)
 
-let check_module_with_metadata (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * type_error list =
+let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * type_error list =
   reset_counter ();
   (* E1: one lazy folder-tree index per checked module — the scan only runs if
      an unbound-name error is actually emitted. *)
@@ -4713,7 +4729,7 @@ let check_module_with_metadata (m : module_form) : local_binding_info list * exp
   let import_errors = import_errors @ check_fact_name_distinctness m in
   let import_errors = import_errors @ check_stdlib_fn_import_scope m in
   let initial_env = make_stdlib_env () in
-  let ctx = make_ctx ~filename:m.source_file ~env:initial_env in
+  let ctx = make_ctx ~source_lines ~filename:m.source_file ~env:initial_env () in
   let ctx = { ctx with import_suggest = suggest } in
 
   (* 1. Collect type definitions (records, ADTs, newtypes) *)

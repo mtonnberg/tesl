@@ -43,7 +43,7 @@ let sample : expr =
            loc = loc_at 2 } in
   let e_field = EField { obj = var 3 "rec"; field = "f"; loc = loc_at 4 } in
   let e_app = EApp { fn = var 5 "g"; arg = int_ 6 1; loc = loc_at 7 } in
-  let e_binop = EBinop { op = BAdd; left = int_ 8 1; right = int_ 9 2; loc = loc_at 10 } in
+  let e_binop = EBinop { op = BAdd; left = int_ 8 1; right = int_ 9 2; loc = loc_at 10; op_loc = loc_at 10 } in
   let e_unop = EUnop { op = UNeg; arg = int_ 11 3; loc = loc_at 12 } in
   let e_if = EIf { cond = var 13 "c"; then_ = int_ 14 1; else_ = int_ 15 2; loc = loc_at 16 } in
   let e_case =

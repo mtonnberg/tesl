@@ -567,7 +567,7 @@ let check_pk_match (decls : top_decl list) : validation_error list =
              match e with
              | EBinop { op = BAnd; left; right; _ } ->
                eq_conjuncts binder left @ eq_conjuncts binder right
-             | EBinop { op = BEq; left; right; loc } ->
+             | EBinop { op = BEq; left; right; loc; _ } ->
                (* left is either the select-chain ending in `where binder.field`
                   (leftmost conjunct) or a bare `binder.field` (later conjunct). *)
                let last_field =

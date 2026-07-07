@@ -105,7 +105,12 @@ and expr =
   | EField  of { obj : expr; field : string; loc : loc }  (** expr.field *)
   | EApp    of { fn : expr; arg : expr; loc : loc }
                (** left-assoc function application *)
-  | EBinop  of { op : binop; left : expr; right : expr; loc : loc }
+  | EBinop  of { op : binop; left : expr; right : expr; loc : loc;
+                 op_loc : loc }
+               (** [op_loc]: the operator token itself — [loc] spans the whole
+                   [left op right] expression, so a diagnostic that wants to
+                   edit just the operator (D9 `+`→`++`) needs the token's own
+                   span.  Synthesized nodes reuse the expression [loc]. *)
   | EUnop   of { op : unop; arg : expr; loc : loc }
   | EIf     of { cond : expr; then_ : expr; else_ : expr; loc : loc }
   | ECase   of { scrut : expr; arms : case_arm list; loc : loc }

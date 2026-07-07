@@ -186,18 +186,18 @@ let replace_at ~kind ~target_index ~op expr =
   let hit ctr = let idx = !ctr in incr ctr; idx = target_index in
   let rec walk e =
     match e with
-    | EBinop { op = old_op; left; right; loc } ->
+    | EBinop { op = old_op; left; right; loc; op_loc } ->
       let matched = kind = KBinop && hit binop_ctr in
       if matched then
         (match op with
-         | MOBinop new_op -> EBinop { op = new_op; left; right; loc }
-         | _ -> EBinop { op = old_op; left; right; loc })
+         | MOBinop new_op -> EBinop { op = new_op; left; right; loc; op_loc }
+         | _ -> EBinop { op = old_op; left; right; loc; op_loc })
       else
         (* Force children left-to-right (map_children does this internally too,
            but we are inside the binop arm where the counter advances). *)
         let left'  = walk left in
         let right' = walk right in
-        EBinop { op = old_op; left = left'; right = right'; loc }
+        EBinop { op = old_op; left = left'; right = right'; loc; op_loc }
     | ELit { lit = LInt _; loc } when kind = KInt ->
       if hit int_ctr then
         (match op with MOInt n -> ELit { lit = LInt n; loc } | _ -> e)

@@ -114,10 +114,10 @@ let map_children (f : expr -> expr) (e : expr) : expr =
     let fn' = f fn in
     let arg' = f arg in
     EApp { fn = fn'; arg = arg'; loc }
-  | EBinop { op; left; right; loc } ->
+  | EBinop { op; left; right; loc; op_loc } ->
     let left' = f left in
     let right' = f right in
-    EBinop { op; left = left'; right = right'; loc }
+    EBinop { op; left = left'; right = right'; loc; op_loc }
   | EUnop { op; arg; loc } ->
     let arg' = f arg in
     EUnop { op; arg = arg'; loc }

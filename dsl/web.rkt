@@ -590,6 +590,12 @@
     ;; guarantor that the proof held.
     (define all-bindings-id
       (format-id name-id "~a-erased-all-arg-bindings" (syntax-e name-id)))
+    ;; D12: the bindings table is read ONLY by clause (3)'s
+    ;; tesl-establish-param-proof calls, so a fully proof-free function must
+    ;; not pay its (hash …) allocation on every call (§2a of the erased-proof
+    ;; design: proof-free params are zero-alloc, byte-identical to the
+    ;; unannotated form).
+    (define any-arg-proof? (for/or ([p (in-list arg-proof-datums)]) (and p #t)))
     (define erased-arg-clauses
       (append
        ;; (1) bind every *arg to its raw value (zero alloc)
@@ -599,10 +605,13 @@
        ;;     on one param that references a sibling param (e.g. HasKey key dict —
        ;;     consumed at runtime by a proof-total stdlib like Dict.get) can resolve all
        ;;     its subjects.  Mirrors the non-erased path's all-arg-bindings.
-       (list #`[#,all-bindings-id
-                (hash #,@(append* (for/list ([arg-id (in-list arg-name-ids)]
-                                             [star-arg (in-list star-ids)])
-                                    (list #`'#,(syntax-e arg-id) star-arg))))])
+       ;;     Emitted only when some param actually carries a runtime proof (D12).
+       (if any-arg-proof?
+           (list #`[#,all-bindings-id
+                    (hash #,@(append* (for/list ([arg-id (in-list arg-name-ids)]
+                                                 [star-arg (in-list star-ids)])
+                                        (list #`'#,(syntax-e arg-id) star-arg))))])
+           '())
        ;; (3) bind each arg: proof-annotated → 1-alloc named-value carrying the fact
        ;;     AND the full cross-param bindings; proof-free → the raw value.
        (for/list ([arg-id (in-list arg-name-ids)]

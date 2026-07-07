@@ -540,7 +540,7 @@ let rec flatten_app_pf acc = function
 let rec check_chain_proof (all_funcs : func_decl list) (e : expr) : proof_expr option =
   match e with
   | EVar { name; _ } -> inner_proof_of_named_fn all_funcs name
-  | EBinop { op = BAnd; left; right; loc } ->
+  | EBinop { op = BAnd; left; right; loc; _ } ->
     (match check_chain_proof all_funcs left, check_chain_proof all_funcs right with
      | Some lp, Some rp -> Some (PredAnd { left = lp; right = rp; loc })
      | Some p, None | None, Some p -> Some p
