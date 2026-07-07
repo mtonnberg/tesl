@@ -47,6 +47,18 @@ export const Status2Schema = z.discriminatedUnion("tag", [_Status2_OpenedSchema,
 export type Status2 = z.infer<typeof Status2Schema>;
 
 
+// --- Human actions (agent -> human handoff) ---
+
+const _TodoServerHumanAction_listTestSchema = z.object({ action: z.literal("listTest"), handle: z.string(), args: z.unknown() });
+const _TodoServerHumanAction_createTodoSchema = z.object({ action: z.literal("createTodo"), handle: z.string(), args: z.unknown() });
+const _TodoServerHumanAction_listMyTodosSchema = z.object({ action: z.literal("listMyTodos"), handle: z.string(), args: z.unknown() });
+const _TodoServerHumanAction_listOpenTodosSchema = z.object({ action: z.literal("listOpenTodos"), handle: z.string(), args: z.unknown() });
+const _TodoServerHumanAction_getTodoSchema = z.object({ action: z.literal("getTodo"), handle: z.string(), args: z.unknown() });
+const _TodoServerHumanAction_completeTodoSchema = z.object({ action: z.literal("completeTodo"), handle: z.string(), args: z.unknown() });
+export const TodoServerHumanActionRequestSchema = z.discriminatedUnion("action", [_TodoServerHumanAction_listTestSchema, _TodoServerHumanAction_createTodoSchema, _TodoServerHumanAction_listMyTodosSchema, _TodoServerHumanAction_listOpenTodosSchema, _TodoServerHumanAction_getTodoSchema, _TodoServerHumanAction_completeTodoSchema]);
+export type TodoServerHumanActionRequest = z.infer<typeof TodoServerHumanActionRequestSchema>;
+
+
 // --- Records ---
 
 export const UserSchema = z.object({
@@ -68,7 +80,7 @@ export const TodoSchema = z.object({
   title: z.string(),
   ownerId: UserIdSchema,
   status: StatusSchema,
-  createdAt: z.number().int(),
+  createdAt: z.union([z.number().int(), z.object({ epochMillis: z.number().int() }).transform((v) => v.epochMillis)]),
 });
 export type Todo = z.infer<typeof TodoSchema>;
 

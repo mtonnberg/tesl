@@ -1234,6 +1234,50 @@ block keeps its authored shape. Generated Elm and TypeScript clients decode
 `PosixMillis` tolerantly (bare integer or the enriched object), so both shapes are
 always parseable client-side.
 
+**Held-back endpoints as human actions (`humanActions`).** `humanActions MyServer user
+: List Tool` is the exact **complement** of `serverTools` at the same call site: one
+tool per endpoint whose auth predicates the user variable's declared proof does **not**
+cover. Together `serverTools` (the agent may run) and `humanActions` (only the human
+may) **partition** the server's endpoints — disjoint and complete. Because both are
+decided from the *declared* proof, you make an action "human-only" by giving the agent a
+`user` value scoped narrower than the human's real authority (e.g. the agent holds
+`Authenticated`, the human is also `Admin`): the admin-gated endpoints then fall into
+`humanActions`.
+
+```tesl
+handler assistant(user: User ::: Authenticated user, q: Ask) -> String requires [notesAi] =
+  let agent = Agent {
+    provider:     anthropic (requireEnv "ANTHROPIC_API_KEY") "claude-opus-4-8"
+    systemPrompt: "Manage the user's notes. Admin-only actions must be asked of the human."
+    maxTokens:    512
+    tools:        List.append (serverTools NotesServer user) (humanActions NotesServer user)
+  }
+  ask agent q.text
+```
+
+A `humanActions` tool is **inert** — this is a language-level guarantee, not a prompting
+convention. Calling it does **not** execute the endpoint: the runtime builder is handed
+only the server *name* and the endpoints' metadata, never the server value or a handler
+closure, so there is no in-process path from the tool to a call. Dispatching one returns
+a `human-action-request` descriptor — `{ kind, server, action, args, handle }` — as the
+tool_result. `action` is the endpoint's tool name; `args` is the model's *advisory*
+prefill; `handle` is a fresh correlation id. The agent thus can only *choose which
+held-back action to request and prefill its arguments* — it can never perform it. Statics
+match `serverTools` (bare server reference, bare proof-annotated user variable, full
+application only), and `humanActions` charges **no** capability (the opposite of
+`serverTools`: the agent never runs these endpoints, so their `requires` is not charged).
+
+The frontend renders the request as a typed button. `tesl generate elm|ts` emits, per
+server, a `<Server>HumanAction` tag union with one constructor per endpoint and a
+`<Server>HumanActionRequest` decoder that **rejects any `action` the server did not
+declare** — a compile-time allowlist. The real endpoint URL is resolved by the generated
+endpoint client the app calls in its `case` arm (never taken from the wire), so a
+prompt-injected agent can neither fabricate an action, relabel it, nor redirect it. When
+the human clicks, their browser calls the real endpoint under their own session (which
+re-checks auth server-side); to let the agent continue, append the completed
+`{ action, handle, result }` to the persisted conversation and run another `converse`
+turn ("resume-after" — the runtime does not suspend the turn).
+
 Running inference requires the `aiProvider` capability (from `Tesl.Agent`; it implies
 `httpClient` because real providers perform outbound HTTP). The agent API:
 

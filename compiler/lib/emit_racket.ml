@@ -277,6 +277,12 @@ type ctx = {
         (like [field_access_type_tbl]): inclusion is the checker's per-call-site
         proof-annotation decision — an admin-gated endpoint is present only when
         the user value's declared facts cover its auth predicates. *)
+  human_actions_site_tbl : (int * int, string * string list) Hashtbl.t;
+    (** (line, col) of a `humanActions` call site → (server name, endpoint tool
+        names EXCLUDED at that site).  The checker's per-call-site COMPLEMENT of
+        [server_tools_site_tbl]: an endpoint whose auth predicates the user's
+        declared proof does NOT cover.  Reuses [server_tools_meta] (all
+        endpoints of the server) filtered by these names. *)
   mutable preserve_case_payload_names : bool;
     (** when true, constructor case payload bindings should remain named values instead of raw payloads *)
   proof_locals : (string, unit) Hashtbl.t;
@@ -337,6 +343,7 @@ let mk_ctx ?(root_path=default_root_path ()) ?(record_fields=[]) ?(record_meta=[
     fn_tool_decls = Hashtbl.create 8;
     server_tools_meta = Hashtbl.create 4;
     server_tools_site_tbl = Hashtbl.create 8;
+    human_actions_site_tbl = Hashtbl.create 8;
     preserve_case_payload_names = false;
     proof_locals = Hashtbl.create 16; raw_locals = Hashtbl.create 16;
     fact_locals = Hashtbl.create 8; ctor_fields = Hashtbl.create 8;
@@ -1832,6 +1839,48 @@ let rec emit_expr ctx e =
     failwith "emit_racket: `serverTools` supports only the fully-applied form \
               `serverTools MyServer user`. This should have been rejected at check \
               time — please report this bug."
+  (* `humanActions S user` lowers to the INERT human-action tool builder: one
+     tool per EXCLUDED endpoint (the checker's complement of `serverTools`).  It
+     reuses `server_tools_meta` (all endpoints of the server) filtered by the
+     call-site's excluded names, and — unlike `serverTools` — passes ONLY the
+     server NAME (a string literal), never the user or the server value: the
+     runtime must have no path to the server's routes/handlers.  The user was
+     consumed at check time to decide the complement; it is not needed at
+     runtime. *)
+  | EApp { fn = EApp { fn = EVar { name = "humanActions"; _ }; arg = server_ref; _ };
+           arg = _user_expr; loc } ->
+    let sname = (match server_ref with
+      | EConstructor { name; args = []; _ } | EVar { name; _ } -> name
+      | _ ->
+        failwith "emit_racket: `humanActions` takes a bare server reference \
+                  (`humanActions MyServer user`). This should have been rejected at \
+                  check time — please report this bug.") in
+    let meta = (match Hashtbl.find_opt ctx.server_tools_meta sname with
+      | Some meta -> meta
+      | None ->
+        failwith (Printf.sprintf
+          "emit_racket: `humanActions %s` — no such server/api pair in this module. \
+           This should have been rejected at check time — please report this bug."
+          sname)) in
+    let excluded = (match Hashtbl.find_opt ctx.human_actions_site_tbl
+                            (loc.Location.start.line, loc.Location.start.col) with
+      | Some (s, names) when s = sname -> names
+      | _ ->
+        (* Fail CLOSED: without the checker's complement decision no endpoint may
+           be surfaced as a human action. *)
+        failwith (Printf.sprintf
+          "emit_racket: `humanActions %s` call site has no checker complement \
+           metadata — please report this bug." sname)) in
+    let selected = List.filter (fun (n, _, _) -> List.mem n excluded) meta in
+    emit ctx (Printf.sprintf "(__tht_human-actions %S (list" sname);
+    List.iter (fun (n, d, s) ->
+      emit ctx (Printf.sprintf " (list %S %S %S)" n d s)) selected;
+    emit ctx "))"
+  | EApp _ as app when (match flatten_app_expr [] app with
+                        | EVar { name = "humanActions"; _ }, _ -> true | _ -> false) ->
+    failwith "emit_racket: `humanActions` supports only the fully-applied form \
+              `humanActions MyServer user`. This should have been rejected at check \
+              time — please report this bug."
   | EApp _ as app when (match parse_insert_many_expr app with Some _ -> true | None -> false) ->
     (match parse_insert_many_expr app with
      | Some (list_var, entity) -> emit_sql_insert_many list_var entity
@@ -3007,6 +3056,12 @@ and emit_expr_simple ctx e =
       | EVar { name = "serverTools"; _ }, _ -> true
       | _ -> false
     in
+    (* humanActions likewise lowers to __tht_human-actions and must reach the
+       dedicated arm (e.g. as an argument to `List.append`), not the fallback. *)
+    let is_human_actions = match flatten_app_expr [] app with
+      | EVar { name = "humanActions"; _ }, _ -> true
+      | _ -> false
+    in
     (* FixedOffset lowers inline to (__ttz_tesl-tz-fixed …) — same reason. *)
     let is_fixed_offset = match app with
       | EApp { fn = EConstructor { name = "FixedOffset"; args = []; _ }; _ } -> true
@@ -3015,6 +3070,7 @@ and emit_expr_simple ctx e =
     if is_typename_record
        || is_tool_from
        || is_server_tools
+       || is_human_actions
        || is_fixed_offset
        || (match extract_select_query app with Some _ -> true | None -> false)
        || (match parse_insert_expr app with Some _ -> true | None -> false)
@@ -3877,8 +3933,9 @@ let config_only_import_names : string list =
     (* `asTool fn` is a compile-time form: it lowers to `__tart_tool …`
        (schema derived from the fn's types) and has no runtime binding.
        `serverTools S user` likewise lowers to `__tst_server-tools …`
-       (per-endpoint metadata derived at compile time). *)
-    "asTool"; "serverTools";
+       (per-endpoint metadata derived at compile time).  `humanActions S user`
+       lowers to `__tht_human-actions …` (its EXCLUDED-endpoint complement). *)
+    "asTool"; "serverTools"; "humanActions";
     (* Cache and Email surface forms are parser-rewritten, never runtime vars:
        `cache` is the config-block keyword (DCache); `Cache.get/set/delete/
        invalidate NAME (k)` parse to ECache* nodes; `Email.send NAME to: …`
@@ -3979,6 +4036,27 @@ let emit_requires ctx (m : module_form) =
   in
   if uses_server_tools then
     emit_line ctx "  (prefix-in __tst_ (only-in tesl/tesl/server-tools server-tools))";
+  (* `humanActions S user` lowers to the INERT human-action tool builder — same
+     WALK-based detection as `serverTools`, own private prefix. *)
+  let uses_human_actions =
+    let found = ref false in
+    let rec walk (e : Ast.expr) : unit =
+      (match e with
+       | Ast.EApp { fn = Ast.EApp { fn = Ast.EVar { name = "humanActions"; _ }; _ }; _ } ->
+         found := true
+       | _ -> ());
+      Ast_visitor.fold_children (fun () c -> walk c) () e
+    in
+    List.iter (function
+      | Ast.DFunc (fd : Ast.func_decl) -> walk fd.body
+      | Ast.DConst (c : Ast.const_form) -> walk c.value
+      | Ast.DTest (tf : Ast.test_form) ->
+        List.iter (fun s -> List.iter walk (Ast.test_stmt_exprs s)) tf.stmts
+      | _ -> ()) m.decls;
+    !found
+  in
+  if uses_human_actions then
+    emit_line ctx "  (prefix-in __tht_ (only-in tesl/tesl/human-actions human-actions))";
   (* TimeZone constructors lower to the tesl-tz runtime builders. *)
   let uses_timezone =
     let found = ref false in
@@ -7138,7 +7216,7 @@ let compile_to_string ?(root_path=default_root_path ()) ?(cyclic_local_import_pa
   let ctx = mk_ctx ~root_path () in
   (* Populate expr_type_tbl (lambda #:returns) and field_access_type_tbl (dot
      type hints, GitHub #26) from a single checker metadata pass. *)
-  (let _lb, expr_types, field_accesses, _anchors, server_tools_sites, _errs =
+  (let _lb, expr_types, field_accesses, _anchors, server_tools_sites, human_actions_sites, _errs =
      Checker.check_module_with_metadata m in
    List.iter (fun (info : Checker.expr_type_info) ->
      let key = (info.loc.Location.start.line, info.loc.Location.start.col) in
@@ -7151,7 +7229,11 @@ let compile_to_string ?(root_path=default_root_path ()) ?(cyclic_local_import_pa
    List.iter (fun (loc, (server, included)) ->
      let key = (loc.Location.start.line, loc.Location.start.col) in
      Hashtbl.replace ctx.server_tools_site_tbl key (server, included)
-   ) server_tools_sites);
+   ) server_tools_sites;
+   List.iter (fun (loc, (server, excluded)) ->
+     let key = (loc.Location.start.line, loc.Location.start.col) in
+     Hashtbl.replace ctx.human_actions_site_tbl key (server, excluded)
+   ) human_actions_sites);
   Hashtbl.clear qualified_imports;
   Hashtbl.clear stdlib_plain_imports;
   Hashtbl.clear job_type_to_queue;

@@ -40,6 +40,7 @@
          "../dsl/sql.rkt"
          "../dsl/types.rkt"
          "../tesl/agent.rkt"
+         (only-in "../tesl/human-actions.rkt" human-actions)
          (only-in "../tesl/time.rkt" PosixMillis)
          "private/postgres-test-support.rkt")
 
@@ -862,6 +863,67 @@
                    (hasheq 'epochMillis 1783804288000
                            'iso "2026-07-11T21:11:28Z")))))
 
+;;; ════════════════════════════════════════════════════════════════════════════
+;;; PILLAR 8 — humanActions: the INERT agent→human handoff.  A humanActions tool
+;;;            NEVER runs the endpoint; calling it returns a
+;;;            `human-action-request` descriptor (kind/server/action/args/handle)
+;;;            as the tool_result, so the frontend renders a typed button and the
+;;;            HUMAN performs the action under their own session.  The runtime
+;;;            builder takes only the server NAME + metadata — it has no route or
+;;;            handler to run, which is the whole "cannot" guarantee.
+;;; ════════════════════════════════════════════════════════════════════════════
+
+(define (human-action-agent provider)
+  (withTools (defineAgent provider "sys" 64)
+             (human-actions "HaServer"
+               (list (list "adminWipe" "Wipe everything. Admin only."
+                           "{\"type\":\"object\",\"properties\":{},\"required\":[]}")))))
+
+(define human-actions-tests
+  (test-suite
+   "humanActions — inert agent->human handoff descriptor"
+
+   (test-case "calling a humanActions tool returns an inert human-action-request"
+     (define captured (box '()))
+     (define provider
+       (capturing-provider
+        (list (toolUseStep "adminWipe" "c1" "{\"reason\":\"cleanup\"}")
+              (textStep "I asked the human to wipe."))
+        captured))
+     (with-capabilities (aiProvider)
+       (define reply (askReply (human-action-agent provider) "wipe everything"))
+       (check-equal? (replyText reply) "I asked the human to wipe.")
+       (check-equal? (replyToolCalls reply) 1))
+     (define results (second-request-tool-results captured))
+     (check-equal? (length results) 1)
+     (check-false (hash-ref (car results) 'is-error))
+     (define desc (string->jsexpr (hash-ref (car results) 'content)))
+     (check-equal? (hash-ref desc 'kind) "human-action-request")
+     (check-equal? (hash-ref desc 'server) "HaServer")
+     (check-equal? (hash-ref desc 'action) "adminWipe")
+     ;; the model's prefill args are carried verbatim (advisory only)
+     (check-equal? (hash-ref (hash-ref desc 'args) 'reason) "cleanup")
+     ;; a correlation handle is present and non-empty (for the resume-after turn)
+     (check-true (string? (hash-ref desc 'handle)))
+     (check-true (> (string-length (hash-ref desc 'handle)) 0))
+     ;; INERT: the handler never ran — its "wiped" output appears nowhere.
+     (check-false (regexp-match? #rx"wiped" (hash-ref (car results) 'content))))
+
+   (test-case "two requests mint distinct correlation handles"
+     (define (one-handle)
+       (define captured (box '()))
+       (define provider
+         (capturing-provider
+          (list (toolUseStep "adminWipe" "c1" "{}") (textStep "done"))
+          captured))
+       (with-capabilities (aiProvider)
+         (askReply (human-action-agent provider) "go"))
+       (hash-ref
+        (string->jsexpr
+         (hash-ref (car (second-request-tool-results captured)) 'content))
+        'handle))
+     (check-not-equal? (one-handle) (one-handle)))))
+
 ;;; ── Run order: pure-runtime suites first, then the DB-gated pillars. ─────────
 
 (define (run-all)
@@ -873,6 +935,7 @@
   (run-tests mock-discipline-tests)
   (run-tests tool-dispatch-containment-tests)
   (run-tests posix-enrichment-tests)
+  (run-tests human-actions-tests)
 
   ;; DB-gated pillars: skip cleanly when PostgreSQL tooling is unavailable.
   (cond

@@ -498,6 +498,25 @@ descriptions (handler doc-comments), and JSON schemas are derived; tool argument
 own boundary validation (capture checks, body codecs). See LANGUAGE-SPEC §11.1 and
 [lesson68](../example/learn/lesson68-server-endpoints-as-tools.tesl).
 
+**Actions the agent may NOT do — hand them to the human (`humanActions`).** `humanActions S user`
+is the exact complement of `serverTools S user`: the endpoints the user's declared proof does *not*
+cover. Together they partition the server — the agent runs what the user can, and everything else
+becomes an inert "ask the human" tool. Scope the agent's `user` narrower than the human's real
+authority and the held-back endpoints (e.g. admin-only ones) land in `humanActions`:
+
+```tesl
+tools: List.append (serverTools NotesServer user) (humanActions NotesServer user)
+```
+
+Calling a `humanActions` tool **cannot** run the endpoint — the runtime is handed only the server
+name and metadata, never a handler — so it returns a `human-action-request` descriptor
+(`{ kind, server, action, args, handle }`) instead. `tesl generate elm|ts` emits a typed decoder per
+server that rejects any `action` the server didn't declare and resolves the real URL from generated
+client code, so the frontend renders a safe button; the human clicks, their browser calls the real
+endpoint under their own session, and you feed the result back as another `converse` turn
+("resume-after"). `humanActions` charges no capability. See LANGUAGE-SPEC §11.1 and
+[lesson69](../example/learn/lesson69-agent-human-handoff.tesl).
+
 **Curating which tools the model gets (the two-api pattern).** `serverTools` derives tools from the
 server's endpoint list, so a second `api`/`server` pair binding the *same handler functions* but
 listing only a subset of endpoints is a compile-time tool allowlist: the user-facing server keeps the

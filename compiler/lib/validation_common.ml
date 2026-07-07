@@ -1289,6 +1289,18 @@ let collect_needed_capabilities
            | None -> [])
         | _ -> []) in
       go bound (scaps @ acc) user_arg
+    (* humanActions S user — the mirror of serverTools, and its capability
+       OPPOSITE: the agent is NOT allowed to run these endpoints, so the site is
+       charged NOTHING.  The tool is inert (it emits a request the human performs
+       in their browser); its endpoints' `requires` are never dispatched in this
+       function's dynamic extent and are never delegated into the agent loop.
+       Charge no capability; only descend into the user sub-expression.
+       Decide-by-resolution: a locally bound `humanActions` falls through. *)
+    | EApp { fn = EApp { fn = EVar { name = "humanActions"; _ }; arg = _server_ref; _ };
+             arg = user_arg; _ }
+      when not (List.mem "humanActions" bound)
+        && not (List.mem_assoc "humanActions" func_caps) ->
+      go bound acc user_arg
     (* Effect forms: prepend the fixed data-table token, then descend into
        children via the shared traversal. *)
     | EEnqueue _ | EPublish _ | ETelemetry _ | ESendEmail _ ->

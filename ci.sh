@@ -1086,6 +1086,7 @@ else
               "tests/agent-tools-tests.tesl" "tests/agent-conversation-tests.tesl" \
               "tests/agent-run-tests.tesl" "tests/server-tools-tests.tesl" \
               "tests/two-api-server-tools-tests.tesl" \
+              "tests/human-actions-tests.tesl" \
               "example/support-assistant.tesl" \
               "example/ai-conversation-service.tesl" )
     AI_RKT=( "tests/agent-provider-norm-test.rkt" "tests/agent-runtime-tests.rkt" \

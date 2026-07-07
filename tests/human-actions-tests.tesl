@@ -1,0 +1,154 @@
+#lang tesl
+module HumanActionsTests exposing [
+  NotesServer,
+  User,
+  Authenticated,
+  Admin,
+  mkUser,
+  mkAdmin,
+]
+
+import Tesl.Prelude exposing [Int, String, Bool, List]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.concat]
+import Tesl.List exposing [List.length, List.append]
+import Tesl.Agent exposing [
+  aiProvider,
+  Agent,
+  Tool,
+  serverTools,
+  humanActions,
+  mockToolProvider,
+  toolUseStep,
+  textStep,
+  askWith,
+  replyText,
+  replyToolCalls,
+]
+
+# ────────────────────────────────────────────────────────────────────────────
+# humanActions: the COMPLEMENT of serverTools at the same call site.
+#
+#   serverTools  S user  — endpoints the user's declared proof COVERS
+#                          (the agent may run them, on the user's behalf).
+#   humanActions S user  — the rest: endpoints the agent may NOT run.  Each is
+#                          an INERT tool.  Calling it does not execute the
+#                          endpoint; it returns a `human-action-request` the
+#                          frontend renders as a button the HUMAN clicks (their
+#                          browser hits the real endpoint under their own
+#                          session, which re-checks auth).
+#
+# The two partition the server's endpoints: disjoint and complete.  Scope the
+# agent's `user` narrower than the human's real authority and the held-back
+# endpoints become the human-action set.  All deterministic, mock-only.
+# ────────────────────────────────────────────────────────────────────────────
+
+capability notesBot implies aiProvider
+
+record User {
+  id: String
+  role: String
+}
+
+fact Authenticated (u: User)
+fact Admin (u: User)
+
+auth cookieAuth(request: HttpRequest) -> u: User ::: Authenticated u =
+  case Dict.lookup "user" request.cookies of
+    Something userId -> ok (User { id: userId, role: "user" }) ::: Authenticated u
+    Nothing -> fail 401 "Missing user cookie"
+
+auth adminAuth(request: HttpRequest) -> u: User ::: Authenticated u && Admin u =
+  case Dict.lookup "admin" request.cookies of
+    Something userId -> ok (User { id: userId, role: "admin" }) ::: Authenticated u && Admin u
+    Nothing -> fail 401 "Missing admin cookie"
+
+# Greet the authenticated user.
+handler greet(u: User ::: Authenticated u) -> String =
+  String.concat "hello " u.id
+
+# Delete ALL notes. Admin only — the agent must never do this autonomously.
+handler wipeNotes(u: User ::: Authenticated u && Admin u) -> String =
+  "all notes wiped"
+
+api NotesApi {
+  get "/greet"
+    auth u: User ::: Authenticated u via cookieAuth
+    -> String
+  post "/admin/wipe"
+    auth u: User ::: Authenticated u && Admin u via adminAuth
+    -> String
+}
+
+server NotesServer for NotesApi {
+  greet = greet
+  wipeNotes = wipeNotes
+}
+
+check mkUser(u: User) -> u: User ::: Authenticated u =
+  ok u ::: Authenticated u
+
+check mkAdmin(u: User) -> u: User ::: Authenticated u && Admin u =
+  ok u ::: Authenticated u && Admin u
+
+fn agentTools(u: User ::: Authenticated u) -> List Tool =
+  serverTools NotesServer u
+
+fn humanTools(u: User ::: Authenticated u) -> List Tool =
+  humanActions NotesServer u
+
+fn adminHumanTools(u: User ::: Authenticated u && Admin u) -> List Tool =
+  humanActions NotesServer u
+
+# The agent gets everything the user CAN do, plus an inert request tool for each
+# thing only the human may do.
+fn plainAgent(u: User ::: Authenticated u) -> Agent =
+  Agent {
+    provider: mockToolProvider []
+    systemPrompt: "You manage the user's notes. Admin-only actions must be asked of the human."
+    maxTokens: 256
+    tools: List.append (serverTools NotesServer u) (humanActions NotesServer u)
+  }
+
+# (1) COMPLEMENT: a plain user's agent-runnable set is greet (1); the held-back
+# human-action set is wipeNotes (1).  Together they partition the 2 endpoints.
+test "serverTools and humanActions partition the server endpoints" {
+  let raw = User { id: "alice", role: "user" }
+  let user = check mkUser raw
+  expect (List.length (agentTools user)) == 1
+  expect (List.length (humanTools user)) == 1
+}
+
+# (2) An admin user can do everything, so there is NOTHING to hand to the human.
+test "an admin user has no held-back human actions" {
+  let raw = User { id: "root", role: "admin" }
+  let admin = check mkAdmin raw
+  expect (List.length (adminHumanTools admin)) == 0
+}
+
+# (3) INERT: the agent calls the admin-only action it may not perform.  The
+# handler NEVER runs ("all notes wiped" never happens); the tool returns a
+# human-action request and the loop continues to the scripted reply.
+test "requesting a held-back action is inert; the loop continues" requires [notesBot] {
+  let raw = User { id: "alice", role: "user" }
+  let user = check mkUser raw
+  let call = toolUseStep "wipeNotes" "c1" "{}"
+  let final = textStep "I've asked you to confirm the wipe."
+  let reply = askWith (plainAgent user) "wipe everything" (mockToolProvider [call, final])
+  expect (replyText reply) == "I've asked you to confirm the wipe."
+  expect (replyToolCalls reply) == 1
+}
+
+# (4) The agent can still run the endpoints it IS allowed (greet), from the same
+# combined tool list — the two kinds coexist.
+test "an allowed serverTools endpoint still dispatches normally" requires [notesBot] {
+  let raw = User { id: "alice", role: "user" }
+  let user = check mkUser raw
+  let call = toolUseStep "greet" "c1" "{}"
+  let final = textStep "Greeted you."
+  let reply = askWith (plainAgent user) "say hi" (mockToolProvider [call, final])
+  expect (replyText reply) == "Greeted you."
+  expect (replyToolCalls reply) == 1
+}

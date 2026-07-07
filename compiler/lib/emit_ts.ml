@@ -504,6 +504,38 @@ let emit_ts (m : module_form) : string =
     add "\n"
   end;
 
+  (* ── Human actions (agent → human handoff) ── *)
+  (* Per server, a zod schema for the `human-action-request` descriptor the agent
+     loop emits when it calls a `humanActions` tool it may NOT perform.  The
+     discriminant `action` is a COMPILE-TIME allowlist (one literal per server
+     endpoint tool name): an `action` the agent never had fails to parse, and the
+     real endpoint URL comes from the generated client function the app calls per
+     case — never from the wire.  `args` is the model's advisory prefill (pass it
+     to the matching client fn, which validates it; the server re-checks auth).
+     `handle` correlates the completed action to a resume-after turn. *)
+  let ts_servers = List.filter_map (function
+    | DServer (sv : server_form) -> Some sv
+    | _ -> None
+  ) m.decls in
+  if ts_servers <> [] then begin
+    add "// --- Human actions (agent -> human handoff) ---\n\n";
+    List.iter (fun (sv : server_form) ->
+      let tools = List.map fst sv.bindings in
+      List.iter (fun tool ->
+        addf "const _%sHumanAction_%sSchema = z.object({ action: z.literal(%S), handle: z.string(), args: z.unknown() });\n"
+          sv.name tool tool
+      ) tools;
+      let schema_list = String.concat ", "
+        (List.map (fun tool ->
+           Printf.sprintf "_%sHumanAction_%sSchema" sv.name tool) tools) in
+      addf "export const %sHumanActionRequestSchema = z.discriminatedUnion(\"action\", [%s]);\n"
+        sv.name schema_list;
+      addf "export type %sHumanActionRequest = z.infer<typeof %sHumanActionRequestSchema>;\n\n"
+        sv.name sv.name
+    ) ts_servers;
+    add "\n"
+  end;
+
   (* ── Records ── *)
   let records = List.filter_map (function
     | DRecord r -> Some r

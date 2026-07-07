@@ -127,6 +127,16 @@ type ctx = {
   server_tools_shadowed : bool;
   (** true when this module declares its own `serverTools` fn/value — the builtin
       arms stand down (decide-by-resolution, not by spelling). *)
+  human_actions_sites : (Location.loc * (string * string list)) list ref;
+  (** Every `humanActions S user` call site → (server name, the endpoint tool
+      names EXCLUDED at that site).  An endpoint is excluded iff the user
+      variable's declared proof annotation does NOT cover its auth predicates —
+      the exact complement of the `serverTools` inclusion decision, so the two
+      builtins partition the server's endpoints (disjoint, complete).  Threaded
+      into the emitter to build exactly the inert human-action tools. *)
+  human_actions_shadowed : bool;
+  (** true when this module declares its own `humanActions` fn/value — the
+      builtin arms stand down (decide-by-resolution, not by spelling). *)
   import_suggest : string -> Import_suggest.suggestion option;
   (** E1: unbound name → "which import would bind it" hint + quickfix.  Seeded
       per-module in {!check_module_with_metadata}; the default suggests nothing. *)
@@ -163,6 +173,8 @@ let make_ctx ?(source_lines = [||]) ~filename ~env () = {
   server_tools_env = [];
   server_tools_sites = ref [];
   server_tools_shadowed = false;
+  human_actions_sites = ref [];
+  human_actions_shadowed = false;
   import_suggest = (fun _ -> None);
   source_lines;
 }
@@ -1864,6 +1876,82 @@ let rec infer_expr ctx (e : expr) : ty =
        server and an authenticated user: `serverTools MyServer user`";
     t_list t_tool
 
+  (* `humanActions MyServer user : List Tool` is the COMPLEMENT of `serverTools`
+     at the same call site: one INERT tool per endpoint the agent may NOT call
+     on `user`'s behalf — whose auth predicates the user variable's declared
+     proof annotation does NOT cover.  serverTools (included) and humanActions
+     (excluded) partition the server's endpoints, disjoint and complete.  The
+     tool never executes the endpoint; it surfaces a request the HUMAN performs
+     in the browser under their own session (which re-checks auth server-side),
+     so scoping the agent's `user` narrower than the human's real authority is
+     what makes the held-back actions meaningful.  Typed structurally for the
+     same reason as `serverTools` — a server name is declarative configuration,
+     not an expression value.  All arms stand down when the module declares its
+     own `humanActions` (decide-by-resolution, not by spelling). *)
+  | EApp { fn = EApp { fn = EVar { name = "humanActions"; _ }; arg = server_ref; _ };
+           arg = user_arg; loc }
+    when not ctx.human_actions_shadowed ->
+    (match server_ref with
+     | EConstructor { name = sname; args = []; _ } | EVar { name = sname; _ } ->
+       (match List.assoc_opt sname ctx.server_tools_env with
+        | Some (auth_ty_opt, endpoints) ->
+          let user_ty = infer_expr ctx user_arg in
+          (match auth_ty_opt with
+           | Some auth_ty_name ->
+             unify_at ctx (expr_loc user_arg) user_ty
+               (ty_of_type_expr (TName { name = auth_ty_name; loc }))
+           | None -> ());
+          (match user_arg with
+           | EVar { name = uname; _ } ->
+             let user_preds =
+               match List.assoc_opt uname ctx.binding_meta_env with
+               | Some (AttachedProofBinding p) -> normalized_preds_of_proof uname p
+               | _ -> []
+             in
+             (* EXCLUDED = the complement of serverTools' INCLUDED filter: an
+                endpoint whose auth predicates the user's declared proof does NOT
+                fully cover.  Empty (user can do everything) is legitimate — no
+                error, unlike serverTools' "no authed endpoint reachable" guard. *)
+             let excluded = List.filter (fun (ep : server_tools_endpoint) ->
+               not (List.for_all (fun pr -> List.mem pr user_preds) ep.ste_preds)
+             ) endpoints in
+             ctx.human_actions_sites :=
+               (loc, (sname, List.map (fun (ep : server_tools_endpoint) -> ep.ste_binding) excluded))
+               :: !(ctx.human_actions_sites)
+           | _ ->
+             add_error ctx (expr_loc user_arg)
+               "`humanActions` takes the authenticated user as a bare variable whose \
+                declared proof annotation decides which endpoints are the agent's \
+                human actions — bind the value first (e.g. a proof-annotated handler \
+                parameter, or `let scoped = requireAuthed user`) and pass that name")
+        | None ->
+          ignore (infer_expr ctx user_arg);
+          add_error ctx loc (Printf.sprintf
+            "`humanActions` argument `%s` is not a server declared in this module — \
+             it takes a bare reference to a `server` block (`humanActions MyServer user`)"
+            sname))
+     | _ ->
+       ignore (infer_expr ctx user_arg);
+       add_error ctx loc
+         "`humanActions` supports only a bare reference to a server declared in this \
+          module (`humanActions MyServer user`) — an arbitrary expression cannot be \
+          lowered to the server's held-back endpoint tools");
+    t_list t_tool
+
+  | EApp { fn = EVar { name = "humanActions"; _ }; loc; _ }
+    when not ctx.human_actions_shadowed ->
+    add_error ctx loc
+      "`humanActions` must be fully applied: `humanActions MyServer user` (a server \
+       and the proof-carrying authenticated user the held-back tools are computed \
+       against); a partial application cannot be lowered";
+    t_list t_tool
+
+  | EVar { name = "humanActions"; loc } when not ctx.human_actions_shadowed ->
+    add_error ctx loc
+      "`humanActions` cannot be passed around as a value — apply it directly to a \
+       server and an authenticated user: `humanActions MyServer user`";
+    t_list t_tool
+
   | EVar { name; loc } ->
     (match lookup_name ctx name with
      | Some ty -> ty
@@ -3365,6 +3453,10 @@ use the `Tuple3 a b c` constructor instead";
           name is not an expression value); the generic head-inference below
           would misreport it. *)
        fallback ()
+     | EVar { name = "humanActions"; _ } when not ctx.human_actions_shadowed ->
+       (* humanActions is typed structurally by its infer_expr arms, same as
+          serverTools — a server name is not an expression value. *)
+       fallback ()
      | EBinop _ ->
        (* Multi-line SQL: order/limit/offset merged as EApp args onto a where-EBinop.
           Delegate to infer_expr which correctly classifies the merged SQL expression. *)
@@ -4716,7 +4808,7 @@ let check_ord_eq_calls ctx =
          ) constraints)
   ) !(ctx.ord_eq_calls)
 
-let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * type_error list =
+let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * (Location.loc * (string * string list)) list * type_error list =
   reset_counter ();
   (* E1: one lazy folder-tree index per checked module — the scan only runs if
      an unbound-name error is actually emitted. *)
@@ -4851,7 +4943,11 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
       | DFunc (fd : Ast.func_decl) -> fd.name = "serverTools"
       | DConst (c : Ast.const_form) -> c.name = "serverTools"
       | _ -> false) m.decls in
-    { ctx with server_tools_env; server_tools_shadowed }
+    let human_actions_shadowed = List.exists (function
+      | DFunc (fd : Ast.func_decl) -> fd.name = "humanActions"
+      | DConst (c : Ast.const_form) -> c.name = "humanActions"
+      | _ -> false) m.decls in
+    { ctx with server_tools_env; server_tools_shadowed; human_actions_shadowed }
   in
 
   (* 3c. Validate agent tool parameters: every tool must resolve to a local `fn`
@@ -5372,20 +5468,21 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
    List.rev !(ctx.field_accesses),
    List.rev !(ctx.bare_record_hints),
    List.rev !(ctx.server_tools_sites),
+   List.rev !(ctx.human_actions_sites),
    import_errors @ export_errors @ fact_ownership_errors @ List.rev !(ctx.errors))
 
 let check_module_with_local_bindings (m : module_form) : local_binding_info list * type_error list =
-  let local_bindings, _, _, _, _, errors = check_module_with_metadata m in
+  let local_bindings, _, _, _, _, _, errors = check_module_with_metadata m in
   (local_bindings, errors)
 
 let check_module_with_expr_types (m : module_form) : expr_type_info list * type_error list =
-  let _, expr_types, _, _, _, errors = check_module_with_metadata m in
+  let _, expr_types, _, _, _, _, errors = check_module_with_metadata m in
   (expr_types, errors)
 
 let check_module (m : module_form) : type_error list =
-  let _, _, _, _, _, errors = check_module_with_metadata m in
+  let _, _, _, _, _, _, errors = check_module_with_metadata m in
   errors
 
 let check_module_with_field_accesses (m : module_form) : field_access_info list * type_error list =
-  let _, _, field_accesses, _, _, errors = check_module_with_metadata m in
+  let _, _, field_accesses, _, _, _, errors = check_module_with_metadata m in
   (field_accesses, errors)

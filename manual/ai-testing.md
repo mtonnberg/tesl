@@ -160,4 +160,5 @@ companion note rather than a `test` block.)
 - [`tests/agent-conversation-tests.tesl`](../tests/agent-conversation-tests.tesl) — multi-turn `converse` and history persistence.
 - [`tests/agent-run-tests.tesl`](../tests/agent-run-tests.tesl) — `agentRun` on a worker, streaming step events to subscribers.
 - [`example/learn/lesson68-server-endpoints-as-tools.tesl`](../example/learn/lesson68-server-endpoints-as-tools.tesl) — the `serverTools` lesson: HTTP endpoints as preauthenticated agent tools (incl. per-user admin inclusion), combined with custom `asTool` tools, all mock-driven.
+- [`example/learn/lesson69-agent-human-handoff.tesl`](../example/learn/lesson69-agent-human-handoff.tesl) — the `humanActions` lesson: endpoints the agent may *not* run, surfaced to the human as an inert request, with the completed result resumed as a new `converse` turn — all mock-driven.
 - [best-practices.md](best-practices.md) — capability and validation patterns.

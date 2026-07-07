@@ -1,0 +1,185 @@
+#lang tesl
+module Lesson69AgentHumanHandoff exposing [
+  NotesServer,
+  User,
+  Authenticated,
+  Admin,
+]
+
+import Tesl.Prelude exposing [Int, String, List]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.String exposing [String.concat]
+import Tesl.List exposing [List.append, List.length]
+import Tesl.Agent exposing [
+  aiProvider,
+  Agent,
+  Tool,
+  serverTools,
+  humanActions,
+  mockToolProvider,
+  toolUseStep,
+  textStep,
+  newConversation,
+  converse,
+  turnReply,
+  turnConversation,
+  askWith,
+  replyText,
+  replyToolCalls,
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lesson 69 — Agent ⇄ human handoff (`humanActions`)
+#
+# Lesson 68 gave an agent the endpoints it MAY run (`serverTools`). This lesson
+# covers the other half: the endpoints it may NOT — surfaced to the HUMAN as a
+# button, with the result fed back so the agent can continue ("resume-after").
+#
+# THE ONE IDEA. `humanActions S user` is the exact COMPLEMENT of
+# `serverTools S user` at the same call site:
+#
+#   serverTools  S user : List Tool   -- endpoints the user's proof COVERS
+#   humanActions S user : List Tool   -- the rest (agent may not run them)
+#
+# Together they PARTITION the server's endpoints — disjoint and complete. You
+# decide the split declaratively, by how much proof the agent's `user` carries:
+# give the agent a value scoped NARROWER than the human's real authority and the
+# held-back endpoints become the human-action set. Here the agent acts for a
+# plain `Authenticated` user, so the admin-only `wipeNotes` is human-only.
+#
+# WHY IT'S SAFE (a language guarantee, not a prompt). A `humanActions` tool is
+# INERT: calling it never runs the endpoint. The runtime builder is handed only
+# the server NAME and the endpoints' metadata — no server value, no handler — so
+# there is simply no in-process path from the tool to a call. Dispatching one
+# returns a descriptor:
+#
+#   { "kind": "human-action-request",
+#     "server": "NotesServer",
+#     "action": "wipeNotes",         -- which held-back action (compiler-known)
+#     "args":   { ... },             -- the model's ADVISORY prefill
+#     "handle": "3f9c…" }            -- correlation id for the resume turn
+#
+# The agent can only CHOOSE which held-back action to request and prefill its
+# args — never perform it, relabel it, or point it elsewhere. The frontend
+# (`tesl generate elm|ts`) turns the descriptor into a typed button whose URL
+# comes from generated client code and whose `action` is checked against a
+# compile-time allowlist; the human clicks, their browser calls the real
+# endpoint under their OWN session (auth re-checked server-side).
+#
+# `humanActions` also charges NO capability — the opposite of `serverTools` —
+# because the agent never runs these endpoints.
+# ─────────────────────────────────────────────────────────────────────────────
+
+capability notesAi implies aiProvider
+
+record User {
+  id: String
+  role: String
+}
+
+fact Authenticated (u: User)
+fact Admin (u: User)
+
+auth cookieAuth(request: HttpRequest) -> u: User ::: Authenticated u =
+  case Dict.lookup "user" request.cookies of
+    Something userId -> ok (User { id: userId, role: "user" }) ::: Authenticated u
+    Nothing -> fail 401 "Missing user cookie"
+
+auth adminAuth(request: HttpRequest) -> u: User ::: Authenticated u && Admin u =
+  case Dict.lookup "admin" request.cookies of
+    Something userId -> ok (User { id: userId, role: "admin" }) ::: Authenticated u && Admin u
+    Nothing -> fail 401 "Missing admin cookie"
+
+# Read the authenticated user's notes.  The agent MAY do this for them.
+handler listNotes(u: User ::: Authenticated u) -> String =
+  String.concat u.id "'s notes: milk, eggs"
+
+# Delete ALL notes.  Admin only — we do NOT trust the agent to do this
+# autonomously, even for an admin user; a human confirms it in the browser.
+handler wipeNotes(u: User ::: Authenticated u && Admin u) -> String =
+  "all notes wiped"
+
+api NotesApi {
+  get "/notes"
+    auth u: User ::: Authenticated u via cookieAuth
+    -> String
+  post "/admin/wipe"
+    auth u: User ::: Authenticated u && Admin u via adminAuth
+    -> String
+}
+
+server NotesServer for NotesApi {
+  listNotes = listNotes
+  wipeNotes = wipeNotes
+}
+
+# Proof minting for the deterministic tests (no HTTP request): the usual
+# check-boundary discipline — you cannot conjure `Authenticated`.
+check mkUser(u: User) -> u: User ::: Authenticated u =
+  ok u ::: Authenticated u
+
+# The assistant for a plain user: it can run what the user can (listNotes) and
+# can ASK the human for what only an admin may (wipeNotes).
+fn assistantFor(u: User ::: Authenticated u) -> Agent =
+  Agent {
+    provider: mockToolProvider [
+      # Turn 1: the model asks the human to wipe (an inert human-action tool),
+      # then reports back. The tool_result it saw was the human-action-request.
+      toolUseStep "wipeNotes" "call_1" "{}",
+      textStep "That needs an admin — I've put a Wipe button in front of you.",
+      # Turn 2 (resume-after): once the human's result is threaded back in as a
+      # new message, the model continues the conversation.
+      textStep "Done — your notes were wiped."
+    ]
+    systemPrompt: "Manage the user's notes. Admin-only actions must be asked of the human."
+    maxTokens: 256
+    tools: List.append (serverTools NotesServer u) (humanActions NotesServer u)
+  }
+
+fn agentRunnable(u: User ::: Authenticated u) -> List Tool =
+  serverTools NotesServer u
+
+fn humanOnly(u: User ::: Authenticated u) -> List Tool =
+  humanActions NotesServer u
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DETERMINISTIC TESTS — no API key, no network, no cost
+# ─────────────────────────────────────────────────────────────────────────────
+
+# (1) THE PARTITION. The plain user's agent-runnable set is listNotes (1); the
+# held-back human-action set is wipeNotes (1). Disjoint and complete.
+test "serverTools and humanActions partition the endpoints" {
+  let raw = User { id: "alice", role: "user" }
+  let user = check mkUser raw
+  expect (List.length (agentRunnable user)) == 1
+  expect (List.length (humanOnly user)) == 1
+}
+
+# (2) THE HANDOFF. The agent calls the held-back `wipeNotes`. The handler never
+# runs ("all notes wiped" does NOT happen here); the inert tool returns a
+# human-action request and the turn ends with the model's message to the user.
+test "turn 1: the agent requests the held-back action, inertly" requires [notesAi] {
+  let raw = User { id: "alice", role: "user" }
+  let user = check mkUser raw
+  let conv0 = newConversation (assistantFor user)
+  let turn1 = converse conv0 "Please wipe all my notes"
+  expect (replyText (turnReply turn1)) == "That needs an admin — I've put a Wipe button in front of you."
+  expect (replyToolCalls (turnReply turn1)) == 1
+}
+
+# (3) RESUME-AFTER. The human clicked the button; their browser hit the real
+# endpoint under their own session and it returned "all notes wiped". We thread
+# that result back in as the next message and the SAME conversation continues —
+# the runtime never suspended a turn; resuming is just another `converse`.
+test "turn 2: the human's completed action resumes the conversation" requires [notesAi] {
+  let raw = User { id: "alice", role: "user" }
+  let user = check mkUser raw
+  let conv0 = newConversation (assistantFor user)
+  let turn1 = converse conv0 "Please wipe all my notes"
+  let conv1 = turnConversation turn1
+  # The frontend posts the completed action back; the developer feeds it in.
+  let turn2 = converse conv1 "[human completed wipeNotes (handle call_1): all notes wiped]"
+  expect (replyText (turnReply turn2)) == "Done — your notes were wiped."
+}

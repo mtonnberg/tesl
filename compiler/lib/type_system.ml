@@ -914,7 +914,7 @@ let tesl_module_exports : (string * string list) list = [
       "mockProvider"; "ask";
       "mockToolProvider"; "toolUseStep"; "textStep";
       "anthropic"; "openai"; "mistral"; "local";
-      "tool"; "asTool"; "serverTools";
+      "tool"; "asTool"; "serverTools"; "humanActions";
       "askReply"; "askWith"; "replyText"; "replyTokens"; "replyToolCalls";
       "decodeAs"; "askFor";
       "Conversation"; "Conversation?"; "ConversationTurn"; "ConversationTurn?";
