@@ -2,9 +2,14 @@
 module Lesson72Units exposing [
   finalSpeed,
   pace,
+  deliveryEta,
+  brakingDistance,
+  kineticEnergy,
   lengthRatio,
   rectangleArea,
   sideFromArea,
+  longestLeg,
+  totalDistance,
   approxEqual,
 ]
 
@@ -13,142 +18,348 @@ module Lesson72Units exposing [
 # ─────────────────────────────────────────────
 # `Tesl.Units` gives every physical quantity a DIMENSION checked at compile
 # time — and ERASED at runtime: a `Speed` is a plain Float in the compiled
-# code, zero cost. Constructors convert INTO SI canonical units
-# (`Length.miles 3.0` is meters inside), accessors convert back OUT
-# (`Speed.inKilometersPerHour v`).
+# code, zero cost.
 #
-# The ordinary operators do dimensional algebra:
-#   Length * Length            : Area          -- `*` adds exponents
-#   Length / Duration          : Speed         -- `/` subtracts them
-#   Acceleration * Duration    : Speed         -- m/s² × 4s = m/s
-#   Length / Length            : Float         -- dimensionless collapses
-#   Length + Duration                          # ❌ compile error, names both dimensions
+#   fn finalSpeed(a: Acceleration, t: Duration) -> Speed = a * t
 #
-# Scalars must be Float literals (`2.0 * len`, never `2 * len`), and dividing
-# by a VARIABLE demands a non-zero proof first:
-#   let safe = Units.requireNonZero t          -- mints FloatNonZero t
-#   d / safe                                   -- ✅ division unlocked
+# That is the whole feature in one line: `*` and `/` work the dimensions out
+# per expression (m/s² × s = m/s), and code whose units don't line up DOES NOT
+# COMPILE. The km/h-vs-m/s bug class dies at the type checker.
 #
-# The quantity type names (Length, Speed, Area, …) are IMPORT-GATED aliases:
-# they mean dimensioned quantities only in a module that imports them from
-# Tesl.Units. Another module's own `type Speed = Slow | Fast` keeps working —
-# but declaring one while ALSO importing the alias is a compile error, never a
-# silent hijack.
+# THE MENTAL MODEL — three rules cover everything:
+#
+#   1. ENTER through a constructor.   `Length.miles 3.0` converts INTO the SI
+#      canonical unit (meters) — inside, every Length IS meters, every
+#      Duration IS seconds, every Speed IS m/s. One value, one ruler.
+#   2. ALGEBRA happens in the types.  `*` adds dimension exponents, `/`
+#      subtracts them, `+`/`-`/comparison demand the SAME dimension. You never
+#      convert between m and km mid-formula, because mid-formula everything
+#      already IS canonical SI.
+#   3. EXIT through an accessor.      `Speed.inKilometersPerHour v` converts
+#      back OUT, naming the unit at the boundary. Raw unit numbers exist only
+#      at the two edges — construction and reading — so there is nowhere IN
+#      BETWEEN for a unit mix-up to hide, and at the edges the constructor or
+#      accessor names its unit right at the call site.
+#
+# Under the hood a dimension is 7 SI exponents (length, mass, time, current,
+# temperature, amount, luminosity). `Speed` is just the name for
+# length¹·time⁻¹; an `Area` is length². Two quantity types are THE SAME TYPE
+# whenever their exponents match — the aliases are labels, not walls:
+#
+#   Length * Length             : Area          -- exponents add:      L¹+L¹ = L²
+#   Length / Duration           : Speed         -- exponents subtract: L¹−T¹ = L¹T⁻¹
+#   Acceleration * Duration     : Speed         -- L¹T⁻² + T¹ = L¹T⁻¹  (m/s² × 4s = m/s)
+#   Mass * Acceleration         : Force         -- physics falls out of the algebra
+#   Length / Length             : Float         -- all exponents zero → plain Float
+#   Length + Duration                           # ❌ compile error, names both dimensions
+#
+# Scalars are Floats, never Ints: `2.0 * len` scales, `2 * len` is a compile
+# error (Tesl never auto-promotes Int to Float). Any Float EXPRESSION scales —
+# `factor * len` is fine when `factor: Float`. Dividing by a variable demands
+# a non-zero proof first — call `Units.requireNonZero` directly, see §4.
+#
+# (`Speed` and friends only mean quantities in modules that import them from
+# Tesl.Units — collision rules in §8.)
+#
+# Companion prose (why it works this way, DB/JSON/agent story, FAQ):
+# example/learn/lesson72-units.md
 
-import Tesl.Prelude exposing [Bool(..)]
+import Tesl.Prelude exposing [Bool(..), String, List]
+import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Float exposing [Float, Float.abs]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Time exposing [
+  Time.secondsToPosix,
+  Time.posixToSeconds,
+  Time.add,
+  Time.diff,
+]
 import Tesl.Units exposing [
   Length,
+  Mass,
   Duration,
   Speed,
   Acceleration,
   Area,
+  Energy,
   Temperature,
   Length.meters,
   Length.kilometers,
+  Length.miles,
   Length.feet,
   Length.inMeters,
+  Length.inKilometers,
   Length.inFeet,
+  Mass.kilograms,
   Duration.seconds,
   Duration.hours,
+  Duration.inSeconds,
   Duration.inMinutes,
+  Duration.toMillis,
+  Speed.metersPerSecond,
+  Speed.kilometersPerHour,
   Speed.inMetersPerSecond,
   Speed.inKilometersPerHour,
+  Speed.inMilesPerHour,
   Acceleration.metersPerSecondSquared,
   Area.squareMeters,
   Area.inSquareMeters,
+  Energy.inJoules,
   Temperature.celsius,
   Temperature.inFahrenheit,
   Units.sqrt,
+  Units.square,
+  Units.sum,
+  Units.max,
   Units.requireNonZero,
 ]
 
-# Floats out of unit conversions carry binary rounding — compare with a
-# tolerance, not `==` (the accessors are the boundary back to raw Floats).
+# Conversion factors like feet (0.3048) are not exact in binary floating
+# point — compare anything that CROSSED such a factor with a tolerance
+# (approxEqual below). Values that stayed in one exact unit (meters entered,
+# meters read; km ↔ m is an exact ×1000) compare fine with `==`.
 fn approxEqual(x: Float, y: Float) -> Bool =
   Float.abs (x - y) < 0.000001
 
-# ─── The flagship: m/s² × s = m/s ────────────────────────────────────────────────
-# `*` ADDS the dimension exponents, so Acceleration (m/s²) times Duration (s)
-# IS a Speed (m/s) — the compiler works that out per expression; annotating the
-# result as anything else is a compile error.
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1. ENTER / EXIT — constructors in, accessors out
+# ═══════════════════════════════════════════════════════════════════════════════
+# Constructors from DIFFERENT units produce the SAME canonical value: a
+# kilometer entered as `Length.kilometers 1.0`, `Length.meters 1000.0`, or
+# `Length.miles 0.621…` is one and the same Length. Which unit you exit
+# through is an independent choice — enter in miles, exit in feet, no pivot
+# tables in between.
+#
+# GOTCHA worth internalizing: if you print a quantity you see the raw SI
+# number (a Speed prints as its m/s value, a Length as meters). That is the
+# erasure showing through. Always exit through an accessor before showing a
+# number to a human.
+
+test "one kilometer, three doors in, any door out" {
+  let a = Length.kilometers 1.0
+  let b = Length.meters 1000.0
+  expect (a == b) == True # same canonical value
+  expect Length.inMeters a == 1000.0
+  expect Length.inKilometers (Length.meters 2500.0) == 2.5
+  expect approxEqual (Length.inFeet a) 3280.839895
+  expect approxEqual (Length.inMeters (Length.miles 1.0)) 1609.344
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 2. SAME-DIMENSION arithmetic — mixed units just work (because SI inside)
+# ═══════════════════════════════════════════════════════════════════════════════
+# `+`, `-`, `<`, `==` need both sides in the SAME dimension — and that is the
+# ONLY thing they need. Meters plus feet is fine: both are already meters
+# inside. This is why rule 1 (canonical SI) matters — the classic "added km to
+# mi" bug cannot be expressed.
+
+fn totalDistance(legs: List Length) -> Length =
+  Units.sum legs
+
+fn longestLeg(a: Length, b: Length) -> Length =
+  Units.max a b
+
+test "meters and feet add directly — both are canonical meters inside" {
+  let mixed = Length.meters 1.0 + Length.feet 1.0
+  expect approxEqual (Length.inMeters mixed) 1.3048
+  expect (Length.kilometers 1.0 > Length.feet 3000.0) == True
+  expect Length.inMeters (totalDistance [Length.meters 400.0,
+                                         Length.kilometers 0.6]) == 1000.0
+  expect Length.inMeters (longestLeg (Length.meters 30.0) (Length.feet 100.0)) == 30.48
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 3. THE ALGEBRA — `*` and `/` derive new dimensions
+# ═══════════════════════════════════════════════════════════════════════════════
+# You never declare that Acceleration × Duration is Speed — the exponent
+# arithmetic IS the rule, and the annotation on the function is documentation
+# the compiler verifies. Annotate the WRONG result type and the function does
+# not compile.
+
+# The flagship: m/s² × s = m/s.
 fn finalSpeed(a: Acceleration, t: Duration) -> Speed =
   a * t
 
-# ─── Division needs a non-zero divisor proof ─────────────────────────────────────
-# `/` SUBTRACTS exponents: Length / Duration is Speed. Like every Tesl `/`, a
-# variable divisor must carry a non-zero proof — `Units.requireNonZero` mints
-# the same `FloatNonZero` fact that guards Float division (quantities ARE
-# Floats at runtime).
+# Dimensions build up through a whole formula. Kinetic energy:
+#   ½ · m · v²  =  Mass × Speed × Speed  =  M¹ · (L¹T⁻¹) · (L¹T⁻¹)  =  L²M¹T⁻²  =  Energy
+# No proofs, no conversions — multiplication alone.
+fn kineticEnergy(m: Mass, v: Speed) -> Energy =
+  0.5 * m * v * v
+
+fn rectangleArea(w: Length, h: Length) -> Area =
+  w * h
+
+test "the algebra derives Speed, Energy, and Area" {
+  expect Speed.inMetersPerSecond
+    (finalSpeed (Acceleration.metersPerSecondSquared 2.5) (Duration.seconds 4.0)) == 10.0
+  # 1500 kg at 20 m/s carries 300 kJ
+  expect Energy.inJoules
+    (kineticEnergy (Mass.kilograms 1500.0) (Speed.metersPerSecond 20.0)) == 300000.0
+  expect Area.inSquareMeters
+    (rectangleArea (Length.meters 12.0) (Length.meters 4.0)) == 48.0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 4. DIVISION — derives dimensions too, but the divisor needs a proof
+# ═══════════════════════════════════════════════════════════════════════════════
+# `/` subtracts exponents: Length / Duration is Speed, Length / Speed is
+# Duration. Like every Tesl `/`, a variable divisor must carry a non-zero
+# proof. The pattern, once and precisely:
+#
+#   `Units.requireNonZero x` takes a NAMED value — a parameter or a
+#   let-binding, not an expression like `(2.0 * a)`; bind that first — and
+#   returns the same quantity carrying the `FloatNonZero` proof (the same
+#   fact that guards Float division; quantities ARE Floats at runtime).
+#
+# Habit from the proof lessons says `check Units.requireNonZero t` — DON'T:
+# the generic `check` combinator collapses the quantity to a bare Float, the
+# division stops cancelling dimensions, and you get a compile error like
+#   cannot unify Length with Speed (because body of `pace` must have type Speed)
+# Call `Units.requireNonZero` directly, as below.
+
 fn pace(d: Length, t: Duration) -> Speed =
   let safe = Units.requireNonZero t
   d / safe
 
-# ─── Dimensionless results collapse to Float ─────────────────────────────────────
-# Length / Length has every exponent at zero — the result is a plain Float,
-# not a quantity type.
+# The business shape of the same division: distance left over average speed
+# is a Duration — L¹ / (L¹T⁻¹) = T¹. "When does the delivery arrive?"
+fn deliveryEta(remaining: Length, avg: Speed) -> Duration =
+  let safe = Units.requireNonZero avg
+  remaining / safe
+
+# Braking distance from speed and deceleration:  v² / (2a)
+#   v * v : (L¹T⁻¹)² = L²T⁻²      then      L²T⁻² / L¹T⁻²  =  L¹  =  Length
+# Note the compound divisor `2.0 * a` is LET-BOUND before the proof mint.
+fn brakingDistance(v: Speed, a: Acceleration) -> Length =
+  let vSquared = v * v
+  let twoA = 2.0 * a
+  let safe = Units.requireNonZero twoA
+  vSquared / safe
+
+# Dimensionless results collapse to a plain Float — a ratio has no unit.
 fn lengthRatio(a: Length, b: Length) -> Float =
   let safe = Units.requireNonZero b
   a / safe
 
-# ─── Multiplication builds dimensions up ─────────────────────────────────────────
-fn rectangleArea(w: Length, h: Length) -> Area =
-  w * h
-
-# ─── Units.sqrt halves even exponents ────────────────────────────────────────────
-# sqrt of an Area (m²) is a Length (m). sqrt of a Length would need fractional
-# exponents — that is a compile error (even exponents only).
-fn sideFromArea(a: Area) -> Length =
-  Units.sqrt a
-
-# ─── What does NOT compile (negative space) ──────────────────────────────────────
-# Cross-dimension arithmetic and dimension-blind scalars are compile errors:
-#
-#   Length.meters 3.0 + Mass.kilograms 1.0  # ❌ cannot add Length and Mass
-#   Length.meters 3.0 + 1.0                 # ❌ wrap the number in a unit first
-#   2 * Length.meters 3.0                   # ❌ scalar must be a Float literal (2.0)
-#   Units.sqrt (Length.meters 4.0)          # ❌ sqrt needs even exponents (m² ok, m not)
-#   Money.usd 100 + Money.eur 100           # ❌ Money never meets raw operators (lesson 71)
-#
-# The error names both dimensions, e.g.:
-#   cannot add quantities of different dimension: `Length` and `Mass`
-#   (dimensions must match exactly; convert first)
-
-# ─── Tests ───────────────────────────────────────────────────────────────────────
-
-test "m/s² times s is m/s" {
-  let accel = Acceleration.metersPerSecondSquared 2.5
-  let dt = Duration.seconds 4.0
-  expect Speed.inMetersPerSecond (finalSpeed accel dt) == 10.0
-  expect approxEqual (Speed.inKilometersPerHour (finalSpeed accel dt)) 36.0
-}
-
-test "pace is distance over time, division proof-gated" {
+test "division derives Speed and collapses ratios" {
   let sprint = pace (Length.meters 100.0) (Duration.seconds 8.0)
   expect Speed.inMetersPerSecond sprint == 12.5
-}
-
-test "constructors convert into SI canonical, accessors convert out" {
-  expect Length.inMeters (Length.kilometers 5.0) == 5000.0
-  expect Duration.inMinutes (Duration.hours 2.0) == 120.0
-  expect approxEqual (Length.inFeet (Length.feet 100.0)) 100.0
-}
-
-test "multiplying lengths gives an area, sqrt takes it back" {
-  let floor = rectangleArea (Length.meters 12.0) (Length.meters 4.0)
-  expect Area.inSquareMeters floor == 48.0
-  expect Length.inMeters (sideFromArea (Area.squareMeters 49.0)) == 7.0
-}
-
-test "scalars scale, same-dimension ratios collapse to Float" {
-  let doubled = 2.0 * Length.meters 21.0
-  expect Length.inMeters doubled == 42.0
+  expect Speed.inKilometersPerHour sprint == 45.0
+  expect approxEqual (Speed.inMilesPerHour sprint) 27.961704
   expect lengthRatio (Length.meters 6.0) (Length.meters 3.0) == 2.0
 }
 
-test "temperature constructors are affine (offset), stored as kelvin" {
-  # Celsius/Fahrenheit constructors apply an offset, so the quantity is
-  # absolute kelvin inside. Caveat: adding two absolute temperatures
-  # type-checks (same dimension) but is rarely physically meaningful.
+test "delivery ETA: 30 km left at 60 km/h is 30 minutes" {
+  # km/h crosses the non-exact 1000/3600 factor — tolerance, per the rule above
+  let eta = deliveryEta (Length.kilometers 30.0) (Speed.kilometersPerHour 60.0)
+  expect approxEqual (Duration.inMinutes eta) 30.0
+}
+
+test "braking distance: 30 m/s at 5 m/s² needs 90 m" {
+  let d = brakingDistance (Speed.metersPerSecond 30.0) (Acceleration.metersPerSecondSquared 5.0)
+  expect Length.inMeters d == 90.0
+  # highway check: 110 km/h at the same braking still fits inside 100 m
+  let dHighway = brakingDistance (Speed.kilometersPerHour 110.0) (Acceleration.metersPerSecondSquared 5.0)
+  expect (dHighway < Length.meters 100.0) == True
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5. Units.square / Units.sqrt — exponents doubled and halved
+# ═══════════════════════════════════════════════════════════════════════════════
+# `Units.square x` is `x * x` under a name; `Units.sqrt` halves every
+# exponent, so it is only defined when they are all even: sqrt of an Area
+# (m²) is a Length (m); sqrt of a bare Length would need a fractional
+# exponent — compile error.
+
+fn sideFromArea(a: Area) -> Length =
+  Units.sqrt a
+
+test "sqrt of an area is a side length" {
+  expect Length.inMeters (sideFromArea (Area.squareMeters 49.0)) == 7.0
+  expect Area.inSquareMeters (Units.square (Length.meters 9.0)) == 81.0
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 6. QUANTITIES IN ENTITIES — a Speed column is just a Real column
+# ═══════════════════════════════════════════════════════════════════════════════
+# Quantities erase all the way down: a `topSpeed: Speed` entity field is a
+# plain double-precision column holding the canonical m/s value, and a bare
+# number on the JSON wire. Enter through a constructor when writing, exit
+# through an accessor when reading — the same two-edges discipline as
+# everywhere else.
+
+entity Vehicle table "vehicles" primaryKey id {
+  id: String
+  topSpeed: Speed
+}
+
+database Fleet = Database {
+  entities: [Vehicle]
+  backend: Memory
+}
+
+test "a Speed column stores canonical m/s and reads back typed" requires [dbRead, dbWrite] {
+  let _ = insert Vehicle { id: "v1", topSpeed: Speed.kilometersPerHour 110.0 }
+  let found = selectOne v from Vehicle where v.id == "v1"
+  expect (case found of
+    Something v2 -> approxEqual (Speed.inKilometersPerHour v2.topSpeed) 110.0
+    Nothing -> False) == True
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. TEMPERATURE — affine constructors (offset, not scale)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Celsius and Fahrenheit are OFFSET scales; the constructors apply the offset
+# and store absolute kelvin. Caveat: adding two absolute temperatures
+# type-checks (same dimension) but is rarely physically meaningful —
+# dimensional analysis catches unit mistakes, not every physics mistake.
+
+test "temperature is stored as kelvin; 100 °C reads back as 212 °F" {
   expect approxEqual (Temperature.inFahrenheit (Temperature.celsius 100.0)) 212.0
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8. THE DURATION BRIDGE — typed spans meet PosixMillis
+# ═══════════════════════════════════════════════════════════════════════════════
+# Timestamps stay `PosixMillis` (exact integer ms — lesson 26); `Duration` is
+# the typed span between them. `Time.add ts (Duration.hours 2.0)` says what it
+# means; `addMs ts 7200000` still works and stays exact, but a model (or a
+# tired reviewer) cannot misread the typed form. `Duration.toMillis` /
+# `Duration.fromMillis` convert explicitly when an API wants integer ms.
+
+test "Time.add speaks Duration; Time.diff returns one" {
+  let start = Time.secondsToPosix 1000
+  let deadline = Time.add start (Duration.hours 2.0)
+  expect Time.posixToSeconds deadline == 8200
+  expect Duration.inSeconds (Time.diff start deadline) == 7200.0
+  expect Duration.inMinutes (Time.diff start deadline) == 120.0
+  expect Duration.toMillis (Duration.hours 2.0) == 7200000
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 9. What does NOT compile (negative space — the whole point)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Every line below is a COMPILE error. This is the feature: the bug never
+# ships, never even runs.
+#
+#   Length.meters 3.0 + Mass.kilograms 1.0  # ❌ cannot add quantities of different
+#                                           #    dimension: `Length` and `Mass`
+#   Length.meters 3.0 + 1.0                 # ❌ cannot add a dimensioned quantity and a
+#                                           #    dimensionless number; wrap the number
+#                                           #    in a unit constructor first
+#   2 * Length.meters 3.0                   # ❌ a quantity is scaled by a `Float`, not an
+#                                           #    `Int` — write a Float literal (`2.0`, not `2`)
+#   Length.meters 1.0 < Duration.seconds 1.0 # ❌ cross-dimension comparison: unify error
+#   Length.meters 4.0 % Length.meters 2.0   # ❌ `%` is not defined for dimensioned quantities
+#   Units.sqrt (Length.meters 4.0)          # ❌ sqrt needs even exponents (m² ok, m not)
+#   fn f(x: Speed) -> Area = x * x          # ❌ x*x is L²T⁻², not Area (L²) — annotation verified
+#   d / (2.0 * a)                           # ❌ V001: divisor expression has no trackable
+#                                           #    proof — let-bind it, then requireNonZero
+#   Money.usd 100 + Money.eur 100           # ❌ Money never meets raw operators (lesson 71)
+#
+# And the import-gating rule: a module that does NOT import Tesl.Units can
+# declare its own `type Speed = Slow | Fast` freely; a module that imports the
+# alias AND declares the type gets:
+#   type `Speed` collides with the `Speed` quantity type exported by
+#   Tesl.Units (imported by this module); rename the type

@@ -24,174 +24,174 @@
 (define/pow
   (launchSpeed)
   #:returns Real
-  (thsl-src! "tests/units-tests.tesl" 71 (list) (lambda () (* (raw-value (tesl_import_Acceleration_metersPerSecondSquared 2.5)) (raw-value (tesl_import_Duration_seconds 4.))))))
+  (thsl-src! "tests/units-tests.tesl" 77 (list) (lambda () (* (raw-value (tesl_import_Acceleration_metersPerSecondSquared 2.5)) (raw-value (tesl_import_Duration_seconds 4.))))))
 
 (define/pow
   (pace [d : Real] [t : Real])
   #:returns Real
-  (let ([tc (thsl-src! "tests/units-tests.tesl" 76 (list (cons 'd *d) (cons 't *t)) (lambda () (raw-value (tesl_import_Units_requireNonZero *t))))]) (thsl-src! "tests/units-tests.tesl" 77 (list (cons 'tc *tc) (cons 'd *d) (cons 't *t)) (lambda () (/ *d (raw-value tc))))))
+  (let ([tc (thsl-src! "tests/units-tests.tesl" 82 (list (cons 'd *d) (cons 't *t)) (lambda () (raw-value (tesl_import_Units_requireNonZero *t))))]) (thsl-src! "tests/units-tests.tesl" 83 (list (cons 'tc *tc) (cons 'd *d) (cons 't *t)) (lambda () (/ *d (raw-value tc))))))
 
 (define/pow
   (lengthRatio [a : Real] [b : Real])
   #:returns Real
-  (let ([bc (thsl-src! "tests/units-tests.tesl" 81 (list (cons 'a *a) (cons 'b *b)) (lambda () (raw-value (tesl_import_Units_requireNonZero *b))))]) (thsl-src! "tests/units-tests.tesl" 82 (list (cons 'bc *bc) (cons 'a *a) (cons 'b *b)) (lambda () (/ *a (raw-value bc))))))
+  (let ([bc (thsl-src! "tests/units-tests.tesl" 87 (list (cons 'a *a) (cons 'b *b)) (lambda () (raw-value (tesl_import_Units_requireNonZero *b))))]) (thsl-src! "tests/units-tests.tesl" 88 (list (cons 'bc *bc) (cons 'a *a) (cons 'b *b)) (lambda () (/ *a (raw-value bc))))))
 
 (define/pow
   (frequencyOf [period : Real])
   #:returns Real
-  (let ([pc (thsl-src! "tests/units-tests.tesl" 86 (list (cons 'period *period)) (lambda () (raw-value (tesl_import_Units_requireNonZero *period))))]) (thsl-src! "tests/units-tests.tesl" 87 (list (cons 'pc *pc) (cons 'period *period)) (lambda () (/ 1. (raw-value pc))))))
+  (let ([pc (thsl-src! "tests/units-tests.tesl" 92 (list (cons 'period *period)) (lambda () (raw-value (tesl_import_Units_requireNonZero *period))))]) (thsl-src! "tests/units-tests.tesl" 93 (list (cons 'pc *pc) (cons 'period *period)) (lambda () (/ 1. (raw-value pc))))))
 
 (define/pow
   (rectangleArea [w : Real] [h : Real])
   #:returns Real
-  (thsl-src! "tests/units-tests.tesl" 90 (list (cons 'w *w) (cons 'h *h)) (lambda () (* *w *h))))
+  (thsl-src! "tests/units-tests.tesl" 96 (list (cons 'w *w) (cons 'h *h)) (lambda () (* *w *h))))
 
 (define/pow
   (boxVolume [base : Real] [h : Real])
   #:returns Real
-  (thsl-src! "tests/units-tests.tesl" 93 (list (cons 'base *base) (cons 'h *h)) (lambda () (* *base *h))))
+  (thsl-src! "tests/units-tests.tesl" 99 (list (cons 'base *base) (cons 'h *h)) (lambda () (* *base *h))))
 
 (module+ test
   (require rackunit)
   (test-case "length constructors and accessors round-trip"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 98 (list) (lambda () (raw-value (tesl_import_Length_inFeet (raw-value (tesl_import_Length_feet 10.))))))) 10.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 99 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Length_meters 42.))))))) 42.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 100 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Length_kilometers 2.))))))) 2000.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 101 (list) (lambda () (raw-value (tesl_import_Length_inKilometers (raw-value (tesl_import_Length_meters 500.))))))) 0.5)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 104 (list) (lambda () (raw-value (tesl_import_Length_inFeet (raw-value (tesl_import_Length_feet 10.))))))) 10.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 105 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Length_meters 42.))))))) 42.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 106 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Length_kilometers 2.))))))) 2000.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 107 (list) (lambda () (raw-value (tesl_import_Length_inKilometers (raw-value (tesl_import_Length_meters 500.))))))) 0.5)
     ))
   )
 
   (test-case "speed constructors and accessors round-trip (km/h)"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 105 (list) (lambda () (raw-value (tesl_import_Speed_inKilometersPerHour (raw-value (tesl_import_Speed_kilometersPerHour 90.))))))) 90.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 106 (list) (lambda () (raw-value (tesl_import_Speed_inMetersPerSecond (raw-value (tesl_import_Speed_kilometersPerHour 90.))))))) 25.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 107 (list) (lambda () (raw-value (tesl_import_Speed_inMetersPerSecond (raw-value (tesl_import_Speed_metersPerSecond 3.))))))) 3.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 111 (list) (lambda () (raw-value (tesl_import_Speed_inKilometersPerHour (raw-value (tesl_import_Speed_kilometersPerHour 90.))))))) 90.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 112 (list) (lambda () (raw-value (tesl_import_Speed_inMetersPerSecond (raw-value (tesl_import_Speed_kilometersPerHour 90.))))))) 25.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 113 (list) (lambda () (raw-value (tesl_import_Speed_inMetersPerSecond (raw-value (tesl_import_Speed_metersPerSecond 3.))))))) 3.)
     ))
   )
 
   (test-case "duration constructors convert to canonical seconds"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 111 (list) (lambda () (raw-value (tesl_import_Duration_inSeconds (raw-value (tesl_import_Duration_minutes 2.))))))) 120.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 117 (list) (lambda () (raw-value (tesl_import_Duration_inSeconds (raw-value (tesl_import_Duration_minutes 2.))))))) 120.)
     ))
   )
 
   (test-case "volume constructors convert to canonical cubic meters"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 115 (list) (lambda () (raw-value (tesl_import_Volume_inCubicMeters (raw-value (tesl_import_Volume_liters 1000.))))))) 1.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 116 (list) (lambda () (raw-value (tesl_import_Volume_inLiters (raw-value (tesl_import_Volume_liters 1.5))))))) 1.5)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 121 (list) (lambda () (raw-value (tesl_import_Volume_inCubicMeters (raw-value (tesl_import_Volume_liters 1000.))))))) 1.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 122 (list) (lambda () (raw-value (tesl_import_Volume_inLiters (raw-value (tesl_import_Volume_liters 1.5))))))) 1.5)
     ))
   )
 
   (test-case "acceleration times duration is a speed: 2.5 m/s^2 for 4 s is 10 m/s"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 122 (list) (lambda () (raw-value (tesl_import_Speed_inMetersPerSecond (raw-value (launchSpeed))))))) 10.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 128 (list) (lambda () (raw-value (tesl_import_Speed_inMetersPerSecond (raw-value (launchSpeed))))))) 10.)
     ))
   )
 
   (test-case "length times length is an area"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 126 (list) (lambda () (raw-value (tesl_import_Area_inSquareMeters (raw-value (rectangleArea (raw-value (tesl_import_Length_meters 3.)) (raw-value (tesl_import_Length_meters 4.))))))))) 12.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 132 (list) (lambda () (raw-value (tesl_import_Area_inSquareMeters (raw-value (rectangleArea (raw-value (tesl_import_Length_meters 3.)) (raw-value (tesl_import_Length_meters 4.))))))))) 12.)
     ))
   )
 
   (test-case "area times length is a volume"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 130 (list) (lambda () (raw-value (tesl_import_Volume_inCubicMeters (raw-value (boxVolume (raw-value (tesl_import_Area_squareMeters 6.)) (raw-value (tesl_import_Length_meters 2.))))))))) 12.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 136 (list) (lambda () (raw-value (tesl_import_Volume_inCubicMeters (raw-value (boxVolume (raw-value (tesl_import_Area_squareMeters 6.)) (raw-value (tesl_import_Length_meters 2.))))))))) 12.)
     ))
   )
 
   (test-case "same-dimension addition and float scaling"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 134 (list) (lambda () (raw-value (tesl_import_Length_inMeters (+ (raw-value (tesl_import_Length_meters 1.5)) (raw-value (tesl_import_Length_meters 2.5)))))))) 4.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 135 (list) (lambda () (raw-value (tesl_import_Length_inMeters (- (raw-value (tesl_import_Length_meters 5.)) (raw-value (tesl_import_Length_meters 1.5)))))))) 3.5)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 136 (list) (lambda () (raw-value (tesl_import_Length_inMeters (* 2. (raw-value (tesl_import_Length_meters 3.)))))))) 6.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 137 (list) (lambda () (raw-value (tesl_import_Length_inMeters (/ (raw-value (tesl_import_Length_meters 6.)) 2.)))))) 3.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 140 (list) (lambda () (raw-value (tesl_import_Length_inMeters (+ (raw-value (tesl_import_Length_meters 1.5)) (raw-value (tesl_import_Length_meters 2.5)))))))) 4.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 141 (list) (lambda () (raw-value (tesl_import_Length_inMeters (- (raw-value (tesl_import_Length_meters 5.)) (raw-value (tesl_import_Length_meters 1.5)))))))) 3.5)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 142 (list) (lambda () (raw-value (tesl_import_Length_inMeters (* 2. (raw-value (tesl_import_Length_meters 3.)))))))) 6.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 143 (list) (lambda () (raw-value (tesl_import_Length_inMeters (/ (raw-value (tesl_import_Length_meters 6.)) 2.)))))) 3.)
     ))
   )
 
   (test-case "same-dimension comparison is numeric"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 141 (list) (lambda () (> (raw-value (tesl_import_Length_meters 2.)) (raw-value (tesl_import_Length_meters 1.)))))) #t)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 142 (list) (lambda () (tesl-equal? (raw-value (tesl_import_Length_meters 1.)) (raw-value (tesl_import_Length_kilometers 0.001)))))) #t)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 147 (list) (lambda () (> (raw-value (tesl_import_Length_meters 2.)) (raw-value (tesl_import_Length_meters 1.)))))) #t)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 148 (list) (lambda () (tesl-equal? (raw-value (tesl_import_Length_meters 1.)) (raw-value (tesl_import_Length_kilometers 0.001)))))) #t)
     ))
   )
 
   (test-case "division with Units.requireNonZero: 100 m over 20 s is 5 m/s"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 148 (list) (lambda () (raw-value (tesl_import_Speed_inMetersPerSecond (raw-value (pace (raw-value (tesl_import_Length_meters 100.)) (raw-value (tesl_import_Duration_seconds 20.))))))))) 5.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 154 (list) (lambda () (raw-value (tesl_import_Speed_inMetersPerSecond (raw-value (pace (raw-value (tesl_import_Length_meters 100.)) (raw-value (tesl_import_Duration_seconds 20.))))))))) 5.)
     ))
   )
 
   (test-case "same-dimension division collapses to a plain Float ratio"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 152 (list) (lambda () (lengthRatio (raw-value (tesl_import_Length_meters 6.)) (raw-value (tesl_import_Length_meters 2.)))))) 3.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 158 (list) (lambda () (lengthRatio (raw-value (tesl_import_Length_meters 6.)) (raw-value (tesl_import_Length_meters 2.)))))) 3.)
     ))
   )
 
   (test-case "scalar over duration inverts the dimension into a frequency"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 156 (list) (lambda () (raw-value (tesl_import_Frequency_inHertz (raw-value (frequencyOf (raw-value (tesl_import_Duration_seconds 0.5))))))))) 2.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 162 (list) (lambda () (raw-value (tesl_import_Frequency_inHertz (raw-value (frequencyOf (raw-value (tesl_import_Duration_seconds 0.5))))))))) 2.)
     ))
   )
 
   (test-case "Units.mul and Units.div mirror the operators"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 162 (list) (lambda () (raw-value (tesl_import_Area_inSquareMeters (raw-value (tesl_import_Units_mul (raw-value (tesl_import_Length_meters 3.)) (raw-value (tesl_import_Length_meters 4.))))))))) 12.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 163 (list) (lambda () (raw-value (tesl_import_Speed_inMetersPerSecond (raw-value (tesl_import_Units_div (raw-value (tesl_import_Length_meters 100.)) (raw-value (tesl_import_Duration_seconds 20.))))))))) 5.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 168 (list) (lambda () (raw-value (tesl_import_Area_inSquareMeters (raw-value (tesl_import_Units_mul (raw-value (tesl_import_Length_meters 3.)) (raw-value (tesl_import_Length_meters 4.))))))))) 12.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 169 (list) (lambda () (raw-value (tesl_import_Speed_inMetersPerSecond (raw-value (tesl_import_Units_div (raw-value (tesl_import_Length_meters 100.)) (raw-value (tesl_import_Duration_seconds 20.))))))))) 5.)
     ))
   )
 
   (test-case "Units.square of a length is an area; Units.sqrt of an area is a length"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 167 (list) (lambda () (raw-value (tesl_import_Area_inSquareMeters (raw-value (tesl_import_Units_square (raw-value (tesl_import_Length_meters 3.))))))))) 9.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 168 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Units_sqrt (raw-value (tesl_import_Area_squareMeters 16.))))))))) 4.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 173 (list) (lambda () (raw-value (tesl_import_Area_inSquareMeters (raw-value (tesl_import_Units_square (raw-value (tesl_import_Length_meters 3.))))))))) 9.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 174 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Units_sqrt (raw-value (tesl_import_Area_squareMeters 16.))))))))) 4.)
     ))
   )
 
   (test-case "Units.sum totals a list of same-dimension quantities"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 172 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Units_sum (list (raw-value (tesl_import_Length_meters 1.)) (raw-value (tesl_import_Length_meters 2.)) (raw-value (tesl_import_Length_meters 3.5)))))))))) 6.5)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 178 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Units_sum (list (raw-value (tesl_import_Length_meters 1.)) (raw-value (tesl_import_Length_meters 2.)) (raw-value (tesl_import_Length_meters 3.5)))))))))) 6.5)
     ))
   )
 
   (test-case "Units.abs, Units.negate, Units.min, Units.max"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 176 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Units_abs (raw-value (tesl_import_Units_negate (raw-value (tesl_import_Length_meters 5.))))))))))) 5.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 177 (list) (lambda () (+ (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Units_negate (raw-value (tesl_import_Length_meters 5.)))))) 5.)))) 0.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 178 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Units_min (raw-value (tesl_import_Length_meters 1.)) (raw-value (tesl_import_Length_meters 2.))))))))) 1.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 179 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Units_max (raw-value (tesl_import_Length_meters 1.)) (raw-value (tesl_import_Length_meters 2.))))))))) 2.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 182 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Units_abs (raw-value (tesl_import_Units_negate (raw-value (tesl_import_Length_meters 5.))))))))))) 5.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 183 (list) (lambda () (+ (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Units_negate (raw-value (tesl_import_Length_meters 5.)))))) 5.)))) 0.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 184 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Units_min (raw-value (tesl_import_Length_meters 1.)) (raw-value (tesl_import_Length_meters 2.))))))))) 1.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 185 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Units_max (raw-value (tesl_import_Length_meters 1.)) (raw-value (tesl_import_Length_meters 2.))))))))) 2.)
     ))
   )
 
   (test-case "unary minus preserves the quantity's magnitude sign"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 183 (list) (lambda () (+ (raw-value (tesl_import_Speed_inMetersPerSecond (- (raw-value (tesl_import_Speed_metersPerSecond 3.))))) 3.)))) 0.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 189 (list) (lambda () (+ (raw-value (tesl_import_Speed_inMetersPerSecond (- (raw-value (tesl_import_Speed_metersPerSecond 3.))))) 3.)))) 0.)
     ))
   )
 
   (test-case "celsius is affine: 100 C is 373.15 K and 212 F"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 189 (list) (lambda () (raw-value (tesl_import_Temperature_inKelvin (raw-value (tesl_import_Temperature_celsius 100.))))))) 373.15)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 190 (list) (lambda () (raw-value (tesl_import_Temperature_inFahrenheit (raw-value (tesl_import_Temperature_celsius 100.))))))) 212.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 191 (list) (lambda () (raw-value (tesl_import_Temperature_inKelvin (raw-value (tesl_import_Temperature_kelvin 0.))))))) 0.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 195 (list) (lambda () (raw-value (tesl_import_Temperature_inKelvin (raw-value (tesl_import_Temperature_celsius 100.))))))) 373.15)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 196 (list) (lambda () (raw-value (tesl_import_Temperature_inFahrenheit (raw-value (tesl_import_Temperature_celsius 100.))))))) 212.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 197 (list) (lambda () (raw-value (tesl_import_Temperature_inKelvin (raw-value (tesl_import_Temperature_kelvin 0.))))))) 0.)
     ))
   )
 
   (test-case "Duration millis bridge rounds half-even"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 197 (list) (lambda () (raw-value (tesl_import_Duration_toMillis (raw-value (tesl_import_Duration_seconds 1.5))))))) 1500)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 198 (list) (lambda () (raw-value (tesl_import_Duration_inSeconds (raw-value (tesl_import_Duration_fromMillis 2500))))))) 2.5)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 203 (list) (lambda () (raw-value (tesl_import_Duration_toMillis (raw-value (tesl_import_Duration_seconds 1.5))))))) 1500)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 204 (list) (lambda () (raw-value (tesl_import_Duration_inSeconds (raw-value (tesl_import_Duration_fromMillis 2500))))))) 2.5)
     ))
   )
 
   (test-case "Time.add and Time.diff speak typed Duration"
     (call-with-fresh-memory-db '() (lambda ()
-  (define ts (thsl-src! "tests/units-tests.tesl" 202 (list) (lambda () (raw-value (tesl_import_Time_secondsToPosix 1000)))))
-  (define later (thsl-src! "tests/units-tests.tesl" 203 (list (cons 'ts ts)) (lambda () (raw-value (tesl_import_Time_add (raw-value ts) (raw-value (tesl_import_Duration_hours 2.)))))))
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 204 (list (cons 'later later) (cons 'ts ts)) (lambda () (raw-value (tesl_import_Time_posixToSeconds (raw-value later)))))) 8200)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 205 (list (cons 'later later) (cons 'ts ts)) (lambda () (raw-value (tesl_import_Duration_inSeconds (raw-value (tesl_import_Time_diff (raw-value ts) (raw-value later)))))))) 7200.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 206 (list (cons 'later later) (cons 'ts ts)) (lambda () (raw-value (tesl_import_Time_posixToSeconds (raw-value (tesl_import_Time_subtract (raw-value later) (raw-value (tesl_import_Duration_hours 2.))))))))) 1000)
+  (define ts (thsl-src! "tests/units-tests.tesl" 208 (list) (lambda () (raw-value (tesl_import_Time_secondsToPosix 1000)))))
+  (define later (thsl-src! "tests/units-tests.tesl" 209 (list (cons 'ts ts)) (lambda () (raw-value (tesl_import_Time_add (raw-value ts) (raw-value (tesl_import_Duration_hours 2.)))))))
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 210 (list (cons 'later later) (cons 'ts ts)) (lambda () (raw-value (tesl_import_Time_posixToSeconds (raw-value later)))))) 8200)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 211 (list (cons 'later later) (cons 'ts ts)) (lambda () (raw-value (tesl_import_Duration_inSeconds (raw-value (tesl_import_Time_diff (raw-value ts) (raw-value later)))))))) 7200.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 212 (list (cons 'later later) (cons 'ts ts)) (lambda () (raw-value (tesl_import_Time_posixToSeconds (raw-value (tesl_import_Time_subtract (raw-value later) (raw-value (tesl_import_Duration_hours 2.))))))))) 1000)
     ))
   )
 

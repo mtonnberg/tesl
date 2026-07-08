@@ -1189,7 +1189,11 @@ let rec check_expr_call_proofs
                  op_name name) ]
       | _ ->
         [ make_error loc
-            ~hint:(Printf.sprintf "bind the divisor to a named variable, then use `check Int.nonZero` before `%s`" op_name)
+            ~hint:(Printf.sprintf
+                     "bind the divisor to a named variable, then mint the \
+                      proof before `%s`: `check Int.nonZero` (Int), \
+                      `Float.requireNonZero` (Float), or \
+                      `Units.requireNonZero` (dimensioned quantity)" op_name)
             (Printf.sprintf "the right operand of `%s` is an expression with no trackable `IsNonZero` proof" op_name) ]
     in
     child_errors @ div_errors
