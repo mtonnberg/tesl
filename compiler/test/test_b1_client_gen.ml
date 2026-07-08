@@ -157,6 +157,33 @@ api MeetingApi {
 }
 |}
 
+(* GitHub #38 residual class: MoneyRate references through the TYPE_EXPR
+   emission paths (records, newtypes) — the entity/IR path was fixed first and
+   the record/newtype path kept emitting alias-specific undefined names
+   (`moneyPerDurationDecoder`).  All positions must reference the ONE shared
+   MoneyRate alias/codec, which must be DEFINED. *)
+let rate_positions = {|#lang tesl
+module RateWide exposing []
+import Tesl.Prelude exposing [String, Int, Bool(..), List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Money exposing [Money, MoneyPerDuration, MoneyPerMass, Money.sek,
+                            MoneyRate.perHour]
+record Quote {
+  base: MoneyPerDuration
+  discount: Maybe MoneyPerDuration
+  tiers: List MoneyPerMass
+}
+type ContractRate = MoneyPerDuration
+handler quote() -> Quote =
+  Quote { base: MoneyRate.perHour (Money.sek 95000),
+          discount: Nothing,
+          tiers: [] }
+api QuoteApi {
+  get "/quote" -> Quote
+}
+server QuoteServer for QuoteApi { quote = quote }
+|}
+
 (* ── tests ────────────────────────────────────────────────────────────────── *)
 let gen_rejects_invalid flag () =
   with_src type_invalid (fun p ->
@@ -216,6 +243,29 @@ let elm_eight_fields_map8 () =
     if code <> 0 then failf "generate-elm failed on an 8-field record:\n%s" out;
     if not (contains "D.map8 Eight" out) then
       failf "expected D.map8 for exactly 8 fields:\n%s" out)
+
+let elm_money_rate_all_positions () =
+  with_src rate_positions (fun p ->
+    let code, out = run_cc ["--generate-elm"; p] in
+    if code <> 0 then failf "generate-elm failed on money-rate positions:\n%s" out;
+    if not (contains "type alias MoneyRate" out) then
+      failf "expected the shared MoneyRate alias to be DEFINED:\n%s" out;
+    if not (contains "moneyRateDecoder :" out) then
+      failf "expected moneyRateDecoder to be DEFINED:\n%s" out;
+    (* the #38 signature: alias-specific names that nothing defines *)
+    if contains "moneyPerDuration" out || contains "moneyPerMass" out then
+      failf "record/newtype path emitted an alias-specific (undefined) codec name:\n%s" out;
+    if contains ": MoneyPerDuration" out || contains ": MoneyPerMass" out then
+      failf "record/newtype path emitted an alias-specific (undefined) TYPE name:\n%s" out)
+
+let ts_money_rate_all_positions () =
+  with_src rate_positions (fun p ->
+    let code, out = run_cc ["--generate-ts"; p] in
+    if code <> 0 then failf "generate-ts failed on money-rate positions:\n%s" out;
+    if not (contains "per: z.string()" out) then
+      failf "expected the tolerant MoneyRate zod schema:\n%s" out;
+    if contains "moneyPerDuration" out then
+      failf "TS emitted an alias-specific (undefined) name:\n%s" out)
 
 (* PosixMillis decoder tolerance: bare int (HTTP) OR the agent-enriched
    {"epochMillis": …} object; encoding stays a bare int. *)
@@ -340,5 +390,11 @@ let () =
         elm_imported_types_emitted;
       test_case "ts client defines imported record + fact" `Quick
         ts_imported_types_emitted;
+    ];
+    "money rates emitted at every position (GitHub #38)", [
+      test_case "elm: record/newtype/Maybe/List rate fields use the ONE defined MoneyRate" `Quick
+        elm_money_rate_all_positions;
+      test_case "ts: rate fields use the tolerant shared schema" `Quick
+        ts_money_rate_all_positions;
     ];
   ]

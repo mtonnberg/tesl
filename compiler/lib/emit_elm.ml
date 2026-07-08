@@ -56,6 +56,7 @@ let rec elm_type_of_type_expr te =
   | TName { name = "Set"; _ } -> "List value"
   (* Dimensioned quantities (Length, Speed, … / canonical "§Q[…]") erase to a
      bare number on the wire. *)
+  | TName { name; _ } when Ir.is_money_rate_type_name name -> "MoneyRate"
   | TName { name; _ } when Ir.is_quantity_type_name name -> "Float"
   (* "Money" falls through to the generic named-type arm: the generator emits a
      top-level `type alias Money = { minorUnits : Int, currency : String }`
@@ -263,6 +264,7 @@ let rec decode_expr_of_type te =
     {|(D.oneOf [ D.int, D.field "epochMillis" D.int ])|}
   | TName { name = "Unit"; _ } -> "(D.succeed ())"
   (* Quantities are a bare number on the wire. *)
+  | TName { name; _ } when Ir.is_money_rate_type_name name -> "moneyRateDecoder"
   | TName { name; _ } when Ir.is_quantity_type_name name -> "D.float"
   (* "Money" falls through to `moneyDecoder`, emitted once per module. *)
   | TName { name; _ } -> decoder_fn_name name
@@ -289,6 +291,7 @@ let rec encode_expr_of_type te value_expr =
   | TName { name = "Bool"; _ } -> "E.bool " ^ value_expr
   | TName { name = "PosixMillis"; _ } -> "E.int " ^ value_expr
   | TName { name = "Unit"; _ } -> "E.null"
+  | TName { name; _ } when Ir.is_money_rate_type_name name -> "moneyRateEncoder " ^ value_expr
   | TName { name; _ } when Ir.is_quantity_type_name name -> "E.float " ^ value_expr
   | TName { name; _ } -> encoder_fn_name name ^ " " ^ value_expr
   | TApp { head = TName { name = "List"; _ }; arg; _ }
@@ -309,6 +312,7 @@ and encode_fn_of_type te =
   | TName { name = "Bool"; _ } -> "E.bool"
   | TName { name = "PosixMillis"; _ } -> "E.int"
   | TName { name = "Unit"; _ } -> "(\\_ -> E.null)"
+  | TName { name; _ } when Ir.is_money_rate_type_name name -> "moneyRateEncoder"
   | TName { name; _ } when Ir.is_quantity_type_name name -> "E.float"
   | TName { name; _ } -> encoder_fn_name name
   | TApp { head = TName { name = "List"; _ }; arg; _ }
