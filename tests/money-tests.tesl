@@ -1,0 +1,191 @@
+#lang tesl
+module Money_tests exposing []
+
+# Runtime tests for Tesl.Money (First-Class Units, phase 1): exact-integer
+# minor-unit money with an intrinsic ISO 4217 Currency qualifier.
+#
+# Money never touches a Float: display/scale/add run on exact integers, and
+# Money.convert computes on exact rationals with ONE round-half-even
+# (banker's rounding) at the end.  Same-currency arithmetic is proof-gated
+# (SameCurrency, minted by `check Money.requireSameCurrency a b`); the
+# compile-time side of that gate is pinned in
+# compiler/test/test_units_money.ml — here we exercise the runtime values.
+
+import Tesl.Prelude exposing [Int, String, Bool]
+import Tesl.Money exposing [
+  Money,
+  Currency,
+  ExchangeRate,
+  Money.usd,
+  Money.jpy,
+  Money.sek,
+  Money.fromMinorUnits,
+  Money.minorUnits,
+  Money.currency,
+  Money.display,
+  Money.scale,
+  Money.negate,
+  Money.abs,
+  Money.isZero,
+  Money.isNegative,
+  Money.add,
+  Money.subtract,
+  Money.compare,
+  Money.requireSameCurrency,
+  Money.requireNonNegative,
+  Money.requireRateFor,
+  Money.convert,
+  Money.convertChecked,
+  Currency.code,
+  Currency.minorDigits,
+  ExchangeRate.make,
+  Usd,
+  Eur,
+  Sek,
+]
+import Tesl.Result exposing [Result(..)]
+import Tesl.Time exposing [PosixMillis, Time.secondsToPosix]
+import Tesl.Float exposing [Float]
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+# The sanctioned same-currency flow: mint SameCurrency, then add/subtract/compare.
+fn total(a: Money, b: Money) -> Money =
+  let sb = check Money.requireSameCurrency a b
+  Money.add a sb
+
+fn difference(a: Money, b: Money) -> Money =
+  let sb = check Money.requireSameCurrency a b
+  Money.subtract a sb
+
+fn ordering(a: Money, b: Money) -> Int =
+  let sb = check Money.requireSameCurrency a b
+  Money.compare a sb
+
+# The sanctioned conversion flow: mint RateFor, then convertChecked.
+fn convertStrict(r: ExchangeRate, m: Money) -> Money =
+  let mc = check Money.requireRateFor r m
+  Money.convertChecked r mc
+
+fn requireDeposit(m: Money) -> Money =
+  let nn = check Money.requireNonNegative m
+  nn
+
+# Un-proven conversion returns a Result; project it to comparable values.
+fn convertedMinor(r: ExchangeRate, m: Money) -> Int =
+  case Money.convert r m of
+    Ok converted -> Money.minorUnits converted
+    Err _ -> 0 - 1
+
+fn convertError(r: ExchangeRate, m: Money) -> String =
+  case Money.convert r m of
+    Ok _ -> "no error"
+    Err msg -> msg
+
+fn usdToEur(rate: Float) -> ExchangeRate =
+  ExchangeRate.make Usd Eur rate (Time.secondsToPosix 0)
+
+# ── Display ────────────────────────────────────────────────────────────────
+
+test "display renders symbol-first currencies with minor digits" {
+  expect Money.display (Money.usd 1050) == "$10.50"
+  expect Money.display (Money.usd 1000) == "$10.00"
+  expect Money.display (Money.usd 5) == "$0.05"
+}
+
+test "display renders zero-minor-digit currencies without a decimal point" {
+  expect Money.display (Money.jpy 1000) == "¥1000"
+}
+
+test "display renders non-symbol currencies as amount-then-code" {
+  expect Money.display (Money.sek 1050) == "10.50 SEK"
+}
+
+test "display renders negative amounts with a leading sign" {
+  expect Money.display (Money.negate (Money.usd 1050)) == "-$10.50"
+  expect Money.display (Money.negate (Money.sek 1050)) == "-10.50 SEK"
+}
+
+# ── Construction + accessors ───────────────────────────────────────────────
+
+test "minorUnits round-trips the constructor amount" {
+  expect Money.minorUnits (Money.usd 1050) == 1050
+  expect Money.minorUnits (Money.jpy 0) == 0
+}
+
+test "fromMinorUnits builds the same value as the per-currency constructor" {
+  expect Money.minorUnits (Money.fromMinorUnits Eur 916) == 916
+  expect Currency.code (Money.currency (Money.fromMinorUnits Eur 916)) == "EUR"
+  expect Currency.code (Money.currency (Money.usd 1)) == "USD"
+}
+
+test "currency metadata: code and minor digits" {
+  expect Currency.code (Money.currency (Money.sek 100)) == "SEK"
+  expect Currency.minorDigits (Money.currency (Money.usd 100)) == 2
+  expect Currency.minorDigits (Money.currency (Money.jpy 100)) == 0
+}
+
+# ── Pure ops: scale / negate / abs / isZero / isNegative ──────────────────
+
+test "scale multiplies minor units by an exact integer" {
+  expect Money.minorUnits (Money.scale (Money.usd 250) 3) == 750
+  expect Money.minorUnits (Money.scale (Money.usd 250) 0) == 0
+}
+
+test "negate and abs flip and strip the sign" {
+  expect Money.minorUnits (Money.negate (Money.usd 100)) == 0 - 100
+  expect Money.minorUnits (Money.abs (Money.negate (Money.usd 100))) == 100
+}
+
+test "isZero and isNegative observe the amount" {
+  expect Money.isZero (Money.usd 0) == True
+  expect Money.isZero (Money.usd 1) == False
+  expect Money.isNegative (Money.negate (Money.usd 1)) == True
+  expect Money.isNegative (Money.usd 1) == False
+}
+
+# ── Proof-gated same-currency arithmetic (happy path) ─────────────────────
+
+test "requireSameCurrency then add sums minor units" {
+  expect Money.minorUnits (total (Money.usd 1050) (Money.usd 250)) == 1300
+  expect Money.display (total (Money.usd 1050) (Money.usd 250)) == "$13.00"
+}
+
+test "requireSameCurrency then subtract" {
+  expect Money.minorUnits (difference (Money.sek 500) (Money.sek 150)) == 350
+}
+
+test "requireSameCurrency then compare returns -1/0/1" {
+  expect ordering (Money.usd 100) (Money.usd 200) == 0 - 1
+  expect ordering (Money.usd 200) (Money.usd 100) == 1
+  expect ordering (Money.usd 100) (Money.usd 100) == 0
+}
+
+test "requireNonNegative passes a non-negative amount through" {
+  expect Money.minorUnits (requireDeposit (Money.usd 0)) == 0
+  expect Money.minorUnits (requireDeposit (Money.usd 750)) == 750
+}
+
+# ── Conversion ─────────────────────────────────────────────────────────────
+
+test "convert applies the rate exactly: 1000 USD-cents at 0.9155 is 916 EUR-cents" {
+  # 1000 x 0.9155 = 915.5 -> round-half-even -> 916 (915 is odd)
+  expect convertedMinor (usdToEur 0.9155) (Money.usd 1000) == 916
+}
+
+test "convert uses banker's rounding: half-cents round to the EVEN neighbor" {
+  # 915 x 0.5 = 457.5 -> 458 (up: 457 odd, 458 even)
+  expect convertedMinor (usdToEur 0.5) (Money.usd 915) == 458
+  # 925 x 0.5 = 462.5 -> 462 (down: 462 even)
+  expect convertedMinor (usdToEur 0.5) (Money.usd 925) == 462
+}
+
+test "convert with a mismatched amount currency is an Err" {
+  expect convertError (usdToEur 0.5) (Money.sek 100) == "exchange rate is FROM USD but amount is in SEK"
+  expect convertedMinor (usdToEur 0.5) (Money.sek 100) == 0 - 1
+}
+
+test "requireRateFor then convertChecked converts directly" {
+  expect Money.minorUnits (convertStrict (usdToEur 0.9155) (Money.usd 1000)) == 916
+  expect Currency.code (Money.currency (convertStrict (usdToEur 0.5) (Money.usd 200))) == "EUR"
+}

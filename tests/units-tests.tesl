@@ -1,0 +1,187 @@
+#lang tesl
+module Units_tests exposing []
+
+# Runtime tests for Tesl.Units (First-Class Units, phases 2/3): dimensioned
+# quantities that ERASE to plain Floats at runtime.  Constructors convert a
+# value in the named unit to the SI-canonical magnitude (meters / kilograms /
+# seconds / kelvin); accessors convert back.  The dimension algebra itself
+# (`*` adds exponents, `/` subtracts, cross-dimension `+` rejected, ...) is
+# compile-time only and pinned in compiler/test/test_units_money.ml — here we
+# exercise the numeric conversions and the polymorphic Units ops.
+#
+# Every expected value below is EXACT in binary floating point (verified),
+# so plain `==` comparisons are stable.
+
+import Tesl.Prelude exposing [Bool, List]
+import Tesl.Float exposing [Float]
+import Tesl.Units exposing [
+  Length,
+  Duration,
+  Speed,
+  Acceleration,
+  Area,
+  Volume,
+  Temperature,
+  Frequency,
+  Length.meters,
+  Length.kilometers,
+  Length.feet,
+  Length.inMeters,
+  Length.inKilometers,
+  Length.inFeet,
+  Duration.seconds,
+  Duration.minutes,
+  Duration.inSeconds,
+  Speed.metersPerSecond,
+  Speed.kilometersPerHour,
+  Speed.inMetersPerSecond,
+  Speed.inKilometersPerHour,
+  Acceleration.metersPerSecondSquared,
+  Area.squareMeters,
+  Area.inSquareMeters,
+  Volume.liters,
+  Volume.inCubicMeters,
+  Volume.inLiters,
+  Temperature.celsius,
+  Temperature.kelvin,
+  Temperature.inKelvin,
+  Temperature.inFahrenheit,
+  Frequency.inHertz,
+  Units.mul,
+  Units.div,
+  Units.square,
+  Units.sqrt,
+  Units.abs,
+  Units.negate,
+  Units.min,
+  Units.max,
+  Units.sum,
+  Units.requireNonZero,
+]
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+# The roadmap example: m/s^2 x 4 s = m/s.
+fn launchSpeed() -> Speed =
+  Acceleration.metersPerSecondSquared 2.5 * Duration.seconds 4.0
+
+# `/` on a variable divisor demands a FloatNonZero proof; the bare-call
+# `Units.requireNonZero` mint is that proof's source.
+fn pace(d: Length, t: Duration) -> Speed =
+  let tc = Units.requireNonZero t
+  d / tc
+
+# Dimensionless result collapses to plain Float.
+fn lengthRatio(a: Length, b: Length) -> Float =
+  let bc = Units.requireNonZero b
+  a / bc
+
+# scalar / quantity inverts the dimension: 1 / Duration = Frequency.
+fn frequencyOf(period: Duration) -> Frequency =
+  let pc = Units.requireNonZero period
+  1.0 / pc
+
+fn rectangleArea(w: Length, h: Length) -> Area =
+  w * h
+
+fn boxVolume(base: Area, h: Length) -> Volume =
+  base * h
+
+# ── Constructor / accessor round-trips ─────────────────────────────────────
+
+test "length constructors and accessors round-trip" {
+  expect Length.inFeet (Length.feet 10.0) == 10.0
+  expect Length.inMeters (Length.meters 42.0) == 42.0
+  expect Length.inMeters (Length.kilometers 2.0) == 2000.0
+  expect Length.inKilometers (Length.meters 500.0) == 0.5
+}
+
+test "speed constructors and accessors round-trip (km/h)" {
+  expect Speed.inKilometersPerHour (Speed.kilometersPerHour 90.0) == 90.0
+  expect Speed.inMetersPerSecond (Speed.kilometersPerHour 90.0) == 25.0
+  expect Speed.inMetersPerSecond (Speed.metersPerSecond 3.0) == 3.0
+}
+
+test "duration constructors convert to canonical seconds" {
+  expect Duration.inSeconds (Duration.minutes 2.0) == 120.0
+}
+
+test "volume constructors convert to canonical cubic meters" {
+  expect Volume.inCubicMeters (Volume.liters 1000.0) == 1.0
+  expect Volume.inLiters (Volume.liters 1.5) == 1.5
+}
+
+# ── Dimensional arithmetic (numeric results) ───────────────────────────────
+
+test "acceleration times duration is a speed: 2.5 m/s^2 for 4 s is 10 m/s" {
+  expect Speed.inMetersPerSecond (launchSpeed()) == 10.0
+}
+
+test "length times length is an area" {
+  expect Area.inSquareMeters (rectangleArea (Length.meters 3.0) (Length.meters 4.0)) == 12.0
+}
+
+test "area times length is a volume" {
+  expect Volume.inCubicMeters (boxVolume (Area.squareMeters 6.0) (Length.meters 2.0)) == 12.0
+}
+
+test "same-dimension addition and float scaling" {
+  expect Length.inMeters (Length.meters 1.5 + Length.meters 2.5) == 4.0
+  expect Length.inMeters (Length.meters 5.0 - Length.meters 1.5) == 3.5
+  expect Length.inMeters (2.0 * Length.meters 3.0) == 6.0
+  expect Length.inMeters (Length.meters 6.0 / 2.0) == 3.0
+}
+
+test "same-dimension comparison is numeric" {
+  expect (Length.meters 2.0 > Length.meters 1.0) == True
+  expect (Length.meters 1.0 == Length.kilometers 0.001) == True
+}
+
+# ── Division (proof-gated divisor) ─────────────────────────────────────────
+
+test "division with Units.requireNonZero: 100 m over 20 s is 5 m/s" {
+  expect Speed.inMetersPerSecond (pace (Length.meters 100.0) (Duration.seconds 20.0)) == 5.0
+}
+
+test "same-dimension division collapses to a plain Float ratio" {
+  expect lengthRatio (Length.meters 6.0) (Length.meters 2.0) == 3.0
+}
+
+test "scalar over duration inverts the dimension into a frequency" {
+  expect Frequency.inHertz (frequencyOf (Duration.seconds 0.5)) == 2.0
+}
+
+# ── Polymorphic Units ops ──────────────────────────────────────────────────
+
+test "Units.mul and Units.div mirror the operators" {
+  expect Area.inSquareMeters (Units.mul (Length.meters 3.0) (Length.meters 4.0)) == 12.0
+  expect Speed.inMetersPerSecond (Units.div (Length.meters 100.0) (Duration.seconds 20.0)) == 5.0
+}
+
+test "Units.square of a length is an area; Units.sqrt of an area is a length" {
+  expect Area.inSquareMeters (Units.square (Length.meters 3.0)) == 9.0
+  expect Length.inMeters (Units.sqrt (Area.squareMeters 16.0)) == 4.0
+}
+
+test "Units.sum totals a list of same-dimension quantities" {
+  expect Length.inMeters (Units.sum [Length.meters 1.0, Length.meters 2.0, Length.meters 3.5]) == 6.5
+}
+
+test "Units.abs, Units.negate, Units.min, Units.max" {
+  expect Length.inMeters (Units.abs (Units.negate (Length.meters 5.0))) == 5.0
+  expect Length.inMeters (Units.negate (Length.meters 5.0)) + 5.0 == 0.0
+  expect Length.inMeters (Units.min (Length.meters 1.0) (Length.meters 2.0)) == 1.0
+  expect Length.inMeters (Units.max (Length.meters 1.0) (Length.meters 2.0)) == 2.0
+}
+
+test "unary minus preserves the quantity's magnitude sign" {
+  expect Speed.inMetersPerSecond (-(Speed.metersPerSecond 3.0)) + 3.0 == 0.0
+}
+
+# ── Temperature (affine constructors) ──────────────────────────────────────
+
+test "celsius is affine: 100 C is 373.15 K and 212 F" {
+  expect Temperature.inKelvin (Temperature.celsius 100.0) == 373.15
+  expect Temperature.inFahrenheit (Temperature.celsius 100.0) == 212.0
+  expect Temperature.inKelvin (Temperature.kelvin 0.0) == 0.0
+}
