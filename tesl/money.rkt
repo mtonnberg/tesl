@@ -390,16 +390,18 @@
     (raise-user-error who "expected a MoneyRate value, got ~e" raw))
   raw)
 
-;; money ÷ quantity → rate.  label = the denominator's SI unit form (emitted
-;; by the compiler from the checker's type — display only).
-(define (tesl-money-rate-div m q label)
+;; money ÷ quantity → rate.  label-factor + label = the denominator's DEFAULT
+;; boundary unit (per h / per kg / …), emitted by the compiler from the
+;; checker's type — drives display AND boundary quantization (per-hour, never
+;; per-second, so realistic rates never quantize to 0).
+(define (tesl-money-rate-div m q label-factor label)
   (define raw (money-raw 'MoneyRate m))
   (define qty (exact->inexact (raw-value q)))
   (when (zero? qty)
     (raise-user-error 'MoneyRate "division by a zero quantity"))
   (tesl-money-rate (/ (tesl-money-minor-units raw) (inexact->exact qty))
                    (tesl-money-currency raw)
-                   1 label))
+                   label-factor label))
 
 ;; rate × quantity → Money (either argument order; the checker guarantees the
 ;; dimensions match).  ONE half-even rounding, here.

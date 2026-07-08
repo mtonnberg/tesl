@@ -199,6 +199,41 @@ let money_rate_alias_of_dim (d : dim) : string option =
   List.find_map (fun (a, d') -> if d = d' then Some a else None)
     money_rate_aliases
 
+(* ── Rate boundary labels (GitHub #38: rates as SQL columns + wire output) ───
+   At a BOUNDARY (JSON wire, database column) a rate is quantized to INTEGER
+   minor units per one `per`-labelled unit — the same stance as Money itself
+   (exact integers at rest, exact rationals only mid-computation, ONE
+   half-even rounding at the edge).  (label, denominator dim, canonical units
+   per one label unit as num/den).  The DEFAULT label per dimension is chosen
+   for sane magnitudes (per HOUR, not per second — a 950 SEK/h rate stored
+   per-second would quantize to 0).  tesl/money.rkt mirrors this table for
+   decode; the factor seam is test-pinned. *)
+let rate_labels : (string * dim * (int * int)) list = [
+  ("s",   d_duration, (1, 1));
+  ("h",   d_duration, (3600, 1));
+  ("day", d_duration, (86400, 1));
+  ("kg",  d_mass,     (1, 1));
+  ("m",   d_length,   (1, 1));
+  ("m^2", d_area,     (1, 1));
+  ("m^3", d_volume,   (1, 1));
+  ("L",   d_volume,   (1, 1000));
+]
+
+let rate_label_dim (label : string) : dim option =
+  List.find_map (fun (l, d, _) -> if l = label then Some d else None)
+    rate_labels
+
+(* The label a DIVISION-built rate quantizes/stores/displays with. *)
+let default_rate_label_of_dim (d : dim) : (string * (int * int)) option =
+  let defaults = [ (d_duration, "h"); (d_mass, "kg"); (d_length, "m");
+                   (d_area, "m^2"); (d_volume, "m^3") ] in
+  match List.assoc_opt d defaults with
+  | Some l ->
+    List.find_map (fun (l', d', f) ->
+        if l' = l && d' = d then Some (l, f) else None)
+      rate_labels
+  | None -> None
+
 (* ── Pretty rendering (for pp_ty and error messages) ─────────────────────── *)
 
 (* "m/s^2", "m^2", "m·kg/s^2", "1/s".  ASCII ^ exponents; "·" separator. *)

@@ -184,3 +184,29 @@ test "950 SEK/h for 1.5 h bills 1425 SEK" {
   expect Money.display (consultantInvoice hourly (Duration.hours 1.5)) == "1425.00 SEK"
   expect Money.display (consultantInvoice hourly (Duration.minutes 30.0)) == "475.00 SEK"
 }
+
+# ─── Rates persist: a MoneyPerDuration entity column (GitHub #38) ────────────────
+# At the storage boundary a rate quantizes to INTEGER minor units per its
+# `per` unit (three columns: hourly_minor BIGINT + hourly_currency TEXT +
+# hourly_per TEXT) — the same exact-integers-at-rest stance as Money itself.
+# Reads reconstruct the exact rate and verify the denominator dimension.
+
+entity Consultant table "consultants" primaryKey id {
+  id: String
+  hourly: MoneyPerDuration
+}
+
+database Agency = Database {
+  entities: [Consultant]
+  backend: Memory
+}
+
+test "a stored hourly rate round-trips and bills" requires [dbRead, dbWrite] {
+  with database Agency {
+    let _ = insert Consultant { id: "c1", hourly: MoneyRate.perHour (Money.sek 95000) }
+    let found = selectOne c from Consultant where c.id == "c1"
+    expect (case found of
+      Something c2 -> Money.display (consultantInvoice c2.hourly (Duration.hours 2.0)) == "1900.00 SEK"
+      Nothing -> False) == True
+  }
+}

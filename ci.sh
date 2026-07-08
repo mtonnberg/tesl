@@ -1103,6 +1103,10 @@ else
         # PG parity; the PG suite self-skips without initdb/pg_ctl)
         "tests/sql-money-tests.rkt"
         "tests/sql-money-pg-test.rkt"
+        # First-Class Units: hand-written conversion-factor oracle (golden)
+        # + direct money-tagged tool-argument decode contract
+        "tests/units-factor-golden-tests.rkt"
+        "tests/agent-money-tools-tests.rkt"
         # Issue #31: pool-lease waiting + 503 mapping (fake connections, no PG)
         "tests/pg-pool-tests.rkt"
         "tests/timezone-zones-test.rkt"

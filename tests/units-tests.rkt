@@ -185,13 +185,35 @@
     ))
   )
 
+  (test-case "Duration millis bridge handles negative spans"
+    (call-with-fresh-memory-db '() (lambda ()
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 208 (list) (lambda () (raw-value (tesl_import_Duration_toMillis (raw-value (tesl_import_Duration_seconds -1.5))))))) -1500)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 209 (list) (lambda () (raw-value (tesl_import_Duration_inSeconds (raw-value (tesl_import_Duration_fromMillis (- 0 2500)))))))) (- 2.5))
+    ))
+  )
+
+  (test-case "Duration millis bridge half-even ties on exact half-milliseconds"
+    (call-with-fresh-memory-db '() (lambda ()
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 216 (list) (lambda () (raw-value (tesl_import_Duration_toMillis (raw-value (tesl_import_Duration_seconds 0.0625))))))) 62)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 217 (list) (lambda () (raw-value (tesl_import_Duration_toMillis (raw-value (tesl_import_Duration_seconds 0.1875))))))) 188)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 218 (list) (lambda () (raw-value (tesl_import_Duration_toMillis (raw-value (tesl_import_Duration_seconds (- 0. 0.0625)))))))) (- 0 62))
+    ))
+  )
+
+  (test-case "near-half milliseconds that are not exact ties round by magnitude"
+    (call-with-fresh-memory-db '() (lambda ()
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 226 (list) (lambda () (raw-value (tesl_import_Duration_toMillis (raw-value (tesl_import_Duration_seconds 0.0015))))))) 2)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 227 (list) (lambda () (raw-value (tesl_import_Duration_toMillis (raw-value (tesl_import_Duration_seconds 0.0025))))))) 3)
+    ))
+  )
+
   (test-case "Time.add and Time.diff speak typed Duration"
     (call-with-fresh-memory-db '() (lambda ()
-  (define ts (thsl-src! "tests/units-tests.tesl" 208 (list) (lambda () (raw-value (tesl_import_Time_secondsToPosix 1000)))))
-  (define later (thsl-src! "tests/units-tests.tesl" 209 (list (cons 'ts ts)) (lambda () (raw-value (tesl_import_Time_add (raw-value ts) (raw-value (tesl_import_Duration_hours 2.)))))))
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 210 (list (cons 'later later) (cons 'ts ts)) (lambda () (raw-value (tesl_import_Time_posixToSeconds (raw-value later)))))) 8200)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 211 (list (cons 'later later) (cons 'ts ts)) (lambda () (raw-value (tesl_import_Duration_inSeconds (raw-value (tesl_import_Time_diff (raw-value ts) (raw-value later)))))))) 7200.)
-  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 212 (list (cons 'later later) (cons 'ts ts)) (lambda () (raw-value (tesl_import_Time_posixToSeconds (raw-value (tesl_import_Time_subtract (raw-value later) (raw-value (tesl_import_Duration_hours 2.))))))))) 1000)
+  (define ts (thsl-src! "tests/units-tests.tesl" 231 (list) (lambda () (raw-value (tesl_import_Time_secondsToPosix 1000)))))
+  (define later (thsl-src! "tests/units-tests.tesl" 232 (list (cons 'ts ts)) (lambda () (raw-value (tesl_import_Time_add (raw-value ts) (raw-value (tesl_import_Duration_hours 2.)))))))
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 233 (list (cons 'later later) (cons 'ts ts)) (lambda () (raw-value (tesl_import_Time_posixToSeconds (raw-value later)))))) 8200)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 234 (list (cons 'later later) (cons 'ts ts)) (lambda () (raw-value (tesl_import_Duration_inSeconds (raw-value (tesl_import_Time_diff (raw-value ts) (raw-value later)))))))) 7200.)
+  (check-equal? (raw-value (thsl-src! "tests/units-tests.tesl" 235 (list (cons 'later later) (cons 'ts ts)) (lambda () (raw-value (tesl_import_Time_posixToSeconds (raw-value (tesl_import_Time_subtract (raw-value later) (raw-value (tesl_import_Duration_hours 2.))))))))) 1000)
     ))
   )
 

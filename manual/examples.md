@@ -111,7 +111,7 @@ parameters.
 ### Money & Units
 | File | Description |
 |------|-------------|
-| [`lesson71-money.tesl`](../example/learn/lesson71-money.tesl) | `Tesl.Money`: integer minor units + intrinsic currency, proof-gated add (`SameCurrency`), runtime exchange rates, a Money entity column with `selectSum` |
+| [`lesson71-money.tesl`](../example/learn/lesson71-money.tesl) | `Tesl.Money`: integer minor units + intrinsic currency, proof-gated add (`SameCurrency`), runtime exchange rates, `Money.scaleBy` interest, money RATES (`MoneyRate.perHour * Duration : Money`) incl. a stored `MoneyPerDuration` entity column, and a Money column with `selectSum` |
 | [`lesson72-units.tesl`](../example/learn/lesson72-units.tesl) | `Tesl.Units`: compile-time SI dimensional analysis erased to Float — the three-rule mental model (enter SI / algebra in types / exit explicit), `m/s² × s : m/s`, kinetic energy and braking distance worked examples, mixed-unit addition, division proofs, `Units.sqrt`, the Duration bridge, and the full negative space |
 | [`lesson72-units.md`](../example/learn/lesson72-units.md) | Companion prose for lesson 72: why the model works, the exponent table, the five gotchas, the entities/JSON/agent story, FAQ |
 

@@ -72,6 +72,12 @@ type ir_type =
     (** Nominal builtin. Bare HTTP wire shape {"minorUnits": <int>, "currency": "<ISO>"};
         the agent boundary ADDITIONALLY carries "display" — client decoders tolerate
         both and normalize to {minorUnits, currency}. *)
+  | IRMoneyRate
+    (** Money per quantity (GitHub #38).  ONE wire shape for every denominator:
+        {"minorUnits": <int, per one `per` unit>, "currency": "<ISO>",
+         "per": "h"|"day"|"s"|"kg"|"m"|"m^2"|"m^3"|"L"} — quantized half-even
+        at the boundary (the Money stance); agent boundary adds "display".
+        The server enforces the denominator dimension on decode. *)
   | IRNamed of string
   | IRVar of string
   | IRList of ir_type
@@ -140,6 +146,12 @@ type ir_module = {
     ACTIVE-gated aliases: `Speed` is a quantity only when the module being
     compiled imports it from Tesl.Units (the checker sets the state before
     the client generators run); a user's own `type Speed` stays IRNamed. *)
+(** True for a money-rate type name: an ACTIVE alias (MoneyPerDuration, …) or
+    the canonical "§MR[…]" TCon name — one shared wire shape for all. *)
+let is_money_rate_type_name name =
+  Units_catalog.active_money_rate_dim_of_alias name <> None
+  || Units_catalog.is_money_rate_name name
+
 let is_quantity_type_name name =
   Units_catalog.active_dim_of_alias name <> None
   || Units_catalog.is_quantity_name name
@@ -162,6 +174,14 @@ let rec ir_type_of_type_expr (te : type_expr) : ir_type =
   (* Dimensioned quantities (Length, Speed, … and the canonical "§Q[…]" TCon
      names) ERASE to a bare number on the wire — clients see plain Float. *)
   | TName { name; _ } when is_quantity_type_name name -> IRFloat
+  (* GitHub #38: money rates have ONE shared wire shape regardless of
+     denominator — {minorUnits (integer, per the `per` unit), currency, per}.
+     The server enforces the dimension; the client sees a single MoneyRate
+     alias (like Money). *)
+  | TName { name; _ }
+    when Units_catalog.active_money_rate_dim_of_alias name <> None
+         || Units_catalog.is_money_rate_name name ->
+    IRMoneyRate
   | TName { name; _ } -> IRNamed name
   | TVar { name; _ } -> IRVar name
   | TFun { dom; cod; _ } -> IRFun (ir_type_of_type_expr dom, ir_type_of_type_expr cod)
@@ -186,6 +206,7 @@ let rec ir_type_to_text = function
   | IRBool -> "Bool"
   | IRPosixMillis -> "PosixMillis"
   | IRMoney -> "Money"
+  | IRMoneyRate -> "MoneyRate"
   | IRNamed name -> name
   | IRVar name -> name
   | IRList ty -> "List " ^ ir_type_arg_to_text ty

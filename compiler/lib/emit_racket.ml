@@ -312,10 +312,14 @@ type ctx = {
   mutable expr_type_tbl : (int * int, string) Hashtbl.t;
     (** Maps (start_line, start_col) → display_ty for each expression, used to emit
         correct #:returns types for lambdas. *)
-  mutable expr_ty_tbl : (int * int, Type_system.ty) Hashtbl.t;
-    (** Same keys, STRUCTURED checker ty (not the lossy display string) — used
-        where emit must dispatch on the inferred type, e.g. `/` on a Float or
-        dimensioned quantity emits real division instead of `quotient`. *)
+  mutable expr_ty_tbl : (int * int * int * int, Type_system.ty) Hashtbl.t;
+    (** Keyed on the FULL SPAN (start line/col, end line/col) — a binop's
+        loc.start equals its LEFT operand's loc.start, so a start-only key let
+        the parent's record overwrite the child's and `a / b < c` silently
+        emitted `quotient` (integer truncation) for the inner Float division.
+        The span is unique per expression.  Holds the STRUCTURED checker ty
+        (not the lossy display string) — used where emit must dispatch on the
+        inferred type: real `/` vs `quotient`, money-rate operator lowering. *)
   mutable field_access_type_tbl : (int * int, string) Hashtbl.t;
     (** Maps (start_line, start_col) of an [EField] → the checker-resolved
         record/entity type of its object (e.g. "Project").  Threaded into the
@@ -493,8 +497,10 @@ let rec emit_type_name ctx ty =
           || Units_catalog.is_quantity_name other
        then emit ctx "Real"
        else if Units_catalog.active_money_rate_dim_of_alias other <> None
-               || Units_catalog.is_money_rate_name other
-       then emit ctx "MoneyRate"
+       then emit ctx other  (* alias VERBATIM — sql/runtime key the
+                               denominator's legal labels per alias *)
+       else if Units_catalog.is_money_rate_name other
+       then emit ctx "MoneyRate"  (* canonical §MR (non-alias dims) *)
        else emit ctx other)
   | TApp { head; arg; _ } ->
     (* Flatten left-associated TApp: (((f a) b) c) → (f a b c) *)
@@ -3211,7 +3217,8 @@ and emit_binop ctx ~loc op left right =
      keeps the historical `quotient`. *)
   let div_is_real () =
     match Hashtbl.find_opt ctx.expr_ty_tbl
-            (loc.Location.start.line, loc.Location.start.col) with
+            (loc.Location.start.line, loc.Location.start.col,
+             loc.Location.stop.line, loc.Location.stop.col) with
     | Some (Type_system.TCon "Float") -> true
     | Some (Type_system.TCon n) when Units_catalog.is_quantity_name n -> true
     | _ -> false
@@ -3342,7 +3349,9 @@ and emit_binop ctx ~loc op left right =
         (money×quantity is a checker error), and both rescale orders leave a
         MoneyRate RESULT. *)
      let ty_at l =
-       Hashtbl.find_opt ctx.expr_ty_tbl (l.Location.start.line, l.Location.start.col) in
+       Hashtbl.find_opt ctx.expr_ty_tbl
+         (l.Location.start.line, l.Location.start.col,
+          l.Location.stop.line, l.Location.stop.col) in
      let is_mr = function
        | Some (Type_system.TCon n) -> Units_catalog.is_money_rate_name n
        | _ -> false in
@@ -3356,10 +3365,17 @@ and emit_binop ctx ~loc op left right =
        | BDiv when is_mr result_ty ->
          (match result_ty with
           | Some (Type_system.TCon n) ->
-            let label = match Units_catalog.dim_of_money_rate_name n with
-              | Some d -> Units_catalog.unit_form d
-              | None -> "unit" in
-            Some ("__tmoney_tesl-money-rate-div", Some label)
+            (* the DEFAULT boundary label for this denominator (per h / per
+               kg / …) — sane quantization magnitude and display *)
+            let label_args = match Units_catalog.dim_of_money_rate_name n with
+              | Some d ->
+                (match Units_catalog.default_rate_label_of_dim d with
+                 | Some (l, (num, den)) ->
+                   Printf.sprintf " %d/%d %S" num den l
+                 | None ->
+                   Printf.sprintf " 1/1 %S" (Units_catalog.unit_form d))
+              | None -> " 1/1 \"unit\"" in
+            Some ("__tmoney_tesl-money-rate-div", Some label_args)
           | _ -> None)
        | BMul when is_mr result_ty ->
          Some ("__tmoney_tesl-money-rate-scale", None)
@@ -3369,11 +3385,11 @@ and emit_binop ctx ~loc op left right =
        | _ -> None
      in
      (match money_rate_special with
-      | Some (head, label_opt) ->
+      | Some (head, extra_args) ->
         emit ctx (Printf.sprintf "(%s " head);
         emit_val_arg left; emit ctx " "; emit_val_arg right;
-        (match label_opt with
-         | Some l -> emit ctx (Printf.sprintf " %S" l)
+        (match extra_args with
+         | Some raw -> emit ctx raw   (* pre-formatted " num/den \"label\"" *)
          | None -> ());
         emit ctx ")"
       | None ->
@@ -7341,7 +7357,12 @@ let compile_to_string ?(root_path=default_root_path ()) ?(cyclic_local_import_pa
    List.iter (fun (info : Checker.expr_type_info) ->
      let key = (info.loc.Location.start.line, info.loc.Location.start.col) in
      Hashtbl.replace ctx.expr_type_tbl key info.display_ty;
-     Hashtbl.replace ctx.expr_ty_tbl key info.ty
+     (* SPAN key — see the field doc: start-only collides parent binop with
+        its left operand (silent `quotient` truncation class). *)
+     Hashtbl.replace ctx.expr_ty_tbl
+       (info.loc.Location.start.line, info.loc.Location.start.col,
+        info.loc.Location.stop.line, info.loc.Location.stop.col)
+       info.ty
    ) expr_types;
    List.iter (fun (fa : Checker.field_access_info) ->
      let key = (fa.fa_loc.Location.start.line, fa.fa_loc.Location.start.col) in

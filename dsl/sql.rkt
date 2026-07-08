@@ -31,7 +31,17 @@
          ;; structs + baked ISO table — never tesl/money.rkt (surface module).
          (only-in "private/money-core.rkt"
                   tesl-money tesl-money? tesl-money-minor-units tesl-money-currency
-                  tesl-currency-code tesl-currency-of)
+                  tesl-currency-code tesl-currency-of
+                  ;; Three-column MoneyRate storage: a rate field (declared as
+                  ;; one of the five MoneyPer* denominator aliases) maps to
+                  ;; `<col>_minor BIGINT NOT NULL` + `<col>_currency TEXT NOT
+                  ;; NULL` + `<col>_per TEXT NOT NULL`.  Persistence is a
+                  ;; BOUNDARY: quantize on write (half-even, the Money.convert
+                  ;; stance), reconstruct + dimension-verify on read.
+                  tesl-money-rate?
+                  tesl-money-rate-quantize
+                  tesl-money-rate-of-boundary
+                  rate-alias-dim-table)
          ;; Instantiated for its side effect: populates tesl-currency-table so
          ;; tesl-currency-of resolves the baked ISO 4217 codes.
          (only-in "private/currency-data.rkt")
@@ -126,7 +136,8 @@
          field-db-type-annotation
          field-column-definitions-sql
          check-money-column-collisions!
-         money-db-values->runtime-value)
+         money-db-values->runtime-value
+         money-rate-db-values->runtime-value)
 
 (struct entity-spec (name source primary-key fields predicate table) #:transparent)
 ;; nullable? is #t for Maybe-typed fields — these map to NULL in PostgreSQL.
@@ -319,6 +330,11 @@
                       "field ~a on entity ~a is a Money field and stores into TWO columns; use field-column-definitions-sql"
                       (field-spec-key field)
                       (field-spec-entity field)))
+  (when (money-rate-field? field)
+    (raise-user-error 'sql
+                      "field ~a on entity ~a is a MoneyRate field and stores into THREE columns; use field-column-definitions-sql"
+                      (field-spec-key field)
+                      (field-spec-entity field)))
   (string-append
    (quote-sql-identifier (field-column-name field) 'sql)
    " "
@@ -405,6 +421,23 @@
             (format "~a TEXT NOT NULL"
                     (quote-sql-identifier (money-currency-column-string field 'sql) 'sql))
             "text" #f #f))]
+    [(money-rate-related-field? field)
+     (reject-unsupported-money-rate-field! field 'sql)
+     (list (expected-db-column
+            (money-rate-minor-column-string field 'sql)
+            (format "~a BIGINT NOT NULL"
+                    (quote-sql-identifier (money-rate-minor-column-string field 'sql) 'sql))
+            "bigint" #f #f)
+           (expected-db-column
+            (money-rate-currency-column-string field 'sql)
+            (format "~a TEXT NOT NULL"
+                    (quote-sql-identifier (money-rate-currency-column-string field 'sql) 'sql))
+            "text" #f #f)
+           (expected-db-column
+            (money-rate-per-column-string field 'sql)
+            (format "~a TEXT NOT NULL"
+                    (quote-sql-identifier (money-rate-per-column-string field 'sql) 'sql))
+            "text" #f #f))]
     [else
      (list (expected-db-column
             (identifier-value->string (field-column-name field) 'sql)
@@ -418,25 +451,30 @@
 (define (field-column-definitions-sql field)
   (map expected-db-column-definition (field-expected-db-columns field)))
 
-;; A Money field's derived column names must not collide with a column another
-;; field already claims — creating/altering the table would otherwise alias
-;; two fields onto one column.  Checked before any DDL runs.
+;; A Money/MoneyRate field's derived column names must not collide with a
+;; column another field already claims — creating/altering the table would
+;; otherwise alias two fields onto one column.  Checked before any DDL runs.
 (define (check-money-column-collisions! entity [who 'sql])
   (define fields (entity-spec-fields entity))
   (define base-columns
     (for/list ([f (in-list fields)])
       (identifier-value->string (field-column-name f) who)))
   (for ([f (in-list fields)]
-        #:when (money-field? f))
-    (for ([derived (in-list (list (money-minor-column-string f who)
-                                  (money-currency-column-string f who)))])
+        #:when (or (money-field? f) (money-rate-field? f)))
+    (define kind (if (money-field? f) "Money" "MoneyRate"))
+    (define derived-columns
+      (if (money-field? f)
+          (list (money-minor-column-string f who)
+                (money-currency-column-string f who))
+          (money-rate-column-strings f who)))
+    (for ([derived (in-list derived-columns)])
       (when (member derived base-columns)
         (raise-user-error who
-                          "entity ~a: Money field ~a stores into derived columns ~a and ~a, but the entity already declares a column named ~a; rename one of the fields"
+                          "entity ~a: ~a field ~a stores into derived columns ~a, but the entity already declares a column named ~a; rename one of the fields"
                           (entity-spec-name entity)
+                          kind
                           (field-spec-key f)
-                          (money-minor-column-string f who)
-                          (money-currency-column-string f who)
+                          (string-join derived-columns " and ")
                           derived)))))
 
 ;; SELECT/INSERT/RETURNING column list one field contributes (quoted names).
@@ -446,6 +484,10 @@
      (reject-unsupported-money-field! field 'sql)
      (list (quote-sql-identifier (money-minor-column-string field 'sql) 'sql)
            (quote-sql-identifier (money-currency-column-string field 'sql) 'sql))]
+    [(money-rate-related-field? field)
+     (reject-unsupported-money-rate-field! field 'sql)
+     (for/list ([col (in-list (money-rate-column-strings field 'sql))])
+       (quote-sql-identifier col 'sql))]
     [else
      (list (quote-sql-identifier (field-column-name field) 'sql))]))
 
@@ -502,6 +544,14 @@
                       "field ~a on entity ~a: Money columns do not support ~a (currencies differ); compare Money.minorUnits explicitly after filtering by currency"
                       (field-spec-key field)
                       (field-spec-entity field)
+                      what))
+  ;; Same backstop for MoneyRate: ordering across currencies AND denominator
+  ;; labels is meaningless (950/h vs 950/day are not comparable amounts).
+  (when (money-rate-related-field? field)
+    (raise-user-error who
+                      "field ~a on entity ~a: MoneyRate columns do not support ~a (currencies and per-unit labels differ); aggregate the materialized Money instead"
+                      (field-spec-key field)
+                      (field-spec-entity field)
                       what)))
 
 ;; Predicates with no meaningful two-column Money lowering (fail-closed).
@@ -509,6 +559,12 @@
   (when (money-related-field? field)
     (raise-user-error who
                       "field ~a on entity ~a: ~a is not supported on Money columns"
+                      (field-spec-key field)
+                      (field-spec-entity field)
+                      what))
+  (when (money-rate-related-field? field)
+    (raise-user-error who
+                      "field ~a on entity ~a: ~a is not supported on MoneyRate columns"
                       (field-spec-key field)
                       (field-spec-entity field)
                       what)))
@@ -532,6 +588,152 @@
                        (field-spec-entity field)
                        distinct-count)]
     [else (tesl-money total (currency-thunk))]))
+
+;; ── Three-column MoneyRate storage ────────────────────────────────────────────
+;;
+;; A MoneyRate field — declared as one of the five denominator aliases
+;; (MoneyPerDuration / MoneyPerMass / MoneyPerLength / MoneyPerArea /
+;; MoneyPerVolume, matched BY NAME exactly like Money) — maps to THREE
+;; PostgreSQL columns:
+;;
+;;   <column>_minor     BIGINT NOT NULL   -- integer minor units per ONE per-unit
+;;   <column>_currency  TEXT   NOT NULL   -- ISO 4217 alpha code ("USD")
+;;   <column>_per       TEXT   NOT NULL   -- denominator unit label ("h", "kg")
+;;
+;; Persistence is a BOUNDARY: the stored value is the QUANTIZED shape —
+;; integer minor units per one `per` unit, ONE half-even rounding, the same
+;; one-rounding stance as Money.convert — on BOTH backends identically.  The
+;; Memory backend stores the quantized-then-RECONSTRUCTED struct (not the
+;; exact input), so Memory ≡ PostgreSQL roundtrips exactly.  The alias name
+;; also fixes the field's denominator DIMENSION; both write and read verify
+;; the label's dimension against it fail-closed (a per-"kg" label in a
+;; MoneyPerDuration column is corrupt data, not a unit conversion).
+;;
+;; NOTE — equality is REPRESENTATIONAL: `==`/`!=` compare the stored
+;; (minor, currency, per) triple, so a price stored as 950/h does NOT match
+;; the same price stored per "day"; normalize to one label before comparing.
+
+(define (money-rate-type-datum? type-datum)
+  (and (hash-ref rate-alias-dim-table (type-datum-name type-datum) #f) #t))
+
+(define (money-rate-field? field)
+  (money-rate-type-datum? (field-spec-type field)))
+
+;; `Maybe MoneyRate` would need NULL semantics spanning all THREE columns;
+;; fail closed until that is designed (mirrors maybe-money-field?).
+(define (maybe-money-rate-field? field)
+  (define inner (maybe-field-inner-type (field-spec-type field)))
+  (and inner (money-rate-type-datum? inner) #t))
+
+(define (money-rate-related-field? field)
+  (or (money-rate-field? field) (maybe-money-rate-field? field)))
+
+;; The FIELD's declared denominator dimension ('duration for MoneyPerDuration,
+;; 'mass for MoneyPerMass, …) — what the boundary verifies labels against.
+(define (rate-field-expected-dim field)
+  (define datum (field-spec-type field))
+  (hash-ref rate-alias-dim-table
+            (type-datum-name (or (maybe-field-inner-type datum) datum))
+            #f))
+
+(define (money-rate-minor-column-string field who)
+  (format "~a_minor" (identifier-value->string (field-column-name field) who)))
+
+(define (money-rate-currency-column-string field who)
+  (format "~a_currency" (identifier-value->string (field-column-name field) who)))
+
+(define (money-rate-per-column-string field who)
+  (format "~a_per" (identifier-value->string (field-column-name field) who)))
+
+(define (money-rate-column-strings field who)
+  (list (money-rate-minor-column-string field who)
+        (money-rate-currency-column-string field who)
+        (money-rate-per-column-string field who)))
+
+;; The MoneyRate variants sql.rkt does NOT support (fail-closed, clear
+;; message): Maybe MoneyRate, MoneyRate primary keys, #:db-type overrides.
+(define (reject-unsupported-money-rate-field! field who)
+  (when (maybe-money-rate-field? field)
+    (raise-user-error who
+                      "field ~a on entity ~a: Maybe MoneyRate fields are not supported yet (NULL semantics across the three MoneyRate columns are undefined)"
+                      (field-spec-key field)
+                      (field-spec-entity field)))
+  (when (field-spec-primary-key? field)
+    (raise-user-error who
+                      "field ~a on entity ~a: a MoneyRate field cannot be the primary key"
+                      (field-spec-key field)
+                      (field-spec-entity field)))
+  (when (field-spec-db-type field)
+    (raise-user-error who
+                      "field ~a on entity ~a: MoneyRate fields manage their own three-column storage (~a BIGINT + ~a TEXT + ~a TEXT); remove #:db-type"
+                      (field-spec-key field)
+                      (field-spec-entity field)
+                      (money-rate-minor-column-string field who)
+                      (money-rate-currency-column-string field who)
+                      (money-rate-per-column-string field who))))
+
+;; Reject a non-MoneyRate value bound for a MoneyRate field with a clear error.
+(define (ensure-money-rate-value field value who)
+  (define raw (normalize-row-value value))
+  (unless (tesl-money-rate? raw)
+    (raise-user-error who
+                      "field ~a on entity ~a is a MoneyRate field and needs a MoneyRate value (e.g. (MoneyRate.perHour money)), got ~e"
+                      (field-spec-key field)
+                      (field-spec-entity field)
+                      value))
+  raw)
+
+;; of-boundary with the FIELD's declared dimension, re-raised with field
+;; context — the ONE reconstruction/validation judgment both the write path
+;; (quantize-then-reconstruct) and the read path (three stored columns) use,
+;; so unknown code/label and dimension mismatch fail closed with the same
+;; error on both backends.
+(define (money-rate-of-boundary/field field minor code label who)
+  (with-handlers ([exn:fail:user?
+                   (lambda (e)
+                     (raise-user-error who
+                                       "field ~a on entity ~a: ~a"
+                                       (field-spec-key field)
+                                       (field-spec-entity field)
+                                       (exn-message e)))])
+    (tesl-money-rate-of-boundary minor code label (rate-field-expected-dim field))))
+
+;; The write boundary: ensure struct → quantize (ONE half-even rounding) →
+;; reconstruct-and-validate.  Returns the three ordered params (the PG shape)
+;; AND the reconstructed struct (the Memory store value), so both backends
+;; persist the identical quantized value.
+(define (money-rate-boundary field value who)
+  (define rate (ensure-money-rate-value field value who))
+  (define-values (minor code label) (tesl-money-rate-quantize rate))
+  (values minor code label
+          (money-rate-of-boundary/field field minor code label who)))
+
+;; Decode the three stored columns back into ONE tesl-money-rate (fail-closed
+;; on a malformed minor value, an unknown currency code or unit label, or a
+;; label whose dimension contradicts the field's declared alias).
+(define (money-rate-db-values->runtime-value field minor code label [who 'sql])
+  (define n
+    (cond
+      [(exact-integer? minor) minor]
+      [(and (rational? minor)
+            (exact-integer? (inexact->exact minor)))
+       (inexact->exact minor)]
+      [else #f]))
+  (unless (exact-integer? n)
+    (raise-user-error who
+                      "field ~a on entity ~a: stored rate minor-units value ~e is not an integer — the ~a column holds corrupt data"
+                      (field-spec-key field)
+                      (field-spec-entity field)
+                      minor
+                      (money-rate-minor-column-string field who)))
+  (unless (string? label)
+    (raise-user-error who
+                      "field ~a on entity ~a: stored rate unit label ~e is not a string — the ~a column holds corrupt data"
+                      (field-spec-key field)
+                      (field-spec-entity field)
+                      label
+                      (money-rate-per-column-string field who)))
+  (money-rate-of-boundary/field field n code label who))
 
 (define (normalize-row-source source)
   (define value (if (procedure? source) (source) source))
@@ -587,9 +789,10 @@
                                 raw-value))])
        (and present?
             (or
-             ;; Money fields match BY NAME (the struct may not be registered
-             ;; as a runtime type in this process).
+             ;; Money/MoneyRate fields match BY NAME (the structs may not be
+             ;; registered as runtime types in this process).
              (and (money-field? field) (tesl-money? field-value))
+             (and (money-rate-field? field) (tesl-money-rate? field-value))
              ;; Nullable fields accept Nothing or a typed Something
              (and (field-spec-nullable? field)
                   (or (Nothing? field-value)
@@ -618,6 +821,16 @@
       [(money-related-field? field)
        (reject-unsupported-money-field! field who)
        (ensure-money-value field raw-value who)]
+      ;; MoneyRate field: persistence is a BOUNDARY, so the coerced value is
+      ;; the QUANTIZED-then-reconstructed struct (one half-even rounding) —
+      ;; the Memory backend stores it and Memory `==`/`!=` compare it with
+      ;; `equal?`, which is therefore the same REPRESENTATIONAL
+      ;; (minor, currency, per) triple equality the PG columns implement.
+      [(money-rate-related-field? field)
+       (reject-unsupported-money-rate-field! field who)
+       (let-values ([(_minor _code _label reconstructed)
+                     (money-rate-boundary field raw-value who)])
+         reconstructed)]
       ;; Nullable (Maybe T) field: accept Nothing, Something(v), or a plain inner value
       [inner-maybe
        (cond
@@ -1030,6 +1243,11 @@
       (raise-user-error 'group-by
                         "field ~a on entity ~a: Money cannot be a groupBy key"
                         (field-spec-key f)
+                        (field-spec-entity f)))
+    (when (money-rate-related-field? f)
+      (raise-user-error 'group-by
+                        "field ~a on entity ~a: MoneyRate cannot be a groupBy key"
+                        (field-spec-key f)
                         (field-spec-entity f))))
   (group-by-clause fields))
 
@@ -1272,6 +1490,29 @@
                 (tesl-currency-code (tesl-money-currency money)))
           (+ index 2)))
 
+;; MoneyRate predicate lowering: `hourly == r` expands over ALL THREE columns —
+;;   (hourly_minor = $n AND hourly_currency = $n+1 AND hourly_per = $n+2)
+;; and `hourly != r` to its negation shape (<> joined by OR), parenthesized so
+;; the fragments compose under the surrounding AND/OR.  The operand is
+;; quantized through the SAME write boundary as INSERT (one half-even
+;; rounding + dimension check).  NOTE: this equality is REPRESENTATIONAL —
+;; it compares the stored triple, so 950/h stored per "h" does NOT match the
+;; same price stored per "day"; the Memory backend's `equal?` on the
+;; reconstructed struct agrees exactly.
+(define (compile-money-rate-equality-sql field operator value index)
+  (define-values (minor code label _reconstructed)
+    (money-rate-boundary field value 'sql))
+  (define-values (op joiner)
+    (if (eq? operator '==) (values "=" "AND") (values "<>" "OR")))
+  (define fragments
+    (for/list ([col (in-list (money-rate-column-strings field 'sql))]
+               [i (in-naturals index)])
+      (format "~a ~a ~a"
+              (quote-sql-identifier col 'sql) op (postgres-placeholder i))))
+  (values (format "(~a)" (string-join fragments (format " ~a " joiner)))
+          (list minor code label)
+          (+ index 3)))
+
 (define (compile-predicate-sql predicate index)
   (match predicate
     [(eq-predicate field operand)
@@ -1282,6 +1523,8 @@
         (compile-money-equality-sql field '==
                                     (ensure-money-value field operand-value 'sql)
                                     index)]
+       [(money-rate-field? field)
+        (compile-money-rate-equality-sql field '== operand-value index)]
        [else
         (define encoded-value
           (field-runtime-value->db-value field operand-value 'sql))
@@ -1304,6 +1547,9 @@
         (compile-money-equality-sql field operator
                                     (ensure-money-value field operand-value 'sql)
                                     index)]
+       [(money-rate-field? field)
+        ;; Only `!=` reaches here for MoneyRate (ordered rejected above).
+        (compile-money-rate-equality-sql field operator operand-value index)]
        [else
         (define encoded-value
           (field-runtime-value->db-value field operand-value 'sql))
@@ -1415,6 +1661,12 @@
                            "internal error: Money field ~a on entity ~a reached the single-column decoder — Money decodes from two columns (bug in dsl/sql.rkt)"
                            (field-spec-key field)
                            (field-spec-entity field))]
+        ;; MoneyRate decodes from THREE columns — same internal-error backstop.
+        [(money-rate-field? field)
+         (raise-user-error 'sql
+                           "internal error: MoneyRate field ~a on entity ~a reached the single-column decoder — MoneyRate decodes from three columns (bug in dsl/sql.rkt)"
+                           (field-spec-key field)
+                           (field-spec-entity field))]
         [(field-adt-type? field)
          (jsexpr->typed-value (field-spec-type field)
                               (cond
@@ -1462,6 +1714,11 @@
                             "internal error: Money field ~a on entity ~a reached the single-column encoder — Money expands to two params (bug in dsl/sql.rkt)"
                             (field-spec-key field)
                             (field-spec-entity field)))
+        (when (money-rate-field? field)
+          (raise-user-error who
+                            "internal error: MoneyRate field ~a on entity ~a reached the single-column encoder — MoneyRate expands to three params (bug in dsl/sql.rkt)"
+                            (field-spec-key field)
+                            (field-spec-entity field)))
         (unless (runtime-type-satisfied? (field-spec-type field) value)
           (raise-user-error who
                             "expected a value satisfying field ~a on entity ~a to match type ~a, got ~a"
@@ -1477,7 +1734,8 @@
           [else value]))))
 
 ;; The ordered SQL params ONE field value expands to: (minor currency-code)
-;; for a Money field, a single encoded value for everything else.
+;; for a Money field, (minor currency-code per-label) for a MoneyRate field,
+;; a single encoded value for everything else.
 (define (field-db-param-values field value who)
   (cond
     [(money-related-field? field)
@@ -1485,29 +1743,47 @@
      (define money (ensure-money-value field value who))
      (list (tesl-money-minor-units money)
            (tesl-currency-code (tesl-money-currency money)))]
+    [(money-rate-related-field? field)
+     (reject-unsupported-money-rate-field! field who)
+     ;; Quantize at the persistence boundary (idempotent when the value came
+     ;; through resolve-field-value, which already reconstructed it).
+     (define-values (minor code label _reconstructed)
+       (money-rate-boundary field value who))
+     (list minor code label)]
     [else
      (list (field-runtime-value->db-value field value who))]))
 
 (define (vector->entity-row entity row-vector)
   ;; A Money field consumes TWO adjacent slots of the result vector (its two
-  ;; columns are always selected together, in minor/currency order); every
-  ;; other field consumes one — so the index is threaded, not (in-naturals).
+  ;; columns are always selected together, in minor/currency order); a
+  ;; MoneyRate field consumes THREE (minor/currency/per order); every other
+  ;; field consumes one — so the index is threaded, not (in-naturals).
   (define-values (row _next-index)
     (for/fold ([acc (hash)]
                [index 0])
               ([field (in-list (entity-spec-fields entity))])
-      (if (money-field? field)
-          (values (hash-set acc
-                            (field-spec-key field)
-                            (money-db-values->runtime-value field
-                                                            (vector-ref row-vector index)
-                                                            (vector-ref row-vector (add1 index))))
-                  (+ index 2))
-          (values (hash-set acc
-                            (field-spec-key field)
-                            (field-db-value->runtime-value field
-                                                           (vector-ref row-vector index)))
-                  (add1 index)))))
+      (cond
+        [(money-field? field)
+         (values (hash-set acc
+                           (field-spec-key field)
+                           (money-db-values->runtime-value field
+                                                           (vector-ref row-vector index)
+                                                           (vector-ref row-vector (add1 index))))
+                 (+ index 2))]
+        [(money-rate-field? field)
+         (values (hash-set acc
+                           (field-spec-key field)
+                           (money-rate-db-values->runtime-value field
+                                                                (vector-ref row-vector index)
+                                                                (vector-ref row-vector (+ index 1))
+                                                                (vector-ref row-vector (+ index 2))))
+                 (+ index 3))]
+        [else
+         (values (hash-set acc
+                           (field-spec-key field)
+                           (field-db-value->runtime-value field
+                                                          (vector-ref row-vector index)))
+                 (add1 index))])))
   row)
 
 (define (postgres-table-exists? runtime entity)
@@ -1882,6 +2158,11 @@
                                "field ~a on entity ~a: Money fields cannot be upsert conflict keys"
                                (field-spec-key f)
                                (field-spec-entity f)))
+           (when (and f (money-rate-related-field? f))
+             (raise-user-error 'upsert-one!
+                               "field ~a on entity ~a: MoneyRate fields cannot be upsert conflict keys"
+                               (field-spec-key f)
+                               (field-spec-entity f)))
            (quote-sql-identifier (field-column-name f) 'sql))
          conflict-fields))
   ;; A Money update target expands over BOTH derived columns.
@@ -2066,6 +2347,13 @@
      (if runtime
          (postgres-money-select-sum runtime entity field predicates)
          (in-memory-money-select-sum entity field predicates))]
+    ;; MoneyRate: summing rates mixes denominators (950/h + 950/day is not a
+    ;; rate) on top of the mixed-currency problem — fail closed, BOTH backends.
+    [(money-rate-related-field? field)
+     (raise-user-error 'select-sum
+                       "field ~a on entity ~a: selectSum over a MoneyRate column is not supported; aggregate the materialized Money instead"
+                       (field-spec-key field)
+                       (field-spec-entity field))]
     [runtime
      (define col (quote-sql-identifier (field-column-name field) 'sql))
      (define-values (where-sql params _) (compile-where-sql predicates))
@@ -2224,6 +2512,11 @@
                       "field ~a on entity ~a: Money cannot be a groupBy key"
                       (field-spec-key field)
                       (field-spec-entity field)))
+  (when (money-rate-related-field? field)
+    (raise-user-error 'groupBy
+                      "field ~a on entity ~a: MoneyRate cannot be a groupBy key"
+                      (field-spec-key field)
+                      (field-spec-entity field)))
   (unless (memq unit '(field hour day week month year))
     (raise-user-error 'groupBy "unknown bucket unit: ~a" unit))
   (define zone
@@ -2371,6 +2664,11 @@
   (when (or (money-field? field) (maybe-money-field? field))
     (raise-user-error 'select-sum-by
                       "field ~a on entity ~a: selectSumBy over a Money column is not supported; sum Money.minorUnits per group after filtering by currency"
+                      (field-spec-key field)
+                      (field-spec-entity field)))
+  (when (money-rate-related-field? field)
+    (raise-user-error 'select-sum-by
+                      "field ~a on entity ~a: selectSumBy over a MoneyRate column is not supported; aggregate the materialized Money instead"
                       (field-spec-key field)
                       (field-spec-entity field)))
   (unless (from-clause? source)

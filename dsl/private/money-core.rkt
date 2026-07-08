@@ -23,6 +23,10 @@
          tesl-currency-table
          tesl-money-display
          tesl-money-rate-display
+         tesl-money-rate-quantize
+         tesl-money-rate-of-boundary
+         rate-label-table
+         rate-alias-dim-table
          define-currencies)
 
 ;; code = ISO 4217 alpha code string ("USD"); minor-digits = exact int (2/0/3)
@@ -54,6 +58,58 @@
   (string-append
    (tesl-money-display (tesl-money per-label (tesl-money-rate-currency r)))
    "/" (tesl-money-rate-label r)))
+
+;; ── Rate boundary labels (GitHub #38: rates as SQL columns + wire output) ──
+;; MIRRORS compiler/lib/units_catalog.ml rate_labels — label → (exact factor
+;; = canonical units per one label unit, denominator dimension key).  At a
+;; boundary a rate is quantized to INTEGER minor units per label unit (one
+;; half-even rounding — the Money stance); decode reconstructs the exact
+;; per-canonical rational and VERIFIES the label's dimension against the
+;; declared rate type.
+(define rate-label-table
+  (hash "s"   (cons 1       'duration)
+        "h"   (cons 3600    'duration)
+        "day" (cons 86400   'duration)
+        "kg"  (cons 1       'mass)
+        "m"   (cons 1       'length)
+        "m^2" (cons 1       'area)
+        "m^3" (cons 1       'volume)
+        "L"   (cons 1/1000  'volume)))
+
+;; declared rate TYPE name → denominator dimension key (for decode checks)
+(define rate-alias-dim-table
+  (hash 'MoneyPerDuration 'duration
+        'MoneyPerMass     'mass
+        'MoneyPerLength   'length
+        'MoneyPerArea     'area
+        'MoneyPerVolume   'volume))
+
+;; rate → (values minor-per-label-int iso-code label) — the boundary shape.
+(define (tesl-money-rate-quantize r)
+  (values (round (* (tesl-money-rate-per-canonical r)
+                    (tesl-money-rate-label-factor r)))
+          (tesl-currency-code (tesl-money-rate-currency r))
+          (tesl-money-rate-label r)))
+
+;; (minor iso label expected-dim-or-#f) → rate; raises on unknown
+;; currency/label or a label whose dimension does not match the declared
+;; rate type — fail-closed, like an unknown currency code on Money decode.
+(define (tesl-money-rate-of-boundary minor code label expected-dim)
+  (define cur (tesl-currency-of code))
+  (unless cur
+    (raise-user-error 'MoneyRate "unknown ISO 4217 currency code: ~e" code))
+  (unless (exact-integer? minor)
+    (raise-user-error 'MoneyRate
+                      "rate minorUnits must be an integer (per '~a' unit), got: ~e"
+                      label minor))
+  (define entry (hash-ref rate-label-table label #f))
+  (unless entry
+    (raise-user-error 'MoneyRate "unknown rate unit label: ~e" label))
+  (when (and expected-dim (not (eq? (cdr entry) expected-dim)))
+    (raise-user-error 'MoneyRate
+                      "rate is per '~a' (a ~a denominator) but the declared type expects a ~a denominator"
+                      label (cdr entry) expected-dim))
+  (tesl-money-rate (/ minor (car entry)) cur (car entry) label))
 
 ;; Populated once by the define-currencies expansion in currency-data.rkt.
 (define tesl-currency-table (make-hash))

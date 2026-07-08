@@ -204,6 +204,29 @@ test "Duration millis bridge rounds half-even" {
   expect Duration.inSeconds (Duration.fromMillis 2500) == 2.5
 }
 
+test "Duration millis bridge handles negative spans" {
+  expect Duration.toMillis (Duration.seconds -1.5) == -1500
+  expect Duration.inSeconds (Duration.fromMillis (0 - 2500)) == -2.5
+}
+
+test "Duration millis bridge half-even ties on exact half-milliseconds" {
+  # A tie needs an exactly-representable half-millisecond: 0.0625 s (= 1/16,
+  # dyadic) is EXACTLY 62.5 ms and rounds to the even neighbor 62; 0.1875 s
+  # (= 3/16) is EXACTLY 187.5 ms and rounds UP to the even neighbor 188.
+  expect Duration.toMillis (Duration.seconds 0.0625) == 62
+  expect Duration.toMillis (Duration.seconds 0.1875) == 188
+  expect Duration.toMillis (Duration.seconds (0.0 - 0.0625)) == (0 - 62)
+}
+
+test "near-half milliseconds that are not exact ties round by magnitude" {
+  # 0.0015 and 0.0025 are NOT dyadic: the nearest binary double sits strictly
+  # ABOVE 1.5 ms / 2.5 ms, so no tie fires and both round UP by magnitude —
+  # 2 and 3 (NOT the half-even 2 one might expect for 2.5 ms).  PINNED: this
+  # is the double-representation contract of the Float->ms bridge.
+  expect Duration.toMillis (Duration.seconds 0.0015) == 2
+  expect Duration.toMillis (Duration.seconds 0.0025) == 3
+}
+
 test "Time.add and Time.diff speak typed Duration" {
   let ts = Time.secondsToPosix 1000
   let later = Time.add ts (Duration.hours 2.0)

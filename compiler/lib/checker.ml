@@ -319,11 +319,42 @@ Expectation chain:
 " (List.map expectation_frame_message outer)
     | _ -> ""
   in
-  Printf.sprintf "cannot unify %s with %s%s%s%s%s%s"
+  (* A Tesl.Units quantity alias and an unrelated nominal type can share a
+     rendered NAME (a quantity `Speed` vs an imported module's own
+     `type Speed = …`), producing the baffling "cannot unify Speed with
+     Speed" — say which side is which. *)
+  let units_name_clash_hint =
+    let quantity_display = function
+      | TCon n when Units_catalog.is_quantity_name n ->
+        Units_catalog.display_of_name n
+      | _ -> None in
+    let is_plain_nominal = function
+      | TCon n -> not (Units_catalog.is_quantity_name n)
+      | _ -> false in
+    let one_side q_ty other =
+      match quantity_display q_ty with
+      | Some d when is_plain_nominal other && pp_ty other = d -> Some d
+      | Some d when is_plain_nominal other
+                    && (match other with
+                        | TCon n ->
+                          String.length n > String.length d
+                          && String.sub n (String.length n - String.length d - 1)
+                               (String.length d + 1) = "." ^ d
+                        | _ -> false) -> Some d
+      | _ -> None in
+    match one_side actual expected, one_side expected actual with
+    | Some d, _ | _, Some d ->
+      Printf.sprintf
+        " (hint: one side is the Tesl.Units QUANTITY `%s`; the other is a \
+         different type that merely shares the name — a module only sees the \
+         quantity `%s` when it imports it from Tesl.Units)" d d
+    | None, None -> "" in
+  Printf.sprintf "cannot unify %s with %s%s%s%s%s%s%s"
     (pp_ty actual) (pp_ty expected)
     (if note = "" then "" else Printf.sprintf " (%s)" note)
     fact_hint
     posix_hint
+    units_name_clash_hint
     reason_hint
     chain_hint
 
@@ -442,6 +473,38 @@ let check_units_name_collisions (m : module_form) : type_error list =
           @ ctor_clashes
         | _ -> [])
       m.decls
+
+(* Run [f] with the alias activation OF [target] (audit fail-open xa/xe: an
+   imported module's signatures were resolved under the IMPORTING module's
+   activation, so `Speed` in an exporter's signature meant a quantity or a
+   user ADT depending on who was LOOKING — dimension laundering across the
+   module boundary in both directions).  Restores the caller's activation
+   (including the money-rate flag) on exit, exception-safe. *)
+let with_module_alias_activation :
+  'a. module_form -> (unit -> 'a) -> 'a =
+  fun target f ->
+  let prev_aliases = Units_catalog.snapshot_active_aliases () in
+  let prev_rate = !Units_catalog.money_rate_aliases_active in
+  let restore () =
+    Units_catalog.set_active_aliases prev_aliases;
+    Units_catalog.money_rate_aliases_active := prev_rate
+  in
+  Units_catalog.set_active_aliases
+    (List.concat_map (fun (imp : import_decl) ->
+         if imp.module_name <> "Tesl.Units" then []
+         else match imp.names with
+           | ImportAll -> List.map fst Units_catalog.aliases
+           | ImportExposing names ->
+             List.filter (fun n -> List.mem_assoc n Units_catalog.aliases) names)
+        target.imports);
+  Units_catalog.money_rate_aliases_active :=
+    List.exists (fun (i : import_decl) -> i.module_name = "Tesl.Money")
+      target.imports;
+  (try
+     let r = f () in
+     restore ();
+     r
+   with e -> restore (); raise e)
 
 (* Compute + set the module's active quantity aliases: the alias TYPE names
    this module imports from Tesl.Units (exposing list, or all of them for a
@@ -926,6 +989,7 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
     match parse_local_import_module path with
     | None | Some (Err _) -> []
     | Some (Ok imported) ->
+      with_module_alias_activation imported @@ fun () ->
         (* `Tesl.List` -> `List`; the env/exposing key prefix. *)
         let short_mod =
           match String.rindex_opt imp.module_name '.' with
@@ -963,6 +1027,7 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
       match parse_local_import_module path with
       | None | Some (Err _) -> []
       | Some (Ok imported) ->
+        with_module_alias_activation imported @@ fun () ->
           (* Collect locally-defined type names from the imported module *)
           let local_types = List.concat_map (function
             | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
@@ -1069,6 +1134,7 @@ let load_imported_ctors (m : module_form) : (string * (string * scheme)) list =
       match parse_local_import_module path with
       | None | Some (Err _) -> []
       | Some (Ok imported) ->
+        with_module_alias_activation imported @@ fun () ->
           let requested = match imp.names with
             | ImportAll -> None
             | ImportExposing names -> Some names
@@ -1115,6 +1181,7 @@ let load_imported_records (m : module_form) : (string * record_def) list =
       match parse_local_import_module path with
       | None | Some (Err _) -> []
       | Some (Ok imported) ->
+        with_module_alias_activation imported @@ fun () ->
         let wants name = match imp.names with
           | ImportAll -> true
           | ImportExposing names -> List.mem name names
@@ -2106,6 +2173,32 @@ let rec infer_expr ctx (e : expr) : ty =
            else add_unknown_name_error ctx loc ~what:"name" name);
           fresh ()))
 
+  | EField { obj; field; loc }
+    when (match obj with
+          | EConstructor { name = "Units"; args = []; _ }
+          | EVar { name = "Units"; _ } ->
+            List.mem ("Units." ^ field) Units_catalog.units_op_names
+            && lookup_name ctx ("Units." ^ field) = None
+          | EConstructor { name = "MoneyRate"; args = []; _ }
+          | EVar { name = "MoneyRate"; _ } ->
+            (field = "currency" || field = "display")
+            && lookup_name ctx ("MoneyRate." ^ field) = None
+          | _ -> false) ->
+    (* Fail-open closed (audit finding u15b): these ops have no env arrow —
+       their result dimension is computed per APPLICATION site — so a bare
+       reference (`let f = Units.mul`, passing `Units.sqrt` as an argument)
+       used to fall through to the record-field-access path and come back as
+       a FRESH type variable: it unified with any function type and laundered
+       dimensions at runtime.  They must be applied directly. *)
+    add_error ctx loc (Printf.sprintf
+      "`%s.%s` is dimension-typed at each application site and cannot be \
+       used as a VALUE (let-bound or passed as an argument); apply it \
+       directly, or wrap the application in your own function"
+      (match obj with EConstructor { name; _ } | EVar { name; _ } -> name
+                    | _ -> "Units")
+      field);
+    fresh ()
+
   | EField { obj; field; loc } ->
     (* First try module-qualified name: Module.function (e.g., Dict.lookup).
        For constructors (uppercase), always try qualified. For EVar (lowercase), try
@@ -3050,13 +3143,74 @@ and record_sql_operand_field_accesses ctx query =
       in
       walk value
     in
+    (* Audit fail-open u08: where-clause VALUE operands were never
+       type-checked — `where v.topSpeed > Length.meters 1.0` (cross-dimension)
+       and `== 5.0` (bare Float into a quantity column) compiled and silently
+       matched on raw canonical floats.  When the column side is a direct
+       `binder.field` reference with a declared type, infer the value operand
+       (errors KEPT — they were simply invisible before) and unify it with
+       the column's declared type.  Ordered comparison on Money / money-rate
+       columns is a compile error here (the runtime backstop in dsl/sql.rkt
+       stays as defense in depth). *)
+    let field_col_ty e =
+      match e with
+      | EField { obj = EVar { name; _ }; field; _ } when name = binder ->
+        (match List.assoc_opt entity ctx.records with
+         | Some rd ->
+           Option.map (fun ty -> (field, ty)) (List.assoc_opt field rd.rd_fields)
+         | None -> None)
+      | _ -> None
+    in
+    let declared_col_ty e =
+      match field_col_ty e with
+      | Some r -> Some r
+      | None ->
+        (* single-comparison selects put the column at the END of the select
+           app-chain: `selectOne v from E where <col>` — the comparison's left
+           IS the whole chain, its terminal `where`-preceded atom the column *)
+        (match flatten_app_expr [] e with
+         | _, args when args <> [] ->
+           let rec last2 = function
+             | [a; b] -> Some (a, b)
+             | _ :: rest -> last2 rest
+             | [] -> None in
+           (match last2 args with
+            | Some (EVar { name = "where"; _ }, col) -> field_col_ty col
+            | _ -> None)
+         | _ -> None)
+    in
+    let check_value_operand op col value =
+      match declared_col_ty col with
+      | None -> record_fields_in value   (* exotic column shape: hints only *)
+      | Some (field, col_ty) ->
+        (match op, col_ty with
+         | (BLt | BLe | BGt | BGe), TCon "Money" ->
+           add_error ctx' (expr_loc col)
+             "Money columns do not support ordered comparison in where \
+              clauses (currencies differ); filter by currency and compare \
+              `Money.minorUnits` explicitly"
+         | (BLt | BLe | BGt | BGe), TCon n
+           when Units_catalog.is_money_rate_name n ->
+           add_error ctx' (expr_loc col)
+             "money-rate columns do not support ordered comparison in where \
+              clauses; materialize Money first"
+         | _ -> ());
+        let value_ty = infer_expr ctx' value in
+        unify_expected_at ctx' (expr_loc value) value_ty
+          (mk_expectation ~origin:(expr_loc col)
+             ~role:(CallArgument (Some "where", 2))
+             ~reason:(Printf.sprintf
+                        "the where clause compares column `%s.%s` (declared \
+                         `%s`)" binder field (pp_ty col_ty))
+             col_ty)
+    in
     let rec scan e =
       match e with
       | EBinop { op = (BAnd | BOr | BAdd); left; right; _ } ->
         scan left; scan right
-      | EBinop { op = (BEq | BNeq | BLt | BLe | BGt | BGe); left; right; _ } ->
-        scan left;              (* left is the column or the select app-chain *)
-        record_fields_in right  (* right is the VALUE operand *)
+      | EBinop { op = (BEq | BNeq | BLt | BLe | BGt | BGe) as op; left; right; _ } ->
+        scan left;                          (* left: column or select app-chain *)
+        check_value_operand op left right   (* right: the VALUE operand *)
       | EApp _ ->
         (* Multi-line SQL: modifier clauses merged as EApp args onto the
            where-EBinop — recurse into the EBinop base. *)
@@ -3111,9 +3265,15 @@ and infer_binop ctx loc ~op_loc op left right =
           | Some d -> t_money_rate d
           | None -> TCon "Money")
        | _ -> TCon "Money")
-    end else if (match lt', rt' with
-                 | TCon n, _ | _, TCon n -> Units_catalog.is_money_rate_name n
-                 | _ -> false) then begin
+    end else if (let is_mr = function
+                   | TCon n -> Units_catalog.is_money_rate_name n
+                   | _ -> false in
+                 (* NOT an or-pattern: `TCon n, _ | _, TCon n` binds the FIRST
+                    alternative and a failing guard does not backtrack, which
+                    silently skipped this branch for `quantity * rate`
+                    (pinned by test_pin_quantity_times_rate — both orders must
+                    materialize Money). *)
+                 is_mr lt' || is_mr rt') then begin
       (* Money-rate algebra: `rate * quantity : Money` when the quantity's
          dimension matches the rate's denominator (ONE half-even rounding at
          materialization); `rate * Float : rate` rescales exactly.  Everything
@@ -5013,6 +5173,17 @@ let check_api_test_scope ctx (m : module_form) seed_stmts stmts =
       if not (List.mem name locals || List.mem name known_names) then
         add_unknown_name_error ctx loc ~what:"constructor" name;
       List.iter (check_expr locals) args
+    (* GitHub #39 (class fix): a QUALIFIED name (`MoneyRate.perHour`,
+       `Units.sqrt`, `Speed.inKilometersPerHour`) must be judged as one unit —
+       descending into the object checked the qualifier (`MoneyRate`) as a
+       bare data constructor, which broke every module that is only a
+       qualifier (no same-named value binding) and every dotted-only import.
+       Accept when the dotted name is known or the qualifier is a known
+       module; otherwise fall through to the ordinary field-access walk. *)
+    | EField { obj = (EConstructor { name; args = []; _ } | EVar { name; _ }); field; _ }
+      when List.mem (name ^ "." ^ field) known_names
+           || List.mem name known_qualifier_modules ->
+      ()
     | EField { obj; _ } ->
       check_expr locals obj
     | EApp { fn; arg; _ } ->

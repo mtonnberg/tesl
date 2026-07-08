@@ -44,6 +44,20 @@
   [Sku sku : String]
   [Price price : Money])
 
+;; Three-column MoneyRate storage, PG side: `<col>_minor BIGINT NOT NULL` +
+;; `<col>_currency TEXT NOT NULL` + `<col>_per TEXT NOT NULL`.  Persistence
+;; is a BOUNDARY (quantize on write, reconstruct + dimension-verify on read),
+;; so Memory ≡ PG roundtrips exactly — asserted below on the same seeds.
+(define rate-memory-rows (make-hash))
+
+(define-entity RateRow
+  #:source (lambda () rate-memory-rows)
+  #:table rate_rows
+  #:primary-key id
+  [Id id : String]
+  [Team team : String]
+  [Hourly hourly : MoneyPerDuration])
+
 ;; Auto-migration pair: V1 creates the table without the Money field, V2
 ;; declares the SAME table with a Money field added.
 (define-entity MigrateRowV1
@@ -60,6 +74,29 @@
 (define price-field (entity-field-ref MoneyRow 'price))
 (define id-field (entity-field-ref MoneyRow 'id))
 (define sku-field (entity-field-ref MoneyRow 'sku))
+
+(define hourly-field (entity-field-ref RateRow 'hourly))
+(define rate-id-field (entity-field-ref RateRow 'id))
+
+;; A hand-built rate: minor-per-label / factor = the exact per-canonical
+;; rational (the MoneyRate.perHour shape).
+(define (rate-of minor-per-label code label factor)
+  (tesl-money-rate (/ minor-per-label factor) (tesl-currency-of code) factor label))
+(define (usd/h m) (rate-of m "USD" "h" 3600))
+(define (eur/h m) (rate-of m "EUR" "h" 3600))
+(define (usd/day m) (rate-of m "USD" "day" 86400))
+
+(define (seed-rates!)
+  ;; r1/r2 share (minor, label) but differ in currency; r3 is the SAME price
+  ;; as r1 (95000/h × 24) stored per "day" (equality is REPRESENTATIONAL);
+  ;; r4's 500.5 minor/label exercises the half-even write quantization.
+  (insert-one! RateRow (hash 'id "r1" 'team "core" 'hourly (usd/h 95000)))
+  (insert-one! RateRow (hash 'id "r2" 'team "core" 'hourly (eur/h 95000)))
+  (insert-one! RateRow (hash 'id "r3" 'team "ops" 'hourly (usd/day 2280000)))
+  (insert-one! RateRow (hash 'id "r4" 'team "ops" 'hourly (rate-of 1001/2 "USD" "h" 3600))))
+
+(define (select-hourly id)
+  (hash-ref (raw-value (select-one (from RateRow) (where (==. rate-id-field id)))) 'hourly))
 
 (define (seed-rows!)
   ;; p1/p2 share USD; p3 is EUR with the SAME minor units as p1 so == must
@@ -95,7 +132,7 @@
     #:server host
     #:port port
     #:schema money_pg_tests
-    #:entities MoneyRow)
+    #:entities MoneyRow RateRow)
 
   (call-with-database
    MoneyDb
@@ -193,7 +230,92 @@
         (lambda (e) (and (exn:fail:user? e)
                          (regexp-match? #rx"not a known ISO 4217 currency" (exn-message e))))
         (lambda () (select-price "p3"))
-        "an unknown stored currency code raises loudly on the PG read path"))))
+        "an unknown stored currency code raises loudly on the PG read path")
+
+       ;; ═══ Three-column MoneyRate storage ═══════════════════════════════
+
+       ;; ── DDL: all three derived columns exist, the logical column does not ──
+       (define rate-columns (table-columns conn "money_pg_tests" "rate_rows"))
+       (check-equal? (hash-ref rate-columns "hourly_minor" #f) (cons "bigint" "NO")
+                     "hourly_minor is BIGINT NOT NULL")
+       (check-equal? (hash-ref rate-columns "hourly_currency" #f) (cons "text" "NO")
+                     "hourly_currency is TEXT NOT NULL")
+       (check-equal? (hash-ref rate-columns "hourly_per" #f) (cons "text" "NO")
+                     "hourly_per is TEXT NOT NULL")
+       (check-false (hash-has-key? rate-columns "hourly")
+                    "no single 'hourly' column is created")
+
+       ;; ── roundtrip: write quantizes (boundary), read reconstructs ──
+       (seed-rates!)
+       (let ([rate (select-hourly "r1")])
+         (check-pred tesl-money-rate? rate)
+         (let-values ([(minor code label) (tesl-money-rate-quantize rate)])
+           (check-equal? (list minor code label) (list 95000 "USD" "h")
+                         "PG roundtrip preserves the (minor, currency, per) triple")))
+       ;; the half-even quantization physically reached the BIGINT column
+       (check-equal? (query-value conn
+                                  "select hourly_minor from money_pg_tests.rate_rows where id = 'r4'")
+                     500
+                     "500.5 minor/label was stored half-even as 500")
+
+       ;; ── where == / != discriminate on ALL three columns ──
+       (check-equal? (map (lambda (r) (hash-ref (raw-value r) 'id))
+                          (select-many (from RateRow)
+                                       (where (==. hourly-field (usd/h 95000)))))
+                     (list "r1")
+                     "== matches the same-triple row only (not the EUR row, and — representational equality — not the same price stored per day)")
+       (check-equal? (length (select-many (from RateRow)
+                                          (where (!=. hourly-field (usd/h 95000)))))
+                     3
+                     "!= excludes exactly the matching MoneyRate row")
+
+       ;; ── rejections hold on the PG path too ──
+       (check-exn
+        (lambda (e) (and (exn:fail:user? e)
+                         (regexp-match? #rx"MoneyRate columns do not support ordered comparison in where clauses"
+                                        (exn-message e))))
+        (lambda () (select-many (from RateRow)
+                                (where (>=. hourly-field (usd/h 1))))))
+       (check-exn
+        (lambda (e) (and (exn:fail:user? e)
+                         (regexp-match? #rx"selectSum over a MoneyRate column is not supported; aggregate the materialized Money instead"
+                                        (exn-message e))))
+        (lambda () (select-sum hourly-field (from RateRow))))
+
+       ;; ── Memory ≡ PG: the SAME seeds reconstruct to equal? structs ──
+       (let ([pg-rates (for/list ([id (in-list '("r1" "r2" "r3" "r4"))])
+                         (select-hourly id))])
+         (parameterize ([current-database-runtime #f])
+           (hash-clear! rate-memory-rows)
+           (seed-rates!)
+           (for ([id (in-list '("r1" "r2" "r3" "r4"))]
+                 [pg-rate (in-list pg-rates)])
+             (check-equal? (select-hourly id) pg-rate
+                           (format "Memory and PG agree on the stored rate for ~a" id)))))
+
+       ;; ── update ... set r.hourly = <rate> writes all three columns ──
+       (update-many! (from RateRow)
+                     (hash 'hourly (eur/h 4242))
+                     (where (==. rate-id-field "r1")))
+       (check-equal? (select-hourly "r1") (eur/h 4242)
+                     "update set replaces all three derived columns")
+
+       ;; ── corrupt stored label fails closed on decode (wrong DIMENSION) ──
+       (query-exec conn
+                   "update money_pg_tests.rate_rows set hourly_per = 'kg' where id = 'r3'")
+       (check-exn
+        (lambda (e) (and (exn:fail:user? e)
+                         (regexp-match? #rx"mass denominator.*expects a duration denominator"
+                                        (exn-message e))))
+        (lambda () (select-hourly "r3"))
+        "a stored label of the wrong dimension raises loudly on the PG read path")
+       (query-exec conn
+                   "update money_pg_tests.rate_rows set hourly_per = 'zzz' where id = 'r4'")
+       (check-exn
+        (lambda (e) (and (exn:fail:user? e)
+                         (regexp-match? #rx"unknown rate unit label" (exn-message e))))
+        (lambda () (select-hourly "r4"))
+        "an unknown stored label raises loudly on the PG read path"))))
 
   ;; ── auto-migration: adding a Money field adds BOTH columns ──
   (define-database MigrateDbV1

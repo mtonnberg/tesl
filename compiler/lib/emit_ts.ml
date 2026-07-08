@@ -73,6 +73,14 @@ let money_zod_schema =
 
 let money_ts_type = "{ minorUnits: number; currency: string }"
 
+(* MoneyRate (GitHub #38): ONE wire shape for every denominator — integer
+   minor units per one `per` unit + currency + per label; tolerant of the
+   agent-enriched extra "display", normalized away (the Money pattern). *)
+let money_rate_zod_schema =
+  "z.object({ minorUnits: z.number().int(), currency: z.string(), per: z.string(), display: z.string().optional() }).transform((v) => ({ minorUnits: v.minorUnits, currency: v.currency, per: v.per }))"
+
+let money_rate_ts_type = "{ minorUnits: number; currency: string; per: string }"
+
 (** Map a Tesl type_expr to a Zod schema expression.
     [fact_schemas] is the set of fact names that have generated Zod schemas. *)
 let rec zod_of_ir_type (fact_schemas : (string, unit) Hashtbl.t) (ty : Ir.ir_type) =
@@ -90,6 +98,7 @@ let rec zod_of_ir_type (fact_schemas : (string, unit) Hashtbl.t) (ty : Ir.ir_typ
   (* Money: tolerant of the agent-enriched shape (extra "display"), normalized
      to the bare {minorUnits, currency} HTTP shape. *)
   | Ir.IRMoney -> money_zod_schema
+  | Ir.IRMoneyRate -> money_rate_zod_schema
   | Ir.IRNamed name ->
     if Hashtbl.mem fact_schemas name then name ^ "Schema"
     else name ^ "Schema"
@@ -133,6 +142,7 @@ let rec ts_type_of_ir_type (ty : Ir.ir_type) =
   | Ir.IRBool -> "boolean"
   | Ir.IRPosixMillis -> "number"
   | Ir.IRMoney -> money_ts_type
+  | Ir.IRMoneyRate -> money_rate_ts_type
   | Ir.IRNamed name -> name
   | Ir.IRVar name -> name
   | Ir.IRList arg ->
@@ -173,6 +183,7 @@ let base_zod_schema_for_type name =
   | "PosixMillis" ->
     "z.union([z.number().int(), z.object({ epochMillis: z.number().int() }).transform((v) => v.epochMillis)])"
   | "Money" -> money_zod_schema
+  | name when Ir.is_money_rate_type_name name -> money_rate_zod_schema
   (* Dimensioned quantities (Length, Speed, … / canonical "§Q[…]") are a bare
      number on the wire. *)
   | name when Ir.is_quantity_type_name name -> "z.number()"
@@ -456,6 +467,7 @@ let emit_ts (m : module_form) : string =
         | TName { name = "Float" | "Real"; _ } -> "z.number()"
         | TName { name = "Bool"; _ } -> "z.boolean()"
         | TName { name = "Money"; _ } -> money_zod_schema
+        | TName { name; _ } when Ir.is_money_rate_type_name name -> money_rate_zod_schema
         | TName { name; _ } when Ir.is_quantity_type_name name -> "z.number()"
         | _ -> "z.string()"
       in

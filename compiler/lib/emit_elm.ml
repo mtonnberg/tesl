@@ -333,6 +333,8 @@ let rec elm_type_of_ir_type (ty : Ir.ir_type) =
   | Ir.IRPosixMillis -> "Int"
   (* Emitted once per module as `type alias Money = { minorUnits : Int, currency : String }`. *)
   | Ir.IRMoney -> "Money"
+  (* Emitted once per module — ONE alias for every rate denominator (#38). *)
+  | Ir.IRMoneyRate -> "MoneyRate"
   | Ir.IRNamed "Unit" -> "()"
   | Ir.IRNamed name -> name
   | Ir.IRVar name -> name
@@ -399,6 +401,8 @@ let rec decode_expr_of_ir_type (ty : Ir.ir_type) =
   (* Field-based decoding ignores extra fields, so the emitted moneyDecoder
      tolerates the agent-enriched shape (extra "display") with no oneOf. *)
   | Ir.IRMoney -> "moneyDecoder"
+  (* Field-based decoding ignores the agent boundary's extra "display". *)
+  | Ir.IRMoneyRate -> "moneyRateDecoder"
   | Ir.IRNamed "Unit" -> "(D.succeed ())"
   | Ir.IRNamed name -> decoder_fn_name name
   | Ir.IRVar _ -> "D.value"
@@ -424,6 +428,7 @@ let rec encode_expr_of_ir_type ty value_expr =
   | Ir.IRBool -> "E.bool " ^ value_expr
   | Ir.IRPosixMillis -> "E.int " ^ value_expr
   | Ir.IRMoney -> "moneyEncoder " ^ value_expr
+  | Ir.IRMoneyRate -> "moneyRateEncoder " ^ value_expr
   | Ir.IRNamed "Unit" -> "E.null"
   | Ir.IRNamed name -> encoder_fn_name name ^ " " ^ value_expr
   | Ir.IRList arg
@@ -1037,6 +1042,18 @@ let ir_endpoint_uses_elm_dict (ep : Ir.ir_endpoint) =
    module needs a `type alias Money` + moneyDecoder + moneyEncoder — emitted
    exactly ONCE, and only when something in the module mentions Money. *)
 
+let rec ir_type_uses_money_rate = function
+  | Ir.IRMoneyRate -> true
+  | Ir.IRList ty
+  | Ir.IRMaybe ty
+  | Ir.IRSet ty -> ir_type_uses_money_rate ty
+  | Ir.IRDict (a, b)
+  | Ir.IRResult (a, b)
+  | Ir.IREither (a, b)
+  | Ir.IRFun (a, b) -> ir_type_uses_money_rate a || ir_type_uses_money_rate b
+  | Ir.IRTuple elems -> List.exists ir_type_uses_money_rate elems
+  | _ -> false
+
 let rec ir_type_uses_money = function
   | Ir.IRMoney -> true
   | Ir.IRList ty
@@ -1062,6 +1079,44 @@ let rec ir_return_uses_money = function
     ir_type_uses_money key_ty || ir_type_uses_money val_ty
   | Ir.IRRetExists { binding; body } ->
     ir_type_uses_money binding.Ir.irb_type || ir_return_uses_money body
+
+let rec ir_return_uses_money_rate = function
+  | Ir.IRRetPlain ty -> ir_type_uses_money_rate ty
+  | Ir.IRRetAttached binding -> ir_type_uses_money_rate binding.Ir.irb_type
+  | Ir.IRRetNamedPack { ty; _ } -> ir_type_uses_money_rate ty
+  | Ir.IRRetForAll { elem_ty; _ }
+  | Ir.IRRetMaybeForAll { elem_ty; _ }
+  | Ir.IRRetSetForAll { elem_ty; _ }
+  | Ir.IRRetMaybeSetForAll { elem_ty; _ } -> ir_type_uses_money_rate elem_ty
+  | Ir.IRRetForAllDictValues { key_ty; val_ty; _ }
+  | Ir.IRRetForAllDictKeys { key_ty; val_ty; _ } ->
+    ir_type_uses_money_rate key_ty || ir_type_uses_money_rate val_ty
+  | Ir.IRRetExists { binding; body } ->
+    ir_type_uses_money_rate binding.Ir.irb_type || ir_return_uses_money_rate body
+
+let ir_endpoint_uses_money_rate (ep : Ir.ir_endpoint) =
+  option_exists (fun (b : Ir.ir_binding) -> ir_type_uses_money_rate b.irb_type) ep.ire_auth
+  || option_exists (fun (b : Ir.ir_binding) -> ir_type_uses_money_rate b.irb_type) ep.ire_body
+  || List.exists (fun (c : Ir.ir_capture) -> ir_type_uses_money_rate c.irc_binding.irb_type) ep.ire_captures
+  || ir_return_uses_money_rate ep.ire_return
+
+let rec type_expr_uses_money_rate = function
+  | TName { name; _ } -> Ir.is_money_rate_type_name name
+  | TVar _ -> false
+  | TApp { head; arg; _ } -> type_expr_uses_money_rate head || type_expr_uses_money_rate arg
+  | TFun { dom; cod; _ } -> type_expr_uses_money_rate dom || type_expr_uses_money_rate cod
+  | TTuple { elems; _ } -> List.exists type_expr_uses_money_rate elems
+
+let decl_uses_money_rate = function
+  | DRecord r -> List.exists (fun (f : field_def) -> type_expr_uses_money_rate f.type_expr) r.fields
+  | DEntity e -> List.exists (fun (f : field_def) -> type_expr_uses_money_rate f.type_expr) e.fields
+  | DType (TypeAdt { variants; _ }) ->
+    List.exists (fun (v : adt_variant) ->
+      List.exists (fun (f : field_def) -> type_expr_uses_money_rate f.type_expr) v.fields) variants
+  | DType (TypeNewtype { base_type; _ })
+  | DType (TypeAlias { base_type; _ }) -> type_expr_uses_money_rate base_type
+  | DFact fd -> List.exists (fun (p : binding) -> type_expr_uses_money_rate p.type_expr) fd.params
+  | _ -> false
 
 let ir_endpoint_uses_money (ep : Ir.ir_endpoint) =
   option_exists (fun (b : Ir.ir_binding) -> ir_type_uses_money b.irb_type) ep.ire_auth
@@ -1139,13 +1194,20 @@ let emit_elm ?module_name_override (m : module_form) : string =
      || List.exists ir_endpoint_uses_money ir_module.Ir.irm_endpoints)
     && not (List.exists decl_defines_money m.decls)
   in
+  (* Same once-and-only-when-needed rule for the shared MoneyRate alias (#38). *)
+  let emit_money_rate_helpers =
+    List.exists decl_uses_money_rate m.decls
+    || List.exists ir_endpoint_uses_money_rate ir_module.Ir.irm_endpoints
+  in
 
   (* ── Module header ── *)
   let builtin_proof_exports =
     if uses_refinement_proofs then ["ForAll"; "ForAllValues"; "ForAllKeys"] else []
   in
   let builtin_money_exports =
-    if emit_money_helpers then ["Money"; "moneyDecoder"; "moneyEncoder"] else []
+    (if emit_money_helpers then ["Money"; "moneyDecoder"; "moneyEncoder"] else [])
+    @ (if emit_money_rate_helpers
+       then ["MoneyRate"; "moneyRateDecoder"; "moneyRateEncoder"] else [])
   in
   let newtype_exports = List.filter_map (function
     | DType (TypeNewtype { name; _ })
@@ -1257,6 +1319,27 @@ let emit_elm ?module_name_override (m : module_form) : string =
     add "    E.object\n";
     add "        [ ( \"minorUnits\", E.int money.minorUnits )\n";
     add "        , ( \"currency\", E.string money.currency )\n";
+    add "        ]\n\n"
+  end;
+
+  if emit_money_rate_helpers then begin
+    add "type alias MoneyRate =\n";
+    add "    { minorUnits : Int\n";
+    add "    , currency : String\n";
+    add "    , per : String\n";
+    add "    }\n\n";
+    add "moneyRateDecoder : D.Decoder MoneyRate\n";
+    add "moneyRateDecoder =\n";
+    add "    D.map3 (\\m c p -> { minorUnits = m, currency = c, per = p })\n";
+    add "        (D.field \"minorUnits\" D.int)\n";
+    add "        (D.field \"currency\" D.string)\n";
+    add "        (D.field \"per\" D.string)\n\n";
+    add "moneyRateEncoder : MoneyRate -> E.Value\n";
+    add "moneyRateEncoder rate =\n";
+    add "    E.object\n";
+    add "        [ ( \"minorUnits\", E.int rate.minorUnits )\n";
+    add "        , ( \"currency\", E.string rate.currency )\n";
+    add "        , ( \"per\", E.string rate.per )\n";
     add "        ]\n\n"
   end;
 

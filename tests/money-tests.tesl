@@ -15,7 +15,10 @@ import Tesl.Prelude exposing [Int, String, Bool]
 import Tesl.Money exposing [
   MoneyPerDuration,
   MoneyRate.perHour,
+  MoneyRate.perDay,
   MoneyRate.perKilogram,
+  MoneyRate.perLiter,
+  MoneyRate.perSquareMeter,
   MoneyRate.display,
   MoneyRate.currency,
   Money,
@@ -44,20 +47,34 @@ import Tesl.Money exposing [
   Money.convertChecked,
   Currency.code,
   Currency.minorDigits,
+  Currency.fromCode,
   ExchangeRate.make,
+  ExchangeRate.fromCurrency,
+  ExchangeRate.toCurrency,
+  ExchangeRate.rate,
+  ExchangeRate.asOf,
   Usd,
   Eur,
   Sek,
 ]
 import Tesl.Result exposing [Result(..)]
-import Tesl.Time exposing [PosixMillis, Time.secondsToPosix]
+import Tesl.Maybe exposing [Maybe, Nothing, Something]
+import Tesl.Time exposing [
+  PosixMillis,
+  Time.secondsToPosix,
+  Time.posixToSeconds,
+]
 import Tesl.Float exposing [Float]
 import Tesl.Units exposing [
   Duration,
   Mass,
+  Volume,
+  Area,
   Duration.hours,
   Duration.minutes,
   Mass.kilograms,
+  Volume.liters,
+  Area.squareMeters,
   Units.requireNonZero,
 ]
 
@@ -241,4 +258,58 @@ test "bulk goods per kilogram, exact Float rescale" {
   expect Money.display (perKg * Mass.kilograms 12.0) == "$30.00"
   let surcharged = perKg * 1.1
   expect Money.display (surcharged * Mass.kilograms 12.0) == "$33.00"
+}
+
+test "perDay displays per day and materializes exactly over 24 hours" {
+  let daily = MoneyRate.perDay (Money.sek 86400)
+  expect MoneyRate.display daily == "864.00 SEK/day"
+  expect Money.minorUnits (daily * Duration.hours 24.0) == 86400
+}
+
+test "perLiter prices by volume" {
+  # $2.00/L x 3 L = $6.00 (the rate stores minor units per m^3: 200 / (1/1000))
+  let fuel = MoneyRate.perLiter (Money.usd 200)
+  expect Money.display (fuel * Volume.liters 3.0) == "$6.00"
+}
+
+test "perSquareMeter prices by area" {
+  let rent = MoneyRate.perSquareMeter (Money.usd 2500)
+  expect MoneyRate.display rent == "$25.00/m^2"
+  expect Money.display (rent * Area.squareMeters 12.0) == "$300.00"
+}
+
+# ── ExchangeRate accessors ─────────────────────────────────────────────────
+
+test "ExchangeRate accessors round-trip the construction arguments" {
+  let r = ExchangeRate.make Usd Eur 0.9155 (Time.secondsToPosix 42)
+  # the stored rate is exactified decimal-faithfully (0.9155 -> 1831/2000),
+  # so the Float accessor reproduces the constructor literal exactly
+  expect ExchangeRate.rate r == 0.9155
+  expect Currency.code (ExchangeRate.fromCurrency r) == "USD"
+  expect Currency.code (ExchangeRate.toCurrency r) == "EUR"
+  expect Time.posixToSeconds (ExchangeRate.asOf r) == 42
+}
+
+# ── Sign predicates on edge amounts ────────────────────────────────────────
+
+test "abs is identity on non-negatives; zero is never negative" {
+  expect Money.minorUnits (Money.abs (Money.usd 750)) == 750
+  expect Money.isZero (Money.negate (Money.usd 0)) == True
+  expect Money.isNegative (Money.usd 0) == False
+  expect Money.isNegative (Money.negate (Money.usd 0)) == False
+}
+
+# ── Currency.fromCode ──────────────────────────────────────────────────────
+
+fn codeOrNone(mc: Maybe Currency) -> String =
+  case mc of
+    Something c -> Currency.code c
+    Nothing -> "none"
+
+test "Currency.fromCode resolves known codes; unknown or lowercase is Nothing" {
+  expect codeOrNone (Currency.fromCode "SEK") == "SEK"
+  expect codeOrNone (Currency.fromCode "JPY") == "JPY"
+  expect codeOrNone (Currency.fromCode "XXQ") == "none"
+  # ISO 4217 codes are case-sensitive upper-case
+  expect codeOrNone (Currency.fromCode "usd") == "none"
 }

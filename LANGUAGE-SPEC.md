@@ -3854,6 +3854,13 @@ test "convert applies a runtime rate with banker's rounding" {
 
 Inside, a rate is an EXACT rational (minor units per SI-canonical denominator unit), so `MoneyRate.perHour (Money.sek 95000) * Duration.minutes 30.0` is exactly `475.00 SEK`. `+`/`-`/`/` on rates are compile errors — materialize `Money` first. The alias type names are import-gated with `Tesl.Money`.
 
+**Rates persist and serialize (GitHub #38).** At a BOUNDARY — the JSON wire or a database column — a rate is quantized to INTEGER minor units per one `per`-labelled unit, half-even, exactly the Money stance (exact integers at rest, exact rationals only mid-computation):
+
+- **Wire**: `{"minorUnits": 95000, "currency": "SEK", "per": "h"}` (agent boundary adds `"display"`). Legal `per` labels: `s`, `h`, `day`, `kg`, `m`, `m^2`, `m^3`, `L`. Decode verifies the label's dimension against the declared alias — `per: "kg"` into a `MoneyPerDuration` field is a decode error, and unknown labels/currencies fail closed.
+- **Database**: an entity field `hourly: MoneyPerDuration` maps to THREE columns — `hourly_minor BIGINT NOT NULL`, `hourly_currency TEXT NOT NULL`, `hourly_per TEXT NOT NULL`. Writes quantize (both backends store the identical quantized value); reads reconstruct the exact rational and verify the dimension. `==`/`!=` compare all three columns — equality is REPRESENTATIONAL (950 SEK stored per `"h"` is a different row value than the same price stored per `"day"`). Ordered comparison, aggregates, and `groupBy` on rate columns are rejected — materialize `Money` and aggregate that.
+- **Division-built rates** (`total / worked`) carry the denominator's DEFAULT label — per `h` for Duration, per `kg`/`m`/`m^2`/`m^3` otherwise — chosen for sane quantization magnitude (a 950 SEK/h rate stored per second would quantize to 0).
+- **Elm/TS clients** get one shared `MoneyRate` alias (`{ minorUnits, currency, per }`) with tolerant decoders, like `Money`.
+
 ```tesl
 fn invoice(rate: MoneyPerDuration, worked: Duration) -> Money =
   rate * worked          # 950 SEK/h × 1.5 h = 1425.00 SEK, half-even once

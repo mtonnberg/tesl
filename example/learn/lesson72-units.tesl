@@ -59,7 +59,7 @@ module Lesson72Units exposing [
 # a non-zero proof first — call `Units.requireNonZero` directly, see §4.
 #
 # (`Speed` and friends only mean quantities in modules that import them from
-# Tesl.Units — collision rules in §8.)
+# Tesl.Units — collision rules in §10.)
 #
 # Companion prose (why it works this way, DB/JSON/agent story, FAQ):
 # example/learn/lesson72-units.md
@@ -93,6 +93,7 @@ import Tesl.Units exposing [
   Length.inFeet,
   Mass.kilograms,
   Duration.seconds,
+  Duration.minutes,
   Duration.hours,
   Duration.inSeconds,
   Duration.inMinutes,
@@ -147,7 +148,66 @@ test "one kilometer, three doors in, any door out" {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 2. SAME-DIMENSION arithmetic — mixed units just work (because SI inside)
+# 2. WHERE THE TYPES GO — lets, records, ADTs, containers
+# ═══════════════════════════════════════════════════════════════════════════════
+# Quantity types annotate every position an ordinary type can. A let
+# annotation PINS a dimension (`let x: Speed = Length.meters 1.0` is a
+# compile error); on a derived expression it VERIFIES the exponent
+# arithmetic. Records, ADT variants, and containers carry quantities like any
+# other field type — construct with the wrong dimension and the error names
+# the field.
+
+record Trip {
+  distance: Length
+  duration: Duration
+}
+
+fn averageSpeed(t: Trip) -> Speed =
+  let safeDur = Units.requireNonZero t.duration
+  t.distance / safeDur
+
+type Segment
+  = Drive dist: Length speed: Speed
+  | Rest pause: Duration
+
+fn segmentTime(s: Segment) -> Duration =
+  case s of
+    Drive d v ->
+      let safeV = Units.requireNonZero v
+      d / safeV
+    Rest p -> p
+
+test "a let annotation pins or verifies the dimension" {
+  let top: Speed = Speed.kilometersPerHour 110.0 # pins: wrong dim = error
+  expect approxEqual (Speed.inKilometersPerHour top) 110.0
+  let w = Length.meters 12.0
+  let h = Length.meters 4.0
+  let a: Area = w * h # verifies: L¹ × L¹ = L²
+  expect Area.inSquareMeters a == 48.0
+}
+
+test "records carry quantities; fields compute like any value" {
+  let trip = Trip { distance: Length.kilometers 30.0, duration: Duration.hours 0.5 }
+  expect approxEqual (Speed.inKilometersPerHour (averageSpeed trip)) 60.0
+}
+
+test "ADT variants carry quantities through pattern matching" {
+  let leg = Drive (Length.meters 100.0) (Speed.metersPerSecond 20.0)
+  expect Duration.inSeconds (segmentTime leg) == 5.0
+  expect Duration.inSeconds (segmentTime (Rest (Duration.minutes 2.0))) == 120.0
+}
+
+test "quantities as container type arguments" {
+  let legs: List Length = [Length.meters 400.0, Length.kilometers 0.6]
+  expect Length.inMeters (Units.sum legs) == 1000.0
+  let maybeTop: Maybe Speed = Something (Speed.metersPerSecond 3.0)
+  expect (case maybeTop of
+    Something v -> Speed.inMetersPerSecond v == 3.0
+    Nothing -> False) == True
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 3. SAME-DIMENSION arithmetic — mixed units just work (because SI inside)
 # ═══════════════════════════════════════════════════════════════════════════════
 # `+`, `-`, `<`, `==` need both sides in the SAME dimension — and that is the
 # ONLY thing they need. Meters plus feet is fine: both are already meters
@@ -170,7 +230,7 @@ test "meters and feet add directly — both are canonical meters inside" {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3. THE ALGEBRA — `*` and `/` derive new dimensions
+# 4. THE ALGEBRA — `*` and `/` derive new dimensions
 # ═══════════════════════════════════════════════════════════════════════════════
 # You never declare that Acceleration × Duration is Speed — the exponent
 # arithmetic IS the rule, and the annotation on the function is documentation
@@ -201,7 +261,7 @@ test "the algebra derives Speed, Energy, and Area" {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 4. DIVISION — derives dimensions too, but the divisor needs a proof
+# 5. DIVISION — derives dimensions too, but the divisor needs a proof
 # ═══════════════════════════════════════════════════════════════════════════════
 # `/` subtracts exponents: Length / Duration is Speed, Length / Speed is
 # Duration. Like every Tesl `/`, a variable divisor must carry a non-zero
@@ -265,7 +325,7 @@ test "braking distance: 30 m/s at 5 m/s² needs 90 m" {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 5. Units.square / Units.sqrt — exponents doubled and halved
+# 6. Units.square / Units.sqrt — exponents doubled and halved
 # ═══════════════════════════════════════════════════════════════════════════════
 # `Units.square x` is `x * x` under a name; `Units.sqrt` halves every
 # exponent, so it is only defined when they are all even: sqrt of an Area
@@ -281,7 +341,7 @@ test "sqrt of an area is a side length" {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 6. QUANTITIES IN ENTITIES — a Speed column is just a Real column
+# 7. QUANTITIES IN ENTITIES — a Speed column is just a Real column
 # ═══════════════════════════════════════════════════════════════════════════════
 # Quantities erase all the way down: a `topSpeed: Speed` entity field is a
 # plain double-precision column holding the canonical m/s value, and a bare
@@ -308,7 +368,7 @@ test "a Speed column stores canonical m/s and reads back typed" requires [dbRead
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 7. TEMPERATURE — affine constructors (offset, not scale)
+# 8. TEMPERATURE — affine constructors (offset, not scale)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Celsius and Fahrenheit are OFFSET scales; the constructors apply the offset
 # and store absolute kelvin. Caveat: adding two absolute temperatures
@@ -320,7 +380,7 @@ test "temperature is stored as kelvin; 100 °C reads back as 212 °F" {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 8. THE DURATION BRIDGE — typed spans meet PosixMillis
+# 9. THE DURATION BRIDGE — typed spans meet PosixMillis
 # ═══════════════════════════════════════════════════════════════════════════════
 # Timestamps stay `PosixMillis` (exact integer ms — lesson 26); `Duration` is
 # the typed span between them. `Time.add ts (Duration.hours 2.0)` says what it
@@ -338,7 +398,7 @@ test "Time.add speaks Duration; Time.diff returns one" {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 9. What does NOT compile (negative space — the whole point)
+# 10. What does NOT compile (negative space — the whole point)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Every line below is a COMPILE error. This is the feature: the bug never
 # ships, never even runs.

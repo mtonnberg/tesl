@@ -339,8 +339,15 @@
         'Money tesl-money?
         'Currency tesl-currency?
         'ExchangeRate tesl-exchange-rate?
-        ;; every MoneyRate alias (MoneyPerDuration, …) emits as this one name
-        'MoneyRate tesl-money-rate?))
+        ;; MoneyRate: the canonical §MR name emits as 'MoneyRate; entity/
+        ;; annotation ALIASES emit verbatim so the sql layer can key the
+        ;; denominator's legal labels — all validate as the one struct.
+        'MoneyRate tesl-money-rate?
+        'MoneyPerDuration tesl-money-rate?
+        'MoneyPerMass tesl-money-rate?
+        'MoneyPerLength tesl-money-rate?
+        'MoneyPerArea tesl-money-rate?
+        'MoneyPerVolume tesl-money-rate?))
 
 (define (type-key? value)
   (or (symbol? value)
@@ -747,15 +754,16 @@
            'to (tesl-currency-code (tesl-exchange-rate-to value))
            'rate (exact->inexact (tesl-exchange-rate-rate value))
            'asOf (runtime-value->jsexpr (tesl-exchange-rate-asOf value)))]
-    ;; MoneyRate likewise: total walk, presentation-only shape — the per-DISPLAY
-    ;; amount in minor units plus its denominator label ("h", "kg", ...).
+    ;; MoneyRate: the boundary shape (GitHub #38) — INTEGER minor units per
+    ;; one `per`-labelled unit (quantized half-even, the Money stance), the
+    ;; currency code, and the label.  `display` rides along only at the agent
+    ;; boundary, mirroring Money.
     [(tesl-money-rate? value)
-     (hash 'minorUnits
-           (round (* (tesl-money-rate-per-canonical value)
-                     (tesl-money-rate-label-factor value)))
-           'currency (tesl-currency-code (tesl-money-rate-currency value))
-           'per (tesl-money-rate-label value)
-           'display (tesl-money-rate-display value))]
+     (define-values (minor code label) (tesl-money-rate-quantize value))
+     (define base (hash 'minorUnits minor 'currency code 'per label))
+     (if (current-agent-money-enrichment?)
+         (hash-set base 'display (tesl-money-rate-display value))
+         base)]
     [(adt-value? value)
      (define prepared-fields
        (for/hash ([(key item) (in-hash (adt-value-fields value))])
@@ -1421,6 +1429,36 @@
     ;; codec path so wire shape and error text cannot drift.
     [(and (type-key? type-datum) (eq? (type-key-name type-datum) 'Money))
      (tesl-decode-prim-money value)]
+    ;; Money rates decode from {minorUnits, currency, per} — the label's
+    ;; DENOMINATOR dimension is verified against the declared alias
+    ;; (MoneyPerDuration refuses per:"kg"); unknown label/currency fails
+    ;; closed.  Extra keys (agent "display") are tolerated.
+    [(and (type-key? type-datum)
+          (hash-ref rate-alias-dim-table (type-key-name type-datum) #f))
+     (define expected-dim (hash-ref rate-alias-dim-table (type-key-name type-datum)))
+     (unless (hash? value)
+       (raise-user-error who
+                         "expected a JSON object {minorUnits, currency, per} for type ~a, got ~a"
+                         (type-key-name type-datum) value))
+     (tesl-money-rate-of-boundary
+      (hash-ref value 'minorUnits
+                (lambda () (raise-user-error who "money rate object is missing 'minorUnits'")))
+      (hash-ref value 'currency
+                (lambda () (raise-user-error who "money rate object is missing 'currency'")))
+      (hash-ref value 'per
+                (lambda () (raise-user-error who "money rate object is missing 'per'")))
+      expected-dim)]
+    [(and (type-key? type-datum) (eq? (type-key-name type-datum) 'MoneyRate))
+     ;; canonical (non-alias) rate type: accept any known label's dimension
+     (unless (hash? value)
+       (raise-user-error who
+                         "expected a JSON object {minorUnits, currency, per} for type MoneyRate, got ~a"
+                         value))
+     (tesl-money-rate-of-boundary
+      (hash-ref value 'minorUnits (lambda () (raise-user-error who "money rate object is missing 'minorUnits'")))
+      (hash-ref value 'currency (lambda () (raise-user-error who "money rate object is missing 'currency'")))
+      (hash-ref value 'per (lambda () (raise-user-error who "money rate object is missing 'per'")))
+      #f)]
     [(and (type-key? type-datum) (eq? (type-key-name type-datum) 'Currency))
      (unless (string? value)
        (raise-user-error who
