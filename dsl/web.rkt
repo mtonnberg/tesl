@@ -19,6 +19,10 @@
                   tesl-log-active?
                   tesl-log-http-request!
                   tesl-log-http-response!)
+         (only-in "metrics.rkt"
+                  metrics-active?
+                  metric-histogram-record!
+                  duration-histogram-boundaries)
          (only-in "../tesl/sse.rkt" make-sse-connection-handler)
          (only-in "../tesl/queue.rkt"
                   channel-spec?
@@ -1782,9 +1786,15 @@
     (format "req-~a-~a" (current-seconds) (random 1000000)))
   (define path-string
     (string-append "/" (string-join (dsl-request-path req) "/")))
-  (define start-ms (and (tesl-log-active?) (current-inexact-milliseconds)))
+  (define start-ms (and (or (tesl-log-active?) (metrics-active?))
+                        (current-inexact-milliseconds)))
   (when (tesl-log-active?)
     (tesl-log-http-request! (dsl-request-method req) path-string))
+  ;; Metrics: the route operation is only known once a route matches; the match
+  ;; loop below records it here so the duration histogram gets a LOW-CARDINALITY
+  ;; label (operation name, never the raw path — an ID-bearing path would mint a
+  ;; new time series per request).
+  (define matched-operation #f)
 
   (define (route-context route auth-value)
     (append
@@ -1882,8 +1892,10 @@
                    [(eq? segment-values no-match)
                     (loop (cdr routes))]
                    [(check-fail? segment-values)
+                    (set! matched-operation (route-spec-operation route))
                     (handler-result->response route segment-values)]
                    [else
+                    (set! matched-operation (route-spec-operation route))
                     (let ([auth-value (and (route-spec-auth route)
                                           (run-auth (route-spec-auth route) req))])
                       (cond
@@ -1900,6 +1912,21 @@
       (inexact->exact (round (- (current-inexact-milliseconds) start-ms))))
     (tesl-log-http-response! (dsl-request-method req) path-string
                                (dsl-response-status final-response) elapsed-ms))
+  ;; Metrics: matched requests only.  The 'route-not-found sentinel must NOT be
+  ;; recorded here as a 404 — `serve` may resolve it to a 200 SPA index-html
+  ;; fallback (the invariant documented below), and recording early would show
+  ;; a permanent 404 storm for every healthy SPA page load.  serve records the
+  ;; sentinel's RESOLVED outcome itself.
+  (when (and (metrics-active?) start-ms (not (eq? response 'route-not-found)))
+    (metric-histogram-record!
+     "http.server.request.duration"
+     (/ (- (current-inexact-milliseconds) start-ms) 1000.0)
+     (list (cons "http.request.method" (dsl-request-method req))
+           (cons "http.response.status_code"
+                 (number->string (dsl-response-status final-response)))
+           (cons "tesl.operation" (or matched-operation "unmatched")))
+     #:unit "s"
+     #:boundaries duration-histogram-boundaries))
   ;; Return the sentinel as-is so `serve` can distinguish "no route" from
   ;; a handler-level 404 (e.g. "user not found").  serve converts it to a
   ;; real response or the SPA fallback.
@@ -2086,16 +2113,34 @@
 
        ;; 3. API dispatch
        [else
+        (define dispatch-start-ms (and (metrics-active?) (current-inexact-milliseconds)))
         (define result (dispatch-request server dsl-req #:capabilities capabilities))
+        ;; Metrics for the 'route-not-found sentinel are recorded HERE, with the
+        ;; RESOLVED status (200 SPA fallback vs real 404) — dispatch-request
+        ;; deliberately skips the sentinel so healthy SPA page loads are not
+        ;; exported as 404s.
+        (define (record-unmatched! status)
+          (when dispatch-start-ms
+            (metric-histogram-record!
+             "http.server.request.duration"
+             (/ (- (current-inexact-milliseconds) dispatch-start-ms) 1000.0)
+             (list (cons "http.request.method" (dsl-request-method dsl-req))
+                   (cons "http.response.status_code" (number->string status))
+                   (cons "tesl.operation"
+                         (if (= status 404) "unmatched" "spa-fallback")))
+             #:unit "s"
+             #:boundaries duration-histogram-boundaries)))
         ;; 4. SPA fallback: only when no API route matched at all (not when a
         ;;    matched handler explicitly returned a 404 error such as "not found").
         (cond
           [(and (eq? result 'route-not-found)
                 index-html-path
                 (file-exists? index-html-path))
+           (record-unmatched! 200)
            (response/full 200 #"OK" (current-seconds) #"text/html; charset=utf-8" '()
                           (list (file->bytes index-html-path)))]
           [else
+           (when (eq? result 'route-not-found) (record-unmatched! 404))
            (dsl-response->http-response
             (if (eq? result 'route-not-found)
                 (error-response 404 "Route not found")

@@ -63,7 +63,7 @@ tie-breakers the spec appeals to.
 - Trusted proof introduction should happen at clear, auditable boundaries.
 - The language should be intentionally opinionated: one obvious style, enforced by a built-in linter/formatter.
 - Ordinary side effects should be capability-governed. Telemetry is the deliberate ambient exception.
-- Observability should follow OpenTelemetry semantic conventions (OpenTelemetry-shaped). A native OTLP exporter is implemented: when `initTelemetry` is given a real `endpoint` URL, telemetry is exported over OTLP/HTTP+JSON (Logs signal) to `<endpoint>/v1/logs` (`dsl/otel.rkt`); with no endpoint it emits structured JSON locally. Spans/metrics and the protobuf/gRPC transport are non-goals.
+- Observability should follow OpenTelemetry semantic conventions (OpenTelemetry-shaped). A native OTLP exporter is implemented: when `initTelemetry` is given a real `endpoint` URL, telemetry is exported over OTLP/HTTP+JSON to `<endpoint>/v1/logs` (Logs signal, `dsl/otel.rkt`) and `<endpoint>/v1/metrics` (Metrics signal, `dsl/metrics.rkt`); with no endpoint it emits structured JSON locally. Spans/traces and the protobuf/gRPC transport are non-goals.
 
 The language is in active development; breaking changes carry **no** backward-compatibility burden.
 We keep the language as tight and small as possible. Earlier architectural notes may use older
@@ -176,7 +176,9 @@ The intended model is:
 - telemetry is ambient and does not require an explicit capability in ordinary code;
 - this exception exists because observability is considered part of the platform foundation rather than an arbitrary user-defined effect.
 
-**Export.** When `initTelemetry` is given a real `endpoint` URL, events are exported to it over OTLP/HTTP+JSON (Logs signal): each event becomes a log record (message → `body`, `timestampMs` → `timeUnixNano`, `service` → the `service.name` resource attribute, attributes → OTLP `KeyValue`s), POSTed in batches to `<endpoint>/v1/logs`. Export is opt-in purely by the presence of a configured endpoint — the outbound network egress is intentionally kept ambient (no `httpClient` capability), consistent with telemetry being platform infrastructure. Export is asynchronous and resilient: events are buffered in a bounded queue (drop-oldest on overflow) flushed by a background timer, and an unreachable/erroring collector degrades to a dropped batch — it never blocks or fails the request path. The sentinel `endpoint "in-memory"` (and the empty string) means "no remote export"; `console True` additionally prints events to the console for local dev. Spans/metrics and the protobuf/gRPC transport are non-goals for this cut — logs over HTTP+JSON only.
+**Export.** When `initTelemetry` is given a real `endpoint` URL, events are exported to it over OTLP/HTTP+JSON (Logs signal): each event becomes a log record (message → `body`, `timestampMs` → `timeUnixNano`, `service` → the `service.name` resource attribute, attributes → OTLP `KeyValue`s), POSTed in batches to `<endpoint>/v1/logs`. Export is opt-in purely by the presence of a configured endpoint — the outbound network egress is intentionally kept ambient (no `httpClient` capability), consistent with telemetry being platform infrastructure. Export is asynchronous and resilient: events are buffered in a bounded queue (drop-oldest on overflow) flushed by a background timer, and an unreachable/erroring collector degrades to a dropped batch — it never blocks or fails the request path. The sentinel `endpoint "in-memory"` (and the empty string) means "no remote export"; `console True` additionally prints events to the console for local dev. Spans/traces and the protobuf/gRPC transport are non-goals for this cut.
+
+**Metrics.** The Metrics signal shares the pipeline (`dsl/metrics.rkt`). Three ambient instruments are importable from `Tesl.Telemetry` — `counter name amount attrs` (monotonic sum, `Int`), `histogram name sample attrs` (explicit-bucket distribution, `Float`, durations in seconds per semantic conventions), and `gauge name value attrs` (last value, `Float`) — where `attrs` is a `List (Tuple2 String String)` of low-cardinality labels (e.g. `[Tuple2 "plan" plan]`). Aggregation is in-process and cumulative; a snapshot is POSTed to `<endpoint>/v1/metrics` on a fixed interval (default 60 s, `metricsInterval` in milliseconds). Metrics default ON when a real endpoint is configured and OFF otherwise; `metrics True|False` overrides (with `endpoint "in-memory"`, `metrics True` records locally with no export — useful in tests). The record path never raises and never blocks, and each instrument is capped at 2000 distinct attribute sets — overflow folds into a single `{otel.metric.overflow="true"}` series, so an unbounded label (a user ID) cannot grow memory without bound. The runtime also records a built-in catalog automatically (HTTP request duration by operation/status, SQL operation duration, DB pool wait/timeouts/size, queue enqueue/job-duration/dead-letters, SSE active-connections/sent/dropped, cache hit/miss, LLM calls/latency/token-usage, per-tool agent latency, and the exporter's own drops) — see `example/learn/lesson73-metrics.tesl` for the full list. Host-level CPU/memory metrics are out of scope by design: they belong to the host's own agent, not the application.
 
 ### 5.3 Opinionated foundation
 **Accepted design.**
@@ -636,7 +638,7 @@ The current frontend gives special treatment to these module names:
 - `Tesl.Env` — environment variable access (`env`, `envInt`)
 - `Tesl.DB` — database capabilities (`dbRead`, `dbWrite`)
 - `Tesl.Http` — HTTP request type (`HttpRequest`). Dot-access fields, each a `Dict String String`: `request.cookies`, `request.headers` (names lowercased), `request.queryParameters` (URL-query values are form-url-decoded; repeated keys are last-wins; keys are case-sensitive). An api-test supplies query parameters inline in the path, e.g. `get "/search?q=hello%20world"`.
-- `Tesl.Telemetry` — telemetry sentinel bindings (`telemetry`, `initTelemetry`)
+- `Tesl.Telemetry` — telemetry sentinel bindings (`telemetry`, `initTelemetry`) and the ambient metric instruments (`counter`, `histogram`, `gauge`). See §5.2.
 - `Tesl.Queue` — queue capabilities (`queueRead`, `queueWrite`, `pubsub`), proof predicates (`FromQueue`, `FromDeadQueue`)
 - `Tesl.UUID` — UUID generation and validation: `UUID.v4`, `UUID.v7`, `UUID.validate`, `IsUuid` proof predicate, `uuidV4Codec`, `uuidV7Codec`. The `uuid` capability gates generation; `UUID.validate` requires no capability. See §21.1.
 - `Tesl.JWT` — JSON Web Token support: `JWT.sign`, `JWT.verify`, `JWT.decode`, nominal newtypes `JwtToken` and `JwtSecret`. The `jwt` capability gates all operations. Algorithm: HS256. See §21.2.
@@ -2295,6 +2297,7 @@ check validatePositive(n: Int) -> n: Int ::: Positive n =
 <telemetry-attr> ::= <identifier-or-dotted> "=" <expr>
 
 <init-telemetry-statement> ::= "initTelemetry" "service" <string> "endpoint" <string> "console" ("true" | "false")
+                               [ "metrics" ("true" | "false") ] [ "metricsInterval" <int> ]
 ```
 
 There is no `serve` statement. The HTTP server is started by the runtime from the `api` field of the `App` record returned by `main` (§11.13).

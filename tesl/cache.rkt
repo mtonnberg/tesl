@@ -34,7 +34,11 @@
                   jsexpr->typed-value
                   lookup-record-spec
                   Nothing
+                  Nothing?
                   Something)
+         (only-in "../dsl/metrics.rkt"
+                  metrics-active?
+                  metric-counter-add!)
          (only-in "../dsl/private/domain-registry.rkt"
                   domain-registry-add!
                   register-background-thread!)
@@ -205,11 +209,21 @@
   (start-cache-sweeper!)   ; idempotent — guarded by sweeper-started? flag
   (define raw-key (if (named-value? key) (named-value-value key) key))
   (define str-key (~a raw-key))
-  (cond
-    [(pg-active?)
-     (pg-get! (pg-conn) (pg-schema) str-key (cache-spec-codec cache-s))]
-    [else
-     (mem-get! (cache-spec-store cache-s) str-key (cache-spec-codec cache-s))]))
+  (define result
+    (cond
+      [(pg-active?)
+       (pg-get! (pg-conn) (pg-schema) str-key (cache-spec-codec cache-s))]
+      [else
+       (mem-get! (cache-spec-store cache-s) str-key (cache-spec-codec cache-s))]))
+  ;; Metrics: hit/miss falls out of the Maybe — Nothing covers absent, expired
+  ;; AND undeserializable entries, which is exactly what "miss" should mean for
+  ;; a hit-rate.  Labeled by cache name (bounded by define-cache decls), never
+  ;; by key.
+  (when (metrics-active?)
+    (metric-counter-add! "tesl.cache.requests" 1
+                         (list (cons "tesl.cache" (~a (cache-spec-name cache-s)))
+                               (cons "tesl.result" (if (Nothing? result) "miss" "hit")))))
+  result)
 
 (define (cache-set! cache-s key value [ttl #f])
   (cache-check-capability! cache-s)

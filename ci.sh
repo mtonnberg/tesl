@@ -1116,6 +1116,8 @@ else
         "tests/record-test.rkt"
         "tests/dap-conditional-smoke.rkt"
         "tests/otlp-exporter-test.rkt"
+        # OTel Metrics signal: registry + OTLP mapping + /v1/metrics exporter
+        "tests/otlp-metrics-test.rkt"
         "editor/tesl-mcp/tests/protocol-smoke.rkt"
         # NOT gated here (by design): tests/httpclient-test.rkt makes real loopback
         # TCP connects that hang where the network filters rather than RST-refuses.

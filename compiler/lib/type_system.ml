@@ -764,6 +764,12 @@ let stdlib_env : (string * scheme) list = [
   (* ── Telemetry ───────────────────────────────────────────────────────── *)
   "initTelemetry", mono t_unit;
   "telemetry",     mono (t_fun [t_string] t_unit);
+  (* Metrics signal (roadmap opentelemetry_metrics): plain stdlib functions,
+     ambient like `telemetry`.  Attrs are [Tuple2 "key" value] pairs, mirroring
+     the Dict.fromList surface. *)
+  "counter",   mono (t_fun [t_string; t_int;   t_list (t_tuple2 t_string t_string)] t_unit);
+  "histogram", mono (t_fun [t_string; t_float; t_list (t_tuple2 t_string t_string)] t_unit);
+  "gauge",     mono (t_fun [t_string; t_float; t_list (t_tuple2 t_string t_string)] t_unit);
 
   (* ── EmailBody ADT ───────────────────────────────────────────────────── *)
   "TextBody", mono (t_fun [t_string] (TCon "EmailBody"));
@@ -1114,6 +1120,9 @@ let stdlib_bare_home_module : (string * string) list = [
   "uuidV4Codec", "Tesl.UUID"; "uuidV7Codec", "Tesl.UUID";
   (* Telemetry — was MISSING from every checker table (the soundness gap). *)
   "initTelemetry", "Tesl.Telemetry"; "telemetry", "Tesl.Telemetry";
+  (* Metrics signal — same module, same ambient model. *)
+  "counter", "Tesl.Telemetry"; "histogram", "Tesl.Telemetry";
+  "gauge", "Tesl.Telemetry";
   (* Whole Tesl.Agent bare API — was MISSING from every checker table.
      NOTE: the compile-time-lowered provider/tool forms
      (anthropic/openai/mistral/local/asTool) are intentionally NOT here — they

@@ -17,6 +17,8 @@
 (require "queue.rkt"
          (only-in "../dsl/types.rkt" runtime-value->jsexpr)
          (only-in "../tesl/logging.rkt" tesl-log-active? tesl-log!)
+         (only-in "../dsl/metrics.rkt"
+                  metrics-active? metric-counter-add! metric-gauge-set!)
          json
          racket/async-channel
          racket/format)
@@ -68,6 +70,36 @@
 ;; with the very thread they are watching.
 (define sse-janitor-custodian (make-custodian))
 
+;; ── Metrics ───────────────────────────────────────────────────────────────────
+;;
+;; Active-connection gauge, maintained at the SAME two janitor-thread points
+;; that own registry membership (register at connect, unregister on every exit
+;; path incl. custodian kill), so the gauge cannot drift from the registry.
+;; Labeled by channel NAME only — channel keys are often per-user/per-entity
+;; values and would explode metric cardinality.
+;;
+;; The COUNT is updated UNCONDITIONALLY — it mirrors registry membership, which
+;; exists whether or not metrics are on.  Gating the count on metrics-active?
+;; would let connects/disconnects during a metrics-off window permanently skew
+;; the gauge after re-enabling.  Only the gauge EMISSION is gated (inside
+;; metric-gauge-set! itself).  The gauge write happens INSIDE the lock so two
+;; concurrent register/unregister events cannot publish out of order and leave
+;; a stale value.  Lock order: sse-metrics-lock → the metrics registry's atomic
+;; section; the registry never takes this lock, so no deadlock.  Kill-safety:
+;; both callers run on janitor threads, which are never killed mid-operation
+;; (see listeners-lock above).
+(define sse-metrics-lock (make-semaphore 1))
+(define sse-active-counts (make-hash))
+
+(define (bump-sse-active! channel-name delta)
+  (call-with-semaphore sse-metrics-lock
+    (lambda ()
+      (define new (max 0 (+ (hash-ref sse-active-counts channel-name 0) delta)))
+      (hash-set! sse-active-counts channel-name new)
+      (when (metrics-active?)
+        (metric-gauge-set! "tesl.sse.connections.active" new
+                           (list (cons "tesl.channel" (~a channel-name))))))))
+
 ;; How many undelivered events one SSE connection may buffer before further
 ;; events for it are dropped.  See on-event below for the slow-vs-dead
 ;; consumer semantics this bound implements.
@@ -105,7 +137,15 @@
     ;; event).  So no live consumer receives fewer events than before, and the
     ;; publisher's cost per listener is O(1) instead of up to 1 s.
     (define (on-event evt)
-      (sync/timeout 0 (async-channel-put-evt event-ch evt)))
+      (unless (sync/timeout 0 (async-channel-put-evt event-ch evt))
+        ;; Buffer full → the event was silently dropped for this consumer.
+        ;; Count it: a rising dropped counter is the observable symptom of a
+        ;; consumer stuck a whole buffer behind.  O(1), never raises, so the
+        ;; publisher-must-never-block contract above still holds.
+        (when (metrics-active?)
+          (metric-counter-add! "tesl.sse.events.dropped" 1
+                               (list (cons "tesl.channel"
+                                           (~a (channel-spec-name channel-spec))))))))
 
     (define listeners  (channel-spec-listeners channel-spec))
     ;; registered — posted by the janitor once the listener is in the registry;
@@ -130,9 +170,11 @@
       (thread
        (lambda ()
          (register-listener! listeners channel-key on-event)
+         (bump-sse-active! (channel-spec-name channel-spec) 1)
          (semaphore-post registered)
          (sync (thread-dead-evt conn-thread) done)
          (unregister-listener! listeners channel-key on-event)
+         (bump-sse-active! (channel-spec-name channel-spec) -1)
          (when (tesl-log-active?)
            (tesl-log! "SSE" (format "disconnect ~a(~a)"
                                      (channel-spec-name channel-spec)
@@ -177,6 +219,10 @@
                          'payload payload)))
                 (write-bytes (string->bytes/utf-8 (format "data: ~a\n\n" json-str)) out)
                 (flush-output out)
+                (when (metrics-active?)
+                  (metric-counter-add! "tesl.sse.events.sent" 1
+                                       (list (cons "tesl.channel"
+                                                   (~a (channel-spec-name channel-spec))))))
                 #t])))
          (when ok? (loop))))
      (lambda ()

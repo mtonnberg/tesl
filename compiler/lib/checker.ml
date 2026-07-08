@@ -2503,16 +2503,44 @@ let rec infer_expr ctx (e : expr) : ty =
          | check_fn :: check_args -> infer_direct_call check_fn check_args
          | [] -> fresh ())
      | EVar { name = "initTelemetry"; _ } ->
+        (* The emitter re-folds each keyword's value from the flattened token
+           stream by stopping at the NEXT known keyword name (bug #19), so a
+           user binding that happens to be spelled like a keyword cannot appear
+           in value position — the emitter would misparse it as the next
+           keyword and emit a valueless Racket keyword.  Reject it here with a
+           clear message instead of letting the generated module fail with an
+           opaque keyword-arity error at startup. *)
+        let is_init_telemetry_kw = function
+          | "service" | "endpoint" | "console" | "metrics" | "metricsInterval" -> true
+          | _ -> false
+        in
+        let reject_shadowed_kw_value value =
+          match value with
+          | EVar { name; loc } when is_init_telemetry_kw name ->
+            add_error ctx loc
+              (Printf.sprintf
+                 "`%s` is an initTelemetry keyword and cannot be used as a value here; rename the binding"
+                 name)
+          | _ -> ()
+        in
         let rec infer_kw_args = function
           | [] -> ()
           | EVar { name = "service"; _ } :: value :: rest
           | EVar { name = "endpoint"; _ } :: value :: rest ->
+            reject_shadowed_kw_value value;
             let value_ty = infer_expr ctx value in
             unify_at ctx (expr_loc value) value_ty t_string;
             infer_kw_args rest
-          | EVar { name = "console"; _ } :: value :: rest ->
+          | EVar { name = "console"; _ } :: value :: rest
+          | EVar { name = "metrics"; _ } :: value :: rest ->
+            reject_shadowed_kw_value value;
             let value_ty = infer_expr ctx value in
             unify_at ctx (expr_loc value) value_ty t_bool;
+            infer_kw_args rest
+          | EVar { name = "metricsInterval"; _ } :: value :: rest ->
+            reject_shadowed_kw_value value;
+            let value_ty = infer_expr ctx value in
+            unify_at ctx (expr_loc value) value_ty t_int;
             infer_kw_args rest
           | EVar { name = kw; loc } :: _ ->
             add_error ctx loc (Printf.sprintf "unknown initTelemetry keyword: %s" kw)

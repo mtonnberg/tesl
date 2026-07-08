@@ -36,7 +36,12 @@
 (require json
          racket/runtime-path
          (only-in "../dsl/types.rkt" record-value-fields record-value?)
-         (only-in "../dsl/private/evidence.rkt" raw-value))
+         (only-in "../dsl/private/evidence.rkt" raw-value)
+         (only-in "../dsl/metrics.rkt"
+                  metrics-active?
+                  metric-counter-add!
+                  metric-histogram-record!
+                  duration-histogram-boundaries))
 
 ;; Resolve http-client.rkt relative to THIS source file (it sits beside us in
 ;; tesl/), not via the `tesl` collection or the CWD — so the dynamic-require
@@ -49,6 +54,7 @@
          make-anthropic-provider
          make-openai-provider
          make-local-provider
+         register-provider-metadata!
          call-provider
          ;; #23: SSE token-stream parsers (exported for offline unit tests).
          anthropic-parse-stream
@@ -62,6 +68,19 @@
 
 ;;; The normalized response shape produced by every provider.
 (struct llm-response (text usage tool-calls stop-reason) #:transparent)
+
+;;; ── Provider metadata (metrics) ──────────────────────────────────────────────
+;;; Providers are opaque closures, so the provider kind + model strings the
+;;; constructors close over would be unreachable at the call-provider choke
+;;; point.  Each constructor registers its closure here (weak keys: a dropped
+;;; provider must stay collectable).  Lookup failure degrades to "unknown" —
+;;; metrics must never constrain what counts as a provider (askWith accepts any
+;;; procedure).
+(define provider-metadata (make-weak-hasheq))
+
+(define (register-provider-metadata! proc provider-name model)
+  (hash-set! provider-metadata proc (cons provider-name model))
+  proc)
 
 ;;; Backwards/ergonomic constructor: a bare text reply with no tools.
 (define (text-response text [usage (hash)])
@@ -300,7 +319,8 @@
 (define anthropic-version "2023-06-01")
 (define (make-anthropic-provider api-key model
                                  [endpoint "https://api.anthropic.com/v1/messages"])
-  (lambda (request)
+  (register-provider-metadata!
+   (lambda (request)
     (define on-delta (and (hash? request) (hash-ref request 'on-delta #f)))
     (define headers
       (list (cons "x-api-key" api-key)
@@ -322,7 +342,8 @@
        (define j (parse-json-body 'anthropic raw))
        (when (>= status 400)
          (raise-user-error 'anthropic "API error (HTTP ~a): ~a" status raw))
-       (anthropic-normalize j)])))
+       (anthropic-normalize j)]))
+   "anthropic" model))
 
 (define (anthropic-tools tools)
   (for/list ([t (in-list tools)])
@@ -399,7 +420,8 @@
 ;;; → must be parsed.  usage prompt_tokens/completion_tokens.
 (define (make-openai-provider api-key model
                               [endpoint "https://api.openai.com/v1/chat/completions"])
-  (lambda (request)
+  (register-provider-metadata!
+   (lambda (request)
     (define on-delta (and (hash? request) (hash-ref request 'on-delta #f)))
     (define headers
       (list (cons "authorization" (string-append "Bearer " api-key))
@@ -422,7 +444,8 @@
        (define j (parse-json-body 'openai raw))
        (when (>= status 400)
          (raise-user-error 'openai "API error (HTTP ~a): ~a" status raw))
-       (openai-normalize j)])))
+       (openai-normalize j)]))
+   "openai" model))
 
 (define (openai-tools tools)
   (for/list ([t (in-list tools)])
@@ -499,15 +522,42 @@
 ;;; escape hatch for self-hosted / OpenAI-compatible servers (llama.cpp, vLLM,
 ;;; Ollama's /v1, etc.): the developer supplies the endpoint explicitly.
 (define (make-local-provider endpoint model [api-key ""])
-  (make-openai-provider api-key model endpoint))
+  ;; Re-register under "local" so metrics distinguish self-hosted endpoints
+  ;; from api.openai.com even though the wire format is shared.
+  (register-provider-metadata! (make-openai-provider api-key model endpoint)
+                               "local" model))
 
 ;;; ── The single choke point ─────────────────────────────────────────────────
 ;;; call-provider : provider request -> llm-response
 ;;; The agent core never invokes a provider procedure directly; everything goes
 ;;; through here, giving later waves one place for retries / telemetry / cost.
 (define (call-provider provider request)
+  (define metric-start (and (metrics-active?) (current-inexact-milliseconds)))
   (define resp (provider request))
   (unless (llm-response? resp)
     (raise-user-error 'agent
                       "provider returned ~e, expected an llm-response" resp))
+  ;; Metrics: LLM call count + latency + token usage, all from this one choke
+  ;; point.  Usage was already normalized by every provider ('input/'output/
+  ;; 'cache-read/'cache-write) and then only aggregated per-conversation — the
+  ;; per-call counters here are what make cost visible over time.
+  (when metric-start
+    (define meta (hash-ref provider-metadata provider #f))
+    (define attrs
+      (list (cons "gen_ai.provider.name" (if meta (car meta) "unknown"))
+          (cons "gen_ai.request.model" (if meta (cdr meta) "unknown"))))
+    (metric-counter-add! "tesl.agent.calls" 1 attrs)
+    (metric-histogram-record!
+     "gen_ai.client.operation.duration"
+     (/ (- (current-inexact-milliseconds) metric-start) 1000.0)
+     attrs
+     #:unit "s"
+     #:boundaries duration-histogram-boundaries)
+    (define usage (llm-response-usage resp))
+    (when (hash? usage)
+      (for ([(token-type count) (in-hash usage)])
+        (when (and (number? count) (positive? count))
+          (metric-counter-add! "gen_ai.client.token.usage" count
+                               (cons (cons "gen_ai.token.type" (~a token-type))
+                                     attrs))))))
   resp)

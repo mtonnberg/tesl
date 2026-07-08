@@ -731,6 +731,19 @@ handler listTodos(user: User ::: Authenticated user)
   select todo from Todo where todo.ownerId == user.id
 ```
 
+Metrics are ambient too. Import `counter`/`histogram`/`gauge` from `Tesl.Telemetry` for your own
+instruments, and the runtime records a built-in catalog automatically whenever a real OTLP endpoint
+is configured — HTTP request duration per route, SQL and DB-pool timings, queue job outcomes, SSE
+connection counts, cache hit rates, and LLM latency/token usage — exported to
+`<endpoint>/v1/metrics` on an interval. No middleware, no SDK wiring
+(`example/learn/lesson73-metrics.tesl`).
+
+```tesl
+fn completeSignup(plan: String) -> String requires [] =
+  let _ = counter "signup.completed" 1 [Tuple2 "plan" plan]
+  "welcome"
+```
+
 ---
 
 ## Runtime cost

@@ -1,0 +1,104 @@
+#lang tesl
+module Lesson73Metrics exposing [recordSignup]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Three metric instruments, imported from Tesl.Telemetry:
+#
+#   counter   "name" amount [Tuple2 "key" "value"]   -- monotonic count (Int)
+#   histogram "name" sample [attrs]                  -- distribution (Float)
+#   gauge     "name" value  [attrs]                  -- current value (Float)
+#
+# Like `telemetry`, metrics are AMBIENT — no capability required.  With a real
+# OTLP endpoint configured in `initTelemetry`, metrics are exported to
+# <endpoint>/v1/metrics every 60 seconds (tune with `metricsInterval`).
+#
+#   let _ = counter "signup.completed" 1 [Tuple2 "plan" plan]
+#
+# ─────────────────────────────────────────────
+# THEORY — the full model
+# ─────────────────────────────────────────────
+# BUILT-IN METRICS: you get a production dashboard without writing a single
+# metric call.  Whenever metrics are on, the runtime records automatically:
+#
+#   http.server.request.duration   histogram  method / status / operation
+#   db.client.operation.duration   histogram  operation / table
+#   db.client.connection.wait_time histogram  pool saturation early-warning
+#   db.client.connection.timeouts  counter    each one was a 503
+#   db.client.connection.max       gauge      configured poolSize
+#   tesl.queue.enqueued            counter    per queue
+#   tesl.queue.job.duration        histogram  per queue, outcome ok/check-fail/error
+#   tesl.queue.jobs.dead           counter    dead-lettered jobs
+#   tesl.sse.connections.active    gauge      per channel
+#   tesl.sse.events.sent/.dropped  counters   dropped = consumer a full buffer behind
+#   tesl.cache.requests            counter    per cache, result hit/miss
+#   tesl.agent.calls               counter    LLM calls per provider/model
+#   gen_ai.client.operation.duration histogram  LLM latency
+#   gen_ai.client.token.usage      counter    tokens by type (input/output/cache-*)
+#   tesl.agent.tool.duration       histogram  per agent tool, outcome ok/error
+#   tesl.telemetry.dropped         counter    the exporter's own drops
+#
+# DEFAULTS: metrics are ON whenever `initTelemetry` has a real endpoint, OFF
+# otherwise.  Override with `metrics True|False`; `endpoint "in-memory"` with
+# `metrics True` records locally with no export (useful in tests).
+#
+# CARDINALITY: attribute values become time-series labels.  Use bounded values
+# (a plan name, a route operation) — never user IDs or raw paths.  The runtime
+# caps each instrument at 2000 distinct attribute sets; overflow folds into a
+# single {otel.metric.overflow="true"} series so a leaked ID cannot eat memory.
+#
+# UNITS: durations are recorded in SECONDS (OTel semantic conventions).
+# Host-level CPU/memory metrics are intentionally NOT collected here — those
+# belong to the host's own agent (node exporter, OneUptime agent, container
+# runtime), not to the application.
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit, List]
+import Tesl.Float exposing [Float]
+import Tesl.Tuple exposing [Tuple2]
+import Tesl.Telemetry exposing [
+  initTelemetry,
+  telemetry,
+  counter,
+  histogram,
+  gauge,
+]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.App exposing [App]
+
+# Counter: how often something happened, labeled by a BOUNDED attribute.
+fn recordSignup(plan: String) -> String requires [] =
+  let _ = counter "signup.completed" 1 [Tuple2 "plan" plan]
+  "welcome to ${plan}"
+
+# Histogram + gauge: measured work and a current level.  Metrics compose with
+# the `telemetry` log statement — same pipeline, different OTel signals.
+handler runBatch() -> String requires [] =
+  let _ = histogram "batch.item.duration" 0.125 [Tuple2 "kind" "resize"]
+  let _ = gauge "batch.backlog" 42.0 []
+  telemetry "batch.finished" { items = 1 }
+  recordSignup "pro"
+
+api MetricsApi {
+  get "/run" -> String
+}
+
+server MetricsServer for MetricsApi {
+  endpoint_0 = runBatch
+}
+
+database MetricsDb = Database {
+  entities: []
+  backend: Memory
+}
+
+main() -> App requires [] =
+  # In production: endpoint env "OTEL_ENDPOINT" — metrics then export to
+  # <endpoint>/v1/metrics every 30s.  Here: in-memory + metrics True records
+  # locally so the lesson runs without a collector.
+  let _ = initTelemetry service "lesson73-metrics" endpoint "in-memory" console False metrics True metricsInterval 30000
+  App {
+    database: MetricsDb
+    api: MetricsServer
+    port: 8087
+  }

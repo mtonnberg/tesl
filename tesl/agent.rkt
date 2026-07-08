@@ -109,6 +109,10 @@
                   money-agent-jsexpr)
          (only-in "../dsl/private/money-core.rkt" tesl-money tesl-money? tesl-currency-of)
          (only-in "../dsl/check.rkt" check-fail? check-fail-message)
+         (only-in "../dsl/metrics.rkt"
+                  metrics-active?
+                  metric-histogram-record!
+                  duration-histogram-boundaries)
          json
          "agent-provider.rkt")
 
@@ -259,10 +263,14 @@
 (define (openai api-key model)
   (make-openai-provider (raw-value api-key) (raw-value model)))
 ;; Mistral speaks the OpenAI chat-completions wire format (Bearer auth), so it
-;; reuses the OpenAI provider pointed at Mistral's endpoint.
+;; reuses the OpenAI provider pointed at Mistral's endpoint.  Re-register the
+;; metadata so metrics label the traffic "mistral", not "openai" (same pattern
+;; as make-local-provider).
 (define (mistral api-key model)
-  (make-openai-provider (raw-value api-key) (raw-value model)
-                        "https://api.mistral.ai/v1/chat/completions"))
+  (register-provider-metadata!
+   (make-openai-provider (raw-value api-key) (raw-value model)
+                         "https://api.mistral.ai/v1/chat/completions")
+   "mistral" (raw-value model)))
 (define (local endpoint model)
   (make-local-provider (raw-value endpoint) (raw-value model)))
 
@@ -392,6 +400,22 @@
 ;;; (NOT an exception); on success dispatch (DB per exec) → success tool_result.
 ;;; Returns a normalized tool-result content block.
 (define (run-tool-call a tc)
+  (define metric-start (and (metrics-active?) (current-inexact-milliseconds)))
+  (define block (run-tool-call/unmetered a tc))
+  ;; Metrics: per-tool latency, labeled by tool name (bounded by the agent's
+  ;; tool list) and outcome.  Every failure path in run-tool-call/unmetered is
+  ;; already normalized to an is-error block, so outcome falls out of the block.
+  (when metric-start
+    (metric-histogram-record!
+     "tesl.agent.tool.duration"
+     (/ (- (current-inexact-milliseconds) metric-start) 1000.0)
+     (list (cons "tesl.tool" (~a (tool-call-name tc)))
+           (cons "tesl.outcome" (if (hash-ref block 'is-error #f) "error" "ok")))
+     #:unit "s"
+     #:boundaries duration-histogram-boundaries))
+  block)
+
+(define (run-tool-call/unmetered a tc)
   (define name (tool-call-name tc))
   (define t (find-tool a name))
   (cond

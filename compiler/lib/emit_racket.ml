@@ -2120,7 +2120,9 @@ let rec emit_expr ctx e =
          Fix: the keyword names are fixed, so collect each keyword's value as ALL
          tokens up to the next known keyword and re-fold them into an application,
          so `ep ()` becomes the call `(ep)` and `f x y` becomes `(f x y)`. *)
-      let known_kw = function "service" | "endpoint" | "console" -> true | _ -> false in
+      let known_kw = function
+        | "service" | "endpoint" | "console" | "metrics" | "metricsInterval" -> true
+        | _ -> false in
       let rec emit_kw_args = function
         | [] -> ()
         | EVar { name = kw; _ } :: rest when known_kw kw ->
@@ -2134,11 +2136,26 @@ let rec emit_expr ctx e =
             | "service" -> "service-name"
             | "endpoint" -> "endpoint"
             | "console" -> "console?"
+            | "metrics" -> "metrics?"
+            | "metricsInterval" -> "metrics-interval-ms"
             | other -> other
           in
           emit ctx (Printf.sprintf " #:%s " racket_kw);
           (match val_toks with
-           | [] -> ()  (* keyword with no value — leave the kw dangling (arity error surfaces) *)
+           | [] ->
+             (* A keyword directly followed by another keyword (or end of args)
+                has no value tokens.  The usual cause is a USER BINDING spelled
+                like a keyword in value position (`console metrics` where
+                `metrics` is a let) — take_value stops at the known keyword
+                name and would emit a valueless Racket keyword that fails at
+                module startup with an opaque arity error.  App-main bodies are
+                not type-checked (checker.ml is_app_main), so this is the only
+                guard on the canonical `let _ = initTelemetry …` in main. *)
+             failwith (Printf.sprintf
+               "initTelemetry keyword `%s` has no value. If a binding named \
+                like an initTelemetry keyword (service/endpoint/console/\
+                metrics/metricsInterval) is being passed as a value, rename \
+                the binding." kw)
            | [ ELit { lit = LBool true; _ } ] -> emit ctx "#t"
            | [ ELit { lit = LBool false; _ } ] -> emit ctx "#f"
            | [ single ] -> emit_expr_simple ctx single

@@ -18,6 +18,12 @@
          (only-in "../tesl/logging.rkt"
                   tesl-log-active?
                   tesl-log-sql!)
+         (only-in "metrics.rkt"
+                  metrics-active?
+                  metric-counter-add!
+                  metric-histogram-record!
+                  metric-gauge-set!
+                  duration-histogram-boundaries)
          ;; Grouped aggregates (GitHub #29): rows are Tuple2 values, and the
          ;; Memory backend buckets through the SAME calendar engine the emitted
          ;; PostgreSQL expressions are tested against.
@@ -2030,7 +2036,20 @@
 ;; so the result flows through untouched and only the count is derived for display.
 (define (with-sql-capture sql params table op run count-of)
   (sql-capture-pending! sql params table op)
+  ;; Metrics: this wrapper is the single seam every postgres-* execution flows
+  ;; through, so timing (run) here yields db.client.operation.duration for the
+  ;; whole SQL surface with no per-call-site changes.  Attrs stay low-cardinality
+  ;; (operation kind + table name — never statement text or params).
+  (define metric-start (and (metrics-active?) (current-inexact-milliseconds)))
   (define result (run))
+  (when metric-start
+    (metric-histogram-record!
+     "db.client.operation.duration"
+     (/ (- (current-inexact-milliseconds) metric-start) 1000.0)
+     (list (cons "db.operation.name" (~a op))
+           (cons "tesl.table" (or table "unknown")))
+     #:unit "s"
+     #:boundaries duration-histogram-boundaries))
   (sql-capture-executed! (count-of result))
   result)
 
@@ -2786,15 +2805,33 @@
 ;; accepts only custodians/evts, not threads.
 (define (make-pool-lease-connector pool db-name timeout-ms)
   (lambda ()
-    (connection-pool-lease
-     pool
-     (thread-dead-evt (current-thread))
-     #:timeout (/ timeout-ms 1000.0)
-     #:fail (lambda ()
-              (raise (exn:fail:tesl:pool-timeout
-                      (format "database '~a': connection pool lease timed out after ~ams — every pooled connection stayed busy; raise `poolSize` in PostgresConfig (default 10) or investigate long-running queries"
-                              db-name timeout-ms)
-                      (current-continuation-marks)))))))
+    ;; Metrics: lease-wait time is the saturation signal (a rising wait_time
+    ;; histogram precedes the timeout cliff); the timeout counter is the cliff
+    ;; itself (each increment is one 503 at the HTTP layer).
+    (define metric-start (and (metrics-active?) (current-inexact-milliseconds)))
+    (define (record-wait!)
+      (when metric-start
+        (metric-histogram-record!
+         "db.client.connection.wait_time"
+         (/ (- (current-inexact-milliseconds) metric-start) 1000.0)
+         (list (cons "tesl.database" (~a db-name)))
+         #:unit "s"
+         #:boundaries duration-histogram-boundaries)))
+    (define conn
+      (connection-pool-lease
+       pool
+       (thread-dead-evt (current-thread))
+       #:timeout (/ timeout-ms 1000.0)
+       #:fail (lambda ()
+                (record-wait!)
+                (metric-counter-add! "db.client.connection.timeouts" 1
+                                     (list (cons "tesl.database" (~a db-name))))
+                (raise (exn:fail:tesl:pool-timeout
+                        (format "database '~a': connection pool lease timed out after ~ams — every pooled connection stayed busy; raise `poolSize` in PostgresConfig (default 10) or investigate long-running queries"
+                                db-name timeout-ms)
+                        (current-continuation-marks))))))
+    (record-wait!)
+    conn))
 
 (define (connect-database database #:migrate? [migrate? #f])
   (unless (database-spec? database)
@@ -2841,6 +2878,13 @@
        (connection-pool connector
                         #:max-connections max-conns
                         #:max-idle-connections (postgres-spec-max-idle-connections config)))
+     ;; Metrics: pool capacity as a gauge, so wait_time/timeouts can be read
+     ;; against the configured ceiling.  No-op if initTelemetry has not run yet
+     ;; (metrics disabled); in the normal boot order main's initTelemetry
+     ;; statement executes before the App boots the database.
+     (metric-gauge-set! "db.client.connection.max" max-conns
+                        (list (cons "tesl.database"
+                                    (~a (database-spec-name database)))))
      ;; Issue #31: lease through the bounded-wait connector instead of handing
      ;; the pool to virtual-connection directly (which leases fail-fast).
      (define runtime

@@ -35,6 +35,11 @@
                   tesl-log-worker-fail!
                   tesl-log-publish!
                   tesl-log-deliver!)
+         (only-in "../dsl/metrics.rkt"
+                  metrics-active?
+                  metric-counter-add!
+                  metric-histogram-record!
+                  duration-histogram-boundaries)
          (only-in "../dsl/capability.rkt"
                   define-capability
                   require-capabilities!
@@ -617,12 +622,18 @@
          (set-box! deferred-sem (cons (queue-spec-semaphore queue-s) (unbox deferred-sem)))
          (semaphore-post (queue-spec-semaphore queue-s)))
      (when (tesl-log-active?) (tesl-log-enqueue! job-type-name job-id))
+     (when (metrics-active?)
+       (metric-counter-add! "tesl.queue.enqueued" 1
+                            (list (cons "tesl.queue" (~a (queue-spec-name queue-s))))))
      job-id]
     [else
      (define job-id (make-job-id))
      (hash-set! (queue-spec-store queue-s) job-id (job-entry raw-payload))
      (semaphore-post (queue-spec-semaphore queue-s))
      (when (tesl-log-active?) (tesl-log-enqueue! job-type-name job-id))
+     (when (metrics-active?)
+       (metric-counter-add! "tesl.queue.enqueued" 1
+                            (list (cons "tesl.queue" (~a (queue-spec-name queue-s))))))
      job-id]))
 
 ;; ── dequeue-next! ────────────────────────────────────────────────────────────
@@ -718,7 +729,13 @@
          new-status
          attempts
          (~a delay-secs)
-         job-id))]
+         job-id)
+       ;; Count AFTER the UPDATE persists the dead status — a raise above means
+       ;; the job was NOT dead-lettered (it can still retry to success), and a
+       ;; counter that fired first would page on a dead letter that never happened.
+       (when (and (string=? new-status "dead") (metrics-active?))
+         (metric-counter-add! "tesl.queue.jobs.dead" 1
+                              (list (cons "tesl.queue" (~a (queue-spec-name queue-s)))))))]
     [else
      (define store (queue-spec-store queue-s))
      (define entry (hash-ref store job-id #f))
@@ -726,12 +743,29 @@
        (define attempts (add1 (hash-ref entry 'attempts 0)))
        (define max-att  (queue-spec-max-attempts queue-s))
        (if (>= attempts max-att)
-           (hash-set! store job-id
-                      (hash-set (hash-set entry 'status 'dead) 'attempts attempts))
+           (begin
+             (hash-set! store job-id
+                        (hash-set (hash-set entry 'status 'dead) 'attempts attempts))
+             (when (metrics-active?)
+               (metric-counter-add! "tesl.queue.jobs.dead" 1
+                                    (list (cons "tesl.queue" (~a (queue-spec-name queue-s)))))))
            (hash-set! store job-id
                       (hash-set (hash-set entry 'status 'pending) 'attempts attempts))))]))
 
 ;; ── process-next-job! (synchronous — for tests and simple workers) ───────────
+
+;; Metrics: one tesl.queue.job.duration point per finished job attempt, labeled
+;; by queue and outcome (ok / check-fail / error).  start-ms is #f when metrics
+;; are off, so the whole record collapses to nothing.
+(define (record-job-duration-metric! queue-s start-ms outcome)
+  (when start-ms
+    (metric-histogram-record!
+     "tesl.queue.job.duration"
+     (/ (- (current-inexact-milliseconds) start-ms) 1000.0)
+     (list (cons "tesl.queue" (~a (queue-spec-name queue-s)))
+           (cons "tesl.outcome" outcome))
+     #:unit "s"
+     #:boundaries duration-histogram-boundaries)))
 
 (define (process-next-job! queue-s handler-fn)
   (define result (dequeue-next! queue-s))
@@ -749,7 +783,9 @@
                      (~a (queue-spec-name queue-s))))))
         (when (tesl-log-active?)
           (tesl-log-dequeue! job-type-name job-id current-attempt (queue-spec-max-attempts queue-s)))
+        (define metric-start (and (metrics-active?) (current-inexact-milliseconds)))
         (with-handlers ([exn:fail? (lambda (e)
+                                     (record-job-duration-metric! queue-s metric-start "error")
                                      (fail-job! queue-s job-id)
                                      (when (tesl-log-active?)
                                        (tesl-log-worker-fail! job-type-name job-id current-attempt
@@ -759,6 +795,7 @@
           (define handler-result (handler-fn named-job))
           (if (check-fail? handler-result)
               (begin
+                (record-job-duration-metric! queue-s metric-start "check-fail")
                 (fail-job! queue-s job-id)
                 (when (tesl-log-active?)
                   (tesl-log-worker-fail! job-type-name job-id current-attempt
@@ -766,6 +803,7 @@
                                           (check-fail-message handler-result)))
                 #f)
               (begin
+                (record-job-duration-metric! queue-s metric-start "ok")
                 (complete-job! queue-s job-id)
                 (when (tesl-log-active?)
                   (tesl-log-worker-done! job-type-name job-id))
@@ -787,7 +825,9 @@
                      (~a (queue-spec-name queue-s))))))
         (when (tesl-log-active?)
           (tesl-log-dequeue! job-type-name job-id current-attempt (queue-spec-max-attempts queue-s)))
+        (define metric-start (and (metrics-active?) (current-inexact-milliseconds)))
         (with-handlers ([exn:fail? (lambda (e)
+                                     (record-job-duration-metric! queue-s metric-start "error")
                                      (fail-job! queue-s job-id)
                                      (when (tesl-log-active?)
                                        (tesl-log-worker-fail! job-type-name job-id current-attempt
@@ -797,6 +837,7 @@
           (define handler-result (handler-fn named-job))
           (if (check-fail? handler-result)
               (begin
+                (record-job-duration-metric! queue-s metric-start "check-fail")
                 (fail-job! queue-s job-id)
                 (when (tesl-log-active?)
                   (tesl-log-worker-fail! job-type-name job-id current-attempt
@@ -806,6 +847,7 @@
                                    (check-fail-message handler-result)
                                    (check-fail-status handler-result)))
               (begin
+                (record-job-duration-metric! queue-s metric-start "ok")
                 (complete-job! queue-s job-id)
                 (when (tesl-log-active?)
                   (tesl-log-worker-done! job-type-name job-id))

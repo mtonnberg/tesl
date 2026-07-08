@@ -6,6 +6,13 @@
          ;; #22: install the framework-log -> telemetry bridge sink. logging.rkt
          ;; requires nothing, so this one-way edge introduces no require cycle.
          (only-in "../tesl/logging.rkt" set-telemetry-log-sink!)
+         ;; Metrics signal (roadmap/next/opentelemetry_metrics.md): registry +
+         ;; /v1/metrics exporter live in dsl/metrics.rkt (requires nothing of
+         ;; ours, so no cycle); init-opentelemetry! is the single on/off switch.
+         (only-in "metrics.rkt"
+                  set-metrics-enabled! reset-metrics!
+                  start-metrics-exporter! stop-metrics-exporter!
+                  metrics-active? metric-counter-add!)
          (for-syntax racket/base syntax/parse))
 
 (provide
@@ -273,14 +280,21 @@
         (loop)))))
   ;; The consumer: enqueue (bounded, drop-oldest) and signal a flush when full.
   (lambda (event)
-    (define full?
+    (define-values (full? dropped?)
       (with-lock
        (lambda ()
          (set! buffer (cons event buffer))
-         (when (> (length buffer) max-buffer)
+         (define overflow? (> (length buffer) max-buffer))
+         (when overflow?
            ;; DROP-OLDEST: buffer is newest-first, so the LAST element is oldest.
            (set! buffer (take buffer max-buffer)))
-         (>= (length buffer) batch-size))))
+         (values (>= (length buffer) batch-size) overflow?))))
+    ;; Metrics self-observability: a rising dropped counter means the collector
+    ;; cannot keep up (or is down) and log data is being lost.  Counted outside
+    ;; the buffer lock — the metrics registry has its own.
+    (when (and dropped? (metrics-active?))
+      (metric-counter-add! "tesl.telemetry.dropped" 1
+                           (list (cons "tesl.signal" "logs"))))
     (when full? (semaphore-post wake))
     (void)))
 
@@ -292,7 +306,9 @@
                              #:otlp-headers [otlp-headers '()]
                              #:otlp-timeout-ms [otlp-timeout-ms 5000]
                              #:otlp-batch-size [otlp-batch-size 100]
-                             #:otlp-flush-interval-ms [otlp-flush-interval-ms 2000])
+                             #:otlp-flush-interval-ms [otlp-flush-interval-ms 2000]
+                             #:metrics? [metrics? 'auto]
+                             #:metrics-interval-ms [metrics-interval-ms 60000])
   (current-telemetry-service-name service-name)
   (current-telemetry-endpoint endpoint)
   (current-telemetry-context '())
@@ -332,6 +348,24 @@
          (emit-telemetry-event! message (cons (cons 'log.category category) attrs)))
        #f))
   (set-box! global-telemetry-log '())
+  ;; ── Metrics signal ──
+  ;; Default ('auto): metrics record + export whenever a real OTLP endpoint is
+  ;; configured, mirroring the logs sink.  `#:metrics? #t` with an in-memory
+  ;; endpoint records into the registry with no exporter (tests, local dev);
+  ;; `#:metrics? #f` disables recording entirely.  Re-init resets the registry
+  ;; and replaces any previous exporter thread (same idempotence as the rest of
+  ;; this function).
+  (define real-endpoint? (pair? otlp-consumers))
+  (define metrics-on? (if (eq? metrics? 'auto) real-endpoint? (and metrics? #t)))
+  (reset-metrics!)
+  (set-metrics-enabled! metrics-on?)
+  (if (and metrics-on? real-endpoint?)
+      (start-metrics-exporter! #:endpoint endpoint
+                               #:headers effective-otlp-headers
+                               #:interval-ms metrics-interval-ms
+                               #:service-name-thunk
+                               (lambda () (current-telemetry-service-name)))
+      (stop-metrics-exporter!))
   (void))
 
 (define (call-with-telemetry-context additions thunk)
