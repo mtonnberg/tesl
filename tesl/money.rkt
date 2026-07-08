@@ -375,3 +375,82 @@
       (check-fail (format "exchange rate is FROM ~a but amount is in ~a"
                           from-code amount-code)
                   400 #f)))
+
+;; ── Money rates: money PER quantity (First-Class Units) ─────────────────────
+;; Construction: `money / quantity` (lowered to tesl-money-rate-div) or a
+;; fixed-denominator constructor below.  Consumption: `rate * quantity`
+;; (lowered to tesl-money-rate-mul) — dimensions cancel in the CHECKER; here
+;; both sides are already erased floats/structs.  The rate stores an EXACT
+;; rational (minor units per SI-canonical denominator unit); the ONE
+;; half-even rounding happens when Money materializes.
+
+(define (money-rate-raw who v)
+  (define raw (raw-value v))
+  (unless (tesl-money-rate? raw)
+    (raise-user-error who "expected a MoneyRate value, got ~e" raw))
+  raw)
+
+;; money ÷ quantity → rate.  label = the denominator's SI unit form (emitted
+;; by the compiler from the checker's type — display only).
+(define (tesl-money-rate-div m q label)
+  (define raw (money-raw 'MoneyRate m))
+  (define qty (exact->inexact (raw-value q)))
+  (when (zero? qty)
+    (raise-user-error 'MoneyRate "division by a zero quantity"))
+  (tesl-money-rate (/ (tesl-money-minor-units raw) (inexact->exact qty))
+                   (tesl-money-currency raw)
+                   1 label))
+
+;; rate × quantity → Money (either argument order; the checker guarantees the
+;; dimensions match).  ONE half-even rounding, here.
+(define (tesl-money-rate-mul a b)
+  (define ra (raw-value a))
+  (define rb (raw-value b))
+  (define-values (rate qty)
+    (if (tesl-money-rate? ra) (values ra rb) (values rb ra)))
+  (define r (money-rate-raw 'MoneyRate rate))
+  (tesl-money (round (* (tesl-money-rate-per-canonical r)
+                        (inexact->exact (exact->inexact (raw-value qty)))))
+              (tesl-money-rate-currency r)))
+
+;; rate × Float scalar → rate (exact rescale, decimal-faithful factor — the
+;; Money.scaleBy stance; no rounding until Money materializes).
+(define (tesl-money-rate-scale a b)
+  (define ra (raw-value a))
+  (define rb (raw-value b))
+  (define-values (rate factor)
+    (if (tesl-money-rate? ra) (values ra rb) (values rb ra)))
+  (define r (money-rate-raw 'MoneyRate rate))
+  (define f (raw-value factor))
+  (unless (rational? f)
+    (raise-user-error 'MoneyRate "rescale factor must be a finite number, got: ~e" f))
+  (tesl-money-rate (* (tesl-money-rate-per-canonical r) (rate->exact f))
+                   (tesl-money-rate-currency r)
+                   (tesl-money-rate-label-factor r)
+                   (tesl-money-rate-label r)))
+
+;; Fixed-denominator constructors: the Money amount IS the per-<label> price;
+;; per-canonical = minor / (canonical units per label unit), all exact.
+(define (make-money-rate who m canonical-per-label label)
+  (define raw (money-raw who m))
+  (tesl-money-rate (/ (tesl-money-minor-units raw) canonical-per-label)
+                   (tesl-money-currency raw)
+                   canonical-per-label label))
+
+(define (|MoneyRate.perHour| m)        (make-money-rate 'MoneyRate.perHour m 3600 "h"))
+(define (|MoneyRate.perDay| m)         (make-money-rate 'MoneyRate.perDay m 86400 "day"))
+(define (|MoneyRate.perKilogram| m)    (make-money-rate 'MoneyRate.perKilogram m 1 "kg"))
+(define (|MoneyRate.perLiter| m)       (make-money-rate 'MoneyRate.perLiter m 1/1000 "L"))
+(define (|MoneyRate.perSquareMeter| m) (make-money-rate 'MoneyRate.perSquareMeter m 1 "m^2"))
+
+(define (|MoneyRate.currency| r)
+  (tesl-money-rate-currency (money-rate-raw 'MoneyRate.currency r)))
+
+(define (|MoneyRate.display| r)
+  (tesl-money-rate-display (money-rate-raw 'MoneyRate.display r)))
+
+(provide tesl-money-rate-div tesl-money-rate-mul tesl-money-rate-scale
+         (struct-out tesl-money-rate)
+         |MoneyRate.perHour| |MoneyRate.perDay| |MoneyRate.perKilogram|
+         |MoneyRate.perLiter| |MoneyRate.perSquareMeter|
+         |MoneyRate.currency| |MoneyRate.display|)

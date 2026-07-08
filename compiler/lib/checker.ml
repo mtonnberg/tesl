@@ -377,7 +377,12 @@ let lookup_field ctx record_ty field_name =
 let resolve_quantity_alias (name : string) : ty option =
   match Units_catalog.active_dim_of_alias name with
   | Some d -> Some (t_quantity d)
-  | None -> None
+  | None ->
+    (* MoneyRate alias types (MoneyPerDuration, …) ride the same activation:
+       activate_units_aliases_for turns them on iff Tesl.Money is imported. *)
+    (match Units_catalog.active_money_rate_dim_of_alias name with
+     | Some d -> Some (t_money_rate d)
+     | None -> None)
 
 (* Fail-closed name-collision guard: a module that IMPORTS the units/money
    surface cannot also declare types/constructors that collide with it —
@@ -401,7 +406,8 @@ let check_units_name_collisions (m : module_form) : type_error list =
             imports_units && List.mem_assoc name Units_catalog.aliases in
           let money_clash =
             imports_money
-            && List.mem name ["Money"; "Currency"; "ExchangeRate"] in
+            && (List.mem name ["Money"; "Currency"; "ExchangeRate"]
+                || List.mem_assoc name Units_catalog.money_rate_aliases) in
           let ctor_clashes =
             match tf with
             | TypeAdt { variants; _ } when imports_money ->
@@ -453,6 +459,8 @@ let activate_units_aliases_for (m : module_form) : string list =
       m.imports
   in
   Units_catalog.set_active_aliases active;
+  Units_catalog.money_rate_aliases_active :=
+    List.exists (fun (i : import_decl) -> i.module_name = "Tesl.Money") m.imports;
   prev
 
 (** Tesl type expression → OCaml ty *)
@@ -1618,7 +1626,7 @@ let known_qualifier_modules =
     "Either"; "Result"; "Time"; "Random"; "Uuid"; "UUID"; "Env";
     "Http"; "HttpClient"; "Json"; "DB"; "Telemetry"; "Tesl"; "JWT"; "Email";
     (* First-Class Units *)
-    "Money"; "Currency"; "ExchangeRate" ]
+    "Money"; "Currency"; "ExchangeRate"; "MoneyRate" ]
   @ Units_catalog.quantity_modules
 
 type constructor_resolution =
@@ -2561,6 +2569,14 @@ let rec infer_expr ctx (e : expr) : ty =
            the name resolves to a user binding.  Runtime bindings are ordinary
            Float functions in tesl/units.rkt (quantities erase). *)
         infer_units_op ctx (expr_loc app) field args
+     | EField { obj = (EConstructor { name = "MoneyRate"; args = []; _ }
+                      | EVar { name = "MoneyRate"; _ });
+                field = ("currency" | "display") as field; _ }
+       when lookup_name ctx ("MoneyRate." ^ field) = None ->
+        (* MoneyRate.currency/display work over EVERY rate denominator, so —
+           like Units.* — they are typed at the application site instead of
+           carrying an env arrow. *)
+        infer_money_rate_op ctx (expr_loc app) field args
      | _ ->
         infer_direct_call base_fn args)
   | EBinop _ as binop ->
@@ -2614,6 +2630,11 @@ let rec infer_expr ctx (e : expr) : ty =
         | TCon "Money" ->
           add_error ctx loc
             "unary `-` is not defined for `Money`; use `Money.negate m`";
+          resolved
+        | TCon q when Units_catalog.is_money_rate_name q ->
+          add_error ctx loc
+            "unary `-` is not defined for money rates; negate the Money after \
+             materializing (`Money.negate (rate * quantity)`)";
           resolved
         | _ ->
           unify_at ctx loc arg_ty t_int;
@@ -3076,6 +3097,81 @@ and infer_binop ctx loc ~op_loc op left right =
         (Diag_fix.verified_token_replace ~source_lines:ctx.source_lines
            ~at:op_loc.start ~token:"+" ~replacement:"++");
       t_string
+    end else if (op = BDiv && lt' = TCon "Money"
+                 && (match rt' with
+                     | TCon n -> Units_catalog.is_quantity_name n
+                     | _ -> false)) then begin
+      (* Money ÷ quantity constructs a MONEY RATE: `total / hours :
+         MoneyPerDuration` — currency inside the value, denominator dimension
+         in the type.  The divisor's non-zero proof is charged by the same
+         validation rule as every `/` (Units.requireNonZero). *)
+      (match rt' with
+       | TCon n ->
+         (match Units_catalog.dim_of_name n with
+          | Some d -> t_money_rate d
+          | None -> TCon "Money")
+       | _ -> TCon "Money")
+    end else if (match lt', rt' with
+                 | TCon n, _ | _, TCon n -> Units_catalog.is_money_rate_name n
+                 | _ -> false) then begin
+      (* Money-rate algebra: `rate * quantity : Money` when the quantity's
+         dimension matches the rate's denominator (ONE half-even rounding at
+         materialization); `rate * Float : rate` rescales exactly.  Everything
+         else materializes through Money first. *)
+      let rate_dim t = match t with
+        | TCon n -> Units_catalog.dim_of_money_rate_name n
+        | _ -> None in
+      let qty_dim t = match t with
+        | TCon n -> Units_catalog.dim_of_name n
+        | _ -> None in
+      let disp d = Units_catalog.display_name d in
+      (match op with
+       | BMul ->
+         (match rate_dim lt', qty_dim rt', rate_dim rt', qty_dim lt' with
+          | Some rd, Some qd, _, _ | _, _, Some rd, Some qd ->
+            if rd = qd then TCon "Money"
+            else begin
+              add_error ctx loc (Printf.sprintf
+                "this money rate is per `%s`, but the quantity is a `%s` — \
+                 the denominator must match exactly"
+                (disp rd) (disp qd));
+              TCon "Money"
+            end
+          | Some rd, None, _, _ when rt' = TCon "Float" || rt' = TCon "Int" ->
+            if rt' = TCon "Int" then
+              add_error ctx loc
+                "a money rate is rescaled by a `Float`, not an `Int` — write \
+                 a Float literal (`2.0`, not `2`)";
+            t_money_rate rd
+          | _, _, Some rd, None when lt' = TCon "Float" || lt' = TCon "Int" ->
+            if lt' = TCon "Int" then
+              add_error ctx loc
+                "a money rate is rescaled by a `Float`, not an `Int` — write \
+                 a Float literal (`2.0`, not `2`)";
+            t_money_rate rd
+          | Some rd, _, _, _ | _, _, Some rd, _ ->
+            add_error ctx loc (Printf.sprintf
+              "a money rate multiplies with a quantity of its denominator \
+               dimension (`%s`) or a Float rescale factor" (disp rd));
+            TCon "Money"
+          | None, _, None, _ ->
+            (* unreachable: this branch is guarded on one operand being a
+               money rate *)
+            fresh ())
+       | BAdd | BSub | BDiv | BMod ->
+         add_error ctx loc (Printf.sprintf
+           "operator `%s` is not defined for money rates; multiply by a \
+            quantity to materialize `Money` first, then use the Money \
+            operations"
+           (match op with BAdd -> "+" | BSub -> "-" | BDiv -> "/" | _ -> "%"));
+         (match rate_dim lt' with
+          | Some d -> t_money_rate d
+          | None -> (match rate_dim rt' with
+              | Some d -> t_money_rate d
+              | None -> fresh ()))
+       | BConcat | BAnd | BOr | BEq | BNeq | BLt | BLe | BGt | BGe ->
+         (* unreachable: the outer match restricts op to arithmetic *)
+         fresh ())
     end else if lt' = TCon "Money" || rt' = TCon "Money" then begin
       (* Money never meets a raw arithmetic operator: same-currency safety is
          proof-gated in the named ops.  One clear error, short-circuit to Money
@@ -3095,7 +3191,9 @@ and infer_binop ctx loc ~op_loc op left right =
          add_error ctx loc
            (Printf.sprintf
               "operator `%s` is not defined for `Money` (money times money is \
-               meaningless); scale by an integer with `Money.scale m k`"
+               meaningless); scale by an integer with `Money.scale m k`, by a \
+               fraction with `Money.scaleBy m f`, or divide by a QUANTITY to \
+               build a money rate (`total / hours : MoneyPerDuration`)"
               (match op with BMul -> "*" | BDiv -> "/" | _ -> "%"))
        | _ -> ());
       TCon "Money"
@@ -3351,6 +3449,27 @@ and infer_units_op ctx loc field args =
     add_error ctx loc (Printf.sprintf
       "unknown Units operation `Units.%s` (available: mul, div, square, sqrt, \
        abs, negate, min, max, sum, requireNonZero)" other);
+    List.iter (fun a -> ignore (infer_expr ctx a)) args;
+    fresh ()
+
+(* MoneyRate.currency/display — denominator-polymorphic accessors, typed per
+   application site (the fixed-denominator constructors are ordinary env
+   rows). *)
+and infer_money_rate_op ctx loc field args =
+  match args with
+  | [a] ->
+    let t = apply !(ctx.subst) (infer_expr ctx a) in
+    (match t with
+     | TCon n when Units_catalog.is_money_rate_name n ->
+       if field = "currency" then TCon "Currency" else t_string
+     | other ->
+       add_error ctx (expr_loc a) (Printf.sprintf
+         "`MoneyRate.%s` expects a money rate (Money divided by a quantity, \
+          or a MoneyRate.per* constructor), got `%s`" field (pp_ty other));
+       if field = "currency" then TCon "Currency" else t_string)
+  | _ ->
+    add_error ctx loc (Printf.sprintf
+      "`MoneyRate.%s` expects 1 argument" field);
     List.iter (fun a -> ignore (infer_expr ctx a)) args;
     fresh ()
 
@@ -3837,6 +3956,15 @@ use the `Tuple3 a b c` constructor instead";
           Route through the same site-typing as the infer path, then unify
           with the annotation. *)
        let ty = infer_units_op ctx (expr_loc app) field args in
+       unify_expected_at ctx (expr_loc app) ty expected;
+       apply !(ctx.subst) ty
+     | EField { obj = (EConstructor { name = "MoneyRate"; args = []; _ }
+                      | EVar { name = "MoneyRate"; _ });
+                field = ("currency" | "display") as field; _ }
+       when lookup_name ctx ("MoneyRate." ^ field) = None ->
+       (* same tail-position discipline as Units.* — no env arrow, so the
+          generic head-inference would swallow errors here *)
+       let ty = infer_money_rate_op ctx (expr_loc app) field args in
        unify_expected_at ctx (expr_loc app) ty expected;
        apply !(ctx.subst) ty
      | _ ->

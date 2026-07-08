@@ -13,6 +13,11 @@ module Money_tests exposing []
 
 import Tesl.Prelude exposing [Int, String, Bool]
 import Tesl.Money exposing [
+  MoneyPerDuration,
+  MoneyRate.perHour,
+  MoneyRate.perKilogram,
+  MoneyRate.display,
+  MoneyRate.currency,
   Money,
   Currency,
   ExchangeRate,
@@ -47,6 +52,14 @@ import Tesl.Money exposing [
 import Tesl.Result exposing [Result(..)]
 import Tesl.Time exposing [PosixMillis, Time.secondsToPosix]
 import Tesl.Float exposing [Float]
+import Tesl.Units exposing [
+  Duration,
+  Mass,
+  Duration.hours,
+  Duration.minutes,
+  Mass.kilograms,
+  Units.requireNonZero,
+]
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -199,4 +212,33 @@ test "Money.scaleBy applies fractional factors with half-even rounding" {
   expect Money.minorUnits (Money.scaleBy (Money.usd 135) 0.5) == 68
   # factor is decimal-faithful: 10% of $0.03 is 0.3 minor units -> 0 (half-even is nearest here)
   expect Money.minorUnits (Money.scaleBy (Money.usd 3) 0.1) == 0
+}
+
+# ── Money rates: money PER quantity ───────────────────────────────────────────
+
+fn hourlyInvoice(rate: MoneyPerDuration, worked: Duration) -> Money =
+  rate * worked
+
+fn effectiveRate(billed: Money, worked: Duration) -> MoneyPerDuration =
+  let safe = Units.requireNonZero worked
+  billed / safe
+
+test "consultant: 950 SEK/h for 1.5 h bills 1425 SEK" {
+  let hourly = MoneyRate.perHour (Money.sek 95000)
+  expect MoneyRate.display hourly == "950.00 SEK/h"
+  expect Money.display (hourlyInvoice hourly (Duration.hours 1.5)) == "1425.00 SEK"
+  expect Money.display (hourlyInvoice hourly (Duration.minutes 30.0)) == "475.00 SEK"
+}
+
+test "a rate built by division round-trips through multiplication" {
+  let r = effectiveRate (Money.sek 142500) (Duration.hours 1.5)
+  expect Money.minorUnits (r * Duration.hours 1.0) == 95000
+  expect Currency.code (MoneyRate.currency r) == "SEK"
+}
+
+test "bulk goods per kilogram, exact Float rescale" {
+  let perKg = MoneyRate.perKilogram (Money.usd 250)
+  expect Money.display (perKg * Mass.kilograms 12.0) == "$30.00"
+  let surcharged = perKg * 1.1
+  expect Money.display (surcharged * Mass.kilograms 12.0) == "$33.00"
 }

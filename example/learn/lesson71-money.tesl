@@ -37,6 +37,9 @@ module Lesson71Money exposing [
 import Tesl.Prelude exposing [Bool(..), Int, String]
 import Tesl.Result exposing [Result(..)]
 import Tesl.Money exposing [
+  MoneyPerDuration,
+  MoneyRate.perHour,
+  MoneyRate.display,
   Money,
   ExchangeRate,
   Usd,
@@ -56,6 +59,7 @@ import Tesl.Money exposing [
   ExchangeRate.make,
 ]
 import Tesl.Time exposing [Time.secondsToPosix]
+import Tesl.Units exposing [Duration, Duration.hours, Duration.minutes]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [Database, Memory]
 
@@ -163,4 +167,20 @@ test "a Money column round-trips and selectSum sums one currency" requires [dbRe
     let _ = insert OrderLine { id: "l2", price: Money.usd 500, quantity: 2 }
   }
   expect Money.display (totalRevenue()) == "$15.50"
+}
+
+# ─── Money rates: money PER quantity (consultant billing) ────────────────────────
+# The currency stays inside the value; the DENOMINATOR dimension joins the
+# type algebra from lesson 72: `rate * Duration : Money` (dimensions cancel,
+# one half-even rounding), `rate * Mass` would not compile. Per-ITEM pricing
+# stays `Money.scale` (exact integer count — see lineTotal above); rates are
+# for continuous quantities: time, weight, area, volume.
+fn consultantInvoice(hourly: MoneyPerDuration, worked: Duration) -> Money =
+  hourly * worked
+
+test "950 SEK/h for 1.5 h bills 1425 SEK" {
+  let hourly = MoneyRate.perHour (Money.sek 95000)
+  expect MoneyRate.display hourly == "950.00 SEK/h"
+  expect Money.display (consultantInvoice hourly (Duration.hours 1.5)) == "1425.00 SEK"
+  expect Money.display (consultantInvoice hourly (Duration.minutes 30.0)) == "475.00 SEK"
 }

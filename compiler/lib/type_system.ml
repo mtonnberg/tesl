@@ -53,6 +53,10 @@ let t_exchange_rate = TCon "ExchangeRate"
 (* A dimensioned quantity: canonical nominal TCon from the exponent vector
    (units_catalog.ml).  Erases to Float at runtime. *)
 let t_quantity (d : Units_catalog.dim) = TCon (Units_catalog.dim_name d)
+(* Money PER quantity (hourly rate, price per kg): currency inside the value,
+   denominator dimension in the type — `Money / Duration : MoneyPerDuration`,
+   `rate * Duration : Money`. *)
+let t_money_rate (d : Units_catalog.dim) = TCon (Units_catalog.money_rate_name d)
 let t_http_response = TCon "HttpResponse"
 let t_agent       = TCon "Agent"
 let t_llm_provider = TCon "LlmProvider"
@@ -280,6 +284,9 @@ let rec pp_ty ?(parens = false) (ty : ty) : string =
        — the raw §Q[...] canonical name must never leak into a diagnostic. *)
     | TCon c when Units_catalog.is_quantity_name c ->
       (match Units_catalog.display_of_name c with Some s -> s | None -> c)
+    (* Money rate: "MoneyPerDuration" / "Money/kg" — §MR[...] never leaks *)
+    | TCon c when Units_catalog.is_money_rate_name c ->
+      (match Units_catalog.money_rate_display_of_name c with Some s -> s | None -> c)
     | TCon c        -> c
     | TApp (TCon "List", a) -> Printf.sprintf "List %s" (pp_ty ~parens:true a)
     | TApp (TCon "Maybe", a) -> Printf.sprintf "Maybe %s" (pp_ty ~parens:true a)
@@ -725,6 +732,17 @@ let stdlib_env : (string * scheme) list = [
   "ExchangeRate.asOf",         mono (t_fun [t_exchange_rate] t_posix);
   "Money.convert", mono (t_fun [t_exchange_rate; t_money] (t_result t_money t_string));
   "Money.convertChecked", mono (t_fun [t_exchange_rate; t_money] t_money);
+  (* Money rates (money PER quantity — consultant cost, price per kg).
+     Construction: a fixed-denominator constructor below, or `money / quantity`
+     directly.  Consumption: `rate * quantity : Money` (dimensions cancel,
+     currency rides through, ONE half-even rounding).  MoneyRate.currency /
+     MoneyRate.display are dimension-polymorphic and typed at the application
+     site by the checker, like the Units ops. *)
+  "MoneyRate.perHour",        mono (t_fun [t_money] (t_money_rate Units_catalog.d_duration));
+  "MoneyRate.perDay",         mono (t_fun [t_money] (t_money_rate Units_catalog.d_duration));
+  "MoneyRate.perKilogram",    mono (t_fun [t_money] (t_money_rate Units_catalog.d_mass));
+  "MoneyRate.perLiter",       mono (t_fun [t_money] (t_money_rate Units_catalog.d_volume));
+  "MoneyRate.perSquareMeter", mono (t_fun [t_money] (t_money_rate Units_catalog.d_area));
   (* moneyCodec is deliberately NOT env-typed — codec names are validated by
      builtin_codec_type and lowered inline, exactly like posixMillisCodec *)
 
@@ -963,8 +981,13 @@ let tesl_module_exports : (string * string list) list = [
       "Money.requireRateFor"; "Money.convert"; "Money.convertChecked";
       "Currency.code"; "Currency.minorDigits"; "Currency.fromCode";
       "ExchangeRate.make"; "ExchangeRate.fromCurrency";
-      "ExchangeRate.toCurrency"; "ExchangeRate.rate"; "ExchangeRate.asOf" ]
+      "ExchangeRate.toCurrency"; "ExchangeRate.rate"; "ExchangeRate.asOf";
+      (* money rates: money PER quantity *)
+      "MoneyRate.perHour"; "MoneyRate.perDay"; "MoneyRate.perKilogram";
+      "MoneyRate.perLiter"; "MoneyRate.perSquareMeter";
+      "MoneyRate.currency"; "MoneyRate.display" ]
       (* moneyCodec lives in Tesl.Json (inline-lowered), NOT here *)
+    @ List.map fst Units_catalog.money_rate_aliases
     @ Currencies.ctor_names
     @ Currencies.money_ctor_names );
   ( "Tesl.Units", Units_catalog.exported_names );

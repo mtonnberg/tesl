@@ -93,7 +93,7 @@ handler addVehicle(...) requires [dbWrite] =
 
 The schema description is the anti-hallucination channel: a model calling your tool is told the unit every time, the same way `PosixMillis` params are told "milliseconds, not seconds". Inside your handlers the checker enforces the rest.
 
-Store SI, exit through accessors at display boundaries — the same "canonical inside, explicit at the edges" discipline as `PosixMillis` (UTC ms inside, `formatTime` at the edge) and `Money` (minor units inside, `Money.display` at the edge). Time, money, and units are one design, three instances.
+Store SI, exit through accessors at display boundaries — the same "canonical inside, explicit at the edges" discipline as `PosixMillis` (UTC ms inside, `formatTime` at the edge) and `Money` (minor units inside, `Money.display` at the edge). Time, money, and units are one design, three instances — and they compose: `Money / Duration : MoneyPerDuration` gives typed hourly billing (`rate * worked : Money`, wrong denominator = compile error). See lesson 71 and `LANGUAGE-SPEC.md` §21.4.
 
 ## The five things that trip people up
 

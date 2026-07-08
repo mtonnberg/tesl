@@ -100,6 +100,41 @@ let dim_of_name (name : string) : dim option =
        with _ -> None)
     | _ -> None
 
+(* ── Money rates (First-Class Units × Money) ─────────────────────────────────
+   A MoneyRate is money PER quantity — hourly consultant cost, price per kg.
+   Currency stays a runtime qualifier (inside the value, like Money); the
+   DENOMINATOR dimension joins the type algebra with its own canonical TCon
+   family, so `Money / Duration : MoneyPerDuration` and
+   `rate * Duration : Money` (dimensions cancel) while
+   `rate * Mass` is a compile error.  Same collision-proof sigil scheme. *)
+
+let money_rate_prefix = "\xc2\xa7MR["   (* "§MR[" *)
+
+let money_rate_name (d : dim) : string =
+  Printf.sprintf "%s%d,%d,%d,%d,%d,%d,%d]" money_rate_prefix
+    d.length d.mass d.time d.current d.temp d.amount d.lumin
+
+let is_money_rate_name (name : string) : bool =
+  let p = money_rate_prefix in
+  String.length name > String.length p
+  && String.sub name 0 (String.length p) = p
+
+let dim_of_money_rate_name (name : string) : dim option =
+  let p = money_rate_prefix in
+  let pl = String.length p in
+  if not (is_money_rate_name name) || name.[String.length name - 1] <> ']' then None
+  else
+    let body = String.sub name pl (String.length name - pl - 1) in
+    match String.split_on_char ',' body with
+    | [l; m; t; c; k; mol; cd] ->
+      (try
+         Some { length = int_of_string l; mass = int_of_string m;
+                time = int_of_string t; current = int_of_string c;
+                temp = int_of_string k; amount = int_of_string mol;
+                lumin = int_of_string cd }
+       with _ -> None)
+    | _ -> None
+
 (* ── Named dimension aliases (the type names users write) ────────────────── *)
 
 let d_length       = { dimensionless with length = 1 }
@@ -146,6 +181,24 @@ let alias_of_dim (d : dim) : string option =
 
 let dim_of_alias (a : string) : dim option = List.assoc_opt a aliases
 
+(* (alias type name, DENOMINATOR dimension) — the MoneyRate types users write.
+   Owned by Tesl.Money (import-gated with it); resolved to the canonical
+   §MR[...] TCon in annotations. *)
+let money_rate_aliases : (string * dim) list = [
+  ("MoneyPerDuration", d_duration);
+  ("MoneyPerMass",     d_mass);
+  ("MoneyPerLength",   d_length);
+  ("MoneyPerArea",     d_area);
+  ("MoneyPerVolume",   d_volume);
+]
+
+let dim_of_money_rate_alias (a : string) : dim option =
+  List.assoc_opt a money_rate_aliases
+
+let money_rate_alias_of_dim (d : dim) : string option =
+  List.find_map (fun (a, d') -> if d = d' then Some a else None)
+    money_rate_aliases
+
 (* ── Pretty rendering (for pp_ty and error messages) ─────────────────────── *)
 
 (* "m/s^2", "m^2", "m·kg/s^2", "1/s".  ASCII ^ exponents; "·" separator. *)
@@ -176,6 +229,16 @@ let display_name (d : dim) : string =
 (* Pretty for a quantity TCon NAME (checker/type_system convenience). *)
 let display_of_name (name : string) : string option =
   Option.map display_name (dim_of_name name)
+
+(* Pretty for a MoneyRate TCon NAME: the alias ("MoneyPerDuration") or
+   "Money/<unit form>" ("Money/kg"); §MR[...] never leaks. *)
+let money_rate_display_of_name (name : string) : string option =
+  Option.map
+    (fun d ->
+       match money_rate_alias_of_dim d with
+       | Some a -> a
+       | None -> "Money/" ^ unit_form d)
+    (dim_of_money_rate_name name)
 
 (* ── Constructor / accessor catalog ──────────────────────────────────────── *)
 
@@ -303,6 +366,14 @@ let snapshot_active_aliases () : string list =
 
 let active_dim_of_alias (a : string) : dim option =
   Hashtbl.find_opt active_aliases a
+
+(* MoneyRate aliases (MoneyPerDuration, …) activate when the module imports
+   Tesl.Money — same silent-hijack discipline as the Units aliases. *)
+let money_rate_aliases_active : bool ref = ref false
+
+let active_money_rate_dim_of_alias (a : string) : dim option =
+  if !money_rate_aliases_active then List.assoc_opt a money_rate_aliases
+  else None
 
 (* Constructor/accessor dim lookup for typing rows. *)
 let constructor_dim (qualified : string) : dim option =

@@ -486,10 +486,15 @@ let rec emit_type_name ctx ty =
           field is a plain Real column/value (the dimension lives only in the
           checker).  ACTIVE-gated — a user type merely NAMED Speed (module
           not importing Tesl.Units) keeps its own identity.  Money stays
-          `Money` — dsl/sql.rkt owns its two-column mapping. *)
+          `Money` — dsl/sql.rkt owns its two-column mapping.  MoneyRate
+          aliases (MoneyPerDuration, …) all validate as the ONE registered
+          runtime struct type. *)
        if Units_catalog.active_dim_of_alias other <> None
           || Units_catalog.is_quantity_name other
        then emit ctx "Real"
+       else if Units_catalog.active_money_rate_dim_of_alias other <> None
+               || Units_catalog.is_money_rate_name other
+       then emit ctx "MoneyRate"
        else emit ctx other)
   | TApp { head; arg; _ } ->
     (* Flatten left-associated TApp: (((f a) b) c) → (f a b c) *)
@@ -3322,9 +3327,59 @@ and emit_binop ctx ~loc op left right =
      emit_val_arg left; emit ctx " "; emit_val_arg right;
      emit ctx ")"
    | _ ->
-     emit ctx (Printf.sprintf "(%s " op_str);
-     emit_val_arg left; emit ctx " "; emit_val_arg right;
-     emit ctx ")")
+     (* Money rates lower to runtime helpers, not raw operators: the checker's
+        types decide which — `money / quantity` builds a rate (the emitted
+        unit label is the denominator's unit form, for display), `rate *
+        quantity` materializes Money (one half-even rounding), and `rate *
+        Float` rescales the rate exactly.  Keyed on the RESULT type (rate ×
+        scalar vs rate × quantity are indistinguishable at runtime — both
+        floats — so the type must decide). *)
+     (* Key caveat: a binop's loc.start EQUALS its left operand's loc.start,
+        and the table keeps the LAST record per key (the parent), so the LEFT
+        operand's entry is unreliable — decide from the RESULT type and the
+        RIGHT operand only (both stable), which suffices: a Money result from
+        `*` with a rate/quantity right operand can only be rate×quantity
+        (money×quantity is a checker error), and both rescale orders leave a
+        MoneyRate RESULT. *)
+     let ty_at l =
+       Hashtbl.find_opt ctx.expr_ty_tbl (l.Location.start.line, l.Location.start.col) in
+     let is_mr = function
+       | Some (Type_system.TCon n) -> Units_catalog.is_money_rate_name n
+       | _ -> false in
+     let is_qty = function
+       | Some (Type_system.TCon n) -> Units_catalog.is_quantity_name n
+       | _ -> false in
+     let result_ty = ty_at loc in
+     let right_ty = ty_at (Checker.expr_loc right) in
+     let money_rate_special =
+       match op with
+       | BDiv when is_mr result_ty ->
+         (match result_ty with
+          | Some (Type_system.TCon n) ->
+            let label = match Units_catalog.dim_of_money_rate_name n with
+              | Some d -> Units_catalog.unit_form d
+              | None -> "unit" in
+            Some ("__tmoney_tesl-money-rate-div", Some label)
+          | _ -> None)
+       | BMul when is_mr result_ty ->
+         Some ("__tmoney_tesl-money-rate-scale", None)
+       | BMul when result_ty = Some (Type_system.TCon "Money")
+                   && (is_mr right_ty || is_qty right_ty) ->
+         Some ("__tmoney_tesl-money-rate-mul", None)
+       | _ -> None
+     in
+     (match money_rate_special with
+      | Some (head, label_opt) ->
+        emit ctx (Printf.sprintf "(%s " head);
+        emit_val_arg left; emit ctx " "; emit_val_arg right;
+        (match label_opt with
+         | Some l -> emit ctx (Printf.sprintf " %S" l)
+         | None -> ());
+        emit ctx ")"
+      | None ->
+        emit ctx (Printf.sprintf "(%s " op_str);
+        emit_val_arg left; emit ctx " "; emit_val_arg right;
+        emit ctx ")"))
 
 and emit_raw_value ctx e =
   (* Emit raw-value for case scrutinees — match Python's *name style *)
@@ -4007,6 +4062,7 @@ let config_only_import_names : string list =
   @ Tz_zones.ctor_names
   @ Currencies.ctor_names
   @ List.map fst Units_catalog.aliases
+  @ List.map fst Units_catalog.money_rate_aliases
 
 let emit_requires ctx (m : module_form) =
   let lazy_local_imports : (string * (string * string) list) list ref = ref [] in
@@ -4136,28 +4192,13 @@ let emit_requires ctx (m : module_form) =
   in
   if uses_timezone then
     emit_line ctx "  (prefix-in __ttz_ (only-in tesl/tesl/time tesl-tz-utc tesl-tz-fixed tesl-tz-named))";
-  (* Currency constructors lower to the baked runtime currency table —
-     import-gated like the expression arm (see currency_ctors_active). *)
-  let uses_currency =
-    let found = ref false in
-    let rec walk (e : Ast.expr) : unit =
-      (match e with
-       | Ast.EConstructor { name; _ }
-         when !currency_ctors_active && Currencies.iso_of_ctor name <> None ->
-         found := true
-       | _ -> ());
-      Ast_visitor.fold_children (fun () c -> walk c) () e
-    in
-    List.iter (function
-      | Ast.DFunc (fd : Ast.func_decl) -> walk fd.body
-      | Ast.DConst (c : Ast.const_form) -> walk c.value
-      | Ast.DTest (tf : Ast.test_form) ->
-        List.iter (fun st -> List.iter walk (Ast.test_stmt_exprs st)) tf.stmts
-      | _ -> ()) m.decls;
-    !found
-  in
-  if uses_currency then
-    emit_line ctx "  (prefix-in __tmoney_ (only-in tesl/tesl/money tesl-currency-of))";
+  (* Currency constructors and money-rate operators lower to __tmoney_
+     runtime helpers — emitted whenever the module imports Tesl.Money (the
+     same import gate as the lowering arms; an unused only-in is harmless). *)
+  if !currency_ctors_active then
+    emit_line ctx
+      "  (prefix-in __tmoney_ (only-in tesl/tesl/money tesl-currency-of \
+       tesl-money-rate-div tesl-money-rate-mul tesl-money-rate-scale))";
   if needs_runtime_path then
     emit_line ctx "  racket/runtime-path";
 

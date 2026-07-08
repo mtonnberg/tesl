@@ -338,7 +338,9 @@
         ;; tesl/time.rkt; structs need explicit rows).
         'Money tesl-money?
         'Currency tesl-currency?
-        'ExchangeRate tesl-exchange-rate?))
+        'ExchangeRate tesl-exchange-rate?
+        ;; every MoneyRate alias (MoneyPerDuration, …) emits as this one name
+        'MoneyRate tesl-money-rate?))
 
 (define (type-key? value)
   (or (symbol? value)
@@ -745,6 +747,15 @@
            'to (tesl-currency-code (tesl-exchange-rate-to value))
            'rate (exact->inexact (tesl-exchange-rate-rate value))
            'asOf (runtime-value->jsexpr (tesl-exchange-rate-asOf value)))]
+    ;; MoneyRate likewise: total walk, presentation-only shape — the per-DISPLAY
+    ;; amount in minor units plus its denominator label ("h", "kg", ...).
+    [(tesl-money-rate? value)
+     (hash 'minorUnits
+           (round (* (tesl-money-rate-per-canonical value)
+                     (tesl-money-rate-label-factor value)))
+           'currency (tesl-currency-code (tesl-money-rate-currency value))
+           'per (tesl-money-rate-label value)
+           'display (tesl-money-rate-display value))]
     [(adt-value? value)
      (define prepared-fields
        (for/hash ([(key item) (in-hash (adt-value-fields value))])

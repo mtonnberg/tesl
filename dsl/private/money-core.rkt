@@ -18,9 +18,11 @@
 (provide (struct-out tesl-currency)
          (struct-out tesl-money)
          (struct-out tesl-exchange-rate)
+         (struct-out tesl-money-rate)
          tesl-currency-of
          tesl-currency-table
          tesl-money-display
+         tesl-money-rate-display
          define-currencies)
 
 ;; code = ISO 4217 alpha code string ("USD"); minor-digits = exact int (2/0/3)
@@ -34,6 +36,24 @@
 ;; provenance PosixMillis, stored as given.  Lives here (not tesl/money.rkt)
 ;; so dsl/types.rkt can encode it without requiring the surface module.
 (struct tesl-exchange-rate (from to rate asOf) #:transparent)
+
+;; Money PER quantity (hourly rate, price per kg — First-Class Units):
+;;   per-canonical = EXACT rational minor units per SI-canonical denominator
+;;                   unit (per second / per kilogram / per m² ...);
+;;   currency      = tesl-currency;
+;;   label-factor  = canonical units per DISPLAY unit (3600 for "h");
+;;   label         = display denominator ("h", "kg", "s", ...).
+;; The label pair is presentation only — the algebra runs on per-canonical.
+(struct tesl-money-rate (per-canonical currency label-factor label) #:transparent)
+
+;; "950.00 SEK/h", "$0.25/kg" — the rate's Money amount per DISPLAY unit,
+;; rounded half-even for rendering only (the stored rate stays exact).
+(define (tesl-money-rate-display r)
+  (define per-label
+    (round (* (tesl-money-rate-per-canonical r) (tesl-money-rate-label-factor r))))
+  (string-append
+   (tesl-money-display (tesl-money per-label (tesl-money-rate-currency r)))
+   "/" (tesl-money-rate-label r)))
 
 ;; Populated once by the define-currencies expansion in currency-data.rkt.
 (define tesl-currency-table (make-hash))

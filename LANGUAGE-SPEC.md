@@ -691,7 +691,7 @@ handler createPost(...) requires [dbWrite, time] =
 
 **Money and units**
 
-- `Tesl.Money` — exact money: `Money` (integer MINOR units + intrinsic ISO 4217 `Currency`, a fixed baked ADT — `Usd`, `Eur`, … 155 codes), per-currency constructors (`Money.usd`, …), `Money.display`, `Money.scale`, proof-gated arithmetic (`Money.add`/`Money.subtract`/`Money.compare` require `SameCurrency a b`, minted by `Money.requireSameCurrency`), explicit runtime-supplied `ExchangeRate` conversion (`Money.convert` / `Money.convertChecked`), and proof predicates `SameCurrency`, `NonNegativeMoney`, `RateFor`. Pure — no capability. See §21.4.
+- `Tesl.Money` — exact money: `Money` (integer MINOR units + intrinsic ISO 4217 `Currency`, a fixed baked ADT — `Usd`, `Eur`, … 155 codes), per-currency constructors (`Money.usd`, …), `Money.display`, `Money.scale`/`Money.scaleBy`, proof-gated arithmetic (`Money.add`/`Money.subtract`/`Money.compare` require `SameCurrency a b`, minted by `Money.requireSameCurrency`), explicit runtime-supplied `ExchangeRate` conversion (`Money.convert` / `Money.convertChecked`), money RATES per quantity (`Money / Duration : MoneyPerDuration`, `rate * Duration : Money` — hourly billing, price per kg), and proof predicates `SameCurrency`, `NonNegativeMoney`, `RateFor`. Pure — no capability. See §21.4.
 - `Tesl.Units` — compile-time SI dimensional analysis, erased to `Float` at runtime: quantity alias types (`Length`, `Mass`, `Duration`, `Speed`, `Area`, …), unit constructors/accessors (`Length.meters`, `Speed.inKilometersPerHour`, …), operator dimension algebra (`Acceleration * Duration : Speed`), and per-call-site polymorphic ops (`Units.mul/div/square/sqrt/abs/negate/min/max/sum/requireNonZero`). The alias type names are import-gated. Pure — no capability. See §21.5.
 
 That is currently useful for bootstrapping, but the important public point is explicit importing and qualification, not the exact bootstrap mechanism.
@@ -3837,6 +3837,29 @@ test "convert applies a runtime rate with banker's rounding" {
 **Why integer minor units, and why isn't the currency in the static type?** Binary floats cannot represent 0.10, so float money drifts by construction; exact-integer minor units make every amount, sum, and scale exact, with a single round-half-even (banker's rounding) only at currency conversion. The currency is an intrinsic runtime qualifier rather than a type parameter — exactly the `PosixMillis` design, where the timezone is data, not 489 timestamp types. A `Money<Usd>`-style type family would multiply every signature, entity, and codec by 155 currencies while still needing runtime handling for currencies chosen at runtime. Instead the same-currency obligation is proof-layer: `Money.add`/`Money.subtract`/`Money.compare` statically require `SameCurrency a b`, which only `check Money.requireSameCurrency a b` can mint — so öre never silently add to yen, and the failure path is the developer's explicit 400, not a corrupted total.
 
 **Why are exchange rates runtime data?** A rate baked into source is stale the moment it is written, and an ambient "current rate" service invisibly couples money math to hidden state. `ExchangeRate.make` forces the rate to arrive as an explicit value with provenance (`asOf`), so every conversion names the rate it used — auditable, testable, and never a compiler default.
+
+**Money rates — money PER quantity (`MoneyPerDuration`, `MoneyPerMass`, …).** Hourly consultant cost and price-per-kilogram compose Money with the §21.5 dimension algebra: the currency stays inside the value, the DENOMINATOR dimension joins the type.
+
+| Function / form | Signature | Notes |
+|---|---|---|
+| `money / quantity` | e.g. `Money -> Duration -> MoneyPerDuration` | Builds a rate by division (the divisor needs the usual non-zero proof, `Units.requireNonZero`). |
+| `MoneyRate.perHour`, `MoneyRate.perDay` | `(m: Money) -> MoneyPerDuration` | The Money IS the per-hour / per-day price. |
+| `MoneyRate.perKilogram` | `(m: Money) -> MoneyPerMass` | |
+| `MoneyRate.perLiter` | `(m: Money) -> MoneyPerVolume` | |
+| `MoneyRate.perSquareMeter` | `(m: Money) -> MoneyPerArea` | |
+| `rate * quantity` | e.g. `MoneyPerDuration -> Duration -> Money` | Dimensions cancel; the currency rides through; ONE round-half-even at materialization. Wrong denominator (`rate * Mass` on an hourly rate) is a compile error naming both dimensions. |
+| `rate * factor` | `MoneyPerDuration -> Float -> MoneyPerDuration` | Exact decimal-faithful rescale (10% surcharge: `rate * 1.1`); no rounding until Money materializes. |
+| `MoneyRate.currency` | `rate -> Currency` | Denominator-polymorphic (typed per application site, like `Units.*`). |
+| `MoneyRate.display` | `rate -> String` | `"950.00 SEK/h"`, `"$2.50/kg"` — canonical, culture-invariant, denominator label from the constructor. |
+
+Inside, a rate is an EXACT rational (minor units per SI-canonical denominator unit), so `MoneyRate.perHour (Money.sek 95000) * Duration.minutes 30.0` is exactly `475.00 SEK`. `+`/`-`/`/` on rates are compile errors — materialize `Money` first. The alias type names are import-gated with `Tesl.Money`.
+
+```tesl
+fn invoice(rate: MoneyPerDuration, worked: Duration) -> Money =
+  rate * worked          # 950 SEK/h × 1.5 h = 1425.00 SEK, half-even once
+```
+
+**Deliberately NOT money rates.** *Money per item* (e-shop unit price × count) is `Money.scale price qty` — an exact-integer count with zero rounding beats a rate (and a dimensionless denominator would make "×3 items" and "×3.0 rescale" indistinguishable in the algebra — a fail-open we refuse). *Money per nominal type* (`MoneyPer<Product>`) does not fit dimensional analysis — nominal types have no exponents and nothing cancels; use `Money.scale` with newtype-keyed prices, and revisit as a phantom-tag feature only if per-entity price mix-ups prove to be a real bug class.
 
 ### 21.5 `Tesl.Units`
 **Implemented.**
