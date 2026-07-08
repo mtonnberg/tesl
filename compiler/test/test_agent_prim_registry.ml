@@ -32,6 +32,8 @@ let tname s = Ast.TName { name = s; loc = gen_loc }
 let tag_oracle = function
   | APString -> "string" | APInt | APPosixMillis -> "int"
   | APFloat -> "float" | APBool -> "bool"
+  | APMoney -> "money"
+  | APQuantity _ -> "float"
 let schema_oracle = function
   | APInt -> {|{"type":"integer"}|}
   (* PosixMillis deliberately carries the epoch-millis semantics to the model
@@ -42,6 +44,13 @@ let schema_oracle = function
   | APFloat -> {|{"type":"number"}|}
   | APBool -> {|{"type":"boolean"}|}
   | APString -> {|{"type":"string"}|}
+  (* Money carries the minor-units semantics — same anti-hallucination channel
+     as PosixMillis; exact bytes pinned. *)
+  | APMoney ->
+    {|{"type":"object","properties":{"minorUnits":{"type":"integer"},"currency":{"type":"string"}},"required":["minorUnits","currency"],"description":"a monetary amount as integer MINOR UNITS (e.g. cents) plus an ISO-4217 currency code - never major units and never a float; $10.00 USD is {\"minorUnits\":1000,\"currency\":\"USD\"}"}|}
+  | APQuantity _ ->
+    (* parameterized; per-dimension checks below pin a concrete instance *)
+    {|{"type":"number"}|}
 
 let () =
   List.iter (fun p ->
@@ -55,15 +64,15 @@ let () =
     check ("decode tag " ^ nm) (agent_prim_decode_tag p = tag_oracle p);
     (* 3. schema fragment matches the independent oracle. *)
     check ("schema " ^ nm) (agent_prim_schema_prop p = schema_oracle p);
-    (* 4. decode-tag and schema AGREE on integer-ness. *)
+    (* 4. decode-tag and schema AGREE on integer-ness.  TOP-LEVEL type only:
+       Money's schema is an object whose minorUnits PROPERTY is an integer, so
+       a substring test would misfire — the prefix is the schema's own type. *)
     let tag_is_int = agent_prim_decode_tag p = "int" in
     let schema_is_int =
       let s = agent_prim_schema_prop p in
-      let needle = "integer" in
-      let rec contains i =
-        i + String.length needle <= String.length s
-        && (String.sub s i (String.length needle) = needle || contains (i + 1))
-      in contains 0
+      let prefix = {|{"type":"integer"|} in
+      String.length s >= String.length prefix
+      && String.sub s 0 (String.length prefix) = prefix
     in
     check ("tag/schema agree on integer-ness " ^ nm) (tag_is_int = schema_is_int);
     (* 5. the emitter derives from the SAME registry — tri-site coverage. *)
@@ -78,9 +87,42 @@ let () =
       (String.length sch > 0 && sch.[0] = '{'))
     all_agent_prims;
 
-  (* 6. the derived diagnostic text is byte-identical to the pre-B4 message. *)
+  (* 6. the derived diagnostic text stays in lockstep with the registry. *)
   check "english whitelist"
-    (agent_prim_whitelist_english = "String, Int, Float, Bool, or PosixMillis");
+    (agent_prim_whitelist_english = "String, Int, Float, Bool, PosixMillis, or Money");
+
+  (* 6b. dimensioned quantities (First-Class Units): parameterized prims, not
+     in all_agent_prims — pin one concrete instance end-to-end.  Both the
+     alias ("Speed") and the canonical §Q name classify; tag is float; the
+     schema is a number whose description names the SI unit.  Aliases are
+     ACTIVE-gated (import-scoped) — activate them as the checker would for a
+     module importing Tesl.Units, and pin the gate itself (inactive → not a
+     prim). *)
+  check "inactive alias is NOT a prim"
+    (Units_catalog.set_active_aliases [];
+     agent_prim_of_type_name "Speed" = None);
+  Units_catalog.set_active_aliases (List.map fst Units_catalog.aliases);
+  let speed_canon =
+    Units_catalog.dim_name
+      (match Units_catalog.dim_of_alias "Speed" with
+       | Some d -> d | None -> Units_catalog.dimensionless)
+  in
+  check "Speed classifies as a quantity prim"
+    (agent_prim_of_type_name "Speed" = Some (APQuantity speed_canon));
+  check "canonical quantity name classifies too"
+    (agent_prim_of_type_name speed_canon = Some (APQuantity speed_canon));
+  check "quantity decode tag is float"
+    (agent_prim_decode_tag (APQuantity speed_canon) = "float");
+  (let s = agent_prim_schema_prop (APQuantity speed_canon) in
+   let contains needle =
+     let n = String.length needle and l = String.length s in
+     let rec go i = i + n <= l && (String.sub s i n = needle || go (i + 1)) in
+     go 0
+   in
+   check "quantity schema is a number" (contains {|"type":"number"|});
+   check "quantity schema names the SI unit" (contains "m/s"));
+  check "quantity emit tag is float"
+    (Emit_racket.agent_arg_type_tag (tname "Speed") = Some "float");
 
   (* 7. all_agent_prims has no duplicate type names. *)
   let names = List.map agent_prim_type_name all_agent_prims in

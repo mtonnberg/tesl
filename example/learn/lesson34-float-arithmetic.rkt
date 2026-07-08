@@ -39,7 +39,7 @@
 (define/pow
   (degreesToRadians [degrees : Real])
   #:returns Real
-  (let ([pi (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 86 (list (cons 'degrees *degrees)) (lambda () 3.14159265358979))]) (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 87 (list (cons 'pi *pi) (cons 'degrees *degrees)) (lambda () (quotient (* *degrees (raw-value pi)) 180.)))))
+  (let ([pi (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 86 (list (cons 'degrees *degrees)) (lambda () 3.14159265358979))]) (thsl-src! "example/learn/lesson34-float-arithmetic.tesl" 87 (list (cons 'pi *pi) (cons 'degrees *degrees)) (lambda () (/ (* *degrees (raw-value pi)) 180.)))))
 
 (define/pow
   (sumFloats [xs : (List Real)])

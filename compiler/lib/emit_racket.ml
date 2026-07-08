@@ -122,7 +122,15 @@ let module_path_table : (string, string) Hashtbl.t =
   add "Tesl.Cache"     "tesl/cache.rkt";
   add "Tesl.Email"     "tesl/email.rkt";
   add "Tesl.Agent"     "tesl/agent.rkt";
+  add "Tesl.Money"     "tesl/money.rkt";
+  add "Tesl.Units"     "tesl/units.rkt";
   h
+
+(* First-Class Units: Currency constructor lowering is IMPORT-gated — the ctor
+   names are short common words (Try, All, Cup, …) a module that does not
+   import Tesl.Money may use for its own ADTs.  Set per compile from the
+   module's imports in [compile_to_string]. *)
+let currency_ctors_active : bool ref = ref false
 
 (** Mapping from qualified import names to renamed Racket identifiers.
     E.g. Dict.lookup → tesl_import_Dict_lookup *)
@@ -151,6 +159,7 @@ let codec_name = function
   | "boolCodec"       -> "tesl-json-bool-codec"
   | "floatCodec"      -> "tesl-json-float-codec"
   | "posixMillisCodec"-> "tesl-json-posix-millis-codec"
+  | "moneyCodec"      -> "tesl-json-money-codec"
   | "listCodec"       -> "tesl-json-list-codec"
   | "dictCodec"       -> "tesl-json-dict-codec"
   | "setCodec"        -> "tesl-json-set-codec"
@@ -303,6 +312,10 @@ type ctx = {
   mutable expr_type_tbl : (int * int, string) Hashtbl.t;
     (** Maps (start_line, start_col) → display_ty for each expression, used to emit
         correct #:returns types for lambdas. *)
+  mutable expr_ty_tbl : (int * int, Type_system.ty) Hashtbl.t;
+    (** Same keys, STRUCTURED checker ty (not the lossy display string) — used
+        where emit must dispatch on the inferred type, e.g. `/` on a Float or
+        dimensioned quantity emits real division instead of `quotient`. *)
   mutable field_access_type_tbl : (int * int, string) Hashtbl.t;
     (** Maps (start_line, start_col) of an [EField] → the checker-resolved
         record/entity type of its object (e.g. "Project").  Threaded into the
@@ -349,6 +362,7 @@ let mk_ctx ?(root_path=default_root_path ()) ?(record_fields=[]) ?(record_meta=[
     fact_locals = Hashtbl.create 8; ctor_fields = Hashtbl.create 8;
     entity_names = Hashtbl.create 4; param_names = Hashtbl.create 8;
     expr_type_tbl = Hashtbl.create 64;
+    expr_ty_tbl = Hashtbl.create 64;
     field_access_type_tbl = Hashtbl.create 64;
     plain_param_names = Hashtbl.create 8;
     fn_return_specs = Hashtbl.create 16;
@@ -467,7 +481,16 @@ let rec emit_type_name ctx ty =
      | "Float" -> emit ctx "Real"
      | "String" -> emit ctx "String"
      | "Bool" -> emit ctx "Boolean"
-     | other -> emit ctx other)
+     | other ->
+       (* Dimensioned quantities ERASE at runtime: a `speed: Speed` entity
+          field is a plain Real column/value (the dimension lives only in the
+          checker).  ACTIVE-gated — a user type merely NAMED Speed (module
+          not importing Tesl.Units) keeps its own identity.  Money stays
+          `Money` — dsl/sql.rkt owns its two-column mapping. *)
+       if Units_catalog.active_dim_of_alias other <> None
+          || Units_catalog.is_quantity_name other
+       then emit ctx "Real"
+       else emit ctx other)
   | TApp { head; arg; _ } ->
     (* Flatten left-associated TApp: (((f a) b) c) → (f a b c) *)
     let rec collect_args acc = function
@@ -1953,6 +1976,18 @@ let rec emit_expr ctx e =
     emit ctx "(__ttz_tesl-tz-fixed ";
     emit_raw_value ctx arg;
     emit ctx ")"
+  (* Currency ADT (fixed set, First-Class Units): one constructor per baked
+     ISO 4217 code (compiler/lib/currencies.ml) — lowered inline to the runtime
+     currency table lookup; the code string never appears in Tesl source
+     (a typo is an unknown-constructor compile error).  IMPORT-gated: the ctor
+     names are short common words (Try, All, Cup, …), so a module that does
+     not import Tesl.Money keeps them for its own ADTs (the checker errors on
+     a collision when Tesl.Money IS imported). *)
+  | EConstructor { name; args = []; _ }
+    when !currency_ctors_active && Currencies.iso_of_ctor name <> None ->
+    (match Currencies.iso_of_ctor name with
+     | Some iso -> emit ctx (Printf.sprintf "(__tmoney_tesl-currency-of %S)" iso)
+     | None -> failwith "emit_racket: currency ctor guard invariant — please report this bug")
   (* Agent { provider, systemPrompt, maxTokens, tools } — the agent constructor,
      usable as a top-level `agent X = Agent { … }` block AND as a plain expression
      (e.g. a per-request BYOK agent). Lowers to the runtime defineAgent + withTools
@@ -2336,7 +2371,7 @@ let rec emit_expr ctx e =
     (match extract_delete_query sql_expr with
      | Some (seed, clauses) -> emit_sql_delete seed clauses
      | None -> failwith "emit_racket: extract_delete_query (EBinop) guard passed but returned None — compiler invariant violation; please report this bug")
-  | EBinop { op; left; right; _ } -> emit_binop ctx op left right
+  | EBinop { op; left; right; loc; _ } -> emit_binop ctx ~loc op left right
   | EUnop { op; arg; _ } ->
     (* Helper: emit a bare EVar param as *name (raw value), else emit normally.
        Needed for boolean conditions where named-value params must be unwrapped. *)
@@ -3162,9 +3197,24 @@ and emit_interp ctx segs =
     emit ctx ")"
   end
 
-and emit_binop ctx op left right =
+and emit_binop ctx ~loc op left right =
+  (* `/` on Int is integer division (quotient) — but on Float and on
+     dimensioned quantities (which erase to Float) it must be REAL division:
+     Racket's `quotient` rejects non-integer flonums outright, and would
+     silently truncate integral ones.  The checker's structured type for the
+     binop expression decides; fail-closed default (no entry / not Float-like)
+     keeps the historical `quotient`. *)
+  let div_is_real () =
+    match Hashtbl.find_opt ctx.expr_ty_tbl
+            (loc.Location.start.line, loc.Location.start.col) with
+    | Some (Type_system.TCon "Float") -> true
+    | Some (Type_system.TCon n) when Units_catalog.is_quantity_name n -> true
+    | _ -> false
+  in
   let op_str = match op with
-    | BAdd -> "+" | BSub -> "-" | BMul -> "*" | BDiv -> "quotient" | BMod -> "remainder"
+    | BAdd -> "+" | BSub -> "-" | BMul -> "*"
+    | BDiv -> if div_is_real () then "/" else "quotient"
+    | BMod -> "remainder"
     | BConcat -> "string-append"  (* handled specially below — needs emit_val_arg *)
     | BAnd -> "and" | BOr -> "or" | BEq -> "equal?" | BNeq -> "not equal?"
     | BLt -> "<" | BLe -> "<=" | BGt -> ">" | BGe -> ">="
@@ -3948,8 +3998,15 @@ let config_only_import_names : string list =
     "cache"; "Cache.get"; "Cache.set"; "Cache.delete"; "Cache.invalidate";
     "EmailBody"; "Email.send"; "startEmailWorker";
     (* the TimeZone ADT lowers inline to the __ttz_ constructors *)
-    "TimeZone"; "Utc"; "FixedOffset" ]
+    "TimeZone"; "Utc"; "FixedOffset";
+    (* type-only names of First-Class Units (their runtime values are the
+       inline-lowered Currency ctors / erased quantity Floats); the Money /
+       Units FUNCTIONS are ordinary provides and stay required *)
+    "Money"; "Currency"; "ExchangeRate";
+    "SameCurrency"; "NonNegativeMoney"; "RateFor" ]
   @ Tz_zones.ctor_names
+  @ Currencies.ctor_names
+  @ List.map fst Units_catalog.aliases
 
 let emit_requires ctx (m : module_form) =
   let lazy_local_imports : (string * (string * string) list) list ref = ref [] in
@@ -4079,6 +4136,28 @@ let emit_requires ctx (m : module_form) =
   in
   if uses_timezone then
     emit_line ctx "  (prefix-in __ttz_ (only-in tesl/tesl/time tesl-tz-utc tesl-tz-fixed tesl-tz-named))";
+  (* Currency constructors lower to the baked runtime currency table —
+     import-gated like the expression arm (see currency_ctors_active). *)
+  let uses_currency =
+    let found = ref false in
+    let rec walk (e : Ast.expr) : unit =
+      (match e with
+       | Ast.EConstructor { name; _ }
+         when !currency_ctors_active && Currencies.iso_of_ctor name <> None ->
+         found := true
+       | _ -> ());
+      Ast_visitor.fold_children (fun () c -> walk c) () e
+    in
+    List.iter (function
+      | Ast.DFunc (fd : Ast.func_decl) -> walk fd.body
+      | Ast.DConst (c : Ast.const_form) -> walk c.value
+      | Ast.DTest (tf : Ast.test_form) ->
+        List.iter (fun st -> List.iter walk (Ast.test_stmt_exprs st)) tf.stmts
+      | _ -> ()) m.decls;
+    !found
+  in
+  if uses_currency then
+    emit_line ctx "  (prefix-in __tmoney_ (only-in tesl/tesl/money tesl-currency-of))";
   if needs_runtime_path then
     emit_line ctx "  racket/runtime-path";
 
@@ -7220,7 +7299,8 @@ let compile_to_string ?(root_path=default_root_path ()) ?(cyclic_local_import_pa
      Checker.check_module_with_metadata m in
    List.iter (fun (info : Checker.expr_type_info) ->
      let key = (info.loc.Location.start.line, info.loc.Location.start.col) in
-     Hashtbl.replace ctx.expr_type_tbl key info.display_ty
+     Hashtbl.replace ctx.expr_type_tbl key info.display_ty;
+     Hashtbl.replace ctx.expr_ty_tbl key info.ty
    ) expr_types;
    List.iter (fun (fa : Checker.field_access_info) ->
      let key = (fa.fa_loc.Location.start.line, fa.fa_loc.Location.start.col) in
@@ -7238,6 +7318,9 @@ let compile_to_string ?(root_path=default_root_path ()) ?(cyclic_local_import_pa
   Hashtbl.clear stdlib_plain_imports;
   Hashtbl.clear job_type_to_queue;
   Hashtbl.clear cyclic_local_import_table;
+  currency_ctors_active :=
+    List.exists (fun (i : Ast.import_decl) -> i.module_name = "Tesl.Money")
+      m.imports;
   List.iter (fun path -> Hashtbl.replace cyclic_local_import_table path ()) cyclic_local_import_paths;
   List.iter (function
     | DQueue q -> List.iter (fun job -> Hashtbl.replace job_type_to_queue job q.name) q.jobs

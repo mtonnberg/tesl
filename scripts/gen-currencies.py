@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Generate the baked ISO 4217 currency tables for Tesl.Money.
+
+The Tesl `Currency` surface is a FIXED set of constructors (no currency-code
+strings — a typo is a compile error, and completion lists every currency), one
+per active ISO 4217 national/territorial currency.  This script bakes:
+
+  * compiler/lib/currencies.ml       — (ctor, iso_code, numeric_code, minor_digits)
+                                       used by the compiler for typing, exports,
+                                       and constructor lowering;
+  * dsl/private/currency-data.rkt    — one `define-currencies` form consumed by
+                                       the hand-written dsl/private/money-core.rkt
+                                       macro, producing the runtime currency
+                                       table + per-currency `Money.<code>`
+                                       constructors with static provides.
+
+The `minor_digits` column is load-bearing (rounding + Money.display): USD=2,
+JPY=0, BHD=3.  Fund codes (BOV, CHE, CHW, CLF, COU, MXV, USN, UYI, UYW),
+precious metals (XAU, ...), SDR (XDR), and the testing/none codes (XTS, XXX)
+are deliberately EXCLUDED — they are not transactional currencies.
+
+Regenerate (and commit both outputs) when ISO 4217 changes:
+
+    python3 scripts/gen-currencies.py
+"""
+
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+OUT_ML = ROOT / "compiler" / "lib" / "currencies.ml"
+OUT_RKT = ROOT / "dsl" / "private" / "currency-data.rkt"
+
+# (iso_code, numeric_code, minor_digits) — the active ISO 4217 list.
+# 0-digit set: BIF CLP DJF GNF ISK JPY KMF KRW PYG RWF UGX VND VUV XAF XOF XPF
+# 3-digit set: BHD IQD JOD KWD LYD OMR TND
+CURRENCIES = [
+    ("AED", 784, 2), ("AFN", 971, 2), ("ALL", 8, 2), ("AMD", 51, 2),
+    ("ANG", 532, 2), ("AOA", 973, 2), ("ARS", 32, 2), ("AUD", 36, 2),
+    ("AWG", 533, 2), ("AZN", 944, 2), ("BAM", 977, 2), ("BBD", 52, 2),
+    ("BDT", 50, 2), ("BGN", 975, 2), ("BHD", 48, 3), ("BIF", 108, 0),
+    ("BMD", 60, 2), ("BND", 96, 2), ("BOB", 68, 2), ("BRL", 986, 2),
+    ("BSD", 44, 2), ("BTN", 64, 2), ("BWP", 72, 2), ("BYN", 933, 2),
+    ("BZD", 84, 2), ("CAD", 124, 2), ("CDF", 976, 2), ("CHF", 756, 2),
+    ("CLP", 152, 0), ("CNY", 156, 2), ("COP", 170, 2), ("CRC", 188, 2),
+    ("CUP", 192, 2), ("CVE", 132, 2), ("CZK", 203, 2), ("DJF", 262, 0),
+    ("DKK", 208, 2), ("DOP", 214, 2), ("DZD", 12, 2), ("EGP", 818, 2),
+    ("ERN", 232, 2), ("ETB", 230, 2), ("EUR", 978, 2), ("FJD", 242, 2),
+    ("FKP", 238, 2), ("GBP", 826, 2), ("GEL", 981, 2), ("GHS", 936, 2),
+    ("GIP", 292, 2), ("GMD", 270, 2), ("GNF", 324, 0), ("GTQ", 320, 2),
+    ("GYD", 328, 2), ("HKD", 344, 2), ("HNL", 340, 2), ("HTG", 332, 2),
+    ("HUF", 348, 2), ("IDR", 360, 2), ("ILS", 376, 2), ("INR", 356, 2),
+    ("IQD", 368, 3), ("IRR", 364, 2), ("ISK", 352, 0), ("JMD", 388, 2),
+    ("JOD", 400, 3), ("JPY", 392, 0), ("KES", 404, 2), ("KGS", 417, 2),
+    ("KHR", 116, 2), ("KMF", 174, 0), ("KPW", 408, 2), ("KRW", 410, 0),
+    ("KWD", 414, 3), ("KYD", 136, 2), ("KZT", 398, 2), ("LAK", 418, 2),
+    ("LBP", 422, 2), ("LKR", 144, 2), ("LRD", 430, 2), ("LSL", 426, 2),
+    ("LYD", 434, 3), ("MAD", 504, 2), ("MDL", 498, 2), ("MGA", 969, 2),
+    ("MKD", 807, 2), ("MMK", 104, 2), ("MNT", 496, 2), ("MOP", 446, 2),
+    ("MRU", 929, 2), ("MUR", 480, 2), ("MVR", 462, 2), ("MWK", 454, 2),
+    ("MXN", 484, 2), ("MYR", 458, 2), ("MZN", 943, 2), ("NAD", 516, 2),
+    ("NGN", 566, 2), ("NIO", 558, 2), ("NOK", 578, 2), ("NPR", 524, 2),
+    ("NZD", 554, 2), ("OMR", 512, 3), ("PAB", 590, 2), ("PEN", 604, 2),
+    ("PGK", 598, 2), ("PHP", 608, 2), ("PKR", 586, 2), ("PLN", 985, 2),
+    ("PYG", 600, 0), ("QAR", 634, 2), ("RON", 946, 2), ("RSD", 941, 2),
+    ("RUB", 643, 2), ("RWF", 646, 0), ("SAR", 682, 2), ("SBD", 90, 2),
+    ("SCR", 690, 2), ("SDG", 938, 2), ("SEK", 752, 2), ("SGD", 702, 2),
+    ("SHP", 654, 2), ("SLE", 925, 2), ("SOS", 706, 2), ("SRD", 968, 2),
+    ("SSP", 728, 2), ("STN", 930, 2), ("SVC", 222, 2), ("SYP", 760, 2),
+    ("SZL", 748, 2), ("THB", 764, 2), ("TJS", 972, 2), ("TMT", 934, 2),
+    ("TND", 788, 3), ("TOP", 776, 2), ("TRY", 949, 2), ("TTD", 780, 2),
+    ("TWD", 901, 2), ("TZS", 834, 2), ("UAH", 980, 2), ("UGX", 800, 0),
+    ("USD", 840, 2), ("UYU", 858, 2), ("UZS", 860, 2), ("VES", 928, 2),
+    ("VND", 704, 0), ("VUV", 548, 0), ("WST", 882, 2), ("XAF", 950, 0),
+    ("XCD", 951, 2), ("XOF", 952, 0), ("XPF", 953, 0), ("YER", 886, 2),
+    ("ZAR", 710, 2), ("ZMW", 967, 2), ("ZWG", 924, 2),
+]
+
+
+def ctor_of(iso: str) -> str:
+    # "USD" -> "Usd"
+    return iso[0] + iso[1:].lower()
+
+
+def main() -> None:
+    codes = [c for c, _, _ in CURRENCIES]
+    if len(set(codes)) != len(codes):
+        raise SystemExit("duplicate ISO code in CURRENCIES")
+    ctors = [ctor_of(c) for c in codes]
+    if len(set(ctors)) != len(ctors):
+        raise SystemExit("constructor collision")
+
+    # ── compiler/lib/currencies.ml ──────────────────────────────────────────
+    ml = [
+        "(* Generated by scripts/gen-currencies.py from the ISO 4217 active list.",
+        "   DO NOT EDIT BY HAND — regenerate and commit when ISO 4217 changes.",
+        f"   {len(CURRENCIES)} currencies.  minor_digits is load-bearing (rounding,",
+        "   Money.display): USD=2, JPY=0, BHD=3. *)",
+        "",
+        "(** (constructor, iso_code, numeric_code, minor_digits) — the fixed",
+        "    `Currency` set. *)",
+        "let currencies : (string * string * int * int) list = [",
+    ]
+    for iso, num, dig in sorted(CURRENCIES):
+        ml.append(f'  ("{ctor_of(iso)}", "{iso}", {num}, {dig});')
+    ml += [
+        "]",
+        "",
+        "let ctor_names : string list =",
+        "  List.map (fun (c, _, _, _) -> c) currencies",
+        "",
+        "let iso_of_ctor (c : string) : string option =",
+        "  List.find_map",
+        "    (fun (c', iso, _, _) -> if c' = c then Some iso else None)",
+        "    currencies",
+        "",
+        "(** Per-currency Money constructor names: Money.usd, Money.eur, ... *)",
+        "let money_ctor_names : string list =",
+        "  List.map",
+        "    (fun (_, iso, _, _) -> \"Money.\" ^ String.lowercase_ascii iso)",
+        "    currencies",
+        "",
+    ]
+    OUT_ML.write_text("\n".join(ml))
+
+    # ── dsl/private/currency-data.rkt ───────────────────────────────────────
+    rkt = [
+        ";; Generated by scripts/gen-currencies.py from the ISO 4217 active list.",
+        ";; DO NOT EDIT BY HAND — regenerate and commit when ISO 4217 changes.",
+        f";; {len(CURRENCIES)} currencies.  The define-currencies macro",
+        ";; (dsl/private/money-core.rkt) expands this into the runtime currency",
+        ";; table plus one `Money.<code>` constructor per currency, all provided.",
+        "#lang racket/base",
+        '(require "money-core.rkt")',
+        "",
+        "(define-currencies",
+    ]
+    for iso, _num, dig in sorted(CURRENCIES):
+        rkt.append(f'  ("{iso}" {dig} |Money.{iso.lower()}|)')
+    rkt.append(")")
+    rkt.append("")
+    OUT_RKT.write_text("\n".join(rkt))
+
+    print(f"wrote {OUT_ML} ({len(CURRENCIES)} currencies)")
+    print(f"wrote {OUT_RKT}")
+
+
+if __name__ == "__main__":
+    main()

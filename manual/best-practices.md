@@ -17,8 +17,9 @@ Use `tesl help manual best-practices` to access this from the CLI.
 7. [Error Handling](#error-handling)
 8. [API Design](#api-design)
 9. [Database Access](#database-access)
-10. [Testing](#testing)
-11. [Performance](#performance)
+10. [Money and Units](#money-and-units)
+11. [Testing](#testing)
+12. [Performance](#performance)
 
 ---
 
@@ -436,6 +437,40 @@ handler transferAmount(fromId: String, toId: String, amount: Int ::: Positive am
       ok { success: true }
   }
 ```
+
+---
+
+## Money and Units
+
+### Money
+
+**✅ Do:** Represent money as `Money` (Tesl.Money) — exact integer MINOR units with an intrinsic currency. **❌ Don't** model money as `Float` (binary floats cannot represent 0.10) or as a bare `Int` that forgets its currency.
+
+```tesl
+let price = Money.usd 1050          # $10.50, minor units (cents)
+let total = Money.scale price 3     # exact integer scaling
+```
+
+- **Use the per-currency constructors** (`Money.usd`, `Money.sek`, …) with minor units; use `Money.fromMinorUnits` when the currency is picked at runtime. A typo'd `Currency` constructor is a compile error.
+- **Mint `SameCurrency` before arithmetic:** `Money.add`/`Money.subtract`/`Money.compare` require it — `let proven = check Money.requireSameCurrency a b` then `Money.add a proven`. Raw `+`/`-`/`<` on money never compiles.
+- **Exchange rates are runtime data**, never constants in source: build them with `ExchangeRate.make from to rate asOf` from a rate service or fixture, and convert with `Money.convert` (Result) or `Money.requireRateFor` + `Money.convertChecked` (proof path).
+- **Display at boundaries** with `Money.display`; store `Money` entity fields directly (two columns, `_minor` + `_currency`) and remember `selectSum` over money sums a single currency only.
+
+### Units
+
+**✅ Do:** Give physical quantities their dimension (Tesl.Units) instead of passing bare `Float`s whose unit lives in a comment or parameter name.
+
+```tesl
+fn brakingDistance(v: Speed, a: Acceleration) -> Length =
+  let vSquared = Units.square v
+  let twoA = 2.0 * a
+  let nonZero = Units.requireNonZero twoA
+  vSquared / nonZero
+```
+
+- **SI canonical inside:** constructors convert in (`Length.miles 3.0` is meters internally), accessors convert out (`Speed.inKilometersPerHour v`). Convert at the boundaries; never carry a "which unit is this?" Float through the core.
+- **Dimensions are checked at compile time** and erased at runtime — the operators do the algebra (`Length / Duration : Speed`), cross-dimension `+` does not compile, and a quantity costs exactly a `Float`.
+- **Scalars are Float literals** (`2.0 * len`, not `2 * len`), and a variable divisor needs `Units.requireNonZero` first, like every Tesl division.
 
 ---
 

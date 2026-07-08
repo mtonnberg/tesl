@@ -1180,7 +1180,11 @@ let rec check_expr_call_proofs
         if has_nonzero then []
         else
           [ make_error loc
-              ~hint:(Printf.sprintf "use `let checked = check Int.nonZero %s` then `%s` the checked value" name op_name)
+              ~hint:(Printf.sprintf
+                       "use `let checked = check Int.nonZero %s` (Int), \
+                        `Float.requireNonZero` (Float), or \
+                        `Units.requireNonZero` (dimensioned quantity), then \
+                        `%s` the checked value" name op_name)
               (Printf.sprintf "the right operand of `%s` (`%s`) has no `IsNonZero` proof; division may crash at runtime"
                  op_name name) ]
       | _ ->

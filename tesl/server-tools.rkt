@@ -39,7 +39,9 @@
                   instantiate-binder-proof
                   prepare-json
                   validate-handler-return)
-         (only-in "../dsl/types.rkt" current-agent-posix-enrichment?)
+         (only-in "../dsl/types.rkt"
+                  current-agent-posix-enrichment?
+                  current-agent-money-enrichment?)
          (only-in "../dsl/types.rkt"
                   auth-spec-binder auth-spec-proof
                   capture-spec? capture-spec-name capture-spec-proof
@@ -200,17 +202,19 @@
                              (check-fail-status result))
                      (check-fail-status result) '())]
         [else
-         ;; Agent-facing PosixMillis enrichment (see types.rkt): a tool result
-         ;; is read by the MODEL, so epoch-millis values are rendered as
+         ;; Agent-facing PosixMillis + Money enrichment (see types.rkt): a tool
+         ;; result is read by the MODEL, so epoch-millis values are rendered as
          ;; {epochMillis, iso} objects instead of bare integers the model
-         ;; would misread.  Enrichment happens in the generic encode walk; a
-         ;; response with a user-written codec keeps its authored shape (the
-         ;; encoder consumes the plain prepared jsexpr, same as HTTP).
+         ;; would misread, and Money values additionally carry their canonical
+         ;; `display` rendering.  Enrichment happens in the generic encode
+         ;; walk; a response with a user-written codec keeps its authored
+         ;; shape (the encoder consumes the plain prepared jsexpr, same as HTTP).
          (define encoded
            (if (route-spec-response-encoder route)
                (let ([prepared (prepare-json result)])
                  (prepare-json ((route-spec-response-encoder route) prepared)))
-               (parameterize ([current-agent-posix-enrichment? #t])
+               (parameterize ([current-agent-posix-enrichment? #t]
+                              [current-agent-money-enrichment? #t])
                  (prepare-json result))))
          (jsexpr->string encoded)]))))
 

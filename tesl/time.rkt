@@ -18,6 +18,7 @@
 (define-newtype PosixMillis Integer)
 
 (provide time nowMillis PosixMillis formatTime durationMs addMs subtractMs diffMs
+         Time.add Time.subtract Time.diff
          Time.posixToSeconds Time.secondsToPosix
          Time.truncHour Time.truncDay Time.truncWeek Time.truncMonth Time.truncYear
          Time.offsetAt
@@ -66,6 +67,26 @@
 ;; Difference between two PosixMillis timestamps (b - a), as a plain integer.
 (define (diffMs a-ms b-ms)
   (- (posix-ms-value b-ms) (posix-ms-value a-ms)))
+
+;; ── Duration bridge (First-Class Units) ─────────────────────────────────────
+;; Typed spans alongside the exact-Int ms forms above.  A Duration is an
+;; ERASED quantity: a plain Float in SI seconds (tesl/units.rkt).  addMs/diffMs
+;; stay canonical (exact integer arithmetic); these give the units-typed
+;; surface — `Time.add ts (Duration.hours 2.0)`.  Seconds → ms rounds
+;; HALF-EVEN on the exact rational (the Money.convert rounding stance).
+
+(define (duration-seconds->exact-ms s)
+  (round (* (inexact->exact (exact->inexact (raw-value s))) 1000)))
+
+(define (Time.add ts dur)
+  (PosixMillis (+ (posix-ms-value ts) (duration-seconds->exact-ms dur))))
+
+(define (Time.subtract ts dur)
+  (PosixMillis (- (posix-ms-value ts) (duration-seconds->exact-ms dur))))
+
+;; (b - a) as a Duration (Float seconds) — the typed counterpart of diffMs.
+(define (Time.diff a-ms b-ms)
+  (/ (exact->inexact (- (posix-ms-value b-ms) (posix-ms-value a-ms))) 1000.0))
 
 ;; Format a PosixMillis timestamp as a human-readable string.
 ;;

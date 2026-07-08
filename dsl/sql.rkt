@@ -24,6 +24,17 @@
          (only-in "../tesl/tuple.rkt" Tuple2)
          (only-in "private/time-trunc.rkt"
                   tesl-time-trunc tesl-tz? tesl-tz-kind tesl-tz-payload)
+         ;; Two-column Money storage: a `Money` field maps to `<col>_minor
+         ;; BIGINT NOT NULL` + `<col>_currency TEXT NOT NULL` (native SUM over
+         ;; minor units; the currency column makes mixed-currency aggregation
+         ;; detectable and rejected).  Layering: sql.rkt requires ONLY the core
+         ;; structs + baked ISO table — never tesl/money.rkt (surface module).
+         (only-in "private/money-core.rkt"
+                  tesl-money tesl-money? tesl-money-minor-units tesl-money-currency
+                  tesl-currency-code tesl-currency-of)
+         ;; Instantiated for its side effect: populates tesl-currency-table so
+         ;; tesl-currency-of resolves the baked ISO 4217 codes.
+         (only-in "private/currency-data.rkt")
          (for-syntax racket/base
                      racket/list
                      racket/syntax
@@ -112,7 +123,10 @@
          compile-predicate-sql
          compile-where-sql
          column-definition-sql
-         field-db-type-annotation)
+         field-db-type-annotation
+         field-column-definitions-sql
+         check-money-column-collisions!
+         money-db-values->runtime-value)
 
 (struct entity-spec (name source primary-key fields predicate table) #:transparent)
 ;; nullable? is #t for Maybe-typed fields — these map to NULL in PostgreSQL.
@@ -300,6 +314,11 @@
   (string-downcase (db-type->sql-string db-type)))
 
 (define (column-definition-sql field)
+  (when (money-field? field)
+    (raise-user-error 'sql
+                      "field ~a on entity ~a is a Money field and stores into TWO columns; use field-column-definitions-sql"
+                      (field-spec-key field)
+                      (field-spec-entity field)))
   (string-append
    (quote-sql-identifier (field-column-name field) 'sql)
    " "
@@ -308,6 +327,211 @@
      [(field-spec-primary-key? field) " PRIMARY KEY"]
      [(field-spec-nullable? field) ""]       ; NULL is the PostgreSQL default
      [else " NOT NULL"])))
+
+;; ── Two-column Money storage ──────────────────────────────────────────────────
+;;
+;; A `Money` field (dsl/private/money-core.rkt: exact-integer minor units + an
+;; ISO 4217 currency) maps to TWO PostgreSQL columns:
+;;
+;;   <column>_minor     BIGINT NOT NULL   -- exact minor units (cents/öre/yen)
+;;   <column>_currency  TEXT   NOT NULL   -- ISO 4217 alpha code ("USD")
+;;
+;; chosen so SUM stays native SQL over the minor column while the currency
+;; column makes cross-currency aggregation DETECTABLE (and rejected) instead
+;; of silently summed.  The Memory backend keeps storing the tesl-money struct
+;; directly in the row — parity with PostgreSQL is behavioural (the decision
+;; tables below), not representational.  Money is matched BY NAME (exactly
+;; like PosixMillis): the field's type datum is the symbol `Money` or a
+;; type-ref carrying that name.
+
+(define (money-type-datum? type-datum)
+  (eq? (type-datum-name type-datum) 'Money))
+
+(define (money-field? field)
+  (money-type-datum? (field-spec-type field)))
+
+;; `Maybe Money` would need NULL semantics spanning BOTH columns; fail closed
+;; until that is designed rather than fall through to a single TEXT column.
+(define (maybe-money-field? field)
+  (define inner (maybe-field-inner-type (field-spec-type field)))
+  (and inner (money-type-datum? inner) #t))
+
+(define (money-related-field? field)
+  (or (money-field? field) (maybe-money-field? field)))
+
+(define (money-minor-column-string field who)
+  (format "~a_minor" (identifier-value->string (field-column-name field) who)))
+
+(define (money-currency-column-string field who)
+  (format "~a_currency" (identifier-value->string (field-column-name field) who)))
+
+;; The Money variants sql.rkt does NOT support (fail-closed, clear message):
+;; Maybe Money, Money primary keys, and #:db-type overrides on a Money field.
+(define (reject-unsupported-money-field! field who)
+  (when (maybe-money-field? field)
+    (raise-user-error who
+                      "field ~a on entity ~a: Maybe Money fields are not supported yet (NULL semantics across the two Money columns are undefined)"
+                      (field-spec-key field)
+                      (field-spec-entity field)))
+  (when (field-spec-primary-key? field)
+    (raise-user-error who
+                      "field ~a on entity ~a: a Money field cannot be the primary key"
+                      (field-spec-key field)
+                      (field-spec-entity field)))
+  (when (field-spec-db-type field)
+    (raise-user-error who
+                      "field ~a on entity ~a: Money fields manage their own two-column storage (~a BIGINT + ~a TEXT); remove #:db-type"
+                      (field-spec-key field)
+                      (field-spec-entity field)
+                      (money-minor-column-string field who)
+                      (money-currency-column-string field who))))
+
+;; One physical column an entity field expects on PostgreSQL (a Money field
+;; expects two).  `type` is the normalized information_schema data_type string
+;; the auto-migration compares against.
+(struct expected-db-column (name definition type nullable? primary-key?) #:transparent)
+
+(define (field-expected-db-columns field)
+  (cond
+    [(money-related-field? field)
+     (reject-unsupported-money-field! field 'sql)
+     (list (expected-db-column
+            (money-minor-column-string field 'sql)
+            (format "~a BIGINT NOT NULL"
+                    (quote-sql-identifier (money-minor-column-string field 'sql) 'sql))
+            "bigint" #f #f)
+           (expected-db-column
+            (money-currency-column-string field 'sql)
+            (format "~a TEXT NOT NULL"
+                    (quote-sql-identifier (money-currency-column-string field 'sql) 'sql))
+            "text" #f #f))]
+    [else
+     (list (expected-db-column
+            (identifier-value->string (field-column-name field) 'sql)
+            (column-definition-sql field)
+            (db-type->normalized-string (field-db-type-annotation field))
+            (field-spec-nullable? field)
+            (field-spec-primary-key? field)))]))
+
+;; The CREATE TABLE / ALTER TABLE column definition(s) one field expands to —
+;; two for a Money field, one for everything else.
+(define (field-column-definitions-sql field)
+  (map expected-db-column-definition (field-expected-db-columns field)))
+
+;; A Money field's derived column names must not collide with a column another
+;; field already claims — creating/altering the table would otherwise alias
+;; two fields onto one column.  Checked before any DDL runs.
+(define (check-money-column-collisions! entity [who 'sql])
+  (define fields (entity-spec-fields entity))
+  (define base-columns
+    (for/list ([f (in-list fields)])
+      (identifier-value->string (field-column-name f) who)))
+  (for ([f (in-list fields)]
+        #:when (money-field? f))
+    (for ([derived (in-list (list (money-minor-column-string f who)
+                                  (money-currency-column-string f who)))])
+      (when (member derived base-columns)
+        (raise-user-error who
+                          "entity ~a: Money field ~a stores into derived columns ~a and ~a, but the entity already declares a column named ~a; rename one of the fields"
+                          (entity-spec-name entity)
+                          (field-spec-key f)
+                          (money-minor-column-string f who)
+                          (money-currency-column-string f who)
+                          derived)))))
+
+;; SELECT/INSERT/RETURNING column list one field contributes (quoted names).
+(define (field-select-column-sql-list field)
+  (cond
+    [(money-related-field? field)
+     (reject-unsupported-money-field! field 'sql)
+     (list (quote-sql-identifier (money-minor-column-string field 'sql) 'sql)
+           (quote-sql-identifier (money-currency-column-string field 'sql) 'sql))]
+    [else
+     (list (quote-sql-identifier (field-column-name field) 'sql))]))
+
+;; Reject a non-Money value bound for a Money field with a clear error.
+(define (ensure-money-value field value who)
+  (define raw (normalize-row-value value))
+  (unless (tesl-money? raw)
+    (raise-user-error who
+                      "field ~a on entity ~a is a Money field and needs a Money value (e.g. (Money.usd 1999)), got ~e"
+                      (field-spec-key field)
+                      (field-spec-entity field)
+                      value))
+  raw)
+
+;; Resolve a STORED currency code fail-closed: an unknown code is data
+;; corruption (or a schema written by an incompatible build) and must surface
+;; loudly, never decode into a half-formed Money.
+(define (money-stored-currency field code who)
+  (define currency (and (string? code) (tesl-currency-of code)))
+  (unless currency
+    (raise-user-error who
+                      "field ~a on entity ~a: stored currency code ~e is not a known ISO 4217 currency — the ~a column holds corrupt data or was written by an incompatible schema"
+                      (field-spec-key field)
+                      (field-spec-entity field)
+                      code
+                      (money-currency-column-string field who)))
+  currency)
+
+;; Decode the two stored columns back into ONE tesl-money (fail-closed on a
+;; malformed minor value or an unknown currency code).
+(define (money-db-values->runtime-value field minor code [who 'sql])
+  (define n
+    (cond
+      [(exact-integer? minor) minor]
+      [(and (rational? minor)
+            (exact-integer? (inexact->exact minor)))
+       (inexact->exact minor)]
+      [else #f]))
+  (unless (exact-integer? n)
+    (raise-user-error who
+                      "field ~a on entity ~a: stored minor-units value ~e is not an integer — the ~a column holds corrupt data"
+                      (field-spec-key field)
+                      (field-spec-entity field)
+                      minor
+                      (money-minor-column-string field who)))
+  (tesl-money n (money-stored-currency field code who)))
+
+;; RUNTIME BACKSTOP (the compile-time forbid lives in the checker): ordered
+;; operations over Money are meaningless across currencies, on BOTH backends —
+;; raised at construction time so Memory and PostgreSQL agree exactly.
+(define (reject-money-ordered-comparison! who field what)
+  (when (money-related-field? field)
+    (raise-user-error who
+                      "field ~a on entity ~a: Money columns do not support ~a (currencies differ); compare Money.minorUnits explicitly after filtering by currency"
+                      (field-spec-key field)
+                      (field-spec-entity field)
+                      what)))
+
+;; Predicates with no meaningful two-column Money lowering (fail-closed).
+(define (reject-money-predicate! who field what)
+  (when (money-related-field? field)
+    (raise-user-error who
+                      "field ~a on entity ~a: ~a is not supported on Money columns"
+                      (field-spec-key field)
+                      (field-spec-entity field)
+                      what)))
+
+;; selectSum over Money — ONE decision table for BOTH backends:
+;;   0 distinct currencies (⇔ 0 matched rows; the columns are NOT NULL)
+;;       → error: a zero total has no currency to carry (fail-closed);
+;;   >1 distinct → error: summing across currencies is meaningless;
+;;   exactly 1  → (tesl-money total currency).
+(define (money-sum-result who field total distinct-count currency-thunk)
+  (cond
+    [(= distinct-count 0)
+     (raise-user-error who
+                       "field ~a on entity ~a: cannot sum Money over an empty row set (no currency for the zero total); guard with a count first"
+                       (field-spec-key field)
+                       (field-spec-entity field))]
+    [(> distinct-count 1)
+     (raise-user-error who
+                       "field ~a on entity ~a: cannot sum Money across mixed currencies (found ~a); filter by currency first"
+                       (field-spec-key field)
+                       (field-spec-entity field)
+                       distinct-count)]
+    [else (tesl-money total (currency-thunk))]))
 
 (define (normalize-row-source source)
   (define value (if (procedure? source) (source) source))
@@ -363,6 +587,9 @@
                                 raw-value))])
        (and present?
             (or
+             ;; Money fields match BY NAME (the struct may not be registered
+             ;; as a runtime type in this process).
+             (and (money-field? field) (tesl-money? field-value))
              ;; Nullable fields accept Nothing or a typed Something
              (and (field-spec-nullable? field)
                   (or (Nothing? field-value)
@@ -384,6 +611,13 @@
   (define inner-maybe (maybe-field-inner-type field-type))
   (define coerced-value
     (cond
+      ;; Money field: matched BY NAME (like PosixMillis) so validation works
+      ;; whether or not `Money` is registered as a runtime type, and a clear
+      ;; Money-specific error beats the generic type mismatch.  Maybe Money is
+      ;; rejected fail-closed inside the guard.
+      [(money-related-field? field)
+       (reject-unsupported-money-field! field who)
+       (ensure-money-value field raw-value who)]
       ;; Nullable (Maybe T) field: accept Nothing, Something(v), or a plain inner value
       [inner-maybe
        (cond
@@ -586,6 +820,10 @@
           (not (sql-null-value? operand-value))
           (equal? (unwrap-non-null row-value) (unwrap-non-null operand-value)))]
     [(comparison-predicate field operator operand)
+     ;; Belt-and-braces (constructors already reject): the Memory backend
+     ;; refuses ordered Money comparison with the SAME error as PostgreSQL.
+     (when (ordered-comparison-operator? operator)
+       (reject-money-ordered-comparison! 'sql field "ordered comparison in where clauses"))
      (define-values (_name operand-value _bindings)
        (resolve-query-operand field operand 'sql operator))
      (define row-value (row-field-ref row field))
@@ -688,6 +926,11 @@
 (define (make-comparison-predicate who operator field operand)
   (unless (field-spec? field)
     (raise-user-error who "expected a field reference, got ~a" field))
+  ;; Money runtime backstop: <, <=, >, >= over a Money column are rejected on
+  ;; BOTH backends at predicate-construction time (`!=` stays allowed — it is
+  ;; an equality shape and lowers to the two-column expansion).
+  (when (ordered-comparison-operator? operator)
+    (reject-money-ordered-comparison! who field "ordered comparison in where clauses"))
   (comparison-predicate field operator operand))
 
 (define (==. field operand)
@@ -720,6 +963,9 @@
 (define (order-by field direction)
   (unless (field-spec? field)
     (raise-user-error 'order-by "expected a field reference, got ~a" field))
+  ;; Ordering by Money has the same cross-currency problem as ordered
+  ;; comparison (and would reference a column that does not exist on PG).
+  (reject-money-ordered-comparison! 'order-by field "ORDER BY")
   (unless (member direction '(asc desc))
     (raise-user-error 'order-by "direction must be 'asc or 'desc, got ~a" direction))
   (order-clause field direction))
@@ -744,34 +990,47 @@
 (define (null?. field)
   (unless (field-spec? field)
     (raise-user-error 'null?. "expected a field reference, got ~a" field))
+  (reject-money-predicate! 'null?. field "IS NULL")
   (null-predicate field))
 
 (define (not-null?. field)
   (unless (field-spec? field)
     (raise-user-error 'not-null?. "expected a field reference, got ~a" field))
+  (reject-money-predicate! 'not-null?. field "IS NOT NULL")
   (not-null-predicate field))
 
 (define (in?. field values)
   (unless (field-spec? field)
     (raise-user-error 'in?. "expected a field reference, got ~a" field))
+  (reject-money-predicate! 'in?. field "IN")
   (in-predicate field values))
 
 (define (not-in?. field values)
   (unless (field-spec? field)
     (raise-user-error 'not-in?. "expected a field reference, got ~a" field))
+  (reject-money-predicate! 'not-in?. field "NOT IN")
   (not-in-predicate field values))
 
 (define (like?. field pattern)
   (unless (field-spec? field)
     (raise-user-error 'like?. "expected a field reference, got ~a" field))
+  (reject-money-predicate! 'like?. field "LIKE")
   (like-predicate field pattern))
 
 (define (ilike?. field pattern)
   (unless (field-spec? field)
     (raise-user-error 'ilike?. "expected a field reference, got ~a" field))
+  (reject-money-predicate! 'ilike?. field "ILIKE")
   (ilike-predicate field pattern))
 
 (define (group-by . fields)
+  (for ([f (in-list fields)]
+        #:when (field-spec? f))
+    (when (or (money-field? f) (maybe-money-field? f))
+      (raise-user-error 'group-by
+                        "field ~a on entity ~a: Money cannot be a groupBy key"
+                        (field-spec-key f)
+                        (field-spec-entity f))))
   (group-by-clause fields))
 
 (define (inner-join entity main-field join-field)
@@ -995,30 +1254,65 @@
     [else
      (raise-user-error 'sql "unsupported SQL predicate operator ~a" operator)]))
 
+;; Money predicate lowering: `price == m` expands over BOTH columns —
+;;   (price_minor = $n AND price_currency = $m)
+;; and `price != m` to its negation shape
+;;   (price_minor <> $n OR price_currency <> $m)
+;; parenthesized so the fragments compose under the surrounding AND/OR.
+(define (compile-money-equality-sql field operator money index)
+  (define minor-col (quote-sql-identifier (money-minor-column-string field 'sql) 'sql))
+  (define currency-col (quote-sql-identifier (money-currency-column-string field 'sql) 'sql))
+  (define-values (op joiner)
+    (if (eq? operator '==) (values "=" "AND") (values "<>" "OR")))
+  (values (format "(~a ~a ~a ~a ~a ~a ~a)"
+                  minor-col op (postgres-placeholder index)
+                  joiner
+                  currency-col op (postgres-placeholder (add1 index)))
+          (list (tesl-money-minor-units money)
+                (tesl-currency-code (tesl-money-currency money)))
+          (+ index 2)))
+
 (define (compile-predicate-sql predicate index)
   (match predicate
     [(eq-predicate field operand)
      (define-values (_name operand-value _bindings)
        (resolve-query-operand field operand 'sql '==))
-     (define encoded-value
-       (field-runtime-value->db-value field operand-value 'sql))
-     (values (format "~a ~a ~a"
-                     (quote-sql-identifier (field-column-name field) 'sql)
-                     (comparison-operator->sql '==)
-                     (postgres-placeholder index))
-             (list encoded-value)
-             (add1 index))]
+     (cond
+       [(money-field? field)
+        (compile-money-equality-sql field '==
+                                    (ensure-money-value field operand-value 'sql)
+                                    index)]
+       [else
+        (define encoded-value
+          (field-runtime-value->db-value field operand-value 'sql))
+        (values (format "~a ~a ~a"
+                        (quote-sql-identifier (field-column-name field) 'sql)
+                        (comparison-operator->sql '==)
+                        (postgres-placeholder index))
+                (list encoded-value)
+                (add1 index))])]
     [(comparison-predicate field operator operand)
+     ;; Belt-and-braces: the `<.`/`<=.`/`>.`/`>=.` constructors already reject
+     ;; Money, but a directly constructed predicate must not slip through.
+     (when (ordered-comparison-operator? operator)
+       (reject-money-ordered-comparison! 'sql field "ordered comparison in where clauses"))
      (define-values (_name operand-value _bindings)
        (resolve-query-operand field operand 'sql operator))
-     (define encoded-value
-       (field-runtime-value->db-value field operand-value 'sql))
-     (values (format "~a ~a ~a"
-                     (quote-sql-identifier (field-column-name field) 'sql)
-                     (comparison-operator->sql operator)
-                     (postgres-placeholder index))
-             (list encoded-value)
-             (add1 index))]
+     (cond
+       [(money-field? field)
+        ;; Only `!=` reaches here for Money (ordered rejected above).
+        (compile-money-equality-sql field operator
+                                    (ensure-money-value field operand-value 'sql)
+                                    index)]
+       [else
+        (define encoded-value
+          (field-runtime-value->db-value field operand-value 'sql))
+        (values (format "~a ~a ~a"
+                        (quote-sql-identifier (field-column-name field) 'sql)
+                        (comparison-operator->sql operator)
+                        (postgres-placeholder index))
+                (list encoded-value)
+                (add1 index))])]
     [(or-predicate left right)
      (define-values (sql-left params-left idx-left)
        (compile-predicate-sql left index))
@@ -1094,8 +1388,7 @@
 
 (define (entity-select-column-sql entity)
   (string-join
-   (for/list ([field (in-list (entity-spec-fields entity))])
-     (quote-sql-identifier (field-column-name field) 'sql))
+   (append-map field-select-column-sql-list (entity-spec-fields entity))
    ", "))
 
 (define (field-db-value->runtime-value field value)
@@ -1115,6 +1408,13 @@
                                          #f)])
             (Something (field-db-value->runtime-value inner-field value))))
       (cond
+        ;; Money decodes from TWO columns — a single-value decode is a bug in
+        ;; this file (some call path missed the two-column expansion).
+        [(money-field? field)
+         (raise-user-error 'sql
+                           "internal error: Money field ~a on entity ~a reached the single-column decoder — Money decodes from two columns (bug in dsl/sql.rkt)"
+                           (field-spec-key field)
+                           (field-spec-entity field))]
         [(field-adt-type? field)
          (jsexpr->typed-value (field-spec-type field)
                               (cond
@@ -1155,6 +1455,13 @@
                                         #f)])
            (field-runtime-value->db-value inner-field value who))])
       (begin
+        ;; Money encodes to TWO params — a single-value encode is a bug in
+        ;; this file (use field-db-param-values, which expands Money).
+        (when (money-field? field)
+          (raise-user-error who
+                            "internal error: Money field ~a on entity ~a reached the single-column encoder — Money expands to two params (bug in dsl/sql.rkt)"
+                            (field-spec-key field)
+                            (field-spec-entity field)))
         (unless (runtime-type-satisfied? (field-spec-type field) value)
           (raise-user-error who
                             "expected a value satisfying field ~a on entity ~a to match type ~a, got ~a"
@@ -1169,12 +1476,39 @@
           [(newtype-value? value) (newtype-value-value value)]
           [else value]))))
 
+;; The ordered SQL params ONE field value expands to: (minor currency-code)
+;; for a Money field, a single encoded value for everything else.
+(define (field-db-param-values field value who)
+  (cond
+    [(money-related-field? field)
+     (reject-unsupported-money-field! field who)
+     (define money (ensure-money-value field value who))
+     (list (tesl-money-minor-units money)
+           (tesl-currency-code (tesl-money-currency money)))]
+    [else
+     (list (field-runtime-value->db-value field value who))]))
+
 (define (vector->entity-row entity row-vector)
-  (for/hash ([field (in-list (entity-spec-fields entity))]
-             [index (in-naturals)])
-    (values (field-spec-key field)
-            (field-db-value->runtime-value field
-                                           (vector-ref row-vector index)))))
+  ;; A Money field consumes TWO adjacent slots of the result vector (its two
+  ;; columns are always selected together, in minor/currency order); every
+  ;; other field consumes one — so the index is threaded, not (in-naturals).
+  (define-values (row _next-index)
+    (for/fold ([acc (hash)]
+               [index 0])
+              ([field (in-list (entity-spec-fields entity))])
+      (if (money-field? field)
+          (values (hash-set acc
+                            (field-spec-key field)
+                            (money-db-values->runtime-value field
+                                                            (vector-ref row-vector index)
+                                                            (vector-ref row-vector (add1 index))))
+                  (+ index 2))
+          (values (hash-set acc
+                            (field-spec-key field)
+                            (field-db-value->runtime-value field
+                                                           (vector-ref row-vector index)))
+                  (add1 index)))))
+  row)
 
 (define (postgres-table-exists? runtime entity)
   (define database (database-runtime-database runtime))
@@ -1220,23 +1554,29 @@
     (vector-ref row 0)))
 
 (define (postgres-create-table! runtime entity)
+  (check-money-column-collisions! entity 'sql)
   (query-exec (database-runtime-connection runtime)
               (format "create table if not exists ~a (~a)"
                       (qualified-table-name (database-runtime-database runtime) entity)
                       (string-join
-                       (for/list ([field (in-list (entity-spec-fields entity))])
-                         (column-definition-sql field))
+                       (append-map field-column-definitions-sql
+                                   (entity-spec-fields entity))
                        ", "))))
 
 (define (postgres-ensure-entity! runtime entity)
+  (check-money-column-collisions! entity 'sql)
   (cond
     [(not (postgres-table-exists? runtime entity))
      (postgres-create-table! runtime entity)]
     [else
      (define columns (postgres-column-metadata runtime entity))
      (define empty-table? (postgres-table-empty? runtime entity))
-     (for ([field (in-list (entity-spec-fields entity))])
-       (define column-name (identifier-value->string (field-column-name field) 'sql))
+     ;; Walk the PHYSICAL columns each field expects (a Money field expects
+     ;; two: <col>_minor BIGINT NOT NULL + <col>_currency TEXT NOT NULL), so
+     ;; adding a Money field to an existing table migrates by adding both.
+     (for* ([field (in-list (entity-spec-fields entity))]
+            [expected (in-list (field-expected-db-columns field))])
+       (define column-name (expected-db-column-name expected))
        (define maybe-column (hash-ref columns column-name #f))
        (cond
          [(not maybe-column)
@@ -1246,7 +1586,7 @@
                                "automatic migration cannot add required column ~a to non-empty table ~a yet"
                                column-name
                                (entity-table-name entity))]
-            [(field-spec-primary-key? field)
+            [(expected-db-column-primary-key? expected)
              (raise-user-error 'sql
                                "automatic migration cannot add a missing primary-key column ~a to existing table ~a yet"
                                column-name
@@ -1255,10 +1595,10 @@
              (query-exec (database-runtime-connection runtime)
                          (format "alter table ~a add column ~a"
                                  (qualified-table-name (database-runtime-database runtime) entity)
-                                 (column-definition-sql field)))])]
+                                 (expected-db-column-definition expected)))])]
          [else
           (define actual-type (hash-ref maybe-column 'data-type))
-          (define expected-type (db-type->normalized-string (field-db-type-annotation field)))
+          (define expected-type (expected-db-column-type expected))
           (cond
             [(equal? actual-type expected-type) (void)]
             ;; NT-07: `Int` columns were BIGINT and now map to NUMERIC (arbitrary
@@ -1281,15 +1621,15 @@
           ;; Nullability check: DB column must match the entity declaration.
           ;; Nullable fields (Maybe types) expect "YES"; non-nullable fields expect "NO".
           (define db-is-nullable (not (equal? (hash-ref maybe-column 'is-nullable) "NO")))
-          (define entity-expects-nullable (field-spec-nullable? field))
-          (when (and (not (field-spec-primary-key? field))
+          (define entity-expects-nullable (expected-db-column-nullable? expected))
+          (when (and (not (expected-db-column-primary-key? expected))
                      (not entity-expects-nullable)
                      db-is-nullable)
             (raise-user-error 'sql
                               "automatic migration found nullable column ~a.~a but the entity declaration requires NOT NULL"
                               (entity-table-name entity)
                               column-name))
-          (when (and (not (field-spec-primary-key? field))
+          (when (and (not (expected-db-column-primary-key? expected))
                      entity-expects-nullable
                      (not db-is-nullable))
             (raise-user-error 'sql
@@ -1498,23 +1838,20 @@
   (define-values (row primary-key-name bindings)
     (normalize-entity-row entity value 'insert-one!))
   (define fields (entity-spec-fields entity))
+  ;; A Money field contributes TWO columns and TWO params (minor, currency).
+  (define insert-columns (append-map field-select-column-sql-list fields))
+  (define params
+    (append* (for/list ([field (in-list fields)])
+               (field-db-param-values field (row-field-ref row field) 'insert-one!))))
   (define sql
     (format "insert into ~a (~a) values (~a) returning ~a"
             (qualified-table-name (database-runtime-database runtime) entity)
+            (string-join insert-columns ", ")
             (string-join
-             (for/list ([field (in-list fields)])
-               (quote-sql-identifier (field-column-name field) 'sql))
-             ", ")
-            (string-join
-             (for/list ([index (in-range 1 (add1 (length fields)))])
+             (for/list ([index (in-range 1 (add1 (length params)))])
                (postgres-placeholder index))
              ", ")
             (entity-select-column-sql entity)))
-  (define params
-    (for/list ([field (in-list fields)])
-      (field-runtime-value->db-value field
-                                     (row-field-ref row field)
-                                     'insert-one!)))
   (when (tesl-log-active?) (tesl-log-sql! sql params))
   (define inserted
     (with-sql-capture sql params (capture-table-name entity) 'insert-one!
@@ -1537,28 +1874,35 @@
       f))
   (define conflict-cols
     (map (lambda (fname)
-           (quote-sql-identifier
-            (field-column-name (find-field fname)) 'sql))
+           (define f (find-field fname))
+           ;; A Money conflict target would need a unique index over both
+           ;; derived columns — not a meaningful conflict key; fail closed.
+           (when (and f (money-related-field? f))
+             (raise-user-error 'upsert-one!
+                               "field ~a on entity ~a: Money fields cannot be upsert conflict keys"
+                               (field-spec-key f)
+                               (field-spec-entity f)))
+           (quote-sql-identifier (field-column-name f) 'sql))
          conflict-fields))
+  ;; A Money update target expands over BOTH derived columns.
   (define update-cols
-    (for/list ([fname (in-list update-fields)])
-      (define col (quote-sql-identifier
-                   (field-column-name (find-field fname)) 'sql))
-      (format "~a = EXCLUDED.~a" col col)))
+    (append*
+     (for/list ([fname (in-list update-fields)])
+       (for/list ([col (in-list (field-select-column-sql-list (find-field fname)))])
+         (format "~a = EXCLUDED.~a" col col)))))
+  (define params
+    (append* (for/list ([field (in-list fields)])
+               (field-db-param-values field (row-field-ref row field) 'upsert-one!))))
   (define sql
     (format "insert into ~a (~a) values (~a) on conflict (~a) do update set ~a returning ~a"
             (qualified-table-name (database-runtime-database runtime) entity)
+            (string-join (append-map field-select-column-sql-list fields) ", ")
             (string-join
-             (map (lambda (f) (quote-sql-identifier (field-column-name f) 'sql)) fields) ", ")
-            (string-join
-             (for/list ([index (in-range 1 (add1 (length fields)))])
+             (for/list ([index (in-range 1 (add1 (length params)))])
                (postgres-placeholder index)) ", ")
             (string-join conflict-cols ", ")
             (string-join update-cols ", ")
             (entity-select-column-sql entity)))
-  (define params
-    (for/list ([field (in-list fields)])
-      (field-runtime-value->db-value field (row-field-ref row field) 'upsert-one!)))
   (when (tesl-log-active?) (tesl-log-sql! sql params))
   (define upserted
     (with-sql-capture sql params (capture-table-name entity) 'upsert-one!
@@ -1572,26 +1916,28 @@
 
 (define (postgres-update-many! runtime entity updates predicates)
   (define update-pairs (normalize-update-spec entity updates))
+  ;; `set p.price = <money>` expands over both derived columns, so the SET
+  ;; column list and its params are flattened per field (Money → two of each)
+  ;; and the WHERE placeholders start after ALL set params.
+  (define set-columns
+    (append-map (lambda (pair) (field-select-column-sql-list (car pair)))
+                update-pairs))
+  (define set-params
+    (append* (for/list ([pair (in-list update-pairs)])
+               (field-db-param-values (car pair) (cdr pair) 'update-many!))))
   (define-values (where-sql where-params _next-index)
-    (compile-where-sql predicates (add1 (length update-pairs))))
+    (compile-where-sql predicates (add1 (length set-params))))
   (define sql
     (format "update ~a set ~a~a returning ~a"
             (qualified-table-name (database-runtime-database runtime) entity)
             (string-join
-             (for/list ([pair (in-list update-pairs)]
-                        [index (in-range 1 (add1 (length update-pairs)))])
-               (format "~a = ~a"
-                       (quote-sql-identifier (field-column-name (car pair)) 'sql)
-                       (postgres-placeholder index)))
+             (for/list ([column (in-list set-columns)]
+                        [index (in-naturals 1)])
+               (format "~a = ~a" column (postgres-placeholder index)))
              ", ")
             where-sql
             (entity-select-column-sql entity)))
-  (define params
-    (append (for/list ([pair (in-list update-pairs)])
-              (field-runtime-value->db-value (car pair)
-                                             (cdr pair)
-                                             'update-many!))
-            where-params))
+  (define params (append set-params where-params))
   (when (tesl-log-active?) (tesl-log-sql! sql params))
   (define rows
     (with-sql-capture sql params (capture-table-name entity) 'update-many!
@@ -1711,24 +2057,81 @@
   (define entity (from-clause-entity source))
   (define predicates (query-predicates clauses))
   (define runtime (database-runtime-for-entity entity))
-  (if runtime
-      (let ()
-        (define col (quote-sql-identifier (field-column-name field) 'sql))
-        (define-values (where-sql params _) (compile-where-sql predicates))
-        (define sql
-          (format "select coalesce(sum(~a), 0) from ~a~a"
-                  col
-                  (qualified-table-name (database-runtime-database runtime) entity)
-                  where-sql))
-        (when (tesl-log-active?) (tesl-log-sql! sql params))
-        (define result
-          (with-sql-capture sql params (capture-table-name entity) 'select-sum
-            (lambda () (apply query-value (database-runtime-connection runtime) sql params))
-            (lambda (_r) 1)))
-        (if (integer? result) result (inexact->exact result)))
-      (for/sum ([row (in-list (in-memory-select-many entity predicates))])
-        (define v (row-field-ref row field 0))
-        (if (number? v) (inexact->exact v) 0))))
+  (cond
+    ;; Money: native SUM over minor units, guarded by the shared decision
+    ;; table in money-sum-result (empty → error, mixed currencies → error,
+    ;; single currency → Money) — identical on both backends.
+    [(money-related-field? field)
+     (reject-unsupported-money-field! field 'select-sum)
+     (if runtime
+         (postgres-money-select-sum runtime entity field predicates)
+         (in-memory-money-select-sum entity field predicates))]
+    [runtime
+     (define col (quote-sql-identifier (field-column-name field) 'sql))
+     (define-values (where-sql params _) (compile-where-sql predicates))
+     (define sql
+       (format "select coalesce(sum(~a), 0) from ~a~a"
+               col
+               (qualified-table-name (database-runtime-database runtime) entity)
+               where-sql))
+     (when (tesl-log-active?) (tesl-log-sql! sql params))
+     (define result
+       (with-sql-capture sql params (capture-table-name entity) 'select-sum
+         (lambda () (apply query-value (database-runtime-connection runtime) sql params))
+         (lambda (_r) 1)))
+     (if (integer? result) result (inexact->exact result))]
+    [else
+     (for/sum ([row (in-list (in-memory-select-many entity predicates))])
+       (define v (row-field-ref row field 0))
+       (if (number? v) (inexact->exact v) 0))]))
+
+;; PostgreSQL Money SUM: one aggregate query fetches the minor-unit total, the
+;; number of DISTINCT currencies and one witness code; the decision table then
+;; decides.  COUNT(DISTINCT c) is 0 exactly when no row matched (the currency
+;; column is NOT NULL), which is the empty case.
+(define (postgres-money-select-sum runtime entity field predicates)
+  (define minor-col (quote-sql-identifier (money-minor-column-string field 'sql) 'sql))
+  (define currency-col (quote-sql-identifier (money-currency-column-string field 'sql) 'sql))
+  (define-values (where-sql params _) (compile-where-sql predicates))
+  (define sql
+    (format "select coalesce(sum(~a), 0), count(distinct ~a), min(~a) from ~a~a"
+            minor-col
+            currency-col
+            currency-col
+            (qualified-table-name (database-runtime-database runtime) entity)
+            where-sql))
+  (when (tesl-log-active?) (tesl-log-sql! sql params))
+  (define row
+    (with-sql-capture sql params (capture-table-name entity) 'select-sum
+      (lambda () (apply query-row (database-runtime-connection runtime) sql params))
+      (lambda (_r) 1)))
+  (define total
+    (let ([v (vector-ref row 0)])
+      (if (exact-integer? v) v (inexact->exact v))))
+  (define distinct-count (vector-ref row 1))
+  (define witness-code (vector-ref row 2))   ; sql-null when no rows matched
+  (money-sum-result 'select-sum field total distinct-count
+                    (lambda () (money-stored-currency field witness-code 'select-sum))))
+
+;; Memory Money SUM: same decision table over the structs stored in the rows.
+(define (in-memory-money-select-sum entity field predicates)
+  (define monies
+    (for/list ([row (in-list (in-memory-select-many entity predicates))])
+      (define v (unwrap-non-null (row-field-ref row field #f)))
+      (unless (tesl-money? v)
+        (raise-user-error 'select-sum
+                          "field ~a on entity ~a holds ~e where a Money value was expected"
+                          (field-spec-key field)
+                          (field-spec-entity field)
+                          v))
+      v))
+  (define distinct-count
+    (length (remove-duplicates
+             (map (lambda (m) (tesl-currency-code (tesl-money-currency m))) monies))))
+  (money-sum-result 'select-sum field
+                    (for/sum ([m (in-list monies)]) (tesl-money-minor-units m))
+                    distinct-count
+                    (lambda () (tesl-money-currency (car monies)))))
 
 ;; MAX(field) — returns the maximum value of a numeric field (or #f if no rows).
 (define (select-max field-accessor source . clauses)
@@ -1738,6 +2141,8 @@
   (define field (if (field-spec? field-accessor) field-accessor (field-accessor)))
   (unless (field-spec? field)
     (raise-user-error 'select-max "expected a field-spec from a field accessor, got ~a" field))
+  ;; Money runtime backstop: MAX over mixed currencies is meaningless.
+  (reject-money-ordered-comparison! 'select-max field "selectMax")
   (define entity (from-clause-entity source))
   (define predicates (query-predicates clauses))
   (define runtime (database-runtime-for-entity entity))
@@ -1768,6 +2173,8 @@
   (define field (if (field-spec? field-accessor) field-accessor (field-accessor)))
   (unless (field-spec? field)
     (raise-user-error 'select-min "expected a field-spec from a field accessor, got ~a" field))
+  ;; Money runtime backstop: MIN over mixed currencies is meaningless.
+  (reject-money-ordered-comparison! 'select-min field "selectMin")
   (define entity (from-clause-entity source))
   (define predicates (query-predicates clauses))
   (define runtime (database-runtime-for-entity entity))
@@ -1810,6 +2217,13 @@
   (define field (if (field-spec? field-accessor) field-accessor (field-accessor)))
   (unless (field-spec? field)
     (raise-user-error 'groupBy "expected a field reference, got ~a" field))
+  ;; Money runtime backstop: a Money value is not a bucketable scalar (and on
+  ;; PostgreSQL its logical column does not physically exist).
+  (when (or (money-field? field) (maybe-money-field? field))
+    (raise-user-error 'groupBy
+                      "field ~a on entity ~a: Money cannot be a groupBy key"
+                      (field-spec-key field)
+                      (field-spec-entity field)))
   (unless (memq unit '(field hour day week month year))
     (raise-user-error 'groupBy "unknown bucket unit: ~a" unit))
   (define zone
@@ -1952,6 +2366,13 @@
   (define field (if (field-spec? field-accessor) field-accessor (field-accessor)))
   (unless (field-spec? field)
     (raise-user-error 'select-sum-by "expected a field-spec from a field accessor, got ~a" field))
+  ;; Money runtime backstop: per-group Money sums need the same per-group
+  ;; mixed-currency guard selectSum has; not implemented yet — fail closed.
+  (when (or (money-field? field) (maybe-money-field? field))
+    (raise-user-error 'select-sum-by
+                      "field ~a on entity ~a: selectSumBy over a Money column is not supported; sum Money.minorUnits per group after filtering by currency"
+                      (field-spec-key field)
+                      (field-spec-entity field)))
   (unless (from-clause? source)
     (raise-user-error 'select-sum-by "expected a from clause, got ~a" source))
   (define entity (from-clause-entity source))

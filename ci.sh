@@ -1099,6 +1099,10 @@ else
         "tests/check-test.rkt"
         "tests/sql-test.rkt"
         "tests/sql-group-by-pg-test.rkt"
+        # First-Class Units: Money two-column storage (Memory decision-table +
+        # PG parity; the PG suite self-skips without initdb/pg_ctl)
+        "tests/sql-money-tests.rkt"
+        "tests/sql-money-pg-test.rkt"
         # Issue #31: pool-lease waiting + 503 mapping (fake connections, no PG)
         "tests/pg-pool-tests.rkt"
         "tests/timezone-zones-test.rkt"

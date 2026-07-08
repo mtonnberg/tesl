@@ -45,6 +45,14 @@ let t_fact    = TCon "Fact"
 let t_delete_result = TCon "DeleteResult"
 let t_jwt_token  = TCon "JwtToken"
 let t_jwt_secret = TCon "JwtSecret"
+(* First-Class Units: Money is nominal like PosixMillis; its currency is a
+   runtime qualifier (a `Currency` value, like TimeZone), NOT an SI dimension. *)
+let t_money         = TCon "Money"
+let t_currency      = TCon "Currency"
+let t_exchange_rate = TCon "ExchangeRate"
+(* A dimensioned quantity: canonical nominal TCon from the exponent vector
+   (units_catalog.ml).  Erases to Float at runtime. *)
+let t_quantity (d : Units_catalog.dim) = TCon (Units_catalog.dim_name d)
 let t_http_response = TCon "HttpResponse"
 let t_agent       = TCon "Agent"
 let t_llm_provider = TCon "LlmProvider"
@@ -268,6 +276,10 @@ let rec pp_ty ?(parens = false) (ty : ty) : string =
     | TCon "Bool"   -> "Bool"
     | TCon "Float"  -> "Float"
     | TCon "Unit"   -> "Unit"
+    (* Dimensioned quantity: render the alias ("Speed") or unit form ("m/s^2")
+       — the raw §Q[...] canonical name must never leak into a diagnostic. *)
+    | TCon c when Units_catalog.is_quantity_name c ->
+      (match Units_catalog.display_of_name c with Some s -> s | None -> c)
     | TCon c        -> c
     | TApp (TCon "List", a) -> Printf.sprintf "List %s" (pp_ty ~parens:true a)
     | TApp (TCon "Maybe", a) -> Printf.sprintf "Maybe %s" (pp_ty ~parens:true a)
@@ -498,6 +510,16 @@ let stdlib_env : (string * scheme) list = [
   "Time.truncYear",  mono (t_fun [t_timezone; t_posix] t_posix);
   (* the zone's UTC offset in minutes AT an instant (DST-correct) *)
   "Time.offsetAt",   mono (t_fun [t_timezone; t_posix] t_int);
+  (* Duration bridge (First-Class Units): typed spans alongside the exact-Int
+     ms forms.  addMs/diffMs stay canonical (exact integer arithmetic — the
+     same exactness stance as Money's minor units); these give the units-typed
+     surface: `Time.add ts (Duration.hours 2.0)`.  Conversion rounds
+     half-even at the ms boundary. *)
+  "Time.add",      mono (t_fun [t_posix; t_quantity Units_catalog.d_duration] t_posix);
+  "Time.subtract", mono (t_fun [t_posix; t_quantity Units_catalog.d_duration] t_posix);
+  "Time.diff",     mono (t_fun [t_posix; t_posix] (t_quantity Units_catalog.d_duration));
+  "Duration.toMillis",   mono (t_fun [t_quantity Units_catalog.d_duration] t_int);
+  "Duration.fromMillis", mono (t_fun [t_int] (t_quantity Units_catalog.d_duration));
   (* TimeZone constructors: Utc, FixedOffset, + one per baked IANA zone
      (appended below from the generated Tz_zones table — a typo'd zone is a
      compile error and completion lists every zone). *)
@@ -658,6 +680,54 @@ let stdlib_env : (string * scheme) list = [
   "JWT.verify", mono (t_fun [t_jwt_token; t_jwt_secret] (t_dict t_string t_string));
   "JWT.decode", mono (t_fun [t_jwt_token] (t_dict t_string t_string));
 
+  (* ── Money (First-Class Units, phase 1) ──────────────────────────────────
+     Money = exact-integer MINOR units (cents/öre/yen) + an intrinsic Currency
+     qualifier — money NEVER touches Float.  Currency is a fixed baked ADT
+     (one ctor per active ISO 4217 code, appended below from Currencies) —
+     a typo'd currency is an unknown-constructor compile error.  Same-currency
+     safety is proof-layer (SameCurrency, minted by Money.requireSameCurrency;
+     Money.add/subtract/compare require it — currency is a runtime qualifier,
+     deliberately NOT in the static type, like a PosixMillis's zone).
+     Cross-currency conversion is EXPLICIT: a runtime-supplied ExchangeRate
+     (never ambient, never a default rate) through Money.convert.  Pure module:
+     no capability. *)
+  (* NOT `Money.of` — `of` is the case-expression keyword and cannot follow a
+     dot in Tesl source *)
+  "Money.fromMinorUnits", mono (t_fun [t_currency; t_int] t_money);
+  "Money.minorUnits",  mono (t_fun [t_money] t_int);
+  "Money.currency",    mono (t_fun [t_money] t_currency);
+  "Money.scale",       mono (t_fun [t_money; t_int] t_money);
+  (* fractional scaling (interest/VAT/discount): decimal-faithful exact factor,
+     half-even rounding back to minor units — named (not `*`) because it rounds *)
+  "Money.scaleBy",     mono (t_fun [t_money; t_float] t_money);
+  "Money.negate",      mono (t_fun [t_money] t_money);
+  "Money.abs",         mono (t_fun [t_money] t_money);
+  "Money.isZero",      mono (t_fun [t_money] t_bool);
+  "Money.isNegative",  mono (t_fun [t_money] t_bool);
+  "Money.display",     mono (t_fun [t_money] t_string);
+  (* Same-currency ops: statically Money -> Money -> Money; the SameCurrency
+     proof obligation on the second argument is enforced by the proof layer. *)
+  "Money.add",         mono (t_fun [t_money; t_money] t_money);
+  "Money.subtract",    mono (t_fun [t_money; t_money] t_money);
+  "Money.compare",     mono (t_fun [t_money; t_money] t_int);
+  (* check functions (mint SameCurrency / NonNegativeMoney / RateFor) *)
+  "Money.requireSameCurrency", mono (t_fun [t_money; t_money] t_money);
+  "Money.requireNonNegative",  mono (t_fun [t_money] t_money);
+  "Money.requireRateFor",      mono (t_fun [t_exchange_rate; t_money] t_money);
+  "Currency.code",        mono (t_fun [t_currency] t_string);
+  "Currency.minorDigits", mono (t_fun [t_currency] t_int);
+  "Currency.fromCode",    mono (t_fun [t_string] (t_maybe t_currency));
+  (* Exchange: rate is runtime data with provenance (asOf), never baked. *)
+  "ExchangeRate.make", mono (t_fun [t_currency; t_currency; t_float; t_posix] t_exchange_rate);
+  "ExchangeRate.fromCurrency", mono (t_fun [t_exchange_rate] t_currency);
+  "ExchangeRate.toCurrency",   mono (t_fun [t_exchange_rate] t_currency);
+  "ExchangeRate.rate",         mono (t_fun [t_exchange_rate] t_float);
+  "ExchangeRate.asOf",         mono (t_fun [t_exchange_rate] t_posix);
+  "Money.convert", mono (t_fun [t_exchange_rate; t_money] (t_result t_money t_string));
+  "Money.convertChecked", mono (t_fun [t_exchange_rate; t_money] t_money);
+  (* moneyCodec is deliberately NOT env-typed — codec names are validated by
+     builtin_codec_type and lowered inline, exactly like posixMillisCodec *)
+
   (* ── Queue / Tesl infrastructure ─────────────────────────────────────── *)
   (* requeue: takes a DeadJob (the concrete dead-letter entry) and returns Bool
      (#t/#f from the runtime).  The result type is CONCRETE — an earlier scheme
@@ -690,6 +760,21 @@ let stdlib_env : (string * scheme) list = [
 ]
 (* the 312 baked IANA zone constructors, each : TimeZone *)
 @ List.map (fun c -> (c, mono t_timezone)) Tz_zones.ctor_names
+(* the baked ISO 4217 Currency constructors (Usd, Eur, …), each : Currency *)
+@ List.map (fun c -> (c, mono t_currency)) Currencies.ctor_names
+(* per-currency Money constructors (Money.usd, …) : Int -> Money (minor units) *)
+@ List.map (fun n -> (n, mono (t_fun [t_int] t_money))) Currencies.money_ctor_names
+(* unit constructors (Length.meters, …) : Float -> <quantity>; factors live
+   only in tesl/units.rkt — the type is factor-independent *)
+@ List.map (fun (m, f, d) -> (m ^ "." ^ f, mono (t_fun [t_float] (t_quantity d))))
+    Units_catalog.constructors
+(* unit accessors (Length.inFeet, …) : <quantity> -> Float *)
+@ List.map (fun (m, f, d) -> (m ^ "." ^ f, mono (t_fun [t_quantity d] t_float)))
+    Units_catalog.accessors
+(* polymorphic dimension ops (Units.mul/div/…) are NOT typed here: they are
+   dimension-computed at each application site in the checker (decide-by-
+   resolution, like the grouped-aggregate heads); their runtime bindings are
+   ordinary Float functions in tesl/units.rkt *)
 
 (** Build an initial type environment from the stdlib list. *)
 let make_stdlib_env () : (string * scheme) list =
@@ -862,8 +947,27 @@ let tesl_module_exports : (string * string list) list = [
       "Time.posixToSeconds"; "Time.secondsToPosix";
       "Time.truncHour"; "Time.truncDay"; "Time.truncWeek";
       "Time.truncMonth"; "Time.truncYear"; "Time.offsetAt";
+      (* Duration bridge — typed spans (First-Class Units) *)
+      "Time.add"; "Time.subtract"; "Time.diff";
       "TimeZone"; "Utc"; "FixedOffset" ]
     @ Tz_zones.ctor_names );
+  ( "Tesl.Money",
+    [ "Money"; "Currency"; "ExchangeRate";
+      (* proof predicates owned by this module *)
+      "SameCurrency"; "NonNegativeMoney"; "RateFor";
+      "Money.fromMinorUnits"; "Money.minorUnits"; "Money.currency";
+      "Money.scale"; "Money.scaleBy";
+      "Money.negate"; "Money.abs"; "Money.isZero"; "Money.isNegative";
+      "Money.display"; "Money.add"; "Money.subtract"; "Money.compare";
+      "Money.requireSameCurrency"; "Money.requireNonNegative";
+      "Money.requireRateFor"; "Money.convert"; "Money.convertChecked";
+      "Currency.code"; "Currency.minorDigits"; "Currency.fromCode";
+      "ExchangeRate.make"; "ExchangeRate.fromCurrency";
+      "ExchangeRate.toCurrency"; "ExchangeRate.rate"; "ExchangeRate.asOf" ]
+      (* moneyCodec lives in Tesl.Json (inline-lowered), NOT here *)
+    @ Currencies.ctor_names
+    @ Currencies.money_ctor_names );
+  ( "Tesl.Units", Units_catalog.exported_names );
   ( "Tesl.Random",
     [ "randomInt"; "randomFloat"; "random" ] );
   ( "Tesl.UUID",
@@ -873,6 +977,7 @@ let tesl_module_exports : (string * string list) list = [
     [ "env"; "envInt"; "envString"; "requireEnv"; "envRead" ] );
   ( "Tesl.Json",
     [ "stringCodec"; "intCodec"; "int32Codec"; "boolCodec"; "floatCodec"; "posixMillisCodec";
+      "moneyCodec";
       "listCodec"; "dictCodec"; "setCodec" ] );
   ( "Tesl.ApiTest",
     [ "HttpResponse"; "JsonValue"; "JsonNull"; "SseStream";
@@ -1094,6 +1199,7 @@ let tesl_known_module_names : string list = [
   "Tesl.Telemetry"; "Tesl.ApiTest"; "Tesl.Tuple"; "Tesl.Id";
   "Tesl.Queue"; "Tesl.Sse"; "Tesl.Logging";
   "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database"; "Tesl.SSE"; "Tesl.App"; "Tesl.Agent";
+  "Tesl.Money"; "Tesl.Units";
   (* Tesl.Bool / Tesl.Crypto / Tesl.Map / Tesl.Channel / Tesl.Sql were removed
      2026-07-07: they had NO runtime .rkt file, so `import Tesl.Crypto`
      typechecked and then crashed at Racket load ("cannot open module file").

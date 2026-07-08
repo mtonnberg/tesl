@@ -105,7 +105,9 @@
                   call-with-delegated-capabilities)
          (only-in "../dsl/private/evidence.rkt" raw-value)
          (only-in "../dsl/types.rkt" tesl-type-codec-decode register-runtime-type/runtime!
-                  newtype-value-value posix-millis-newtype? posix-millis-agent-jsexpr)
+                  newtype-value-value posix-millis-newtype? posix-millis-agent-jsexpr
+                  money-agent-jsexpr)
+         (only-in "../dsl/private/money-core.rkt" tesl-money tesl-money? tesl-currency-of)
          (only-in "../dsl/check.rkt" check-fail? check-fail-message)
          json
          "agent-provider.rkt")
@@ -301,8 +303,8 @@
 ;;; positional parameters, type-checking each value against the parameter's base
 ;;; type.  A non-object payload, a missing field, or a type mismatch RAISES — the
 ;;; tool-call loop turns that into an is_error tool_result so the model can retry.
-;;; Self-contained (only `json` + raw-value), so no codec-registry entry is needed
-;;; for a primitive-typed tool parameter.
+;;; Self-contained (only `json` + raw-value + the money-core structs), so no
+;;; codec-registry entry is needed for a primitive-typed tool parameter.
 (define (tesl-agent-decode-args args-json specs)
   (define j
     (with-handlers ([exn:fail?
@@ -327,6 +329,24 @@
                     (raise-user-error 'tool "argument ~a must be a number" key))]
       [(bool)   (if (boolean? v) v
                     (raise-user-error 'tool "argument ~a must be a boolean" key))]
+      ;; Money-typed tool params arrive as {minorUnits: <int>, currency: <ISO
+      ;; code>} (the compiler emits tag "money"); extra keys — e.g. an
+      ;; enriched `display` echoed back by the model — are tolerated.
+      [(money)
+       (unless (hash? v)
+         (raise-user-error 'tool "argument ~a must be an object {minorUnits, currency}" key))
+       (define units (hash-ref v 'minorUnits
+                               (lambda ()
+                                 (raise-user-error 'tool "argument ~a is missing minorUnits" key))))
+       (define code (hash-ref v 'currency
+                              (lambda ()
+                                (raise-user-error 'tool "argument ~a is missing currency" key))))
+       (unless (exact-integer? units)
+         (raise-user-error 'tool "argument ~a must have integer minorUnits" key))
+       (define cur (and (string? code) (tesl-currency-of code)))
+       (unless cur
+         (raise-user-error 'tool "argument ~a has unknown currency code: ~a" key code))
+       (tesl-money units cur)]
       [else     (raise-user-error 'tool "unsupported argument type for ~a" key)])))
 
 ;;; withTools : Agent -> List Tool -> Agent
@@ -425,6 +445,11 @@
     [(and (posix-millis-newtype? r)
           (exact-integer? (newtype-value-value r)))
      (jsexpr->string (posix-millis-agent-jsexpr (newtype-value-value r)))]
+    ;; A Money tool result likewise: the enriched {minorUnits, currency,
+    ;; display} object instead of the struct's opaque print form the model
+    ;; would misread (minor units are not major units).
+    [(tesl-money? r)
+     (jsexpr->string (money-agent-jsexpr r))]
     [else (format "~a" r)]))
 
 (define (tool-result-block id content is-error?)

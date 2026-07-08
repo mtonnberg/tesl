@@ -1114,7 +1114,9 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
 let stdlib_predicates : string list =
   Type_system.framework_proof_predicates
   @ [ "IsNonZero"; "IsNonNegative"; "IsNonEmpty"; "IsUpperCase"; "IsLowerCase"
-    ; "IsTrimmed"; "IsSorted"; "HasKey"; "Authenticated"; "Fact"; "FloatNonZero" ]
+    ; "IsTrimmed"; "IsSorted"; "HasKey"; "Authenticated"; "Fact"; "FloatNonZero"
+    (* Money (First-Class Units) predicates, owned by Tesl.Money *)
+    ; "SameCurrency"; "NonNegativeMoney"; "RateFor" ]
 
 (** Collect predicate names produced by check/auth/establish functions in imported modules. *)
 let load_imported_predicates (m : module_form) : string list =

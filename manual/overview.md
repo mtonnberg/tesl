@@ -143,6 +143,13 @@ per-feature breakdown is single-sourced in the canonical
 
 See the README for status and the roadmap for what's planned.
 
+Two standard-library types extend the "invalid states" principle to everyday data. `Tesl.Money` is
+exact integer minor units with an intrinsic ISO-4217 currency: raw `+` on money is a compile error,
+same-currency arithmetic is proof-gated (`SameCurrency`), and exchange rates are explicit runtime
+values — never ambient. `Tesl.Units` is compile-time SI dimensional analysis: `m/s² × 4 s` *is*
+`m/s`, adding meters to kilograms does not compile, and every quantity erases to a plain `Float` at
+runtime. See [`LANGUAGE-SPEC.md` §21.4–21.5](../LANGUAGE-SPEC.md) and lessons 71–72.
+
 ---
 
 ## Who Should Use Tesl?

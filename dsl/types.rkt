@@ -4,6 +4,12 @@
          racket/match
          racket/set
          "private/evidence.rkt"
+         ;; Money structs + display live in the private core (NOT tesl/money.rkt
+         ;; — that surface module requires THIS file); the generated currency
+         ;; table is instantiated for effect so tesl-currency-of resolves codes
+         ;; on decode paths even before tesl/money.rkt is loaded.
+         "private/money-core.rkt"
+         (only-in "private/currency-data.rkt")
          (for-syntax racket/base
                      racket/list
                      racket/syntax
@@ -48,6 +54,8 @@
  current-agent-posix-enrichment?
  posix-millis-agent-jsexpr
  posix-millis-newtype?
+ current-agent-money-enrichment?
+ money-agent-jsexpr
  jsexpr->typed-value
  jsexpr->typed-value/result
  type-datum-display
@@ -103,6 +111,7 @@
  tesl-json-bool-codec
  tesl-json-float-codec
  tesl-json-posix-millis-codec
+ tesl-json-money-codec
  tesl-json-list-codec
  tesl-json-dict-codec
  tesl-json-set-codec
@@ -114,6 +123,7 @@
  tesl-encode-prim-bool
  tesl-encode-prim-float
  tesl-encode-prim-posix-millis
+ tesl-encode-prim-money
  tesl-encode-prim-list
  tesl-encode-prim-dict
  tesl-encode-prim-set
@@ -123,6 +133,7 @@
  tesl-decode-prim-bool
  tesl-decode-prim-float
  tesl-decode-prim-posix-millis
+ tesl-decode-prim-money
  tesl-decode-prim-list
  tesl-decode-prim-dict
  tesl-decode-prim-set
@@ -319,7 +330,15 @@
         ;;   Fact  — carries a detached (erased) proof; re-verifying it would
         ;;           violate the proof-erasure discipline.
         'Unit (lambda (_value) #t)
-        'Fact (lambda (_value) #t)))
+        'Fact (lambda (_value) #t)
+        ;; Money (First-Class Units): struct-backed built-ins from
+        ;; private/money-core.rkt — without these rows the fail-CLOSED
+        ;; no-predicate default would reject every Money-typed boundary
+        ;; argument (PosixMillis gets its predicate via define-newtype in
+        ;; tesl/time.rkt; structs need explicit rows).
+        'Money tesl-money?
+        'Currency tesl-currency?
+        'ExchangeRate tesl-exchange-rate?))
 
 (define (type-key? value)
   (or (symbol? value)
@@ -679,6 +698,23 @@
   (and (newtype-value? value)
        (eq? (type-key-name (newtype-value-type-name value)) 'PosixMillis)))
 
+;; ── Agent-facing Money enrichment ────────────────────────────────────────────
+;; A bare `{minorUnits: 1050, currency: "SEK"}` in a tool result makes the model
+;; do the minor-unit arithmetic itself and misstate amounts (the same
+;; digits-confusion class as PosixMillis above).  At the AGENT boundary only —
+;; never HTTP responses, whose wire format is developer-owned — a Money value
+;; additionally carries its canonical human rendering (`display`, from
+;; tesl-money-display, the ONE display definition).  Opt-in via this parameter,
+;; set by the agent tool result encoders (serverTools dispatch, asTool result
+;; path).  Limitation: a record with a user-written `codec` block keeps its
+;; authored wire shape — only the generic walk enriches.
+(define current-agent-money-enrichment? (make-parameter #f))
+
+(define (money-agent-jsexpr m)
+  (hash 'minorUnits (tesl-money-minor-units m)
+        'currency (tesl-currency-code (tesl-money-currency m))
+        'display (tesl-money-display m)))
+
 (define (runtime-value->jsexpr value)
   (cond
     [(named-value? value)
@@ -691,6 +727,24 @@
      (posix-millis-agent-jsexpr (newtype-value-value value))]
     [(newtype-value? value)
      (runtime-value->jsexpr (newtype-value-value value))]
+    ;; Money wire shape (HTTP + agent): always `{minorUnits, currency}` — the
+    ;; agent boundary (parameter above) additionally carries `display`.
+    [(tesl-money? value)
+     (if (current-agent-money-enrichment?)
+         (money-agent-jsexpr value)
+         (hash 'minorUnits (tesl-money-minor-units value)
+               'currency (tesl-currency-code (tesl-money-currency value))))]
+    ;; A Currency is its ISO 4217 code on the wire.
+    [(tesl-currency? value)
+     (tesl-currency-code value)]
+    ;; ExchangeRate rarely crosses the wire, but the walk stays total: the
+    ;; exact-rational rate is rendered as a JSON number (floats never enter
+    ;; money ARITHMETIC; this is presentation only).
+    [(tesl-exchange-rate? value)
+     (hash 'from (tesl-currency-code (tesl-exchange-rate-from value))
+           'to (tesl-currency-code (tesl-exchange-rate-to value))
+           'rate (exact->inexact (tesl-exchange-rate-rate value))
+           'asOf (runtime-value->jsexpr (tesl-exchange-rate-asOf value)))]
     [(adt-value? value)
      (define prepared-fields
        (for/hash ([(key item) (in-hash (adt-value-fields value))])
@@ -1351,6 +1405,18 @@
                          value))
      (list->set (for/list ([item (in-list value)])
                   (jsexpr->typed-value maybe-set-type item who)))]
+    ;; Money / Currency are struct-backed built-ins (not records/newtypes, so
+    ;; no spec matches): decode through the same single-source helpers as the
+    ;; codec path so wire shape and error text cannot drift.
+    [(and (type-key? type-datum) (eq? (type-key-name type-datum) 'Money))
+     (tesl-decode-prim-money value)]
+    [(and (type-key? type-datum) (eq? (type-key-name type-datum) 'Currency))
+     (unless (string? value)
+       (raise-user-error who
+                         "expected a JSON string ISO 4217 code for type Currency, got ~a"
+                         value))
+     (or (tesl-currency-of value)
+         (raise-user-error who "unknown ISO 4217 currency code ~a" value))]
     [else
      (define maybe-newtype-base (hash-ref newtype-registry type-datum #f))
      (if maybe-newtype-base
@@ -2175,6 +2241,15 @@
 (define (tesl-encode-prim-posix-millis v)
   (define raw (raw-value v))
   (if (integer? raw) raw (error "expected PosixMillis (integer), got ~a" v)))
+;; Money encodes as its unconditional wire shape `{minorUnits, currency}` —
+;; agent enrichment (display) is a boundary concern, never a codec one, so an
+;; authored codec and the generic walk agree on the persisted/HTTP shape.
+(define (tesl-encode-prim-money v)
+  (define raw (raw-value v))
+  (if (tesl-money? raw)
+      (hash 'minorUnits (tesl-money-minor-units raw)
+            'currency (tesl-currency-code (tesl-money-currency raw)))
+      (error "expected Money, got ~a" v)))
 (define (tesl-encode-prim-list v)
   (define raw (raw-value v))
   (if (list? raw) (map runtime-value->jsexpr raw) (error "expected List, got ~a" v)))
@@ -2203,6 +2278,24 @@
   (if (real? j) j (error "expected JSON number, got ~a" j)))
 (define (tesl-decode-prim-posix-millis j)
   (if (integer? j) j (error "expected JSON integer for PosixMillis, got ~a" j)))
+;; Money decode: `{minorUnits: <int>, currency: <known ISO code>}` → tesl-money.
+;; Extra keys (e.g. an agent-enriched `display` echoed back) are tolerated;
+;; an unknown currency code or a non-integer amount is a clear error.
+(define (tesl-decode-prim-money j)
+  (unless (hash? j)
+    (error "expected JSON object {minorUnits, currency} for Money, got ~a" j))
+  (define units (jsexpr-object-ref j 'minorUnits 'TESL-MISSING))
+  (define code (jsexpr-object-ref j 'currency 'TESL-MISSING))
+  (when (or (eq? units 'TESL-MISSING) (eq? code 'TESL-MISSING))
+    (error "expected JSON object with minorUnits and currency for Money, got ~a" j))
+  (unless (exact-integer? units)
+    (error "expected integer minorUnits for Money, got ~a" units))
+  (unless (string? code)
+    (error "expected string currency code for Money, got ~a" code))
+  (define cur (tesl-currency-of code))
+  (unless cur
+    (error "unknown ISO 4217 currency code for Money: ~a" code))
+  (tesl-money units cur))
 (define (tesl-decode-prim-list j)
   (if (list? j) j (error "expected JSON array for List, got ~a" j)))
 (define (tesl-decode-prim-dict j)
@@ -2220,6 +2313,7 @@
 (define tesl-json-bool-codec         (cons tesl-encode-prim-bool         tesl-decode-prim-bool))
 (define tesl-json-float-codec        (cons tesl-encode-prim-float        tesl-decode-prim-float))
 (define tesl-json-posix-millis-codec (cons tesl-encode-prim-posix-millis tesl-decode-prim-posix-millis))
+(define tesl-json-money-codec        (cons tesl-encode-prim-money        tesl-decode-prim-money))
 (define tesl-json-list-codec         (cons tesl-encode-prim-list         tesl-decode-prim-list))
 (define tesl-json-dict-codec         (cons tesl-encode-prim-dict         tesl-decode-prim-dict))
 (define tesl-json-set-codec          (cons tesl-encode-prim-set          tesl-decode-prim-set))

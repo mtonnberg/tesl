@@ -32,7 +32,7 @@ These are full, runnable API examples:
 
 ## Learning Path (Recommended Order)
 
-The `learn/` directory ships **67 `.tesl` lessons** (`ls example/learn/lesson*.tesl | wc -l`).
+The `learn/` directory ships **73 `.tesl` lessons** (`ls example/learn/lesson*.tesl | wc -l`).
 The list below is a curated recommended order through the core concepts, not the full catalog —
 run `ls example/learn/` (or `tesl help manual examples`) to see every lesson, including the later
 ones on UUID/JWT/HTTP client, caching, email, step debugging, AI agents, and query
@@ -107,6 +107,12 @@ parameters.
 | [`lesson69-agent-human-handoff.tesl`](../example/learn/lesson69-agent-human-handoff.tesl) | `humanActions`: endpoints the agent may not run, handed to the human as a button, with resume-after |
 | [`lesson70-agent-async-work.tesl`](../example/learn/lesson70-agent-async-work.tesl) | Long-running agent work over a queue: a tool enqueues, a worker does it and resumes the conversation |
 | [`support-assistant.tesl`](../example/support-assistant.tesl) | Complete capability-bounded support assistant with deterministic tests |
+
+### Money & Units
+| File | Description |
+|------|-------------|
+| [`lesson71-money.tesl`](../example/learn/lesson71-money.tesl) | `Tesl.Money`: integer minor units + intrinsic currency, proof-gated add (`SameCurrency`), runtime exchange rates, a Money entity column with `selectSum` |
+| [`lesson72-units.tesl`](../example/learn/lesson72-units.tesl) | `Tesl.Units`: compile-time SI dimensional analysis erased to Float — `m/s² × s : m/s`, pace = distance/time, areas, `Units.sqrt`, unit conversions in/out |
 
 ### Testing
 | File | Description |

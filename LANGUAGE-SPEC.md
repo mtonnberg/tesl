@@ -689,6 +689,11 @@ handler createPost(...) requires [dbWrite, time] =
 
 **Why `BIGINT` not `TIMESTAMPTZ`?** Both use 8 bytes. `BIGINT`/epoch is portable, free of timezone surprises, and trivial to sort/compare with integer arithmetic. Convert when you need PostgreSQL date functions: `to_timestamp(ts / 1000.0)` and `extract(epoch from ts) * 1000`.
 
+**Money and units**
+
+- `Tesl.Money` — exact money: `Money` (integer MINOR units + intrinsic ISO 4217 `Currency`, a fixed baked ADT — `Usd`, `Eur`, … 155 codes), per-currency constructors (`Money.usd`, …), `Money.display`, `Money.scale`, proof-gated arithmetic (`Money.add`/`Money.subtract`/`Money.compare` require `SameCurrency a b`, minted by `Money.requireSameCurrency`), explicit runtime-supplied `ExchangeRate` conversion (`Money.convert` / `Money.convertChecked`), and proof predicates `SameCurrency`, `NonNegativeMoney`, `RateFor`. Pure — no capability. See §21.4.
+- `Tesl.Units` — compile-time SI dimensional analysis, erased to `Float` at runtime: quantity alias types (`Length`, `Mass`, `Duration`, `Speed`, `Area`, …), unit constructors/accessors (`Length.meters`, `Speed.inKilometersPerHour`, …), operator dimension algebra (`Acceleration * Duration : Speed`), and per-call-site polymorphic ops (`Units.mul/div/square/sqrt/abs/negate/min/max/sum/requireNonZero`). The alias type names are import-gated. Pure — no capability. See §21.5.
+
 That is currently useful for bootstrapping, but the important public point is explicit importing and qualification, not the exact bootstrap mechanism.
 
 ### 10.6 Standard library GDP proofs
@@ -2914,6 +2919,8 @@ Use `Tesl.Tuple` to construct and deconstruct tuples:
 - `Tuple2.first t`, `Tuple2.second t` — accessors
 - `Tuple3 a b c`, `Tuple3.first/second/third` — analogous
 
+Modules importing `Tesl.Units` additionally get dimensioned quantity types (`Length`, `Speed`, `Area`, …; §21.5): each is a canonical type over its SI exponent vector, arithmetic operators compute the result dimension per expression, a dimensionless result collapses to plain `Float`, and every quantity erases to `Float` at runtime.
+
 ### 14b.2 PosixMillis is not Int
 
 `PosixMillis` is a nominal newtype. A plain `Int` does NOT satisfy a `PosixMillis`
@@ -3580,7 +3587,7 @@ If the `insert` or any subsequent step raises an exception, the transaction roll
 
 ## 21. Standard Library Extensions
 
-This section documents three new modules added to the Tesl standard library.
+This section documents newer modules added to the Tesl standard library.
 
 ### 21.1 `Tesl.UUID`
 **Implemented.**
@@ -3738,6 +3745,185 @@ handler fetchExternalUser(id: String) -> HttpResponse requires [httpClient] =
 **Header lists.** Headers are `List (Tuple2 String String)` — a list of name/value pairs. Pass `[]` for requests with no custom headers.
 
 **Response inspection.** Inspect `response.status` (HTTP status code) and `response.body` (raw response body string). Parse JSON bodies with the standard codec layer or with `Dict`/`String` operations.
+
+### 21.4 `Tesl.Money`
+**Implemented.**
+
+Provides exact monetary amounts: an integer count of MINOR units (cents / öre / yen) carrying an intrinsic ISO 4217 currency. Money NEVER touches `Float`, and there is no Money × Money. Import:
+
+```tesl
+import Tesl.Money exposing [Money, Currency, ExchangeRate,
+                            SameCurrency, RateFor,
+                            Usd, Eur, Money.usd, Money.display, Money.scale,
+                            Money.add, Money.requireSameCurrency,
+                            Money.convert, Money.requireRateFor,
+                            Money.convertChecked, ExchangeRate.make]
+```
+
+**Capability:** none — `Tesl.Money` is a pure module.
+
+**Types:**
+
+- `Money` — an exact-integer amount in minor units plus its `Currency`. `Money.usd 1050` is $10.50 (1050 cents).
+- `Currency` — a FIXED baked ADT with one constructor per active ISO 4217 code (`Usd`, `Eur`, `Jpy`, `Sek`, … — 155 codes, generated into `compiler/lib/currencies.ml`). A typo'd currency is an unknown-constructor compile error and completion lists every code. Each currency carries its minor-digit convention (USD 2, JPY 0, BHD 3), which drives rounding, display, and the digit-shift in conversion.
+- `ExchangeRate` — a runtime-supplied rate with provenance: `ExchangeRate.make from to rate asOf`. The rate is exactified decimal-faithfully at construction (0.9155 becomes the exact rational 1831/2000, not the raw binary-float noise), so conversion math is exact end to end.
+
+**Functions:**
+
+| Function | Signature | Notes |
+|---|---|---|
+| `Money.usd`, `Money.eur`, … | `(minorUnits: Int) -> Money` | One per ISO code. There is deliberately no `Money.of` — `of` is the case-expression keyword and cannot follow a dot. |
+| `Money.fromMinorUnits` | `(c: Currency) (minorUnits: Int) -> Money` | For a currency picked at runtime. |
+| `Money.minorUnits` | `(m: Money) -> Int` | |
+| `Money.currency` | `(m: Money) -> Currency` | |
+| `Money.display` | `(m: Money) -> String` | Canonical, culture-INVARIANT rendering: `"$10.50"`, `"¥1000"`, `"10.50 SEK"` — digits and a single `.` decimal, no thousand separators, never a `,` decimal. Locale rendering (sv-SE `100 000,23 kr`) is a client-side presentation concern (`Intl.NumberFormat` over the wire's `{minorUnits, currency}`); the server bakes no locale tables. |
+| `Money.scale` | `(m: Money) (k: Int) -> Money` | Exact integer scaling (quantity × unit price). |
+| `Money.scaleBy` | `(m: Money) (factor: Float) -> Money` | FRACTIONAL scaling (interest, VAT, discount): the factor is exactified decimal-faithfully (`1.055` → `211/200`), multiplied exact, and rounded HALF-EVEN back to minor units. Named — not `*` — because it rounds. `Money.scaleBy m 1.055` applies 5.5% interest. |
+| `Money.negate`, `Money.abs` | `(m: Money) -> Money` | |
+| `Money.isZero`, `Money.isNegative` | `(m: Money) -> Bool` | |
+| `Money.add`, `Money.subtract` | `(a: Money) (b: Money ::: SameCurrency a b) -> Money` | Proof-gated: the second argument must carry `SameCurrency a b`. |
+| `Money.compare` | `(a: Money) (b: Money ::: SameCurrency a b) -> Int` | −1 / 0 / 1 on minor units. |
+| `Money.requireSameCurrency` | `check (a: Money) (b: Money) -> b ::: SameCurrency a b` | Mints the same-currency proof (or fails 400). |
+| `Money.requireNonNegative` | `check (m: Money) -> m ::: NonNegativeMoney m` | |
+| `Money.convert` | `(r: ExchangeRate) (m: Money) -> Result Money String` | `Err` when the rate's FROM currency does not match the amount. |
+| `Money.requireRateFor` | `check (r: ExchangeRate) (m: Money) -> m ::: RateFor r m` | Mints the rate-matches-amount proof. |
+| `Money.convertChecked` | `(r: ExchangeRate) (m: Money ::: RateFor r m) -> Money` | Total behind the proof — no `Result` to unwrap. |
+| `Currency.code` | `(c: Currency) -> String` | ISO alpha code, `"USD"`. |
+| `Currency.minorDigits` | `(c: Currency) -> Int` | |
+| `Currency.fromCode` | `(s: String) -> Maybe Currency` | Runtime code resolution. |
+| `ExchangeRate.make` | `(from: Currency) (to: Currency) (rate: Float) (asOf: PosixMillis) -> ExchangeRate` | Rate data always carries provenance. |
+| `ExchangeRate.fromCurrency` / `.toCurrency` / `.rate` / `.asOf` | accessors | |
+
+**Raw operators are compile errors with hints.** `price + tax` reports ``operator `+` is not defined for `Money`; use `Money.add a b` (requires a `SameCurrency a b` proof — mint it with `Money.requireSameCurrency a b`)``. `*`, `/`, `%` report that money times money is meaningless and point at `Money.scale m k`; `<`/`<=`/`>`/`>=` report that ordering across currencies is undefined and point at `Money.compare`. Unary `-` points at `Money.negate`.
+
+**Proof predicates:** `SameCurrency a b` (two-subject, the `Dict.requireKey`/`HasKey` shape), `NonNegativeMoney m`, `RateFor r m`. A runtime currency mismatch inside `Money.add`/`Money.convertChecked` means the proof layer was bypassed and fails loudly — defense in depth, not the safety story.
+
+**JSON codecs / wire shape:** `moneyCodec` (exported by `Tesl.Json`) encodes/decodes the unconditional wire shape:
+
+```json
+{"minorUnits": 1000, "currency": "USD"}
+```
+
+At the AGENT boundary only, a Money value additionally carries `"display"` (`"$10.00"`) so the model never re-derives major units from minor units; HTTP responses keep the two-field shape. Agent tool-parameter schemas for `Money` parameters carry a description spelling out the minor-units convention (`$10.00 USD is {"minorUnits":1000,"currency":"USD"}` — never major units, never a float).
+
+**Database storage.** A `price: Money` entity field maps to TWO columns: `price_minor BIGINT` + `price_currency TEXT`. Equality (`==`) works in `where` clauses; ordered comparisons (`<`, `>=`, …) and `ORDER BY` on a Money column are rejected (ordering across stored currencies is undefined). `selectSum` over a Money column returns `Money` and only sums a single currency: mixed currencies raise (`filter by currency first`), and an empty row set raises (a zero total has no currency to carry). `Maybe Money` columns are not supported (NULL semantics would span both columns — fail-closed).
+
+**Example:**
+
+```tesl
+import Tesl.Money exposing [Money, ExchangeRate, SameCurrency, RateFor,
+                            Usd, Eur, Money.usd, Money.display,
+                            Money.add, Money.requireSameCurrency,
+                            Money.convert, ExchangeRate.make]
+import Tesl.Result exposing [Result(..)]
+import Tesl.Time exposing [PosixMillis, Time.secondsToPosix]
+
+fn addSameCurrency(a: Money, b: Money) -> Money =
+  let proven = check Money.requireSameCurrency a b
+  Money.add a proven
+
+fn convertToDisplay(rate: ExchangeRate, amount: Money) -> String =
+  case Money.convert rate amount of
+    Ok converted -> Money.display converted
+    Err message -> message
+
+test "convert applies a runtime rate with banker's rounding" {
+  # 1000 minor USD × 0.9155 = 915.5 → round-half-even → 916 minor EUR
+  let rate = ExchangeRate.make Usd Eur 0.9155 (Time.secondsToPosix 1751900000)
+  expect convertToDisplay rate (Money.usd 1000) == "€9.16"
+}
+```
+
+**Why integer minor units, and why isn't the currency in the static type?** Binary floats cannot represent 0.10, so float money drifts by construction; exact-integer minor units make every amount, sum, and scale exact, with a single round-half-even (banker's rounding) only at currency conversion. The currency is an intrinsic runtime qualifier rather than a type parameter — exactly the `PosixMillis` design, where the timezone is data, not 489 timestamp types. A `Money<Usd>`-style type family would multiply every signature, entity, and codec by 155 currencies while still needing runtime handling for currencies chosen at runtime. Instead the same-currency obligation is proof-layer: `Money.add`/`Money.subtract`/`Money.compare` statically require `SameCurrency a b`, which only `check Money.requireSameCurrency a b` can mint — so öre never silently add to yen, and the failure path is the developer's explicit 400, not a corrupted total.
+
+**Why are exchange rates runtime data?** A rate baked into source is stale the moment it is written, and an ambient "current rate" service invisibly couples money math to hidden state. `ExchangeRate.make` forces the rate to arrive as an explicit value with provenance (`asOf`), so every conversion names the rate it used — auditable, testable, and never a compiler default.
+
+### 21.5 `Tesl.Units`
+**Implemented.**
+
+Provides compile-time SI dimensional analysis over `Float` quantities. Dimensions exist ONLY in the type layer and are fully ERASED at runtime — a `Speed` is a plain Racket float in the compiled program, zero cost. Import:
+
+```tesl
+import Tesl.Units exposing [Length, Duration, Speed, Area,
+                            Length.meters, Length.kilometers, Duration.seconds,
+                            Speed.inKilometersPerHour, Units.sqrt,
+                            Units.requireNonZero]
+```
+
+**Capability:** none — `Tesl.Units` is a pure module.
+
+**Quantity types.** A dimension is a vector of signed exponents over the 7 SI base dimensions (m, kg, s, A, K, mol, cd). The importable alias type names are:
+
+`Length`, `Mass`, `Duration`, `ElectricCurrent`, `Temperature`, `AmountOfSubstance`, `LuminousIntensity`, `Speed` (m/s), `Acceleration` (m/s²), `Area` (m²), `Volume` (m³), `Force` (N), `Energy` (J), `Power` (W), `Pressure` (Pa), `Frequency` (1/s)
+
+These are structural over the dimension, not nominal: `Speed` in an annotation and the result of `Length.meters 1.0 / Duration.seconds 1.0` are the SAME type. A computed dimension with no alias still works and prints in unit form (`m/s^3`).
+
+**Constructors and accessors.** Every unit constructor is `Float -> Quantity` and converts INTO the SI canonical magnitude; every accessor is `Quantity -> Float` and converts back OUT. Conversion factors live only in the runtime (`tesl/units.rkt`); the types are factor-independent.
+
+| Module | Constructors | Accessors |
+|---|---|---|
+| `Length` | `meters`, `kilometers`, `centimeters`, `millimeters`, `miles`, `feet`, `inches`, `yards`, `nauticalMiles` | `inMeters`, `inKilometers`, … `inNauticalMiles` |
+| `Mass` | `kilograms`, `grams`, `milligrams`, `tonnes`, `pounds`, `ounces` | `inKilograms`, … |
+| `Duration` | `seconds`, `milliseconds`, `minutes`, `hours`, `days` | `inSeconds`, … |
+| `Speed` | `metersPerSecond`, `kilometersPerHour`, `milesPerHour`, `knots` | `inMetersPerSecond`, … |
+| `Acceleration` | `metersPerSecondSquared` | `inMetersPerSecondSquared` |
+| `Area` | `squareMeters`, `squareKilometers`, `hectares`, `squareFeet`, `acres` | `inSquareMeters`, … |
+| `Volume` | `cubicMeters`, `liters`, `milliliters`, `gallons` | `inCubicMeters`, … |
+| `Temperature` | `kelvin`, `celsius`, `fahrenheit` (affine — see caveat) | `inKelvin`, `inCelsius`, `inFahrenheit` |
+| `Force` | `newtons` | `inNewtons` |
+| `Energy` | `joules`, `kilojoules`, `kilowattHours`, `calories` | `inJoules`, … |
+| `Power` | `watts`, `kilowatts`, `horsepower` | `inWatts`, … |
+| `Frequency` | `hertz`, `kilohertz` | `inHertz`, `inKilohertz` |
+| `Pressure` | `pascals`, `kilopascals`, `bar` | `inPascals`, … |
+
+**Operator dimension algebra.** The ordinary arithmetic operators compute dimensions per expression:
+
+- `*` ADDS exponent vectors: `Length * Length : Area`; `Acceleration * Duration : Speed` — m/s² × 4 s is m/s.
+- `/` SUBTRACTS them: `Length / Duration : Speed`; `1.0 / Duration : Frequency` (a scalar numerator inverts the dimension).
+- `+` / `-` and comparisons require the SAME dimension; a mismatch is a compile error naming both dimensions: ``cannot add quantities of different dimension: `Length` and `Mass` (dimensions must match exactly; convert first)``.
+- A dimensionless result collapses to plain `Float` (`Length / Length : Float`).
+- A scalar operand must be a `Float` literal: `2.0 * len` is fine; `2 * len` reports ``a quantity is scaled by a `Float`, not an `Int` — write a Float literal (`2.0`, not `2`)``.
+- `%` is not defined for quantities.
+- Division follows the same non-zero rule as every Tesl `/`: a variable divisor must carry a non-zero proof. `Units.requireNonZero q` mints `FloatNonZero q` — the SAME predicate that guards `Float` division, because quantities ARE floats at runtime:
+
+```tesl
+fn pace(d: Length, t: Duration) -> Speed =
+  let safe = Units.requireNonZero t
+  d / safe
+```
+
+**Polymorphic dimension operations.** `Units.mul`, `Units.div`, `Units.square`, `Units.sqrt`, `Units.abs`, `Units.negate`, `Units.min`, `Units.max`, `Units.sum`, `Units.requireNonZero`. A dimension variable does not fit HM unification, so these are dimension-COMPUTED at each application site: `Units.sqrt` halves the exponents and is only defined when every exponent is even (`Units.sqrt area : Length`; the square root of a bare `Length` is not a physical quantity and is a compile error); `Units.min`/`Units.max` require both arguments in the same dimension; `Units.sum` takes a `List` of one known dimension.
+
+**Duration bridge (`Tesl.Time` interop).** Timestamps stay `PosixMillis` with exact-Int ms deltas (`addMs`/`diffMs` remain canonical — the same exactness stance as Money's minor units). Alongside them, typed spans: `Time.add : PosixMillis -> Duration -> PosixMillis`, `Time.subtract`, and `Time.diff : PosixMillis -> PosixMillis -> Duration` (exported by `Tesl.Time`), plus `Duration.toMillis : Duration -> Int` (rounds half-even) and `Duration.fromMillis : Int -> Duration` here. `Time.add ts (Duration.hours 2.0)` reads as intended and is unambiguous to a model in a way `addMs ts 7200000` is not.
+
+**Import gating.** The alias type names (`Length`, `Speed`, …) are common words, so they resolve to quantity types ONLY in a module that imports them from `Tesl.Units`. A module that does not import them keeps its own `type Speed = Slow | Fast` working unchanged. Declaring such a type while ALSO importing the colliding alias is a compile error (``type `Speed` collides with the `Speed` quantity type exported by Tesl.Units (imported by this module); rename the type``) — never a silent hijack. Internally each dimension is a canonical type name built from characters that cannot appear in a Tesl identifier, so user types can never collide with (or forge) a quantity type.
+
+**Temperature is affine.** `Temperature.celsius` and `Temperature.fahrenheit` apply an OFFSET (°C → K adds 273.15), so the stored quantity is absolute kelvin. Caveat: adding two absolute temperatures type-checks (same dimension) but is rarely physically meaningful — dimensional analysis catches unit mistakes, not every physics mistake.
+
+**Agent boundary.** Agent tool-parameter schemas for quantity parameters carry the unit in the description (`"a Speed expressed in SI units: m/s — ALWAYS supply the value in m/s, never in km/h, mph, feet, pounds or any other non-SI unit; convert first"`) — the km/h-vs-m/s guessing class is exactly what this kills.
+
+**Example:**
+
+```tesl
+import Tesl.Units exposing [Length, Duration, Speed, Acceleration, Area,
+                            Length.meters, Duration.seconds,
+                            Acceleration.metersPerSecondSquared,
+                            Speed.inMetersPerSecond]
+
+# m/s² × s = m/s — the compiler works the dimension out per expression
+fn finalSpeed(a: Acceleration, t: Duration) -> Speed =
+  a * t
+
+fn rectangleArea(w: Length, h: Length) -> Area =
+  w * h
+
+test "dimension algebra" {
+  let accel = Acceleration.metersPerSecondSquared 2.5
+  expect Speed.inMetersPerSecond (finalSpeed accel (Duration.seconds 4.0)) == 10.0
+}
+```
+
+**Why compile-time dimensions with runtime erasure?** The alternative designs both lose: runtime unit objects tax every arithmetic operation and turn unit bugs into production exceptions; no units at all is the Mars Climate Orbiter. Encoding each dimension as a distinct canonical type makes dimension checking ordinary type equality — `m/s/s × 4s : m/s` falls out of exponent arithmetic in the checker, wrong-unit code does not compile, and the compiled program pays nothing because every quantity erases to a plain float. Conversions happen exactly twice: at construction (into SI canonical) and at an accessor (out of it), so there is no unit ambiguity in between — and the import gating keeps this entire vocabulary out of modules that never asked for it.
 
 ---
 

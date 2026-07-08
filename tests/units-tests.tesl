@@ -14,6 +14,14 @@ module Units_tests exposing []
 
 import Tesl.Prelude exposing [Bool, List]
 import Tesl.Float exposing [Float]
+import Tesl.Time exposing [
+  PosixMillis,
+  Time.secondsToPosix,
+  Time.posixToSeconds,
+  Time.add,
+  Time.subtract,
+  Time.diff,
+]
 import Tesl.Units exposing [
   Length,
   Duration,
@@ -31,7 +39,10 @@ import Tesl.Units exposing [
   Length.inFeet,
   Duration.seconds,
   Duration.minutes,
+  Duration.hours,
   Duration.inSeconds,
+  Duration.toMillis,
+  Duration.fromMillis,
   Speed.metersPerSecond,
   Speed.kilometersPerHour,
   Speed.inMetersPerSecond,
@@ -184,4 +195,19 @@ test "celsius is affine: 100 C is 373.15 K and 212 F" {
   expect Temperature.inKelvin (Temperature.celsius 100.0) == 373.15
   expect Temperature.inFahrenheit (Temperature.celsius 100.0) == 212.0
   expect Temperature.inKelvin (Temperature.kelvin 0.0) == 0.0
+}
+
+# ── Duration bridge (typed spans ⇄ exact-Int PosixMillis deltas) ──────────────
+
+test "Duration millis bridge rounds half-even" {
+  expect Duration.toMillis (Duration.seconds 1.5) == 1500
+  expect Duration.inSeconds (Duration.fromMillis 2500) == 2.5
+}
+
+test "Time.add and Time.diff speak typed Duration" {
+  let ts = Time.secondsToPosix 1000
+  let later = Time.add ts (Duration.hours 2.0)
+  expect Time.posixToSeconds later == 8200
+  expect Duration.inSeconds (Time.diff ts later) == 7200.0
+  expect Time.posixToSeconds (Time.subtract later (Duration.hours 2.0)) == 1000
 }

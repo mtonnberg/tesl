@@ -366,6 +366,95 @@ let lookup_field ctx record_ty field_name =
 
 (* ── Build typing environment from AST declarations ─────────────────────── *)
 
+(* First-Class Units: a quantity ALIAS type name (Length/Speed/Area/…)
+   normalizes to its dimension-canonical TCon, so `Speed` in an annotation and
+   the result of `Length.meters 1.0 / Duration.seconds 1.0` are the SAME type
+   (structural over the dimension, NOT nominal per alias).  ACTIVE-gated:
+   aliases resolve only when the module imports them from Tesl.Units (the
+   names are common words — `type Speed = Slow | Fast` in a module that does
+   not import Tesl.Units must keep meaning the user's ADT); the checker
+   activates them per module in [activate_units_aliases_for]. *)
+let resolve_quantity_alias (name : string) : ty option =
+  match Units_catalog.active_dim_of_alias name with
+  | Some d -> Some (t_quantity d)
+  | None -> None
+
+(* Fail-closed name-collision guard: a module that IMPORTS the units/money
+   surface cannot also declare types/constructors that collide with it —
+   silent hijack in either direction is the bug class this feature exists to
+   kill.  A module that does NOT import them keeps full freedom (`type Speed
+   = Slow | Fast` stays the user's ADT). *)
+let check_units_name_collisions (m : module_form) : type_error list =
+  let imports_units =
+    List.exists (fun (i : import_decl) -> i.module_name = "Tesl.Units") m.imports in
+  let imports_money =
+    List.exists (fun (i : import_decl) -> i.module_name = "Tesl.Money") m.imports in
+  if not (imports_units || imports_money) then []
+  else
+    List.concat_map (fun decl ->
+        match decl with
+        | DType tf ->
+          let (name, loc) = match tf with
+            | TypeNewtype { name; loc; _ } | TypeAlias { name; loc; _ }
+            | TypeAdt { name; loc; _ } -> (name, loc) in
+          let alias_clash =
+            imports_units && List.mem_assoc name Units_catalog.aliases in
+          let money_clash =
+            imports_money
+            && List.mem name ["Money"; "Currency"; "ExchangeRate"] in
+          let ctor_clashes =
+            match tf with
+            | TypeAdt { variants; _ } when imports_money ->
+              List.filter_map (fun (v : adt_variant) ->
+                  if Currencies.iso_of_ctor v.ctor <> None then
+                    Some { loc = v.loc;
+                           message = Printf.sprintf
+                             "constructor `%s` collides with the `%s` Currency \
+                              constructor exported by Tesl.Money (imported by \
+                              this module); rename the constructor"
+                             v.ctor v.ctor;
+                           fix = None }
+                  else None)
+                variants
+            | _ -> []
+          in
+          (if alias_clash then
+             [{ loc;
+                message = Printf.sprintf
+                  "type `%s` collides with the `%s` quantity type exported by \
+                   Tesl.Units (imported by this module); rename the type"
+                  name name;
+                fix = None }]
+           else if money_clash then
+             [{ loc;
+                message = Printf.sprintf
+                  "type `%s` collides with the `%s` type exported by \
+                   Tesl.Money (imported by this module); rename the type"
+                  name name;
+                fix = None }]
+           else [])
+          @ ctor_clashes
+        | _ -> [])
+      m.decls
+
+(* Compute + set the module's active quantity aliases: the alias TYPE names
+   this module imports from Tesl.Units (exposing list, or all of them for a
+   bare/ImportAll import).  Returns the previous active set so nested module
+   checks can restore it. *)
+let activate_units_aliases_for (m : module_form) : string list =
+  let prev = Units_catalog.snapshot_active_aliases () in
+  let active =
+    List.concat_map (fun (imp : import_decl) ->
+        if imp.module_name <> "Tesl.Units" then []
+        else match imp.names with
+          | ImportAll -> List.map fst Units_catalog.aliases
+          | ImportExposing names ->
+            List.filter (fun n -> List.mem_assoc n Units_catalog.aliases) names)
+      m.imports
+  in
+  Units_catalog.set_active_aliases active;
+  prev
+
 (** Tesl type expression → OCaml ty *)
 let rec ty_of_type_expr (te : type_expr) : ty =
   match te with
@@ -377,7 +466,10 @@ let rec ty_of_type_expr (te : type_expr) : ty =
      | "Float" | "Real"  -> t_float
      | "Unit"            -> t_unit
      | "PosixMillis"     -> t_posix
-     | other             -> TCon other)
+     | other ->
+       (match resolve_quantity_alias other with
+        | Some q -> q
+        | None -> TCon other))
   | TVar { name; _ }     -> TCon name   (* treat named tyvars as abstract *)
   | TApp { head = TName { name = "Fact"; _ }; _ } -> t_fact
   | TApp { head; arg; _ }-> TApp (ty_of_type_expr head, ty_of_type_expr arg)
@@ -406,7 +498,10 @@ let ty_of_type_expr_with_params (params_map : (string * int) list) (te : type_ex
        | "Float" | "Real"  -> t_float
        | "Unit"            -> t_unit
        | "PosixMillis"     -> t_posix
-       | other             -> TCon other)
+       | other ->
+         (match resolve_quantity_alias other with
+          | Some q -> q
+          | None -> TCon other))
     | TVar { name; _ } ->
       (match List.assoc_opt name params_map with
        | Some id -> TVar id
@@ -1521,7 +1616,10 @@ let local_let_reason name expected_ty =
 let known_qualifier_modules =
   [ "List"; "ListPrim"; "Dict"; "String"; "Int"; "Float"; "Set"; "Maybe";
     "Either"; "Result"; "Time"; "Random"; "Uuid"; "UUID"; "Env";
-    "Http"; "HttpClient"; "Json"; "DB"; "Telemetry"; "Tesl"; "JWT"; "Email" ]
+    "Http"; "HttpClient"; "Json"; "DB"; "Telemetry"; "Tesl"; "JWT"; "Email";
+    (* First-Class Units *)
+    "Money"; "Currency"; "ExchangeRate" ]
+  @ Units_catalog.quantity_modules
 
 type constructor_resolution =
   | KnownConstructor of ty
@@ -1667,6 +1765,11 @@ let ty_is_ord ctx (t : ty) : bool =
   let rec go seen t =
     match apply !(ctx.subst) t with
     | TCon ("Int" | "Float" | "PosixMillis") -> true
+    (* Dimensioned quantities are ordered (same-dimension only — unification
+       already rejects a cross-dimension compare before this predicate runs).
+       Money is deliberately NOT ord: ordering across currencies is undefined;
+       use Money.compare (which requires the SameCurrency proof). *)
+    | TCon q when Units_catalog.is_quantity_name q -> true
     | TVar _ -> true  (* generic — permissive (the ground-check gates real use) *)
     | TCon name when is_ty_var_name name -> true   (* generic type param — permissive *)
     | TCon name when not (List.mem name seen) ->
@@ -2446,6 +2549,18 @@ let rec infer_expr ctx (e : expr) : ty =
         check_decodeAs_call ~strict:false ctx ~loc ~args
           ~result_ty:(apply !(ctx.subst) result_ty);
         apply !(ctx.subst) result_ty
+     | EField { obj = (EConstructor { name = "Units"; args = []; _ }
+                      | EVar { name = "Units"; _ }); field; _ }
+       when lookup_name ctx ("Units." ^ field) = None ->
+        (* First-Class Units, phase 3: the polymorphic dimension operations
+           (Units.mul/div/square/sqrt/abs/negate/min/max/sum).  A dimension
+           variable does not fit HM (abelian-group unification is non-unitary),
+           so these are dimension-COMPUTED at each application site instead —
+           argument dimensions are ground here, so the result dimension is
+           plain exponent arithmetic.  Decide-by-resolution: stands down when
+           the name resolves to a user binding.  Runtime bindings are ordinary
+           Float functions in tesl/units.rkt (quantities erase). *)
+        infer_units_op ctx (expr_loc app) field args
      | _ ->
         infer_direct_call base_fn args)
   | EBinop _ as binop ->
@@ -2489,10 +2604,17 @@ let rec infer_expr ctx (e : expr) : ty =
     let arg_ty = infer_expr ctx arg in
     (match op with
      | UNeg ->
-       (* Unary minus works on both Int and Float *)
+       (* Unary minus works on Int, Float, and dimensioned quantities (a
+          negative length is a direction; the dimension is preserved).
+          Money is rejected with a hint — use Money.negate. *)
        let resolved = apply !(ctx.subst) arg_ty in
        (match resolved with
         | TCon "Float" -> t_float
+        | TCon q when Units_catalog.is_quantity_name q -> resolved
+        | TCon "Money" ->
+          add_error ctx loc
+            "unary `-` is not defined for `Money`; use `Money.negate m`";
+          resolved
         | _ ->
           unify_at ctx loc arg_ty t_int;
           t_int)
@@ -2954,14 +3076,122 @@ and infer_binop ctx loc ~op_loc op left right =
         (Diag_fix.verified_token_replace ~source_lines:ctx.source_lines
            ~at:op_loc.start ~token:"+" ~replacement:"++");
       t_string
+    end else if lt' = TCon "Money" || rt' = TCon "Money" then begin
+      (* Money never meets a raw arithmetic operator: same-currency safety is
+         proof-gated in the named ops.  One clear error, short-circuit to Money
+         so the caller sees no cascading unify noise. *)
+      (match op with
+       | BAdd ->
+         add_error ctx loc
+           "operator `+` is not defined for `Money`; use `Money.add a b` \
+            (requires a `SameCurrency a b` proof — mint it with \
+            `Money.requireSameCurrency a b`)"
+       | BSub ->
+         add_error ctx loc
+           "operator `-` is not defined for `Money`; use `Money.subtract a b` \
+            (requires a `SameCurrency a b` proof — mint it with \
+            `Money.requireSameCurrency a b`)"
+       | BMul | BDiv | BMod ->
+         add_error ctx loc
+           (Printf.sprintf
+              "operator `%s` is not defined for `Money` (money times money is \
+               meaningless); scale by an integer with `Money.scale m k`"
+              (match op with BMul -> "*" | BDiv -> "/" | _ -> "%"))
+       | _ -> ());
+      TCon "Money"
     end else begin
-      let num_ty = match lt', rt' with
-        | TCon "Float", _ | _, TCon "Float" -> t_float
-        | _ -> t_int
+      (* First-Class Units: the dimensioned-quantity algebra.  This branch
+         MUST run before the unify-to-num_ty default below — that unify would
+         collapse a quantity operand to Float and silently lose the dimension.
+         `*` adds exponent vectors, `/` subtracts them, `+`/`-` require equal
+         dimensions; a dimensionless result collapses back to plain Float. *)
+      let dim_of t = match t with
+        | TCon n -> Units_catalog.dim_of_name n
+        | _ -> None
       in
-      unify_at ctx loc lt num_ty;
-      unify_at ctx loc rt num_ty;
-      num_ty
+      let disp d = Units_catalog.display_name d in
+      let quantity_or_float d =
+        if Units_catalog.dim_is_zero d then t_float else t_quantity d
+      in
+      (* The scalar side of a mixed scalar×quantity op must be Float; an Int
+         literal is the common slip, so it gets a targeted hint instead of a
+         bare unify error. *)
+      let require_float_scalar side_ty side_expr =
+        match apply !(ctx.subst) side_ty with
+        | TCon "Int" ->
+          add_error ctx (expr_loc side_expr)
+            "a quantity is scaled by a `Float`, not an `Int` — write a Float \
+             literal (`2.0`, not `2`)"
+        | _ -> unify_at ctx loc side_ty t_float
+      in
+      match dim_of lt', dim_of rt' with
+      | Some dl, Some dr ->
+        (match op with
+         | BMul -> quantity_or_float (Units_catalog.dim_add dl dr)
+         | BDiv -> quantity_or_float (Units_catalog.dim_sub dl dr)
+         | BAdd | BSub ->
+           if dl = dr then t_quantity dl
+           else begin
+             add_error ctx loc (Printf.sprintf
+               "cannot %s quantities of different dimension: `%s` and `%s` \
+                (dimensions must match exactly; convert first)"
+               (if op = BAdd then "add" else "subtract")
+               (disp dl) (disp dr));
+             t_quantity dl   (* fail-closed: keep the LHS dimension *)
+           end
+         | BMod ->
+           add_error ctx loc (Printf.sprintf
+             "operator `%%` is not defined for dimensioned quantities (`%s`)"
+             (disp dl));
+           t_quantity dl
+         | BConcat | BAnd | BOr | BEq | BNeq | BLt | BLe | BGt | BGe ->
+           (* unreachable: the outer match restricts op to arithmetic *)
+           t_quantity dl)
+      | Some d, None ->
+        (match op with
+         | BMul | BDiv ->
+           (* quantity × scalar / quantity ÷ scalar keeps the dimension *)
+           require_float_scalar rt right;
+           t_quantity d
+         | BAdd | BSub ->
+           add_error ctx loc (Printf.sprintf
+             "cannot %s a dimensioned quantity (`%s`) and a dimensionless \
+              number; wrap the number in a unit constructor first"
+             (if op = BAdd then "add" else "subtract") (disp d));
+           t_quantity d
+         | BMod ->
+           add_error ctx loc "operator `%` is not defined for dimensioned quantities";
+           t_quantity d
+         | BConcat | BAnd | BOr | BEq | BNeq | BLt | BLe | BGt | BGe ->
+           t_quantity d)
+      | None, Some d ->
+        (match op with
+         | BMul ->
+           require_float_scalar lt left;
+           t_quantity d
+         | BDiv ->
+           (* scalar / quantity INVERTS the dimension (1/s, 1/m, …) *)
+           require_float_scalar lt left;
+           quantity_or_float (Units_catalog.dim_neg d)
+         | BAdd | BSub ->
+           add_error ctx loc (Printf.sprintf
+             "cannot %s a dimensionless number and a dimensioned quantity \
+              (`%s`); wrap the number in a unit constructor first"
+             (if op = BAdd then "add" else "subtract") (disp d));
+           t_quantity d
+         | BMod ->
+           add_error ctx loc "operator `%` is not defined for dimensioned quantities";
+           t_quantity d
+         | BConcat | BAnd | BOr | BEq | BNeq | BLt | BLe | BGt | BGe ->
+           t_quantity d)
+      | None, None ->
+        let num_ty = match lt', rt' with
+          | TCon "Float", _ | _, TCon "Float" -> t_float
+          | _ -> t_int
+        in
+        unify_at ctx loc lt num_ty;
+        unify_at ctx loc rt num_ty;
+        num_ty
     end
   | BConcat ->
     unify_at ctx loc lt t_string;
@@ -2999,14 +3229,130 @@ and infer_binop ctx loc ~op_loc op left right =
     let t = apply !(ctx.subst) lt in
     if ty_is_ground t then begin
       if not (ty_is_ord ctx t) then
-        add_error ctx loc (Printf.sprintf
-          "ordering operator `%s` is not defined for type `%s` \
-           (only Int, Float, PosixMillis, and newtypes over them are ordered; \
-           compare a numeric representation instead)"
-          (cmp_op_name op) (pp_ty t))
+        if t = TCon "Money" then
+          add_error ctx loc (Printf.sprintf
+            "ordering operator `%s` is not defined for `Money` (ordering \
+             across currencies is undefined); use `Money.compare a b` — it \
+             requires a `SameCurrency a b` proof"
+            (cmp_op_name op))
+        else
+          add_error ctx loc (Printf.sprintf
+            "ordering operator `%s` is not defined for type `%s` \
+             (only Int, Float, PosixMillis, dimensioned quantities, and \
+             newtypes over them are ordered; compare a numeric representation \
+             instead)"
+            (cmp_op_name op) (pp_ty t))
     end else
       ctx.ord_eq_acc := (POrd, t) :: !(ctx.ord_eq_acc);
     t_bool
+
+(* First-Class Units, phase 3 — application-site typing of the polymorphic
+   dimension operations.  Argument dimensions are ground at every call, so the
+   result dimension is computed with plain exponent arithmetic; a Float operand
+   is the dimensionless case.  A dimensionless RESULT collapses to Float.
+   Fail-closed: any operand that is neither a quantity nor a Float is an error
+   (never routed to the Int/Float default). *)
+and infer_units_op ctx loc field args =
+  let disp = Units_catalog.display_name in
+  let quantity_or_float d =
+    if Units_catalog.dim_is_zero d then t_float else t_quantity d in
+  (* classify one argument: quantity dim | dimensionless Float | bad *)
+  let arg_dim e =
+    let t = apply !(ctx.subst) (infer_expr ctx e) in
+    match t with
+    | TCon n when Units_catalog.is_quantity_name n ->
+      (match Units_catalog.dim_of_name n with
+       | Some d -> `Dim d
+       | None -> `Other t)
+    | TCon "Float" -> `Dimless
+    | TCon "Int" ->
+      add_error ctx (expr_loc e)
+        (Printf.sprintf
+           "`Units.%s` scales with `Float`, not `Int` — write a Float literal \
+            (`2.0`, not `2`)" field);
+      `Dimless
+    | TVar _ ->
+      (* monomorphic phase: an un-ground operand pins to Float *)
+      unify_at ctx (expr_loc e) t t_float; `Dimless
+    | other ->
+      add_error ctx (expr_loc e)
+        (Printf.sprintf
+           "`Units.%s` expects a dimensioned quantity (or a Float scalar), \
+            got `%s`" field (pp_ty other));
+      `Other other
+  in
+  let dim_or_zero = function
+    | `Dim d -> d
+    | `Dimless | `Other _ -> Units_catalog.dimensionless in
+  let arity_error n =
+    add_error ctx loc (Printf.sprintf
+      "`Units.%s` expects %d argument%s" field n (if n = 1 then "" else "s"));
+    List.iter (fun a -> ignore (infer_expr ctx a)) args;
+    fresh () in
+  match field, args with
+  | "mul", [a; b] ->
+    quantity_or_float
+      (Units_catalog.dim_add (dim_or_zero (arg_dim a)) (dim_or_zero (arg_dim b)))
+  | "div", [a; b] ->
+    quantity_or_float
+      (Units_catalog.dim_sub (dim_or_zero (arg_dim a)) (dim_or_zero (arg_dim b)))
+  | "square", [a] ->
+    quantity_or_float (Units_catalog.dim_scale 2 (dim_or_zero (arg_dim a)))
+  | "sqrt", [a] ->
+    let d = dim_or_zero (arg_dim a) in
+    if Units_catalog.dim_all_even d then
+      quantity_or_float (Units_catalog.dim_halve d)
+    else begin
+      add_error ctx loc (Printf.sprintf
+        "`Units.sqrt` is only defined when every dimension exponent is even; \
+         `%s` has an odd exponent (the square root of `%s` is not a physical \
+         quantity)" (disp d) (disp d));
+      fresh ()
+    end
+  | ("abs" | "negate" | "requireNonZero"), [a] ->
+    (* requireNonZero: check fn minting FloatNonZero (quantities erase to
+       Float, so the SAME predicate that guards Float division applies) —
+       typing is same-quantity in/out; the proof side lives in
+       stdlib_func_infos. *)
+    (match arg_dim a with
+     | `Dim d -> t_quantity d
+     | `Dimless -> t_float
+     | `Other _ -> fresh ())
+  | ("min" | "max"), [a; b] ->
+    (match arg_dim a, arg_dim b with
+     | `Dim da, `Dim db when da = db -> t_quantity da
+     | `Dimless, `Dimless -> t_float
+     | `Dim da, `Dim db ->
+       add_error ctx loc (Printf.sprintf
+         "`Units.%s` needs both arguments in the SAME dimension: `%s` vs `%s`"
+         field (disp da) (disp db));
+       t_quantity da
+     | `Dim d, `Dimless | `Dimless, `Dim d ->
+       add_error ctx loc (Printf.sprintf
+         "`Units.%s` needs both arguments in the SAME dimension: `%s` vs a \
+          dimensionless Float" field (disp d));
+       t_quantity d
+     | _ -> fresh ())
+  | "sum", [xs] ->
+    let t = apply !(ctx.subst) (infer_expr ctx xs) in
+    (match t with
+     | TApp (TCon "List", TCon n) when Units_catalog.is_quantity_name n ->
+       TCon n
+     | TApp (TCon "List", TCon "Float") -> t_float
+     | other ->
+       add_error ctx (expr_loc xs) (Printf.sprintf
+         "`Units.sum` expects a `List` of dimensioned quantities (one known \
+          dimension), got `%s`" (pp_ty other));
+       fresh ())
+  | ("mul" | "div" | "min" | "max"), _ -> arity_error 2
+  | ("square" | "sqrt" | "abs" | "negate" | "sum" | "requireNonZero"), _ ->
+    arity_error 1
+  | other, _ ->
+    add_error ctx loc (Printf.sprintf
+      "unknown Units operation `Units.%s` (available: mul, div, square, sqrt, \
+       abs, negate, min, max, sum, requireNonZero)" other);
+    List.iter (fun a -> ignore (infer_expr ctx a)) args;
+    fresh ()
 
 and unwind_fun_type ty =
   match ty with
@@ -3481,6 +3827,18 @@ use the `Tuple3 a b c` constructor instead";
        (* Multi-line SQL: order/limit/offset merged as EApp args onto a where-EBinop.
           Delegate to infer_expr which correctly classifies the merged SQL expression. *)
        fallback ()
+     | EField { obj = (EConstructor { name = "Units"; args = []; _ }
+                      | EVar { name = "Units"; _ }); field; _ }
+       when lookup_name ctx ("Units." ^ field) = None ->
+       (* First-Class Units: the polymorphic dimension ops have no env arrow
+          type (their result dimension is computed per application site), so
+          the generic head-inference below would thread a FRESH fn var and
+          swallow every dimension/arity error in tail position — a fail-open.
+          Route through the same site-typing as the infer path, then unify
+          with the annotation. *)
+       let ty = infer_units_op ctx (expr_loc app) field args in
+       unify_expected_at ctx (expr_loc app) ty expected;
+       apply !(ctx.subst) ty
      | _ ->
        (* Generic call-checking path: infer the function type, check each arg
           against expected, unify the result with the annotation.  We do NOT
@@ -4830,6 +5188,12 @@ let check_ord_eq_calls ctx =
 
 let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_binding_info list * expr_type_info list * field_access_info list * (Location.loc * string) list * (Location.loc * (string * string list)) list * (Location.loc * (string * string list)) list * type_error list =
   reset_counter ();
+  (* First-Class Units: activate the quantity alias TYPE names this module
+     imports from Tesl.Units.  Deliberately NOT restored on exit — the emit
+     pass runs after the checker in the same compile and consults the state;
+     re-activated below after import loading (a nested check of an imported
+     module sets its own aliases). *)
+  ignore (activate_units_aliases_for m);
   (* E1: one lazy folder-tree index per checked module — the scan only runs if
      an unbound-name error is actually emitted. *)
   let local_index = Import_suggest.build_local_index m in
@@ -4840,6 +5204,7 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
   let import_errors = import_errors @ check_proof_predicate_scope m in
   let import_errors = import_errors @ check_fact_name_distinctness m in
   let import_errors = import_errors @ check_stdlib_fn_import_scope m in
+  let import_errors = import_errors @ check_units_name_collisions m in
   let initial_env = make_stdlib_env () in
   let ctx = make_ctx ~source_lines ~filename:m.source_file ~env:initial_env () in
   let ctx = { ctx with import_suggest = suggest } in
@@ -4870,6 +5235,9 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
     env = load_imported_func_sigs m @ ctx.env;
     function_kinds = load_imported_func_kinds m @ ctx.function_kinds;
   } in
+  (* re-activate THIS module's quantity aliases: loading an imported module
+     above may have checked it and set its own (see activate note at entry) *)
+  ignore (activate_units_aliases_for m);
   let ctx = collect_func_sigs ctx m.decls in
   let ctx = {
     ctx with

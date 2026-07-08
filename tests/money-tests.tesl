@@ -24,6 +24,7 @@ import Tesl.Money exposing [
   Money.currency,
   Money.display,
   Money.scale,
+  Money.scaleBy,
   Money.negate,
   Money.abs,
   Money.isZero,
@@ -188,4 +189,14 @@ test "convert with a mismatched amount currency is an Err" {
 test "requireRateFor then convertChecked converts directly" {
   expect Money.minorUnits (convertStrict (usdToEur 0.9155) (Money.usd 1000)) == 916
   expect Currency.code (Money.currency (convertStrict (usdToEur 0.5) (Money.usd 200))) == "EUR"
+}
+
+test "Money.scaleBy applies fractional factors with half-even rounding" {
+  # 5.5% interest on $100.00
+  expect Money.display (Money.scaleBy (Money.usd 10000) 1.055) == "$105.50"
+  # halves round to even: 62.5 -> 62, 67.5 -> 68
+  expect Money.minorUnits (Money.scaleBy (Money.usd 125) 0.5) == 62
+  expect Money.minorUnits (Money.scaleBy (Money.usd 135) 0.5) == 68
+  # factor is decimal-faithful: 10% of $0.03 is 0.3 minor units -> 0 (half-even is nearest here)
+  expect Money.minorUnits (Money.scaleBy (Money.usd 3) 0.1) == 0
 }

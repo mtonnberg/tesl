@@ -127,7 +127,12 @@ let sql_write_op_names : string list =
    TOTAL classifiers; a new variant here fails to compile at every consumer
    (checker whitelist, decode-tag emitter, JSON-schema emitter) until handled.
    (mirrors the sql_op registry pattern above.) *)
-type agent_prim = APString | APInt | APFloat | APBool | APPosixMillis
+type agent_prim =
+  | APString | APInt | APFloat | APBool | APPosixMillis
+  | APMoney
+  (* a dimensioned quantity (First-Class Units) — carries the canonical
+     quantity TCon name so the JSON schema can describe the unit to the model *)
+  | APQuantity of string
 
 (* the ONLY membership test — the surface type name the user writes *)
 let agent_prim_of_type_name : string -> agent_prim option = function
@@ -136,19 +141,31 @@ let agent_prim_of_type_name : string -> agent_prim option = function
   | "Float"       -> Some APFloat
   | "Bool"        -> Some APBool
   | "PosixMillis" -> Some APPosixMillis
-  | _             -> None
+  | "Money"       -> Some APMoney
+  | n when Units_catalog.is_quantity_name n -> Some (APQuantity n)
+  | n ->
+    (* ACTIVE-gated: an alias name is a quantity only when the module being
+       compiled imports it from Tesl.Units (the checker sets the state). *)
+    (match Units_catalog.active_dim_of_alias n with
+     | Some d -> Some (APQuantity (Units_catalog.dim_name d))
+     | None -> None)
 
 let agent_prim_type_name : agent_prim -> string = function
   | APString -> "String" | APInt -> "Int" | APFloat -> "Float"
   | APBool -> "Bool" | APPosixMillis -> "PosixMillis"
+  | APMoney -> "Money"
+  | APQuantity n ->
+    (match Units_catalog.display_of_name n with Some s -> s | None -> n)
 
 let all_agent_prims : agent_prim list =
-  [ APString; APInt; APFloat; APBool; APPosixMillis ]
+  [ APString; APInt; APFloat; APBool; APPosixMillis; APMoney ]
 
 (* TOTAL: the tag `tesl-agent-decode-args` understands (Racket symbol name) *)
 let agent_prim_decode_tag : agent_prim -> string = function
   | APString -> "string" | APInt -> "int" | APPosixMillis -> "int"
   | APFloat -> "float" | APBool -> "bool"
+  | APMoney -> "money"
+  | APQuantity _ -> "float"   (* quantities erase to Float on the wire *)
 
 (* TOTAL: the JSON Schema property fragment for this primitive.
    PosixMillis carries a semantic description: without it the model sees a bare
@@ -163,6 +180,26 @@ let agent_prim_schema_prop : agent_prim -> string = function
   | APFloat -> {|{"type":"number"}|}
   | APBool  -> {|{"type":"boolean"}|}
   | APString -> {|{"type":"string"}|}
+  | APMoney ->
+    (* Same anti-hallucination channel as PosixMillis: the schema is the one
+       description that reaches the model for every tool, so the minor-units
+       semantics ride along here. *)
+    {|{"type":"object","properties":{"minorUnits":{"type":"integer"},"currency":{"type":"string"}},"required":["minorUnits","currency"],"description":"a monetary amount as integer MINOR UNITS (e.g. cents) plus an ISO-4217 currency code - never major units and never a float; $10.00 USD is {\"minorUnits\":1000,\"currency\":\"USD\"}"}|}
+  | APQuantity name ->
+    (* The unit rides in the schema so the model never guesses (km/h vs m/s —
+       the exact confusion class this feature exists to kill). *)
+    let unit =
+      match Units_catalog.dim_of_name name with
+      | Some d -> Units_catalog.unit_form d
+      | None -> "unknown"
+    in
+    let display =
+      match Units_catalog.display_of_name name with
+      | Some s -> s | None -> name
+    in
+    Printf.sprintf
+      {|{"type":"number","description":"a %s expressed in SI units: %s - ALWAYS supply the value in %s, never in km/h, mph, feet, pounds or any other non-SI unit; convert first"}|}
+      display unit unit
 
 (* English whitelist for diagnostics — derived, not hand-typed, so the error
    message cannot drift from the registry. e.g. "String, Int, Float, Bool, or
@@ -666,6 +703,7 @@ let builtin_codec_type : (string * string) list = [
   "boolCodec",        "Bool";
   "floatCodec",       "Float";
   "posixMillisCodec", "PosixMillis";
+  "moneyCodec",       "Money";
   "listCodec",        "List";
   "dictCodec",        "Dict";
   "setCodec",         "Set";
@@ -944,6 +982,68 @@ let stdlib_func_infos : (string * func_info) list =
                                                  args = ["key"; "dict"]; loc = g });
                      loc = g };
          loc = g }; fi_loc = g });
+    (* ── Money (First-Class Units): same-currency safety is proof-layer.
+       Currency is a runtime qualifier (not in the static type, like a
+       PosixMillis's zone), so `usd + eur` is caught HERE: Money.add/subtract/
+       compare require SameCurrency a b on the second argument (cross-param,
+       the Dict.get shape), minted only by Money.requireSameCurrency.
+       Money.convertChecked likewise requires RateFor r m (the rate's FROM
+       currency matches the amount), minted by Money.requireRateFor. *)
+    ("Money.add",
+     { fi_name = "Money.add"; fi_kind = FnKind;
+       fi_params = [ plain "a" "Money";
+                     param "b" "Money"
+                       (Some (PredApp { pred = "SameCurrency"; args = ["a"; "b"]; loc = g })) ];
+       fi_return = ret "Money"; fi_loc = g });
+    ("Money.subtract",
+     { fi_name = "Money.subtract"; fi_kind = FnKind;
+       fi_params = [ plain "a" "Money";
+                     param "b" "Money"
+                       (Some (PredApp { pred = "SameCurrency"; args = ["a"; "b"]; loc = g })) ];
+       fi_return = ret "Money"; fi_loc = g });
+    ("Money.compare",
+     { fi_name = "Money.compare"; fi_kind = FnKind;
+       fi_params = [ plain "a" "Money";
+                     param "b" "Money"
+                       (Some (PredApp { pred = "SameCurrency"; args = ["a"; "b"]; loc = g })) ];
+       fi_return = ret "Int"; fi_loc = g });
+    (* Money.requireSameCurrency: check returning b ::: SameCurrency a b
+       (2-arg proof, the Dict.requireKey shape) *)
+    ("Money.requireSameCurrency",
+     { fi_name = "Money.requireSameCurrency"; fi_kind = CheckKind;
+       fi_params = [ plain "a" "Money"; plain "b" "Money" ];
+       fi_return = RetAttached {
+         binding = { name = "b"; type_expr = tname "Money";
+                     proof_ann = Some (PredApp { pred = "SameCurrency";
+                                                 args = ["a"; "b"]; loc = g });
+                     loc = g };
+         loc = g }; fi_loc = g });
+    ("Money.requireNonNegative",
+     { fi_name = "Money.requireNonNegative"; fi_kind = CheckKind;
+       fi_params = [ plain "m" "Money" ];
+       fi_return = ret_attached "m" "Money" "NonNegativeMoney"; fi_loc = g });
+    ("Money.requireRateFor",
+     { fi_name = "Money.requireRateFor"; fi_kind = CheckKind;
+       fi_params = [ plain "r" "ExchangeRate"; plain "m" "Money" ];
+       fi_return = RetAttached {
+         binding = { name = "m"; type_expr = tname "Money";
+                     proof_ann = Some (PredApp { pred = "RateFor";
+                                                 args = ["r"; "m"]; loc = g });
+                     loc = g };
+         loc = g }; fi_loc = g });
+    ("Money.convertChecked",
+     { fi_name = "Money.convertChecked"; fi_kind = FnKind;
+       fi_params = [ plain "r" "ExchangeRate";
+                     param "m" "Money"
+                       (Some (PredApp { pred = "RateFor"; args = ["r"; "m"]; loc = g })) ];
+       fi_return = ret "Money"; fi_loc = g });
+    (* Units.requireNonZero: check returning q ::: FloatNonZero q — quantities
+       erase to Float, so the SAME predicate that unlocks `/` for Floats
+       unlocks quantity division (`d / Units.requireNonZero-checked t`). *)
+    ("Units.requireNonZero",
+     { fi_name = "Units.requireNonZero"; fi_kind = CheckKind;
+       fi_params = [ plain "q" "a" ];
+       fi_return = ret_attached "q" "a" "FloatNonZero"; fi_loc = g });
     (* String.trim / trimLeft / trimRight: fn returning String ? IsTrimmed *)
     ("String.trim",
      { fi_name = "String.trim"; fi_kind = FnKind;

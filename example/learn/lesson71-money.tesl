@@ -1,0 +1,166 @@
+#lang tesl
+module Lesson71Money exposing [
+  showPrice,
+  lineTotal,
+  addSameCurrency,
+  convertToDisplay,
+  convertChecked,
+  totalRevenue,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — Money: integer minor units + intrinsic currency
+# ─────────────────────────────────────────────
+# `Money` is an exact-integer amount in MINOR units (cents/öre/yen) carrying its
+# own ISO-4217 `Currency`. Money NEVER touches Float, and there is no
+# Money × Money. `Money.usd 1050` is $10.50; `Currency` is a baked ADT
+# (`Usd`, `Eur`, `Jpy`, … 155 codes) so a typo'd currency is an
+# unknown-constructor COMPILE error.
+#
+# Raw operators are compile errors with hints — safety is proof-gated:
+#   price + tax                    # ❌ `+` not defined for Money; use Money.add
+#   price < other                  # ❌ ordering undefined across currencies
+#   Money.add a b                  # ❌ unless b carries `SameCurrency a b`
+#   let ok = check Money.requireSameCurrency a b
+#   Money.add a ok                 # ✅ proof minted, addition unlocked
+#
+# Cross-currency conversion is EXPLICIT: a runtime-supplied `ExchangeRate`
+# (never ambient, never baked into the language), applied with `Money.convert`
+# (Result-typed) or the proof path `Money.requireRateFor` + `Money.convertChecked`.
+# Rounding is banker's (round-half-even) on minor units.
+#
+# In the database a `price: Money` field stores as TWO columns
+# (`price_minor BIGINT` + `price_currency TEXT`); `==` works in where-clauses,
+# ordered comparisons are rejected, and `selectSum` over money only sums a
+# single currency (mixed or empty row sets raise instead of guessing).
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.Result exposing [Result(..)]
+import Tesl.Money exposing [
+  Money,
+  ExchangeRate,
+  Usd,
+  Eur,
+  Jpy,
+  Money.usd,
+  Money.sek,
+  Money.fromMinorUnits,
+  Money.minorUnits,
+  Money.display,
+  Money.scale,
+  Money.add,
+  Money.requireSameCurrency,
+  Money.requireRateFor,
+  Money.convert,
+  Money.convertChecked,
+  ExchangeRate.make,
+]
+import Tesl.Time exposing [Time.secondsToPosix]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+
+# ─── Construction + display ──────────────────────────────────────────────────────
+# Per-currency constructors take MINOR units: `Money.usd 1050` = $10.50.
+# `Money.fromMinorUnits` takes the Currency as a value — handy when the
+# currency is picked at runtime. `Money.display` renders with the currency's
+# minor-digit convention: "$10.50", "¥1000", "10.50 SEK".
+fn showPrice() -> String =
+  let price = Money.usd 1050
+  Money.display price
+
+# ─── Scaling — quantity × unit price stays exact ─────────────────────────────────
+# `Money.scale m k` multiplies by an exact integer. There is no Money × Money
+# and no Money × Float — those are compile errors.
+fn lineTotal(unitPrice: Money, quantity: Int) -> Money =
+  Money.scale unitPrice quantity
+
+# ─── Proof-gated addition ────────────────────────────────────────────────────────
+# `Money.add a b` statically requires a `SameCurrency a b` proof on `b`.
+# `check Money.requireSameCurrency a b` mints it (or fails 400 at the
+# boundary when the currencies differ) — öre never silently add to yen.
+fn addSameCurrency(a: Money, b: Money) -> Money =
+  let proven = check Money.requireSameCurrency a b
+  Money.add a proven
+
+# ─── Conversion, Result path ─────────────────────────────────────────────────────
+# The rate is RUNTIME DATA with provenance (asOf) — Tesl bakes currencies, never
+# rates. `Money.convert` is Result-typed: Err when the rate's FROM currency does
+# not match the amount. Rounding is round-half-even on minor units.
+fn convertToDisplay(rate: ExchangeRate, amount: Money) -> String =
+  case Money.convert rate amount of
+    Ok converted -> Money.display converted
+    Err message -> message
+
+# ─── Conversion, proof path ──────────────────────────────────────────────────────
+# `check Money.requireRateFor rate amount` mints `RateFor rate amount`, which
+# `Money.convertChecked` requires — conversion is then total, no Result to unwrap.
+fn convertChecked(rate: ExchangeRate, amount: Money) -> Money =
+  let proven = check Money.requireRateFor rate amount
+  Money.convertChecked rate proven
+
+# ─── A Money column ──────────────────────────────────────────────────────────────
+# `price: Money` becomes two columns: price_minor BIGINT + price_currency TEXT.
+entity OrderLine table "order_lines" primaryKey id {
+  id: String
+  price: Money
+  quantity: Int
+}
+
+database Shop = Database {
+  entities: [OrderLine]
+  backend: Memory
+}
+
+# `selectSum` over a Money column returns Money — and only sums a SINGLE
+# currency: mixed currencies (or an empty row set, whose zero has no currency)
+# raise instead of adding öre to yen.
+fn totalRevenue() -> Money requires [dbRead] =
+  with database Shop {
+    selectSum l.price from OrderLine
+  }
+
+# ─── Tests ───────────────────────────────────────────────────────────────────────
+
+test "money is integer minor units with a currency-aware display" {
+  let price = Money.usd 1050
+  expect Money.minorUnits price == 1050
+  expect Money.display price == "$10.50"
+  expect Money.display (Money.fromMinorUnits Jpy 1000) == "¥1000"
+  expect Money.display (Money.sek 1050) == "10.50 SEK"
+  expect showPrice() == "$10.50"
+}
+
+test "scale multiplies by an exact integer" {
+  let unitPrice = Money.usd 199
+  expect Money.minorUnits (lineTotal unitPrice 3) == 597
+}
+
+test "add works once the SameCurrency proof is minted" {
+  let a = Money.usd 1000
+  let b = Money.usd 250
+  expect Money.display (addSameCurrency a b) == "$12.50"
+}
+
+test "convert applies a runtime rate with banker's rounding" {
+  # 1000 minor USD × 0.9155 = 915.5 → round-half-even → 916 minor EUR
+  let rate = ExchangeRate.make Usd Eur 0.9155 (Time.secondsToPosix 1751900000)
+  expect convertToDisplay rate (Money.usd 1000) == "€9.16"
+}
+
+test "convert is an Err when the rate does not match the amount" {
+  let eurRate = ExchangeRate.make Eur Usd 1.0922 (Time.secondsToPosix 1751900000)
+  expect convertToDisplay eurRate (Money.usd 1000) == "exchange rate is FROM EUR but amount is in USD"
+}
+
+test "convertChecked is total behind a RateFor proof" {
+  let rate = ExchangeRate.make Usd Eur 0.9155 (Time.secondsToPosix 1751900000)
+  expect Money.minorUnits (convertChecked rate (Money.usd 1000)) == 916
+}
+
+test "a Money column round-trips and selectSum sums one currency" requires [dbRead, dbWrite] {
+  with database Shop {
+    let _ = insert OrderLine { id: "l1", price: Money.usd 1050, quantity: 1 }
+    let _ = insert OrderLine { id: "l2", price: Money.usd 500, quantity: 2 }
+  }
+  expect Money.display (totalRevenue()) == "$15.50"
+}

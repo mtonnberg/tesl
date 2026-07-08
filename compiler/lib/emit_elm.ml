@@ -54,6 +54,12 @@ let rec elm_type_of_type_expr te =
   | TName { name = "PosixMillis"; _ } -> "Int"
   | TName { name = "Unit"; _ } -> "()"
   | TName { name = "Set"; _ } -> "List value"
+  (* Dimensioned quantities (Length, Speed, … / canonical "§Q[…]") erase to a
+     bare number on the wire. *)
+  | TName { name; _ } when Ir.is_quantity_type_name name -> "Float"
+  (* "Money" falls through to the generic named-type arm: the generator emits a
+     top-level `type alias Money = { minorUnits : Int, currency : String }`
+     (plus moneyDecoder / moneyEncoder) once, when the module uses Money. *)
   | TName { name; _ } -> name
   | TApp { head = TName { name = "List"; _ }; arg; _ } ->
     "List " ^ elm_type_arg arg
@@ -256,6 +262,9 @@ let rec decode_expr_of_type te =
   | TName { name = "PosixMillis"; _ } ->
     {|(D.oneOf [ D.int, D.field "epochMillis" D.int ])|}
   | TName { name = "Unit"; _ } -> "(D.succeed ())"
+  (* Quantities are a bare number on the wire. *)
+  | TName { name; _ } when Ir.is_quantity_type_name name -> "D.float"
+  (* "Money" falls through to `moneyDecoder`, emitted once per module. *)
   | TName { name; _ } -> decoder_fn_name name
   | TApp { head = TName { name = "List"; _ }; arg; _ } ->
     "(D.list " ^ decode_expr_arg arg ^ ")"
@@ -280,6 +289,7 @@ let rec encode_expr_of_type te value_expr =
   | TName { name = "Bool"; _ } -> "E.bool " ^ value_expr
   | TName { name = "PosixMillis"; _ } -> "E.int " ^ value_expr
   | TName { name = "Unit"; _ } -> "E.null"
+  | TName { name; _ } when Ir.is_quantity_type_name name -> "E.float " ^ value_expr
   | TName { name; _ } -> encoder_fn_name name ^ " " ^ value_expr
   | TApp { head = TName { name = "List"; _ }; arg; _ }
   | TApp { head = TName { name = "Set"; _ }; arg; _ } ->
@@ -299,6 +309,7 @@ and encode_fn_of_type te =
   | TName { name = "Bool"; _ } -> "E.bool"
   | TName { name = "PosixMillis"; _ } -> "E.int"
   | TName { name = "Unit"; _ } -> "(\\_ -> E.null)"
+  | TName { name; _ } when Ir.is_quantity_type_name name -> "E.float"
   | TName { name; _ } -> encoder_fn_name name
   | TApp { head = TName { name = "List"; _ }; arg; _ }
   | TApp { head = TName { name = "Set"; _ }; arg; _ } ->
@@ -320,6 +331,8 @@ let rec elm_type_of_ir_type (ty : Ir.ir_type) =
   | Ir.IRFloat -> "Float"
   | Ir.IRBool -> "Bool"
   | Ir.IRPosixMillis -> "Int"
+  (* Emitted once per module as `type alias Money = { minorUnits : Int, currency : String }`. *)
+  | Ir.IRMoney -> "Money"
   | Ir.IRNamed "Unit" -> "()"
   | Ir.IRNamed name -> name
   | Ir.IRVar name -> name
@@ -383,6 +396,9 @@ let rec decode_expr_of_ir_type (ty : Ir.ir_type) =
      agent-enriched {"epochMillis": <int>, …} object. *)
   | Ir.IRPosixMillis ->
     {|(D.oneOf [ D.int, D.field "epochMillis" D.int ])|}
+  (* Field-based decoding ignores extra fields, so the emitted moneyDecoder
+     tolerates the agent-enriched shape (extra "display") with no oneOf. *)
+  | Ir.IRMoney -> "moneyDecoder"
   | Ir.IRNamed "Unit" -> "(D.succeed ())"
   | Ir.IRNamed name -> decoder_fn_name name
   | Ir.IRVar _ -> "D.value"
@@ -407,6 +423,7 @@ let rec encode_expr_of_ir_type ty value_expr =
   | Ir.IRFloat -> "E.float " ^ value_expr
   | Ir.IRBool -> "E.bool " ^ value_expr
   | Ir.IRPosixMillis -> "E.int " ^ value_expr
+  | Ir.IRMoney -> "moneyEncoder " ^ value_expr
   | Ir.IRNamed "Unit" -> "E.null"
   | Ir.IRNamed name -> encoder_fn_name name ^ " " ^ value_expr
   | Ir.IRList arg
@@ -459,6 +476,7 @@ and encode_fn_of_ir_type ty =
   | Ir.IRFloat -> "E.float"
   | Ir.IRBool -> "E.bool"
   | Ir.IRPosixMillis -> "E.int"
+  | Ir.IRMoney -> "moneyEncoder"
   | Ir.IRNamed "Unit" -> "(\\_ -> E.null)"
   | Ir.IRNamed name -> encoder_fn_name name
   | _ -> "(\\value -> " ^ (encode_expr_of_ir_type ty "value") ^ ")"
@@ -1014,6 +1032,72 @@ let ir_endpoint_uses_elm_dict (ep : Ir.ir_endpoint) =
   || List.exists (fun (c : Ir.ir_capture) -> ir_type_uses_elm_dict c.irc_binding.irb_type) ep.ire_captures
   || ir_return_uses_elm_dict ep.ire_return
 
+(* ── Money usage scan ────────────────────────────────────────────────────────
+   Money is a nominal builtin with a structured wire shape, so the generated
+   module needs a `type alias Money` + moneyDecoder + moneyEncoder — emitted
+   exactly ONCE, and only when something in the module mentions Money. *)
+
+let rec ir_type_uses_money = function
+  | Ir.IRMoney -> true
+  | Ir.IRList ty
+  | Ir.IRMaybe ty
+  | Ir.IRSet ty -> ir_type_uses_money ty
+  | Ir.IRDict (a, b)
+  | Ir.IRResult (a, b)
+  | Ir.IREither (a, b)
+  | Ir.IRFun (a, b) -> ir_type_uses_money a || ir_type_uses_money b
+  | Ir.IRTuple elems -> List.exists ir_type_uses_money elems
+  | _ -> false
+
+let rec ir_return_uses_money = function
+  | Ir.IRRetPlain ty -> ir_type_uses_money ty
+  | Ir.IRRetAttached binding -> ir_type_uses_money binding.Ir.irb_type
+  | Ir.IRRetNamedPack { ty; _ } -> ir_type_uses_money ty
+  | Ir.IRRetForAll { elem_ty; _ }
+  | Ir.IRRetMaybeForAll { elem_ty; _ }
+  | Ir.IRRetSetForAll { elem_ty; _ }
+  | Ir.IRRetMaybeSetForAll { elem_ty; _ } -> ir_type_uses_money elem_ty
+  | Ir.IRRetForAllDictValues { key_ty; val_ty; _ }
+  | Ir.IRRetForAllDictKeys { key_ty; val_ty; _ } ->
+    ir_type_uses_money key_ty || ir_type_uses_money val_ty
+  | Ir.IRRetExists { binding; body } ->
+    ir_type_uses_money binding.Ir.irb_type || ir_return_uses_money body
+
+let ir_endpoint_uses_money (ep : Ir.ir_endpoint) =
+  option_exists (fun (b : Ir.ir_binding) -> ir_type_uses_money b.irb_type) ep.ire_auth
+  || option_exists (fun (b : Ir.ir_binding) -> ir_type_uses_money b.irb_type) ep.ire_body
+  || List.exists (fun (c : Ir.ir_capture) -> ir_type_uses_money c.irc_binding.irb_type) ep.ire_captures
+  || ir_return_uses_money ep.ire_return
+
+let rec type_expr_uses_money = function
+  | TName { name = "Money"; _ } -> true
+  | TName _ | TVar _ -> false
+  | TApp { head; arg; _ } -> type_expr_uses_money head || type_expr_uses_money arg
+  | TFun { dom; cod; _ } -> type_expr_uses_money dom || type_expr_uses_money cod
+  | TTuple { elems; _ } -> List.exists type_expr_uses_money elems
+
+let decl_uses_money = function
+  | DRecord r -> List.exists (fun (f : field_def) -> type_expr_uses_money f.type_expr) r.fields
+  | DEntity e -> List.exists (fun (f : field_def) -> type_expr_uses_money f.type_expr) e.fields
+  | DType (TypeAdt { variants; _ }) ->
+    List.exists (fun (v : adt_variant) ->
+      List.exists (fun (f : field_def) -> type_expr_uses_money f.type_expr) v.fields) variants
+  | DType (TypeNewtype { base_type; _ })
+  | DType (TypeAlias { base_type; _ }) -> type_expr_uses_money base_type
+  (* Fact base types: find_fact_base_type reads the DFact's first param. *)
+  | DFact fd -> List.exists (fun (p : binding) -> type_expr_uses_money p.type_expr) fd.params
+  | _ -> false
+
+(* Defensive dedup: if the user somehow declares their own type named `Money`,
+   don't emit a second (conflicting) definition — theirs wins in the output. *)
+let decl_defines_money = function
+  | DRecord { name = "Money"; _ } -> true
+  | DEntity { name = "Money"; _ } -> true
+  | DType (TypeAdt { name = "Money"; _ })
+  | DType (TypeNewtype { name = "Money"; _ })
+  | DType (TypeAlias { name = "Money"; _ }) -> true
+  | _ -> false
+
 let format_elm_exports items =
   match Ir.dedupe_preserving_order items with
   | [] -> "(..)"
@@ -1049,10 +1133,19 @@ let emit_elm ?module_name_override (m : module_form) : string =
   let uses_refinement_proofs = List.exists decl_uses_proofs m.decls in
   let ir_module = Ir.module_to_ir m in
   let endpoints_use_elm_dict = List.exists ir_endpoint_uses_elm_dict ir_module.Ir.irm_endpoints in
+  (* Emit the Money alias + codec helpers exactly once, and only when needed. *)
+  let emit_money_helpers =
+    (List.exists decl_uses_money m.decls
+     || List.exists ir_endpoint_uses_money ir_module.Ir.irm_endpoints)
+    && not (List.exists decl_defines_money m.decls)
+  in
 
   (* ── Module header ── *)
   let builtin_proof_exports =
     if uses_refinement_proofs then ["ForAll"; "ForAllValues"; "ForAllKeys"] else []
+  in
+  let builtin_money_exports =
+    if emit_money_helpers then ["Money"; "moneyDecoder"; "moneyEncoder"] else []
   in
   let newtype_exports = List.filter_map (function
     | DType (TypeNewtype { name; _ })
@@ -1102,11 +1195,11 @@ let emit_elm ?module_name_override (m : module_form) : string =
     | _ -> None
   ) m.decls |> List.concat in
   let endpoint_exports = List.map (fun (ep : Ir.ir_endpoint) -> fn_name_of_endpoint ep.ire_method ep.ire_path) ir_module.Ir.irm_endpoints in
-  let reserved_param_names = builtin_proof_exports @ newtype_exports @ fact_exports @ record_exports @ entity_exports @ endpoint_exports @ human_action_exports in
+  let reserved_param_names = builtin_proof_exports @ builtin_money_exports @ newtype_exports @ fact_exports @ record_exports @ entity_exports @ endpoint_exports @ human_action_exports in
   let elm_module_name = match module_name_override with Some name -> name | None -> m.module_name in
   addf "module %s exposing%s
 " elm_module_name
-    (format_elm_exports (builtin_proof_exports @ newtype_exports @ fact_exports @ adt_exports @ record_exports @ entity_exports @ endpoint_exports @ human_action_exports));
+    (format_elm_exports (builtin_proof_exports @ builtin_money_exports @ newtype_exports @ fact_exports @ adt_exports @ record_exports @ entity_exports @ endpoint_exports @ human_action_exports));
   let source_base = Filename.basename m.source_file in
   addf "{- Generated by tesl generate elm from %s — experimental client generation, do not edit by hand -}
 
@@ -1142,6 +1235,29 @@ let emit_elm ?module_name_override (m : module_form) : string =
     add "type ForAll p\n    = ForAll\n\n";
     add "type ForAllValues p\n    = ForAllValues\n\n";
     add "type ForAllKeys p\n    = ForAllKeys\n\n"
+  end;
+
+  (* ── Money (builtin) ── *)
+  (* One shared alias + codec pair for the nominal Money builtin.  The decoder
+     is FIELD-BASED, so the agent-boundary wire shape's extra "display" field
+     is naturally ignored — both the bare HTTP shape {"minorUnits","currency"}
+     and the enriched one decode to the same value (no D.oneOf needed). *)
+  if emit_money_helpers then begin
+    add "type alias Money =\n";
+    add "    { minorUnits : Int\n";
+    add "    , currency : String\n";
+    add "    }\n\n";
+    add "moneyDecoder : D.Decoder Money\n";
+    add "moneyDecoder =\n";
+    add "    D.map2 (\\m c -> { minorUnits = m, currency = c })\n";
+    add "        (D.field \"minorUnits\" D.int)\n";
+    add "        (D.field \"currency\" D.string)\n\n";
+    add "moneyEncoder : Money -> E.Value\n";
+    add "moneyEncoder money =\n";
+    add "    E.object\n";
+    add "        [ ( \"minorUnits\", E.int money.minorUnits )\n";
+    add "        , ( \"currency\", E.string money.currency )\n";
+    add "        ]\n\n"
   end;
 
   (* ── Newtypes ── *)

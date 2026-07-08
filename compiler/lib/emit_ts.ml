@@ -64,6 +64,15 @@ let path_to_template path =
 
 (* ── Zod type mapping ────────────────────────────────────────────────────── *)
 
+(* Money arrives as {"minorUnits": <int>, "currency": "<ISO>"} over bare HTTP,
+   but the agent-facing boundary ADDITIONALLY includes "display".  Accept BOTH
+   (optional display), normalized to the bare {minorUnits, currency} shape so
+   the TS-side type stays stable (mirrors the PosixMillis tolerant decoder). *)
+let money_zod_schema =
+  "z.object({ minorUnits: z.number().int(), currency: z.string(), display: z.string().optional() }).transform((v) => ({ minorUnits: v.minorUnits, currency: v.currency }))"
+
+let money_ts_type = "{ minorUnits: number; currency: string }"
+
 (** Map a Tesl type_expr to a Zod schema expression.
     [fact_schemas] is the set of fact names that have generated Zod schemas. *)
 let rec zod_of_ir_type (fact_schemas : (string, unit) Hashtbl.t) (ty : Ir.ir_type) =
@@ -78,6 +87,9 @@ let rec zod_of_ir_type (fact_schemas : (string, unit) Hashtbl.t) (ty : Ir.ir_typ
      integer so the TS-side type stays `number` (mirrors the Elm decoder). *)
   | Ir.IRPosixMillis ->
     "z.union([z.number().int(), z.object({ epochMillis: z.number().int() }).transform((v) => v.epochMillis)])"
+  (* Money: tolerant of the agent-enriched shape (extra "display"), normalized
+     to the bare {minorUnits, currency} HTTP shape. *)
+  | Ir.IRMoney -> money_zod_schema
   | Ir.IRNamed name ->
     if Hashtbl.mem fact_schemas name then name ^ "Schema"
     else name ^ "Schema"
@@ -120,6 +132,7 @@ let rec ts_type_of_ir_type (ty : Ir.ir_type) =
   | Ir.IRFloat -> "number"
   | Ir.IRBool -> "boolean"
   | Ir.IRPosixMillis -> "number"
+  | Ir.IRMoney -> money_ts_type
   | Ir.IRNamed name -> name
   | Ir.IRVar name -> name
   | Ir.IRList arg ->
@@ -159,6 +172,10 @@ let base_zod_schema_for_type name =
      agent-enriched {"epochMillis": <int>, …} object. *)
   | "PosixMillis" ->
     "z.union([z.number().int(), z.object({ epochMillis: z.number().int() }).transform((v) => v.epochMillis)])"
+  | "Money" -> money_zod_schema
+  (* Dimensioned quantities (Length, Speed, … / canonical "§Q[…]") are a bare
+     number on the wire. *)
+  | name when Ir.is_quantity_type_name name -> "z.number()"
   | _ -> "z.string()"  (* fallback for unknown custom types *)
 
 (* ── Constraint → Zod method ─────────────────────────────────────────────── *)
@@ -438,6 +455,8 @@ let emit_ts (m : module_form) : string =
         | TName { name = "Int" | "Integer"; _ } -> "z.number().int()"
         | TName { name = "Float" | "Real"; _ } -> "z.number()"
         | TName { name = "Bool"; _ } -> "z.boolean()"
+        | TName { name = "Money"; _ } -> money_zod_schema
+        | TName { name; _ } when Ir.is_quantity_type_name name -> "z.number()"
         | _ -> "z.string()"
       in
       addf "export const %sSchema = %s.brand<%S>();\n" name base_schema name;
