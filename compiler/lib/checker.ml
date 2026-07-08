@@ -4377,7 +4377,45 @@ let check_func_decl ?(user_fn_names : string list = []) ctx (fd : func_decl) =
        | _ -> false
      in tail fd.body)
   in
-  (if is_app_main then () else
+  (if is_app_main then
+     (* App-main: the tail `App { … }` record is declarative configuration —
+        its fields reference declarations (databases/servers/queues) by NAME,
+        not as values — so it stays STRUCTURALLY validated (validation pass +
+        V001 field checks), never inferred.  But the let-chain ABOVE it is
+        ordinary expressions, and skipping those was a fail-open: an unknown
+        initTelemetry keyword, a wrong-typed call, or a completely unbound
+        name in a main `let` all compiled clean and failed at Racket load or
+        silently at runtime (roadmap/next/app_main_body_typechecking.md).
+        Check each binding exactly like the ELet/ELetProof inference arms,
+        threading bindings so later lets see earlier ones, and stop at the
+        App tail. *)
+     let rec check_app_main_lets ctx = function
+       | ELet { name; declared_type; value; body; loc; declared_proof = _ } ->
+         let value_ty =
+           match declared_type with
+           | Some declared_type ->
+             let expected_ty = ty_of_type_expr declared_type in
+             let inferred_ty = infer_expr ctx value in
+             unify_expected_at ctx (expr_loc value) inferred_ty
+               (mk_expectation ~origin:loc ~role:(LetBinding name)
+                 ~reason:(local_let_reason name expected_ty) expected_ty);
+             apply !(ctx.subst) expected_ty
+           | None -> infer_expr ctx value
+         in
+         let env_fv = free_vars_env ctx.env in
+         let sch = generalize env_fv !(ctx.subst) value_ty in
+         check_app_main_lets { ctx with env = env_extend name sch ctx.env } body
+       | ELetProof { value_name; proof_name; value; body; _ } ->
+         let value_ty = infer_expr ctx value in
+         let sch = generalize (free_vars_env ctx.env) !(ctx.subst) value_ty in
+         let env' =
+           env_extend proof_name (mono t_fact) (env_extend value_name sch ctx.env)
+         in
+         check_app_main_lets { ctx with env = env' } body
+       | _ -> ()  (* the App { … } tail — owned by the structural pass *)
+     in
+     check_app_main_lets ctx' fd.body
+   else
    check_stmt ctx' fd.body
      (mk_expectation ~origin:fd.loc ~role:(ReturnBody fd.name)
        ~reason:(return_reason fd.name expected) expected));

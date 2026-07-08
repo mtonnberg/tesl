@@ -1941,7 +1941,7 @@ evts.onmessage = (e) => {
 <main-decl> ::= "main" "(" ")" "->" "App" "requires" "[" <capability-list> "]" "=" <body>
 ```
 
-The body is an ordinary function body that may run startup `let` bindings (telemetry init, port resolution, seeding) and must end by returning an `App { ... }` record:
+The body is an ordinary function body that may run startup `let` bindings (telemetry init, port resolution, seeding) and must end by returning an `App { ... }` record. The `let` bindings are fully type-checked like any function body (unknown names, wrong-typed calls, and invalid `initTelemetry` keywords are compile errors); only the final `App { ... }` record is validated structurally, because its `database`/`api`/`queues`/`email`/`sseChannels` fields reference declarations by name rather than as values:
 
 ```text
 <app-record> ::= "App" "{"
