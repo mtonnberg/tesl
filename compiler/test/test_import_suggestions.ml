@@ -239,6 +239,93 @@ let test_unknown_name_without_candidate_is_plain () =
    | Some f ->
      Alcotest.failf "expected no fix, got %s" (Compile.fix_to_json (Some f)))
 
+(* ── #34: bare top-level constants across the module boundary ────────────── *)
+
+(* A literal-valued exported constant now binds in the importing module — with
+   its real type, not a unify-with-anything fresh var. *)
+let test_const_import_binds () =
+  let dir = fresh_dir () in
+  write_file (Filename.concat dir "consts.tesl")
+    "#lang tesl\n\
+     module Consts exposing [kMax, kName]\n\
+     import Tesl.Prelude exposing [Int, String]\n\
+     \n\
+     kMax = 5\n\
+     \n\
+     kName = \"tesl\"\n";
+  let src = "#lang tesl\n\
+             module Main exposing [go]\n\
+             import Tesl.Prelude exposing [Int, String]\n\
+             import Consts exposing [kMax, kName]\n\
+             \n\
+             fn go(x: Int) -> Int =\n\
+             \  x + kMax\n\
+             \n\
+             fn name() -> String =\n\
+             \  kName\n" in
+  let diags = check_at (Filename.concat dir "main.tesl") src in
+  (match diags with
+   | [] -> ()
+   | ds ->
+     Alcotest.failf "expected clean check, got:\n%s"
+       (String.concat "\n"
+          (List.map (fun (d : Compile.diagnostic) ->
+               Printf.sprintf "  [%s] %s" d.code d.message) ds)))
+
+(* The imported constant carries its literal type: using an Int constant where
+   a String is required must be a TYPE error, not accepted via a fresh var. *)
+let test_const_import_is_really_typed () =
+  let dir = fresh_dir () in
+  write_file (Filename.concat dir "consts.tesl")
+    "#lang tesl\n\
+     module Consts exposing [kMax]\n\
+     import Tesl.Prelude exposing [Int]\n\
+     \n\
+     kMax = 5\n";
+  let src = "#lang tesl\n\
+             module Main exposing [go]\n\
+             import Tesl.Prelude exposing [String]\n\
+             import Consts exposing [kMax]\n\
+             \n\
+             fn go() -> String =\n\
+             \  kMax\n" in
+  let diags = check_at (Filename.concat dir "main.tesl") src in
+  (match diags with
+   | [] -> Alcotest.fail "Int constant accepted as String — const import is untyped"
+   | _ -> ())
+
+(* A constant whose value has no syntactically evident type cannot cross the
+   boundary; the error must explain the zero-arg-fn wrap, and must NOT suggest
+   adding the import that is already present (the old misleading hint). *)
+let test_opaque_const_hint_no_duplicate_import () =
+  let dir = fresh_dir () in
+  write_file (Filename.concat dir "consts.tesl")
+    "#lang tesl\n\
+     module Consts exposing [kPair]\n\
+     import Tesl.Prelude exposing [Int, String]\n\
+     \n\
+     kPair = { a: 1, b: \"x\" }\n";
+  let src = "#lang tesl\n\
+             module Main exposing [go]\n\
+             import Tesl.Prelude exposing [Int]\n\
+             import Consts exposing [kPair]\n\
+             \n\
+             fn go(x: Int) -> Int =\n\
+             \  let p = kPair\n\
+             \  x\n" in
+  let diags = check_at (Filename.concat dir "main.tesl") src in
+  let d = find_diag ~code:"T001" ~msg_sub:"wrap it in a zero-arg function" diags in
+  (* the old hint suggested `add import Consts exposing [kPair]` verbatim *)
+  (let re = Str.regexp_string "add `import" in
+   if (try ignore (Str.search_forward re d.message 0); true
+       with Not_found -> false)
+   then Alcotest.failf "hint still suggests re-adding the import: %s" d.message);
+  (match d.fix with
+   | None -> ()
+   | Some f ->
+     Alcotest.failf "opaque-const hint must not carry an import fix, got %s"
+       (Compile.fix_to_json (Some f)))
+
 (* ── W050 unused-import fixes ────────────────────────────────────────────── *)
 
 let lint_at path source =
@@ -324,6 +411,14 @@ let () =
         test_local_subdir_hint_no_fix;
       Alcotest.test_case "no candidate → plain error" `Quick
         test_unknown_name_without_candidate_is_plain;
+    ];
+    "const-exports", [
+      Alcotest.test_case "literal const binds across modules (#34)" `Quick
+        test_const_import_binds;
+      Alcotest.test_case "imported const carries its real type (#34)" `Quick
+        test_const_import_is_really_typed;
+      Alcotest.test_case "opaque const → wrap hint, no duplicate import (#34)" `Quick
+        test_opaque_const_hint_no_duplicate_import;
     ];
     "w050", [
       Alcotest.test_case "prunes one unused name" `Quick

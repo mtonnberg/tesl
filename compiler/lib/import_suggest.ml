@@ -145,6 +145,10 @@ type local_export = {
   le_path   : string;         (* file that defines it *)
   le_expose : string;         (* what to put in the exposing list — the name
                                  itself, or `Type(..)` for an ADT constructor *)
+  le_opaque_const : bool;     (* #34: a bare top-level constant whose value has
+                                 no syntactically evident type — the importer's
+                                 checker cannot bind it, so "add the import"
+                                 would be a lie; hint the zero-arg-fn wrap. *)
 }
 
 (** Parse [path] and index every name an importer could expose: exported names,
@@ -165,7 +169,15 @@ let exports_of_file (path : string) : (string * local_export) list =
     | Err _ -> []
     | Ok m ->
       let entry expose name =
-        (name, { le_module = m.module_name; le_path = path; le_expose = expose })
+        let opaque_const =
+          List.exists (function
+            | DConst (c : const_form) ->
+              c.name = name && Type_system.shallow_const_ty c.value = None
+            | _ -> false
+          ) m.decls
+        in
+        (name, { le_module = m.module_name; le_path = path; le_expose = expose;
+                 le_opaque_const = opaque_const })
       in
       List.concat_map (function
         | ExportName n -> [entry n n]
@@ -211,6 +223,18 @@ let build_local_index (m : module_form) : local_index =
 
 (* ── Putting it together ───────────────────────────────────────────────────── *)
 
+(* #34: is [expose_name] already listed in an import of [target_module]?  When
+   it is, "add `import …`" would tell the user to duplicate a line they already
+   have — the unbound name has some other cause (e.g. a declaration kind that
+   does not bind across modules), so the hint must say that instead. *)
+let already_imported (m : module_form) ~(target_module : string) ~(expose_name : string) =
+  List.exists (fun (imp : import_decl) ->
+    imp.module_name = target_module
+    && (match imp.names with
+        | ImportAll -> true
+        | ImportExposing names -> List.mem expose_name names))
+    m.imports
+
 (* " — add `import M exposing [x]`", or, when M is already imported with an
    exposing list, " — add `x` to the existing `import M exposing [...]`". *)
 let hint_for (m : module_form) ~(target_module : string) ~(expose_name : string) =
@@ -220,7 +244,10 @@ let hint_for (m : module_form) ~(target_module : string) ~(expose_name : string)
       && (match imp.names with ImportExposing _ -> true | ImportAll -> false))
       m.imports
   in
-  if already_exposing then
+  if already_imported m ~target_module ~expose_name then
+    Printf.sprintf " — `%s` is already imported from `%s`, but the import does \
+                    not make it usable here" expose_name target_module
+  else if already_exposing then
     Printf.sprintf " — add `%s` to the existing `import %s exposing [...]`"
       expose_name target_module
   else
@@ -248,6 +275,29 @@ let suggest (m : module_form) ~(local_index : local_index) (name : string)
   | [] ->
     match List.assoc_opt name (Lazy.force local_index) with
     | Some (le, true) ->
+      if le.le_opaque_const then
+        (* #34: a bare constant only crosses the module boundary when its type
+           is evident from a literal value — otherwise no import can help. *)
+        Some {
+          sug_hint = Printf.sprintf " — `%s` (%s) exports it, but a constant \
+                                     with a non-literal value cannot be \
+                                     imported; wrap it in a zero-arg function \
+                                     in %s instead (`fn %s() -> T = ...`)"
+              le.le_module (Filename.basename le.le_path)
+              (Filename.basename le.le_path) le.le_expose;
+          sug_fix = None;
+        }
+      else if already_imported m ~target_module:le.le_module ~expose_name:le.le_expose then
+        (* #34: the import line the old hint suggested is already present —
+           adding it again cannot fix anything, so say what is actually wrong. *)
+        Some {
+          sug_hint = Printf.sprintf " — `%s` is already imported from `%s` (%s), \
+                                     but this declaration does not bind across \
+                                     modules"
+              le.le_expose le.le_module (Filename.basename le.le_path);
+          sug_fix = None;
+        }
+      else
       Some {
         sug_hint = Printf.sprintf " — module `%s` (%s) exports it; add `import %s exposing [%s]`"
             le.le_module (Filename.basename le.le_path) le.le_module le.le_expose;

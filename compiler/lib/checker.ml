@@ -895,6 +895,26 @@ let load_imported_func_sigs (m : module_form) : (string * scheme) list =
               in
               (if include_plain then [ (fd.name, q_sch) ] else [])
               @ (if include_qualified then [ (qualified_name, q_sch) ] else [])
+            | DConst c ->
+              (* #34: bind exported constants across the module boundary.  The
+                 emitted Racket already `provide`s them; only the checker's
+                 import env was missing the binding, so `import Lib exposing
+                 [kMax]` type-checked the export but left every use unbound. *)
+              (match shallow_const_ty c.value with
+               | None -> []
+               | Some ty ->
+                 let sch = mono ty in
+                 let qualified_name = imp.module_name ^ "." ^ c.name in
+                 let include_plain = match requested with
+                   | Some names -> List.mem c.name names
+                   | None -> false
+                 in
+                 let include_qualified = match requested with
+                   | Some names -> List.mem c.name names
+                   | None -> true
+                 in
+                 (if include_plain then [ (c.name, sch) ] else [])
+                 @ (if include_qualified then [ (qualified_name, sch) ] else []))
             | _ -> []
           ) imported.decls
   ) m.imports

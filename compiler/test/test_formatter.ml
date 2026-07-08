@@ -129,6 +129,9 @@ let corpus = [
   "exposing_dotdot",
   "#lang tesl\nimport Tesl.Prelude exposing [Bool(..), Int, String]\n";
 
+  "exposing_multiline_with_comment",
+  "#lang tesl\nimport Tesl.Prelude exposing [\n  # a comment describing the import\n  Int,\n  String,\n]\n";
+
   "leading_blank_lines",
   "\n\n\n#lang tesl\nfn f(x: Int) -> Int = x\n";
 
@@ -266,6 +269,21 @@ let test_exposing_dotdot_preserved () =
   check string "(..) re-export marker preserved through canonicalisation"
     "#lang tesl\nimport Tesl.Prelude exposing [Bool(..), Int]\n" out
 
+(* #35: a `#` comment inside a multi-line exposing list must NOT be collapsed
+   onto one line — the comment would swallow the names after it, turning valid
+   code into `import M exposing [# comment Int, String]` which no longer
+   compiles.  The whole region is preserved verbatim instead. *)
+let test_exposing_comment_not_collapsed () =
+  let src =
+    "#lang tesl\nimport Tesl.Prelude exposing [\n  # a comment describing the import\n  Int,\n  String,\n]\n" in
+  check string "comment inside exposing list preserves the author's layout"
+    src (fmt src)
+
+let test_exposing_comment_trailing_line () =
+  let src = "#lang tesl\nimport M exposing [a, b] # why we import M\n" in
+  check string "trailing comment after exposing list preserved"
+    src (fmt src)
+
 let test_leading_blank_lines_removed () =
   let out = fmt "\n\n\n#lang tesl\nfn f(x: Int) -> Int = x\n" in
   check string "file never starts with a blank line"
@@ -377,6 +395,8 @@ let () =
       test_case "leading comma normalised"                   `Quick test_exposing_leading_comma_normalised;
       test_case "long list splits with trailing comma"       `Quick test_exposing_long_splits_with_trailing_comma;
       test_case "(..) re-export preserved"                   `Quick test_exposing_dotdot_preserved;
+      test_case "comment inside list not collapsed (#35)"    `Quick test_exposing_comment_not_collapsed;
+      test_case "trailing comment preserved (#35)"           `Quick test_exposing_comment_trailing_line;
     ];
     "blank-lines", [
       test_case "leading blank lines removed"                `Quick test_leading_blank_lines_removed;

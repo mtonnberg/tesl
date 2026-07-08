@@ -1,0 +1,365 @@
+#lang tesl
+module Lesson70AgentAsyncWork exposing [ReportServer]
+
+import Tesl.Prelude exposing [String, Unit]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Json exposing [stringCodec]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Queue exposing [
+  FromQueue,
+  queueRead,
+  queueWrite,
+  pubsub,
+  Queue,
+  QueueRetryStrategy,
+  Exponential,
+]
+import Tesl.Database exposing [
+  Database,
+  Postgres,
+  PostgresConfig,
+  TcpConnection,
+]
+import Tesl.SSE exposing [SseChannel]
+import Tesl.String exposing [String.concat]
+import Tesl.ApiTest exposing [
+  statusOk,
+  hasLength,
+  includesWhere,
+  subscribe,
+  collect,
+  JobResult(..),
+  processNextJob,
+  pendingJobCount,
+  expectJobOk,
+]
+import Tesl.Agent exposing [
+  aiProvider,
+  Agent,
+  Tool,
+  Conversation,
+  tool,
+  decodeAs,
+  mockToolProvider,
+  mockProvider,
+  toolUseStep,
+  textStep,
+  newConversation,
+  conversationFrom,
+  conversationJson,
+  converse,
+  turnReply,
+  turnConversation,
+  replyText,
+]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Lesson 70 — Long-running agent work over a queue, with resume-after
+#
+# Lesson 69 handed an action to a HUMAN. This lesson hands one to a WORKER: the
+# agent asks for something SLOW (a report), the request is dropped on a queue and
+# the turn returns immediately, and when the worker finishes it RESUMES the same
+# conversation so the agent can tell the user — plus fans the result out over SSE
+# (an email would go the same place).
+#
+# THE SHAPE (no new language surface — pure composition of things you already
+# have: `serverTools`/`tool`, `enqueue`, `worker`, `publish`, and the
+# `conversationFrom` / `converseStreaming` / `conversationJson` conversation
+# primitives from lesson 64):
+#
+#   1. A tool the agent can call, `requestReport`, whose dispatch only ENQUEUES a
+#      job and returns "queued" — it never does the slow work on the turn. The
+#      tool is built PER TURN so it CAPTURES the conversation id (the model never
+#      supplies it, so it cannot target another user's conversation).
+#   2. A worker that does the slow work, then RESUMES the captured conversation:
+#      load its transcript, run one more `converseStreaming` turn feeding in the
+#      result, save the advanced transcript. converseStreaming publishes the new
+#      reply on the conversation's SSE channel, so a browser watching that
+#      conversation sees the agent pick back up on its own.
+#
+# The conversation id carried on the job IS the "active conversation is awaiting
+# this result" record — completion re-enters exactly that conversation. Nothing
+# is suspended: resuming is just another turn, run on the worker.
+# ══════════════════════════════════════════════════════════════════════════════
+
+capability reportAi implies aiProvider
+capability reportRead implies dbRead
+capability reportWrite implies dbWrite
+capability reportPubSub implies pubsub
+capability reportEnqueue implies queueWrite
+# The HTTP turn: builds the agent (whose tool enqueues), loads/saves the
+# conversation, and streams the turn.
+capability reportTurn implies reportAi, reportRead, reportWrite, reportPubSub, reportEnqueue
+# The worker: reads the queue, then resumes the conversation (read/write/ai) and
+# publishes the streamed reply.
+capability reportWorker implies queueRead, reportAi, reportRead, reportWrite, reportPubSub
+
+# ── Domain + persistence ──────────────────────────────────────────────────────
+
+entity ConversationRecord table "report_conversations" primaryKey id {
+  id: String
+  transcript: String
+}
+
+database ReportDb = Database {
+  schema: "lesson70"
+  entities: [ConversationRecord]
+  backend: Postgres (PostgresConfig {
+    dbName: "demo"
+    user: "demo"
+    password: "demo"
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
+}
+
+# The job that carries the SLOW work off the turn. `conversationId` is the join
+# key back to the awaiting conversation (captured from the turn, never supplied
+# by the model). `kind` is what to report on.
+record ReportJob {
+  conversationId: String
+  kind: String
+}
+
+codec ReportJob {
+  toJson {
+    conversationId -> "conversationId" with_codec stringCodec
+    kind -> "kind" with_codec stringCodec
+  }
+  fromJson [
+    {
+      conversationId <- "conversationId" with_codec stringCodec
+      kind <- "kind" with_codec stringCodec
+    }
+  ]
+}
+
+# The tool argument the model supplies: only WHAT to report on.
+record ReportSpec {
+  kind: String
+}
+
+codec ReportSpec {
+  toJson_forbidden
+  fromJson [
+    {
+      kind <- "kind" with_codec stringCodec
+    }
+  ]
+}
+
+# One streamed event on a conversation's channel: a step of a turn.
+type ChatEvent
+  = Chunk content: String
+
+sseChannel ChatStream(conversationId: String) = SseChannel {
+  database: ReportDb
+  payload: ChatEvent
+}
+
+queue ReportQueue requires [] = Queue {
+  database: ReportDb
+  jobs: [Job ReportJob generateReport Nothing]
+  retry: QueueRetryStrategy {
+    maxAttempts: 1
+    backoff: Exponential
+    initialDelay: 0
+  }
+}
+
+# ── The agent-facing tool: enqueue, don't compute ─────────────────────────────
+
+fn validateReportSpec(argsJson: String) -> ReportSpec =
+  decodeAs "ReportSpec" argsJson
+
+# The dispatch's real work: drop a job on the queue carrying the CAPTURED
+# conversation id, and hand the model a short acknowledgement. The slow work
+# happens on the worker, later. `conversationId` is the FIRST parameter so the
+# tool can partially apply it (capturing it) while the model supplies only the
+# `ReportSpec`. (A named fn because `enqueue` is a statement.)
+fn dispatchReport(conversationId: String, spec: ReportSpec) -> String
+  requires [reportEnqueue] =
+  enqueue ReportJob { conversationId: conversationId, kind: spec.kind }
+  String.concat "Queued your report on: " spec.kind
+
+# Build the tool for THIS turn, capturing the conversation id by partially
+# applying `dispatchReport`. The model chooses only the report `kind`; it can
+# neither perform the work nor point it at a different conversation.
+fn reportTool(conversationId: String) -> Tool
+  requires [reportEnqueue] =
+  let argSchema = "{\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\"}},\"required\":[\"kind\"]}"
+  let toolDesc = "Generate a report for the user. Runs in the background; the user is told here when it is ready."
+  tool "requestReport" toolDesc argSchema validateReportSpec (dispatchReport conversationId)
+
+# ── Conversation persistence (same discipline as lesson 64) ───────────────────
+
+fn loadConversation(agent: Agent, conversationId: String) -> Conversation
+  requires [reportRead] =
+  case selectOne r from ConversationRecord where r.id == conversationId of
+    Something r -> conversationFrom agent r.transcript
+    Nothing -> newConversation agent
+
+fn updateTranscript(conversationId: String, json: String) -> Unit
+  requires [reportWrite] =
+  update rec in ConversationRecord
+    where rec.id == conversationId
+    set rec.transcript = json
+
+fn insertTranscript(conversationId: String, json: String) -> Unit
+  requires [reportWrite] =
+  let rows = [ConversationRecord { id: conversationId, transcript: json }]
+  insertMany rows in ConversationRecord
+
+fn saveConversation(conversationId: String, conv: Conversation) -> Unit
+  requires [reportRead, reportWrite] =
+  let json = conversationJson conv
+  transaction {
+    case selectOne r from ConversationRecord where r.id == conversationId of
+      Something r -> updateTranscript conversationId json
+      Nothing -> insertTranscript conversationId json
+  }
+
+# Publish one event to a conversation's channel. (`publish` is a statement, so
+# it lives in a named fn.)
+fn publishChunk(conversationId: String, event: String) -> Unit
+  requires [reportPubSub] =
+  publish ChatStream(conversationId) Chunk { content: event }
+
+# The live user turn: load (or start) the conversation, run it, persist, and
+# return the reply as the HTTP response. (Streaming per-token over SSE is
+# lesson 64; here the SSE channel is reserved for the ASYNC completion, which has
+# no HTTP response to return to.)
+fn runTurn(agent: Agent, conversationId: String, message: String) -> String
+  requires [reportRead, reportWrite, reportAi] =
+  let conv = loadConversation agent conversationId
+  let turn = converse conv message
+  let _ = saveConversation conversationId (turnConversation turn)
+  replyText (turnReply turn)
+
+# The RESUME turn, run on the worker: re-enter the SAME conversation with the
+# result as the next message, persist the advanced transcript, and hand back the
+# follow-up reply text. (The worker publishes it — keeping DB work and channel
+# notification separate: publishes after a transaction deliver cleanly.)
+fn resumeConversation(agent: Agent, conversationId: String, message: String) -> String
+  requires [reportRead, reportWrite, reportAi] =
+  let conv = loadConversation agent conversationId
+  let turn = converse conv message
+  let _ = saveConversation conversationId (turnConversation turn)
+  replyText (turnReply turn)
+
+# ── The worker: do the slow work, then RESUME the conversation ────────────────
+
+# The "slow" work. Real code would query, render a PDF, call an external service…
+fn buildReport(kind: String) -> String =
+  String.concat (String.concat "Report [" kind) "]: 3 items, all healthy."
+
+worker generateReport(job: ReportJob ::: FromQueue (Id == jobId) job)
+  requires [reportWorker] =
+  # 1) The slow work, off the turn.
+  let report = buildReport job.kind
+  # 2) RESUME: re-enter the SAME conversation with the result as the next
+  #    message; the advanced transcript is persisted and we get the follow-up
+  #    reply back. The resume agent needs no tools — it only summarises the
+  #    result. (Live, this is the same LLM/agent as the first turn.)
+  let resumeAgent = Agent {
+    provider: mockProvider ["Your report is ready — I've posted it above."]
+    systemPrompt: "You manage the user's reports."
+    maxTokens: 256
+    tools: []
+  }
+  let resultMsg = String.concat "The report finished. Result: " report
+  let reply = resumeConversation resumeAgent job.conversationId resultMsg
+  # 3) Fan out on the conversation's channel: the finished report, then the
+  #    agent's follow-up. An `Email.send` to the user would sit right here too —
+  #    same completion point, same correlation.
+  let _ = publishChunk job.conversationId (String.concat "report: " report)
+  publishChunk job.conversationId (String.concat "text: " reply)
+  job
+
+# ── HTTP surface ──────────────────────────────────────────────────────────────
+
+record MessageRequest {
+  conversationId: String
+  message: String
+}
+
+codec MessageRequest {
+  toJson_forbidden
+  fromJson [
+    {
+      conversationId <- "conversationId" with_codec stringCodec
+      message <- "message" with_codec stringCodec
+    }
+  ]
+}
+
+# The turn agent: scripted to call requestReport once, then tell the user it's
+# queued. (Live, swap mockToolProvider for `anthropic …`.)
+fn turnAgent(conversationId: String) -> Agent
+  requires [reportEnqueue] =
+  Agent {
+    provider: mockToolProvider [
+      toolUseStep "requestReport" "call_1" "{\"kind\":\"q3-sales\"}",
+      textStep "I've queued your q3-sales report and will post it here when it's ready."
+    ]
+    systemPrompt: "You manage the user's reports. Use requestReport for anything slow."
+    maxTokens: 256
+    tools: [reportTool conversationId]
+  }
+
+handler sendMessage(req: MessageRequest) -> String
+  requires [reportTurn] =
+  runTurn (turnAgent req.conversationId) req.conversationId req.message
+
+api ReportApi {
+  post "/chat"
+    body req: MessageRequest
+    -> String
+
+  sse "/chat/:conversationId/events"
+    capture conversationId: String using stringCodec
+    subscribe ChatStream(conversationId)
+}
+
+server ReportServer for ReportApi {
+  sendMessage = sendMessage
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DETERMINISTIC TESTS — mock provider + in-memory api-test harness (no key, no PG)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# (1) Turn 1 enqueues the slow work and returns immediately; nothing is computed
+# on the turn. The agent's tool call put exactly one job on the queue.
+api-test "the agent's tool enqueues slow work and the turn returns at once" for ReportServer requires [reportTurn] {
+  let posted = post "/chat" body { "conversationId": "conv-1", "message": "generate my q3 sales report" }
+  expect statusOk posted.status
+  # the turn ran the tool (which enqueued) and returned — the slow work is queued
+  expect pendingJobCount ReportQueue == 1
+}
+
+# (2) RESUME-AFTER: running the worker does the slow work and re-enters the SAME
+# conversation, publishing the finished report and the agent's follow-up on the
+# conversation's channel. The awaiting conversation picks itself back up with no
+# request in flight — the two events are exactly what a browser would render.
+api-test "the worker resumes the awaiting conversation when the job completes" for ReportServer requires [reportTurn, reportWorker] {
+  let stream = subscribe "/chat/conv-1/events"
+  let posted = post "/chat" body { "conversationId": "conv-1", "message": "generate my q3 sales report" }
+  expect statusOk posted.status
+  expect pendingJobCount ReportQueue == 1
+
+  # Run the worker — it builds the report AND resumes the conversation.
+  let done = processNextJob ReportQueue
+  let job = expectJobOk done
+  expect job.conversationId == "conv-1"
+  expect pendingJobCount ReportQueue == 0
+
+  # The channel carries exactly the worker's two async events: the finished
+  # report, then the agent's follow-up reply from the resumed turn.
+  let events = collect stream count 2 timeout 2000ms
+  expect hasLength 2 events
+  expect includesWhere { "tag": "Chunk", "fields": { "content": "report: Report [q3-sales]: 3 items, all healthy." } } events
+  expect includesWhere { "tag": "Chunk", "fields": { "content": "text: Your report is ready — I've posted it above." } } events
+}

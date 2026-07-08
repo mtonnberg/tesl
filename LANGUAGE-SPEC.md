@@ -576,6 +576,7 @@ Two import forms are supported:
 - **Explicit imports** list the names to bring into the unqualified scope. The constructor-family form `Type(..)` imports an ADT name together with all of its constructors.
 - **Module imports** (no `exposing` clause) load the module without importing any names into the unqualified scope. All exported names from the module are accessible via qualified `Module.Name` syntax in both type annotations and function call positions.
 - **Proof predicates** — upper-case names such as `ValidPort` or `IsPositive` used in `:::` proof annotations are first-class exportable names, exactly like functions and types. A module that declares a predicate through an `establish`, `check`, or `auth` function must list it in `exposing [...]` to make it importable. Any other module that explicitly names the predicate in its own function annotations must import it. This makes every proof predicate greppable: searching the codebase for `ValidPort` in an `exposing [...]` list finds its home module immediately.
+- **Top-level constants** — a bare binding (`kMax = 5`) can be exported and imported like a function **when its value's type is syntactically evident**: an `Int`/`Float`/`Bool`/`String` literal (including interpolated strings and negated numbers) or a homogeneous list of such literals. Cross-module signatures are annotation-driven and a bare constant carries no annotation, so a constant with any other value (a record literal, a constructor application, a computed expression) does not bind in the importing module; the importer's error explains the fix — wrap it in a zero-arg function (`fn kMax() -> T = ...`).
 
 **Import ordering.** All `import` declarations must appear immediately after the `module` header, before any type, function, capability, or other top-level declaration. An `import` that appears after any other declaration is a **compile-time error**:
 
@@ -1277,6 +1278,20 @@ the human clicks, their browser calls the real endpoint under their own session 
 re-checks auth server-side); to let the agent continue, append the completed
 `{ action, handle, result }` to the persisted conversation and run another `converse`
 turn ("resume-after" — the runtime does not suspend the turn).
+
+**Long-running work over a queue (resume-after, no new surface).** The same resume-after
+shape covers *machine* work an agent starts but should not block on. A tool the agent
+calls (a `serverTools` handler, or a `tool` whose dispatch captures the conversation id)
+only `enqueue`s a job and returns "queued"; the turn ends at once. A `worker` does the
+slow work later and, at completion, `publish`es to the conversation's SSE channel (and/or
+`Email.send`s) **and resumes the conversation** — load its transcript with
+`conversationFrom`, run one more `converse` with the result as the message, persist with
+`conversationJson`. The conversation id carried on the job is the "this conversation is
+awaiting that result" record; completion re-enters exactly that conversation. Nothing is
+suspended (a resumed turn is just another `converse`, run on the worker), so a
+never-completed job never pins a request. This is pure composition of `enqueue` /
+`worker` / `publish` / the conversation primitives — no agent-specific machinery. See
+`example/learn/lesson70-agent-async-work.tesl`.
 
 Running inference requires the `aiProvider` capability (from `Tesl.Agent`; it implies
 `httpClient` because real providers perform outbound HTTP). The agent API:

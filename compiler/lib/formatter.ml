@@ -608,26 +608,47 @@ let reflow_exposing_lists ?(max_len = 80) (lines : string list) : string list =
     rest := List.tl !rest;
     (* Check if this line is a module…exposing line *)
     if is_exposing_line line then begin
+      (* Only the part of a line before any `#` comment participates in
+         bracket counting and reflow decisions — exposing lists contain no
+         string literals, so a `#` always starts a comment here. *)
+      let code_part l =
+        match String.index_opt l '#' with
+        | Some i -> String.sub l 0 i
+        | None -> l
+      in
       (* Collect the full bracket content, potentially across multiple lines *)
       let collected = Buffer.create 128 in
       Buffer.add_string collected line;
+      (* Keep the original physical lines too: if the region turns out to
+         contain a comment we must NOT collapse it (joining lines would merge
+         the comment with the names that follow, commenting them out). *)
+      let orig_rev = ref [ line ] in
       (* Keep adding lines until we see the closing ] (tracking bracket depth) *)
       let depth = ref 0 in
       String.iter (fun c ->
         if c = '[' then incr depth
         else if c = ']' then decr depth
-      ) line;
+      ) (code_part line);
       while !depth > 0 && !rest <> [] do
         let next = List.hd !rest in
         rest := List.tl !rest;
+        orig_rev := next :: !orig_rev;
         Buffer.add_char collected ' ';
         (* Strip leading whitespace from continuation lines *)
         Buffer.add_string collected (String.trim next);
         String.iter (fun c ->
           if c = '[' then incr depth
           else if c = ']' then decr depth
-        ) next
+        ) (code_part next)
       done;
+      let has_comment =
+        List.exists (fun l -> String.contains l '#') !orig_rev
+      in
+      if has_comment then
+        (* Preserve the author's layout verbatim: reflowing would splice the
+           comment into the middle of the name list. *)
+        List.iter (fun l -> result := l :: !result) (List.rev !orig_rev)
+      else begin
       let full = Buffer.contents collected in
       (* Normalise internal whitespace (collapse runs of spaces to one) *)
       let normalised =
@@ -680,6 +701,7 @@ let reflow_exposing_lists ?(max_len = 80) (lines : string list) : string list =
           result := (Printf.sprintf "  %s," name) :: !result
         ) names;
         result := "]" :: !result
+      end
       end
     end else
       result := line :: !result

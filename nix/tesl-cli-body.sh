@@ -87,6 +87,29 @@ _tesl_freshen_bytecode() {
   fi
 }
 
+# #33: emit every transitive local import of FILE to its sibling .rkt so racket
+# can load them. Shared by compile/run/test — `tesl test` previously skipped
+# this step, so on a fresh checkout (no *.rkt, they are gitignored) a
+# multi-module project's tests failed with a swallowed "cannot open module
+# file" and the misleading "(no test results)".
+_tesl_emit_dep_rkts() {
+  local FILE="$1" DEP DEP_RKT DEPS RET=0
+  DEPS="$(_tesl_compile_deps "$FILE" 2>/dev/null)"
+  for DEP in $DEPS; do
+    if [ -n "$DEP" ] && [ "$DEP" != "$FILE" ]; then
+      DEP_RKT="${DEP%.tesl}.rkt"
+      if ! _tesl_compile_to_stdout "$DEP" > "$DEP_RKT" 2>&1; then
+        echo "error: Failed to compile dependency: $DEP" >&2
+        rm -f "$DEP_RKT"
+        RET=1
+      else
+        _tesl_freshen_bytecode "$DEP_RKT"   # #18: drop stale .zo on compiler change
+      fi
+    fi
+  done
+  return "$RET"
+}
+
 # Locate the templates dir (holds minimal/ api/ docker/).
 # Prefer a live repo checkout (dev), else the store path baked by the preamble.
 _tesl_templates_dir() {
@@ -847,7 +870,7 @@ _tesl_build() {
 # Each emitted check sits on a .rkt line carrying (thsl-src! "<file>" <line> …),
 # so we resolve the .rkt location to the original .tesl file:line.
 _tesl_test_format() {
-  local src="$1" rkt="$2" out="$3"
+  local src="$1" rkt="$2" out="$3" status="${4:-0}"
   [ -f "$out" ] || return 0
   awk -v rkt="$rkt" '
     # Resolve a .rkt line number to its original .tesl "file:line" by reading the
@@ -910,7 +933,12 @@ _tesl_test_format() {
     }
   ' "$out" > "$out.fmt" 2>/dev/null
 
-  if [ -s "$out.fmt" ] && grep -q "FAILED\|test\|results" "$out.fmt"; then
+  # #33: a hard racket error (e.g. a missing imported-module .rkt) produces no
+  # parseable test blocks; "(no test results)" used to swallow the real error.
+  # When the run FAILED and nothing was parsed, show the raw output instead.
+  if [ "$status" -ne 0 ] && grep -q "(no test results)" "$out.fmt" 2>/dev/null; then
+    grep -Ev "^raco (setup|make|link|test):" "$out" >&2 || true
+  elif [ -s "$out.fmt" ] && grep -q "FAILED\|test\|results" "$out.fmt"; then
     cat "$out.fmt" >&2
   else
     grep -Ev "^raco (setup|make|link|test):" "$out" >&2 || true
@@ -958,22 +986,8 @@ case "$CMD" in
     OUT="${FILE%.tesl}.rkt"
     OUT_TMP="$(mktemp --suffix=.rkt)"
 
-    # Get all dependencies (transitive imports) of the file
-    DEPS="$(_tesl_compile_deps "$FILE" 2>/dev/null)"
-
-    # Compile all dependencies first to .rkt files in their directories
-    RET=0
-    for DEP in $DEPS; do
-      if [ -n "$DEP" ] && [ "$DEP" != "$FILE" ]; then
-        DEP_RKT="${DEP%.tesl}.rkt"
-        if ! _tesl_compile_to_stdout "$DEP" > "$DEP_RKT" 2>&1; then
-          echo "error: Failed to compile dependency: $DEP" >&2
-          rm -f "$DEP_RKT"
-          RET=1
-        fi
-      fi
-    done
-    if [ "$RET" -ne 0 ]; then
+    # Compile all dependencies (transitive imports) first
+    if ! _tesl_emit_dep_rkts "$FILE"; then
       rm -f "$OUT_TMP"; exit 1
     fi
 
@@ -1052,22 +1066,8 @@ case "$CMD" in
     OUT="${FILE%.tesl}.rkt"
     RET=0
 
-    # Get all dependencies (transitive imports) of the file
-    DEPS="$(_tesl_compile_deps "$FILE" 2>/dev/null)"
-
-    # Compile all dependencies first to .rkt files in their directories
-    for DEP in $DEPS; do
-      if [ -n "$DEP" ] && [ "$DEP" != "$FILE" ]; then
-        DEP_RKT="${DEP%.tesl}.rkt"
-        if ! _tesl_compile_to_stdout "$DEP" > "$DEP_RKT" 2>&1; then
-          echo "error: Failed to compile dependency: $DEP" >&2
-          rm -f "$DEP_RKT"
-          RET=1
-        else
-          _tesl_freshen_bytecode "$DEP_RKT"   # #18: drop stale .zo on compiler change
-        fi
-      fi
-    done
+    # Compile all dependencies (transitive imports) first
+    _tesl_emit_dep_rkts "$FILE" || RET=1
 
     if [ "$RET" -eq 0 ]; then
       OUT_TMP="$(mktemp --suffix=.rkt)"
@@ -1134,6 +1134,11 @@ case "$CMD" in
       OUT="${FILE%.tesl}.rkt"
       OUT_TMP="$(mktemp --suffix=.rkt)"
       _tesl_require_compiler
+      # #33: like `run`, emit imported local modules' .rkt first — otherwise
+      # raco test dies on "cannot open module file" for a fresh checkout.
+      if ! _tesl_emit_dep_rkts "$FILE"; then
+        rm -f "$OUT_TMP"; RET=1; continue
+      fi
       if [ -n "$TEST_NAME" ] && [ -n "$TEST_KIND" ]; then
         "$TESL_OCAML_COMPILER" --test-name "$TEST_NAME" --test-kind "$TEST_KIND" "$FILE" > "$OUT_TMP"
       elif [ -n "$TEST_NAME" ]; then
@@ -1153,7 +1158,7 @@ case "$CMD" in
           # is unreadable for someone who wrote a .tesl test, not Racket.
           OUTPUT_TMP="$(mktemp)"
           raco test "$OUT" >"$OUTPUT_TMP" 2>&1; STATUS=$?
-          _tesl_test_format "$FILE" "$OUT" "$OUTPUT_TMP"
+          _tesl_test_format "$FILE" "$OUT" "$OUTPUT_TMP" "$STATUS"
           rm -f "$OUTPUT_TMP"
           [ "$STATUS" -ne 0 ] && RET="$STATUS"
         fi

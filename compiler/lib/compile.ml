@@ -2906,6 +2906,72 @@ let check_file filename =
   let source = In_channel.with_open_text filename In_channel.input_all in
   check_source filename source
 
+(* ── Client-generation module merge (#36) ────────────────────────────────── *)
+
+(* The Elm/TS client generators receive one [module_form], but the entrypoint's
+   endpoint signatures reference imported-module types by bare name (a request-
+   body record, a fact used as a `Proven` phantom).  Emitting only the
+   entrypoint's decls therefore produced clients that reference types they
+   never define.  Merge every transitively imported local module's CLIENT-
+   RELEVANT decls into the entrypoint before emitting: type definitions plus
+   the check/auth/establish functions the emitters consult to classify facts
+   (client-side validator vs server-only).  Runtime/API surface decls (api,
+   server, database, queue, …) are NOT merged — only the entrypoint defines
+   the client's endpoints.  Names already defined by the entrypoint win. *)
+let merge_imported_client_decls (entry : Ast.module_form) : Ast.module_form =
+  let is_client_decl = function
+    | Ast.DFact _ | Ast.DType _ | Ast.DRecord _ | Ast.DEntity _
+    | Ast.DCodec _ | Ast.DFunc _ -> true
+    | _ -> false
+  in
+  let decl_key = function
+    | Ast.DFact (f : Ast.fact_form) -> Some ("fact:" ^ f.name)
+    | Ast.DType (Ast.TypeAdt { name; _ })
+    | Ast.DType (Ast.TypeNewtype { name; _ })
+    | Ast.DType (Ast.TypeAlias { name; _ }) -> Some ("type:" ^ name)
+    | Ast.DRecord (r : Ast.record_form) -> Some ("type:" ^ r.name)
+    | Ast.DEntity (e : Ast.entity_form) -> Some ("type:" ^ e.name)
+    | Ast.DCodec (c : Ast.codec_form) -> Some ("codec:" ^ c.name)
+    | Ast.DFunc (f : Ast.func_decl) -> Some ("fn:" ^ f.name)
+    | _ -> None
+  in
+  let seen_files = Hashtbl.create 8 in
+  Hashtbl.replace seen_files entry.Ast.source_file ();
+  let seen_names = Hashtbl.create 32 in
+  List.iter (fun d ->
+    match decl_key d with
+    | Some k -> Hashtbl.replace seen_names k ()
+    | None -> ()
+  ) entry.Ast.decls;
+  let rec walk (m : Ast.module_form) : Ast.top_decl list =
+    List.concat_map (fun (imp : Ast.import_decl) ->
+      let path =
+        Checker.resolve_local_import_path m.Ast.source_file imp.Ast.module_name
+      in
+      if Hashtbl.mem seen_files path || not (Sys.file_exists path) then []
+      else begin
+        Hashtbl.replace seen_files path ();
+        try
+          let source = In_channel.with_open_text path In_channel.input_all in
+          match Parser.parse_module path source with
+          | Err _ -> []   (* the full-checker gate already reported it *)
+          | Ok im ->
+            let own =
+              List.filter (fun d ->
+                is_client_decl d
+                && (match decl_key d with
+                    | Some k when Hashtbl.mem seen_names k -> false
+                    | Some k -> Hashtbl.replace seen_names k (); true
+                    | None -> false)
+              ) im.Ast.decls
+            in
+            own @ walk im
+        with Sys_error _ -> []
+      end
+    ) m.Ast.imports
+  in
+  { entry with Ast.decls = entry.Ast.decls @ walk entry }
+
 (* ── WS4: whole-project / batch checking ─────────────────────────────────────
    A normal `tesl --check f1 f2 ...` already checks N files in one OS process,
    so it pays the process-spawn cost once instead of N times.  These helpers go

@@ -1128,6 +1128,7 @@ let () =
        let source = In_channel.with_open_text filename In_channel.input_all in
        match Parser.parse_module filename source with
        | Ok m ->
+         let m = Compile.merge_imported_client_decls m in   (* #36 *)
          let output = Emit_ts.emit_ts m in
          (match out_file with
           | None -> print_string output
@@ -1153,6 +1154,7 @@ let () =
        let source = In_channel.with_open_text filename In_channel.input_all in
        match Parser.parse_module filename source with
        | Ok m ->
+         let m = Compile.merge_imported_client_decls m in   (* #36 *)
          let inferred_module_name =
            match out_file with
            | None -> None

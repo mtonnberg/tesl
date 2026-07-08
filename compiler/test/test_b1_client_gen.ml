@@ -226,6 +226,87 @@ let elm_posix_field_tolerant_decoder () =
     if not (contains {|(D.oneOf [ D.int, D.field "epochMillis" D.int ])|} out) then
       failf "expected the tolerant PosixMillis decoder (bare int OR {epochMillis}):\n%s" out)
 
+(* ── GitHub #36: imported-module types must be emitted, not just referenced ──
+   The entrypoint's API references a record + fact declared in an imported
+   module; the generated client previously mentioned `NewThing` / `NameSafe`
+   in endpoint signatures without ever DEFINING them (uncompilable client). *)
+let issue36_lib = {|#lang tesl
+module Lib exposing [NameSafe, isName, NewThing]
+import Tesl.Prelude exposing [String]
+import Tesl.String exposing [String.length]
+import Tesl.Json exposing [stringCodec]
+
+fact NameSafe (name: String)
+
+check isName(name: String) -> name: String ::: NameSafe name =
+  if String.length name > 0 then
+    ok name ::: NameSafe name
+  else
+    fail 400 "empty"
+
+record NewThing {
+  name: String ::: NameSafe name
+}
+
+codec NewThing {
+  toJson_forbidden
+  fromJson [
+    { name <- "name" with_codec stringCodec via isName }
+  ]
+}
+|}
+
+let issue36_main = {|#lang tesl
+module Main exposing [MainApi, MainServer]
+import Tesl.Prelude exposing [String]
+import Lib exposing [NameSafe, isName, NewThing]
+
+api MainApi {
+  post "/thing"
+    body newThing: NewThing
+    -> String
+}
+
+handler createThing(newThing: NewThing) -> String =
+  newThing.name
+
+server MainServer for MainApi {
+  createThing = createThing
+}
+|}
+
+let with_issue36_project f =
+  let dir = Filename.temp_dir "tesl-i36" "" in
+  let write name src =
+    let p = Filename.concat dir name in
+    let oc = open_out p in output_string oc src; close_out oc; p
+  in
+  let lib = write "lib.tesl" issue36_lib in
+  let main = write "main.tesl" issue36_main in
+  Fun.protect
+    ~finally:(fun () ->
+      List.iter (fun p -> try Sys.remove p with _ -> ()) [lib; main];
+      (try Unix.rmdir dir with _ -> ()))
+    (fun () -> f main)
+
+let elm_imported_types_emitted () =
+  with_issue36_project (fun main ->
+    let code, out = run_cc ["--generate-elm"; main] in
+    if code <> 0 then failf "generate-elm failed on the multi-module project:\n%s" out;
+    if not (contains "type alias NewThing" out) then
+      failf "imported record NewThing referenced but not defined (#36):\n%s" out;
+    if not (contains "type NameSafe" out) then
+      failf "imported fact NameSafe referenced but not defined (#36):\n%s" out)
+
+let ts_imported_types_emitted () =
+  with_issue36_project (fun main ->
+    let code, out = run_cc ["--generate-ts"; main] in
+    if code <> 0 then failf "generate-ts failed on the multi-module project:\n%s" out;
+    if not (contains "NewThingSchema" out) then
+      failf "imported record NewThing schema missing from TS client (#36):\n%s" out;
+    if not (contains "NameSafeSchema" out) then
+      failf "imported fact NameSafe schema missing from TS client (#36):\n%s" out)
+
 let () =
   run "B1-Client-Generation" [
     "checker bypass (a)", [
@@ -253,5 +334,11 @@ let () =
     "PosixMillis decoder tolerance", [
       test_case "PosixMillis field decodes bare int OR {epochMillis}" `Quick
         elm_posix_field_tolerant_decoder;
+    ];
+    "imported types emitted (GitHub #36)", [
+      test_case "elm client defines imported record + fact" `Quick
+        elm_imported_types_emitted;
+      test_case "ts client defines imported record + fact" `Quick
+        ts_imported_types_emitted;
     ];
   ]

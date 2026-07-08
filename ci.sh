@@ -128,7 +128,7 @@ phase_started_at=$SECONDS
 
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=13
+TOTAL_PHASES=14
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -1018,6 +1018,54 @@ else
         phase_end SKIP
     else
         phase_end OK
+    fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Phase 9b — tesl CLI smoke: multi-module `tesl test` (#33)
+# ══════════════════════════════════════════════════════════════════════════════
+# `tesl test <entrypoint>` must compile the entrypoint's imported local modules
+# (like `tesl run` does) — on a fresh checkout (*.rkt gitignored) it used to die
+# with a SWALLOWED "cannot open module file" and print "(no test results)".
+# Drives the real CLI body script end-to-end from a clean temp project.
+phase_begin "tesl CLI smoke (multi-module test, #33)"
+if ! command -v racket >/dev/null 2>&1; then
+    printf "  %s⚠%s  racket not found — skipping CLI smoke\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+elif [ ! -f "$_main_exe" ]; then
+    printf "  %s⚠%s  compiler not built — skipping CLI smoke\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+else
+    _cli_smoke_dir="$(mktemp -d)"
+    cat > "$_cli_smoke_dir/lib.tesl" <<'EOF'
+module Lib exposing [double]
+import Tesl.Prelude exposing [Int]
+
+fn double(n: Int) -> Int = n + n
+EOF
+    cat > "$_cli_smoke_dir/main.tesl" <<'EOF'
+module Main exposing [quad]
+import Tesl.Prelude exposing [Int]
+import Lib exposing [double]
+
+fn quad(n: Int) -> Int = double (double n)
+
+test "quad 3 == 12" {
+  expect quad 3 == 12
+}
+EOF
+    _cli_out="$( cd "$_cli_smoke_dir" && \
+        TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
+        bash "$SCRIPT_DIR/nix/tesl-cli-body.sh" test main.tesl 2>&1 )"
+    _cli_rc=$?
+    if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -q "1 test passed"; then
+        printf "  %s✓%s  tesl test compiles imported modules and runs tests\n" "$C_GREEN" "$C_RESET"
+        rm -rf "$_cli_smoke_dir"
+        phase_end OK
+    else
+        printf "  %s✗%s  multi-module tesl test failed (rc=%s):\n%s\n" "$C_RED" "$C_RESET" "$_cli_rc" "$_cli_out"
+        rm -rf "$_cli_smoke_dir"
+        phase_end FAIL
     fi
 fi
 

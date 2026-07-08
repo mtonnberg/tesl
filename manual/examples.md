@@ -105,6 +105,7 @@ parameters.
 | [`lesson63-ai-structured-output.tesl`](../example/learn/lesson63-ai-structured-output.tesl) | Typed structured output (`askFor` / `decodeAs`) |
 | [`lesson68-server-endpoints-as-tools.tesl`](../example/learn/lesson68-server-endpoints-as-tools.tesl) | `serverTools`: your HTTP endpoints as preauthenticated agent tools, combined with custom tools |
 | [`lesson69-agent-human-handoff.tesl`](../example/learn/lesson69-agent-human-handoff.tesl) | `humanActions`: endpoints the agent may not run, handed to the human as a button, with resume-after |
+| [`lesson70-agent-async-work.tesl`](../example/learn/lesson70-agent-async-work.tesl) | Long-running agent work over a queue: a tool enqueues, a worker does it and resumes the conversation |
 | [`support-assistant.tesl`](../example/support-assistant.tesl) | Complete capability-bounded support assistant with deterministic tests |
 
 ### Testing

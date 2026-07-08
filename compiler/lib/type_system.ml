@@ -1104,3 +1104,29 @@ let tesl_known_module_names : string list = [
 (** Returns [true] when [name] is a known Tesl.* stdlib module. *)
 let is_known_tesl_module (name : string) : bool =
   List.mem name tesl_known_module_names
+
+(* ── Exported-constant shallow typing (#34) ──────────────────────────────── *)
+
+(** The type of a bare top-level constant (`kMax = 5`), derived WITHOUT running
+    inference on its module.  Cross-module signatures are annotation-driven and
+    a bare const has no annotation, so only values whose type is syntactically
+    evident can be bound by an importing module's checker; for anything else
+    the importer's unbound-name error explains the wrap-in-a-fn workaround
+    (see Import_suggest).  Single source of truth for both the checker's
+    import-side binding and the error hint's classification. *)
+let rec shallow_const_ty (e : Ast.expr) : ty option =
+  match e with
+  | Ast.ELit { lit; _ } ->
+    (match lit with
+     | Ast.LInt _ | Ast.LBigInt _ -> Some t_int
+     | Ast.LFloat _               -> Some t_float
+     | Ast.LBool _                -> Some t_bool
+     | Ast.LString _              -> Some t_string
+     | Ast.LInterp _              -> Some t_string)
+  | Ast.EUnop { op = Ast.UNeg; arg; _ } -> shallow_const_ty arg
+  | Ast.EList { elems = e0 :: rest; _ } ->
+    (match shallow_const_ty e0 with
+     | Some t when List.for_all (fun x -> shallow_const_ty x = Some t) rest ->
+       Some (t_list t)
+     | _ -> None)
+  | _ -> None

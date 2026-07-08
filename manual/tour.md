@@ -517,6 +517,17 @@ endpoint under their own session, and you feed the result back as another `conve
 ("resume-after"). `humanActions` charges no capability. See LANGUAGE-SPEC §11.1 and
 [lesson69](../example/learn/lesson69-agent-human-handoff.tesl).
 
+**Long-running work: enqueue, then resume the conversation.** When a tool is slow (generate a
+report, call a third party), don't block the turn — the tool `enqueue`s a job and returns "queued".
+A `worker` does the work later and, when done, `publish`es to the conversation's SSE channel (an
+`Email.send` fits here too) *and resumes the conversation*: load its transcript with
+`conversationFrom`, run one more `converse` feeding in the result, persist. The conversation id
+travels on the job, so completion re-enters exactly the conversation that was waiting — a browser
+watching it sees the agent pick back up on its own. Nothing is suspended (a resumed turn is just
+another `converse`, run on the worker), so a job that never finishes never pins a request. This is
+plain composition of `enqueue` / `worker` / `publish` / the conversation primitives — no new agent
+machinery. See [lesson70](../example/learn/lesson70-agent-async-work.tesl).
+
 **Curating which tools the model gets (the two-api pattern).** `serverTools` derives tools from the
 server's endpoint list, so a second `api`/`server` pair binding the *same handler functions* but
 listing only a subset of endpoints is a compile-time tool allowlist: the user-facing server keeps the

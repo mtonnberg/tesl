@@ -141,6 +141,7 @@ If you are writing tooling that deep-links into the manual, read that page first
 
 - **[Best Practices Guide](best-practices.md)** — patterns, naming, testing, proof cost model
 - **[AI / Agent Testing](ai-testing.md)** — testing `Agent { … }` tools, entitlements, and structured output
+- **[Agent Handoffs](agent-handoffs.md)** — `humanActions` (agent → human) and long-running work over a queue (agent → worker), unified by resume-after
 
 ### 6. Reference & deploy
 
