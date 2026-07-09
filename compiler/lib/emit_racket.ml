@@ -273,7 +273,23 @@ type ctx = {
   fn_tool_decls : (string, Ast.func_decl) Hashtbl.t;
     (** declared-function name → its decl — for `asTool fn`, which derives a Tool's
         JSON schema + arg decode from the function's parameter types (the same wrapping
-        the declarative `agent` block applies to its `tools:` list). *)
+        the declarative `agent` block applies to its `tools:` list).  Holds LOCAL
+        decls plus exposing-imported fns from directly imported local modules
+        (locals win) — see the imported harvest in [emit_module]. *)
+  mutable astool_shadowed : bool;
+    (** the module declares its own fn/const named `asTool` — the builtin form
+        is INERT under a user binding (the checker's whole-module asTool walk
+        skips such modules, same policy as serverTools/humanActions), so every
+        `asTool`-headed application must emit as an ORDINARY call to the user's
+        binding.  Without this the broadened emit guards claimed the form and
+        crashed on e.g. `double (asTool 20)` with the issue-#24 failwith. *)
+  imported_tool_fns : (string, unit) Hashtbl.t;
+    (** names in [fn_tool_decls] that came from an IMPORT (not m.decls).  An
+        imported tool fn's capability IDENTIFIERS are define-capability-bound in
+        the DECLARING module's emitted .rkt and are not require-bound here, so
+        `emit_tool_from_fd` must delegate its caps through the issue-#30
+        procedure-capability registry (`call-with-delegated-capabilities`)
+        instead of the local `(with-capabilities (capName ...) ...)` shape. *)
   server_tools_meta : (string, (string * string * string) list) Hashtbl.t;
     (** server name → per non-SSE endpoint (tool name, description, JSON schema)
         — the compile-time metadata `serverTools S user` passes to the runtime
@@ -305,6 +321,14 @@ type ctx = {
     (** ADT constructor name → [field labels] — for resolving positional case bindings *)
   entity_names : (string, unit) Hashtbl.t;
     (** set of entity names — entity construction emits (hash 'field val) not (Name #:field val) *)
+  local_channels : (string, unit) Hashtbl.t;
+    (** sseChannel names DECLARED by this module (DChannel).  The EPublish /
+        emit_sse_route channel operand is name-wired: a local name emits the
+        bare `define-channel` binding (byte-identical to the historical
+        output); a miss means the channel is declared in another module
+        (issue-#41 class) and resolves through the process-wide registry —
+        per-call `(channel-for-name 'N)` at publish sites, a lazy quoted
+        symbol in the instantiation-time sse-routes list. *)
   param_names : (string, unit) Hashtbl.t;
     (** function parameter names — these have *name bindings from define/pow *)
   plain_param_names : (string, unit) Hashtbl.t;
@@ -337,6 +361,13 @@ type ctx = {
   proof_annotated_ctor_fields : (string, string list) Hashtbl.t;
     (** constructor name → list of proof-annotated field labels.
         These fields must preserve their named-value when stored in ADT constructors. *)
+  newtype_bases : (string, string) Hashtbl.t;
+    (** newtype name → base type head name (e.g. UserId → String), local decls
+        first then imported (exposing-filtered, local-wins).  Drives the URL
+        capture auto-wrap: a capture bound as a newtype but decoded with the
+        base codec (`capturer uid: UserId using stringCodec` — the exact shape
+        the validator endorses) previously handed the handler the RAW base
+        value, so the first `.value` / newtype-typed contract trapped. *)
 }
 
 let default_root_path () =
@@ -358,13 +389,16 @@ let mk_ctx ?(root_path=default_root_path ()) ?(record_fields=[]) ?(record_meta=[
   { buf = Buffer.create 4096; case_counter = 0; root_path; record_fields; record_meta; func_kind = None; func_return_spec = None;
     fn_names = Hashtbl.create 16; fn_arities = Hashtbl.create 16;
     fn_tool_decls = Hashtbl.create 8;
+    astool_shadowed = false;
+    imported_tool_fns = Hashtbl.create 8;
     server_tools_meta = Hashtbl.create 4;
     server_tools_site_tbl = Hashtbl.create 8;
     human_actions_site_tbl = Hashtbl.create 8;
     preserve_case_payload_names = false;
     proof_locals = Hashtbl.create 16; raw_locals = Hashtbl.create 16;
     fact_locals = Hashtbl.create 8; ctor_fields = Hashtbl.create 8;
-    entity_names = Hashtbl.create 4; param_names = Hashtbl.create 8;
+    entity_names = Hashtbl.create 4; local_channels = Hashtbl.create 4;
+    param_names = Hashtbl.create 8;
     expr_type_tbl = Hashtbl.create 64;
     expr_ty_tbl = Hashtbl.create 64;
     field_access_type_tbl = Hashtbl.create 64;
@@ -373,6 +407,7 @@ let mk_ctx ?(root_path=default_root_path ()) ?(record_fields=[]) ?(record_meta=[
     proof_carrier_lets = Hashtbl.create 8;
     proof_aware_locals = Hashtbl.create 8;
     proof_annotated_ctor_fields = Hashtbl.create 8;
+    newtype_bases = Hashtbl.create 8;
     auth_return_binding = None }
 
 let emit ctx s = Buffer.add_string ctx.buf s
@@ -1369,6 +1404,18 @@ let emit_tool_from_fd ctx (fd : Ast.func_decl) =
     List.filter (fun c -> not (List.mem c bound_vars)) fd.capabilities in
   if concrete_caps = [] then
     emit ctx (Printf.sprintf " (lambda (_decoded) (apply %s _decoded)))" fd.name)
+  else if Hashtbl.mem ctx.imported_tool_fns fd.name then
+    (* Imported tool fn with declared caps: its capability IDENTIFIERS are
+       bound only in the declaring module's emitted .rkt (provides come from
+       the exposing list, never from define-capability), so the local
+       `(with-capabilities (capName ...) ...)` shape would emit unbound names.
+       The fn VALUE itself is require-bound, and define/pow registered its
+       declared capability VALUES in the issue-#30 procedure registry at its
+       define site — delegate exactly those around dispatch (same additive
+       grant semantics as the local wrapper). *)
+    emit ctx (Printf.sprintf
+                " (lambda (_decoded) (call-with-delegated-capabilities %s (lambda () (apply %s _decoded)))))"
+                fd.name fd.name)
   else
     emit ctx (Printf.sprintf
                 " (lambda (_decoded) (with-capabilities (%s) (apply %s _decoded))))"
@@ -1481,6 +1528,36 @@ let build_server_tools_meta (decls : Ast.top_decl list) (srv : Ast.server_form)
       in
       (bname, desc, server_tools_endpoint_schema codecs ep)
     ) paired
+
+(* The applied fn's name under the [ctx.fn_return_specs] / [ctx.fn_arities]
+   key convention: a plain [EVar] head gives the bare name; a qualified
+   [Module.fn] head (EField over the module's zero-arg EConstructor — the
+   shape qualified calls parse to, cf. [emit_fn_name]) gives "Module.fn".
+   Consumers that matched heads only as [EVar] silently missed qualified
+   calls to imported fns (DESIGN-4 Topic A, consumer completeness). *)
+let rec head_fn_name (e : Ast.expr) : string option =
+  match e with
+  | EApp { fn; _ } -> head_fn_name fn
+  | EVar { name; _ } -> Some name
+  | EField { obj = EConstructor { name = modname; args = []; _ }; field; _ } ->
+    Some (modname ^ "." ^ field)
+  | _ -> None
+
+(* Is [value] a call to a fn whose return spec is a proof-carrying
+   Maybe-attached binding (`-> Maybe (v: T ::: P v)`)?  The single test behind
+   proof_carrier_lets / scrut_is_proof_carrier — factored so all four consumer
+   sites (plain ELet, raw-tail ELet, debug-stmts ELet, raw-tail ECase
+   scrutinee) share one head-name resolution incl. qualified heads. *)
+let app_is_proof_carrier ctx (value : Ast.expr) : bool =
+  match value with
+  | EApp _ ->
+    (match head_fn_name value with
+     | Some fn_name ->
+       (match Hashtbl.find_opt ctx.fn_return_specs fn_name with
+        | Some (RetMaybeAttached { binding = b; _ }) when b.proof_ann <> None -> true
+        | _ -> false)
+     | None -> false)
+  | _ -> false
 
 let rec emit_expr ctx e =
   let sql_op_name = function
@@ -1807,7 +1884,8 @@ let rec emit_expr ctx e =
     (match parse_upsert_expr app with
      | Some upsert -> emit_sql_upsert upsert
      | None -> failwith "emit_racket: parse_upsert_expr guard passed but returned None — compiler invariant violation; please report this bug")
-  | EApp _ as app when (match flatten_app_expr [] app with
+  | EApp _ as app when (not ctx.astool_shadowed)
+                       && (match flatten_app_expr [] app with
                         | EVar { name = "asTool"; _ }, [EVar { name; _ }] -> Hashtbl.mem ctx.fn_tool_decls name
                         | _ -> false) ->
     (* `asTool fn` — wrap a typed Tesl function as an LLM tool (schema derived
@@ -1823,8 +1901,12 @@ let rec emit_expr ctx e =
      runtime binding, so emitting it verbatim yields a module that fails to LOAD.
      Fail loudly instead of emitting an unbound identifier.  The checker rejects
      these first (checker.ml `check_malformed_tool_forms`); this is defense-in-
-     depth for `tesl compile` paths that do not run full validation. *)
-  | EApp _ as app when (match flatten_app_expr [] app with
+     depth for `tesl compile` paths that do not run full validation.
+     SHADOWING: a module declaring its own `fn asTool` makes the builtin form
+     inert (checker policy) — such applications fall through to the generic
+     call emit, which resolves to the user's define/pow binding. *)
+  | EApp _ as app when (not ctx.astool_shadowed)
+                       && (match flatten_app_expr [] app with
                         | EVar { name = "asTool"; _ }, _ -> true | _ -> false) ->
     failwith "emit_racket: `asTool` supports only a bare function reference \
               (`asTool myFn`); a partial application or non-function argument cannot \
@@ -2534,18 +2616,7 @@ let rec emit_expr ctx e =
       | _ -> false
     in
     if is_fact_value then Hashtbl.replace ctx.fact_locals name ();
-    let is_proof_carrier_value =
-      match value with
-      | EApp _ ->
-        let rec get_fn = function EApp { fn; _ } -> get_fn fn | e -> e in
-        (match get_fn value with
-         | EVar { name = fn_name; _ } ->
-           (match Hashtbl.find_opt ctx.fn_return_specs fn_name with
-            | Some (RetMaybeAttached { binding = b; _ }) when b.proof_ann <> None -> true
-            | _ -> false)
-         | _ -> false)
-      | _ -> false
-    in
+    let is_proof_carrier_value = app_is_proof_carrier ctx value in
     if is_proof_carrier_value then Hashtbl.replace ctx.proof_carrier_lets name ();
     emit ctx (Printf.sprintf "(let ([%s " name);
     emit_expr ctx value;
@@ -2875,7 +2946,20 @@ let rec emit_expr ctx e =
               serve/cache/email) reached the emitter un-desugared \
               (Desugar.desugar_module must run before emit_module)"
   | EPublish { channel_name; key; event_ctor; payload; _ } ->
-    emit ctx (Printf.sprintf "(publish-event! %s " channel_name);
+    (* Name-wired channel operand (issue-#41 class): a locally declared
+       channel emits its bare define-channel binding (exact historical
+       bytes); otherwise the channel is declared in another module and the
+       publish site cannot name its binding — resolve per-call through the
+       process-wide registry (channel-for-name, tesl/queue.rkt; fail-closed
+       on zero/many).  Publish sites live inside handler/fn/test bodies, so
+       the lookup runs long after every define-channel has registered.  ONLY
+       the name operand differs on a miss — key/payload emission (the
+       raw-param-sensitive part) is untouched. *)
+    let channel_ref =
+      if Hashtbl.mem ctx.local_channels channel_name then channel_name
+      else Printf.sprintf "(channel-for-name '%s)" channel_name
+    in
+    emit ctx (Printf.sprintf "(publish-event! %s " channel_ref);
     (match key with
      | Some key_expr ->
        emit ctx "(format \"~a\" ";
@@ -2888,6 +2972,20 @@ let rec emit_expr ctx e =
      | None -> emit ctx "\"\"");
     emit ctx " ";
     (match payload with
+     | Some (ERecord { loc = rloc; _ } as payload_rec)
+       when List.mem_assoc event_ctor ctx.record_fields ->
+       (* RECORD payload (matrix sse/c2 2026-07): the channel's payload type is
+          a `record`, whose runtime constructor is KEYWORD-only — a positional
+          `(Notice v)` arity-traps at publish time.  Route through the same
+          `TypeName { … }` record-construction arm as every other record
+          literal (keyword ctor for records, hash for entities, field-level
+          raw-param handling included) by rebuilding the application the
+          parser split into (event_ctor, payload).  ADT-variant payloads
+          (not in record_fields) keep the positional ctor emit below. *)
+       emit_expr ctx (EApp {
+         fn = EConstructor { name = event_ctor; args = []; loc = rloc };
+         arg = payload_rec;
+         loc = rloc })
      | Some (ERecord { fields; _ }) ->
        emit ctx (Printf.sprintf "(%s" event_ctor);
        List.iter (fun (_, v) -> emit ctx " "; emit_expr_simple ctx v) fields;
@@ -3108,9 +3206,18 @@ and emit_expr_simple ctx e =
       | EApp { fn = EConstructor { args = []; _ }; arg = ERecord _; _ } -> true
       | _ -> false
     in
-    let is_tool_from = match flatten_app_expr [] app with
-      | EVar { name = "asTool"; _ }, [EVar { name; _ }] -> Hashtbl.mem ctx.fn_tool_decls name
-      | _ -> false
+    (* ANY `asTool`-headed application must reach emit_expr: the dedicated
+       tool arm when the argument is a known fn, else the issue-#24 fail-loud
+       arm.  The generic application fallback below would emit the unbound
+       `(asTool ...)` verbatim — a module that fails to LOAD (argument-position
+       twin of the statement-position #24 hole).  UNLESS the module shadows
+       `asTool` with its own fn/const: then the name IS require/define-bound
+       and the generic call emit is exactly right (checker skips its asTool
+       walk under the same predicate). *)
+    let is_tool_from = (not ctx.astool_shadowed)
+      && (match flatten_app_expr [] app with
+      | EVar { name = "asTool"; _ }, _ -> true
+      | _ -> false)
     in
     (* serverTools must reach the dedicated emit_expr arm (it lowers to
        __tst_server-tools with compile-time metadata), never the generic
@@ -3154,14 +3261,71 @@ and emit_expr_simple ctx e =
         | EVar { name; _ } -> String.length name > 0 && name.[0] >= 'A' && name.[0] <= 'Z'
         | _ -> false
       in
-      if (is_unit_arg || is_stdlib_fn fn) && not is_ctor then
+      (* Partial application in ARGUMENT position (matrix stmt-forms 2026-07):
+         `applyTwice (addN 3) 1` — the under-applied `(addN 3)` fell through to
+         the direct-call emit below and arity-trapped at runtime, while the SAME
+         expression let-bound eta-expanded fine (emit_expr's generic EApp arm,
+         `Some arity when args < arity`, wraps the missing params in curried
+         lambdas).  Delegate exactly that under-application case to emit_expr so
+         both positions share one lowering; fully-applied calls are untouched. *)
+      let is_under_applied =
+        (not is_ctor) && (not is_unit_arg) &&
+        (match fn with
+         | EVar { name; _ } ->
+           (match Hashtbl.find_opt ctx.fn_arities name with
+            | Some arity -> List.length args < arity
+            | None -> false)
+         (* Qualified head (`PartialLib.addN 3`) — fn_arities holds qualified
+            `Module.fn` keys (load_imported_fn_arities), and the emit_expr
+            eta-expansion arm this delegates to resolves the same key; matching
+            only EVar heads left the qualified twin arity-trapping at runtime
+            (DESIGN-4 Topic A's head-shape lesson, again). *)
+         | EField { obj = EConstructor { name = modname; _ }; field; _ } ->
+           (match Hashtbl.find_opt ctx.fn_arities (modname ^ "." ^ field) with
+            | Some arity -> List.length args < arity
+            | None -> false)
+         | _ -> false)
+      in
+      if is_under_applied then
+        emit_expr ctx app
+      else if (is_unit_arg || is_stdlib_fn fn) && not is_ctor then
         (* Delegate to emit_expr for stdlib/zero-arg — it handles raw-value properly *)
         emit_expr ctx app
       else begin
-        (* Constructor as arg: (Circle 5) without raw-value *)
+        (* Constructor as arg: (Circle 5) without raw-value.
+           NEWTYPE ctor args are emitted RAW (matrix types 2026-07): inside a
+           define/pow-family body a plain let-local is bound to its GDP name
+           SYMBOL (the value lives in the evidence env), so `Price inner`
+           passed the bare symbol and the strict base check trapped
+           ("expected a value of type …Money, got inner123").  A newtype
+           stores the raw base value by construction, so the evidence-
+           resolving `(raw-value …)` (or the `*name` raw twin for params) is
+           always the right emission — the same reasoning as the main
+           emit path's emit_ctor_arg. *)
+        let head_is_newtype = match fn with
+          | EConstructor { name; _ } | EVar { name; _ } ->
+            Hashtbl.mem ctx.newtype_bases name
+          | _ -> false
+        in
+        let emit_newtype_ctor_arg arg = match arg with
+          | EVar { name; _ } when not (Hashtbl.mem ctx.fn_names name) &&
+                                   not (Hashtbl.mem stdlib_name_map name) &&
+                                   not (Hashtbl.mem qualified_imports name) &&
+                                   not (Hashtbl.mem stdlib_plain_imports name) ->
+            if ctx.func_kind <> None then begin
+              if Hashtbl.mem ctx.param_names name || Hashtbl.mem ctx.raw_locals name
+              then emit ctx ("*" ^ name)
+              else emit ctx (Printf.sprintf "(raw-value %s)" name)
+            end
+            else emit ctx (Printf.sprintf "(raw-value %s)" (resolve_name name))
+          | _ -> emit_expr_simple ctx arg
+        in
         emit ctx "(";
         emit_expr ctx fn;
-        List.iter (fun arg -> emit ctx " "; emit_expr_simple ctx arg) args;
+        List.iter (fun arg ->
+          emit ctx " ";
+          if head_is_newtype then emit_newtype_ctor_arg arg
+          else emit_expr_simple ctx arg) args;
         emit ctx ")"
       end
 
@@ -3633,6 +3797,46 @@ and pattern_to_racket ctx pat scrut_var =
         r r ctor
     in
     (guard, [])
+  | PCon { ctor = ("TextBody" | "HtmlBody" | "RichBody") as ctor; fields; _ }
+    when not (Hashtbl.mem ctx.ctor_fields ctor) ->
+    (* EmailBody constructor patterns (matrix email-cache 2026-07): EmailBody
+       values are tagged LISTS — `(list 'TextBody content)` etc, tesl/email.rkt
+       — not adt-value structs, so the generic PCon arm below could never match
+       one (every arm fell through to the catch-all / no-match error).  Guard on
+       the tag, bind fields positionally.  A user's own same-named ADT ctor is
+       in ctx.ctor_fields and keeps the generic lowering. *)
+    let r = star_ref scrut_var in
+    let ctor_guard = Printf.sprintf "(and (pair? %s) (eq? (car %s) '%s))" r r ctor in
+    let extra_guards = ref [] in
+    let all_bindings = ref [] in
+    List.iteri (fun i (_, sub_pat) ->
+      let field_expr = Printf.sprintf "(list-ref %s %d)" r (i + 1) in
+      match sub_pat with
+      | PWild -> ()
+      | PVar var_name when var_name <> "_" ->
+        all_bindings := (Printf.sprintf "[%s %s]" var_name field_expr) :: !all_bindings
+      | PVar _ -> ()
+      | _ ->
+        let temp_var_base =
+          let base = if scrut_var.[0] = '*' then String.sub scrut_var 1 (String.length scrut_var - 1)
+                     else scrut_var in
+          Printf.sprintf "%s_f%d" base i
+        in
+        let temp_var = if scrut_var.[0] = '*' then "*" ^ temp_var_base else temp_var_base in
+        let raw_field_expr = Printf.sprintf "(raw-value %s)" field_expr in
+        let temp_binding = Printf.sprintf "[%s %s]" temp_var raw_field_expr in
+        all_bindings := temp_binding :: !all_bindings;
+        let (sub_guard, sub_bindings) = pattern_to_racket ctx sub_pat temp_var in
+        if sub_guard <> "#t" then
+          extra_guards := (Printf.sprintf "(let ([%s %s]) %s)" temp_var raw_field_expr sub_guard) :: !extra_guards;
+        all_bindings := List.rev_append sub_bindings !all_bindings
+    ) fields;
+    let all_guards = ctor_guard :: List.rev !extra_guards in
+    let guard = match all_guards with
+      | [g] -> g
+      | gs -> Printf.sprintf "(and %s)" (String.concat " " gs)
+    in
+    (guard, List.rev !all_bindings)
   | PCon { ctor; fields; _ } ->
     let r = star_ref scrut_var in
     let ctor_guard =
@@ -3916,14 +4120,20 @@ let expand_import_names names =
 let module_name_to_kebab = Validation_common.module_name_to_kebab
 let resolve_local_import_path = Validation_common.resolve_local_import_path
 
+(* Keys are CANONICAL paths (Validation_common.canonical_import_path): the
+   same module is reached with different relative spellings depending on the
+   importing file, and a raw-string key silently missed the SCC membership. *)
 let cyclic_local_import_table : (string, unit) Hashtbl.t = Hashtbl.create 16
+
+let canonical_import_path = Validation_common.canonical_import_path
 
 let is_cyclic_local_import (m : module_form) (imp : import_decl) =
   let is_tesl_stdlib = String.length imp.module_name >= 5 &&
                        String.sub imp.module_name 0 5 = "Tesl." in
   not is_tesl_stdlib &&
   m.source_file <> "" && m.source_file <> "<test>" &&
-  Hashtbl.mem cyclic_local_import_table (resolve_local_import_path m.source_file imp.module_name)
+  Hashtbl.mem cyclic_local_import_table
+    (canonical_import_path (resolve_local_import_path m.source_file imp.module_name))
 
 let load_local_import_module source_file module_name =
   let path = resolve_local_import_path source_file module_name in
@@ -3955,9 +4165,21 @@ let expand_local_import_names source_file module_name names =
         Hashtbl.replace adts name [name]
       | _ -> ()
     ) imported.decls;
-    List.concat_map (fun n ->
-      let n = strip_dotdot_suffix n in
+    List.concat_map (fun raw ->
+      let n = strip_dotdot_suffix raw in
+      let with_ctors = n <> raw in
       if String.contains n '.' then [n]
+      else if not with_ctors then
+        (* Bare `exposing [Opaque]` imports ONLY the type name.  Expanding an
+           imported ADT name to all its constructors here used to break every
+           opaque (bare) export: the declaring module's provide correctly
+           honors `exposing [Opaque]` (no ctors), so the emitted
+           `(only-in ... Opaque Hidden ...)` failed at raco make with a raw
+           "identifier not included in nested require spec".  Constructors are
+           pulled in only by an explicit `Opaque(..)` import — whose validity
+           against the declaring module's export form (`Opaque(..)` vs bare)
+           the checker already enforces. *)
+        [n]
       else match Hashtbl.find_opt adts n with
            | Some expanded -> expanded
            | None -> [n]
@@ -4058,44 +4280,20 @@ let collect_qualified_uses_for_module short_name (m : module_form) : string list
     desugar pass, forms lowered inline by the emitter (`asTool`/`serverTools`,
     the TimeZone constructors).  They never appear in emitted Racket, so
     importing them must NOT emit a `require` binding — the runtime modules do
-    not (and must not) provide them.  Single source: [emit_requires] filters
-    imports through this list, and test_stdlib_runtime_binding.ml excludes the
-    same list when asserting every remaining importable name has a real
-    runtime `provide`. *)
+    not (and must not) provide them.  Single source: {!Stdlib_config_names}
+    (which also feeds the checker's type-position rejection of these names);
+    [emit_requires] filters imports through this list, and
+    test_stdlib_runtime_binding.ml excludes the same list when asserting every
+    remaining importable name has a real runtime `provide`.
+    TimeZone / Money / Currency / ExchangeRate / the MoneyPer* aliases are NOT
+    in this list: they appear as bare identifiers in emitted TYPE positions
+    (handler #:returns, endpoint types), where an unbound name makes
+    normalize-type-identifier key the type-ref to the EMITTING file — so the
+    same stdlib type imported by two modules compared unequal at define-server
+    (issue #42).  The runtime provides them as type-name symbols, and the
+    emitted require binding keys both sides to the declaring runtime module. *)
 let config_only_import_names : string list =
-  [ "Database"; "DatabaseBackend"; "Postgres"; "Memory"; "PostgresConfig";
-    "PostgresConnection"; "TcpConnection"; "SocketConnection";
-    "Queue"; "QueueRetryStrategy"; "QueueRetryConfig"; "QueueRetryBackoff";
-    "Exponential"; "Fixed"; "Linear";
-    "Email"; "SmtpConfig"; "SseChannel"; "App"; "Job"; "Cache";
-    (* `asTool fn` is a compile-time form: it lowers to `__tart_tool …`
-       (schema derived from the fn's types) and has no runtime binding.
-       `serverTools S user` likewise lowers to `__tst_server-tools …`
-       (per-endpoint metadata derived at compile time).  `humanActions S user`
-       lowers to `__tht_human-actions …` (its EXCLUDED-endpoint complement). *)
-    "asTool"; "serverTools"; "humanActions";
-    (* Cache and Email surface forms are parser-rewritten, never runtime vars:
-       `cache` is the config-block keyword (DCache); `Cache.get/set/delete/
-       invalidate NAME (k)` parse to ECache* nodes; `Email.send NAME to: …`
-       parses to ESendEmail; `startEmailWorker` is a statement keyword
-       (EStartEmailWorker); `EmailBody` is type-only (its TextBody/HtmlBody/
-       RichBody constructors ARE runtime values and stay required).
-       2026-07-07: importing any of these typechecked then crashed the
-       generated module at load ("identifier not included in nested require
-       spec") — found by test_stdlib_runtime_binding.ml. *)
-    "cache"; "Cache.get"; "Cache.set"; "Cache.delete"; "Cache.invalidate";
-    "EmailBody"; "Email.send"; "startEmailWorker";
-    (* the TimeZone ADT lowers inline to the __ttz_ constructors *)
-    "TimeZone"; "Utc"; "FixedOffset";
-    (* type-only names of First-Class Units (their runtime values are the
-       inline-lowered Currency ctors / erased quantity Floats); the Money /
-       Units FUNCTIONS are ordinary provides and stay required *)
-    "Money"; "Currency"; "ExchangeRate";
-    "SameCurrency"; "NonNegativeMoney"; "RateFor" ]
-  @ Tz_zones.ctor_names
-  @ Currencies.ctor_names
-  @ List.map fst Units_catalog.aliases
-  @ List.map fst Units_catalog.money_rate_aliases
+  Stdlib_config_names.require_suppressed
 
 let emit_requires ctx (m : module_form) =
   let lazy_local_imports : (string * (string * string) list) list ref = ref [] in
@@ -4125,11 +4323,19 @@ let emit_requires ctx (m : module_form) =
   emit_line ctx "  tesl/tesl/queue";
   emit_line ctx "  tesl/tesl/sse";
   (* cache and email DSL macros live in their own tesl/tesl modules.
-     Only emit their require when the module actually uses them so that
-     files compiled without a database/SMTP connection don't load the
-     runtime eagerly. *)
-  let has_cache = List.exists (function Ast.DCache _ -> true | _ -> false) m.decls in
-  let has_email = List.exists (function Ast.DEmail _ -> true | _ -> false) m.decls in
+     Only emit their require when the module actually DECLARES OR USES them so
+     that files compiled without a database/SMTP connection don't load the
+     runtime eagerly.  The uses side (Desugar.module_uses_cache/email — one
+     owner for the lowered-form knowledge) closes the issue-#41-class hole
+     where a module that only USES Email.send / Cache.get (declaration in an
+     imported module) emitted send-email!/cache-get! with no require at all,
+     crashing at module load on the runtime fn name itself. *)
+  let has_cache =
+    List.exists (function Ast.DCache _ -> true | _ -> false) m.decls
+    || Desugar.module_uses_cache m in
+  let has_email =
+    List.exists (function Ast.DEmail _ -> true | _ -> false) m.decls
+    || Desugar.module_uses_email m in
   let has_agent = List.exists (function Ast.DAgent _ -> true | _ -> false) m.decls in
   (* `Agent { … }` (block or expression) and `asTool fn` both lower to the Tesl.Agent
      library constructors (`__tart_withTools`/`__tart_defineAgent`/`__tart_tool` …).
@@ -4253,9 +4459,18 @@ let emit_requires ctx (m : module_form) =
           if imported_path = "" then
             module_name_to_kebab imp.module_name ^ ".rkt"
           else
-            (* Convert .tesl to .rkt and get basename *)
-            let kebab = module_name_to_kebab imp.module_name in
-            kebab ^ ".rkt"
+            (* Single source of truth: the require must name the RESOLVED
+               source file's basename (`LibB.tesl` → `LibB.rkt`), because the
+               build pipeline emits every dep to `${dep%.tesl}.rkt`.  The
+               kebab-case transform is only the resolver's first PROBE; a
+               module saved under its PascalCase name (which `--check`
+               accepts and the V001 filename hint explicitly offers) used to
+               get an unconditional kebab require pointing at a file that was
+               never produced ("cannot open module file lib-b.rkt"). *)
+            let base = Filename.basename imported_path in
+            (if Filename.check_suffix base ".tesl"
+             then Filename.chop_suffix base ".tesl"
+             else base) ^ ".rkt"
     in
     (* Non-absolute paths are repo-relative; convert to Racket collection path *)
     let is_absolute = String.length modpath > 0 && modpath.[0] = '/' in
@@ -4323,9 +4538,18 @@ let emit_requires ctx (m : module_form) =
           expand_local_import_names m.source_file imp.module_name names
       in
       (* Config-block types (database/queue/email/sse) and inline-lowered forms
-         are compile-time only — see {!config_only_import_names}. *)
+         are compile-time only — see {!config_only_import_names}.  STDLIB
+         imports only: the list holds ~700 short common names (currency ctors
+         All/Try/Top, timezone ctors, SI aliases Area/Duration/…) that a LOCAL
+         module may legitimately export as its own records/types — filtering a
+         local import silently dropped that require binding, so a check-green
+         program crashed at load with `<Name>: unbound identifier`.  A local
+         dep's emitted .rkt provides every exported name, so nothing needs
+         suppressing on the local side. *)
       let expanded =
-        List.filter (fun n -> not (List.mem n config_only_import_names)) expanded in
+        if is_tesl_stdlib then
+          List.filter (fun n -> not (List.mem n config_only_import_names)) expanded
+        else expanded in
       let qualified = List.filter (fun n -> String.contains n '.') expanded in
       let plain = List.filter (fun n -> not (String.contains n '.')) expanded in
       (* Register plain names from Tesl stdlib modules as stdlib functions *)
@@ -4843,18 +5067,7 @@ let emit_func ctx (fd : func_decl) =
       if is_fact_here then Hashtbl.replace ctx.fact_locals name ();
       (* Track if this let is bound to a proof-carrying wrapper function result
          so case arms on this variable propagate proof to their sub-variables. *)
-      let is_proof_carrier_here =
-        match value with
-        | EApp _ ->
-          let rec get_fn = function EApp { fn; _ } -> get_fn fn | e -> e in
-          (match get_fn value with
-           | EVar { name = fn_name; _ } ->
-             (match Hashtbl.find_opt ctx.fn_return_specs fn_name with
-              | Some (RetMaybeAttached { binding = b; _ }) when b.proof_ann <> None -> true
-              | _ -> false)
-           | _ -> false)
-        | _ -> false
-      in
+      let is_proof_carrier_here = app_is_proof_carrier ctx value in
       if is_proof_carrier_here then Hashtbl.replace ctx.proof_carrier_lets name ();
       emit ctx (Printf.sprintf "(let ([%s " name);
       emit_expr ctx value;
@@ -4960,14 +5173,7 @@ let emit_func ctx (fd : func_decl) =
          the Something-arm payload to be treated as a named-value (not raw). *)
       let scrut_is_proof_carrier = match scrut with
         | EVar { name; _ } -> Hashtbl.mem ctx.proof_carrier_lets name
-        | EApp _ ->
-          let rec get_fn = function EApp { fn; _ } -> get_fn fn | e -> e in
-          (match get_fn scrut with
-           | EVar { name = fn_name; _ } ->
-             (match Hashtbl.find_opt ctx.fn_return_specs fn_name with
-              | Some (RetMaybeAttached { binding = b; _ }) when b.proof_ann <> None -> true
-              | _ -> false)
-           | _ -> false)
+        | EApp _ -> app_is_proof_carrier ctx scrut
         | _ -> false
       in
       emit ctx (Printf.sprintf "(let ([%s " tmp);
@@ -5285,18 +5491,7 @@ let emit_func ctx (fd : func_decl) =
         | _ -> false
       in
       if is_fact_here then Hashtbl.replace ctx.fact_locals name ();
-      let is_proof_carrier_here =
-        match value with
-        | EApp _ ->
-          let rec get_fn = function EApp { fn; _ } -> get_fn fn | e -> e in
-          (match get_fn value with
-           | EVar { name = fn_name; _ } ->
-             (match Hashtbl.find_opt ctx.fn_return_specs fn_name with
-              | Some (RetMaybeAttached { binding = b; _ }) when b.proof_ann <> None -> true
-              | _ -> false)
-           | _ -> false)
-        | _ -> false
-      in
+      let is_proof_carrier_here = app_is_proof_carrier ctx value in
       if is_proof_carrier_here then Hashtbl.replace ctx.proof_carrier_lets name ();
       let val_loc = Checker.expr_loc value in
       emit ctx (Printf.sprintf "(let ([%s (thsl-src! %S %d " name
@@ -5462,8 +5657,12 @@ let emit_capability ctx (c : capability_form) =
   (match c.implies with
   | [] -> emit_line ctx (Printf.sprintf "(define-capability %s)" c.name)
   | caps ->
+    (* Render through cap_ident: an implies entry may be the two-word implicit
+       per-cache capability `cacheCap <Name>` (parse_cap_name accepts it), which
+       must collapse to the `cacheCap_<Name>` identifier — raw concatenation
+       emitted it as TWO identifiers, the first (`cacheCap`) unbound. *)
     emit ctx (Printf.sprintf "(define-capability %s (implies " c.name);
-    emit ctx (String.concat " " caps);
+    emit ctx (cap_list_str caps);
     emit_line ctx "))");
   emit_nl ctx
 
@@ -5530,6 +5729,94 @@ let emit_codec ctx (cf : codec_form) =
      emit_line ctx "\n  ))";
    | ToJsonAdt -> () (* handled by emit_adt_codec; should not reach here *)
   );
+  (* Newtype-aware field decode (matrix types/ctrl4 + ctrl4b, 2026-07): a
+     record field declared as a newtype (`type UserId = String`) must hold a
+     wrapped `newtype-value` after decode — the capture path already
+     auto-wraps (see emit_capture / [newtype_bases]) and the encode path
+     unwraps (tesl-prim-encode-base, dsl/types.rkt), so an unwrapped decode
+     left the record asymmetric: `.value` trapped and `with_codec UserId`
+     found no registry decoder at all ("no decoder succeeded").  BOTH
+     documented spellings wrap here:
+       - `field <- "key" with_codec stringCodec` on a newtype-typed field →
+         decode the base prim, then apply the newtype constructor;
+       - `field <- "key" with_codec UserId` (the codec names the newtype) →
+         decode the newtype's BASE prim (same shared missing-field/type-
+         mismatch errors), then apply the constructor.
+     Non-newtype fields and unknown bases keep the exact historical bytes. *)
+  let codec_field_types = match List.assoc_opt cf.name ctx.record_fields with
+    | Some fts -> fts
+    | None -> []
+  in
+  let normalize_base = function
+    | "Integer" -> "Int"
+    | "Real" -> "Float"
+    | b -> b
+  in
+  let base_of_prim_codec = function
+    | "stringCodec"      -> Some "String"
+    | "intCodec"         -> Some "Int"
+    | "int32Codec"       -> Some "Int32"
+    | "boolCodec"        -> Some "Bool"
+    | "floatCodec"       -> Some "Float"
+    | "posixMillisCodec" -> Some "PosixMillis"
+    | "moneyCodec"       -> Some "Money"  (* builtin_codec_type knows it; omitting
+                                             it left a Money-newtype field unwrapped
+                                             after decode (`.value` trapped — the
+                                             ctrl4 bug, for Money) *)
+    | _                  -> None
+  in
+  (* Every base named by base_of_prim_codec must have a decoder row here, or
+     the `with_codec <Newtype>` arm degrades to applying the constructor to
+     the RAW jsexpr (a {minorUnits,currency} hash for Money) with no decode
+     step.  The runtime provides tesl-decode-prim-money / -posix-millis
+     alongside the scalar prims (dsl/types.rkt). *)
+  let prim_decoder_of_base = function
+    | "String"      -> Some "tesl-decode-prim-string"
+    | "Int"         -> Some "tesl-decode-prim-int"
+    | "Int32"       -> Some "tesl-decode-prim-int32"
+    | "Bool"        -> Some "tesl-decode-prim-bool"
+    | "Float"       -> Some "tesl-decode-prim-float"
+    | "PosixMillis" -> Some "tesl-decode-prim-posix-millis"
+    | "Money"       -> Some "tesl-decode-prim-money"
+    | _             -> None
+  in
+  (* Apply newtype constructor [ctor] (base [base]) to decoded value [inner].
+     PosixMillis is itself a define-newtype at runtime (tesl/time), so a
+     PosixMillis-based user newtype must wrap the decoded raw millis in the
+     BASE constructor first — `(Stamp raw-int)` trapped on the strict base
+     check ("expected a value of type …PosixMillis, got 1000000").  Money
+     needs no such wrap: its runtime rep (tesl-money struct) is what the
+     decoder already returns.  The PosixMillis identifier is require-bound
+     wherever the newtype is declared (declaring `type Stamp = PosixMillis`
+     requires importing it). *)
+  let apply_newtype_ctor ctor base inner =
+    if normalize_base base = "PosixMillis"
+    then Printf.sprintf "(%s (PosixMillis %s))" ctor inner
+    else Printf.sprintf "(%s %s)" ctor inner
+  in
+  let decode_call field_name json_key codec =
+    match Hashtbl.find_opt ctx.newtype_bases codec with
+    | Some base ->
+      (* `with_codec UserId`: the codec IS a (local or imported) newtype. *)
+      (match prim_decoder_of_base (normalize_base base) with
+       | Some prim ->
+         apply_newtype_ctor codec base
+           (Printf.sprintf "(tesl-decode-prim-field _j %S %s)" json_key prim)
+       | None ->
+         (* Non-prim base: the newtype constructor itself validates the base
+            type; keep the shared missing-field error. *)
+         Printf.sprintf "(%s (jsexpr-required-field _j %S))" codec json_key)
+    | None ->
+      let plain = codec_decode_field_call codec json_key in
+      (match List.assoc_opt field_name codec_field_types with
+       | Some (Ast.TName { name = ft_name; _ }) ->
+         (match Hashtbl.find_opt ctx.newtype_bases ft_name,
+                base_of_prim_codec codec with
+          | Some nb, Some cb when normalize_base nb = normalize_base cb ->
+            apply_newtype_ctor ft_name nb plain
+          | _ -> plain)
+       | _ -> plain)
+  in
   (* Emit decode function(s) *)
   (match cf.from_json with
    | FromJsonForbidden ->
@@ -5543,12 +5830,12 @@ let emit_codec ctx (cf : codec_form) =
        List.iter (function
          | DecodeField { field_name; json_key; codec; via = []; _ } ->
            emit_line ctx (Printf.sprintf "  (define _f_%s %s)"
-             field_name (codec_decode_field_call codec json_key))
+             field_name (decode_call field_name json_key codec))
          | DecodeField { field_name; json_key; codec; via = [via_fn]; _ } ->
            (* Via checker: decode raw then apply checker *)
            let r_var = Printf.sprintf "_r1_%s" field_name in
            emit_line ctx (Printf.sprintf "  (define _fraw_%s %s)"
-             field_name (codec_decode_field_call codec json_key));
+             field_name (decode_call field_name json_key codec));
            emit_line ctx (Printf.sprintf "  (define %s" r_var);
            emit_line ctx (Printf.sprintf "    (let ([_r (%s _fraw_%s)])" via_fn field_name);
            emit_line ctx "      (cond [(check-ok? _r) _r] [(check-fail? _r) _r] [else _r])))";
@@ -5567,11 +5854,11 @@ let emit_codec ctx (cf : codec_form) =
            (match combined_via with
             | None ->
               emit_line ctx (Printf.sprintf "  (define _f_%s %s)"
-                field_name (codec_decode_field_call codec json_key))
+                field_name (decode_call field_name json_key codec))
             | Some combined ->
               let r_var = Printf.sprintf "_r1_%s" field_name in
               emit_line ctx (Printf.sprintf "  (define _fraw_%s %s)"
-                field_name (codec_decode_field_call codec json_key));
+                field_name (decode_call field_name json_key codec));
               emit_line ctx (Printf.sprintf "  (define %s" r_var);
               emit_line ctx (Printf.sprintf "    (let ([_r (%s _fraw_%s)])" combined field_name);
               emit_line ctx "      (cond [(check-ok? _r) _r] [(check-fail? _r) _r] [else _r])))";
@@ -5723,8 +6010,34 @@ let emit_capture ctx (c : capture_form) =
     | "int32Codec"  -> "int32-segment"
     | other         -> other
   in
-  emit ctx (Printf.sprintf "]
-  #:parser %s" parser_fn);
+  (* Newtype capture auto-wrap (2026-07 matrix types/ctrl3, clients/newtype-ep):
+     the validator explicitly ALLOWS a newtype binding decoded with its base
+     codec (`capturer uid: UserId using stringCodec`), but the parsed segment
+     was bound RAW — the handler's `.value` / newtype return contract then
+     trapped at runtime.  When the binding type is a (local or imported)
+     newtype whose base matches the codec's output, wrap the successfully
+     parsed value in the newtype constructor; check-fail results pass through
+     untouched so route matching / 400s behave exactly as before. *)
+  let codec_base = match c.parser with
+    | "stringCodec" -> Some "String"
+    | "intCodec"    -> Some "Int"
+    | "int32Codec"  -> Some "Int32"
+    | _ -> None
+  in
+  let newtype_wrap = match codec_base, c.binding.type_expr with
+    | Some base, Ast.TName { name = tn; _ } ->
+      (match Hashtbl.find_opt ctx.newtype_bases tn with
+       | Some b when b = base -> Some tn
+       | _ -> None)
+    | _ -> None
+  in
+  (match newtype_wrap with
+   | Some tn ->
+     emit ctx (Printf.sprintf "]
+  #:parser (lambda (tesl-cap-seg) (let ((tesl-cap-parsed (%s tesl-cap-seg))) (if (check-fail? tesl-cap-parsed) tesl-cap-parsed (%s tesl-cap-parsed))))" parser_fn tn)
+   | None ->
+     emit ctx (Printf.sprintf "]
+  #:parser %s" parser_fn));
   (match c.checker with
    | Some checker -> emit_line ctx (Printf.sprintf " #:check %s)" checker)
    | None -> emit_line ctx ")");
@@ -5780,7 +6093,19 @@ let emit_sse_route ctx (ep : api_endpoint) =
    | None -> emit ctx "#f");
   emit ctx " ";
   (match (ep_subscribes ep) with
-   | channel_name :: _ -> emit ctx channel_name
+   | channel_name :: _ ->
+     (* Name-wired channel slot (issue-#41 class).  A locally declared channel
+        emits its bare binding (exact historical bytes).  A miss (channel
+        declared in another module) must NOT emit a direct channel-for-name
+        call here: the surrounding `(define X-sse-routes (list …))` evaluates
+        at module INSTANTIATION, which can precede the declaring module's
+        define-channel when the declarer is the importing entrypoint.  Emit
+        the channel NAME as a quoted symbol instead; the subscribe path
+        (resolve-sse-channel in dsl/web.rkt, api-test-subscribe in
+        dsl/test-support.rkt) resolves it lazily at consumption time. *)
+     if Hashtbl.mem ctx.local_channels channel_name
+     then emit ctx channel_name
+     else emit ctx (Printf.sprintf "'%s" channel_name)
    | [] -> emit ctx "#f");
   emit ctx " ";
   (* key-index: which `:param` segment carries the channel key.  Prefer the
@@ -6091,6 +6416,14 @@ let emit_test ctx ~(database_names : string list) (t : test_form) =
       Printf.sprintf "(if (zero? (tesl-prop-random 2)) (Nothing) (Something %s))" elem_gen
     | TName { name = type_name; _ } ->
       (match List.find_opt (fun (n, _, _) -> n = type_name) ctx.record_meta with
+       | Some (_, fields, _invariant) when Hashtbl.mem ctx.entity_names type_name ->
+         (* Entities are plain field hashes at runtime (define-entity binds an
+            entity-spec struct, NOT a constructor procedure) — a keyword call
+            would trap "application: not a procedure". *)
+         let parts = List.map (fun (field : Ast.field_def) ->
+           Printf.sprintf "'%s %s" field.name (random_expr_for_type field.type_expr)
+         ) fields in
+         Printf.sprintf "(hash %s)" (String.concat " " parts)
        | Some (_, fields, _invariant) ->
          let has_proofs = List.exists (fun (f : Ast.field_def) -> f.proof_ann <> None) fields in
          if has_proofs then
@@ -7052,46 +7385,163 @@ let emit_module ctx (m : module_form) =
       ) variants
     | _ -> ()
   ) m.decls;
-  (* Also populate ctor_fields from imported local modules *)
+  (* Also populate ctor_fields (and harvest record/entity decls, below) from
+     imported local modules *)
   let is_tesl_stdlib name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
   in
-  List.iter (fun (imp : import_decl) ->
-    if not (is_tesl_stdlib imp.module_name) then begin
-      let path = resolve_local_import_path m.source_file imp.module_name in
-      if Sys.file_exists path then begin
-        let source = In_channel.with_open_text path In_channel.input_all in
-        (match Parser.parse_module path source with
-         | Err _ -> ()
-         | Ok imported ->
-           List.iter (function
-             | DType (TypeAdt { variants; _ }) ->
-               List.iter (fun (v : Ast.adt_variant) ->
-                 let labels = List.map (fun (f : Ast.field_def) -> f.name) v.fields in
-                 if labels <> [] && not (Hashtbl.mem ctx.ctor_fields v.ctor) then
-                   Hashtbl.replace ctx.ctor_fields v.ctor labels
-               ) variants
-             | _ -> ()
-           ) imported.decls)
-      end
-    end
-  ) m.imports;
-  (* Collect record/entity field definitions for typed record construction *)
+  let imported_modules =
+    List.filter_map (fun (imp : import_decl) ->
+      if is_tesl_stdlib imp.module_name then None
+      else match load_local_import_module m.source_file imp.module_name with
+        | None -> None
+        | Some imported -> Some (imp, imported.decls)
+    ) m.imports
+  in
+  (* ADT ctor labels come from EVERY imported decl (an exposing item like
+     `Color(..)` names the type, not its ctors, so no exposing filter here).
+     proof_annotated_ctor_fields is harvested from the SAME variants under the
+     SAME guard so the two tables stay key-aligned: a ctor present in
+     ctor_fields but absent here is exactly the cross-module named-value
+     stripping bug (an imported `MkPair { count: p }` emitted `*p`, dropping
+     the GDP facts stored inside the ADT — DESIGN-4 Topic A).  The local
+     m.decls loop above ran first, so not-mem gives local-wins, mirroring the
+     #40 record harvest. *)
+  List.iter (fun (_, decls) ->
+    List.iter (function
+      | DType (TypeAdt { variants; _ }) ->
+        List.iter (fun (v : Ast.adt_variant) ->
+          let labels = List.map (fun (f : Ast.field_def) -> f.name) v.fields in
+          if labels <> [] && not (Hashtbl.mem ctx.ctor_fields v.ctor) then begin
+            Hashtbl.replace ctx.ctor_fields v.ctor labels;
+            let proof_fields = List.filter_map (fun (f : Ast.field_def) ->
+              if f.proof_ann <> None then Some f.name else None
+            ) v.fields in
+            if proof_fields <> []
+               && not (Hashtbl.mem ctx.proof_annotated_ctor_fields v.ctor) then
+              Hashtbl.replace ctx.proof_annotated_ctor_fields v.ctor proof_fields
+          end
+        ) variants
+      | _ -> ()
+    ) decls
+  ) imported_modules;
+  (* Collect record/entity field definitions for typed record construction.
+     Imported records/entities must be included: without them a cross-module
+     `Box { n: 3 }` in expression position misses the record arm and falls
+     through to the generic constructor call, trapping at runtime (issue #40).
+     The harvest is SCOPE-ACCURATE, not name-only: only names the import's
+     exposing clause actually brings into scope qualify (a private decl of an
+     imported module must not reclassify anything here), and any name the
+     current module itself binds as a type/record/entity/ADT-constructor wins
+     unconditionally — the record arm precedes the ADT-ctor arm, so a harvested
+     entry shadowing a local ADT ctor would hijack its construction. *)
+  let local_type_like_names =
+    List.concat_map (function
+      | DRecord r -> [r.name]
+      | DEntity e -> [e.name]
+      | DType (TypeNewtype { name; _ }) | DType (TypeAlias { name; _ }) -> [name]
+      | DType (TypeAdt { name; variants; _ }) ->
+        name :: List.map (fun (v : Ast.adt_variant) -> v.ctor) variants
+      | _ -> []
+    ) m.decls
+  in
+  let imported_rec_decls =
+    List.concat_map (fun ((imp : import_decl), decls) ->
+      match imp.names with
+      | ImportAll ->
+        (* `import Lib` (no exposing) — the emitted require is the WHOLE
+           module `(file "Lib.rkt")`, binding every EXPORTED name, and the
+           checker registers those records/entities in construction scope
+           (load_imported_records, wants = true under ImportAll).  Returning
+           [] here left a bare `Box { n: 3 }` on the generic-ctor path —
+           `(Box (hash 'n 3))`, an arity trap at runtime: the issue-#40 class
+           re-reachable through the ImportAll spelling.  Export-filtered to
+           match exactly what the require binds; local names win via
+           [local_type_like_names] as below. *)
+        (match load_local_import_module m.source_file imp.module_name with
+         | None -> []
+         | Some lib_m ->
+           let exported_names =
+             List.map (function ExportName n | ExportAdt n -> n) lib_m.exports in
+           let in_scope name =
+             List.mem name exported_names
+             && not (List.mem name local_type_like_names) in
+           List.filter (function
+             | DRecord r -> in_scope r.name
+             | DEntity e -> in_scope e.name
+             | _ -> false
+           ) decls)
+      | ImportExposing exposed ->
+        let in_scope name =
+          List.mem name exposed && not (List.mem name local_type_like_names) in
+        List.filter (function
+          | DRecord r -> in_scope r.name
+          | DEntity e -> in_scope e.name
+          | _ -> false
+        ) decls
+    ) imported_modules
+  in
+  (* Newtype → base-head-name table for the capture auto-wrap (see the
+     [newtype_bases] field doc): local decls first, then imported ones under
+     the same exposing filter / local-wins rules as the record harvest above.
+     The imported newtype's constructor identifier is require-bound at the
+     use site (`exposing [UserId]` emits an only-in for it), so the wrap
+     lambda can apply it directly. *)
+  let head_name_of_type_expr = function
+    | Ast.TName { name; _ } -> Some name
+    | _ -> None
+  in
+  List.iter (function
+    | DType (TypeNewtype { name; base_type; _ }) ->
+      (match head_name_of_type_expr base_type with
+       | Some base -> Hashtbl.replace ctx.newtype_bases name base
+       | None -> ())
+    | _ -> ()
+  ) m.decls;
+  List.iter (fun ((imp : import_decl), decls) ->
+    let in_scope =
+      match imp.names with
+      | ImportAll ->
+        (* Same ImportAll rule as the record harvest above: the whole-module
+           require binds every exported name, so an exported newtype's
+           constructor is applicable here too. *)
+        (match load_local_import_module m.source_file imp.module_name with
+         | None -> (fun _ -> false)
+         | Some lib_m ->
+           let exported_names =
+             List.map (function ExportName n | ExportAdt n -> n) lib_m.exports in
+           fun name ->
+             List.mem name exported_names
+             && not (List.mem name local_type_like_names))
+      | ImportExposing exposed ->
+        fun name ->
+          List.mem name exposed && not (List.mem name local_type_like_names)
+    in
+    List.iter (function
+      | DType (TypeNewtype { name; base_type; _ })
+        when in_scope name && not (Hashtbl.mem ctx.newtype_bases name) ->
+        (match head_name_of_type_expr base_type with
+         | Some base -> Hashtbl.replace ctx.newtype_bases name base
+         | None -> ())
+      | _ -> ()
+    ) decls
+  ) imported_modules;
+  let all_rec_decls = m.decls @ imported_rec_decls in
   let record_fields = List.filter_map (function
     | DRecord r -> Some (r.name, List.map (fun (f : Ast.field_def) -> (f.name, f.type_expr)) r.fields)
     | DEntity e -> Some (e.name, List.map (fun (f : Ast.field_def) -> (f.name, f.type_expr)) e.fields)
     | _ -> None
-  ) m.decls in
+  ) all_rec_decls in
   let record_meta = List.filter_map (function
     | DRecord r -> Some (r.name, r.fields, r.invariant)
     | DEntity e -> Some (e.name, e.fields, None)
     | _ -> None
-  ) m.decls in
+  ) all_rec_decls in
   let ctx = { ctx with record_fields; record_meta } in
   List.iter (function
     | DEntity e -> Hashtbl.replace ctx.entity_names e.name ()
     | _ -> ()
-  ) m.decls;
+  ) all_rec_decls;
   let database_names = List.filter_map (function
     | DDatabase d -> Some d.name
     | _ -> None
@@ -7106,10 +7556,77 @@ let emit_module ctx (m : module_form) =
       Hashtbl.replace ctx.fn_return_specs fd.name fd.return_spec
     | _ -> ()
   ) m.decls;
+  (* asTool shadowing — byte-for-byte the checker's skip predicate (its
+     whole-module asTool walk): a LOCAL fn/const named `asTool` makes the
+     builtin form inert, so the emit guards must treat asTool-headed
+     applications as ordinary calls (see [astool_shadowed] field doc). *)
+  ctx.astool_shadowed <-
+    List.exists (function
+      | DFunc (fd : Ast.func_decl) -> fd.name = "asTool"
+      | DConst (c : Ast.const_form) -> c.name = "asTool"
+      | _ -> false
+    ) m.decls;
   List.iter (fun (name, arity) ->
     Hashtbl.replace ctx.fn_names name ();
     Hashtbl.replace ctx.fn_arities name arity
   ) (load_imported_fn_arities m);
+  (* `asTool importedFn`: harvest tool-able fn decls (and their return specs)
+     from directly imported local modules, scope-accurately like the #40 record
+     harvest above — ImportExposing plain names only (ImportAll brings no plain
+     names into scope, matching load_imported_fn_arities), MainKind excluded,
+     LOCAL decls win (the m.decls loop above ran first; the not-mem guard
+     refuses overwrite, which also makes the first import win on a duplicate
+     exposed name).  Without this, both asTool guards miss for an imported fn:
+     tools-list position fell to the generic app path (literal unbound
+     `(asTool f)` — module fails to load), statement position hit the
+     issue-#24 failwith (compiler crash).  Origin is recorded in
+     [imported_tool_fns] so emit_tool_from_fd can pick the registry-delegation
+     dispatch shape (its cap identifiers are not require-bound here). *)
+  List.iter (fun ((imp : import_decl), decls) ->
+    let requested = match imp.names with
+      | ImportAll -> None
+      | ImportExposing names -> Some names
+    in
+    List.iter (function
+      | DFunc (fd : Ast.func_decl) when fd.kind <> MainKind ->
+        let exposed_plain = match requested with
+          | Some names -> List.mem fd.name names
+          | None -> false
+        in
+        if exposed_plain then begin
+          if not (Hashtbl.mem ctx.fn_tool_decls fd.name) then begin
+            Hashtbl.replace ctx.fn_tool_decls fd.name fd;
+            Hashtbl.replace ctx.imported_tool_fns fd.name ()
+          end;
+          if not (Hashtbl.mem ctx.fn_return_specs fd.name) then
+            Hashtbl.replace ctx.fn_return_specs fd.name fd.return_spec
+        end;
+        (* Qualified `Module.fn` return-spec key — byte-for-byte the inclusion
+           rules of load_imported_fn_arities: always for ImportAll, when
+           exposed for ImportExposing.  Without it a qualified call
+           `Lib.maybePositive n` missed proof_carrier_lets and the
+           Something-arm payload emitted as the stripped `*v` (empirically
+           red: detach-all-proof trap — DESIGN-4 Topic A). *)
+        let include_qualified = match requested with
+          | Some names -> List.mem fd.name names
+          | None -> true
+        in
+        if include_qualified then begin
+          let qualified_name = imp.module_name ^ "." ^ fd.name in
+          if not (Hashtbl.mem ctx.fn_return_specs qualified_name) then
+            Hashtbl.replace ctx.fn_return_specs qualified_name fd.return_spec
+        end
+      | _ -> ()) decls
+  ) imported_modules;
+
+  (* Local sseChannel names — the name-wired HIT set for EPublish and
+     emit_sse_route (see the [local_channels] field doc): a declared name
+     keeps the bare define-channel binding, anything else resolves through
+     the process-wide registry. *)
+  List.iter (function
+    | DChannel (c : Ast.channel_form) -> Hashtbl.replace ctx.local_channels c.name ()
+    | _ -> ()
+  ) m.decls;
 
   (* Build api_name → server_name mapping for SSE routes naming *)
   let api_to_server : (string, string) Hashtbl.t = Hashtbl.create 8 in
@@ -7129,6 +7646,144 @@ let emit_module ctx (m : module_form) =
 
   emit_requires ctx m;
   emit_provide ctx m;
+
+  (* Imported-module test submodules (matrix 2026-07, silent-pass class):
+     `raco test main.rkt` instantiates ONLY main's `test` submodule, so a
+     failing test/api-test/load-test block in an imported module used to pass
+     silently ("1 test passed", exit 0) unless the lib file itself was handed
+     to the runner.  Emit a require of each DIRECT local import's test
+     submodule inside our own test submodule; Racket instantiates a module
+     (and its submodules) at most once per namespace, so a lib shared by main
+     and another dep still runs its tests exactly once.  Gated on the dep
+     declaring a test-ish decl (DTest covers doctests — they are synthesized
+     at parse time) DIRECTLY OR TRANSITIVELY: a dep's emitted .rkt has a test
+     submodule under exactly that condition (a testless MIDDLE module still
+     emits one — this very block — that pulls its own deps' test submodules,
+     so the chain composes).  Gating on the direct decls only silently
+     skipped the sandwich main→A(no tests)→B(tests): A.rkt had the B require
+     inside `(module+ test …)`, but nothing instantiated A's test submodule.
+     A dep with NO test-declaring module anywhere in its closure emits no
+     test submodule at all, so an unconditional require would fail to
+     resolve.  Skipped entirely under --test-name single-block selection
+     (that flag means "run exactly this block of THIS entry file") and for
+     cyclic imports (their decls are inlined here, not required). *)
+  let dep_test_submodule_rkts =
+    if !test_name_filter <> None then []
+    else begin
+      let module_declares_tests (decls : top_decl list) =
+        List.exists (function
+          | DTest _ | DApiTest _ | DLoadTest _ -> true
+          | _ -> false) decls
+      in
+      (* Reachability over the dep's import closure, cycle-safe on CANONICAL
+         paths (the same module is reached with different relative spellings
+         per importing file — the canonical_import_path lesson). *)
+      let declares_tests_transitively (imp : import_decl) (decls : top_decl list) =
+        module_declares_tests decls
+        || begin
+          let visited : (string, unit) Hashtbl.t = Hashtbl.create 8 in
+          let rec walk (src_file : string) (mod_name : string) : bool =
+            if is_tesl_stdlib mod_name then false
+            else
+              let path = resolve_local_import_path src_file mod_name in
+              if path = "" then false
+              else
+                let key = canonical_import_path path in
+                if Hashtbl.mem visited key then false
+                else begin
+                  Hashtbl.replace visited key ();
+                  match load_local_import_module src_file mod_name with
+                  | None -> false
+                  | Some dep_m ->
+                    module_declares_tests dep_m.decls
+                    || List.exists (fun (di : import_decl) ->
+                         walk dep_m.source_file di.module_name) dep_m.imports
+                end
+          in
+          (* mark the DEP itself visited so a back-edge in a cycle stops *)
+          let dep_path = resolve_local_import_path m.source_file imp.module_name in
+          if dep_path <> "" then
+            Hashtbl.replace visited (canonical_import_path dep_path) ();
+          match load_local_import_module m.source_file imp.module_name with
+          | None -> false
+          | Some dep_m ->
+            List.exists (fun (di : import_decl) ->
+              walk dep_m.source_file di.module_name) dep_m.imports
+        end
+      in
+      let seen_dep_rkt = Hashtbl.create 8 in
+      List.filter_map (fun ((imp : import_decl), decls) ->
+        if not (declares_tests_transitively imp decls)
+           || is_cyclic_local_import m imp then None
+        else
+          let imported_path = resolve_local_import_path m.source_file imp.module_name in
+          if imported_path = "" || not (Sys.file_exists imported_path) then None
+          else
+            (* Same basename rule as the per-import require in emit_requires:
+               the build pipeline emits every dep to `${dep%.tesl}.rkt` next
+               to the entry file. *)
+            let base = Filename.basename imported_path in
+            let rkt =
+              (if Filename.check_suffix base ".tesl"
+               then Filename.chop_suffix base ".tesl"
+               else base) ^ ".rkt" in
+            if Hashtbl.mem seen_dep_rkt rkt then None
+            else begin Hashtbl.replace seen_dep_rkt rkt (); Some rkt end
+      ) imported_modules
+    end
+  in
+  if dep_test_submodule_rkts <> [] then begin
+    emit_line ctx "(module+ test";
+    List.iter (fun rkt ->
+      emit_line ctx (Printf.sprintf "  (require (submod (file %S) test))" rkt)
+    ) dep_test_submodule_rkts;
+    emit_line ctx ")";
+    emit_nl ctx
+  end;
+
+  (* Non-local `cacheCap <Name>` capability VALUES (issue-#41 class).  A cache
+     declared in another module binds `cacheCap_<Name>` only in the declaring
+     module's emitted .rkt, but capability grants compare by eq? on the VALUE —
+     so every requires-position mention here (`with-capabilities`,
+     `#:capabilities [...]`, test grants) needs the declaring module's
+     instance.  define-cache stores that instance on the registered cache-spec,
+     so bind it once via the registry.  Instantiation-safe: `requires
+     [cacheCap <Name>]` with a non-local Name only passes the check when the
+     declaring module is a (transitive) import, and requires instantiate
+     before this define runs. *)
+  let synth_cache_caps =
+    let local_cache_names =
+      List.filter_map (function Ast.DCache (c : Ast.cache_form) -> Some c.name | _ -> None)
+        m.decls in
+    let add acc caps =
+      List.fold_left (fun acc cap ->
+        if String.length cap >= 9 && String.sub cap 0 9 = "cacheCap " then begin
+          let n = String.sub cap 9 (String.length cap - 9) in
+          if List.mem n local_cache_names || List.mem n acc then acc else acc @ [n]
+        end else acc
+      ) acc caps
+    in
+    List.fold_left (fun acc d ->
+      match d with
+      | DFunc (fd : Ast.func_decl) -> add acc fd.capabilities
+      | DQueue (q : Ast.queue_form) -> add acc q.capabilities
+      | DAgent (a : Ast.agent_form) -> add acc a.capabilities
+      | DTest (t : Ast.test_form) -> add acc t.capabilities
+      | DApiTest (t : Ast.api_test_form) -> add acc t.capabilities
+      | DLoadTest (t : Ast.load_test_form) -> add acc t.capabilities
+      (* `capability admin implies cacheCap Sessions` is a cacheCap MENTION
+         too: emit_capability renders it as the cacheCap_<Name> identifier, so
+         an implies referencing an IMPORTED module's cache needs the same
+         synthesized define (a local cache's define-cache binds it). *)
+      | DCapability (c : Ast.capability_form) -> add acc c.implies
+      | _ -> acc
+    ) [] m.decls
+  in
+  List.iter (fun n ->
+    emit_line ctx
+      (Printf.sprintf "(define cacheCap_%s (cache-spec-capability (cache-for-name '%s)))" n n)
+  ) synth_cache_caps;
+  if synth_cache_caps <> [] then emit_nl ctx;
 
   (* Emit proof predicate symbol definitions *)
   let proof_names = collect_proof_names m in
@@ -7283,9 +7938,10 @@ let emit_module ctx (m : module_form) =
       Hashtbl.replace emitted_names name ()
     | _ -> ()
   ) m.decls;
-  (* Track which cyclic modules have been processed to avoid infinite recursion *)
+  (* Track which cyclic modules have been processed to avoid infinite recursion.
+     Keys are canonical paths, like [cyclic_local_import_table]. *)
   let processed_cyclic : (string, unit) Hashtbl.t = Hashtbl.create 8 in
-  Hashtbl.replace processed_cyclic m.source_file ();
+  Hashtbl.replace processed_cyclic (canonical_import_path m.source_file) ();
   (* Inline declarations from all SCC members recursively via BFS *)
   let inline_cyclic (cyclic_m : module_form) =
     emit_nl ctx;
@@ -7340,9 +7996,10 @@ let emit_module ctx (m : module_form) =
   (* Use a queue to process all SCC members, not just direct imports *)
   let to_process : module_form Queue.t = Queue.create () in
   List.iter (fun (imp : Ast.import_decl) ->
+    let path =
+      canonical_import_path (resolve_local_import_path m.source_file imp.module_name) in
     if is_cyclic_local_import m imp &&
-       not (Hashtbl.mem processed_cyclic (resolve_local_import_path m.source_file imp.module_name)) then begin
-      let path = resolve_local_import_path m.source_file imp.module_name in
+       not (Hashtbl.mem processed_cyclic path) then begin
       Hashtbl.replace processed_cyclic path ();
       (match load_local_import_module m.source_file imp.module_name with
        | None -> ()
@@ -7354,7 +8011,9 @@ let emit_module ctx (m : module_form) =
     inline_cyclic cyclic_m;
     (* Also enqueue transitive cyclic imports of this module *)
     List.iter (fun (imp : Ast.import_decl) ->
-      let path = resolve_local_import_path cyclic_m.source_file imp.module_name in
+      let path =
+        canonical_import_path
+          (resolve_local_import_path cyclic_m.source_file imp.module_name) in
       if Hashtbl.mem cyclic_local_import_table path &&
          not (Hashtbl.mem processed_cyclic path) then begin
         Hashtbl.replace processed_cyclic path ();
@@ -7400,7 +8059,9 @@ let compile_to_string ?(root_path=default_root_path ()) ?(cyclic_local_import_pa
   currency_ctors_active :=
     List.exists (fun (i : Ast.import_decl) -> i.module_name = "Tesl.Money")
       m.imports;
-  List.iter (fun path -> Hashtbl.replace cyclic_local_import_table path ()) cyclic_local_import_paths;
+  List.iter (fun path ->
+    Hashtbl.replace cyclic_local_import_table (canonical_import_path path) ()
+  ) cyclic_local_import_paths;
   List.iter (function
     | DQueue q -> List.iter (fun job -> Hashtbl.replace job_type_to_queue job q.name) q.jobs
     | _ -> ()

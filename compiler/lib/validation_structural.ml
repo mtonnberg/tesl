@@ -1054,13 +1054,35 @@ let check_capture_codec_types (decls : top_decl list) : validation_error list =
             in
             if is_newtype_match then None
             else
+              (* Hint must name a spelling that actually PARSES: `using` takes a
+                 CODEC name, so suggest the builtin codec matching the binding
+                 type — resolving a newtype to its base first (`UserId` over
+                 `String` → `using stringCodec`).  The old fallback suggested
+                 `using <TypeName>`, which is a parse error. *)
+              let codec_for ty =
+                List.assoc_opt ty (List.map (fun (a, b) -> (b, a)) builtin_codec_type) in
+              let suggestion =
+                match codec_for binding_type with
+                | Some c -> Printf.sprintf "use `using %s` for `%s` captures" c binding_type
+                | None ->
+                  (match List.assoc_opt binding_type newtype_base with
+                   | Some base ->
+                     (match codec_for base with
+                      | Some c ->
+                        Printf.sprintf
+                          "use `using %s` (`%s` is a newtype over `%s`; the capture is wrapped automatically)"
+                          c binding_type base
+                      | None ->
+                        Printf.sprintf
+                          "use a codec that decodes to `%s` (the base type of `%s`)"
+                          base binding_type)
+                   | None ->
+                     Printf.sprintf "use a codec that decodes to `%s`" binding_type)
+              in
               Some (make_error cf.loc
                 ~hint:(Printf.sprintf
-                  "use `using %s` for `%s` captures, or change the binding type to `%s`"
-                  (match List.assoc_opt binding_type
-                      (List.map (fun (a,b) -> (b,a)) builtin_codec_type) with
-                   | Some c -> c | None -> binding_type)
-                  binding_type expected_type)
+                  "%s, or change the binding type to `%s`"
+                  suggestion expected_type)
                 (Printf.sprintf
                   "capture `%s`: binding type is `%s` but `%s` decodes to `%s`"
                   cf.name binding_type cf.parser expected_type))))
@@ -1913,6 +1935,28 @@ let check_typed_config_blocks (decls : top_decl list) : validation_error list =
        | EList { elems; _ } ->
          ignore (types);
          List.concat_map (fun e -> match cfg_ctor e with
+           | Some "Job" ->
+             (* The folded form takes EXACTLY three arguments (LANGUAGE-SPEC
+                §queues): `Job <JobType> <workerFn> <dead-slot>` with the dead
+                slot spelled `Nothing` or `(Something deadFn)`.  Desugar's
+                job_entries extraction matches only that shape — a 2-arg
+                `Job PingJob handlePing` extracted NOTHING, so the queue
+                emitted `#:job-types ()` and every enqueue failed at RUNTIME
+                ("no queue declares job type …") despite the queue textually
+                declaring it.  Fail closed here instead. *)
+             (match e with
+              | EApp { fn = EApp { fn = EApp { fn = EConstructor { name = "Job"; _ };
+                                               arg = jt; _ }; _ }; _ } ->
+                (match cfg_ctor jt with
+                 | Some _ -> []
+                 | None ->
+                   [ make_error (cfg_expr_loc e)
+                       "the first argument of `Job` must name a job record type, e.g. `Job EmailJob sendEmailWorker Nothing`" ])
+              | _ ->
+                [ make_error (cfg_expr_loc e)
+                    "a `Job` entry takes exactly three arguments: `Job <JobType> <workerFn> <dead-slot>` — \
+                     add the dead-letter slot, e.g. `Job EmailJob sendEmailWorker Nothing` or \
+                     `Job EmailJob sendEmailWorker (Something handleDeadEmail)`" ])
            | Some _ -> [] | None -> [ make_error loc "`jobs` must be a list of job types, e.g. `[EmailJob]`" ]) elems
        | _ -> err "`jobs` must be a list of job types, e.g. `[EmailJob]`")
     | VRefList ->
@@ -2042,13 +2086,13 @@ let check_app_wiring (decls : top_decl list) : validation_error list =
          let one key set kind = match List.assoc_opt key fields with
            | Some v -> (match cfg_ctor v with
                | Some n when not (List.mem n set) ->
-                 [ make_error loc ~hint:(Printf.sprintf "declare or import `%s`" n)
+                 [ make_error loc ~hint:(Printf.sprintf "declare `%s` in this module — App activation refs are local by construction" n)
                      (Printf.sprintf "App `%s` references unknown %s `%s`" key kind n) ]
                | _ -> [])
            | None -> [] in
          let many key set kind = match List.assoc_opt key fields with
            | Some v -> List.filter_map (fun n -> if List.mem n set then None
-               else Some (make_error loc ~hint:(Printf.sprintf "declare or import `%s`" n)
+               else Some (make_error loc ~hint:(Printf.sprintf "declare `%s` in this module — App activation refs are local by construction" n)
                  (Printf.sprintf "App `%s` activates unknown %s `%s`" key kind n))) (names_of v)
            | None -> [] in
          one "database" dbs "database"

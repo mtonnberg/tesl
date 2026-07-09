@@ -923,7 +923,18 @@
           'data     (let ([fix (hash-ref d 'fix 'null)])
                        (if (eq? fix 'null) (hash) (hash 'fix fix))))))
 
-(define (run-check compiler file-path)
+;; ── Whole-program check: dep-file diagnostic partition (2026-07-09) ─────────
+;; `--check-json <entry>` now runs the FULL per-module pipeline on every
+;; transitively imported local module, so its diagnostic list mixes entry-file
+;; diagnostics with dep-file ones — each tagged with its own `file` field.
+;; diag->lsp drops `file` (an LSP diagnostic is positioned within ONE
+;; document), so publishing the whole list on the checked document painted dep
+;; errors as phantom squiggles at unrelated entry-file coordinates, and a
+;; carried quickfix would be applied to the wrong file.  Partition on `file`:
+;; entry diagnostics stay on the document; dep diagnostics are grouped per dep
+;; file and published on the dep's OWN uri (push model, publishDiagnostics
+;; accepts any uri) or dropped from single-document replies (pull model).
+(define (run-check-raw compiler file-path)
   (with-logical-env (lambda ()
   (let-values ([(proc pout pin perr)
                 (subprocess #f #f #f
@@ -935,7 +946,55 @@
            [_   (port->string perr)]
            [_   (subprocess-wait proc)])
       (with-handlers ([exn? (lambda (e) (log (format "check json: ~a" (exn-message e))) '())])
-        (map diag->lsp (hash-ref (read-json (open-input-string raw)) 'diagnostics '()))))))))
+        (hash-ref (read-json (open-input-string raw)) 'diagnostics '())))))))
+
+;; Absolute, dot-free spelling of a diagnostic `file` for identity comparison.
+;; Dep files are spelled by the compiler's import resolution (relative to the
+;; entry's logical directory), the entry by the logical path, and linter rows
+;; by the temp copy's path — hence resolve against `base-dir` and simplify.
+(define (norm-diag-path p base-dir)
+  (with-handlers ([exn:fail? (lambda (_) (if (path? p) (path->string p) p))])
+    (path->string
+     (simplify-path (path->complete-path (if (path? p) p (string->path p))
+                                         base-dir)
+                    #f))))
+
+;; Run the check and split the result: (values entry-lsp-diags dep-groups)
+;; where dep-groups = (listof (cons abs-dep-path-string lsp-diags)).  A
+;; diagnostic belongs to the ENTRY document when its `file` matches the
+;; logical path (checker rows) or the checked file argument (linter rows on
+;; the temp copy), or carries no `file` at all (defensive).
+(define (run-check/partitioned compiler file-path)
+  (let* ([raw-diags   (run-check-raw compiler file-path)]
+         [checked-str (if (path? file-path) (path->string file-path) file-path)]
+         [entry-str   (or (logical-path->string (current-logical-path))
+                          checked-str)]
+         [base-dir    (let-values ([(dir _name _must-be-dir?)
+                                    (split-path (path->complete-path entry-str))])
+                        dir)]
+         [entry-norms (list (norm-diag-path entry-str base-dir)
+                            (norm-diag-path checked-str base-dir))]
+         [entry '()]
+         [deps (make-hash)]      ; norm dep path -> reversed lsp diags
+         [dep-order '()])
+    (for ([d (in-list raw-diags)])
+      (let ([f (hash-ref d 'file #f)])
+        (if (or (not f) (member (norm-diag-path f base-dir) entry-norms))
+            (set! entry (cons (diag->lsp d) entry))
+            (let ([fn (norm-diag-path f base-dir)])
+              (unless (hash-has-key? deps fn)
+                (set! dep-order (cons fn dep-order)))
+              (hash-set! deps fn (cons (diag->lsp d) (hash-ref deps fn '())))))))
+    (values (reverse entry)
+            (for/list ([fn (in-list (reverse dep-order))])
+              (cons fn (reverse (hash-ref deps fn)))))))
+
+;; Entry-document diagnostics only — the single-document consumers (pull
+;; diagnostics): the reply describes ONE document, so dep-file rows are
+;; excluded rather than mis-anchored.
+(define (run-check compiler file-path)
+  (let-values ([(entry _deps) (run-check/partitioned compiler file-path)])
+    entry))
 
 (define (run-local-bindings compiler file-path)
   (with-logical-env (lambda ()
@@ -1849,6 +1908,36 @@
                            'method  "textDocument/publishDiagnostics"
                            'params  (hash 'uri uri 'diagnostics diags))))
 
+;; entry uri → list of dep uris the last check published diagnostics on, so a
+;; dep going clean (or the entry closing) clears its stale squiggles.
+(define dep-diag-uris (make-hash))
+
+;; Publish dep-file diagnostic groups on their own uris.  A dep that is OPEN
+;; in the editor is skipped: its own didOpen/didChange validation owns that
+;; uri (and runs against the buffer text, which may be newer than the on-disk
+;; content this whole-program check read).
+(define (publish-dep-diags! out entry-uri dep-groups)
+  (let ([new-uris
+         (for/fold ([acc '()]) ([grp (in-list dep-groups)])
+           (let ([dep-uri (path->uri (car grp))])
+             (cond
+               [(hash-has-key? docs dep-uri) acc]
+               [else (publish-diags! out dep-uri (cdr grp))
+                     (cons dep-uri acc)])))])
+    (for ([old (in-list (hash-ref dep-diag-uris entry-uri '()))])
+      (unless (member old new-uris)
+        (publish-diags! out old '())))
+    (if (null? new-uris)
+        (hash-remove! dep-diag-uris entry-uri)
+        (hash-set! dep-diag-uris entry-uri new-uris))))
+
+;; Clear every dep-file diagnostic published on behalf of `entry-uri`
+;; (didClose: the whole-program view anchored at this document goes away).
+(define (clear-dep-diags! out entry-uri)
+  (for ([dep-uri (in-list (hash-ref dep-diag-uris entry-uri '()))])
+    (publish-diags! out dep-uri '()))
+  (hash-remove! dep-diag-uris entry-uri))
+
 (define (check-text! out uri disk-path text compiler)
   (cond
     [(not compiler)
@@ -1857,10 +1946,11 @@
     [else
      (with-validation-tmp "tesl-lsp-~a.tesl" text disk-path compiler
        (lambda (tmp)
-         (let ([diags    (run-check compiler tmp)]
-               [bindings (run-local-bindings compiler tmp)])
-           (hash-set! local-bindings-cache uri bindings)
-           (publish-diags! out uri diags))))]))
+         (let-values ([(diags dep-groups) (run-check/partitioned compiler tmp)])
+           (let ([bindings (run-local-bindings compiler tmp)])
+             (hash-set! local-bindings-cache uri bindings)
+             (publish-diags! out uri diags)
+             (publish-dep-diags! out uri dep-groups)))))]))
 
 (define (check-disk! out uri disk-path compiler)
   (cond
@@ -1872,7 +1962,9 @@
      (log (format "not found: ~a" disk-path))]
     [else
      (hash-set! local-bindings-cache uri (run-local-bindings compiler disk-path))
-     (publish-diags! out uri (run-check compiler disk-path))]))
+     (let-values ([(diags dep-groups) (run-check/partitioned compiler disk-path)])
+       (publish-diags! out uri diags)
+       (publish-dep-diags! out uri dep-groups))]))
 
 ;; ── URI / path ────────────────────────────────────────────────────────────────
 
@@ -2229,6 +2321,7 @@
            (let ([uri (hash-ref (hash-ref params 'textDocument (hash)) 'uri "")])
              (hash-remove! docs uri)
              (hash-remove! local-bindings-cache uri)
+             (clear-dep-diags! out uri)
              (write-message out (hash 'jsonrpc "2.0"
                                       'method "textDocument/publishDiagnostics"
                                       'params (hash 'uri uri 'diagnostics '()))))

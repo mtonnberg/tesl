@@ -127,6 +127,14 @@
          (struct-out database-spec)
          (struct-out database-runtime)
          database-schema-name
+         ;; Memory-database registry (test isolation): every `define-database
+         ;; #:backend memory` registers its spec here so
+         ;; call-with-fresh-memory-db (dsl/test-support.rkt) can reset the
+         ;; stores of ALL live memory databases — including ones declared in
+         ;; IMPORTED modules, which the emitter's per-module database list
+         ;; cannot see (it harvests only the emitting module's own decls).
+         register-memory-database!
+         registered-memory-databases
          ;; Pool-lease waiting (issue #31): the timeout error is exported so the
          ;; HTTP layer can map it to 503 instead of a generic 500; the connector
          ;; builder is exported so the pool behaviour is testable without a live
@@ -167,6 +175,26 @@
 (struct postgres-spec (database user password server port socket max-connections max-idle-connections auto-migrate?) #:transparent)
 (struct database-spec (name backend schema entities config) #:transparent)
 (struct database-runtime (database connection) #:transparent)
+
+;; ── Memory-database registry ─────────────────────────────────────────────────
+;; Every memory-backend database-spec is recorded at creation (define-database's
+;; memory arm calls register-memory-database!).  Rationale: test-block state
+;; isolation (call-with-fresh-memory-db) must reset the entity stores of EVERY
+;; live memory database, but the compiler can only emit a per-module reset list
+;; from the decls it sees — a `database` block declared in an IMPORTED module is
+;; invisible there, so its rows used to leak across test/api-test/load-test
+;; blocks (matrix 2026-07: entity-db/isolation, test-blocks/server-x).  The
+;; registry makes the reset registry-based instead of decl-based: the runtime
+;; objects self-register at module instantiation, which by require-ordering
+;; always happens before any test block runs.  Postgres databases never
+;; register (their state is not process-local, resetting it is not our call).
+;; eq?-keyed hash so re-registration of the same spec is idempotent.
+(define memory-database-registry (make-hasheq))
+(define (register-memory-database! spec)
+  (hash-set! memory-database-registry spec #t)
+  spec)
+(define (registered-memory-databases)
+  (hash-keys memory-database-registry))
 
 (define current-database-runtime (make-parameter #f))
 
@@ -952,9 +980,9 @@
   ;; genuinely non-orderable and still errors.
   (unless (or (sql-null-value? value)
               (let ([inner (unwrap-non-null value)])
-                (or (number? inner) (string? inner))))
+                (or (number? inner) (string? inner) (boolean? inner))))
     (raise-user-error who
-                      "field ~a on entity ~a does not support ordered comparison ~a for ~a value ~a; expected a string or number"
+                      "field ~a on entity ~a does not support ordered comparison ~a for ~a value ~a; expected a string, number or boolean"
                       (field-spec-key field)
                       (field-spec-entity field)
                       operator
@@ -985,6 +1013,18 @@
        [(<=) (or (string<? left right) (string=? left right))]
        [(>) (string>? left right)]
        [(>=) (or (string>? left right) (string=? left right))]
+       [else
+        (raise-user-error who "unsupported ordered SQL predicate operator ~a" operator)])]
+    ;; Bool ordering, PostgreSQL semantics: false < true.  PG orders boolean
+    ;; columns (ORDER BY and ordered comparisons alike); before this arm the
+    ;; Memory backend raised on `order t.done asc` over a Bool column that the
+    ;; checker accepts and PG handles (2026-07-09 review, item 6).
+    [(and (boolean? left) (boolean? right))
+     (case operator
+       [(<) (and (not left) right)]
+       [(<=) (or (not left) right)]
+       [(>) (and left (not right))]
+       [(>=) (or left (not right))]
        [else
         (raise-user-error who "unsupported ordered SQL predicate operator ~a" operator)])]
     [else
@@ -1365,6 +1405,38 @@
                               (predicate-matches-row? predicate row))
                             predicates))
     (attach-query-proofs entity row predicates)))
+
+;; ORDER BY on the Memory backend — parity with postgres-select-many, which
+;; passes the order clause through to SQL.  Before this helper the in-memory
+;; branch silently IGNORED `order p.field asc/desc` and returned rows in hash
+;; order (silent wrong values).  Semantics mirror PostgreSQL:
+;;   - stable sort (`sort` is stable) by the single order-clause field;
+;;   - ASC places NULLs last, DESC places NULLs first (PG defaults);
+;;   - newtype-wrapped values (PosixMillis, user newtypes — the GitHub #28
+;;     class) and Something(v) Maybe values compare by their unwrapped base;
+;;   - non-orderable values raise the same error as where-clause ordered
+;;     comparisons (via ordered-comparison-result).
+(define (in-memory-order-rows rows order)
+  (if (not order)
+      rows
+      (let* ([field (order-clause-field order)]
+             [asc?  (eq? (order-clause-direction order) 'asc)])
+        (sort rows
+              (lambda (a b)
+                (define va (row-field-ref a field))
+                (define vb (row-field-ref b field))
+                (cond
+                  ;; NULL placement: PG default is NULLS LAST for ASC,
+                  ;; NULLS FIRST for DESC.  Two NULLs keep original order.
+                  [(and (sql-null-value? va) (sql-null-value? vb)) #f]
+                  [(sql-null-value? va) (not asc?)]
+                  [(sql-null-value? vb) asc?]
+                  [else
+                   (let ([ua (unwrap-non-null va)]
+                         [ub (unwrap-non-null vb)])
+                     (if asc?
+                         (ordered-comparison-result field '< ua ub 'order-by)
+                         (ordered-comparison-result field '< ub ua 'order-by)))]))))))
 
 ;; Returns #t if the given row satisfies an inner join constraint.
 ;; We look up all rows in the join entity's in-memory store and check
@@ -2302,6 +2374,8 @@
                                  #:when (for/and ([j (in-list joins)])
                                           (in-memory-inner-join-matches? j row)))
                         row)]
+             ;; ORDER BY before OFFSET/LIMIT — SQL evaluation order.
+             [results (in-memory-order-rows results order)]
              [after-offset (if off (list-tail results (min (offset-clause-count off) (length results))) results)])
         (if lim (take after-offset (min (limit-clause-count lim) (length after-offset))) after-offset))))
 
@@ -2315,7 +2389,7 @@
   (define runtime (database-runtime-for-entity entity))
   (if runtime
       (postgres-select-one runtime entity predicates order)
-      (let ([matches (in-memory-select-many entity predicates)])
+      (let ([matches (in-memory-order-rows (in-memory-select-many entity predicates) order)])
         (and (pair? matches) (car matches)))))
 
 ;; COUNT(*) — returns an Int (exact number of matching rows).
@@ -2440,6 +2514,32 @@
                     distinct-count
                     (lambda () (tesl-money-currency (car monies)))))
 
+;; MAX/MIN over the Memory backend, shared by select-max and select-min.
+;; SQL aggregate semantics: NULL rows (a Maybe column's Nothing / sql-null)
+;; are ignored; all-NULL (or no rows) yields NULL (#f here).  Comparison
+;; happens on the UNWRAPPED base value — the GitHub #28 class: a newtype
+;; column (PosixMillis, a user `type Code = Int`, …) stores newtype-value
+;; structs, which Racket max/min reject with "expected: real?".  The stored
+;; value itself (wrapper intact) is returned, exactly like a `select` row
+;; field read, so the result still satisfies the declared newtype return type.
+;; operator is '> for MAX, '< for MIN.
+(define (in-memory-extreme who rows field operator)
+  (define candidates
+    (for*/list ([row (in-list rows)]
+                [v (in-value (row-field-ref row field))]
+                #:unless (or (not v) (sql-null-value? v)))
+      v))
+  (if (null? candidates)
+      #f
+      (for/fold ([best (car candidates)])
+                ([v (in-list (cdr candidates))])
+        (if (ordered-comparison-result field operator
+                                       (unwrap-non-null v)
+                                       (unwrap-non-null best)
+                                       who)
+            v
+            best))))
+
 ;; MAX(field) — returns the maximum value of a numeric field (or #f if no rows).
 (define (select-max field-accessor source . clauses)
   (require-capabilities! (list db-read))
@@ -2468,9 +2568,7 @@
             (lambda () (apply query-value (database-runtime-connection runtime) sql params))
             (lambda (_r) 1)))
         (if (and result (integer? result)) (inexact->exact result) result))
-      (let ([rows (in-memory-select-many entity predicates)])
-        (if (null? rows) #f
-            (apply max (map (lambda (row) (row-field-ref row field 0)) rows))))))
+      (in-memory-extreme 'select-max (in-memory-select-many entity predicates) field '>)))
 
 ;; MIN(field) — returns the minimum value of a numeric field (or #f if no rows).
 (define (select-min field-accessor source . clauses)
@@ -2500,9 +2598,7 @@
             (lambda () (apply query-value (database-runtime-connection runtime) sql params))
             (lambda (_r) 1)))
         (if (and result (integer? result)) (inexact->exact result) result))
-      (let ([rows (in-memory-select-many entity predicates)])
-        (if (null? rows) #f
-            (apply min (map (lambda (row) (row-field-ref row field 0)) rows))))))
+      (in-memory-extreme 'select-min (in-memory-select-many entity predicates) field '<)))
 
 
 
@@ -3062,8 +3158,9 @@
                    #:defaults ([schema-name.value #'"public"]))
         #:entities entity:id ...)
      #'(define database-name
-         (database-spec 'database-name
-                        'memory
-                        schema-name.value
-                        (list entity ...)
-                        #f))]))
+         (register-memory-database!
+          (database-spec 'database-name
+                         'memory
+                         schema-name.value
+                         (list entity ...)
+                         #f)))]))

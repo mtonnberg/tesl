@@ -64,7 +64,9 @@
  record-value
  record-value?
  record-value-type
+ record-value-identity
  record-value-fields
+ (struct-out type-ref)
  (struct-out field-access-spec)
  (struct-out adt-spec)
  (struct-out adt-variant-spec)
@@ -140,6 +142,7 @@
  tesl-codec-encode-field
  tesl-codec-decode-field
  tesl-decode-prim-field
+ jsexpr-required-field
  (for-syntax normalize-type-stx
              normalize-type-binding-stx
              normalize-type-return-stx))
@@ -2269,10 +2272,26 @@
 ;; got ~a <printed-v>".  This (pre-existing) text is reproduced verbatim.
 
 ;; Encoders: raw Tesl value -> jsexpr-compatible (raises on type mismatch).
+;;
+;; Newtype transparency (manual §11.6, matrix types/ctrl4 2026-07): a record
+;; field declared as a newtype (`type UserId = String`) holds a
+;; `newtype-value` at runtime, but its authored codec names the BASE codec
+;; (`id -> "id" with_codec stringCodec`).  `raw-value` deliberately does not
+;; unwrap newtypes (dot/.value and type predicates need the wrapper), so the
+;; prim encoders unwrap here — matching the generic walk
+;; (`runtime-value->jsexpr` line ~739) which has always encoded newtypes
+;; transparently.  Error text still prints the ORIGINAL value.
+(define (tesl-prim-encode-base v)
+  (let loop ([x (raw-value v)])
+    (if (newtype-value? x)
+        (loop (raw-value (newtype-value-value x)))
+        x)))
 (define (tesl-encode-prim-string v)
-  (if (string? (raw-value v)) (raw-value v) (error "expected String, got ~a" v)))
+  (define raw (tesl-prim-encode-base v))
+  (if (string? raw) raw (error "expected String, got ~a" v)))
 (define (tesl-encode-prim-int v)
-  (if (integer? (raw-value v)) (raw-value v) (error "expected Int, got ~a" v)))
+  (define raw (tesl-prim-encode-base v))
+  (if (integer? raw) raw (error "expected Int, got ~a" v)))
 ;; Int32: JS-safe 32-bit-bounded integer. Same wire shape as Int (a JSON number),
 ;; but the decode boundary REJECTS values outside [-2^31, 2^31) rather than
 ;; silently wrapping — mirroring int32? in tesl/int32.rkt (constants inlined here
@@ -2281,34 +2300,36 @@
 (define TESL-INT32-MAX (sub1 (expt 2 31)))
 (define (tesl-int32-in-range? n) (and (exact-integer? n) (>= n TESL-INT32-MIN) (<= n TESL-INT32-MAX)))
 (define (tesl-encode-prim-int32 v)
-  (define raw (raw-value v))
+  (define raw (tesl-prim-encode-base v))
   (if (tesl-int32-in-range? raw) raw (error "expected Int32 (in [-2^31, 2^31)), got ~a" v)))
 (define (tesl-encode-prim-bool v)
-  (if (boolean? (raw-value v)) (raw-value v) (error "expected Bool, got ~a" v)))
+  (define raw (tesl-prim-encode-base v))
+  (if (boolean? raw) raw (error "expected Bool, got ~a" v)))
 (define (tesl-encode-prim-float v)
-  (if (real? (raw-value v)) (raw-value v) (error "expected Float, got ~a" v)))
+  (define raw (tesl-prim-encode-base v))
+  (if (real? raw) raw (error "expected Float, got ~a" v)))
 (define (tesl-encode-prim-posix-millis v)
-  (define raw (raw-value v))
+  (define raw (tesl-prim-encode-base v))
   (if (integer? raw) raw (error "expected PosixMillis (integer), got ~a" v)))
 ;; Money encodes as its unconditional wire shape `{minorUnits, currency}` —
 ;; agent enrichment (display) is a boundary concern, never a codec one, so an
 ;; authored codec and the generic walk agree on the persisted/HTTP shape.
 (define (tesl-encode-prim-money v)
-  (define raw (raw-value v))
+  (define raw (tesl-prim-encode-base v))
   (if (tesl-money? raw)
       (hash 'minorUnits (tesl-money-minor-units raw)
             'currency (tesl-currency-code (tesl-money-currency raw)))
       (error "expected Money, got ~a" v)))
 (define (tesl-encode-prim-list v)
-  (define raw (raw-value v))
+  (define raw (tesl-prim-encode-base v))
   (if (list? raw) (map runtime-value->jsexpr raw) (error "expected List, got ~a" v)))
 (define (tesl-encode-prim-dict v)
-  (define raw (raw-value v))
+  (define raw (tesl-prim-encode-base v))
   (if (hash? raw)
       (for/hash ([(k item) (in-hash raw)]) (values k (runtime-value->jsexpr item)))
       (error "expected Dict, got ~a" v)))
 (define (tesl-encode-prim-set v)
-  (define raw (raw-value v))
+  (define raw (tesl-prim-encode-base v))
   (if (set? raw) (map runtime-value->jsexpr (set->list raw)) (error "expected Set, got ~a" v)))
 
 ;; Decoders: jsexpr-compatible -> raw value (raises on type mismatch).

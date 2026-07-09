@@ -256,10 +256,26 @@ let hint_for (m : module_form) ~(target_module : string) ~(expose_name : string)
 (** The guiding hint (and quickfix) for an unbound [name] in [m], or [None]
     when nothing anywhere is known to export it.  [local_index] comes from
     {!build_local_index} — pass the same lazy value for every error in one
-    module so the folder tree is scanned at most once. *)
-let suggest (m : module_form) ~(local_index : local_index) (name : string)
+    module so the folder tree is scanned at most once.
+
+    [for_type_position]: set for TYPE-position diagnostics (unbound type
+    names).  A config-only stdlib name (currency/timezone constructor, SI
+    quantity alias — {!Stdlib_config_names.rejected_in_type_position}) can
+    never become a legal type by importing its stdlib home module: applying
+    that fix lands straight on the type-position rejection — a guided dead
+    end.  For such names the stdlib sources are skipped and only the folder
+    tree is consulted (a sibling module exporting its own `type All` IS legal
+    — locally-imported names win the rejection).  Value-position suggestions
+    are unaffected. *)
+let suggest ?(for_type_position = false) (m : module_form)
+    ~(local_index : local_index) (name : string)
   : suggestion option =
-  match stdlib_modules_exporting name with
+  let stdlib_modules =
+    if for_type_position && Stdlib_config_names.is_rejected_in_type_position name
+    then []
+    else stdlib_modules_exporting name
+  in
+  match stdlib_modules with
   | [target_module] ->
     Some { sug_hint = hint_for m ~target_module ~expose_name:name;
            sug_fix  = build_fix m ~target_module ~expose_name:name }

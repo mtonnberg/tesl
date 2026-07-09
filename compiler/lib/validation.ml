@@ -24,6 +24,13 @@ type validation_error = Validation_common.validation_error
 
 let check_module (m : module_form) : validation_error list =
   let decls = m.decls in
+  (* 2026-07 matrix: validators whose metadata tables (entity columns, codec
+     target types, newtype→base, record proof-anns/invariants) were built from
+     LOCAL decls only get the merged list — local decls first (local-wins for
+     assoc lookups), imported TYPE-LIKE decls appended, exposing-filtered (see
+     load_imported_type_decls).  The harvest contains no walkable bodies, so
+     passes that iterate DFunc/DTest bodies validate exactly the same code. *)
+  let decls_with_imported_types = decls @ load_imported_type_decls m in
   let imported_funcs = load_imported_func_info m in
   let cap_map = build_local_cap_map decls @ load_imported_cap_map m in
   (* Module-level facts computed ONCE and threaded through the passes that would
@@ -52,7 +59,7 @@ let check_module (m : module_form) : validation_error list =
   @ (TCapability @: check_capability_cycles decls)
   @ (TProof @: check_check_fn_has_proof_return decls)
   @ (TDatabase @: check_entity_structure ~facts decls)
-  @ (TCodec @: check_capture_codec_types decls)
+  @ (TCodec @: check_capture_codec_types decls_with_imported_types)
   @ (TProof @: check_capture_proof_via ~facts decls)
   @ (TProof @: check_auth_proof_via ~facts decls)
   @ (TProof @: check_endpoint_proof_subject_binding decls)
@@ -69,17 +76,17 @@ let check_module (m : module_form) : validation_error list =
   @ (TTesting @: check_test_descriptions decls)
   @ (TStructural @: check_server_completeness ~extra_funcs:imported_funcs decls)
   @ (TDatabase @: check_sql_field_names ~facts decls)
-  @ (TCodec @: check_codec_target_types ~facts decls)
+  @ (TCodec @: check_codec_target_types ~facts decls_with_imported_types)
   @ (TCodec @: check_codec_proof_coverage ~facts decls)
   @ (TCodec @: check_codec_alt_completeness ~facts decls)
   @ (TCodec @: check_codec_field_types ~facts decls)
   @ (TProof @: check_call_site_proofs ~facts decls)
-  @ (TProof @: check_record_field_proof_construction ~facts decls)
+  @ (TProof @: check_record_field_proof_construction ~facts decls_with_imported_types)
   @ (TDatabase @: check_sql_where_clauses ~facts decls)
-  @ (TDatabase @: check_group_by_rules decls)
+  @ (TDatabase @: check_group_by_rules decls_with_imported_types)
   @ (TProof @: Proof_discharge.check_fn_return_proof_annotations ~facts decls)
   @ (TNaming @: check_circular_const_bindings decls)
-  @ (TProof @: check_ghost_witness_predicates ~facts decls)
+  @ (TProof @: check_ghost_witness_predicates ~facts decls_with_imported_types)
   @ (TProof @: check_filter_check_args ~facts decls)
   @ (TProof @: check_forall_consistency ~facts decls)
   @ (TProof @: check_fact_arg_types decls)

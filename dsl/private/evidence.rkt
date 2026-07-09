@@ -58,11 +58,18 @@
 
 ;; Base-layer raw-value: no environment lookup.
 ;; check-runtime.rkt provides an extended version with current-evidence-env support.
+;; packed-exists projects to its body: the checker types an exists-returning
+;; fn's result as the UNDERLYING type (the existential hides the witness NAMES,
+;; not the value), so value-position consumption (string ops, comparisons,
+;; interpolation) must see the body — mirroring prepare-response-value at the
+;; HTTP boundary.  Proof reasoning is unaffected: facts-of still returns '()
+;; for a packed value, so no fact can be minted from this projection.
 (: raw-value (-> Any Any))
 (define (raw-value value)
   (cond
     [(named-value? value) (named-value-value value)]
     [(check-ok? value) (check-ok-value value)]
+    [(packed-exists? value) (raw-value (packed-exists-body value))]
     [else value]))
 
 ;; Convert a Tesl value to its string representation for use in string

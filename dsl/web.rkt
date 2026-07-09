@@ -28,6 +28,7 @@
                   channel-spec?
                   channel-spec-name
                   channel-spec-listeners
+                  channel-for-name
                   start-pubsub-listen!)
          (only-in "../dsl/sql.rkt"
                   current-database-runtime
@@ -1954,10 +1955,24 @@
                   (or (not seg) (equal? seg p)))
                 route)))))
 
+;; Resolve an SSE route's channel slot to a live channel-spec.  The emitter
+;; writes the channel two ways:
+;;   - the DIRECT binding when the channel is declared in the emitting module
+;;     (byte-identical to the historical output), or
+;;   - the channel NAME as a quoted SYMBOL when it is declared in another
+;;     module (the issue-#41 name-wired class).  The sse-routes list is a
+;;     top-level define evaluated at module INSTANTIATION — a direct
+;;     channel-for-name call there could run before the declaring module
+;;     registers (when the declarer is the importing entrypoint), so the
+;;     symbol is resolved LAZILY here, at consumption time (first subscribe /
+;;     serve startup), when every require has long since instantiated.
+(define (resolve-sse-channel ch)
+  (if (symbol? ch) (channel-for-name ch) ch))
+
 (define (handle-sse-request route dsl-req)
   (define pattern    (first route))
   (define auth-fn    (second route))
-  (define channel-s  (third route))
+  (define channel-s  (resolve-sse-channel (third route)))
   ;; Issue #17: 4th element is the key-index (which path segment carries the
   ;; channel key, or #f = auth-only no-key channel); 5th is the list of
   ;; (index . validator) for EVERY declared `:param` capture check.
@@ -2038,7 +2053,7 @@
       (define schema (database-schema-name (database-runtime-database db-runtime)))
       (define channel-registry
         (for/hash ([route (in-list sse-routes)])
-          (define ch (third route))
+          (define ch (resolve-sse-channel (third route)))
           (values (channel-spec-name ch) ch)))
       (start-pubsub-listen! channel-registry db-runtime schema)))
 
@@ -2099,6 +2114,23 @@
      (define dsl-req (request->dsl-request req))
 
      ;; 1. SSE routes (long-lived streaming responses)
+     ;;
+     ;; METRIC CONTRACT (pinned by tests/otlp-metrics-test.rkt tier 5): SSE
+     ;; requests are deliberately EXCLUDED from http.server.request.duration.
+     ;; They are long-lived streams — one open EventSource "lasts" minutes to
+     ;; hours, so recording its lifetime would poison every percentile of a
+     ;; histogram whose other samples are millisecond API calls.  The SSE
+     ;; route table is matched here, BEFORE dispatch-request (the histogram's
+     ;; only matched-request recording site), and neither handle-sse-request
+     ;; nor stream teardown records it, so the exclusion holds on accept,
+     ;; while streaming, and at disconnect.  SSE traffic has its own catalog
+     ;; entries instead: tesl.sse.connections.active (per-channel gauge —
+     ;; the "active requests" signal for streams) and
+     ;; tesl.sse.events.sent/dropped (counters).  There is no separate
+     ;; http.server.request counter in the catalog (the histogram's count
+     ;; doubles as it), so excluding SSE here excludes it from request
+     ;; counts too — by design: stream connects are connection-lifecycle
+     ;; events, visible in the gauge, not request-shaped work.
      (define sse-match (find-sse-match sse-routes dsl-req))
      (cond
        [sse-match

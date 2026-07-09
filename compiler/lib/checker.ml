@@ -953,6 +953,36 @@ let load_imported_func_kinds (m : module_form) : (string * func_kind) list =
           ) imported.decls
   ) m.imports
 
+(** Exposing-imported plain-name function DECLS from directly imported local
+    modules — the resolution set an Agent `tools:` list / a standalone
+    `asTool fn` may reference beyond [m.decls].  Mirrors
+    [load_imported_func_kinds]'s scope rules for PLAIN names (ImportExposing
+    only — ImportAll brings no plain fn names into scope; MainKind excluded)
+    but returns the full decl so the AGENT-1 parameter rules can run on an
+    imported tool fn.  The per-path parse is memoized by
+    [parse_local_import_module]. *)
+let load_imported_func_decls (m : module_form) : (string * func_decl) list =
+  let is_tesl_module name =
+    String.length name >= 5 && String.sub name 0 5 = "Tesl."
+  in
+  List.concat_map (fun (imp : import_decl) ->
+    if is_tesl_module imp.module_name then []
+    else
+      let path = resolve_local_import_path m.source_file imp.module_name in
+      match parse_local_import_module path with
+      | None | Some (Err _) -> []
+      | Some (Ok imported) ->
+        (match imp.names with
+         | ImportAll -> []
+         | ImportExposing names ->
+           List.filter_map (function
+             | DFunc (fd : func_decl)
+               when fd.kind <> MainKind && List.mem fd.name names ->
+               Some (fd.name, fd)
+             | _ -> None
+           ) imported.decls)
+  ) m.imports
+
 let load_imported_func_sigs (m : module_form) : (string * scheme) list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
@@ -1209,6 +1239,39 @@ let load_imported_records (m : module_form) : (string * record_def) list =
                   List.map (fun (f : field_def) -> (f.name, ty_of_type_expr f.type_expr))
                     e.fields } in
             (qualify e.name, rd) :: (if wants e.name then [(e.name, rd)] else [])
+          | _ -> []
+        ) imported.decls
+  ) m.imports
+
+(* decodeAs cross-module (matrix codec/decodeas): the fromJson-codec table
+   [ctx.codec_decode_types] was built from LOCAL DCodec decls only, so
+   `decodeAs "Simple" j` in a module importing `Simple` from the module that
+   DECLARES its codec was falsely rejected ("target type has no fromJson
+   codec") — while the runtime registry is process-global and provably decodes
+   (lib.rkt registers its codec on load).  Harvest imported non-forbidden
+   fromJson codecs, scope-accurately like [load_imported_records]: the bare
+   type name only when the import brings that TYPE into scope, the
+   module-qualified name always (a qualified type reference is legal after any
+   import). *)
+let load_imported_codec_decode_types (m : module_form) : string list =
+  let is_tesl_module name =
+    String.length name >= 5 && String.sub name 0 5 = "Tesl."
+  in
+  List.concat_map (fun (imp : import_decl) ->
+    if is_tesl_module imp.module_name then []
+    else
+      let path = resolve_local_import_path m.source_file imp.module_name in
+      match parse_local_import_module path with
+      | None | Some (Err _) -> []
+      | Some (Ok imported) ->
+        let wants name = match imp.names with
+          | ImportAll -> true
+          | ImportExposing names -> List.mem name names
+        in
+        List.concat_map (function
+          | DCodec (cf : codec_form) when cf.from_json <> FromJsonForbidden ->
+            (imp.module_name ^ "." ^ cf.type_name)
+            :: (if wants cf.type_name then [cf.type_name] else [])
           | _ -> []
         ) imported.decls
   ) m.imports
@@ -1730,14 +1793,14 @@ let rec query_spine_atoms e =
      | _ -> base :: args)
   | other -> [other]
 
-let rec classify_lowered_query e =
+let rec classify_lowered_query ctx e =
   match e with
   | EBinop { op = (BEq | BNeq | BLt | BLe | BGt | BGe); left; _ } ->
-    classify_lowered_query left
+    classify_lowered_query ctx left
   | EBinop { op = (BAnd | BOr | BAdd); left; right; _ } ->
-    (match classify_lowered_query left with
+    (match classify_lowered_query ctx left with
      | Some ty -> Some ty
-     | None -> classify_lowered_query right)
+     | None -> classify_lowered_query ctx right)
   | _ ->
     let (base_fn, args) = flatten_app_expr [] e in
     match base_fn with
@@ -1746,7 +1809,14 @@ let rec classify_lowered_query e =
     | EVar { name = "selectCount"; _ } -> Some t_int
     | EVar { name = "selectSum"; _ }
     | EVar { name = "selectMax"; _ }
-    | EVar { name = "selectMin"; _ } -> Some t_int  (* field type refined in infer_expr *)
+    | EVar { name = "selectMin"; _ } ->
+      (* Aggregate + where lowering: refine by the queried FIELD's declared type
+         exactly like the plain (non-where) path — a `selectSum l.price … where …`
+         over a Money column is Money, over a newtype column that newtype.
+         Previously hardcoded t_int, so the correct `-> Money` annotation was
+         REJECTED ("cannot unify Int with Money") while the checker-demanded
+         `-> Int` then trapped at runtime (the runtime value really is Money). *)
+      Some (select_aggregate_field_type ctx args)
     | EVar { name = ("selectCountBy" | "selectSumBy"); _ } ->
       (* grouped aggregates (GitHub #29): List (Tuple2 K V); K/V are refined by
          [grouped_query_type] at the infer sites (needs ctx + the FULL expr) *)
@@ -1762,7 +1832,7 @@ let rec classify_lowered_query e =
          Only recurse when we actually peeled at least one EApp layer (args <> []);
          otherwise base_fn == e and we'd loop infinitely. *)
       if args = [] then None
-      else classify_lowered_query base_fn
+      else classify_lowered_query ctx base_fn
 
 (* Decide-by-resolution for `decodeAs`: the runtime type read is driven by the
    resolved RESULT type, so the literal type-name string must agree with it and
@@ -2149,6 +2219,24 @@ let rec infer_expr ctx (e : expr) : ty =
       "`humanActions` cannot be passed around as a value — apply it directly to a \
        server and an authenticated user: `humanActions MyServer user`";
     t_list t_tool
+
+  (* Explicit `startWorkers X` / `startDeadWorkers X` statements: a workers
+     binding is a name-wired, module-local alist with NO process-wide registry
+     entry (unlike queues/caches/emails/channels), so a worker start can never
+     resolve cross-module.  Replace the generic unknown-name error with the
+     clear class message; the guard keeps a user-defined `fn startWorkers`
+     callable.  (The statement parses as a bare [EVar] head — statement-starter
+     idents are never application heads — so the intercept is on the EVar.) *)
+  | EVar { name = ("startWorkers" | "startDeadWorkers") as sw; loc }
+    when lookup_name ctx sw = None
+         && not (List.mem_assoc sw ctx.ctors) ->
+    add_error ctx loc
+      (Printf.sprintf
+         "`%s` cannot start workers here — workers can only be started in the \
+          module that declares the queue. Declare the queue's jobs in its \
+          `jobs:` list and activate the queue via the `queues:` list of \
+          `main() -> App` in the declaring module." sw);
+    t_unit
 
   | EVar { name; loc } ->
     (match lookup_name ctx name with
@@ -2557,7 +2645,7 @@ let rec infer_expr ctx (e : expr) : ty =
         (match grouped_query_type app with
          | Some ty -> record_sql_operand_field_accesses ctx base_fn; ty
          | None ->
-        match classify_lowered_query base_fn with
+        match classify_lowered_query ctx base_fn with
          | Some ty -> record_sql_operand_field_accesses ctx base_fn; ty
          | None ->
            let check_fns = flatten_check_chain_expr [] base_fn in
@@ -2640,7 +2728,7 @@ let rec infer_expr ctx (e : expr) : ty =
         (match grouped_query_type app with
          | Some ty -> record_sql_operand_field_accesses ctx base_fn; ty
          | None ->
-         match classify_lowered_query base_fn with
+         match classify_lowered_query ctx base_fn with
          | Some ty -> record_sql_operand_field_accesses ctx base_fn; ty
          | None -> infer_direct_call base_fn args)
      | EConstructor { name; _ }
@@ -2704,7 +2792,7 @@ let rec infer_expr ctx (e : expr) : ty =
     (match grouped_query_type binop with
      | Some ty -> record_sql_operand_field_accesses ctx binop; ty
      | None ->
-    match classify_lowered_query binop with
+    match classify_lowered_query ctx binop with
      | Some ty -> record_sql_operand_field_accesses ctx binop; ty
      | None ->
        let rec infer_check_chain_value = function
@@ -2780,6 +2868,10 @@ let rec infer_expr ctx (e : expr) : ty =
       | "Either"       -> Some ["Left"; "Right"]
       | "Result"       -> Some ["Ok"; "Err"]
       | "DeleteResult" -> Some ["NoRowDeleted"; "RowsDeleted"]
+      (* Tesl.Email's EmailBody is a real stdlib ADT (tesl/email.rkt); seeding
+         its variants makes exhaustive matches recognized as such (2026-07
+         matrix email-cache: all-3-arm case was flagged non-exhaustive). *)
+      | "EmailBody"    -> Some ["TextBody"; "HtmlBody"; "RichBody"]
       | _              -> None
     in
     let all_ctors_for_type type_name =
@@ -4552,9 +4644,187 @@ let check_local_import_names (m : module_form) : type_error list =
              ) names)
   ) m.imports
 
-(** Collect all type names that are explicitly in scope for this module:
-    locally-defined types + types brought in via import …exposing. *)
-let collect_in_scope_type_names (m : module_form) : string list =
+(* ── Export locality ────────────────────────────────────────────────────────
+   A module may export ONLY names it declares locally — re-export was removed
+   2026-07 (along with the `library` feature).  This is a pure function of the
+   module's own decls, plus its imports for the GUIDED variant of the message:
+   when the non-local exposed name is actually IMPORTED, the error names the
+   true declaring module and the import line consumers should write instead.
+
+   Shared by [check_module_with_metadata] (own-module `--check` / emit) and
+   the whole-program dependency walk in [Compile.cross_module_diags], so a
+   `--check <entrypoint>` rejects an illegal re-export anywhere in the import
+   graph — not only when the offending module is checked directly (the
+   2026-07-08 multi-module audit's check-passes/emit-fails class). *)
+let export_locality_errors (m : module_form) : type_error list =
+  let is_tesl_module name =
+    String.length name >= 5 && String.sub name 0 5 = "Tesl."
+  in
+  let strip_dotdot s =
+    let n = String.length s in
+    if n > 4 && String.sub s (n-4) 4 = "(..)" then String.sub s 0 (n-4) else s
+  in
+  (* Names DECLARED by this module.  Deliberately excludes imported and
+     builtin constructors: `exposing` a name that merely arrived via an import
+     (including a ctor pulled in by `Type(..)`) is a re-export, and the emit
+     side never defines it locally. *)
+  let decl_names = List.concat_map (function
+    | DFunc fd -> [fd.name]
+    | DConst c -> [c.name]
+    | DType (TypeAdt { name; variants; _ }) ->
+      name :: List.map (fun (v : Ast.adt_variant) -> v.ctor) variants
+    | DType (TypeNewtype { name; _ }) | DType (TypeAlias { name; _ }) -> [name]
+    | DRecord r -> [r.name]
+    | DEntity e -> [e.name]
+    | DDatabase db -> [db.name]
+    | DApi api -> [api.name]
+    | DServer srv -> [srv.name]
+    | DAgent a -> [a.name]
+    | DQueue q -> [q.name]
+    | DChannel ch -> [ch.name]
+    (* cache / email names are exportable like queue / channel names: the
+       emitted define-cache / define-email is a plain module-level binding, so
+       `module Lib exposing [C]` provides it and an importer's
+       `import Lib exposing [C]` require-binds it (issue-#41 class — the
+       declared-in-lib-used-in-main direction). *)
+    | DCache c -> [c.name]
+    | DEmail e -> [e.name]
+    | DCapability cap -> [cap.name]
+    | DFact f -> [f.name]
+    | DWorkers w -> [w.name]
+    | _ -> []
+  ) m.decls in
+  (* Proof predicates declared by check/auth/establish functions. *)
+  let predicate_names = List.concat_map (function
+    | DFunc fd when is_proof_introducing_kind fd.kind ->
+      let collect_pred = function
+        | RetPlain { ty = TApp { head = TName { name = "Fact"; _ }; arg; _ }; _ } ->
+          (match arg with
+           | TApp { head = TName { name; _ }; _ } -> [name]
+           | TName { name; _ } -> [name]
+           | _ -> [])
+        | RetPlain { ty = TApp { head = TName { name = "Maybe"; _ };
+                                  arg = TApp { head = TName { name = "Fact"; _ }; arg = inner; _ }; _ }; _ } ->
+          (match inner with
+           | TApp { head = TName { name; _ }; _ } -> [name]
+           | TName { name; _ } -> [name]
+           | _ -> [])
+        | RetAttached { binding = b; _ } ->
+          (match b.proof_ann with
+           | Some (PredApp { pred; _ }) -> [pred]
+           | Some (PredAnd _) -> []  (* conjunction — collect individually if needed *)
+           | _ -> [])
+        | RetNamedPack { entity_proof; other_proof; _ } ->
+          let pred_of_opt = function
+            | None -> []
+            | Some (PredApp { pred; _ }) -> [pred]
+            | Some (PredAnd _) -> []
+          in
+          pred_of_opt entity_proof @ pred_of_opt other_proof
+        | RetForAll { proof = PredApp { pred; _ }; _ }
+        | RetMaybeForAll { proof = PredApp { pred; _ }; _ }
+        | RetSetForAll { proof = PredApp { pred; _ }; _ }
+        | RetMaybeSetForAll { proof = PredApp { pred; _ }; _ }
+        | RetForAllDictValues { proof = PredApp { pred; _ }; _ }
+        | RetForAllDictKeys   { proof = PredApp { pred; _ }; _ } -> [pred]
+        | RetMaybeAttached { binding = b; _ } ->
+          (match b.proof_ann with
+           | Some (PredApp { pred; _ }) -> [pred]
+           | Some (PredAnd _) -> []
+           | _ -> [])
+        | _ -> []
+      in
+      collect_pred fd.return_spec
+    | _ -> []
+  ) m.decls in
+  (* Which import (if any) brings exposed name [n] into scope?  Used only to
+     upgrade the generic non-local message into the guided re-export one. *)
+  let import_origin_of (n : string) : string option =
+    List.find_map (fun (imp : import_decl) ->
+      match imp.names with
+      | ImportExposing names when List.exists (fun raw -> strip_dotdot raw = n) names ->
+        Some imp.module_name
+      | ImportExposing names when not (is_tesl_module imp.module_name) ->
+        (* n may be a constructor pulled in via `Type(..)`. *)
+        let dd_types =
+          List.filter_map (fun raw ->
+            let base = strip_dotdot raw in
+            if base <> raw then Some base else None
+          ) names
+        in
+        if dd_types = [] then None
+        else
+          let path = resolve_local_import_path m.source_file imp.module_name in
+          (match parse_local_import_module path with
+           | Some (Ok im) ->
+             if List.exists (function
+                  | DType (TypeAdt { name; variants; _ }) ->
+                    List.mem name dd_types
+                    && List.exists (fun (v : Ast.adt_variant) -> v.ctor = n) variants
+                  | _ -> false
+                ) im.decls
+             then Some imp.module_name else None
+           | _ -> None)
+      | ImportAll when not (is_tesl_module imp.module_name) ->
+        let path = resolve_local_import_path m.source_file imp.module_name in
+        (match parse_local_import_module path with
+         | Some (Ok im) ->
+           if List.exists (function ExportName e | ExportAdt e -> e = n) im.exports
+           then Some imp.module_name else None
+         | _ -> None)
+      | _ -> None
+    ) m.imports
+  in
+  let all_known_names = decl_names @ predicate_names in
+  let seen_exports : (string, Location.loc) Hashtbl.t = Hashtbl.create 16 in
+  List.concat_map (fun export ->
+    let n = match export with ExportName n | ExportAdt n -> n in
+    let duplicate_error =
+      match Hashtbl.find_opt seen_exports n with
+      | Some first_loc ->
+        [ { loc = Location.dummy_loc m.source_file;
+            message = Printf.sprintf
+              "module exposes duplicate name `%s` (first declared for export at line %d)"
+              n (first_loc.start.line + 1); fix = None } ]
+      | None ->
+        Hashtbl.replace seen_exports n (Location.dummy_loc m.source_file);
+        []
+    in
+    let unknown_error =
+      if List.mem n all_known_names then []
+      else
+        let message =
+          match import_origin_of n with
+          | Some origin ->
+            (* Preserve the (..) shape in the consumer hint for ADT exports. *)
+            let hint_name =
+              match export with ExportAdt _ -> n ^ "(..)" | ExportName _ -> n in
+            Printf.sprintf
+              "module exposes `%s`, but only locally-defined names can be \
+               exported — `%s` is imported from `%s`, not declared here \
+               (re-export is not supported). Remove `%s` from this exposing \
+               list; consumers should `import %s exposing [%s]` directly."
+              n n origin n origin hint_name
+          | None ->
+            Printf.sprintf "module exposes unknown or non-local name `%s` \
+                            (only locally-defined names can be exported)" n
+        in
+        [ { loc = Location.dummy_loc m.source_file; message; fix = None } ]
+    in
+    duplicate_error @ unknown_error
+  ) m.exports
+
+(** Type names in scope for this module, split by PROVENANCE:
+    - [fst]: locally bound — declared in this module or imported from a LOCAL
+      (non-Tesl) module.  These are names the user owns; they may shadow
+      config-only stdlib names (the corpus relies on `type Email = String`,
+      `record Fixed { … }`, …).
+    - [snd]: brought into scope by a `Tesl.*` import (exposing list or the
+      ImportAll export-set expansion).
+    The split feeds [check_type_names_in_scope]'s rejection of config-only
+    stdlib names in type positions: rejection fires ONLY when the name is not
+    locally bound, so local shadowing always wins. *)
+let collect_scope_type_names_split (m : module_form) : string list * string list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
   in
@@ -4572,27 +4842,39 @@ let collect_in_scope_type_names (m : module_form) : string list =
     | DAgent { name; _ } -> Some name
     | _ -> None
   ) m.decls in
-  let imported = List.concat_map (fun (imp : import_decl) ->
-    match imp.names with
-    | ImportAll ->
-      if is_tesl_module imp.module_name then
-        (match Type_system.tesl_module_export_set imp.module_name with
-         | None -> []
-         | Some exports -> exports)
-      else
-        let path = resolve_local_import_path m.source_file imp.module_name in
-        (match parse_local_import_module path with
-           | None | Some (Err _) -> []
-           | Some (Ok imp_m) ->
-             List.filter_map (function
-               | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
-               | DType (TypeAlias { name; _ }) | DRecord { name; _ }
-               | DFact { name; _ } -> Some name
-               | _ -> None
-             ) imp_m.decls)
-    | ImportExposing names -> List.map strip_dotdot names
-  ) m.imports in
-  always_in_scope @ local_types @ imported
+  let (local_imported, tesl_imported) =
+    List.fold_left (fun (locals, tesls) (imp : import_decl) ->
+      match imp.names with
+      | ImportAll ->
+        if is_tesl_module imp.module_name then
+          (match Type_system.tesl_module_export_set imp.module_name with
+           | None -> (locals, tesls)
+           | Some exports -> (locals, exports @ tesls))
+        else
+          let path = resolve_local_import_path m.source_file imp.module_name in
+          (match parse_local_import_module path with
+             | None | Some (Err _) -> (locals, tesls)
+             | Some (Ok imp_m) ->
+               let names = List.filter_map (function
+                 | DType (TypeAdt { name; _ }) | DType (TypeNewtype { name; _ })
+                 | DType (TypeAlias { name; _ }) | DRecord { name; _ }
+                 | DFact { name; _ } -> Some name
+                 | _ -> None
+               ) imp_m.decls in
+               (names @ locals, tesls))
+      | ImportExposing names ->
+        let names = List.map strip_dotdot names in
+        if is_tesl_module imp.module_name then (locals, names @ tesls)
+        else (names @ locals, tesls)
+    ) ([], []) m.imports
+  in
+  (always_in_scope @ local_types @ local_imported, tesl_imported)
+
+(** Collect all type names that are explicitly in scope for this module:
+    locally-defined types + types brought in via import …exposing. *)
+let collect_in_scope_type_names (m : module_form) : string list =
+  let (locally_bound, stdlib_imported) = collect_scope_type_names_split m in
+  locally_bound @ stdlib_imported
 
 (** Extract all (name, loc) pairs from TName nodes in a type_expr. *)
 let rec type_names_of_type_expr (te : type_expr) : (string * Location.loc) list =
@@ -4625,15 +4907,85 @@ let type_names_of_return_spec (rs : return_spec) : (string * Location.loc) list 
   in
   go rs
 
+(** Category-specific error for a config-only stdlib name used in a TYPE
+    position (multi-module audit 2026-07: every such name typechecked in every
+    type position, then emitted as an unbound Racket identifier that
+    normalize-type-identifier keys to the EMITTING file — silent per-file
+    nominal types same-file, define-server type-ref mismatch cross-module).
+    [name] is guaranteed ∈ {!Stdlib_config_names.rejected_in_type_position}.
+    [replacement_in_scope] gates the TimeZone/Currency quickfix on the
+    replacement type actually being importable-visible, so an applied fix
+    never trades this error for a fresh not-in-scope one. *)
+let config_only_type_position_error ~(replacement_in_scope : string -> bool)
+    (name : string) (loc : Location.loc) : type_error =
+  let config_block_usage = [
+    ("Database",           "a `database NAME = Database { … }` declaration");
+    ("PostgresConfig",     "the `backend: Postgres (PostgresConfig { … })` field of a `database` declaration");
+    ("Queue",              "a `queue NAME = Queue { … }` declaration");
+    ("QueueRetryStrategy", "the `retry: QueueRetryStrategy { … }` field of a `queue` declaration");
+    ("QueueRetryConfig",   "the retry configuration of a `queue` declaration");
+    ("Email",              "an `email NAME = Email { … }` declaration");
+    ("SmtpConfig",         "the `smtp: SmtpConfig { … }` field of an `email` declaration");
+    ("SseChannel",         "an `sseChannel NAME(…) = SseChannel { … }` declaration");
+    ("App",                "the `main() -> App` entrypoint (only `main` may return `App`)");
+    ("Job",                "the `jobs: [Job …]` list of a `queue` declaration");
+    ("Cache",              "a `cache NAME = Cache { … }` declaration");
+  ] in
+  let ctor_fix replacement =
+    if replacement_in_scope replacement then
+      Some (Diag_fix.Replace_range {
+        start_line = loc.start.line; start_col = loc.start.col;
+        end_line = loc.stop.line; end_col = loc.stop.col;
+        replacement })
+    else None
+  in
+  match List.assoc_opt name config_block_usage with
+  | Some usage ->
+    { loc; fix = None;
+      message = Printf.sprintf
+        "`%s` is a config-only stdlib name: it configures %s and is not a \
+         data type, so it cannot be used as a parameter, return, field, or \
+         endpoint type." name usage }
+  | None ->
+    (match List.assoc_opt name Stdlib_config_names.config_ctor_owner with
+     | Some owner ->
+       { loc; fix = None;
+         message = Printf.sprintf
+           "`%s` is a config-block constructor (of `%s`) consumed at compile \
+            time, not a data type; it cannot appear in a type position."
+           name owner }
+     | None ->
+       if List.mem name Stdlib_config_names.config_adts_and_ctors then
+         { loc; fix = None;
+           message = Printf.sprintf
+             "`%s` is a config-block type consumed at compile time, not a \
+              data type; it cannot appear in a type position." name }
+       else if List.mem name Stdlib_config_names.currency_ctors then
+         { loc; fix = ctor_fix "Currency";
+           message = Printf.sprintf
+             "`%s` is a `Currency` constructor, not a type; annotate with \
+              `Currency` (import Tesl.Money exposing [Currency])." name }
+       else
+         { loc; fix = ctor_fix "TimeZone";
+           message = Printf.sprintf
+             "`%s` is a `TimeZone` constructor, not a type; annotate with \
+              `TimeZone` (import Tesl.Time exposing [TimeZone])." name })
+
 (** Hint about where to import a type from. *)
 (** Validate that every type name used in declarations is explicitly in scope.
     [suggest] (E1) resolves an out-of-scope name to the import that would bind
     it — every stdlib export plus sibling modules in the folder tree — and
     carries the LSP quickfix.  (Generalizes the old hardcoded 17-name
-    `import_hint` list to the whole {!Type_system.tesl_module_exports} table.) *)
+    `import_hint` list to the whole {!Type_system.tesl_module_exports} table.)
+    Additionally REJECTS config-only stdlib names
+    ({!Stdlib_config_names.rejected_in_type_position}) in type positions
+    unless locally bound — local shadows (`type Email = String`,
+    `record Fixed { … }`, non-Tesl module imports) win; `main() -> App` stays
+    exempt because MainKind return specs are skipped below. *)
 let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion option)
     (m : module_form) : type_error list =
-  let in_scope = collect_in_scope_type_names m in
+  let (locally_bound, stdlib_imported) = collect_scope_type_names_split m in
+  let in_scope = locally_bound @ stdlib_imported in
   (* A name is ok if: in scope, or qualified (contains '.'), or type-variable (lowercase) *)
   let is_ok name =
     List.mem name in_scope
@@ -4641,7 +4993,16 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
     || (String.length name > 0 && Char.lowercase_ascii name.[0] = name.[0])
   in
   let make_err (name, loc) =
-    if is_ok name then None
+    if is_ok name then
+      (* In scope — but a config-only stdlib name is only a TYPE by lexical
+         accident of the exposing list; using it in a type position emits an
+         unbound identifier.  Reject unless the user locally owns the name. *)
+      if Stdlib_config_names.is_rejected_in_type_position name
+         && not (List.mem name locally_bound)
+      then
+        Some (config_only_type_position_error
+                ~replacement_in_scope:(fun r -> List.mem r in_scope) name loc)
+      else None
     else
       let hint, fix = match suggest name with
         | Some (s : Import_suggest.suggestion) -> s.sug_hint, s.sug_fix
@@ -4671,6 +5032,125 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
   in
   let check_te te = List.filter_map make_err (type_names_of_type_expr te) @ check_tuple_arities te in
   let check_rs rs = List.filter_map make_err (type_names_of_return_spec rs) in
+  (* ENDPOINT-only rejection of real data types that cannot cross the HTTP
+     boundary (2026-07 matrix email-cache/emailbody-endpoint): `EmailBody` is a
+     legitimate type in fn params/returns and record fields, but it has no JSON
+     codec — as an endpoint body type every request 400s (no decoder), as an
+     endpoint return type every response 500s.  Reject at CHECK time, only in
+     endpoint positions; a locally-declared same-named type wins. *)
+  let non_wire_stdlib_types = [ "EmailBody" ] in
+  (* Item 10 (review 2026-07-09): the name-level rejection alone missed NESTED
+     exposure — a wire-positioned record whose field (transitively) carries
+     EmailBody passed check and serialized garbage at runtime (the generic
+     jsexpr walk turns the tagged list into ["TextBody", …]).  Build a
+     name → fields table over local + transitively imported decls (records,
+     entities, ADT variant fields, newtype/alias bases) and reject any wire
+     position from which EmailBody is reachable, naming the offending path.
+     Lazy: the import closure is only parsed when a wire-positioned name
+     actually resolves to a walkable decl. *)
+  let wire_field_table : (string * (string * type_expr) list) list Lazy.t =
+    lazy begin
+      let is_tesl_module name =
+        String.length name >= 5 && String.sub name 0 5 = "Tesl." in
+      let decls_of (dm : module_form) =
+        List.concat_map (function
+          | DRecord rd ->
+            [ (rd.name,
+               List.map (fun (f : field_def) -> (f.name, f.type_expr)) rd.fields) ]
+          | DEntity e ->
+            [ (e.name,
+               List.map (fun (f : field_def) -> (f.name, f.type_expr)) e.fields) ]
+          | DType (TypeAdt { name; variants; _ }) ->
+            [ (name,
+               List.concat_map (fun (v : adt_variant) ->
+                 List.map (fun (f : field_def) -> (f.name, f.type_expr)) v.fields)
+                 variants) ]
+          | DType (TypeNewtype { name; base_type; _ })
+          | DType (TypeAlias { name; base_type; _ }) ->
+            [ (name, [ ("", base_type) ]) ]
+          | _ -> []
+        ) dm.decls
+      in
+      (* Cycle guard on CANONICAL paths (the item-19 lesson: raw resolved
+         spellings differ per importing module); the entry is pre-marked. *)
+      let canon p = try Unix.realpath p with _ -> p in
+      let visited : (string, unit) Hashtbl.t = Hashtbl.create 8 in
+      Hashtbl.replace visited (canon m.source_file) ();
+      let acc = ref (decls_of m) in
+      let rec walk (dm : module_form) =
+        List.iter (fun (imp : import_decl) ->
+          if not (is_tesl_module imp.module_name) then begin
+            let path = resolve_local_import_path dm.source_file imp.module_name in
+            let c = canon path in
+            if not (Hashtbl.mem visited c) then begin
+              Hashtbl.replace visited c ();
+              match parse_local_import_module path with
+              | None | Some (Err _) -> ()
+              | Some (Ok dep) -> acc := !acc @ decls_of dep; walk dep
+            end
+          end
+        ) dm.imports
+      in
+      walk m;
+      !acc
+    end
+  in
+  (* Path of `Owner.field` segments from [root] to a field whose type mentions
+     the stdlib EmailBody, or [None].  A name that RESOLVES in the table is
+     the user's own type (local decls come first, so local shadows win) and is
+     recursed into; only an unresolvable `EmailBody` is the stdlib one. *)
+  let find_wire_email_path (root : string) : string list option =
+    let table = Lazy.force wire_field_table in
+    let stdlib_email_body n =
+      n = "EmailBody" && not (List.mem n locally_bound)
+      && List.assoc_opt n table = None
+    in
+    let visiting : (string, unit) Hashtbl.t = Hashtbl.create 8 in
+    let rec go name : string list option =
+      if Hashtbl.mem visiting name then None
+      else begin
+        Hashtbl.replace visiting name ();
+        match List.assoc_opt name table with
+        | None -> None
+        | Some fields ->
+          List.find_map (fun (fname, fte) ->
+            let seg =
+              if fname = "" then Printf.sprintf "`%s`" name
+              else Printf.sprintf "`%s.%s`" name fname
+            in
+            let names = List.map fst (type_names_of_type_expr fte) in
+            if List.exists stdlib_email_body names then Some [ seg ]
+            else
+              List.find_map (fun n ->
+                Option.map (fun path -> seg :: path) (go n)
+              ) names
+          ) fields
+      end
+    in
+    go root
+  in
+  let make_wire_err (name, loc) =
+    if List.mem name non_wire_stdlib_types && not (List.mem name locally_bound)
+    then
+      Some { loc; fix = None;
+             message = Printf.sprintf
+               "`%s` cannot cross the HTTP boundary: it has no JSON codec — \
+                construct it server-side and use a wire type (record/ADT with \
+                a codec) in the endpoint signature instead." name }
+    else
+      match find_wire_email_path name with
+      | Some path ->
+        Some { loc; fix = None;
+               message = Printf.sprintf
+                 "`%s` cannot cross the HTTP boundary: %s is `EmailBody`, \
+                  which has no JSON codec — construct the `EmailBody` \
+                  server-side and keep it out of wire-visible types \
+                  (endpoint bodies/returns, sseChannel payloads, queue job \
+                  records)." name (String.concat " → " path) }
+      | None -> None
+  in
+  let check_wire_te te = List.filter_map make_wire_err (type_names_of_type_expr te) in
+  let check_wire_rs rs = List.filter_map make_wire_err (type_names_of_return_spec rs) in
   List.concat_map (function
     | DFunc fd ->
       List.concat_map (fun (b : binding) -> check_te b.type_expr) fd.params
@@ -4699,17 +5179,121 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
         (* Skip return-spec check when no explicit `->` was written (default Unit),
            and for SSE (no return spec at all). *)
         (match ep_return_spec_opt ep with
-         | Some rs when ep_has_explicit_return ep -> check_rs rs | _ -> [])
+         | Some rs when ep_has_explicit_return ep ->
+           check_rs rs @ check_wire_rs rs
+         | _ -> [])
         @ (match ep.auth with Some a -> check_te a.binding.type_expr | None -> [])
         @ List.concat_map (fun (c : api_capture) -> check_te c.binding.type_expr) ep.captures
-        @ (match ep_body ep with Some b -> check_te b.type_expr | None -> [])
+        @ (match ep_body ep with
+           | Some b -> check_te b.type_expr @ check_wire_te b.type_expr
+           | None -> [])
       ) af.endpoints
     | DFact ff ->
       List.concat_map (fun (b : binding) -> check_te b.type_expr) ff.params
     | DCapture cf ->
       check_te cf.binding.type_expr
+    (* Item 10: sseChannel payloads and queue job records are wire positions
+       too (SSE JSON / PG-persisted job store) — same EmailBody rejection.
+       Only the WIRE walk runs here; the general scope check for these decls
+       is unchanged (validated elsewhere). *)
+    | DChannel ch ->
+      (* [Desugar.channel_payload_type]: the typed `= SseChannel { … }` form
+         still carries its payload in [config_expr] at check time. *)
+      check_wire_te (Desugar.channel_payload_type ch)
+    | DQueue q ->
+      List.concat_map (fun jt -> List.filter_map make_wire_err [ (jt, q.loc) ])
+        (Desugar.queue_job_types q)
     | _ -> []
   ) m.decls
+
+(** Sibling of the type-position rejection, for EXPRESSION positions: the
+    config-block constructors [config_stdlib_seed] seeds (`Postgres`/`Memory`/
+    `TcpConnection`/`SocketConnection`/`Exponential`/`Fixed`/`Linear`) are only
+    legal INSIDE the config declarations that consume them (`database D =
+    Database { backend: Memory }`, `queue Q = Queue { retry: … backoff:
+    Exponential }` — validation forces literal ctor forms there).  In an
+    ordinary expression (`let b = Memory` in a fn) they typecheck via the
+    seeded value env but emit an UNBOUND Racket identifier, crashing the
+    generated module at load.  Reject them wherever the seed made them
+    resolvable: fn bodies, consts, and test statements.  Config declarations
+    (DDatabase/DQueue/…) are deliberately NOT walked — that is where the
+    constructors belong.  Local shadowing wins: a same-named constructor of a
+    locally-declared (or locally-imported) ADT is the user's own. *)
+let check_config_ctor_expr_positions (m : module_form) : type_error list =
+  let (_, seeded_ctors) = config_stdlib_seed m in
+  if seeded_ctors = [] then []
+  else begin
+    let is_tesl_module name =
+      String.length name >= 5 && String.sub name 0 5 = "Tesl."
+    in
+    let local_ctor_names =
+      List.concat_map (function
+        | DType (TypeAdt { variants; _ }) ->
+          List.map (fun (v : adt_variant) -> v.ctor) variants
+        | _ -> []
+      ) m.decls
+      @ List.concat_map (fun (imp : import_decl) ->
+          if is_tesl_module imp.module_name then []
+          else
+            let path = resolve_local_import_path m.source_file imp.module_name in
+            match parse_local_import_module path with
+            | None | Some (Err _) -> []
+            | Some (Ok imp_m) ->
+              List.concat_map (function
+                | DType (TypeAdt { variants; _ }) ->
+                  List.map (fun (v : adt_variant) -> v.ctor) variants
+                | _ -> []
+              ) imp_m.decls
+        ) m.imports
+    in
+    let flagged name =
+      List.mem_assoc name seeded_ctors && not (List.mem name local_ctor_names)
+    in
+    let errs = ref [] in
+    let visit e =
+      match e with
+      | EConstructor { name; loc; _ } when flagged name ->
+        let owner = match List.assoc_opt name seeded_ctors with
+          | Some (adt_name, _) -> adt_name
+          | None -> "?" in
+        let home = match List.assoc_opt name Stdlib_config_names.config_ctor_owner with
+          | Some "QueueRetryBackoff" -> "`queue NAME = Queue { … }`"
+          | _ -> "`database NAME = Database { … }`" in
+        errs := { loc; fix = None;
+                  message = Printf.sprintf
+                    "`%s` is a config-block constructor (of `%s`): it is only \
+                     meaningful inside a %s declaration and has no runtime \
+                     value, so it cannot be used in an ordinary expression."
+                    name owner home } :: !errs
+      | _ -> ()
+    in
+    List.iter (function
+      | DFunc fd -> Ast_visitor.iter visit fd.body
+      | DConst c -> Ast_visitor.iter visit c.value
+      | DTest t ->
+        List.iter (fun s -> List.iter (Ast_visitor.iter visit) (test_stmt_exprs s))
+          t.stmts
+      (* Item 18 (review 2026-07-09): api-test/load-test bodies + seed
+         statements resolve the seeded ctors exactly like test bodies (the
+         seed env is module-wide), and a `let b = Memory` there emitted an
+         unbound Racket identifier — same hole, one decl kind over.  Mirrors
+         the sibling stdlib-name sweep's DApiTest/DLoadTest/DAgent arms. *)
+      | DApiTest t ->
+        List.iter (Ast_visitor.iter visit) t.seed_stmts;
+        List.iter (fun s -> List.iter (Ast_visitor.iter visit) (test_stmt_exprs s))
+          t.stmts
+      | DLoadTest lt ->
+        List.iter (Ast_visitor.iter visit) lt.seed_stmts;
+        List.iter (fun s -> List.iter (Ast_visitor.iter visit) (test_stmt_exprs s))
+          lt.request_stmts
+      (* An `agent X = Agent {…}` config_expr is KEPT by desugar and re-emitted
+         verbatim (unlike database/queue/… whose RHSs desugar to erased
+         scalars), so a config ctor in one of its slots reaches Racket. *)
+      | DAgent a -> Option.iter (Ast_visitor.iter visit) a.config_expr
+      | _ -> ()
+    ) m.decls;
+    List.rev !errs
+  end
 
 (** Proof predicates that belong to stdlib modules and must be explicitly imported
     (via `import Tesl.X exposing [Pred]`) to be usable in proof annotations.
@@ -5565,7 +6149,14 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
   let suggest = Import_suggest.suggest m ~local_index in
   let import_errors = check_stdlib_import_names m in
   let import_errors = import_errors @ check_local_import_names m in
-  let import_errors = import_errors @ check_type_names_in_scope ~suggest m in
+  (* Item 7 (review 2026-07-09): type-position suggestions must not offer
+     config-only stdlib names — the suggested import would land on the
+     type-position rejection below. *)
+  let suggest_type =
+    Import_suggest.suggest ~for_type_position:true m ~local_index in
+  let import_errors =
+    import_errors @ check_type_names_in_scope ~suggest:suggest_type m in
+  let import_errors = import_errors @ check_config_ctor_expr_positions m in
   let import_errors = import_errors @ check_proof_predicate_scope m in
   let import_errors = import_errors @ check_fact_name_distinctness m in
   let import_errors = import_errors @ check_stdlib_fn_import_scope m in
@@ -5580,6 +6171,12 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
      `imported.field` type-checks (local defs keep precedence — they are at the
      front of ctx.records, imported are appended). *)
   let ctx = { ctx with records = ctx.records @ load_imported_records m } in
+  (* decodeAs on a codec declared in an imported module (matrix codec/decodeas):
+     local codecs were collected by [collect_type_defs]; append the imported
+     ones (bare name gated on the type being in scope, qualified always). *)
+  let ctx = { ctx with
+    codec_decode_types =
+      ctx.codec_decode_types @ load_imported_codec_decode_types m } in
   let imported_ctors = load_imported_ctors m in
   let (config_adts, config_ctors) = config_stdlib_seed m in
   let ctx = { ctx with
@@ -5635,6 +6232,33 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
         Some ("__cache_" ^ c.name, mono ty)
       | _ -> None
     ) m.decls in
+    (* Issue-#41 class companion: harvest DCache from LOCAL imports too, so a
+       cross-module `Cache.get C k` types as the cache's declared valueType
+       instead of silently falling to a fresh tvar (fail-open).  Local decls
+       stay first in the env, so a local cache always wins. *)
+    let imported_cache_bindings =
+      let is_tesl_module name =
+        String.length name >= 5 && String.sub name 0 5 = "Tesl."
+      in
+      List.concat_map (fun (imp : import_decl) ->
+        if is_tesl_module imp.module_name then []
+        else
+          let wants name = match imp.names with
+            | ImportAll -> true
+            | ImportExposing names -> List.mem name names
+          in
+          let path = resolve_local_import_path m.source_file imp.module_name in
+          match parse_local_import_module path with
+          | None | Some (Err _) -> []
+          | Some (Ok imported) ->
+            List.filter_map (function
+              | DCache (c : Ast.cache_form) when wants c.name ->
+                Some ("__cache_" ^ c.name, mono (ty_of_type_expr (cache_value_type c)))
+              | _ -> None
+            ) imported.decls
+      ) m.imports
+    in
+    let cache_bindings = cache_bindings @ imported_cache_bindings in
     (* A declarative `agent X = Agent { … }` binds the bare name [X] to type
        [Agent], so it resolves as a value where `ask`/`askReply`/`askWith` expect
        one (mirroring how a server name is a value). *)
@@ -5728,48 +6352,95 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
      codegen cannot lower is the same fail-open class this compiler is being
      hardened against.  Fail closed: reject a malformed `asTool` at check time
      with an actionable message. *)
+  (* Message + guided variants shared by the tools-list validator and the
+     whole-module `asTool` walk (3c-bis below): one owner for the "what asTool
+     accepts" wording so the two report identically. *)
+  let malformed_astool_error agent_label loc (arg : Ast.expr) =
+    match arg with
+    | Ast.EField { obj = (Ast.EVar { name = mname; _ } | Ast.EConstructor { name = mname; args = []; _ }); field; _ }
+      when String.length mname > 0 && mname.[0] >= 'A' && mname.[0] <= 'Z' ->
+      (* `asTool M.f` — a qualified reference (a capitalized module obj parses
+         as EConstructor).  The emitted require only binds plain
+         exposing-imported names, so guide to the supported spelling. *)
+      add_error ctx loc (Printf.sprintf
+        "%s: `asTool %s.%s` — a qualified reference is not supported; add \
+         `import %s exposing [%s]` and write `asTool %s`"
+        agent_label mname field mname field field)
+    | _ ->
+      add_error ctx loc (Printf.sprintf
+        "%s: `asTool` supports only a bare function reference (`asTool myFn`); \
+         a partial application like `asTool (myFn arg)` is not supported — codegen \
+         cannot derive the tool's JSON schema from it, so the emitted module would \
+         fail to load. Define a wrapper `fn myTool(...) = myFn boundValue ...` that \
+         closes over the bound value in its body, and pass `asTool myTool`."
+        agent_label)
+  in
+  (* `asTool` applications already validated by the tools-list machinery, so
+     the whole-module walk (3c-bis) never double-reports the same site.  Keyed
+     on the FULL span (see the expr_ty_tbl lesson: start-only keys collide). *)
+  let astool_handled : (int * int * int * int, unit) Hashtbl.t = Hashtbl.create 16 in
+  let loc_key (l : Location.loc) =
+    (l.start.line, l.start.col, l.stop.line, l.stop.col) in
   let check_malformed_tool_forms agent_label fields =
     match List.assoc_opt "tools" fields with
     | Some (Ast.EList { elems; _ }) ->
       List.iter (function
         | Ast.EApp { fn = Ast.EVar { name = "asTool"; _ }; arg; loc } ->
+          Hashtbl.replace astool_handled (loc_key loc) ();
           (match arg with
            | Ast.EVar _ -> ()   (* the one supported form: a bare reference *)
-           | _ ->
-             add_error ctx loc (Printf.sprintf
-               "%s: `asTool` supports only a bare function reference (`asTool myFn`); \
-                a partial application like `asTool (myFn arg)` is not supported — codegen \
-                cannot derive the tool's JSON schema from it, so the emitted module would \
-                fail to load. Define a wrapper `fn myTool(...) = myFn boundValue ...` that \
-                closes over the bound value in its body, and pass `asTool myTool`."
-               agent_label))
+           | _ -> malformed_astool_error agent_label loc arg)
         | _ -> ()   (* manual `tool { … }` and other tool forms are validated elsewhere *)
       ) elems
     | _ -> ()
   in
+  (* Tool-name resolution: local decls first, then plain exposing-imported fns
+     (memoized once per module).  An imported fn in an Agent tools list used to
+     be a FALSE check error ("not a function declared in this module") even
+     though the emitter can lower it. *)
+  let imported_tool_fn_decls = lazy (load_imported_func_decls m) in
+  let resolve_tool_fn tn =
+    match List.find_opt (function DFunc fd -> fd.name = tn | _ -> false) m.decls with
+    | Some (DFunc fd) -> Some (fd, `Local)
+    | _ ->
+      (match List.assoc_opt tn (Lazy.force imported_tool_fn_decls) with
+       | Some fd -> Some (fd, `Imported)
+       | None -> None)
+  in
+  (* AGENT-1 parameter rules, run on the RESOLVED tool fn whether local or
+     imported.  [param_loc] anchors the error: a local fd's own param locs
+     (byte-stable diagnostics), the referencing site for an imported fd (its
+     param locs point into the other file). *)
+  let check_tool_fd_params agent_label tn ~param_loc (fd : Ast.func_decl) =
+    List.iter (fun (b : Ast.binding) ->
+      let eloc = param_loc b in
+      (match b.proof_ann with
+       | Some _ ->
+         add_error ctx eloc (Printf.sprintf
+           "%s: tool '%s' parameter '%s' must not carry a proof annotation (`:::`) — \
+            the model supplies this argument as untrusted JSON, so a proof on it would be \
+            fabricated, not validated; take the raw value and validate it inside the tool with a `check`"
+           agent_label tn b.name)
+       | None -> ());
+      (* Whitelist is the single Validation_common.agent_prim registry (B4);
+         the message type-list is DERIVED from it so it cannot drift. *)
+      if Validation_common.agent_prim_of_type_expr b.type_expr = None then
+        add_error ctx eloc (Printf.sprintf
+          "%s: tool '%s' parameter '%s' must be %s — agent tool arguments are decoded from the model's JSON"
+          agent_label tn b.name Validation_common.agent_prim_whitelist_english)
+    ) fd.params
+  in
   let check_agent_tool_refs agent_label tool_refs =
     List.iter (fun (tn, tloc) ->
-      match List.find_opt (function DFunc fd -> fd.name = tn | _ -> false) m.decls with
-      | Some (DFunc fd) ->
-        List.iter (fun (b : Ast.binding) ->
-          (match b.proof_ann with
-           | Some _ ->
-             add_error ctx b.loc (Printf.sprintf
-               "%s: tool '%s' parameter '%s' must not carry a proof annotation (`:::`) — \
-                the model supplies this argument as untrusted JSON, so a proof on it would be \
-                fabricated, not validated; take the raw value and validate it inside the tool with a `check`"
-               agent_label tn b.name)
-           | None -> ());
-          (* Whitelist is the single Validation_common.agent_prim registry (B4);
-             the message type-list is DERIVED from it so it cannot drift. *)
-          if Validation_common.agent_prim_of_type_expr b.type_expr = None then
-            add_error ctx b.loc (Printf.sprintf
-              "%s: tool '%s' parameter '%s' must be %s — agent tool arguments are decoded from the model's JSON"
-              agent_label tn b.name Validation_common.agent_prim_whitelist_english)
-        ) fd.params
-      | _ ->
+      match resolve_tool_fn tn with
+      | Some (fd, origin) ->
+        let param_loc (b : Ast.binding) =
+          match origin with `Local -> b.loc | `Imported -> tloc in
+        check_tool_fd_params agent_label tn ~param_loc fd
+      | None ->
         add_error ctx tloc (Printf.sprintf
-          "%s: tool '%s' is not a function declared in this module" agent_label tn)
+          "%s: tool '%s' is not a function declared in this module or exposed by one of its imports"
+          agent_label tn)
     ) tool_refs
   in
   (* The record fields of an `Agent { … }` construction (either surface shape). *)
@@ -5814,7 +6485,70 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
        malformed-`asTool` check.  Walk DConst values too. *)
     | DConst c ->
       walk_agents_in_expr (Printf.sprintf "agent expression in `%s`" c.name) c.value
+    (* An `Agent { … }` inside a `test` block escaped ALL tool validation
+       (malformed-form, AGENT-1 param rules, fn-existence): the walk covered
+       only DFunc/DConst.  Same label scheme, same checks. *)
+    | DTest (tf : Ast.test_form) ->
+      let label = Printf.sprintf "agent expression in test %S" tf.description in
+      List.iter (fun s ->
+        List.iter (walk_agents_in_expr label) (Ast.test_stmt_exprs s)
+      ) tf.stmts
     | _ -> ()) m.decls;
+
+  (* 3c-bis. Whole-module `asTool` validation.  `asTool` types structurally
+     (`a -> Tool`), so outside an Agent `tools:` list an `asTool x` was never
+     fn-existence-checked: statement position crashed the COMPILER (the
+     emitter's issue-#24 failwith), argument/list position emitted the literal
+     unbound `(asTool x)` — a module that fails to load.  Fail closed here:
+     every `asTool`-headed application anywhere in fn/const/test bodies (and
+     agent config exprs) must be a bare reference to an in-scope fn — local or
+     exposing-imported — whose params pass AGENT-1.  Sites the tools-list
+     machinery above already validated are in [astool_handled] and skipped, so
+     nothing double-reports.  Skipped entirely when the module shadows the
+     `asTool` name with its own decl (same policy as serverTools/humanActions:
+     the builtin form is inert under a user binding). *)
+  let astool_shadowed = List.exists (function
+    | DFunc (fd : Ast.func_decl) -> fd.name = "asTool"
+    | DConst (c : Ast.const_form) -> c.name = "asTool"
+    | _ -> false) m.decls in
+  (if not astool_shadowed then begin
+    let rec walk_astool label (e : Ast.expr) : unit =
+      (match e with
+       | EApp { fn = EVar { name = "asTool"; _ }; arg; loc }
+         when not (Hashtbl.mem astool_handled (loc_key loc)) ->
+         (match arg with
+          | EVar { name; _ } ->
+            (match resolve_tool_fn name with
+             | Some (fd, origin) ->
+               let param_loc (b : Ast.binding) =
+                 match origin with `Local -> b.loc | `Imported -> loc in
+               check_tool_fd_params label name ~param_loc fd
+             | None ->
+               add_error ctx loc (Printf.sprintf
+                 "%s: `asTool %s` — '%s' is not a function declared in this \
+                  module or exposed by one of its imports; `asTool` derives \
+                  the tool's JSON schema from a fn declaration at compile time"
+                 label name name))
+          | _ -> malformed_astool_error label loc arg)
+       | _ -> ());
+      Ast_visitor.fold_children (fun () c -> walk_astool label c) () e
+    in
+    List.iter (function
+      | DFunc (fd : Ast.func_decl) ->
+        walk_astool (Printf.sprintf "`asTool` in `%s`" fd.name) fd.body
+      | DConst (c : Ast.const_form) ->
+        walk_astool (Printf.sprintf "`asTool` in `%s`" c.name) c.value
+      | DTest (tf : Ast.test_form) ->
+        let label = Printf.sprintf "`asTool` in test %S" tf.description in
+        List.iter (fun s ->
+          List.iter (walk_astool label) (Ast.test_stmt_exprs s)
+        ) tf.stmts
+      | DAgent (a : Ast.agent_form) ->
+        (match a.config_expr with
+         | Some e -> walk_astool (Printf.sprintf "`asTool` in agent '%s'" a.name) e
+         | None -> ())
+      | _ -> ()) m.decls
+  end);
 
   (* 3d. serverTools endpoint-shape rules, validated once per server a
      `serverTools` expression actually references:
@@ -6042,69 +6776,9 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
      all fns' obligations are known. *)
   check_ord_eq_calls ctx;
 
-  (* 5. Check that all exported names actually exist in the module *)
-  let decl_names = List.concat_map (function
-    | DFunc fd -> [fd.name]
-    | DConst c -> [c.name]
-    | DType (TypeAdt { name; variants; _ }) ->
-      name :: List.map (fun (v : Ast.adt_variant) -> v.ctor) variants
-    | DType (TypeNewtype { name; _ }) | DType (TypeAlias { name; _ }) -> [name]
-    | DRecord r -> [r.name]
-    | DEntity e -> [e.name]
-    | DDatabase db -> [db.name]
-    | DApi api -> [api.name]
-    | DServer srv -> [srv.name]
-    | DAgent a -> [a.name]
-    | DQueue q -> [q.name]
-    | DChannel ch -> [ch.name]
-    | DCapability cap -> [cap.name]
-    | DFact f -> [f.name]
-    | DWorkers w -> [w.name]
-    | _ -> []
-  ) m.decls in
-  (* Proof predicates declared by check/auth/establish functions *)
-  let predicate_names = List.concat_map (function
-    | DFunc fd when is_proof_introducing_kind fd.kind ->
-      let collect_pred = function
-        | RetPlain { ty = TApp { head = TName { name = "Fact"; _ }; arg; _ }; _ } ->
-          (match arg with
-           | TApp { head = TName { name; _ }; _ } -> [name]
-           | TName { name; _ } -> [name]
-           | _ -> [])
-        | RetPlain { ty = TApp { head = TName { name = "Maybe"; _ };
-                                  arg = TApp { head = TName { name = "Fact"; _ }; arg = inner; _ }; _ }; _ } ->
-          (match inner with
-           | TApp { head = TName { name; _ }; _ } -> [name]
-           | TName { name; _ } -> [name]
-           | _ -> [])
-        | RetAttached { binding = b; _ } ->
-          (match b.proof_ann with
-           | Some (PredApp { pred; _ }) -> [pred]
-           | Some (PredAnd _) -> []  (* conjunction — collect individually if needed *)
-           | _ -> [])
-        | RetNamedPack { entity_proof; other_proof; _ } ->
-          let pred_of_opt = function
-            | None -> []
-            | Some (PredApp { pred; _ }) -> [pred]
-            | Some (PredAnd _) -> []
-          in
-          pred_of_opt entity_proof @ pred_of_opt other_proof
-        | RetForAll { proof = PredApp { pred; _ }; _ }
-        | RetMaybeForAll { proof = PredApp { pred; _ }; _ }
-        | RetSetForAll { proof = PredApp { pred; _ }; _ }
-        | RetMaybeSetForAll { proof = PredApp { pred; _ }; _ }
-        | RetForAllDictValues { proof = PredApp { pred; _ }; _ }
-        | RetForAllDictKeys   { proof = PredApp { pred; _ }; _ } -> [pred]
-        | RetMaybeAttached { binding = b; _ } ->
-          (match b.proof_ann with
-           | Some (PredApp { pred; _ }) -> [pred]
-           | Some (PredAnd _) -> []
-           | _ -> [])
-        | _ -> []
-      in
-      collect_pred fd.return_spec
-    | _ -> []
-  ) m.decls in
+  (* 5. Check that all exported names actually exist in the module — see
+     [export_locality_errors] (shared with the whole-program dependency walk
+     in Compile.cross_module_diags). *)
 
   (* Ownership check: a check/establish/auth function can only produce a predicate
      that is declared with `fact` in THIS module.  Importing a fact only grants
@@ -6184,36 +6858,12 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
     | _ -> []
   ) m.decls in
 
-  (* Re-export was removed 2026-07 (along with the `library` feature): a module may
-     export ONLY names it declares locally, never a name it merely imported.  So
-     imported-exposed names are NOT added here — exporting one now fails with the
-     "only locally-defined names can be exported" error below. *)
-  let all_known_names = decl_names @ predicate_names @ List.map fst ctx.ctors in
-  let seen_exports : (string, Location.loc) Hashtbl.t = Hashtbl.create 16 in
-  let export_errors = List.concat_map (fun export ->
-    let n = match export with ExportName n | ExportAdt n -> n in
-    let duplicate_error =
-      match Hashtbl.find_opt seen_exports n with
-      | Some first_loc ->
-        [ { loc = Location.dummy_loc m.source_file;
-            message = Printf.sprintf
-              "module exposes duplicate name `%s` (first declared for export at line %d)"
-              n (first_loc.start.line + 1); fix = None } ]
-      | None ->
-        Hashtbl.replace seen_exports n (Location.dummy_loc m.source_file);
-        []
-    in
-    let unknown_error =
-      if List.mem n all_known_names then []
-      else [ {
-        loc = Location.dummy_loc m.source_file;
-        message = Printf.sprintf "module exposes unknown or non-local name `%s` \
-                                  (only locally-defined names can be exported)" n;
-        fix = None
-      } ]
-    in
-    duplicate_error @ unknown_error
-  ) m.exports in
+  (* Re-export was removed 2026-07 (along with the `library` feature): a module
+     may export ONLY names it declares locally, never a name it merely imported.
+     [export_locality_errors] enforces this against the module's own decls —
+     NOT ctx.ctors, which contains imported/builtin constructors and previously
+     let an imported ctor slip through the locality check. *)
+  let export_errors = export_locality_errors m in
 
   (* 6. Return collected errors and retained metadata — include stdlib import validation errors *)
   (List.rev !(ctx.local_bindings),

@@ -1,0 +1,176 @@
+#lang tesl
+module Main exposing [MainServer]
+
+# Runtime regressions for the 2026-07 matrix emit/type batch:
+#
+#   1. EmailBody as a DATA type: a `fn … -> EmailBody` return trapped at
+#      runtime (no registered runtime predicate for the EmailBody type-ref —
+#      tesl/email.rkt now registers one), and an exhaustive 3-arm case over
+#      its constructors was (a) flagged non-exhaustive at check time and
+#      (b) lowered against adt-value structs that can never match the tagged
+#      LIST representation, so every arm fell through.
+#
+#   2. Partial application in ARGUMENT position (`applyTwice (addN 3) 1`)
+#      emitted a direct under-applied call — "addN: arity mismatch" — while
+#      the let-bound spelling eta-expanded fine.
+#
+#   3. Newtype record-field codecs (§11.6 transparency): with
+#      `with_codec stringCodec` on a newtype-typed field the ENCODE direction
+#      trapped ("expected String, got (newtype-value …)"); with
+#      `with_codec UserId` the DECODE direction failed ("no decoder
+#      succeeded").  Both spellings now round-trip.
+
+import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
+import Tesl.Json exposing [stringCodec]
+import Tesl.ApiTest exposing [statusOk]
+import Tesl.Email exposing [EmailBody, TextBody, HtmlBody, RichBody]
+
+# ── 1. EmailBody as a data type ───────────────────────────────────────────────
+
+fn mkBody(name: String) -> EmailBody =
+  RichBody "hi ${name}" "<b>hi ${name}</b>"
+
+fn mkText(s: String) -> EmailBody =
+  TextBody s
+
+fn bodyKind(b: EmailBody) -> String =
+  case b of
+    TextBody t -> "text"
+    HtmlBody h -> "html"
+    RichBody t h -> "rich"
+
+test "fn returning EmailBody satisfies its declared return type" {
+  let b = mkBody "x"
+  expect bodyKind b == "rich"
+  let t = mkText "plain"
+  expect bodyKind t == "text"
+  expect bodyKind (HtmlBody "<i>h</i>") == "html"
+}
+
+# ── 2. partial application in argument position ─────────────────────────────
+
+fn addN(a: Int, b: Int) -> Int =
+  a + b
+
+fn applyTwice(f: Int -> Int, n: Int) -> Int =
+  f (f n)
+
+test "partial application in argument position" {
+  expect applyTwice (addN 3) 1 == 7
+}
+
+test "named partial application still works" {
+  let addTen = addN 10
+  expect addTen 5 == 15
+}
+
+# ── 3. newtype record-field codec round-trip (both spellings) ───────────────
+
+type UserId = String
+
+record User {
+  id: UserId
+  name: String
+}
+
+codec User {
+  toJson {
+    id -> "id" with_codec stringCodec
+    name -> "name" with_codec stringCodec
+  }
+  fromJson [
+    {
+      id <- "id" with_codec stringCodec
+      name <- "name" with_codec stringCodec
+    }
+  ]
+}
+
+type AcctId = String
+
+record Acct {
+  id: AcctId
+  name: String
+}
+
+codec Acct {
+  toJson {
+    id -> "id" with_codec AcctId
+    name -> "name" with_codec stringCodec
+  }
+  fromJson [
+    {
+      id <- "id" with_codec AcctId
+      name <- "name" with_codec stringCodec
+    }
+  ]
+}
+
+handler getUser(uid: String) -> User =
+  let typed = UserId uid
+  User { id: typed, name: "user-${typed.value}" }
+
+handler echoUser(body: User) -> User =
+  { body | id: UserId "echoed" }
+
+handler getAcct(aid: String) -> Acct =
+  let typed = AcctId aid
+  Acct { id: typed, name: "acct-${typed.value}" }
+
+handler echoAcct(body: Acct) -> Acct =
+  { body | id: AcctId "echoed" }
+
+capturer uidCapture: uid: String using stringCodec
+
+api MainApi {
+  get "/users/:uid"
+    capture uid: String via uidCapture
+    -> User
+
+  post "/users/echo"
+    body body: User
+    -> User
+
+  get "/accts/:uid"
+    capture uid: String via uidCapture
+    -> Acct
+
+  post "/accts/echo"
+    body body: Acct
+    -> Acct
+}
+
+server MainServer for MainApi {
+  getUser = getUser
+  echoUser = echoUser
+  getAcct = getAcct
+  echoAcct = echoAcct
+}
+
+api-test "newtype field encodes transparently (stringCodec spelling)" for MainServer requires [] {
+  let r = get "/users/u-9"
+  expect statusOk r.status
+  expect r.body.id == "u-9"
+  expect r.body.name == "user-u-9"
+}
+
+api-test "newtype field decodes + re-encodes (stringCodec spelling)" for MainServer requires [] {
+  let r = post "/users/echo" body { "id": "ignored", "name": "bob" }
+  expect statusOk r.status
+  expect r.body.id == "echoed"
+  expect r.body.name == "bob"
+}
+
+api-test "newtype field encodes transparently (with_codec TypeName spelling)" for MainServer requires [] {
+  let r = get "/accts/a-1"
+  expect statusOk r.status
+  expect r.body.id == "a-1"
+  expect r.body.name == "acct-a-1"
+}
+
+api-test "newtype field decodes + re-encodes (with_codec TypeName spelling)" for MainServer requires [] {
+  let r = post "/accts/echo" body { "id": "ignored", "name": "eve" }
+  expect statusOk r.status
+  expect r.body.id == "echoed"
+  expect r.body.name == "eve"
+}

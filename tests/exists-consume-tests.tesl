@@ -1,0 +1,42 @@
+#lang tesl
+module ExistsConsumeTests exposing []
+
+# Regression (2026-07 multi-module matrix, proof/existpack): consuming an
+# exists-returning fn's result AS ITS DECLARED UNDERLYING TYPE.  The checker
+# types the result as the underlying type (the pack hides witness NAMES, not
+# the value), but the runtime handed back the raw packed-exists struct, so
+# `String.length tok` trapped ("string-length: contract violation … given:
+# (packed-exists …)").  raw-value (dsl/private/evidence.rkt +
+# check-runtime.rkt) now projects the packed body; proof hiding is preserved
+# (facts-of still returns nothing for a packed value).  Identical
+# same-module and cross-module — the cross-module CHECK acceptance is locked
+# by compiler/test/test_checker_multimodule.ml.
+
+import Tesl.Prelude exposing [Bool(..), Int, String]
+import Tesl.String exposing [String.length, String.startsWith]
+import Tesl.Random exposing [random]
+import Tesl.Id exposing [generatePrefixedId]
+
+fact IsTokenId (s: String)
+
+check checkTokenId(s: String) -> s: String ::: IsTokenId s =
+  if String.length s > 3 then
+    ok s ::: IsTokenId s
+  else
+    fail 400 "bad token"
+
+capability idGen implies random
+
+fn generateToken() -> exists tokenId: String => tokenId: String ::: IsTokenId tokenId
+  requires [idGen] =
+  let tokenId = generatePrefixedId "tok"
+  let validated = check checkTokenId tokenId
+  exists tokenId =>
+    validated
+
+test "exists result consumed as its underlying String type" requires [idGen] {
+  let tok = generateToken()
+  expect String.length tok > 3
+  expect String.startsWith tok "tok"
+  expect "wrapped:${tok}" != "wrapped:"
+}

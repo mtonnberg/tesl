@@ -35,6 +35,11 @@
  Money
  Currency
  ExchangeRate
+ MoneyPerDuration
+ MoneyPerMass
+ MoneyPerLength
+ MoneyPerArea
+ MoneyPerVolume
  ;; proof predicates
  SameCurrency
  NonNegativeMoney
@@ -83,6 +88,16 @@
 (define Money 'Money)
 (define Currency 'Currency)
 (define ExchangeRate 'ExchangeRate)
+
+;; MoneyRate alias type names: they appear verbatim in emitted type positions
+;; (handler #:returns / endpoint types), so they must be require-bound in the
+;; importing module or the minted type-ref is keyed to the emitting file and
+;; cross-module server wiring rejects it (issue #42).
+(define MoneyPerDuration 'MoneyPerDuration)
+(define MoneyPerMass 'MoneyPerMass)
+(define MoneyPerLength 'MoneyPerLength)
+(define MoneyPerArea 'MoneyPerArea)
+(define MoneyPerVolume 'MoneyPerVolume)
 
 ;; ── Proof predicates ─────────────────────────────────────────────────────────
 

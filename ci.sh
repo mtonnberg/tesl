@@ -1098,6 +1098,9 @@ else
         "tests/body-proof-test.rkt"
         "tests/check-test.rkt"
         "tests/sql-test.rkt"
+        # Memory-database registry: imported-db test isolation (fresh-memory-db
+        # resets ALL registered memory databases, not just the emitter's list)
+        "tests/memory-db-registry-test.rkt"
         "tests/sql-group-by-pg-test.rkt"
         # First-Class Units: Money two-column storage (Memory decision-table +
         # PG parity; the PG suite self-skips without initdb/pg_ctl)

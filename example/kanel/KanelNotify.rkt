@@ -14,7 +14,7 @@
   tesl/tesl/sse
   (only-in tesl/tesl/telemetry telemetry)
   (only-in tesl/tesl/queue queueRead FromQueue FromDeadQueue)
-  (only-in (file "kanel-models.rkt") NotifyPayload)
+  (only-in (file "KanelModels.rkt") NotifyPayload)
 )
 
 

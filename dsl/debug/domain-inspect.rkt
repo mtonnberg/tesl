@@ -66,7 +66,7 @@
 ;; The display field names for a domain struct kind.
 (define (domain-field-names name field-count)
   (case name
-    [(queue-spec)   '("name" "jobTypes" "store" "semaphore" "maxAttempts" "backoff" "initialDelay")]
+    [(queue-spec)   '("name" "jobTypes" "store" "semaphore" "maxAttempts" "backoff" "initialDelay" "jobTypeRefs")]
     [(channel-spec) '("name" "store" "listeners")]
     [(cache-spec)   '("name" "defaultTtl" "codec" "capability" "store")]
     [(email-spec)   '("name" "database" "smtpHost" "smtpPort" "smtpUsername" "smtpPassword" "smtpTls" "store")]

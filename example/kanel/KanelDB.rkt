@@ -17,11 +17,11 @@
   (only-in tesl/tesl/maybe Maybe Something Nothing)
   (only-in tesl/tesl/time nowMillis time [Time.secondsToPosix tesl_import_Time_secondsToPosix])
   (only-in tesl/tesl/db DeleteResult NoRowDeleted RowsDeleted)
-  (only-in (file "kanel-models.rkt") kanelDbRead kanelDbWrite KanelUser Org OrgMembership Project Issue IssueComment TimeEntry Invoice OrgRole RoleAdmin RoleMember RoleViewer IssueStatus Backlog Todo InProgress InReview Done Cancelled InvoiceStatus Draft Approved Sent Paid Overdue)
-  (only-in (file "kanel-auth.rkt") OrgMember OrgAdmin ProjMember)
-  (only-in (file "kanel-org.rkt") ValidOrgName ValidSlug ValidEmail ValidDisplayName)
-  (only-in (file "kanel-issues.rkt") ValidTitle ValidDescription PositiveEstimate PositiveMinutes NotDone ValidCommentBody)
-  (only-in (file "kanel-billing.rkt") InvoiceDraft)
+  (only-in (file "KanelModels.rkt") kanelDbRead kanelDbWrite KanelUser Org OrgMembership Project Issue IssueComment TimeEntry Invoice OrgRole RoleAdmin RoleMember RoleViewer IssueStatus Backlog Todo InProgress InReview Done Cancelled InvoiceStatus Draft Approved Sent Paid Overdue)
+  (only-in (file "KanelAuth.rkt") OrgMember OrgAdmin ProjMember)
+  (only-in (file "KanelOrg.rkt") ValidOrgName ValidSlug ValidEmail ValidDisplayName)
+  (only-in (file "KanelIssues.rkt") ValidTitle ValidDescription PositiveEstimate PositiveMinutes NotDone ValidCommentBody)
+  (only-in (file "KanelBilling.rkt") InvoiceDraft)
 )
 
 

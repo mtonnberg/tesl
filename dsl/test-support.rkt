@@ -13,6 +13,7 @@
          "web.rkt"
          (only-in "../tesl/queue.rkt"
                   channel-spec-listeners
+                  channel-for-name
                   queue-spec-store))
 
 (provide call-with-fresh-memory-db
@@ -122,11 +123,27 @@
 (define (call-with-fresh-memory-db databases thunk)
   (unless (procedure? thunk)
     (raise-user-error 'call-with-fresh-memory-db "expected a thunk, got ~a" thunk))
+  ;; Reset the union of (a) the databases the emitter listed — the emitting
+  ;; module's own decls — and (b) every registered memory database
+  ;; (dsl/sql.rkt).  (a) alone leaks state across test blocks whenever the
+  ;; `database` block lives in an IMPORTED module: the emitter cannot see
+  ;; imported decls here, so it emits '() and the previous block's rows
+  ;; survive (matrix 2026-07: second api-test saw the first's seed — 200 vs
+  ;; 404; load-test seed collided on a duplicate primary key).  The registry
+  ;; is populated at module instantiation, which requires-order guarantees
+  ;; happens before any test block runs, so (b) covers imported databases
+  ;; without the emitter needing a require-bound name for them.  Postgres
+  ;; databases never register, and clear-entity-store! only touches mutable
+  ;; hash sources, so non-memory backends are untouched either way.
   (define db-list
-    (cond
-      [(null? databases) '()]
-      [(list? databases) databases]
-      [else (list databases)]))
+    (remove-duplicates
+     (append
+      (cond
+        [(null? databases) '()]
+        [(list? databases) databases]
+        [else (list databases)])
+      (registered-memory-databases))
+     eq?))
   (define (reset!)
     (for ([database (in-list db-list)])
       (for ([entity (in-list (database-spec-entities database))])
@@ -248,7 +265,12 @@
                       "subscribe could not match SSE route ~a"
                       (or name path)))
   (define auth-fn   (second route))
-  (define channel-s (third route))
+  ;; The route's channel slot is either the live channel-spec (declared in the
+  ;; emitting module) or its NAME as a symbol (declared in another module —
+  ;; issue #41 class); resolve the symbol lazily via the process-wide registry,
+  ;; mirroring resolve-sse-channel in dsl/web.rkt.
+  (define channel-s (let ([ch (third route)])
+                      (if (symbol? ch) (channel-for-name ch) ch)))
   ;; Issue #17: 4th element is the key-index, 5th the list of (index . validator)
   ;; for every declared capture check — see emit_sse_route / handle-sse-request.
   ;; Enforce them here too so the api-test path matches the production path.

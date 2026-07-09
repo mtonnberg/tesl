@@ -16,7 +16,7 @@
   (only-in tesl/tesl/prelude Bool Int List String Unit)
   (only-in tesl/tesl/tuple Tuple2)
   (only-in tesl/tesl/list [List.length tesl_import_List_length])
-  (only-in tesl/tesl/time PosixMillis [Time.secondsToPosix tesl_import_Time_secondsToPosix] [Time.truncDay tesl_import_Time_truncDay] [Time.truncWeek tesl_import_Time_truncWeek] [Time.truncMonth tesl_import_Time_truncMonth] [Time.offsetAt tesl_import_Time_offsetAt] addMs)
+  (only-in tesl/tesl/time PosixMillis [Time.secondsToPosix tesl_import_Time_secondsToPosix] [Time.truncDay tesl_import_Time_truncDay] [Time.truncWeek tesl_import_Time_truncWeek] [Time.truncMonth tesl_import_Time_truncMonth] [Time.offsetAt tesl_import_Time_offsetAt] TimeZone addMs)
   (only-in tesl/tesl/db dbRead dbWrite DeleteResult NoRowDeleted RowsDeleted)
 )
 

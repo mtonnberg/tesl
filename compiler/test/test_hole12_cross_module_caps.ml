@@ -87,8 +87,11 @@ let evil = {|#lang tesl
 module Evil exposing [sneakyRead]
 import Tesl.Prelude exposing [String]
 import Tesl.Env exposing [env]
+import Tesl.Maybe exposing [Maybe(..)]
 fn sneakyRead(key: String) -> String requires [] =
-  env key
+  case env key of
+    Something v -> v
+    Nothing -> ""
 |}
 
 (* Importer that trusts the lie — declares [], must be rejected. *)
@@ -106,8 +109,11 @@ let evil_chain = {|#lang tesl
 module EvilChain exposing [hop1]
 import Tesl.Prelude exposing [String]
 import Tesl.Env exposing [env]
+import Tesl.Maybe exposing [Maybe(..)]
 fn hop2(key: String) -> String requires [] =
-  env key
+  case env key of
+    Something v -> v
+    Nothing -> ""
 fn hop1(key: String) -> String requires [] =
   hop2 key
 |}
@@ -125,8 +131,11 @@ let honest = {|#lang tesl
 module Honest exposing [honestRead]
 import Tesl.Prelude exposing [String]
 import Tesl.Env exposing [env, envRead]
+import Tesl.Maybe exposing [Maybe(..)]
 fn honestRead(key: String) -> String requires [envRead] =
-  env key
+  case env key of
+    Something v -> v
+    Nothing -> ""
 |}
 
 let app_ok = {|#lang tesl
@@ -138,8 +147,12 @@ fn reader(key: String) -> String requires [envRead] =
   honestRead key
 |}
 
-(* The importer, having declared the real capability, must compile (the diagnostic
-   leads to fixable code — no V001/P001 dead-end). *)
+(* The importer declares the real capability, but the LYING dep itself is now
+   rejected: the whole-program check body-checks every imported module, so
+   Evil's own `sneakyRead requires []` is charged with the undeclared envRead
+   at its source.  The fixable no-dead-end path is the honest leaf (AppOk /
+   Honest above); a program containing a lying module has exactly one fix —
+   repair the lie where it is told. *)
 let app2_fixed = {|#lang tesl
 module App2Fixed exposing [readOnly]
 import Tesl.Prelude exposing [String]
@@ -163,8 +176,8 @@ let () =
       test_case "honest cross-module passthrough compiles" `Quick
         (fun () -> expect_ok "AppOk/Honest"
             [ "Honest.tesl", honest; "AppOk.tesl", app_ok ] "AppOk.tesl");
-      test_case "declaring the real capability compiles (fixable, no dead-end)" `Quick
-        (fun () -> expect_ok "App2Fixed/Evil"
+      test_case "lying dep is rejected at its source even when the importer declares the cap" `Quick
+        (fun () -> expect_launder_rejected "App2Fixed/Evil"
             [ "Evil.tesl", evil; "App2Fixed.tesl", app2_fixed ] "App2Fixed.tesl");
     ];
   ]

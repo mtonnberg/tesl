@@ -18,8 +18,8 @@
   (only-in tesl/tesl/id generatePrefixedId)
   (only-in tesl/tesl/random random)
   (only-in tesl/tesl/maybe Maybe Something Nothing)
-  (only-in (file "kanel-models.rkt") ValidOrgId ValidProjectId ValidIssueId kanelDbRead kanelDbWrite kanelPubSub OrgRole RoleAdmin RoleMember RoleViewer IssueStatus Backlog Todo InProgress InReview Done Cancelled OrgMembership Project ProjectMembership Issue IssueComment TimeEntry NewProjectRequest NewIssueRequest UpdateIssueRequest UpdateStatusRequest NewCommentRequest NewTimeEntryRequest)
-  (only-in (file "kanel-auth.rkt") KanelSession Authenticated OrgMember IssueAssignee checkOrgMember checkOrgAdmin checkProjMember checkOrgMember-signature checkOrgAdmin-signature checkProjMember-signature)
+  (only-in (file "KanelModels.rkt") ValidOrgId ValidProjectId ValidIssueId kanelDbRead kanelDbWrite kanelPubSub OrgRole RoleAdmin RoleMember RoleViewer IssueStatus Backlog Todo InProgress InReview Done Cancelled OrgMembership Project ProjectMembership Issue IssueComment TimeEntry NewProjectRequest NewIssueRequest UpdateIssueRequest UpdateStatusRequest NewCommentRequest NewTimeEntryRequest)
+  (only-in (file "KanelAuth.rkt") KanelSession Authenticated OrgMember IssueAssignee checkOrgMember checkOrgAdmin checkProjMember checkOrgMember-signature checkOrgAdmin-signature checkProjMember-signature)
 )
 
 

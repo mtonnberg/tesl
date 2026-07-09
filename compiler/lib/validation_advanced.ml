@@ -879,6 +879,27 @@ let check_record_field_proof_construction
         let subject_env = build_initial_subject_env fd.params in
         let proof_env = build_initial_proof_env fd.params in
         walk_expr type_env subject_env proof_env fd.body
+      (* 2026-07 matrix (record ctor proof enforcement in TEST blocks): the
+         construction-proof walk previously never entered test bodies, so a
+         bare `Msg { title: "unvalidated" }` in a `test { … }` was silently
+         accepted while the identical fn-body construction was rejected.  The
+         statement block is lowered to one nested ELet/ELetProof expression
+         (expr_of_test_stmts) so the SAME env-threading walk accepts witnessed
+         constructions exactly as in fn bodies. *)
+      | DTest tf ->
+        (match expr_of_test_stmts tf.stmts with
+         | Some e -> walk_expr [] [] [] e
+         | None -> ())
+      | DApiTest at ->
+        List.iter (walk_expr [] [] []) at.seed_stmts;
+        (match expr_of_test_stmts at.stmts with
+         | Some e -> walk_expr [] [] [] e
+         | None -> ())
+      | DLoadTest lt ->
+        List.iter (walk_expr [] [] []) lt.seed_stmts;
+        (match expr_of_test_stmts lt.request_stmts with
+         | Some e -> walk_expr [] [] [] e
+         | None -> ())
       | _ -> ()
     ) decls;
     List.rev !errors
@@ -1279,6 +1300,28 @@ let check_ghost_witness_predicates
         field_proof_type_ctx :=
           Some (fn_type_env funcs fields_by_type ctors fd, fields_by_type, ctors);
         walk_expr type_env subject_env proof_env fd.body
+      (* 2026-07 matrix: ghost-witness enforcement in TEST blocks — same
+         lowering as check_record_field_proof_construction's DTest arm (see
+         expr_of_test_stmts), so a witnessless `OrderLine { … }` in a test is
+         rejected exactly like in a fn body while `let (p ::: pw) = check …`
+         chains still resolve the witness. *)
+      | DTest tf ->
+        field_proof_type_ctx := None;
+        (match expr_of_test_stmts tf.stmts with
+         | Some e -> walk_expr [] [] [] e
+         | None -> ())
+      | DApiTest at ->
+        field_proof_type_ctx := None;
+        List.iter (walk_expr [] [] []) at.seed_stmts;
+        (match expr_of_test_stmts at.stmts with
+         | Some e -> walk_expr [] [] [] e
+         | None -> ())
+      | DLoadTest lt ->
+        field_proof_type_ctx := None;
+        List.iter (walk_expr [] [] []) lt.seed_stmts;
+        (match expr_of_test_stmts lt.request_stmts with
+         | Some e -> walk_expr [] [] [] e
+         | None -> ())
       | _ -> ()
     ) decls;
     field_proof_registry := [];

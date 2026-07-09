@@ -19,8 +19,8 @@
   (only-in tesl/tesl/random random)
   (only-in tesl/tesl/maybe Maybe Something Nothing)
   (only-in tesl/tesl/list [List.length tesl_import_List_length] [List.foldl tesl_import_List_foldl] [List.append tesl_import_List_append])
-  (only-in (file "kanel-models.rkt") ValidOrgId ValidUserId kanelDbRead kanelDbWrite KanelUser Org OrgMembership OrgRole RoleAdmin RoleMember RoleViewer NewOrgRequest)
-  (only-in (file "kanel-auth.rkt") KanelSession Authenticated checkOrgMember checkOrgAdmin checkOrgMember-signature checkOrgAdmin-signature)
+  (only-in (file "KanelModels.rkt") ValidOrgId ValidUserId kanelDbRead kanelDbWrite KanelUser Org OrgMembership OrgRole RoleAdmin RoleMember RoleViewer NewOrgRequest)
+  (only-in (file "KanelAuth.rkt") KanelSession Authenticated checkOrgMember checkOrgAdmin checkOrgMember-signature checkOrgAdmin-signature)
 )
 
 

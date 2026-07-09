@@ -103,6 +103,14 @@
      (raw-value (hash-ref (current-evidence-env) value))]
     [(named-value? value) (named-value-value value)]
     [(check-ok? value) (raw-value (check-ok-value value))]
+    ;; Exists-pack projection (matrix proof/existpack): the checker types an
+    ;; exists-returning fn's result as its UNDERLYING type, so value-position
+    ;; consumption (`String.length tok`) must see the packed body — otherwise
+    ;; the raw packed-exists struct escapes into prims ("string-length:
+    ;; contract violation … given: (packed-exists …)").  The existential hides
+    ;; witness NAMES only; facts-of stays '() for a packed value, so proof
+    ;; hiding is preserved (unpack still goes through resolve-packed-exists).
+    [(packed-exists? value) (raw-value (packed-exists-body value))]
     [else value]))
 
 

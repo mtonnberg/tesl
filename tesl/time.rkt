@@ -17,7 +17,14 @@
 ;; Use .value to extract the raw integer when you need plain arithmetic.
 (define-newtype PosixMillis Integer)
 
-(provide time nowMillis PosixMillis formatTime durationMs addMs subtractMs diffMs
+;; Type-name symbol (mirrors Money/Dict/Maybe): `TimeZone` appears verbatim in
+;; emitted TYPE positions, so the importing module needs a real require binding
+;; or its type-ref is keyed to the emitting file (issue #42).  The VALUE
+;; constructors (Utc, FixedOffset, zone names) still lower inline to the
+;; tesl-tz-* helpers and stay config-only.
+(define TimeZone 'TimeZone)
+
+(provide time nowMillis PosixMillis TimeZone formatTime durationMs addMs subtractMs diffMs
          Time.add Time.subtract Time.diff
          Time.posixToSeconds Time.secondsToPosix
          Time.truncHour Time.truncDay Time.truncWeek Time.truncMonth Time.truncYear

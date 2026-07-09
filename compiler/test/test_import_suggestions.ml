@@ -386,6 +386,51 @@ let test_w050_deletes_multiline_import () =
   Alcotest.(check bool) "sibling W050s share one edit" true
     (fix_empty = fix_insert)
 
+(* Item 7 (review 2026-07-09): a config-only stdlib name in a TYPE position
+   (currency/timezone constructor, SI alias — Stdlib_config_names.
+   rejected_in_type_position) must NOT get an import suggestion: applying
+   "add `import Tesl.Money exposing [All]`" lands straight on the
+   type-position rejection — a guided dead end.  The unbound-type error stays,
+   with no stdlib hint and no fix.  VALUE-position suggestions for the same
+   name are unaffected (the import IS legal there). *)
+let test_type_position_excludes_config_only_names () =
+  let has sub s =
+    try ignore (Str.search_forward (Str.regexp_string sub) s 0); true
+    with Not_found -> false
+  in
+  let dir = fresh_dir () in
+  let src = "#lang tesl\n\
+             module Main exposing [h]\n\
+             \n\
+             fn h(x: All) -> All =\n\
+             \  x\n" in
+  let diags = check_at (Filename.concat dir "main.tesl") src in
+  let d = find_diag ~code:"T001" ~msg_sub:"type `All` is not in scope" diags in
+  if has "Tesl.Money" d.message then
+    Alcotest.failf
+      "type-position suggestion must not offer the config-only `All` \
+       (importing it lands on the type-position rejection): %s" d.message;
+  (match d.fix with
+   | None -> ()
+   | Some _ ->
+     Alcotest.failf "type-position config-only name must carry no import fix, \
+                     got %s" (Compile.fix_to_json d.fix));
+  (* Surgical-exclusion control: an ordinary type name still gets its stdlib
+     suggestion through the same (type-position) path. *)
+  let dir2 = fresh_dir () in
+  let src2 = "#lang tesl\n\
+              module Main exposing [g]\n\
+              import Tesl.Prelude exposing [Int]\n\
+              \n\
+              fn g(x: Maybe Int) -> Int =\n\
+              \  0\n" in
+  let diags2 = check_at (Filename.concat dir2 "main.tesl") src2 in
+  let d2 = find_diag ~code:"T001" ~msg_sub:"type `Maybe` is not in scope" diags2 in
+  if not (has "Tesl.Maybe" d2.message) then
+    Alcotest.failf
+      "ordinary type-position suggestion must still name its module: %s"
+      d2.message
+
 (* ── Runner ──────────────────────────────────────────────────────────────── *)
 
 let () =
@@ -397,6 +442,8 @@ let () =
         test_stdlib_fn_extend_existing_import;
       Alcotest.test_case "type not in scope names its module" `Quick
         test_type_not_in_scope_suggests_module;
+      Alcotest.test_case "type position excludes config-only names (item 7)" `Quick
+        test_type_position_excludes_config_only_names;
       Alcotest.test_case "no imports → insert before first decl" `Quick
         test_insert_with_no_imports;
       Alcotest.test_case "proof predicate carries fix" `Quick

@@ -14,7 +14,7 @@
   tesl/tesl/sse
   (prefix-in __ttz_ (only-in tesl/tesl/time tesl-tz-utc tesl-tz-fixed tesl-tz-named))
   (only-in tesl/tesl/prelude Int String List)
-  (only-in tesl/tesl/time PosixMillis [Time.secondsToPosix tesl_import_Time_secondsToPosix] [Time.posixToSeconds tesl_import_Time_posixToSeconds] [Time.truncHour tesl_import_Time_truncHour] [Time.truncDay tesl_import_Time_truncDay] [Time.truncWeek tesl_import_Time_truncWeek] [Time.truncMonth tesl_import_Time_truncMonth] [Time.truncYear tesl_import_Time_truncYear] [Time.offsetAt tesl_import_Time_offsetAt])
+  (only-in tesl/tesl/time PosixMillis [Time.secondsToPosix tesl_import_Time_secondsToPosix] [Time.posixToSeconds tesl_import_Time_posixToSeconds] [Time.truncHour tesl_import_Time_truncHour] [Time.truncDay tesl_import_Time_truncDay] [Time.truncWeek tesl_import_Time_truncWeek] [Time.truncMonth tesl_import_Time_truncMonth] [Time.truncYear tesl_import_Time_truncYear] [Time.offsetAt tesl_import_Time_offsetAt] TimeZone)
   (only-in tesl/tesl/tuple Tuple2 [Tuple2.first tesl_import_Tuple2_first] [Tuple2.second tesl_import_Tuple2_second])
   (only-in tesl/tesl/maybe Maybe Something Nothing)
   (only-in tesl/tesl/list [List.length tesl_import_List_length] [List.head tesl_import_List_head])

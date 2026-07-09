@@ -59,6 +59,7 @@
                   check-fail-status)
          (only-in "../dsl/private/domain-registry.rkt"
                   domain-registry-add!
+                  domain-registry-of-kind
                   register-background-thread!)
          (only-in "../dsl/types.rkt"
                   runtime-value->jsexpr
@@ -66,7 +67,19 @@
                   lookup-record-spec
                   record-value?
                   record-value-type
-                  record-value-fields)
+                  record-value-identity
+                  record-value-fields
+                  type-ref
+                  type-ref?
+                  type-ref-name
+                  type-ref-owner
+                  ;; exported for-syntax by types.rkt, so this only-in binds
+                  ;; it at PHASE 1: define-queue and queue-for-job-ref mint
+                  ;; nominal job-type identities (#s(type-ref owner name)) at
+                  ;; expansion time — the same minting define-record uses for
+                  ;; record identity, so payload and queue keys compare
+                  ;; equal?.
+                  normalize-type-stx)
          (only-in "../dsl/sql.rkt"
                   current-database-runtime
                   database-runtime-connection
@@ -89,6 +102,8 @@
  ;; Queue
  define-queue
  enqueue!
+ queue-for-job
+ queue-for-job-ref
  process-next-job!
  process-next-job/result!
  pending-job-count
@@ -97,6 +112,7 @@
  ;; Pub/sub channel
  define-channel
  publish-event!
+ channel-for-name
  received-events
  start-pubsub-listen!        ; for WebSocket server
  ;; Proof predicates
@@ -112,6 +128,7 @@
  start-dead-workers!
  ;; Struct accessors (tests)
  (struct-out queue-spec)
+ queue-spec-job-type-refs ; forcing wrapper over the lazy field (see struct def)
  (struct-out channel-spec)
  (struct-out dead-job)
  ;; Worker-pool tracking (for DAP inspection)
@@ -137,13 +154,36 @@
 
 (struct queue-spec
   (name           ; symbol  — queue identifier
-   job-types      ; (listof symbol)
+   job-types      ; (listof symbol) — job-type NAMES (PG strings, display, api-test registry)
    store          ; mutable hash  — in-memory fallback: job-id → job-entry
    semaphore      ; semaphore    — signals the worker thread when a job is available
    max-attempts   ; integer
    backoff        ; 'exponential | 'fixed
-   initial-delay) ; integer (seconds)
+   initial-delay  ; integer (seconds)
+   job-type-refs-lazy) ; promise of (listof (or type-ref? symbol)) — NOMINAL
+                  ; job identities; read through queue-spec-job-type-refs,
+                  ; NEVER this raw accessor.  define-queue stores a (delay …)
+                  ; that mints the refs on FIRST ACCESS from quote-syntax'd
+                  ; job-type identifiers, so a define-record that textually
+                  ; FOLLOWS the define-queue in the same module is already
+                  ; bound by then (module expansion is sequential, but the
+                  ; promise forces only after the whole module is
+                  ; instantiated) — an expansion-time mint silently degraded
+                  ; such queues to bare-symbol name routing.  A bare symbol
+                  ; entry now means the identifier is unbound in the FULLY
+                  ; EXPANDED module (a genuinely foreign name), and keeps
+                  ; name-match semantics.  Parallel to job-types
+                  ; entry-for-entry.  A plain list value is also accepted for
+                  ; hand-constructed specs (tests).
   #:transparent)
+
+;; Public accessor — the historical name and contract: the ref LIST.  Forces
+;; the promise minted by define-queue; tolerates a plain list for
+;; hand-constructed specs.  Idempotent and pure, so a racing double-force is
+;; harmless.
+(define (queue-spec-job-type-refs s)
+  (define v (queue-spec-job-type-refs-lazy s))
+  (if (promise? v) (force v) v))
 
 (struct channel-spec
   (name           ; symbol
@@ -259,13 +299,35 @@
 (define (make-job-id)
   (symbol->string (gensym 'job)))
 
-(define (job-entry payload [status 'pending] [attempts 0])
-  (hash 'payload payload 'status status 'attempts attempts))
+;; Monotonic enqueue sequence number for the in-memory store.  The store is a
+;; mutable hash keyed by gensym'd job-id, so iterating it yields ARBITRARY
+;; order — but dequeue must be FIFO for parity with the PostgreSQL path
+;; (`order by created_at asc`, see dequeue-next!).  Every job-entry records
+;; the sequence at enqueue time; status updates (hash-set on the existing
+;; entry) preserve it, so a retried job keeps its original position exactly
+;; like an unchanged created_at does on PostgreSQL.
+(define in-memory-job-seq (box 0))
+(define (next-job-seq!)
+  (let loop ()
+    (define n (unbox in-memory-job-seq))
+    (if (box-cas! in-memory-job-seq n (add1 n))
+        (add1 n)
+        (loop))))
 
+(define (job-entry payload [status 'pending] [attempts 0])
+  (hash 'payload payload 'status status 'attempts attempts 'seq (next-job-seq!)))
+
+(define (job-entry-seq entry)
+  (hash-ref entry 'seq 0))
+
+;; FIFO: sorted by enqueue sequence — (car (pending-jobs store)) is the oldest
+;; pending job, matching PostgreSQL's `order by created_at asc` dequeue.
 (define (pending-jobs store)
-  (for/list ([(k v) (in-hash store)]
-             #:when (eq? (hash-ref v 'status) 'pending))
-    (cons k v)))
+  (sort (for/list ([(k v) (in-hash store)]
+                   #:when (eq? (hash-ref v 'status) 'pending))
+          (cons k v))
+        <
+        #:key (lambda (entry) (job-entry-seq (cdr entry)))))
 
 (define (pending-job-count queue-s)
   (require-capabilities! (list queueRead))
@@ -300,6 +362,23 @@
         #:max-attempts max-att:integer
         #:backoff backoff-sym:id
         #:initial-delay init-delay:integer)
+     ;; Nominal job identity: normalize each job-type identifier AS BOUND IN
+     ;; THE FULLY EXPANDED MODULE (a record define anywhere in this module, or
+     ;; a require from the declaring module) — the exact minting define-record
+     ;; uses for record-value identity, so enqueue!'s payload check compares
+     ;; owners structurally.  The refs are minted LAZILY (a promise forced on
+     ;; first access via queue-spec-job-type-refs): an expansion-time mint saw
+     ;; only bindings discovered so far during sequential module expansion, so
+     ;; a job record DECLARED AFTER its queue silently degraded to a
+     ;; bare-symbol entry — spelling-based routing with the nominal misroute
+     ;; backstop self-disabled, conditional on textual declaration order.  A
+     ;; quote-syntax'd identifier keeps the module's scopes, and by the time
+     ;; any enqueue/lookup forces the promise the module is fully instantiated,
+     ;; so identifier-binding resolves against the COMPLETE module.  An
+     ;; identifier unbound even then is a genuinely foreign name: it stays a
+     ;; bare symbol and keeps name-match semantics (minting a ref would key the
+     ;; owner to THIS emitting file — a wrong owner that would false-mismatch
+     ;; every payload).
      #'(define name
          (let ([spec (queue-spec 'name
                                  '(job-type ...)
@@ -307,11 +386,112 @@
                                  (make-semaphore 0)
                                  max-att
                                  'backoff-sym
-                                 init-delay)])
+                                 init-delay
+                                 (delay
+                                   (for/list ([jt (in-list (list (quote-syntax job-type) ...))])
+                                     (if (identifier-binding jt)
+                                         (job-type-ref-of-quoted jt)
+                                         (syntax-e jt)))))])
            ;; Register the LIVE spec so the DAP debugger can enumerate this queue
            ;; (and read its pending jobs) even when it is not a paused-frame local.
            (domain-registry-add! 'queues spec)
            spec))]))
+
+;; Runtime twin of normalize-type-identifier (dsl/types.rkt, phase 1) for the
+;; single-identifier job-type case: mint #s(type-ref <owner> <name>) from a
+;; BOUND quote-syntax'd identifier.  Owner selection is byte-for-byte
+;; binding-owner-key's cond (resolved module path first, then the syntax
+;; source, then the non-path resolved name) so the ref compares equal? to the
+;; identity define-record minted for the same record.  type-ref is #:prefab,
+;; so phase-0 and phase-1 mints are interchangeable.
+(define (job-type-ref-of-quoted jt)
+  (define binding (identifier-binding jt))
+  (define resolved
+    (resolved-module-path-name (module-path-index-resolve (car binding))))
+  (type-ref (cond [(path? resolved) resolved]
+                  [(path? (syntax-source jt)) (syntax-source jt)]
+                  [resolved resolved]
+                  [else 'interactive])
+            (cadr binding)))
+
+;; ── Cross-module queue lookup ────────────────────────────────────────────────
+
+;; Resolve a job type to its declaring queue via the process-wide registry.
+;; Compiled for an `enqueue` whose queue lives in another module: the enqueue
+;; site cannot name the queue binding (requiring it back from the entrypoint
+;; would be a require cycle), but every define-queue has already registered its
+;; live spec by the time any handler/fn body runs.  Fail-closed on both zero
+;; and multiple declaring queues.
+;;
+;; job-type is either a bare SYMBOL (name match — hand-written callers and the
+;; unbound-identifier fallback of queue-for-job-ref) or a NOMINAL type-ref
+;; (#s(type-ref owner name), from queue-for-job-ref): a ref matches a queue
+;; entry by equal? — same name AND same declaring module — with a name
+;; fallback only against a queue's bare-symbol entries (whose define-queue
+;; could not resolve an owner).  This closes the misroute where module B's own
+;; `PingJob` record spelled the same as module A's routed into A's queue.
+
+;; The display name of a job-type key (ref or bare symbol).
+(define (job-type-key-name jt)
+  (if (type-ref? jt) (type-ref-name jt) jt))
+
+;; Does queue-spec s declare job-type (ref or bare symbol)?
+(define (queue-declares-job-type? s job-type)
+  (cond
+    [(type-ref? job-type)
+     (define refs (queue-spec-job-type-refs s))
+     (or (and (list? refs) (member job-type refs) #t)
+         ;; name fallback ONLY for bare-symbol entries (unbound at define-queue)
+         (and (list? refs) (memq (type-ref-name job-type) (filter symbol? refs)) #t))]
+    [else (and (memq job-type (queue-spec-job-types s)) #t)]))
+
+(define (queue-for-job job-type)
+  (define matches
+    (for/list ([s (in-list (domain-registry-of-kind 'queues))]
+               #:when (queue-declares-job-type? s job-type))
+      s))
+  (cond
+    [(and (pair? matches) (null? (cdr matches))) (car matches)]
+    [(null? matches)
+     ;; A nominal miss with a NAME-equal queue elsewhere is the misroute the
+     ;; refs exist to stop — report both owners instead of "no queue".
+     (define name-only
+       (and (type-ref? job-type)
+            (for/first ([s (in-list (domain-registry-of-kind 'queues))]
+                        #:when (memq (type-ref-name job-type)
+                                     (queue-spec-job-types s)))
+              s)))
+     (if name-only
+         (let ([declared (for/first ([r (in-list (or (queue-spec-job-type-refs name-only) '()))]
+                                     #:when (and (type-ref? r)
+                                                 (eq? (type-ref-name r)
+                                                      (type-ref-name job-type))))
+                           r)])
+           (raise-user-error 'enqueue!
+             "~a from ~a is not a job type of queue ~a (declares ~a from ~a)"
+             (type-ref-name job-type) (type-ref-owner job-type)
+             (queue-spec-name name-only)
+             (type-ref-name job-type)
+             (if declared (type-ref-owner declared) "<unknown>")))
+         (raise-user-error 'enqueue!
+           "no queue declares job type ~a — declare `Job ~a <worker> ...` in a queue in the running program"
+           (job-type-key-name job-type) (job-type-key-name job-type)))]
+    [else
+     (raise-user-error 'enqueue!
+       "ambiguous job type ~a: declared by queues ~a — a job type may be handled by exactly one queue"
+       (job-type-key-name job-type) (map queue-spec-name matches))]))
+
+;; (queue-for-job-ref PingJob) → (queue-for-job '#s(type-ref <owner> PingJob))
+;; — the job-type identifier is require-bound at the enqueue site (the payload
+;; construction next to it already uses it), so syntax-time normalize keys the
+;; ref to the TRUE declaring module.  Unbound (hand-written Racket callers)
+;; falls back to today's bare-symbol name lookup.
+(define-syntax (queue-for-job-ref stx)
+  (syntax-parse stx
+    [(_ jt:id)
+     (if (identifier-binding #'jt)
+         #`(queue-for-job '#,(normalize-type-stx #'jt))
+         #'(queue-for-job 'jt))]))
 
 ;; ── Proof attachment ─────────────────────────────────────────────────────────
 
@@ -423,10 +603,14 @@
                 [dj          (attach-dead-queue-proofs queue-s job-id raw-payload)])
            (list job-id (dead-job-named-val dj))))]
     [else
+     ;; FIFO by enqueue sequence — parity with the PG branch's
+     ;; `order by created_at asc` above (same class as pending-jobs).
      (define dead-entries
-       (for/list ([(k v) (in-hash (queue-spec-store queue-s))]
-                  #:when (eq? (hash-ref v 'status) 'dead))
-         (cons k v)))
+       (sort (for/list ([(k v) (in-hash (queue-spec-store queue-s))]
+                        #:when (eq? (hash-ref v 'status) 'dead))
+               (cons k v))
+             <
+             #:key (lambda (entry) (job-entry-seq (cdr entry)))))
      (if (null? dead-entries)
          #f
          (let* ([entry    (car dead-entries)]
@@ -596,6 +780,39 @@
   (unless (queue-spec? queue-s)
     (raise-user-error 'enqueue! "expected a queue-spec, got ~a" queue-s))
   (define raw-payload (raw-value payload))
+  ;; Fail closed: the payload's record type must be one of the queue's declared
+  ;; job types.  Without this a payload that reached the wrong queue (e.g. via
+  ;; the cross-module queue-for-job name lookup) would be accepted here and
+  ;; only blow up inside the worker body, after any effects have run.
+  ;;
+  ;; The check is NOMINAL when it can be: if the spec carries job-type-refs and
+  ;; the name-matching declared entry is a type-ref, the payload's own record
+  ;; identity (record-value-identity, minted by define-record) must be equal? to
+  ;; a declared ref — a same-NAME record declared by a DIFFERENT module is the
+  ;; silent-misroute class and errors here with both owners.  Bare-symbol
+  ;; entries (job-type id unbound at define-queue) and specs without refs
+  ;; (hand-built in Racket tests) keep the historical name check.
+  (when (record-value? raw-payload)
+    (define payload-type (record-value-type raw-payload))
+    (unless (memq payload-type (queue-spec-job-types queue-s))
+      (raise-user-error 'enqueue!
+        "queue ~a does not declare job type ~a (declared: ~a)"
+        (queue-spec-name queue-s) payload-type (queue-spec-job-types queue-s)))
+    (define refs (queue-spec-job-type-refs queue-s))
+    (define declared-ref
+      (and (list? refs)
+           (for/first ([r (in-list refs)]
+                       #:when (and (type-ref? r) (eq? (type-ref-name r) payload-type)))
+             r)))
+    (when declared-ref
+      (define payload-identity (record-value-identity raw-payload))
+      (when (and (type-ref? payload-identity)
+                 (not (member payload-identity refs)))
+        (raise-user-error 'enqueue!
+          "~a from ~a is not a job type of queue ~a (declares ~a from ~a)"
+          payload-type (type-ref-owner payload-identity)
+          (queue-spec-name queue-s)
+          payload-type (type-ref-owner declared-ref)))))
   (define job-type-name
     (and (tesl-log-active?)
          (if (record-value? raw-payload)
@@ -979,6 +1196,34 @@
            ;; channel and its CONNECTED CLIENTS (the listeners hash) when paused.
            (domain-registry-add! 'channels spec)
            spec))]))
+
+;; ── Cross-module channel lookup ──────────────────────────────────────────────
+;;
+;; Resolve a channel NAME to its live channel-spec via the process-wide
+;; registry — the exact mirror of queue-for-job above.  Compiled for a
+;; `publish`/`subscribe` whose declaring `sseChannel` block lives in ANOTHER
+;; module: the publish site cannot name the channel binding (requiring the
+;; declarer back from the entrypoint would be a require cycle), but every
+;; define-channel has already registered its live spec by the time any
+;; handler/fn body runs.  The registry holds the SAME eq? instance the
+;; declaring module bound, so in-memory listener delivery (which walks
+;; channel-spec-listeners) is unchanged.  Fail-closed on both zero and
+;; multiple declaring modules.
+(define (channel-for-name name)
+  (define matches
+    (for/list ([s (in-list (domain-registry-of-kind 'channels))]
+               #:when (eq? (channel-spec-name s) name))
+      s))
+  (cond
+    [(and (pair? matches) (null? (cdr matches))) (car matches)]
+    [(null? matches)
+     (raise-user-error 'publish
+       "no sseChannel named ~a in the running program — the module declaring `sseChannel ~a(…) = SseChannel { … }` must be part of the program"
+       name name)]
+    [else
+     (raise-user-error 'publish
+       "ambiguous sseChannel name ~a: declared by ~a modules — a channel name must be declared exactly once per program"
+       name (length matches))]))
 
 ;; ── In-memory listener delivery ──────────────────────────────────────────────
 

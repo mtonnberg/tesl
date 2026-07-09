@@ -2552,6 +2552,14 @@ let parse_module_file path =
     | Err _ -> None
   with Sys_error _ -> None
 
+(* Graph nodes are CANONICAL paths (Validation_common.canonical_import_path):
+   [resolve_local_import_path] spells the same file differently depending on
+   the importing file (`main.tesl` on the CLI vs `./main.tesl` reached through
+   a dep's back-edge), and raw-string nodes made the SCC containing the entry
+   invisible — the emitter then fell back to plain requires and `raco make`
+   died with a raw "cycle in loading" (2026-07-08 audit). *)
+let canonical_import_path = Validation_common.canonical_import_path
+
 let build_local_import_graph entry_path =
   let graph : (string, string list) Hashtbl.t = Hashtbl.create 16 in
   let rec visit path =
@@ -2563,14 +2571,15 @@ let build_local_import_graph entry_path =
         | Some m ->
           List.filter_map (fun (imp : Ast.import_decl) ->
             if is_tesl_stdlib_module_name imp.module_name then None
-            else Some (resolve_local_import_path m.source_file imp.module_name)
+            else Some (canonical_import_path
+                         (resolve_local_import_path m.source_file imp.module_name))
           ) m.imports
       in
       Hashtbl.add graph path deps;
       List.iter visit deps
     end
   in
-  visit entry_path;
+  visit (canonical_import_path entry_path);
   graph
 
 let tarjan_sccs (graph : (string, string list) Hashtbl.t) =
@@ -2617,9 +2626,10 @@ let tarjan_sccs (graph : (string, string list) Hashtbl.t) =
   !sccs
 
 let cyclic_local_import_paths_for_entry entry_path =
+  let entry_canon = canonical_import_path entry_path in
   let graph = build_local_import_graph entry_path in
   let sccs = tarjan_sccs graph in
-  match List.find_opt (fun component -> List.mem entry_path component) sccs with
+  match List.find_opt (fun component -> List.mem entry_canon component) sccs with
   | Some component when List.length component > 1 -> component
   | _ -> []
 
@@ -2669,14 +2679,371 @@ let type_diags_of source (m : Ast.module_form) : diagnostic list =
     else base
   ) type_errors
 
-(** Produce a diagnostic for each pair of files involved in an import cycle.
-    Returns [] if the file is synthetic (empty path, <test>, etc.). *)
-(** Run the full check pipeline on a parsed module; returns diagnostics. *)
-let check_module source (m : Ast.module_form) : diagnostic list =
+(** The full PER-MODULE check pipeline (everything `--check <file>` runs except
+    the cross-module graph walk below): legacy-Bool lint, type check, proof
+    check, validations.  Factored out so [cross_module_diags] can run the exact
+    `--check dep.tesl` judgment on every transitively imported module — same
+    passes, same order, diagnostics anchored at the DEP's own file via its
+    parse locations. *)
+let module_local_diags source (m : Ast.module_form) : diagnostic list =
   legacy_bool_diagnostics m.source_file source m
   @ type_diags_of source m
   @ List.map diag_of_proof_error (Proof_checker.check_module m)
   @ List.map diag_of_validation_error (Validation.check_module m)
+
+(* ── Cross-module structural validation (2026-07-08 multi-module audit) ─────
+   `--check <entrypoint>` historically validated the entrypoint plus module
+   INTERFACES only, so two classes of dependency errors surfaced one phase too
+   late (at that module's own emit, or as a raw Racket error at `raco make`):
+
+   1. EXPORT LOCALITY — a dependency whose `exposing` list re-exports an
+      imported name passed the whole-program check, then its emit failed T001.
+   2. IMPORT CYCLES the emitter cannot lower — the cyclic-SCC inliner supports
+      only pure declarations (fn/type/record/entity/const/fact/tests/capturers);
+      a cycle containing config decls (server/database/queue/sseChannel/api/
+      codec/capability/agent/email/cache/workers/`main`) emitted provides with
+      no definition, and `raco make` rejected the require graph with a raw
+      "standard-module-name-resolver: cycle in loading".
+
+   3. (2026-07-09, the systemic hole behind both) MODULE BODIES — the
+      entrypoint check never type-checked imported modules' bodies at all: a
+      dependency with a hard type error (`cannot unify String with Int`), an
+      out-of-scope type, a proof error or a failing validation passed
+      `--check main.tesl` silently and only died when THAT module was emitted
+      ("check green, build red"; --generate-elm/-ts shipped clients for broken
+      programs).  The walk now runs the FULL per-module check pipeline
+      ([module_local_diags] — exactly `--check dep.tesl` semantics, which the
+      audit confirmed rejects these bodies) on every transitively imported
+      local module, each diagnostic anchored at that module's own file:line.
+      A dep that fails to PARSE is reported the same way.
+
+   This walk loads the transitive local-import graph (memoized parse) and
+   rejects all of the above at CHECK time with .tesl-anchored diagnostics.
+   Cycles made only of pure declarations remain legal — mutually recursive
+   modules are supported by the SCC inliner (example/sandbox*.tesl) — but a
+   module importing ITSELF is always rejected (the inliner never fires for a
+   single-node SCC, so the emitted file would require itself).
+
+   [skip_dep_body canon] (canonical path): when true, the dep's PER-MODULE
+   check is skipped — used by `--check f1 f2`/`--check-batch`/`--check-all` so
+   a module that is ITSELF a CLI argument is body-checked exactly once (its
+   own per-file run), never re-reported under each consumer.  The graph is
+   still traversed through skipped modules (their deps may not be CLI args),
+   and cycle/self-import detection is unaffected. *)
+(* KEEP IN SYNC with the emitter's cyclic-SCC inliner (emit_racket.ml): the
+   None arms below are exactly the decl kinds the inliner can lower inside an
+   import cycle.  The user-facing diagnostic further down enumerates the same
+   set — extend all three together when the inliner grows. *)
+let cycle_unsafe_decl_reason (d : Ast.top_decl) : string option =
+  match d with
+  | Ast.DFunc fd when fd.kind = Ast.MainKind -> Some "`main()`"
+  | Ast.DFunc _ | Ast.DType _ | Ast.DRecord _ | Ast.DEntity _ | Ast.DConst _
+  | Ast.DFact _ | Ast.DTest _ | Ast.DApiTest _ | Ast.DLoadTest _
+  | Ast.DCapture _ -> None
+  | Ast.DCodec c      -> Some (Printf.sprintf "codec `%s`" c.name)
+  | Ast.DDatabase db  -> Some (Printf.sprintf "database `%s`" db.name)
+  | Ast.DCapability c -> Some (Printf.sprintf "capability `%s`" c.name)
+  | Ast.DQueue q      -> Some (Printf.sprintf "queue `%s`" q.name)
+  | Ast.DChannel c    -> Some (Printf.sprintf "sseChannel `%s`" c.name)
+  | Ast.DWorkers w    -> Some (Printf.sprintf "workers `%s`" w.name)
+  | Ast.DCache c      -> Some (Printf.sprintf "cache `%s`" c.name)
+  | Ast.DAgent a      -> Some (Printf.sprintf "agent `%s`" a.name)
+  | Ast.DEmail e      -> Some (Printf.sprintf "email `%s`" e.name)
+  | Ast.DApi a        -> Some (Printf.sprintf "api `%s`" a.name)
+  | Ast.DServer s     -> Some (Printf.sprintf "server `%s`" s.name)
+
+let cross_module_diags ?(skip_dep_body : string -> bool = fun _ -> false)
+    (m : Ast.module_form) : diagnostic list =
+  let entry = m.Ast.source_file in
+  if entry = "" || entry = "<test>" || not (Sys.file_exists entry) then []
+  else begin
+    let mk_diag ~(source : string) (loc : Location.loc) message : diagnostic = {
+      file       = loc.Location.file;
+      start_line = loc.Location.start.line;
+      start_col  = loc.Location.start.col;
+      end_line   = loc.Location.stop.line;
+      end_col    = loc.Location.stop.col;
+      severity   = "error";
+      code       = (if source = "type-checker" then "T001" else "V001");
+      message;
+      fix        = None;
+      source;
+      manual     = None;
+    } in
+    let diags : diagnostic list ref = ref [] in
+    let entry_canon = canonical_import_path entry in
+    (* Parse cache keyed by canonical path; the entry uses the ALREADY-parsed
+       [m] (check_source may be validating an in-memory buffer).  Parse ERRORS
+       are kept (not collapsed to None) so a dep that fails to parse is
+       reported like any other dep-check failure; the underlying reads go
+       through [Checker.parse_local_import_module], the import cache shared
+       with the checker's own import loading (and across a batch run). *)
+    let parsed : (string, Ast.module_form Parser.result option) Hashtbl.t =
+      Hashtbl.create 16 in
+    Hashtbl.replace parsed entry_canon (Some (Parser.Ok m));
+    let parse_at ~spelling ~canon : Ast.module_form Parser.result option =
+      match Hashtbl.find_opt parsed canon with
+      | Some r -> r
+      | None ->
+        let r = Checker.parse_local_import_module spelling in
+        Hashtbl.replace parsed canon r; r
+    in
+    let visited : (string, unit) Hashtbl.t = Hashtbl.create 16 in
+    let reported_cycles : (string, unit) Hashtbl.t = Hashtbl.create 4 in
+    (* Every successfully parsed module of the transitive closure (deps only;
+       the entry [m] is prepended below) — input to the name-wired resolution
+       check after the walk. *)
+    let closure_mods : Ast.module_form list ref = ref [] in
+    (* [stack]: modules on the current DFS path, HEAD = the module whose
+       imports are being walked; used to reconstruct the cycle path. *)
+    let rec dfs (canon : string) (im : Ast.module_form)
+                (stack : (string * Ast.module_form) list) : unit =
+      let stack = (canon, im) :: stack in
+      List.iter (fun (imp : Ast.import_decl) ->
+        if not (is_tesl_stdlib_module_name imp.module_name) then begin
+          let spelling = resolve_local_import_path im.Ast.source_file imp.Ast.module_name in
+          let dep_canon = canonical_import_path spelling in
+          if dep_canon = canon then begin
+            (* Self-import: never lowerable — the emitted module would require
+               itself.  Always rejected.  The name-based
+               [Validation_names.check_self_imports] already reports the
+               `import Self` spelling; this PATH-based variant only reports
+               when the import is spelled differently but still resolves to
+               the module's own file. *)
+            if imp.Ast.module_name <> im.Ast.module_name then
+              diags := mk_diag ~source:"validation" imp.Ast.loc
+                (Printf.sprintf
+                   "module `%s` imports itself (import `%s` resolves to this \
+                    module's own file) — remove this import; a module's own \
+                    declarations are already in scope"
+                   im.Ast.module_name imp.Ast.module_name)
+                :: !diags
+          end
+          else if List.mem_assoc dep_canon stack then begin
+            (* Back edge: an import cycle.  Reconstruct the path
+               dep -> ... -> current -> dep for the diagnostic. *)
+            let rec take_until acc = function
+              | [] -> acc
+              | (c, mf) :: rest ->
+                if c = dep_canon then (c, mf) :: acc
+                else take_until ((c, mf) :: acc) rest
+            in
+            let members = take_until [] stack in  (* dep first, current last *)
+            let key = String.concat "\x00"
+                        (List.sort String.compare (List.map fst members)) in
+            if not (Hashtbl.mem reported_cycles key) then begin
+              Hashtbl.replace reported_cycles key ();
+              let offender =
+                List.find_map (fun (_, mf) ->
+                  List.find_map (fun d ->
+                    match cycle_unsafe_decl_reason d with
+                    | Some reason -> Some (mf.Ast.module_name, reason)
+                    | None -> None
+                  ) mf.Ast.decls
+                ) members
+              in
+              match offender with
+              | None -> ()  (* pure SCC: supported via inline (sandbox class) *)
+              | Some (offender_name, reason) ->
+                let path_str =
+                  String.concat " -> "
+                    (List.map (fun (_, mf) -> mf.Ast.module_name) members
+                     @ [ (match members with (_, first) :: _ -> first.Ast.module_name
+                                           | [] -> imp.Ast.module_name) ])
+                in
+                diags := mk_diag ~source:"validation" imp.Ast.loc
+                  (Printf.sprintf
+                     "import cycle detected: %s — module `%s` declares %s, so \
+                      this cycle cannot be compiled (modules in an import cycle \
+                      may only contain fn (non-main)/type/record/entity/const/\
+                      fact/test/api-test/load-test/capture declarations, which \
+                      the compiler inlines). Break the cycle by moving the \
+                      shared declarations into a separate module imported by \
+                      both sides."
+                     path_str offender_name reason)
+                  :: !diags
+            end
+          end
+          else if not (Hashtbl.mem visited dep_canon) then begin
+            (* Mark BEFORE descending: a diamond re-reaches the dep only after
+               this subtree completes (during it, the stack check fires), so
+               every module is body-checked at most once per invocation. *)
+            Hashtbl.replace visited dep_canon ();
+            match parse_at ~spelling ~canon:dep_canon with
+            | None -> ()   (* unresolvable import: the entry's own checker
+                              reports it at the import site *)
+            | Some (Parser.Err e) ->
+              (* A dep that fails to PARSE is a whole-program check failure,
+                 anchored at the dep's own file (previously silent here; the
+                 entry only saw "unbound name" fallout at best). *)
+              if not (skip_dep_body dep_canon) then
+                diags := diag_of_parse_error e :: !diags
+            | Some (Parser.Ok dep_m) ->
+              closure_mods := dep_m :: !closure_mods;
+              (* THE WHOLE-PROGRAM CHECK: run the full `--check dep.tesl`
+                 pipeline on the dependency (types, proofs, validations,
+                 export locality — the checker returns all of these), so a
+                 broken body can no longer hide behind a clean interface.
+                 Diagnostics carry the dep's own file/lines via its parse
+                 locations. *)
+              if not (skip_dep_body dep_canon) then begin
+                match
+                  (try Some (In_channel.with_open_text spelling
+                               In_channel.input_all)
+                   with Sys_error _ -> None)
+                with
+                | Some dep_source ->
+                  diags := List.rev_append
+                             (module_local_diags dep_source dep_m) !diags
+                | None -> ()
+              end;
+              dfs dep_canon dep_m stack
+          end
+        end
+      ) im.Ast.imports
+    in
+    dfs entry_canon m [];
+    (* ── Entrypoint-closure name-wired resolution (issue #41 class) ─────────
+       Cache / email / publish / subscribe / enqueue sites resolve their NAME
+       through the process-wide domain registry at runtime when the declaring
+       block is in another module.  The registry only ever holds specs from
+       modules that are actually part of the program, so a name declared
+       NOWHERE in the entry's transitive import closure can NEVER resolve —
+       the runtime lookup is fail-closed, but only fires at first call.  When
+       the entry is a PROGRAM ROOT (it declares `main()`, a server, or an
+       api-test/load-test — the module IS the program), reject at check time
+       with the use anchored at its own site.  A plain library checked
+       standalone is exempt by design: its declaring module may legitimately
+       be a downstream importer (the importer-declares pattern #41 chose the
+       registry for). *)
+    let is_program_root =
+      List.exists (function
+        | Ast.DFunc fd -> fd.Ast.kind = Ast.MainKind
+        | Ast.DServer _ | Ast.DApiTest _ | Ast.DLoadTest _ -> true
+        | _ -> false
+      ) m.Ast.decls
+    in
+    if is_program_root then begin
+      let closure = m :: List.rev !closure_mods in
+      (* (kind, name, declaring module, decl loc) for every name-wired
+         declaration in the closure — the loc/module carry the duplicate
+         diagnostic below; the (kind, name) projection feeds the
+         declared-nowhere check. *)
+      let declared_with_locs =
+        List.concat_map (fun (cm : Ast.module_form) ->
+          List.concat_map (fun d ->
+            match d with
+            | Ast.DCache (c : Ast.cache_form) ->
+              [ (Desugar.UseCache, c.Ast.name, cm.Ast.module_name, c.Ast.loc) ]
+            | Ast.DEmail (em : Ast.email_form) ->
+              [ (Desugar.UseEmail, em.Ast.name, cm.Ast.module_name, em.Ast.loc) ]
+            | Ast.DChannel (ch : Ast.channel_form) ->
+              [ (Desugar.UseChannel, ch.Ast.name, cm.Ast.module_name, ch.Ast.loc) ]
+            | Ast.DQueue (q : Ast.queue_form) ->
+              List.map (fun jt ->
+                (Desugar.UseJobType, jt, cm.Ast.module_name, q.Ast.loc))
+                (Desugar.queue_job_types q)
+            | _ -> []
+          ) cm.Ast.decls
+        ) closure
+      in
+      let declared =
+        List.map (fun (k, n, _, _) -> (k, n)) declared_with_locs in
+      let declared_mem kind name =
+        List.exists (fun (k, n) -> k = kind && n = name) declared in
+      (* Item 13 (review 2026-07-09): 'declared more than once' is as illegal
+         as 'declared nowhere' — the runtime lookups (cache-for-name /
+         email-for-name / channel-for-name / queue-for-job) fail closed on
+         multiplicity ("declared exactly once per program") but only at first
+         cross-module call or module instantiation.  Surface it at check time,
+         anchored at the second declaration, naming every declaring module. *)
+      let dup_reported : (Desugar.wired_use_kind * string, unit) Hashtbl.t =
+        Hashtbl.create 4 in
+      List.iter (fun (kind, name, _, _) ->
+        if not (Hashtbl.mem dup_reported (kind, name)) then begin
+          let dups =
+            List.filter (fun (k, n, _, _) -> k = kind && n = name)
+              declared_with_locs in
+          if List.length dups > 1 then begin
+            Hashtbl.replace dup_reported (kind, name) ();
+            let modules =
+              List.map (fun (_, _, mn, _) -> Printf.sprintf "`%s`" mn) dups in
+            let (_, _, _, anchor_loc) = List.nth dups 1 in
+            let msg = match kind with
+              | Desugar.UseCache ->
+                Printf.sprintf
+                  "cache `%s` is declared %d times in this program (modules \
+                   %s) — a cache name must be declared exactly once per \
+                   program; remove or rename the duplicate declarations"
+                  name (List.length dups) (String.concat ", " modules)
+              | Desugar.UseEmail ->
+                Printf.sprintf
+                  "email `%s` is declared %d times in this program (modules \
+                   %s) — an email name must be declared exactly once per \
+                   program; remove or rename the duplicate declarations"
+                  name (List.length dups) (String.concat ", " modules)
+              | Desugar.UseChannel ->
+                Printf.sprintf
+                  "sseChannel `%s` is declared %d times in this program \
+                   (modules %s) — an sseChannel name must be declared exactly \
+                   once per program; remove or rename the duplicate \
+                   declarations"
+                  name (List.length dups) (String.concat ", " modules)
+              | Desugar.UseJobType ->
+                Printf.sprintf
+                  "job type `%s` is declared by %d queues in this program \
+                   (modules %s) — a job type must belong to exactly one \
+                   queue per program; remove it from the duplicate `jobs:` \
+                   lists"
+                  name (List.length dups) (String.concat ", " modules)
+            in
+            diags := mk_diag ~source:"validation" anchor_loc msg :: !diags
+          end
+        end
+      ) declared_with_locs;
+      List.iter (fun cm ->
+        List.iter (fun ((kind : Desugar.wired_use_kind), name, loc) ->
+          if not (declared_mem kind name) then begin
+            let msg = match kind with
+              | Desugar.UseCache ->
+                Printf.sprintf
+                  "no cache named `%s` is declared anywhere in this program — \
+                   declare `cache %s = Cache { … }` in this module or one of \
+                   the entrypoint's (transitive) imports" name name
+              | Desugar.UseEmail ->
+                Printf.sprintf
+                  "no email named `%s` is declared anywhere in this program — \
+                   declare `email %s = Email { … }` in this module or one of \
+                   the entrypoint's (transitive) imports" name name
+              | Desugar.UseChannel ->
+                Printf.sprintf
+                  "no sseChannel named `%s` is declared anywhere in this \
+                   program — declare `sseChannel %s(…) = SseChannel { … }` in \
+                   this module or one of the entrypoint's (transitive) imports"
+                  name name
+              | Desugar.UseJobType ->
+                Printf.sprintf
+                  "no queue declares job type `%s` anywhere in this program — \
+                   add `%s` to a queue's `jobs:` list in this module or one of \
+                   the entrypoint's (transitive) imports" name name
+            in
+            diags := mk_diag ~source:"validation" loc msg :: !diags
+          end
+        ) (Desugar.collect_name_wired_uses cm)
+      ) closure
+    end;
+    List.rev !diags
+  end
+
+(** Run the full check pipeline on a parsed module; returns diagnostics.
+    Whole-program: [cross_module_diags] runs the same per-module pipeline on
+    every transitively imported local module, so a dependency's errors fail
+    the entrypoint check with dep-anchored diagnostics.  [skip_dep_body]
+    (canonical path predicate) suppresses the dep-body re-check for modules
+    that are themselves being checked in the same CLI invocation. *)
+let check_module ?skip_dep_body source (m : Ast.module_form) : diagnostic list =
+  module_local_diags source m
+  @ cross_module_diags ?skip_dep_body m
 
 let default_root_path () =
   match Sys.getenv_opt "TESL_REPO_ROOT" with
@@ -2722,7 +3089,10 @@ let compile_source ?(root_path=default_root_path ()) ?(type_check=true) ?(debug=
           time_phase timing "validation" (fun () ->
             List.map diag_of_validation_error (Validation.check_module m))
         in
-        type_diags @ proof_diags @ validation_diags
+        let graph_diags =
+          time_phase timing "modgraph" (fun () -> cross_module_diags m)
+        in
+        type_diags @ proof_diags @ validation_diags @ graph_diags
     in
     if diags <> [] then Failure diags
     else begin
@@ -2763,7 +3133,10 @@ let compile_file ?(root_path=default_root_path ()) ?(type_check=true) filename =
           time_phase timing "validation" (fun () ->
             List.map diag_of_validation_error (Validation.check_module m))
         in
-        type_diags @ proof_diags @ validation_diags
+        let graph_diags =
+          time_phase timing "modgraph" (fun () -> cross_module_diags m)
+        in
+        type_diags @ proof_diags @ validation_diags @ graph_diags
     in
     if diags <> [] then Failure diags
     else
@@ -2885,11 +3258,11 @@ let local_bindings_file filename =
   let source = In_channel.with_open_text filename In_channel.input_all in
   local_bindings_source filename source
 
-let check_source filename source =
+let check_source ?skip_dep_body filename source =
   try
     match parse_module filename source with
     | Err e -> [diag_of_parse_error e]
-    | Ok m  -> check_module source m
+    | Ok m  -> check_module ?skip_dep_body source m
   with Failure msg -> [{
     file       = filename;
     start_line = 1; start_col = 1;
@@ -2902,9 +3275,26 @@ let check_source filename source =
     manual     = None;
   }]
 
-let check_file filename =
+let check_file ?skip_dep_body filename =
   let source = In_channel.with_open_text filename In_channel.input_all in
-  check_source filename source
+  check_source ?skip_dep_body filename source
+
+(** Canonical-path membership predicate over a CLI file list.  Used by every
+    multi-file check driver so the whole-program dep walk skips the body
+    re-check of any module that is ITSELF an argument of the same invocation:
+    that module's own per-file check reports its diagnostics exactly once
+    (dedupe by [Validation_common.canonical_import_path], which unifies
+    `lib.tesl` / `./lib.tesl` / symlinked spellings). *)
+let cli_skip_predicate (filenames : string list) : string -> bool =
+  let set = Hashtbl.create 16 in
+  List.iter (fun f -> Hashtbl.replace set (canonical_import_path f) ()) filenames;
+  fun canon -> Hashtbl.mem set canon
+
+(** `--check f1 f2 …`: whole-program check of each file; a dep that is also a
+    CLI argument here is reported only under its own entry. *)
+let check_files (filenames : string list) : diagnostic list =
+  let skip = cli_skip_predicate filenames in
+  List.concat_map (fun f -> check_file ~skip_dep_body:skip f) filenames
 
 (* ── Client-generation module merge (#36) ────────────────────────────────── *)
 
@@ -2982,18 +3372,20 @@ let merge_imported_client_decls (entry : Ast.module_form) : Ast.module_form =
    instead of once per consumer.
 
    Per-file results are returned as an ordered association list so callers can
-   report a per-file pass/fail summary.  Each file is checked independently:
-   the diagnostics for one file are exactly what `check_file` would produce for
-   it on its own (the cache only avoids redundant *imported-module* parses, it
-   never shares the primary module's check state), so batch output is identical
-   to running the files separately. *)
+   report a per-file pass/fail summary.  Each file is checked independently
+   (the cache only avoids redundant *imported-module* parses, it never shares
+   the primary module's check state).  The whole-program dep walk skips the
+   body re-check of deps that are THEMSELVES batch members ([cli_skip_predicate]),
+   so a broken shared module fails its own row exactly once instead of being
+   re-reported under every consumer. *)
 
 (** Check each of [filenames] in one process, sharing the imported-module parse
     cache.  Returns [(filename, diagnostics)] in input order. *)
 let check_files_batch (filenames : string list) : (string * diagnostic list) list =
+  let skip = cli_skip_predicate filenames in
   List.map (fun filename ->
     let diags =
-      try check_file filename
+      try check_file ~skip_dep_body:skip filename
       with Sys_error msg ->
         [{ file = filename; start_line = 0; start_col = 0;
            end_line = 0; end_col = 0; severity = "error";

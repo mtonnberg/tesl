@@ -139,7 +139,10 @@ fn f(n: Int) -> Int requires [totallyBogusCap] = n
 |}
 let proof_expected =
   "[P001] error @ proof-checker 3:3-5:1\n\
-  \  function 'f' requires undeclared capability 'totallyBogusCap'"
+  \  function 'f' requires undeclared capability 'totallyBogusCap'; \
+     capabilities must be declared in the module that uses them or in a \
+     module it imports — move the `capability` declaration to a shared \
+     module both can import"
 
 (* ── Validation error (V001, source=validation) ─────────────────────────────── *)
 (* A server binding referencing a handler that does not exist. *)

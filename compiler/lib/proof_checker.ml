@@ -118,7 +118,12 @@ let stdlib_capabilities : (string * (string * string list) list) list =
   Validation_common.tesl_stdlib_cap_map
 
 let load_imported_cap_map (m : module_form) : (string * string list) list =
-  List.concat_map (fun (imp : import_decl) ->
+  (* Issue-#41 companion: implicit cache/email capabilities ("cacheCap <Name>"
+     / "emailCap") from every transitively imported local module — the single
+     collector lives in Validation_common (shared with the capability
+     validator) so the two judgments cannot drift. *)
+  Validation_common.collect_imported_cache_email_caps m
+  @ List.concat_map (fun (imp : import_decl) ->
     let requested = match imp.names with
       | ImportAll -> None
       | ImportExposing names -> Some names
@@ -1044,12 +1049,21 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
      list: each listed name must be a declared/imported capability.  (Only a
      FUNCTION's parameters can bind a capability-row variable, so no
      [func_bound_cap_vars] exception here.) *)
+  (* Guidance shared by every requires-list rejection (matrix proof/capmain):
+     the commonest miss is a capability declared in the ENTRYPOINT while a lib
+     fn requires it — capability scope is per-module-plus-imports, so the
+     declaration must live where (or below where) it is used. *)
+  let undeclared_cap_guidance =
+    "; capabilities must be declared in the module that uses them or in a \
+     module it imports — move the `capability` declaration to a shared module \
+     both can import" in
   let check_requires ~what ~name ~loc caps =
     List.iter (fun cap ->
       if not (List.mem cap declared_caps) then
         errors := { loc;
           message = Printf.sprintf
-            "%s '%s' requires undeclared capability '%s'" what name cap
+            "%s '%s' requires undeclared capability '%s'%s" what name cap
+            undeclared_cap_guidance
         } :: !errors
     ) caps
   in
@@ -1074,7 +1088,8 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
         if not (List.mem cap declared_caps) && not (List.mem cap bound_vars) then
           errors := { loc = fd.loc;
             message = Printf.sprintf
-              "function '%s' requires undeclared capability '%s'" fd.name cap
+              "function '%s' requires undeclared capability '%s'%s" fd.name cap
+              undeclared_cap_guidance
           } :: !errors
       ) fd.capabilities
     (* Decl kinds that CARRY a `requires [...]` list but were skipped by the

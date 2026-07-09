@@ -1,0 +1,100 @@
+#lang tesl
+module Main exposing [MainServer]
+
+# Regression (2026-07 matrix sse/c2): `publish Chan key Notice { … }` with a
+# RECORD payload emitted the positional `(Notice v)` — record constructors are
+# keyword-only, so every publish of a record-typed sseChannel payload
+# arity-trapped at runtime ("Notice: arity mismatch; expected: 0 plus an
+# argument with keyword #:message; given 1").  The EPublish payload arm now
+# routes record literals through the same keyword-ctor arm as every other
+# record construction.
+
+import Tesl.Prelude exposing [String, Unit]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Queue exposing [pubsub]
+import Tesl.ApiTest exposing [
+  statusOk,
+  isNotEmpty,
+  includesWhere,
+  subscribe,
+  collect,
+]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.SSE exposing [SseChannel]
+
+database MainDb = Database {
+  schema: "publish_record_payload"
+  entities: []
+  backend: Memory
+}
+
+record Notice {
+  message: String
+}
+
+codec Notice {
+  toJson {
+    message -> "message" with_codec stringCodec
+  }
+  fromJson [
+    {
+      message <- "message" with_codec stringCodec
+    }
+  ]
+}
+
+record SendReq {
+  userId: String
+  message: String
+}
+
+codec SendReq {
+  toJson {
+    userId -> "userId" with_codec stringCodec
+    message -> "message" with_codec stringCodec
+  }
+  fromJson [
+    {
+      userId <- "userId" with_codec stringCodec
+      message <- "message" with_codec stringCodec
+    }
+  ]
+}
+
+fn parseUserId(id: String) -> String =
+  id
+
+capturer userIdCapture: String using stringCodec via parseUserId
+
+sseChannel Notices(userId: String) = SseChannel {
+  database: MainDb
+  payload: Notice
+}
+
+handler sendNotice(req: SendReq) -> String
+  requires [pubsub] =
+  publish Notices(req.userId) Notice { message: req.message }
+  "ok"
+
+api MainApi {
+  post "/send"
+    body req: SendReq
+    -> String
+
+  sse "/events/:userId"
+    capture userId: String via userIdCapture
+    subscribe Notices(userId)
+}
+
+server MainServer for MainApi {
+  sendNotice = sendNotice
+}
+
+api-test "publish with record payload reaches the subscriber" for MainServer requires [pubsub] {
+  let stream = subscribe "/events/user-1"
+  let resp = post "/send" body { "userId": "user-1", "message": "hello-record" }
+  expect statusOk resp.status
+  let events = collect stream count 1 timeout 1500ms
+  expect isNotEmpty events
+  expect includesWhere { "message": "hello-record" } events
+}

@@ -15,9 +15,9 @@
   (only-in tesl/tesl/prelude Bool Int String List Fact)
   (only-in tesl/tesl/string [String.length tesl_import_String_length])
   (only-in tesl/tesl/list [List.length tesl_import_List_length] [List.foldl tesl_import_List_foldl])
-  (only-in (file "kanel-models.rkt") OrgRole RoleAdmin RoleMember RoleViewer IssueStatus Backlog Todo InProgress InReview Done Cancelled InvoiceStatus Draft Approved Sent Paid Overdue)
-  (only-in (file "kanel-org.rkt") checkOrgName checkSlug checkEmail checkOrgName-signature checkSlug-signature checkEmail-signature)
-  (only-in (file "kanel-issues.rkt") checkTitle checkDescription checkEstimate checkPositiveMinutes checkCommentBody checkTransition checkTitle-signature checkDescription-signature checkEstimate-signature checkPositiveMinutes-signature checkCommentBody-signature checkTransition-signature)
+  (only-in (file "KanelModels.rkt") OrgRole RoleAdmin RoleMember RoleViewer IssueStatus Backlog Todo InProgress InReview Done Cancelled InvoiceStatus Draft Approved Sent Paid Overdue)
+  (only-in (file "KanelOrg.rkt") checkOrgName checkSlug checkEmail checkOrgName-signature checkSlug-signature checkEmail-signature)
+  (only-in (file "KanelIssues.rkt") checkTitle checkDescription checkEstimate checkPositiveMinutes checkCommentBody checkTransition checkTitle-signature checkDescription-signature checkEstimate-signature checkPositiveMinutes-signature checkCommentBody-signature checkTransition-signature)
 )
 
 

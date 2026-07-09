@@ -19,6 +19,10 @@
 
 (provide processInput processInput-signature)
 
+(module+ test
+  (require (submod (file "lesson07-home.rkt") test))
+)
+
 (define/pow
   (processInput [n : Integer ::: (InBounds n)] [label : String ::: (Sanitized label)])
   #:returns String

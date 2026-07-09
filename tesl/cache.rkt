@@ -41,6 +41,7 @@
                   metric-counter-add!)
          (only-in "../dsl/private/domain-registry.rkt"
                   domain-registry-add!
+                  domain-registry-of-kind
                   register-background-thread!)
          (only-in "../dsl/sql.rkt"
                   current-database-runtime
@@ -58,6 +59,8 @@
  cache-set!
  cache-delete!
  cache-invalidate-prefix!
+ ;; Cross-module cache lookup (issue #41 class — see cache-for-name below)
+ cache-for-name
  ;; Struct accessors (for tests)
  (struct-out cache-spec))
 
@@ -314,3 +317,29 @@
            ;; its entries / keys / ttl) even when it is not a paused-frame local.
            (domain-registry-add! 'caches spec)
            spec))]))
+
+;; ── Cross-module cache lookup ─────────────────────────────────────────────────
+;;
+;; Resolve a cache NAME to its live cache-spec via the process-wide registry —
+;; the exact mirror of queue-for-job (tesl/queue.rkt).  Compiled for a
+;; Cache.get/set/delete/invalidate (or a `requires [cacheCap <Name>]` grant)
+;; whose declaring `cache` block lives in ANOTHER module: the use site cannot
+;; name the cache binding (requiring the declarer back from the entrypoint
+;; would be a require cycle), but every define-cache has already registered its
+;; live spec by the time any handler/fn body runs.  Fail-closed on both zero
+;; and multiple declaring modules.
+(define (cache-for-name name)
+  (define matches
+    (for/list ([s (in-list (domain-registry-of-kind 'caches))]
+               #:when (eq? (cache-spec-name s) name))
+      s))
+  (cond
+    [(and (pair? matches) (null? (cdr matches))) (car matches)]
+    [(null? matches)
+     (raise-user-error 'cache
+       "no cache named ~a in the running program — the module declaring `cache ~a = Cache { … }` must be part of the program"
+       name name)]
+    [else
+     (raise-user-error 'cache
+       "ambiguous cache name ~a: declared by ~a modules — a cache name must be declared exactly once per program"
+       name (length matches))]))

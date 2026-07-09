@@ -401,8 +401,24 @@ let test_ir_newtype_base () =
   let json = emit_ir newtype_src in
   assert_contains ~name:"newtype base" json {|"newtypes":[{"name":"UserId","base":"String"}]|}
 
+(* CHECK-CLEAN twin of [body_endpoint_src] for the CLI test: --ir is now
+   gated behind the full checker (item 14), so the CLI fixture needs its
+   imports (the in-process emit_ir fixtures stay parse-only). *)
+let cli_body_endpoint_src = {|#lang tesl
+module ItemApiModule exposing [ItemApi]
+import Tesl.Prelude exposing [String]
+record Item {
+  name: String
+}
+api ItemApi {
+  post "/items"
+    body item: Item
+    -> Item
+}
+|}
+
 let test_cli_ir_endpoint_output () =
-  with_temp_file "tesl-ir-" body_endpoint_src (fun path ->
+  with_temp_file "tesl-ir-" cli_body_endpoint_src (fun path ->
     let exit_code, stdout = run_ir path in
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"cli ir module" stdout {|"module":"ItemApiModule"|};
@@ -1221,6 +1237,32 @@ let test_agent_context_errors_sort_first () =
   if not (sorted ranked) then
     Alcotest.fail "agent-context diagnostics must be ranked errors-first"
 
+(* Item 14 (review 2026-07-09): --ir feeds downstream client generators, so it
+   is gated behind the full whole-program checker like --generate-ts/-elm — a
+   module that fails --check must not yield a plausible IR artifact.
+   (--semantic-json deliberately stays parse-only: the LSP consumes it for
+   documentSymbol/semanticTokens on in-progress buffers.) *)
+let broken_ir_src = {|#lang tesl
+module BrokenIr exposing []
+import Tesl.Prelude exposing [Int]
+
+fn oops(x: Int) -> Int =
+  x + "not an int"
+
+api A {
+  get "/oops"
+    -> Int
+}
+|}
+
+let test_cli_ir_gated_on_check_failure () =
+  with_temp_file "tesl_ir_gate" broken_ir_src (fun path ->
+    let (code, stdout) = run_ir path in
+    if code = 0 then
+      Alcotest.failf "--ir must refuse a module that fails --check (item 14)";
+    if contains "/oops" stdout then
+      Alcotest.failf "--ir must not print IR for a failing module, got:\n%s" stdout)
+
 let () =
   Alcotest.run "IR" [
     "emit", [
@@ -1245,6 +1287,7 @@ let () =
       Alcotest.test_case "newtype base" `Quick test_ir_newtype_base;
       Alcotest.test_case "cli --ir output" `Quick test_cli_ir_endpoint_output;
       Alcotest.test_case "cli --ir real todo-api facts" `Quick test_cli_ir_real_todo_api_facts;
+      Alcotest.test_case "cli --ir gated on check failure (item 14)" `Quick test_cli_ir_gated_on_check_failure;
     ];
     "constraints", [
       Alcotest.test_case "starts_with constraint" `Quick test_ir_starts_with_constraint;

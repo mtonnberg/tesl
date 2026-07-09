@@ -28,13 +28,20 @@
 ;;; introspection), it needs zero knowledge of the spec struct definitions, so it
 ;;; can sit below them in the module graph with no back-edge.  Hence no cycle.
 ;;;
-;;; PURITY / ZERO RUNTIME-BEHAVIOUR CHANGE
-;;; --------------------------------------
+;;; PURITY
+;;; ------
 ;;; The only effect of registration is appending an (eq?-deduped) entry to a
-;;; private box.  Nothing reads the registry during normal (non-debug) execution,
-;;; and the macros' EXPANSION shape is unaffected at the emitted-.rkt level (the
-;;; emitter only CALLS the macros), so program behaviour and the byte-exact emit
-;;; are both unchanged.
+;;; private box, and the macros' EXPANSION shape is unaffected at the
+;;; emitted-.rkt level (the emitter only CALLS the macros).  Non-debug readers
+;;; form one class: the *-for-name / *-for-job runtime lookups that resolve a
+;;; cross-module name-wired use to the declaring module's live spec (issue #41)
+;;; — `queue-for-job` / `queue-for-job-ref` (tesl/queue.rkt, 'queues kind),
+;;; `cache-for-name` (tesl/cache.rkt, 'caches), `email-for-name`
+;;; (tesl/email.rkt, 'emails) and `channel-for-name` (tesl/queue.rkt,
+;;; 'channels; called from web.rkt / test-support.rkt lazy SSE resolution).
+;;; Every define-queue/cache/email/channel registers its spec here, which is
+;;; what makes those lookups possible; each is fail-closed (errors on zero or
+;;; multiple declaring modules).
 
 (provide domain-registry-add!
          domain-registry-entries        ; -> (listof (cons kind spec))

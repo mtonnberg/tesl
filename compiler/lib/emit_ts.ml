@@ -99,6 +99,11 @@ let rec zod_of_ir_type (fact_schemas : (string, unit) Hashtbl.t) (ty : Ir.ir_typ
      to the bare {minorUnits, currency} HTTP shape. *)
   | Ir.IRMoney -> money_zod_schema
   | Ir.IRMoneyRate -> money_rate_zod_schema
+  (* Unit has no generated schema (issue #11, TS side — the Elm emitter maps it
+     to `D.succeed ()`): emitting `UnitSchema` referenced an undefined name and
+     the whole generated module failed tsc.  Mirror Elm's tolerance — accept any
+     JSON, produce void. *)
+  | Ir.IRNamed "Unit" -> "z.unknown().transform(() => undefined as void)"
   | Ir.IRNamed name ->
     if Hashtbl.mem fact_schemas name then name ^ "Schema"
     else name ^ "Schema"
@@ -143,6 +148,8 @@ let rec ts_type_of_ir_type (ty : Ir.ir_type) =
   | Ir.IRPosixMillis -> "number"
   | Ir.IRMoney -> money_ts_type
   | Ir.IRMoneyRate -> money_rate_ts_type
+  (* Unit: no generated `Unit` type exists — `Promise<Unit>` failed tsc (#11). *)
+  | Ir.IRNamed "Unit" -> "void"
   | Ir.IRNamed name -> name
   | Ir.IRVar name -> name
   | Ir.IRList arg ->

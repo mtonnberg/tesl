@@ -882,7 +882,11 @@ let () =
   | [] -> print_string usage; exit 1
 
   | ("--check" :: filenames) when filenames <> [] ->
-    let all_diags = List.concat_map Compile.check_file filenames in
+    (* Whole-program: each entrypoint's check covers its transitively imported
+       local modules too (dep diagnostics anchored at the dep's own file); a
+       dep that is itself listed here is checked/reported once, under its own
+       argument (Compile.check_files dedupes by canonical path). *)
+    let all_diags = Compile.check_files filenames in
     List.iter print_diagnostic all_diags;
     exit (if all_diags = [] then 0 else 1)
 
@@ -1103,6 +1107,13 @@ let () =
 
   | ["--ir"; filename] ->
     (try
+       (* B1 / review §8.2: the API IR feeds downstream client generators, so
+          it is gated behind the FULL whole-program checker exactly like
+          --generate-ts/--generate-elm — a program that fails `--check` must
+          not still yield a plausible machine-consumed IR artifact. *)
+       (match Compile.compile_file ~root_path ~type_check:true filename with
+        | Compile.Failure diags -> List.iter print_diagnostic diags; exit 1
+        | Compile.Success _ -> ());
        let source = In_channel.with_open_text filename In_channel.input_all in
        match Parser.parse_module filename source with
        | Ok m ->
@@ -1195,6 +1206,11 @@ let () =
        Printf.eprintf "error: %s\n" msg; exit 1)
 
   | ["--semantic-json"; filename] ->
+    (* Deliberately PARSE-ONLY (not checker-gated like --ir): the LSP consumes
+       this snapshot for documentSymbol / semanticTokens (editor/protocol.md),
+       which must keep working while the buffer has type errors — gating it
+       would blank the outline and highlighting on every in-progress edit.
+       Diagnostics reach the editor through --check-json, never this path. *)
     (try
        match Compile.semantic_json_file filename with
        | Some json -> print_string json; print_newline (); exit 0

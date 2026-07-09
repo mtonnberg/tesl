@@ -1,0 +1,251 @@
+#lang tesl
+module MemoryBackendRegressions exposing []
+
+# Memory-backend parity regressions (2026-07 multi-module audit — all four
+# reproduced SAME-MODULE, i.e. plain Memory-backend bugs):
+#
+#   1. `select … order p.field asc/desc` was SILENTLY IGNORED on the Memory
+#      backend (rows came back in hash order) — postgres-select-many passed the
+#      order clause to SQL, the in-memory branch only applied offset/limit.
+#      Fixed by in-memory-order-rows (dsl/sql.rkt).
+#   2. `selectMax` / `selectMin` over a newtype-typed column (PosixMillis, a
+#      user `type Code = Int`) fed raw newtype-value structs to Racket max/min
+#      ("contract violation expected: real?") — the GitHub #28 class
+#      (unwrap-non-null) resurfacing in the aggregate path.  Fixed by
+#      in-memory-extreme (dsl/sql.rkt), which compares unwrapped values and
+#      returns the stored (still-wrapped) value.
+#   3. In-memory queue FIFO: the job store is a hash keyed by gensym'd job-id,
+#      so processNextJob dequeued in arbitrary hash order while the PostgreSQL
+#      path is FIFO (`order by created_at asc`).  Fixed by a monotonic enqueue
+#      sequence number in job-entry + sorted pending-jobs (tesl/queue.rkt).
+#   4. `selectSum l.price from L where …` over a Money column: the COMPILER
+#      hole is fixed (checker.ml classify_lowered_query hardcoded Int on the
+#      where-lowered aggregate path, so the correct `-> Money` annotation was
+#      rejected and the checker-demanded `-> Int` trapped at runtime); the
+#      "money sum with a where-clause" test below now exercises the — always
+#      correct — runtime path from Tesl source.  (Runtime-only coverage lives
+#      in tests/sql-money-tests.rkt.)
+
+import Tesl.Prelude exposing [Bool(..), Int, String, List, Unit]
+import Tesl.List exposing [List.map]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Time exposing [
+  PosixMillis,
+  Time.secondsToPosix,
+  Time.posixToSeconds,
+]
+import Tesl.Queue exposing [
+  FromQueue,
+  queueRead,
+  queueWrite,
+  Queue,
+  Job,
+  QueueRetryStrategy,
+  Fixed,
+]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Money exposing [Money, Money.usd, Money.minorUnits]
+import Tesl.ApiTest exposing [
+  statusOk,
+  JobResult(..),
+  processNextJob,
+  pendingJobCount,
+  expectJobOk,
+]
+
+type Code = Int
+
+entity P table "mem_reg_ps" primaryKey id {
+  id: String
+  qty: Int
+  name: String
+  at: PosixMillis
+  code: Code
+  done: Bool
+}
+
+entity L table "mem_reg_lines" primaryKey id {
+  id: String
+  cat: String
+  price: Money
+}
+
+database D = Database {
+  entities: [P, L]
+  backend: Memory
+}
+
+fn qtys(ps: List P) -> List Int =
+  List.map (fn(p: P) -> p.qty) ps
+
+fn names(ps: List P) -> List String =
+  List.map (fn(p: P) -> p.name) ps
+
+fn orderedAsc() -> List P requires [dbRead] =
+  with database D { select p from P order p.qty asc }
+
+fn orderedDesc() -> List P requires [dbRead] =
+  with database D { select p from P order p.qty desc }
+
+fn orderedByName() -> List P requires [dbRead] =
+  with database D { select p from P order p.name asc }
+
+fn orderedByDone() -> List P requires [dbRead] =
+  with database D { select p from P order p.done asc }
+
+fn orderedByDoneDesc() -> List P requires [dbRead] =
+  with database D { select p from P order p.done desc }
+
+fn newest() -> PosixMillis requires [dbRead] =
+  with database D { selectMax p.at from P }
+
+fn oldest() -> PosixMillis requires [dbRead] =
+  with database D { selectMin p.at from P }
+
+fn maxQty() -> Int requires [dbRead] =
+  with database D { selectMax p.qty from P }
+
+fn minCode() -> Code requires [dbRead] =
+  with database D { selectMin p.code from P }
+
+test "order by asc/desc is applied on the Memory backend" requires [dbRead, dbWrite] {
+  with database D {
+    let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
+    let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
+    let _ = insert P { id: "c", qty: 2, name: "banana", at: Time.secondsToPosix 200, code: Code 3, done: True }
+  }
+  expect qtys (orderedAsc ()) == [1, 2, 3]
+  expect qtys (orderedDesc ()) == [3, 2, 1]
+}
+
+# Regression (2026-07-09 review, item 6): ORDER BY on a Bool column raised
+# "does not support ordered comparison" on the Memory backend while the
+# checker accepts it and PostgreSQL orders booleans (false < true).  Two rows
+# only: Bool has two values, so a third row would make the tie order
+# hash-dependent under the stable sort.
+test "order by on a Bool column sorts false before true (PG parity)" requires [dbRead, dbWrite] {
+  with database D {
+    let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
+    let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
+  }
+  expect names (orderedByDone ()) == ["apple", "cherry"]
+  expect names (orderedByDoneDesc ()) == ["cherry", "apple"]
+}
+
+test "order by on a String column sorts lexicographically" requires [dbRead, dbWrite] {
+  with database D {
+    let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
+    let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
+    let _ = insert P { id: "c", qty: 2, name: "banana", at: Time.secondsToPosix 200, code: Code 3, done: True }
+  }
+  expect names (orderedByName ()) == ["apple", "banana", "cherry"]
+}
+
+# Regression 4: the checker now refines the where-lowered aggregate's result
+# by the queried FIELD's declared type, so `-> Money` is the accepted (and
+# only runtime-correct) annotation for a Money-column sum with a where-clause.
+fn sumIn(c: String) -> Money requires [dbRead] =
+  with database D { selectSum l.price from L where l.cat == c }
+
+test "money sum with a where-clause" requires [dbRead, dbWrite] {
+  with database D {
+    let _ = insert L { id: "l1", cat: "x", price: Money.usd 100 }
+    let _ = insert L { id: "l2", cat: "x", price: Money.usd 250 }
+    let _ = insert L { id: "l3", cat: "y", price: Money.usd 999 }
+  }
+  expect Money.minorUnits (sumIn "x") == 350
+  expect Money.minorUnits (sumIn "y") == 999
+}
+
+test "selectMax/selectMin over newtype columns on the Memory backend" requires [dbRead, dbWrite] {
+  with database D {
+    let _ = insert P { id: "a", qty: 3, name: "cherry", at: Time.secondsToPosix 300, code: Code 7, done: True }
+    let _ = insert P { id: "b", qty: 1, name: "apple", at: Time.secondsToPosix 100, code: Code 9, done: False }
+    let _ = insert P { id: "c", qty: 2, name: "banana", at: Time.secondsToPosix 200, code: Code 3, done: True }
+  }
+  expect Time.posixToSeconds (newest ()) == 300
+  expect Time.posixToSeconds (oldest ()) == 100
+  expect minCode () == Code 3
+  expect maxQty () == 3
+}
+
+# ── In-memory queue FIFO (processNextJob must dequeue in enqueue order) ──────
+
+database QDb = Database {
+  schema: "memregfifo"
+  entities: []
+  backend: Memory
+}
+
+record SeqJob {
+  tag: String
+}
+
+queue RegQueue requires [queueRead] = Queue {
+  database: QDb
+  jobs: [Job SeqJob handleSeq Nothing]
+  retry: QueueRetryStrategy {
+    maxAttempts: 2
+    backoff: Fixed
+    initialDelay: 1
+  }
+}
+
+worker handleSeq(job: SeqJob ::: FromQueue (Id == jobId) job)
+  requires [queueRead] =
+  job
+
+record TriggerRequest {
+  tag: String
+}
+
+codec TriggerRequest {
+  toJson {
+    tag -> "tag" with_codec stringCodec
+  }
+  fromJson [
+    {
+      tag <- "tag" with_codec stringCodec
+    }
+  ]
+}
+
+handler send(req: TriggerRequest) -> String
+  requires [queueWrite] =
+  enqueue SeqJob { tag: req.tag }
+  "queued"
+
+api RegApi {
+  post "/send"
+    body req: TriggerRequest
+    -> String
+}
+
+server RegServer for RegApi {
+  send = send
+}
+
+api-test "in-memory queue dequeues FIFO" for RegServer requires [queueRead, queueWrite] {
+  let r1 = post "/send" body { "tag": "one" }
+  expect statusOk r1.status
+  let r2 = post "/send" body { "tag": "two" }
+  expect statusOk r2.status
+  let r3 = post "/send" body { "tag": "three" }
+  expect statusOk r3.status
+
+  expect pendingJobCount RegQueue == 3
+
+  let resA = processNextJob RegQueue
+  let jobA = expectJobOk resA
+  expect jobA.tag == "one"
+
+  let resB = processNextJob RegQueue
+  let jobB = expectJobOk resB
+  expect jobB.tag == "two"
+
+  let resC = processNextJob RegQueue
+  let jobC = expectJobOk resC
+  expect jobC.tag == "three"
+}

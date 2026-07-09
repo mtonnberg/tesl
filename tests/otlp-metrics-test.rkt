@@ -333,3 +333,145 @@
   ;; with metrics on, a malformed attrs value is swallowed, never raised
   (check-not-exn (lambda () (counter "n" 1 42)))
   (set-metrics-enabled! #f))
+
+;;; ── 5. HTTP SURFACE: SSE endpoints stay OUT of http.server.request.duration ──
+;;;
+;;; SSE requests are long-lived streams: recording their lifetime into the
+;;; request-duration histogram would poison every percentile (a single open
+;;; stream "lasts" minutes-to-hours vs millisecond API calls).  The routing
+;;; layer guarantees the exclusion — `serve` (dsl/web.rkt) matches the distinct
+;;; SSE route table BEFORE dispatch-request, and neither handle-sse-request nor
+;;; the stream teardown records the histogram.  SSE traffic is observable via
+;;; its own catalog entries instead: tesl.sse.connections.active (gauge,
+;;; per-channel) + tesl.sse.events.sent/dropped (counters).  This tier pins
+;;; that contract end-to-end against a real `serve` socket: a normal request
+;;; records exactly one histogram point; an SSE connect+disconnect adds NONE
+;;; (neither at accept nor at stream end) while showing up in the SSE gauge.
+;;; Self-SKIPs when no localhost port can be bound, like tier 2.
+
+(require (only-in "../dsl/web.rkt"
+                  define-handler define-api define-server serve)
+         (only-in "../tesl/queue.rkt" define-channel))
+
+(define (run-sse-http-surface)
+  (define-channel SseMetricsProbeChannel)
+  (define-handler (sse-metrics-ping) #:returns String "pong")
+  (define-api SseMetricsProbeAPI
+    [sse-metrics-ping : "ping" :> (Get JSON String)])
+  (define-server SseMetricsProbeServer
+    #:api SseMetricsProbeAPI
+    [sse-metrics-ping sse-metrics-ping])
+  ;; Same 5-element route shape the emitter produces for `sse "/events/:key"`.
+  (define sse-routes
+    (list (list (list "events" #f) #f SseMetricsProbeChannel 1 '())))
+  ;; Grab a free port number (close the scout listener, then serve on it).
+  (define scout (tcp-listen 0 4 #t "127.0.0.1"))
+  (define-values (_la port _ra _rp) (tcp-addresses scout #t))
+  (tcp-close scout)
+  (fresh!)
+  (define server-custodian (make-custodian))
+  (parameterize ([current-custodian server-custodian])
+    (thread
+     (lambda ()
+       (with-handlers ([exn:fail? void])
+         (serve SseMetricsProbeServer #:port port #:sse-routes sse-routes)))))
+  (define (try-connect)
+    (with-handlers ([exn:fail? (lambda (_) #f)])
+      (define-values (in out) (tcp-connect "127.0.0.1" port))
+      (cons in out)))
+  (define (wait-until thunk #:timeout-ms [timeout-ms 10000] #:what [what "condition"])
+    (let loop ([waited 0])
+      (cond
+        [(thunk) => values]
+        [(>= waited timeout-ms) (error 'sse-http-surface "timed out waiting for ~a" what)]
+        [else (sleep 0.1) (loop (+ waited 100))])))
+  (define (snapshot-instrument kind name)
+    (for/first ([entry (in-list (metrics-snapshot))]
+                #:when (and (eq? (first entry) kind)
+                            (equal? (second entry) name)))
+      entry))
+  (define (duration-histogram-total-count)
+    (define entry (snapshot-instrument 'histogram "http.server.request.duration"))
+    (if entry
+        (for/sum ([p (in-list (fifth entry))])
+          (vector-ref (cdr p) 2))
+        0))
+  (define (sse-active-gauge-value)
+    (define entry (snapshot-instrument 'gauge "tesl.sse.connections.active"))
+    (and entry
+         (for/first ([p (in-list (fifth entry))]
+                     #:when (equal? (car p)
+                                    (list (cons "tesl.channel" "SseMetricsProbeChannel"))))
+           (cdr p))))
+  (dynamic-wind
+   void
+   (lambda ()
+     ;; Wait for the server socket to accept.
+     (let ([conn (wait-until try-connect #:what "server socket")])
+       (close-output-port (cdr conn))
+       (close-input-port (car conn)))
+     ;; 1. Normal API request → exactly one histogram point, operation-labeled.
+     (let-values ([(in out) (tcp-connect "127.0.0.1" port)])
+       (write-string "GET /ping HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n" out)
+       (flush-output out)
+       (define status (read-line in 'return-linefeed))
+       (check-true (and (string? status) (regexp-match? #rx"200" status))
+                   "normal GET /ping answers 200")
+       ;; drain until EOF so the request definitely completed server-side
+       (let drain () (unless (eof-object? (read-line in 'return-linefeed)) (drain)))
+       (close-output-port out)
+       (close-input-port in))
+     (wait-until (lambda () (= (duration-histogram-total-count) 1))
+                 #:what "the /ping histogram record")
+     (test-case "a normal request records http.server.request.duration"
+       (define entry (snapshot-instrument 'histogram "http.server.request.duration"))
+       (check-pred list? entry)
+       (check-equal? (duration-histogram-total-count) 1)
+       (check-true
+        (for/or ([p (in-list (fifth entry))])
+          (and (member (cons "tesl.operation" "sse-metrics-ping") (car p)) #t))
+        "the point carries the route operation label"))
+     ;; 2. SSE request: connect, see the stream headers, then disconnect.
+     (define-values (sse-in sse-out) (tcp-connect "127.0.0.1" port))
+     (write-string "GET /events/u1 HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n" sse-out)
+     (flush-output sse-out)
+     (define sse-status (read-line sse-in 'return-linefeed))
+     (check-true (and (string? sse-status) (regexp-match? #rx"200" sse-status))
+                 "SSE GET answers 200 (stream open)")
+     (wait-until (lambda () (equal? (sse-active-gauge-value) 1))
+                 #:what "tesl.sse.connections.active = 1")
+     (test-case "an OPEN SSE stream counts in the SSE gauge, not the duration histogram"
+       (check-equal? (sse-active-gauge-value) 1)
+       (check-equal? (duration-histogram-total-count) 1
+                     "no histogram point was recorded at SSE accept time"))
+     ;; 3. Disconnect; stream teardown must not record a duration either.
+     (close-output-port sse-out)
+     (close-input-port sse-in)
+     ;; The connection thread only notices the hangup at its next heartbeat
+     ;; write (10 s cadence, tesl/sse.rkt) — give the janitor comfortably more
+     ;; than one heartbeat interval before declaring the unregister missing.
+     (wait-until (lambda ()
+                   (define v (sse-active-gauge-value))
+                   (or (equal? v 0) (equal? v #f)))
+                 #:timeout-ms 30000
+                 #:what "SSE janitor unregister after disconnect")
+     (sleep 0.2) ; grace for any (buggy) teardown-time recording to land
+     (test-case "SSE disconnect leaves http.server.request.duration untouched"
+       (check-equal? (duration-histogram-total-count) 1)))
+   (lambda ()
+     (custodian-shutdown-all server-custodian)
+     (set-metrics-enabled! #f)
+     (reset-metrics!))))
+
+(define (sse-http-surface-or-skip)
+  (define can-bind?
+    (with-handlers ([exn:fail? (lambda (_) #f)])
+      (define l (tcp-listen 0 4 #t "127.0.0.1"))
+      (tcp-close l)
+      #t))
+  (cond
+    [can-bind? (run-sse-http-surface)]
+    [else
+     (displayln "SKIPPED: SSE/http.server.request.duration surface test — cannot bind a localhost TCP port")]))
+
+(sse-http-surface-or-skip)

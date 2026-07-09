@@ -32,8 +32,11 @@
          (only-in "../dsl/private/check-runtime.rkt"
                   raw-value
                   named-value?)
+         (only-in "../dsl/types.rkt"
+                  register-runtime-type!)
          (only-in "../dsl/private/domain-registry.rkt"
                   domain-registry-add!
+                  domain-registry-of-kind
                   register-background-thread!)
          (only-in "../dsl/sql.rkt"
                   current-database-runtime
@@ -48,6 +51,10 @@
  emailCap
  ;; Macro to declare an email configuration
  define-email
+ ;; EmailBody type-name symbol (mirrors Money/TimeZone): the name appears
+ ;; verbatim in emitted TYPE positions, so the importing module needs a real
+ ;; require binding or its type-ref is keyed to the emitting file (issue #42)
+ EmailBody
  ;; EmailBody ADT constructors (Racket-facing names, used by the emitter)
  TextBody
  HtmlBody
@@ -61,6 +68,8 @@
  ;; Email operations
  send-email!
  start-email-worker!
+ ;; Cross-module email lookup (issue #41 class — see email-for-name below)
+ email-for-name
  ;; Security: header-field CRLF guard (exported for the regression suite)
  email-header-field-safe?
  ;; Struct accessors (tests)
@@ -108,6 +117,9 @@
 ;;   HtmlBody content     — HTML only
 ;;   RichBody text html   — both plain text and HTML
 
+;; Type-name symbol (see provide note above)
+(define EmailBody 'EmailBody)
+
 (define (make-text-body content) (list 'TextBody content))
 (define (make-html-body content) (list 'HtmlBody content))
 (define (make-rich-body text html) (list 'RichBody text html))
@@ -128,6 +140,21 @@
     [(list 'HtmlBody h) h]
     [(list 'RichBody _ h) h]
     [_ #f]))
+
+;; Runtime type predicate (matrix email-cache 2026-07): EmailBody is a real
+;; data type (fn returns / params / record fields), but no predicate was ever
+;; registered, so `runtime-type-satisfied?` failed CLOSED (S13) on the
+;; EmailBody type-ref and EVERY `fn … -> EmailBody` return check trapped —
+;; even on correct values.  An EmailBody value is one of the three tagged
+;; lists built above; check tag + arity (content types are the checker's
+;; compile-time concern — runtime content may be a wrapped named-value).
+(define (email-body? v)
+  (match v
+    [(list 'TextBody _) #t]
+    [(list 'HtmlBody _) #t]
+    [(list 'RichBody _ _) #t]
+    [_ #f]))
+(register-runtime-type! 'EmailBody email-body?)
 
 ;; ── define-email macro ────────────────────────────────────────────────────────
 ;;
@@ -160,6 +187,31 @@
            ;; (pending / sent / dead counts) even when it is not a paused-frame local.
            (domain-registry-add! 'emails spec)
            spec))]))
+
+;; ── Cross-module email lookup ─────────────────────────────────────────────────
+;;
+;; Resolve an email NAME to its live email-spec via the process-wide registry —
+;; the exact mirror of queue-for-job (tesl/queue.rkt).  Compiled for an
+;; Email.send / startEmailWorker whose declaring `email` block lives in ANOTHER
+;; module: the use site cannot name the email binding (requiring the declarer
+;; back from the entrypoint would be a require cycle), but every define-email
+;; has already registered its live spec by the time any handler/fn body runs.
+;; Fail-closed on both zero and multiple declaring modules.
+(define (email-for-name name)
+  (define matches
+    (for/list ([s (in-list (domain-registry-of-kind 'emails))]
+               #:when (eq? (email-spec-name s) name))
+      s))
+  (cond
+    [(and (pair? matches) (null? (cdr matches))) (car matches)]
+    [(null? matches)
+     (raise-user-error 'email
+       "no email named ~a in the running program — the module declaring `email ~a = Email { … }` must be part of the program"
+       name name)]
+    [else
+     (raise-user-error 'email
+       "ambiguous email name ~a: declared by ~a modules — an email name must be declared exactly once per program"
+       name (length matches))]))
 
 ;; ── send-email! ───────────────────────────────────────────────────────────────
 ;;

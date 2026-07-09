@@ -1022,14 +1022,15 @@
      "  Lib.double n\n"
      "fn sumTriple(t: Lib.Triple) -> Int =\n"
      "  t.x + t.y + t.z\n"))
-   ; Compile Lib and write the output to lib.rkt in the source directory
-   ; (App.tesl requires lib.rkt from the same directory)
+   ; Compile Lib and write the output to Lib.rkt in the source directory —
+   ; the emitted require names the RESOLVED source basename (Lib.tesl →
+   ; Lib.rkt), not the kebab-case spelling.
    (define-values (lib-status lib-generated lib-errors) (run-tesl-compiler lib-path))
    (unless (zero? lib-status)
      (error 'test "lib compilation failed: ~a" lib-errors))
-   (write-file (build-path dir "lib.rkt") lib-generated)
-   ; App's emitted code does (require (file "lib.rkt")) relative to its OWN
-   ; location, so App.rkt must be written into `dir` beside lib.rkt — not to a
+   (write-file (build-path dir "Lib.rkt") lib-generated)
+   ; App's emitted code does (require (file "Lib.rkt")) relative to its OWN
+   ; location, so App.rkt must be written into `dir` beside Lib.rkt — not to a
    ; random /var/tmp file (which is what compile-tesl-module does).
    (compile-tesl-to-dir! app-path)
    (define run/wc (tesl-module-value (build-path dir "App.rkt") 'run))
@@ -3337,6 +3338,7 @@
                   FromQueue FromDeadQueue
                   deadJobs requeue
                   queue-spec queue-spec-store queue-spec-max-attempts
+                  queue-spec-job-type-refs
                   channel-spec channel-spec-store
                   dead-job dead-job? dead-job-id dead-job-queue-spec dead-job-named-val))
 
@@ -3641,15 +3643,42 @@
 ; Q14: enqueue! adds job to queue store
 (let ()
   (parameterize ([current-capabilities (list queueWrite)])
-    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 1 'fixed 0))
+    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 1 'fixed 0 '(TestJob)))
     (define job-id (enqueue! q (hash 'value "hello")))
     (check-true (string? job-id) "Q14: enqueue! returns a string job-id")
     (check-equal? (hash-count (queue-spec-store q)) 1 "Q14: enqueue! adds job to store")))
 
+; Q14b: NOMINAL job identity (DESIGN-4 Topic B).  define-queue mints
+; #s(type-ref owner name) refs for bound job-type identifiers; enqueue!
+; accepts the module's own record and REJECTS a same-NAME record whose
+; identity names a different owner, printing both owners (previously a
+; silent misroute into the foreign queue on the in-memory backend).
+(define-record Q14bJob [tag : String])
+(define-queue Q14bQueue
+  #:job-types (Q14bJob)
+  #:max-attempts 1
+  #:backoff fixed
+  #:initial-delay 0)
+(let ()
+  (parameterize ([current-capabilities (list queueWrite)])
+    (check-true (andmap type-ref? (queue-spec-job-type-refs Q14bQueue))
+                "Q14b: define-queue minted nominal type-ref entries for a bound job type")
+    (check-true (string? (enqueue! Q14bQueue (Q14bJob #:tag "ok")))
+                "Q14b: same-module nominal enqueue accepted")
+    (define foreign
+      (record-value 'Q14bJob
+                    (type-ref (string->path "/elsewhere/other-module.rkt") 'Q14bJob)
+                    (hash 'tag "forged")))
+    (check-exn (lambda (e) (and (exn:fail? e)
+                                (regexp-match? #rx"Q14bJob from .*other-module\\.rkt is not a job type of queue Q14bQueue \\(declares Q14bJob from "
+                                               (exn-message e))))
+               (lambda () (enqueue! Q14bQueue foreign))
+               "Q14b: same-name record from another owner fails closed with both owners")))
+
 ; Q15: process-next-job! calls handler with job value
 (let ()
   (parameterize ([current-capabilities (list queueWrite queueRead)])
-    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 1 'fixed 0))
+    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 1 'fixed 0 '(TestJob)))
     (define received (box #f))
     (enqueue! q (hash 'value "world"))
     (define result
@@ -3660,7 +3689,7 @@
 ; Q16: handler failure causes job to be marked failed/retried
 (let ()
   (parameterize ([current-capabilities (list queueWrite queueRead)])
-    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 3 'fixed 0))
+    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 3 'fixed 0 '(TestJob)))
     (enqueue! q (hash 'value "failing"))
     (define result
       (process-next-job! q (lambda (_job) (error "job failed on purpose"))))
@@ -3671,7 +3700,7 @@
 ; Q17: job has FromQueue fact
 (let ()
   (parameterize ([current-capabilities (list queueWrite queueRead)])
-    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 1 'fixed 0))
+    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 1 'fixed 0 '(TestJob)))
     (enqueue! q (hash 'value "test"))
     (define facts (box '()))
     (process-next-job!
@@ -3688,7 +3717,7 @@
 ; Q18: multiple jobs processed in order
 (let ()
   (parameterize ([current-capabilities (list queueWrite queueRead)])
-    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 1 'fixed 0))
+    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 1 'fixed 0 '(TestJob)))
     (enqueue! q (hash 'seq 1))
     (enqueue! q (hash 'seq 2))
     (enqueue! q (hash 'seq 3))
@@ -3697,7 +3726,7 @@
 ; Q19: Dead letter after maxAttempts exhausted
 (let ()
   (parameterize ([current-capabilities (list queueWrite queueRead)])
-    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 2 'fixed 0))
+    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 2 'fixed 0 '(TestJob)))
     (enqueue! q (hash 'value "will-die"))
     ; First failure — job retried (attempts=1, max-attempts=2)
     (process-next-job! q (lambda (_job) (error "fail1")))
@@ -3738,7 +3767,7 @@
 ; Q23: start-workers! launches background threads (smoke test)
 (let ()
   (parameterize ([current-capabilities (list queueWrite queueRead)])
-    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 1 'fixed 0))
+    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 1 'fixed 0 '(TestJob)))
     (define processed (box #f))
     (define workers (list (cons q (lambda (job) (set-box! processed #t)))))
     (parameterize ([current-capabilities (list queueWrite)])
@@ -4016,7 +4045,7 @@
 ; Q31: runtime — deadJobs returns dead jobs from in-memory store
 (let ()
   (parameterize ([current-capabilities (list queueWrite queueRead)])
-    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 2 'fixed 0))
+    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 2 'fixed 0 '(TestJob)))
     (enqueue! q (hash 'value "job1"))
     ; Exhaust attempts so job becomes dead
     (process-next-job! q (lambda (_) (error "fail1")))
@@ -4028,7 +4057,7 @@
 ; Q32: runtime — requeue puts dead job back to pending, worker can process it
 (let ()
   (parameterize ([current-capabilities (list queueWrite queueRead)])
-    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 2 'fixed 0))
+    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 2 'fixed 0 '(TestJob)))
     (enqueue! q (hash 'value "requeue-me"))
     ; Exhaust attempts
     (process-next-job! q (lambda (_) (error "fail1")))
@@ -4055,7 +4084,7 @@
 ; Q33: runtime — deadJobs result has FromDeadQueue fact
 (let ()
   (parameterize ([current-capabilities (list queueWrite queueRead)])
-    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 1 'fixed 0))
+    (define q (queue-spec 'TestQ '(TestJob) (make-hash) (make-semaphore 0) 1 'fixed 0 '(TestJob)))
     (enqueue! q (hash 'value "check-proof"))
     (process-next-job! q (lambda (_) (error "die")))
     (define dead (deadJobs q))

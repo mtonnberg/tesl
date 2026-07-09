@@ -804,6 +804,15 @@ let builtin_ctor_info : ctor_info = [
   ("Right", ([mk_var_type "b"], mk_app_type (mk_app_type (mk_name_type "Either") (mk_var_type "a")) (mk_var_type "b")));
   ("Tuple2", ([mk_var_type "a"; mk_var_type "b"], mk_app_type (mk_app_type (mk_name_type "Tuple2") (mk_var_type "a")) (mk_var_type "b")));
   ("Tuple3", ([mk_var_type "a"; mk_var_type "b"; mk_var_type "c"], mk_app_type (mk_app_type (mk_app_type (mk_name_type "Tuple3") (mk_var_type "a")) (mk_var_type "b")) (mk_var_type "c")));
+  (* EmailBody (Tesl.Email) is a REAL stdlib ADT — TextBody String | HtmlBody
+     String | RichBody String String (tesl/email.rkt).  Without these rows the
+     exhaustiveness checker had no variant list for it, so a case covering all
+     three constructors was still flagged V001 non-exhaustive (2026-07 matrix
+     email-cache).  Local decls are consed in FRONT of this list by
+     build_ctor_info, so a user's own same-named constructor still wins. *)
+  ("TextBody", ([mk_name_type "String"], mk_name_type "EmailBody"));
+  ("HtmlBody", ([mk_name_type "String"], mk_name_type "EmailBody"));
+  ("RichBody", ([mk_name_type "String"; mk_name_type "String"], mk_name_type "EmailBody"));
 ]
 
 let build_ctor_info (decls : top_decl list) : ctor_info =
@@ -843,6 +852,18 @@ let resolve_local_import_path source_file module_name =
   let kebab_path = Filename.concat dir (module_name_to_kebab module_name ^ ".tesl") in
   if Sys.file_exists kebab_path then kebab_path
   else Filename.concat dir (module_name ^ ".tesl")
+
+(** Canonical spelling of a module path, for identity comparisons (import
+    cycle/SCC detection).  [resolve_local_import_path] builds paths relative
+    to the IMPORTING file, so the same module reached from two places gets two
+    spellings (`main.tesl` on the CLI vs `./main.tesl` via a dep's back-edge)
+    — string-keyed graph nodes then never meet and the cyclic-SCC machinery
+    silently misses the cycle (2026-07-08 audit: `raco make` died with a raw
+    "cycle in loading").  [Unix.realpath] also resolves symlinks; a missing
+    file (unresolvable import) keeps its given spelling — callers report that
+    separately. *)
+let canonical_import_path (p : string) : string =
+  try Unix.realpath p with _ -> p
 
 let normalize_exposed_type_name (name : string) : string option =
   let n = String.length name in
@@ -894,6 +915,65 @@ let load_imported_ctor_info (m : module_form) : ctor_info =
                  ) variants
              | _ -> []
            ) imported.decls)
+  ) m.imports
+
+(* ── Imported type-like decls (2026-07 matrix: validator-side harvest) ─────
+   Several validators build metadata tables (entity columns, codec target
+   types, newtype→base, record proof-anns/invariants) from LOCAL decls only,
+   so the identical program was accepted same-module but rejected — or worse,
+   NOT rejected (proof enforcement) — when the type came through an import.
+   This is the validator-side mirror of the emitter's scope-accurate #40
+   harvest (emit_racket.ml emit_module): only names the import's exposing
+   clause actually brings into scope qualify (`Name` or `Name(..)`;
+   [ImportAll] brings all), and a name the current module itself declares as a
+   type/record/entity wins unconditionally (the harvested twin is dropped, so
+   local metadata cannot be shadowed by an import).  Returned decls carry only
+   TYPE-LIKE forms (DRecord/DEntity/DType) — appending them to a module's
+   [decls] never adds walkable bodies (DFunc/DTest/…), so validators that
+   iterate bodies are unaffected by construction. *)
+let load_imported_type_decls (m : module_form) : top_decl list =
+  let is_tesl_module name =
+    String.length name >= 5 && String.sub name 0 5 = "Tesl."
+  in
+  let local_type_names =
+    List.concat_map (function
+      | DRecord (r : record_form) -> [r.name]
+      | DEntity (e : entity_form) -> [e.name]
+      | DType (TypeAdt { name; _ })
+      | DType (TypeNewtype { name; _ })
+      | DType (TypeAlias { name; _ }) -> [name]
+      | _ -> []
+    ) m.decls
+  in
+  List.concat_map (fun (imp : import_decl) ->
+    if is_tesl_module imp.module_name then []
+    else
+      let path = resolve_local_import_path m.source_file imp.module_name in
+      if not (Sys.file_exists path) then []
+      else
+        let source = In_channel.with_open_text path In_channel.input_all in
+        match Parser.parse_module path source with
+        | Err _ -> []
+        | Ok imported ->
+          let exposed = match imp.names with
+            | ImportAll -> None
+            | ImportExposing names ->
+              Some (List.filter_map normalize_exposed_type_name names)
+          in
+          let in_scope name =
+            (match exposed with
+             | None -> true
+             | Some names -> List.mem name names)
+            && not (List.mem name local_type_names)
+          in
+          List.filter (function
+            | DRecord (r : record_form) -> in_scope r.name
+            | DEntity (e : entity_form) -> in_scope e.name
+            | DType (TypeAdt { name; _ })
+            | DType (TypeNewtype { name; _ })
+            | DType (TypeAlias { name; _ }) -> in_scope name
+            | _ -> false
+          ) imported.decls
   ) m.imports
 
 (* ── Stdlib proof metadata ───────────────────────────────────────────────── *)
@@ -1563,11 +1643,60 @@ let tesl_stdlib_cap_map : (string * (string * string list) list) list = [
   "Tesl.Email",      [("emailCap", [])];
 ]
 
+(* Issue-#41 companion (cacheCap composability): the implicit capabilities a
+   `cache` / `email` declaration defines ("cacheCap <Name>" / "emailCap") were
+   only harvested from LOCAL decls (build_cap_map / build_local_cap_map), so a
+   `requires [cacheCap C]` with C declared in an imported module always failed
+   P001/V001 — the whole cross-module cache direction was check-blocked.
+   Collect them from every TRANSITIVELY imported local module: capability
+   DECLAREDNESS is a whole-program fact (the runtime resolves the value through
+   the process-wide registry via cache-for-name), not a lexical-scope fact, so
+   no exposing gate applies — mirroring how a local `cache C` makes `cacheCap
+   C` available module-wide without any import.  Transitive because the
+   declaring module may be several `import` hops away (main → lib → base); the
+   walk is cycle-guarded by CANONICAL path ([canonical_import_path]):
+   [resolve_local_import_path] spells the same file differently per importing
+   module (`./a.tesl` vs `a.tesl`), so a raw-spelling visited set re-visits
+   diamonds/cycles reached via two spellings; the entry module itself is
+   pre-marked so a back-edge to it never re-harvests. *)
+let collect_imported_cache_email_caps (m : module_form) : (string * string list) list =
+  let is_tesl_module name =
+    String.length name >= 5 && String.sub name 0 5 = "Tesl."
+  in
+  let visited : (string, unit) Hashtbl.t = Hashtbl.create 8 in
+  Hashtbl.replace visited (canonical_import_path m.source_file) ();
+  let rec walk (m : module_form) : (string * string list) list =
+    List.concat_map (fun (imp : import_decl) ->
+      if is_tesl_module imp.module_name then []
+      else
+        let path = resolve_local_import_path m.source_file imp.module_name in
+        let canon = canonical_import_path path in
+        if Hashtbl.mem visited canon then []
+        else begin
+          Hashtbl.replace visited canon ();
+          if not (Sys.file_exists path) then []
+          else
+            let source = In_channel.with_open_text path In_channel.input_all in
+            match Parser.parse_module path source with
+            | Err _ -> []
+            | Ok imported ->
+              List.filter_map (function
+                | DCache (c : Ast.cache_form) -> Some ("cacheCap " ^ c.name, [])
+                | DEmail _ -> Some ("emailCap", [])
+                | _ -> None
+              ) imported.decls
+              @ walk imported
+        end
+    ) m.imports
+  in
+  walk m
+
 let load_imported_cap_map (m : module_form) : (string * string list) list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
   in
-  List.concat_map (fun (imp : import_decl) ->
+  collect_imported_cache_email_caps m
+  @ List.concat_map (fun (imp : import_decl) ->
     if is_tesl_module imp.module_name then
       (* For Tesl stdlib modules, use the static capability table *)
       (match List.assoc_opt imp.module_name tesl_stdlib_cap_map with
@@ -1673,6 +1802,79 @@ let build_fields_map (decls : top_decl list) : field_map =
     | DEntity e -> Some (e.name, e.fields)
     | _ -> None
   ) decls
+
+(* ── Test-statement block → nested expression (2026-07 matrix, bug: record
+   ctor proof/invariant enforcement skipped in TEST blocks) ─────────────────
+   Expression-walking validators that thread subject/proof envs through
+   [ELet]/[ELetProof] (the record construction-proof passes) previously never
+   saw `test` / `api-test` / `load-test` bodies at all, so `Msg { title:
+   "unvalidated" }` in a test block was silently accepted while the identical
+   fn-body construction was rejected.  Rather than duplicating the env
+   threading of [check_test_stmts_call_proofs] per validator, lower the
+   statement block to ONE nested expression with the same scoping semantics:
+   TsLet/TsLetProof scope over the REMAINING statements (nested body),
+   branch/arm statement blocks scope locally, and every other statement's
+   expressions are sequenced via a `_`-named let.  The result is walked with
+   each validator's EXISTING traversal, so acceptance of witnessed
+   constructions (proof-env resolution through check-fn lets) matches fn
+   bodies exactly. *)
+let expr_of_test_stmts (stmts : test_stmt list) : expr option =
+  let leaf loc = EVar { name = "_"; loc } in
+  let rec chain (stmts : test_stmt list) : expr option =
+    match stmts with
+    | [] -> None
+    | stmt :: rest ->
+      let rest_e = chain rest in
+      let seq ?(loc = gen_loc) (es : expr list) : expr option =
+        (* Sequence side-effect-position exprs, then the rest of the block. *)
+        List.fold_right (fun e acc ->
+          let body = match acc with Some b -> b | None -> leaf loc in
+          Some (ELet { name = "_"; declared_type = None; declared_proof = None;
+                       value = e; body; loc }))
+          es rest_e
+      in
+      (match stmt with
+       | TsLet { name; declared_type; value; declared_proof; loc } ->
+         let body = match rest_e with Some b -> b | None -> leaf loc in
+         Some (ELet { name; declared_type; declared_proof; value; body; loc })
+       | TsLetProof { value_name; proof_names; value; loc } ->
+         let body = match rest_e with Some b -> b | None -> leaf loc in
+         let arity = List.length proof_names in
+         (* Mirror the fn-body lowering of `let (v ::: p1 && p2) = rhs`: the
+            first proof binder carries the value binding; further binders are
+            inner ELetProofs over the same RHS with a positional proof_index. *)
+         let (outer, _) =
+           List.fold_left (fun (acc_body, i) pname ->
+             let vname = if i = 0 then value_name else "_" in
+             (ELetProof { value_name = vname; proof_name = pname;
+                          proof_index = (if arity > 1 then Some (arity - 1 - i, arity) else None);
+                          value; body = acc_body; loc }, i + 1))
+             (body, 0) (List.rev proof_names)
+         in
+         Some outer
+       | TsExpect { left; right; loc } ->
+         seq ~loc (left :: (match right with Some r -> [r] | None -> []))
+       | TsExpectFail { fn; arg; loc } -> seq ~loc [fn; arg]
+       | TsExpectHasProof { fn; arg; loc; _ } -> seq ~loc [fn; arg]
+       | TsProperty { params; body; loc; _ } ->
+         (* Property params bind names (with optional proof-relevant where
+            clauses) — reuse the walkers' ELambda arm for the binder scope. *)
+         seq ~loc [ELambda { params = List.map (fun (p : property_param) -> p.binding) params;
+                             body; loc }]
+       | TsIf { cond; then_stmts; else_stmts; loc } ->
+         let branch stmts = match chain stmts with Some e -> e | None -> leaf loc in
+         seq ~loc [EIf { cond; then_ = branch then_stmts;
+                         else_ = branch else_stmts; loc }]
+       | TsCase { scrut; arms; loc } ->
+         let arms' = List.map (fun (a : ts_case_arm) ->
+           { pattern = a.ts_pattern; guard = a.ts_guard;
+             body = (match chain a.ts_body with Some e -> e | None -> leaf a.ts_loc);
+             loc = a.ts_loc }) arms
+         in
+         seq ~loc [ECase { scrut; arms = arms'; loc }]
+       | TsExpr { e; loc } -> seq ~loc [e])
+  in
+  chain stmts
 
 let rec collect_call_head_and_args acc = function
   | EApp { fn; arg; _ } -> collect_call_head_and_args (arg :: acc) fn
