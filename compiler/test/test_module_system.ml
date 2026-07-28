@@ -52,16 +52,20 @@
 open Alcotest
 
 let compiler =
+  (* Every invocation below runs behind a `cd <tempdir>`, so a path resolved
+     relative to the launch cwd must be absolutized here or it stops existing
+     the moment the subshell changes directory. *)
+  let abs p = if Filename.is_relative p then Filename.concat (Sys.getcwd ()) p else p in
   match Sys.getenv_opt "TESL_OCAML_COMPILER" with
-  | Some p when Sys.file_exists p -> p
+  | Some p when Sys.file_exists p -> abs p
   | _ ->
     (match Sys.getenv_opt "TESL_BIN" with
-     | Some v when Filename.basename v = "main.exe" && Sys.file_exists v -> v
+     | Some v when Filename.basename v = "main.exe" && Sys.file_exists v -> abs v
      | _ ->
        let dir = Filename.dirname Sys.argv.(0) in
        let c1 = Filename.concat (Filename.dirname dir) "bin/main.exe" in
        let c2 = Filename.concat dir "../bin/main.exe" in
-       if Sys.file_exists c1 then c1 else if Sys.file_exists c2 then c2 else "tesl")
+       if Sys.file_exists c1 then abs c1 else if Sys.file_exists c2 then abs c2 else "tesl")
 
 (** Repo root (for TESL_REPO_ROOT when invoking raco): env override, else walk
     up from cwd looking for a directory containing `compiler/`. *)

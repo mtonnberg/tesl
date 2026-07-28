@@ -197,6 +197,16 @@
       (string->bytes/utf-8
        (string-append (no-crlf "header name" name-str) ": "
                       (no-crlf "header value" val-str)))))
+  ;; Transparent gzip is the wrong trade for an SSE body: with the default
+  ;; #:content-decode '(gzip) the request advertises gzip, the server
+  ;; compresses the event stream, and the decoded bytes only surface when the
+  ;; response COMPLETES — every delta arrives in one end-of-call burst
+  ;; (issue #43).  Force identity so deltas arrive as they are generated.
+  (define stream-header-bytes
+    (if (for/or ([h (in-list header-bytes)])
+          (regexp-match? #rx"(?i:^accept-encoding:)" h))
+        header-bytes
+        (cons #"Accept-Encoding: identity" header-bytes)))
   (define-values (status-line _resp-headers resp-port)
     (with-handlers ([exn:fail?
                      (lambda (e)
@@ -207,8 +217,9 @@
                      #:ssl? use-ssl?
                      #:port port
                      #:method "POST"
-                     #:headers header-bytes
-                     #:data (string->bytes/utf-8 body-str))))
+                     #:headers stream-header-bytes
+                     #:data (string->bytes/utf-8 body-str)
+                     #:content-decode '())))
   (define status-code
     (let* ([line (if (bytes? status-line) (bytes->string/utf-8 status-line) status-line)]
            [parts (string-split line " ")])

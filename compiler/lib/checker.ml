@@ -2602,38 +2602,53 @@ let rec infer_expr ctx (e : expr) : ty =
           | "service" | "endpoint" | "console" | "metrics" | "metricsInterval" -> true
           | _ -> false
         in
-        let reject_shadowed_kw_value value =
-          match value with
-          | EVar { name; loc } when is_init_telemetry_kw name ->
-            add_error ctx loc
-              (Printf.sprintf
-                 "`%s` is an initTelemetry keyword and cannot be used as a value here; rename the binding"
-                 name)
-          | _ -> ()
-        in
+        (* Mirror the emitter's re-fold (emit_racket.ml, bug #19): the keyword
+           surface parses as a flat left-assoc application, so a value that is
+           itself a call — `endpoint ep()` — arrives as the separate tokens
+           `endpoint, ep, ()`.  Collect each keyword's value as ALL tokens up
+           to the next known keyword and re-fold them into an application, so
+           the checker accepts exactly what the emitter emits (issue #44). *)
         let rec infer_kw_args = function
           | [] -> ()
-          | EVar { name = "service"; _ } :: value :: rest
-          | EVar { name = "endpoint"; _ } :: value :: rest ->
-            reject_shadowed_kw_value value;
-            let value_ty = infer_expr ctx value in
-            unify_at ctx (expr_loc value) value_ty t_string;
-            infer_kw_args rest
-          | EVar { name = "console"; _ } :: value :: rest
-          | EVar { name = "metrics"; _ } :: value :: rest ->
-            reject_shadowed_kw_value value;
-            let value_ty = infer_expr ctx value in
-            unify_at ctx (expr_loc value) value_ty t_bool;
-            infer_kw_args rest
-          | EVar { name = "metricsInterval"; _ } :: value :: rest ->
-            reject_shadowed_kw_value value;
-            let value_ty = infer_expr ctx value in
-            unify_at ctx (expr_loc value) value_ty t_int;
-            infer_kw_args rest
+          | EVar { name = kw; loc } :: rest when is_init_telemetry_kw kw ->
+            let rec take_value acc = function
+              | (EVar { name = k; _ } :: _) as more when is_init_telemetry_kw k ->
+                (List.rev acc, more)
+              | x :: more -> take_value (x :: acc) more
+              | [] -> (List.rev acc, [])
+            in
+            let (val_toks, more) = take_value [] rest in
+            (match val_toks with
+             | [] ->
+               (* Keyword directly followed by another keyword (or end of
+                  args): usually a user binding spelled like a keyword in
+                  value position, which the emitter cannot re-fold. *)
+               add_error ctx loc
+                 (Printf.sprintf
+                    "initTelemetry keyword `%s` has no value. If a binding named \
+                     like an initTelemetry keyword (service/endpoint/console/\
+                     metrics/metricsInterval) is being passed as a value, rename \
+                     the binding." kw)
+             | fn_tok :: arg_toks ->
+               let value =
+                 List.fold_left
+                   (fun f a -> EApp { fn = f; arg = a; loc = expr_loc f })
+                   fn_tok arg_toks
+               in
+               let expected_ty = match kw with
+                 | "service" | "endpoint" -> t_string
+                 | "console" | "metrics" -> t_bool
+                 | _ -> t_int
+               in
+               let value_ty = infer_expr ctx value in
+               unify_at ctx (expr_loc value) value_ty expected_ty);
+            infer_kw_args more
           | EVar { name = kw; loc } :: _ ->
             add_error ctx loc (Printf.sprintf "unknown initTelemetry keyword: %s" kw)
           | value :: _ ->
-            add_error ctx (expr_loc value) "initTelemetry expects keyword/value pairs"
+            add_error ctx (expr_loc value)
+              "initTelemetry expects keyword/value pairs: each of \
+               service/endpoint/console/metrics/metricsInterval followed by its value"
         in
         infer_kw_args args;
         t_unit

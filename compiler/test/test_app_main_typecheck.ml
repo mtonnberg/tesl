@@ -114,7 +114,7 @@ let t_keyword_shadow_value_rejected () =
   let metrics = True
   initTelemetry service "x" endpoint "in-memory" console metrics
 |})
-    "is an initTelemetry keyword"
+    "like an initTelemetry keyword"
 
 (* ── Sound variants: no false positives ─────────────────────────────────── *)
 
@@ -205,6 +205,33 @@ let t_main_enqueue_statement_ok () =
 |}
      ^ queue_tail)
 
+(* Issue #44: a call expression as a keyword value flattens into the arg
+   spine (`endpoint, ep, ()`); the checker must re-fold it like the emitter
+   does instead of rejecting with T001. *)
+let t_call_expr_keyword_value_accepted () =
+  assert_clean
+    (app_preamble
+     ^ {|fn telemetryEndpoint() -> String requires [] =
+  "in-memory"
+
+main() -> App requires [] =
+  let _ = initTelemetry service "repro" endpoint telemetryEndpoint() console True
+|}
+     ^ app_tail)
+
+(* The re-folded value still type-checks: Bool call where String expected. *)
+let t_call_expr_keyword_value_bad_type_rejected () =
+  assert_error
+    (app_preamble
+     ^ {|fn telemetryOn() -> Bool requires [] =
+  True
+
+main() -> App requires [] =
+  let _ = initTelemetry service "repro" endpoint telemetryOn() console True
+|}
+     ^ app_tail)
+    "cannot unify"
+
 let t_main_enqueue_bad_payload_rejected () =
   assert_error
     (queue_preamble
@@ -229,6 +256,10 @@ let () =
           Alcotest.test_case "let-chain env threading" `Quick t_let_chain_threading;
           Alcotest.test_case "let-chain threading catches bad type" `Quick
             t_let_chain_threading_bad_type;
+          Alcotest.test_case "call expression as initTelemetry keyword value" `Quick
+            t_call_expr_keyword_value_accepted;
+          Alcotest.test_case "call expression keyword value bad type rejected" `Quick
+            t_call_expr_keyword_value_bad_type_rejected;
           Alcotest.test_case "enqueue statement in main" `Quick
             t_main_enqueue_statement_ok;
           Alcotest.test_case "enqueue bad payload in main rejected" `Quick
