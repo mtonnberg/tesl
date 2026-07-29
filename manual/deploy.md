@@ -4,6 +4,24 @@
 
 Use `tesl help manual deploy` to access this from the CLI.
 
+## `tesl build` has two modes — `[deploy].target` picks one
+
+| `[deploy].target` | What `tesl build` does | Needs Docker |
+|---|---|---|
+| `"local"` (what `tesl init` scaffolds) | Type-checks and compiles the `[project].entrypoint` into `.tesl-stuff/build/`, then tells you to `tesl run`. | no |
+| `"container"` | Stages a Dockerfile + the Tesl runtime and builds the image (the rest of this page). | yes |
+| key absent | `"container"` (the behaviour that predates the key). | yes |
+
+Override the manifest per invocation with `tesl build --local` /
+`tesl build --container`. The container-only flags below
+(`--app-only`, `--with-postgres`, `--tag`, `--out`, `--no-docker`) imply
+`--container`, so asking for an image variant always builds one.
+
+A local build produces no artifact to ship — `tesl run` executes the compiled
+program in place. The rest of this page is the **container** mode.
+
+## The container mode
+
 A Tesl project ships as a **Docker image you can just run** — `tesl build`
 compiles the app, stages the Tesl runtime, generates a Dockerfile, and builds
 the image. No runtime code changes, no hand-written Dockerfile.
@@ -24,6 +42,10 @@ and app-only otherwise.
 # scaffold (api template = a DB-backed CRUD service with proofs + auth + tests)
 tesl init myapi --template api --yes
 cd myapi
+
+# --- local: compile + run in place ([deploy].target = "local", the default) ---
+tesl build                            # → .tesl-stuff/build/app.rkt (no Docker)
+tesl run                              # serve it
 
 # --- all-in-one: runs anywhere, no external database ---
 tesl build --with-postgres            # → image tagged "myapi" (the [project].name)

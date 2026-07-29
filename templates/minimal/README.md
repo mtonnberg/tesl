@@ -26,10 +26,15 @@ by `tesl init` from the `minimal` template.
 ```sh
 tesl build        # type-check + compile (proofs are enforced here)
 tesl run          # serve on $PORT (default 8088)
+                  # (both use [project].entrypoint from tesl.toml — no file argument needed)
 
 # in another shell:
 curl -b 'user=alice' localhost:8088/tasks/2
 ```
+
+`tesl build` compiles only, because `tesl.toml` says `[deploy].target = "local"`.
+Set it to `"container"` (or run `tesl build --container`) to produce a Docker
+image instead — see `tesl help manual deploy`.
 
 Edit `app.tesl` and add a second route or a new `fact` — the type checker tells
 you exactly which proofs are still missing.

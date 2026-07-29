@@ -183,6 +183,6 @@ TESL_POSTGRES_PASSWORD  (optional)
 | `brew install tesl` / `apt install tesl` | Roadmap — not done |
 | VS Code Marketplace | Roadmap — not done |
 | Native Windows (no WSL2) | Not planned for beta |
-| Docker image (via `tesl build`) | Available — see [dev-docs/deploy.md](dev-docs/deploy.md) |
+| Docker image (via `tesl build --container`) | Available — see [dev-docs/deploy.md](dev-docs/deploy.md) |
 
 See `roadmap/discarded/language_distribution.md` for the plan.

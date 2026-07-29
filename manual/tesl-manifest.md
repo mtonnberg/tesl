@@ -41,7 +41,7 @@ target = "local"   # "local" | "container"
 | key          | type   | required | meaning |
 |--------------|--------|----------|---------|
 | `name`       | string | yes      | Human-facing project name. Used for the telemetry `service` string and the container image name. Does **not** have to be a valid Tesl module identifier — the module header is always `App` because the entrypoint file is `app.tesl`. |
-| `entrypoint` | string | yes      | Path (relative to the manifest) of the application `.tesl` file `tesl build` compiles. |
+| `entrypoint` | string | yes      | Path (relative to the manifest) of the application `.tesl` file `tesl build` compiles. It is also the file the project verbs use when you give none: `tesl run`, `tesl test`, `tesl check`, `tesl compile`, `tesl validate` and `tesl watch` fall back to it (announced on stderr) whenever they are called with no `.tesl` argument from anywhere inside the project. |
 
 ### `[env]`
 
@@ -62,10 +62,17 @@ defaults are. The canonical Postgres keys are `TESL_POSTGRES_DATABASE`,
 
 ### `[deploy]`
 
+`target` selects what `tesl build` does:
+
 | value         | meaning |
 |---------------|---------|
-| `"local"`     | Run the compiled binary directly. |
-| `"container"` | Build an OCI image (Dockerfile produced under the build output). |
+| `"local"`     | Run the compiled program directly: `tesl build` type-checks and compiles the entrypoint into `.tesl-stuff/build/` and does **not** need Docker. |
+| `"container"` | Build an OCI image: `tesl build` stages a Dockerfile plus the Tesl runtime and runs `docker build`. |
+| *key absent*  | Treated as `"container"` (the behaviour that predates this key). |
+
+`tesl build --local` / `tesl build --container` override the manifest for one
+invocation; the container-only flags (`--app-only`, `--with-postgres`, `--tag`,
+`--out`, `--no-docker`) imply `--container`.
 
 ## The reader: `scripts/tesl-manifest.sh`
 

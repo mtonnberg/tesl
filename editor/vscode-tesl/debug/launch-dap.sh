@@ -128,8 +128,20 @@ if [[ -z "${DAP_SERVER}" ]]; then
     TESL_BIN="${HOME}/.nix-profile/bin/tesl"
   fi
   if [[ -n "${TESL_BIN}" ]]; then
-    # Follow symlinks to get the real binary path
-    TESL_REAL="$(readlink -f "${TESL_BIN}" 2>/dev/null || echo "${TESL_BIN}")"
+    # Follow symlinks to get the real binary path. #46: this script runs with the
+    # HOST's bash/readlink (the nix wrapper's GNU userland is not in scope here),
+    # and BSD/macOS readlink has no -f — so resolve the chain by hand instead.
+    TESL_REAL="${TESL_BIN}"
+    _tesl_hops=0
+    while [[ -L "${TESL_REAL}" && ${_tesl_hops} -lt 32 ]]; do
+      _tesl_target="$(readlink "${TESL_REAL}" 2>/dev/null)" || break
+      [[ -n "${_tesl_target}" ]] || break
+      case "${_tesl_target}" in
+        /*) TESL_REAL="${_tesl_target}" ;;
+        *)  TESL_REAL="$(dirname "${TESL_REAL}")/${_tesl_target}" ;;
+      esac
+      _tesl_hops=$((_tesl_hops + 1))
+    done
     # Binary is at <root>/bin/tesl → <root> is the parent of bin/
     TESL_ROOT="$(dirname "$(dirname "${TESL_REAL}")")"
     find_dap "${TESL_ROOT}/dsl/debug/dap-server.rkt" "${TESL_ROOT}" || \

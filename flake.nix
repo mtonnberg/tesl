@@ -172,6 +172,24 @@
           '';
         };
 
+        # ── GNU userland pinned into the wrappers' PATH ────────────────────────
+        # #46: on macOS the BSD variants of these tools are what a fresh
+        # `nix profile install` finds on PATH, and the CLI (plus the Racket
+        # runtime's own shell-outs) expects GNU semantics.  Prepending the store
+        # paths here makes them real runtime dependencies of the installed
+        # package — correctly GC-rooted, identical on Linux and macOS, zero user
+        # action.  The CLI body is ALSO written to be BSD-clean (see the
+        # portable-shims section there), so this is the belt to that suspenders:
+        # neither layer alone has to be perfect.
+        gnuUserland = pkgs.lib.makeBinPath [
+          pkgs.coreutils   # mktemp, stat, readlink, realpath, dirname, cksum …
+          pkgs.gnused
+          pkgs.gnugrep
+          pkgs.gawk
+          pkgs.findutils
+          pkgs.diffutils   # cmp
+        ];
+
         # ── Shared preamble injected at the top of all installed wrappers ─────
         # Sets the Racket collection path so the wrapper works with the
         # pre-compiled .zo files baked into the tesl-racket Nix derivation.
@@ -201,7 +219,7 @@
           export TESL_TEMPLATES_DIR="${tesl-templates}/share/tesl-templates"
           export TESL_COLLECTIONS_DIR="${tesl-racket}/share/tesl-collections/tesl"
 
-          export PATH="${pkgs.racket}/bin:$PATH"
+          export PATH="${pkgs.racket}/bin:${gnuUserland}:$PATH"
         '';
 
         # ── CLI body (shared between installed and dev wrappers) ──────────────
@@ -221,7 +239,7 @@
           export TESL_OCAML_COMPILER="''${TESL_OCAML_COMPILER:-$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe}"
           export PLTCOLLECTS="${pkgs.racket}/share/racket/collects:${tesl-racket}/share/tesl-collections''${PLTCOLLECTS:+:$PLTCOLLECTS}"
 
-          export PATH="${pkgs.racket}/bin:$PATH"
+          export PATH="${pkgs.racket}/bin:${gnuUserland}:$PATH"
         '' + cliBody);
 
         # ── tesl-lsp wrapper ──────────────────────────────────────────────────

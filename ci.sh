@@ -128,7 +128,7 @@ phase_started_at=$SECONDS
 
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=14
+TOTAL_PHASES=15
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -1142,6 +1142,29 @@ EOF
 
     rm -rf "$_cli_smoke_dir"
     if [ "$_cli_fail" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Phase 9c — CLI portability (BSD/macOS userland) + manifest-driven verbs
+# ══════════════════════════════════════════════════════════════════════════════
+# Issue #46: the CLI assumed a GNU userland (`mktemp --suffix=`, `readlink -f`,
+# `realpath --relative-to`, `stat -c`, `sed -i`, `xargs -d`), so a fresh macOS
+# install could not run a scaffolded project; `tesl test`/`tesl run` with no file
+# contradicted the scaffolded README; and `tesl build` built a Docker image even
+# for [deploy].target = "local".  tests/cli-portability.sh is the ratchet: a
+# STATIC scan of nix/tesl-cli-body.sh for GNU-only constructs plus a DYNAMIC
+# re-run of the verbs with BSD-only mktemp/stat/readlink/sed/xargs shimmed onto
+# PATH — both run on this Linux CI, so a macOS-only regression fails here.
+phase_begin "CLI portability (BSD userland) + manifest-driven verbs"
+_portability_rc=0
+TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
+    bash "$SCRIPT_DIR/tests/cli-portability.sh" || _portability_rc=$?
+if [ "$_portability_rc" -eq 0 ]; then
+    phase_end OK
+elif [ "$_portability_rc" -eq 77 ]; then
+    phase_end SKIP
+else
+    phase_end FAIL
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
