@@ -43,13 +43,9 @@
 (log! "requiring tesl/dsl/debug/checkpoint ...")
 (require tesl/dsl/debug/checkpoint)
 (log! "=== checkpoint loaded OK ===")
-;; Predicates needed by infer-type-string / handle-variables
-(require (only-in tesl/dsl/private/evidence
-                  named-value? named-value-value
-                  check-ok? check-ok-value)
-         (only-in tesl/dsl/types
-                  newtype-value? newtype-value-type-name newtype-value-value
-                  record-value? record-value-type record-value-fields))
+;; (The GDP/record value predicates this module used to import for its own
+;; infer-type-string + expandability tests are gone: both questions are answered
+;; by dsl/debug/value-tree.rkt now — see the require below.)
 
 ;; FULL LIVE DOMAIN STATE: the global domain registry lists every queue / cache /
 ;; SSE channel / email outbox / worker pool the debuggee created via define-queue /
@@ -80,12 +76,22 @@
                   domain-struct-name
                   domain-object?
                   domain-object-summary
-                  domain-object-fields
-                  domain-field-names
-                  channel-connected-count
-                  worker-pool-live
                   registry-object-label
                   domain-registry-objects))
+
+;; THE structured-value renderer, shared with headless-inspect.rkt (and hence with
+;; this adapter's own ATTACH mode, which consumes what that streams).  `value-children`
+;; is the single answer to "what can this value be expanded into" and `value-display`
+;; / `value-type` the single answer to how it reads — see dsl/debug/value-tree.rkt's
+;; header for the drift this replaced.  Everything below builds DAP variables on top
+;; of those three functions and nothing else.
+(require (only-in tesl/dsl/debug/value-tree
+                  value-children
+                  value-display
+                  value-type
+                  child-display
+                  node-children
+                  hash-display))
 
 ;; Domain runtime inspection (queues, channels, caches, email outbox) is done
 ;; via GENERIC, dependency-free struct introspection — see domain-struct-name and
@@ -596,19 +602,9 @@
 
 ;; ── Variable type inference ───────────────────────────────────────────────────
 
-;; Infer a human-readable type string from a Tesl runtime value.
-(define (infer-type-string v)
-  (cond
-    [(named-value? v)    (infer-type-string (named-value-value v))]
-    [(check-ok? v)       (infer-type-string (check-ok-value v))]
-    [(newtype-value? v)  (~a (newtype-value-type-name v))]
-    [(record-value? v)   (~a (record-value-type v))]
-    [(string? v)         "String"]
-    [(integer? v)        "Int"]
-    [(boolean? v)        "Bool"]
-    [(list? v)           "List"]
-    [(hash? v)           "Hash"]
-    [else                ""]))
+;; Was a hand-copied twin of headless-inspect's version; both are now the single
+;; `value-type` in value-tree.rkt.  Alias kept because call sites below read better.
+(define infer-type-string value-type)
 
 ;; ── Domain runtime inspection ──────────────────────────────────────────────────
 ;;
@@ -631,186 +627,112 @@
 ;; leak across pauses.
 (define varref-registry (make-hash))
 (define varref-counter (box 100))
+
+;; ── evaluateName registry (Copy Value / hover / watch) ────────────────────────
+;;
+;; DAP clients do NOT copy the `value` string they already hold: VSCode/VSCodium's
+;; "Copy Value" issues an `evaluate` request for the variable's `evaluateName`
+;; (with context "clipboard" when the adapter advertises supportsClipboardContext)
+;; and copies THAT response.  This adapter previously implemented no `evaluate`
+;; handler at all and answered every unknown command with an empty successful
+;; body, so the client copied an empty string — which is why Copy Value silently
+;; did nothing, on the SQL preview and on every other variable alike.
+;;
+;; Rather than expose an expression evaluator (a debugger that can run arbitrary
+;; code against a paused production process is a hazard we do not need), every
+;; variable we emit registers a stable dotted PATH as its evaluateName, and
+;; `evaluate` is a pure lookup in this table.  Nothing is executed.
+;;
+;; Each entry holds:
+;;   display — the (possibly truncated/summarised) string shown in the panel
+;;   full    — the COMPLETE untruncated text, which is what a copy must yield
+;;   raw     — the underlying value, so a copied composite can still be expanded
+(struct eval-entry (display full raw) #:transparent)
+(define evalname-registry (make-hash))
+
 (define (reset-varrefs!)
   (hash-clear! varref-registry)
+  (hash-clear! evalname-registry)
   (set-box! varref-counter 100))
+
 (define (alloc-varref! thunk)
   (define r (unbox varref-counter))
   (set-box! varref-counter (+ r 1))
   (hash-set! varref-registry r thunk)
   r)
 
-;; Compact, never-raising one-line summary of a raw hash, so a nested store
-;; entry (a queue JOB {status, payload, attempts}, an email {to, subject, body,
-;; status}, …) reads as e.g. `{status: pending, attempts: 0, …}` in the value
-;; column INSTEAD of a raw `#hash(...)` dump — while still being expandable to
-;; the full set of keys via its child varref.  Dependency-free; any error
-;; falls back to safe-display so it can never break the panel.
-(define HASH-SUMMARY-KEYS 3)       ; keys shown inline before the ellipsis
-(define HASH-SUMMARY-VALUE-LEN 24) ; per-value truncation inside the summary
+;; Register `path` as an evaluateName for a value and return the path.  The FULL
+;; text is safe-display's complete rendering (never the compact hash summary), so
+;; copying a large record or a long SQL preview yields the whole thing.
+(define (register-evalname! path display-str raw [full #f])
+  (when (and (string? path) (non-empty-string? path))
+    (hash-set! evalname-registry path
+               (eval-entry display-str
+                           (or full (full-text-of raw display-str))
+                           raw)))
+  path)
 
-(define (truncate-str s n)
-  (if (> (string-length s) n)
-      (string-append (substring s 0 (max 0 (- n 1))) "…")
-      s))
+;; The complete, copy-worthy text for a value: safe-display's full rendering,
+;; falling back to the display string if that raises.
+(define (full-text-of raw display-str)
+  (with-handlers ([(lambda (_) #t) (lambda (_) display-str)])
+    (safe-display raw)))
 
-(define (hash-summary h)
-  (with-handlers ([(lambda (_) #t) (lambda (_) (safe-display h))])
-    (define n (hash-count h))
-    (cond
-      [(zero? n) "{}"]
-      [else
-       ;; Stable ordering: sort keys by their printed form so the inline preview
-       ;; is deterministic across runs (hash iteration order is unspecified).
-       (define keys (sort (hash-keys h) string<? #:key ~a))
-       (define shown (if (> n HASH-SUMMARY-KEYS) (take keys HASH-SUMMARY-KEYS) keys))
-       (define parts
-         (for/list ([k (in-list shown)])
-           (define vs (truncate-str (safe-display (hash-ref h k)) HASH-SUMMARY-VALUE-LEN))
-           (format "~a: ~a" (~a k) vs)))
-       (string-append "{" (string-join parts ", ")
-                      (if (> n HASH-SUMMARY-KEYS) ", …" "")
-                      "}")])))
+;; A child's evaluateName: `parent.field`, or `parent[3]` for an index (the child
+;; name already carries its own brackets), matching how a user would write it.
+(define (child-eval-path parent-path child-name)
+  (cond
+    [(not (and (string? parent-path) (non-empty-string? parent-path))) #f]
+    [(string-prefix? child-name "[") (string-append parent-path child-name)]
+    [else (string-append parent-path "." child-name)]))
 
-;; Friendlier label for a hash whose shape we recognise — only when CHEAP and
-;; UNAMBIGUOUS (presence of the diagnostic keys), so we never special-case
-;; fragilely.  Returns a short prefix or #f (fall back to hash-summary).
-(define (hash-shape-label h)
-  (with-handlers ([(lambda (_) #t) (lambda (_) #f)])
-    (cond
-      ;; A queue JOB entry: id (optional) + status + attempts.
-      [(and (hash-has-key? h 'status) (hash-has-key? h 'attempts))
-       (define id (or (and (hash-has-key? h 'id) (hash-ref h 'id))
-                      (and (hash-has-key? h 'job-id) (hash-ref h 'job-id)) #f))
-       (if id
-           (format "job ~a — ~a" (safe-display id) (~a (hash-ref h 'status)))
-           (format "job — ~a" (~a (hash-ref h 'status))))]
-      ;; An email outbox entry: to + subject + status.
-      [(and (hash-has-key? h 'to) (hash-has-key? h 'subject) (hash-has-key? h 'status))
-       (format "email → ~a — ~a [~a]"
-               (~a (hash-ref h 'to))
-               (truncate-str (~a (hash-ref h 'subject)) HASH-SUMMARY-VALUE-LEN)
-               (~a (hash-ref h 'status)))]
-      [else #f])))
-
-;; Value-column display for a (non-empty) hash: a recognised-shape label when we
-;; have one, otherwise the compact key summary.  Never raises.
-(define (hash-display h)
-  (or (hash-shape-label h) (hash-summary h)))
-
-;; Build a single DAP variable hash for (name . value), allocating a child
-;; varref when the value is structured (domain object, record, ADT, non-empty
-;; list, or any non-empty raw hash).  `type-str` is the display type (may carry
-;; a proof); `value-str` the display string.
-(define (make-variable name value-str type-str raw-val)
+;; Build a single DAP variable hash for a (name, value) pair, allocating a child
+;; varref whenever `value-children` says the value has structure.
+;;
+;; Expandability is NOT decided here any more.  It used to be, by testing the
+;; outer Racket representation (record-value? / list? / hash? / domain-object?),
+;; which silently excluded every WRAPPED value — a proof-carrying record is a
+;; `named-value`, a checked one a `check-ok`, a Money/units one a `newtype-value`,
+;; and an ADT payload (`Ok(record)`) matched nothing at all.  Those all *display*
+;; as composites, so the panel showed inner structure next to a variable that
+;; claimed to have no children: the "just a string, not a tree" bug.  The single
+;; `value-children` in value-tree.rkt unwraps before deciding, and
+;; tests/dap-value-tree-tests.rkt pins display and expansion to agree.
+;;
+;; `eval-path` is this variable's dotted evaluateName (see the registry above);
+;; #f suppresses registration for synthetic rows that cannot be copied.
+(define (make-variable name value-str type-str raw-val [eval-path #f])
+  (define kids (value-children raw-val))
+  (define path (and eval-path (register-evalname! eval-path value-str raw-val)))
   (define child-ref
-    (cond
-      [(domain-object? raw-val)
-       (alloc-varref! (lambda () (domain-object-children raw-val)))]
-      [(record-value? raw-val)
-       (alloc-varref! (lambda () (record-children raw-val)))]
-      [(and (list? raw-val) (pair? raw-val))
-       (alloc-varref! (lambda () (list-children raw-val)))]
-      ;; Every nested non-empty raw hash (e.g. a queue JOB entry, an email outbox
-      ;; entry, a cache value that is itself a hash) is recursively expandable —
-      ;; hash-children recurses through make-variable, so a job's payload that is
-      ;; a record will then drill on into its fields.
-      [(and (hash? raw-val) (positive? (hash-count raw-val)))
-       (alloc-varref! (lambda () (hash-children raw-val)))]
-      [else 0]))
-  (hasheq 'name               name
-          'value              value-str
-          'type               (or type-str "")
-          'variablesReference child-ref
-          'presentationHint   (hasheq 'kind "data")))
+    (if (pair? kids)
+        (alloc-varref! (lambda () (children->variables raw-val kids path)))
+        0))
+  (define base
+    (hasheq 'name               name
+            'value              value-str
+            'type               (or type-str "")
+            'variablesReference child-ref
+            'presentationHint   (hasheq 'kind "data")))
+  ;; evaluateName is what the client sends back on Copy Value / hover / watch.
+  (if path (hash-set base 'evaluateName path) base))
 
-;; Children of a domain object: one variable per struct field, plus a synthesised
-;; summary line.  Stores (hashes) are themselves rendered as expandable.
-(define (domain-object-children v)
+;; One level of children for `parent`, from the shared enumeration.  `child-display`
+;; supplies the live-count labels for a domain object's fields (an SSE channel's
+;; listeners read "3 connected client(s)", a store reads "{7 entries}") — the same
+;; strings the attach path shows, because both call the same function.
+(define (children->variables parent kids parent-path)
   (with-handlers ([exn:fail? (lambda (e)
                                (list (hasheq 'name "<error>" 'value (exn-message e)
                                              'variablesReference 0)))])
-    (define name (domain-struct-name v))
-    (define fields (domain-object-fields v))
-    (define field-names (domain-field-names name (length fields)))
-    (for/list ([fn (in-list field-names)]
-               [fv (in-list fields)])
-      (cond
-        ;; channel-spec listeners: key → (listof callback) — each callback is one
-        ;; CONNECTED SSE CLIENT.  Render per-key connected-client counts so the
-        ;; panel shows exactly how many clients are subscribed to each channel key.
-        [(and (eq? name 'channel-spec) (string=? fn "listeners") (hash? fv))
-         (hasheq 'name fn
-                 'value (format "~a connected client(s)" (channel-connected-count fv))
-                 'variablesReference (if (> (hash-count fv) 0)
-                                         (alloc-varref! (lambda () (listener-children fv)))
-                                         0))]
-        ;; worker-pool threads: box of (listof thread).  Render the live count and
-        ;; expand to one entry per worker thread with its running/dead status.
-        [(and (eq? name 'worker-pool) (string=? fn "threads"))
-         (define ts (if (box? fv) (unbox fv) (if (list? fv) fv '())))
-         (hasheq 'name fn
-                 'value (format "~a live / ~a total" (worker-pool-live fv) (length ts))
-                 'variablesReference (if (pair? ts)
-                                         (alloc-varref! (lambda () (thread-children ts)))
-                                         0))]
-        [(hash? fv)
-         (hasheq 'name fn
-                 'value (format "{~a entries}" (hash-count fv))
-                 'variablesReference (if (> (hash-count fv) 0)
-                                         (alloc-varref! (lambda () (hash-children fv)))
-                                         0))]
-        [(and (box? fv) (list? (unbox fv)))
-         (hasheq 'name fn
-                 'value (format "[~a items]" (length (unbox fv)))
-                 'variablesReference (if (pair? (unbox fv))
-                                         (alloc-varref! (lambda () (list-children (unbox fv))))
-                                         0))]
-        [else
-         (hasheq 'name fn 'value (safe-display fv) 'variablesReference 0)]))))
-
-;; Children of a channel's listeners hash: one entry per channel key, showing the
-;; number of connected SSE clients subscribed to that key.
-(define (listener-children listeners)
-  (for/list ([(k cbs) (in-hash listeners)])
-    (define n (if (list? cbs) (length cbs) 1))
-    (hasheq 'name (~a k)
-            'value (format "~a connected client(s)" n)
-            'variablesReference 0)))
-
-;; Children of a worker-pool's thread list: one entry per worker thread with its
-;; live/dead status.
-(define (thread-children ts)
-  (for/list ([t (in-list ts)] [i (in-naturals)])
-    (hasheq 'name (format "worker[~a]" i)
-            'value (if (and (thread? t) (thread-running? t)) "running" "stopped")
-            'variablesReference 0)))
-
-;; Display string for a value inside a structured-children list: a hash gets the
-;; compact, expandable summary (never a raw #hash dump); everything else uses
-;; safe-display.
-(define (child-value-display val)
-  (if (and (hash? val) (positive? (hash-count val)))
-      (hash-display val)
-      (safe-display val)))
-
-;; Children of an in-memory store hash: key → value, value expandable if itself
-;; structured.  Iterate in a stable key order so the panel is deterministic.
-(define (hash-children h)
-  (for/list ([k (in-list (sort (hash-keys h) string<? #:key ~a))])
-    (define val (hash-ref h k))
-    (make-variable (~a k) (child-value-display val) (infer-type-string val) val)))
-
-;; Children of a record value: one variable per field.
-(define (record-children rv)
-  (define fields (record-value-fields rv))
-  (for/list ([(k val) (in-hash fields)])
-    (make-variable (~a k) (child-value-display val) (infer-type-string val) val)))
-
-;; Children of a list: indexed elements.
-(define (list-children lst)
-  (for/list ([el (in-list lst)] [i (in-naturals)])
-    (make-variable (format "[~a]" i) (child-value-display el) (infer-type-string el) el)))
+    (for/list ([kv (in-list kids)])
+      (define cname (car kv))
+      (define cval  (cdr kv))
+      (make-variable cname
+                     (child-display parent cname cval)
+                     (value-type cval)
+                     cval
+                     (child-eval-path parent-path cname)))))
 
 ;; Collect the domain objects present in the paused frame's locals as a list of
 ;; (name . value) pairs, for the Domain scope.
@@ -929,14 +851,53 @@
               [else (void)]))          ; command replies: fire-and-forget
           (loop)])))))
 
-;; Rendered {name,value,type} JSON rows → DAP variables (flat, ref 0).
-(define (rendered->variables rows)
-  (for/list ([r (in-list rows)] #:when (hash? r))
-    (hasheq 'name  (hash-ref r 'name "")
-            'value (hash-ref r 'value "")
-            'type  (hash-ref r 'type "")
-            'variablesReference 0)))
+;; ── Attach-mode variables: rebuild the tree from the streamed nodes ───────────
+;;
+;; The control channel streams each local/domain object as a NESTED node
+;; ({name, value, type, children?, truncated?} — see value-tree.rkt), so attach
+;; mode gets the same expandable Variables tree launch mode does.  It used to
+;; stream flat {name,value,type} rows and this function hardcoded
+;; `variablesReference: 0`, which is why every record / list / queue in an
+;; attached session was one unexpandable string.
+;;
+;; Refs are allocated over the RECEIVED nodes rather than over live values (the
+;; debuggee is another process — there is nothing local to walk), and the
+;; evaluateName registry is populated from the node text so Copy Value works when
+;; attached exactly as it does when launching.
+(define (node->variable n parent-path)
+  (define name  (format "~a" (hash-ref n 'name "")))
+  (define value (format "~a" (hash-ref n 'value "")))
+  (define kids  (node-children n))
+  (define path  (if parent-path (child-eval-path parent-path name) name))
+  (when path
+    ;; `raw` is #f: there is no local value behind an attached node, so the copy
+    ;; text is the streamed string itself (already the full rendering — the
+    ;; debuggee applied the same renderer before sending it).
+    (hash-set! evalname-registry path (eval-entry value value #f)))
+  (define base
+    (hasheq 'name name
+            'value (if (hash-ref n 'truncated #f)
+                       ;; Say so rather than let a clipped tree read as complete.
+                       (string-append value "  …(truncated)")
+                       value)
+            'type (format "~a" (hash-ref n 'type ""))
+            'variablesReference
+            (if (pair? kids)
+                (alloc-varref! (lambda () (nodes->variables kids path)))
+                0)
+            'presentationHint (hasheq 'kind "data")))
+  (if path (hash-set base 'evaluateName path) base))
 
+(define (nodes->variables nodes parent-path)
+  (for/list ([n (in-list nodes)] #:when (hash? n))
+    (node->variable n parent-path)))
+
+;; Streamed local nodes → DAP variables (top level: no parent path).
+(define (rendered->variables rows) (nodes->variables rows #f))
+
+;; Domain scope when attached.  Each bucket entry carries its own `children`
+;; tree (queue store entries, per-key SSE listener counts, worker liveness), so
+;; queues/caches/channels expand here just as they do in launch mode.
 (define (attach-domain-variables)
   (define evt (unbox attach-last-stopped))
   (define dom (and evt (hash-ref evt 'domain #f)))
@@ -944,29 +905,68 @@
       (for*/list ([bucket '(queues caches sse email workers)]
                   [obj (in-list (hash-ref dom bucket '()))]
                   #:when (hash? obj))
-        (hasheq 'name  (format "~a" (hash-ref obj 'label (hash-ref obj 'name bucket)))
+        (define label (format "~a" (hash-ref obj 'label (hash-ref obj 'name bucket))))
+        (define kids (node-children obj))
+        (define path (register-evalname! label
+                                         (format "~a" (hash-ref obj 'summary ""))
+                                         #f
+                                         (format "~a" (hash-ref obj 'summary ""))))
+        (hasheq 'name  label
                 'value (format "~a" (hash-ref obj 'summary ""))
                 'type  (format "~a" (hash-ref obj 'kind bucket))
-                'variablesReference 0))
+                'evaluateName path
+                'variablesReference
+                (if (pair? kids)
+                    (alloc-varref! (lambda () (nodes->variables kids path)))
+                    0)
+                'presentationHint (hasheq 'kind "data")))
       '()))
 
+;; SQL scope when attached.  Mirrors the launch-mode row set and naming exactly
+;; (`sql` / `table` / `operation` / `params` / `preview` / `status`), so the panel
+;; does not change shape depending on how the session started, and every row is
+;; copyable through the same evaluateName registry.
 (define (attach-sql-variables)
   (define evt (unbox attach-last-stopped))
   (define sql (and evt (hash-ref evt 'sql #f)))
-  (if (hash? sql)
-      (append
-       (list (hasheq 'name "statement" 'value (format "~a" (hash-ref sql 'sql ""))
-                     'type "SQL" 'variablesReference 0)
-             (hasheq 'name "preview" 'value (format "~a" (hash-ref sql 'preview ""))
-                     'type "SQL" 'variablesReference 0)
-             (hasheq 'name "status" 'value (format "~a" (hash-ref sql 'status ""))
-                     'type "" 'variablesReference 0))
-       (for/list ([p (in-list (hash-ref sql 'params '()))] #:when (hash? p))
-         (hasheq 'name  (format "$~a" (hash-ref p 'index 0))
-                 'value (format "~a" (hash-ref p 'value ""))
-                 'type  (format "~a" (hash-ref p 'type ""))
-                 'variablesReference 0)))
-      '()))
+  (define (row name value type)
+    (hasheq 'name name
+            'value value
+            'type type
+            'variablesReference 0
+            'evaluateName (register-evalname! (string-append "sql." name) value #f value)
+            'presentationHint (hasheq 'kind "data")))
+  (cond
+    [(not (hash? sql)) '()]
+    [else
+     (define (str k [dflt ""]) (format "~a" (hash-ref sql k dflt)))
+     (define params (hash-ref sql 'params '()))
+     (define param-vars
+       (for/list ([p (in-list params)] #:when (hash? p))
+         (define idx (hash-ref p 'index 0))
+         (define v (format "~a" (hash-ref p 'value "")))
+         (hasheq 'name (format "$~a" idx)
+                 'value (format "~a : ~a" v (hash-ref p 'type ""))
+                 'type (format "~a" (hash-ref p 'type ""))
+                 'variablesReference 0
+                 'evaluateName (register-evalname! (format "sql.params.$~a" idx) v #f v)
+                 'presentationHint (hasheq 'kind "data"))))
+     (append
+      (list (row "sql" (str 'sql) "parameterized ($1,$2…)")
+            (row "table" (str 'table "(unknown)") "")
+            (row "operation" (str 'operation "(unknown)") "")
+            (hasheq 'name "params"
+                    'value (format "~a bound param(s)" (length params))
+                    'type "ordered, typed"
+                    'variablesReference (if (pair? param-vars)
+                                            (alloc-varref! (lambda () param-vars))
+                                            0)
+                    'presentationHint (hasheq 'kind "data"))
+            (row "preview" (str 'preview) "read-only — never executed; escaped")
+            (row "status" (str 'status) ""))
+      (if (hash-has-key? sql 'row-count)
+          (list (row "row-count" (str 'row-count) "Int"))
+          '()))]))
 
 (define (handle-initialize req)
   (log! "handle-initialize")
@@ -976,7 +976,14 @@
             'supportsSingleStepRequest              #t
             'supportsStepInTargetsRequest           #f
             'supportsConditionalBreakpoints         #t
-            'supportsHitConditionalBreakpoints      #t))
+            'supportsHitConditionalBreakpoints      #t
+            ;; Copy Value: the client resolves a variable's `evaluateName` through
+            ;; an `evaluate` request with context "clipboard" and copies THAT
+            ;; result — so advertising this is half of making the copy button work
+            ;; (handle-evaluate below is the other half).
+            'supportsClipboardContext               #t
+            ;; Hovering a name in the editor while paused resolves it the same way.
+            'supportsEvaluateForHovers              #t))
   (dap-event "initialized" (hasheq)))
 
 (define (handle-set-breakpoints req)
@@ -1292,7 +1299,7 @@
                  [user-var? (and (not (string=? var-name "_"))
                                  (not (string-prefix? var-name "tesl_")))]
                  [raw-val   (cdr pair)]
-                 [display   (safe-display raw-val)]
+                 [display   (value-display raw-val)]
                  ;; PROOF/TYPE OVERLAY: prefer the compile-time type (which
                  ;; carries the proof annotation) over the runtime-inferred
                  ;; bare type.  Falls back to runtime inference if the
@@ -1308,20 +1315,19 @@
                                 (string-append display " : " type-str)
                                 display)])
             (and user-var?
-                 ;; make-variable allocates a child varref for structured values
-                 ;; (records / lists / domain objects) so they expand in the panel.
-                 (make-variable var-name value-str type-str raw-val)))))
+                 ;; make-variable allocates a child varref whenever value-children
+                 ;; reports structure, and registers `var-name` as the
+                 ;; evaluateName so Copy Value / hover / watch resolve it.  The
+                 ;; copyable text is the FULL value, not the proof-annotated
+                 ;; display string.
+                 (make-variable var-name value-str type-str raw-val var-name)))))
    locals))
 
 ;; One DAP variable hash for a domain object, labelled `label`.  Allocates a child
 ;; varref so the object expands to its fields in the panel.  (registry-object-label
 ;; and domain-registry-objects are imported from domain-inspect.rkt.)
 (define (domain-object-variable label v)
-  (hasheq 'name               label
-          'value              (domain-object-summary v)
-          'type               (~a (domain-struct-name v))
-          'variablesReference (alloc-varref! (lambda () (domain-object-children v)))
-          'presentationHint   (hasheq 'kind "data")))
+  (make-variable label (value-display v) (~a (domain-struct-name v)) v label))
 
 ;; Build the Domain-scope variable list.  Merges TWO sources, de-duped by eq?:
 ;;   1. domain objects bound in the paused frame's LOCALS (labelled by their
@@ -1413,9 +1419,12 @@
   (for/list ([p (in-list params)] [i (in-naturals 1)])
     (define tag (sql-param-type-tag p))
     (make-variable (format "$~a" i)
-                   (format "~a : ~a" (safe-display p) tag)
+                   (format "~a : ~a" (value-display p) tag)
                    tag
-                   p)))
+                   p
+                   ;; Copyable as `sql.params.$1` — and the registered full text is
+                   ;; the bare value, not the " : Int" annotated display string.
+                   (format "sql.params.$~a" i))))
 
 ;; Build the SQL-scope variable list from a capture record.  Order: the exact
 ;; parameterized statement, the table/op, the ordered params (expandable), the
@@ -1434,37 +1443,42 @@
       (if (pair? params)
           (alloc-varref! (lambda () (sql-param-variables params)))
           0))
+    ;; Every row is copyable: each registers its own evaluateName so the client's
+    ;; Copy Value round-trip resolves (see the evalname registry above — the SQL
+    ;; preview was the most-reported casualty of that request being unimplemented).
+    ;; The registered text is the FULL statement/preview, never a truncated one.
+    ;; `raw` is #f and `full` is the string itself: these rows are ALREADY rendered
+    ;; text, so re-rendering them through safe-display would wrap the statement in
+    ;; quotes and copy `"SELECT …"` instead of `SELECT …`.
+    (define (sql-row name value type)
+      (hasheq 'name name
+              'value value
+              'type type
+              'variablesReference 0
+              'evaluateName (register-evalname! (string-append "sql." name)
+                                                value #f value)
+              'presentationHint (hasheq 'kind "data")))
+    (define preview (sql-inline-preview sql params))
     (append
      (list
-      (hasheq 'name "sql"
-              'value sql
-              'type "parameterized ($1,$2…)"
-              'variablesReference 0
-              'presentationHint (hasheq 'kind "data"))
-      (hasheq 'name "table"
-              'value (or table "(unknown)")
-              'type "" 'variablesReference 0)
-      (hasheq 'name "operation"
-              'value (if op (~a op) "(unknown)")
-              'type "" 'variablesReference 0)
+      ;; `sql` is the exact text handed to the driver — the one you paste into psql
+      ;; alongside the params.
+      (sql-row "sql" sql "parameterized ($1,$2…)")
+      (sql-row "table" (or table "(unknown)") "")
+      (sql-row "operation" (if op (~a op) "(unknown)") "")
       (hasheq 'name "params"
               'value (format "~a bound param(s)" (length params))
               'type "ordered, typed"
               'variablesReference param-ref
               'presentationHint (hasheq 'kind "data"))
-      (hasheq 'name "preview (not executed; DB receives the parameterized form)"
-              'value (sql-inline-preview sql params)
-              'type "read-only; escaped"
-              'variablesReference 0
-              'presentationHint (hasheq 'kind "data"))
-      (hasheq 'name "status"
-              'value (~a status)
-              'type "" 'variablesReference 0))
+      ;; Short NAME (the caveat lives in the type column): a name long enough to
+      ;; push the value out of the panel is unreadable, and it made the copy target
+      ;; awkward to refer to.
+      (sql-row "preview" preview "read-only — never executed; escaped")
+      (sql-row "status" (~a status) ""))
      ;; Row count only once the statement has actually executed (and is known).
      (if (and (eq? status 'executed) (exact-nonnegative-integer? rowcount))
-         (list (hasheq 'name "row-count"
-                       'value (number->string rowcount)
-                       'type "Int" 'variablesReference 0))
+         (list (sql-row "row-count" (number->string rowcount) "Int"))
          '()))))
 
 (define (handle-variables req)
@@ -1500,6 +1514,61 @@
            ((hash-ref varref-registry ref)))]
         [else '()]))
     (dap-response req #t (hasheq 'variables vars))))
+
+;; ── evaluate: Copy Value / hover / watch ──────────────────────────────────────
+;;
+;; A pure LOOKUP against the evaluateName registry the current stop populated —
+;; deliberately not an expression evaluator.  A debugger that can execute
+;; arbitrary code inside a paused, possibly live process is a hazard, and nothing
+;; the Copy/hover/watch features need requires it.
+;;
+;; Contexts:
+;;   "clipboard"  Copy Value — return the COMPLETE untruncated text.  This is the
+;;                request that used to fall through to the unknown-command handler
+;;                and get an empty successful body, which is precisely why the copy
+;;                button silently produced nothing.
+;;   "hover"      the hovered identifier; unknown names fail QUIETLY (success #f
+;;                with no message) so hovering ordinary source text shows no popup.
+;;   "watch"/other  a watch row or Debug Console entry; an unknown name fails with
+;;                a message naming what IS available, rather than a blank row.
+(define (handle-evaluate req)
+  (define args (hash-ref req 'arguments (hasheq)))
+  (define expr (let ([e (hash-ref args 'expression "")])
+                 (if (string? e) (string-trim e) "")))
+  (define context (let ([c (hash-ref args 'context "")])
+                    (if (string? c) c "")))
+  (define entry (hash-ref evalname-registry expr #f))
+  (cond
+    [entry
+     (define clipboard? (equal? context "clipboard"))
+     (define text (if clipboard? (eval-entry-full entry) (eval-entry-display entry)))
+     (define raw (eval-entry-raw entry))
+     ;; Offer expansion for a composite result so a watch row can be drilled into.
+     ;; Skipped for clipboard (the client only reads `result`) and when attached
+     ;; (no local value behind the node).
+     (define kids (if (or clipboard? (not raw)) '() (value-children raw)))
+     (dap-response req #t
+       (hasheq 'result text
+               'type (if raw (value-type raw) "")
+               'variablesReference
+               (if (pair? kids)
+                   (alloc-varref! (lambda () (children->variables raw kids expr)))
+                   0)))]
+    ;; Hover over something that is not an in-scope variable: stay silent.
+    [(equal? context "hover")
+     (dap-response req #f (hasheq))]
+    [else
+     (define known (sort (hash-keys evalname-registry) string<?))
+     (dap-response req #f
+       (hasheq 'message
+               (if (null? known)
+                   "Not paused, or no variables are in scope at this stop."
+                   (format "`~a` is not a variable at this stop. In scope: ~a"
+                           expr
+                           (string-join (if (> (length known) 12)
+                                            (append (take known 12) (list "…"))
+                                            known)
+                                        ", ")))))]))
 
 ;; Resume verbs: proxy the command over the control channel in attach mode,
 ;; else resume the in-process debuggee.  The channel's own "resumed" event (or
@@ -1596,10 +1665,30 @@
       [(equal? cmd "stepIn")           (handle-step-in req)]
       [(equal? cmd "stepOut")          (handle-step-out req)]
       [(equal? cmd "source")           (handle-source req)]
+      [(equal? cmd "evaluate")         (handle-evaluate req)]
       [(equal? cmd "disconnect")       (handle-disconnect req)]
+      ;; Commands we deliberately accept as no-ops.  Clients send these
+      ;; unconditionally during setup regardless of advertised capabilities, and a
+      ;; failure response would surface as a spurious error notification.  Listing
+      ;; them EXPLICITLY is what lets the default below be strict.
+      [(member cmd '("setExceptionBreakpoints" "setFunctionBreakpoints"
+                     "setDataBreakpoints" "setInstructionBreakpoints"
+                     "cancel" "terminate" "pause"))
+       (dap-response req #t (hasheq))]
       [else
-       ;; Unknown command: respond with empty success to keep the session alive.
-       (dap-response req #t (hasheq))])))
+       ;; Anything else genuinely is not implemented — say so.
+       ;;
+       ;; This used to answer `success: true` with an empty body "to keep the
+       ;; session alive", which made every unimplemented request fail SILENTLY and
+       ;; look like a working feature that returned nothing.  That is how the Copy
+       ;; Value button came to do nothing at all: the client's `evaluate` request
+       ;; got a cheerful empty success and copied the empty result, with no error
+       ;; anywhere to hint that `evaluate` was simply missing.  A truthful failure
+       ;; makes the client fall back or report, and makes the next such gap loud
+       ;; instead of invisible.
+       (log! "dispatch: UNIMPLEMENTED command " cmd)
+       (dap-response req #f
+         (hasheq 'message (format "The Tesl debug adapter does not implement `~a`." cmd)))])))
 
 ;; ── In-module tests (task #44: DEEP-INSPECT raw hashes) ─────────────────────────
 ;;
@@ -1633,50 +1722,163 @@
     (define v (make-variable "empty" (hash-display (hash)) "Hash" (hash)))
     (check-equal? (hash-ref v 'variablesReference) 0))
 
-  (test-case "hash-children returns the status / payload / attempts children"
+  ;; Expand one level through the varref registry, exactly as a `variables`
+  ;; request does.
+  (define (expand var)
+    (define r (hash-ref var 'variablesReference 0))
+    (if (and (> r 0) (hash-has-key? varref-registry r))
+        ((hash-ref varref-registry r))
+        '()))
+  (define (names-of vars) (map (lambda (v) (hash-ref v 'name)) vars))
+  (define (child-named vars n)
+    (for/or ([v (in-list vars)]) (and (equal? (hash-ref v 'name) n) v)))
+
+  (test-case "a job hash expands to its status / payload / attempts children"
     (reset-varrefs!)
-    (define kids (hash-children job-entry))
-    (define names (map (lambda (k) (hash-ref k 'name)) kids))
+    (define kids (expand (make-variable "job-1" (hash-display job-entry) "Hash" job-entry)))
+    (define names (names-of kids))
     (check-not-false (member "status" names) "status child present")
     (check-not-false (member "payload" names) "payload child present")
     (check-not-false (member "attempts" names) "attempts child present"))
 
   (test-case "the record-valued payload child drills FURTHER into its fields"
     (reset-varrefs!)
-    (define kids (hash-children job-entry))
-    (define payload-var
-      (for/or ([k (in-list kids)]) (and (equal? (hash-ref k 'name) "payload") k)))
+    (define kids (expand (make-variable "job-1" (hash-display job-entry) "Hash" job-entry)))
+    (define payload-var (child-named kids "payload"))
     (check-true (and payload-var #t) "payload child exists")
-    (define pref (hash-ref payload-var 'variablesReference))
-    (check-true (> pref 0) "payload (a record) must itself be expandable")
-    (define payload-kids ((hash-ref varref-registry pref)))
-    (define pnames (map (lambda (k) (hash-ref k 'name)) payload-kids))
+    (check-true (> (hash-ref payload-var 'variablesReference) 0)
+                "payload (a record) must itself be expandable")
+    (define pnames (names-of (expand payload-var)))
     (check-not-false (member "amount" pnames) "record field amount drilled")
     (check-not-false (member "currency" pnames) "record field currency drilled"))
 
-  (test-case "hash value display is a compact summary, NOT a raw #hash dump"
-    (define s (hash-display job-entry))
-    (check-false (regexp-match? #rx"#hash" s) "no raw #hash blob")
-    ;; Recognised job shape → friendly label by id/status (here no id key, so by status).
-    (check-true (string-contains? s "pending") "status surfaced in the summary line"))
+  ;; ── evaluateName / Copy Value ───────────────────────────────────────────────
+  ;; The copy button issues `evaluate` for a variable's evaluateName; these pin
+  ;; that the names are emitted, nest correctly, and resolve to the FULL text.
 
-  (test-case "an email-shaped hash gets a friendly to/subject/status label"
-    (define email (hash 'to "a@x" 'subject "Welcome" 'body "hi" 'status 'sent))
-    (define s (hash-display email))
-    (check-true (string-contains? s "a@x") "recipient surfaced")
-    (check-true (string-contains? s "Welcome") "subject surfaced")
-    (check-true (string-contains? s "sent") "status surfaced"))
+  (test-case "variables carry a dotted evaluateName, nested by path"
+    (reset-varrefs!)
+    (define v (make-variable "job" (hash-display job-entry) "Hash" job-entry "job"))
+    (check-equal? (hash-ref v 'evaluateName) "job")
+    (define payload (child-named (expand v) "payload"))
+    (check-equal? (hash-ref payload 'evaluateName) "job.payload")
+    (define amount (child-named (expand payload) "amount"))
+    (check-equal? (hash-ref amount 'evaluateName) "job.payload.amount"))
 
-  (test-case "hash-summary truncates to the first few keys with an ellipsis"
-    (define big (hash 'a 1 'b 2 'c 3 'd 4 'e 5))
-    (define s (hash-summary big))
-    (check-true (string-contains? s "…") "large hashes are truncated")
-    (check-false (regexp-match? #rx"#hash" s) "no raw blob"))
+  (test-case "list element evaluateNames use index syntax, not a dot"
+    (reset-varrefs!)
+    (define v (make-variable "xs" "[1, 2]" "List" (list 1 2) "xs"))
+    (check-equal? (sort (map (lambda (c) (hash-ref c 'evaluateName)) (expand v)) string<?)
+                  '("xs[0]" "xs[1]")))
 
-  (test-case "hash-summary / hash-display never raise on hostile input"
-    ;; A hash whose value errors when displayed must fall back, never throw.
-    (check-not-exn (lambda () (hash-summary (hash 'k (hash))))) ; empty inner hash
-    (check-not-exn (lambda () (hash-display (hash)))))
+  (test-case "a registered evaluateName resolves to the COMPLETE value text"
+    ;; The panel shows a truncated 3-key summary for a wide hash; a copy must
+    ;; still yield the whole value, which is the point of storing `full`.
+    (reset-varrefs!)
+    (define wide (hash 'a 1 'b 2 'c 3 'd 4 'e 5))
+    (void (make-variable "wide" (hash-display wide) "Hash" wide "wide"))
+    (define entry (hash-ref evalname-registry "wide" #f))
+    (check-true (and entry #t) "evaluateName registered")
+    (check-true (string-contains? (eval-entry-display entry) "…")
+                "the DISPLAYED value is the truncated summary")
+    (check-false (string-contains? (eval-entry-full entry) "…")
+                 "the COPYABLE value is not truncated")
+    (for ([k '("a" "b" "c" "d" "e")])
+      (check-true (string-contains? (eval-entry-full entry) k)
+                  (format "copied text includes key ~a" k))))
+
+  (test-case "reset-varrefs! clears evaluateNames too (no cross-stop leakage)"
+    (reset-varrefs!)
+    (void (make-variable "x" "1" "Int" 1 "x"))
+    (check-true (hash-has-key? evalname-registry "x"))
+    (reset-varrefs!)
+    (check-false (hash-has-key? evalname-registry "x")
+                 "a name from the previous pause must not resolve at the next one"))
+
+  ;; ── Attach mode rebuilds a real tree from streamed nodes ────────────────────
+  ;; The launch/attach equivalence itself is pinned in tests/dap-value-tree-tests.rkt;
+  ;; here we check the DAP-side node→variable conversion.
+
+  (test-case "streamed child nodes become EXPANDABLE attach-mode variables"
+    (reset-varrefs!)
+    (define node
+      (hasheq 'name "order" 'value "Order {…}" 'type "Order"
+              'children (list (hasheq 'name "amount" 'value "4200" 'type "Int"))))
+    (define vars (rendered->variables (list node)))
+    (check-equal? (length vars) 1)
+    (define v (car vars))
+    (check-true (> (hash-ref v 'variablesReference) 0)
+                "a node WITH children must be expandable — this hardcoded 0 before")
+    (check-equal? (hash-ref v 'evaluateName) "order")
+    (define kids (expand v))
+    (check-equal? (names-of kids) '("amount"))
+    (check-equal? (hash-ref (car kids) 'evaluateName) "order.amount")
+    (check-equal? (hash-ref (car kids) 'variablesReference) 0
+                  "a leaf node stays a leaf"))
+
+  (test-case "a leaf node is not given a dead expand arrow"
+    (reset-varrefs!)
+    (define vars (rendered->variables
+                  (list (hasheq 'name "n" 'value "42" 'type "Int"))))
+    (check-equal? (hash-ref (car vars) 'variablesReference) 0))
+
+  (test-case "a TRUNCATED streamed node says so instead of looking complete"
+    (reset-varrefs!)
+    (define vars (rendered->variables
+                  (list (hasheq 'name "deep" 'value "Big {…}" 'type "Big"
+                                'truncated #t))))
+    (check-true (string-contains? (hash-ref (car vars) 'value) "truncated")))
+
+  ;; (The hash summary/label rendering itself now lives in value-tree.rkt and is
+  ;; covered by tests/dap-value-tree-tests.rkt, alongside the composite-implies-
+  ;; expandable invariant that ties display and expansion together.)
+
+  ;; ── SQL scope rows ──────────────────────────────────────────────────────────
+
+  (test-case "every SQL scope row is copyable (has an evaluateName that resolves)"
+    (reset-varrefs!)
+    (define cap (hash 'sql "SELECT * FROM users WHERE id = $1"
+                      'params (list 42)
+                      'table "users" 'op 'select 'status 'pending))
+    (define rows (sql->variables cap))
+    (define by-name
+      (for/hash ([r (in-list rows)]) (values (hash-ref r 'name) r)))
+    (for ([n '("sql" "table" "operation" "preview" "status")])
+      (define row (hash-ref by-name n #f))
+      (check-true (and row #t) (format "row ~a present" n))
+      (define en (hash-ref row 'evaluateName #f))
+      (check-true (and en #t) (format "row ~a carries an evaluateName" n))
+      (check-true (hash-has-key? evalname-registry en)
+                  (format "row ~a's evaluateName resolves — an unresolvable one is what made Copy Value copy nothing" n))))
+
+  (test-case "the SQL preview row copies the FULL inlined statement"
+    (reset-varrefs!)
+    (define cap (hash 'sql "SELECT * FROM users WHERE id = $1 AND name = $2"
+                      'params (list 42 "ada")
+                      'table "users" 'op 'select 'status 'pending))
+    (void (sql->variables cap))
+    (define entry (hash-ref evalname-registry "sql.preview" #f))
+    (check-true (and entry #t) "sql.preview is registered")
+    (check-equal? (eval-entry-full entry)
+                  "SELECT * FROM users WHERE id = 42 AND name = 'ada'"))
+
+  (test-case "the SQL preview row NAME is short (the caveat lives in the type column)"
+    (reset-varrefs!)
+    (define rows (sql->variables (hash 'sql "SELECT 1" 'params '() 'status 'pending)))
+    (define preview (for/or ([r (in-list rows)])
+                      (and (equal? (hash-ref r 'name) "preview") r)))
+    (check-true (and preview #t))
+    (check-true (< (string-length (hash-ref preview 'name)) 20)
+                "a long name pushes the value out of the panel")
+    (check-true (string-contains? (hash-ref preview 'type) "never executed")
+                "and the not-executed caveat is still stated, in the type column"))
+
+  (test-case "bound params are copyable as sql.params.$N, bare of the type suffix"
+    (reset-varrefs!)
+    (void (sql-param-variables (list 42 "ada")))
+    (check-equal? (eval-entry-full (hash-ref evalname-registry "sql.params.$1")) "42")
+    ;; The panel shows `"ada" : String`; the copy is just the value.
+    (check-equal? (eval-entry-full (hash-ref evalname-registry "sql.params.$2")) "\"ada\""))
 
   ;; ── SQL transparency render helpers (task #43) ──────────────────────────────
   (test-case "sql-inline-preview folds escaped literals into the parameterized text"

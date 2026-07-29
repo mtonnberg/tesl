@@ -1165,6 +1165,11 @@ else
         # Live attach control channel: protocol + socket lifecycle + re-arm +
         # detach/EOF semantics + pause timeout + concurrent-stop serialization
         "tests/dap-attach-smoke.rkt"
+        # Debugger value lenses: the composite-implies-expandable invariant plus
+        # launch-mode ≡ attach-mode tree equivalence (dsl/debug/value-tree.rkt)
+        "tests/dap-value-tree-tests.rkt"
+        # …and the attach wire JSON that carries those trees between processes
+        "tests/dap-attach-value-tree-smoke.rkt"
         "tests/dap-sql-scope-smoke.rkt"
         "tests/codec-specialization-test.rkt"
         "tests/lifted-list-tests.rkt"
@@ -1195,6 +1200,10 @@ else
         # OTel Metrics signal: registry + OTLP mapping + /v1/metrics exporter
         "tests/otlp-metrics-test.rkt"
         "editor/tesl-mcp/tests/protocol-smoke.rkt"
+        # The LSP server's own in-module suite (hover/completion/code-action/
+        # semantic-token rendering, incl. quick-fix ACTION TITLES).  It was not
+        # gated anywhere before, so ~400 assertions could rot unnoticed.
+        "editor/tesl-lsp/tesl-lsp.rkt"
         # NOT gated here (by design): tests/httpclient-test.rkt makes real loopback
         # TCP connects that hang where the network filters rather than RST-refuses.
     )

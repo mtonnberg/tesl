@@ -511,7 +511,16 @@
         (define done (sync/timeout 5 exit-ch))
         (check-equal? done 'done "server should exit after disconnect"))))
 
-(test-case "subprocess: server handles unknown command gracefully"
+;; An UNIMPLEMENTED command must fail truthfully.
+;;
+;; This previously asserted the opposite — success #t with an empty body, "to keep
+;; the session alive".  That fallback is what made the Copy Value button appear
+;; broken with no error anywhere: VSCodium resolves a variable's evaluateName via
+;; an `evaluate` request, `evaluate` was not implemented, and the fallback answered
+;; every such request with a cheerful empty success, so the client copied an empty
+;; string.  Answering honestly means the client can fall back or report, and the
+;; NEXT missing command is visible instead of silent.
+(test-case "subprocess: an unimplemented command fails, and says which"
   (if (not subprocess-available?)
       (printf "SKIPPED: subprocess unavailable\n")
       (with-dap-server (proc out in err)
@@ -519,7 +528,6 @@
           (hasheq 'seq 1 'type "request" 'command "initialize"
                   'arguments (hasheq 'clientID "test" 'adapterID "tesl")))
         (recv-until (lambda (m) (and (hash? m) (equal? (hash-ref m 'type "") "event"))) out 8)
-        ;; Send an unknown command
         (send-dap! in
           (hasheq 'seq 2 'type "request" 'command "unknownXyzCommand" 'arguments (hasheq)))
         (define resp (recv-until
@@ -529,8 +537,83 @@
                        out 8))
         (check-true (hash? resp) "server should respond to unknown command")
         (when (hash? resp)
-          (check-equal? (hash-ref resp 'success #f) #t
-                        "unknown commands should return success #t per dispatch fallback")))))
+          (check-equal? (hash-ref resp 'success #f) #f
+                        "an unimplemented command must NOT report success")
+          (check-true (string-contains?
+                       (hash-ref (hash-ref resp 'body (hasheq)) 'message "")
+                       "unknownXyzCommand")
+                      "and the failure must name the command")))))
+
+;; Setup commands clients send unconditionally stay no-op successes, so the strict
+;; default above cannot produce spurious error popups.
+(test-case "subprocess: benign setup commands are still accepted as no-ops"
+  (if (not subprocess-available?)
+      (printf "SKIPPED: subprocess unavailable\n")
+      (with-dap-server (proc out in err)
+        (send-dap! in
+          (hasheq 'seq 1 'type "request" 'command "initialize"
+                  'arguments (hasheq 'clientID "test" 'adapterID "tesl")))
+        (recv-until (lambda (m) (and (hash? m) (equal? (hash-ref m 'type "") "event"))) out 8)
+        (for ([cmd '("setExceptionBreakpoints" "setFunctionBreakpoints")]
+              [seq (in-naturals 2)])
+          (send-dap! in
+            (hasheq 'seq seq 'type "request" 'command cmd 'arguments (hasheq)))
+          (define resp (recv-until
+                         (lambda (m) (and (hash? m)
+                                          (equal? (hash-ref m 'type "") "response")
+                                          (equal? (hash-ref m 'command "") cmd)))
+                         out 8))
+          (check-true (hash? resp) (format "~a answered" cmd))
+          (when (hash? resp)
+            (check-equal? (hash-ref resp 'success #f) #t
+                          (format "~a must be accepted, not rejected" cmd)))))))
+
+;; The capabilities that make Copy Value / hover work at all.  Without
+;; supportsClipboardContext the client never asks for the clipboard form.
+(test-case "subprocess: initialize advertises clipboard + hover evaluate support"
+  (if (not subprocess-available?)
+      (printf "SKIPPED: subprocess unavailable\n")
+      (with-dap-server (proc out in err)
+        (send-dap! in
+          (hasheq 'seq 1 'type "request" 'command "initialize"
+                  'arguments (hasheq 'clientID "test" 'adapterID "tesl")))
+        (define resp (recv-until
+                       (lambda (m) (and (hash? m)
+                                        (equal? (hash-ref m 'type "") "response")
+                                        (equal? (hash-ref m 'command "") "initialize")))
+                       out 8))
+        (check-true (hash? resp) "initialize answered")
+        (when (hash? resp)
+          (define caps (hash-ref resp 'body (hasheq)))
+          (check-equal? (hash-ref caps 'supportsClipboardContext #f) #t
+                        "Copy Value depends on this capability being advertised")
+          (check-equal? (hash-ref caps 'supportsEvaluateForHovers #f) #t)))))
+
+;; `evaluate` must be implemented — reaching the unimplemented-command branch is
+;; the exact failure mode that broke the copy button.
+(test-case "subprocess: evaluate is implemented (not an unimplemented command)"
+  (if (not subprocess-available?)
+      (printf "SKIPPED: subprocess unavailable\n")
+      (with-dap-server (proc out in err)
+        (send-dap! in
+          (hasheq 'seq 1 'type "request" 'command "initialize"
+                  'arguments (hasheq 'clientID "test" 'adapterID "tesl")))
+        (recv-until (lambda (m) (and (hash? m) (equal? (hash-ref m 'type "") "event"))) out 8)
+        ;; Not paused, so no name resolves — but the failure must be the
+        ;; "no variables in scope" answer, NOT "does not implement `evaluate`".
+        (send-dap! in
+          (hasheq 'seq 2 'type "request" 'command "evaluate"
+                  'arguments (hasheq 'expression "x" 'context "clipboard")))
+        (define resp (recv-until
+                       (lambda (m) (and (hash? m)
+                                        (equal? (hash-ref m 'type "") "response")
+                                        (equal? (hash-ref m 'command "") "evaluate")))
+                       out 8))
+        (check-true (hash? resp) "evaluate answered")
+        (when (hash? resp)
+          (define msg (hash-ref (hash-ref resp 'body (hasheq)) 'message ""))
+          (check-false (string-contains? msg "does not implement")
+                       "evaluate must be handled, not fall through to the strict default")))))
 
 (test-case "subprocess: sequence numbers increment across responses"
   (if (not subprocess-available?)

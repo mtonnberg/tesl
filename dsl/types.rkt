@@ -32,6 +32,10 @@
  runtime-type-predicate
  define-newtype
  define-type-alias
+ ;; The raw constructor, exported so the debugger's value-tree tests can build a
+ ;; newtype-wrapped value directly (a Money/units binding is the shape that used
+ ;; to render as an unexpandable blob). Emitted code goes through define-newtype.
+ newtype-value
  newtype-value?
  newtype-value-type-name
  newtype-value-value

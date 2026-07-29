@@ -32,6 +32,159 @@ type t =
           which must split at `then` AND before `else` at once.  Elements must
           not themselves be [Multi]. *)
 
+(* ── Human titles for code actions ───────────────────────────────────────────
+   The editor shows this string in the lightbulb / quick-fix menu, and it is the
+   ONLY thing a user reads before deciding to apply an edit.  The LSP used to
+   synthesize it as [Printf.sprintf "Apply fix for %s" code], so every action in
+   every file read "Apply fix for W010" — which says nothing about what the edit
+   does and forces the user to apply it to find out.
+
+   [title] derives a specific, imperative description from the diagnostic CODE
+   (which carries the producer's intent) plus the edit's KIND and CONTENT.  It is
+   deliberately total and has no "Apply fix for …"-style escape hatch: the worst
+   case for an unrecognised code is still a content-derived description of the
+   actual edit ("Delete these 2 lines", "Replace with `x ++ y`").
+
+   Guarantees pinned by test/test_fix_titles.ml:
+     • no title mentions a diagnostic code, or the word "diagnostic";
+     • every title starts with an imperative verb and is ≤ 72 chars;
+     • every code that ships a fix anywhere in the compiler has an entry here
+       (a new fix-shipping code fails that test until its title is written).   *)
+
+let truncate n s =
+  let s = String.concat " " (String.split_on_char '\n' s) in
+  let s = String.trim s in
+  if String.length s <= n then s
+  else String.sub s 0 (max 0 (n - 1)) ^ "\u{2026}"
+
+let starts_with p s =
+  String.length s >= String.length p && String.sub s 0 (String.length p) = p
+
+(** Parse a rendered import statement into its module name and exposed names.
+    Handles both forms [Import_suggest.render_import] produces —
+    [import M exposing [a, b]] and, for a long list, the multi-line
+    [import M exposing [\n  a,\n  b,\n]] — plus a bare [import M].
+    [None] when the text is not an import at all. *)
+let parse_import (text : string) : (string * string list) option =
+  let t = String.trim text in
+  if not (starts_with "import " t) then None
+  else begin
+    let rest = String.trim (String.sub t 7 (String.length t - 7)) in
+    match String.index_opt rest '[' with
+    | None ->
+      (* `import M` — or `import M exposing` with nothing after it. *)
+      let m =
+        match String.index_opt rest ' ' with
+        | Some i -> String.sub rest 0 i
+        | None -> rest
+      in
+      Some (String.trim m, [])
+    | Some i ->
+      let before = String.trim (String.sub rest 0 i) in
+      (* strip a trailing `exposing` *)
+      let m =
+        match String.index_opt before ' ' with
+        | Some j -> String.trim (String.sub before 0 j)
+        | None -> before
+      in
+      let inside =
+        let j = try String.rindex rest ']' with Not_found -> String.length rest in
+        if j > i + 1 then String.sub rest (i + 1) (j - i - 1) else ""
+      in
+      let names =
+        String.split_on_char ',' inside
+        |> List.map (fun s ->
+             (* the multi-line form indents each name and keeps newlines *)
+             String.trim (String.concat " " (String.split_on_char '\n' s)))
+        |> List.filter (fun s -> s <> "")
+      in
+      Some (m, names)
+  end
+
+(** How many lines an inclusive span covers, phrased for a human. *)
+let line_count_phrase start_line end_line =
+  let n = end_line - start_line + 1 in
+  if n <= 1 then "this line" else Printf.sprintf "these %d lines" n
+
+(** Title for an edit whose replacement text is a rendered import statement.
+    [Import_suggest] APPENDS the name it is making available, so the last exposed
+    name is the one this action adds — which is what the user wants to read.
+    [None] when the text is not an import at all. *)
+let import_title (text : string) : string option =
+  match parse_import text with
+  | None -> None
+  | Some (m, []) -> Some (Printf.sprintf "Import %s" m)
+  | Some (m, names) ->
+    let added = List.nth names (List.length names - 1) in
+    Some (Printf.sprintf "Import %s from %s" added m)
+
+let rec content_title (fix : t) : string =
+  match fix with
+  | Insert_line { text; _ } ->
+    (match import_title text with
+     | Some t -> t
+     | None -> Printf.sprintf "Insert `%s`" (truncate 48 text))
+  | Replace_span { start_line; end_line; replacement } ->
+    if replacement = "" then
+      Printf.sprintf "Delete %s" (line_count_phrase start_line end_line)
+    else
+      (match parse_import replacement with
+       | Some (m, names) when names <> [] ->
+         Printf.sprintf "Change the import from %s to expose %s" m
+           (String.concat ", " names)
+       | _ -> Printf.sprintf "Replace with `%s`" (truncate 48 replacement))
+  | Replace_line { replacement; _ } ->
+    if String.trim replacement = "" then "Clear this line"
+    else Printf.sprintf "Rewrite line as `%s`" (truncate 48 replacement)
+  | Replace_range { start_line; start_col; end_line; end_col; replacement } ->
+    if replacement = "" then "Delete this text"
+    else if start_line = end_line && start_col = end_col then
+      (* zero-width range = pure insertion *)
+      Printf.sprintf "Insert `%s`" (truncate 32 replacement)
+    else Printf.sprintf "Replace with `%s`" (truncate 48 replacement)
+  | Multi [] -> "Apply the suggested edits"
+  | Multi (first :: _) -> content_title first
+
+(** The set of diagnostic codes that ship a fix and therefore need an
+    intent-bearing title.  Kept as data so test/test_fix_titles.ml can assert it
+    stays complete as new fixes are added. *)
+let titled_codes = [ "W010"; "W011"; "W050"; "T001"; "E000"; "E002";
+                     "VBOOL001"; "VBOOL002" ]
+
+(** The user-facing code-action title for [fix], reported under [code]. *)
+let title ~(code : string) (fix : t) : string =
+  match code, fix with
+  (* ── Linter formatting fixes: the code IS the intent. ── *)
+  | "W010", _ -> "Remove trailing whitespace"
+  | "W011", _ -> "Re-indent to a multiple of 2 spaces"
+  (* ── Unused imports (W050).  Deleting the statement vs. pruning names from
+        it are different actions and must not read alike. ── *)
+  | "W050", Replace_span { replacement = ""; _ } -> "Remove this unused import"
+  | "W050", Replace_span { replacement; _ } ->
+    (match parse_import replacement with
+     | Some (m, names) when names <> [] ->
+       Printf.sprintf "Remove the unused names, keeping %s from %s"
+         (String.concat ", " names) m
+     | _ -> "Remove the unused names from this import")
+  (* ── Type errors (T001) and a missing Bool import (VBOOL002): import
+        suggestions dominate, and `import_title` names exactly which name the
+        action makes available. ── *)
+  | ("T001" | "VBOOL002"), Insert_line { text; _ } ->
+    (match import_title text with Some t -> t | None -> content_title fix)
+  | ("T001" | "VBOOL002"), Replace_span { replacement; _ } ->
+    (match import_title replacement with Some t -> t | None -> content_title fix)
+  (* ── Parser fixes (E000/E002). ── *)
+  | "E002", _ -> "Delete the obsolete `#lang tesl` line"
+  | "E000", (Multi _ | Replace_range _) ->
+    "Move the body onto its own indented line"
+  (* ── Legacy boolean spellings (VBOOL001) fix a token but ship the whole
+        corrected LINE, so the honest, useful title is to show that line — the
+        user sees exactly what they will get. ── *)
+  | "VBOOL001", Replace_line { replacement; _ } ->
+    Printf.sprintf "Rewrite line as `%s`" (truncate 48 replacement)
+  (* ── Anything else: describe the actual edit. ── *)
+  | _ -> content_title fix
+
 (* ── Source-verified builders ────────────────────────────────────────────────
    Fail-closed: when the source snapshot is absent or does not contain what the
    location claims, the builder returns [None] and the diagnostic ships without

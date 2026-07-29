@@ -2169,10 +2169,162 @@
     (and (string? msg)
          (regexp-match? #px"(?i:\\bimport\\b)" msg))))
 
+;; The lightbulb / quick-fix menu title.
+;;
+;; This used to be (format "Apply fix for ~a" code), so every action in every
+;; file read "Apply fix for W010" — a diagnostic code is not a description of an
+;; edit, and the user had to apply the action to find out what it did.  The
+;; compiler now ships a specific imperative title with each fix (Diag_fix.title:
+;; "Remove trailing whitespace", "Import map from Tesl.List", "Remove this unused
+;; import", …) because it is the side that knows the diagnostic's intent.
+;;
+;; `fix-title` prefers that wire title and falls back to describing the edit from
+;; its own content, so an older `tesl` binary on PATH still yields something
+;; useful rather than regressing to a code.  There is deliberately NO code-based
+;; fallback anywhere in this path.
+;; One refinement the server can make that the compiler cannot: for a
+;; COLUMN-PRECISE (`replace_range`) edit we hold the buffer, so we can read the
+;; exact text being replaced and name BOTH sides — "Remove `return`", "Change `+`
+;; to `++`" — where the fix alone only carries the new text and the compiler can
+;; therefore only say "Delete this text" / "Replace with `++`".  Line-granular
+;; kinds are left to the wire title, which is already code-specific for them
+;; ("Remove this unused import", "Delete the obsolete `#lang tesl` line").
+(define (range-title text fix)
+  (and (string? text)
+       (equal? (hash-ref fix 'kind #f) "replace_range")
+       (let* ([lines (string-split text "\n" #:trim? #f)]
+              [sl (hash-ref fix 'start_line 0)]
+              [el (hash-ref fix 'end_line 0)]
+              [sc (hash-ref fix 'start_col 0)]
+              [ec (hash-ref fix 'end_col 0)]
+              [replacement (hash-ref fix 'replacement "")])
+         (and (= sl el)                       ; single-line range only
+              (>= sl 0) (< sl (length lines))
+              (let* ([line (list-ref lines sl)]
+                     [len (string-length line)]
+                     [a (max 0 (min len sc))]
+                     [b (max a (min len ec))]
+                     [old (string-trim (substring line a b))])
+                (and (non-empty-string? old)
+                     (<= (string-length old) 40)
+                     (if (string=? (string-trim replacement) "")
+                         (format "Remove `~a`" old)
+                         (format "Change `~a` to `~a`"
+                                 old (string-trim replacement)))))))))
+
+(define (fix-title diag [text #f])
+  (define data (hash-ref diag 'data (hash)))
+  (define fix (if (hash? data) (hash-ref data 'fix 'null) 'null))
+  (define wire (and (hash? fix) (hash-ref fix 'title #f)))
+  (define code (let ([c (hash-ref diag 'code "")]) (if (string? c) c "")))
+  (cond
+    [(and (hash? fix) (range-title text fix)) => values]
+    [(and (string? wire) (non-empty-string? wire)) wire]
+    [(hash? fix) (describe-fix fix code)]
+    [else "Apply the suggested edit"]))
+
+;; Fallback description, mirroring `Diag_fix.title ~code` in the compiler for use
+;; when the wire carries no title (an older `tesl` binary on PATH).  The compiler
+;; is authoritative — this exists only so an out-of-date toolchain degrades to a
+;; useful description instead of regressing to naming the diagnostic code, which
+;; is asserted for every (code × kind) pair in the test block at the end of this
+;; file.
+(define (describe-fix fix [code ""])
+  (define (clip s n)
+    (let ([one-line (string-trim (string-replace (or s "") "\n" " "))])
+      (if (> (string-length one-line) n)
+          (string-append (substring one-line 0 (max 0 (- n 1))) "…")
+          one-line)))
+  ;; "import M exposing [a, b]" → (list "M" '("a" "b")); #f when not an import.
+  ;; Mirrors Diag_fix.parse_import, including the wrapped multi-line rendering
+  ;; the compiler emits for a long exposing list.
+  (define (parse-import text)
+    (define t (string-trim (or text "")))
+    (and (string-prefix? t "import ")
+         (let* ([rest (string-trim (substring t 7))]
+                [i (let ([m (regexp-match-positions #rx"\\[" rest)]) (and m (caar m)))])
+           (cond
+             [(not i)
+              ;; bare `import M` (or `import M exposing` with nothing after)
+              (list (car (string-split rest)) '())]
+             [else
+              (let* ([before (string-trim (substring rest 0 i))]
+                     ;; drop a trailing `exposing`
+                     [m (car (string-split before))]
+                     [j (let ([p (regexp-match-positions #rx"\\][^]]*$" rest)])
+                          (if p (caar p) (string-length rest)))]
+                     [inside (if (> j (add1 i)) (substring rest (add1 i) j) "")]
+                     [names (filter non-empty-string?
+                                    (map (lambda (s)
+                                           (string-trim (string-replace s "\n" " ")))
+                                         (string-split inside ",")))])
+                (list m names))]))))
+  (define (import-title text)
+    (define p (parse-import text))
+    (and p
+         (let ([m (first p)] [names (second p)])
+           (if (null? names)
+               (format "Import ~a" m)
+               (format "Import ~a from ~a" (last names) m)))))
+  ;; Codes whose fix is an IMPORT action: the appended name is the one the
+  ;; action makes available (Import_suggest appends it), so name that.
+  (define import-code? (member code '("T001" "VBOOL002")))
+  (case (hash-ref fix 'kind #f)
+    [("insert_line")
+     (define text (hash-ref fix 'text ""))
+     (or (import-title text) (format "Insert `~a`" (clip text 48)))]
+    [("replace_span")
+     (define r (hash-ref fix 'replacement ""))
+     (define start (hash-ref fix 'start_line 0))
+     (define end (hash-ref fix 'end_line 0))
+     (define p (parse-import r))
+     (cond
+       [(string=? r "")
+        (cond
+          [(equal? code "W050") "Remove this unused import"]
+          [(equal? code "E002") "Delete the obsolete `#lang tesl` line"]
+          [else
+           (define n (add1 (- end start)))
+           (if (<= n 1) "Delete this line" (format "Delete these ~a lines" n))])]
+       ;; Adding a name to an existing import.
+       [(and import-code? (import-title r)) => values]
+       ;; Pruning unused names FROM an import keeps the survivors.
+       [(and (equal? code "W050") p (pair? (second p)))
+        (format "Remove the unused names, keeping ~a from ~a"
+                (string-join (second p) ", ") (first p))]
+       [(equal? code "W050") "Remove the unused names from this import"]
+       [(and p (pair? (second p)))
+        (format "Change the import from ~a to expose ~a"
+                (first p) (string-join (second p) ", "))]
+       [else (format "Replace with `~a`" (clip r 48))])]
+    [("replace_line")
+     (define r (hash-ref fix 'replacement ""))
+     (cond
+       [(equal? code "W010") "Remove trailing whitespace"]
+       [(equal? code "W011") "Re-indent to a multiple of 2 spaces"]
+       [(string=? (string-trim r) "") "Clear this line"]
+       [else (format "Rewrite line as `~a`" (clip r 48))])]
+    [("replace_range")
+     (define r (hash-ref fix 'replacement ""))
+     (cond
+       [(string=? r "") "Delete this text"]
+       [(and (= (hash-ref fix 'start_line 0) (hash-ref fix 'end_line 0))
+             (= (hash-ref fix 'start_col 0) (hash-ref fix 'end_col 0)))
+        (format "Insert `~a`" (clip r 32))]
+       [else (format "Replace with `~a`" (clip r 48))])]
+    [("multi")
+     (define edits (hash-ref fix 'edits '()))
+     (cond
+       [(equal? code "E000") "Move the body onto its own indented line"]
+       [(and (list? edits) (pair? edits) (hash? (car edits)))
+        (describe-fix (car edits) code)]
+       [else "Apply the suggested edits"])]
+    [else "Apply the suggested edit"]))
+
 (define (diag->code-action uri text diag)
   (let ([edits (diag->fix-edits text diag)])
     (and (pair? edits)
-         (hash 'title (format "Apply fix for ~a" (hash-ref diag 'code "diagnostic"))
+         (hash 'title (fix-title diag text)
                'kind "quickfix"
                'diagnostics (list diag)
                'edit (hash 'changes (hash (uri->json-key uri) edits))))))
@@ -3167,7 +3319,10 @@
          [edit (car uri-edits)])
     (check-not-false action)
     (check-equal? (hash-ref action 'kind) "quickfix")
-    (check-equal? (hash-ref action 'title) "Apply fix for W010")
+    ;; No fix.title on the wire (an older `tesl` on PATH) → the local fallback
+    ;; mirrors the compiler and names the actual problem, never the code.
+    (check-equal? (hash-ref action 'title) "Remove trailing whitespace")
+    (check-false (regexp-match? #rx"W010" (hash-ref action 'title)))
     (check-equal? (hash-ref edit 'newText) "import Tesl.Prelude exposing [Int]")
     (check-equal? (hash-ref (hash-ref edit 'range) 'start) (hash 'line 1 'character 0)))
 
@@ -3189,7 +3344,106 @@
     (check-not-false action)
     (check-equal? (hash-ref edit 'newText) "++")
     (check-equal? (hash-ref (hash-ref edit 'range) 'start) (hash 'line 1 'character 45))
-    (check-equal? (hash-ref (hash-ref edit 'range) 'end)   (hash 'line 1 'character 46)))
+    (check-equal? (hash-ref (hash-ref edit 'range) 'end)   (hash 'line 1 'character 46))
+    ;; The server holds the buffer, so it can name BOTH sides of a token-level
+    ;; edit — the compiler's fix only carries the new text.
+    (check-equal? (hash-ref action 'title) "Change `+` to `++`"))
+
+  ;; ── Quick-fix TITLES ─────────────────────────────────────────────────────
+  ;;
+  ;; Every action used to be titled "Apply fix for <CODE>", which described
+  ;; nothing and made simultaneous actions indistinguishable.  These pin the
+  ;; three sources of a title and the rule that a code is never one of them.
+
+  ;; 1. The compiler's wire title wins for line-granular kinds, where it is
+  ;;    code-specific in a way content alone cannot be.
+  (let* ([uri "file:///tmp/title-wire.tesl"]
+         [text "module Main exposing [f]\nimport Tesl.Prelude exposing [Int, String]\nfn f() -> Int = 1\n"]
+         [diag (hash
+                'code "W050"
+                'data (hash 'fix (hash 'kind "replace_span"
+                                       'start_line 1 'end_line 1
+                                       'replacement "import Tesl.Prelude exposing [Int]"
+                                       'title "Remove the unused names, keeping Int from Tesl.Prelude")))]
+         [action (diag->code-action uri text diag)])
+    (check-equal? (hash-ref action 'title)
+                  "Remove the unused names, keeping Int from Tesl.Prelude"))
+
+  ;; 2. A token DELETION names the removed code, which needs the buffer.
+  (let* ([uri "file:///tmp/title-delete.tesl"]
+         [text "module Main exposing [f]\nfn f(x: Int) -> Int =\n    return x\n"]
+         [diag (hash
+                'code "T001"
+                'data (hash 'fix (hash 'kind "replace_range"
+                                       'start_line 2 'start_col 4
+                                       'end_line 2 'end_col 11
+                                       'replacement ""
+                                       ;; the compiler could only manage this:
+                                       'title "Delete this text")))]
+         [action (diag->code-action uri text diag)])
+    (check-equal? (hash-ref action 'title) "Remove `return`"))
+
+  ;; 3. With NO wire title (an older `tesl` on PATH) the fallback still describes
+  ;;    the edit — and in particular never names the code.
+  (let* ([uri "file:///tmp/title-fallback.tesl"]
+         [text "module Main exposing [f]\nfn f() -> Int = 1\n"])
+    (define (title-for code fix)
+      (hash-ref (diag->code-action uri text (hash 'code code 'data (hash 'fix fix)))
+                'title))
+    (check-equal? (title-for "T001" (hash 'kind "insert_line" 'line 1
+                                          'text "import Tesl.List exposing [map]"))
+                  "Import map from Tesl.List")
+    ;; Extending an existing import: the APPENDED name is the one being added.
+    (check-equal? (title-for "T001" (hash 'kind "replace_span" 'start_line 1 'end_line 1
+                                          'replacement "import Tesl.List exposing [head, map]"))
+                  "Import map from Tesl.List")
+    ;; W050's deletion is code-specific…
+    (check-equal? (title-for "W050" (hash 'kind "replace_span" 'start_line 1 'end_line 1
+                                          'replacement ""))
+                  "Remove this unused import")
+    (check-equal? (title-for "W050" (hash 'kind "replace_span" 'start_line 1 'end_line 1
+                                          'replacement "import Tesl.Prelude exposing [Int]"))
+                  "Remove the unused names, keeping Int from Tesl.Prelude")
+    ;; …while an unrecognised code still counts the lines it will delete.
+    (check-equal? (title-for "ZZZ999" (hash 'kind "replace_span" 'start_line 1 'end_line 1
+                                            'replacement ""))
+                  "Delete this line")
+    (check-equal? (title-for "ZZZ999" (hash 'kind "replace_span" 'start_line 0 'end_line 2
+                                            'replacement ""))
+                  "Delete these 3 lines")
+    ;; The wrapped multi-line exposing form the compiler emits for long lists.
+    (check-equal? (title-for "T001"
+                             (hash 'kind "insert_line" 'line 1
+                                   'text "import Tesl.List exposing [\n  head,\n  map,\n]"))
+                  "Import map from Tesl.List"))
+
+  ;; 4. THE REGRESSION ITSELF: no title, from any source, may name a diagnostic
+  ;;    code or read as the old generic wording.
+  (let* ([uri "file:///tmp/title-no-codes.tesl"]
+         [text "module Main exposing [f]\nfn f() -> Int =\n    return 1\n"]
+         [fixes (list (hash 'kind "replace_line" 'line 1 'replacement "fn f() -> Int =")
+                      (hash 'kind "insert_line" 'line 1 'text "import Tesl.List exposing [map]")
+                      (hash 'kind "replace_span" 'start_line 1 'end_line 1 'replacement "")
+                      (hash 'kind "replace_range" 'start_line 2 'start_col 4
+                            'end_line 2 'end_col 11 'replacement "")
+                      (hash 'kind "multi" 'edits
+                            (list (hash 'kind "replace_range" 'start_line 2 'start_col 4
+                                        'end_line 2 'end_col 5 'replacement "x"))))])
+    (for* ([code '("W010" "W011" "W050" "T001" "E000" "E002" "VBOOL001" "ZZZ999")]
+           [fix (in-list fixes)])
+      (define action (diag->code-action uri text (hash 'code code 'data (hash 'fix fix))))
+      (when action
+        (define t (hash-ref action 'title))
+        (check-false (regexp-match? #rx"Apply fix for" t)
+                     (format "~a/~a regressed to the generic wording: ~a"
+                             code (hash-ref fix 'kind) t))
+        (check-false (regexp-match? (regexp code) t)
+                     (format "~a/~a leaks the code into the title: ~a"
+                             code (hash-ref fix 'kind) t))
+        (check-true (non-empty-string? t))
+        (check-true (< (string-length t) 90)
+                    (format "~a/~a title too long for a menu: ~a"
+                            code (hash-ref fix 'kind) t)))))
 
   ;; multi (D9): one code action carrying several TextEdits (single-line-`if` split)
   (let* ([uri "file:///tmp/multi-fix.tesl"]

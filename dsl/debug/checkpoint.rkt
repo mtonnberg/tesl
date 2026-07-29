@@ -66,6 +66,11 @@
  thsl-display-value
  safe-display
  format-proof-list
+ ;; ADT field ordering — exported so dsl/debug/value-tree.rkt orders an ADT's
+ ;; EXPANDED children exactly as safe-display-adt orders them inline.  Sharing
+ ;; the one ordering function is what keeps the value column and the expanded
+ ;; tree from disagreeing about field order.
+ adt-field-keys-ordered
  ;; conditional-breakpoint support
  make-bp-record
  bp-record?
@@ -715,8 +720,26 @@
 ;; DAP server from compile-time --local-bindings-json (see overlay-binding-type
 ;; in dap-server.rkt).  We keep the facts path for the rare case a value still
 ;; carries an explicitly attached proof.
-(define (safe-display v)
+;; DEPTH BOUND.  safe-display recurses through records / ADTs / lists / hashes,
+;; and did so without any limit.  A value that references itself — a mutable
+;; runtime hash reachable from its own entry, say — made it recur forever, which
+;; does not raise and so is not caught by any `with-handlers` guard: it HANGS the
+;; thread that is rendering, and that thread is the paused debuggee.  A merely
+;; very deep value produced a uselessly enormous string for the value column by
+;; the same mechanism.
+;;
+;; The cap is far above anything a real Tesl value nests (records nest a handful
+;; of levels), so no existing rendering changes; past it we emit `…` — honest
+;; about having stopped rather than pretending the value ended there.
+(define SAFE-DISPLAY-MAX-DEPTH 12)
+
+(define (safe-display v) (safe-display/depth v SAFE-DISPLAY-MAX-DEPTH))
+
+(define (safe-display/depth v depth)
+  ;; One level down for every recursive call below.
+  (define (safe-display v) (safe-display/depth v (sub1 depth)))
   (cond
+    [(<= depth 0) "…"]
     ;; Unwrap GDP wrappers first
     [(named-value? v)
      (let* ([inner     (safe-display (named-value-value v))]
@@ -748,7 +771,7 @@
            (hash-map fields (lambda (k vv) (format "~a: ~a" k (safe-display vv))) #t)
            ", ")
          "}"))]
-    [(adt-value? v)     (safe-display-adt v)]
+    [(adt-value? v)     (safe-display-adt v (sub1 depth))]
     [(list? v)
      (string-append "[" (string-join (map safe-display v) ", ") "]")]
     ;; Raw hash (e.g. a database entity ROW returned by select — stored as a
@@ -772,28 +795,43 @@
 ;; hash keyed by field name; positional ctors use synthetic field-0/field-1/…
 ;; keys, which we render as a tuple-like argument list, while named fields render
 ;; as a record-like body.  A nullary variant renders as just its name.
-(define (safe-display-adt v)
-  (define variant (~a (adt-value-variant v)))
-  (define fields  (adt-value-fields v))
-  (define keys    (hash-keys fields))
+;; The ADT's field keys in DISPLAY ORDER, plus which layout applies.  Returns
+;; (values layout ordered-keys) where layout is 'nullary / 'tuple / 'positional
+;; / 'named.  Exported (see the provide block) so the debugger's expanded child
+;; list uses the SAME order as the inline value string — the two disagreeing is
+;; exactly the kind of drift that made expanded trees look unrelated to the
+;; value column.
+(define (adt-field-keys-ordered v)
+  (define fields (adt-value-fields v))
+  (define keys   (hash-keys fields))
   (cond
-    [(null? keys) variant]                              ; nullary: Nothing, True, …
+    [(null? keys) (values 'nullary '())]
     ;; Tuple sugar: type Tuple2/Tuple3/… → (a, b, …).  Tuple fields are named
     ;; 'first 'second 'third (see runtime-type-satisfied? in types.rkt).
     [(regexp-match? #rx"^Tuple[0-9]+$" (~a (adt-value-type v)))
-     (let ([vals (map (lambda (k) (safe-display (hash-ref fields k)))
-                      (sort keys tuple-key<?))])
-       (string-append "(" (string-join vals ", ") ")"))]
+     (values 'tuple (sort keys tuple-key<?))]
     ;; Positional fields (field-0, field-1, …): Variant(v0, v1)
     [(andmap positional-key? keys)
-     (let ([vals (map (lambda (k) (safe-display (hash-ref fields k)))
-                      (sort keys positional<?))])
-       (string-append variant "(" (string-join vals ", ") ")"))]
-    ;; Named fields: Variant {name: val, …}
+     (values 'positional (sort keys positional<?))]
+    ;; Named fields: Variant {name: val, …} — sorted so the order is stable
+    ;; across runs (hash iteration order is unspecified).
+    [else (values 'named (sort keys string<? #:key ~a))]))
+
+;; `depth` is threaded from safe-display/depth so a cycle running through an ADT
+;; is bounded exactly like one running through a record or a hash.
+(define (safe-display-adt v [depth SAFE-DISPLAY-MAX-DEPTH])
+  (define variant (~a (adt-value-variant v)))
+  (define fields  (adt-value-fields v))
+  (define-values (layout keys) (adt-field-keys-ordered v))
+  (define (val-of k) (safe-display/depth (hash-ref fields k) depth))
+  (case layout
+    [(nullary) variant]                                 ; Nothing, True, …
+    [(tuple)      (string-append "(" (string-join (map val-of keys) ", ") ")")]
+    [(positional) (string-append variant "(" (string-join (map val-of keys) ", ") ")")]
     [else
      (string-append variant " {"
        (string-join
-         (hash-map fields (lambda (k vv) (format "~a: ~a" k (safe-display vv))) #t)
+         (for/list ([k (in-list keys)]) (format "~a: ~a" k (val-of k)))
          ", ")
        "}")]))
 

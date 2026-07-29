@@ -52,16 +52,23 @@
 (require racket/port
          json
          tesl/dsl/debug/checkpoint
-         (only-in tesl/dsl/private/evidence
-                  named-value? named-value-value
-                  check-ok? check-ok-value)
-         (only-in tesl/dsl/types
-                  newtype-value? newtype-value-type-name newtype-value-value
-                  record-value? record-value-type record-value-fields)
+         ;; (The GDP/record value predicates this module used for its own copy of
+         ;; infer-type-string are gone — value-tree.rkt answers that now.)
          (only-in tesl/dsl/private/domain-registry
                   sql-capture-for-thread
                   most-recent-sql-capture)
          (only-in db/base sql-null?)
+         ;; THE shared structured-value renderer.  locals/domain rows carry a
+         ;; nested `children` tree built here so the DAP adapter's ATTACH mode can
+         ;; rebuild a real expandable Variables tree from what this streams —
+         ;; previously these rows were flat strings and attach mode could only show
+         ;; unexpandable blobs.  See dsl/debug/value-tree.rkt's header.
+         (only-in tesl/dsl/debug/value-tree
+                  value->node
+                  value-display
+                  value-type
+                  DEFAULT-MAX-DEPTH
+                  DEFAULT-MAX-CHILDREN)
          (only-in tesl/dsl/debug/domain-inspect
                   domain-struct-name
                   domain-object?
@@ -146,27 +153,32 @@
 
 (define (bp-specs->json bps) (map bp-spec->json bps))
 
-;; ── Type inference (same logic as dap-server's infer-type-string) ───────────
-;; A human-readable type string from a Tesl runtime value, GDP-unwrapped.
-(define (infer-type-string v)
-  (cond
-    [(named-value? v)    (infer-type-string (named-value-value v))]
-    [(check-ok? v)       (infer-type-string (check-ok-value v))]
-    [(newtype-value? v)  (~a (newtype-value-type-name v))]
-    [(record-value? v)   (~a (record-value-type v))]
-    [(string? v)         "String"]
-    [(integer? v)        "Int"]
-    [(boolean? v)        "Bool"]
-    [(list? v)           "List"]
-    [(hash? v)           "Hash"]
-    [else                ""]))
+;; ── Type inference ──────────────────────────────────────────────────────────
+;; A human-readable type string from a Tesl runtime value, GDP-unwrapped.  This
+;; used to be a hand-copied twin of dap-server's `infer-type-string`; both are now
+;; one definition in value-tree.rkt (`value-type`).  The name is kept as an alias
+;; because it is part of this module's provide surface.
+(define infer-type-string value-type)
 
 ;; ── Locals → JSON ───────────────────────────────────────────────────────────
-;; One {name, value, type} per user-visible local in the paused frame.  Uses the
-;; SAME proof-unwrapping renderer (safe-display) as the DAP Variables panel, and
-;; skips compiler-generated names ("_" and the tesl_ prefix) exactly as
+;; One node per user-visible local in the paused frame:
+;;
+;;     {name, value, type, children?: [ …same shape… ], truncated?: true}
+;;
+;; The `children` tree is what lets a CONSUMER of this JSON — the DAP adapter's
+;; attach mode, `tesl debug-inspect`, the MCP tool — show a real expandable value
+;; tree.  Emitting only {name,value,type} was the reason attach-mode sessions
+;; showed every record / list / queue as one unexpandable string.  Depth and
+;; breadth are bounded (see value-tree.rkt) because this crosses a socket.
+;;
+;; The {name, value, type} keys are unchanged, so existing consumers that read
+;; only those keep working; `children` is purely additive.
+;;
+;; Compiler-generated names ("_" and the tesl_ prefix) are skipped exactly as
 ;; dap-server's locals->variables does.
-(define (locals->json locals)
+(define (locals->json locals
+                      #:max-depth [max-depth DEFAULT-MAX-DEPTH]
+                      #:max-children [max-children DEFAULT-MAX-CHILDREN])
   (filter-map
    (lambda (pair)
      (and (pair? pair)
@@ -176,9 +188,9 @@
                              (not (string-prefix? name "tesl_")))]
                  [raw   (cdr pair)])
             (and user?
-                 (hasheq 'name  name
-                         'value (safe-display raw)
-                         'type  (infer-type-string raw))))))
+                 (value->node name raw
+                              #:max-depth max-depth
+                              #:max-children max-children)))))
    locals))
 
 ;; ── Domain → JSON ─────────────────────────────────────────────────────────────
@@ -191,7 +203,13 @@
   (define base
     (hasheq 'label   label
             'kind    (~a (domain-struct-name v))
-            'summary (domain-object-summary v)))
+            'summary (domain-object-summary v)
+            ;; The object's own expandable field tree (store entries, per-key SSE
+            ;; listener counts, worker thread states, …).  Without this, a queue or
+            ;; cache in an ATTACHED session was a single summary line with no way
+            ;; to drill into its live state — the same structure launch mode has
+            ;; always shown, now carried over the wire.
+            'children (hash-ref (value->node label v) 'children '())))
   (with-handlers ([exn:fail? (lambda (_e) base)])
     (define name   (domain-struct-name v))
     (define fields (domain-object-fields v))

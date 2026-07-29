@@ -136,7 +136,9 @@ let diag_of_validation_error (e : Validation.validation_error) : diagnostic = {
   manual     = Error_codes.manual_for ~topic:e.topic ~code:"V001" ~message:e.message ();
 }
 
-let rec fix_to_json = function
+(* The nested edits of a `multi` fix carry no title of their own — the action is
+   titled once, at the top level, from the owning diagnostic's code. *)
+let rec fix_edit_to_json = function
   | None -> "null"
   | Some (Replace_line { line; replacement }) ->
       Printf.sprintf {|{"kind":"replace_line","line":%d,"replacement":%s}|}
@@ -152,7 +154,22 @@ let rec fix_to_json = function
         start_line start_col end_line end_col (json_encode_string replacement)
   | Some (Multi edits) ->
       Printf.sprintf {|{"kind":"multi","edits":[%s]}|}
-        (String.concat "," (List.map (fun e -> fix_to_json (Some e)) edits))
+        (String.concat "," (List.map (fun e -> fix_edit_to_json (Some e)) edits))
+
+(* A fix on the wire carries the human code-action TITLE alongside its edit.
+   The LSP shows that string in the lightbulb menu; it previously invented
+   "Apply fix for <CODE>" itself, which told the user nothing about what applying
+   the action would do.  Deriving it here means the compiler — which knows the
+   diagnostic's intent — owns the wording, and every client gets the same one. *)
+let fix_to_json ?(code = "") (fix : diagnostic_fix option) : string =
+  match fix with
+  | None -> "null"
+  | Some f ->
+    let edit = fix_edit_to_json (Some f) in
+    (* splice "title" into the edit object *)
+    let body = String.sub edit 1 (String.length edit - 2) in
+    Printf.sprintf {|{%s,"title":%s}|} body
+      (json_encode_string (Diag_fix.title ~code f))
 
 let diag_to_json (d : diagnostic) : string =
   Printf.sprintf
@@ -163,7 +180,7 @@ let diag_to_json (d : diagnostic) : string =
     (json_encode_string d.severity)
     (json_encode_string d.code)
     (json_encode_string d.message)
-    (fix_to_json d.fix)
+    (fix_to_json ~code:d.code d.fix)
     (json_encode_string d.source)
 
 let diagnostics_to_json (diags : diagnostic list) : string =
