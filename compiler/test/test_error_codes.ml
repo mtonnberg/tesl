@@ -247,7 +247,9 @@ let () =
   List.iter (fun c ->
     check (Printf.sprintf "rendered code present in registry: %s" c)
       (Error_codes.lookup c <> None) "missing from registry")
-    [ "E000"; "T001"; "P001"; "V001"; "VBOOL001"; "VBOOL002"; "W010"; "W080" ];
+    [ "E000"; "T001"; "P001"; "V001"; "VBOOL001"; "VBOOL002"; "W010"; "W080";
+      (* Tesl.Regex pattern literals — see lib/regex_lint.ml *)
+      "VREGEX001"; "VREGEX002"; "VREGEX003"; "VREGEX004" ];
 
   Printf.printf "\n%s (%d failure(s))\n"
     (if !failures = 0 then "PASS" else "FAILURES") !failures;

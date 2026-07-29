@@ -116,6 +116,7 @@ parameters.
 | [`lesson72-units.md`](../example/learn/lesson72-units.md) | Companion prose for lesson 72: why the model works, the exponent table, the five gotchas, the entities/JSON/agent story, FAQ |
 | [`lesson73-metrics.tesl`](../example/learn/lesson73-metrics.tesl) | The OTel Metrics signal: ambient `counter` / `histogram` / `gauge` alongside the `telemetry` log statement, the built-in HTTP/DB/queue metric catalog, `metrics True` + `metricsInterval` on `initTelemetry`, and why a metric call never disturbs the value flowing through the function |
 | [`lesson74-interop-patterns.tesl`](../example/learn/lesson74-interop-patterns.tesl) | What to write instead of file access and subprocesses: config via `Tesl.Env`, durable data as an entity, import via an endpoint, export generated and streamed; long-running work as a queue job, and a foreign service called from a worker (Tesl always initiates, no database credentials, capability named for the effect) |
+| [`lesson75-regex-validation.tesl`](../example/learn/lesson75-regex-validation.tesl) | `Tesl.Regex` inside `check` functions that mint `ValidEmail` / `ValidSlug`: why the pattern must be a string literal (VREGEX002), the compile-time rejection of catastrophic backtracking (VREGEX003) and of capture groups that may not participate (VREGEX004, which is what makes `Regex.captures : … -> Maybe (List String)` honest), plus `find` / `findAll` / `replace` / `split` |
 
 ### Testing
 | File | Description |

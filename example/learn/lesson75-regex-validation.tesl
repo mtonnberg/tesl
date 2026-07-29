@@ -1,0 +1,246 @@
+module Lesson75RegexValidation exposing [
+  ValidEmail,
+  ValidSlug,
+  requireEmail,
+  requireSlug,
+  deliverTo,
+  permalink,
+  emailDomain,
+  extractTicketIds,
+  redactDigits,
+  splitTags,
+]
+
+import Tesl.Prelude exposing [Bool(..), String, List]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.List exposing [List.length, List.head]
+import Tesl.Regex exposing [
+  Regex.matches,
+  Regex.find,
+  Regex.findAll,
+  Regex.captures,
+  Regex.replace,
+  Regex.split,
+]
+
+# ─────────────────────────────────────────────
+# QUICK START — just use it, no theory needed
+# ─────────────────────────────────────────────
+# Tesl.Regex gives Tesl.String a regex surface. Six functions, and the PATTERN
+# is always the first argument:
+#
+#   Regex.matches  "^[a-z]+$" s          -> Bool
+#   Regex.find     "[0-9]+"   s          -> Maybe String        (first match)
+#   Regex.findAll  "[0-9]+"   s          -> List String         (every match)
+#   Regex.captures "^(a)-(b)$" s         -> Maybe (List String) (the groups)
+#   Regex.replace  "[0-9]"    s "#"      -> String              (every match)
+#   Regex.split    "[,;]"     s          -> List String
+#
+# The pattern must be written as a STRING LITERAL at the call site. That is the
+# whole point of the module, and everything else on this page follows from it.
+
+# ─────────────────────────────────────────────
+# THE POINT — minting facts without hand-rolled parsing
+# ─────────────────────────────────────────────
+# A `check` function is how a Tesl program turns untrusted input into a value
+# that carries a proof. Before Tesl.Regex, anything shaped like "is this an
+# email address" had to be assembled out of String.contains / String.split /
+# String.indexOf — a dozen lines of arithmetic on indices, in the ONE place in
+# the program where being subtly wrong matters most.
+#
+# A regex says the same thing in one line, and the compiler reads the line.
+
+fact ValidEmail (s: String)
+
+check requireEmail(raw: String) -> raw: String ::: ValidEmail raw =
+  if Regex.matches "^[^@ ]+@[^@ ]+[.][a-z]{2,}$" raw then
+    ok raw ::: ValidEmail raw
+  else
+    fail 400 "not a valid email address"
+
+# Downstream code demands the proof, so it is impossible to reach with a raw
+# unvalidated string — the compiler rejects the call, exactly as in lesson05.
+fn deliverTo(address: String ::: ValidEmail address) -> String =
+  "queued mail for ${address}"
+
+fact ValidSlug (s: String)
+
+check requireSlug(raw: String) -> raw: String ::: ValidSlug raw =
+  if Regex.matches "^[a-z0-9]+(?:-[a-z0-9]+)*$" raw then
+    ok raw ::: ValidSlug raw
+  else
+    fail 400 "a slug is lowercase words joined by single hyphens"
+
+fn permalink(slug: String ::: ValidSlug slug) -> String =
+  "https://example.com/p/${slug}"
+
+# ─────────────────────────────────────────────
+# WHY THE PATTERN MUST BE A LITERAL
+# ─────────────────────────────────────────────
+# Every other language treats a regex as a string it hands to a matcher at
+# runtime. Tesl treats it as part of the program, so it gets checked when the
+# program gets checked:
+#
+#   fn broken(s: String) -> Bool = Regex.matches "[a-z" s
+#     error[VREGEX001]: unterminated character class — expected `]`
+#
+#   fn dynamic(p: String, s: String) -> Bool = Regex.matches p s
+#     error[VREGEX002]: needs its pattern written as a string literal
+#
+# VREGEX002 is not a limitation, it is the feature. Racket's matcher (like
+# almost every matcher) backtracks, so a pattern that can come from a request
+# body is a denial-of-service endpoint. Removing the dynamic form removes the
+# hole, and it is what makes the two rules below enforceable at all.
+#
+# If you want to name a pattern, name the PREDICATE instead — write a `fn` or a
+# `check` like the two above. That is better style anyway: callers should read
+# `requireSlug`, not a regex.
+
+# ─────────────────────────────────────────────
+# THE COMPILER REJECTS PATTERNS THAT CAN BLOW UP
+# ─────────────────────────────────────────────
+# `^(a+)+$` against forty a's and a `!` makes a backtracking matcher explore
+# 2^40 ways to split the input. Tesl will not compile it:
+#
+#   Regex.matches "^(?:a+)+$" s
+#     error[VREGEX003]: a repeated group whose body also repeats is ambiguous
+#
+# The rule is: a group repeated two or more times may not contain an
+# alternation, may not match the empty string, and may not contain its own
+# quantifier — UNLESS it starts with a fixed separator character that cannot
+# appear anywhere else in the group. That exception is what keeps the everyday
+# idiom legal, and it is why `requireSlug` above compiles:
+#
+#   "^[a-z0-9]+(?:-[a-z0-9]+)*$"     OK  — each repetition must start with `-`,
+#                                          which `[a-z0-9]` cannot match, so the
+#                                          input splits exactly one way
+#   "^(?:[a-z0-9]+-)*[a-z0-9]+$"     OK  — same idea, separator at the end
+#   "^(?:[a-z]+[.])+[a-z]+$"     REJECTED — `[a-z]+` starts the repetition, so
+#                                          the split is ambiguous
+#
+# A pattern the rules cannot see through is still bounded at runtime: every
+# match runs under a wall-clock deadline (TESL_REGEX_TIMEOUT_MS, 1 s by
+# default) and over a bounded input (TESL_REGEX_MAX_INPUT_BYTES, 1 MiB).
+
+# ─────────────────────────────────────────────
+# CAPTURE GROUPS — no Maybe per group
+# ─────────────────────────────────────────────
+# `Regex.captures` returns `Maybe (List String)`: Nothing when the pattern does
+# not match, otherwise ONE String per capture group, in source order, with the
+# whole match left out (use `Regex.find` for that).
+#
+# There is no inner Maybe because the compiler refuses patterns where a group
+# could fail to participate — a group under a `?`/`*`/`+`, or a group inside an
+# alternation branch:
+#
+#   Regex.captures "^(a)?b$" s        error[VREGEX004]  (captures nothing when absent)
+#   Regex.captures "^(a)|(b)$" s      error[VREGEX004]  (only one branch wins)
+#
+# Write `(?: … )` for grouping you do not want to capture, and the list you get
+# back is always exactly as long as the number of groups you wrote.
+
+fn emailDomain(address: String ::: ValidEmail address) -> Maybe String =
+  case Regex.captures "^[^@ ]+@([^@ ]+)$" address of
+    Nothing -> Nothing
+    Something parts -> List.head parts
+
+# ─────────────────────────────────────────────
+# THE REST OF THE SURFACE
+# ─────────────────────────────────────────────
+
+# findAll: every non-overlapping match, left to right.
+fn extractTicketIds(body: String) -> List String =
+  Regex.findAll "TESL-[0-9]+" body
+
+# replace: rewrites EVERY match. The replacement is inserted literally — `$1`
+# and backslash-1 are ordinary characters, never group references — so a
+# replacement built from user data can never turn into a substitution
+# directive.
+fn redactDigits(s: String) -> String =
+  Regex.replace "[0-9]" s "#"
+
+# split: like String.split, but the separator is a pattern.
+fn splitTags(s: String) -> List String =
+  Regex.split "[,;] ?" s
+
+# ─────────────────────────────────────────────
+# THE SUBSET
+# ─────────────────────────────────────────────
+# Accepted: literal characters, `.`, character classes `[a-z]` / `[^0-9]`,
+# `\d \D \w \W \s \S`, the word boundaries `\b \B`, the anchors `^ $`,
+# groups `( … )` and `(?: … )`, alternation `|`, and the quantifiers
+# `? * + {n} {n,} {n,m}`.
+#
+# Not accepted, each with its own error: backreferences (`\1`), lookaround
+# (`(?= (?! (?<= (?<!`), inline flags (`(?i:`), lazy/possessive quantifiers
+# (`*?`, `*+`) and POSIX bracket classes (`[:alpha:]`).
+#
+# One spelling note: a Tesl string literal processes escapes, so a regex
+# backslash is written DOUBLED — `"\\d+"` in Tesl source is the pattern `\d+`.
+# Character classes usually read better anyway: `[0-9]+` needs no escaping at
+# all, and `[.]` is a tidier literal dot than `\\.`.
+
+fn hasThreeDigits(s: String) -> Bool =
+  Regex.matches "\\d{3}" s
+
+# ─────────────────────────────────────────────
+# TESTS
+# ─────────────────────────────────────────────
+
+test "email validation mints a fact" {
+  let raw = "bob@example.com"
+  let good = check requireEmail raw
+  expect deliverTo good == "queued mail for bob@example.com"
+  expect emailDomain good == Something "example.com"
+
+  # The check is the only door: a bad address never reaches deliverTo.
+  let noAt = "not-an-email"
+  let noTld = "bob@example"
+  let spaced = "bob @example.com"
+  let noLocal = "@example.com"
+  expectFail check requireEmail noAt
+  expectFail check requireEmail noTld
+  expectFail check requireEmail spaced
+  expectFail check requireEmail noLocal
+}
+
+test "slug validation mints a fact" {
+  let raw = "hello-world-2"
+  let good = check requireSlug raw
+  expect permalink good == "https://example.com/p/hello-world-2"
+
+  let upper = "Hello"
+  let doubleHyphen = "hello--world"
+  let leading = "-hello"
+  let trailing = "hello-"
+  expectFail check requireSlug upper
+  expectFail check requireSlug doubleHyphen
+  expectFail check requireSlug leading
+  expectFail check requireSlug trailing
+}
+
+test "matches is unanchored unless you anchor it" {
+  expect Regex.matches "[0-9]+" "abc123" == True
+  expect Regex.matches "^[0-9]+$" "abc123" == False
+  expect Regex.matches "^[0-9]+$" "123" == True
+  expect hasThreeDigits "ab123" == True
+  expect hasThreeDigits "ab12" == False
+}
+
+test "find, findAll, captures" {
+  expect Regex.find "[0-9]+" "a12b345" == Something "12"
+  expect Regex.find "[0-9]+" "abc" == Nothing
+  expect extractTicketIds "see TESL-12 and TESL-345" == ["TESL-12", "TESL-345"]
+  expect List.length (extractTicketIds "nothing here") == 0
+  expect Regex.captures "^([a-z]+)-([0-9]+)$" "ab-12" == Something ["ab", "12"]
+  expect Regex.captures "^([a-z]+)-([0-9]+)$" "nope" == Nothing
+  # A pattern with no groups still reports the match — with an empty list.
+  expect Regex.captures "^[a-z]+$" "ab" == Something []
+}
+
+test "replace and split" {
+  expect redactDigits "card 4111 1111" == "card #### ####"
+  expect redactDigits "no digits" == "no digits"
+  expect splitTags "a, b;c" == ["a", "b", "c"]
+  expect splitTags "single" == ["single"]
+}

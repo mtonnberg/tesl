@@ -283,6 +283,27 @@ let string_ : entry list = [
     ~doc:"Check function: passes non-empty strings, minting IsNonEmpty.";
 ]
 
+(* ── Tesl.Regex ────────────────────────────────────────────────────────────── *)
+(* Pattern-literal-only regex (LANGUAGE-SPEC.md §21.6).  The pattern is
+   argument 1 of every function and is validated when the program is compiled
+   (VREGEX001-4), which is why `Regex.captures` can promise `List String`
+   rather than `List (Maybe String)`. *)
+
+let regex : entry list = [
+  f "Regex.matches" [ "pattern"; "input" ] ~m:"Tesl.Regex"
+    ~doc:"True when the literal pattern matches anywhere in input; anchor with ^ and $ for a whole-string match.";
+  f "Regex.find" [ "pattern"; "input" ] ~m:"Tesl.Regex"
+    ~doc:"The text of the first match, or Nothing.";
+  f "Regex.findAll" [ "pattern"; "input" ] ~m:"Tesl.Regex"
+    ~doc:"The text of every non-overlapping match, left to right.";
+  f "Regex.captures" [ "pattern"; "input" ] ~m:"Tesl.Regex"
+    ~doc:"The capture groups of the first match (whole match excluded); every group participates, so there is no inner Maybe.";
+  f "Regex.replace" [ "pattern"; "input"; "replacement" ] ~m:"Tesl.Regex"
+    ~doc:"Replaces every match; the replacement is inserted literally (no $1 / backslash-1 group references).";
+  f "Regex.split" [ "pattern"; "input" ] ~m:"Tesl.Regex"
+    ~doc:"Splits input on every match of the pattern.";
+]
+
 (* ── Tesl.List / Tesl.ListPrim ─────────────────────────────────────────────── *)
 (* The pure combinators are lifted to tesl/list.tesl (the checker loads their
    types from that source, not stdlib_env), so those rows carry the signature
@@ -782,7 +803,7 @@ let telemetry : entry list = [
 
 let entries : entry list =
   ambient @ prelude @ email @ maybe_result @ time
-  @ int32 @ db @ either @ string_ @ list_ @ list_prim @ int_ @ float_
+  @ int32 @ db @ either @ string_ @ regex @ list_ @ list_prim @ int_ @ float_
   @ dict @ set_ @ tuple @ money @ random_uuid_id_env @ json_codecs
   @ api_test @ jwt @ cache @ database @ http_client @ agent @ queue
   @ telemetry

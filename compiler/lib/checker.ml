@@ -1752,7 +1752,7 @@ let local_let_reason name expected_ty =
   Printf.sprintf "let binding `%s` must have declared type %s" name (pp_ty expected_ty)
 
 let known_qualifier_modules =
-  [ "List"; "ListPrim"; "Dict"; "String"; "Int"; "Float"; "Set"; "Maybe";
+  [ "List"; "ListPrim"; "Dict"; "String"; "Regex"; "Int"; "Float"; "Set"; "Maybe";
     "Either"; "Result"; "Time"; "Random"; "Uuid"; "UUID"; "Env";
     "Http"; "HttpClient"; "Json"; "DB"; "Telemetry"; "Tesl"; "JWT"; "Email";
     (* First-Class Units *)
