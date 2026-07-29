@@ -165,8 +165,32 @@ design" guarantee:
 | L7 | **Auto-migration DDL at startup** | `ensure-database-ready!` generates + executes DDL from entity/field names (regex-validated, source-derived). Check the destructive-migration path. | `dsl/sql.rkt` | Low — needs audit |
 
 **Surface notes (narrowing factors):** there is **no user-facing FFI / `eval` / `comptime` /
-`foreign`** (`foreign fn` is only a roadmap proposal), so app code can't reach arbitrary host
-code; and **proof ownership (P001) + detach/attach subject-identity are compiler-enforced** —
+`foreign`**, and this line **stands** — it has now been reconsidered and upheld twice
+(`discarded/lift-remaining-stdlib-and-foreign-fn.md`, 2026-06-30, declined `foreign fn`;
+`discarded/using_queues_for_ffi.md`, 2026-07-29, declined FFI again — including the
+declared-program subprocess variant, partly *because* trading this line away is a real cost).
+Stated precisely, it means two things:
+
+1. **App code cannot reach any host facility that is not a declared, capability-gated stdlib
+   primitive.** Host FFI exists only *maintainer-side*, inside the trusted core, with a narrow
+   typed surface — `tesl/jwt.rkt` wraps libcrypto's HMAC-SHA256 as `JWT.sign`/`JWT.verify`
+   behind the `jwt` capability. There is no user-facing form that takes a command, a path, a
+   symbol name, or host code of any kind, so **input cannot select the code that runs**.
+2. **Every value entering typed Tesl from outside crosses the validating decode boundary.**
+   HTTP request bodies, queue job payloads and cache reads all go through
+   `jsexpr->typed-value`, which re-establishes types, newtype identity and ADT tags, and is
+   **fail-closed on proofs**: a `:::`-annotated record field cannot decode at all without a
+   registered `#:check` (`dsl/types.rkt:1394`, `coerce-record-field-value` at `:974`). An
+   external producer therefore cannot forge a proof-annotated field.
+
+The one boundary that does **not** re-validate is a database row read back —
+`vector->entity-row` (`dsl/sql.rkt:1834`) never calls `coerce-record-field-value`, because the
+checker enforces record invariants at the *write* site. That asymmetry is sound only while
+every writer goes through Tesl, which is exactly why granting a foreign process database write
+access (e.g. an external `tesl_jobs` consumer) is not supported; see
+`manual/best-practices.md#interop-and-foreign-work` and LANGUAGE-SPEC §11.15.
+
+Also **proof ownership (P001) + detach/attach subject-identity are compiler-enforced** —
 forging a proof for another value, or minting another module's predicate, is rejected. Both
 should get a confirmatory test pass but are currently strengths, not gaps.
 

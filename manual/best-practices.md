@@ -18,8 +18,9 @@ Use `tesl help manual best-practices` to access this from the CLI.
 8. [API Design](#api-design)
 9. [Database Access](#database-access)
 10. [Money and Units](#money-and-units)
-11. [Testing](#testing)
-12. [Performance](#performance)
+11. [Interop and Foreign Work](#interop-and-foreign-work)
+12. [Testing](#testing)
+13. [Performance](#performance)
 
 ---
 
@@ -471,6 +472,72 @@ fn brakingDistance(v: Speed, a: Acceleration) -> Length =
 - **SI canonical inside:** constructors convert in (`Length.miles 3.0` is meters internally), accessors convert out (`Speed.inKilometersPerHour v`). Convert at the boundaries; never carry a "which unit is this?" Float through the core.
 - **Dimensions are checked at compile time** and erased at runtime — the operators do the algebra (`Length / Duration : Speed`), cross-dimension `+` does not compile, and a quantity costs exactly a `Float`.
 - **Scalars are Float literals** (`2.0 * len`, not `2 * len`), and a variable divisor needs `Units.requireNonZero` first, like every Tesl division.
+
+---
+
+## Interop and Foreign Work
+
+Tesl has **no FFI**: no `foreign fn`, no `eval`, no subprocesses, no filesystem. It still talks to non-Tesl code every day — through the primitives you already have. A handler `enqueue`s a job, a `worker` calls the foreign service over `HttpClient`, and the result is `insert`ed and/or `publish`ed to the caller's SSE channel. Nothing new is required, and the proof system survives the boundary intact.
+
+The worked example is [`example/learn/lesson74-interop-patterns.tesl`](../example/learn/lesson74-interop-patterns.tesl) — file access, background workloads, and a foreign service called from a worker, all compiled and tested. This section is the policy behind it; read the lesson for the code.
+
+### Triage: "Tesl can't do X, give me an escape hatch"
+
+Three requests hide behind that sentence, and they have three different answers.
+
+| The request really is | Answer | Why |
+|---|---|---|
+| A **bounded primitive gap** — hashing, regex, a date format | A **primitive in the trusted core**, behind its own capability | Small, auditable, maintained by us; the value it returns is constructed by trusted code, not decoded from a stranger |
+| A **large third-party ecosystem** — image processing, ML, PDF, a vendor SDK | A **separate service** the app calls over HTTP, per the initiator rule below | We are never going to re-implement it, and it does not have to live in our process to be usable |
+| **Arbitrary host access from app code** — a general `foreign fn` | **Never** | The return value would enter typed Tesl with no validating boundary, so it could forge any proof-annotated field, newtype, or ADT tag — a hole in the proof kernel, not a feature |
+
+The precedent for the first row is `Tesl.JWT`: `tesl/jwt.rkt` binds libcrypto's HMAC-SHA256 through Racket's FFI and exposes exactly `JWT.sign` / `JWT.verify` / `JWT.decode` under the `jwt` capability. Host FFI is allowed **maintainer-side**, inside the trusted core, with a narrow typed surface. It is never user-facing.
+
+The load-bearing distinction across the whole table is **data boundary vs. host-value boundary**. A result that arrives as JSON crosses the validating decoder and cannot forge a proof — a `:::`-annotated record field will not even decode without a registered check ([`LANGUAGE-SPEC.md`](../LANGUAGE-SPEC.md) §11.17). A result that arrives as a host value bypasses every check Tesl makes.
+
+### Tesl always initiates
+
+**✅ Do:** make the outbound call from a `worker` and treat the reply *as* the HTTP response. The foreign side learns no Tesl URL, holds no credential, and Tesl exposes no inbound surface. Durability and retry come from the queue, so a dropped connection is just a retried job.
+
+| | Reply path | Tesl exposes inbound? | Extra machinery |
+|---|---|---|---|
+| **Tesl initiates** (default) | response to our own outbound call | no | outbound timeout |
+| **Inbound webhook** (fallback) | foreign side calls the Tesl API | **yes** | endpoint + auth + replay defence + correlation storage |
+
+Reach for the webhook only when the work runs long enough (minutes and up) that holding an outbound connection is untenable. Note what happens when you do: it stops being interop machinery and becomes an ordinary integration — an authenticated Tesl endpoint, with the existing `auth` machinery applying unchanged and nothing interop-specific about it.
+
+**❌ Don't** ignore what the default costs. A blocked outbound call pins one of the queue's `numberOfWorkers` threads for its whole duration, and Tesl's HTTP client does not yet take a timeout, so a hung upstream will starve the queue: with `numberOfWorkers: 4`, four wedged calls stop *all* background work, including job types that have nothing to do with the foreign service. Until outbound timeouts land (`roadmap/next/primitive_gaps_and_outbound_hardening.md`), give a flaky upstream headroom — a larger `numberOfWorkers`, or its own queue so it cannot starve unrelated jobs.
+
+### The foreign-work recipe
+
+Same shape as the agent resume-after pattern (`LANGUAGE-SPEC.md` §11.18, [`lesson70-agent-async-work.tesl`](../example/learn/lesson70-agent-async-work.tesl)) with "an LLM" swapped for "a Rust service" — read that first if you have not; the rest of this is what changes.
+
+**There is no blocking wait.** Say this to yourself before designing anything: Tesl has no `sleep` and no `await`, so a handler **cannot** enqueue work and then wait for the answer. This is the thing people trip over. Interop is a *workflow*, not a function call: the handler returns immediately ("queued", plus a correlation id), and the answer arrives later through a different channel. If your design has a step that reads "and then we wait for the result", it will not compile, and the fix is to redraw the flow, not to look for the await.
+
+**Correlate explicitly.** `tesl_jobs` has no `result` column, so nothing carries an answer back for you. A reply is a *second* thing: another job type, a database row, or an SSE event — carrying a correlation id that is present in both payloads. Generate it in the handler (`generatePrefixedId`), return it to the caller, and put it on the outbound request so the foreign side echoes it back.
+
+**Assume duplicates.** Queue delivery is **at-least-once** with retry and backoff: a worker that crashes after calling the foreign service but before completing will call it again. The foreign side must therefore be idempotent — key its work on the correlation id and return the previous result for a repeat. On the Tesl side, prefer writes that are safe to repeat (upsert or check-then-insert on the correlation id) over blind `insert`.
+
+**Name the capability after the effect, not the transport.** Declare one capability per foreign effect, on both sides of the queue:
+
+```tesl
+capability thumbnailRequest implies queueWrite  # what a handler needs to request a thumbnail
+capability thumbnailer      implies httpClient  # what the worker needs to produce one
+```
+
+so signatures read `requires [thumbnailRequest]` and `requires [thumbnailer]`, exactly the way `capability emailWrite implies queueWrite` (`LANGUAGE-SPEC.md` §11.15) makes "send an email" a capability rather than "write to a queue". A bare `requires [queueWrite]` or `requires [httpClient]` on business logic tells a reader nothing — it says "this can enqueue something" or "this can reach the network", when what they need to know is "this can reach the thumbnailer, and nothing else". The capability list is documentation the compiler checks; spend it on the effect.
+
+**The foreign side never gets app database credentials.** It receives a JSON payload and returns a JSON result. Not a connection string, not a read-only replica, not "just for reporting". The reason is in the next subsection, and it is a soundness reason, not a hygiene one.
+
+### Never point an external worker at `tesl_jobs`
+
+This is the first idea everyone has — "the jobs are already in Postgres, just let my Python worker poll the table" — and it is the one variant that breaks the proof system.
+
+`tesl_jobs` lives in the app's own database, so consuming it from a non-Tesl process means handing that process the app's PostgreSQL credentials. **The database read path does not re-validate record invariants**: the checker enforces them at the *write* site, which is sound precisely because every write goes through the checker. A process with database write access sits outside that guarantee. It can plant rows that violate declared invariants, and Tesl will read them back and treat those facts as established — including facts a `check` function would have rejected. Of everything you could grant a foreign process, database write access is the single grant that defeats the proof system.
+
+The practical blockers point the same way: `tesl_jobs` is internal and unversioned (its shape changes without notice), it has no `result` column to write an answer into, and with no PostgreSQL runtime configured the queue is in-memory — so an external consumer cannot attach in dev or in tests, where you would want to prove the integration works.
+
+Supporting an external consumer properly would mean a versioned view over `tesl_jobs`, a locked-down PostgreSQL role, and a published payload contract. That is a project, not a shortcut. Until it exists, the supported shape is the one above: Tesl initiates, JSON in, JSON out, credentials stay home.
 
 ---
 

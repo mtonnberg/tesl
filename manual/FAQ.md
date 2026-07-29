@@ -114,6 +114,18 @@ handler getTodo(id: String ::: ValidTodoId id) -> Todo ? FromDb (Id == id)
 
 This handler requires the `dbRead` capability to read from the database.
 
+### Can I call C, Rust, or Python from Tesl? Is there an FFI?
+
+No, and there deliberately never will be a user-facing one. A `foreign fn` would hand a raw host value straight into typed Tesl with no validating boundary, so it could forge any proof-annotated field, newtype, or ADT tag — a hole in the proof kernel rather than a feature.
+
+What you do instead depends on which request you actually have:
+
+- **A missing primitive** (hashing, regex, a date format) → it belongs in the trusted core behind its own capability, like `Tesl.JWT`. File an issue; do not work around it.
+- **A whole foreign ecosystem** (image processing, ML, a vendor SDK) → run it as its own service. A `worker` calls it over HTTP and Tesl always initiates, so the foreign side holds no credential and Tesl exposes no inbound surface.
+- **Files or subprocesses** → almost always the wrong shape for a horizontally scaled app; see [`lesson74-interop-patterns.tesl`](../example/learn/lesson74-interop-patterns.tesl) for what to write instead.
+
+The full policy, including why an external process must never be given database credentials, is in [Interop and Foreign Work](best-practices.md#interop-and-foreign-work).
+
 ### What does "Validate Once" mean?
 
 This is a core principle of Tesl: **validate data once at the boundary, then carry the proof throughout the system.**

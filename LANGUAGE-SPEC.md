@@ -1027,6 +1027,8 @@ capability emailRead  implies queueRead
 
 Built-in `queueRead` and `queueWrite` capabilities come from `Tesl.Queue` (analogous to `dbRead`/`dbWrite` from `Tesl.DB`).
 
+**The job store is internal; an external consumer is not supported.** Jobs live in a `tesl_jobs` table inside the app's own database. That table is an implementation detail — unversioned, and with no `result` column — and when no PostgreSQL runtime is configured the queue is in-memory instead, so nothing external can attach in dev or tests. The decisive reason is not practical, though: consuming `tesl_jobs` from a non-Tesl process means handing that process the app's database credentials, and a process with database **write** access can plant rows that violate declared record invariants. The checker enforces those invariants at the *write* site, and the read path does not re-check them, so Tesl would read such rows back and treat the facts as established. It is the one grant that defeats the proof system. Foreign work belongs behind an outbound call made from a `worker` — see [Interop and Foreign Work](manual/best-practices.md#interop-and-foreign-work) in the manual.
+
 ### 11.16 SSE channel declarations
 **Accepted design, Implemented.**
 
@@ -1080,6 +1082,10 @@ worker sendEmailWorker(job: SendEmail ::: FromQueue (Id == jobId) job)
 A worker (and `deadWorker`) body **must return the job value** — its declared return type *is* the job type (`SendEmail` here). End the body with `job` (which marks the job done) or with `fail …` (which marks it failed and eligible for retry). Returning any other value — for example the `HttpResponse` from an HTTP call made inside the worker — is a `T001` type error; bind such intermediate results with `let _ = …` and end the body with `job`.
 
 `FromQueue (Id == jobId) job` follows the same 2-arg pattern as `FromDb (Id == pk) entity` — both the job's primary key subject and the job entity subject are in the proof.
+
+**`FromQueue` is provenance, not validity.** It states exactly one thing: *this value came off the queue*. It does **not** state that the value is valid, that it satisfies any domain predicate, or — should external producers ever exist — that our own code enqueued it. A worker that needs a domain fact about the payload must establish it the ordinary way (`check`, `establish`, a `FromDb` lookup); `FromQueue` never substitutes for one. This mirrors `FromDb`, which likewise says "this row came from the database", not "this row is correct".
+
+What makes the boundary trustworthy is not the proof but the **decode**. A job payload is reconstructed with `jsexpr->typed-value` (`tesl/queue.rkt:293`), the same validating decoder that HTTP request bodies cross, so newtype identity, ADT tags and field types are all re-established from JSON. It is additionally **fail-closed on proofs**: a record field carrying a `:::` annotation cannot decode at all unless the record registered an explicit `#:check` for it (`dsl/types.rkt:1394`; the field checker itself is `coerce-record-field-value`, `dsl/types.rkt:974`). A payload therefore cannot smuggle in a proof-annotated field that was never checked — decoding raises instead. Queue payloads are validated exactly as strictly as HTTP request bodies. Contrast a database row, which is *not* re-validated on read (§11.15) — data arriving through the decoder is checked; rows written behind the runtime's back are not.
 
 There is no separate `workers` declaration. Worker functions are wired to job types directly inside the folded queue's `jobs` list (§11.15). A dead-letter worker is declared with `deadWorker` (it receives a `FromDeadQueue` proof) and is wired via the job's dead slot, `(Something handleDeadEmail)`:
 
