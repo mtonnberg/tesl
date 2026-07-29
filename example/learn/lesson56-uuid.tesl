@@ -8,6 +8,8 @@ module Lesson56Uuid exposing [
   generateV7,
 ]
 
+# lesson: track=stdlib order=310 needs=lesson11-capabilities
+# summary: Generate collision-resistant identifiers with UUID v4 and time-ordered v7
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 56 — UUID: Universally Unique Identifiers
 #

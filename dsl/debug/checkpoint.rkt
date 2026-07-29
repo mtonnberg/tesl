@@ -40,7 +40,14 @@
          (only-in "../types.rkt"
                   newtype-value? newtype-value-type-name newtype-value-value
                   record-value? record-value-type record-value-fields
-                  adt-value? adt-value-type adt-value-variant adt-value-fields)
+                  adt-value? adt-value-type adt-value-variant adt-value-fields
+                  ;; `secret` redaction.  safe-display is THE leaf renderer for
+                  ;; all three debugger surfaces (DAP launch, DAP attach,
+                  ;; headless/MCP) — value-tree.rkt defers every leaf here, and
+                  ;; dap-server.rkt's `full-text-of` (Copy Value / hover / watch,
+                  ;; which deliberately bypasses truncation) calls it too — so
+                  ;; this ONE point covers all of them.
+                  secret-value? secret-header-value? secret-redaction-text)
          ;; STOP-THE-WORLD (task #42): the global registry lists every Tesl-spawned
          ;; background thread.  domain-registry.rkt is dependency-free (it requires
          ;; nothing from queue/cache/email/web), so this introduces no import cycle.
@@ -847,6 +854,9 @@
        (if (string=? proof-str "") inner
            (string-append inner "  [" proof-str "]")))]
     [(check-ok? v)      (safe-display (check-ok-value v))]
+    ;; An outbound secret header value already prints as "[redacted]" (custom
+    ;; write proc), but state it here rather than rely on that at a distance.
+    [(secret-header-value? v) secret-redaction-text]
     ;; Format by Racket type
     [(newtype-value? v)
      ;; A newtype's type-name may be a `type-ref` prefab struct (owner name); show
@@ -862,7 +872,13 @@
                    (let ([vec (struct->vector tn)])  ; #(struct:type-ref owner name)
                      (if (>= (vector-length vec) 3) (vector-ref vec 2) tn))]
                   [else tn])])
-       (format "~a(~a)" nm (safe-display (newtype-value-value v))))]
+       ;; A secret renders `Password([redacted])`: the TYPE stays visible (you
+       ;; can still see which secret you are looking at) and the payload never
+       ;; does.  Deliberately no length, prefix or hash — partial disclosure in
+       ;; a debugger is the convenience that erodes the guarantee.
+       (format "~a(~a)" nm (if (secret-value? v)
+                               secret-redaction-text
+                               (safe-display (newtype-value-value v)))))]
     [(record-value? v)
      (let ([fields (record-value-fields v)])
        (string-append (~a (record-value-type v)) " {"

@@ -73,7 +73,8 @@
          (only-in "../types.rkt"
                   newtype-value? newtype-value-type-name newtype-value-value
                   record-value? record-value-type record-value-fields
-                  adt-value? adt-value-type adt-value-variant adt-value-fields)
+                  adt-value? adt-value-type adt-value-variant adt-value-fields
+                  secret-value? secret-header-value? secret-redaction-text)
          (only-in "domain-inspect.rkt"
                   domain-struct-name
                   domain-object?
@@ -125,9 +126,15 @@
 ;; `Money(record)` must expand to the record's fields rather than dead-end.
 (define (value-unwrap/newtype v)
   (let ([u (value-unwrap v)])
-    (if (newtype-value? u)
+    (if (and (newtype-value? u) (not (secret-value? u)))
         (value-unwrap/newtype (newtype-value-value u))
         u)))
+;; A SECRET newtype is deliberately NOT unwrapped above.  This is the subtle
+;; one: `value-children` calls this, so descending into a secret would publish
+;; its inner value as an expandable CHILD of the panel row — a child whose own
+;; display is the plaintext, bypassing the display-side redaction entirely.
+;; Stopping here makes a secret a leaf on the children side, which is the other
+;; half of the composite⇒expandable invariant (see `composite-display?`).
 
 ;; ── Display ───────────────────────────────────────────────────────────────────
 
@@ -197,6 +204,13 @@
   (with-handlers ([(lambda (_) #t) (lambda (_) "<unprintable>")])
     (define u (value-unwrap v))
     (cond
+      ;; A secret reads as exactly "[redacted]" — no wrapper, no length, no
+      ;; prefix.  The TYPE column still says `Password` (see `value-type`), so
+      ;; nothing about which value you are looking at is lost.  Paired with the
+      ;; `composite-display?` clause below: a redacted secret must read as a
+      ;; LEAF on both the display and the children side, and
+      ;; tests/dap-value-tree-tests.rkt pins those two together.
+      [(or (secret-value? u) (secret-header-value? u)) secret-redaction-text]
       [(domain-object? u) (domain-object-summary u)]
       ;; A worker thread reads as its liveness, not as `#<thread>`.  Stated at the
       ;; VALUE level (rather than as a special case of the worker-pool's `threads`
@@ -241,6 +255,17 @@
 ;; that pairs this with `value-children` cannot be satisfied by teaching both
 ;; sides the same wrong answer.
 (define (composite-display? v)
+  (with-handlers ([(lambda (_) #t) (lambda (_) #f)])
+    ;; "[redacted]" carries a bracket, so the display-string heuristic below
+    ;; would call a secret composite while `value-children` correctly reports a
+    ;; leaf — the exact disagreement this invariant exists to rule out.  A
+    ;; secret is a leaf, stated once, before the heuristic.
+    (define u (value-unwrap v))
+    (cond
+     [(or (secret-value? u) (secret-header-value? u)) #f]
+     [else (composite-display?/heuristic v)])))
+
+(define (composite-display?/heuristic v)
   (with-handlers ([(lambda (_) #t) (lambda (_) #f)])
     (define s (value-display v))
     (and (string? s)

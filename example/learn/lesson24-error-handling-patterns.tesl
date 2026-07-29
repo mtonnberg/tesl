@@ -8,6 +8,8 @@ module Lesson24ErrorHandlingPatterns exposing [
   parseAndValidate,
 ]
 
+# lesson: track=api order=130 needs=lesson05-intro-to-proofs
+# summary: Reject bad input the Tesl way — fail with an HTTP status, with no exceptions to propagate
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

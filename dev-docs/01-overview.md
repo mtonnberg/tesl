@@ -40,7 +40,7 @@ tesl/
 │   ├── env.rkt                        # env / envString / requireEnv
 │   └── websocket.rkt                 # RFC 6455 WebSocket server
 ├── tests/
-│   ├── tesl-test.rkt                 # Main Racket test suite (657+ tests)
+│   ├── tesl-test.rkt                 # Main Racket test suite
 │   └── sql-test.rkt, web-test.rkt, ...
 └── example/
     ├── learn/                        # User-facing lessons 00–27

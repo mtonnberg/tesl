@@ -15,6 +15,8 @@ module Lesson44MultiParamProofs exposing [
   useSortedPair,
 ]
 
+# lesson: track=proofs order=540 needs=lesson10-cross-parameter-proofs
+# summary: Write a check over several parameters and choose which one the proof attaches to
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

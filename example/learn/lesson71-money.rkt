@@ -27,31 +27,31 @@
 ;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
 ;; those happens AFTER the statement, so the SQL lens can show the exact
 ;; statement that ran (erased with the checkpoints in a release build).
-(register-sql-read-lines! "example/learn/lesson71-money.tesl" '(121 122 206))
+(register-sql-read-lines! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" '(123 124 208))
 (define/pow
   (showPrice)
   #:returns String
-  (let ([price (thsl-src! "example/learn/lesson71-money.tesl" 71 (list) (lambda () (raw-value (tesl_import_Money_usd 1050))))]) (thsl-src! "example/learn/lesson71-money.tesl" 72 (list (cons 'price *price)) (lambda () (raw-value (tesl_import_Money_display (raw-value price)))))))
+  (let ([price (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 73 (list) (lambda () (raw-value (tesl_import_Money_usd 1050))))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 74 (list (cons 'price *price)) (lambda () (raw-value (tesl_import_Money_display (raw-value price)))))))
 
 (define/pow
   (lineTotal [unitPrice : Money] [quantity : Integer])
   #:returns Money
-  (thsl-src! "example/learn/lesson71-money.tesl" 78 (list (cons 'unitPrice *unitPrice) (cons 'quantity *quantity)) (lambda () (raw-value (tesl_import_Money_scale *unitPrice *quantity)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 80 (list (cons 'unitPrice *unitPrice) (cons 'quantity *quantity)) (lambda () (raw-value (tesl_import_Money_scale *unitPrice *quantity)))))
 
 (define/pow
   (addSameCurrency [a : Money] [b : Money])
   #:returns Money
-  (thsl-src! "example/learn/lesson71-money.tesl" 85 (list (cons 'a *a) (cons 'b *b)) (lambda () (let/check ([tesl-checked-0 (tesl_import_Money_requireSameCurrency a b)]) (let ([proven tesl-checked-0]) (raw-value (tesl_import_Money_add *a proven)))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 87 (list (cons 'a *a) (cons 'b *b)) (lambda () (let/check ([tesl-checked-0 (tesl_import_Money_requireSameCurrency a b)]) (let ([proven tesl-checked-0]) (raw-value (tesl_import_Money_add *a proven)))))))
 
 (define/pow
   (convertToDisplay [rate : ExchangeRate] [amount : Money])
   #:returns String
-  (thsl-src-control! "example/learn/lesson71-money.tesl" 93 (list (cons 'rate *rate) (cons 'amount *amount)) (lambda () (let ([tesl-case-1 (raw-value (tesl_import_Money_convert *rate *amount))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Ok)) (let ([converted (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "example/learn/lesson71-money.tesl" 94 (list (cons 'converted converted)) (lambda () (raw-value (raw-value (tesl_import_Money_display *converted))))))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Err)) (let ([message (hash-ref (adt-value-fields *tesl-case-1) 'error)]) (thsl-src! "example/learn/lesson71-money.tesl" 95 (list (cons 'message message)) (lambda () *message)))])))))
+  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 95 (list (cons 'rate *rate) (cons 'amount *amount)) (lambda () (let ([tesl-case-1 (raw-value (tesl_import_Money_convert *rate *amount))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Ok)) (let ([converted (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 96 (list (cons 'converted converted)) (lambda () (raw-value (raw-value (tesl_import_Money_display *converted))))))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Err)) (let ([message (hash-ref (adt-value-fields *tesl-case-1) 'error)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 97 (list (cons 'message message)) (lambda () *message)))])))))
 
 (define/pow
   (convertChecked [rate : ExchangeRate] [amount : Money])
   #:returns Money
-  (thsl-src! "example/learn/lesson71-money.tesl" 101 (list (cons 'rate *rate) (cons 'amount *amount)) (lambda () (let/check ([tesl-checked-2 (tesl_import_Money_requireRateFor rate amount)]) (let ([proven tesl-checked-2]) (raw-value (tesl_import_Money_convertChecked *rate proven)))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 103 (list (cons 'rate *rate) (cons 'amount *amount)) (lambda () (let/check ([tesl-checked-2 (tesl_import_Money_requireRateFor rate amount)]) (let ([proven tesl-checked-2]) (raw-value (tesl_import_Money_convertChecked *rate proven)))))))
 
 (define-entity OrderLine
   #:source (make-hash)
@@ -70,12 +70,12 @@
   (totalRevenue)
   #:capabilities [dbRead]
   #:returns Money
-  (thsl-src! "example/learn/lesson71-money.tesl" 121 (list) (lambda () (call-with-database Shop (lambda () (select-sum (entity-field-ref OrderLine 'price) (from OrderLine)))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 123 (list) (lambda () (call-with-database Shop (lambda () (select-sum (entity-field-ref OrderLine 'price) (from OrderLine)))))))
 
 (define/pow
   (consultantInvoice [hourly : MoneyPerDuration] [worked : Real])
   #:returns Money
-  (thsl-src! "example/learn/lesson71-money.tesl" 178 (list (cons 'hourly *hourly) (cons 'worked *worked)) (lambda () (__tmoney_tesl-money-rate-mul *hourly *worked))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 180 (list (cons 'hourly *hourly) (cons 'worked *worked)) (lambda () (__tmoney_tesl-money-rate-mul *hourly *worked))))
 
 (define-entity Consultant
   #:source (make-hash)
@@ -93,76 +93,76 @@
   (require rackunit)
   (test-case "money is integer minor units with a currency-aware display"
     (call-with-fresh-memory-db (list Shop Agency) (lambda ()
-  (define price (thsl-src! "example/learn/lesson71-money.tesl" 128 (list) (lambda () (raw-value (tesl_import_Money_usd 1050)))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson71-money.tesl" 129 (list (cons 'price price)) (lambda () (raw-value (tesl_import_Money_minorUnits (raw-value price)))))) 1050)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson71-money.tesl" 130 (list (cons 'price price)) (lambda () (raw-value (tesl_import_Money_display (raw-value price)))))) "$10.50")
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson71-money.tesl" 131 (list (cons 'price price)) (lambda () (raw-value (tesl_import_Money_display (raw-value (tesl_import_Money_fromMinorUnits (__tmoney_tesl-currency-of "JPY") 1000))))))) "\u00a51000")
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson71-money.tesl" 132 (list (cons 'price price)) (lambda () (raw-value (tesl_import_Money_display (raw-value (tesl_import_Money_sek 1050))))))) "10.50 SEK")
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson71-money.tesl" 133 (list (cons 'price price)) (lambda () (showPrice)))) "$10.50")
+  (define price (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 130 (list) (lambda () (raw-value (tesl_import_Money_usd 1050)))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 131 (list (cons 'price price)) (lambda () (raw-value (tesl_import_Money_minorUnits (raw-value price)))))) 1050)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 132 (list (cons 'price price)) (lambda () (raw-value (tesl_import_Money_display (raw-value price)))))) "$10.50")
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 133 (list (cons 'price price)) (lambda () (raw-value (tesl_import_Money_display (raw-value (tesl_import_Money_fromMinorUnits (__tmoney_tesl-currency-of "JPY") 1000))))))) "\u00a51000")
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 134 (list (cons 'price price)) (lambda () (raw-value (tesl_import_Money_display (raw-value (tesl_import_Money_sek 1050))))))) "10.50 SEK")
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 135 (list (cons 'price price)) (lambda () (showPrice)))) "$10.50")
     ))
   )
 
   (test-case "scale multiplies by an exact integer"
     (call-with-fresh-memory-db (list Shop Agency) (lambda ()
-  (define unitPrice (thsl-src! "example/learn/lesson71-money.tesl" 137 (list) (lambda () (raw-value (tesl_import_Money_usd 199)))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson71-money.tesl" 138 (list (cons 'unitPrice unitPrice)) (lambda () (raw-value (tesl_import_Money_minorUnits (raw-value (lineTotal unitPrice 3))))))) 597)
+  (define unitPrice (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 139 (list) (lambda () (raw-value (tesl_import_Money_usd 199)))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 140 (list (cons 'unitPrice unitPrice)) (lambda () (raw-value (tesl_import_Money_minorUnits (raw-value (lineTotal unitPrice 3))))))) 597)
     ))
   )
 
   (test-case "add works once the SameCurrency proof is minted"
     (call-with-fresh-memory-db (list Shop Agency) (lambda ()
-  (define a (thsl-src! "example/learn/lesson71-money.tesl" 142 (list) (lambda () (raw-value (tesl_import_Money_usd 1000)))))
-  (define b (thsl-src! "example/learn/lesson71-money.tesl" 143 (list (cons 'a a)) (lambda () (raw-value (tesl_import_Money_usd 250)))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson71-money.tesl" 144 (list (cons 'b b) (cons 'a a)) (lambda () (raw-value (tesl_import_Money_display (raw-value (addSameCurrency a b))))))) "$12.50")
+  (define a (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 144 (list) (lambda () (raw-value (tesl_import_Money_usd 1000)))))
+  (define b (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 145 (list (cons 'a a)) (lambda () (raw-value (tesl_import_Money_usd 250)))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 146 (list (cons 'b b) (cons 'a a)) (lambda () (raw-value (tesl_import_Money_display (raw-value (addSameCurrency a b))))))) "$12.50")
     ))
   )
 
   (test-case "convert applies a runtime rate with banker's rounding"
     (call-with-fresh-memory-db (list Shop Agency) (lambda ()
-  (define rate (thsl-src! "example/learn/lesson71-money.tesl" 149 (list) (lambda () (raw-value (tesl_import_ExchangeRate_make (__tmoney_tesl-currency-of "USD") (__tmoney_tesl-currency-of "EUR") 0.9155 (raw-value (tesl_import_Time_secondsToPosix 1751900000)))))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson71-money.tesl" 150 (list (cons 'rate rate)) (lambda () (convertToDisplay rate (raw-value (tesl_import_Money_usd 1000)))))) "\u20ac9.16")
+  (define rate (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 151 (list) (lambda () (raw-value (tesl_import_ExchangeRate_make (__tmoney_tesl-currency-of "USD") (__tmoney_tesl-currency-of "EUR") 0.9155 (raw-value (tesl_import_Time_secondsToPosix 1751900000)))))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 152 (list (cons 'rate rate)) (lambda () (convertToDisplay rate (raw-value (tesl_import_Money_usd 1000)))))) "\u20ac9.16")
     ))
   )
 
   (test-case "convert is an Err when the rate does not match the amount"
     (call-with-fresh-memory-db (list Shop Agency) (lambda ()
-  (define eurRate (thsl-src! "example/learn/lesson71-money.tesl" 154 (list) (lambda () (raw-value (tesl_import_ExchangeRate_make (__tmoney_tesl-currency-of "EUR") (__tmoney_tesl-currency-of "USD") 1.0922 (raw-value (tesl_import_Time_secondsToPosix 1751900000)))))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson71-money.tesl" 155 (list (cons 'eurRate eurRate)) (lambda () (convertToDisplay eurRate (raw-value (tesl_import_Money_usd 1000)))))) "exchange rate is FROM EUR but amount is in USD")
+  (define eurRate (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 156 (list) (lambda () (raw-value (tesl_import_ExchangeRate_make (__tmoney_tesl-currency-of "EUR") (__tmoney_tesl-currency-of "USD") 1.0922 (raw-value (tesl_import_Time_secondsToPosix 1751900000)))))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 157 (list (cons 'eurRate eurRate)) (lambda () (convertToDisplay eurRate (raw-value (tesl_import_Money_usd 1000)))))) "exchange rate is FROM EUR but amount is in USD")
     ))
   )
 
   (test-case "convertChecked is total behind a RateFor proof"
     (call-with-fresh-memory-db (list Shop Agency) (lambda ()
-  (define rate (thsl-src! "example/learn/lesson71-money.tesl" 159 (list) (lambda () (raw-value (tesl_import_ExchangeRate_make (__tmoney_tesl-currency-of "USD") (__tmoney_tesl-currency-of "EUR") 0.9155 (raw-value (tesl_import_Time_secondsToPosix 1751900000)))))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson71-money.tesl" 160 (list (cons 'rate rate)) (lambda () (raw-value (tesl_import_Money_minorUnits (raw-value (convertChecked rate (raw-value (tesl_import_Money_usd 1000))))))))) 916)
+  (define rate (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 161 (list) (lambda () (raw-value (tesl_import_ExchangeRate_make (__tmoney_tesl-currency-of "USD") (__tmoney_tesl-currency-of "EUR") 0.9155 (raw-value (tesl_import_Time_secondsToPosix 1751900000)))))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 162 (list (cons 'rate rate)) (lambda () (raw-value (tesl_import_Money_minorUnits (raw-value (convertChecked rate (raw-value (tesl_import_Money_usd 1000))))))))) 916)
     ))
   )
 
   (test-case "a Money column round-trips and selectSum sums one currency"
     (call-with-fresh-memory-db (list Shop Agency) (lambda ()
     (with-capabilities (dbRead dbWrite)
-    (define tesl-ignored-3 (thsl-src! "example/learn/lesson71-money.tesl" 165 (list) (lambda () (insert-one! OrderLine (hash 'id "l1" 'price (raw-value (tesl_import_Money_usd 1050)) 'quantity 1)))))
-    (define tesl-ignored-4 (thsl-src! "example/learn/lesson71-money.tesl" 166 (list) (lambda () (insert-one! OrderLine (hash 'id "l2" 'price (raw-value (tesl_import_Money_usd 500)) 'quantity 2)))))
-    (check-equal? (raw-value (thsl-src! "example/learn/lesson71-money.tesl" 168 (list) (lambda () (raw-value (tesl_import_Money_display (raw-value (totalRevenue))))))) "$15.50")
+    (define tesl-ignored-3 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 167 (list) (lambda () (insert-one! OrderLine (tesl-hash 'id "l1" 'price (raw-value (tesl_import_Money_usd 1050)) 'quantity 1)))))
+    (define tesl-ignored-4 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 168 (list) (lambda () (insert-one! OrderLine (tesl-hash 'id "l2" 'price (raw-value (tesl_import_Money_usd 500)) 'quantity 2)))))
+    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 170 (list) (lambda () (raw-value (tesl_import_Money_display (raw-value (totalRevenue))))))) "$15.50")
     )
     ))
   )
 
   (test-case "950 SEK/h for 1.5 h bills 1425 SEK"
     (call-with-fresh-memory-db (list Shop Agency) (lambda ()
-  (define hourly (thsl-src! "example/learn/lesson71-money.tesl" 181 (list) (lambda () (raw-value (tesl_import_MoneyRate_perHour (raw-value (tesl_import_Money_sek 95000)))))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson71-money.tesl" 182 (list (cons 'hourly hourly)) (lambda () (raw-value (tesl_import_MoneyRate_display (raw-value hourly)))))) "950.00 SEK/h")
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson71-money.tesl" 183 (list (cons 'hourly hourly)) (lambda () (raw-value (tesl_import_Money_display (raw-value (consultantInvoice hourly (raw-value (tesl_import_Duration_hours 1.5))))))))) "1425.00 SEK")
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson71-money.tesl" 184 (list (cons 'hourly hourly)) (lambda () (raw-value (tesl_import_Money_display (raw-value (consultantInvoice hourly (raw-value (tesl_import_Duration_minutes 30.))))))))) "475.00 SEK")
+  (define hourly (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 183 (list) (lambda () (raw-value (tesl_import_MoneyRate_perHour (raw-value (tesl_import_Money_sek 95000)))))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 184 (list (cons 'hourly hourly)) (lambda () (raw-value (tesl_import_MoneyRate_display (raw-value hourly)))))) "950.00 SEK/h")
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 185 (list (cons 'hourly hourly)) (lambda () (raw-value (tesl_import_Money_display (raw-value (consultantInvoice hourly (raw-value (tesl_import_Duration_hours 1.5))))))))) "1425.00 SEK")
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 186 (list (cons 'hourly hourly)) (lambda () (raw-value (tesl_import_Money_display (raw-value (consultantInvoice hourly (raw-value (tesl_import_Duration_minutes 30.))))))))) "475.00 SEK")
     ))
   )
 
   (test-case "a stored hourly rate round-trips and bills"
     (call-with-fresh-memory-db (list Shop Agency) (lambda ()
     (with-capabilities (dbRead dbWrite)
-    (define tesl-ignored-5 (thsl-src! "example/learn/lesson71-money.tesl" 205 (list) (lambda () (insert-one! Consultant (hash 'id "c1" 'hourly (raw-value (tesl_import_MoneyRate_perHour (raw-value (tesl_import_Money_sek 95000)))))))))
-    (define found (thsl-src! "example/learn/lesson71-money.tesl" 206 (list) (lambda () (let ([tesl_match (select-one (from Consultant) (where (==. (entity-field-ref Consultant 'id) "c1")))]) (if tesl_match (Something tesl_match) Nothing)))))
-    (check-equal? (raw-value (thsl-src! "example/learn/lesson71-money.tesl" 207 (list (cons 'found found)) (lambda () (let ([*tesl-case-6 (raw-value found)]) (cond [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Something)) (let ([c2 (hash-ref (adt-value-fields *tesl-case-6) 'value)]) (thsl-src! "example/learn/lesson71-money.tesl" 208 (list (cons 'c2 c2)) (lambda () (tesl-equal? (raw-value (tesl_import_Money_display (raw-value (consultantInvoice (raw-value (tesl-dot/runtime c2 'hourly 'Consultant)) (raw-value (tesl_import_Duration_hours 2.)))))) "1900.00 SEK"))))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Nothing)) (thsl-src! "example/learn/lesson71-money.tesl" 209 (list) (lambda () #f))]))))) #t)
+    (define tesl-ignored-5 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 207 (list) (lambda () (insert-one! Consultant (tesl-hash 'id "c1" 'hourly (raw-value (tesl_import_MoneyRate_perHour (raw-value (tesl_import_Money_sek 95000)))))))))
+    (define found (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 208 (list) (lambda () (let ([tesl_match (select-one (from Consultant) (where (==. (entity-field-ref Consultant 'id) "c1")))]) (if tesl_match (Something tesl_match) Nothing)))))
+    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 209 (list (cons 'found found)) (lambda () (let ([*tesl-case-6 (raw-value found)]) (cond [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Something)) (let ([c2 (hash-ref (adt-value-fields *tesl-case-6) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 210 (list (cons 'c2 c2)) (lambda () (tesl-equal? (raw-value (tesl_import_Money_display (raw-value (consultantInvoice (raw-value (tesl-dot/runtime c2 'hourly 'Consultant)) (raw-value (tesl_import_Duration_hours 2.)))))) "1900.00 SEK"))))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson71-money.tesl" 211 (list) (lambda () #f))]))))) #t)
     )
     ))
   )

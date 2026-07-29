@@ -1,5 +1,7 @@
 module Lesson31WorkerConcurrency exposing [EmailQueue, ConcurrencyServer]
 
+# lesson: track=async order=410 needs=lesson28-dead-letter-queue
+# summary: Run N workers on one queue with numberOfWorkers, and know when raising it actually helps
 # Lesson 31 — Worker Concurrency with numberOfWorkers
 #
 # By default, a queue runs a single worker thread.  For high-throughput

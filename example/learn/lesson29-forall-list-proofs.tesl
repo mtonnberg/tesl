@@ -1,5 +1,7 @@
 module Lesson29ForallListProofs exposing [NoteServer]
 
+# lesson: track=proofs order=580 needs=lesson20-named-db-results
+# summary: Prove a property of every element of a returned list with ForAll
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

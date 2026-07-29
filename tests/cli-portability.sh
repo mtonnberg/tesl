@@ -352,6 +352,72 @@ else
   fail "symlinked project path broke the build-output resolution (rc=$rc): $out"
 fi
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Part 3 — NATIVE LIBRARY: libsodium must resolve the way Tesl.Crypto resolves it
+# ─────────────────────────────────────────────────────────────────────────────
+# Tesl.Crypto reaches libsodium through `ffi/unsafe`.  Relying on the ambient
+# loader path is not portable — a `nix profile install` user has no libsodium on
+# any default search path, and on macOS DYLD_LIBRARY_PATH is unreliable — so
+# flake.nix bakes the ABSOLUTE store path into $TESL_LIBSODIUM and crypto.rkt
+# prefers it, falling back to a plain `ffi-lib "libsodium"` lookup for non-Nix
+# installs (the Docker images apt-install libsodium-dev).
+#
+# This is a ratchet on BOTH halves of that contract, because either alone rots:
+#   * the library actually loads and `sodium_init()` succeeds;
+#   * resolution is LAZY — merely requiring tesl/crypto.rkt must not touch the
+#     library.  That property is load-bearing far beyond Crypto:
+#     compiler/test/test_stdlib_runtime_binding.ml walks EVERY stdlib .rkt with
+#     `dynamic-require <module> (void)` to enumerate its provides, so an eager
+#     ffi-lib that failed would break the seam test for every module, not just
+#     this one.  tesl/jwt.rkt gets this wrong today (it requires
+#     openssl/libcrypto, which resolves at module instantiation); Crypto must
+#     not regress into copying it.
+echo ""
+echo "── native: libsodium resolution for Tesl.Crypto"
+
+if ! command -v racket >/dev/null 2>&1; then
+  note "racket not on PATH — skipping the libsodium ratchet"
+else
+  # (a) LAZY: declaring the module without instantiating it must succeed even
+  #     with $TESL_LIBSODIUM pointed at nothing.
+  if TESL_LIBSODIUM=/nonexistent/libsodium.so \
+     racket -e '(dynamic-require (string->path "'"$REPO_ROOT"'/tesl/crypto.rkt") (void))' \
+     >/dev/null 2>&1; then
+    pass "tesl/crypto.rkt DECLARES without touching libsodium (lazy resolution)"
+  else
+    fail "tesl/crypto.rkt resolves libsodium eagerly — this breaks test_stdlib_runtime_binding.ml for EVERY stdlib module"
+  fi
+
+  # (b) RESOLVES: the real library loads and a real primitive answers.  Uses the
+  #     public surface, so this fails if either the FFI binding or the
+  #     $TESL_LIBSODIUM contract breaks.
+  _sodium_out="$(racket -e '
+    (require (file "'"$REPO_ROOT"'/tesl/crypto.rkt"))
+    (displayln (Crypto.fingerprint "abc"))' 2>&1)" || true
+  if [ "$_sodium_out" = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" ]; then
+    pass "libsodium loads and answers a known-answer digest correctly"
+  else
+    fail "libsodium did not resolve, or answered wrongly: $_sodium_out"
+  fi
+
+  # (c) The install hint must be actionable when the library is genuinely absent.
+  #     A user hitting this needs a command to run, not "could not load foreign
+  #     library".  Only meaningful when the fallback lookup ALSO fails, so this
+  #     is a note rather than a failure on a machine where libsodium is on the
+  #     ambient path.
+  _hint_out="$(TESL_LIBSODIUM=/nonexistent/libsodium.so racket -e '
+    (require (file "'"$REPO_ROOT"'/tesl/crypto.rkt"))
+    (with-handlers ([values (lambda (e) (displayln (exn-message e)))])
+      (Crypto.fingerprint "abc"))' 2>&1)" || true
+  if printf '%s' "$_hint_out" | grep -q "^ba7816bf"; then
+    note "libsodium is on the ambient loader path — cannot exercise the missing-library hint here"
+  elif printf '%s' "$_hint_out" | grep -q "apt-get install libsodium-dev"; then
+    pass "a missing libsodium produces an actionable install hint"
+  else
+    fail "a missing libsodium did not produce the actionable install hint: $_hint_out"
+  fi
+fi
+
 echo ""
 if [ "$FAIL" -eq 0 ]; then
   echo "cli-portability: PASS"

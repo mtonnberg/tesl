@@ -10,6 +10,9 @@ __pycache__/
 !.claude/commands/
 .direnv/
 _build/
+# playground/build.sh's isolated dune build directory + its static output
+_build-playground/
+playground/dist/
 .agents/
 result
 .tesl-collections/dsl/debug/compiled/

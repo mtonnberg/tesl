@@ -1,5 +1,7 @@
 module Lesson67NewtypeColumns exposing [findBySku, quantityForSku]
 
+# lesson: track=data order=670 needs=lesson04-newtypes,lesson18-database-sql-and-proofs
+# summary: Use a newtype as an entity column, so the wrong String is a compile error at every SQL site
 # ─────────────────────────────────────────────
 # QUICK START — newtypes as entity columns
 # ─────────────────────────────────────────────

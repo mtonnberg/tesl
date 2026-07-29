@@ -1082,6 +1082,61 @@ let stdlib_func_infos : (string * func_info) list =
                                                  args = ["key"; "dict"]; loc = g });
                      loc = g };
          loc = g }; fi_loc = g });
+    (* ── Crypto ────────────────────────────────────────────────────────────
+       Three facts, and each one earns its place:
+
+       HashFor — the MINT side.  The bug it prevents is hashing the wrong one of
+       several same-typed strings in scope together, and there are exactly two
+       handlers where that is the normal situation: change-password (oldPassword
+       and newPassword side by side) and password-reset (resetToken,
+       newPassword, confirmPassword).  Those are the handlers with sibling
+       variables of identical type and the ones exercised least, and the type
+       system cannot help because every candidate is a String.  The constraint
+       bites one layer up, at an ordinary cross-parameter signature:
+         fn storeNewPassword(user: User, newPassword: String,
+                             hash: PasswordHash ::: HashFor newPassword) = ...
+       `storeNewPassword user np (Crypto.hashPassword body.oldPassword)` then
+       does not compile.
+
+       PasswordVerified / Authentic — the VERIFY side.  Check-shaped, exactly
+       like String.requireNonEmpty, so an `auth` function reaches
+       `Authenticated user` only by way of a real verification, and "forgot to
+       check the signature before trusting the cookie" stops compiling.
+
+       All three are minted ONLY here.  proof_discharge.ml's stdlib_auto_preds
+       does not include them, so a hand-written `fn f(p) -> PasswordHash :::
+       HashFor p = ...` is rejected — that is the property the fail-closed
+       negative tests pin. *)
+    ("Crypto.hashPassword",
+     { fi_name = "Crypto.hashPassword"; fi_kind = FnKind;
+       fi_params = [ plain "plaintext" "String" ];
+       fi_return = RetAttached {
+         binding = { name = "hash"; type_expr = tname "PasswordHash";
+                     proof_ann = Some (PredApp { pred = "HashFor";
+                                                 args = ["plaintext"]; loc = g });
+                     loc = g };
+         loc = g }; fi_loc = g });
+    (* Takes Maybe PasswordHash so a missing user row and a wrong password cost
+       the same — see tesl/crypto.rkt's timing equaliser. *)
+    ("Crypto.checkPassword",
+     { fi_name = "Crypto.checkPassword"; fi_kind = CheckKind;
+       fi_params = [ plain "stored" "Maybe"; plain "candidate" "String" ];
+       fi_return = RetAttached {
+         binding = { name = "stored"; type_expr = tname "Maybe";
+                     proof_ann = Some (PredApp { pred = "PasswordVerified";
+                                                 args = ["stored"]; loc = g });
+                     loc = g };
+         loc = g }; fi_loc = g });
+    ("Crypto.checkSignature",
+     { fi_name = "Crypto.checkSignature"; fi_kind = CheckKind;
+       fi_params = [ plain "key" "Secret"; plain "sig" "Signature";
+                     plain "payload" "String" ];
+       fi_return = RetAttached {
+         binding = { name = "payload"; type_expr = tname "String";
+                     proof_ann = Some (PredApp { pred = "Authentic";
+                                                 args = ["payload"]; loc = g });
+                     loc = g };
+         loc = g }; fi_loc = g });
     (* ── Money (First-Class Units): same-currency safety is proof-layer.
        Currency is a runtime qualifier (not in the static type, like a
        PosixMillis's zone), so `usd + eur` is caught HERE: Money.add/subtract/
@@ -1794,7 +1849,7 @@ let check_self_referential_aliases (decls : top_decl list) : validation_error li
   in
   List.concat_map (function
     | DType (TypeAlias { name; base_type; loc })
-    | DType (TypeNewtype { name; base_type; loc }) ->
+    | DType (TypeNewtype { name; base_type; loc; _ }) ->
       if mentions_name name base_type then
         [ make_error loc
             (Printf.sprintf

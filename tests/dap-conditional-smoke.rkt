@@ -14,7 +14,8 @@
 ;;   TESL_COMPILER   — tesl binary
 ;;   RACKET_BIN      — racket binary (defaults to the running racket)
 
-(require rackunit racket/string json)
+(require racket/file
+         rackunit racket/string json)
 
 (define REPO-ROOT (or (getenv "TESL_REPO_ROOT")
                       (path->string (current-directory))))
@@ -28,8 +29,28 @@
 (define TESL-BIN (build-path REPO-ROOT "compiler" "_build" "default" "bin" "main.exe"))
 (when (and (not (getenv "TESL_COMPILER")) (file-exists? TESL-BIN))
   (putenv "TESL_COMPILER" (path->string TESL-BIN)))
-;; The checkScore checkpoint line in lesson61 (thsl-src! "…" 90 (list (cons 'n *n)) …).
-(define CHECK-LINE 90)
+;; The checkScore checkpoint line in lesson61, DERIVED from the source rather than
+;; hardcoded.
+;;
+;; It used to be `(define CHECK-LINE 90)`, and that broke the moment the lesson
+;; gained two metadata header comment lines: the checkpoint moved to 92, the
+;; breakpoint was armed on a line with no checkpoint, no `stopped` event ever
+;; arrived, and the failure ("should receive a stopped event for n==100") pointed
+;; at the DAP server rather than at the line number. A hardcoded line number into
+;; a file other people edit is exactly that fragile — anyone adding a comment to
+;; lesson61 breaks a debugger test with an unrelated-looking symptom.
+;;
+;; The checkpoint is the first line of `checkScore`'s body, i.e. the line after
+;; its `check checkScore(...) =` declaration.
+(define CHECK-LINE
+  (let loop ([lines (file->lines TESL-FILE)] [n 1])
+    (cond
+      [(null? lines)
+       (error 'dap-conditional-smoke
+              "could not find `check checkScore` in ~a — has the lesson been renamed?"
+              TESL-FILE)]
+      [(regexp-match? #rx"^check checkScore" (car lines)) (add1 n)]
+      [else (loop (cdr lines) (add1 n))])))
 
 (define (send! out msg)
   (define b (string->bytes/utf-8 (jsexpr->string msg)))

@@ -7,8 +7,13 @@ import Tesl.Dict exposing [Dict.lookup]
 import Tesl.Telemetry exposing [telemetry, initTelemetry]
 import Tesl.App exposing [App]
 import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.Env exposing [requireEnv, envRead]
+import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.verify]
 
-capability readTaskCookie
+# `envRead` belongs in the closure, not as an extra every caller must remember:
+# the auth path reads the session signing key from the environment, so a
+# capability that grants "read the auth cookie" has to grant that too.
+capability readTaskCookie implies jwt, envRead
 
 record AdminUser {
   id: String
@@ -47,14 +52,28 @@ check isPositive(taskId: Int) -> taskId: Int ::: Positive taskId =
 
 fact Authenticated (req: AdminUser)
 
+# THIS USED TO BE A PRIVILEGE-ESCALATION HOLE. It read `user` AND `role`
+# straight out of the cookies, so any client could send `Cookie: user=x;
+# role=admin` and reach the admin branch of `getAdminTask`. A value the client
+# sends is a request to be an administrator, never evidence of being one.
+#
+# The session is now a signed token: `JWT.verify` checks the HMAC-SHA256
+# signature and the `exp` claim and auto-401s on failure, and BOTH the subject
+# and the role are claims INSIDE the signature — editing either one invalidates
+# the token. The only place a role can be granted is where the token is minted,
+# server-side, at login.
 auth cookieUserAuth(request: HttpRequest) -> requestUser: AdminUser ::: Authenticated requestUser
   requires [readTaskCookie] =
-  case Dict.lookup "user" request.cookies of
-    Nothing -> fail 401 "Missing user cookie"
-    Something userId ->
-      case Dict.lookup "role" request.cookies of
-        Something role -> ok AdminUser { id: userId, role: role } ::: Authenticated requestUser
-        Nothing -> ok AdminUser { id: userId, role: "user" } ::: Authenticated requestUser
+  case Dict.lookup "session" request.cookies of
+    Nothing -> fail 401 "Missing session cookie"
+    Something raw ->
+      let claims = JWT.verify (JwtToken raw) (JwtSecret (requireEnv "SESSION_JWT_SECRET"))
+      case Dict.lookup "sub" claims of
+        Nothing -> fail 401 "Session token has no subject"
+        Something userId ->
+          case Dict.lookup "role" claims of
+            Something role -> ok AdminUser { id: userId, role: role } ::: Authenticated requestUser
+            Nothing -> ok AdminUser { id: userId, role: "user" } ::: Authenticated requestUser
 
 capturer positiveTaskCapture: Int ::: Positive taskId using intCodec via isPositive
 

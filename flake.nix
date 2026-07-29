@@ -34,9 +34,6 @@
             if [ -f "LANGUAGE-SPEC.md" ]; then
               cp LANGUAGE-SPEC.md $out/share/tesl/doc/ || true
             fi
-            if [ -f "TESL.md" ]; then
-              cp TESL.md $out/share/tesl/doc/ || true
-            fi
             if [ -f "INSTALL.md" ]; then
               cp INSTALL.md $out/share/tesl/doc/ || true
             fi
@@ -190,6 +187,21 @@
           pkgs.diffutils   # cmp
         ];
 
+        # ── Native shared libraries the Racket runtime dlopen()s ───────────────
+        # `tesl/crypto.rkt` reaches libsodium through `ffi/unsafe`.  Relying on
+        # the ambient loader path is not portable: a `nix profile install` user
+        # has no libsodium on the default search path at all, and on macOS
+        # DYLD_LIBRARY_PATH is unreliable.  So we bake the ABSOLUTE store path of
+        # the library into the wrappers and have crypto.rkt prefer it, falling
+        # back to a plain `ffi-lib "libsodium"` lookup for non-Nix installs
+        # (Docker images, distro packages).  That makes libsodium a real,
+        # GC-rooted runtime dependency of the installed package.
+        #
+        # extensions.sharedLibrary is ".so" on Linux and ".dylib" on Darwin, so
+        # one expression covers both.
+        libsodiumPath =
+          "${pkgs.libsodium}/lib/libsodium${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}";
+
         # ── Shared preamble injected at the top of all installed wrappers ─────
         # Sets the Racket collection path so the wrapper works with the
         # pre-compiled .zo files baked into the tesl-racket Nix derivation.
@@ -220,6 +232,9 @@
           export TESL_COLLECTIONS_DIR="${tesl-racket}/share/tesl-collections/tesl"
 
           export PATH="${pkgs.racket}/bin:${gnuUserland}:$PATH"
+
+          # Native library for Tesl.Crypto (see libsodiumPath above).
+          export TESL_LIBSODIUM="''${TESL_LIBSODIUM:-${libsodiumPath}}"
         '';
 
         # ── CLI body (shared between installed and dev wrappers) ──────────────
@@ -240,6 +255,7 @@
           export PLTCOLLECTS="${pkgs.racket}/share/racket/collects:${tesl-racket}/share/tesl-collections''${PLTCOLLECTS:+:$PLTCOLLECTS}"
 
           export PATH="${pkgs.racket}/bin:${gnuUserland}:$PATH"
+          export TESL_LIBSODIUM="''${TESL_LIBSODIUM:-${libsodiumPath}}"
         '' + cliBody);
 
         # ── tesl-lsp wrapper ──────────────────────────────────────────────────
@@ -296,14 +312,27 @@
             ocamlPackages.dune_3
             ocamlPackages.findlib
             ocamlPackages.alcotest
+            # playground/build.sh: compiles the pure-OCaml compiler library to
+            # JavaScript for the browser playground.  Opt-in — the jsoo stanza is
+            # gated on the release profile (compiler/playground/dune), so nothing
+            # in the normal dev/CI path needs these.
+            ocamlPackages.js_of_ocaml
+            ocamlPackages.js_of_ocaml-compiler
             # Integration test mock servers
             mailhog   # SMTP mock for email integration tests (MailHog binary in PATH as MailHog)
             python3   # HTTP mock server for httpclient integration tests
+            libsodium # Tesl.Crypto: Argon2id / HMAC / digests / constant-time compare
           ];
 
           shellHook = ''
             export TESL_REPO_ROOT="''${TESL_REPO_ROOT:-${toString ./.}}"
             export TESL_OCAML_COMPILER="''${TESL_OCAML_COMPILER:-$TESL_REPO_ROOT/compiler/_build/default/bin/main.exe}"
+
+            # Tesl.Crypto's libsodium — absolute store path, same as the
+            # installed wrappers use.  `racket` invoked directly in the dev shell
+            # (ci.sh does this a lot) therefore resolves it identically to a
+            # `nix profile install`.
+            export TESL_LIBSODIUM="''${TESL_LIBSODIUM:-${libsodiumPath}}"
 
             if [ -z "''${TESL_SKIP_AUTO_BUILD:-}" ] && [ ! -x "$TESL_OCAML_COMPILER" ]; then
               echo "[tesl] OCaml compiler not built; building compiler/bin/main.exe..."

@@ -1,0 +1,41 @@
+; ── Browser (js_of_ocaml) build of the Tesl compiler ──────────────────────────
+;
+; This target is DELIBERATELY invisible to plain `dune build` — and therefore to
+; ci.sh, the nix derivation and every developer without js_of_ocaml installed.
+; It is gated on the release profile; see the long note on the stanza below for
+; why that mechanism and not another.  Build it explicitly:
+;
+;     dune build --profile release playground/tesl_playground_js.bc.js
+;
+; or, from the repo root, `playground/build.sh`.
+;
+; Requires js_of_ocaml (library) and js_of_ocaml-compiler (the `js_of_ocaml`
+; binary) on PATH; both are in the nix dev shell.
+
+(executable
+ (name tesl_playground_js)
+ (modules tesl_playground_js)
+ ; -warn-error +8 to match the compiler library's fail-closed discipline.
+ (flags (:standard -warn-error +8))
+ (modes js)
+ ; ── Why this stanza is gated on the RELEASE profile ──────────────────────────
+ ; An empty `(alias (name default))` override does NOT work, and that was the
+ ; first attempt: "Library js_of_ocaml not found" is raised while dune RESOLVES
+ ; the rule, before any alias gets to decide whether to build it.  So plain
+ ; `dune build` — and therefore ci.sh phase 1 — failed on every machine without
+ ; js_of_ocaml, which is precisely what the exclusion exists to prevent.
+ ;
+ ; `%{env:...}` would be the direct way to express "opt in", but it needs
+ ; (lang dune 3.15) and this project is on 3.0; bumping the language version to
+ ; gate one optional target would change defaults across the whole build.
+ ;
+ ; `%{profile}` needs no version bump.  Everything that must keep working on a
+ ; machine without js_of_ocaml uses the DEV profile — plain `dune build`,
+ ; `dune test`, ci.sh, and flake.nix's `dune build bin/main.exe` — so gating on
+ ; release disables the stanza for all of them, while `playground/build.sh`
+ ; (which already passes --profile release) still builds it.
+ ;
+ ; The cost, stated: `dune build --profile release` now requires js_of_ocaml.
+ ; Nothing in the repo does that today.
+ (enabled_if (= %{profile} release))
+ (libraries tesl_compiler_lib js_of_ocaml))

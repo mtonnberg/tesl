@@ -16,6 +16,8 @@ import Tesl.Agent exposing [
   replyToolCalls,
 ]
 
+# lesson: track=ai order=430 needs=lesson11-capabilities
+# summary: Declare an AI agent whose tools are ordinary typed Tesl functions
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 62 — AI agents and typed-function tools
 #

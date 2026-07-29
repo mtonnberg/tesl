@@ -29,6 +29,8 @@ import Tesl.Agent exposing [
   replyToolCalls,
 ]
 
+# lesson: track=ai order=460 needs=lesson68-server-endpoints-as-tools
+# summary: Surface the endpoints an agent may not run as typed buttons for the human, then resume the turn with the result
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 69 — Agent ⇄ human handoff (`humanActions`)
 #

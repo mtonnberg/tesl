@@ -20,7 +20,7 @@ let expr_reads_env (e : expr) : bool =
   let rec go e =
     (match e with
      | EVar { name; _ }
-       when List.mem name ["env"; "envInt"; "envString"; "requireEnv"] -> found := true
+       when List.mem name ["env"; "envInt"; "envString"; "requireEnv"; "requireSecret"] -> found := true
      | _ -> ());
     ignore (Ast_visitor.fold_children (fun () e -> go e; ()) () e)
   in

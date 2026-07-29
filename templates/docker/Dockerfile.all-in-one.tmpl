@@ -38,8 +38,15 @@ LABEL org.opencontainers.image.title="__APP_NAME__" \
 # postinst is interactive by default). The lone "pg_lsclusters: not found"
 # notice from postgresql-common's postinst is harmless (the cluster is created
 # at runtime by `tesl db`, not at build time).
+#
+# libsodium is installed in the same layer: it is the native library Tesl.Crypto
+# reaches through the FFI (Argon2id, HMAC, digests, constant-time compare).  The
+# name-stable `-dev` package is used deliberately — the runtime package carries
+# the soname in its name (libsodium23 → libsodium26) and would break on a base
+# image bump, and the dev package also drops the unversioned `libsodium.so`
+# symlink the FFI lookup prefers.
 RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql postgresql-client \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql postgresql-client libsodium-dev \
  && rm -rf /var/lib/apt/lists/*
 
 # Make the postgres tools (initdb, pg_ctl, postgres) reachable on PATH without

@@ -30,7 +30,18 @@
  register-runtime-type!
  register-runtime-type/runtime!
  runtime-type-predicate
+ tesl-hash
  define-newtype
+ define-secret-newtype
+ register-secret-type!
+ secret-type-name?
+ secret-value?
+ secret-redaction-text
+ secret-constant-time-equal?
+ current-redact-secrets?
+ secret-header-value
+ secret-header-value?
+ secret-header-value-plaintext
  define-type-alias
  ;; The raw constructor, exported so the debugger's value-tree tests can build a
  ;; newtype-wrapped value directly (a Money/units binding is the shape that used
@@ -301,8 +312,119 @@
 
 (struct runtime-type-entry (name predicate) #:transparent)
 (define runtime-type-registry (make-hash))
+;; ── Non-shadowable aliases for Racket builtins the EMITTER emits bare ────────
+;; Issue-#12 class: emitted code that calls a bare Racket builtin breaks the
+;; moment a Tesl program binds a name that spells the same thing.  `hash` is the
+;; live instance and it is not exotic — it is the most natural variable name in
+;; password code:
+;;
+;;   let hash = Crypto.hashPassword newPassword      # Tesl
+;;   (let ([hash …]) (insert-one! Account (hash 'id id …)))   ; emitted
+;;                                          ^^^^ the user's binding, applied
+;;
+;; which traps at runtime as "application: not a procedure; given: 'hash…".
+;; Routing every emitted hash construction through `tesl-hash` closes it for
+;; good, because a Tesl identifier cannot contain a hyphen — so no Tesl program
+;; can shadow this name, by construction.  Same reasoning as the `tesl-prop-*`
+;; helpers in dsl/test-support.rkt, which fixed the `format`/`map`/`random`
+;; instances of the same class in generated property tests.
+(define tesl-hash hash)
+
 (struct newtype-value (type-name value) #:transparent)
 (define newtype-registry (make-hash))
+
+;; ── Secret newtypes ──────────────────────────────────────────────────────────
+;; `secret Password = String` is `type Password = String` minus `.value`, plus
+;; redaction at every rendering sink.  The `.value` half is a COMPILE-TIME
+;; matter (the checker refuses the field access), so at runtime a secret is an
+;; ordinary newtype-value — identical representation, identical SQL round-trip.
+;;
+;; What the runtime needs is the ability to ANSWER "is this value secret?" at
+;; every node of a renderer's walk, because redaction is structural: a secret
+;; nested in a record inside a list inside a Maybe must redact while its
+;; siblings render normally.  This registry is that answer, and it is a set of
+;; type tokens rather than a flag on the struct so that no existing
+;; newtype-value construction site has to change.
+(define secret-type-registry (make-hash))
+
+(define (register-secret-type! type-token)
+  (hash-set! secret-type-registry type-token #t))
+
+(define (secret-type-name? type-token)
+  (hash-ref secret-type-registry type-token #f))
+
+;; The single predicate every rendering sink calls.  Deliberately NOT recursive:
+;; each sink walks its own structure and asks this question per node, so a sink
+;; that forgets to recurse fails its structural-redaction test rather than
+;; silently redacting a whole subtree.
+(define (secret-value? value)
+  (and (newtype-value? value)
+       (secret-type-name? (newtype-value-type-name value))))
+
+;; The one string every sink substitutes.  Fixed, and deliberately carries no
+;; length, prefix or hash of the value: partial disclosure in a debugger is the
+;; convenience that erodes the guarantee (see roadmap/next/tesl_crypto.md).
+(define secret-redaction-text "[redacted]")
+
+;; Opt-in structural redaction for `runtime-value->jsexpr`.
+;;
+;; `runtime-value->jsexpr` is the ONE total structural walk over Tesl runtime
+;; values, and it is shared by the HTTP response path, SQL ADT-field
+;; persistence, the cache, the queue store, SSE and test support — redacting
+;; there unconditionally would CORRUPT PERSISTENCE (a stored secret would come
+;; back as the literal string "[redacted]").  So redaction is a parameter,
+;; default OFF, switched on only by the RENDERING sinks (telemetry).  Because
+;; the walk recurses through itself, one `parameterize` at the sink gives
+;; redaction at every node — which is exactly the structural property the
+;; feature needs (a secret nested in a record inside a List inside a Maybe
+;; redacts while its siblings render normally).
+(define current-redact-secrets? (make-parameter #f))
+
+;; Constant-time byte comparison, for the `==` lowering on a secret.
+;;
+;; `tesl/crypto.rkt` has its own copy (it is the trusted crypto body and owns
+;; the libsodium binding); this one exists because `tesl/private/runtime.rkt`
+;; (where `tesl-equal?` lives) CANNOT require `tesl/crypto.rkt` — crypto.rkt
+;; already requires private/runtime.rkt, so the edge would be a cycle.
+;; dsl/types.rkt is below both, which makes it the only shared home.
+;; Same shape as tesl/jwt.rkt's signature compare: XOR every byte pair and OR
+;; the results, always processing all bytes.  The LENGTH comparison short-
+;; circuits (lengths are not secret-equal-length in general, and a length
+;; mismatch is already observable from the value's own encoding).
+(define (constant-time-bytes=?/secret a b)
+  (and (= (bytes-length a) (bytes-length b))
+       (= 0 (for/fold ([acc 0]) ([x (in-bytes a)] [y (in-bytes b)])
+              (bitwise-ior acc (bitwise-xor x y))))))
+
+;; Compare two secret payloads without an early-exit data dependency.  Non-byte,
+;; non-string payloads (a secret over Int, say) fall back to `equal?`: there is
+;; no byte encoding to walk and an integer compare has no useful timing story.
+(define (secret-constant-time-equal? a b)
+  (define (->bytes v)
+    (cond [(bytes? v) v]
+          [(string? v) (string->bytes/utf-8 v)]
+          [else #f]))
+  (define ab (->bytes a))
+  (define bb (->bytes b))
+  (if (and ab bb)
+      (constant-time-bytes=?/secret ab bb)
+      (equal? a b)))
+
+;; An outbound-header value that carries a secret's plaintext WITHOUT being a
+;; String.  `Http.secretHeader` / `HttpClient.bearer` are typed as returning a
+;; `Tuple2 String String`, because that is what the HTTP verbs' header
+;; parameter accepts; the checker therefore believes the value half is a String.
+;; If the runtime value were the plaintext string, projecting it back out
+;; (`Tuple2.second h`) and interpolating it would leak — and if it were a bare
+;; `newtype-value`, `~a` would print the transparent struct, plaintext
+;; included.  This struct closes both: it is not a string (so every String
+;; primitive errors loudly instead of leaking) and it prints as "[redacted]".
+;; The plaintext comes back out at exactly one place: `http-header-pair` in
+;; tesl/http-client.rkt, inside trusted code, on its way onto the wire.
+(struct secret-header-value (plaintext)
+  #:methods gen:custom-write
+  [(define (write-proc self port mode)
+     (write-string secret-redaction-text port))])
 
 (define built-in-runtime-type-registry
   (hash 'Any (lambda (_value) #t)
@@ -733,6 +855,12 @@
 
 (define (runtime-value->jsexpr value)
   (cond
+    ;; Structural redaction, FIRST clause so it fires at every node of the walk
+    ;; (see `current-redact-secrets?`).  OFF by default: this walk is also the
+    ;; persistence/response path, where a secret must round-trip unchanged.
+    [(and (current-redact-secrets?) (secret-value? value))
+     secret-redaction-text]
+    [(secret-header-value? value) secret-redaction-text]
     [(named-value? value)
      (runtime-value->jsexpr (named-value-value value))]
     [(check-ok? value)
@@ -1555,6 +1683,18 @@
                                    (and (newtype-value? value)
                                         (equal? (newtype-value-type-name value) '#,type-token))))
          (hash-set! newtype-registry '#,type-token '#,base-type-datum))]))
+
+;; `secret X = T` — a newtype in every runtime respect, additionally registered
+;; as secret so the rendering sinks redact it.  Withholding `.value` and `Eq`,
+;; and rejecting the type in a response/codec position, are the checker's job;
+;; nothing about them is expressible or enforceable here.
+(define-syntax (define-secret-newtype stx)
+  (syntax-parse stx
+    [(_ name:id base-type:expr)
+     (define type-token (normalize-type-stx #'name))
+     #`(begin
+         (define-newtype name base-type)
+         (register-secret-type! '#,type-token))]))
 
 ;; Transparent alias: the constructor validates and returns the value as-is (no newtype-value wrap).
 ;; The type predicate delegates to the base type, so operators like > and == work directly.

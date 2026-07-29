@@ -1,4 +1,6 @@
 module Lesson00HelloWorld exposing [greet, add]
+# lesson: track=basics order=10 needs=none
+# summary: Write, compile and run your first Tesl module — module, exposing, import, fn and interpolated strings
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

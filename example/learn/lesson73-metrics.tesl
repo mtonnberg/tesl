@@ -1,5 +1,7 @@
 module Lesson73Metrics exposing [recordSignup]
 
+# lesson: track=stdlib order=510 needs=lesson17-telemetry
+# summary: Record counters, histograms and gauges as ambient OpenTelemetry metrics
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

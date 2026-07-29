@@ -10,6 +10,8 @@ module Lesson25StandardLibraryStringsListsInts exposing [
   formatRecord,
 ]
 
+# lesson: track=stdlib order=180 needs=none
+# summary: The three most-used standard modules: Tesl.String, Tesl.List and Tesl.Int
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

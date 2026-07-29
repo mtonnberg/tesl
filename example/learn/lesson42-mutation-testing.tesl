@@ -7,6 +7,8 @@ module Lesson42MutationTesting exposing [
   checkDiscount,
 ]
 
+# lesson: track=testing order=650 needs=lesson14-test-blocks,lesson06-proof-check-proof-auth
+# summary: Ask whether your tests would catch a plausible logic error injected into a check or auth
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

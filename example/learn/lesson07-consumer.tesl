@@ -1,5 +1,7 @@
 module Lesson07Consumer exposing [processInput]
 
+# lesson: track=proofs order=270 needs=lesson07-home
+# summary: Import a predicate and its check function from another module and use both in your own annotations
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

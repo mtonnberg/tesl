@@ -5,6 +5,8 @@ module Lesson54DebuggingProofErrors exposing [
   diagnoseCommonMistakes,
 ]
 
+# lesson: track=proofs order=170 needs=lesson05-intro-to-proofs,lesson06-proof-check-proof-auth
+# summary: Read the common proof errors and know which edit fixes each one
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 54 — Debugging Proof Errors
 #

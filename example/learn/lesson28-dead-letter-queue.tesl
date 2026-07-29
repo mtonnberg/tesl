@@ -1,5 +1,7 @@
 module Lesson28DeadLetterQueue exposing [NotifQueue]
 
+# lesson: track=async order=400 needs=lesson18-database-sql-and-proofs
+# summary: Give a queue a dead-letter worker, so jobs that exhaust their retries get compensated instead of lost
 # Lesson 28 — Dead-Letter Workers
 #
 # When a worker job fails maxAttempts times in a row, it becomes "dead".

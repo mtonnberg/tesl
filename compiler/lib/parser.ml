@@ -2253,7 +2253,23 @@ and parse_atom s =
     if peek s = PIPE_LEFT then
       return (EConstructor { name = "Something"; args = []; loc = loc0 })
     else begin
-      let* arg = parse_atom s in
+      (* parse_postfix, NOT parse_atom: `.field` binds tighter than constructor
+         application, so `Something acct.passwordHash` must mean
+         `Something (acct.passwordHash)`.
+
+         With parse_atom the argument stopped at `acct`, and the caller
+         (parse_postfix) then wrapped the WHOLE constructor —
+         `(Something acct).passwordHash` — which is silently wrong rather than
+         a compile error: `.field` on an unresolved type falls through to the
+         checker's permissive T_ANY fallback, so it typechecks and then traps at
+         runtime with "dot access is only supported on declared record/entity
+         values".
+
+         `Something` was the ONLY constructor with this bug, because it is the
+         only one that parses its own argument here.  Every other constructor
+         (including user ADTs and `Ok`/`Err`) is applied through parse_app, whose
+         argument parser is already parse_postfix. *)
+      let* arg = parse_postfix s in
       let loc = span loc0 (expr_loc arg) in
       return (EConstructor { name = "Something"; args = [arg]; loc })
     end
@@ -3149,8 +3165,12 @@ let parse_entity_form s =
   let loc = span loc0 (current_loc s) in
   return { name; table; primary_key = pk; fields; loc }
 
-(** Parse a type declaration: newtype, type alias, or ADT. *)
-let rec parse_type_form s =
+(** Parse a type declaration: newtype, type alias, or ADT.  [secret] is true when
+    the declaration was introduced by the contextual [secret] keyword
+    ([secret Password = String]) rather than [type]; it only ever reaches a
+    [TypeNewtype] (an ADT/alias cannot be secret — see [parse_top_decl], which
+    only takes the [secret] path for a plain `secret UIDENT` header). *)
+let rec parse_type_form ?(secret = false) s =
   let loc0 = current_loc s in
   let* name = expect_uident s in
   skip_newlines s;
@@ -3204,7 +3224,7 @@ let rec parse_type_form s =
          s.pos <- saved;
          let* base = parse_type_expr s in
          let loc = span loc0 (current_loc s) in
-         return (TypeNewtype { name; base_type = base; loc })
+         return (TypeNewtype { name; base_type = base; secret; loc })
        end
      | IDENT _ ->
        (* §7.11 (review 2026-07): a single non-ADT base is a NOMINAL newtype
@@ -3216,11 +3236,11 @@ let rec parse_type_form s =
           uppercase-named bases.  This makes the runtime encoding match the spec. *)
        let* base = parse_type_expr s in
        let loc = span loc0 (current_loc s) in
-       return (TypeNewtype { name; base_type = base; loc })
+       return (TypeNewtype { name; base_type = base; secret; loc })
      | _ ->
        let* base = parse_type_expr s in
        let loc = span loc0 (current_loc s) in
-       return (TypeNewtype { name; base_type = base; loc }))
+       return (TypeNewtype { name; base_type = base; secret; loc }))
   | NEWLINE | INDENT ->
     skip_newlines s;
     (* ADT with variants each on separate indented lines *)
@@ -5035,6 +5055,17 @@ and parse_top_decl s =
     (* Parse like a test for now *)
     let* t = parse_test_form s in
     return (DTest t)
+  (* `secret Password = String` — the `secret` keyword is CONTEXTUAL, recognised
+     here and NOT in the lexer's keyword table, because `secret` is already an
+     ordinary identifier in the corpus (`fn signClaims(claims: String, secret:
+     JwtSecret)`, `let secret = …` in tests/jwt-tests.tesl).  Lexing it as a
+     keyword would break those files.  The lookahead makes it unambiguous: a
+     type name is a UIDENT, so `secret UIDENT` cannot be the bare-const arm
+     below (`name = value` requires EQ next) nor any expression. *)
+  | IDENT "secret" when (match peek2 s with UIDENT _ -> true | _ -> false) ->
+    advance s;
+    let* t = parse_type_form ~secret:true s in
+    return (DType t)
   | IDENT _ when peek2 s = EQ ->
     (* Bare name = value — treat as const declaration *)
     let* c = parse_const_form s in
@@ -5052,6 +5083,10 @@ and parse_top_decl s =
             | DATABASE | CAPABILITY | FACT | CONST | QUEUE | CHANNEL
             | CAPTURE | CAPTURER | API | SERVER | TEST | API_TEST | LOAD_TEST | CACHE | EMAIL
             | PROPERTY | MAIN | WORKER | DEAD_WORKER | ESTABLISH | EOF -> ()
+            (* `secret Password = String` starts a declaration too.  The SAME
+               two-token test as the parse arm, so a `let secret = …` inside a
+               body is not mistaken for one. *)
+            | IDENT "secret" when (match peek2 s with UIDENT _ -> true | _ -> false) -> ()
             | _ -> advance s; skip_to_top ()
           in
           skip_to_top ();
@@ -5231,6 +5266,15 @@ let starts_top_decl = function
   | PROPERTY | MAIN | WORKER | DEAD_WORKER | ESTABLISH -> true
   | _ -> false
 
+(** [starts_top_decl] on the stream head, additionally recognising the
+    CONTEXTUAL `secret UIDENT` declaration header (which a single token cannot
+    decide — `secret` is also an ordinary identifier). *)
+let starts_top_decl_at s =
+  starts_top_decl (peek s)
+  || (match peek s with
+      | IDENT "secret" -> (match peek2 s with UIDENT _ -> true | _ -> false)
+      | _ -> false)
+
 (** Best-effort top-level declaration loop: collects every declaration that
     parses, and on a parse error resynchronises to the next top-level keyword
     (or EOF) and keeps going, instead of aborting the whole module.  Always
@@ -5252,7 +5296,7 @@ let rec parse_top_decls_recover s acc =
          to the next top-level keyword.  [parse_top_decl]'s own recovery only
          fires for the unknown-leading-token case, so we always skip here. *)
       if s.pos = before then advance s;
-      while peek s <> EOF && not (starts_top_decl (peek s)) do
+      while peek s <> EOF && not (starts_top_decl_at s) do
         advance s
       done;
       parse_top_decls_recover s acc

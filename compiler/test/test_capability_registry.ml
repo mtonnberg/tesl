@@ -34,6 +34,12 @@ let oracle = [
   "generateId", ["random"]; "generatePrefixedId", ["random"];
   "env", ["envRead"]; "envInt", ["envRead"];
   "envString", ["envRead"]; "requireEnv", ["envRead"];
+  (* `secret` (roadmap/next/tesl_crypto.md): requireSecret is an env READ like
+     requireEnv — it just lands in a `Secret` instead of a String, so it charges
+     the same capability and no new one.  HttpClient.bearer /
+     HttpClient.secretHeader deliberately appear NOWHERE here: they build a
+     header pair and perform no I/O, and a capability marks an effect. *)
+  "requireSecret", ["envRead"];
   "deadJobs", ["queueRead"]; "requeue", ["queueWrite"];
   "JWT.sign", ["jwt"]; "JWT.verify", ["jwt"]; "JWT.decode", ["jwt"];
   "HttpClient.get", ["httpClient"]; "HttpClient.post", ["httpClient"];
@@ -42,6 +48,15 @@ let oracle = [
   "ask", ["aiProvider"]; "askReply", ["aiProvider"]; "askWith", ["aiProvider"];
   "askFor", ["aiProvider"]; "converse", ["aiProvider"];
   "converseStreaming", ["aiProvider"]; "agentRun", ["aiProvider"];
+  (* Tesl.Crypto charges NOTHING except for the two calls that draw randomness.
+     A capability marks an EFFECT; sensitivity is carried by the types (`secret`)
+     and the facts, which track the VALUE rather than the function.  So
+     signWith / checkSignature / checkPassword / needsRehash / fingerprint /
+     keyFingerprint are ungated — they are no more privileged than
+     String.length — and hashPassword (which draws a salt) plus randomToken
+     charge the EXISTING `random`.  No new capability, no new cap_map row.
+     If a future edit gates a pure Crypto function, this oracle fails. *)
+  "Crypto.hashPassword", ["random"]; "Crypto.randomToken", ["random"];
 ]
 
 let () =

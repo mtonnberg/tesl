@@ -1,8 +1,21 @@
 #lang racket
 
 (require "private/runtime.rkt"
+         racket/runtime-path
          (only-in "../dsl/capability.rkt"
                   define-capability require-capabilities! current-capabilities))
+
+;; `Secret` is declared in tesl/crypto.rkt (`define-secret-newtype`), which this
+;; module cannot `require`: crypto.rkt already requires private/runtime.rkt, so
+;; the edge would be a cycle.  Resolved by `dynamic-require` at CALL time — the
+;; same pattern dsl/otel.rkt uses to reach tesl/http-client.rkt.
+;;
+;; It must be the real constructor, not a hand-built `(newtype-value 'Secret …)`:
+;; a newtype's runtime type token is a `type-ref` struct carrying its DEFINING
+;; MODULE, so a bare-symbol tag would satisfy neither `Secret`'s runtime type
+;; predicate nor `secret-value?` — it would typecheck and then silently fail to
+;; redact, which is the worst of both.
+(define-runtime-path env-crypto-source "crypto.rkt")
 
 ;; Reading the environment is an effect; a function that calls env/envInt/
 ;; envString/requireEnv in its body must declare `requires [envRead]` (enforced by
@@ -10,7 +23,7 @@
 ;; `env` function below.
 (define-capability envRead)
 
-(provide env envInt envString requireEnv envRead
+(provide env envInt envString requireEnv requireSecret envRead
          current-env-bootstrap? with-env-bootstrap)
 
 ;; CAP-2: a user-level env read must enforce its own capability at runtime, like
@@ -67,3 +80,19 @@
 (define (requireEnv name)
   (ensure-env-capability!)
   (tesl-env-raw name))
+
+;; requireSecret : String -> Secret — read an env var straight into a `Secret`,
+;; with no String ever existing in Tesl code.  `Secret (requireEnv "…")` would
+;; also typecheck, but it puts the plaintext in a String first, which is exactly
+;; what `secret` exists to prevent; this is the sanctioned env sink.
+;;
+;; Fails the same way `requireEnv` does when the variable is unset (a #f payload
+;; is a load-time configuration error, not a secret worth hiding) — the raise
+;; deliberately does NOT name a value.
+(define (requireSecret name)
+  (ensure-env-capability!)
+  (define raw (tesl-env-raw name))
+  (unless (and (string? raw) (> (string-length raw) 0))
+    (raise-user-error 'requireSecret
+                      "environment variable ~a is not set (or is empty)" name))
+  ((dynamic-require env-crypto-source 'Secret) raw))

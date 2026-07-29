@@ -13,6 +13,8 @@ import Tesl.Database exposing [
   SocketConnection,
 ]
 
+# lesson: track=testing order=660 needs=lesson32-api-tests
+# summary: Assert on latency percentiles, throughput and error rates with a load-test block
 # ── Goal ─────────────────────────────────────────────────────────────────────
 # Learn the `load-test` block — Tesl's built-in load/performance testing.
 # Load tests reuse the same seed and request syntax as `api-test`, but

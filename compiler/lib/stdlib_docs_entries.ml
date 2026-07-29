@@ -588,6 +588,7 @@ let random_uuid_id_env : entry list = [
   f "envInt" [ "name"; "default" ] ~m:"Tesl.Env" ~doc:"Reads an environment variable as Int, falling back to default when unset or unparseable.";
   f "envString" [ "name"; "default" ] ~m:"Tesl.Env" ~doc:"Reads an environment variable as String, falling back to default when unset.";
   f "requireEnv" [ "name" ] ~m:"Tesl.Env" ~doc:"Reads an environment variable as String, failing at startup if unset.";
+  f "requireSecret" [ "name" ] ~m:"Tesl.Env" ~doc:"Reads an environment variable straight into a Secret, failing at startup if unset — no String ever exists in Tesl code. A Secret has no `.value`: hand it to Crypto.signWith / Crypto.keyFingerprint / HttpClient.bearer, store it in a column, or compare it with == (constant-time).";
 ]
 
 (* ── Tesl.Json (builtin codecs — validated by name and lowered inline) ─────── *)
@@ -679,6 +680,58 @@ let jwt : entry list = [
   f "JWT.decode" [ "token" ] ~m:"Tesl.JWT" ~doc:"Decodes the claims WITHOUT verifying the signature — never use for auth decisions.";
 ]
 
+(* ── Tesl.Crypto ─────────────────────────────────────────────────────────────
+   Every doc string names the PRIMITIVE underneath.  Friendly names hide the
+   CHOICE, never the FACT: nobody should have to audit Tesl to decide whether
+   Tesl's password hashing is sound — the answer is "it is libsodium's
+   crypto_pwhash, unmodified, with libsodium's recommended parameters", and it
+   has to be checkable in a minute by someone who does not read Racket. *)
+
+let crypto : entry list = [
+  e "PasswordHash" ~m:"Tesl.Crypto"
+    ~kind:(KType "secret type PasswordHash   # opaque: no constructor, no .value, no ==")
+    ~doc:"A stored password hash (libsodium crypto_pwhash / Argon2id, PHC string format). Opaque on purpose: it has no constructor, so a plaintext cannot be blessed as a hash, and no ==, because its only legitimate comparison is Crypto.checkPassword. Secret: redacted in telemetry, logs and the debugger. Store it in a column directly.";
+  e "Signature" ~m:"Tesl.Crypto"
+    ~kind:(KType "type Signature   # opaque: no .value, no ==; use Crypto.signatureHex to transport")
+    ~doc:"An HMAC-SHA256 message authentication tag. Public data (publishing it is the point), so it is NOT redacted — but it has no ==, because comparing tags by hand is not constant-time. Use Crypto.checkSignature to verify and Crypto.signatureHex / Crypto.signatureFromHex to transport.";
+  e "Secret" ~m:"Tesl.Crypto"
+    ~kind:(KType "secret type Secret = String   # constant-time ==, redacted everywhere, no .value")
+    ~doc:"Key material. A Secret cannot become a String in Tesl code: no interpolation, no concatenation, no .value. Hand it to a function that knows what to do with it, store it in a column, or compare it with == (which lowers to libsodium's sodium_memcmp).";
+  e "HashFor" ~m:"Tesl.Crypto" ~kind:(KFact "fact HashFor (plaintext: String)")
+    ~doc:"This PasswordHash is the hash of THAT plaintext; minted only by Crypto.hashPassword. Demand it on a storing function's parameter and hashing the wrong one of several same-typed strings in scope stops compiling — the change-password and password-reset shapes.";
+  e "PasswordVerified" ~m:"Tesl.Crypto" ~kind:(KFact "fact PasswordVerified (stored: Maybe PasswordHash)")
+    ~doc:"A submitted password was checked against this stored hash; minted only by Crypto.checkPassword. Reaching Authenticated still needs an explicit establish — this fact makes that step small and reviewable, it does not remove it.";
+  e "Authentic" ~m:"Tesl.Crypto" ~kind:(KFact "fact Authentic (payload: String)")
+    ~doc:"This payload's message authentication tag verified; minted only by Crypto.checkSignature. Require it and \"forgot to check the signature before trusting the value\" stops compiling.";
+
+  f "Crypto.hashPassword" [ "plaintext" ] ~m:"Tesl.Crypto"
+    ~doc:"Hashes a password for storage. libsodium crypto_pwhash_str — Argon2id, libsodium's INTERACTIVE parameters (currently m=64 MiB, t=2, p=1), read from the library at call time so a libsodium upgrade strengthens every new hash with no code change. Draws a random salt. Rejects input over 1024 bytes: an unbounded memory-hard hash on an unauthenticated endpoint is a denial-of-service amplifier.";
+  f "Crypto.checkPassword" [ "stored"; "candidate" ] ~m:"Tesl.Crypto"
+    ~doc:"Verifies a submitted password against a stored hash. libsodium crypto_pwhash_str_verify, constant-time. Takes Maybe deliberately: with Nothing it hashes against a dummy, so a missing user and a wrong password cost the same and the login endpoint does not leak which addresses are registered. Use with check: `let ok = check Crypto.checkPassword(user.passwordHash, body.password)`.";
+  f "Crypto.needsRehash" [ "stored" ] ~m:"Tesl.Crypto"
+    ~doc:"True when a stored hash was minted with weaker parameters than the current ones, or in a format this libsodium cannot parse. libsodium crypto_pwhash_str_needs_rehash. Re-mint on the next successful login — a hash is one-way, so that is the only moment the plaintext exists. Tesl deliberately does not write to the database for you.";
+
+  f "Crypto.signWith" [ "key"; "payload" ] ~m:"Tesl.Crypto"
+    ~aliases:["Crypto.hmacSha256"]
+    ~doc:"Produces a tag a client cannot forge or tamper with. libsodium crypto_auth_hmacsha256 (HMAC-SHA256). Deliberately not called `sign`: this is SYMMETRIC authentication — anyone who can verify can also forge. The bare name is reserved for asymmetric signing.";
+  f "Crypto.checkSignature" [ "key"; "sig"; "payload" ] ~m:"Tesl.Crypto"
+    ~doc:"Confirms a payload carries a valid tag for this key. Recomputes the HMAC and compares with libsodium sodium_memcmp (constant-time). Use with check; the failure is a 401. This is why there is no constantTimeEquals on the surface: the compare lives where it cannot be got wrong.";
+  f "Crypto.signatureHex" [ "sig" ] ~m:"Tesl.Crypto"
+    ~doc:"The transport form of a signature you produced, for putting in a header or a body. A tag is public data, so this is not an unwrap of a secret — but comparing two of these is a timing-unsafe MAC comparison, which is what the SEC004 diagnostic is for.";
+  f "Crypto.signatureFromHex" [ "hex" ] ~m:"Tesl.Crypto"
+    ~doc:"Parses an inbound hex signature — a webhook's X-Signature header (Stripe, GitHub) — so Crypto.checkSignature can verify it. Malformed input fails the verification cleanly; it never raises.";
+
+  f "Crypto.fingerprint" [ "content" ] ~m:"Tesl.Crypto"
+    ~aliases:["Crypto.sha256"]
+    ~doc:"A stable content digest for ETags, cache keys, dedup and idempotency keys. libsodium crypto_hash_sha256, hex-encoded. NOT for passwords — a fast digest of a password is exactly the mistake Crypto.hashPassword exists to prevent.";
+  f "Crypto.keyFingerprint" [ "key" ] ~m:"Tesl.Crypto"
+    ~doc:"A short, non-reversible identifier for a key, safe to log: \"did I load the right key?\". Domain-separated SHA-256, truncated to 16 hex characters. It is not proof of key possession.";
+  v "Crypto.randomToken" ~m:"Tesl.Crypto"
+    ~doc:"An unguessable token: 256 bits from the OS CSPRNG, base64url (43 URL-safe characters). No length parameter, on purpose. Store only its fingerprint, never the token — then a database leak cannot be replayed.";
+  f "Crypto.sha512" [ "content" ] ~m:"Tesl.Crypto"
+    ~doc:"SHA-512 of the content, hex-encoded (libsodium crypto_hash_sha512). An expert alias; prefer Crypto.fingerprint unless a foreign protocol demands SHA-512 specifically.";
+]
+
 (* ── Tesl.Cache (compiler-lowered forms; the Cache config block is generated) ─ *)
 
 let cache : entry list = [
@@ -718,6 +771,8 @@ let http_client : entry list = [
   f "HttpClient.post" [ "url"; "headers"; "body" ] ~m:"Tesl.HttpClient" ~doc:"Outbound POST with a string body.";
   f "HttpClient.put" [ "url"; "headers"; "body" ] ~m:"Tesl.HttpClient" ~doc:"Outbound PUT with a string body.";
   f "HttpClient.delete" [ "url"; "headers" ] ~m:"Tesl.HttpClient" ~doc:"Outbound DELETE.";
+  f "HttpClient.bearer" [ "secret" ] ~m:"Tesl.HttpClient" ~doc:"An `Authorization: Bearer <secret>` header pair, built from a Secret with no intermediate String. Drop it straight into any verb's header list; the plaintext is unwrapped inside the client, on its way to the socket.";
+  f "HttpClient.secretHeader" [ "name"; "secret" ] ~m:"Tesl.HttpClient" ~doc:"A (name, secret) header pair for any header that carries a credential (e.g. \"X-Api-Key\"). Same one-way guarantee as HttpClient.bearer: the value is never a String in Tesl code and renders as [redacted] everywhere.";
 ]
 
 (* ── Tesl.Agent ────────────────────────────────────────────────────────────── *)
@@ -805,5 +860,5 @@ let entries : entry list =
   ambient @ prelude @ email @ maybe_result @ time
   @ int32 @ db @ either @ string_ @ regex @ list_ @ list_prim @ int_ @ float_
   @ dict @ set_ @ tuple @ money @ random_uuid_id_env @ json_codecs
-  @ api_test @ jwt @ cache @ database @ http_client @ agent @ queue
+  @ api_test @ jwt @ crypto @ cache @ database @ http_client @ agent @ queue
   @ telemetry

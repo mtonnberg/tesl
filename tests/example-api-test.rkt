@@ -7,6 +7,9 @@
          racket/runtime-path
          racket/string
          "../example/bookmark-api.rkt"
+         (only-in "../tesl/jwt.rkt" JWT.sign JwtSecret jwt)
+         (only-in "../dsl/types.rkt" newtype-value? newtype-value-value)
+         (only-in "../dsl/private/evidence.rkt" raw-value)
          "../dsl/capability.rkt"
          "../dsl/sql.rkt"
          "../dsl/web.rkt"
@@ -128,13 +131,40 @@
          (cons "TESL_POSTGRES_PORT" (number->string (hash-ref cfg 'port)))
          (cons "TESL_POSTGRES_DATABASE" (hash-ref cfg 'database))
          (cons "TESL_POSTGRES_USER" (hash-ref cfg 'user))
-         (cons "TESL_POSTGRES_PASSWORD" ""))
+         (cons "TESL_POSTGRES_PASSWORD" "")
+         ;; The app reads its session signing key from here (see the auth block
+         ;; in example/todo-api.tesl). A test value is fine — what matters is
+         ;; that the harness signs with the SAME key the app verifies with.
+         (cons "SESSION_JWT_SECRET" "test-session-signing-key-not-a-real-secret"))
    (lambda ()
      (define todo-server (todo-module-value 'TodoServer))
      (define todo-database (todo-module-value 'TodoDatabase))
      (define seed-example-data! (todo-module-value 'seedExampleData))
     (define todo-db-read (module-private-value todo-api-module-path 'todoDbRead))
     (define todo-web-service (module-private-value todo-api-module-path 'todoWebService))
+
+     ;; example/todo-api.tesl no longer trusts a bare `user=<name>` cookie — that
+     ;; cookie is chosen by the client, so `Cookie: user=anna` impersonated anna.
+     ;; It now reads a SIGNED session token, so this harness has to mint one the
+     ;; same way a real login endpoint would: JWT.sign over {sub, exp} with the
+     ;; key the app reads from SESSION_JWT_SECRET.  Signing here (rather than
+     ;; hardcoding a token string) keeps the fixture valid when the token format
+     ;; or the expiry rule changes.
+     (define session-cookie
+       (let* ([secret (getenv "SESSION_JWT_SECRET")]
+              [exp (+ (inexact->exact (floor (current-inexact-milliseconds)))
+                      3600000)]
+              ;; `exp` must be NUMERIC: JWT.verify compares it against the
+              ;; clock. (JWT.sign's typed surface says `Dict String String`,
+              ;; which cannot express that — a real mismatch, recorded in the
+              ;; implementation log. A string here now yields a clean 401 rather
+              ;; than the 500 it used to.)
+              [token (with-capabilities (todo-web-service)
+                       (JWT.sign (hash "sub" "mikael" "exp" exp)
+                                 (JwtSecret secret)))])
+         (string-append "session="
+                        (let ([raw (raw-value token)])
+                          (if (newtype-value? raw) (newtype-value-value raw) raw)))))
 
      (call-with-database
       todo-database
@@ -154,7 +184,7 @@
           (dispatch-with-server todo-server (list todo-web-service)
                                 'POST
                                 '("todos")
-                                #:cookie "user=mikael"
+                                #:cookie session-cookie
                                 #:body (hash 'title "Ship automatic migrations")))
         (check-equal? (dsl-response-status todo-create-response) 200)
         (define todo-id (hash-ref (dsl-response-body todo-create-response) 'id))
@@ -162,18 +192,18 @@
         (check-equal? (hash-ref (hash-ref (dsl-response-body todo-create-response) 'status) 'tag) "Open")
 
         (define todo-list-response
-          (dispatch-with-server todo-server (list todo-web-service) 'GET '("todos" "mine") #:cookie "user=mikael"))
+          (dispatch-with-server todo-server (list todo-web-service) 'GET '("todos" "mine") #:cookie session-cookie))
         (check-equal? (dsl-response-status todo-list-response) 200)
         (check-equal? (length (dsl-response-body todo-list-response)) 2)
 
         (define todo-get-response
-          (dispatch-with-server todo-server (list todo-web-service) 'GET (list "todos" todo-id) #:cookie "user=mikael"))
+          (dispatch-with-server todo-server (list todo-web-service) 'GET (list "todos" todo-id) #:cookie session-cookie))
         (check-equal? (dsl-response-status todo-get-response) 200)
         (check-equal? (hash-ref (dsl-response-body todo-get-response) 'title) "Ship automatic migrations")
         (check-equal? (hash-ref (hash-ref (dsl-response-body todo-get-response) 'status) 'tag) "Open")
 
         (define todo-complete-response
-          (dispatch-with-server todo-server (list todo-web-service) 'PUT (list "todos" todo-id "complete") #:cookie "user=mikael"))
+          (dispatch-with-server todo-server (list todo-web-service) 'PUT (list "todos" todo-id "complete") #:cookie session-cookie))
         (check-equal? (dsl-response-status todo-complete-response) 200)
         (check-equal? (hash-ref (hash-ref (dsl-response-body todo-complete-response) 'status) 'tag) "Done"))))))
 

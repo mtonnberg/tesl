@@ -12,6 +12,11 @@ entrypoint = "app.tesl"
 # point at your own database.
 [env]
 PORT = "8086"
+# The HMAC key the `auth` in app.tesl verifies session tokens with. REPLACE THIS
+# before you deploy, keep the real value out of version control, and rotate it
+# here rather than in the source (a key written into a .tesl file is reported as
+# SEC003 — `tesl help SEC003`).
+SESSION_JWT_SECRET = "CHANGE-ME-dev-only"
 TESL_POSTGRES_DATABASE = "app"
 TESL_POSTGRES_HOST = "localhost"
 TESL_POSTGRES_PORT = "5432"

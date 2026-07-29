@@ -25,37 +25,37 @@
 (define/pow
   (divide [a : Integer] [b : Integer])
   #:returns (Result Integer String)
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 60 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (tesl-equal? *b 0) (raw-value (raw-value (Err "division by zero"))) (let/check ([tesl-checked-0 (tesl_import_Int_nonZero b)]) (let ([safeb tesl-checked-0]) (raw-value (raw-value (Ok (tesl_import_Int_divide *a safeb))))))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 62 (list (cons 'a *a) (cons 'b *b)) (lambda () (if (tesl-equal? *b 0) (raw-value (raw-value (Err "division by zero"))) (let/check ([tesl-checked-0 (tesl_import_Int_nonZero b)]) (let ([safeb tesl-checked-0]) (raw-value (raw-value (Ok (tesl_import_Int_divide *a safeb))))))))))
 
 (define/pow
   (safeDivideOrDefault [a : Integer] [b : Integer] [fallback : Integer])
   #:returns Integer
-  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 68 (list (cons 'a *a) (cons 'b *b) (cons 'fallback *fallback)) (lambda () (let ([tesl-case-1 (raw-value (divide a b))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 69 (list (cons 'n n)) (lambda () *n)))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Err)) (thsl-src! "example/learn/lesson46-result-type.tesl" 70 (list) (lambda () *fallback))])))))
+  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 70 (list (cons 'a *a) (cons 'b *b) (cons 'fallback *fallback)) (lambda () (let ([tesl-case-1 (raw-value (divide a b))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 71 (list (cons 'n n)) (lambda () *n)))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Err)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 72 (list) (lambda () *fallback))])))))
 
 (define/pow
   (okOrDefault [r : (Result Integer String)] [default : Integer])
   #:returns Integer
-  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 74 (list (cons 'r *r) (cons 'default *default)) (lambda () (let ([tesl-case-2 *r]) (cond [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl-case-2) 'value)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 75 (list (cons 'n n)) (lambda () *n)))] [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Err)) (thsl-src! "example/learn/lesson46-result-type.tesl" 76 (list) (lambda () *default))])))))
+  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 76 (list (cons 'r *r) (cons 'default *default)) (lambda () (let ([tesl-case-2 *r]) (cond [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl-case-2) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 77 (list (cons 'n n)) (lambda () *n)))] [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Err)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 78 (list) (lambda () *default))])))))
 
 (define/pow
   (isErr [r : (Result Integer String)])
   #:returns Boolean
-  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 80 (list (cons 'r *r)) (lambda () (let ([tesl-case-3 *r]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Ok)) (thsl-src! "example/learn/lesson46-result-type.tesl" 81 (list) (lambda () (raw-value #f)))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Err)) (thsl-src! "example/learn/lesson46-result-type.tesl" 82 (list) (lambda () (raw-value #t)))])))))
+  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 82 (list (cons 'r *r)) (lambda () (let ([tesl-case-3 *r]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Ok)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 83 (list) (lambda () (raw-value #f)))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Err)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 84 (list) (lambda () (raw-value #t)))])))))
 
 (define/pow
   (parseInt [raw : String])
   #:returns (Result Integer String)
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 88 (list (cons 'raw *raw)) (lambda () (if (tesl_import_String_isEmpty *raw) (raw-value (raw-value (Err "input is empty"))) (let ([tesl-case-4 (raw-value (tesl_import_String_toInt *raw))]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Nothing)) (thsl-src! "example/learn/lesson46-result-type.tesl" 92 (list) (lambda () (raw-value (raw-value (Err "not a valid integer")))))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 93 (list (cons 'n n)) (lambda () (raw-value (raw-value (Ok *n))))))]))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 90 (list (cons 'raw *raw)) (lambda () (if (tesl_import_String_isEmpty *raw) (raw-value (raw-value (Err "input is empty"))) (let ([tesl-case-4 (raw-value (tesl_import_String_toInt *raw))]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 94 (list) (lambda () (raw-value (raw-value (Err "not a valid integer")))))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 95 (list (cons 'n n)) (lambda () (raw-value (raw-value (Ok *n))))))]))))))
 
 (define/pow
   (validateAge [n : Integer])
   #:returns (Result Integer String)
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 99 (list (cons 'n *n)) (lambda () (if (< *n 0) (raw-value (raw-value (Err "age cannot be negative"))) (if (> *n 150) (raw-value (raw-value (Err "age seems unrealistically large"))) (raw-value (raw-value (Ok *n))))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 101 (list (cons 'n *n)) (lambda () (if (< *n 0) (raw-value (raw-value (Err "age cannot be negative"))) (if (> *n 150) (raw-value (raw-value (Err "age seems unrealistically large"))) (raw-value (raw-value (Ok *n))))))))
 
 (define/pow
   (processAge [raw : String])
   #:returns (Result Integer String)
-  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 110 (list (cons 'raw *raw)) (lambda () (let ([tesl-case-5 (raw-value (parseInt raw))]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Err)) (let ([e (hash-ref (adt-value-fields *tesl-case-5) 'error)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 111 (list (cons 'e e)) (lambda () (raw-value (raw-value (Err *e))))))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl-case-5) 'value)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 112 (list (cons 'n n)) (lambda () (raw-value (validateAge *n)))))])))))
+  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 112 (list (cons 'raw *raw)) (lambda () (let ([tesl-case-5 (raw-value (parseInt raw))]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Err)) (let ([e (hash-ref (adt-value-fields *tesl-case-5) 'error)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 113 (list (cons 'e e)) (lambda () (raw-value (raw-value (Err *e))))))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl-case-5) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 114 (list (cons 'n n)) (lambda () (raw-value (validateAge *n)))))])))))
 
 (define-adt UserError
   [NotFound [id : String]]
@@ -66,150 +66,150 @@
 (define/pow
   (fetchUser [userId : String] [requestingUser : String])
   #:returns (Result String UserError)
-  (thsl-src! "example/learn/lesson46-result-type.tesl" 123 (list (cons 'userId *userId) (cons 'requestingUser *requestingUser)) (lambda () (if (tesl_import_String_isEmpty *userId) (raw-value (raw-value (Err (InvalidInput "userId cannot be empty")))) (if (and (tesl-equal? *userId "admin") (not (tesl-equal? *requestingUser "admin"))) (raw-value (raw-value (Err (Forbidden requestingUser)))) (if (tesl-equal? *userId "ghost") (raw-value (raw-value (Err (NotFound userId)))) (raw-value (raw-value (Ok *userId)))))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 125 (list (cons 'userId *userId) (cons 'requestingUser *requestingUser)) (lambda () (if (tesl_import_String_isEmpty *userId) (raw-value (raw-value (Err (InvalidInput "userId cannot be empty")))) (if (and (tesl-equal? *userId "admin") (not (tesl-equal? *requestingUser "admin"))) (raw-value (raw-value (Err (Forbidden requestingUser)))) (if (tesl-equal? *userId "ghost") (raw-value (raw-value (Err (NotFound userId)))) (raw-value (raw-value (Ok *userId)))))))))
 
 (define/pow
   (describeError [err : UserError])
   #:returns String
-  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 135 (list (cons 'err *err)) (lambda () (let ([tesl-case-6 *err]) (cond [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'NotFound)) (let ([id (hash-ref (adt-value-fields *tesl-case-6) 'id)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 136 (list (cons 'id id)) (lambda () (raw-value (format "no user with id ~a" (tesl-display-val *id))))))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Forbidden)) (let ([user (hash-ref (adt-value-fields *tesl-case-6) 'user)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 137 (list (cons 'user user)) (lambda () (raw-value (format "user ~a is not allowed to do this" (tesl-display-val *user))))))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'InvalidInput)) (let ([msg (hash-ref (adt-value-fields *tesl-case-6) 'message)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 138 (list (cons 'msg msg)) (lambda () (raw-value (format "bad input: ~a" (tesl-display-val *msg))))))])))))
+  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 137 (list (cons 'err *err)) (lambda () (let ([tesl-case-6 *err]) (cond [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'NotFound)) (let ([id (hash-ref (adt-value-fields *tesl-case-6) 'id)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 138 (list (cons 'id id)) (lambda () (raw-value (format "no user with id ~a" (tesl-display-val *id))))))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Forbidden)) (let ([user (hash-ref (adt-value-fields *tesl-case-6) 'user)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 139 (list (cons 'user user)) (lambda () (raw-value (format "user ~a is not allowed to do this" (tesl-display-val *user))))))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'InvalidInput)) (let ([msg (hash-ref (adt-value-fields *tesl-case-6) 'message)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 140 (list (cons 'msg msg)) (lambda () (raw-value (format "bad input: ~a" (tesl-display-val *msg))))))])))))
 
 (define/pow
   (runPipeline [rawAge : String] [rawId : String])
   #:returns (Result String String)
-  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 145 (list (cons 'rawAge *rawAge) (cons 'rawId *rawId)) (lambda () (let ([tesl-case-7 (raw-value (processAge rawAge))]) (cond [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Err)) (let ([e (hash-ref (adt-value-fields *tesl-case-7) 'error)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 146 (list (cons 'e e)) (lambda () (raw-value (raw-value (Err *e))))))] [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Ok)) (let ([age (hash-ref (adt-value-fields *tesl-case-7) 'value)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 148 (list (cons 'age age)) (lambda () (if (< *age 18) (raw-value (raw-value (Err "must be 18 or older"))) (if (tesl_import_String_isEmpty *rawId) (raw-value (raw-value (Err "id is required"))) (raw-value (raw-value (Ok (format "user ~a (age ~a) is valid" (tesl-display-val *rawId) (tesl-display-val (raw-value (tesl_import_Int_toString *age))))))))))))])))))
+  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 147 (list (cons 'rawAge *rawAge) (cons 'rawId *rawId)) (lambda () (let ([tesl-case-7 (raw-value (processAge rawAge))]) (cond [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Err)) (let ([e (hash-ref (adt-value-fields *tesl-case-7) 'error)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 148 (list (cons 'e e)) (lambda () (raw-value (raw-value (Err *e))))))] [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Ok)) (let ([age (hash-ref (adt-value-fields *tesl-case-7) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 150 (list (cons 'age age)) (lambda () (if (< *age 18) (raw-value (raw-value (Err "must be 18 or older"))) (if (tesl_import_String_isEmpty *rawId) (raw-value (raw-value (Err "id is required"))) (raw-value (raw-value (Ok (format "user ~a (age ~a) is valid" (tesl-display-val *rawId) (tesl-display-val (raw-value (tesl_import_Int_toString *age))))))))))))])))))
 
 (define/pow
   (okIntOrDefault [r : (Result Integer String)] [d : Integer])
   #:returns Integer
-  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 160 (list (cons 'r *r) (cons 'd *d)) (lambda () (let ([tesl-case-8 *r]) (cond [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl-case-8) 'value)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 161 (list (cons 'n n)) (lambda () *n)))] [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Err)) (thsl-src! "example/learn/lesson46-result-type.tesl" 162 (list) (lambda () *d))])))))
+  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 162 (list (cons 'r *r) (cons 'd *d)) (lambda () (let ([tesl-case-8 *r]) (cond [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Ok)) (let ([n (hash-ref (adt-value-fields *tesl-case-8) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 163 (list (cons 'n n)) (lambda () *n)))] [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Err)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 164 (list) (lambda () *d))])))))
 
 (define/pow
   (errMsgOrEmpty [r : (Result Integer String)])
   #:returns String
-  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 165 (list (cons 'r *r)) (lambda () (let ([tesl-case-9 *r]) (cond [(and (adt-value? *tesl-case-9) (eq? (adt-value-variant *tesl-case-9) 'Ok)) (thsl-src! "example/learn/lesson46-result-type.tesl" 166 (list) (lambda () (raw-value "")))] [(and (adt-value? *tesl-case-9) (eq? (adt-value-variant *tesl-case-9) 'Err)) (let ([e (hash-ref (adt-value-fields *tesl-case-9) 'error)]) (thsl-src! "example/learn/lesson46-result-type.tesl" 167 (list (cons 'e e)) (lambda () *e)))])))))
+  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 167 (list (cons 'r *r)) (lambda () (let ([tesl-case-9 *r]) (cond [(and (adt-value? *tesl-case-9) (eq? (adt-value-variant *tesl-case-9) 'Ok)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 168 (list) (lambda () (raw-value "")))] [(and (adt-value? *tesl-case-9) (eq? (adt-value-variant *tesl-case-9) 'Err)) (let ([e (hash-ref (adt-value-fields *tesl-case-9) 'error)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 169 (list (cons 'e e)) (lambda () *e)))])))))
 
 (define/pow
   (isOkResult [r : (Result Integer String)])
   #:returns Boolean
-  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 170 (list (cons 'r *r)) (lambda () (let ([tesl-case-10 *r]) (cond [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Ok)) (thsl-src! "example/learn/lesson46-result-type.tesl" 171 (list) (lambda () (raw-value #t)))] [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Err)) (thsl-src! "example/learn/lesson46-result-type.tesl" 172 (list) (lambda () (raw-value #f)))])))))
+  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 172 (list (cons 'r *r)) (lambda () (let ([tesl-case-10 *r]) (cond [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Ok)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 173 (list) (lambda () (raw-value #t)))] [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Err)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 174 (list) (lambda () (raw-value #f)))])))))
 
 (define/pow
   (isErrUserResult [r : (Result String UserError)])
   #:returns Boolean
-  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 175 (list (cons 'r *r)) (lambda () (let ([tesl-case-11 *r]) (cond [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Ok)) (thsl-src! "example/learn/lesson46-result-type.tesl" 176 (list) (lambda () (raw-value #f)))] [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Err)) (thsl-src! "example/learn/lesson46-result-type.tesl" 177 (list) (lambda () (raw-value #t)))])))))
+  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 177 (list (cons 'r *r)) (lambda () (let ([tesl-case-11 *r]) (cond [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Ok)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 178 (list) (lambda () (raw-value #f)))] [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Err)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 179 (list) (lambda () (raw-value #t)))])))))
 
 (define/pow
   (isErrStrResult [r : (Result String String)])
   #:returns Boolean
-  (thsl-src-control! "example/learn/lesson46-result-type.tesl" 180 (list (cons 'r *r)) (lambda () (let ([tesl-case-12 *r]) (cond [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Ok)) (thsl-src! "example/learn/lesson46-result-type.tesl" 181 (list) (lambda () (raw-value #f)))] [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Err)) (thsl-src! "example/learn/lesson46-result-type.tesl" 182 (list) (lambda () (raw-value #t)))])))))
+  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 182 (list (cons 'r *r)) (lambda () (let ([tesl-case-12 *r]) (cond [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Ok)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 183 (list) (lambda () (raw-value #f)))] [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Err)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 184 (list) (lambda () (raw-value #t)))])))))
 
 (module+ test
   (require rackunit)
   (test-case "Ok carries the success value"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 185 (list) (lambda () (okIntOrDefault (divide 10 2) 0)))) 5)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 187 (list) (lambda () (okIntOrDefault (divide 10 2) 0)))) 5)
     ))
   )
 
   (test-case "Err carries the failure description"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 189 (list) (lambda () (errMsgOrEmpty (divide 10 0))))) "division by zero")
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 191 (list) (lambda () (errMsgOrEmpty (divide 10 0))))) "division by zero")
     ))
   )
 
   (test-case "divide 10 by 2 is Ok"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 193 (list) (lambda () (isOkResult (divide 10 2))))) #t)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 195 (list) (lambda () (isOkResult (divide 10 2))))) #t)
     ))
   )
 
   (test-case "divide by zero is Err"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 197 (list) (lambda () (isErr (divide 10 0))))) #t)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 199 (list) (lambda () (isErr (divide 10 0))))) #t)
     ))
   )
 
   (test-case "parseInt succeeds on a valid number"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 201 (list) (lambda () (okIntOrDefault (parseInt "42") 0)))) 42)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 203 (list) (lambda () (okIntOrDefault (parseInt "42") 0)))) 42)
     ))
   )
 
   (test-case "parseInt fails on empty string"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 205 (list) (lambda () (errMsgOrEmpty (parseInt ""))))) "input is empty")
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 207 (list) (lambda () (errMsgOrEmpty (parseInt ""))))) "input is empty")
     ))
   )
 
   (test-case "parseInt fails on non-numeric input"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 209 (list) (lambda () (isErr (parseInt "hello"))))) #t)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 211 (list) (lambda () (isErr (parseInt "hello"))))) #t)
     ))
   )
 
   (test-case "validateAge rejects negatives"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 213 (list) (lambda () (isErr (validateAge -1))))) #t)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 215 (list) (lambda () (isErr (validateAge -1))))) #t)
     ))
   )
 
   (test-case "validateAge rejects unrealistic values"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 217 (list) (lambda () (isErr (validateAge 200))))) #t)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 219 (list) (lambda () (isErr (validateAge 200))))) #t)
     ))
   )
 
   (test-case "validateAge accepts a normal value"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 221 (list) (lambda () (okIntOrDefault (validateAge 30) 0)))) 30)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 223 (list) (lambda () (okIntOrDefault (validateAge 30) 0)))) 30)
     ))
   )
 
   (test-case "processAge chains parse then validate"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 225 (list) (lambda () (okIntOrDefault (processAge "25") 0)))) 25)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 226 (list) (lambda () (isErr (processAge "abc"))))) #t)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 227 (list) (lambda () (isErr (processAge "-5"))))) #t)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 227 (list) (lambda () (okIntOrDefault (processAge "25") 0)))) 25)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 228 (list) (lambda () (isErr (processAge "abc"))))) #t)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 229 (list) (lambda () (isErr (processAge "-5"))))) #t)
     ))
   )
 
   (test-case "fetchUser ok returns the userId"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r (thsl-src! "example/learn/lesson46-result-type.tesl" 231 (list) (lambda () (fetchUser "bob" "alice"))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 232 (list (cons 'r r)) (lambda () (isErrUserResult r)))) #f)
+  (define r (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 233 (list) (lambda () (fetchUser "bob" "alice"))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 234 (list (cons 'r r)) (lambda () (isErrUserResult r)))) #f)
     ))
   )
 
   (test-case "fetchUser empty userId is Err"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r (thsl-src! "example/learn/lesson46-result-type.tesl" 236 (list) (lambda () (fetchUser "" "alice"))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 237 (list (cons 'r r)) (lambda () (isErrUserResult r)))) #t)
+  (define r (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 238 (list) (lambda () (fetchUser "" "alice"))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 239 (list (cons 'r r)) (lambda () (isErrUserResult r)))) #t)
     ))
   )
 
   (test-case "fetchUser ghost is Err (not found)"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r (thsl-src! "example/learn/lesson46-result-type.tesl" 241 (list) (lambda () (fetchUser "ghost" "alice"))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 242 (list (cons 'r r)) (lambda () (isErrUserResult r)))) #t)
+  (define r (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 243 (list) (lambda () (fetchUser "ghost" "alice"))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 244 (list (cons 'r r)) (lambda () (isErrUserResult r)))) #t)
     ))
   )
 
   (test-case "safeDivideOrDefault uses fallback on error"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 246 (list) (lambda () (safeDivideOrDefault 10 0 99)))) 99)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 247 (list) (lambda () (safeDivideOrDefault 10 2 99)))) 5)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 248 (list) (lambda () (safeDivideOrDefault 10 0 99)))) 99)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 249 (list) (lambda () (safeDivideOrDefault 10 2 99)))) 5)
     ))
   )
 
   (test-case "runPipeline end-to-end success"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 251 (list) (lambda () (isErrStrResult (runPipeline "25" "alice"))))) #f)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 253 (list) (lambda () (isErrStrResult (runPipeline "25" "alice"))))) #f)
     ))
   )
 
   (test-case "runPipeline fails on underage"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson46-result-type.tesl" 255 (list) (lambda () (isErrStrResult (runPipeline "15" "alice"))))) #t)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson46-result-type.tesl" 257 (list) (lambda () (isErrStrResult (runPipeline "15" "alice"))))) #t)
     ))
   )
 

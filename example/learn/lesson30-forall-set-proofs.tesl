@@ -1,5 +1,7 @@
 module Lesson30ForallSetProofs exposing [run, doublePositive, mapAndCount]
 
+# lesson: track=proofs order=590 needs=lesson29-forall-list-proofs
+# summary: The same ForAll guarantee for sets, and the two ways to produce one
 # ─────────────────────────────────────────────
 # ForAll on sets — same semantics as List ForAll
 # ─────────────────────────────────────────────

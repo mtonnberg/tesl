@@ -27,7 +27,12 @@
 (require json
          racket/runtime-path
          (only-in ffi/unsafe/atomic call-as-atomic)
-         (only-in "private/domain-registry.rkt" register-background-thread!))
+         (only-in "private/domain-registry.rkt" register-background-thread!)
+         ;; `secret` redaction only.  dsl/types.rkt requires nothing but
+         ;; dsl/private/*, so this keeps the "requires nothing of ours that could
+         ;; cycle back" property stated above.
+         (only-in "types.rkt"
+                  secret-value? secret-header-value? secret-redaction-text))
 
 (provide metrics-active?
          set-metrics-enabled!
@@ -214,10 +219,17 @@
 (define (ms->nano-string ms)
   (number->string (inexact->exact (round (* ms 1000000.0)))))
 
+;; Metric attribute values are raw pass-throughs into `stringValue`, so this is
+;; a rendering sink of its own and needs its own redaction check — a secret used
+;; as a metric dimension would otherwise be exported verbatim.
 (define (attrs->otlp-key-values attrs)
   (for/list ([entry (in-list attrs)])
+    (define v (cdr entry))
     (hash 'key (car entry)
-          'value (hash 'stringValue (cdr entry)))))
+          'value (hash 'stringValue
+                       (if (or (secret-value? v) (secret-header-value? v))
+                           secret-redaction-text
+                           v)))))
 
 (define (number->otlp-point-value v)
   ;; asInt for exact integers (as a string, int64 rule), asDouble otherwise.

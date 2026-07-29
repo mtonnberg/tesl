@@ -7,6 +7,8 @@ module Lesson05IntroToProofs exposing [
   requiresPositive,
 ]
 
+# lesson: track=proofs order=50 needs=none
+# summary: A check function stamps a value as validated, and the stamp travels with it through the type system
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

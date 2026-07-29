@@ -144,7 +144,7 @@ let issue40_entity_plain_hash () =
     let out = emit_ok "main (issue40)" main_p in
     if contains "(Thing (hash" out then
       failf "imported entity literal applied the entity-spec as a procedure (#40):\n%s" out;
-    if not (contains {|(hash 'id "a")|} out) then
+    if not (contains {|(tesl-hash 'id "a")|} out) then
       failf "imported entity literal must emit a plain field hash (#40):\n%s" out)
 
 (* REVIEW2 item 15 (2026-07-09): the #40 record/entity harvest skipped
@@ -186,7 +186,7 @@ let issue40_importall_record_keyword_ctor () =
     (* entity twin: plain field hash, not spec-as-procedure *)
     if contains "(Thing (hash" out then
       failf "ImportAll entity literal applied the entity-spec as a procedure:\n%s" out;
-    if not (contains {|(hash 'id "a")|} out) then
+    if not (contains {|(tesl-hash 'id "a")|} out) then
       failf "ImportAll entity literal must emit a plain field hash:\n%s" out)
 
 (* ── #41: enqueue in a module, queue declared in the entrypoint ──────────── *)
@@ -303,7 +303,7 @@ fn mk() -> Wrapped =
     let out = emit_ok "main (hijack)" main_p in
     if not (contains "(Thing 3)" out) then
       failf "local ADT ctor Thing must keep positional ADT emission (#40 review):\n%s" out;
-    if contains {|(hash 'n 3)|} out then
+    if contains {|(tesl-hash 'n 3)|} out then
       failf "local ADT ctor construction hijacked by imported entity harvest (#40 review):\n%s" out)
 
 (* A PRIVATE (unexposed, unimported) decl of an imported module must not be
@@ -357,7 +357,7 @@ test "entity property" with 5 runs {
     let out = emit_ok "main (property entity)" main_p in
     if contains "(Thing #:id" out then
       failf "property generator keyword-called an entity-spec (#40 review):\n%s" out;
-    if not (contains "(hash 'id" out) then
+    if not (contains "(tesl-hash 'id" out) then
       failf "property generator must build entity rows as plain hashes (#40 review):\n%s" out)
 
 (* EmailBody is the same #42 class: it appears verbatim in emitted type

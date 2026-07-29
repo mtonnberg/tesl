@@ -12,6 +12,8 @@ module Lesson72Units exposing [
   approxEqual,
 ]
 
+# lesson: track=stdlib order=770 needs=none
+# summary: Give physical quantities compile-time dimensions, checked when you multiply and erased at runtime
 # ─────────────────────────────────────────────
 # QUICK START — units: compile-time dimensions, runtime Floats
 # ─────────────────────────────────────────────

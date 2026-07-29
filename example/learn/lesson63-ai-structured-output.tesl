@@ -19,6 +19,8 @@ import Tesl.Agent exposing [
 ]
 import Tesl.Env exposing [requireEnv]
 
+# lesson: track=ai order=440 needs=lesson62-ai-agents
+# summary: Turn a model reply into a typed value with askFor, and give each user their own provider credentials
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 63 — Structured output, and bring-your-own-key (BYOK)
 #

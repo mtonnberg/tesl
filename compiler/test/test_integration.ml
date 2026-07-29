@@ -873,7 +873,7 @@ entity Product table "products" primaryKey id {
 fn createProduct(id: String, category: String, price: Int) -> Product =
   insert Product { id: id, category: category, inStock: true, price: price }
 |} in
-  check_contains "sql insert lowering" src "(insert-one! Product (hash 'id id 'category category 'inStock #t 'price price))"
+  check_contains "sql insert lowering" src "(insert-one! Product (tesl-hash 'id id 'category category 'inStock #t 'price price))"
 
 let test_sql_update_lowering () =
   let src = {|module Foo exposing [setPrice]
@@ -889,7 +889,7 @@ fn setPrice(id: String, newPrice: Int) -> Product ? FromDb (Id == id)
     set p.price = newPrice
     returning one
 |} in
-  check_contains "sql update lowering" src "(car (update-many! (from Product) (hash (entity-field-ref Product 'price) newPrice) (where (==. (entity-field-ref Product 'id) id))))"
+  check_contains "sql update lowering" src "(car (update-many! (from Product) (tesl-hash (entity-field-ref Product 'price) newPrice) (where (==. (entity-field-ref Product 'id) id))))"
 
 let test_sql_delete_lowering () =
   let src = {|module Foo exposing [removeProduct]

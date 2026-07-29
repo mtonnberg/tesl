@@ -674,6 +674,14 @@
 
 ;; The complete, copy-worthy text for a value: safe-display's full rendering,
 ;; falling back to the display string if that raises.
+;;
+;; Exported (this module has no other provides — it is a script) so
+;; tests/secret-runtime-tests.rkt can assert directly that the Copy Value /
+;; hover / watch path redacts a `secret`.  It is the most dangerous rendering
+;; sink in the debugger precisely because it deliberately bypasses truncation to
+;; build complete text; "it calls safe-display, so it must be fine" is the kind
+;; of reasoning that should be a test rather than a comment.
+(provide full-text-of)
 (define (full-text-of raw display-str)
   (with-handlers ([(lambda (_) #t) (lambda (_) display-str)])
     (safe-display raw)))

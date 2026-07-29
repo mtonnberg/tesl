@@ -16,6 +16,8 @@ module Lesson02AdtsAndPatternMatching exposing [
   responseBody,
 ]
 
+# lesson: track=basics order=30 needs=none
+# summary: Model a value as one of several variants and take it apart with an exhaustive case
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

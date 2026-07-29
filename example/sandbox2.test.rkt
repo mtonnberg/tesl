@@ -26,17 +26,17 @@
 (define/pow
   (double [n : Integer])
   #:returns Integer
-  (thsl-src! "example/sandbox2.test.tesl" 15 (list (cons 'n *n)) (lambda () (+ *n *n))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 15 (list (cons 'n *n)) (lambda () (+ *n *n))))
 
 (define/pow
   (add [x : Integer] [y : Integer])
   #:returns Integer
-  (thsl-src! "example/sandbox2.test.tesl" 23 (list (cons 'x *x) (cons 'y *y)) (lambda () (+ *x *y))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 23 (list (cons 'x *x) (cons 'y *y)) (lambda () (+ *x *y))))
 
 (define-checker
   (isLargerThan [x : Integer] [y : Integer])
   #:returns [x : Integer ::: (IsLargerThan x y)]
-  (thsl-src! "example/sandbox2.test.tesl" 28 (list (cons 'x *x) (cons 'y *y)) (lambda () (if (> *x *y) (accept (IsLargerThan x y) #:value *x) (reject "x must be larger than y" #:http-code 400)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 28 (list (cons 'x *x) (cons 'y *y)) (lambda () (if (> *x *y) (accept (IsLargerThan x y) #:value *x) (reject "x must be larger than y" #:http-code 400)))))
 
 (define-record AnIntRecord
   [someProp : Integer]
@@ -55,49 +55,49 @@
 (define/pow
   (genSmallPositive [seed : Integer])
   #:returns Integer
-  (thsl-src! "example/sandbox2.test.tesl" 121 (list (cons 'seed *seed)) (lambda () (+ 1 (remainder *seed 100)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 121 (list (cons 'seed *seed)) (lambda () (+ 1 (remainder *seed 100)))))
 
 (module+ test
   (require rackunit)
   (test-case "double basics"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 36 (list) (lambda () (double 0)))) 0)
-  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 37 (list) (lambda () (double 5)))) 10)
-  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 38 (list) (lambda () (double -3)))) -6)
-  (check-not-equal? (thsl-src! "example/sandbox2.test.tesl" 39 (list) (lambda () (double 1))) 0)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 36 (list) (lambda () (double 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 37 (list) (lambda () (double 5)))) 10)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 38 (list) (lambda () (double -3)))) -6)
+  (check-not-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 39 (list) (lambda () (double 1))) 0)
     ))
   )
 
   (test-case "add basics"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 43 (list) (lambda () (add 3 7)))) 10)
-  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 44 (list) (lambda () (add 0 0)))) 0)
-  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 45 (list) (lambda () (add -1 1)))) 0)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 43 (list) (lambda () (add 3 7)))) 10)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 44 (list) (lambda () (add 0 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 45 (list) (lambda () (add -1 1)))) 0)
     ))
   )
 
   (test-case "String.length"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 49 (list) (lambda () (tesl_import_String_length "hello")))) 5)
-  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 50 (list) (lambda () (tesl_import_String_length "")))) 0)
-  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 51 (list) (lambda () (tesl_import_String_length "a")))) 1)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 49 (list) (lambda () (tesl_import_String_length "hello")))) 5)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 50 (list) (lambda () (tesl_import_String_length "")))) 0)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 51 (list) (lambda () (tesl_import_String_length "a")))) 1)
     ))
   )
 
   (test-case "String.startsWith"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-true (raw-value (thsl-src! "example/sandbox2.test.tesl" 55 (list) (lambda () (tesl_import_String_startsWith "hello" "hel")))))
-  (check-true (raw-value (thsl-src! "example/sandbox2.test.tesl" 56 (list) (lambda () (tesl_import_String_startsWith "hello" "")))))
+  (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 55 (list) (lambda () (tesl_import_String_startsWith "hello" "hel")))))
+  (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 56 (list) (lambda () (tesl_import_String_startsWith "hello" "")))))
     ))
   )
 
   (test-case "comparisons"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-true (thsl-src! "example/sandbox2.test.tesl" 60 (list) (lambda () (> 5 3))))
-  (check-true (thsl-src! "example/sandbox2.test.tesl" 61 (list) (lambda () (< 3 5))))
-  (check-true (thsl-src! "example/sandbox2.test.tesl" 62 (list) (lambda () (>= 5 5))))
-  (check-true (thsl-src! "example/sandbox2.test.tesl" 63 (list) (lambda () (<= 5 5))))
-  (check-not-equal? (thsl-src! "example/sandbox2.test.tesl" 64 (list) (lambda () 5)) 3)
+  (check-true (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 60 (list) (lambda () (> 5 3))))
+  (check-true (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 61 (list) (lambda () (< 3 5))))
+  (check-true (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 62 (list) (lambda () (>= 5 5))))
+  (check-true (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 63 (list) (lambda () (<= 5 5))))
+  (check-not-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 64 (list) (lambda () 5)) 3)
     ))
   )
 
@@ -215,16 +215,16 @@
 
   (test-case "doctest: double"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 1 (list) (lambda () (double 5)))) 10)
-  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 1 (list) (lambda () (double 0)))) 0)
-  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 1 (list) (lambda () (double -3)))) -6)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 1 (list) (lambda () (double 5)))) 10)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 1 (list) (lambda () (double 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 1 (list) (lambda () (double -3)))) -6)
     ))
   )
 
   (test-case "doctest: add"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 1 (list) (lambda () (add 3 7)))) 10)
-  (check-equal? (raw-value (thsl-src! "example/sandbox2.test.tesl" 1 (list) (lambda () (add 0 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 1 (list) (lambda () (add 3 7)))) 10)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/sandbox2.test.tesl" 1 (list) (lambda () (add 0 0)))) 0)
     ))
   )
 

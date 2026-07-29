@@ -13,6 +13,13 @@
                   set-metrics-enabled! reset-metrics!
                   start-metrics-exporter! stop-metrics-exporter!
                   metrics-active? metric-counter-add!)
+         ;; `secret` redaction.  dsl/types.rkt sits BELOW this module (it requires
+         ;; only dsl/private/*), so this edge introduces no cycle either.
+         ;; Telemetry is a RENDERING sink: a secret must never reach a collector.
+         (only-in "types.rkt"
+                  secret-value? secret-header-value? secret-redaction-text
+                  current-redact-secrets? runtime-value->jsexpr
+                  record-value? adt-value? newtype-value?)
          (for-syntax racket/base syntax/parse))
 
 (provide
@@ -28,6 +35,10 @@
  merge-otlp-headers
  telemetry-events->otlp-logs-jsexpr
  telemetry-value->otlp-any-value
+ ;; The console/consumer attribute serializer, exported so the `secret`
+ ;; structural-redaction suite can measure it directly (a secret must redact at
+ ;; every node of this walk while its siblings render normally).
+ telemetry-value->jsexpr
  init-opentelemetry!
  call-with-telemetry-context
  telemetry-event!
@@ -53,6 +64,13 @@
 
 (define (telemetry-value->jsexpr value)
   (cond
+    ;; ── Redaction, FIRST ──────────────────────────────────────────────────
+    ;; Telemetry is a rendering sink, and this walk is structural (hash / list /
+    ;; vector recurse through this same function), so asking the question here —
+    ;; at every node — is what makes a secret nested in a record inside a List
+    ;; inside a Maybe redact while its siblings render normally.
+    [(secret-value? value) secret-redaction-text]
+    [(secret-header-value? value) secret-redaction-text]
     [(hash? value)
      (for/hash ([(key item) (in-hash value)])
        (values (telemetry-key->json-key key)
@@ -67,6 +85,15 @@
      (keyword->string value)]
     [(bytes? value)
      (bytes->string/utf-8 value)]
+    ;; Tesl VALUE STRUCTS (record / ADT / newtype, and everything reachable from
+    ;; them) had no arm here and fell through `[else value]`, so a record-valued
+    ;; telemetry attribute produced a raw struct — not a jsexpr at all.  Delegate
+    ;; to the ONE total structural walk, with redaction switched ON for this
+    ;; sink; the parameterize covers every node it reaches, including the
+    ;; siblings of a redacted secret, which still render normally.
+    [(or (record-value? value) (adt-value? value) (newtype-value? value))
+     (parameterize ([current-redact-secrets? #t])
+       (runtime-value->jsexpr value))]
     [else value]))
 
 (define (telemetry-event->jsexpr event)
@@ -122,6 +149,11 @@
 ;; because in Racket booleans are not numbers, but we make the ordering explicit.
 (define (telemetry-value->otlp-any-value value)
   (cond
+    ;; Its OWN guard, not just the shared coercion's: the string?/boolean?/
+    ;; integer? arms below short-circuit before delegating, so a redaction check
+    ;; that lived only in telemetry-value->jsexpr would be bypassed here.
+    [(or (secret-value? value) (secret-header-value? value))
+     (hash 'stringValue secret-redaction-text)]
     [(boolean? value) (hash 'boolValue value)]
     [(exact-integer? value) (hash 'intValue (number->string value))]
     [(and (real? value) (rational? value)) (hash 'doubleValue (exact->inexact value))]

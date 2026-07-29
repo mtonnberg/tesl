@@ -1,5 +1,7 @@
 module Lesson17Telemetry exposing [processRequest, processRequestWithSpan]
 
+# lesson: track=stdlib order=380 needs=none
+# summary: Emit an OpenTelemetry span from any function body with a telemetry block, no capability required
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

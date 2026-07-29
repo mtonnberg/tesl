@@ -40,8 +40,14 @@
 ;; JwtToken wraps a String — the dot-separated JWT string "header.payload.sig"
 (define-newtype JwtToken String)
 
-;; JwtSecret wraps a String — the HMAC-SHA256 signing key
-(define-newtype JwtSecret String)
+;; JwtSecret wraps a String — the HMAC-SHA256 signing key.
+;; `define-secret-newtype` is `define-newtype` plus a registration in
+;; `dsl/types.rkt`'s secret-type registry, so every rendering sink (telemetry,
+;; the three debugger surfaces, structured logging) substitutes
+;; `secret-redaction-text` instead of printing the key.  It is additive at
+;; runtime — identical representation, identical SQL round-trip, `.value` still
+;; works — so no emitted code changes.
+(define-secret-newtype JwtSecret String)
 
 ;; ── HMAC-SHA256 via FFI (OpenSSL libcrypto) ──────────────────────────────────
 
@@ -172,41 +178,73 @@
                                     (newtype-value-value secret)
                                     secret)))
   (define parts (string-split token-str "."))
-  (unless (= (length parts) 3)
-    (raise-user-error 'JWT.verify
-                      "invalid JWT format: expected 3 dot-separated parts, got ~a"
-                      (length parts)))
-  (define header-b64  (list-ref parts 0))
-  (define payload-b64 (list-ref parts 1))
-  (define sig-b64     (list-ref parts 2))
-  ;; Re-derive signature
-  (define signing-input (string-append header-b64 "." payload-b64))
-  (define secret-bytes (string->bytes/utf-8 secret-str))
-  (define expected-sig (compute-signature secret-bytes signing-input))
-  (define actual-sig   (base64url-decode sig-b64))
-  ;; Constant-time comparison (byte-by-byte, always process all bytes).
-  ;; XOR every pair of bytes and OR them together; 0 means equal.
-  (define sig-ok?
-    (and (= (bytes-length expected-sig) (bytes-length actual-sig))
-         (= 0 (for/fold ([acc 0]) ([eb (in-bytes expected-sig)]
-                                   [ab (in-bytes actual-sig)])
-                (bitwise-ior acc (bitwise-xor eb ab))))))
-  (if (not sig-ok?)
-      (check-fail "Invalid JWT signature" 401 '())
-      ;; Decode payload
-      (let ([payload-bytes (base64url-decode payload-b64)])
-        (define claims
-          (with-handlers ([exn:fail? (lambda (_)
-                                       #f)])
-            (string->jsexpr (bytes->string/utf-8 payload-bytes))))
-        (if (not claims)
-            (check-fail "Malformed JWT payload" 401 '())
-            ;; Check expiry if present (exp is in milliseconds since epoch)
-            (if (and (hash? claims) (hash-has-key? claims 'exp)
-                     (< (hash-ref claims 'exp)
-                        (inexact->exact (floor (current-inexact-milliseconds)))))
-                (check-fail "JWT token has expired" 401 '())
-                (jwt-claims->string-keyed claims))))))
+  ;; A STRUCTURALLY malformed token is a 401, not a raise.  The token comes off
+  ;; the wire, so `Cookie: session=garbage` used to escape as an uncaught
+  ;; `raise-user-error` — a client-triggerable 500 on every JWT-authenticated
+  ;; endpoint, and an oracle that distinguishes "not a token" from "wrong
+  ;; signature".  Every other rejection here is already `check-fail … 401`; this
+  ;; one now agrees with them, and with `Crypto.signatureFromHex`, which parses
+  ;; an inbound tag without ever raising, for the same reason.
+  (if (not (= (length parts) 3))
+      (check-fail "Invalid JWT format" 401 '())
+      (let* ([header-b64  (list-ref parts 0)]
+             [payload-b64 (list-ref parts 1)]
+             [sig-b64     (list-ref parts 2)]
+             ;; Re-derive signature
+             [signing-input (string-append header-b64 "." payload-b64)]
+             [secret-bytes (string->bytes/utf-8 secret-str)]
+             [expected-sig (compute-signature secret-bytes signing-input)]
+             ;; Likewise for a signature segment that is not valid base64url:
+             ;; fall through to the constant-time compare with an empty tag,
+             ;; which fails, rather than raising out of the handler.
+             [actual-sig
+              (with-handlers ([exn:fail? (lambda (_) #"")])
+                (base64url-decode sig-b64))]
+             ;; Constant-time comparison (byte-by-byte, always process all
+             ;; bytes).  XOR every pair of bytes and OR them together; 0 means
+             ;; equal.
+             [sig-ok?
+              (and (= (bytes-length expected-sig) (bytes-length actual-sig))
+                   (= 0 (for/fold ([acc 0]) ([eb (in-bytes expected-sig)]
+                                             [ab (in-bytes actual-sig)])
+                          (bitwise-ior acc (bitwise-xor eb ab)))))])
+        (if (not sig-ok?)
+            (check-fail "Invalid JWT signature" 401 '())
+            ;; Decode payload
+            (let* ([payload-bytes
+                    (with-handlers ([exn:fail? (lambda (_) #"")])
+                      (base64url-decode payload-b64))]
+                   [claims
+                    (with-handlers ([exn:fail? (lambda (_) #f)])
+                      (string->jsexpr (bytes->string/utf-8 payload-bytes)))])
+              (if (not claims)
+                  (check-fail "Malformed JWT payload" 401 '())
+                  ;; Check expiry if present (exp is in ms since the epoch).
+                  ;;
+                  ;; A NON-NUMERIC `exp` is treated as expired, not as absent.
+                  ;; Two reasons, and the second is the important one:
+                  ;;   * `(< "1785355686959" now)` is a contract violation, which
+                  ;;     escapes as an uncaught exception and becomes a 500 —
+                  ;;     while every other rejection on this path is a 401.  A
+                  ;;     well-formed token with a string `exp` is enough to
+                  ;;     trigger it.
+                  ;;   * skipping the check on an unparseable `exp` would be
+                  ;;     FAIL-OPEN: a token whose expiry cannot be read would be
+                  ;;     accepted forever.  Unreadable expiry must mean expired.
+                  ;; (`JWT.sign`'s typed surface is `Dict String String`, so a
+                  ;; Tesl program CAN put a string there and then have its own
+                  ;; tokens rejected by its own verifier — better a clean 401
+                  ;; than a 500, and better than accepting them.)
+                  (let* ([exp (and (hash? claims) (hash-ref claims 'exp #f))]
+                         [now (inexact->exact (floor (current-inexact-milliseconds)))]
+                         [expired?
+                          (cond
+                            [(eq? exp #f) #f]           ; no exp claim: no expiry
+                            [(real? exp) (< exp now)]
+                            [else #t])])                ; unreadable: fail closed
+                    (if expired?
+                        (check-fail "JWT token has expired" 401 '())
+                        (jwt-claims->string-keyed claims)))))))))
 
 ;; JWT.decode : ∀a. JwtToken → a
 ;;

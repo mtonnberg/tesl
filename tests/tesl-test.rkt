@@ -2000,21 +2000,55 @@
   (check-true (regexp-match? #rx"requires proof|not trackable|does not statically satisfy" err)
               (format "expected compound cross-param shape error, got: ~a" err)))
 
+;; example/admin-task-api.tesl no longer trusts a plaintext `user=…; role=…`
+;; cookie. That was a live privilege escalation: the CLIENT declared its own role,
+;; and the handler trusted it for the admin branch, so `Cookie: role=admin` was
+;; all it took. Both the subject and the role are now claims INSIDE a signed
+;; token, so this harness mints tokens the way a login endpoint would — which is
+;; also the only way to still test the 403 path honestly (a NON-admin token,
+;; rather than a client asking to be a non-admin).
+(require (only-in "../tesl/jwt.rkt" JWT.sign JwtSecret jwt)
+         (only-in "../dsl/types.rkt" newtype-value? newtype-value-value))
+
+(define ADMIN-TASK-SECRET "test-session-signing-key-not-a-real-secret")
+
+(define (signed-session-cookie #:sub sub #:role [role #f])
+  (define exp (+ (inexact->exact (floor (current-inexact-milliseconds))) 3600000))
+  (define claims
+    (if role
+        (hash "sub" sub "role" role "exp" exp)
+        (hash "sub" sub "exp" exp)))
+  (define token (with-capabilities (jwt) (JWT.sign claims (JwtSecret ADMIN-TASK-SECRET))))
+  (string-append "session="
+                 (let ([raw token])
+                   (if (newtype-value? raw) (newtype-value-value raw) raw))))
+
+(define (admin-session-cookie #:sub [sub "anna"] #:role [role "admin"])
+  (define exp (+ (inexact->exact (floor (current-inexact-milliseconds))) 3600000))
+  (define token
+    (with-capabilities (jwt)
+      (JWT.sign (hash "sub" sub "role" role "exp" exp)
+                (JwtSecret ADMIN-TASK-SECRET))))
+  (string-append "session="
+                 (let ([raw token])
+                   (if (newtype-value? raw) (newtype-value-value raw) raw))))
+
 (define (run-tesl-admin-task-example-tests)
+  (putenv "SESSION_JWT_SECRET" ADMIN-TASK-SECRET)
   (define compiled-module-path (compile-tesl-module tesl-admin-task-source-path))
   (define admin-server (tesl-module-value compiled-module-path 'AdminTaskServer))
   (define readTaskCookie (module-private-value compiled-module-path 'readTaskCookie))
 
   (define ok-response
-    (dispatch-with-server admin-server (list readTaskCookie) 'GET '("tasks" "admin" "2") #:cookie "user=anna; role=admin"))
+    (dispatch-with-server admin-server (list readTaskCookie) 'GET '("tasks" "admin" "2") #:cookie (admin-session-cookie)))
   (define forbidden-response
-    (dispatch-with-server admin-server (list readTaskCookie) 'GET '("tasks" "admin" "2") #:cookie "user=anna; role=user"))
+    (dispatch-with-server admin-server (list readTaskCookie) 'GET '("tasks" "admin" "2") #:cookie (admin-session-cookie #:role "user")))
   (define unauthorized-response
     (dispatch-with-server admin-server (list readTaskCookie) 'GET '("tasks" "admin" "2")))
   (define invalid-capture-response
-    (dispatch-with-server admin-server (list readTaskCookie) 'GET '("tasks" "admin" "0") #:cookie "user=anna; role=admin"))
+    (dispatch-with-server admin-server (list readTaskCookie) 'GET '("tasks" "admin" "0") #:cookie (admin-session-cookie)))
   (define missing-response
-    (dispatch-with-server admin-server (list readTaskCookie) 'GET '("tasks" "admin" "99") #:cookie "user=anna; role=admin"))
+    (dispatch-with-server admin-server (list readTaskCookie) 'GET '("tasks" "admin" "99") #:cookie (admin-session-cookie)))
 
   (check-equal? (dsl-response-status ok-response) 200)
   (check-equal? (hash-ref (dsl-response-body ok-response) 'ownerId) "anna")
@@ -2096,8 +2130,13 @@
          (cons "TESL_POSTGRES_PORT" (number->string (hash-ref cfg 'port)))
          (cons "TESL_POSTGRES_DATABASE" (hash-ref cfg 'database))
          (cons "TESL_POSTGRES_USER" (hash-ref cfg 'user))
-         (cons "TESL_POSTGRES_PASSWORD" ""))
+         (cons "TESL_POSTGRES_PASSWORD" "")
+         ;; example/todo-api.tesl reads its session signing key from here; it no
+         ;; longer trusts a plaintext `user=<name>` cookie, since the client
+         ;; picks that value.
+         (cons "SESSION_JWT_SECRET" ADMIN-TASK-SECRET))
    (lambda ()
+     (define todo-cookie (signed-session-cookie #:sub "mikael"))
      (define compiled-module-path (compile-tesl-module tesl-todo-source-path))
      (define resolveExamplePort (tesl-module-value compiled-module-path 'resolveExamplePort))
      (define todo-server (tesl-module-value compiled-module-path 'TodoServer))
@@ -2131,7 +2170,7 @@
           (dispatch-with-server todo-server (list todoWebService)
                                 'POST
                                 '("todos")
-                                #:cookie "user=mikael"
+                                #:cookie todo-cookie
                                 #:body (hash 'title "no")))
         (check-equal? (dsl-response-status todo-invalid-create-response) 400)
         (check-true
@@ -2143,7 +2182,7 @@
           (dispatch-with-server todo-server (list todoWebService)
                                 'POST
                                 '("todos")
-                                #:cookie "user=mikael"
+                                #:cookie todo-cookie
                                 #:body (hash 'title "Ship automatic migrations")))
         (check-equal? (dsl-response-status todo-create-response) 200)
         (define todo-id (hash-ref (dsl-response-body todo-create-response) 'id))
@@ -2151,18 +2190,18 @@
         (check-equal? (hash-ref (hash-ref (dsl-response-body todo-create-response) 'status) 'tag) "Open")
 
         (define todo-list-response
-          (dispatch-with-server todo-server (list todoWebService) 'GET '("todos" "mine") #:cookie "user=mikael"))
+          (dispatch-with-server todo-server (list todoWebService) 'GET '("todos" "mine") #:cookie todo-cookie))
         (check-equal? (dsl-response-status todo-list-response) 200)
         (check-equal? (length (dsl-response-body todo-list-response)) 2)
 
         (define todo-get-response
-          (dispatch-with-server todo-server (list todoWebService) 'GET (list "todos" todo-id) #:cookie "user=mikael"))
+          (dispatch-with-server todo-server (list todoWebService) 'GET (list "todos" todo-id) #:cookie todo-cookie))
         (check-equal? (dsl-response-status todo-get-response) 200)
         (check-equal? (hash-ref (dsl-response-body todo-get-response) 'title) "Ship automatic migrations")
         (check-equal? (hash-ref (hash-ref (dsl-response-body todo-get-response) 'status) 'tag) "Open")
 
         (define todo-complete-response
-          (dispatch-with-server todo-server (list todoWebService) 'PUT (list "todos" todo-id "complete") #:cookie "user=mikael"))
+          (dispatch-with-server todo-server (list todoWebService) 'PUT (list "todos" todo-id "complete") #:cookie todo-cookie))
         (check-equal? (dsl-response-status todo-complete-response) 200)
         (check-equal? (hash-ref (hash-ref (dsl-response-body todo-complete-response) 'status) 'tag) "Done")))
       (run-tesl-query-proof-tests))))

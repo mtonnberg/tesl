@@ -10,6 +10,11 @@ entrypoint = "app.tesl"
 # use these to know what to export at runtime.
 [env]
 PORT = "8088"
+# The HMAC key the `auth` in app.tesl verifies session tokens with. REPLACE THIS
+# before you deploy, keep the real value out of version control, and rotate it
+# here rather than in the source (a key written into a .tesl file is reported as
+# SEC003 — `tesl help SEC003`).
+SESSION_JWT_SECRET = "CHANGE-ME-dev-only"
 
 [database]
 # "none"     — no database (this template).

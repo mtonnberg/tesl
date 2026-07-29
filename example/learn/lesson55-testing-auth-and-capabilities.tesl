@@ -1,5 +1,7 @@
 module Lesson55TestingAuthAndCapabilities exposing [AuthServer]
 
+# lesson: track=testing order=240 needs=lesson32-api-tests,lesson11-capabilities
+# summary: Test an authenticated endpoint and prove that unauthenticated requests really are rejected
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 55 — Testing Auth and Capabilities
 #
@@ -10,21 +12,52 @@ module Lesson55TestingAuthAndCapabilities exposing [AuthServer]
 
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Http exposing [HttpRequest]
-import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Dict exposing [Dict.lookup, Dict.singleton]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.ApiTest exposing [statusOk, statusClientError]
 import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DOMAIN: A simple authenticated API
+#
+# The session cookie is a SIGNED token, not a name. A bare `cookies "session"`
+# check is not authentication: the client picks the cookie, so `session=alice`
+# would authenticate anyone as alice. JWT.verify recomputes the HMAC-SHA256
+# signature and auto-401s unless it matches, so only a token this server minted
+# gets in — and test 3 below proves it, because a forged cookie now fails.
 # ─────────────────────────────────────────────────────────────────────────────
+
+capability sessionAuthCap implies jwt
 
 fact Authenticated (user: String)
 
-auth sessionAuth(req: HttpRequest) -> user: String ::: Authenticated user =
+# The signing key is written here ONLY so this lesson's api-tests are
+# self-contained (they have to mint a valid cookie, which needs the key).
+# A real service reads it from the environment and never commits it:
+#   JwtSecret (requireEnv "SESSION_JWT_SECRET")
+fn lessonSecret() -> JwtSecret = JwtSecret "lesson55-signing-key-not-for-production"
+
+# What a login handler would hand back as the session cookie value.
+fn mintSession(user: String) -> String requires [sessionAuthCap] =
+  (JWT.sign (Dict.singleton "sub" user) (lessonSecret())).value
+
+# An attacker CAN produce a well-formed token — what they cannot do is sign it
+# with this server's key. Test 5 sends one of these.
+fn forgedSession(user: String) -> String requires [sessionAuthCap] =
+  (JWT.sign (Dict.singleton "sub" user) (JwtSecret "an-attackers-own-key")).value
+
+auth sessionAuth(req: HttpRequest) -> user: String ::: Authenticated user
+  requires [sessionAuthCap] =
   case Dict.lookup "session" req.cookies of
     Nothing -> fail 401 "not authenticated"
-    Something token -> ok token ::: Authenticated user
+    Something raw ->
+      # JWT.verify checks the signature and the `exp` claim, and its 401 flows
+      # out through this `let` — bind it, do not nest it inside another call.
+      let claims = JWT.verify (JwtToken raw) (lessonSecret())
+      case Dict.lookup "sub" claims of
+        Nothing -> fail 401 "not authenticated"
+        Something subject -> ok subject ::: Authenticated user
 
 # ─────────────────────────────────────────────────────────────────────────────
 # API with both public and authenticated endpoints
@@ -65,15 +98,31 @@ api-test "health endpoint is accessible without auth" for AuthServer {
 }
 
 # Test 2: Protected endpoint requires authentication
-api-test "profile endpoint returns 401 without cookie" for AuthServer {
+api-test "profile endpoint returns 401 without cookie" for AuthServer requires [sessionAuthCap] {
   let resp = get "/profile"
   expect statusClientError resp.status
 }
 
-# Test 3: Protected endpoint works with valid session cookie
-api-test "profile endpoint works with session cookie" for AuthServer {
-  let resp = get "/profile" cookie { "session": "alice" }
+# Test 3: Protected endpoint works with a SIGNED session cookie
+api-test "profile endpoint works with a signed session cookie" for AuthServer requires [sessionAuthCap] {
+  let resp = get "/profile" cookie { "session": mintSession "alice" }
   expect statusOk resp.status
+}
+
+# Test 4: A cookie the client simply made up is rejected. This is the test that
+# would have PASSED against the old `ok token ::: Authenticated user` version —
+# which is exactly why that version was not authentication.
+api-test "profile endpoint rejects a made-up cookie value" for AuthServer requires [sessionAuthCap] {
+  let resp = get "/profile" cookie { "session": "alice" }
+  expect statusClientError resp.status
+}
+
+# Test 5: And a WELL-FORMED token signed with the wrong key is rejected too.
+# Test 4 alone would pass against an authenticator that merely required the
+# cookie to look like a JWT; only this one exercises the signature check.
+api-test "profile endpoint rejects a token signed with the wrong key" for AuthServer requires [sessionAuthCap] {
+  let resp = get "/profile" cookie { "session": forgedSession "alice" }
+  expect statusClientError resp.status
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -82,7 +131,10 @@ api-test "profile endpoint works with session cookie" for AuthServer {
 # api-test runs the full HTTP stack: routing, auth, handler, response.
 # For authenticated endpoints:
 #   - No cookie → auth function returns fail 401 → client error status
-#   - Valid cookie → auth function returns ok → handler runs → success
+#   - Signed cookie → auth function returns ok → handler runs → success
+#   - FORGED cookie → signature check fails → 401. Test this one. An auth test
+#     suite that only covers "no cookie" and "a cookie" cannot tell an
+#     authenticator from a cookie reader.
 #
 # The compiler wires the auth function to the endpoint automatically.
 # If you forget to test the unauthenticated case, the handler might run

@@ -26,18 +26,18 @@
   (processRequest [userId : String] [action : String])
   #:capabilities [apiTime]
   #:returns String
-  (let ([_ (thsl-src! "example/learn/lesson17-telemetry.tesl" 56 (list (cons 'userId *userId) (cons 'action *action)) (lambda () (telemetry-event! "request.process" #:attributes (["user.id" *userId] ["action.name" *action]))))]) (thsl-src! "example/learn/lesson17-telemetry.tesl" 57 (list (cons 'userId *userId) (cons 'action *action)) (lambda () (format "processed ~a for user ~a at ~a" (tesl-display-val *action) (tesl-display-val *userId) (tesl-display-val (raw-value (tesl_import_Time_posixToSeconds (raw-value (nowMillis))))))))))
+  (let ([_ (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson17-telemetry.tesl" 58 (list (cons 'userId *userId) (cons 'action *action)) (lambda () (telemetry-event! "request.process" #:attributes (["user.id" *userId] ["action.name" *action]))))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson17-telemetry.tesl" 59 (list (cons 'userId *userId) (cons 'action *action)) (lambda () (format "processed ~a for user ~a at ~a" (tesl-display-val *action) (tesl-display-val *userId) (tesl-display-val (raw-value (tesl_import_Time_posixToSeconds (raw-value (nowMillis))))))))))
 
 (define/pow
   (processRequestWithSpan [userId : String] [requestCount : Integer])
   #:capabilities [apiTime]
   #:returns String
-  (let ([result (thsl-src! "example/learn/lesson17-telemetry.tesl" 60 (list (cons 'userId *userId) (cons 'requestCount *requestCount)) (lambda () (format "handled ~a requests" (tesl-display-val *requestCount))))]) (let ([_ (thsl-src! "example/learn/lesson17-telemetry.tesl" 61 (list (cons 'result *result) (cons 'userId *userId) (cons 'requestCount *requestCount)) (lambda () (telemetry-event! "batch.process" #:attributes (["user.id" *userId] ["count" *requestCount] ["timestamp" (raw-value (tesl_import_Time_posixToSeconds (raw-value (nowMillis))))]))))]) (thsl-src! "example/learn/lesson17-telemetry.tesl" 62 (list (cons 'result *result) (cons 'userId *userId) (cons 'requestCount *requestCount)) (lambda () (raw-value result))))))
+  (let ([result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson17-telemetry.tesl" 62 (list (cons 'userId *userId) (cons 'requestCount *requestCount)) (lambda () (format "handled ~a requests" (tesl-display-val *requestCount))))]) (let ([_ (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson17-telemetry.tesl" 63 (list (cons 'result *result) (cons 'userId *userId) (cons 'requestCount *requestCount)) (lambda () (telemetry-event! "batch.process" #:attributes (["user.id" *userId] ["count" *requestCount] ["timestamp" (raw-value (tesl_import_Time_posixToSeconds (raw-value (nowMillis))))]))))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson17-telemetry.tesl" 64 (list (cons 'result *result) (cons 'userId *userId) (cons 'requestCount *requestCount)) (lambda () (raw-value result))))))
 
 (define-handler
   (healthCheck)
   #:returns String
-  (let ([_ (thsl-src! "example/learn/lesson17-telemetry.tesl" 71 (list) (lambda () (telemetry-event! "health.check" #:attributes (["status" "ok"]))))]) (thsl-src! "example/learn/lesson17-telemetry.tesl" 72 (list) (lambda () "ok"))))
+  (let ([_ (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson17-telemetry.tesl" 73 (list) (lambda () (telemetry-event! "health.check" #:attributes (["status" "ok"]))))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson17-telemetry.tesl" 74 (list) (lambda () "ok"))))
 
 (define HealthServer-sse-routes '())
 (define-api HealthApi
@@ -57,4 +57,4 @@
   #:entities )
 
 (module+ main
-  (thsl-src! "example/learn/lesson17-telemetry.tesl" 87 (list) (lambda () (with-capabilities () (call-with-database TelemetryDb (lambda () (let ([_ (init-opentelemetry! #:service-name "lesson17-telemetry" #:endpoint "in-memory" #:console? #t)]) (serve HealthServer #:port 8086 #:capabilities (list) #:sse-routes HealthServer-sse-routes))))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson17-telemetry.tesl" 89 (list) (lambda () (with-capabilities () (call-with-database TelemetryDb (lambda () (let ([_ (init-opentelemetry! #:service-name "lesson17-telemetry" #:endpoint "in-memory" #:console? #t)]) (serve HealthServer #:port 8086 #:capabilities (list) #:sse-routes HealthServer-sse-routes))))))))

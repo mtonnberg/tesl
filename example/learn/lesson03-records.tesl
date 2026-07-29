@@ -12,6 +12,8 @@ module Lesson03Records exposing [
   flipDimensions,
 ]
 
+# lesson: track=basics order=40 needs=none
+# summary: Group named fields into an immutable record, read a field, and produce an updated copy
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

@@ -14,8 +14,16 @@
          net/url
          racket/port
          (only-in "../dsl/capability.rkt" define-capability require-capabilities!)
-         (only-in "../dsl/types.rkt" define-record adt-value? adt-value-type adt-value-fields)
+         (only-in "../dsl/types.rkt" define-record adt-value? adt-value-type adt-value-fields
+                  ;; `secret` outbound headers: the ONE place a secret's plaintext
+                  ;; is taken back out, inside trusted code, on its way to the socket.
+                  secret-value? newtype-value? newtype-value-value
+                  secret-header-value secret-header-value?
+                  secret-header-value-plaintext)
          (only-in "../dsl/private/evidence.rkt" raw-value)
+         ;; tesl/tuple.rkt requires only dsl/types.rkt + evidence.rkt, so there is
+         ;; no cycle; `Tuple2` is the header pair every verb already accepts.
+         (only-in "tuple.rkt" Tuple2)
          (only-in "private/http-stub.rkt" current-outbound-http-hook))
 
 (provide httpClient
@@ -25,6 +33,10 @@
          HttpClient.post
          HttpClient.put
          HttpClient.delete
+         ;; Secret-accepting outbound header sinks (roadmap/next/tesl_crypto.md's
+         ;; secret-accepting-sinks table).
+         HttpClient.bearer
+         HttpClient.secretHeader
          ;; #23: streaming POST (SSE) for provider token streaming.
          http-post-stream
          ;; Security: outbound header CRLF guard (exported for the regression suite)
@@ -112,18 +124,67 @@
 ;;; lesson58) died on a raw `regexp-match?: contract violation` instead of
 ;;; sending.  Both shapes are accepted here, mirroring `Tuple2.first`, and
 ;;; anything else is a clean HttpClient error rather than a Racket one.
+;;; THE unwrap point for a `secret` on its way onto the wire.
+;;;
+;;; `HttpClient.bearer` / `HttpClient.secretHeader` are typed as returning a
+;;; `Tuple2 String String`, but the value half they actually build is a
+;;; `secret-header-value` — not a string, so no String primitive can touch it,
+;;; and it prints as "[redacted]" so nothing that renders it can leak it.  Here,
+;;; in trusted code, one function turns it back into the plaintext bytes that go
+;;; on the socket.  A plain `newtype-value` is unwrapped too (a secret column
+;;; value handed to a header keeps working), and the CR/LF guard below still
+;;; applies to the result — the guard is the reason this returns a string rather
+;;; than deferring the coercion.
+(define (header-field->string who v)
+  (cond
+    [(string? v) v]
+    [(secret-header-value? v) (secret-header-value-plaintext v)]
+    [(newtype-value? v) (header-field->string who (newtype-value-value v))]
+    [else
+     (raise-user-error who
+                       "expected a header name/value as String, got ~a"
+                       (if (secret-value? v) "a secret" v))]))
+
 (define (http-header-pair who h)
   (define v (raw-value h))
+  (define (fld x) (header-field->string who (raw-value x)))
   (cond
     [(and (adt-value? v) (equal? (adt-value-type v) 'Tuple2))
      (define fs (adt-value-fields v))
-     (values (raw-value (hash-ref fs 'first  "")) (raw-value (hash-ref fs 'second "")))]
-    [(and (list? v) (= (length v) 2)) (values (raw-value (first v)) (raw-value (second v)))]
-    [(and (pair? v) (not (list? v)))  (values (raw-value (car v)) (raw-value (cdr v)))]
+     (values (fld (hash-ref fs 'first  "")) (fld (hash-ref fs 'second "")))]
+    [(and (list? v) (= (length v) 2)) (values (fld (first v)) (fld (second v)))]
+    [(and (pair? v) (not (list? v)))  (values (fld (car v)) (fld (cdr v)))]
     [(string? v) (values v "")]
     [else
      (raise-user-error who
                        "expected a header as Tuple2 String String, got ~a" v)]))
+
+;;; ── Secret-accepting header constructors ─────────────────────────────────────
+;;;
+;;; `HttpClient.secretHeader "X-Api-Key" k` and `HttpClient.bearer k` are the
+;;; sanctioned way a secret reaches an outbound header, replacing the
+;;; `("Authorization", "Bearer " ++ key.value)` that `secret` makes impossible.
+;;; The returned pair is an ordinary Tuple2 ADT value (so it drops straight into
+;;; the header list every verb already accepts); only its value half is the
+;;; opaque `secret-header-value` wrapper.
+(define (make-secret-header who name secret [prefix ""])
+  (unless (string? name)
+    (raise-user-error who "header name must be a String, got ~a" name))
+  (define inner (raw-value secret))
+  (define plain
+    (cond
+      [(newtype-value? inner) (newtype-value-value inner)]
+      [(string? inner) inner]
+      [else (raise-user-error who "expected a Secret, got ~a" inner)]))
+  (unless (string? plain)
+    (raise-user-error who "expected a Secret over String"))
+  (Tuple2 name (secret-header-value (string-append prefix plain))))
+
+(define (HttpClient.secretHeader name secret)
+  (make-secret-header 'HttpClient.secretHeader name secret))
+
+(define (HttpClient.bearer secret)
+  (make-secret-header 'HttpClient.bearer "Authorization" secret "Bearer "))
 
 ;;; Convert raw response headers from http-sendrecv into a list of Tuple2 String String.
 ;;; Each element is a 2-element list matching Tesl's Tuple2 runtime representation.

@@ -12,6 +12,8 @@ module Lesson22CompoundNamedPack exposing [
   validateAndReturn,
 ]
 
+# lesson: track=proofs order=620 needs=lesson20-named-db-results
+# summary: Split a return annotation into entity proofs and independent proof cargo
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

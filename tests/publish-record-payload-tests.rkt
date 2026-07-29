@@ -36,11 +36,11 @@
             [(check-ok? v) (loop (check-ok-value v))]
             [else v])))
   (define _fields (record-value-fields _raw))
-  (hash 'message (tesl-encode-prim-string (raw-value (hash-ref _fields 'message)))
+  (tesl-hash 'message (tesl-encode-prim-string (raw-value (hash-ref _fields 'message)))
   ))
 (define (tesl-codec-decode-Notice-0 _j)
   (define _f_message (tesl-decode-prim-field _j "message" tesl-decode-prim-string))
-  (record-value 'Notice (hash 'message _f_message)))
+  (record-value 'Notice (tesl-hash 'message _f_message)))
 (register-type-codec! 'Notice tesl-codec-encode-Notice (list tesl-codec-decode-Notice-0))
 
 (define-record SendReq
@@ -55,19 +55,19 @@
             [(check-ok? v) (loop (check-ok-value v))]
             [else v])))
   (define _fields (record-value-fields _raw))
-  (hash 'userId (tesl-encode-prim-string (raw-value (hash-ref _fields 'userId)))
+  (tesl-hash 'userId (tesl-encode-prim-string (raw-value (hash-ref _fields 'userId)))
         'message (tesl-encode-prim-string (raw-value (hash-ref _fields 'message)))
   ))
 (define (tesl-codec-decode-SendReq-0 _j)
   (define _f_userId (tesl-decode-prim-field _j "userId" tesl-decode-prim-string))
   (define _f_message (tesl-decode-prim-field _j "message" tesl-decode-prim-string))
-  (record-value 'SendReq (hash 'userId _f_userId 'message _f_message)))
+  (record-value 'SendReq (tesl-hash 'userId _f_userId 'message _f_message)))
 (register-type-codec! 'SendReq tesl-codec-encode-SendReq (list tesl-codec-decode-SendReq-0))
 
 (define/pow
   (parseUserId [id : String])
   #:returns String
-  (thsl-src! "tests/publish-record-payload-tests.tesl" 64 (list (cons 'id *id)) (lambda () *id)))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/publish-record-payload-tests.tesl" 64 (list (cons 'id *id)) (lambda () *id)))
 
 (define-capture userIdCapture
   [userIdCapture : String]
@@ -79,7 +79,7 @@
   (sendNotice [req : SendReq])
   #:capabilities [pubsub]
   #:returns String
-  (let ([_ (thsl-src! "tests/publish-record-payload-tests.tesl" 75 (list (cons 'req *req)) (lambda () (publish-event! Notices (format "~a" (raw-value req.userId)) (Notice #:message (raw-value req.message)))))]) (thsl-src! "tests/publish-record-payload-tests.tesl" 76 (list (cons 'req *req)) (lambda () "ok"))))
+  (let ([_ (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/publish-record-payload-tests.tesl" 75 (list (cons 'req *req)) (lambda () (publish-event! Notices (format "~a" (raw-value req.userId)) (Notice #:message (raw-value req.message)))))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/publish-record-payload-tests.tesl" 76 (list (cons 'req *req)) (lambda () "ok"))))
 
 (define MainServer-sse-routes
   (list (list (list "events" #f) #f Notices 1 (list (cons 1 (sse-key-capture userIdCapture))))))
@@ -104,12 +104,12 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (pubsub)
-              (define stream (thsl-src! "tests/publish-record-payload-tests.tesl" 93 (list) (lambda () (subscribe MainServer-sse-routes (list "events" "user-1") #:headers (hash) #:name "/events/user-1"))))
-              (define resp (thsl-src! "tests/publish-record-payload-tests.tesl" 94 (list (cons 'stream stream)) (lambda () (dispatch-api-test-request MainServer 'post (list "send") #:headers (hash) #:body (hash (string->symbol "userId") "user-1" (string->symbol "message") "hello-record") #:capabilities (list pubsub)))))
-              (check-true (raw-value (thsl-src! "tests/publish-record-payload-tests.tesl" 95 (list (cons 'resp resp) (cons 'stream stream)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
-              (define events (thsl-src! "tests/publish-record-payload-tests.tesl" 96 (list (cons 'resp resp) (cons 'stream stream)) (lambda () (collect (raw-value stream) #:count 1 #:timeout-ms 1500))))
-              (check-true (raw-value (thsl-src! "tests/publish-record-payload-tests.tesl" 97 (list (cons 'events events) (cons 'resp resp) (cons 'stream stream)) (lambda () (isNotEmpty (raw-value events))))))
-              (check-true (raw-value (thsl-src! "tests/publish-record-payload-tests.tesl" 98 (list (cons 'events events) (cons 'resp resp) (cons 'stream stream)) (lambda () (includesWhere (hash 'message "hello-record") (raw-value events))))))
+              (define stream (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/publish-record-payload-tests.tesl" 93 (list) (lambda () (subscribe MainServer-sse-routes (list "events" "user-1") #:headers (tesl-hash) #:name "/events/user-1"))))
+              (define resp (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/publish-record-payload-tests.tesl" 94 (list (cons 'stream stream)) (lambda () (dispatch-api-test-request MainServer 'post (list "send") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "userId") "user-1" (string->symbol "message") "hello-record") #:capabilities (list pubsub)))))
+              (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/publish-record-payload-tests.tesl" 95 (list (cons 'resp resp) (cons 'stream stream)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+              (define events (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/publish-record-payload-tests.tesl" 96 (list (cons 'resp resp) (cons 'stream stream)) (lambda () (collect (raw-value stream) #:count 1 #:timeout-ms 1500))))
+              (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/publish-record-payload-tests.tesl" 97 (list (cons 'events events) (cons 'resp resp) (cons 'stream stream)) (lambda () (isNotEmpty (raw-value events))))))
+              (check-true (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/publish-record-payload-tests.tesl" 98 (list (cons 'events events) (cons 'resp resp) (cons 'stream stream)) (lambda () (includesWhere (tesl-hash 'message "hello-record") (raw-value events))))))
             )
           ))
       ))

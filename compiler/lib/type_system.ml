@@ -45,6 +45,15 @@ let t_fact    = TCon "Fact"
 let t_delete_result = TCon "DeleteResult"
 let t_jwt_token  = TCon "JwtToken"
 let t_jwt_secret = TCon "JwtSecret"
+(* Tesl.Crypto.  All three are nominal wrappers over String.
+   PasswordHash and Secret are additionally SECRET (redacted at every rendering
+   sink); Signature is not, because a MAC tag is public data.
+   PasswordHash and Signature have NO constructor row in [stdlib_env] on
+   purpose — that is exactly what makes them opaque, so `PasswordHash "hunter2"`
+   is an unknown-constructor error rather than a blessed lie. *)
+let t_password_hash = TCon "PasswordHash"
+let t_signature     = TCon "Signature"
+let t_secret        = TCon "Secret"
 (* First-Class Units: Money is nominal like PosixMillis; its currency is a
    runtime qualifier (a `Currency` value, like TimeZone), NOT an SI dimension. *)
 let t_money         = TCon "Money"
@@ -707,6 +716,19 @@ let stdlib_env : (string * scheme) list = [
      String-returning counterpart to `env` (which returns Maybe), for places that
      need a value directly, e.g. `anthropic (requireEnv "ANTHROPIC_API_KEY") model`. *)
   "requireEnv", mono (t_fun [t_string] t_string);
+  (* requireSecret: read an env var straight into a `Secret`, with no String
+     ever existing in Tesl code.  This is the "read from the environment" row of
+     the secret-accepting-sinks table: `Secret (requireEnv "…")` would work but
+     puts the plaintext in a String first, which is exactly what the feature
+     exists to prevent.
+     v1 is MONOMORPHIC — it returns the stdlib `Secret`, not the user's own
+     `secret Password = String`.  Result-polymorphism would need a fresh result
+     var + an [escaping_result_var_whitelist] entry + a bespoke
+     decide-by-resolution validator (the `decodeAs` pattern), which is a lot of
+     fail-closed machinery for an env read; a user secret is minted from a
+     request body (Phase 4's decoder path), which is where user secrets actually
+     come from. *)
+  "requireSecret", mono (t_fun [t_string] t_secret);
 
   (* ── HTTP ────────────────────────────────────────────────────────────── *)
   "statusOk",          mono t_int;
@@ -719,6 +741,19 @@ let stdlib_env : (string * scheme) list = [
   "HttpClient.post",      mono (t_fun [t_string; t_list (t_tuple2 t_string t_string); t_string] t_http_response);
   "HttpClient.put",       mono (t_fun [t_string; t_list (t_tuple2 t_string t_string); t_string] t_http_response);
   "HttpClient.delete",    mono (t_fun [t_string; t_list (t_tuple2 t_string t_string)] t_http_response);
+  (* Outbound header sinks — the "an outbound HTTP header" row of the
+     secret-accepting-sinks table.  Both return a `Tuple2 String String`, which
+     is what the four verbs' header parameter already accepts, so a secret can
+     be put on the wire without a `String` ever existing in Tesl code and
+     without changing four signatures the whole corpus depends on.
+     At RUNTIME the value half is NOT a string: it is an opaque
+     `secret-header-value` (dsl/types.rkt) that prints as `[redacted]` and is
+     rejected by every String primitive, so projecting it back out
+     (`Tuple2.second h`) cannot leak.  It becomes plaintext at exactly one
+     place — `http-header-pair` in tesl/http-client.rkt, inside trusted code, on
+     its way onto the socket. *)
+  "HttpClient.bearer",    mono (t_fun [t_secret] (t_tuple2 t_string t_string));
+  "HttpClient.secretHeader", mono (t_fun [t_string; t_secret] (t_tuple2 t_string t_string));
 
   (* ── Agent (AI Tier-0) ──────────────────────────────────────────────── *)
   (* mockProvider: list of scripted reply strings → an opaque LlmProvider. *)
@@ -806,6 +841,55 @@ let stdlib_env : (string * scheme) list = [
   "JWT.sign",   mono (t_fun [t_dict t_string t_string; t_jwt_secret] t_jwt_token);
   "JWT.verify", mono (t_fun [t_jwt_token; t_jwt_secret] (t_dict t_string t_string));
   "JWT.decode", mono (t_fun [t_jwt_token] (t_dict t_string t_string));
+
+  (* ── Crypto ──────────────────────────────────────────────────────────────
+     Eight jobs, three types, three facts.  Every primitive is libsodium.
+
+     `Secret` HAS a constructor, deliberately, and the other two do not:
+       * `Secret "…"` only asserts "this string is key material", which is more
+         protective than leaving it a bare String, and something has to be able
+         to mint one from a config read.  A hardcoded key is caught by the
+         SEC003 lint (a string LITERAL reaching a secret-accepting parameter),
+         which is the precise check — not by making the type unusable.
+       * `PasswordHash "…"` would bless a plaintext as a hash. That is a
+         catastrophic type lie, so there is no row for it.
+       * `Signature "…"` would invite hand-rolled tag comparison. Use
+         `Crypto.signatureFromHex`, which parses rather than asserts.
+
+     No new capability: a capability marks an EFFECT, and sensitivity is carried
+     by the types and the facts.  Only the two functions that draw randomness
+     are gated, and they reuse the existing `random`. *)
+  "Secret", mono (t_fun [t_string] t_secret);
+
+  "Crypto.hashPassword",  mono (t_fun [t_string] t_password_hash);
+  (* Takes `Maybe` so a missing user row and a wrong password cost the same:
+     with Nothing it hashes against a dummy.  Check-shaped — the proof half
+     lives in Validation_common.stdlib_func_infos. *)
+  "Crypto.checkPassword", mono (t_fun [t_maybe t_password_hash; t_string]
+                                  (t_maybe t_password_hash));
+  "Crypto.needsRehash",   mono (t_fun [t_password_hash] t_bool);
+
+  "Crypto.signWith",      mono (t_fun [t_secret; t_string] t_signature);
+  "Crypto.checkSignature", mono (t_fun [t_secret; t_signature; t_string] t_string);
+  (* Transport, in and out.  A MAC tag is public: you PUT it in a header and you
+     READ one out of a header, so both directions are needed and neither is an
+     unwrap of a secret. *)
+  "Crypto.signatureHex",     mono (t_fun [t_signature] t_string);
+  "Crypto.signatureFromHex", mono (t_fun [t_string] t_signature);
+
+  "Crypto.fingerprint",    mono (t_fun [t_string] t_string);
+  "Crypto.keyFingerprint", mono (t_fun [t_secret] t_string);
+  (* A VALUE type, not a function type, like nowMillis / UUID.v4 / randomFloat:
+     `Crypto.randomToken()` is a fresh value per call, and Emit_racket's
+     stdlib_zero_arg_names is what lowers the `()` to a nullary application. *)
+  "Crypto.randomToken",    mono t_string;
+
+  (* Expert aliases.  Never required to write correct code; they exist so that
+     someone who already knows what they want can say it, and so a search for
+     "hmac" or "sha256" lands somewhere useful. *)
+  "Crypto.hmacSha256", mono (t_fun [t_secret; t_string] t_signature);
+  "Crypto.sha256",     mono (t_fun [t_string] t_string);
+  "Crypto.sha512",     mono (t_fun [t_string] t_string);
 
   (* ── Money (First-Class Units, phase 1) ──────────────────────────────────
      Money = exact-integer MINOR units (cents/öre/yen) + an intrinsic Currency
@@ -932,6 +1016,76 @@ let stdlib_env : (string * scheme) list = [
    ordinary Float functions in tesl/units.rkt *)
 
 (** Build an initial type environment from the stdlib list. *)
+(* ── Secret-accepting parameters ────────────────────────────────────────────
+   THE RULE, from roadmap/next/tesl_crypto.md, which subsumes the whole
+   secret-accepting-sinks table:
+
+     a `secret T` may be passed where a parameter explicitly marked
+     secret-accepting expects a `T`.  Nowhere else.
+
+   OPT-IN IS PER PARAMETER, NOT PER MODULE.  `String.concat` is stdlib too and
+   must never accept a secret; `Crypto.checkPassword`'s FIRST argument is the
+   stored `Maybe PasswordHash` and only its SECOND is the candidate.  A
+   module-level or type-level rule cannot express either, so the unit of marking
+   is the argument slot.
+
+   Without this rule the feature is safe and useless: an author declares
+   `secret Password = String`, discovers `Crypto.hashPassword body.password`
+   does not typecheck (unify is strictly nominal), and — per the roadmap's own
+   named risk — the realistic outcome is not a filed issue, it is that they stop
+   declaring the type `secret` and lose the protection entirely.
+
+   App authors never write these markings; they only read them in `tesl doc`, so
+   the learnable surface stays the one sentence above.
+
+   SINGLE SOURCE.  The SEC003 lint (a string LITERAL reaching a secret-accepting
+   parameter — a hardcoded credential) needs exactly this table, so it lives here
+   as one exported binding rather than being restated in linter.ml. *)
+let secret_accepting_params : (string * int list) list = [
+  (* Password storage.  Index 0 is the plaintext being hashed. *)
+  "Crypto.hashPassword",   [0];
+  (* Index 1 is the CANDIDATE password.  Index 0 is the stored
+     `Maybe PasswordHash` and is deliberately NOT marked — a PasswordHash is not
+     a secret you were handed, it is a value you already hold. *)
+  "Crypto.checkPassword",  [1];
+  (* Message authentication: index 0 is the key.  The MESSAGE (index 1) is not
+     marked — it is ordinary data, and marking it would let a secret be signed
+     as a payload. *)
+  "Crypto.signWith",       [0];
+  "Crypto.checkSignature", [0];
+  (* "Which key did I load?" — a short non-reversible digest, the sanctioned
+     answer to the question that would otherwise motivate an unwrap. *)
+  "Crypto.keyFingerprint", [0];
+  (* Outbound headers: the whole point of these two functions. *)
+  "HttpClient.bearer",       [0];
+  "HttpClient.secretHeader", [1];
+]
+
+let secret_accepting_indices (name : string) : int list =
+  match List.assoc_opt name secret_accepting_params with
+  | Some idxs -> idxs
+  | None -> []
+
+let is_secret_accepting_param (name : string) (index : int) : bool =
+  List.mem index (secret_accepting_indices name)
+
+(** The base type a secret-accepting parameter really wants, or [None] when the
+    parameter is not one a secret could ever satisfy.
+
+    Deliberately a SHORT total function rather than a chase through the alias
+    table: the parameters in {!secret_accepting_params} are stdlib parameters, so
+    their declared types are fixed and known here.  `Secret` needs its own row
+    because it is a stdlib nominal wrapper over String declared in
+    tesl/crypto.rkt — it has no entry in the checker's alias table, so a user's
+    `secret ApiKey = String` would not satisfy a `Secret` parameter without it.
+    That is the ONE special case, and it is what makes `Crypto.signWith myKey`
+    work for a user-declared secret rather than only for the stdlib `Secret`. *)
+let secret_param_expected_base (t : ty) : ty option =
+  match t with
+  | TCon "String" -> Some t_string
+  | TCon "Secret" -> Some t_string
+  | _ -> None
+
 let make_stdlib_env () : (string * scheme) list =
   stdlib_env
 
@@ -1149,7 +1303,7 @@ let tesl_module_exports : (string * string list) list = [
     [ "IsUuid"; "uuid"; "UUID.v4"; "UUID.v7"; "UUID.validate";
       "uuidV4Codec"; "uuidV7Codec" ] );
   ( "Tesl.Env",
-    [ "env"; "envInt"; "envString"; "requireEnv"; "envRead" ] );
+    [ "env"; "envInt"; "envString"; "requireEnv"; "requireSecret"; "envRead" ] );
   ( "Tesl.Json",
     [ "stringCodec"; "intCodec"; "int32Codec"; "boolCodec"; "floatCodec"; "posixMillisCodec";
       "moneyCodec";
@@ -1169,6 +1323,18 @@ let tesl_module_exports : (string * string list) list = [
       "httpCalled"; "httpCallCount"; "httpLastBody" ] );
   ( "Tesl.JWT",
     [ "jwt"; "JwtToken"; "JwtSecret"; "JWT.sign"; "JWT.verify"; "JWT.decode" ] );
+  ( "Tesl.Crypto",
+    (* Password storage, message authentication, digests and secrets.
+       `PasswordHash` and `Signature` appear here as TYPES only — there is no
+       constructor row for them in stdlib_env, which is what makes them opaque
+       (`PasswordHash "hunter2"` is a T001 unknown constructor). *)
+    [ "PasswordHash"; "Signature"; "Secret";
+      "HashFor"; "PasswordVerified"; "Authentic";
+      "Crypto.hashPassword"; "Crypto.checkPassword"; "Crypto.needsRehash";
+      "Crypto.signWith"; "Crypto.checkSignature";
+      "Crypto.signatureHex"; "Crypto.signatureFromHex";
+      "Crypto.fingerprint"; "Crypto.keyFingerprint"; "Crypto.randomToken";
+      "Crypto.hmacSha256"; "Crypto.sha256"; "Crypto.sha512" ] );
   ( "Tesl.Cache",
     [ "cache"; "Cache.get"; "Cache.set"; "Cache.delete"; "Cache.invalidate";
       (* config-block type (typed config block) *)
@@ -1191,7 +1357,8 @@ let tesl_module_exports : (string * string list) list = [
     [ "SseChannel" ] );
   ( "Tesl.HttpClient",
     [ "httpClient"; "HttpResponse"; "HttpResponse?";
-      "HttpClient.get"; "HttpClient.post"; "HttpClient.put"; "HttpClient.delete" ] );
+      "HttpClient.get"; "HttpClient.post"; "HttpClient.put"; "HttpClient.delete";
+      "HttpClient.bearer"; "HttpClient.secretHeader" ] );
   ( "Tesl.Agent",
     [ "aiProvider"; "Agent"; "LlmProvider"; "AgentReply"; "AgentReply?"; "Tool"; "ToolStep";
       "mockProvider"; "ask";
@@ -1250,7 +1417,7 @@ let stdlib_bare_home_module : (string * string) list = [
   "Int32", "Tesl.Int32";
   (* Env *)
   "env", "Tesl.Env"; "envInt", "Tesl.Env"; "envString", "Tesl.Env";
-  "requireEnv", "Tesl.Env";
+  "requireEnv", "Tesl.Env"; "requireSecret", "Tesl.Env";
   (* Id *)
   "generateId", "Tesl.Id"; "generatePrefixedId", "Tesl.Id";
   (* Random *)
@@ -1354,13 +1521,26 @@ let stdlib_capabilities : (string * string list) list = [
   (* Env *)
   "env", ["envRead"]; "envInt", ["envRead"];
   "envString", ["envRead"]; "requireEnv", ["envRead"];
+  "requireSecret", ["envRead"];
   (* Queue infrastructure *)
   "deadJobs", ["queueRead"]; "requeue", ["queueWrite"];
   (* JWT *)
   "JWT.sign", ["jwt"]; "JWT.verify", ["jwt"]; "JWT.decode", ["jwt"];
+  (* Crypto — ONLY the two that draw randomness.  A capability marks an effect;
+     sensitivity is carried by the types and the facts, which track the VALUE
+     rather than the function.  So signWith/checkSignature/checkPassword/
+     needsRehash/fingerprint are ungated: they are as privileged as
+     String.length.  (`jwt` above is inconsistent with that rule — JWT.sign is a
+     pure HMAC and is gated — but removing a capability would break every
+     `requires [jwt]` in the wild, so it stays as recorded debt rather than
+     being propagated here.) *)
+  "Crypto.hashPassword", ["random"]; "Crypto.randomToken", ["random"];
   (* HttpClient *)
   "HttpClient.get", ["httpClient"]; "HttpClient.post", ["httpClient"];
   "HttpClient.put", ["httpClient"]; "HttpClient.delete", ["httpClient"];
+  (* HttpClient.bearer / .secretHeader build a header PAIR and perform no I/O:
+     a capability marks an effect, and these have none.  The verb that actually
+     sends still requires `httpClient`. *)
   (* UUID generation (A2-3 drift fix: these were MISSING from var_caps). *)
   "UUID.v4", ["uuid"]; "UUID.v7", ["uuid"];
   (* Tesl.Agent inference entry points — every call that contacts a provider. *)
@@ -1385,8 +1565,13 @@ let tesl_known_module_names : string list = [
   "Tesl.Queue"; "Tesl.Sse"; "Tesl.Logging";
   "Tesl.JWT"; "Tesl.Cache"; "Tesl.Email"; "Tesl.Database"; "Tesl.SSE"; "Tesl.App"; "Tesl.Agent";
   "Tesl.Money"; "Tesl.Units";
-  (* Tesl.Bool / Tesl.Crypto / Tesl.Map / Tesl.Channel / Tesl.Sql were removed
-     2026-07-07: they had NO runtime .rkt file, so `import Tesl.Crypto`
+  (* Tesl.Crypto: REINSTATED with a real tesl/crypto.rkt behind it (password
+     storage, message authentication, digests, secrets).  It was removed
+     2026-07-07 precisely because it had no runtime file; the seam test
+     test_stdlib_runtime_binding.ml is what makes reinstating it safe. *)
+  "Tesl.Crypto";
+  (* Tesl.Bool / Tesl.Map / Tesl.Channel / Tesl.Sql are still removed
+     2026-07-07: they had NO runtime .rkt file, so `import Tesl.Map`
      typechecked and then crashed at Racket load ("cannot open module file").
      Rejecting the import at compile time is the fail-closed behaviour;
      test_stdlib_runtime_binding.ml pins every remaining module to a real file. *)

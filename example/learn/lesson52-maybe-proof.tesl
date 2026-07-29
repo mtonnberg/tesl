@@ -1,3 +1,5 @@
+# lesson: track=proofs order=600 needs=lesson23-maybe-and-optional-values,lesson09-proof-composition
+# summary: Return either nothing or a proof-carrying value, and keep the proof through the case
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

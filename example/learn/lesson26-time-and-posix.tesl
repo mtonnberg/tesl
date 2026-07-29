@@ -7,6 +7,8 @@ module Lesson26TimeAndPosix exposing [
   createdRecently,
 ]
 
+# lesson: track=stdlib order=300 needs=lesson04-newtypes
+# summary: One canonical timestamp type, PosixMillis, and the Tesl.Time functions that read and format it
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

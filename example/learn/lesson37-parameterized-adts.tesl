@@ -20,6 +20,8 @@ module Lesson37ParameterizedAdts exposing [
   treeContains,
 ]
 
+# lesson: track=basics order=720 needs=lesson02-adts-and-pattern-matching
+# summary: Write generic container types by giving a type its own type parameters
 # ═══════════════════════════════════════════
 # PARAMETERIZED ADTS
 # ═══════════════════════════════════════════

@@ -1,5 +1,7 @@
 module Lesson08ProofTransport exposing [ValidAge, checkAge, birthday, showAge]
 
+# lesson: track=proofs order=570 needs=lesson38-proof-decomposition
+# summary: Move a proof independently of its value with detachFact, attachFact and forgetFact
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

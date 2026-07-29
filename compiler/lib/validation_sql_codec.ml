@@ -243,13 +243,20 @@ let local_declared_type_names (decls : top_decl list) : string list =
    Newtypes/aliases are kind-ambiguous without resolution, so they are left
    `Other` and not subjected to the kind check (conservative — avoids
    over-rejecting an alias that resolves to a record or ADT). *)
-type codec_target_kind = Adt | Record | Other
+(* `Secret` is a kind of its own: unlike a plain newtype it is NOT
+   kind-ambiguous-and-therefore-skipped, it is categorically rejected.  A codec
+   is a serialization contract in both directions, and a secret has no legitimate
+   outbound serialization — the whole `secret` asymmetry is that it comes in and
+   does not go back out.  Declaring one would silently reopen the response hole
+   the checker's wire walk closes. *)
+type codec_target_kind = Adt | Record | Secret | Other
 
 let codec_target_kinds (decls : top_decl list) : (string * codec_target_kind) list =
   List.concat_map (function
     | DType (TypeAdt { name; _ }) -> [(name, Adt)]
     | DRecord r -> [(r.name, Record)]
     | DEntity e -> [(e.name, Record)]
+    | DType (TypeNewtype { name; secret = true; _ }) -> [(name, Secret)]
     | DType (TypeNewtype { name; _ })
     | DType (TypeAlias { name; _ }) -> [(name, Other)]
     | _ -> []
@@ -281,6 +288,13 @@ let check_codec_target_types ?facts ?(extra_funcs=[]) (decls : top_decl list) : 
         (match cf.to_json with ToJsonFields _ -> true | _ -> false)
         || (match cf.from_json with FromJsonAlts _ -> true | _ -> false) in
       (match List.assoc_opt cf.type_name kinds with
+       | Some Secret ->
+         errors := make_error cf.loc
+           ~hint:"if you must hand a client a value once (a fresh API key, a reset token), that is not a secret you hold but a token you mint: `Crypto.randomToken`, send it, and store only its `Crypto.fingerprint`"
+           (Printf.sprintf
+              "codec '%s': `%s` is a `secret`, which has no serialization. A secret is one-way at the network boundary — it can come in (request bodies and job payloads decode it), it cannot go back out, and a codec would be exactly the way back out."
+              cf.name cf.type_name)
+           :: !errors
        | Some Record when uses_adt_json ->
          errors := make_error cf.loc
            ~hint:(Printf.sprintf "use a record-style codec (`toJson { ... }` / `fromJson [ ... ]`) for record/entity `%s`, or apply `adtJson` to an ADT (a `type` with constructors)" cf.type_name)

@@ -1,5 +1,7 @@
 module Lesson66QueryParameters exposing [SearchServer]
 
+# lesson: track=api order=230 needs=lesson15-api-handlers-server
+# summary: Read query parameters, cookies and headers in an auth function, so the handler only ever sees proven values
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 66 — Reading query parameters
 #

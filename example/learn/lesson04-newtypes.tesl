@@ -9,6 +9,8 @@ module Lesson04Newtypes exposing [
   emailAddress,
 ]
 
+# lesson: track=basics order=110 needs=none
+# summary: Give a String or Int its own nominal type, so a UserId can never be passed where a ProjectId is expected
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

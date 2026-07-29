@@ -13,7 +13,8 @@
 ;;; Run: racket editor/tesl-mcp/tests/protocol-smoke.rkt
 ;;; Exit code 0 on success, 1 on any failed assertion.
 
-(require json
+(require racket/file
+         json
          racket/port
          racket/runtime-path)
 
@@ -21,6 +22,26 @@
 (define server-path (simplify-path (build-path here ".." "tesl-mcp.rkt")))
 (define repo-root   (simplify-path (build-path here ".." ".." "..")))
 (define lesson61    (build-path repo-root "example" "learn" "lesson61-step-debugging.tesl"))
+
+;; The conditional-breakpoint line, DERIVED from the lesson rather than hardcoded.
+;;
+;; It was the literal 191, and adding two metadata header comment lines to the
+;; lesson moved the intended statement to 192 — so the breakpoint armed on a line
+;; where `n` is not yet bound, and the failure read "debug_inspect local n ==
+;; \"-10\"" as if the MCP debug surface were broken. Two sibling debugger tests
+;; had the identical defect. A test must not hardcode a line number into a file
+;; other people edit.
+;;
+;; We want the last statement of the "rejects negative score" test block before
+;; the `expectFail`, i.e. the point where `n`, `y` and `z` are all in scope.
+(define conditional-break-line
+  (let loop ([lines (file->lines lesson61)] [n 1])
+    (cond
+      [(null? lines)
+       (error 'smoke "could not find `let z = 2.32` in ~a — has the lesson changed?"
+              lesson61)]
+      [(regexp-match? #rx"^  let z = 2[.]32" (car lines)) n]
+      [else (loop (cdr lines) (add1 n))])))
 
 (define failures 0)
 (define (check! ok? label)
@@ -143,7 +164,7 @@
                                           'file (path->string lesson61)
                                           'mode "test"
                                           'breakpoints
-                                          (list (hasheq 'line 191
+                                          (list (hasheq 'line conditional-break-line
                                                         'condition "n == -10"))))))
   (define di-res (hash-ref di 'result (hasheq)))
   (check! (not (hash-ref di-res 'isError #f)) "debug_inspect not an error")
@@ -159,8 +180,9 @@
         (and (equal? (hash-ref l 'name #f) "n") l)))
     (check! (and n-local (equal? (hash-ref n-local 'value #f) "-10"))
             "debug_inspect local n == \"-10\" at the conditional breakpoint")
-    (check! (equal? (hash-ref (hash-ref di-json 'breakpoint (hasheq)) 'line #f) 191)
-            "debug_inspect breakpoint line == 191"))
+    (check! (equal? (hash-ref (hash-ref di-json 'breakpoint (hasheq)) 'line #f)
+                    conditional-break-line)
+            (format "debug_inspect breakpoint line == ~a" conditional-break-line)))
 
   ;; ── unknown method → JSON-RPC error -32601 ──
   (printf "\n[unknown method]\n")

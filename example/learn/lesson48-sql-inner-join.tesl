@@ -5,6 +5,8 @@ module Lesson48SqlInnerJoin exposing [
   findOrderItemsByOrderId,
 ]
 
+# lesson: track=data order=680 needs=lesson21-sql-reference
+# summary: Query two entities together on a foreign key with innerJoin
 # ─────────────────────────────────────────────
 # QUICK START — innerJoin
 # ─────────────────────────────────────────────

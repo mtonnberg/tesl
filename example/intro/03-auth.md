@@ -22,6 +22,12 @@ auth cookieAuth(request: HttpRequest) -> user: User ::: Authenticated user
 
 `auth` is the special form for authentication. It reads the request and either produces a value with `Authenticated` proof, or fails with a 401. The proof is unforgeable — only `auth` functions can introduce it.
 
+> **The credential check is elided above.** A bare cookie read is **not** authentication — the client
+> chooses its own cookies. Verify a signed session (`Crypto.checkSignature`, or `JWT.verify` on a
+> signed token) and mint the fact from the *verified* value; the compiler reports the guessable
+> shape as `SEC001`. See `tesl help manual best-practices#security`. What this page is about is the
+> half above that: once the fact exists, it cannot be skipped.
+
 ---
 
 ## Handlers declare what they need

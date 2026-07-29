@@ -10,7 +10,8 @@ import Tesl.Http exposing [HttpRequest]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Dict exposing [Dict.lookup]
 import Tesl.Time exposing [nowMillis, PosixMillis, time]
-import Tesl.Env exposing [env, envInt, envRead]
+import Tesl.Env exposing [env, envInt, envRead, requireEnv]
+import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.verify]
 import Tesl.String exposing [String.length, String.startsWith, String.contains]
 import Tesl.Int exposing [Int.parse]
 import Tesl.List exposing [List.isEmpty, List.filterCheck]
@@ -30,8 +31,12 @@ import Tesl.Database exposing [
 ]
 capability todoDbRead implies dbRead
 capability todoDbWrite implies dbWrite
-capability todoReadHttpCookie
-capability todoWebService implies todoDbRead, todoDbWrite, todoReadHttpCookie, time, random
+# `envRead` is part of the closure, not an extra the caller must remember: the
+# cookie-auth path reads the session signing key from the environment, so a
+# capability that grants "read the auth cookie" has to grant that too. Otherwise
+# every caller — including the test harness — needs to know the app's internals.
+capability todoReadHttpCookie implies jwt, envRead
+capability todoWebService implies todoDbRead, todoDbWrite, todoReadHttpCookie, time, random, envRead
 
 type UserId = String
 
@@ -110,11 +115,20 @@ fn resolveExamplePort(teslPort: Maybe String, portEnv: Maybe String) -> Int =
 
 fact Authenticated (req: User)
 
+# A bare `cookies "user"` check is NOT authentication: the client picks that
+# cookie, so `Cookie: user=anna` impersonates anna. This reads a SIGNED session
+# token instead — JWT.verify checks the HMAC-SHA256 signature and the `exp`
+# claim, and auto-401s on anything it did not mint. The user id is the `sub`
+# claim, i.e. it lives INSIDE the signature and the client cannot edit it.
 auth cookieAuth(request: HttpRequest) -> requestUser: User ::: Authenticated requestUser
   requires [todoReadHttpCookie] =
-  case Dict.lookup "user" request.cookies of
-    Something userId -> ok (User { id: userId, role: "user" }) ::: Authenticated requestUser
-    Nothing -> fail 401 "Missing or invalid user cookie"
+  case Dict.lookup "session" request.cookies of
+    Nothing -> fail 401 "Missing session cookie"
+    Something raw ->
+      let claims = JWT.verify (JwtToken raw) (JwtSecret (requireEnv "SESSION_JWT_SECRET"))
+      case Dict.lookup "sub" claims of
+        Nothing -> fail 401 "Session token has no subject"
+        Something userId -> ok (User { id: UserId userId, role: "user" }) ::: Authenticated requestUser
 
 fact TitleSafe (title: String)
 
@@ -281,7 +295,7 @@ server TodoServer for TodoApi {
   completeTodo = completeTodo
 }
 
-main() -> App requires [todoWebService, envRead] =
+main() -> App requires [todoWebService] =
   let _ = initTelemetry service "todo-api" endpoint "in-memory" console True
   let port = resolveExamplePort (env "TESL_TODO_API_PORT") (env "PORT")
   let _ = seedExampleData()

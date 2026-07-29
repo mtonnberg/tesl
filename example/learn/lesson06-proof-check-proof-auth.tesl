@@ -7,6 +7,8 @@ module Lesson06ProofCheckProofAuth exposing [
   adminAuth,
 ]
 
+# lesson: track=proofs order=60 needs=lesson05-intro-to-proofs
+# summary: The three proof-producing function kinds: check validates at runtime, establish asserts a trust boundary, auth proves identity
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────
@@ -32,6 +34,12 @@ module Lesson06ProofCheckProofAuth exposing [
 import Tesl.Prelude exposing [Int, Fact, String]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Env exposing [requireEnv, envRead]
+import Tesl.Crypto exposing [
+  Secret,
+  Crypto.checkSignature,
+  Crypto.signatureFromHex,
+]
 
 # ─── CHECK: validates at runtime, fails gracefully with HTTP status ───────────
 #
@@ -79,17 +87,35 @@ establish makeProofTrusted (n: Int) -> Fact (Trusted n) =
 #
 # Note: auth calls Dict.lookup "user" request.cookies — this matches against Maybe String.
 # "Nothing" means the cookie was absent; "Something value" means it was present.
+#
+# A BARE COOKIE CHECK IS NOT AUTHENTICATION. This lesson used to read a `user`
+# cookie and mint IsAdmin when it equalled "admin" — but the CLIENT chooses that
+# cookie, so `Cookie: user=admin` walked straight in. The compiler now reports
+# that shape as SEC001 (`tesl help SEC001`).
+#
+# The honest version below reads a SIGNED session: the server minted
+# `session` with `Crypto.signWith key payload` and handed back the tag in
+# `sessionSig`. `Crypto.checkSignature` recomputes the tag over `session` with
+# the server's key, compares it in constant time, and fails 401 unless it
+# matches — so `ok` is only reachable for a value the server itself issued.
+# Note the shape: a `check` INSIDE the `auth`. The check yields the verified
+# payload (carrying an `Authentic` fact); the `auth` is the one trusted place
+# that converts "the server signed this" into the domain fact `IsAdmin`.
 
 fact IsAdmin (n: String)
 
-auth adminAuth(request: HttpRequest) -> String ? IsAdmin =
-  case Dict.lookup "user" request.cookies of
-    Nothing -> fail 401 "admin only" # no user cookie → unauthenticated
-    Something userId -> # cookie present
-      if userId == "admin" then
-        ok userId ::: IsAdmin userId # it's the admin user → attach IsAdmin proof
-      else
-        fail 401 "admin only" # any other user → reject
+auth adminAuth(request: HttpRequest) -> String ? IsAdmin
+  requires [envRead] =
+  case Dict.lookup "session" request.cookies of
+    Nothing -> fail 401 "admin only" # no session cookie → unauthenticated
+    Something payload -> # cookie present
+      case Dict.lookup "sessionSig" request.cookies of
+        Nothing -> fail 401 "admin only" # unsigned → nothing to verify
+        Something sigHex ->
+          let key = Secret (requireEnv "ADMIN_SESSION_KEY")
+          # Constant-time; auto-401 on a tag that does not match.
+          let adminId = check Crypto.checkSignature key (Crypto.signatureFromHex sigHex) payload
+          ok adminId ::: IsAdmin adminId # signature verified → attach IsAdmin proof
 
 # ─────────────────────────────────────────────
 # UNDERSTANDING — why it works this way
@@ -111,11 +137,15 @@ auth adminAuth(request: HttpRequest) -> String ? IsAdmin =
 #          Typical source: cookies, JWT tokens, session IDs in HTTP headers.
 #          Failure mode: return HTTP 401 Unauthorized to client.
 #
-# The "ok userId::: IsAdmin user" in adminAuth:
-# - "userId" is the local binding from the "Something userId" case branch (the raw cookie value)
-# - "user" is the NAMED RETURN VALUE declared in "-> user: String::: IsAdmin user"
-# - The proof fact "IsAdmin user" is attached to the returned value using the return binding name.
-# The handler parameter receives this as "user: String::: IsAdmin user".
+# The "ok adminId ::: IsAdmin adminId" in adminAuth:
+# - "adminId" is the local binding produced by the `check Crypto.checkSignature`
+#   — the VERIFIED payload, not the raw cookie value
+# - The proof fact "IsAdmin adminId" is attached to the returned value.
+# The handler parameter receives this as "user: String ::: IsAdmin user".
+#
+# WHY THE VERIFICATION MATTERS HERE: `auth` is a trust boundary, and a trust
+# boundary is only as good as what it inspects. Reading a cookie and believing
+# it is not a check — it is the client's opinion, laundered into a fact.
 #
 # In practice, auth functions usually return the authenticated user record
 # (e.g., an AdminUser struct) rather than just the raw string.

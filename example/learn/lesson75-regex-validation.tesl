@@ -23,6 +23,8 @@ import Tesl.Regex exposing [
   Regex.split,
 ]
 
+# lesson: track=stdlib order=690 needs=lesson25-standard-library-strings-lists-ints
+# summary: Match, extract and replace with Tesl.Regex, where the pattern always comes first
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

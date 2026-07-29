@@ -1,5 +1,7 @@
 module Lesson16CompleteNotesApi exposing [NotesServer]
 
+# lesson: track=api order=150 needs=lesson15-api-handlers-server,lesson18-database-sql-and-proofs,lesson04-newtypes
+# summary: Read a complete CRUD service end to end — newtypes, proof-carrying records, auth, handlers, api and server in one file
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

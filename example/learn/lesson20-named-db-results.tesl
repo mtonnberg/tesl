@@ -8,6 +8,8 @@ module Lesson20NamedDbResults exposing [
   existentialFetch,
 ]
 
+# lesson: track=data order=210 needs=lesson18-database-sql-and-proofs
+# summary: Tie a fetched entity to the variable the caller binds it to, with the ? named-pack operator and FromDb
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

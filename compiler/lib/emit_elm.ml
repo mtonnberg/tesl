@@ -1359,8 +1359,8 @@ let emit_elm ?module_name_override (m : module_form) : string =
 
   (* ── Newtypes ── *)
   let newtypes = List.filter_map (function
-    | DType (TypeNewtype { name; base_type; _ }) -> Some (name, base_type)
-    | DType (TypeAlias  { name; base_type; _ }) -> Some (name, base_type)
+    | DType (TypeNewtype { name; base_type; secret; _ }) -> Some (name, base_type, secret)
+    | DType (TypeAlias  { name; base_type; _ }) -> Some (name, base_type, false)
     | _ -> None
   ) m.decls in
 
@@ -1368,8 +1368,29 @@ let emit_elm ?module_name_override (m : module_form) : string =
     add "-- ---------------------------------------------------------------------------\n";
     add "-- Newtypes\n";
     add "-- ---------------------------------------------------------------------------\n\n";
-    List.iter (fun (name, base_type) ->
+    List.iter (fun (name, base_type, secret) ->
       let elm_base = elm_type_of_type_expr base_type in
+      (* Direction-dependent (see the same note in emit_ts.ml): the checker has
+         already rejected every RESPONSE-position secret, so a secret that
+         reaches here is a REQUEST field and emits as the plain base type — an
+         `Elm type alias Password = String` the caller can build from a string
+         it already holds.
+
+         Both the decoder AND the encoder are emitted.  The roadmap's "do not
+         emit an encoder" reading does not survive contact: the CLIENT is
+         outside the guarantee boundary ("nothing outside Tesl is covered"), it
+         holds the plaintext, and a request-body encoder is the one legitimate
+         direction — a request record's own encoder calls this one.  Dropping
+         the DECODER was tried and is worse than useless: a request record gets
+         a decoder too (Elm clients decode their own payloads), and it
+         references this one, so the generated module simply would not compile.
+         A transparent alias to String has nothing to hide anyway; the ONE
+         thing that matters is enforced upstream — the checker will not let a
+         secret appear in a response type at all. *)
+      if secret then begin
+        addf "-- `%s` is a Tesl `secret`: request-only. Tesl never serializes one\n" name;
+        addf "-- into a response, so nothing on the way back carries this type.\n"
+      end;
       addf "type alias %s =\n    %s\n\n" name elm_base;
       let base_dec = decode_expr_of_type base_type in
       addf "%s : D.Decoder %s\n" (decoder_fn_name name) name;

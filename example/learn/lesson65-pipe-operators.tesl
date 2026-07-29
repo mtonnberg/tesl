@@ -8,6 +8,8 @@ module Lesson65PipeOperators exposing [
   processChain,
 ]
 
+# lesson: track=basics order=350 needs=lesson13-partial-application-and-pipelines
+# summary: Remove nested parentheses with the forward and backward pipe operators
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 65 — Pipe Operators: |> and <|
 #

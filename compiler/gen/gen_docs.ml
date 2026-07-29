@@ -72,7 +72,7 @@ let () =
   (* Root-level docs *)
   List.iter (fun f ->
     emit oc f (Filename.concat repo_root f)
-  ) ["LANGUAGE-SPEC.md"; "TESL.md"; "README.md"; "INSTALL.md"];
+  ) ["LANGUAGE-SPEC.md"; "README.md"; "INSTALL.md"];
 
   (* manual/ *)
   let manual_dir = Filename.concat repo_root "manual" in

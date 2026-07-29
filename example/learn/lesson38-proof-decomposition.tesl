@@ -11,6 +11,8 @@ module Lesson38ProofDecomposition exposing [
   decomposeThenCall,
 ]
 
+# lesson: track=proofs order=560 needs=lesson09-proof-composition
+# summary: Split a proof-carrying value into a bare value and a detached proof
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

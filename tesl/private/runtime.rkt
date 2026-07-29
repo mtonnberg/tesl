@@ -36,12 +36,27 @@
 ;; the static layer (which rejects them), not by this runtime guard.  Delegates
 ;; to `equal?` for the actual comparison so all structural semantics are
 ;; unchanged for every non-function value.
+;; SECRET `==`.  `secret X = T` keeps Eq (unlike PasswordHash/Signature, whose
+;; only legitimate comparison IS a verification) and lowers it to a
+;; CONSTANT-TIME compare: `==` is the sanctioned way to check a secret, so an
+;; early-exit `equal?` here would hand an attacker a byte-at-a-time oracle.
+;; This is the single point — every `==`/`!=` in generated code routes here.
+;; The compare is by (type-name, payload): two DIFFERENT secret types can never
+;; be compared in a well-typed program (unify is nominal), so the type-name
+;; check is a cheap non-secret discriminator, and only the payloads go through
+;; the timing-safe path.
 (define (tesl-equal? a b)
   (when (or (procedure? a) (procedure? b))
     (raise-user-error
      'comparison
      "functions cannot be compared for equality (== / !=); this indicates a checker bug — please report it"))
-  (equal? a b))
+  (cond
+    [(or (secret-value? a) (secret-value? b))
+     (and (secret-value? a) (secret-value? b)
+          (equal? (newtype-value-type-name a) (newtype-value-type-name b))
+          (secret-constant-time-equal? (newtype-value-value a)
+                                       (newtype-value-value b)))]
+    [else (equal? a b)]))
 
 (define (empty-string->false value)
   (if (and (string? value) (string=? (string-trim value) ""))

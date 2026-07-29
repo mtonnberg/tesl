@@ -7,6 +7,8 @@ module Lesson58HttpClient exposing [
   buildBearerHeader,
 ]
 
+# lesson: track=stdlib order=500 needs=none
+# summary: Call an external HTTP service from Tesl and handle the typed response
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 58 — HttpClient: Outgoing HTTP Requests
 #

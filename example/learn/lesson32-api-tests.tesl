@@ -14,6 +14,8 @@ import Tesl.Database exposing [
   SocketConnection,
 ]
 
+# lesson: track=testing order=160 needs=lesson14-test-blocks,lesson15-api-handlers-server
+# summary: Test a whole HTTP endpoint from Tesl: seeded state, request bodies and JSON response assertions
 # ── Goal ─────────────────────────────────────────────────────────────────────
 # Learn the new `api-test` block by writing the same kinds of tests you would
 # otherwise need Racket for: request bodies, seeded state, and JSON response

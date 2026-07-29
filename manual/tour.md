@@ -177,6 +177,12 @@ get "/todos/mine"
   -> List Todo
 ```
 
+The credential check is elided here — the point of the snippet is the proof, not the cookie. A bare
+cookie read is **not** authentication: the client chooses its own cookies, and the compiler reports
+that shape as `SEC001`. Verify a signed session (`Crypto.checkSignature`, or `JWT.verify` on a
+signed token) and mint the fact from the verified value — see
+`tesl help manual best-practices#security`.
+
 ### Capabilities: explicit side effects
 
 Every function lists what it touches. Think of it as dependency injection, but enforced by the
@@ -751,7 +757,13 @@ fn completeSignup(plan: String) -> String requires [] =
 Most of Tesl's safety guarantees are *compile-time only* and disappear before your program runs: if
 it's a proof or a capability, the static cost is essentially zero; if it's actual work (validating a
 value, reading a cookie, executing a query), it runs exactly once, at the right moment, and never
-again. The full per-feature table — proofs, `check`, capabilities, `ForAll`, ADTs, newtypes,
+again.
+
+Be precise about what "zero-cost" claims, though: it refers to **proof erasure specifically**, not to
+all runtime overhead. Proof tracking is erased after type-checking and costs nothing, but each
+`fn`/`handler` call still pays a small always-on capability-grant + return-shape-validation cost.
+
+The full per-feature table — proofs, `check`, capabilities, `ForAll`, ADTs, newtypes,
 `telemetry`, and auth — is single-sourced in the canonical
 [proof cost model](best-practices.md#proof-cost-model).
 
@@ -1001,7 +1013,7 @@ tesl run app.tesl     # serves on http://localhost:8086
 ```
 
 See [`INSTALL.md`](../INSTALL.md) for full installation options (home-manager, NixOS modules, editor
-setup). The `example/learn/` folder contains 70+ lessons from hello world through ADTs, proofs,
+setup). The `example/learn/` folder holds the lesson corpus, from hello world through ADTs, proofs,
 database queries, queues, and real-time SSE — each a small, runnable `.tesl` file with inline
 explanations, browsable via `tesl help manual examples`.
 

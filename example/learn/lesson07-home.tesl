@@ -1,5 +1,7 @@
 module Lesson07Home exposing [InBounds, checkInBounds, Sanitized, sanitize]
 
+# lesson: track=proofs order=260 needs=lesson05-intro-to-proofs
+# summary: Declare proof predicates in one module and export them so other modules can name them
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

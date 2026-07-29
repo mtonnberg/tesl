@@ -23,48 +23,48 @@
 (define-checker
   (checkAge [n : Integer])
   #:returns [n : Integer ::: (ValidAge n)]
-  (thsl-src! "example/learn/lesson08-proof-transport.tesl" 27 (list (cons 'n *n)) (lambda () (if (and (>= *n 0) (<= *n 150)) (accept (ValidAge n) #:value *n) (reject "invalid age" #:http-code 400)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson08-proof-transport.tesl" 29 (list (cons 'n *n)) (lambda () (if (and (>= *n 0) (<= *n 150)) (accept (ValidAge n) #:value *n) (reject "invalid age" #:http-code 400)))))
 
 (define/pow
   (birthday [age : Integer ::: (ValidAge age)])
   #:returns Integer
-  (let ([withoutProof (thsl-src! "example/learn/lesson08-proof-transport.tesl" 38 (list (cons 'age *age)) (lambda () (forget-proof age)))]) (thsl-src! "example/learn/lesson08-proof-transport.tesl" 39 (list (cons 'withoutProof *withoutProof) (cons 'age *age)) (lambda () (+ (raw-value withoutProof) 1)))))
+  (let ([withoutProof (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson08-proof-transport.tesl" 40 (list (cons 'age *age)) (lambda () (forget-proof age)))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson08-proof-transport.tesl" 41 (list (cons 'withoutProof *withoutProof) (cons 'age *age)) (lambda () (+ (raw-value withoutProof) 1)))))
 
 (define/pow
   (showAge [age : Integer ::: (ValidAge age)])
   #:returns String
-  (thsl-src! "example/learn/lesson08-proof-transport.tesl" 48 (list (cons 'age *age)) (lambda () (let ([tesl-proof-binding-0 age]) (let ([rawAge (forget-proof tesl-proof-binding-0)] [ageProof (detach-all-proof tesl-proof-binding-0)]) (format "age is ~a" (tesl-display-val *rawAge)))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson08-proof-transport.tesl" 50 (list (cons 'age *age)) (lambda () (let ([tesl-proof-binding-0 age]) (let ([rawAge (forget-proof tesl-proof-binding-0)] [ageProof (detach-all-proof tesl-proof-binding-0)]) (format "age is ~a" (tesl-display-val *rawAge)))))))
 
 (module+ test
   (require rackunit)
   (test-case "checkAge valid"
     (call-with-fresh-memory-db '() (lambda ()
-  (define n1 (thsl-src! "example/learn/lesson08-proof-transport.tesl" 161 (list) (lambda () 0)))
+  (define n1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson08-proof-transport.tesl" 163 (list) (lambda () 0)))
   (define tesl-checked-1 (checkAge n1))
   (when (check-fail? tesl-checked-1)
     (raise-user-error 'tesl-test "unexpected failure in let r1: ~a" (check-fail-message tesl-checked-1)))
   (define r1 tesl-checked-1)
-  (define n2 (thsl-src! "example/learn/lesson08-proof-transport.tesl" 163 (list (cons 'r1 r1) (cons 'n1 n1)) (lambda () 25)))
+  (define n2 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson08-proof-transport.tesl" 165 (list (cons 'r1 r1) (cons 'n1 n1)) (lambda () 25)))
   (define tesl-checked-2 (checkAge n2))
   (when (check-fail? tesl-checked-2)
     (raise-user-error 'tesl-test "unexpected failure in let r2: ~a" (check-fail-message tesl-checked-2)))
   (define r2 tesl-checked-2)
-  (define n3 (thsl-src! "example/learn/lesson08-proof-transport.tesl" 165 (list (cons 'r2 r2) (cons 'n2 n2) (cons 'r1 r1) (cons 'n1 n1)) (lambda () 150)))
+  (define n3 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson08-proof-transport.tesl" 167 (list (cons 'r2 r2) (cons 'n2 n2) (cons 'r1 r1) (cons 'n1 n1)) (lambda () 150)))
   (define tesl-checked-3 (checkAge n3))
   (when (check-fail? tesl-checked-3)
     (raise-user-error 'tesl-test "unexpected failure in let r3: ~a" (check-fail-message tesl-checked-3)))
   (define r3 tesl-checked-3)
-  (check-equal? (thsl-src! "example/learn/lesson08-proof-transport.tesl" 167 (list (cons 'r3 r3) (cons 'n3 n3) (cons 'r2 r2) (cons 'n2 n2) (cons 'r1 r1) (cons 'n1 n1)) (lambda () 1)) 1)
+  (check-equal? (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson08-proof-transport.tesl" 169 (list (cons 'r3 r3) (cons 'n3 n3) (cons 'r2 r2) (cons 'n2 n2) (cons 'r1 r1) (cons 'n1 n1)) (lambda () 1)) 1)
     ))
   )
 
   (test-case "checkAge rejects"
     (call-with-fresh-memory-db '() (lambda ()
-  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson08-proof-transport.tesl" 171 (list) (lambda ()
+  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson08-proof-transport.tesl" 173 (list) (lambda ()
                           (checkAge -1))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkAge -1"))
-  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "example/learn/lesson08-proof-transport.tesl" 172 (list) (lambda ()
+  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson08-proof-transport.tesl" 174 (list) (lambda ()
                           (checkAge 151))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: check checkAge 151"))
@@ -73,23 +73,23 @@
 
   (test-case "birthday increments"
     (call-with-fresh-memory-db '() (lambda ()
-  (define n (thsl-src! "example/learn/lesson08-proof-transport.tesl" 176 (list) (lambda () 30)))
+  (define n (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson08-proof-transport.tesl" 178 (list) (lambda () 30)))
   (define tesl-checked-4 (checkAge n))
   (when (check-fail? tesl-checked-4)
     (raise-user-error 'tesl-test "unexpected failure in let age: ~a" (check-fail-message tesl-checked-4)))
   (define age tesl-checked-4)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson08-proof-transport.tesl" 178 (list (cons 'age age) (cons 'n n)) (lambda () (birthday age)))) 31)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson08-proof-transport.tesl" 180 (list (cons 'age age) (cons 'n n)) (lambda () (birthday age)))) 31)
     ))
   )
 
   (test-case "showAge produces string"
     (call-with-fresh-memory-db '() (lambda ()
-  (define n (thsl-src! "example/learn/lesson08-proof-transport.tesl" 182 (list) (lambda () 25)))
+  (define n (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson08-proof-transport.tesl" 184 (list) (lambda () 25)))
   (define tesl-checked-5 (checkAge n))
   (when (check-fail? tesl-checked-5)
     (raise-user-error 'tesl-test "unexpected failure in let age: ~a" (check-fail-message tesl-checked-5)))
   (define age tesl-checked-5)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson08-proof-transport.tesl" 184 (list (cons 'age age) (cons 'n n)) (lambda () (showAge age)))) "age is 25")
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson08-proof-transport.tesl" 186 (list (cons 'age age) (cons 'n n)) (lambda () (showAge age)))) "age is 25")
     ))
   )
 

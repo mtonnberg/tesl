@@ -472,14 +472,28 @@ let emit_ts (m : module_form) : string =
 
   (* ── Newtypes ── *)
   let newtypes = List.filter_map (function
-    | DType (TypeNewtype { name; base_type; _ }) -> Some (name, base_type)
-    | DType (TypeAlias  { name; base_type; _ }) -> Some (name, base_type)
+    | DType (TypeNewtype { name; base_type; secret; _ }) -> Some (name, base_type, secret)
+    | DType (TypeAlias  { name; base_type; _ }) -> Some (name, base_type, false)
     | _ -> None
   ) m.decls in
 
   if newtypes <> [] then begin
     add "// --- Newtypes ---\n\n";
-    List.iter (fun (name, base_type) ->
+    List.iter (fun (name, base_type, secret) ->
+      (* A `secret` reaching a generated client is DIRECTION-DEPENDENT, and the
+         direction is already decided for us: the checker rejects a secret in
+         every response position (endpoint returns, SSE payloads, and
+         transitively any record reachable from them), so the only secret a
+         generator can ever be handed is one in a REQUEST type.  There it emits
+         as a plain `string` — the client holds the plaintext and must be able to
+         send it, and it is NOT branded, because a brand would force the caller
+         to mint a Tesl-side value it has no way to obtain. *)
+      if secret then begin
+        addf "// `%s` is a Tesl `secret`: request-only. Tesl will not serialize one\n" name;
+        addf "// into a response, so this type never appears on the way back.\n";
+        addf "export const %sSchema = z.string();\n" name;
+        addf "export type %s = z.infer<typeof %sSchema>;\n\n" name name
+      end else
       let base_schema = match base_type with
         | TName { name = "String"; _ } -> "z.string()"
         | TName { name = "Int" | "Integer"; _ } -> "z.number().int()"

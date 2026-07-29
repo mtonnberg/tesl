@@ -7,6 +7,8 @@ module Lesson40ImplicitValueUnwrapping exposing [
 ]
 import Tesl.Prelude exposing [Int, Bool, String]
 
+# lesson: track=proofs order=640 needs=lesson05-intro-to-proofs
+# summary: Why a proof-carrying parameter can be used as a plain value with no unwrapping syntax
 # lesson40: Implicit Value Unwrapping
 #
 # In Tesl, function parameters carry GDP metadata so the compiler can

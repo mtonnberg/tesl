@@ -8,6 +8,8 @@ module Lesson50NestedConstructorPatterns exposing [
   describeResult,
 ]
 
+# lesson: track=basics order=750 needs=lesson49-literal-patterns
+# summary: Match a constructor and the shape of its field in a single case arm
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

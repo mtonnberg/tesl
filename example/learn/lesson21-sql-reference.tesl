@@ -30,6 +30,8 @@ module Lesson21SqlReference exposing [
   swapStock,
 ]
 
+# lesson: track=data order=220 needs=lesson18-database-sql-and-proofs
+# summary: The whole SQL surface in one file: select, insert, update, delete, ordering, aggregates and upsert
 # ─────────────────────────────────────────────
 # QUICK START — SQL forms cheat-sheet
 # ─────────────────────────────────────────────

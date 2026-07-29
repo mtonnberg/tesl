@@ -14,13 +14,14 @@ Use `tesl help manual best-practices` to access this from the CLI.
 4. [Validation Patterns](#validation-patterns)
 5. [Proof Management](#proof-management)
 6. [Proof Cost Model](#proof-cost-model)
-7. [Error Handling](#error-handling)
-8. [API Design](#api-design)
-9. [Database Access](#database-access)
-10. [Money and Units](#money-and-units)
-11. [Interop and Foreign Work](#interop-and-foreign-work)
-12. [Testing](#testing)
-13. [Performance](#performance)
+7. [Security](#security)
+8. [Error Handling](#error-handling)
+9. [API Design](#api-design)
+10. [Database Access](#database-access)
+11. [Money and Units](#money-and-units)
+12. [Interop and Foreign Work](#interop-and-foreign-work)
+13. [Testing](#testing)
+14. [Performance](#performance)
 
 ---
 
@@ -296,9 +297,152 @@ tesl run --debug my-api.tesl                    # breakpoints + raw-value inspec
 | Newtypes (`type UserId = String`) | A thin wrapper struct for nominal distinctness; unwrapped automatically on DB and JSON boundaries. |
 
 > This table is the **canonical** proof-cost model for the docs — the overview, getting-started, FAQ,
-> tour, and `TESL.md` all link here rather than restate it. The underlying proof-erasure rules are
+> tour, and the `README` all link here rather than restate it. The underlying proof-erasure rules are
 > specified in [`LANGUAGE-SPEC.md`](../LANGUAGE-SPEC.md); if this table and the spec ever diverge, the
 > language spec is authoritative.
+
+---
+
+## Security
+
+The compiler carries a dedicated **`Security`** diagnostic category (`SEC0xx`) — run
+`tesl help codes` to list it, and `tesl help SEC001` for any single code. Everything in this
+section is either enforced by one of those codes or is a rule Tesl cannot check for you.
+
+### A cookie check is not authentication
+
+**❌ Don't:** decide who the caller is by comparing request data against a string:
+
+```tesl
+auth cookieAuth(request: HttpRequest) -> user: String ::: Authenticated user =
+  case Dict.lookup "user" request.cookies of
+    Nothing -> fail 401 "no user cookie"
+    Something userId ->
+      -- SEC001 fires on the comparison below
+      if userId == "admin" then
+        ok userId ::: Authenticated userId
+      else
+        fail 401 "admin only"
+```
+
+The client picks the value of `user`, so `Cookie: user=admin` walks straight in. Nothing about
+this is authentication: it is a client-supplied claim being read back as if it were a fact. The
+same applies to a `role` cookie, an `X-User-Id` header, or a `?user=` query parameter — **any
+value the client sends is a request, never a credential.** The compiler reports this shape as
+`SEC001`.
+
+**✅ Do:** authenticate against something the client cannot forge, and let the verification mint
+the fact:
+
+```tesl
+auth sessionAuth(request: HttpRequest) -> user: String ::: Authenticated user
+  requires [readSessionCookie, envRead] =
+  case Dict.lookup "session" request.cookies of
+    Nothing -> fail 401 "Not signed in"
+    Something payload ->
+      case Dict.lookup "sessionSig" request.cookies of
+        Nothing -> fail 401 "Not signed in"
+        Something sigHex ->
+          -- Recomputes the tag over `payload` with the server's key, in
+          -- constant time, and fails 401 unless it matches. `Authenticated`
+          -- is minted only on the far side of that check.
+          let verified = check Crypto.checkSignature
+                           (Secret (requireEnv "SESSION_SIGNING_KEY"))
+                           (Crypto.signatureFromHex sigHex) payload
+          ok verified ::: Authenticated verified
+```
+
+Three shapes are honest, in rough order of how much machinery they need:
+
+| Shape | Verify with | Notes |
+|---|---|---|
+| Signed session value | `check Crypto.checkSignature key sig payload` → `Authentic payload` | Stateless; the payload is readable by the client but not writable |
+| Signed token (JWT) | `JWT.verify token secret` | Checks the HMAC **and** the `exp` claim, auto-401s; claims travel inside the signature |
+| Opaque session id | your own session table lookup | `Crypto.randomToken` to mint; revocable, but needs storage |
+
+Comparing an **already-verified** value against a literal is correct and does not fire — the
+verified subject is yours, not the client's. `SEC001` stops tracking a value the moment it passes
+through `Crypto.checkSignature`, `Crypto.checkPassword`, `JWT.verify`, or a `check`/`auth` call.
+
+### Never let the client declare its own privileges
+
+A `role` that arrives in a cookie, header or query parameter is a request to be an administrator,
+not evidence of being one. Put the role **inside the signed payload** (a JWT claim, or a MAC that
+covers the role as well as the user id) or look it up server-side from the authenticated user id.
+
+```tesl
+-- ❌ privilege escalation: the client sends `role=admin` and the handler believes it
+case Dict.lookup "role" request.cookies of
+  Something role -> ok AdminUser { id: userId, role: role } ::: Authenticated requestUser
+
+-- ✅ the role is a claim inside the signed token, so editing the cookie invalidates it
+let claims = JWT.verify (JwtToken raw) (JwtSecret (requireEnv "SESSION_JWT_SECRET"))
+case Dict.lookup "role" claims of
+  Something role -> ok AdminUser { id: userId, role: role } ::: Authenticated requestUser
+```
+
+Tesl cannot detect this one for you: whether a record field originated with the client is a
+cross-function dataflow question about values the linter has no types for. It is on you, and it is
+the single most common real-world web authorization bug.
+
+### Keys come from the environment, never from the source
+
+```tesl
+-- ❌ SEC003 — committed to the repository, identical in every deployment,
+--    and still in git history after you change it
+let key = Secret "s3cr3t-signing-key"
+
+-- ✅ read it at startup; rotate it where it lives
+let key = Secret (requireEnv "SESSION_SIGNING_KEY")
+```
+
+`Secret` has a constructor precisely so a config read can produce one — `SEC003` is what keeps
+that constructor from becoming a place to type a key.
+
+### Verify tags, do not compare them
+
+```tesl
+-- ❌ SEC004 — `==` on String short-circuits, so the comparison time leaks how
+--    many leading bytes of the correct tag were guessed
+let matches = Crypto.signatureHex (Crypto.signWith key payload) == provided
+
+-- ✅ constant-time, and it yields a fact instead of a Bool
+let verified = check Crypto.checkSignature key (Crypto.signatureFromHex provided) payload
+```
+
+This is why `Signature` has no `==` at all: the only legitimate comparison of two tags **is** a
+verification. `Crypto.signatureHex` exists to put a tag in a header and `Crypto.signatureFromHex`
+to read one back out — neither is a way to check one.
+
+### Passwords
+
+Store `Crypto.hashPassword`, never the plaintext and never a fast digest of it
+(`Crypto.fingerprint` is for ETags and cache keys, not passwords). Verify with
+`Crypto.checkPassword`, which is timing-equalized against user enumeration and yields a
+`PasswordVerified` fact rather than a `Bool`.
+
+Where two same-typed plaintexts are in scope at once — change-password (`oldPassword`,
+`newPassword`) and password-reset (`resetToken`, `newPassword`, `confirmPassword`) — demand
+`HashFor` one layer up, and hashing the wrong one stops compiling:
+
+```tesl
+fn storeNewPassword(user: User, newPassword: String,
+                    hash: PasswordHash ::: HashFor newPassword) -> Unit = ...
+
+storeNewPassword user np (Crypto.hashPassword np)                 -- compiles
+storeNewPassword user np (Crypto.hashPassword body.oldPassword)   -- rejected
+```
+
+### What Tesl deliberately does not check
+
+- **Entropy of string literals.** A lint that guesses whether `"abc123"` is a key fires on test
+  vectors and fixtures forever. `SEC003` is structural instead: a literal in a *key position*.
+- **Field names.** Whether `password: String` should have been a `secret` type is a naming
+  judgement; it is planned behind a suppression mechanism rather than shipped as an unsilenceable
+  warning.
+- **Whether an `auth` body verified anything at all.** Every honest `auth` reads request data, so
+  the shape is not a signal on its own — which is exactly why `SEC001` keys on the *literal
+  comparison* rather than on the read.
 
 ---
 

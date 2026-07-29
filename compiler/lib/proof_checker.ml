@@ -1143,7 +1143,12 @@ let stdlib_predicates : string list =
   @ [ "IsNonZero"; "IsNonNegative"; "IsNonEmpty"; "IsUpperCase"; "IsLowerCase"
     ; "IsTrimmed"; "IsSorted"; "HasKey"; "Authenticated"; "Fact"; "FloatNonZero"
     (* Money (First-Class Units) predicates, owned by Tesl.Money *)
-    ; "SameCurrency"; "NonNegativeMoney"; "RateFor" ]
+    ; "SameCurrency"; "NonNegativeMoney"; "RateFor"
+    (* Crypto predicates, owned by Tesl.Crypto.  Deliberately NOT in
+       Type_system.framework_proof_predicates (that set is the reserved,
+       never-user-mintable one); these are ordinary stdlib predicates whose only
+       producing sites are the three rows in Validation_common.stdlib_func_infos. *)
+    ; "HashFor"; "PasswordVerified"; "Authentic" ]
 
 (** Collect predicate names produced by check/auth/establish functions in imported modules. *)
 let load_imported_predicates (m : module_form) : string list =

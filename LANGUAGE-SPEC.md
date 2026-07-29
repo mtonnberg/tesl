@@ -638,6 +638,7 @@ The current frontend gives special treatment to these module names:
 - `Tesl.Http` — HTTP request type (`HttpRequest`). Dot-access fields, each a `Dict String String`: `request.cookies`, `request.headers` (names lowercased), `request.queryParameters` (URL-query values are form-url-decoded; repeated keys are last-wins; keys are case-sensitive). An api-test supplies query parameters inline in the path, e.g. `get "/search?q=hello%20world"`.
 - `Tesl.Telemetry` — telemetry sentinel bindings (`telemetry`, `initTelemetry`) and the ambient metric instruments (`counter`, `histogram`, `gauge`). See §5.2.
 - `Tesl.Queue` — queue capabilities (`queueRead`, `queueWrite`, `pubsub`), proof predicates (`FromQueue`, `FromDeadQueue`)
+- `Tesl.Crypto` — password storage, message authentication, digests and secrets (`PasswordHash`, `Signature`, `Secret`; facts `HashFor`, `PasswordVerified`, `Authentic`). Every primitive is libsodium. Reuses `random` for the two operations that draw randomness; introduces no capability of its own. See §21.7.
 - `Tesl.UUID` — UUID generation and validation: `UUID.v4`, `UUID.v7`, `UUID.validate`, `IsUuid` proof predicate, `uuidV4Codec`, `uuidV7Codec`. The `uuid` capability gates generation; `UUID.validate` requires no capability. See §21.1.
 - `Tesl.JWT` — JSON Web Token support: `JWT.sign`, `JWT.verify`, `JWT.decode`, nominal newtypes `JwtToken` and `JwtSecret`. The `jwt` capability gates all operations. Algorithm: HS256. See §21.2.
 - `Tesl.HttpClient` — outgoing HTTP requests: `HttpClient.get`, `HttpClient.post`, `HttpClient.put`, `HttpClient.delete`, the `HttpResponse` record, and the `httpClient` capability. See §21.3.
@@ -4083,6 +4084,86 @@ check requireSlug(raw: String) -> raw: String ::: ValidSlug raw =
 ```
 
 See `example/learn/lesson75-regex-validation.tesl`.
+
+### 21.7 `Tesl.Crypto`
+**Implemented.**
+
+Password storage, message authentication, content digests, and secrets. Import:
+
+```tesl
+import Tesl.Crypto exposing [
+  PasswordHash, Signature, Secret,
+  HashFor, PasswordVerified, Authentic,
+  Crypto.hashPassword, Crypto.checkPassword, Crypto.needsRehash,
+  Crypto.signWith, Crypto.checkSignature,
+  Crypto.fingerprint, Crypto.keyFingerprint, Crypto.randomToken,
+]
+```
+
+**Every primitive is libsodium, unmodified.** Tesl's contribution is the type system around the primitives, never the primitives. The implementation (`tesl/crypto.rkt`) marshals values across the FFI and chooses libsodium's own recommended parameters; it implements no cryptography. `tesl doc Crypto.<name>` states the primitive underneath every function — friendly names hide the *choice*, never the *fact*.
+
+**No mechanism reaches the application author.** No algorithm choice, no work factor, no nonce, no salt, no encoding, no length. Every knob is a place where a non-expert makes a wrong call and gets a plausible-looking result. Experts get transparency through documentation and the algorithm tag inside every stored artifact — not through parameters.
+
+**Capabilities.** A capability marks an *effect*; sensitivity is carried by the types and the facts, which track the value rather than the function. So only the two operations that draw randomness are gated, and they reuse the existing `random`:
+
+| Gated by `random` | Ungated (pure) |
+|---|---|
+| `Crypto.hashPassword` (draws a salt), `Crypto.randomToken` | everything else — `checkPassword`, `signWith`, `checkSignature`, `needsRehash`, `fingerprint`, `keyFingerprint` |
+
+`Tesl.JWT`'s `jwt` capability is inconsistent with that rule — `JWT.sign` is a pure HMAC and is gated — and is retained as known debt rather than propagated: removing a capability would break every `requires [jwt]` in the wild.
+
+**Types.**
+
+| Type | Secret? | `==` | `Ord` | `.value` | Constructor |
+|---|---|---|---|---|---|
+| `PasswordHash` | yes | **no** | no | **no** | **none** |
+| `Secret` | yes | yes, **constant-time** | no | **no** | `Secret "…"` |
+| `Signature` | no | **no** | no | **no** | via `Crypto.signatureFromHex` |
+
+- `PasswordHash` has **no caller-callable constructor**, so `PasswordHash "hunter2"` is a `T001` unknown-constructor error: a plaintext cannot be blessed as a hash.
+- `PasswordHash` and `Signature` have **no `Eq` at all** — not for timing, but because a hand comparison would route around `Crypto.checkPassword` / `Crypto.checkSignature` and quietly defeat the design. Their only legitimate comparison *is* a verification.
+- `Secret` keeps `==`, lowered to libsodium's `sodium_memcmp`, so the familiar operator stays and the timing leak does not. `Ord` is denied on all three: an ordered comparison against a secret is a binary-search oracle for its value.
+- `Signature` is **not** secret. A message authentication tag is public data — publishing it is the entire point — and redacting it would make webhook debugging impossible.
+- **Storage is not rendering.** A `PasswordHash` column stores and reads its real value, exactly like any other newtype column; otherwise it could never be verified against. Redaction applies where a value is *displayed*.
+
+**Facts.**
+
+| Fact | Minted by | Meaning |
+|---|---|---|
+| `HashFor plaintext` | `Crypto.hashPassword` | This hash is the hash of *that* plaintext |
+| `PasswordVerified stored` | `Crypto.checkPassword` | A submitted password was checked against this stored hash |
+| `Authentic payload` | `Crypto.checkSignature` | This payload's tag verified |
+
+All three are minted **only** by those functions. A hand-written `fn f(p) -> PasswordHash ::: HashFor p = …` is rejected: they are absent from `proof_discharge.ml`'s `stdlib_auto_preds`, so there is no fail-open path that grants them by name.
+
+**Functions.**
+
+| Function | Signature | Notes |
+|---|---|---|
+| `Crypto.hashPassword` | `(plaintext: String) -> PasswordHash ::: HashFor plaintext` | Argon2id, PHC string format, libsodium's INTERACTIVE parameters read at call time. Requires `random`. Rejects input over **1024 bytes** with a 400 — libsodium imposes no bound of its own, so an unbounded memory-hard hash on an unauthenticated endpoint is a denial-of-service amplifier. Rejection, never truncation. |
+| `Crypto.checkPassword` | `(stored: Maybe PasswordHash) (candidate: String) -> ok stored ::: PasswordVerified stored \| fail 401` | Constant-time. Takes `Maybe` **deliberately**: with `Nothing` it hashes against a dummy, so a missing user and a wrong password cost the same and return the same message. Without that, a login endpoint enumerates registered addresses. |
+| `Crypto.needsRehash` | `(stored: PasswordHash) -> Bool` | True when the stored hash was minted with weaker parameters than the current ones, or in an unparseable format. Tesl does **not** perform the rehash: a crypto function writing to the database would be a hidden effect. |
+| `Crypto.signWith` | `(key: Secret) (payload: String) -> Signature` | HMAC-SHA256. Expert alias `Crypto.hmacSha256`. Deliberately not named `sign`: this is *symmetric* authentication, and the bare name is reserved for asymmetric signing so that "I signed it, so anyone can verify it" cannot be inferred. |
+| `Crypto.checkSignature` | `(key: Secret) (sig: Signature) (payload: String) -> ok payload ::: Authentic payload \| fail 401` | Constant-time. This is why there is no `constantTimeEquals` on the surface — the compare lives where it cannot be got wrong. |
+| `Crypto.signatureHex` | `(sig: Signature) -> String` | Transport out, for a header or body. |
+| `Crypto.signatureFromHex` | `(hex: String) -> Signature` | Transport in — a webhook's signature header (Stripe, GitHub). Malformed input fails the verification cleanly; it never raises. |
+| `Crypto.fingerprint` | `(content: String) -> String` | SHA-256, hex. For ETags, cache keys, dedup, idempotency keys. Expert alias `Crypto.sha256`; `Crypto.sha512` also exists. **Not for passwords.** |
+| `Crypto.keyFingerprint` | `(key: Secret) -> String` | "Did I load the right key?" — a domain-separated SHA-256 truncated to 16 hex characters, safe to log. Not proof of key possession. |
+| `Crypto.randomToken` | `() -> String` | 256 bits from the OS CSPRNG, base64url (43 URL-safe characters). No length parameter, on purpose. Requires `random`. |
+
+**Argument order.** Configuration first, subject last, so `payload |> Crypto.signWith key` reads correctly (`x |> f` is `f x`, so the piped value is the last argument) and `Crypto.signWith key` partially applies into a reusable signer.
+
+**Upgrades and rolling deploys.** Cost parameters are read from libsodium at call time, never hardcoded, so a libsodium upgrade silently strengthens every *new* hash while `needsRehash` starts answering `True` for old ones — application code that was correct stays correct. Stored data is never rewritten: a hash is one-way, so the plaintext exists for exactly one moment, the next successful login, and upgrade-on-login is therefore not the weaker option but the only mechanism. Verification accepts every scheme ever shipped because the algorithm and its parameters live inside each stored PHC string, so old and new instances read the same rows during a rolling deploy — no flag day, no dual-write window, and **never** a bulk rewrite at startup.
+
+**Foreign-hash migration, and its limit.** libsodium verifies foreign **Argon2i / Argon2id** PHC strings, including ones with parameters libsodium would not itself choose. It **cannot** verify bcrypt (`$2a$`/`$2b$`) or scrypt (`$7$`), and has no PBKDF2 at all. Both limits are pinned by tests so behaviour and documentation cannot drift apart.
+
+**What `PasswordVerified` does and does not deliver.** It proves a password was checked against a stored hash. Reaching `Authenticated` still requires an `establish`. What the fact buys is that the unverified step becomes *small, explicit and reviewable* — one `establish` beside a real verification — instead of an `auth` body that never verified anything. That is a genuine improvement; it is not a proof of correct authentication.
+
+**Not provided, deliberately:** general `encrypt`/`decrypt`, raw AES/ChaCha, cipher modes, MD5, SHA-1, any parameter knob, and key custody (envelope encryption, KMS integration, rotation infrastructure — that is platform infrastructure, not language surface; Tesl's job is to accept a key as a value).
+
+**Native dependency.** `Tesl.Crypto` loads **libsodium** through the FFI. It is declared in `flake.nix` (so both the dev shell and an installed `nix profile install` resolve it by absolute store path via `$TESL_LIBSODIUM`) and installed in both `tesl build` Docker images. Resolution is *lazy*: requiring the module does not touch the library. A missing library produces an actionable install hint, and both properties are ratcheted by `tests/cli-portability.sh`.
+
+See `example/learn/lesson64-password-storage.tesl` and `tests/crypto-runtime-tests.rkt`.
 
 ---
 

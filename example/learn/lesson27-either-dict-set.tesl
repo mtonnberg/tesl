@@ -8,6 +8,8 @@ module Lesson27EitherDictSet exposing [
   getByValidKeys,
 ]
 
+# lesson: track=stdlib order=290 needs=lesson02-adts-and-pattern-matching
+# summary: Three more standard containers — Either for two-sided results, Dict for lookups, Set for uniqueness
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

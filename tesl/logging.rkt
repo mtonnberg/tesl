@@ -14,8 +14,13 @@
 ;;; routes through `tesl-emit!`, which writes to stderr (when verbose) AND to the
 ;;; telemetry sink (when installed), carrying structured attributes.
 ;;;
-;;; Dependency direction: this module requires NOTHING, so dsl/otel.rkt can
-;;; require it and install the sink with no require cycle.
+;;; Dependency direction: this module requires nothing that could cycle back —
+;;; only dsl/types.rkt's `secret` predicates, and dsl/types.rkt itself requires
+;;; only dsl/private/*.  dsl/otel.rkt can still require this file and install
+;;; the sink with no require cycle.
+
+(require (only-in "../dsl/types.rkt"
+                  secret-value? secret-header-value? secret-redaction-text))
 
 (provide
  tesl-verbose?
@@ -96,10 +101,18 @@
   ;; Condense multi-line SQL to one line for readability
   (define one-line
     (regexp-replace* #px"\\s+" (string-trim sql) " "))
+  ;; STORAGE IS NOT RENDERING: a secret column writes and reads its real value,
+  ;; so the bound parameter really is the secret — but this line RENDERS it into
+  ;; the framework trace (stderr and, via tesl-emit!, the telemetry sink), which
+  ;; is exactly a sink that must redact.
+  (define (render-param p)
+    (if (or (secret-value? p) (secret-header-value? p))
+        secret-redaction-text
+        (~a p)))
   (define param-str
     (if (null? params)
         ""
-        (format " [~a]" (string-join (map ~a params) ", "))))
+        (format " [~a]" (string-join (map render-param params) ", "))))
   (tesl-emit! "SQL" (format "~a~a" one-line param-str)
               (list (cons 'db.statement one-line)
                     (cons 'db.param_count (length params)))))

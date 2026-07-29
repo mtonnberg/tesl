@@ -258,8 +258,19 @@ type adt_variant = {
 }
 
 type type_form =
-  | TypeNewtype of { name : string; base_type : type_expr; loc : loc }
-                   (** type UserId = String *)
+  | TypeNewtype of { name : string; base_type : type_expr; secret : bool; loc : loc }
+                   (** [type UserId = String], or [secret Password = String] when
+                       [secret] is true.
+
+                       A SECRET is a newtype in every structural respect — same
+                       nominal identity, same runtime [newtype-value] wrapper,
+                       same SQL round-trip — MINUS [.value], minus [Ord], plus
+                       redaction at every rendering sink, plus rejection in a
+                       response/codec/generated-client position.  It is a FLAG
+                       on this constructor rather than a constructor of its own
+                       precisely because everything else about it is identical:
+                       [TypeNewtype] is matched at ~55 sites, and every
+                       [{ name; base_type; _ }] pattern keeps working. *)
   | TypeAlias   of { name : string; base_type : type_expr; loc : loc }
                    (** transparent alias — currently same as newtype at surface *)
   | TypeAdt     of { name : string; params : string list; variants : adt_variant list; loc : loc }

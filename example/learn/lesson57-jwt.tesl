@@ -5,6 +5,8 @@ module Lesson57Jwt exposing [
   wrapAndVerify,
 ]
 
+# lesson: track=stdlib order=330 needs=lesson06-proof-check-proof-auth
+# summary: Sign and verify JSON Web Tokens for stateless auth, with nominal types keeping token and secret apart
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 57 — JWT: JSON Web Tokens
 #

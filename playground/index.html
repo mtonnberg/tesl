@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tesl playground — check, don't run</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #16181d; --muted: #5c6370; --line: #d8dce3;
+    --panel: #f6f7f9; --err: #b4232a; --warn: #8a6100; --info: #1f5fa8;
+    --ok: #1a7f4b; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --fg: #e6e8ec; --muted: #9aa2af; --line: #2c313a;
+      --panel: #1b1e24; --err: #ff7b72; --warn: #d9a441; --info: #79b8ff;
+      --ok: #6cc48a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header {
+    padding: .6rem 1rem; border-bottom: 1px solid var(--line);
+    display: flex; gap: .6rem; align-items: center; flex-wrap: wrap;
+  }
+  header h1 { font-size: 1rem; margin: 0 .5rem 0 0; font-weight: 600; }
+  header .note { color: var(--muted); font-size: .8rem; }
+  button, select {
+    font: inherit; padding: .25rem .6rem; border: 1px solid var(--line);
+    border-radius: 4px; background: var(--panel); color: var(--fg); cursor: pointer;
+  }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 0; height: calc(100vh - 52px); }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; height: auto; } }
+  #src {
+    width: 100%; height: 100%; min-height: 60vh; resize: none; border: 0;
+    border-right: 1px solid var(--line); padding: .8rem;
+    font-family: var(--mono); font-size: 13px; line-height: 1.5;
+    background: var(--bg); color: var(--fg); tab-size: 2; white-space: pre;
+    overflow: auto;
+  }
+  #right { overflow: auto; padding: .8rem; }
+  .status { font-size: .82rem; color: var(--muted); margin-bottom: .6rem; }
+  .diag {
+    border: 1px solid var(--line); border-left-width: 4px; border-radius: 4px;
+    padding: .5rem .6rem; margin-bottom: .5rem; background: var(--panel);
+  }
+  .diag.error   { border-left-color: var(--err); }
+  .diag.warning { border-left-color: var(--warn); }
+  .diag.info    { border-left-color: var(--info); }
+  .diag .head { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; }
+  .code {
+    font-family: var(--mono); font-weight: 700; font-size: .82rem;
+    padding: 0 .3rem; border: 1px solid var(--line); border-radius: 3px;
+  }
+  .sev { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
+  .diag.error .sev { color: var(--err); }
+  .diag.warning .sev { color: var(--warn); }
+  .span { font-family: var(--mono); font-size: .8rem; color: var(--muted); }
+  .src-tag { font-size: .75rem; color: var(--muted); }
+  .msg { white-space: pre-wrap; margin: .35rem 0 0; }
+  .fix {
+    margin-top: .45rem; padding-top: .45rem; border-top: 1px dashed var(--line);
+    display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+  }
+  .fix .title { font-size: .85rem; }
+  .fix .kind { font-family: var(--mono); font-size: .75rem; color: var(--muted); }
+  .clean { color: var(--ok); font-weight: 600; }
+  details { margin-top: .8rem; border-top: 1px solid var(--line); padding-top: .6rem; }
+  summary { cursor: pointer; font-size: .85rem; }
+  pre {
+    font-family: var(--mono); font-size: 12px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 4px; padding: .6rem;
+    overflow-x: auto; max-height: 40vh;
+  }
+  .cannot { font-size: .8rem; color: var(--muted); margin-top: 1rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tesl playground</h1>
+  <select id="examples" aria-label="Examples"></select>
+  <button id="check">Check</button>
+  <button id="share">Copy share link</button>
+  <span class="note">checks only — nothing is executed, no server involved</span>
+</header>
+<main>
+  <textarea id="src" spellcheck="false" aria-label="Tesl source"></textarea>
+  <div id="right">
+    <div class="status" id="status">loading the compiler…</div>
+    <div id="diags"></div>
+    <div id="artifacts"></div>
+    <p class="cannot">
+      This page runs the real Tesl compiler (parser, type checker, proof checker,
+      validation, linter, emitters) compiled to JavaScript. It cannot
+      <strong>run</strong> a Tesl program: there is no Racket runtime, no
+      PostgreSQL, no HTTP server and no SSE here. To run one, install the CLI and
+      use <code>tesl run</code>.
+    </p>
+  </div>
+</main>
+
+<script>
+// ─── Examples ────────────────────────────────────────────────────────────────
+// The module header must match the file name; the driver derives the virtual
+// file name from the header, so any `module X` works.
+const EXAMPLES = [
+  {
+    name: "1 · Clean: proofs that check out",
+    src: `module ProofsOk exposing [ValidTitle, isSafeTitle, saveTitle, useIt]
+
+import Tesl.Prelude exposing [String]
+import Tesl.String exposing [String.length]
+
+# A named guarantee about a String.
+fact ValidTitle (title: String)
+
+# The one place the rule is enforced. On success the value carries the stamp.
+check isSafeTitle(title: String) -> title: String ::: ValidTitle title =
+  if 3 <= String.length title && String.length title <= 120 then
+    ok title ::: ValidTitle title
+  else
+    fail 400 "Title must be 3-120 characters"
+
+# Stands in for the database write: it REQUIRES the stamp.
+fn saveTitle(title: String ::: ValidTitle title) -> String =
+  "saved: \${title}"
+
+# Validate once, then use it. This compiles.
+fn useIt(raw: String) -> String =
+  let validated = check isSafeTitle raw
+  saveTitle validated
+`
+  },
+  {
+    name: "2 · PROOF ERROR: unvalidated string reaches the write",
+    src: `module ProofsForgotten exposing [ValidTitle, isSafeTitle, saveTitle, oops]
+
+import Tesl.Prelude exposing [String]
+import Tesl.String exposing [String.length]
+
+fact ValidTitle (title: String)
+
+check isSafeTitle(title: String) -> title: String ::: ValidTitle title =
+  if 3 <= String.length title && String.length title <= 120 then
+    ok title ::: ValidTitle title
+  else
+    fail 400 "Title must be 3-120 characters"
+
+fn saveTitle(title: String ::: ValidTitle title) -> String =
+  "saved: \${title}"
+
+# The bug: \`raw\` was never validated, and it is handed straight to the write.
+# There is no runtime check here to forget — the compiler refuses the program.
+fn oops(raw: String) -> String =
+  saveTitle raw
+`
+  },
+  {
+    name: "3 · Type error with a machine-applicable fix",
+    src: `module MissingImport exposing [titleLength]
+
+import Tesl.Prelude exposing [Int, String]
+
+# \`String.length\` needs its import. The diagnostic carries the exact edit —
+# press Apply.
+fn titleLength(title: String) -> Int =
+  String.length title
+`
+  },
+  {
+    name: "4 · Capabilities: a write without the permission to write",
+    src: `module CapabilityMissing exposing [Note, NoteDb, addNote]
+
+import Tesl.Prelude exposing [String]
+import Tesl.DB exposing [dbRead]
+import Tesl.Database exposing [Database, Memory]
+
+entity Note table "notes" primaryKey id {
+  id: String @db(text)
+  body: String @db(text)
+}
+
+database NoteDb = Database {
+  schema: "notes"
+  entities: [Note]
+  backend: Memory
+}
+
+# \`requires [dbRead]\` but the body writes. Capabilities are checked, not
+# documented — and this is not something you can forget to test for.
+fn addNote(id: String, body: String) -> Note
+  requires [dbRead] =
+  insert Note { id: id, body: body }
+`
+  }
+];
+
+// ─── Share links: the source lives in the URL fragment, nowhere else ─────────
+// #z<base64url> = raw-deflate compressed; #s<base64url> = uncompressed.
+// No backend, no storage, no moderation surface. The fragment is never sent to
+// any server by the browser.
+const b64u = {
+  enc(bytes) {
+    let s = "";
+    for (const b of bytes) s += String.fromCharCode(b);
+    return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  },
+  dec(str) {
+    const s = atob(str.replace(/-/g, "+").replace(/_/g, "/"));
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    return out;
+  }
+};
+
+async function encodeShare(text) {
+  const raw = new TextEncoder().encode(text);
+  if (typeof CompressionStream === "function") {
+    try {
+      const cs = new CompressionStream("deflate-raw");
+      const w = cs.writable.getWriter();
+      w.write(raw); w.close();
+      const buf = await new Response(cs.readable).arrayBuffer();
+      return "z" + b64u.enc(new Uint8Array(buf));
+    } catch (e) { /* fall through */ }
+  }
+  return "s" + b64u.enc(raw);
+}
+
+async function decodeShare(frag) {
+  if (!frag) return null;
+  const kind = frag[0], body = frag.slice(1);
+  try {
+    if (kind === "s") return new TextDecoder().decode(b64u.dec(body));
+    if (kind === "z") {
+      const ds = new DecompressionStream("deflate-raw");
+      const w = ds.writable.getWriter();
+      w.write(b64u.dec(body)); w.close();
+      const buf = await new Response(ds.readable).arrayBuffer();
+      return new TextDecoder().decode(new Uint8Array(buf));
+    }
+  } catch (e) { return null; }
+  return null;
+}
+
+// ─── Fix application — mirrors compiler/lib/diag_fix.ml `apply` ──────────────
+// Line numbers in the JSON are 0-based, as in the compiler.
+function applyFix(source, fix) {
+  if (fix.kind === "multi") {
+    const key = f => f.kind === "replace_range"
+      ? [f.start_line, f.start_col]
+      : [f.line !== undefined ? f.line : f.start_line, 0];
+    const sorted = fix.edits.slice().sort((a, b) => {
+      const ka = key(a), kb = key(b);
+      return kb[0] - ka[0] || kb[1] - ka[1];
+    });
+    return sorted.reduce((s, e) => applyFix(s, e), source);
+  }
+  const lines = source.split("\n");
+  switch (fix.kind) {
+    case "replace_line":
+      lines[fix.line] = fix.replacement;
+      return lines.join("\n");
+    case "insert_line":
+      lines.splice(fix.line, 0, fix.text);
+      return lines.join("\n");
+    case "replace_span": {
+      const n = fix.end_line - fix.start_line + 1;
+      if (fix.replacement === "") lines.splice(fix.start_line, n);
+      else lines.splice(fix.start_line, n, fix.replacement);
+      return lines.join("\n");
+    }
+    case "replace_range": {
+      const s = lines[fix.start_line], e = lines[fix.end_line];
+      const joined = s.slice(0, fix.start_col) + fix.replacement + e.slice(fix.end_col);
+      lines.splice(fix.start_line, fix.end_line - fix.start_line + 1, joined);
+      return lines.join("\n");
+    }
+    default:
+      return source;
+  }
+}
+
+// ─── UI ─────────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+};
+
+let ready = false;
+
+function render(result) {
+  const diags = $("diags"), arts = $("artifacts");
+  diags.replaceChildren(); arts.replaceChildren();
+  const errors = result.diagnostics.filter(d => d.severity === "error").length;
+  const warns = result.diagnostics.filter(d => d.severity === "warning").length;
+  if (result.diagnostics.length === 0) {
+    $("status").innerHTML = '<span class="clean">no diagnostics — this program checks</span>';
+  } else {
+    $("status").textContent =
+      `${errors} error${errors === 1 ? "" : "s"}, ${warns} warning${warns === 1 ? "" : "s"}`;
+  }
+
+  for (const d of result.diagnostics) {
+    const box = el("div", "diag " + (d.severity || "info"));
+    const head = el("div", "head");
+    head.append(el("span", "sev", d.severity));
+    head.append(el("span", "code", d.code));
+    head.append(el("span", "span",
+      `${d.start.line + 1}:${d.start.col + 1}–${d.end.line + 1}:${d.end.col + 1}`));
+    head.append(el("span", "src-tag", d.source));
+    box.append(head);
+    box.append(el("p", "msg", d.message));
+    if (d.fix) {
+      const f = el("div", "fix");
+      f.append(el("span", "title", d.fix.title || "(untitled fix)"));
+      f.append(el("span", "kind", d.fix.kind));
+      const b = el("button", null, "Apply");
+      b.addEventListener("click", () => {
+        $("src").value = applyFix($("src").value, d.fix);
+        run();
+      });
+      f.append(b);
+      box.append(f);
+    }
+    diags.append(box);
+  }
+
+  for (const [key, label] of [["racket", "Generated Racket"],
+                              ["ts", "Generated TypeScript client"],
+                              ["elm", "Generated Elm client"]]) {
+    if (!result[key]) continue;
+    const det = el("details");
+    det.append(el("summary", null, `${label} (${result[key].length} bytes)`));
+    det.append(el("pre", null, result[key]));
+    arts.append(det);
+  }
+}
+
+function run() {
+  if (!ready) return;
+  const t0 = performance.now();
+  let raw;
+  try {
+    raw = teslCheck($("src").value);
+  } catch (e) {
+    $("status").textContent = "compiler threw: " + e;
+    return;
+  }
+  const ms = Math.round(performance.now() - t0);
+  render(JSON.parse(raw));
+  $("status").textContent += `  ·  ${ms} ms`;
+}
+
+let timer = null;
+function scheduleRun() {
+  clearTimeout(timer);
+  timer = setTimeout(run, 400);
+}
+
+async function boot() {
+  const sel = $("examples");
+  EXAMPLES.forEach((ex, i) => {
+    const o = document.createElement("option");
+    o.value = String(i); o.textContent = ex.name;
+    sel.append(o);
+  });
+  sel.addEventListener("change", () => {
+    $("src").value = EXAMPLES[Number(sel.value)].src;
+    history.replaceState(null, "", location.pathname + location.search);
+    run();
+  });
+
+  const shared = await decodeShare(location.hash.slice(1));
+  $("src").value = shared !== null ? shared : EXAMPLES[1].src;
+  if (shared === null) sel.value = "1";
+
+  $("check").addEventListener("click", run);
+  $("src").addEventListener("input", scheduleRun);
+  $("share").addEventListener("click", async () => {
+    const frag = await encodeShare($("src").value);
+    const url = location.origin + location.pathname + location.search + "#" + frag;
+    history.replaceState(null, "", "#" + frag);
+    try { await navigator.clipboard.writeText(url); $("share").textContent = "Copied!"; }
+    catch (e) { $("share").textContent = "URL updated — copy from the address bar"; }
+    setTimeout(() => { $("share").textContent = "Copy share link"; }, 2500);
+  });
+
+  // The compiler .js sets window.teslCheck when it finishes evaluating.
+  const waitFor = () => {
+    if (typeof window.teslCheck === "function") {
+      ready = true;
+      run();
+    } else {
+      setTimeout(waitFor, 50);
+    }
+  };
+  waitFor();
+}
+boot();
+</script>
+<script src="tesl_playground.js" defer></script>
+</body>
+</html>

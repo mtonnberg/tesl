@@ -1,267 +1,120 @@
-# Tesl
+# Tesl — proof-carrying web APIs, for humans and AI agents
 
-**Tesl is an beta-stage language project built for the AI-era that is trying to make web APIs feel closer to a solved problem.**
+**Tesl is a beta-stage language for building web APIs, built for the AI era.** A `check` function
+makes a validated value *carry its proof*, so once data is checked at the boundary the compiler
+structurally prevents whole classes of forgotten-validation and defensive-boilerplate bugs
+downstream. Auth, effects, typed SQL, queues, real-time pub/sub, and AI-agent tools are part of the
+language, not bolted on.
 
-The bet behind Tesl is that most API bugs are not fundamentally “business logic is hard” bugs. They come from validation being forgotten, auth being implicit, effects being hidden, and domain guarantees evaporating a few function calls after the boundary.
+> **Status: beta.** The guarantees below are real and compiler-enforced 
+> guarantees with no runtime re-check ([runtime cost](manual/tour.md#runtime-cost)), and the trust
+> boundary is drawn precisely in [`LANGUAGE-SPEC.md` §7](LANGUAGE-SPEC.md). Breaking changes are
+> expected. Read this as the design intent and what is enforced today — not as a promise.
 
-Tesl is trying to push those concerns into the language itself:
+## The 60-second version
 
-- validate once at the boundary, then carry the result as evidence
-- make auth requirements visible in signatures instead of middleware folklore
-- make capabilities and side effects explicit
-- make common API infrastructure part of the language story instead of an afterthought
-- Combining the strengths of LLMs with a strong and deterministic compiler
+A `fact` is a named claim about a value. A `check` is the only way to introduce one. Ask for a proof
+you have not earned, and the compiler stops you:
 
-The goal is not to produce a clever research toy. The goal is to get to a point where a normal programmer asking _“what should I use for my next web API?”_ can answer _“Tesl”_ because the language makes the correct path the obvious path.
+```tesl
+fact ValidTitle (title: String)
 
-Currently Tesl has gotten the features envisioned at the start and is in a stabilizing phase. New features is (currently) not the main focus.
+check checkTitle(title: String) -> title: String ::: ValidTitle title =
+  if String.length title > 0 then
+    ok title ::: ValidTitle title
+  else
+    fail 400 "title must not be empty"
+
+fn saveTitle(title: String ::: ValidTitle title) -> String =
+  title
+
+fn createTodo(rawTitle: String) -> String =
+  saveTitle rawTitle          # rawTitle was never checked
+```
+
+```text
+$ tesl check todo.tesl
+error[V001]: call to `saveTitle` argument `title` does not statically satisfy declared proof `ValidTitle rawTitle`
+Hint: validate `rawTitle` with a check function that establishes `ValidTitle rawTitle`
+  --> todo.tesl:18:3
+
+  read more: tesl help manual best-practices#proof-management  (explain: tesl help V001)
+```
+
+That error is the language selling itself. **Every diagnostic carries a stable code**, a precise
+span, a manual deep-link, and often a machine-applicable fix — `tesl explain V001` tells you the
+whole story and `tesl help codes` lists every code the compiler can emit. It is also why Tesl suits
+an AI coding agent: the compiler, not a human reviewer, is the thing that says no.
 
 ## Quick start
 
-From nothing to a running, type-checked web API in three steps:
+From nothing to a running, type-checked web API:
 
 ```bash
-# 1. Install Nix with flakes enabled — https://nixos.org/download
-#    (skip if you already have Nix)
-
+# 1. Install Nix with flakes enabled — https://nixos.org/download  (skip if you have it)
 # 2. Install Tesl
 nix profile install github:mtonnberg/tesl
 
 # 3. Scaffold a project and run it
-tesl init myapi            # asks a couple of quick questions (add --yes to take defaults)
+tesl init myapi            # a couple of quick questions; add --yes to take defaults
 cd myapi
-tesl run app.tesl          # starts the project's database if needed, serves on http://localhost:8086
+tesl run app.tesl          # starts the project database if needed, serves on http://localhost:8086
 ```
 
-`tesl init` writes a working app (`app.tesl`), a project manifest (`tesl.toml`), a
-`.env`, and an `AGENTS.md`/`CLAUDE.md` for coding agents. With the default **managed**
-database, `tesl run` auto-starts a project-local PostgreSQL and loads `.env`, so the
-API is live with no extra setup. The scaffold is commented to introduce Tesl's
-headline feature — compile-time proofs — without overwhelming you.
-
-**Ship it as a Docker image** — one command, with or without a bundled database:
-
-```bash
-tesl build --with-postgres       # all-in-one image: app + embedded PostgreSQL
-docker run -p 8086:8086 myapi    # runs anywhere, no external database needed
-
-# or, for production against your own database:
-tesl build --app-only            # smaller image; configure via TESL_POSTGRES_* env at runtime
-```
-
-See [`dev-docs/deploy.md`](dev-docs/deploy.md) for the full deployment guide
-(image flavours, runtime config, GitHub Actions), [`INSTALL.md`](INSTALL.md) for editor setup, and
-[“try the language today”](#try-the-language-today) below for more.
-
-## Beta status
-
-Tesl is in **beta**.
-
-That means, explicitly:
-
-- the language is in active development
-- breaking changes are expected
-- backward compatibility is **not** a goal yet
-- the implementation is real, useful for exploration and building non-critical apps, but it is not finished
-- Feedback and ideas are most appreciated
-
-Tesl can now be installed standalone via Nix flake (`nix profile install github:mtonnberg/tesl`) — see [`INSTALL.md`](INSTALL.md).
-
-## What Tesl is trying to achieve
-
-Tesl is trying to become a language for building web APIs, quickly and safely - where the important guarantees are structural rather than conventional.
-
-In practical terms, that means:
-
-- request validation should not disappear after decoding
-- auth should not be something you merely remember to wire up
-- effects should be declared and checked
-- typed database access, queues, pub/sub, and telemetry should fit into one coherent programming model
-- AI agents should use ordinary typed functions as tools — `Agent { … }` with `asTool fn`, no hand-written JSON schemas
-- refactoring should preserve guarantees instead of silently eroding them
-
-The intended long-term shape is a language that is small, opinionated, explicit, and boringly reliable for API work that people who just want things done will choose since it is the easiest way to a working and stable product.
-
-### Who is Tesl for?
-
-I’m building Tesl for productive web developers—people who today use TypeScript, C#, Java, or Kotlin and want to get things done without the language getting in their way. The goal is for you to feel immediately at home and actually enjoy the workflow.
-
-The goal is to make the theoretically "best path" the path of least resistance—transforming formal logic like GDP (Ghosts of Departed Proofs) from a cumbersome hindrance into a genuine productivity boost. I’m really keen on having type theory enthusiasts involved to help ensure these abstractions remain sound, as long as the end result stays approachable for everyone else.
-
-
-## Current state
-
-Broadly, the project is here today:
-
-- `.tesl` is the primary authoring surface
-- there is a working compiler, CLI, formatter, LSP, and linter
-- the repo contains larger examples, tests, and experimental client-generation work
-- the current implementation is a hybrid system: a frontend compiler plus a Racket runtime/substrate
-- some important guarantees are already enforced statically, while some runtime integrity checks still exist in internal/trusted parts of the current implementation
-- the language design is still being tightened; ergonomics and tooling are still moving targets
-
-So the project is already past the “pure sketch” stage, but it is not yet at the “stable language you can bet a company on” stage.
-
-## Non-goals / anti-goals
-
-Tesl is **not** trying to be:
-
-- a language with many equally valid styles and conventions
-- a framework where auth, validation, and effects are mostly runtime wiring concerns
-- a backward-compatible platform during beta
-- a general-purpose language before it is excellent at the web API problem
-- a language where unsafe escape hatches are the normal way to get things done
-- a project that preserves old syntax forever once a better design is found
-
-The language is intentionally opinionated. If Tesl succeeds, it should do so by being small, sharp, and reliable — not by being endlessly permissive.
-
-**Contributing to the language itself?** See [dev-docs/README.md](dev-docs/README.md) for the dev shell, build, and test workflow.
-
-**Driving Tesl from an AI coding agent?** See [AGENTS.md](AGENTS.md) — the entry point for the `tesl` agent API (compile-check loop, targeted queries, headless debugging).
-
-## Documentation and Help
-
-Tesl provides comprehensive documentation accessible via the CLI:
-
-```bash
-# Show all available commands
-tesl help
-
-# Show the complete manual index
-tesl help manual
-
-# Show specific documentation sections
-tesl help manual overview          # Introduction to Tesl
-tesl help manual language-spec     # Formal language specification
-tesl help manual examples         # Complete list of all examples
-tesl help manual best-practices   # Recommended patterns and conventions
-tesl help manual faq              # Frequently asked questions
-
-# Show ALL documentation concatenated (for LLMs with large context windows)
-tesl help manual full
-# or simply:
-tesl help full
-
-# Search across all documentation
-tesl help search validation
-```
-
-All documentation is also available in the `manual/` directory of the repository, including:
-- **MANUAL.md** - Main documentation index
-- **overview.md** - Introduction and core concepts
-- **examples.md** - Catalog of all example files
-- **best-practices.md** - Style guide and recommended patterns
-- **FAQ.md** - Common questions and troubleshooting
-
-```bash
-# Validate a file (compile + lint + format check — no execution):
-tesl validate example/sandbox.tesl
-
-# Run test blocks inside a file:
-tesl test example/sandbox2.test.tesl
-
-# Run a single block by name; --test-kind (test | api-test | load-test | doctest)
-# disambiguates same-named blocks and runs one api-test/load-test/doctest alone:
-tesl test --test-name "my test" --test-kind api-test example/sandbox2.test.tesl
-```
-
-## Try the language today
-
-### 1. Install
-
-```bash
-nix profile install github:mtonnberg/tesl
-```
-
-Or try without installing: `nix run github:mtonnberg/tesl -- help`
-
-See [`INSTALL.md`](INSTALL.md) for home-manager, NixOS, and editor setup.
-
-### 2. Validate a small Tesl example
-
-```bash
-tesl validate example/sandbox.tesl
-```
-
-### 3. Run a `.tesl` program
-
-```bash
-tesl run example/todo-api.tesl
-tesl run example/admin-task-api.tesl
-```
-
-### 4. Look at other `.tesl` examples in the repo
-
-Browse the full, always-current example catalog with `tesl help manual examples` (or see `manual/examples.md`).
-
-### 5. Run some example APIs
-
-#### Todo API with PostgreSQL
-
-Start a local PostgreSQL instance first (from inside the dev shell):
-
-```bash
-bash scripts/postgres-start.sh
-```
-
-Then run the API:
-
-```bash
-tesl run example/todo-api.tesl
-```
-
-Starts on port `8086` and exposes:
-
-- `POST /todos`
-- `GET /todos/mine`
-- `GET /todos/:todoId`
-- `PUT /todos/:todoId/complete`
-
-Useful local PostgreSQL commands (from inside the dev shell):
-
-```bash
-bash scripts/postgres-init.sh
-bash scripts/postgres-start.sh
-bash scripts/postgres-stop.sh
-```
-
-Relevant PostgreSQL environment variables for the example are:
-
-- `TESL_POSTGRES_HOST`
-- `TESL_POSTGRES_PORT`
-- `TESL_POSTGRES_DATABASE`
-- `TESL_POSTGRES_USER`
-- `TESL_POSTGRES_PASSWORD`
-- `TESL_POSTGRES_SOCKET`
-
-### Example requests
-
-```bash path=null start=null
-curl -sS -X POST http://127.0.0.1:8086/todos \
-  -H 'content-type: application/json' \
-  -d '{"title":"Write the first Tesl program"}' | jq
-```
+`tesl init` writes a working, commented app (`app.tesl`), a manifest (`tesl.toml`), a `.env`, and an
+`AGENTS.md`/`CLAUDE.md` for coding agents. With the default **managed** database, `tesl run`
+auto-starts a project-local PostgreSQL and loads `.env`, so the API is live with no extra setup.
+
+Ship it as a Docker image with `tesl build --with-postgres` (all-in-one) or `tesl build --app-only`
+(bring your own database) — see [`manual/deploy.md`](manual/deploy.md).
+
+**Honest caveat: Nix is a hard gate.** Nix is the only supported install path today. If you do not
+have Nix and do not want it, this is where the trail ends for now — a standalone binary is on the
+roadmap, not done. See [`INSTALL.md`](INSTALL.md).
+
+## Where to go next — pick one
+
+| You are… | Start here |
+|---|---|
+| **new to Tesl** | [`manual/GETTING-STARTED.md`](manual/GETTING-STARTED.md) — `tesl init` to your first proof error, step by step |
+| **done with that, want to build** | [`manual/first-change.md`](manual/first-change.md) — add a real feature to the scaffold, hit a proof error on purpose, understand why the compiler is right |
+| **an AI coding agent**, or pointing one at Tesl | [`AGENTS.md`](AGENTS.md) — the compile-check loop, targeted JSON queries, headless debugging |
+| **convincing yourself** | [`example/intro/`](example/intro/) — a short prose introduction, then [`manual/overview.md`](manual/overview.md) |
+| **reading the whole language** | [`manual/tour.md`](manual/tour.md) — the long read: auth, capabilities, typed SQL, queues, SSE, agents, `ForAll` proofs, tests |
+| **looking something up** | [`LANGUAGE-SPEC.md`](LANGUAGE-SPEC.md) (source of truth), [`manual/best-practices.md`](manual/best-practices.md), [`manual/FAQ.md`](manual/FAQ.md) |
+| **stuck** | `tesl explain <CODE>`, then [`manual/FAQ.md`](manual/FAQ.md) |
+| **changing the compiler** | [`CONTRIBUTING.md`](CONTRIBUTING.md) — environment, the gate, the roadmap, the workflow; then [`dev-docs/README.md`](dev-docs/README.md) for the guides |
+
+Everything above is also in the binary, with no checkout: `tesl help manual` for the index,
+`tesl help manual <section>` for one page, `tesl help search <query>` to grep it all, and
+`tesl help full` to dump the entire corpus into a large-context LLM.
 
 ## Editor and Language Server
 
-The `tesl` binary has built-in editor support. The language server in `editor/tesl-lsp/` bridges the compiler and your editor over JSON-RPC (LSP). A VSCodium/VS Code extension is available in `editor/vscode-tesl/`.
+The `tesl` install includes `tesl-lsp`, and the VSCodium/VS Code extension is on
+[Open VSX](https://open-vsx.org) — search for **Tesl**. You get live diagnostics (with quick-fixes),
+hover types, go-to-definition, completions, and occurrence highlighting, all straight from the
+compiler. `editor/protocol.md` documents the compiler–editor JSON contract the LSP is built on.
 
-The compiler exposes the following JSON flags, which the language server uses to power live diagnostics, go-to-definition, hover types, completions, and occurrence highlighting:
+## What Tesl is trying to achieve
 
-| Flag | Purpose |
-|---|---|
-| `--check-json <file>` | Full diagnostic check — parse errors, type errors, and lint warnings |
-| `--definition-json <file> <line> <col>` | Jump-to-definition location |
-| `--occurrences-json <file> <line> <col>` | All same-file occurrences of a symbol |
-| `--type-at-json <file> <line> <col>` | Inferred type of the expression at the cursor |
-| `--field-at-json <file> <line> <col>` | Record field info at the cursor |
-| `--completions-json <file> <line> <col>` | Context-aware completions (field and identifier) |
-| `--local-bindings-json <file>` | All inferred local binding types in the file |
+Most API bugs are not "business logic is hard" bugs. They come from validation being forgotten, auth
+being implicit, effects being hidden, and domain guarantees evaporating a few calls after the
+boundary. So: validate once and carry the result as evidence; put auth requirements in signatures
+instead of middleware folklore; make capabilities and effects explicit; make queues, pub/sub, typed
+SQL, and agent tools part of the language story; and let refactoring preserve guarantees instead of
+silently eroding them.
 
-All flags return versioned JSON. See `editor/protocol.md` for the full compiler–editor protocol contract and [`editor/vscode-tesl/README.md`](editor/vscode-tesl/README.md) for extension installation instructions.
+Tesl is deliberately opinionated, and deliberately **not**: a language with many equally valid
+styles; a framework where auth, validation, and effects are runtime wiring; a general-purpose
+language before it is excellent at the web-API problem; or a place where unsafe escape hatches are
+the normal way to get things done. The goal is that a normal programmer asking *"what should I use
+for my next web API?"* can answer *"Tesl"* — because the language makes the correct path the obvious
+path.
 
-## Notes on style and imports
+## Beta status, plainly
 
-Tesl is intentionally explicit.
-
-Standard `.tesl` names are explicit. Import general built-ins from `Tesl.Prelude`, import constructor families with syntax like `Maybe(..)`, import built-in capabilities such as `time` explicitly, and pull specialized helpers like `generatePrefixedId` or `env` from their dedicated modules instead of the Prelude.
+The language is in active development, breaking changes are expected, and backward compatibility is
+not a goal yet. The implementation is real and useful for exploration and non-critical apps, but it
+is not finished: some guarantees are enforced statically, and some runtime integrity checks still
+live in trusted internals. Feedback and ideas are most appreciated.

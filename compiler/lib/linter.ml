@@ -1375,6 +1375,276 @@ let lint_int_at_wire filename (source : string) (out : lint_diag list ref) =
       | _ -> ()
     ) m.decls
 
+(* ── Security lints (SEC0xx) ─────────────────────────────────────────────────
+   Their own diagnostic category (Error_codes.Security), and their own governing
+   rule (roadmap/completed/crypto_phase0_security_lints.md):
+
+     A security lint ships only if it is ACTIONABLE (one obvious fix), PRECISE
+     (a clean codebase is COMPLETELY silent) and ABOUT SOMETHING TESL CAN
+     ENFORCE.  Anything failing those belongs in the manual.
+
+   A noisy security lint is worse than none — it trains people to ignore the
+   whole category — and there is no suppression mechanism, so a false positive
+   cannot be silenced at all.  Two checks that were specified and deliberately
+   NOT shipped for exactly that reason:
+
+     - "an `auth` body mints a fact from an unverified request value": fires on
+       26 corpus files including BOTH `tesl init` scaffolds, because every
+       honest `auth` reads request data.  The read is not the signal.
+     - "an authorization decision made from a client-supplied role field": needs
+       cross-function dataflow (auth → record field → handler parameter → field
+       read) plus types the linter does not have.  Documented in
+       `best-practices#security` instead.
+
+   These passes work on the AST.  Tesl forbids shadowing (LANGUAGE-SPEC §13.2),
+   so a FLAT per-declaration set of tainted names is sound and much simpler than
+   threading a scope environment. *)
+
+(* HttpRequest fields that are wholly client-controlled.  `.body` and `.path`
+   are deliberately absent: an `auth` comparing `.path` against a literal is
+   route logic, and a body is validated by a `check`, not by an `auth`. *)
+let sec_request_fields = [ "cookies"; "headers"; "queryParameters" ]
+
+(* Passing through one of these makes a value VERIFIED, and comparing a verified
+   value against a literal is correct authorization.  Taint stops here — without
+   this, the honest replacement pattern would fire SEC001 on itself. *)
+let sec_verifying_heads =
+  [ "check"; "auth";
+    "Crypto.checkSignature"; "Crypto.checkPassword"; "JWT.verify" ]
+
+let rec sec_flatten_app acc (e : Ast.expr) : Ast.expr * Ast.expr list =
+  match e with
+  | Ast.EApp { fn; arg; _ } -> sec_flatten_app (arg :: acc) fn
+  | head -> (head, acc)
+
+(* The dotted name of a callee.  A qualified stdlib call is NOT one identifier:
+   `Crypto.signatureHex x` parses as
+   [EApp { fn = EField { obj = EConstructor "Crypto"; field = "signatureHex" } }],
+   because `Crypto` lexes as a UIDENT (→ [EConstructor]) and `parse_postfix`
+   then folds the `.field` chain onto it.  Reassemble the source spelling. *)
+let rec sec_qualified_name (e : Ast.expr) : string option =
+  match e with
+  | Ast.EVar { name; _ } -> Some name
+  | Ast.EConstructor { name; _ } -> Some name
+  | Ast.EField { obj; field; _ } ->
+    (match sec_qualified_name obj with
+     | Some q -> Some (q ^ "." ^ field)
+     | None -> None)
+  | _ -> None
+
+(* The head name of an application, for a plain or dotted identifier head. *)
+let sec_head_name (e : Ast.expr) : string option =
+  sec_qualified_name (fst (sec_flatten_app [] e))
+
+let sec_is_string_literal (e : Ast.expr) =
+  match e with Ast.ELit { lit = Ast.LString _; _ } -> true | _ -> false
+
+(* Only ever called on a node [sec_is_string_literal] just accepted. *)
+let sec_lit_loc ~(fallback : Location.loc) (e : Ast.expr) : Location.loc =
+  match e with Ast.ELit { loc; _ } -> loc | _ -> fallback
+
+(** Every expression a top-level declaration can contain, for the whole-module
+    walks (SEC003/SEC004 are not `auth`-scoped: a hardcoded key or a hand-rolled
+    tag comparison is just as wrong in a `fn`, a `handler` or a test). *)
+let sec_decl_exprs (d : Ast.top_decl) : Ast.expr list =
+  match d with
+  | Ast.DFunc fd -> [ fd.body ]
+  | Ast.DConst c -> [ c.value ]
+  | Ast.DTest t -> List.concat_map Ast.test_stmt_exprs t.stmts
+  | Ast.DApiTest t -> t.seed_stmts @ List.concat_map Ast.test_stmt_exprs t.stmts
+  | Ast.DLoadTest t ->
+    t.seed_stmts @ List.concat_map Ast.test_stmt_exprs t.request_stmts
+  | _ -> []
+
+(* Names a pattern binds (so a `case` on a tainted scrutinee taints its arms). *)
+let rec sec_pattern_binders (p : Ast.pattern) : string list =
+  match p with
+  | Ast.PVar n -> [ n ]
+  | Ast.PCon { fields; _ } ->
+    List.concat_map (fun (_, sub) -> sec_pattern_binders sub) fields
+  | Ast.PWild | Ast.PNullary _ | Ast.PLit _ -> []
+
+(** Is [e] derived from client-controlled request data, given the already-known
+    tainted names [env]?  Structural: any subexpression that reads a request
+    field taints the whole expression, EXCEPT under a verifying call. *)
+let rec sec_tainted (env : string list) (e : Ast.expr) : bool =
+  match e with
+  | Ast.EField { field; _ } when List.mem field sec_request_fields -> true
+  | Ast.EField { obj; _ } -> sec_tainted env obj
+  | Ast.EVar { name; _ } -> List.mem name env
+  | Ast.EApp _ ->
+    (match sec_head_name e with
+     | Some h when List.mem h sec_verifying_heads -> false
+     | _ ->
+       let head, args = sec_flatten_app [] e in
+       sec_tainted env head || List.exists (sec_tainted env) args)
+  | Ast.EBinop { left; right; _ } ->
+    sec_tainted env left || sec_tainted env right
+  | Ast.EUnop { arg; _ } -> sec_tainted env arg
+  | Ast.EConstructor { args; _ } -> List.exists (sec_tainted env) args
+  | Ast.ERecord { fields; _ } ->
+    List.exists (fun (_, v) -> sec_tainted env v) fields
+  | Ast.EList { elems; _ } -> List.exists (sec_tainted env) elems
+  | Ast.ELit { lit = Ast.LInterp segs; _ } ->
+    List.exists (function Ast.IExpr sub -> sec_tainted env sub | _ -> false) segs
+  | _ -> false
+
+(** Grow the tainted-name set by one pass over [body]: a `let` whose value is
+    tainted taints its name, and a `case` on a tainted scrutinee taints every
+    name its arm patterns bind.  Iterated to a fixpoint by the caller (a `let`
+    can read a name bound later in a sibling branch's textual order). *)
+let sec_taint_step (env : string list) (body : Ast.expr) : string list =
+  Ast_visitor.fold (fun env (e : Ast.expr) ->
+    let add n env = if n = "_" || List.mem n env then env else n :: env in
+    match e with
+    | Ast.ELet { name; value; _ } when sec_tainted env value -> add name env
+    | Ast.ELetProof { value_name; value; _ } when sec_tainted env value ->
+      add value_name env
+    | Ast.ECase { scrut; arms; _ } when sec_tainted env scrut ->
+      List.fold_left (fun env (arm : Ast.case_arm) ->
+        List.fold_left (fun env n -> add n env)
+          env (sec_pattern_binders arm.pattern)) env arms
+    | _ -> env
+  ) env body
+
+let sec_taint_fixpoint (body : Ast.expr) : string list =
+  let rec go env n =
+    if n <= 0 then env
+    else
+      let env' = sec_taint_step env body in
+      if List.length env' = List.length env then env else go env' (n - 1)
+  in
+  go [] 8
+
+(** SEC001 — inside an `auth` body, request-derived data compared with a string
+    literal.  Audit L2's root, stated exactly: the
+    `case Dict.lookup "user" request.cookies of … if userId == "admin"` shape. *)
+let sec001_auth_literal_compare filename (m : Ast.module_form) (out : lint_diag list ref) =
+  List.iter (function
+    | Ast.DFunc (fd : Ast.func_decl) when fd.kind = Ast.AuthKind ->
+      let env = sec_taint_fixpoint fd.body in
+      ignore (Ast_visitor.fold (fun () (e : Ast.expr) ->
+        match e with
+        | Ast.EBinop { op = (Ast.BEq | Ast.BNeq) as op; left; right; op_loc; _ }
+          when (sec_tainted env left && sec_is_string_literal right)
+            || (sec_is_string_literal left && sec_tainted env right) ->
+          let opname = if op = Ast.BEq then "==" else "!=" in
+          out := { file = filename;
+                   line = op_loc.start.line; col = op_loc.start.col;
+                   severity = "warning"; code = "SEC001";
+                   message = Printf.sprintf
+                     "authorization decided by `%s` against a string literal: \
+                      the compared value comes from the request \
+                      (cookies/headers/query), so the client chooses it and the \
+                      comparison proves nothing — `Cookie: user=admin` walks \
+                      in. Authenticate with something the client cannot forge \
+                      (`check Crypto.checkSignature key sig payload`, or \
+                      `JWT.verify` on a signed token) and decide from the \
+                      VERIFIED value. A bare `cookies \"user\"` check is not \
+                      authentication."
+                     opname;
+                   fix = None } :: !out
+        | _ -> ()) () fd.body)
+    | _ -> ()) m.decls
+
+(** SEC003 — a string LITERAL used as key material.  Structural (a literal in a
+    key POSITION), never entropy guessing: the known-answer vectors a crypto
+    test suite needs would light an entropy lint up permanently. *)
+let sec003_hardcoded_secret filename (m : Ast.module_form) (out : lint_diag list ref) =
+  (* Functions whose FIRST argument is the key (all of Tesl.Crypto's keyed
+     operations).  `Secret` itself is handled separately: its only argument is
+     the key material. *)
+  let keyed_first_arg =
+    [ "Crypto.signWith"; "Crypto.checkSignature"; "Crypto.keyFingerprint";
+      "Crypto.hmacSha256" ] in
+  let emit (loc : Location.loc) what =
+    out := { file = filename; line = loc.start.line; col = loc.start.col;
+             severity = "warning"; code = "SEC003";
+             message = Printf.sprintf
+               "hardcoded secret: a string literal is used as %s. A key in the \
+                source is readable by everyone who can read the repository, \
+                stays in git history after you rotate it, and is the same in \
+                every deployment. Read it from the environment instead: \
+                `Secret (requireEnv \"SESSION_SIGNING_KEY\")`."
+               what;
+             fix = None } :: !out
+  in
+  let scan (e : Ast.expr) =
+    ignore (Ast_visitor.fold (fun () (e : Ast.expr) ->
+      match e with
+      | Ast.EApp { loc; _ } ->
+        (match sec_head_name e, snd (sec_flatten_app [] e) with
+         | Some "Secret", (arg :: _) when sec_is_string_literal arg ->
+           emit (sec_lit_loc ~fallback:loc arg) "the value of a `Secret`"
+         | Some h, (key :: _)
+           when List.mem h keyed_first_arg && sec_is_string_literal key ->
+           emit (sec_lit_loc ~fallback:loc key)
+             (Printf.sprintf "the key argument of `%s`" h)
+         | _ -> ())
+      | Ast.EConstructor { name = "Secret"; args = arg :: _; loc; _ }
+        when sec_is_string_literal arg ->
+        emit (sec_lit_loc ~fallback:loc arg) "the value of a `Secret`"
+      | _ -> ()) () e)
+  in
+  List.iter (fun d -> List.iter scan (sec_decl_exprs d)) m.decls
+
+(** SEC004 — a `Crypto.signatureHex` result compared with `==`/`!=`.  A
+    hand-rolled MAC check: `==` on String short-circuits, so the comparison time
+    leaks how many leading bytes of the correct tag were guessed. *)
+let sec004_timing_unsafe_mac filename (m : Ast.module_form) (out : lint_diag list ref) =
+  let is_hex_call (e : Ast.expr) =
+    match e with
+    | Ast.EApp _ -> sec_head_name e = Some "Crypto.signatureHex"
+    | _ -> false
+  in
+  let scan (exprs : Ast.expr list) =
+    (* No shadowing in Tesl, so a flat set of names bound to a signatureHex
+       result is sound across the whole declaration. *)
+    let hex_vars =
+      List.fold_left (fun acc e ->
+        Ast_visitor.fold (fun acc (e : Ast.expr) ->
+          match e with
+          | Ast.ELet { name; value; _ } when is_hex_call value -> name :: acc
+          | Ast.ELetProof { value_name; value; _ } when is_hex_call value ->
+            value_name :: acc
+          | _ -> acc) acc e) [] exprs
+    in
+    let is_hex (e : Ast.expr) =
+      is_hex_call e
+      || (match e with Ast.EVar { name; _ } -> List.mem name hex_vars | _ -> false)
+    in
+    List.iter (fun e ->
+      ignore (Ast_visitor.fold (fun () (e : Ast.expr) ->
+        match e with
+        | Ast.EBinop { op = (Ast.BEq | Ast.BNeq) as op; left; right; op_loc; _ }
+          when is_hex left || is_hex right ->
+          out := { file = filename;
+                   line = op_loc.start.line; col = op_loc.start.col;
+                   severity = "warning"; code = "SEC004";
+                   message = Printf.sprintf
+                     "timing-unsafe MAC comparison: `%s` on a \
+                      `Crypto.signatureHex` result short-circuits at the first \
+                      differing byte, so the comparison time leaks how much of \
+                      the correct tag the caller guessed. `signatureHex` is for \
+                      TRANSPORTING a tag; verify with \
+                      `check Crypto.checkSignature key sig payload`, which \
+                      compares in constant time and yields an `Authentic` fact \
+                      instead of a `Bool` (parse an inbound hex tag with \
+                      `Crypto.signatureFromHex`)."
+                     (if op = Ast.BEq then "==" else "!=");
+                   fix = None } :: !out
+        | _ -> ()) () e)) exprs
+  in
+  List.iter (fun d -> scan (sec_decl_exprs d)) m.decls
+
+let lint_security filename (source : string) (out : lint_diag list ref) =
+  match Parser.parse_module filename source with
+  | Err _ -> ()
+  | Ok m ->
+    sec001_auth_literal_compare filename m out;
+    sec003_hardcoded_secret filename m out;
+    sec004_timing_unsafe_mac filename m out
+
 (* ── Public API ──────────────────────────────────────────────────────────── *)
 
 (** Run all lint checks and return diagnostics as [Compile.diagnostic] values
@@ -1394,6 +1664,12 @@ let lint_file (filename : string) : Compile.diagnostic list =
      linting an unparseable file is meaningless, and the parse error itself is
      already reported by `Compile.check_source`.  Any findings accumulated by the
      line-based passes before the failure are still returned. *)
+  (* Security first, and with its OWN exception guard.  The outer `try` below
+     covers every pass together, so a pass appended at the END silently never
+     runs once an earlier pass raises on a lexer-fatal buffer — which for a
+     SECURITY finding is the wrong failure mode.  Running first with a private
+     guard means neither direction can suppress the other. *)
+  (try lint_security filename src out with Failure _ -> ());
   (try
     lint_file_structure    filename lines out;
     lint_whitespace        filename lines out;

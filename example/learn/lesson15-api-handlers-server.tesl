@@ -1,5 +1,7 @@
 module Lesson15ApiHandlersServer exposing [TaskServer]
 
+# lesson: track=api order=90 needs=lesson03-records,lesson05-intro-to-proofs
+# summary: Build a real HTTP endpoint from records, a check and auth at the boundary, handlers, an api type and a server
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

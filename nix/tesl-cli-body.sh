@@ -1688,6 +1688,24 @@ case "$CMD" in
     echo "tesl ${TESL_VERSION:-dev}"
     [ -n "${TESL_OCAML_COMPILER:-}" ] && echo "compiler: $TESL_OCAML_COMPILER"
     ;;
+  doc|--doc-json|explain)
+    # `tesl doc` / `tesl doc <name>` / `tesl doc Tesl.<Module>` / `tesl explain <CODE>`
+    # are pure compiler surfaces, so they forward verbatim.
+    #
+    # These were UNREACHABLE from an installed CLI until 2026-07-29: there was no
+    # arm for them, so the `*)` branch printed "unknown command" while
+    # `main.exe doc` worked fine — i.e. the documented stdlib-transparency
+    # command failed for everyone who installed via the flake, and only worked
+    # for people running the compiler out of a checkout. That matters
+    # disproportionately for Tesl.Crypto, whose whole rule-4 promise is that
+    # `tesl doc` names the primitive underneath every friendly function name.
+    _tesl_require_compiler
+    if [ "$CMD" = "--doc-json" ]; then
+      "$TESL_OCAML_COMPILER" --doc-json "$@"
+    else
+      "$TESL_OCAML_COMPILER" "$CMD" "$@"
+    fi
+    ;;
   help|--help|-h)
     if [ -n "$1" ]; then
       # Pass help subcommands to the compiler

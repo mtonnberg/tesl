@@ -1,5 +1,7 @@
 module Lesson61StepDebugging exposing [describeScore, computeGrade]
 
+# lesson: track=testing order=390 needs=none
+# summary: Set breakpoints and inspect locals, proof tags included, in the VSCode debugger
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 61 — Step Debugging with VSCode
 #

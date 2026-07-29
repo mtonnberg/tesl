@@ -316,7 +316,7 @@ let () =
     ((Desugar.provenance_from surface).desugared_from = surface);
 
   (* 7. Declarations with no expr children pass through untouched. *)
-  let ty_decl = DType (TypeNewtype { name = "T"; base_type = TName { name = "String"; loc = loc_at 300 }; loc = loc_at 301 }) in
+  let ty_decl = DType (TypeNewtype { name = "T"; base_type = TName { name = "String"; loc = loc_at 300 }; secret = false; loc = loc_at 301 }) in
   check "non-expr declaration passes through verbatim"
     (Desugar.desugar_decl (empty_tables ()) ty_decl = ty_decl);
 

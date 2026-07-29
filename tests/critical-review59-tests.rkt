@@ -30,127 +30,127 @@
 (define-checker
   (checkA [n : Integer])
   #:returns [n : Integer ::: (A n)]
-  (thsl-src! "tests/critical-review59-tests.tesl" 46 (list (cons 'n *n)) (lambda () (if (> *n 0) (accept (A n) #:value *n) (reject "fail A" #:http-code 400)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 46 (list (cons 'n *n)) (lambda () (if (> *n 0) (accept (A n) #:value *n) (reject "fail A" #:http-code 400)))))
 
 (define-checker
   (checkB [n : Integer ::: (A n)])
   #:returns [n : Integer ::: (B n)]
-  (thsl-src! "tests/critical-review59-tests.tesl" 52 (list (cons 'n *n)) (lambda () (if (< *n 1000) (accept (B n) #:value *n) (reject "fail B" #:http-code 400)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 52 (list (cons 'n *n)) (lambda () (if (< *n 1000) (accept (B n) #:value *n) (reject "fail B" #:http-code 400)))))
 
 (define-checker
   (checkC [n : Integer ::: ((A n) && (B n))])
   #:returns [n : Integer ::: (C n)]
-  (thsl-src! "tests/critical-review59-tests.tesl" 58 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 42)) (accept (C n) #:value *n) (reject "fail C" #:http-code 400)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 58 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 42)) (accept (C n) #:value *n) (reject "fail C" #:http-code 400)))))
 
 (define-checker
   (checkD [n : Integer ::: ((A n) && ((B n) && (C n)))])
   #:returns [n : Integer ::: (D n)]
-  (thsl-src! "tests/critical-review59-tests.tesl" 64 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 99)) (accept (D n) #:value *n) (reject "fail D" #:http-code 400)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 64 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 99)) (accept (D n) #:value *n) (reject "fail D" #:http-code 400)))))
 
 (define-checker
   (checkE [n : Integer ::: ((A n) && ((B n) && ((C n) && (D n))))])
   #:returns [n : Integer ::: (E n)]
-  (thsl-src! "tests/critical-review59-tests.tesl" 70 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 500)) (accept (E n) #:value *n) (reject "fail E" #:http-code 400)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 70 (list (cons 'n *n)) (lambda () (if (not (tesl-equal? *n 500)) (accept (E n) #:value *n) (reject "fail E" #:http-code 400)))))
 
 (define-checker
   (checkPos [n : Integer])
   #:returns [n : Integer ::: (IsPositive n)]
-  (thsl-src! "tests/critical-review59-tests.tesl" 76 (list (cons 'n *n)) (lambda () (if (> *n 0) (accept (IsPositive n) #:value *n) (reject "not positive" #:http-code 400)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 76 (list (cons 'n *n)) (lambda () (if (> *n 0) (accept (IsPositive n) #:value *n) (reject "not positive" #:http-code 400)))))
 
 (define-checker
   (checkSmall [n : Integer])
   #:returns [n : Integer ::: (IsSmall n)]
-  (thsl-src! "tests/critical-review59-tests.tesl" 82 (list (cons 'n *n)) (lambda () (if (< *n 100) (accept (IsSmall n) #:value *n) (reject "too large" #:http-code 400)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 82 (list (cons 'n *n)) (lambda () (if (< *n 100) (accept (IsSmall n) #:value *n) (reject "too large" #:http-code 400)))))
 
 (define-trusted
   (proveA [n : Integer])
   #:returns (Fact (A n))
-  (thsl-src! "tests/critical-review59-tests.tesl" 88 (list (cons 'n *n)) (lambda () (trusted-proof (A n)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 88 (list (cons 'n *n)) (lambda () (trusted-proof (A n)))))
 
 (define-trusted
   (proveB [n : Integer])
   #:returns (Fact (B n))
-  (thsl-src! "tests/critical-review59-tests.tesl" 91 (list (cons 'n *n)) (lambda () (trusted-proof (B n)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 91 (list (cons 'n *n)) (lambda () (trusted-proof (B n)))))
 
 (define/pow
   (needsA [n : Integer ::: (A n)])
   #:returns Integer
-  (thsl-src! "tests/critical-review59-tests.tesl" 95 (list (cons 'n *n)) (lambda () *n)))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 95 (list (cons 'n *n)) (lambda () *n)))
 
 (define/pow
   (needsB [n : Integer ::: (B n)])
   #:returns Integer
-  (thsl-src! "tests/critical-review59-tests.tesl" 96 (list (cons 'n *n)) (lambda () *n)))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 96 (list (cons 'n *n)) (lambda () *n)))
 
 (define/pow
   (needsAB [n : Integer ::: ((A n) && (B n))])
   #:returns Integer
-  (thsl-src! "tests/critical-review59-tests.tesl" 97 (list (cons 'n *n)) (lambda () *n)))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 97 (list (cons 'n *n)) (lambda () *n)))
 
 (define/pow
   (needsAll [n : Integer ::: ((A n) && ((B n) && ((C n) && ((D n) && (E n)))))])
   #:returns Integer
-  (thsl-src! "tests/critical-review59-tests.tesl" 98 (list (cons 'n *n)) (lambda () *n)))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 98 (list (cons 'n *n)) (lambda () *n)))
 
 (define/pow
   (needsPositive [n : Integer ::: (IsPositive n)])
   #:returns Integer
-  (thsl-src! "tests/critical-review59-tests.tesl" 99 (list (cons 'n *n)) (lambda () *n)))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 99 (list (cons 'n *n)) (lambda () *n)))
 
 (define/pow
   (doChain5 [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review59-tests.tesl" 104 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-0 (checkA raw)]) (let ([a tesl-checked-0]) (let/check ([tesl-checked-1 (checkB a)]) (let ([b tesl-checked-1]) (let/check ([tesl-checked-2 (checkC b)]) (let ([c tesl-checked-2]) (let/check ([tesl-checked-3 (checkD c)]) (let ([d tesl-checked-3]) (let/check ([tesl-checked-4 (checkE d)]) (let ([e tesl-checked-4]) (raw-value (needsAll e)))))))))))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 104 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-0 (checkA raw)]) (let ([a tesl-checked-0]) (let/check ([tesl-checked-1 (checkB a)]) (let ([b tesl-checked-1]) (let/check ([tesl-checked-2 (checkC b)]) (let ([c tesl-checked-2]) (let/check ([tesl-checked-3 (checkD c)]) (let ([d tesl-checked-3]) (let/check ([tesl-checked-4 (checkE d)]) (let ([e tesl-checked-4]) (raw-value (needsAll e)))))))))))))))
 
 (define/pow
   (introAndLeft [raw : Integer])
   #:returns Integer
-  (let ([pa (thsl-src! "tests/critical-review59-tests.tesl" 130 (list (cons 'raw *raw)) (lambda () (proveA raw)))]) (let ([pb (thsl-src! "tests/critical-review59-tests.tesl" 131 (list (cons 'pa *pa) (cons 'raw *raw)) (lambda () (proveB raw)))]) (let ([combined (thsl-src! "tests/critical-review59-tests.tesl" 132 (list (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (intro-and pa pb)))]) (let ([left (thsl-src! "tests/critical-review59-tests.tesl" 133 (list (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (and-left combined)))]) (let ([base (thsl-src! "tests/critical-review59-tests.tesl" 134 (list (cons 'left *left) (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (forget-proof raw)))]) (let ([withA (thsl-src! "tests/critical-review59-tests.tesl" 135 (list (cons 'base *base) (cons 'left *left) (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (attach-proof base left)))]) (thsl-src! "tests/critical-review59-tests.tesl" 136 (list (cons 'withA *withA) (cons 'base *base) (cons 'left *left) (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (raw-value (needsA withA)))))))))))
+  (let ([pa (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 130 (list (cons 'raw *raw)) (lambda () (proveA raw)))]) (let ([pb (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 131 (list (cons 'pa *pa) (cons 'raw *raw)) (lambda () (proveB raw)))]) (let ([combined (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 132 (list (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (intro-and pa pb)))]) (let ([left (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 133 (list (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (and-left combined)))]) (let ([base (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 134 (list (cons 'left *left) (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (forget-proof raw)))]) (let ([withA (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 135 (list (cons 'base *base) (cons 'left *left) (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (attach-proof base left)))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 136 (list (cons 'withA *withA) (cons 'base *base) (cons 'left *left) (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (raw-value (needsA withA)))))))))))
 
 (define/pow
   (introAndRight [raw : Integer])
   #:returns Integer
-  (let ([pa (thsl-src! "tests/critical-review59-tests.tesl" 145 (list (cons 'raw *raw)) (lambda () (proveA raw)))]) (let ([pb (thsl-src! "tests/critical-review59-tests.tesl" 146 (list (cons 'pa *pa) (cons 'raw *raw)) (lambda () (proveB raw)))]) (let ([combined (thsl-src! "tests/critical-review59-tests.tesl" 147 (list (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (intro-and pa pb)))]) (let ([right (thsl-src! "tests/critical-review59-tests.tesl" 148 (list (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (and-right combined)))]) (let ([base (thsl-src! "tests/critical-review59-tests.tesl" 149 (list (cons 'right *right) (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (forget-proof raw)))]) (let ([withB (thsl-src! "tests/critical-review59-tests.tesl" 150 (list (cons 'base *base) (cons 'right *right) (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (attach-proof base right)))]) (thsl-src! "tests/critical-review59-tests.tesl" 151 (list (cons 'withB *withB) (cons 'base *base) (cons 'right *right) (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (raw-value (needsB withB)))))))))))
+  (let ([pa (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 145 (list (cons 'raw *raw)) (lambda () (proveA raw)))]) (let ([pb (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 146 (list (cons 'pa *pa) (cons 'raw *raw)) (lambda () (proveB raw)))]) (let ([combined (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 147 (list (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (intro-and pa pb)))]) (let ([right (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 148 (list (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (and-right combined)))]) (let ([base (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 149 (list (cons 'right *right) (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (forget-proof raw)))]) (let ([withB (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 150 (list (cons 'base *base) (cons 'right *right) (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (attach-proof base right)))]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 151 (list (cons 'withB *withB) (cons 'base *base) (cons 'right *right) (cons 'combined *combined) (cons 'pb *pb) (cons 'pa *pa) (cons 'raw *raw)) (lambda () (raw-value (needsB withB)))))))))))
 
 (define/pow
   (singleDetach [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review59-tests.tesl" 162 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-5 (checkA raw)]) (let ([a tesl-checked-5]) (let ([pa (detach-all-proof a)]) (let ([v (forget-proof a)]) (let ([withA (attach-proof v pa)]) (raw-value (needsA withA))))))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 162 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-5 (checkA raw)]) (let ([a tesl-checked-5]) (let ([pa (detach-all-proof a)]) (let ([v (forget-proof a)]) (let ([withA (attach-proof v pa)]) (raw-value (needsA withA))))))))))
 
 (define/pow
   (multiProofDetach [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review59-tests.tesl" 177 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-6 (checkA raw)]) (let ([a tesl-checked-6]) (let/check ([tesl-checked-7 (checkB a)]) (let ([b tesl-checked-7]) (let ([_p (detach-all-proof b)]) 0))))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 177 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-6 (checkA raw)]) (let ([a tesl-checked-6]) (let/check ([tesl-checked-7 (checkB a)]) (let ([b tesl-checked-7]) (let ([_p (detach-all-proof b)]) 0))))))))
 
 (define/pow
   (isEven [n : Integer])
   #:returns Boolean
-  (thsl-src! "tests/critical-review59-tests.tesl" 190 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #t) (raw-value (isOdd (- *n 1)))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 190 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #t) (raw-value (isOdd (- *n 1)))))))
 
 (define/pow
   (isOdd [n : Integer])
   #:returns Boolean
-  (thsl-src! "tests/critical-review59-tests.tesl" 196 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #f) (raw-value (isEven (- *n 1)))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 196 (list (cons 'n *n)) (lambda () (if (tesl-equal? *n 0) (raw-value #f) (raw-value (isEven (- *n 1)))))))
 
 (define/pow
   (proofDecompChain [raw : Integer])
   #:returns Integer
-  (thsl-src! "tests/critical-review59-tests.tesl" 222 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-8 (checkA raw)]) (let ([a tesl-checked-8]) (let/check ([tesl-checked-9 (checkB a)]) (let ([b tesl-checked-9]) (let ([tesl-proof-binding-10 b]) (let ([v (forget-proof tesl-proof-binding-10)] [p (detach-all-proof tesl-proof-binding-10)]) (let ([pA (and-left p)]) (let ([withA (attach-proof v pA)]) (raw-value (needsA withA)))))))))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 222 (list (cons 'raw *raw)) (lambda () (let/check ([tesl-checked-8 (checkA raw)]) (let ([a tesl-checked-8]) (let/check ([tesl-checked-9 (checkB a)]) (let ([b tesl-checked-9]) (let ([tesl-proof-binding-10 b]) (let ([v (forget-proof tesl-proof-binding-10)] [p (detach-all-proof tesl-proof-binding-10)]) (let ([pA (and-left p)]) (let ([withA (attach-proof v pA)]) (raw-value (needsA withA)))))))))))))
 
 (module+ test
   (require rackunit)
   (test-case "R59_DC01 five-check deep chain works with valid input"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 112 (list) (lambda () 5)))
-  (define result (thsl-src! "tests/critical-review59-tests.tesl" 113 (list (cons 'r1 r1)) (lambda () (doChain5 r1))))
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 114 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
+  (define r1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 112 (list) (lambda () 5)))
+  (define result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 113 (list (cons 'r1 r1)) (lambda () (doChain5 r1))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 114 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
     ))
   )
 
   (test-case "R59_DC02 five-check deep chain rejects first check failure"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 118 (list) (lambda () 0)))
-  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review59-tests.tesl" 119 (list (cons 'r1 r1)) (lambda ()
+  (define r1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 118 (list) (lambda () 0)))
+  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 119 (list (cons 'r1 r1)) (lambda ()
                           ((let () (define/pow (tesl-lambda-11) #:returns Integer (doChain5 r1)) tesl-lambda-11) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (let () (define/pow (tesl-lambda-12) #:returns Integer (doChain5 r1)) tesl-lambda-12) (list)"))
@@ -159,8 +159,8 @@
 
   (test-case "R59_DC03 five-check deep chain rejects mid-chain failure"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 123 (list) (lambda () 42)))
-  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review59-tests.tesl" 124 (list (cons 'r1 r1)) (lambda ()
+  (define r1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 123 (list) (lambda () 42)))
+  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 124 (list (cons 'r1 r1)) (lambda ()
                           ((let () (define/pow (tesl-lambda-12) #:returns Integer (doChain5 r1)) tesl-lambda-12) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (let () (define/pow (tesl-lambda-13) #:returns Integer (doChain5 r1)) tesl-lambda-13) (list)"))
@@ -169,32 +169,32 @@
 
   (test-case "R59_IA01 introAnd andLeft with establish proofs works"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 139 (list) (lambda () 5)))
-  (define result (thsl-src! "tests/critical-review59-tests.tesl" 140 (list (cons 'r1 r1)) (lambda () (introAndLeft r1))))
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 141 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
+  (define r1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 139 (list) (lambda () 5)))
+  (define result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 140 (list (cons 'r1 r1)) (lambda () (introAndLeft r1))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 141 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
     ))
   )
 
   (test-case "R59_IA02 introAnd andRight with establish proofs works"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 154 (list) (lambda () 5)))
-  (define result (thsl-src! "tests/critical-review59-tests.tesl" 155 (list (cons 'r1 r1)) (lambda () (introAndRight r1))))
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 156 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
+  (define r1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 154 (list) (lambda () 5)))
+  (define result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 155 (list (cons 'r1 r1)) (lambda () (introAndRight r1))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 156 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
     ))
   )
 
   (test-case "R59_DT01 detachFact with single proof and reattach"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 169 (list) (lambda () 5)))
-  (define result (thsl-src! "tests/critical-review59-tests.tesl" 170 (list (cons 'r1 r1)) (lambda () (singleDetach r1))))
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 171 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
+  (define r1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 169 (list) (lambda () 5)))
+  (define result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 170 (list (cons 'r1 r1)) (lambda () (singleDetach r1))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 171 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
     ))
   )
 
   (test-case "R59_MP01 detachFact fails at runtime with multiple proofs"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 183 (list) (lambda () 5)))
-  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "tests/critical-review59-tests.tesl" 184 (list (cons 'r1 r1)) (lambda ()
+  (define r1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 183 (list) (lambda () 5)))
+  (let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 184 (list (cons 'r1 r1)) (lambda ()
                           ((let () (define/pow (tesl-lambda-13) #:returns Integer (multiProofDetach r1)) tesl-lambda-13) (list)))))])
     (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))
                 "expected failure: (let () (define/pow (tesl-lambda-14) #:returns Integer (multiProofDetach r1)) tesl-lambda-14) (list)"))
@@ -203,26 +203,26 @@
 
   (test-case "R59_MR01 mutual recursion isEven/isOdd"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 202 (list) (lambda () (isEven 4)))) #t)
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 203 (list) (lambda () (isEven 3)))) #f)
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 204 (list) (lambda () (isOdd 3)))) #t)
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 205 (list) (lambda () (isOdd 4)))) #f)
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 206 (list) (lambda () (isEven 0)))) #t)
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 207 (list) (lambda () (isOdd 0)))) #f)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 202 (list) (lambda () (isEven 4)))) #t)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 203 (list) (lambda () (isEven 3)))) #f)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 204 (list) (lambda () (isOdd 3)))) #t)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 205 (list) (lambda () (isOdd 4)))) #f)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 206 (list) (lambda () (isEven 0)))) #t)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 207 (list) (lambda () (isOdd 0)))) #f)
     ))
   )
 
   (test-case "R59_PD01 proof decomp with andLeft now works correctly (fix 1.1)"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 230 (list) (lambda () 5)))
-  (define result (thsl-src! "tests/critical-review59-tests.tesl" 231 (list (cons 'r1 r1)) (lambda () (proofDecompChain r1))))
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 232 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
+  (define r1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 230 (list) (lambda () 5)))
+  (define result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 231 (list (cons 'r1 r1)) (lambda () (proofDecompChain r1))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 232 (list (cons 'result result) (cons 'r1 r1)) (lambda () result))) 5)
     ))
   )
 
   (test-case "R59_PD02 andRight also works on accumulated proofs"
     (call-with-fresh-memory-db '() (lambda ()
-  (define r1 (thsl-src! "tests/critical-review59-tests.tesl" 236 (list) (lambda () 5)))
+  (define r1 (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 236 (list) (lambda () 5)))
   (define tesl-checked-14 (checkA r1))
   (when (check-fail? tesl-checked-14)
     (raise-user-error 'tesl-test "unexpected failure in let a: ~a" (check-fail-message tesl-checked-14)))
@@ -236,10 +236,10 @@
     (raise-user-error 'tesl-test "unexpected failure in let-proof: ~a" (check-fail-message tesl-proof-bind-16)))
   (define v (forget-proof tesl-proof-bind-16))
   (define p (detach-all-proof tesl-proof-bind-16))
-  (define pB (thsl-src! "tests/critical-review59-tests.tesl" 240 (list (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (and-right p))))
-  (define withB (thsl-src! "tests/critical-review59-tests.tesl" 241 (list (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (attach-proof v pB))))
-  (define result (thsl-src! "tests/critical-review59-tests.tesl" 242 (list (cons 'withB withB) (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (needsB withB))))
-  (check-equal? (raw-value (thsl-src! "tests/critical-review59-tests.tesl" 243 (list (cons 'result result) (cons 'withB withB) (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () result))) 5)
+  (define pB (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 240 (list (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (and-right p))))
+  (define withB (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 241 (list (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (attach-proof v pB))))
+  (define result (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 242 (list (cons 'withB withB) (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () (needsB withB))))
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/critical-review59-tests.tesl" 243 (list (cons 'result result) (cons 'withB withB) (cons 'pB pB) (cons 'v v) (cons 'b b) (cons 'a a) (cons 'r1 r1)) (lambda () result))) 5)
     ))
   )
 

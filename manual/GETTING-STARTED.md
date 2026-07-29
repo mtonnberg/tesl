@@ -1,484 +1,232 @@
 # Getting Started with Tesl
 
-This guide will take you from zero to a working Tesl API project. It covers installation, project creation, core concepts, and running your first application.
+Zero to a running, type-checked web API — and one deliberate proof error, because that is the moment
+Tesl explains itself. Budget 20 minutes.
 
-Use `tesl help manual getting-started` to access this from the CLI.
-
----
-
-## Installation
-
-See [INSTALL.md](../INSTALL.md) for install and setup (Nix, home-manager, NixOS, editor setup,
-and the PostgreSQL setup the example APIs need). Once installed, `tesl help` verifies the `tesl`
-CLI is on your PATH. To contribute from a source checkout instead, see
-[dev-docs/README.md](../dev-docs/README.md).
+`tesl help manual getting-started` prints this page from the CLI.
 
 ---
 
-## Creating Your First Tesl Project
-
-### Option 1: Start from Scratch
-
-1. Create a project directory:
-   ```bash
-   mkdir my-tesl-api
-   cd my-tesl-api
-   ```
-
-2. Add a `.gitignore` for generated files:
-   ```
-   # Tesl build output (compiled .rkt + Racket bytecode)
-   .tesl-stuff/
-   ```
-   `tesl run` compiles your `.tesl` files to `.rkt` files under the project's hidden `.tesl-stuff/build/` directory (mirroring your source tree); Racket's compiled bytecode caches land there too. Everything under `.tesl-stuff/` is transient — it should not be committed, and it is always safe to delete (`tesl clean` removes the build output) at the cost of a fresh compile.
-
-3. Create your first Tesl file:
-   ```bash
-   touch api.tesl
-   ```
-   (For a reproducible per-project dev shell with `tesl` and PostgreSQL on the
-   PATH, see [INSTALL.md](../INSTALL.md).)
-
-### Option 2: Use the Example as a Template
-
-Copy the todo-api example from a repository checkout as a starting point:
+## 0. Install
 
 ```bash
-# Copy the example
-cp tesl/example/todo-api.tesl my-api.tesl
-
-# Validate it
-tesl check my-api.tesl
+nix profile install github:mtonnberg/tesl
+tesl help                       # confirms `tesl` is on your PATH
 ```
+
+Nix is the only supported install path today. See [INSTALL.md](../INSTALL.md) for home-manager,
+NixOS, editor setup, and the "try it without installing" variant. If you want to work on the Tesl
+compiler itself instead, go to [dev-docs/README.md](../dev-docs/README.md).
 
 ---
 
-## Your First Tesl API
+## 1. Scaffold a project with `tesl init`
 
-Let's create a simple API from scratch. This example will:
-- Define a validated type
-- Create database operations
-- Expose HTTP endpoints
+**`tesl init` is the recommended way to start a Tesl project.** Do not hand-roll a directory — the
+scaffold is a complete, compiling, commented service, and everything below assumes it.
 
-### Step 1: Define a validated type
-
-Create `users-api.tesl`. Everything starts by validating at the boundary and
-carrying the result as proof:
-
-```tesl
-module UsersApi exposing [UserServer]
-
-# Import exactly what you use — Tesl is explicit about imports.
-import Tesl.Prelude exposing [String]
-import Tesl.DB exposing [dbRead, dbWrite]
-import Tesl.Http exposing [HttpRequest]
-import Tesl.Maybe exposing [Maybe(..)]
-import Tesl.Dict exposing [Dict.lookup]
-import Tesl.String exposing [String.length, String.contains]
-import Tesl.Time exposing [nowMillis, time, PosixMillis]
-import Tesl.Json exposing [stringCodec, posixMillisCodec]
-
-# Capabilities this program is allowed to use.
-capability userDbRead implies dbRead
-capability userDbWrite implies dbWrite
-capability userAuthCap
-
-# A fact is a named claim about a value. `check` is the ordinary way to
-# introduce one: it validates at the boundary and stamps the value with proof.
-fact ValidEmail (email: String)
-
-check checkEmail(email: String) -> email: String ::: ValidEmail email =
-  if String.contains email "@" && String.contains email "." then
-    ok email ::: ValidEmail email
-  else
-    fail 400 "email must contain '@' and '.'"
+```bash
+tesl init myapi        # asks a couple of questions; add --yes to take the defaults
+cd myapi
 ```
 
-### Step 2: Describe the request body and the response
+You get:
 
-A `record` is a data shape; its `codec` says how it is (de)serialised. Because
-the `NewUser.email` field is proof-annotated and its codec decodes `email`
-`via checkEmail`, an invalid email is rejected at the HTTP boundary — the
-handler can never see one.
+| File | What it is |
+|---|---|
+| `app.tesl` | A working service: an `entity` on PostgreSQL, cookie `auth`, an **input proof** on the request body, an **output proof** on the response, and `test` blocks. Heavily commented. |
+| `tesl.toml` | The project manifest — entrypoint, the `[env]` contract, database mode, deploy target. See [tesl-manifest.md](tesl-manifest.md). |
+| `.env` | Local environment values, loaded automatically by `tesl run`. |
+| `AGENTS.md` / `CLAUDE.md` | Instructions for AI coding agents working in this project (see [AGENTS.md](../AGENTS.md)). |
+| `.gitignore`, `README.md`, `.vscode/launch.json` | Sensible defaults: `.tesl-stuff/` ignored, a project README, and a debugger launch config. |
+
+> `.tesl-stuff/build/` holds the generated `.rkt` files and Racket bytecode. It is always safe to
+> delete (`tesl clean`) at the cost of a fresh compile, and it should never be committed.
+
+---
+
+## 2. Run it
+
+```bash
+tesl run app.tesl
+```
+
+With the default **managed** database, this provisions a project-local PostgreSQL, loads `.env`, and
+serves on <http://localhost:8086>. In another terminal:
+
+```bash
+# create a todo (the `user` cookie is what the scaffold's `auth` reads)
+curl -sS -X POST http://localhost:8086/todos \
+  -H 'content-type: application/json' \
+  -H 'Cookie: user=demo' \
+  -d '{"title":"Read the Tesl tutorial"}'
+
+# and one that is deliberately too short — rejected at the boundary with a 400,
+# before any handler code runs
+curl -sS -X POST http://localhost:8086/todos \
+  -H 'content-type: application/json' \
+  -H 'Cookie: user=demo' \
+  -d '{"title":"no"}'
+```
+
+That 400 is not a hand-written guard clause. It comes from a `check` wired into the body's codec.
+
+---
+
+## 3. Break it on purpose — meet the proof checker
+
+Open `app.tesl` and find the `NewTodo` codec:
 
 ```tesl
-record NewUser {
-  email: String ::: ValidEmail email
-  name: String
-}
-
-codec NewUser {
+codec NewTodo {
   toJson_forbidden
   fromJson [
     {
-      email <- "email" with_codec stringCodec via checkEmail
-      name <- "name" with_codec stringCodec
+      title <- "title" with_codec stringCodec via isSafeTitle
     }
   ]
 }
-
-record User {
-  id: String
-  email: String
-  name: String
-  createdAt: PosixMillis
-}
-
-codec User {
-  toJson {
-    id -> "id" with_codec stringCodec
-    email -> "email" with_codec stringCodec
-    name -> "name" with_codec stringCodec
-    createdAt -> "createdAt" with_codec posixMillisCodec
-  }
-  fromJson_forbidden
-}
 ```
 
-### Step 3: Authenticate, then write the handlers
-
-`auth` turns a raw request into a proven identity. A `handler` is like a
-function whose proof-carrying parameters are guaranteed *before its body runs*:
-here `user` is always `Authenticated` and `body.email` always has `ValidEmail`.
-
-```tesl
-fact Authenticated (user: String)
-
-auth userAuth(request: HttpRequest) -> user: String ::: Authenticated user =
-  case Dict.lookup "user" request.cookies of
-    Nothing -> fail 401 "not authenticated"
-    Something userId -> ok userId ::: Authenticated user
-
-# How to parse the ":id" path segment.
-capturer userIdCapture: id: String using stringCodec
-
-handler createUser(user: String ::: Authenticated user, body: NewUser) -> User
-  requires [userDbWrite, time] =
-  # user is authenticated and body.email is validated — no defensive checks needed.
-  User { id: "user-1", email: body.email, name: body.name, createdAt: nowMillis() }
-
-handler getUser(user: String ::: Authenticated user, id: String) -> Maybe User
-  requires [userDbRead, time] =
-  Something (User { id: id, email: "test@example.com", name: "Test User", createdAt: nowMillis() })
-```
-
-### Step 4: Declare the API and bind the server
-
-The `api` block is the type-level shape; the `server` block binds each handler.
-The compiler checks that every endpoint has a handler and that every proof an
-endpoint requires is actually established at the boundary.
-
-```tesl
-api UserApi {
-  post "/users"
-    auth user: String ::: Authenticated user via userAuth
-    body body: NewUser
-    -> User
-
-  get "/users/:id"
-    auth user: String ::: Authenticated user via userAuth
-    capture id: String via userIdCapture
-    -> Maybe User
-}
-
-server UserServer for UserApi {
-  createUser = createUser
-  getUser = getUser
-}
-```
-
-### Step 5: Run it
+Delete ` via isSafeTitle`, then:
 
 ```bash
-# Check for errors (no execution)
-tesl check users-api.tesl
-
-# Run the server — serves on http://localhost:8086
-tesl run users-api.tesl
-
-# In another terminal, create a user (an auth cookie satisfies `userAuth`):
-curl -X POST http://localhost:8086/users \
-  -H "Content-Type: application/json" \
-  -H "Cookie: user=alice" \
-  -d '{"email": "test@example.com", "name": "Test User"}'
-
-# Fetch one back:
-curl -H "Cookie: user=alice" http://localhost:8086/users/user-1
+tesl check app.tesl
 ```
 
-> This whole program compiles as written. The closest complete, always-compiled
-> versions live in
-> [`example/learn/lesson15-api-handlers-server.tesl`](../example/learn/lesson15-api-handlers-server.tesl)
-> and [`example/learn/lesson16-complete-notes-api.tesl`](../example/learn/lesson16-complete-notes-api.tesl).
+```text
+error[V001]: codec 'NewTodo': decoder field 'title' requires proof predicates TitleSafe but has no `via` validation
+Hint: add `via <checkFn>` so field 'title' is validated before decoding succeeds
+  --> app.tesl:112:7
+
+  read more: tesl help manual best-practices#validation-patterns  (explain: tesl help V001)
+```
+
+Read what just happened. `NewTodo.title` is declared as `String ::: TitleSafe title` — a string that
+**carries proof** it is a safe title. A `check` is the only thing in the language that can mint that
+proof. Remove the `via`, and there is no longer any path from raw JSON to a proven value, so the
+program does not compile. Not a lint. Not a runtime error in production. A compile error, at the one
+place where the mistake was made.
+
+Put ` via isSafeTitle` back and `tesl check app.tesl` goes quiet.
+
+**Every diagnostic works like this one:** a stable code, a precise span, a manual deep-link, and
+often a machine-applicable fix.
+
+```bash
+tesl explain V001         # the full explanation for one code
+tesl help codes           # every code the compiler can emit
+```
+
+Try one more: change `handler getTodo`'s return type from `Todo ? FromDb (Id == todoId)` to plain
+`Todo`, then put it back. The `?` is how a proof travels *out* of the SQL boundary, and only the
+`select` boundary can mint it — a handler cannot fabricate one.
 
 ---
 
-## Project Structure
+## 4. The everyday loop
 
-As your project grows, organize it like this:
+```bash
+tesl check app.tesl        # parse + types + proofs, no execution
+tesl validate app.tesl     # check + lint + format check — the one to run before committing
+tesl fmt app.tesl          # format in place (--check to verify only)
+tesl test app.tesl         # run the file's `test` / `api-test` / `load-test` blocks
+tesl run app.tesl          # serve it (TESL_VERBOSE=1 for detailed logs)
+tesl mutate app.tesl       # mutate the validation logic and confirm your tests catch it
+tesl build --with-postgres # an all-in-one Docker image (see deploy.md)
+```
+
+Add files as the project grows and `tesl check` them together: `tesl check app.tesl db.tesl`.
+A module's name and its file name must match — the compiler resolves imports by file name — so
+`module TodoRoutes` lives in `todo-routes.tesl` (or `TodoRoutes.tesl`).
+
+### Looking things up
+
+```bash
+tesl help manual best-practices    # one manual section
+tesl help search transaction       # full-text search across the whole manual
+tesl help codes                    # every diagnostic code
+```
+
+Your editor knows the rest: install the Tesl extension (see [INSTALL.md](../INSTALL.md)) for
+diagnostics, hover types, go-to-definition, completions, and quick-fixes straight from the compiler.
+
+---
+
+## 5. The two ideas behind everything else
+
+**Proofs (Ghosts of Departed Proofs).** `value ::: SomeFact value` means "this value carries proof
+that `SomeFact` holds". Only a `check` mints a proof; from then on it flows through calls
+automatically, and a function that asks for one it was not given is a compile error. Proofs are
+**erased** after type checking — they cost nothing at runtime (the canonical
+[proof cost model](best-practices.md#proof-cost-model) has the per-feature table).
+
+**Capabilities.** Side effects are declared, not implicit:
+
+```tesl
+handler getTodo(todoId: String) -> Maybe Todo
+  requires [dbRead] =
+  selectOne todo from Todo where todo.id == todoId
+```
+
+Common ones: `dbRead`, `dbWrite`, `time`, `random`, `queue`, `pubsub`, `emailCap`. A handler can only
+do what its `requires` list allows, and the compiler checks the whole call graph.
+
+Both ideas, in full: [overview.md](overview.md) for the shape, [tour.md](tour.md) for every feature.
+
+---
+
+## 6. Structuring a larger project
 
 ```
-my-api/
+myapi/
+├── app.tesl            # api + server + main (the entrypoint in tesl.toml)
+├── tesl.toml
 ├── src/
-│   ├── types.tesl          # Type definitions and predicates
-│   ├── validation.tesl     # Validation functions (check/establish)
-│   ├── auth.tesl          # Authentication predicates and handlers
-│   ├── db/
-│   │   ├── schema.tesl    # Entity definitions
-│   │   └── queries.tesl   # Database operations
-│   ├── routes/
-│   │   ├── users.tesl     # User-related routes
-│   │   ├── todos.tesl     # Todo-related routes
-│   │   └── ...
-│   └── main.tesl          # API declaration and server
-├── tests/
-│   ├── users.test.tesl    # Tests for user routes
-│   ├── todos.test.tesl    # Tests for todo routes
-│   └── ...
-├── config/
-│   └── database.tesl      # Database configuration
-├── package.json           # Frontend dependencies (if applicable)
-└── flake.nix             # Nix flake for reproducible builds
+│   ├── types.tesl      # records, entities, newtypes
+│   ├── validation.tesl # check / establish functions
+│   ├── auth.tesl       # auth boundaries
+│   └── routes/…        # handlers, grouped by resource
+└── tests/
+    └── todos.test.tesl
 ```
 
-### Module Organization
-
-- **One module per file** - Keep files focused
-- **Explicit imports** - Always specify what you import
-- **Layered architecture** - Validation → Types → Business logic → Routes
-
-### Discovering Builtins: `tesl doc`
-
-Every builtin type and function — including the ones implemented in the
-runtime rather than in Tesl — has a viewable Tesl signature:
-
-```bash
-tesl doc                 # list all stdlib modules
-tesl doc Tesl.Email      # a module's full surface
-tesl doc Email.send      # one name: signature + one-line doc
-tesl doc SmtpConfig      # record/config shapes, field by field
-```
-
-Function types are rendered live from the type checker, so what `tesl doc`
-prints is exactly what the compiler enforces. The same catalog powers editor
-hover (`--doc-json`).
-
----
-
-## Core Concepts Explained
-
-### GDP: Ghosts of Departed Proofs
-
-Tesl's type system is inspired by **GDP (Ghosts of Departed Proofs)**, a research language that demonstrated how to add dependent types and proofs to a functional language without requiring a complete rewrite of the type system.
-
-**Key insight:** Instead of tracking proofs separately from values, GDP stamps values with proof information that travels with them through the type system.
-
-In Tesl:
-- `value ::: Proof` means "value carrying proof that Proof holds"
-- The proof is automatically tracked by the compiler
-- Proofs flow through function calls automatically
-- Missing proofs are compile-time errors
-
-**Runtime cost — proofs are zero-cost by default.** In release and `--debug` builds alike, proofs are
-erased after type-checking: no struct, no allocation, zero runtime overhead (free-floating
-`detachFact` / `attachFact` proofs are the one minimal-token exception). The canonical
-[proof cost model](best-practices.md#proof-cost-model) has the full per-feature table and the
-debugging story.
-
-### Proof Flow Example
-
-```tesl
-# Step 1: Validate at the boundary
-check checkEmail(email: String) -> email: String ::: ValidEmail email = ...
-
-# Step 2: Use the validated value
-fn createUser(email: String ::: ValidEmail email) -> User = ...
-  # email is guaranteed to be valid here
-  # The proof ValidEmail email is automatically available
-
-# Step 3: Proof is automatically carried through
-handler registerUser(email: String ::: ValidEmail email, body: NewUser) -> User
-  requires [userDbWrite, time] =
-  createUser email  # No need to re-validate!
-```
-
-### Capability System
-
-Tesl makes effects explicit through a capability system. Functions declare what they can do:
-
-```tesl
-handler getTodo(id: String) -> Todo
-  requires [dbRead] =  # Can read from the database
-  selectOne todo from Todo where todo.id == id
-
-handler sendEmail(user: User) -> Result
-  requires [dbRead, sendEmail] =  # Can read the DB and send email
-  # ...
-```
-
-Common capabilities:
-- `db` or `dbRead`, `dbWrite` - Database access
-- `time` - Access to current time
-- `random` - Random number generation
-- `queue` - Queue operations
-- `pubsub` - Pub/Sub operations
-- `smtp` - Email sending
-- `auth` - Authentication capabilities
-
----
-
-## Development Workflow
-
-### 1. Write Code
-
-Create your `.tesl` files with types, validation, and handlers.
-
-### 2. Validate
-
-```bash
-# Check a single file
-tesl check api.tesl
-
-# Check multiple files
-tesl check api.tesl db.tesl routes.tesl
-```
-
-### 3. Format
-
-```bash
-# Format a file in place
-tesl fmt api.tesl
-
-# Check formatting without modifying
-tesl fmt --check api.tesl
-```
-
-### 4. Lint
-
-```bash
-# Run the linter
-tesl lint api.tesl
-```
-
-### 5. Run
-
-```bash
-# Run the server
-tesl run api.tesl
-
-# With verbose logging
-tesl run api.tesl
-# Set TESL_VERBOSE=1 for detailed logs
-```
-
-### 6. Test
-
-```bash
-# Run tests
-tesl test tests.tesl
-
-# Mutation testing is a separate command: it mutates your validation logic and
-# checks that your tests catch it. Pass the file to mutate, plus any extra test files.
-tesl mutate api.tesl tests.tesl
-```
-
----
-
-## Editor Setup
-
-### VS Code
-
-1. Install the Tesl extension from the marketplace
-2. Open a Tesl project
-3. The LSP (Language Server Protocol) provides:
-   - Syntax highlighting
-   - Autocompletion
-   - Error diagnostics
-   - Hover documentation
-   - Go-to-definition
-   - Find references
-
-### Configuration
-
-Create `.vscode/settings.json`:
-
-```json
-{
-  "tesl.server.path": "tesl-lsp"
-}
-```
-
-### Manual LSP Setup
-
-If not using VS Code, you can run the LSP manually:
-
-```bash
-tesl-lsp
-```
+One module per file, explicit imports, and a layering of validation → types → logic → routes. See
+[best-practices.md](best-practices.md) for the idiomatic version of all of this.
 
 ---
 
 ## Troubleshooting
 
-### "Command not found: tesl"
-
-Make sure the Nix profile is in your PATH:
-
-```bash
-# For bash/zsh
-. ~/.nix-profile/etc/profile.d/nix.sh
-
-# Or add to your shell config
-echo 'export PATH="$HOME/.nix-profile/bin:$PATH"' >> ~/.bashrc
-```
-
-### "Tesl compiler not found"
-
-This means the compiler binary is missing. In development mode:
-
-```bash
-# Build the compiler
-cd compiler && dune build bin/main.exe
-```
-
-### PostgreSQL connection issues
-
-Make sure PostgreSQL is running and accessible:
-
-```bash
-# Start PostgreSQL (if using the dev shell, it starts automatically)
-psql -h localhost -p 55432 -U tesl
-
-# Create the databases used by examples
-createdb -h localhost -p 55432 -U tesl todo-api
-createdb -h localhost -p 55432 -U tesl admin-task-api
-createdb -h localhost -p 55432 -U tesl chat
-```
-
-### "Proof not found" errors
-
-Ensure you're:
-1. Using `check` functions (not regular functions) for validation
-2. Attaching proofs with `:::` syntax
-3. Letting proofs flow through function calls automatically
+| Symptom | Fix |
+|---|---|
+| `command not found: tesl` | Add the Nix profile to your PATH: `export PATH="$HOME/.nix-profile/bin:$PATH"` |
+| A diagnostic you do not understand | `tesl explain <CODE>` — the code is in the error, e.g. `error[V001]` |
+| `proof not found` / `does not statically satisfy declared proof` | The value never went through a `check`. Validate at the boundary (a codec `via`, a `capturer via`, or an explicit `check` call) rather than re-checking downstream. |
+| PostgreSQL connection errors | In managed mode, `tesl db` provisions and starts the local cluster; check the `TESL_POSTGRES_*` values in `.env` against [tesl-manifest.md](tesl-manifest.md). |
+| Anything else | [FAQ.md](FAQ.md), or `tesl help search <term>` |
 
 ---
 
-## Next Steps
+## Next steps
 
-Now that you have a basic understanding, explore:
+**One next step, and it is this one: [Your First Change](first-change.md)** — add a real feature to
+the scaffold (a rename endpoint), hit a proof error while building it, and understand why the compiler
+is right. 15 minutes. From the CLI: `tesl help manual first-change`.
 
-1. **[Examples](examples.md)** - See complete working examples
-2. **[Guided Feature Tour](tour.md)** - Every feature in one pass
-3. **[Best Practices](best-practices.md)** - Learn idiomatic patterns
-4. **[Language Specification](../LANGUAGE-SPEC.md)** - Dive into the details
+After that, in any order:
+
+1. **[Examples](examples.md)** — the bundled example catalog and the `example/learn/` lessons
+2. **[Guided Feature Tour](tour.md)** — the long read: typed SQL, queues, SSE, agents, `ForAll`
+3. **[Best Practices](best-practices.md)** — idiomatic patterns, testing, the proof cost model
+4. **[Deploying a Tesl web API](deploy.md)** — `tesl build`, image flavours, runtime config
+5. **[LANGUAGE-SPEC.md](../LANGUAGE-SPEC.md)** — the source of truth
 
 ---
 
 ## See Also
 
-- [Manual Index](MANUAL.md) - Back to the main manual
-- [Overview](overview.md) - Conceptual introduction
-- [Guided Feature Tour](tour.md) - The long-form language walkthrough
-- [Language Specification](../LANGUAGE-SPEC.md) - Formal specification
-- [Best Practices](best-practices.md) - Recommended patterns
+- [Manual Index](MANUAL.md) — back to the manual
+- [Overview](overview.md) — the conceptual introduction
+- [AGENTS.md](../AGENTS.md) — driving Tesl from an AI coding agent
+- [INSTALL.md](../INSTALL.md) — install and editor setup

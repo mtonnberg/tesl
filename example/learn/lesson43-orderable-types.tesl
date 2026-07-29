@@ -16,6 +16,8 @@ module Lesson43OrderableTypes exposing [
   createdBefore,
 ]
 
+# lesson: track=basics order=710 needs=lesson04-newtypes
+# summary: Which types the ordering operators accept — Int, Float, PosixMillis and the newtypes derived from them
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

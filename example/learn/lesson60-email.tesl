@@ -5,6 +5,8 @@ module Lesson60Email exposing [
   sendHtmlNewsletter,
 ]
 
+# lesson: track=stdlib order=490 needs=lesson11-capabilities
+# summary: Send email through the built-in outbox pattern — an email block, a database and emailCap
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 60 — Email Support (Outbox Pattern)
 #

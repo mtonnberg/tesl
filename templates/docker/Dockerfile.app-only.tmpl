@@ -26,6 +26,20 @@ FROM __RACKET_BASE__
 LABEL org.opencontainers.image.title="__APP_NAME__" \
       org.opencontainers.image.description="Tesl app (app-only, external Postgres)"
 
+# Native library the Tesl runtime dlopen()s: libsodium, used by Tesl.Crypto for
+# Argon2id password hashing, HMAC, digests and constant-time comparison.
+# Installed unconditionally and by the NAME-STABLE dev package — the runtime
+# package is version-suffixed (libsodium23 on bookworm, libsodium26 later) and
+# would silently break on a base-image bump, whereas `libsodium-dev` keeps its
+# name across Debian releases and pulls the correct runtime lib as a dependency.
+# It also provides the unversioned `libsodium.so` symlink, so the FFI lookup
+# succeeds regardless of soname. An app that never calls Tesl.Crypto pays one
+# small layer; an app that does would otherwise fail at runtime, not build time,
+# which is the worse trade.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libsodium-dev \
+ && rm -rf /var/lib/apt/lists/*
+
 # The Tesl runtime collections are required by the compiled app via
 #   (require tesl/dsl/… tesl/tesl/…)
 # We expose them as a Racket collection root through PLTCOLLECTS. The base

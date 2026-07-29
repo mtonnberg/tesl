@@ -7,6 +7,8 @@ module Lesson59Cache exposing [
   lookupSession,
 ]
 
+# lesson: track=stdlib order=480 needs=lesson18-database-sql-and-proofs
+# summary: Cache values in the Postgres-backed store that ships with Tesl — no Redis, no dual write
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 59 — Native Cache
 #

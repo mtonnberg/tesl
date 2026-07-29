@@ -12,12 +12,36 @@
 ;; different `score` values, which is exactly what conditional/hit-count gating
 ;; needs to be demonstrated against.
 
-(require rackunit json racket/system racket/runtime-path)
+(require racket/file
+         rackunit json racket/system racket/runtime-path)
 
 (define-runtime-path here ".")
 (define repo (simplify-path (build-path here "..")))
 (define tesl-bin (build-path repo "compiler" "_build" "default" "bin" "main.exe"))
 (define lesson (build-path repo "example" "learn" "lesson61-step-debugging.tesl"))
+
+;; Both breakpoint lines are DERIVED from the lesson source, not hardcoded.
+;;
+;; They used to be the literals 99 and 114, and they broke the moment the lesson
+;; gained two metadata header comment lines: both numbers landed on COMMENTS, the
+;; breakpoints never fired, and 4 of 5 cases failed with symptoms that pointed at
+;; the conditional-breakpoint engine rather than at the line numbers. The sibling
+;; tests/dap-conditional-smoke.rkt had the identical defect. A hardcoded line
+;; number into a file other people edit is that fragile — adding a comment to
+;; lesson61 should not be able to break a debugger test.
+(define (line-of rx what)
+  (let loop ([lines (file->lines lesson)] [n 1])
+    (cond
+      [(null? lines)
+       (error 'dap-headless-inspect-conditional-smoke
+              "could not find ~a in ~a — has the lesson changed?" what lesson)]
+      [(regexp-match? rx (car lines)) n]
+      [else (loop (cdr lines) (add1 n))])))
+
+;; `if score >= 90 then`, the first checkpoint inside describeScore.
+(define LINE-DESCRIBE (line-of #rx"^  if score >= 90 then" "the describeScore branch"))
+;; The first line of computeGrade's body, i.e. the line after its `fn` header.
+(define LINE-COMPUTE (add1 (line-of #rx"^fn computeGrade" "computeGrade")))
 
 (putenv "TESL_REPO_ROOT" (path->string repo))
 
@@ -37,13 +61,13 @@
    (printf "SKIP: compiler not built at ~a\n" tesl-bin)]
   [else
    (test-case "agent sets an UNCONDITIONAL breakpoint — stops at the FIRST hit (score 95)"
-     (define r (inspect "--break-at" "99"))
+     (define r (inspect "--break-at" (number->string LINE-DESCRIBE)))
      (check-true (hash-ref r 'stopped) "breakpoint hit")
-     (check-equal? (hash-ref (hash-ref r 'source) 'line) 99)
+     (check-equal? (hash-ref (hash-ref r 'source) 'line) LINE-DESCRIBE)
      (check-equal? (local-value r "score") "95" "first describeScore call is score 95"))
 
    (test-case "agent sets a CONDITIONAL breakpoint — fires ONLY when score == 75 (skips 95, 85)"
-     (define r (inspect "--break-at" "99: score == 75"))
+     (define r (inspect "--break-at" (format "~a: score == 75" LINE-DESCRIBE)))
      (check-true (hash-ref r 'stopped) "conditional breakpoint eventually fires")
      (check-equal? (local-value r "score") "75"
                    "stopped at the score==75 call, not the earlier 95/85 calls")
@@ -51,22 +75,22 @@
                    "the firing breakpoint reports its condition"))
 
    (test-case "agent sets a HIT-COUNT breakpoint — fires on the 3rd execution (score 75)"
-     (define r (inspect "--break-at" "99: ==3"))
+     (define r (inspect "--break-at" (format "~a: ==3" LINE-DESCRIBE)))
      (check-true (hash-ref r 'stopped))
      (check-equal? (local-value r "score") "75" "3rd describeScore call is score 75")
      (check-equal? (hash-ref (hash-ref r 'breakpoint) 'hit) "==3"))
 
    (test-case "agent sets MULTIPLE breakpoints — stops at one of them and reports which"
-     (define r (inspect "--break-at" "99,114"))
+     (define r (inspect "--break-at" (format "~a,~a" LINE-DESCRIBE LINE-COMPUTE)))
      (check-true (hash-ref r 'stopped))
      (define bp-line (hash-ref (hash-ref r 'breakpoint) 'line))
-     (check-true (or (= bp-line 99) (= bp-line 114))
+     (check-true (or (= bp-line LINE-DESCRIBE) (= bp-line LINE-COMPUTE))
                  "stopped at one of the requested breakpoints")
      (check-equal? (hash-ref (hash-ref r 'source) 'line) bp-line
                    "source line matches the firing breakpoint"))
 
    (test-case "no breakpoint matches → stopped=false with a reason (fail-open, never hangs)"
-     (define r (inspect "--break-at" "99: score == 999999"))
+     (define r (inspect "--break-at" (format "~a: score == 999999" LINE-DESCRIBE)))
      (check-false (hash-ref r 'stopped))
      (check-true (string? (hash-ref r 'reason)) "carries a reason when nothing fires"))])
 

@@ -7,6 +7,8 @@ module Lesson19ExistentialWitnesses exposing [
   SessionServer,
 ]
 
+# lesson: track=proofs order=610 needs=lesson05-intro-to-proofs
+# summary: Return a proof about a value the caller never gets to name, using exists
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

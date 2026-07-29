@@ -220,39 +220,39 @@
 (define-checker
   (checkOrgId [orgId : String])
   #:returns [orgId : String ::: (ValidOrgId orgId)]
-  (thsl-src! "example/kanel/KanelModels.tesl" 226 (list (cons 'orgId *orgId)) (lambda () (if (< (raw-value (tesl_import_String_length *orgId)) 3) (reject "invalid org id" #:http-code 400) (accept (ValidOrgId orgId) #:value *orgId)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/kanel/KanelModels.tesl" 226 (list (cons 'orgId *orgId)) (lambda () (if (< (raw-value (tesl_import_String_length *orgId)) 3) (reject "invalid org id" #:http-code 400) (accept (ValidOrgId orgId) #:value *orgId)))))
 
 (define-checker
   (checkProjectId [projectId : String])
   #:returns [projectId : String ::: (ValidProjectId projectId)]
-  (thsl-src! "example/kanel/KanelModels.tesl" 234 (list (cons 'projectId *projectId)) (lambda () (if (< (raw-value (tesl_import_String_length *projectId)) 3) (reject "invalid project id" #:http-code 400) (accept (ValidProjectId projectId) #:value *projectId)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/kanel/KanelModels.tesl" 234 (list (cons 'projectId *projectId)) (lambda () (if (< (raw-value (tesl_import_String_length *projectId)) 3) (reject "invalid project id" #:http-code 400) (accept (ValidProjectId projectId) #:value *projectId)))))
 
 (define-checker
   (checkIssueId [issueId : String])
   #:returns [issueId : String ::: (ValidIssueId issueId)]
-  (thsl-src! "example/kanel/KanelModels.tesl" 242 (list (cons 'issueId *issueId)) (lambda () (if (< (raw-value (tesl_import_String_length *issueId)) 3) (reject "invalid issue id" #:http-code 400) (accept (ValidIssueId issueId) #:value *issueId)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/kanel/KanelModels.tesl" 242 (list (cons 'issueId *issueId)) (lambda () (if (< (raw-value (tesl_import_String_length *issueId)) 3) (reject "invalid issue id" #:http-code 400) (accept (ValidIssueId issueId) #:value *issueId)))))
 
 (define-checker
   (checkInvoiceId [invoiceId : String])
   #:returns [invoiceId : String ::: (ValidInvoiceId invoiceId)]
-  (thsl-src! "example/kanel/KanelModels.tesl" 250 (list (cons 'invoiceId *invoiceId)) (lambda () (if (< (raw-value (tesl_import_String_length *invoiceId)) 3) (reject "invalid invoice id" #:http-code 400) (accept (ValidInvoiceId invoiceId) #:value *invoiceId)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/kanel/KanelModels.tesl" 250 (list (cons 'invoiceId *invoiceId)) (lambda () (if (< (raw-value (tesl_import_String_length *invoiceId)) 3) (reject "invalid invoice id" #:http-code 400) (accept (ValidInvoiceId invoiceId) #:value *invoiceId)))))
 
 (define-checker
   (checkUserId [userId : String])
   #:returns [userId : String ::: (ValidUserId userId)]
-  (thsl-src! "example/kanel/KanelModels.tesl" 258 (list (cons 'userId *userId)) (lambda () (if (< (raw-value (tesl_import_String_length *userId)) 3) (reject "invalid user id" #:http-code 400) (accept (ValidUserId userId) #:value *userId)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/kanel/KanelModels.tesl" 258 (list (cons 'userId *userId)) (lambda () (if (< (raw-value (tesl_import_String_length *userId)) 3) (reject "invalid user id" #:http-code 400) (accept (ValidUserId userId) #:value *userId)))))
 
 (define-checker
   (checkTargetUserId [targetUserId : String])
   #:returns [targetUserId : String ::: (ValidUserId targetUserId)]
-  (thsl-src! "example/kanel/KanelModels.tesl" 264 (list (cons 'targetUserId *targetUserId)) (lambda () (if (< (raw-value (tesl_import_String_length *targetUserId)) 3) (reject "invalid user id" #:http-code 400) (accept (ValidUserId targetUserId) #:value *targetUserId)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/kanel/KanelModels.tesl" 264 (list (cons 'targetUserId *targetUserId)) (lambda () (if (< (raw-value (tesl_import_String_length *targetUserId)) 3) (reject "invalid user id" #:http-code 400) (accept (ValidUserId targetUserId) #:value *targetUserId)))))
 
 (define (tesl-codec-encode-OrgRole _v)
   (define _raw (raw-value _v))
   (cond
-    [(equal? _raw RoleAdmin) (hash "tag" "RoleAdmin")]
-    [(equal? _raw RoleMember) (hash "tag" "RoleMember")]
-    [(equal? _raw RoleViewer) (hash "tag" "RoleViewer")]
+    [(equal? _raw RoleAdmin) (tesl-hash "tag" "RoleAdmin")]
+    [(equal? _raw RoleMember) (tesl-hash "tag" "RoleMember")]
+    [(equal? _raw RoleViewer) (tesl-hash "tag" "RoleViewer")]
     [else (error (format "OrgRole: unexpected value ~~a" _raw))]))
 (define (tesl-codec-decode-OrgRole-0 _j)
   (define _tag
@@ -270,12 +270,12 @@
 (define (tesl-codec-encode-IssueStatus _v)
   (define _raw (raw-value _v))
   (cond
-    [(equal? _raw Backlog) (hash "tag" "Backlog")]
-    [(equal? _raw Todo) (hash "tag" "Todo")]
-    [(equal? _raw InProgress) (hash "tag" "InProgress")]
-    [(equal? _raw InReview) (hash "tag" "InReview")]
-    [(equal? _raw Done) (hash "tag" "Done")]
-    [(equal? _raw Cancelled) (hash "tag" "Cancelled")]
+    [(equal? _raw Backlog) (tesl-hash "tag" "Backlog")]
+    [(equal? _raw Todo) (tesl-hash "tag" "Todo")]
+    [(equal? _raw InProgress) (tesl-hash "tag" "InProgress")]
+    [(equal? _raw InReview) (tesl-hash "tag" "InReview")]
+    [(equal? _raw Done) (tesl-hash "tag" "Done")]
+    [(equal? _raw Cancelled) (tesl-hash "tag" "Cancelled")]
     [else (error (format "IssueStatus: unexpected value ~~a" _raw))]))
 (define (tesl-codec-decode-IssueStatus-0 _j)
   (define _tag
@@ -296,11 +296,11 @@
 (define (tesl-codec-encode-InvoiceStatus _v)
   (define _raw (raw-value _v))
   (cond
-    [(equal? _raw Draft) (hash "tag" "Draft")]
-    [(equal? _raw Approved) (hash "tag" "Approved")]
-    [(equal? _raw Sent) (hash "tag" "Sent")]
-    [(equal? _raw Paid) (hash "tag" "Paid")]
-    [(equal? _raw Overdue) (hash "tag" "Overdue")]
+    [(equal? _raw Draft) (tesl-hash "tag" "Draft")]
+    [(equal? _raw Approved) (tesl-hash "tag" "Approved")]
+    [(equal? _raw Sent) (tesl-hash "tag" "Sent")]
+    [(equal? _raw Paid) (tesl-hash "tag" "Paid")]
+    [(equal? _raw Overdue) (tesl-hash "tag" "Overdue")]
     [else (error (format "InvoiceStatus: unexpected value ~~a" _raw))]))
 (define (tesl-codec-decode-InvoiceStatus-0 _j)
   (define _tag
@@ -322,7 +322,7 @@
 (define (tesl-codec-decode-NewOrgRequest-0 _j)
   (define _f_name (tesl-decode-prim-field _j "name" tesl-decode-prim-string))
   (define _f_slug (tesl-decode-prim-field _j "slug" tesl-decode-prim-string))
-  (record-value 'NewOrgRequest (hash 'name _f_name 'slug _f_slug)))
+  (record-value 'NewOrgRequest (tesl-hash 'name _f_name 'slug _f_slug)))
 (register-type-codec! 'NewOrgRequest tesl-codec-encode-NewOrgRequest (list tesl-codec-decode-NewOrgRequest-0))
 
 (define (tesl-codec-encode-NewProjectRequest _v)
@@ -330,7 +330,7 @@
 (define (tesl-codec-decode-NewProjectRequest-0 _j)
   (define _f_name (tesl-decode-prim-field _j "name" tesl-decode-prim-string))
   (define _f_description (tesl-decode-prim-field _j "description" tesl-decode-prim-string))
-  (record-value 'NewProjectRequest (hash 'name _f_name 'description _f_description)))
+  (record-value 'NewProjectRequest (tesl-hash 'name _f_name 'description _f_description)))
 (register-type-codec! 'NewProjectRequest tesl-codec-encode-NewProjectRequest (list tesl-codec-decode-NewProjectRequest-0))
 
 (define (tesl-codec-encode-NewIssueRequest _v)
@@ -339,7 +339,7 @@
   (define _f_title (tesl-decode-prim-field _j "title" tesl-decode-prim-string))
   (define _f_description (tesl-decode-prim-field _j "description" tesl-decode-prim-string))
   (define _f_estimate (tesl-decode-prim-field _j "estimate" tesl-decode-prim-int))
-  (record-value 'NewIssueRequest (hash 'title _f_title 'description _f_description 'estimate _f_estimate)))
+  (record-value 'NewIssueRequest (tesl-hash 'title _f_title 'description _f_description 'estimate _f_estimate)))
 (register-type-codec! 'NewIssueRequest tesl-codec-encode-NewIssueRequest (list tesl-codec-decode-NewIssueRequest-0))
 
 (define (tesl-codec-encode-UpdateIssueRequest _v)
@@ -349,21 +349,21 @@
   (define _f_description (tesl-decode-prim-field _j "description" tesl-decode-prim-string))
   (define _f_estimate (tesl-decode-prim-field _j "estimate" tesl-decode-prim-int))
   (define _f_assigneeId (tesl-decode-prim-field _j "assigneeId" tesl-decode-prim-string))
-  (record-value 'UpdateIssueRequest (hash 'title _f_title 'description _f_description 'estimate _f_estimate 'assigneeId _f_assigneeId)))
+  (record-value 'UpdateIssueRequest (tesl-hash 'title _f_title 'description _f_description 'estimate _f_estimate 'assigneeId _f_assigneeId)))
 (register-type-codec! 'UpdateIssueRequest tesl-codec-encode-UpdateIssueRequest (list tesl-codec-decode-UpdateIssueRequest-0))
 
 (define (tesl-codec-encode-UpdateStatusRequest _v)
   (error "toJson is forbidden for type UpdateStatusRequest: this type cannot be JSON-encoded"))
 (define (tesl-codec-decode-UpdateStatusRequest-0 _j)
   (define _f_newStatus (tesl-codec-decode-field _j "newStatus" 'IssueStatus))
-  (record-value 'UpdateStatusRequest (hash 'newStatus _f_newStatus)))
+  (record-value 'UpdateStatusRequest (tesl-hash 'newStatus _f_newStatus)))
 (register-type-codec! 'UpdateStatusRequest tesl-codec-encode-UpdateStatusRequest (list tesl-codec-decode-UpdateStatusRequest-0))
 
 (define (tesl-codec-encode-NewCommentRequest _v)
   (error "toJson is forbidden for type NewCommentRequest: this type cannot be JSON-encoded"))
 (define (tesl-codec-decode-NewCommentRequest-0 _j)
   (define _f_body (tesl-decode-prim-field _j "body" tesl-decode-prim-string))
-  (record-value 'NewCommentRequest (hash 'body _f_body)))
+  (record-value 'NewCommentRequest (tesl-hash 'body _f_body)))
 (register-type-codec! 'NewCommentRequest tesl-codec-encode-NewCommentRequest (list tesl-codec-decode-NewCommentRequest-0))
 
 (define (tesl-codec-encode-NewTimeEntryRequest _v)
@@ -371,12 +371,12 @@
 (define (tesl-codec-decode-NewTimeEntryRequest-0 _j)
   (define _f_minutes (tesl-decode-prim-field _j "minutes" tesl-decode-prim-int))
   (define _f_description (tesl-decode-prim-field _j "description" tesl-decode-prim-string))
-  (record-value 'NewTimeEntryRequest (hash 'minutes _f_minutes 'description _f_description)))
+  (record-value 'NewTimeEntryRequest (tesl-hash 'minutes _f_minutes 'description _f_description)))
 (register-type-codec! 'NewTimeEntryRequest tesl-codec-encode-NewTimeEntryRequest (list tesl-codec-decode-NewTimeEntryRequest-0))
 
 (define (tesl-codec-encode-NewInvoiceRequest _v)
   (error "toJson is forbidden for type NewInvoiceRequest: this type cannot be JSON-encoded"))
 (define (tesl-codec-decode-NewInvoiceRequest-0 _j)
   (define _f_notes (tesl-decode-prim-field _j "notes" tesl-decode-prim-string))
-  (record-value 'NewInvoiceRequest (hash 'notes _f_notes)))
+  (record-value 'NewInvoiceRequest (tesl-hash 'notes _f_notes)))
 (register-type-codec! 'NewInvoiceRequest tesl-codec-encode-NewInvoiceRequest (list tesl-codec-decode-NewInvoiceRequest-0))

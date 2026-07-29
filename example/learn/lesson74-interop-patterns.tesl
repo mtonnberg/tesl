@@ -34,6 +34,8 @@ import Tesl.ApiTest exposing [
   expectJobOk,
 ]
 
+# lesson: track=stdlib order=520 needs=lesson28-dead-letter-queue
+# summary: What to write instead when you want file access or a subprocess, neither of which Tesl has
 # ── Goal ─────────────────────────────────────────────────────────────────────
 # Two things people ask for that Tesl deliberately does NOT have:
 #

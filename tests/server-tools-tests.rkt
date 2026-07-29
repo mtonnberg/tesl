@@ -41,17 +41,17 @@
 (define-auther
   (cookieAuth [request : HttpRequest])
   #:returns [u : User ::: (Authenticated u)]
-  (thsl-src-control! "tests/server-tools-tests.tesl" 55 (list (cons 'request *request)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "tests/server-tools-tests.tesl" 56 (list (cons 'userId userId)) (lambda () (accept Authenticated #:value (User #:id *userId #:role "user")))))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "tests/server-tools-tests.tesl" 57 (list) (lambda () (reject "Missing user cookie" #:http-code 401)))])))))
+  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 55 (list (cons 'request *request)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 56 (list (cons 'userId userId)) (lambda () (accept Authenticated #:value (User #:id *userId #:role "user")))))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 57 (list) (lambda () (reject "Missing user cookie" #:http-code 401)))])))))
 
 (define-auther
   (adminAuth [request : HttpRequest])
   #:returns [u : User ::: ((Authenticated u) && (Admin u))]
-  (thsl-src-control! "tests/server-tools-tests.tesl" 60 (list (cons 'request *request)) (lambda () (let ([tesl-case-1 (raw-value (tesl_import_Dict_lookup "admin" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "tests/server-tools-tests.tesl" 61 (list (cons 'userId userId)) (lambda () (accept (Authenticated && Admin) #:value (User #:id *userId #:role "admin")))))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "tests/server-tools-tests.tesl" 62 (list) (lambda () (reject "Missing admin cookie" #:http-code 401)))])))))
+  (thsl-src-control! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 60 (list (cons 'request *request)) (lambda () (let ([tesl-case-1 (raw-value (tesl_import_Dict_lookup "admin" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 61 (list (cons 'userId userId)) (lambda () (accept (Authenticated && Admin) #:value (User #:id *userId #:role "admin")))))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 62 (list) (lambda () (reject "Missing admin cookie" #:http-code 401)))])))))
 
 (define-checker
   (isNoteId [noteId : String])
   #:returns [noteId : String ::: (NoteId noteId)]
-  (thsl-src! "tests/server-tools-tests.tesl" 65 (list (cons 'noteId *noteId)) (lambda () (if (tesl_import_String_startsWith *noteId "note-") (accept (NoteId noteId) #:value *noteId) (reject "Malformed note id" #:http-code 400)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 65 (list (cons 'noteId *noteId)) (lambda () (if (tesl_import_String_startsWith *noteId "note-") (accept (NoteId noteId) #:value *noteId) (reject "Malformed note id" #:http-code 400)))))
 
 (define-capture noteIdCapture
   [noteId : String ::: (NoteId noteId)]
@@ -60,7 +60,7 @@
 (define-checker
   (isSafeText [text : String])
   #:returns [text : String ::: (TextSafe text)]
-  (thsl-src! "tests/server-tools-tests.tesl" 73 (list (cons 'text *text)) (lambda () (if (<= (raw-value (tesl_import_String_length *text)) 20) (accept (TextSafe text) #:value *text) (reject "Text too long" #:http-code 400)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 73 (list (cons 'text *text)) (lambda () (if (<= (raw-value (tesl_import_String_length *text)) 20) (accept (TextSafe text) #:value *text) (reject "Text too long" #:http-code 400)))))
 
 (define-record NewNote
   [text : String ::: (TextSafe text)]
@@ -78,33 +78,33 @@
         (ensure-named 'text (check-ok-value _r1_text) (check-ok-facts _r1_text) (check-ok-bindings _r1_text) #:subject 'text)
         _r1_text))
   (or (and (check-fail? _f_text) _f_text)
-      (record-value 'NewNote (hash 'text _f_text))))
+      (record-value 'NewNote (tesl-hash 'text _f_text))))
 (register-type-codec! 'NewNote tesl-codec-encode-NewNote (list tesl-codec-decode-NewNote-0))
 
 (define-handler
   (greet [u : User ::: (Authenticated u)])
   #:returns String
-  (thsl-src! "tests/server-tools-tests.tesl" 93 (list (cons 'u *u)) (lambda () (raw-value (tesl_import_String_concat "hello " (raw-value u.id))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 93 (list (cons 'u *u)) (lambda () (raw-value (tesl_import_String_concat "hello " (raw-value u.id))))))
 
 (define-handler
   (createNote [u : User ::: (Authenticated u)] [note : NewNote])
   #:returns String
-  (thsl-src! "tests/server-tools-tests.tesl" 97 (list (cons 'u *u) (cons 'note *note)) (lambda () (raw-value (tesl_import_String_concat (raw-value (tesl_import_String_concat (raw-value u.id) ":")) (raw-value note.text))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 97 (list (cons 'u *u) (cons 'note *note)) (lambda () (raw-value (tesl_import_String_concat (raw-value (tesl_import_String_concat (raw-value u.id) ":")) (raw-value note.text))))))
 
 (define-handler
   (getNote [u : User ::: (Authenticated u)] [noteId : String ::: (NoteId noteId)])
   #:returns String
-  (thsl-src! "tests/server-tools-tests.tesl" 101 (list (cons 'u *u) (cons 'noteId *noteId)) (lambda () (raw-value (tesl_import_String_concat "note " *noteId)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 101 (list (cons 'u *u) (cons 'noteId *noteId)) (lambda () (raw-value (tesl_import_String_concat "note " *noteId)))))
 
 (define-handler
   (guarded [u : User ::: (Authenticated u)])
   #:returns String
-  (thsl-src! "tests/server-tools-tests.tesl" 105 (list (cons 'u *u)) (lambda () (if (tesl-equal? (raw-value u.id) "blocked") (reject "blocked user" #:http-code 403) "ok"))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 105 (list (cons 'u *u)) (lambda () (if (tesl-equal? (raw-value u.id) "blocked") (reject "blocked user" #:http-code 403) "ok"))))
 
 (define-handler
   (adminWipe [u : User ::: ((Authenticated u) && (Admin u))])
   #:returns String
-  (thsl-src! "tests/server-tools-tests.tesl" 112 (list (cons 'u *u)) (lambda () "wiped")))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 112 (list (cons 'u *u)) (lambda () "wiped")))
 
 (define NotesServer-sse-routes '())
 (define-api NotesApi
@@ -150,70 +150,70 @@
 (define-checker
   (mkUser [u : User])
   #:returns [u : User ::: (Authenticated u)]
-  (thsl-src! "tests/server-tools-tests.tesl" 149 (list (cons 'u *u)) (lambda () (accept (Authenticated u) #:value *u))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 149 (list (cons 'u *u)) (lambda () (accept (Authenticated u) #:value *u))))
 
 (define-checker
   (mkAdmin [u : User])
   #:returns [u : User ::: ((Authenticated u) && (Admin u))]
-  (thsl-src! "tests/server-tools-tests.tesl" 152 (list (cons 'u *u)) (lambda () (accept ((Authenticated u) && (Admin u)) #:value *u))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 152 (list (cons 'u *u)) (lambda () (accept ((Authenticated u) && (Admin u)) #:value *u))))
 
 (define/pow
   (plainTools [u : User ::: (Authenticated u)])
   #:returns (List Tool)
-  (thsl-src! "tests/server-tools-tests.tesl" 155 (list (cons 'u *u)) (lambda () (raw-value (__tst_server-tools NotesServer u (list (list "greet" "Greet the authenticated user by id." "{\"type\":\"object\",\"properties\":{},\"required\":[]}") (list "createNote" "Store a validated note for the authenticated user." "{\"type\":\"object\",\"properties\":{\"note\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}},\"required\":[\"note\"]}") (list "getNote" "Read one note by its id." "{\"type\":\"object\",\"properties\":{\"noteId\":{\"type\":\"string\"}},\"required\":[\"noteId\"]}") (list "guarded" "Do something only unblocked users may do." "{\"type\":\"object\",\"properties\":{},\"required\":[]}")))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 155 (list (cons 'u *u)) (lambda () (raw-value (__tst_server-tools NotesServer u (list (list "greet" "Greet the authenticated user by id." "{\"type\":\"object\",\"properties\":{},\"required\":[]}") (list "createNote" "Store a validated note for the authenticated user." "{\"type\":\"object\",\"properties\":{\"note\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}},\"required\":[\"note\"]}") (list "getNote" "Read one note by its id." "{\"type\":\"object\",\"properties\":{\"noteId\":{\"type\":\"string\"}},\"required\":[\"noteId\"]}") (list "guarded" "Do something only unblocked users may do." "{\"type\":\"object\",\"properties\":{},\"required\":[]}")))))))
 
 (define/pow
   (adminTools [u : User ::: ((Authenticated u) && (Admin u))])
   #:returns (List Tool)
-  (thsl-src! "tests/server-tools-tests.tesl" 158 (list (cons 'u *u)) (lambda () (raw-value (__tst_server-tools NotesServer u (list (list "greet" "Greet the authenticated user by id." "{\"type\":\"object\",\"properties\":{},\"required\":[]}") (list "createNote" "Store a validated note for the authenticated user." "{\"type\":\"object\",\"properties\":{\"note\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}},\"required\":[\"note\"]}") (list "getNote" "Read one note by its id." "{\"type\":\"object\",\"properties\":{\"noteId\":{\"type\":\"string\"}},\"required\":[\"noteId\"]}") (list "guarded" "Do something only unblocked users may do." "{\"type\":\"object\",\"properties\":{},\"required\":[]}") (list "adminWipe" "Wipe everything. Admin only." "{\"type\":\"object\",\"properties\":{},\"required\":[]}")))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 158 (list (cons 'u *u)) (lambda () (raw-value (__tst_server-tools NotesServer u (list (list "greet" "Greet the authenticated user by id." "{\"type\":\"object\",\"properties\":{},\"required\":[]}") (list "createNote" "Store a validated note for the authenticated user." "{\"type\":\"object\",\"properties\":{\"note\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}},\"required\":[\"note\"]}") (list "getNote" "Read one note by its id." "{\"type\":\"object\",\"properties\":{\"noteId\":{\"type\":\"string\"}},\"required\":[\"noteId\"]}") (list "guarded" "Do something only unblocked users may do." "{\"type\":\"object\",\"properties\":{},\"required\":[]}") (list "adminWipe" "Wipe everything. Admin only." "{\"type\":\"object\",\"properties\":{},\"required\":[]}")))))))
 
 (define/pow
   (plainAgent [u : User ::: (Authenticated u)])
   #:returns Agent
-  (thsl-src! "tests/server-tools-tests.tesl" 161 (list (cons 'u *u)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockToolProvider (list))) (raw-value "You manage the user's notes with the provided tools.") (raw-value 256)) (__tst_server-tools NotesServer u (list (list "greet" "Greet the authenticated user by id." "{\"type\":\"object\",\"properties\":{},\"required\":[]}") (list "createNote" "Store a validated note for the authenticated user." "{\"type\":\"object\",\"properties\":{\"note\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}},\"required\":[\"note\"]}") (list "getNote" "Read one note by its id." "{\"type\":\"object\",\"properties\":{\"noteId\":{\"type\":\"string\"}},\"required\":[\"noteId\"]}") (list "guarded" "Do something only unblocked users may do." "{\"type\":\"object\",\"properties\":{},\"required\":[]}")))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 161 (list (cons 'u *u)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockToolProvider (list))) (raw-value "You manage the user's notes with the provided tools.") (raw-value 256)) (__tst_server-tools NotesServer u (list (list "greet" "Greet the authenticated user by id." "{\"type\":\"object\",\"properties\":{},\"required\":[]}") (list "createNote" "Store a validated note for the authenticated user." "{\"type\":\"object\",\"properties\":{\"note\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}},\"required\":[\"note\"]}") (list "getNote" "Read one note by its id." "{\"type\":\"object\",\"properties\":{\"noteId\":{\"type\":\"string\"}},\"required\":[\"noteId\"]}") (list "guarded" "Do something only unblocked users may do." "{\"type\":\"object\",\"properties\":{},\"required\":[]}")))))))
 
 (define/pow
   (adminAgent [u : User ::: ((Authenticated u) && (Admin u))])
   #:returns Agent
-  (thsl-src! "tests/server-tools-tests.tesl" 169 (list (cons 'u *u)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockToolProvider (list))) (raw-value "You administer the notes service.") (raw-value 256)) (__tst_server-tools NotesServer u (list (list "greet" "Greet the authenticated user by id." "{\"type\":\"object\",\"properties\":{},\"required\":[]}") (list "createNote" "Store a validated note for the authenticated user." "{\"type\":\"object\",\"properties\":{\"note\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}},\"required\":[\"note\"]}") (list "getNote" "Read one note by its id." "{\"type\":\"object\",\"properties\":{\"noteId\":{\"type\":\"string\"}},\"required\":[\"noteId\"]}") (list "guarded" "Do something only unblocked users may do." "{\"type\":\"object\",\"properties\":{},\"required\":[]}") (list "adminWipe" "Wipe everything. Admin only." "{\"type\":\"object\",\"properties\":{},\"required\":[]}")))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 169 (list (cons 'u *u)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockToolProvider (list))) (raw-value "You administer the notes service.") (raw-value 256)) (__tst_server-tools NotesServer u (list (list "greet" "Greet the authenticated user by id." "{\"type\":\"object\",\"properties\":{},\"required\":[]}") (list "createNote" "Store a validated note for the authenticated user." "{\"type\":\"object\",\"properties\":{\"note\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}},\"required\":[\"note\"]}") (list "getNote" "Read one note by its id." "{\"type\":\"object\",\"properties\":{\"noteId\":{\"type\":\"string\"}},\"required\":[\"noteId\"]}") (list "guarded" "Do something only unblocked users may do." "{\"type\":\"object\",\"properties\":{},\"required\":[]}") (list "adminWipe" "Wipe everything. Admin only." "{\"type\":\"object\",\"properties\":{},\"required\":[]}")))))))
 
 (module+ test
   (require rackunit)
   (test-case "plain user gets only the Authenticated endpoints as tools"
     (call-with-fresh-memory-db '() (lambda ()
-  (define rawUser (thsl-src! "tests/server-tools-tests.tesl" 179 (list) (lambda () (User #:id "alice" #:role "user"))))
+  (define rawUser (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 179 (list) (lambda () (User #:id "alice" #:role "user"))))
   (define tesl-checked-2 (mkUser rawUser))
   (when (check-fail? tesl-checked-2)
     (raise-user-error 'tesl-test "unexpected failure in let user: ~a" (check-fail-message tesl-checked-2)))
   (define user tesl-checked-2)
-  (check-equal? (raw-value (thsl-src! "tests/server-tools-tests.tesl" 181 (list (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (tesl_import_List_length (raw-value (plainTools user))))))) 4)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 181 (list (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (tesl_import_List_length (raw-value (plainTools user))))))) 4)
     ))
   )
 
   (test-case "admin user additionally gets the admin-gated endpoint"
     (call-with-fresh-memory-db '() (lambda ()
-  (define rawAdmin (thsl-src! "tests/server-tools-tests.tesl" 187 (list) (lambda () (User #:id "root" #:role "admin"))))
+  (define rawAdmin (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 187 (list) (lambda () (User #:id "root" #:role "admin"))))
   (define tesl-checked-3 (mkAdmin rawAdmin))
   (when (check-fail? tesl-checked-3)
     (raise-user-error 'tesl-test "unexpected failure in let admin: ~a" (check-fail-message tesl-checked-3)))
   (define admin tesl-checked-3)
-  (check-equal? (raw-value (thsl-src! "tests/server-tools-tests.tesl" 189 (list (cons 'admin admin) (cons 'rawAdmin rawAdmin)) (lambda () (raw-value (tesl_import_List_length (raw-value (adminTools admin))))))) 5)
+  (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 189 (list (cons 'admin admin) (cons 'rawAdmin rawAdmin)) (lambda () (raw-value (tesl_import_List_length (raw-value (adminTools admin))))))) 5)
     ))
   )
 
   (test-case "endpoint tool dispatches the handler on the user's behalf"
     (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (notesBot)
-    (define rawUser (thsl-src! "tests/server-tools-tests.tesl" 196 (list) (lambda () (User #:id "alice" #:role "user"))))
+    (define rawUser (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 196 (list) (lambda () (User #:id "alice" #:role "user"))))
     (define tesl-checked-4 (mkUser rawUser))
     (when (check-fail? tesl-checked-4)
       (raise-user-error 'tesl-test "unexpected failure in let user: ~a" (check-fail-message tesl-checked-4)))
     (define user tesl-checked-4)
-    (define call (thsl-src! "tests/server-tools-tests.tesl" 198 (list (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (toolUseStep "greet" "call_1" "{}")))))
-    (define final (thsl-src! "tests/server-tools-tests.tesl" 199 (list (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (textStep "Greeted you.")))))
-    (define reply (thsl-src! "tests/server-tools-tests.tesl" 200 (list (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (askWith (raw-value (plainAgent user)) "greet me" (raw-value (mockToolProvider (list call final))))))))
-    (check-equal? (raw-value (thsl-src! "tests/server-tools-tests.tesl" 201 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyText (raw-value reply)))))) "Greeted you.")
-    (check-equal? (raw-value (thsl-src! "tests/server-tools-tests.tesl" 202 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
+    (define call (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 198 (list (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (toolUseStep "greet" "call_1" "{}")))))
+    (define final (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 199 (list (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (textStep "Greeted you.")))))
+    (define reply (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 200 (list (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (askWith (raw-value (plainAgent user)) "greet me" (raw-value (mockToolProvider (list call final))))))))
+    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 201 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyText (raw-value reply)))))) "Greeted you.")
+    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 202 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
     ))
   )
@@ -221,16 +221,16 @@
   (test-case "body endpoint tool decodes the model's body argument"
     (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (notesBot)
-    (define rawUser (thsl-src! "tests/server-tools-tests.tesl" 208 (list) (lambda () (User #:id "alice" #:role "user"))))
+    (define rawUser (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 208 (list) (lambda () (User #:id "alice" #:role "user"))))
     (define tesl-checked-5 (mkUser rawUser))
     (when (check-fail? tesl-checked-5)
       (raise-user-error 'tesl-test "unexpected failure in let user: ~a" (check-fail-message tesl-checked-5)))
     (define user tesl-checked-5)
-    (define call (thsl-src! "tests/server-tools-tests.tesl" 210 (list (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (toolUseStep "createNote" "call_1" "{\"note\":{\"text\":\"buy milk\"}}")))))
-    (define final (thsl-src! "tests/server-tools-tests.tesl" 211 (list (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (textStep "Saved your note.")))))
-    (define reply (thsl-src! "tests/server-tools-tests.tesl" 212 (list (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (askWith (raw-value (plainAgent user)) "note: buy milk" (raw-value (mockToolProvider (list call final))))))))
-    (check-equal? (raw-value (thsl-src! "tests/server-tools-tests.tesl" 213 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyText (raw-value reply)))))) "Saved your note.")
-    (check-equal? (raw-value (thsl-src! "tests/server-tools-tests.tesl" 214 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
+    (define call (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 210 (list (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (toolUseStep "createNote" "call_1" "{\"note\":{\"text\":\"buy milk\"}}")))))
+    (define final (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 211 (list (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (textStep "Saved your note.")))))
+    (define reply (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 212 (list (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (askWith (raw-value (plainAgent user)) "note: buy milk" (raw-value (mockToolProvider (list call final))))))))
+    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 213 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyText (raw-value reply)))))) "Saved your note.")
+    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 214 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
     ))
   )
@@ -238,16 +238,16 @@
   (test-case "capture endpoint tool validates the capture argument"
     (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (notesBot)
-    (define rawUser (thsl-src! "tests/server-tools-tests.tesl" 220 (list) (lambda () (User #:id "alice" #:role "user"))))
+    (define rawUser (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 220 (list) (lambda () (User #:id "alice" #:role "user"))))
     (define tesl-checked-6 (mkUser rawUser))
     (when (check-fail? tesl-checked-6)
       (raise-user-error 'tesl-test "unexpected failure in let user: ~a" (check-fail-message tesl-checked-6)))
     (define user tesl-checked-6)
-    (define call (thsl-src! "tests/server-tools-tests.tesl" 222 (list (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (toolUseStep "getNote" "call_1" "{\"noteId\":\"note-7\"}")))))
-    (define final (thsl-src! "tests/server-tools-tests.tesl" 223 (list (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (textStep "Found it.")))))
-    (define reply (thsl-src! "tests/server-tools-tests.tesl" 224 (list (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (askWith (raw-value (plainAgent user)) "show note-7" (raw-value (mockToolProvider (list call final))))))))
-    (check-equal? (raw-value (thsl-src! "tests/server-tools-tests.tesl" 225 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyText (raw-value reply)))))) "Found it.")
-    (check-equal? (raw-value (thsl-src! "tests/server-tools-tests.tesl" 226 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
+    (define call (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 222 (list (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (toolUseStep "getNote" "call_1" "{\"noteId\":\"note-7\"}")))))
+    (define final (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 223 (list (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (textStep "Found it.")))))
+    (define reply (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 224 (list (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (askWith (raw-value (plainAgent user)) "show note-7" (raw-value (mockToolProvider (list call final))))))))
+    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 225 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyText (raw-value reply)))))) "Found it.")
+    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 226 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
     ))
   )
@@ -255,16 +255,16 @@
   (test-case "invalid body argument is rejected as is_error and the loop continues"
     (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (notesBot)
-    (define rawUser (thsl-src! "tests/server-tools-tests.tesl" 232 (list) (lambda () (User #:id "alice" #:role "user"))))
+    (define rawUser (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 232 (list) (lambda () (User #:id "alice" #:role "user"))))
     (define tesl-checked-7 (mkUser rawUser))
     (when (check-fail? tesl-checked-7)
       (raise-user-error 'tesl-test "unexpected failure in let user: ~a" (check-fail-message tesl-checked-7)))
     (define user tesl-checked-7)
-    (define call (thsl-src! "tests/server-tools-tests.tesl" 234 (list (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (toolUseStep "createNote" "call_1" "{\"note\":{\"text\":\"aaaaaaaaaaaaaaaaaaaaa\"}}")))))
-    (define final (thsl-src! "tests/server-tools-tests.tesl" 235 (list (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (textStep "That note is too long.")))))
-    (define reply (thsl-src! "tests/server-tools-tests.tesl" 236 (list (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (askWith (raw-value (plainAgent user)) "note" (raw-value (mockToolProvider (list call final))))))))
-    (check-equal? (raw-value (thsl-src! "tests/server-tools-tests.tesl" 237 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyText (raw-value reply)))))) "That note is too long.")
-    (check-equal? (raw-value (thsl-src! "tests/server-tools-tests.tesl" 238 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
+    (define call (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 234 (list (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (toolUseStep "createNote" "call_1" "{\"note\":{\"text\":\"aaaaaaaaaaaaaaaaaaaaa\"}}")))))
+    (define final (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 235 (list (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (textStep "That note is too long.")))))
+    (define reply (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 236 (list (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (askWith (raw-value (plainAgent user)) "note" (raw-value (mockToolProvider (list call final))))))))
+    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 237 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyText (raw-value reply)))))) "That note is too long.")
+    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 238 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
     ))
   )
@@ -272,16 +272,16 @@
   (test-case "handler fail becomes an is_error tool_result, not an exception"
     (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (notesBot)
-    (define rawUser (thsl-src! "tests/server-tools-tests.tesl" 244 (list) (lambda () (User #:id "blocked" #:role "user"))))
+    (define rawUser (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 244 (list) (lambda () (User #:id "blocked" #:role "user"))))
     (define tesl-checked-8 (mkUser rawUser))
     (when (check-fail? tesl-checked-8)
       (raise-user-error 'tesl-test "unexpected failure in let user: ~a" (check-fail-message tesl-checked-8)))
     (define user tesl-checked-8)
-    (define call (thsl-src! "tests/server-tools-tests.tesl" 246 (list (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (toolUseStep "guarded" "call_1" "{}")))))
-    (define final (thsl-src! "tests/server-tools-tests.tesl" 247 (list (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (textStep "You are not allowed to do that.")))))
-    (define reply (thsl-src! "tests/server-tools-tests.tesl" 248 (list (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (askWith (raw-value (plainAgent user)) "do it" (raw-value (mockToolProvider (list call final))))))))
-    (check-equal? (raw-value (thsl-src! "tests/server-tools-tests.tesl" 249 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyText (raw-value reply)))))) "You are not allowed to do that.")
-    (check-equal? (raw-value (thsl-src! "tests/server-tools-tests.tesl" 250 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
+    (define call (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 246 (list (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (toolUseStep "guarded" "call_1" "{}")))))
+    (define final (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 247 (list (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (textStep "You are not allowed to do that.")))))
+    (define reply (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 248 (list (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (askWith (raw-value (plainAgent user)) "do it" (raw-value (mockToolProvider (list call final))))))))
+    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 249 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyText (raw-value reply)))))) "You are not allowed to do that.")
+    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 250 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'user user) (cons 'rawUser rawUser)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
     ))
   )
@@ -289,16 +289,16 @@
   (test-case "admin tool dispatches for an admin-proved user"
     (call-with-fresh-memory-db '() (lambda ()
     (with-capabilities (notesBot)
-    (define rawAdmin (thsl-src! "tests/server-tools-tests.tesl" 255 (list) (lambda () (User #:id "root" #:role "admin"))))
+    (define rawAdmin (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 255 (list) (lambda () (User #:id "root" #:role "admin"))))
     (define tesl-checked-9 (mkAdmin rawAdmin))
     (when (check-fail? tesl-checked-9)
       (raise-user-error 'tesl-test "unexpected failure in let admin: ~a" (check-fail-message tesl-checked-9)))
     (define admin tesl-checked-9)
-    (define call (thsl-src! "tests/server-tools-tests.tesl" 257 (list (cons 'admin admin) (cons 'rawAdmin rawAdmin)) (lambda () (raw-value (toolUseStep "adminWipe" "call_1" "{}")))))
-    (define final (thsl-src! "tests/server-tools-tests.tesl" 258 (list (cons 'call call) (cons 'admin admin) (cons 'rawAdmin rawAdmin)) (lambda () (raw-value (textStep "Wiped.")))))
-    (define reply (thsl-src! "tests/server-tools-tests.tesl" 259 (list (cons 'final final) (cons 'call call) (cons 'admin admin) (cons 'rawAdmin rawAdmin)) (lambda () (raw-value (askWith (raw-value (adminAgent admin)) "wipe it all" (raw-value (mockToolProvider (list call final))))))))
-    (check-equal? (raw-value (thsl-src! "tests/server-tools-tests.tesl" 260 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'admin admin) (cons 'rawAdmin rawAdmin)) (lambda () (raw-value (replyText (raw-value reply)))))) "Wiped.")
-    (check-equal? (raw-value (thsl-src! "tests/server-tools-tests.tesl" 261 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'admin admin) (cons 'rawAdmin rawAdmin)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
+    (define call (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 257 (list (cons 'admin admin) (cons 'rawAdmin rawAdmin)) (lambda () (raw-value (toolUseStep "adminWipe" "call_1" "{}")))))
+    (define final (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 258 (list (cons 'call call) (cons 'admin admin) (cons 'rawAdmin rawAdmin)) (lambda () (raw-value (textStep "Wiped.")))))
+    (define reply (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 259 (list (cons 'final final) (cons 'call call) (cons 'admin admin) (cons 'rawAdmin rawAdmin)) (lambda () (raw-value (askWith (raw-value (adminAgent admin)) "wipe it all" (raw-value (mockToolProvider (list call final))))))))
+    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 260 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'admin admin) (cons 'rawAdmin rawAdmin)) (lambda () (raw-value (replyText (raw-value reply)))))) "Wiped.")
+    (check-equal? (raw-value (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/tests/server-tools-tests.tesl" 261 (list (cons 'reply reply) (cons 'final final) (cons 'call call) (cons 'admin admin) (cons 'rawAdmin rawAdmin)) (lambda () (raw-value (replyToolCalls (raw-value reply)))))) 1)
     )
     ))
   )

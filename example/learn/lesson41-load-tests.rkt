@@ -22,7 +22,7 @@
 ;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
 ;; those happens AFTER the statement, so the SQL lens can show the exact
 ;; statement that ran (erased with the checkpoints in a release build).
-(register-sql-read-lines! "example/learn/lesson41-load-tests.tesl" '(71))
+(register-sql-read-lines! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson41-load-tests.tesl" '(73))
 (define-record Greeting
   [name : String]
   [message : String]
@@ -35,13 +35,13 @@
             [(check-ok? v) (loop (check-ok-value v))]
             [else v])))
   (define _fields (record-value-fields _raw))
-  (hash 'name (tesl-encode-prim-string (raw-value (hash-ref _fields 'name)))
+  (tesl-hash 'name (tesl-encode-prim-string (raw-value (hash-ref _fields 'name)))
         'message (tesl-encode-prim-string (raw-value (hash-ref _fields 'message)))
   ))
 (define (tesl-codec-decode-Greeting-0 _j)
   (define _f_name (tesl-decode-prim-field _j "name" tesl-decode-prim-string))
   (define _f_message (tesl-decode-prim-field _j "message" tesl-decode-prim-string))
-  (record-value 'Greeting (hash 'name _f_name 'message _f_message)))
+  (record-value 'Greeting (tesl-hash 'name _f_name 'message _f_message)))
 (register-type-codec! 'Greeting tesl-codec-encode-Greeting (list tesl-codec-decode-Greeting-0))
 
 (define-entity Book
@@ -66,13 +66,13 @@
 (define-handler
   (greet [g : Greeting])
   #:returns Greeting
-  (thsl-src! "example/learn/lesson41-load-tests.tesl" 67 (list (cons 'g *g)) (lambda () (Greeting #:name (raw-value g.name) #:message (format "Hello, ~a!" (tesl-display-val (raw-value g.name)))))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson41-load-tests.tesl" 69 (list (cons 'g *g)) (lambda () (Greeting #:name (raw-value g.name) #:message (format "Hello, ~a!" (tesl-display-val (raw-value g.name)))))))
 
 (define-handler
   (listBooks)
   #:capabilities [dbRead]
   #:returns (List Book)
-  (thsl-src! "example/learn/lesson41-load-tests.tesl" 71 (list) (lambda () (select-many (from Book)))))
+  (thsl-src! "/home/mikael/repos_wsl/tesl-github/tesl/example/learn/lesson41-load-tests.tesl" 73 (list) (lambda () (select-many (from Book)))))
 
 (define Lesson41Server-sse-routes '())
 (define-api Lesson41Api
@@ -102,7 +102,7 @@
           (lambda ()
             (run-load-test Lesson41Server 50 2
               (lambda ()
-                (dispatch-api-test-request Lesson41Server 'post (list "greet") #:headers (hash) #:body (hash (string->symbol "name") "bench" (string->symbol "message") "") #:capabilities '())
+                (dispatch-api-test-request Lesson41Server 'post (list "greet") #:headers (tesl-hash) #:body (tesl-hash (string->symbol "name") "bench" (string->symbol "message") "") #:capabilities '())
               )
               #:assertions (list (load-test-assert 'p99 '< 500) (load-test-assert 'error-rate '< 0.05))
             )
@@ -119,11 +119,11 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (dbRead dbWrite)
-              (insert-one! Book (hash 'id "book-1" 'title "The Art of Tesl" 'pages 320))
-              (insert-one! Book (hash 'id "book-2" 'title "Proofs in Practice" 'pages 210))
+              (insert-one! Book (tesl-hash 'id "book-1" 'title "The Art of Tesl" 'pages 320))
+              (insert-one! Book (tesl-hash 'id "book-2" 'title "Proofs in Practice" 'pages 210))
               (run-load-test Lesson41Server 30 2
                 (lambda ()
-                  (dispatch-api-test-request Lesson41Server 'get (list "books") #:headers (hash) #:capabilities (list dbRead dbWrite))
+                  (dispatch-api-test-request Lesson41Server 'get (list "books") #:headers (tesl-hash) #:capabilities (list dbRead dbWrite))
                 )
                 #:assertions (list (load-test-assert 'p95 '< 500) (load-test-assert 'error-rate '< 0.05))
               )

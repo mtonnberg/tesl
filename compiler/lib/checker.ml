@@ -78,6 +78,13 @@ type ctx = {
   records  : (string * record_def) list;
   adts     : (string * adt_def) list;      (* type name → ADT def *)
   type_aliases : (string * ty) list;        (* newtype/alias name → base type (for Eq/Ord resolution) *)
+  secret_types : string list;
+  (** Names declared `secret X = T` — local decls and the exported types of
+      imported modules (see [load_imported_ctors], which re-parses the source, so
+      cross-module works with no extra plumbing).  A secret is a newtype in every
+      other respect, so this list is the WHOLE of what the checker adds:
+      withhold `.value`, deny Ord, reject in a response/codec/client position,
+      and sharpen the interpolation/telemetry errors. *)
   ctors    : (string * (string * scheme)) list;(* ctor name → (type_name, ctor_scheme) *)
   errors   : type_error list ref;
   local_bindings : local_binding_info list ref;
@@ -152,6 +159,7 @@ let make_ctx ?(source_lines = [||]) ~filename ~env () = {
   records  = [];
   adts     = [];
   type_aliases = [];
+  secret_types = [];
   ctors    = [];
   errors   = ref [];
   local_bindings = ref [];
@@ -653,14 +661,18 @@ let collect_type_defs ctx (decls : top_decl list) : ctx =
       { ctx with
         adts = (name, ad) :: ctx.adts;
         ctors = new_ctors @ ctx.ctors }
-    | DType (TypeNewtype { name; base_type; _ }) ->
-      (* Newtype: wrap type + accessor scheme *)
+    | DType (TypeNewtype { name; base_type; secret; _ }) ->
+      (* Newtype: wrap type + accessor scheme.  A `secret` declaration is the
+         SAME registration — same nominal ctor, same base recorded for Eq
+         resolution — plus its name on [secret_types]; everything the keyword
+         subtracts is decided from that list. *)
       let base = ty_of_type_expr base_type in
       let ctor_ty  = TFun (base, TCon name) in
       let ctor_sch = mono ctor_ty in
       { ctx with
         ctors = (name, (name, ctor_sch)) :: ctx.ctors;
-        type_aliases = (name, base) :: ctx.type_aliases }
+        type_aliases = (name, base) :: ctx.type_aliases;
+        secret_types = (if secret then name :: ctx.secret_types else ctx.secret_types) }
     | DType (TypeAlias { name; base_type; _ }) ->
       (* Transparent alias — record its base so Eq/Ord resolution can chase it. *)
       { ctx with type_aliases = (name, ty_of_type_expr base_type) :: ctx.type_aliases }
@@ -1153,6 +1165,29 @@ let exported_ctor_entries (m : module_form) : (string * string * scheme) list =
     | _ -> []
   ) m.decls
 
+(** Names declared `secret X = T` in the modules this one imports (bare name and
+    module-qualified name both, mirroring [load_imported_records]).  Only the
+    EXPORTED ones matter, but the export filter is deliberately skipped: a name
+    that is not exported cannot be referenced here anyway, and being permissive
+    here can only ADD restrictions (a secret is only ever subtracted from). *)
+let load_imported_secret_types (m : module_form) : string list =
+  let is_tesl_module name =
+    String.length name >= 5 && String.sub name 0 5 = "Tesl."
+  in
+  List.concat_map (fun (imp : import_decl) ->
+    if is_tesl_module imp.module_name then []
+    else
+      let path = resolve_local_import_path m.source_file imp.module_name in
+      match parse_local_import_module path with
+      | None | Some (Err _) -> []
+      | Some (Ok imported) ->
+        List.concat_map (function
+          | DType (TypeNewtype { name; secret = true; _ }) ->
+            [ name; imp.module_name ^ "." ^ name ]
+          | _ -> []
+        ) imported.decls
+  ) m.imports
+
 let load_imported_ctors (m : module_form) : (string * (string * scheme)) list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
@@ -1422,6 +1457,11 @@ let stdlib_check_function_names = [
   "Int.nonNegative";
   "String.requireNonEmpty";
   "Dict.requireKey";
+  (* Crypto's two verify-side checks. Both tables must list a check function:
+     this one drives the `check f(x)` form, and
+     Validation_common.stdlib_func_infos drives the proof shape. *)
+  "Crypto.checkPassword";
+  "Crypto.checkSignature";
 ]
 
 let is_check_function_name ctx name =
@@ -1906,9 +1946,31 @@ let rec ty_is_ground (t : ty) : bool =
    collect_type_defs); resolving through it makes `type Celsius = Float` orderable
    and `type Callback = (Int) -> Int` non-equatable.  Nominal identity is unaffected
    (unification still distinguishes the TCons); this only decides comparability. *)
+(* Types that are deliberately NOT comparable, and why each is on the list.
+   Kept as one function so the Ord and Eq rules cannot drift apart, and checked
+   BEFORE the alias chase — otherwise `secret Code = Int` would silently inherit
+   Int's ordering, which is precisely the leak (an ordered comparison against a
+   secret is a binary-search oracle for its value). *)
+let crypto_no_ord_types = [ "PasswordHash"; "Signature"; "Secret" ]
+
+(* No Eq at all — NOT for timing (a Secret's `==` is constant-time and stays),
+   but because a hand comparison would route around Crypto.checkPassword /
+   Crypto.checkSignature and quietly defeat the whole design.  Their only
+   legitimate comparison IS a verification.  Precedent:
+   roadmap/completed/eq_ord_generic_soundness.md. *)
+let crypto_no_eq_types = [ "PasswordHash"; "Signature" ]
+
 let ty_is_ord ctx (t : ty) : bool =
   let rec go seen t =
     match apply !(ctx.subst) t with
+    | TCon name when List.mem name crypto_no_ord_types -> false
+    (* A USER `secret X = T` is denied Ord for the same reason as the stdlib
+       three, and for the same reason this test sits BEFORE the alias chase:
+       `secret Code = Int` would otherwise inherit Int's ordering, and an
+       ordered comparison against a secret is a binary-search oracle for its
+       value.  `==` deliberately STAYS (and lowers to a constant-time compare) —
+       that is the sanctioned way to check a secret. *)
+    | TCon name when List.mem name ctx.secret_types -> false
     | TCon ("Int" | "Float" | "PosixMillis") -> true
     (* Dimensioned quantities are ordered (same-dimension only — unification
        already rejects a cross-dimension compare before this predicate runs).
@@ -1926,6 +1988,7 @@ let ty_is_ord ctx (t : ty) : bool =
 let ty_is_eq ctx (t : ty) : bool =
   let rec go seen t =
     match apply !(ctx.subst) t with
+    | TCon name when List.mem name crypto_no_eq_types -> false
     | TFun _ -> false                      (* functions have no decidable equality *)
     | TVar _ -> true                       (* generic / type-param — permissive *)
     | TCon name when is_ty_var_name name -> true   (* generic type param — permissive *)
@@ -1959,6 +2022,47 @@ let ord_eq_callee_name (fn_expr : expr) : string option =
   | EField { obj = EConstructor { name = modname; _ }; field; _ } -> Some (modname ^ "." ^ field)
   | EField { obj = EVar { name = modname; _ }; field; _ } -> Some (modname ^ "." ^ field)
   | _ -> None
+
+(* ── The secret-accepting-parameter rule ──────────────────────────────────────
+   `secret X = T` withholds `.value`, which is ~90% of the containment — but it
+   also means there is NO expression that turns a secret into its base type, so a
+   secret would be unusable if nothing accepted one.  The roadmap's subsuming
+   rule closes that:
+
+     a `secret T` may be passed where a parameter explicitly MARKED
+     secret-accepting expects a `T`.  Nowhere else.
+
+   The markings are {!Type_system.secret_accepting_params} (per PARAMETER, not per
+   module — `String.concat` is stdlib too and must never accept a secret, and
+   `Crypto.checkPassword`'s first argument is the stored hash while only its
+   second is the candidate).  The single source is shared with the SEC003 lint.
+
+   DECIDE-BY-RESOLUTION, FAIL CLOSED, exactly as [check_decodeAs_call] does it:
+   the relaxation applies only when EVERY one of four independent facts holds —
+   the callee name is in the table, the index is one of its marked slots, the
+   argument's RESOLVED type is a locally-known secret, and that secret's declared
+   base is exactly the base the parameter wants.  Any one of them missing and the
+   ordinary parameter type is used, which produces the ordinary error.  There is
+   no wildcard and no "when in doubt, allow". *)
+let secret_relaxed_param ctx (callee : expr) (idx : int) (param_ty : ty) (arg_ty : ty) : ty =
+  match ord_eq_callee_name callee with
+  | None -> param_ty
+  | Some name ->
+    if not (Type_system.is_secret_accepting_param name idx) then param_ty
+    else
+      let param_r = apply !(ctx.subst) param_ty in
+      let arg_r = apply !(ctx.subst) arg_ty in
+      (match Type_system.secret_param_expected_base param_r, arg_r with
+       | Some wanted, TCon x when List.mem x ctx.secret_types ->
+         (match List.assoc_opt x ctx.type_aliases with
+          (* The secret's own base must BE the base this parameter wants: a
+             `secret Code = Int` is still rejected by a `String` parameter, so
+             the marking widens the slot for secrets over the right base only —
+             it does not turn it into a wildcard. *)
+          | Some base when apply !(ctx.subst) base = wanted -> arg_r
+          | _ -> param_ty)
+       | _ -> param_ty)
+
 
 (** Infer the type of an expression. Returns the inferred type;
     errors are accumulated in ctx. *)
@@ -2043,6 +2147,22 @@ let rec infer_expr ctx (e : expr) : ty =
         let ty' = apply !(ctx.subst) ty in
         (match ty' with
          | TCon ("String" | "Int" | "Bool" | "Float") | TVar _ -> ()
+         (* Interpolating a newtype is ALREADY rejected by the arm below (only
+            the four primitives and a type variable are admitted), so a secret
+            in an interpolation hole never compiled.  What it needs is a message
+            that says WHY, rather than offering the "convert to String first"
+            advice that for a secret is precisely the thing that must not
+            exist. *)
+         | TCon name when List.mem name ctx.secret_types ->
+           add_error ctx (expr_loc e)
+             (Printf.sprintf
+               "cannot interpolate `%s`: it is a `secret`, and in Tesl a secret \
+                cannot become a String — no interpolation, no concatenation, no \
+                `.value`, no escape hatch. Interpolate a non-secret identifier \
+                for it instead (an id, or `Crypto.keyFingerprint` for a \
+                short non-reversible digest that tells you WHICH secret you \
+                loaded)."
+               name)
          | _ ->
            add_error ctx (expr_loc e)
              (Printf.sprintf
@@ -2371,8 +2491,19 @@ let rec infer_expr ctx (e : expr) : ty =
                   in
                   (match newtype_base with
                    | Some base ->
-                     (* Newtype: `.value` unwraps; no other field exists. *)
-                     if field = "value" then base else no_such_field ()
+                     (* Newtype: `.value` unwraps; no other field exists.
+                        A `secret` withholds even `.value` — that IS the
+                        keyword's definition ("`type X = T` minus `.value`"),
+                        and it is ~90% of the containment on its own: `unify` is
+                        strictly nominal, so with no eliminator there is no
+                        expression that turns a secret into its base type. *)
+                     if field = "value" && List.mem type_name ctx.secret_types then begin
+                       add_error ctx loc (Printf.sprintf
+                         "`%s` is a `secret` type, so it has no `.value`: a secret cannot become a `%s`. Hand it to a function that accepts a secret (`Crypto.signWith`, `Crypto.keyFingerprint`, `HttpClient.bearer`), store it in a database column (the SQL layer takes the newtype as-is), or compare it with `==` (which lowers to a constant-time compare). If you need to hand a value to a client once, that is not a secret you hold but a token you mint: `Crypto.randomToken`, send it, and store only its `Crypto.fingerprint`."
+                         type_name (pp_ty base));
+                       fresh ()
+                     end
+                     else if field = "value" then base else no_such_field ()
                    | None ->
                      if is_primitive || is_user_adt then begin
                        add_error ctx loc (Printf.sprintf
@@ -2396,9 +2527,54 @@ let rec infer_expr ctx (e : expr) : ty =
                          | "Agent" | "AgentReply" | "LlmProvider"
                          | "Conversation" | "ConversationTurn"
                          | "Tool" | "ToolStep" -> true
+                         (* Tesl.Crypto: opaque with a field set of EXACTLY
+                            NOTHING — see no_eliminator_types below. *)
+                         | "PasswordHash" | "Signature" | "Secret" -> true
+                         | _ -> false
+                       in
+                       (* Types with NO eliminator at all.  `.value` on these is
+                          the single largest hole in the `secret` design: a
+                          `PasswordHash`/`Secret` whose inner String can be got
+                          back out is not opaque and not secret, it is just a
+                          String with a longer name.  There is no runtime
+                          representation difference — the checker is the whole
+                          enforcement — so this list IS the guarantee.
+
+                          `Signature` is here too, for a different reason: it is
+                          public data, but `.value` on it would hand back a hex
+                          tag that invites `==` comparison, routing around
+                          Crypto.checkSignature and its constant-time compare.
+                          `Crypto.signatureHex` is the sanctioned, lintable way
+                          out. *)
+                       let no_eliminator = match type_name with
+                         | "PasswordHash" | "Signature" | "Secret" -> true
                          | _ -> false
                        in
                        if not is_known_opaque then fresh ()
+                       else if no_eliminator then begin
+                         add_error ctx loc (Printf.sprintf
+                           "`%s` has no field `%s`. %s"
+                           type_name field
+                           (match type_name with
+                            | "PasswordHash" ->
+                              "A PasswordHash is opaque on purpose: the only \
+                               legitimate way to use one is \
+                               `Crypto.checkPassword`, which is \
+                               constant-time and returns a proof. Store it in a \
+                               column directly — the SQL layer takes it as-is."
+                            | "Secret" ->
+                              "A Secret cannot become a String — that is the \
+                               whole guarantee. Hand it to a function that \
+                               knows what to do with it (`Crypto.signWith`, \
+                               `Crypto.keyFingerprint`), store it in a column, \
+                               or compare it with `==` (which is \
+                               constant-time)."
+                            | _ ->
+                              "A Signature's only legitimate comparison IS a \
+                               verification: use `Crypto.checkSignature`. To put \
+                               one in a header, use `Crypto.signatureHex`."));
+                         fresh ()
+                       end
                        else
                          (match field with
                           | "value" | "cookies" | "headers" | "queryParameters"
@@ -2552,11 +2728,25 @@ let rec infer_expr ctx (e : expr) : ty =
     let infer_direct_call fn_expr call_args =
       let fn_ty = infer_expr ctx fn_expr in
       let arg_tys_rev = ref [] in
+      let arg_index = ref (-1) in
       let final_ret_ty = List.fold_left (fun current_ret_ty arg_expr ->
+        incr arg_index;
         let arg_ty = infer_expr ctx arg_expr in
         arg_tys_rev := arg_ty :: !arg_tys_rev;
+        (* Secret-accepting parameter (roadmap/next/tesl_crypto.md's subsuming
+           rule): widen the callee's parameter slot to the argument's own secret
+           type when — and only when — the slot is marked and the secret's base
+           is exactly what the slot wants.  See [secret_relaxed_param]: it is
+           decide-by-resolution and fails closed, so an UNMARKED slot keeps
+           rejecting a secret (String.concat still does). *)
         let next_ret_ty = fresh () in
-        unify_at ctx (expr_loc arg_expr) current_ret_ty (TFun (arg_ty, next_ret_ty));
+        let param_ty =
+          match apply !(ctx.subst) current_ret_ty with
+          | TFun (p, _) -> secret_relaxed_param ctx fn_expr !arg_index p arg_ty
+          | _ -> arg_ty
+        in
+        unify_at ctx (expr_loc arg_expr) current_ret_ty (TFun (param_ty, next_ret_ty));
+        unify_at ctx (expr_loc arg_expr) arg_ty param_ty;
         apply !(ctx.subst) next_ret_ty
       ) fn_ty call_args in
       (* Record the call for Eq/Ord discharge after the whole module is checked
@@ -3135,7 +3325,24 @@ let rec infer_expr ctx (e : expr) : ty =
        expressions: infer them so their types and field accesses are recorded
        for hover / type-at (otherwise hovering on `record.field` inside a
        telemetry block reports the enclosing Unit). *)
-    List.iter (fun (_, v) -> ignore (infer_expr ctx v)) fields;
+    (* A telemetry attribute value is an ARBITRARY expression with no type
+       constraint at all — the one place a secret reaches a rendering sink
+       WITHOUT going through `.value` or an interpolation hole.  The runtime
+       redacts it (dsl/otel.rkt), but a redacted attribute is a silently useless
+       attribute, so reject it here where the author can see it. *)
+    List.iter (fun (k, v) ->
+      let vty = apply !(ctx.subst) (infer_expr ctx v) in
+      match vty with
+      | TCon name when List.mem name ctx.secret_types ->
+        add_error ctx (expr_loc v) (Printf.sprintf
+          "telemetry attribute `%s` is a `secret` (`%s`): a secret must not \
+           reach a telemetry collector. The runtime redacts it to \
+           `[redacted]`, which makes the attribute useless rather than \
+           safe — emit a non-secret identifier instead (an id, or \
+           `Crypto.keyFingerprint` for a short non-reversible digest)."
+          k name)
+      | _ -> ()
+    ) fields;
     t_unit
   | EEnqueue { payload; _ } ->
     ignore (infer_expr ctx payload);
@@ -4307,11 +4514,22 @@ use the `Tuple3 a b c` constructor instead";
          let resolved_fn = apply !(ctx.subst) !current_ty in
          match resolved_fn with
          | TFun (param_ty, ret_ty) ->
-           ignore (check_expr ctx arg_expr
-             (push_expectation ~origin:(expr_loc app)
-               ~role:(CallArgument (call_target_name base_fn, idx + 1))
-               ~reason:(argument_reason base_fn (idx + 1))
-               param_ty expected));
+           if Type_system.is_secret_accepting_param
+                (Option.value ~default:"" (ord_eq_callee_name base_fn)) idx
+           then begin
+             (* A secret-accepting slot: infer first, so the argument's resolved
+                type can widen the parameter (see [secret_relaxed_param]).  The
+                expectation-chain path below cannot do this — it pushes the
+                DECLARED parameter type before the argument is known. *)
+             let arg_ty = infer_expr ctx arg_expr in
+             let target = secret_relaxed_param ctx base_fn idx param_ty arg_ty in
+             unify_at ctx (expr_loc arg_expr) arg_ty target
+           end else
+             ignore (check_expr ctx arg_expr
+               (push_expectation ~origin:(expr_loc app)
+                 ~role:(CallArgument (call_target_name base_fn, idx + 1))
+                 ~reason:(argument_reason base_fn (idx + 1))
+                 param_ty expected));
            current_ty := apply !(ctx.subst) ret_ty
          | _ ->
            let is_concrete = match resolved_fn with
@@ -5094,6 +5312,11 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
      position from which EmailBody is reachable, naming the offending path.
      Lazy: the import closure is only parsed when a wire-positioned name
      actually resolves to a walkable decl. *)
+  (* Secret type names reachable from this module — local decls plus the
+     transitively imported closure, collected by the SAME walk as
+     [wire_field_table] so the two cannot disagree about which modules were
+     visited. *)
+  let wire_secret_names : string list ref = ref [] in
   let wire_field_table : (string * (string * type_expr) list) list Lazy.t =
     lazy begin
       let is_tesl_module name =
@@ -5111,7 +5334,9 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
                List.concat_map (fun (v : adt_variant) ->
                  List.map (fun (f : field_def) -> (f.name, f.type_expr)) v.fields)
                  variants) ]
-          | DType (TypeNewtype { name; base_type; _ })
+          | DType (TypeNewtype { name; base_type; secret; _ }) ->
+            if secret then wire_secret_names := name :: !wire_secret_names;
+            [ (name, [ ("", base_type) ]) ]
           | DType (TypeAlias { name; base_type; _ }) ->
             [ (name, [ ("", base_type) ]) ]
           | _ -> []
@@ -5175,6 +5400,61 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
     in
     go root
   in
+  (* `secret` is ONE-WAY at the network boundary: it may come IN (Phase 4 — the
+     plaintext password in a request body is the highest-value secret in the
+     system and the whole point of the inbound half) and it may not go back OUT.
+     So the two wire positions that previously called [make_wire_err]
+     identically now differ: a response/SSE position additionally rejects a
+     secret; a request/queue-payload position does not.  Reuse the same
+     transitive [wire_field_table] walk, so the rejection is transitive for free
+     (a record containing a record containing a secret is equally rejected) and
+     the error can name the `Owner.field → …` path. *)
+  let find_wire_secret_path (root : string) : string list option =
+    let table = Lazy.force wire_field_table in
+    let is_secret n = List.mem n !wire_secret_names in
+    if is_secret root then Some [ Printf.sprintf "`%s`" root ]
+    else begin
+      let visiting : (string, unit) Hashtbl.t = Hashtbl.create 8 in
+      let rec go name : string list option =
+        if Hashtbl.mem visiting name then None
+        else begin
+          Hashtbl.replace visiting name ();
+          match List.assoc_opt name table with
+          | None -> None
+          | Some fields ->
+            List.find_map (fun (fname, fte) ->
+              let seg =
+                if fname = "" then Printf.sprintf "`%s`" name
+                else Printf.sprintf "`%s.%s`" name fname
+              in
+              let names = List.map fst (type_names_of_type_expr fte) in
+              if List.exists is_secret names then Some [ seg ]
+              else
+                List.find_map (fun n ->
+                  Option.map (fun path -> seg :: path) (go n)
+                ) names
+            ) fields
+        end
+      in
+      go root
+    end
+  in
+  let secret_wire_err (name, loc) =
+    match find_wire_secret_path name with
+    | Some path ->
+      Some { loc; fix = None;
+             message = Printf.sprintf
+               "`%s` cannot be serialized to a client: %s is a `secret`. A \
+                secret is one-way at the network boundary — it can come in, it \
+                cannot go back out, and shipping `[redacted]` to a client that \
+                expects a value is a bug that looks like a feature. If you must \
+                hand a client a value once (a fresh API key, a reset token), \
+                that is not a secret you hold but a token you mint: \
+                `Crypto.randomToken`, send it, and store only its \
+                `Crypto.fingerprint`."
+               name (String.concat " → " path) }
+    | None -> None
+  in
   let make_wire_err (name, loc) =
     if List.mem name non_wire_stdlib_types && not (List.mem name locally_bound)
     then
@@ -5195,8 +5475,18 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
                   records)." name (String.concat " → " path) }
       | None -> None
   in
+  (* REQUEST position (endpoint body, queue job record): EmailBody only — a
+     secret is welcome here, that is the inbound half. *)
   let check_wire_te te = List.filter_map make_wire_err (type_names_of_type_expr te) in
-  let check_wire_rs rs = List.filter_map make_wire_err (type_names_of_return_spec rs) in
+  (* RESPONSE position (endpoint return, SSE payload): EmailBody AND secret. *)
+  let check_out_te te =
+    let names = type_names_of_type_expr te in
+    List.filter_map make_wire_err names @ List.filter_map secret_wire_err names
+  in
+  let check_wire_rs rs =
+    let names = type_names_of_return_spec rs in
+    List.filter_map make_wire_err names @ List.filter_map secret_wire_err names
+  in
   List.concat_map (function
     | DFunc fd ->
       List.concat_map (fun (b : binding) -> check_te b.type_expr) fd.params
@@ -5244,8 +5534,10 @@ let check_type_names_in_scope ~(suggest : string -> Import_suggest.suggestion op
        is unchanged (validated elsewhere). *)
     | DChannel ch ->
       (* [Desugar.channel_payload_type]: the typed `= SseChannel { … }` form
-         still carries its payload in [config_expr] at check time. *)
-      check_wire_te (Desugar.channel_payload_type ch)
+         still carries its payload in [config_expr] at check time.  An SSE
+         payload is an OUTBOUND position (it is serialized to a connected
+         client), so it takes the response walk. *)
+      check_out_te (Desugar.channel_payload_type ch)
     | DQueue q ->
       List.concat_map (fun jt -> List.filter_map make_wire_err [ (jt, q.loc) ])
         (Desugar.queue_job_types q)
@@ -6221,6 +6513,10 @@ let check_module_with_metadata ?(source_lines = [||]) (m : module_form) : local_
      `imported.field` type-checks (local defs keep precedence — they are at the
      front of ctx.records, imported are appended). *)
   let ctx = { ctx with records = ctx.records @ load_imported_records m } in
+  (* Cross-module secrets: an imported `secret Password = String` must withhold
+     `.value` and deny Ord here too. *)
+  let ctx = { ctx with
+    secret_types = ctx.secret_types @ load_imported_secret_types m } in
   (* decodeAs on a codec declared in an imported module (matrix codec/decodeas):
      local codecs were collected by [collect_type_defs]; append the imported
      ones (bare name gated on the type being in scope, qualified always). *)

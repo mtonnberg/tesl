@@ -6,6 +6,8 @@ module Lesson01BasicTypesAndFunctions exposing [
   clamp,
 ]
 
+# lesson: track=basics order=20 needs=lesson00-hello-world
+# summary: The everyday syntax — Int, String, Bool, arithmetic, comparisons, let bindings and multi-line if
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

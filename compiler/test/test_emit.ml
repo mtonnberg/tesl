@@ -280,7 +280,7 @@ auth cookieAuth(request: HttpRequest) -> session: SessionUser::: Authenticated s
 |} in
   let racket = compile_ok src "auth_record_return_emit" in
   assert_contains ~name:"typed SessionUser constructor" racket "(SessionUser #:id \"u1\" #:username \"alice\")";
-  assert_not_contains ~name:"raw hash auth return" racket "(hash 'id \"u1\" 'username: \"alice\")"
+  assert_not_contains ~name:"raw hash auth return" racket "(tesl-hash 'id \"u1\" 'username: \"alice\")"
 
 let test_handler_emit () =
   let src = {|module Foo exposing [createTask]
@@ -907,7 +907,7 @@ codec Req {
   assert_contains ~name:"codec decodes the field despite the stray colon"
     racket "(tesl-decode-prim-field _j \"name\"";
   assert_not_contains ~name:"decoder is not empty (field not dropped)"
-    racket "(record-value 'Req (hash ))"
+    racket "(record-value 'Req (tesl-hash ))"
 
 (* ── EOk attach-proof: strip surface `check` wrapper ─────────────────────────
    `ok (check (checkA && checkB)) n ::: p` (a proof-sidecar fn tail) reaches the

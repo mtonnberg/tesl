@@ -21,8 +21,9 @@ A manual location is addressed as:
 ```
 
 - **`<section>`** — a manual section name accepted by `tesl help manual <section>`. The canonical
-  set is listed in the [manual index](MANUAL.md#manual-sections): `getting-started`, `overview`,
-  `language-spec`, `examples`, `best-practices`, `faq`, `anchors`, `dev`.
+  set is the table in the [manual index](MANUAL.md#manual-sections), and that table is the *only*
+  place it is written down: `tests/doc-integrity.sh` asserts it round-trips against the CLI in
+  both directions, so restating the list here would just be a copy that drifts.
 - **`#<anchor>`** *(optional)* — a heading **slug** within that section (see slug rules below). When
   omitted, the address refers to the top of the section.
 
@@ -100,6 +101,7 @@ them.
 | `best-practices#validation-patterns` | How to write and compose `check` functions |
 | `best-practices#proof-management` | Attaching, detaching, and reattaching proofs |
 | `best-practices#proof-cost-model` | Runtime cost of proofs (zero — erased in release and `--debug`; net only via `=0`) |
+| `best-practices#security` | Authentication vs. a cookie check, key handling, MAC verification, passwords (the `SEC0xx` codes) |
 | `best-practices#api-design` | Route design, versioning, pagination |
 | `best-practices#database-access` | Typed queries, parameterization, transactions |
 | `best-practices#error-handling` | Status codes and structured error messages |

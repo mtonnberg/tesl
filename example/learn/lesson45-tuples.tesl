@@ -15,6 +15,8 @@ module Lesson45Tuples exposing [
   classifyPair,
 ]
 
+# lesson: track=basics order=730 needs=none
+# summary: Pair or triple values of different types with Tuple2 and Tuple3
 # ---------------------------------------------
 # QUICK START - just use it, no theory needed
 # ---------------------------------------------

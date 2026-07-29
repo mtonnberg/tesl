@@ -118,6 +118,7 @@ let module_path_table : (string, string) Hashtbl.t =
   add "Tesl.App"       "tesl/prelude.rkt";
   add "Tesl.Logging"   "tesl/logging.rkt";
   add "Tesl.JWT"        "tesl/jwt.rkt";
+  add "Tesl.Crypto"     "tesl/crypto.rkt";
   add "Tesl.HttpClient" "tesl/http-client.rkt";
   add "Tesl.UUID"       "tesl/uuid.rkt";  (* canonical uppercase alias *)
   add "Tesl.Cache"     "tesl/cache.rkt";
@@ -689,7 +690,9 @@ let stdlib_zero_arg_names : (string, unit) Hashtbl.t =
      (* 2026-07-06: effectful fresh-value builtins, called as `f()` and lowered
         to `(f)` (same idiom as UUID.v4) — a per-call fresh value, not a
         once-evaluated constant. *)
-     "randomFloat"; "generateId"]; h
+     "randomFloat"; "generateId";
+     (* Crypto.randomToken() — a fresh 256-bit token per call. *)
+     "Crypto.randomToken"]; h
 
 let job_type_to_queue : (string, string) Hashtbl.t = Hashtbl.create 16
 
@@ -1722,7 +1725,7 @@ let rec emit_expr ctx e =
       emit_core ()
   in
   let emit_sql_insert (insert : sql_insert) =
-    emit ctx (Printf.sprintf "(insert-one! %s (hash" insert.entity);
+    emit ctx (Printf.sprintf "(insert-one! %s (tesl-hash" insert.entity);
     List.iter (fun (field, value) ->
       emit ctx " ";
       emit ctx (Printf.sprintf "'%s " field);
@@ -1741,7 +1744,7 @@ let rec emit_expr ctx e =
   in
   let emit_sql_update (update : sql_update) =
     let emit_core () =
-      emit ctx (Printf.sprintf "(update-many! (from %s) (hash" update.entity);
+      emit ctx (Printf.sprintf "(update-many! (from %s) (tesl-hash" update.entity);
       List.iter (fun (field, value) ->
         emit ctx (Printf.sprintf " (entity-field-ref %s '%s) " update.entity field);
         emit_expr ctx value
@@ -1762,7 +1765,7 @@ let rec emit_expr ctx e =
   in
   let _ = emit_sql_insert_many in (* used below *)
   let emit_sql_upsert (upsert : sql_upsert) =
-    emit ctx (Printf.sprintf "(upsert-one! %s (hash" upsert.entity);
+    emit ctx (Printf.sprintf "(upsert-one! %s (tesl-hash" upsert.entity);
     List.iter (fun (field, value) ->
       emit ctx " ";
       emit ctx (Printf.sprintf "'%s " field);
@@ -2053,7 +2056,7 @@ let rec emit_expr ctx e =
        let other_fields = List.filter (fun (k, _) -> k <> "__base__") fields in
        emit ctx "(tesl-record-update ";
        emit_raw_value ctx base_expr;
-       emit ctx " (hash ";
+       emit ctx " (tesl-hash ";
        List.iteri (fun i (k, v) ->
          if i > 0 then emit ctx " ";
          emit ctx (Printf.sprintf "'%s " k);
@@ -2150,7 +2153,7 @@ let rec emit_expr ctx e =
     in
     if Hashtbl.mem ctx.entity_names rname then begin
       (* Entity rows are plain hashes at runtime — emit (hash 'field val ...) *)
-      emit ctx "(hash";
+      emit ctx "(tesl-hash";
       List.iter (fun (k, v) ->
         emit ctx (Printf.sprintf " '%s " k);
         emit_field_val k v
@@ -2704,7 +2707,7 @@ let rec emit_expr ctx e =
        in
        emit ctx "(tesl-record-update ";
        emit_raw_value ctx base_expr;
-       emit ctx " (hash ";
+       emit ctx " (tesl-hash ";
        List.iteri (fun i (k, v) ->
          if i > 0 then emit ctx " ";
          emit ctx (Printf.sprintf "'%s " k);
@@ -2760,7 +2763,7 @@ let rec emit_expr ctx e =
           emit ctx ")"
         | None ->
           (* Plain hash — used when type is unknown *)
-          emit ctx "(hash ";
+          emit ctx "(tesl-hash ";
           List.iteri (fun i (k, v) ->
             if i > 0 then emit ctx " ";
             emit ctx (Printf.sprintf "'%s " k);
@@ -5755,6 +5758,16 @@ let emit_entity ctx (e : entity_form) =
   emit_nl ctx
 
 let emit_type_form ctx = function
+  | TypeNewtype { name; base_type; secret = true; _ } ->
+    (* `define-secret-newtype` expands to `define-newtype` + a registry entry, so
+       the runtime REPRESENTATION is an ordinary `newtype-value` — deliberately,
+       because that is what makes a secret column round-trip its real value
+       unchanged.  The registry is what lets every rendering sink answer "is this
+       value secret?" at each node of its walk. *)
+    emit ctx (Printf.sprintf "(define-secret-newtype %s " name);
+    emit_type_name ctx base_type;
+    emit_line ctx ")";
+    emit_nl ctx
   | TypeNewtype { name; base_type; _ } ->
     emit ctx (Printf.sprintf "(define-newtype %s " name);
     emit_type_name ctx base_type;
@@ -5813,7 +5826,7 @@ let emit_adt_codec ctx (cf : codec_form) (variants : adt_variant list) =
   else begin
     emit_line ctx "  (cond";
     List.iter (fun ctor ->
-      emit_line ctx (Printf.sprintf "    [(equal? _raw %s) (hash \"tag\" %S)]" ctor ctor)
+      emit_line ctx (Printf.sprintf "    [(equal? _raw %s) (tesl-hash \"tag\" %S)]" ctor ctor)
     ) ctors;
     emit_line ctx (Printf.sprintf "    [else (error (format \"%s: unexpected value ~~a\" _raw))]))" cf.name)
   end;
@@ -5854,7 +5867,7 @@ let emit_codec ctx (cf : codec_form) =
      emit_line ctx "            [(check-ok? v) (loop (check-ok-value v))]";
      emit_line ctx "            [else v])))";
      emit_line ctx "  (define _fields (record-value-fields _raw))";
-     emit ctx "  (hash ";
+     emit ctx "  (tesl-hash ";
      List.iteri (fun i (e : codec_encode_entry) ->
        if i > 0 then emit ctx "\n        ";
        emit ctx (Printf.sprintf "'%s %s"
@@ -6039,7 +6052,7 @@ let emit_codec ctx (cf : codec_form) =
           emit_line ctx "            _cross_check_result";
           emit ctx "            "
         | _ -> ());
-       emit ctx (Printf.sprintf "(record-value '%s (hash " cf.name);
+       emit ctx (Printf.sprintf "(record-value '%s (tesl-hash " cf.name);
        List.iteri (fun i fn ->
          if i > 0 then emit ctx " ";
          emit ctx (Printf.sprintf "'%s _f_%s" fn fn)) field_names;
@@ -6557,7 +6570,7 @@ let emit_test ctx ~(database_names : string list) (t : test_form) =
          let parts = List.map (fun (field : Ast.field_def) ->
            Printf.sprintf "'%s %s" field.name (random_expr_for_type field.type_expr)
          ) fields in
-         Printf.sprintf "(hash %s)" (String.concat " " parts)
+         Printf.sprintf "(tesl-hash %s)" (String.concat " " parts)
        | Some (_, fields, _invariant) ->
          let has_proofs = List.exists (fun (f : Ast.field_def) -> f.proof_ann <> None) fields in
          if has_proofs then
@@ -7040,7 +7053,7 @@ and emit_api_test_json ctx ~server_name ~capabilities e =
   | ELit { lit = LString s; _ } ->
     emit_api_test_template_content ctx ~server_name ~capabilities ~helper_name:"api-test-string-fragment" s
   | ERecord { fields; _ } ->
-    emit ctx "(hash";
+    emit ctx "(tesl-hash";
     List.iter (fun (k, v) ->
       emit ctx " (string->symbol ";
       emit ctx (Printf.sprintf "%S" k);
@@ -7127,7 +7140,7 @@ and emit_api_test_expr ctx ~server_name ~capabilities e =
        emit ctx " #:headers ";
        (match headers with
         | Some headers_expr -> emit_api_test_json ctx ~server_name ~capabilities headers_expr
-        | None -> emit ctx "(hash)");
+        | None -> emit ctx "(tesl-hash)");
        (match body with
         | Some body_expr -> emit ctx " #:body "; emit_api_test_json ctx ~server_name ~capabilities body_expr
         | None -> ());
@@ -7151,7 +7164,7 @@ and emit_api_test_expr ctx ~server_name ~capabilities e =
        emit ctx " #:headers ";
        (match headers with
         | Some headers_expr -> emit_api_test_json ctx ~server_name ~capabilities headers_expr
-        | None -> emit ctx "(hash)");
+        | None -> emit ctx "(tesl-hash)");
        emit ctx " #:name ";
        (match path with
         | ELit { lit = LString s; _ } -> emit ctx (Printf.sprintf "%S" s)

@@ -16,7 +16,8 @@ import Tesl.Http exposing [HttpRequest]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Dict exposing [Dict.lookup]
 import Tesl.Time exposing [nowMillis, PosixMillis, time]
-import Tesl.Env exposing [env, envInt, envRead]
+import Tesl.Env exposing [env, envInt, envRead, requireEnv]
+import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.verify]
 import Tesl.String exposing [String.length]
 import Tesl.List exposing [List.isEmpty]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -35,7 +36,7 @@ import Tesl.App exposing [App]
 # server needs; a handler can only do what its declared capabilities allow.
 capability appDbRead implies dbRead
 capability appDbWrite implies dbWrite
-capability appReadCookie
+capability appReadCookie implies jwt
 capability appWebService implies appDbRead, appDbWrite, appReadCookie, time, random
 
 type UserId = String
@@ -80,13 +81,31 @@ fn generateTodoId() -> String
   generatePrefixedId "todo"
 
 # An `auth` is the boundary that turns a raw request into a trusted user.
+#
+# READ THIS BEFORE YOU CHANGE IT. A bare `cookies "user"` check is NOT
+# authentication: the client chooses its own cookies, so `Cookie: user=anna`
+# would impersonate anna and every `todo.ownerId` check below it would be
+# meaningless. The session is a SIGNED token — `JWT.verify` recomputes the
+# HMAC-SHA256 signature and checks the `exp` claim, and auto-401s on anything
+# this service did not mint. The user id is the `sub` claim, i.e. it lives
+# INSIDE the signature and the client cannot edit it. Mint it at login with
+#
+#   JWT.sign (Dict.singleton "sub" userId) secret
+#
+# and set SESSION_JWT_SECRET in the environment ([env] in tesl.toml).
+# Never take a `role` (or any other privilege) from a cookie: put it in the
+# signed claims, or look it up server-side from the verified user id.
 fact Authenticated (req: User)
 
 auth cookieAuth(request: HttpRequest) -> requestUser: User ::: Authenticated requestUser
-  requires [appReadCookie] =
-  case Dict.lookup "user" request.cookies of
-    Something userId -> ok (User { id: userId, role: "user" }) ::: Authenticated requestUser
-    Nothing -> fail 401 "Missing or invalid user cookie"
+  requires [appReadCookie, envRead] =
+  case Dict.lookup "session" request.cookies of
+    Nothing -> fail 401 "Missing session cookie"
+    Something raw ->
+      let claims = JWT.verify (JwtToken raw) (JwtSecret (requireEnv "SESSION_JWT_SECRET"))
+      case Dict.lookup "sub" claims of
+        Nothing -> fail 401 "Session token has no subject"
+        Something userId -> ok (User { id: UserId userId, role: "user" }) ::: Authenticated requestUser
 
 # ── PROOF #1 (INPUT): validate the request body at the boundary ───────────────
 # `TitleSafe` is a fact about a string. The `check` is the ONLY way to mint it.

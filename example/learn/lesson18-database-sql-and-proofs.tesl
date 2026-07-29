@@ -1,5 +1,7 @@
 module Lesson18DatabaseSqlAndProofs exposing [NoteDatabase, NoteServer]
 
+# lesson: track=data order=100 needs=lesson05-intro-to-proofs
+# summary: Declare a table with entity and query it in typed SQL whose results carry a proof that they came from the database
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

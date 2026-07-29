@@ -8,6 +8,8 @@ module Lesson09ProofComposition exposing [
   decomposeBoth,
 ]
 
+# lesson: track=proofs order=250 needs=lesson05-intro-to-proofs
+# summary: Require and decompose several facts about the same value with &&
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

@@ -14,6 +14,8 @@ module Lesson12RecordsWithProofs exposing [
   processOrder,
 ]
 
+# lesson: track=proofs order=70 needs=lesson03-records,lesson05-intro-to-proofs
+# summary: Put a proof on a record field, so the data shape itself guarantees its contents were validated
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

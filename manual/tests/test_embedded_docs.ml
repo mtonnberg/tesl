@@ -273,9 +273,10 @@ let () =
 
   (* 6b. (D8a) Banned marketing phrases must not resurface in the calibrated
      docs (documentation_improvements, decision #4: retire "unbreakable" /
-     "production-ready").  The ONLY allowed occurrence is TESL.md's honest alpha
+     "production-ready").  The ONLY allowed occurrence is the README's honest beta
      disclaimer, which uses the word inside an explicit negation — allowlisted by
-     the "not as a promise" marker on that line. *)
+     the "not as a promise" marker on that line.  (TESL.md was folded into the
+     README and deleted — revised_onboarding Phase 1.) *)
   (* manual_dir may be relative (e.g. ".."), so append parent rather than
      dirname (which would map ".." -> "."). *)
   let repo_root = Filename.concat manual_dir Filename.parent_dir_name in
@@ -310,7 +311,6 @@ let () =
               (List.length offenders) phrase))
       banned
   in
-  scan_banned "TESL.md" (read_abs (Filename.concat repo_root "TESL.md"));
   scan_banned "manual/overview.md" (read "overview.md");
   scan_banned "README.md" (read_abs (Filename.concat repo_root "README.md"));
 
@@ -355,6 +355,13 @@ let () =
   check "best-practices#proof-cost-model exists"
     (List.mem "proof-cost-model" (slugs_of_file "best-practices.md"))
     "Proof Cost Model heading missing";
+  (* The Security section is the manual target for the SEC0xx diagnostic
+     category (Error_codes.Security).  Every SEC code's `manual` field cites
+     `best-practices#security`, so losing the heading dead-links the whole
+     category. *)
+  check "best-practices#security exists"
+    (List.mem "security" (slugs_of_file "best-practices.md"))
+    "Security heading missing (SEC0xx diagnostics deep-link to it)";
   check "faq#is-there-runtime-overhead-for-proofs exists"
     (List.mem "is-there-runtime-overhead-for-proofs" (slugs_of_file "FAQ.md"))
     "FAQ proof-overhead heading missing";
@@ -469,7 +476,7 @@ let () =
     else []
   in
   let docs_to_lint =
-    (List.map (fun f -> (f, Filename.concat repo_root f)) [ "README.md"; "TESL.md"; "LANGUAGE-SPEC.md" ])
+    (List.map (fun f -> (f, Filename.concat repo_root f)) [ "README.md"; "LANGUAGE-SPEC.md" ])
     @ dir_md "manual" @ dir_md "dev-docs" @ dir_md "example/intro"
     |> List.filter (fun (_, abs) -> Sys.file_exists abs)
   in

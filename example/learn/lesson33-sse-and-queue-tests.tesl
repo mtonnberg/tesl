@@ -34,6 +34,8 @@ import Tesl.Database exposing [
 ]
 import Tesl.SSE exposing [SseChannel]
 
+# lesson: track=testing order=420 needs=lesson32-api-tests,lesson28-dead-letter-queue
+# summary: Drive SSE streams and background workers deterministically from an api-test
 # ── Goal ─────────────────────────────────────────────────────────────────────
 # Learn how `api-test` can drive SSE streams and workers deterministically.
 # The test opens a stream, triggers an HTTP action that enqueues a job, runs the

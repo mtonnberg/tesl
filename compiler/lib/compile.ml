@@ -1314,7 +1314,7 @@ let resolve_symbol_in_top_decl env line col (decl : Ast.top_decl) =
          match resolve_symbol_in_expr env param_locals line col fd.body with
          | Some _ as found -> found
          | None -> if loc_contains_position name_loc line col then Some (term_symbol fd.name name_loc) else None)
-  | Ast.DType (Ast.TypeNewtype { name; base_type; loc })
+  | Ast.DType (Ast.TypeNewtype { name; base_type; loc; _ })
   | Ast.DType (Ast.TypeAlias { name; base_type; loc }) ->
     let name_loc = precise_name_loc loc name in
     (match resolve_symbol_in_type_expr env line col base_type with
@@ -1696,7 +1696,7 @@ let rec collect_occurrences_in_top_decl env target (decl : Ast.top_decl) =
     @ List.concat_map (collect_occurrences_in_binding ~locals:param_locals env target) fd.params
     @ collect_occurrences_in_return_spec ~locals:param_locals env target fd.return_spec
     @ collect_occurrences_in_expr env param_locals target fd.body
-  | Ast.DType (Ast.TypeNewtype { name; base_type; loc })
+  | Ast.DType (Ast.TypeNewtype { name; base_type; loc; _ })
   | Ast.DType (Ast.TypeAlias { name; base_type; loc }) ->
     let name_loc = precise_name_loc loc name in
     (if symbol_equal (type_symbol name name_loc) target then [name_loc] else [])
@@ -3696,7 +3696,16 @@ let agent_diag_json (d : diagnostic) : string =
   ] in
   let with_fix = match d.fix with
     | None -> base
-    | Some _ -> base @ ["fix", fix_to_json d.fix]
+    | Some _ ->
+      (* ~code is REQUIRED here.  Without it [fix_to_json] falls back to
+         [Diag_fix.content_title], which describes the EDIT ("Replace with
+         `TodoApi`") instead of the INTENT ("Change the module name to
+         `TodoApi`").  This was silently wrong on the agent-context surface only
+         — [diag_to_json] two hundred lines up passes ~code correctly — so every
+         quick-fix an AI agent saw had generic wording while the same fix shown
+         to the LSP had the real title.  For a language positioned around its
+         agent surface, that is the wrong half to degrade. *)
+      base @ ["fix", fix_to_json ~code:d.code d.fix]
   in
   json_obj with_fix
 

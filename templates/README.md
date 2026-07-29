@@ -25,8 +25,8 @@ templates/<name>/
 
 | name      | based on                      | database | features |
 |-----------|-------------------------------|----------|----------|
-| `minimal` | `example/admin-task-api.tesl` | none     | cookie `auth`, telemetry, one **input** proof (`Positive` via `capture`), one **output** proof (`Int ? Positive`) |
-| `api`     | `example/todo-api.tesl`       | managed PostgreSQL | `entity` + `database`, JSON `codec`, cookie `auth`, one **input** proof (`TitleSafe` via codec), one **output** proof (`Todo ? FromDb`), `test` blocks |
+| `minimal` | `example/admin-task-api.tesl` | none     | signed-session `auth`, telemetry, one **input** proof (`Positive` via `capture`), one **output** proof (`Int ? Positive`) |
+| `api`     | `example/todo-api.tesl`       | managed PostgreSQL | `entity` + `database`, JSON `codec`, signed-session `auth`, one **input** proof (`TitleSafe` via codec), one **output** proof (`Todo ? FromDb`), `test` blocks |
 
 ## Verifying a template
 

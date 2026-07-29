@@ -25,6 +25,8 @@ import Tesl.Agent exposing [
   replyToolCalls,
 ]
 
+# lesson: track=ai order=450 needs=lesson15-api-handlers-server,lesson62-ai-agents,lesson05-intro-to-proofs
+# summary: Hand an agent every endpoint the caller's own proof already covers, as preauthenticated tools
 # ─────────────────────────────────────────────────────────────────────────────
 # Lesson 68 — Server endpoints as agent tools (`serverTools`)
 #

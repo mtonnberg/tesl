@@ -41,6 +41,7 @@ type category =
   | Codec         (** JSON codec / SQL field coverage *)
   | Naming        (** scope / naming / imports *)
   | Lint          (** opinionated linter warnings *)
+  | Security      (** structural security mistakes (SEC0xx) *)
 
 let category_name = function
   | Syntax -> "syntax"
@@ -51,6 +52,7 @@ let category_name = function
   | Codec -> "codec"
   | Naming -> "naming"
   | Lint -> "lint"
+  | Security -> "security"
 
 type entry = {
   code     : string;
@@ -375,6 +377,76 @@ let registry : entry list = [
        values, or a string/BigNumber codec for genuinely large `Int`. Advisory: \
        internal/compute `Int` use is unaffected.";
     manual = Some "best-practices" };
+
+  (* ── Linter: security (SEC0xx) ─────────────────────────────────────────────
+     Their own category, deliberately, so `tesl help codes` groups them apart
+     from style lints and a reader can tell "this is a security finding" from
+     the code alone.  The governing rule for the category (roadmap
+     tesl_crypto.md § Security lints): a check ships only if it is ACTIONABLE
+     (one obvious fix), PRECISE (a clean codebase is completely silent) and
+     ABOUT SOMETHING TESL CAN ENFORCE.  A noisy security lint is worse than
+     none — it trains people to ignore the whole category — and there is no
+     suppression mechanism yet, so a false positive cannot be silenced at all.
+     Anything failing those tests belongs in the manual, not here. *)
+  { code = "SEC001"; category = Security;
+    title = "authorization decided by comparing request data with a string literal";
+    explanation =
+      "Inside an `auth` body, a value that came from the request \
+       (`request.cookies`, `request.headers`, `request.queryParameters`) is \
+       compared with `==`/`!=` against a string literal, and the result decides \
+       whether to mint the authentication fact. The client chooses that value, \
+       so the comparison proves nothing: anyone can send \
+       `Cookie: user=admin`. A plaintext, guessable session cookie is not \
+       authentication.\n\n\
+       Authenticate with something the client cannot forge, then decide \
+       authorization from the verified value:\n\
+       \  - a signed session or token — `check Crypto.checkSignature key sig \
+       payload` yields `Authentic payload`, and `JWT.verify` checks an \
+       HMAC-signed token (see `example/learn/lesson57-jwt.tesl`);\n\
+       \  - a password — `Crypto.checkPassword stored candidate` yields \
+       `PasswordVerified`;\n\
+       \  - an opaque random session id (`Crypto.randomToken`) looked up in \
+       your session table.\n\n\
+       Comparing an already-verified value against a literal is fine and does \
+       NOT fire: the lint stops tracking a value once it has passed through \
+       `Crypto.checkSignature`, `Crypto.checkPassword`, `JWT.verify` or a \
+       `check`/`auth` call.";
+    manual = Some "best-practices#security" };
+
+  { code = "SEC003"; category = Security;
+    title = "hardcoded secret — a string literal used as key material";
+    explanation =
+      "A string literal is being used as key material: either `Secret \"…\"` \
+       directly, or a literal in the key position of `Crypto.signWith` / \
+       `Crypto.checkSignature` / `Crypto.keyFingerprint` / \
+       `Crypto.hmacSha256`. A key committed to the repository is readable by \
+       everyone who can read the source, survives in git history after it is \
+       changed, and is identical across every deployment.\n\n\
+       Read it from the environment instead — `Secret (requireEnv \
+       \"SESSION_SIGNING_KEY\")` — and rotate it there. This is a STRUCTURAL \
+       check (a literal in a key position), not entropy guessing: Tesl \
+       deliberately does not scan string literals for high-entropy-looking \
+       content, because that lint cannot be made quiet.";
+    manual = Some "best-practices#security" };
+
+  { code = "SEC004"; category = Security;
+    title = "timing-unsafe MAC comparison via `Crypto.signatureHex`";
+    explanation =
+      "A `Crypto.signatureHex` result is being compared with `==`/`!=`. That \
+       is a hand-rolled message-authentication check, and `==` on `String` \
+       short-circuits at the first differing byte, so how long the comparison \
+       takes leaks how much of the correct tag the caller guessed — enough to \
+       recover a valid tag byte by byte without ever knowing the key.\n\n\
+       `Crypto.signatureHex` exists only to TRANSPORT a tag (put it in a \
+       header, read one out of a header). Verify with \
+       `check Crypto.checkSignature key sig payload`, which compares in \
+       constant time and yields an `Authentic payload` fact that downstream \
+       code can demand — a `Bool` can be ignored or inverted, a fact cannot. \
+       For an inbound hex tag, parse it first with \
+       `Crypto.signatureFromHex`.\n\n\
+       This is why `Signature` has no `==` of its own: the only legitimate \
+       comparison of two tags IS a verification.";
+    manual = Some "best-practices#security" };
 ]
 
 (* ── Lookup helpers ───────────────────────────────────────────────────────── *)
@@ -452,7 +524,12 @@ let index () : string =
   Buffer.add_string buf
     "Every code the compiler and linter can emit. Run `tesl help <code>` (or\n\
      `tesl explain <code>`) for a full explanation and a manual deep-link.\n\n";
-  let cats = [ Syntax; Type; Proof; Capability; Structure; Codec; Naming; Lint ] in
+  (* NOTE: this list is the ONE silent coupling in this module — [category_name]
+     is exhaustive so the compiler forces a new constructor to be named there,
+     but a category omitted HERE simply never appears in `tesl help codes` while
+     `tesl explain <code>` keeps working. Keep it in sync with the variant. *)
+  let cats = [ Syntax; Type; Proof; Capability; Structure; Codec; Naming;
+               Security; Lint ] in
   List.iter (fun cat ->
     let rows = List.filter (fun e -> e.category = cat) registry in
     if rows <> [] then begin

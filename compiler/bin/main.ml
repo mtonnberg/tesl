@@ -224,6 +224,9 @@ let section_to_embedded_key name =
   match name with
   | "" | "manual"                         -> "manual/MANUAL.md"
   | "getting-started" | "get-started" | "start" -> "manual/GETTING-STARTED.md"
+  (* S3 of the onboarding journey: the guided first change to the `tesl init`
+     scaffold that triggers a proof error on purpose and then fixes it. *)
+  | "first-change" | "first"               -> "manual/first-change.md"
   | "overview" | "tutorial"               -> "manual/overview.md"
   | "language-spec"                        -> "LANGUAGE-SPEC.md"
   | "examples"                             -> "manual/examples.md"
@@ -272,6 +275,7 @@ let get_manual_content section =
     match name with
     | "" | "manual" -> Filename.concat !manual_dir "MANUAL.md"
     | "getting-started" | "get-started" | "start" -> Filename.concat !manual_dir "GETTING-STARTED.md"
+    | "first-change" | "first" -> Filename.concat !manual_dir "first-change.md"
     | "overview" | "tutorial" -> Filename.concat !manual_dir "overview.md"
     | "language-spec" -> Filename.concat !manual_dir "LANGUAGE-SPEC.md"
     | "examples" -> Filename.concat !manual_dir "examples.md"
@@ -368,12 +372,12 @@ let get_full_manual () =
   let doc_pairs = [
     Filename.concat !manual_dir "MANUAL.md",         "manual/MANUAL.md";
     Filename.concat !manual_dir "GETTING-STARTED.md","manual/GETTING-STARTED.md";
+    Filename.concat !manual_dir "first-change.md",    "manual/first-change.md";
     Filename.concat !manual_dir "overview.md",        "manual/overview.md";
     Filename.concat !manual_dir "examples.md",        "manual/examples.md";
     Filename.concat !manual_dir "best-practices.md",  "manual/best-practices.md";
     Filename.concat !manual_dir "FAQ.md",             "manual/FAQ.md";
     Filename.concat !manual_dir "LANGUAGE-SPEC.md",   "LANGUAGE-SPEC.md";
-    Filename.concat !manual_dir "TESL.md",            "TESL.md";
     Filename.concat !manual_dir "INSTALL.md",         "INSTALL.md";
     Filename.concat !manual_dir "README.md",          "README.md";
   ] in
@@ -636,7 +640,7 @@ let display_manual section_spec =
           print_string content; exit 0))
   | None ->
     Printf.eprintf "Error: Manual section '%s' not found.\n" section;
-    Printf.eprintf "Available sections: getting-started, overview, tour, language-spec, examples, best-practices, ai-testing, deploy, tesl-manifest, faq, intro, anchors, dev\n";
+    Printf.eprintf "Available sections: getting-started, first-change, overview, tour, language-spec, examples, best-practices, ai-testing, deploy, tesl-manifest, faq, intro, anchors, dev\n";
     Printf.eprintf "Use 'tesl help' for command line usage; 'tesl help codes' for the diagnostic-code index.\n";
     exit 1
 

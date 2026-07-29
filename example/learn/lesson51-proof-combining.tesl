@@ -9,6 +9,8 @@ module Lesson51ProofCombining exposing [
   processNameManual,
 ]
 
+# lesson: track=proofs order=550 needs=lesson09-proof-composition
+# summary: The three ways to accumulate several proofs on one value, and when each applies
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

@@ -12,6 +12,8 @@ module Lesson36Lambdas exposing [
   validateAll,
 ]
 
+# lesson: track=basics order=190 needs=none
+# summary: Write an anonymous function inline and capture variables from the surrounding scope
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

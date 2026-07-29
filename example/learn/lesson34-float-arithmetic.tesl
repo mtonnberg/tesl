@@ -10,6 +10,8 @@ module Lesson34FloatArithmetic exposing [
   isValidReading,
 ]
 
+# lesson: track=basics order=700 needs=none
+# summary: Float literals, arithmetic, and the rules for mixing Float with Int
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

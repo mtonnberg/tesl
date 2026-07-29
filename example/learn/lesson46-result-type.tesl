@@ -11,6 +11,8 @@ module Lesson46ResultType exposing [
   isErr,
 ]
 
+# lesson: track=basics order=280 needs=lesson02-adts-and-pattern-matching
+# summary: Return either a success or a meaningful error value with Result ok err
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

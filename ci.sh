@@ -30,6 +30,11 @@
 #    2. Dune test             OCaml alcotest suite, ID-keyed waivers   (compiler/)
 #    3. Lifted-stdlib snaps   scripts/gen-stdlib-rkt.sh --check
 #    4. Embedded-docs sync    embedded_docs.ml matches manual/+example/ (promote)
+#   4a. Doc integrity         tests/doc-integrity.sh — relative links, cited
+#                             #anchors, MANUAL.md ↔ `tesl help manual` round-trip,
+#                             orphan docs, hand-typed corpus counts
+#   4b. Manual coherence      manual/tests — the standalone dune project guarding
+#                             the anchor contract + doc-prose lints (str/unix only)
 #    5. Format                tesl fmt (in place), bounded xargs -P pool
 #    6. Validate              tesl validate (check+lint+fmt), xargs -P pool
 #    7. Exact-match snaps     byte-exact re-emit vs committed example/learn/*.rkt
@@ -128,7 +133,7 @@ phase_started_at=$SECONDS
 
 # ── Phase registry / progress bar ────────────────────────────────────────────
 # We know the phase count up front so each phase can print "[N/T] <name>".
-TOTAL_PHASES=15
+TOTAL_PHASES=18
 PHASE_NUM=0
 # Parallel arrays: name / status (OK|FAIL|SKIP) / elapsed seconds.
 PHASE_NAMES=()
@@ -751,6 +756,30 @@ fi
 # Modules whose pure combinator bodies are written in Tesl (e.g. tesl/list.tesl)
 # compile to a committed *-derived.rkt snapshot the public shim re-exports.
 # `tesl/` is outside the dune root, so the snapshot is committed; a drift fails.
+phase_begin "Lesson catalog (gen-lesson-index --check)"
+# The lesson corpus was indexed by hand in three places that all disagreed, and
+# every count had drifted (73 / 70+ / 50+ against a real 77), while 37 lesson
+# files appeared in no index at all.  The index is now GENERATED from two comment
+# lines in each lesson, and this phase fails on drift — so a new lesson without
+# metadata, a duplicate reading-order position, a dangling prerequisite, or a
+# prerequisite that comes LATER than the lesson needing it all fail here rather
+# than rotting into the docs.
+if [ ! -f "$SCRIPT_DIR/scripts/gen-lesson-index.sh" ]; then
+    printf "  %s⚠%s  scripts/gen-lesson-index.sh not found — skipping\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+else
+    _lesson_idx_rc=0
+    bash "$SCRIPT_DIR/scripts/gen-lesson-index.sh" --check || _lesson_idx_rc=$?
+    if [ "$_lesson_idx_rc" -eq 0 ]; then
+        phase_end OK
+    elif [ "$_lesson_idx_rc" -eq 77 ]; then
+        phase_end SKIP
+    else
+        printf "  %s✗%s  lesson metadata invalid or manual/lessons.md drifted (run scripts/gen-lesson-index.sh and commit)\n" "$C_RED" "$C_RESET"
+        phase_end FAIL
+    fi
+fi
+
 phase_begin "Lifted-stdlib snapshots (gen-stdlib-rkt --check)"
 if [ ! -f "$SCRIPT_DIR/scripts/gen-stdlib-rkt.sh" ]; then
     printf "  %s⚠%s  scripts/gen-stdlib-rkt.sh not found — skipping\n" "$C_YELLOW" "$C_RESET"
@@ -781,6 +810,65 @@ elif git -C "$SCRIPT_DIR" diff --quiet -- compiler/lib/embedded_docs.ml; then
 else
     printf "  %s✗%s  embedded_docs.ml is stale vs manual/ + example/ — run 'dune build' (it promotes the snapshot) and commit compiler/lib/embedded_docs.ml\n" "$C_RED" "$C_RESET"
     phase_end FAIL
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Phase 4a — Doc integrity (links, anchors, section map, orphans, counts)
+# ══════════════════════════════════════════════════════════════════════════════
+# The docs had no structural test at all: ~280 relative markdown links and ~55
+# cited `#anchor`s were unverified, the manual section→file map was duplicated in
+# SIX places that disagreed, and four different hand-typed corpus counts were all
+# wrong.  tests/doc-integrity.sh is the ratchet, and it is deliberately runnable
+# standalone (`bash tests/doc-integrity.sh`, ~2 s, markdown only) so a docs edit
+# gets the answer without the full gate — while still running HERE so it cannot be
+# skipped by forgetting.  Placed right after the build because the section-map and
+# diagnostic-deep-link halves invoke `tesl help manual`; without main.exe those two
+# halves self-skip and the script exits 77.
+phase_begin "Doc integrity (links, anchors, section map, orphans)"
+_docint_main_exe="$COMPILER_DIR/_build/default/bin/main.exe"
+_docint_rc=0
+TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_docint_main_exe" \
+    bash "$SCRIPT_DIR/tests/doc-integrity.sh" || _docint_rc=$?
+if [ "$_docint_rc" -eq 0 ]; then
+    phase_end OK
+elif [ "$_docint_rc" -eq 77 ]; then
+    phase_end SKIP
+else
+    phase_end FAIL
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Phase 4b — Manual coherence suite (manual/tests, standalone dune project)
+# ══════════════════════════════════════════════════════════════════════════════
+# manual/tests/ guards the stable-anchor contract from the CONSUMING side (every
+# anchor listed in manual/anchors.md and every anchor main.ml's get_help_suggestion
+# emits resolves to a real heading), plus the doc-prose lints: no stale proof
+# cost-model wording, no banned marketing phrases, every dev-docs page declares an
+# Audience, no orphan manual page, and no D1-class syntax rot in ```tesl fences.
+# It has its OWN dune-project (str + unix only, no compiler library, no Racket), so
+# the root `dune build` / `dune test` never reaches it — it was orphaned from the
+# gate entirely until this phase.  A missing dune SKIPs; a real failure FAILs.
+phase_begin "Manual coherence suite (manual/tests)"
+if ! command -v dune >/dev/null 2>&1; then
+    printf "  %s⚠%s  dune not found — skipping the manual coherence suite\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+elif [ ! -f "$SCRIPT_DIR/manual/tests/dune-project" ]; then
+    printf "  %s⚠%s  manual/tests/dune-project not found — skipping\n" "$C_YELLOW" "$C_RESET"
+    phase_end SKIP
+else
+    _mancoh_log="$(mktemp "${TMPDIR:-/tmp}/tesl-manual-coherence.XXXXXX")"
+    # --force: the alias is cached on the .ml alone, but the assertions read the
+    # markdown, so a doc-only edit must still re-run it.
+    if ( cd "$SCRIPT_DIR/manual/tests" && dune runtest --force ) > "$_mancoh_log" 2>&1; then
+        printf "  %s✓%s  %s\n" "$C_GREEN" "$C_RESET" \
+            "$(grep -c '^ok   - ' "$_mancoh_log" 2>/dev/null || echo 0) manual coherence checks passed"
+        phase_end OK
+    else
+        grep -E '^(FAIL - |FAILURES)' "$_mancoh_log" | head -40 | sed 's/^/  /'
+        grep -qE '^(FAIL - |FAILURES)' "$_mancoh_log" || tail -20 "$_mancoh_log" | sed 's/^/  /'
+        phase_end FAIL
+    fi
+    rm -f "$_mancoh_log"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1209,11 +1297,42 @@ else
         # edge, pow bounds the exponent before expt, NaN/inf convert cleanly —
         # plus issue #45's api-test path normalization (literal ≡ computed)
         "tests/int32-runtime-tests.rkt"
+        # `secret X = T` runtime half (roadmap/next/tesl_crypto.md phases 3+4).
+        # Here because the enforcement is spread across SIX independent sinks
+        # (telemetry jsexpr + OTLP AnyValue, metric attributes, safe-display, the
+        # value-tree display/children pair, dap-server's Copy Value text, the SQL
+        # trace) and the property that matters is STRUCTURAL: a secret nested in a
+        # record inside a tuple inside a List inside a Maybe inside an ADT payload
+        # must redact while its siblings render normally.  A shallow
+        # implementation passes a flat test and fails this suite, and none of that
+        # is reachable from the OCaml `dune test` side.  It also pins the one
+        # thing a well-meaning future edit gets wrong: `runtime-value->jsexpr` is
+        # the PERSISTENCE walk too, so redaction there is opt-in and both
+        # directions are asserted.
+        "tests/secret-runtime-tests.rkt"
         # Tesl.Regex runtime last line of defence: the ReDoS deadline (a
         # pathological pattern the COMPILER rejects, handed straight to the
         # runtime, must not hang the process), the input bound, and the
         # capture-list shape `Regex.captures` promises
         "tests/regex-runtime-tests.rkt"
+        # Tesl.Crypto — the security suite, and the one place in the gate where a
+        # green run means something a round-trip test cannot prove:
+        #   * KNOWN-ANSWER digests/MACs (NIST + RFC 4231) plus an INDEPENDENT
+        #     oracle (libsodium vs OpenSSL libcrypto) across the HMAC block
+        #     boundary, because a self-consistently wrong implementation
+        #     round-trips perfectly;
+        #   * the COST-PARAMETER REGRESSION — wall clock AND the memory limit
+        #     libsodium reports. A build whose Argon2id work factor silently
+        #     collapsed passes every other test in the file, and that is a total
+        #     security failure that looks like everything working. This is the
+        #     test most likely to be skipped and most likely to matter;
+        #   * TIMING EQUALISATION: verifying against Nothing (no user row) must
+        #     cost the same as against a real hash, or the login endpoint
+        #     enumerates registered addresses;
+        #   * the documented foreign-hash LIMITS as ratchets (foreign Argon2id
+        #     verifies; bcrypt and scrypt do not) so behaviour and docs cannot
+        #     drift apart.
+        "tests/crypto-runtime-tests.rkt"
         "tests/codec-specialization-test.rkt"
         "tests/lifted-list-tests.rkt"
         "tests/body-proof-test.rkt"

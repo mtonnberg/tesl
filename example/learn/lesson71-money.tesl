@@ -7,6 +7,8 @@ module Lesson71Money exposing [
   totalRevenue,
 ]
 
+# lesson: track=stdlib order=760 needs=none
+# summary: Handle money as exact integer minor units carrying its own currency, never a Float
 # ─────────────────────────────────────────────
 # QUICK START — Money: integer minor units + intrinsic currency
 # ─────────────────────────────────────────────

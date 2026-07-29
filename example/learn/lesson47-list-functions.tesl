@@ -10,6 +10,8 @@ module Lesson47ListFunctions exposing [
   buildRange,
 ]
 
+# lesson: track=stdlib order=200 needs=lesson36-lambdas
+# summary: The whole Tesl.List surface — map, filter, fold, sort and the rest, every one pure
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

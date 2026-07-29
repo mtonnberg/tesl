@@ -5,6 +5,8 @@ module Lesson11Capabilities exposing [
   readAndWrite,
 ]
 
+# lesson: track=api order=120 needs=none
+# summary: Name the side effects a function may perform, build a hierarchy with implies, and let the compiler track them transitively
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

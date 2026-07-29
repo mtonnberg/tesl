@@ -1,5 +1,5 @@
 # ── __APP_NAME__ ──────────────────────────────────────────────────────────────
-# A minimal Tesl web service: cookie auth + telemetry, NO database.
+# A minimal Tesl web service: signed-session auth + telemetry, NO database.
 #
 # The module header is always `App` because `tesl build` resolves imports by
 # file name and this file is `app.tesl`. The human-facing name of your project
@@ -12,13 +12,15 @@ import Tesl.Http exposing [HttpRequest]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Dict exposing [Dict.lookup]
 import Tesl.Telemetry exposing [telemetry, initTelemetry]
-import Tesl.Env exposing [envInt, envRead]
+import Tesl.Env exposing [envInt, envRead, requireEnv]
+import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.verify]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
 
 # A capability is an explicit permission. A handler can only do what its
 # capabilities allow, and `main` decides which capabilities to grant.
-capability readSessionCookie
+# `implies jwt` lets the auth below verify the signed session token.
+capability readSessionCookie implies jwt
 
 record SessionUser {
   id: String
@@ -50,17 +52,35 @@ check isPositive(taskId: Int) -> taskId: Int ::: Positive taskId =
     fail 400 "Task id must be positive"
 
 # An `auth` is a check that runs against the HTTP request and produces a trusted
-# user. `requires [readSessionCookie]` declares the capability it needs.
+# user. `requires [...]` declares the capabilities it needs.
+#
+# READ THIS BEFORE YOU CHANGE IT. A bare `cookies "user"` check is NOT
+# authentication: the client chooses its own cookies, so `Cookie: user=admin;
+# role=admin` would walk straight in. The session below is a SIGNED token —
+# `JWT.verify` recomputes the HMAC-SHA256 signature and checks the `exp` claim,
+# and auto-401s on anything this service did not mint. Both the user id and the
+# role are claims INSIDE the signature, so a client cannot promote itself by
+# editing a cookie. The only place a role is granted is where you mint the
+# token, server-side, at login:
+#
+#   JWT.sign (Dict.fromList [Tuple2 "sub" userId, Tuple2 "role" "user"]) secret
+#   (needs `import Tesl.Tuple exposing [Tuple2]` and `Dict.fromList`)
+#
+# Set SESSION_JWT_SECRET in the environment ([env] in tesl.toml).
 fact Authenticated (req: SessionUser)
 
 auth cookieAuth(request: HttpRequest) -> requestUser: SessionUser ::: Authenticated requestUser
-  requires [readSessionCookie] =
-  case Dict.lookup "user" request.cookies of
-    Nothing -> fail 401 "Missing user cookie"
-    Something userId ->
-      case Dict.lookup "role" request.cookies of
-        Something role -> ok SessionUser { id: userId, role: role } ::: Authenticated requestUser
-        Nothing -> ok SessionUser { id: userId, role: "user" } ::: Authenticated requestUser
+  requires [readSessionCookie, envRead] =
+  case Dict.lookup "session" request.cookies of
+    Nothing -> fail 401 "Missing session cookie"
+    Something raw ->
+      let claims = JWT.verify (JwtToken raw) (JwtSecret (requireEnv "SESSION_JWT_SECRET"))
+      case Dict.lookup "sub" claims of
+        Nothing -> fail 401 "Session token has no subject"
+        Something userId ->
+          case Dict.lookup "role" claims of
+            Something role -> ok SessionUser { id: userId, role: role } ::: Authenticated requestUser
+            Nothing -> ok SessionUser { id: userId, role: "user" } ::: Authenticated requestUser
 
 # A `capture` wires a route parameter through a check + codec so the handler
 # receives an already-proven value (here: `Positive taskId`).

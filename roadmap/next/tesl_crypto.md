@@ -1,7 +1,32 @@
 # `Tesl.Crypto` — hashing, message authentication, password storage, secrets
 
-> **Status:** Next · **Effort:** a six-phase ladder, each phase independently shippable.
-> Phase 0 is S and needs no crypto; Phase 1 unblocks login. Plan before writing code.
+> **Status:** Phases 0-4 LANDED 2026-07-29 · Phase 5 extracted to
+> `roadmap/next/response_metadata_and_cookies.md` (blocked, and not on crypto).
+> **Effort:** a six-phase ladder, each phase independently shippable.
+>
+> **What landed, and where to read about it:**
+> * the shipped surface, types, facts and limits — `LANGUAGE-SPEC.md` §21.7
+> * every decision, deviation and open question — `IMPLEMENTATION-LOG-crypto-and-onboarding.md`
+>   at the repo root
+> * the lesson — `example/learn/lesson64-password-storage.tesl` (which also closed the
+>   long-standing missing-`lesson64` gap, so the renumber that
+>   `roadmap/next/revised_onboarding.md` planned for it is no longer needed)
+> * the security suite — `tests/crypto-runtime-tests.rkt`
+>
+> **Corrections to this document, found while implementing it.** Each is argued in the
+> implementation log; they are listed here so nobody re-derives them from the text below:
+> 1. libsodium verifies foreign **Argon2i/Argon2id only** — NOT scrypt, and it has no PBKDF2 at
+>    all (§"libsodium and the stored format" claims otherwise). Both limits are now pinned by
+>    tests.
+> 2. `error_codes.ml` has **eight** categories, not the six quoted in §"Security lints".
+> 3. The `cookies "user" == "admin"` grep matches **nothing**; the real spelling appears in
+>    **26 files**, not six — including both `tesl init` scaffolds.
+> 4. Only **one** api-test in the whole corpus posts a cookie.
+> 5. There is **no mechanism to promote a diagnostic category to errors** (no `--strict`, no env
+>    var, no config key), so §"Security lints"'s "CI can promote the category" is not available.
+> 6. `Signature` needs hex transport in **both** directions, or the webhook-verification use case
+>    that justifies Phase 2 cannot be written at all.
+> 7. Open questions 1, 3 and 5 are answered — see the log.
 
 Carved out of `roadmap/next/primitive_gaps_and_outbound_hardening.md` (2026-07-29). It is the
 single most likely reason an application cannot be written in Tesl at all, and therefore the real

@@ -1,3 +1,5 @@
+# lesson: track=proofs order=630 needs=lesson06-proof-check-proof-auth
+# summary: Give a predicate literal parameters, so HasMin 10 is a different fact from HasMin 5
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────

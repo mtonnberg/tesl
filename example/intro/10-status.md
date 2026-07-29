@@ -56,7 +56,7 @@ tesl fmt    my-api.tesl    # format in-place
 
 See [`INSTALL.md`](../../INSTALL.md) for home-manager, NixOS, and editor setup.
 
-The `example/learn/` folder in the repo has 53 progressive lessons — from hello world through ADTs, proofs, typed SQL, queues, and SSE — each as a small runnable `.tesl` file with inline explanations.
+The `example/learn/` folder in the repo is a progressive lesson corpus — from hello world through ADTs, proofs, typed SQL, queues, and SSE — each as a small runnable `.tesl` file with inline explanations.
 
 ---
 

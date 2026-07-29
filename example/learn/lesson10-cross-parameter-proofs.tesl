@@ -5,6 +5,8 @@ module Lesson10CrossParameterProofs exposing [
   safePair,
 ]
 
+# lesson: track=proofs order=530 needs=lesson05-intro-to-proofs
+# summary: Express a relationship between two arguments in a proof, so the caller must establish it first
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────
