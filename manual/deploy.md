@@ -72,7 +72,8 @@ Copy it to your project's `.github/workflows/deploy.yml` and set `APP_NAME`.
 ## How it works (and what is intentionally not here)
 
 - `tesl build` stages the Tesl runtime collections (`dsl`/`tesl`/`lang`) and your
-  compiled `app.rkt` into a build context, instantiates one of the templates in
+  freshly compiled `app.rkt` into its own build context (it never touches your
+  source tree or `.tesl-stuff/`), instantiates one of the templates in
   [`templates/docker/`](../templates/docker/), and runs `docker build`. The
   Racket base image is matched to the compiler's Racket (`racket/racket:9.2-full`
   by default; override with `TESL_RACKET_BASE`).

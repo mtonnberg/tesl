@@ -973,6 +973,65 @@ function activate(context) {
       },
     })
   );
+
+  // Attach ergonomics: make `request: "attach"` work with ZERO config.
+  // - A bare attach config (no project/socket/port/program) gets the workspace
+  //   folder as its project, which is where `tesl run --debug` puts the
+  //   endpoint (<project>/.tesl-stuff/debug.sock or debug.port).
+  // - Fail fast with a actionable message when no endpoint exists, instead of
+  //   letting the adapter session start and immediately terminate.
+  context.subscriptions.push(
+    vscode.debug.registerDebugConfigurationProvider("tesl", {
+      resolveDebugConfiguration(folder, config) {
+        if (config.request === "attach" && !config.socket && !config.port && !config.program) {
+          if (!config.project) {
+            config.project = folder ? folder.uri.fsPath : wsPath;
+          }
+          if (!config.name) config.name = "Attach to running app (tesl run --debug)";
+          if (config.project) {
+            const stuff = path.join(config.project, ".tesl-stuff");
+            const hasEndpoint =
+              fs.existsSync(path.join(stuff, "debug.sock")) ||
+              fs.existsSync(path.join(stuff, "debug.port"));
+            if (!hasEndpoint) {
+              vscode.window.showErrorMessage(
+                `Tesl: no attach endpoint under ${stuff} — start the app first with \`tesl run --debug <file.tesl>\` (Tesl: Run current file in debug mode).`
+              );
+              return undefined; // abort the session cleanly
+            }
+          }
+        }
+        return config;
+      },
+    })
+  );
+
+  // Palette command: start the current file under `tesl run --debug` in a
+  // terminal — the counterpart of the attach config above.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("tesl.runDebugMode", () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || !editor.document.fileName.endsWith(".tesl")) {
+        vscode.window.showErrorMessage("Tesl: open a .tesl file first.");
+        return;
+      }
+      const term = vscode.window.createTerminal("tesl run --debug");
+      term.show();
+      term.sendText(`tesl run --debug ${JSON.stringify(editor.document.fileName)}`);
+    })
+  );
+
+  // Palette command: attach to the running app of the current workspace.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("tesl.attachRunning", () => {
+      const folder = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0];
+      vscode.debug.startDebugging(folder, {
+        type: "tesl",
+        request: "attach",
+        name: "Attach to running app (tesl run --debug)",
+      });
+    })
+  );
 }
 
 function deactivate() {

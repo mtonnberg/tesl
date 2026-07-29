@@ -1022,13 +1022,17 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Phase 9b — tesl CLI smoke: multi-module `tesl test` (#33)
+#  Phase 9b — tesl CLI smoke: multi-module `tesl test` (#33) + build layout
 # ══════════════════════════════════════════════════════════════════════════════
 # `tesl test <entrypoint>` must compile the entrypoint's imported local modules
-# (like `tesl run` does) — on a fresh checkout (*.rkt gitignored) it used to die
-# with a SWALLOWED "cannot open module file" and print "(no test results)".
+# (like `tesl run` does) — on a fresh checkout (no .tesl-stuff/build/ yet) it
+# used to die with a SWALLOWED "cannot open module file" and print "(no test
+# results)".  Also locks the build-output relocation: every generated .rkt (and
+# Racket's compiled/ bytecode) lands under <project-root>/.tesl-stuff/build/ in
+# a tree MIRRORING the sources — never next to the .tesl files — and deleting
+# .tesl-stuff/ then rerunning must always work.
 # Drives the real CLI body script end-to-end from a clean temp project.
-phase_begin "tesl CLI smoke (multi-module test, #33)"
+phase_begin "tesl CLI smoke (multi-module test + .tesl-stuff/build layout)"
 if ! command -v racket >/dev/null 2>&1; then
     printf "  %s⚠%s  racket not found — skipping CLI smoke\n" "$C_YELLOW" "$C_RESET"
     phase_end SKIP
@@ -1037,6 +1041,13 @@ elif [ ! -f "$_main_exe" ]; then
     phase_end SKIP
 else
     _cli_smoke_dir="$(mktemp -d)"
+    _cli_fail=0
+    # tesl.toml at the top marks the PROJECT ROOT — build output anchors here.
+    cat > "$_cli_smoke_dir/tesl.toml" <<'EOF'
+[project]
+name = "cli-smoke"
+entrypoint = "main.tesl"
+EOF
     cat > "$_cli_smoke_dir/lib.tesl" <<'EOF'
 module Lib exposing [double]
 import Tesl.Prelude exposing [Int]
@@ -1054,19 +1065,76 @@ test "quad 3 == 12" {
   expect quad 3 == 12
 }
 EOF
-    _cli_out="$( cd "$_cli_smoke_dir" && \
-        TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
-        bash "$SCRIPT_DIR/nix/tesl-cli-body.sh" test main.tesl 2>&1 )"
-    _cli_rc=$?
+    # Subdirectory module pair (imports are same-directory-only, so a
+    # "subdirectory module" is an entry + its deps living together in a subdir
+    # of the project root) — locks the mirrored-tree build layout.
+    mkdir -p "$_cli_smoke_dir/sub"
+    cat > "$_cli_smoke_dir/sub/util.tesl" <<'EOF'
+module Util exposing [triple]
+import Tesl.Prelude exposing [Int]
+
+fn triple(n: Int) -> Int = n + n + n
+EOF
+    cat > "$_cli_smoke_dir/sub/app.tesl" <<'EOF'
+module App exposing [nine]
+import Tesl.Prelude exposing [Int]
+import Util exposing [triple]
+
+fn nine(n: Int) -> Int = triple (triple n)
+
+test "nine 1 == 9" {
+  expect nine 1 == 9
+}
+EOF
+    _cli_run() {  # run the real CLI body from the project root
+        ( cd "$_cli_smoke_dir" && \
+            TESL_REPO_ROOT="$SCRIPT_DIR" TESL_OCAML_COMPILER="$_main_exe" \
+            bash "$SCRIPT_DIR/nix/tesl-cli-body.sh" "$@" 2>&1 )
+    }
+
+    # 1) multi-module test from the project root
+    _cli_out="$(_cli_run test main.tesl)"; _cli_rc=$?
     if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -q "1 test passed"; then
         printf "  %s✓%s  tesl test compiles imported modules and runs tests\n" "$C_GREEN" "$C_RESET"
-        rm -rf "$_cli_smoke_dir"
-        phase_end OK
     else
         printf "  %s✗%s  multi-module tesl test failed (rc=%s):\n%s\n" "$C_RED" "$C_RESET" "$_cli_rc" "$_cli_out"
-        rm -rf "$_cli_smoke_dir"
-        phase_end FAIL
+        _cli_fail=1
     fi
+
+    # 2) subdirectory module: mirrored tree under .tesl-stuff/build/
+    _cli_out="$(_cli_run test sub/app.tesl)"; _cli_rc=$?
+    if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -q "1 test passed" \
+        && [ -f "$_cli_smoke_dir/.tesl-stuff/build/sub/app.rkt" ] \
+        && [ -f "$_cli_smoke_dir/.tesl-stuff/build/sub/util.rkt" ]; then
+        printf "  %s✓%s  subdirectory module builds into the mirrored .tesl-stuff/build/ tree\n" "$C_GREEN" "$C_RESET"
+    else
+        printf "  %s✗%s  subdirectory-module tesl test failed (rc=%s):\n%s\n" "$C_RED" "$C_RESET" "$_cli_rc" "$_cli_out"
+        _cli_fail=1
+    fi
+
+    # 3) NO generated files outside .tesl-stuff/ (the whole point of the layout)
+    _cli_stray="$(find "$_cli_smoke_dir" \( -name '*.rkt' -o -name 'compiled' \) \
+        -not -path "$_cli_smoke_dir/.tesl-stuff/*" 2>/dev/null)"
+    if [ -z "$_cli_stray" ] && [ -f "$_cli_smoke_dir/.tesl-stuff/build/main.rkt" ] \
+        && [ -f "$_cli_smoke_dir/.tesl-stuff/build/lib.rkt" ]; then
+        printf "  %s✓%s  all generated output lives under .tesl-stuff/\n" "$C_GREEN" "$C_RESET"
+    else
+        printf "  %s✗%s  generated files leaked outside .tesl-stuff/:\n%s\n" "$C_RED" "$C_RESET" "$_cli_stray"
+        _cli_fail=1
+    fi
+
+    # 4) always safe to delete: rm -rf .tesl-stuff, rerun, must pass
+    rm -rf "$_cli_smoke_dir/.tesl-stuff"
+    _cli_out="$(_cli_run test main.tesl)"; _cli_rc=$?
+    if [ "$_cli_rc" -eq 0 ] && printf '%s' "$_cli_out" | grep -q "1 test passed"; then
+        printf "  %s✓%s  rm -rf .tesl-stuff && tesl test still passes (fresh rebuild)\n" "$C_GREEN" "$C_RESET"
+    else
+        printf "  %s✗%s  rerun after deleting .tesl-stuff failed (rc=%s):\n%s\n" "$C_RED" "$C_RESET" "$_cli_rc" "$_cli_out"
+        _cli_fail=1
+    fi
+
+    rm -rf "$_cli_smoke_dir"
+    if [ "$_cli_fail" -eq 0 ]; then phase_end OK; else phase_end FAIL; fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1092,6 +1160,11 @@ else
         "tests/dap-stop-the-world-smoke.rkt"
         "tests/dap-headless-inspect-smoke.rkt"
         "tests/dap-headless-inspect-conditional-smoke.rkt"
+        # Persistent NDJSON inspector mode (session-started / stopped× / exited)
+        "tests/dap-headless-persistent-smoke.rkt"
+        # Live attach control channel: protocol + socket lifecycle + re-arm +
+        # detach/EOF semantics + pause timeout + concurrent-stop serialization
+        "tests/dap-attach-smoke.rkt"
         "tests/dap-sql-scope-smoke.rkt"
         "tests/codec-specialization-test.rkt"
         "tests/lifted-list-tests.rkt"

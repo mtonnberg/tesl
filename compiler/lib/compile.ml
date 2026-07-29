@@ -4136,11 +4136,12 @@ let mutate_file ?(root_path=default_root_path ()) ?(extra_test_files=[]) filenam
    emitted source) and then bundle it into a standalone native executable with
    `raco exe`.
 
-   The `.rkt` is written next to the source file (`<src>.rkt`), not to a temp
-   dir, because emitted local-import requires use *relative* `(file "X.rkt")`
-   paths resolved against the requiring module's own directory.  Writing in
-   place lets those resolve against the sibling emitted `.rkt` files (the same
-   layout `tesl <file> > <file>.rkt` already produces).  `raco exe` then
+   The emitted module closure is staged FLAT into a fresh temp directory (the
+   same approach as [debug_inspect] below).  Emitted local-import requires use
+   *relative* `(file "X.rkt")` paths resolved against the requiring module's
+   own directory, and local imports are same-directory-only by language design
+   — so one flat temp dir holding every emitted `.rkt` keeps them resolving,
+   and no generated file lands in the user's source tree.  `raco exe` then
    inlines every required module — including the `tesl/...` DSL collection — so
    the resulting binary starts without paying the Racket source cold-start and
    needs no `raco link`.  (Data files referenced at runtime, e.g. a server's
@@ -4161,27 +4162,63 @@ let build_exe ?(root_path=default_root_path ()) ?out filename : build_result =
     match compile_file ~root_path ~type_check:true filename with
     | Failure diags -> BuildDiags diags
     | Success racket ->
-      (* Emit the .rkt next to the source so relative (file ...) requires of
-         sibling modules resolve (identical layout to `tesl <file> > x.rkt`). *)
       let stem =
         if Filename.check_suffix filename ".tesl"
         then Filename.chop_suffix filename ".tesl"
         else filename
       in
-      let rkt_path = stem ^ ".rkt" in
       let exe_path = match out with Some p -> p | None -> stem in
-      (try
-         Out_channel.with_open_text rkt_path
-           (fun oc -> Out_channel.output_string oc racket);
-         let cmd =
-           Printf.sprintf "raco exe -o %s %s"
-             (Filename.quote exe_path) (Filename.quote rkt_path)
-         in
-         let exit_code, output = run_capture cmd in
-         if exit_code = 0 then BuildOk exe_path
-         else BuildErr
-             (Printf.sprintf "raco exe failed (exit %d):\n%s" exit_code output)
-       with Sys_error msg -> BuildErr msg)
+      (* Stage the emitted closure (entry + every transitive local import)
+         flat into a temp dir — see the header comment above.  Basenames are
+         unique because local imports are same-directory-only. *)
+      let abs_src =
+        let p = if Filename.is_relative filename
+                then Filename.concat (Sys.getcwd ()) filename
+                else filename in
+        (try Unix.realpath p with _ -> p)
+      in
+      let deps =
+        let graph = build_local_import_graph abs_src in
+        let entry_canon = canonical_import_path abs_src in
+        Hashtbl.fold (fun path _ acc ->
+          if path = entry_canon then acc else path :: acc) graph []
+      in
+      let compiled_deps =
+        List.fold_left (fun acc path ->
+          match acc with
+          | Error _ -> acc
+          | Ok xs ->
+            (match compile_file ~root_path ~type_check:true path with
+             | Failure diags -> Error diags
+             | Success dep_racket -> Ok ((path, dep_racket) :: xs))
+        ) (Ok []) deps
+      in
+      (match compiled_deps with
+       | Error diags -> BuildDiags diags
+       | Ok dep_rkts ->
+         (try
+            let tmp_dir = Filename.temp_dir "tesl-exe-" "" in
+            let rkt_name src =
+              Filename.remove_extension (Filename.basename src) ^ ".rkt" in
+            List.iter (fun (dep_abs, dep_racket) ->
+              Out_channel.with_open_text
+                (Filename.concat tmp_dir (rkt_name dep_abs))
+                (fun oc -> Out_channel.output_string oc dep_racket)
+            ) dep_rkts;
+            let rkt_path = Filename.concat tmp_dir (rkt_name abs_src) in
+            Out_channel.with_open_text rkt_path
+              (fun oc -> Out_channel.output_string oc racket);
+            (* [exe_path] may be relative: it resolves against the caller's
+               cwd (unchanged — raco runs from here, only the .rkt moved). *)
+            let cmd =
+              Printf.sprintf "raco exe -o %s %s"
+                (Filename.quote exe_path) (Filename.quote rkt_path)
+            in
+            let exit_code, output = run_capture cmd in
+            if exit_code = 0 then BuildOk exe_path
+            else BuildErr
+                (Printf.sprintf "raco exe failed (exit %d):\n%s" exit_code output)
+          with Sys_error msg -> BuildErr msg))
 
 (* ── AC2: headless `tesl debug-inspect` ──────────────────────────────────────
    Compile a .tesl with debug instrumentation, then run it headlessly to a single

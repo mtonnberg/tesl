@@ -1,6 +1,16 @@
 # API-Test Debugging — Breakpoints Inside api-test Bodies
 
-**Status:** next
+**Status:** IMPLEMENTED (2026-07-29)
+
+`emit_api_test_stmt` now mirrors `emit_test`'s `thsl-src!` checkpoint wrapping
+(TsLet value, TsExpect subject, TsExpr, TsExpectFail, TsExpectHasProof, TsIf/TsCase
+branches with locals threading via `api_test_cp_locals_after`); load-test request
+bodies stay uninstrumented. 15 committed snapshots regenerated (pure wrapping
+diffs), new dune group `g8_api_test_instrumentation` in
+`compiler/test/test_debug.ml` (8 cases), full dune test + raco sweep green, docs
+note in `manual/best-practices.md` (single-test debug: other blocks' breakpoints
+are dead under `--test-name`). Remaining manual step: VSCodium end-to-end
+breakpoint check inside an api-test body.
 
 **Why:** Debugging a single api-test from VSCode (Test Explorer "Debug" profile or
 the "🐛 Debug api-test" CodeLens) launches, registers breakpoints, then runs to

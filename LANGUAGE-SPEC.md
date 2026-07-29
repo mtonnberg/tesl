@@ -3986,7 +3986,7 @@ tesl --debug file.tesl
 
 When `--debug` is active:
 1. Every emitted expression is wrapped with `(thsl-src "file.tesl" LINE expr)` using the `loc` of the AST node.
-2. A `.tesl.srcmap.json` sidecar file is written alongside the compiled `.rkt`. It maps Tesl source lines to generated Racket lines:
+2. A `.tesl.srcmap.json` sidecar file is written alongside the compiled `.rkt` (when the `tesl` CLI manages the output, that pair lives under the project's `.tesl-stuff/build/` directory). It maps Tesl source lines to generated Racket lines:
 
 ```json
 {
@@ -4027,6 +4027,30 @@ The `editor/vscode-tesl` extension contributes a `debuggers` entry in `package.j
 | 4 | Conditional breakpoints | **Open** — pause only when a user expression is truthy. |
 | 4 | Watch expressions | **Open** — user-defined expressions evaluated at each pause. |
 
+### 22.6 Attach to a running process
+
+`tesl run --debug <file.tesl>` starts the app with live checkpoints (the same
+emitted code — the `thsl-src!` gate is read at Racket expansion time) and a
+loopback-only control channel under `<project>/.tesl-stuff/` (`debug.sock`, or
+`debug.port` for the TCP fallback). Debuggers then attach to the RUNNING
+process — the app keeps serving across attach/detach, and breakpoints can be
+re-armed without a relaunch:
+
+- **VSCode/VSCodium**: the `Attach to running app (tesl run --debug)` launch
+  configuration (`request: "attach"`, `project: "${workspaceFolder}"`).
+  Disconnect detaches; the app keeps running.
+- **CLI / agents**: `tesl debug-attach` — `--break-at FILE:LINE … --once`
+  (arm, wait for the first stop, print it, resume, detach), `--snapshot`,
+  `--ping`, `--detach`, or a bare NDJSON stdin/stdout bridge for interactive
+  stepping. MCP: the `tesl.debug_attach` tool.
+
+A plain `tesl run` build erases every checkpoint at expansion time (zero
+release residue) and exposes no endpoint — attach is a property of `--debug`
+runs only. An abandoned pause can be bounded with
+`TESL_DEBUG_PAUSE_TIMEOUT_MS` (auto-resume). The wrapper keeps debug and
+release bytecode separate (a mode marker under `.tesl-stuff/build/` drops
+stale `compiled/` dirs when the mode flips).
+
 ---
 
 ## Appendix A. Current implementation divergences
@@ -4054,7 +4078,7 @@ Tesl applications emit structured log lines to stderr for:
 **Zero overhead when disabled.** `tesl-verbose?` is evaluated once at module load time from the `TESL_VERBOSE` environment variable. When it is `#f`, the only per-call cost is a single boolean read.
 
 ```bash
-TESL_VERBOSE=1 racket your-compiled-app.rkt
+TESL_VERBOSE=1 racket .tesl-stuff/build/your-app.rkt   # or: TESL_VERBOSE=1 tesl run your-app.tesl
 ```
 
 Example output:

@@ -7040,8 +7040,35 @@ and emit_api_test_expr ctx ~server_name ~capabilities e =
        emit ctx ")")
   | _ -> emit_expr ctx e
 
-let rec emit_api_test_stmt ctx ~indent ~server_name ~capabilities = function
-  | TsLet { name; value = (EApp _ as check_app); _ } when (let rec find_check = function
+(* Names bound by an api-test statement, threaded as checkpoint locals for the
+   statements that FOLLOW it — mirrors emit_test's fold (a let's own VALUE
+   checkpoint sees only the PRECEDING locals; the new name isn't bound yet). *)
+let api_test_cp_locals_after stmt locals = match stmt with
+  | TsLet { name; _ } when not (String.equal name "_")
+                         && not (String.length name >= 5 && String.sub name 0 5 = "tesl_") ->
+    (name, name) :: locals
+  | TsLetProof { value_name; _ } when not (String.equal value_name "_") ->
+    (value_name, value_name) :: locals
+  | _ -> locals
+
+let rec emit_api_test_stmt ctx ?(checkpoints=false) ?(locals=[]) ~indent ~server_name ~capabilities stmt =
+  (* B5 mirror of emit_test_stmt: wrap each statement's value/subject in a
+     (thsl-src! file line locals thunk) checkpoint so breakpoints can fire inside
+     api-test bodies (the macro erases to the bare thunk body in release, and to
+     a real checkpoint under TESL_DEBUG).  [checkpoints] is false only for
+     load-test request bodies — a throughput benchmark, intentionally
+     uninstrumented. *)
+  let emit_cp loc emit_body =
+    if checkpoints then begin
+      emit ctx (Printf.sprintf "(thsl-src! %S %d " loc.Location.file (loc.Location.start.line + 1));
+      emit_locals_list ctx locals;
+      emit ctx " (lambda () ";
+      emit_body ();
+      emit ctx "))"
+    end else emit_body ()
+  in
+  match stmt with
+  | TsLet { name; value = (EApp _ as check_app); loc; _ } when (let rec find_check = function
         | EApp { fn = EVar { name = "check"; _ }; _ } -> true
         | EApp { fn; _ } -> find_check fn
         | _ -> false
@@ -7065,10 +7092,13 @@ let rec emit_api_test_stmt ctx ~indent ~server_name ~capabilities = function
     (* Keep the original check-ok so proof-sensitive API-test assertions and
        helper calls preserve the checker-produced GDP subject. *)
     emit ctx indent;
-    emit ctx (Printf.sprintf "(define %s (" tmp);
-    emit_api_test_expr ctx ~server_name ~capabilities fn_expr;
-    List.iter (fun a -> emit ctx " "; emit_api_test_arg ctx ~server_name ~capabilities a) args;
-    emit_line ctx "))";
+    emit ctx (Printf.sprintf "(define %s " tmp);
+    emit_cp loc (fun () ->
+      emit ctx "(";
+      emit_api_test_expr ctx ~server_name ~capabilities fn_expr;
+      List.iter (fun a -> emit ctx " "; emit_api_test_arg ctx ~server_name ~capabilities a) args;
+      emit ctx ")");
+    emit_line ctx ")";
     emit_line ctx (Printf.sprintf "%s(when (check-fail? %s)" indent tmp);
     emit_line ctx (Printf.sprintf "%s  (raise-user-error 'tesl-test \"unexpected failure in let %s: ~a\" (check-fail-message %s)))" indent binding_name tmp);
     emit ctx indent;
@@ -7089,7 +7119,7 @@ let rec emit_api_test_stmt ctx ~indent ~server_name ~capabilities = function
       emit_line ctx (Printf.sprintf "  (define %s (detach-all-proof %s))" pname tmp);
       Hashtbl.replace ctx.proof_locals pname ()
     ) proof_names
-  | TsLet { name; value; _ } ->
+  | TsLet { name; value; loc; _ } ->
     let binding_name =
       if String.equal name "_" then begin
         let n = ctx.case_counter in
@@ -7100,26 +7130,26 @@ let rec emit_api_test_stmt ctx ~indent ~server_name ~capabilities = function
     in
     emit ctx indent;
     emit ctx (Printf.sprintf "(define %s " binding_name);
-    emit_api_test_expr ctx ~server_name ~capabilities value;
+    emit_cp loc (fun () -> emit_api_test_expr ctx ~server_name ~capabilities value);
     emit_line ctx ")"
-  | TsExpect { left; right = None; _ } ->
+  | TsExpect { left; right = None; loc } ->
     emit ctx indent;
     emit ctx "(check-true (raw-value ";
-    emit_api_test_expr ctx ~server_name ~capabilities left;
+    emit_cp loc (fun () -> emit_api_test_expr ctx ~server_name ~capabilities left);
     emit_line ctx "))"
-  | TsExpect { left; right = Some right; _ } ->
+  | TsExpect { left; right = Some right; loc } ->
     emit ctx indent;
     emit ctx "(check-equal? ";
     emit ctx "(raw-value ";
-    emit_api_test_expr ctx ~server_name ~capabilities left;
+    emit_cp loc (fun () -> emit_api_test_expr ctx ~server_name ~capabilities left);
     emit ctx ") ";
     emit_api_test_expr ctx ~server_name ~capabilities right;
     emit_line ctx ")"
-  | TsExpr { e; _ } ->
+  | TsExpr { e; loc } ->
     emit ctx indent;
-    emit_api_test_expr ctx ~server_name ~capabilities e;
+    emit_cp loc (fun () -> emit_api_test_expr ctx ~server_name ~capabilities e);
     emit_nl ctx
-  | TsExpectFail { fn; arg; _ } ->
+  | TsExpectFail { fn; arg; loc } ->
     let rec flatten_args acc a = match a with
       | EApp { fn = base; arg = last; _ } -> flatten_args (last :: acc) base
       | _ -> a :: acc
@@ -7141,16 +7171,18 @@ let rec emit_api_test_stmt ctx ~indent ~server_name ~capabilities = function
     emit ctx indent;
     emit_line ctx "(let ([tesl-ef-result (with-handlers ([exn:fail? (lambda (e) 'tesl-exception)])";
     emit ctx (indent ^ "                        ");
-    emit_expect_fail_call ();
+    emit_cp loc emit_expect_fail_call;
     emit_line ctx ")])";
     emit_line ctx (indent ^ "  (check-true (or (eq? tesl-ef-result 'tesl-exception) (check-fail? tesl-ef-result))))")
-  | TsExpectHasProof { fn; arg; proof_name = _; _ } ->
+  | TsExpectHasProof { fn; arg; proof_name = _; loc } ->
     emit ctx indent;
-    emit ctx "(";
-    emit_api_test_expr ctx ~server_name ~capabilities fn;
-    emit ctx " ";
-    emit_api_test_expr ctx ~server_name ~capabilities arg;
-    emit_line ctx ")"
+    emit_cp loc (fun () ->
+      emit ctx "(";
+      emit_api_test_expr ctx ~server_name ~capabilities fn;
+      emit ctx " ";
+      emit_api_test_expr ctx ~server_name ~capabilities arg;
+      emit ctx ")");
+    emit_nl ctx
   | TsProperty { description = _; params = _; body; _ } ->
     emit ctx indent;
     emit ctx "(check-true ";
@@ -7161,11 +7193,19 @@ let rec emit_api_test_stmt ctx ~indent ~server_name ~capabilities = function
     emit ctx "(if ";
     emit_api_test_expr ctx ~server_name ~capabilities cond;
     emit_nl ctx;
+    (* Recurse threading [checkpoints] and [locals] so statements inside the
+       branches keep their thsl-src! checkpoints, folding branch-local lets into
+       the locals list for subsequent branch statements. *)
+    let emit_branch stmts =
+      ignore (List.fold_left (fun ls s ->
+        emit_api_test_stmt ctx ~checkpoints ~locals:ls ~indent:(indent ^ "    ") ~server_name ~capabilities s;
+        api_test_cp_locals_after s ls) locals stmts)
+    in
     emit_line ctx (indent ^ "  (let ()");
-    List.iter (emit_api_test_stmt ctx ~indent:(indent ^ "    ") ~server_name ~capabilities) then_stmts;
+    emit_branch then_stmts;
     emit_line ctx (indent ^ "  )");
     emit_line ctx (indent ^ "  (let ()");
-    List.iter (emit_api_test_stmt ctx ~indent:(indent ^ "    ") ~server_name ~capabilities) else_stmts;
+    emit_branch else_stmts;
     emit_line ctx (indent ^ "  ))")
   | TsCase { scrut; arms; _ } ->
     let var = fresh_case ctx in
@@ -7188,11 +7228,16 @@ let rec emit_api_test_stmt ctx ~indent ~server_name ~capabilities = function
       emit ctx (indent ^ "  [");
       emit ctx full_guard;
       emit_nl ctx;
+      let emit_arm_body arm_indent =
+        ignore (List.fold_left (fun ls s ->
+          emit_api_test_stmt ctx ~checkpoints ~locals:ls ~indent:arm_indent ~server_name ~capabilities s;
+          api_test_cp_locals_after s ls) locals arm.ts_body)
+      in
       (match binding_code with
-       | [] -> List.iter (emit_api_test_stmt ctx ~indent:(indent ^ "    ") ~server_name ~capabilities) arm.ts_body
+       | [] -> emit_arm_body (indent ^ "    ")
        | _ ->
          List.iter (fun b -> emit_line ctx (indent ^ "    " ^ Printf.sprintf "(let (%s)" b)) binding_code;
-         List.iter (emit_api_test_stmt ctx ~indent:(indent ^ "      ") ~server_name ~capabilities) arm.ts_body;
+         emit_arm_body (indent ^ "      ");
          List.iter (fun _ -> emit_line ctx (indent ^ "    )")) binding_code);
       emit_line ctx (indent ^ "  ]")
     ) arms;
@@ -7218,7 +7263,15 @@ let emit_api_test ctx ~(database_names : string list) (t : api_test_form) =
     emit_api_test_expr ctx ~server_name:t.server_name ~capabilities:t.capabilities seed_expr;
     emit_nl ctx
   ) t.seed_stmts;
-  List.iter (emit_api_test_stmt ctx ~indent:body_indent ~server_name:t.server_name ~capabilities:t.capabilities) t.stmts;
+  (* Fold through stmts accumulating in-scope locals for the Variables panel —
+     mirrors emit_test.  checkpoints:true wraps each statement in a thsl-src!
+     checkpoint so breakpoints can fire inside api-test bodies (load-test
+     request bodies stay uninstrumented: throughput benchmark). *)
+  let _ = List.fold_left (fun locals stmt ->
+    emit_api_test_stmt ctx ~checkpoints:true ~locals ~indent:body_indent
+      ~server_name:t.server_name ~capabilities:t.capabilities stmt;
+    api_test_cp_locals_after stmt locals
+  ) [] t.stmts in
   if t.capabilities <> [] then emit_line ctx "            )";
   emit_line ctx "          ))";
   emit_line ctx "      ))";

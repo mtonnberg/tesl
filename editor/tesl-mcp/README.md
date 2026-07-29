@@ -23,6 +23,7 @@ on the same framing and compiler-discovery as the Tesl LSP
 | `tesl.references` | `{file, line, col}` | `--occurrences-json` | 0-based line, 0-based col. Same-file occurrences. |
 | `tesl.proof_obligations` | `{file}` | `--agent-context-json` (sliced) | Just the `proof_obligations` array. |
 | `tesl.debug_inspect` | `{file, breakpoints \| break_at, mode?}` | `tesl debug-inspect` | Headless debugger — **you set the breakpoints**, incl. conditional & hit-count. |
+| `tesl.debug_attach` | `{project?, action?, break_at?, when?, hit?, timeout_ms?}` | `tesl debug-attach` | Live attach to a running `tesl run --debug` app — arm/re-arm with zero relaunches; the app keeps serving. Actions: `once` (default), `snapshot`, `ping`, `detach`. |
 
 Every tool's text response is the compiler's already-compact JSON, passed through
 verbatim — no re-pretty-printing (token economy).
@@ -54,6 +55,37 @@ Example arguments:
 { "file": "example/learn/lesson61-step-debugging.tesl",
   "mode": "test",
   "breakpoints": [ { "line": 191, "condition": "n == -10" } ] }
+```
+
+### `tesl.debug_attach`
+
+Live attach to an **already-running** `tesl run --debug` process — the
+counterpart of `tesl.debug_inspect` for long sessions: the app keeps serving,
+its accumulated state (queues, caches, sessions) stays intact, and you can
+re-arm different breakpoints on every call with zero relaunches.
+
+- `action: "once"` (default) — arm the `break_at` breakpoints (as
+  `"FILE:LINE"` strings, file spelled as the compiler saw it), wait for the
+  first stop (bounded by `timeout_ms`, default 30000), return it, resume, and
+  detach.  Trigger the stop yourself — e.g. curl the app's endpoint — while
+  the call waits.
+- `action: "snapshot"` — paused state + live domain/SQL right now.
+- `action: "ping"` — is the attach endpoint alive?
+- `action: "detach"` — recovery hatch: disarm everything, resume.
+
+The endpoint is discovered under `<project>/.tesl-stuff/` (`project` defaults
+to the nearest `tesl.toml`).  The result is `{ok, events: […]}` — the NDJSON
+stream from the channel; the `{event: "stopped", locals, domain, sql}` entry
+is the paused state.  Optional `when`/`hit` apply a condition / hit-count spec
+to every breakpoint.
+
+Example arguments:
+
+```json
+{ "project": "/home/me/my-app",
+  "break_at": ["app.tesl:42"],
+  "when": "userId == \"alice\"",
+  "timeout_ms": 30000 }
 ```
 
 ## Running it

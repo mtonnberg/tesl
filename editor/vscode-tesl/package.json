@@ -106,6 +106,35 @@
                 "description": "When mode is 'test', run only the test block with this exact name (optional)."
               }
             }
+          },
+          "attach": {
+            "properties": {
+              "project": {
+                "type": "string",
+                "description": "Project root of the running `tesl run --debug` app (its .tesl-stuff/ holds the attach endpoint). Defaults to the workspace folder.",
+                "default": "${workspaceFolder}"
+              },
+              "socket": {
+                "type": "string",
+                "description": "Explicit unix socket path of the attach endpoint (overrides project discovery)."
+              },
+              "port": {
+                "type": "number",
+                "description": "Explicit loopback TCP port of the attach endpoint (overrides project discovery)."
+              },
+              "program": {
+                "type": "string",
+                "description": "Legacy alias: with only `program` set, attach behaves like launch for that file."
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "program",
+                  "test"
+                ],
+                "description": "Legacy alias mode (only used with `program`)."
+              }
+            }
           }
         },
         "initialConfigurations": [
@@ -122,6 +151,12 @@
             "name": "Debug Tesl tests",
             "program": "${file}",
             "mode": "test"
+          },
+          {
+            "type": "tesl",
+            "request": "attach",
+            "name": "Attach to running app (tesl run --debug)",
+            "project": "${workspaceFolder}"
           }
         ],
         "configurationSnippets": [
@@ -146,6 +181,16 @@
               "program": "^\"\\${file}\"",
               "mode": "test"
             }
+          },
+          {
+            "label": "Tesl: Attach to running app",
+            "description": "Attach to an app started with `tesl run --debug` — the app keeps running when you disconnect.",
+            "body": {
+              "type": "tesl",
+              "request": "attach",
+              "name": "Attach to running app (tesl run --debug)",
+              "project": "^\"\\${workspaceFolder}\""
+            }
           }
         ]
       }
@@ -156,6 +201,16 @@
       }
     ],
     "commands": [
+      {
+        "command": "tesl.runDebugMode",
+        "title": "Run current file in debug mode (tesl run --debug)",
+        "category": "Tesl"
+      },
+      {
+        "command": "tesl.attachRunning",
+        "title": "Attach to running app",
+        "category": "Tesl"
+      },
       {
         "command": "tesl.debugTests",
         "title": "Debug Tesl Tests",

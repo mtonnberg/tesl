@@ -44,6 +44,73 @@ _tesl_check() {
   "$TESL_OCAML_COMPILER" --check "$@"
 }
 
+# ── Build-output location (.tesl-stuff/build/) ──────────────────────────────
+# Compiled .rkt files do NOT go next to the .tesl sources: they land under
+# <project-root>/.tesl-stuff/build/, MIRRORING the source tree
+# (<root>/.tesl-stuff/build/<path-of-.tesl-relative-to-root>.rkt).  Racket then
+# drops its compiled/ bytecode next to each emitted .rkt, i.e. also inside
+# .tesl-stuff/.  The mirrored layout preserves the relative positions of the
+# emitted modules, so the emitter's basename `(file "X.rkt")` requires keep
+# resolving (local imports are same-directory-only by language design).
+# Everything under .tesl-stuff/ is transient: deleting it and rerunning any
+# command is always safe (at the cost of a fresh compile) — `tesl clean` does
+# exactly that for build/.  Override the build root with TESL_BUILD_DIR
+# (absolute, or relative to the project root).
+
+# Nearest ancestor of DIR (inclusive) containing tesl.toml. rc 1 if none.
+_tesl_project_root_of_dir() {
+  local d
+  d="$(cd "$1" 2>/dev/null && pwd)" || return 1
+  while :; do
+    if [ -f "$d/tesl.toml" ]; then echo "$d"; return 0; fi
+    [ "$d" = "/" ] && return 1
+    d="$(dirname "$d")"
+  done
+}
+
+# Project root for a .tesl FILE: nearest ancestor with tesl.toml, falling back
+# to the file's own directory (a bare single-file project with no manifest).
+_tesl_project_root() {
+  local dir
+  dir="$(cd "$(dirname "$1")" 2>/dev/null && pwd)" || return 1
+  _tesl_project_root_of_dir "$dir" || echo "$dir"
+}
+
+# Effective build root for a project root ($1), honoring TESL_BUILD_DIR.
+_tesl_build_root() {
+  local root="$1"
+  if [ -n "${TESL_BUILD_DIR:-}" ]; then
+    case "$TESL_BUILD_DIR" in
+      /*) echo "$TESL_BUILD_DIR" ;;
+      *)  echo "$root/$TESL_BUILD_DIR" ;;
+    esac
+  else
+    echo "$root/.tesl-stuff/build"
+  fi
+}
+
+# Map a .tesl file to its build-output .rkt path (mirrored tree) and create
+# the parent directory.  Prints the path.  A file that resolves OUTSIDE the
+# project root is a hard error: local imports cannot escape the project by
+# language design, so this only fires on a genuinely misplaced file.
+_tesl_out_path() {
+  local FILE="$1" abs root rel build_root out
+  abs="$(realpath "$FILE" 2>/dev/null)" || abs="$FILE"
+  root="$(_tesl_project_root "$FILE")" || {
+    echo "error: cannot resolve directory of $FILE" >&2; return 1; }
+  rel="$(realpath --relative-to="$root" "$abs" 2>/dev/null || true)"
+  case "$rel" in
+    ""|/*|..|../*)
+      echo "error: $FILE resolves outside the project root $root (nearest tesl.toml); cannot place its build output" >&2
+      return 1 ;;
+  esac
+  build_root="$(_tesl_build_root "$root")"
+  out="$build_root/${rel%.tesl}.rkt"
+  mkdir -p "$(dirname "$out")" || {
+    echo "error: cannot create build directory $(dirname "$out")" >&2; return 1; }
+  echo "$out"
+}
+
 # #18: a cheap, stable identity for the CURRENT compiler build. In nix the binary
 # lives at an immutable per-revision store path (so the resolved path changes on a
 # flake bump); in a dev shell the path is stable but the binary's size+mtime move
@@ -87,17 +154,40 @@ _tesl_freshen_bytecode() {
   fi
 }
 
-# #33: emit every transitive local import of FILE to its sibling .rkt so racket
-# can load them. Shared by compile/run/test — `tesl test` previously skipped
-# this step, so on a fresh checkout (no *.rkt, they are gitignored) a
-# multi-module project's tests failed with a swallowed "cannot open module
-# file" and the misleading "(no test results)".
+# Attach debugging: Racket bytecode caches the EXPANSION of a module, and the
+# thsl-src! checkpoints are erased-or-kept at expansion time (TESL_DEBUG, see
+# dsl/debug/checkpoint.rkt B5). A .zo built in release mode therefore has NO
+# checkpoints baked in — reusing it under `tesl run --debug` would silently
+# make every breakpoint dead (and the reverse wastes release runs on checkpoint
+# overhead). Key the whole build tree on the mode: when it flips, drop every
+# compiled/ dir under the build root so Racket re-expands in the new mode.
+_tesl_debug_mode_sync() {
+  local root="$1" mode="$2" build_root marker prev
+  build_root="$(_tesl_build_root "$root")"
+  mkdir -p "$build_root" 2>/dev/null || true
+  marker="$build_root/.debug-mode"
+  prev=""
+  [ -f "$marker" ] && prev="$(cat "$marker" 2>/dev/null)"
+  if [ "$prev" != "$mode" ]; then
+    if [ -n "$prev" ]; then
+      echo "[tesl] debug mode changed — dropping cached bytecode so checkpoints match" >&2
+    fi
+    find "$build_root" -type d -name compiled -prune -exec rm -rf {} + 2>/dev/null || true
+    printf '%s' "$mode" > "$marker" 2>/dev/null || true
+  fi
+}
+
+# #33: emit every transitive local import of FILE to its build-dir .rkt
+# (.tesl-stuff/build/, mirrored tree) so racket can load them. Shared by
+# compile/run/test/watch — `tesl test` previously skipped this step, so on a
+# fresh checkout (no build dir yet) a multi-module project's tests failed with
+# a swallowed "cannot open module file" and the misleading "(no test results)".
 _tesl_emit_dep_rkts() {
   local FILE="$1" DEP DEP_RKT DEPS RET=0
   DEPS="$(_tesl_compile_deps "$FILE" 2>/dev/null)"
   for DEP in $DEPS; do
     if [ -n "$DEP" ] && [ "$DEP" != "$FILE" ]; then
-      DEP_RKT="${DEP%.tesl}.rkt"
+      DEP_RKT="$(_tesl_out_path "$DEP")" || { RET=1; continue; }
       if ! _tesl_compile_to_stdout "$DEP" > "$DEP_RKT" 2>&1; then
         echo "error: Failed to compile dependency: $DEP" >&2
         rm -f "$DEP_RKT"
@@ -571,6 +661,13 @@ EOF
     [ -n "$env_block" ] && echo "$env_block"
     echo '      "program": "${file}",'
     echo '      "mode": "test"'
+    echo '    },'
+    echo '    {'
+    echo '      "type": "tesl",'
+    echo '      "request": "attach",'
+    echo '      "name": "Attach to running app (tesl run --debug)",'
+    [ -n "$env_block" ] && echo "$env_block"
+    echo '      "project": "${workspaceFolder}"'
     echo '    }'
     echo '  ]'
     echo '}'
@@ -683,9 +780,8 @@ _tesl_init() {
     echo ".env"
     echo "# Nix build symlink"
     echo "result"
-    echo "# Racket compiled caches and generated output"
-    echo "compiled/"
-    echo "*.rkt"
+    echo "# Tesl build output (compiled .rkt + Racket bytecode; recreate with any tesl command)"
+    echo ".tesl-stuff/"
   } > "$DEST/.gitignore"
 
   _tesl_init_agents_md "$DEST/AGENTS.md" "$NAME" "$TEMPLATE" "$PGMODE"
@@ -989,9 +1085,18 @@ case "$CMD" in
     _tesl_require_compiler
     exec "$TESL_OCAML_COMPILER" debug-inspect "$@"
     ;;
+  debug-attach)
+    # Live attach to an ALREADY-RUNNING `tesl run --debug` process: arm/re-arm
+    # breakpoints, receive stop events, inspect, resume, detach — the server
+    # keeps serving throughout. Thin NDJSON client over the control channel
+    # (dsl/debug/control-channel.rkt); all args are handled by the client
+    # (--break-at FILE:LINE, --once, --snapshot, --ping, --detach, --project,
+    # --help). The endpoint defaults to <project>/.tesl-stuff/debug.sock.
+    exec racket -l tesl/dsl/debug/attach-client -- "$@"
+    ;;
   compile)
     FILE="${1:?Usage: tesl compile <file.tesl>}"
-    OUT="${FILE%.tesl}.rkt"
+    OUT="$(_tesl_out_path "$FILE")" || exit 1
     OUT_TMP="$(mktemp --suffix=.rkt)"
 
     # Compile all dependencies (transitive imports) first
@@ -1065,13 +1170,35 @@ case "$CMD" in
     "$TESL_OCAML_COMPILER" --fmt-check "$@"
     ;;
   run)
-    FILE="${1:?Usage: tesl run <file.tesl> [args…]}"
+    # --debug: start the app with live thsl-src! checkpoints and the attach
+    # control channel (unix socket / loopback TCP under .tesl-stuff/) so a
+    # debugger can attach to the RUNNING process — arm/re-arm breakpoints,
+    # inspect, resume — without relaunching. Costs checkpoint overhead; a
+    # plain `tesl run` stays byte-for-byte the zero-residue release build.
+    TESL_RUN_DEBUG=0
+    if [ "${1:-}" = "--debug" ]; then TESL_RUN_DEBUG=1; shift; fi
+    FILE="${1:?Usage: tesl run [--debug] <file.tesl> [args…]}"
     shift
     # Convenience: load ./.env so the app sees TESL_POSTGRES_*/PORT without manual sourcing.
     _tesl_load_dotenv
     # Managed-mode projects: auto-start the project-local Postgres if needed.
     _tesl_db_autostart_if_managed
-    OUT="${FILE%.tesl}.rkt"
+    if [ "$TESL_RUN_DEBUG" = "1" ]; then
+      # Absolute source path: the emitter bakes the compiler's input path into
+      # each thsl-src! checkpoint, and attach clients (VSCode setBreakpoints,
+      # tesl debug-attach) identify files absolutely — compile from the
+      # absolute spelling so breakpoint file matching never misses.
+      FILE="$(realpath "$FILE" 2>/dev/null || echo "$FILE")"
+    fi
+    PROJ_ROOT="$(_tesl_project_root "$FILE")" || exit 1
+    OUT="$(_tesl_out_path "$FILE")" || exit 1
+    # Keep cached bytecode mode-consistent (see _tesl_debug_mode_sync).
+    _tesl_debug_mode_sync "$PROJ_ROOT" "$TESL_RUN_DEBUG"
+    if [ "$TESL_RUN_DEBUG" = "1" ]; then
+      export TESL_DEBUG=1
+      export TESL_DEBUG_CONTROL_DIR="$PROJ_ROOT/.tesl-stuff"
+      echo "[tesl] debug mode: attach endpoint at $TESL_DEBUG_CONTROL_DIR/debug.sock (or debug.port)" >&2
+    fi
     RET=0
 
     # Compile all dependencies (transitive imports) first
@@ -1139,7 +1266,7 @@ case "$CMD" in
     [ $# -gt 0 ] || { echo "Usage: tesl test [--test-name <name>] [--test-kind <kind>] <file.tesl> [more.tesl ...]" >&2; exit 1; }
     RET=0
     for FILE in "$@"; do
-      OUT="${FILE%.tesl}.rkt"
+      OUT="$(_tesl_out_path "$FILE")" || { RET=1; continue; }
       OUT_TMP="$(mktemp --suffix=.rkt)"
       _tesl_require_compiler
       # #33: like `run`, emit imported local modules' .rkt first — otherwise
@@ -1188,7 +1315,7 @@ case "$CMD" in
   watch)
     FILE="${1:?Usage: tesl watch <file.tesl>}"
     shift
-    OUT="${FILE%.tesl}.rkt"
+    OUT="$(_tesl_out_path "$FILE")" || exit 1
     RACKET_PID=""
     PREV_SNAP=""
     trap '[ -n "$RACKET_PID" ] && kill "$RACKET_PID" 2>/dev/null' EXIT
@@ -1218,6 +1345,10 @@ case "$CMD" in
         echo "[tesl watch] Compiling..."
         STDERR_TMP="$(mktemp)"
         OUT_TMP="$(mktemp --suffix=.rkt)"
+        # #33 (watch): (re)emit imported modules' .rkt into the build dir too —
+        # the entry .rkt alone cannot load if a dep's .rkt is missing or stale.
+        # A dep failure surfaces via the entry compile below (same diagnostics).
+        _tesl_emit_dep_rkts "$FILE" >/dev/null 2>&1 || true
         if _tesl_compile_to_stdout "$FILE" > "$OUT_TMP" 2>"$STDERR_TMP"; then
           grep -Ev "^raco (setup|make|link|test):" "$STDERR_TMP" >&2 || true
           rm -f "$STDERR_TMP"
@@ -1291,6 +1422,20 @@ case "$CMD" in
   build)
     _tesl_build "$@"
     ;;
+  clean)
+    # Remove the project's transient build output (.tesl-stuff/build, or the
+    # TESL_BUILD_DIR override).  Deliberately scoped to the build output only:
+    # other .tesl-stuff/ subdirectories (e.g. a future on-disk cache with its
+    # own lifecycle) survive, and .tesl-postgres/ (real data) is never touched.
+    ROOT="$(_tesl_project_root_of_dir "$PWD")" || ROOT="$PWD"
+    BUILD_ROOT="$(_tesl_build_root "$ROOT")"
+    if [ -d "$BUILD_ROOT" ]; then
+      rm -rf "$BUILD_ROOT"
+      echo "tesl clean: removed $BUILD_ROOT"
+    else
+      echo "tesl clean: nothing to remove ($BUILD_ROOT does not exist)"
+    fi
+    ;;
   version|--version|-v)
     # A stable version string plus the resolved compiler path — the latter's Nix
     # store hash disambiguates which of several installed store builds is running.
@@ -1312,13 +1457,17 @@ Usage:
   tesl db                  start|stop|status                 Manage the project-local Postgres
   tesl build               [--app-only|--with-postgres]      Build a runnable Docker image
                            [--tag NAME] [--no-docker] [--out DIR]
-  tesl compile             <file.tesl>                    Compile .tesl → .rkt
+  tesl compile             <file.tesl>                    Compile .tesl → .rkt (into .tesl-stuff/build/)
+  tesl clean                                              Delete the project's build output (.tesl-stuff/build/)
   tesl check               <file.tesl> [more.tesl ...]   Type-check without output
   tesl lint                <file.tesl> [more.tesl ...]   Run the opinionated linter
   tesl fmt                 <file.tesl> [more.tesl ...]   Format in-place
   tesl fmt-check           <file.tesl> [more.tesl ...]   Check formatting without modifying
   tesl validate            <file.tesl> [more.tesl ...]   Run check + lint + fmt-check
-  tesl run                 <file.tesl> [args…]           Compile then execute
+  tesl run                 [--debug] <file.tesl> [args…]  Compile then execute
+                           (--debug: live checkpoints + attach endpoint under .tesl-stuff/)
+  tesl debug-attach        [--project DIR] [command…]     Attach to a `tesl run --debug` process
+                           (arm breakpoints, inspect, resume — see tesl debug-attach --help)
   tesl test                <file.tesl> [more.tesl ...]   Compile and run tests
   tesl watch               <file.tesl> [args…]           Watch, recompile, and restart on changes
   tesl generate ir         <file.tesl>                   Emit API IR as JSON

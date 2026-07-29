@@ -142,8 +142,10 @@ parameters.
 
 4. **Compile** (generate Racket code):
    ```bash
-   tesl example/todo-api.tesl > output.rkt
+   tesl compile example/todo-api.tesl
    ```
+   The compiled `.rkt` lands under the project's `.tesl-stuff/build/` directory
+   (the command prints the exact path).
 
 ---
 

@@ -821,6 +821,153 @@
 
 ;; ── DAP command dispatch ──────────────────────────────────────────────────────
 
+;; ── ATTACH MODE: proxy to a running `tesl run --debug` process ────────────────
+;;
+;; Real attach: the debuggee is a SEPARATE OS process started by the user with
+;; `tesl run --debug`, exposing the control channel from
+;; dsl/debug/control-channel.rkt (unix socket / loopback TCP under
+;; <project>/.tesl-stuff/).  In attach mode this adapter does NOT compile or
+;; load anything — it is a thin DAP↔control-channel proxy:
+;;   setBreakpoints → {"cmd":"set-breakpoints"}     continue/step → resume cmds
+;;   stopped events ← the channel's NDJSON stream    disconnect → detach
+;; The launch-mode machinery (compile-debug, dynamic-require, in-process
+;; domain-registry reads) is untouched and still serves `request:"launch"`.
+;;
+;; Known v1 limitation, by design: the channel streams locals/domain/SQL
+;; ALREADY RENDERED ({name,value,type} strings), so the Variables panel in
+;; attach mode is flat — no structured drill-down into records/hashes.  The
+;; values shown are the same strings launch mode renders; only expansion is
+;; missing.  Deep drill-down needs a varref RPC on the channel (future work).
+
+(define attach-conn (box #f))          ; (cons in out) when attached
+(define attach-last-stopped (box #f))  ; last rendered stopped event (jsexpr)
+
+(define (attach-mode?) (and (unbox attach-conn) #t))
+
+(define (attach-send! obj)
+  (let ([conn (unbox attach-conn)])
+    (when conn
+      (with-handlers ([exn:fail? (lambda (e) (log! "attach-send failed: " (exn-message e)))])
+        (write-string (jsexpr->string obj) (cdr conn))
+        (write-string "\n" (cdr conn))
+        (flush-output (cdr conn))))))
+
+;; Resolve the control endpoint from attach args: explicit socket/port win,
+;; else <project>/.tesl-stuff/{debug.sock,debug.port}.  `project` defaults to
+;; the directory of `program` (so an attach entry can reuse "${file}").
+(define (attach-endpoint args)
+  (define socket (hash-ref args 'socket #f))
+  (define port   (hash-ref args 'port #f))
+  (define project
+    (or (let ([p (hash-ref args 'project #f)]) (and (non-empty-string? p) p))
+        (let ([p (hash-ref args 'program #f)])
+          (and (string? p) (non-empty-string? p)
+               (path->string (path-only (path->complete-path (string->path p))))))))
+  (cond
+    [(and (string? socket) (non-empty-string? socket)) (cons 'unix socket)]
+    [(exact-positive-integer? port) (cons 'tcp port)]
+    [project
+     (define dir (build-path project ".tesl-stuff"))
+     (define sock (build-path dir "debug.sock"))
+     (define pfile (build-path dir "debug.port"))
+     (cond
+       [(file-exists? sock) (cons 'unix (path->string sock))]
+       [(file-exists? pfile)
+        (let ([p (string->number (string-trim (file->string pfile)))])
+          (and p (cons 'tcp p)))]
+       [else #f])]
+    [else #f]))
+
+(define (attach-connect! endpoint)
+  (case (car endpoint)
+    [(unix)
+     (define us (dynamic-require 'racket/unix-socket 'unix-socket-connect))
+     (us (cdr endpoint))]
+    [(tcp) (tcp-connect "127.0.0.1" (cdr endpoint))]))
+
+;; Reader pump: control-channel NDJSON → DAP events.  A stopped line is
+;; mirrored into last-stopped-event (file/line only — the shared stackTrace
+;; handler reads those) plus attach-last-stopped (rendered locals/domain/sql
+;; for the attach variables path).  EOF/detached ends the DAP session but
+;; leaves the debuggee serving.
+(define (start-attach-reader! in)
+  (thread
+   (lambda ()
+     (let loop ()
+       (define line (with-handlers ([exn:fail? (lambda (_e) eof)]) (read-line in 'any)))
+       (cond
+         [(eof-object? line)
+          (log! "attach: channel closed")
+          (set-box! attach-conn #f)
+          (dap-event "terminated" (hasheq))]
+         [else
+          (define msg (with-handlers ([exn:fail? (lambda (_e) #f)]) (string->jsexpr line)))
+          (when (hash? msg)
+            (case (hash-ref msg 'event #f)
+              [("stopped")
+               (set-box! attach-last-stopped msg)
+               (set-box! last-stopped-event
+                         (hasheq 'file (hash-ref msg 'file "")
+                                 'line (hash-ref msg 'line 0)
+                                 'locals '()
+                                 'reason (hash-ref msg 'reason "breakpoint")))
+               (set-box! paused? #t)
+               (dap-event "stopped"
+                 (hasheq 'reason (hash-ref msg 'reason "breakpoint")
+                         'threadId 1
+                         'allThreadsStopped #t
+                         'source (hasheq 'path (hash-ref msg 'file ""))
+                         'line (hash-ref msg 'line 0)))]
+              [("resumed")
+               (set-box! paused? #f)
+               ;; A timeout/no-client auto-resume also lands here; tell the
+               ;; client execution moved on so the UI leaves the paused state.
+               (dap-event "continued" (hasheq 'threadId 1 'allThreadsContinued #t))]
+              [("detached")
+               (set-box! attach-conn #f)
+               (dap-event "terminated" (hasheq))]
+              [else (void)]))          ; command replies: fire-and-forget
+          (loop)])))))
+
+;; Rendered {name,value,type} JSON rows → DAP variables (flat, ref 0).
+(define (rendered->variables rows)
+  (for/list ([r (in-list rows)] #:when (hash? r))
+    (hasheq 'name  (hash-ref r 'name "")
+            'value (hash-ref r 'value "")
+            'type  (hash-ref r 'type "")
+            'variablesReference 0)))
+
+(define (attach-domain-variables)
+  (define evt (unbox attach-last-stopped))
+  (define dom (and evt (hash-ref evt 'domain #f)))
+  (if (hash? dom)
+      (for*/list ([bucket '(queues caches sse email workers)]
+                  [obj (in-list (hash-ref dom bucket '()))]
+                  #:when (hash? obj))
+        (hasheq 'name  (format "~a" (hash-ref obj 'label (hash-ref obj 'name bucket)))
+                'value (format "~a" (hash-ref obj 'summary ""))
+                'type  (format "~a" (hash-ref obj 'kind bucket))
+                'variablesReference 0))
+      '()))
+
+(define (attach-sql-variables)
+  (define evt (unbox attach-last-stopped))
+  (define sql (and evt (hash-ref evt 'sql #f)))
+  (if (hash? sql)
+      (append
+       (list (hasheq 'name "statement" 'value (format "~a" (hash-ref sql 'sql ""))
+                     'type "SQL" 'variablesReference 0)
+             (hasheq 'name "preview" 'value (format "~a" (hash-ref sql 'preview ""))
+                     'type "SQL" 'variablesReference 0)
+             (hasheq 'name "status" 'value (format "~a" (hash-ref sql 'status ""))
+                     'type "" 'variablesReference 0))
+       (for/list ([p (in-list (hash-ref sql 'params '()))] #:when (hash? p))
+         (hasheq 'name  (format "$~a" (hash-ref p 'index 0))
+                 'value (format "~a" (hash-ref p 'value ""))
+                 'type  (format "~a" (hash-ref p 'type ""))
+                 'variablesReference 0)))
+      '()))
+
 (define (handle-initialize req)
   (log! "handle-initialize")
   (dap-response req #t
@@ -837,6 +984,29 @@
          [source (hash-ref args 'source (hasheq))]
          [path (hash-ref source 'path "")]
          [bps (hash-ref args 'breakpoints '())])
+    (when (attach-mode?)
+      ;; Proxy: translate the DAP breakpoint rows to the control-channel shape
+      ;; (hitCondition → hit) and hand them to the running process.  Replies on
+      ;; the channel are fire-and-forget; verification is optimistic exactly
+      ;; like launch mode below.
+      (attach-send!
+       (hasheq 'cmd "set-breakpoints"
+               'file path
+               'breakpoints
+               (for/list ([bp (in-list bps)])
+                 (let* ([b (hasheq 'line (hash-ref bp 'line 0))]
+                        [b (let ([c (hash-ref bp 'condition #f)])
+                             (if (and (string? c) (non-empty-string? c))
+                                 (hash-set b 'condition c) b))]
+                        [b (let ([h (hash-ref bp 'hitCondition #f)])
+                             (if (and (string? h) (non-empty-string? h))
+                                 (hash-set b 'hit h) b))])
+                   b))))
+      (dap-response req #t
+        (hasheq 'breakpoints
+                (map (lambda (bp) (hasheq 'verified #t 'line (hash-ref bp 'line 0))) bps)))
+      (log! "setBreakpoints (attach proxy): path=" path))
+    (unless (attach-mode?)
     ;; Carry the full {line, condition, hitCondition} per breakpoint as bp-records
     ;; (see checkpoint.rkt) so conditional / hit-conditional breakpoints can be
     ;; evaluated at the checkpoint.  A blank/absent condition becomes #f inside
@@ -860,7 +1030,7 @@
       (hasheq 'breakpoints
               (map (lambda (r)
                      (hasheq 'verified #t 'line (bp-record-line r)))
-                   records)))))
+                   records))))))
 
 ;; Pending launch: compile during launch, start program during configurationDone.
 ;; This ensures setBreakpoints messages are processed before the program runs.
@@ -967,16 +1137,59 @@
 
 (define (handle-launch req) (prepare-session! req "launch"))
 
-;; DAP `attach`.  Tesl programs are debugged IN-PROCESS (the debuggee is loaded
-;; via dynamic-require into this adapter's own Racket runtime — there is no
-;; separate OS process to attach to), so a remote/PID attach is out of scope and
-;; would be unbounded.  Instead we support the bounded, useful case: attach
-;; behaves like launch for a given `program` path — the client may use an
-;; "attach" configuration (e.g. to skip a build task or to reuse a launch.json
-;; attach entry) and still get full breakpoint/step/variable debugging.  This
-;; keeps client wiring trivial (same arguments as launch) while honouring the DAP
-;; attach request rather than rejecting it.
-(define (handle-attach req) (prepare-session! req "attach"))
+;; DAP `attach`.  Two shapes:
+;;
+;; REAL ATTACH (config has `project`, `socket`, or `port`): connect to the
+;; control channel of an already-running `tesl run --debug` process and proxy
+;; (see the ATTACH MODE section above).  Nothing is compiled or loaded; the
+;; debuggee keeps running when the session disconnects.
+;;
+;; LEGACY ALIAS (config has only `program`, like launch): historical behaviour —
+;; attach acts as launch for that program (the debuggee is loaded in-process via
+;; dynamic-require).  Kept so existing attach entries in launch.json continue to
+;; work unchanged.
+(define (handle-attach req)
+  (define args (hash-ref req 'arguments (hasheq)))
+  (define wants-real-attach?
+    (or (let ([p (hash-ref args 'project #f)]) (and (string? p) (non-empty-string? p)))
+        (let ([s (hash-ref args 'socket #f)]) (and (string? s) (non-empty-string? s)))
+        (exact-positive-integer? (hash-ref args 'port #f))))
+  (cond
+    [wants-real-attach?
+     (define ep (attach-endpoint args))
+     (cond
+       [(not ep)
+        (dap-response req #f
+          (hasheq 'message "No debug endpoint found — start the app with `tesl run --debug` first (looked for .tesl-stuff/debug.sock / debug.port)."))
+        (dap-event "terminated" (hasheq))]
+       [else
+        (with-handlers
+            ([exn:fail?
+              (lambda (e)
+                (dap-response req #f
+                  (hasheq 'message (format "Cannot attach: ~a — is the app still running?" (exn-message e))))
+                (dap-event "terminated" (hasheq)))])
+          (define-values (in out) (attach-connect! ep))
+          ;; Consume the attached/busy banner synchronously so a busy refusal
+          ;; fails the request instead of surfacing as a confusing later event.
+          (define hello
+            (with-handlers ([exn:fail? (lambda (_e) #f)])
+              (string->jsexpr (read-line in 'any))))
+          (cond
+            [(and (hash? hello) (equal? (hash-ref hello 'event #f) "attached"))
+             (set-box! attach-conn (cons in out))
+             (start-attach-reader! in)
+             (dap-response req #t (hasheq))
+             (dap-event "output"
+               (hasheq 'category "console"
+                       'output (format "[dbg] === Tesl Debug Session (attach) ===\n[dbg] Endpoint: ~a\n[dbg] The app keeps running when you disconnect.\n"
+                                       (cdr ep))))]
+            [else
+             (dap-response req #f
+               (hasheq 'message (format "Attach refused by the process: ~a"
+                                        (if (hash? hello) (hash-ref hello 'reason "busy") "no banner"))))
+             (dap-event "terminated" (hasheq))]))])]
+    [else (prepare-session! req "attach")]))
 
 (define (handle-threads req)
   (dap-response req #t
@@ -1012,13 +1225,29 @@
   ;; Advertise the Domain scope when there are domain objects in scope OR anywhere
   ;; in the global registry (the full live domain state) — so queues/caches/SSE
   ;; channels/email outboxes/worker pools surface even when no local binds them.
-  (define has-domain? (or (pair? (domain-locals locals))
-                          (pair? (domain-registry-objects))))
+  ;; Attach mode: the debuggee is another process, so the in-process registry is
+  ;; empty here — decide from the RENDERED domain/sql the channel streamed.
+  (define attach-evt (and (attach-mode?) (unbox attach-last-stopped)))
+  (define (attach-domain-nonempty?)
+    (define dom (and attach-evt (hash-ref attach-evt 'domain #f)))
+    (and (hash? dom)
+         (for/or ([b '(queues caches sse email workers)])
+           (pair? (hash-ref dom b '())))))
+  (define has-domain?
+    (if (attach-mode?)
+        (attach-domain-nonempty?)
+        (or (pair? (domain-locals locals))
+            (pair? (domain-registry-objects)))))
   ;; SQL scope (task #43): advertise it ONLY when a SQL statement ran or is pending
   ;; on this pause (so the panel isn't cluttered with an empty scope otherwise).
   ;; Label it with the op + table so multiple queries are distinguishable rather
   ;; than a bare "SQL".
-  (define sql-cap (current-sql-capture-record))
+  (define sql-cap
+    (if (attach-mode?)
+        (let ([s (and attach-evt (hash-ref attach-evt 'sql #f))])
+          (and (hash? s)
+               (hasheq 'op (hash-ref s 'operation #f) 'table (hash-ref s 'table #f))))
+        (current-sql-capture-record)))
   (define has-sql? (and sql-cap #t))
   (define sql-scope-name
     (if sql-cap
@@ -1248,6 +1477,14 @@
     (log! "handle-variables: ref=" ref " " (length locals) " locals @ line " line "; raw=" (~a locals))
     (define vars
       (cond
+        ;; Attach mode: values arrive pre-rendered over the channel — flat rows.
+        [(attach-mode?)
+         (define evt (unbox attach-last-stopped))
+         (cond
+           [(= ref 1) (rendered->variables (if evt (hash-ref evt 'locals '()) '()))]
+           [(= ref 2) (attach-domain-variables)]
+           [(= ref 3) (attach-sql-variables)]
+           [else '()])]
         [(= ref 1) (locals->variables locals line)]
         [(= ref 2) (domain->variables locals)]
         ;; ref 3: the SQL scope (task #43) — exactly what the driver runs.  A #f
@@ -1264,22 +1501,35 @@
         [else '()]))
     (dap-response req #t (hasheq 'variables vars))))
 
+;; Resume verbs: proxy the command over the control channel in attach mode,
+;; else resume the in-process debuggee.  The channel's own "resumed" event (or
+;; the next stop) keeps client state truthful in attach mode.
+(define (attach-resume! cmd)
+  (set-box! paused? #f)
+  (attach-send! (hasheq 'cmd cmd)))
+
 (define (handle-continue req)
-  (resume! 'continue)
+  (if (attach-mode?) (attach-resume! "continue") (resume! 'continue))
   (dap-response req #t (hasheq 'allThreadsContinued #t)))
 
 (define (handle-next req)
   ;; Step over: resume, but pause at next thsl-src! in same file.
-  (let ([evt (unbox last-stopped-event)])
-    (when evt
-      (set-box! step-next-file (hash-ref evt 'file #f))))
-  (resume! 'step-over)
+  (cond
+    [(attach-mode?) (attach-resume! "step-over")]
+    [else
+     (let ([evt (unbox last-stopped-event)])
+       (when evt
+         (set-box! step-next-file (hash-ref evt 'file #f))))
+     (resume! 'step-over)])
   (dap-response req #t (hasheq 'allThreadsContinued #t)))
 
 (define (handle-step-in req)
   ;; Step into: pause at the very next thsl-src! call (any file).
-  (set-box! step-into-next? #t)
-  (resume! 'step-in)
+  (cond
+    [(attach-mode?) (attach-resume! "step-in")]
+    [else
+     (set-box! step-into-next? #t)
+     (resume! 'step-in)])
   (dap-response req #t (hasheq 'allThreadsContinued #t)))
 
 ;; Step out: run until this thread returns to a SHALLOWER checkpoint frame (the
@@ -1288,7 +1538,7 @@
 ;; top frame (depth 0) nothing is shallower, so it runs to the next breakpoint or
 ;; completion — i.e. behaves like continue.
 (define (handle-step-out req)
-  (resume! 'step-out)
+  (if (attach-mode?) (attach-resume! "step-out") (resume! 'step-out))
   (dap-response req #t (hasheq 'allThreadsContinued #t)))
 
 ;; VSCodium sends 'source' when it wants file content from the adapter.
@@ -1308,9 +1558,23 @@
 
 (define (handle-disconnect req)
   (dap-response req #t (hasheq))
-  ;; Wake up a paused thread (if any) so the process can exit cleanly, then exit.
-  ;; resume! is a no-op when not paused, so this never blocks.
-  (resume! 'continue)
+  (cond
+    [(attach-mode?)
+     ;; DETACH, don't kill: disarm everything this session armed, resume a
+     ;; parked thread, close the channel — the debuggee KEEPS SERVING.  Only
+     ;; this adapter process exits.
+     (attach-send! (hasheq 'cmd "detach"))
+     (sleep 0.2)                       ; give the detach line time to flush
+     (let ([conn (unbox attach-conn)])
+       (when conn
+         (with-handlers ([exn:fail? void])
+           (close-input-port (car conn))
+           (close-output-port (cdr conn)))))
+     (set-box! attach-conn #f)]
+    [else
+     ;; Launch mode: wake up a paused thread (if any) so the process can exit
+     ;; cleanly.  resume! is a no-op when not paused, so this never blocks.
+     (resume! 'continue)])
   (dap-event "terminated" (hasheq))
   (exit 0))
 

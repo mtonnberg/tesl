@@ -1,5 +1,16 @@
 # Separate output location (`.tesl-stuff/build/`)
 
+## STATUS: IMPLEMENTED (2026-07-29)
+
+All phases landed: wrapper relocation (`nix/tesl-cli-body.sh` — `_tesl_project_root`/
+`_tesl_out_path` helpers, all four verbs + dep emission + watch), `tesl init`
+gitignore now just `.tesl-stuff/`, new `tesl clean` verb (scoped to `build/`),
+`tesl --exe` staged through a flat temp dir (`compiler/lib/compile.ml:build_exe`,
+no more sibling `.rkt`), ci.sh Phase 9b extended (mirrored subdir layout,
+no-strays sweep, delete-and-rerun), docs updated.  `tesl-sourcemap` deliberately
+left on sibling defaults (dev tool with explicit `--rkt-out`/`--map-out` flags;
+not driven against user projects by tooling).
+
 ## Background
 
 Today the compiled Racket files are siblings to the corresponding Tesl files. That makes a user's project folder noisy: a developer building an app in Tesl never interacts with Racket, yet sees a `.rkt` next to every `.tesl`, plus Racket's `compiled/` bytecode dirs. `tesl init` papers over this with a blunt `*.rkt` + `compiled/` gitignore.

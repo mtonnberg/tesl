@@ -109,6 +109,27 @@
 (define paused-thread-box (box #f))
 (define (current-paused-thread) (unbox paused-thread-box))
 
+;; SERIALIZE stops across threads. paused-thread-box holds a single thread and
+;; event-ch/paused-ch model a single outstanding stop, so two request threads
+;; hitting breakpoints concurrently would clobber each other's stop state (the
+;; second channel-put on event-ch also races the consumer's one-stop-at-a-time
+;; protocol). A live attach session keeps the server serving while paused, which
+;; makes concurrent hits an expected case rather than a corner: the second
+;; thread now queues here and delivers its own stop only after the first stop
+;; fully resumes.
+(define stop-serialize-sem (make-semaphore 1))
+
+;; Optional upper bound on how long a checkpoint may stay parked, in
+;; milliseconds (TESL_DEBUG_PAUSE_TIMEOUT_MS). An abandoned attach session must
+;; not wedge a dev server forever: on timeout the pause auto-resumes as if
+;; `continue` was sent. Read per-pause so a controller can set it dynamically.
+;; Unset/invalid → no bound (the DAP launch flow relies on unbounded pauses).
+(define (pause-timeout-secs)
+  (let ([e (getenv "TESL_DEBUG_PAUSE_TIMEOUT_MS")])
+    (and e
+         (let ([n (string->number e)])
+           (and (real? n) (> n 0) (/ n 1000.0))))))
+
 ;; Maps filename (string) -> list of bp-record (see make-bp-record below).
 ;; Each record carries the 1-based line plus the optional DAP `condition` and
 ;; `hitCondition` expressions and a mutable hit counter.  A bare line breakpoint
@@ -550,37 +571,52 @@
                    [(out)  (<  d (unbox step-base-depth))]
                    [else   #f]))])
       (when (or bp-match? step-hit?)
-        ;; Clear the step so it does not immediately re-trigger at this same stop.
-        (set-box! step-mode #f)
-        ;; STOP-THE-WORLD: freeze all OTHER Tesl background threads while paused so
-        ;; the queue depth / outbox / caches cannot change under inspection.
-        (stop-the-world-suspend!)
-        ;; Record WHICH thread is parked so the DAP server reads this thread's
-        ;; per-thread state (SQL capture, etc.).
-        (set-box! paused-thread-box (current-thread))
-        (channel-put event-ch
-          (hasheq 'event  "stopped"
-                  'file   file
-                  'line   line
-                  'locals locals
-                  'reason (if bp-match? "breakpoint" "step")))
-        ;; Block until DAP sends a resume command, then interpret it.
-        (let ([cmd (channel-get paused-ch)])
-          (set-box! paused-thread-box #f)
-          ;; Scope any pending step to THIS (the parked) thread and record the
-          ;; frame depth the step started from. Works in any thread (handler,
-          ;; worker, main) — the depth is relative to that thread's own stack.
-          (set-box! step-thread (current-thread))
-          (cond
-            [(eq? cmd 'step-in)   (set-box! step-mode 'in)   (set-box! step-base-depth d)]
-            [(eq? cmd 'step-over) (set-box! step-mode 'over) (set-box! step-base-depth d)]
-            [(eq? cmd 'step-out)  (set-box! step-mode 'out)  (set-box! step-base-depth d)]
-            [else                 (set-box! step-mode #f)])  ; continue
-          ;; Freeze the world across step-in/step-over so the stepping thread
-          ;; advances deterministically (no second worker / concurrent request can
-          ;; pre-empt it at the same breakpoint). continue and stepOut thaw it.
-          (unless (memq cmd '(step-in step-over))
-            (stop-the-world-resume!)))))))
+        ;; One stop at a time, process-wide: a second thread's hit queues here
+        ;; until the current stop fully resumes (see stop-serialize-sem above).
+        ;; dynamic-wind guarantees the slot is released even if the parked
+        ;; thread is killed while blocked (e.g. a client tears the session down).
+        (dynamic-wind
+          (lambda () (semaphore-wait stop-serialize-sem))
+          (lambda ()
+            ;; Clear the step so it does not immediately re-trigger at this same stop.
+            (set-box! step-mode #f)
+            ;; STOP-THE-WORLD: freeze all OTHER Tesl background threads while paused so
+            ;; the queue depth / outbox / caches cannot change under inspection.
+            (stop-the-world-suspend!)
+            ;; Record WHICH thread is parked so the DAP server reads this thread's
+            ;; per-thread state (SQL capture, etc.).
+            (set-box! paused-thread-box (current-thread))
+            (channel-put event-ch
+              (hasheq 'event  "stopped"
+                      'file   file
+                      'line   line
+                      'locals locals
+                      'reason (if bp-match? "breakpoint" "step")))
+            ;; Block until the controller sends a resume command, then interpret
+            ;; it. With TESL_DEBUG_PAUSE_TIMEOUT_MS set, an abandoned pause
+            ;; auto-resumes as `continue` so a live server can never be wedged
+            ;; forever by a client that stopped listening.
+            (let ([cmd (or (let ([secs (pause-timeout-secs)])
+                             (if secs
+                                 (sync/timeout secs paused-ch)
+                                 (channel-get paused-ch)))
+                           'continue)])
+              (set-box! paused-thread-box #f)
+              ;; Scope any pending step to THIS (the parked) thread and record the
+              ;; frame depth the step started from. Works in any thread (handler,
+              ;; worker, main) — the depth is relative to that thread's own stack.
+              (set-box! step-thread (current-thread))
+              (cond
+                [(eq? cmd 'step-in)   (set-box! step-mode 'in)   (set-box! step-base-depth d)]
+                [(eq? cmd 'step-over) (set-box! step-mode 'over) (set-box! step-base-depth d)]
+                [(eq? cmd 'step-out)  (set-box! step-mode 'out)  (set-box! step-base-depth d)]
+                [else                 (set-box! step-mode #f)])  ; continue
+              ;; Freeze the world across step-in/step-over so the stepping thread
+              ;; advances deterministically (no second worker / concurrent request can
+              ;; pre-empt it at the same breakpoint). continue and stepOut thaw it.
+              (unless (memq cmd '(step-in step-over))
+                (stop-the-world-resume!))))
+          (lambda () (semaphore-post stop-serialize-sem)))))))
 
 ;; A normal statement checkpoint: pause, then run the statement at depth+1 so a
 ;; called function's checkpoints nest one level deeper (step-over skips them).
@@ -784,3 +820,25 @@
 
 ;; Kept for backward compatibility (used by thsl-src! diagnostic prints).
 (define (thsl-display-value v) (safe-display v))
+
+;; ── Attach control-channel bootstrap ─────────────────────────────────────────
+;; When TESL_DEBUG_CONTROL_DIR is set (by `tesl run --debug`), start the live
+;; attach control channel (dsl/debug/control-channel.rkt) in the background.
+;; The require is DYNAMIC and runs in its own thread so this module's own
+;; instantiation finishes first (control-channel statically requires this
+;; module; the module-registry lock makes the loader thread wait until we are
+;; fully instantiated, so there is no load cycle).  A release process never
+;; sets the env var, so this whole block is one getenv at load time — the
+;; zero-release-cost property of the checkpoint machinery is untouched.
+;; Fail-open: an error starting the channel must never take the app down; it is
+;; reported on stderr and the app simply runs without an attach surface.
+(let ([ctl-dir (getenv "TESL_DEBUG_CONTROL_DIR")])
+  (when (and ctl-dir (non-empty-string? ctl-dir))
+    (void
+     (thread
+      (lambda ()
+        (with-handlers ([(lambda (_) #t)
+                         (lambda (e)
+                           (eprintf "tesl-debug: control channel failed to start: ~a\n"
+                                    (if (exn? e) (exn-message e) e)))])
+          ((dynamic-require 'tesl/dsl/debug/control-channel 'start-control-channel!))))))))

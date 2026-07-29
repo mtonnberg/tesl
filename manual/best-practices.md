@@ -967,6 +967,14 @@ tesl test --test-name "my flow" --test-kind api-test my-api.test.tesl
 tesl check my-api.test.tesl
 ```
 
+> **Debugging note:** under `--test-name` only the selected block is compiled
+> and emitted. Breakpoints set in *other* test blocks are therefore silently
+> dead for the duration of a single-test debug session — they are not broken,
+> just not part of the emitted program. Re-run without `--test-name` (or select
+> the block that owns the breakpoint) to make them fire. This applies to
+> `test`, `api-test`, and `doctest` blocks alike; `load-test` request bodies
+> are never instrumented (they are throughput benchmarks).
+
 ### Test Configuration
 
 **Tests are in-memory by default.** Test blocks run against an automatic in-memory store, so the vast majority of tests need no database setup. Add a `with database X` header clause only when a test needs a specific or real backend — it binds the named database `X` so queries in the block run against `X`'s configured backend:

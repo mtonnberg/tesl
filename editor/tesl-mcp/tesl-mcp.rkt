@@ -298,7 +298,96 @@
                         'description "Headless F5: run through every breakpoint (resume after each) until the program completes; result is {mode:\"continue\", snapshots:[…], completed}."))
      '("file"))
     'run (lambda (compiler args)
-           (compiler-json-result compiler (debug-inspect-args args))))))
+           (compiler-json-result compiler (debug-inspect-args args))))
+
+   (hasheq
+    'name "tesl.debug_attach"
+    'description (string-append
+                  "Attach to an ALREADY-RUNNING `tesl run --debug` process — no "
+                  "relaunch, the app keeps serving. Actions: \"once\" (default; arm "
+                  "'break_at' breakpoints, wait for the first stop, return it, "
+                  "resume, detach — trigger the stop yourself, e.g. curl the "
+                  "endpoint, while this call waits), \"snapshot\" (paused state + "
+                  "live domain/SQL right now), \"ping\" (is the endpoint alive?), "
+                  "\"detach\" (recovery: disarm everything and resume). break_at "
+                  "entries are \"FILE:LINE\" (file as the compiler saw it — "
+                  "absolute, or relative to the project root). Returns the NDJSON "
+                  "event stream as {events:[…]}: look for the {event:\"stopped\", "
+                  "locals, domain, sql} entry. The endpoint is discovered under "
+                  "<project>/.tesl-stuff/ (project defaults to the file's own "
+                  "directory tree via tesl.toml).")
+    'inputSchema
+    (schema
+     (hasheq
+      'project (hasheq 'type "string"
+                       'description "Project root of the running app (dir containing .tesl-stuff/). Default: nearest tesl.toml above CWD.")
+      'action (hasheq 'type "string" 'enum '("once" "snapshot" "ping" "detach"))
+      'break_at (hasheq 'type "array" 'items str-prop
+                        'description "Breakpoints as \"FILE:LINE\" strings (action \"once\").")
+      'when (hasheq 'type "string"
+                    'description "Optional condition over locals applied to every break_at (e.g. \"n >= 3\").")
+      'hit (hasheq 'type "string"
+                   'description "Optional hit-count spec applied to every break_at (==|>=|<=|>|<|% N).")
+      'timeout_ms (hasheq 'type "integer"
+                          'description "action \"once\": give up waiting for a stop after N ms (default 30000)."))
+     '())
+    'run (lambda (_compiler args) (run-debug-attach args)))))
+
+;; ── tesl.debug_attach: drive the attach client as a subprocess ────────────────
+;; Reuses the tested CLI client (dsl/debug/attach-client.rkt) rather than
+;; reimplementing the wire protocol: spawn the SAME racket binary running this
+;; server (collections/env inherited), collect its NDJSON stdout, and hand the
+;; parsed event list back as one JSON object.
+
+(define (attach-cli-args args)
+  (define action (or (arg-ref args 'action) "once"))
+  (define project (arg-ref args 'project))
+  (define break-at (arg-ref args 'break_at))
+  (define when-cond (arg-ref args 'when))
+  (define hit-cond (arg-ref args 'hit))
+  (define timeout-ms (arg-ref args 'timeout_ms))
+  (append
+   (if (string? project) (list "--project" project) '())
+   (cond
+     [(equal? action "once")
+      (unless (and (list? break-at) (pair? break-at))
+        (error 'mcp "debug_attach action \"once\" requires 'break_at'"))
+      (append
+       (append-map (lambda (s) (list "--break-at" (format "~a" s))) break-at)
+       (if (string? when-cond) (list "--when" when-cond) '())
+       (if (string? hit-cond) (list "--hit" hit-cond) '())
+       (list "--timeout-ms"
+             (number->string (if (exact-integer? timeout-ms) timeout-ms 30000)))
+       (list "--once"))]
+     [(equal? action "snapshot") (list "--snapshot")]
+     [(equal? action "ping")     (list "--ping")]
+     [(equal? action "detach")   (list "--detach")]
+     [else (error 'mcp (format "debug_attach: unknown action ~a" action))])))
+
+(define (run-debug-attach args)
+  (define racket-bin (find-system-path 'exec-file))
+  (define cli (attach-cli-args args))
+  (define-values (proc stdout stdin stderr)
+    (apply subprocess #f #f #f racket-bin
+           "-l" "tesl/dsl/debug/attach-client" "--" cli))
+  (close-output-port stdin)
+  (define out (port->string stdout))
+  (define err (port->string stderr))
+  (subprocess-wait proc)
+  (define code (subprocess-status proc))
+  (close-input-port stdout) (close-input-port stderr)
+  (define events
+    (filter values
+            (for/list ([line (in-list (string-split out "\n"))])
+              (and (non-empty-string? (string-trim line))
+                   (with-handlers ([exn:fail? (lambda (_e) #f)])
+                     (string->jsexpr line))))))
+  (define body
+    (if (= code 0)
+        (hasheq 'ok #t 'events events)
+        (hasheq 'ok #f 'exit code 'events events
+                'error (string-trim err))))
+  (values (jsexpr->string body) (not (= code 0))))
 
 (define (tool-by-name name)
   (for/or ([t (in-list tools)])

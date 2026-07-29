@@ -14,9 +14,12 @@
 > - `.claude/commands/tesl-debug-curl.md` — curl-to-trigger-a-breakpoint flow for a
 >   running server.
 >
-> DEFERRED (→ `../later/further_editor_improvements.md`): `tesl.run_function` (no
-> per-function runner CLI yet), a dynamic arm-breakpoint control endpoint on an
-> already-running server, and cross-file (IR-1) navigation. The analysis below is
+> DEFERRED at the time: `tesl.run_function` (no per-function runner CLI yet), a
+> dynamic arm-breakpoint control endpoint on an already-running server, and
+> cross-file (IR-1) navigation.  UPDATE 2026-07-29: the arm-on-a-running-server
+> item LANDED — `tesl run --debug` + the control channel + `tesl debug-attach` /
+> DAP attach / `tesl.debug_attach`; see `attach_debugger_running_process.md` in
+> this folder.  The other two remain open (untracked).  The analysis below is
 > retained as the design record.
 
 ---

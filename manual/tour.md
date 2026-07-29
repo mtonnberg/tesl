@@ -926,7 +926,8 @@ No stack traces. No type variable soup. Just what went wrong and how to fix it.
 
 ### Deployment
 
-Tesl produces Racket source (`.rkt` files) that run on the Racket VM. The standard production deploy
+Tesl produces Racket source (`.rkt` files, kept out of your way under the project's
+`.tesl-stuff/build/` directory) that run on the Racket VM. The standard production deploy
 is a Docker image built by `tesl build` — see [Deploying a Tesl web API](deploy.md) for the image
 flavours, runtime config, and CI workflow. A standalone-executable builder is also available today via
 `tesl --exe <file> [--out <path>]` (it shells out to `raco exe`; needs `raco` on PATH).

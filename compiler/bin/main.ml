@@ -1518,7 +1518,8 @@ let () =
     when not (String.length filename > 2 && filename.[0] = '-')
          && (rest = [] || (match rest with ["--out"; _] -> true | _ -> false)) ->
     (* WS6: build a standalone executable via `raco exe`.  Emits byte-identical
-       Racket (same as `tesl <file>`) next to the source, then bundles it. *)
+       Racket (same as `tesl <file>`) into a temp dir, then bundles it — no
+       generated files land next to the source. *)
     let out = match rest with ["--out"; f] -> Some f | _ -> None in
     (match Compile.build_exe ~root_path ?out filename with
      | Compile.BuildOk exe_path ->

@@ -1306,6 +1306,139 @@ let test_g7_main_locals_is_list () =
   if not (contains "(list)" racket || contains "(list " racket) then
     Alcotest.fail "g7_main_locals: no (list in main debug output"
 
+(* ── Group 8: api-test block instrumentation ─────────────────────────────────── *)
+(* Mirror of the plain-`test` checkpoints: every api-test statement arm
+   (TsLet / TsExpect / TsExpr / TsExpectFail / TsIf branches) wraps its
+   value/subject in a (thsl-src! file line locals thunk) checkpoint so
+   breakpoints can fire inside api-test bodies.  load-test request bodies are
+   the deliberate exception (throughput benchmark — no instrumentation). *)
+
+let api_test_common_decls = {|
+record Ping {
+  message: String
+}
+
+codec Ping {
+  toJson {
+    message -> "message" with_codec stringCodec
+  }
+  fromJson [
+    {
+      message <- "message" with_codec stringCodec
+    }
+  ]
+}
+
+handler echo(req: Ping) -> Ping =
+  req
+
+fn boom(flag: Bool) -> Int =
+  if flag then
+    fail 500 "boom"
+  else
+    1
+
+api A {
+  post "/echo"
+    body req: Ping
+    -> Ping
+}
+
+server S for A {
+  echo = echo
+}
+|}
+
+let api_test_src = module_ ~exports:"S"
+  ~extra:"import Tesl.ApiTest exposing [statusOk]\n"
+  (api_test_common_decls ^ {|
+api-test "instrumented statements" for S {
+  let r = post "/echo" body { "message": "hi" }
+  expect statusOk r.status
+  expect r.body.message == "hi"
+  expectFail boom True
+  boom False
+  if True then
+    let inner = post "/echo" body { "message": "branch" }
+    expect inner.status == 200
+  else
+    expect r.status == 200
+}
+|})
+
+(* G8.1 TsLet: the bound value is wrapped in a checkpoint *)
+let test_g8_api_test_let_wrapped () =
+  let racket = compile_ok "g8_api_let" api_test_src in
+  assert_contains "g8_api_let" "(define r (thsl-src! \"<test>\"" racket
+
+(* G8.2 TsExpect without right side: subject wrapped inside (raw-value …) *)
+let test_g8_api_test_expect_true_wrapped () =
+  let racket = compile_ok "g8_api_expect_true" api_test_src in
+  assert_contains "g8_api_expect_true" "(check-true (raw-value (thsl-src! \"<test>\"" racket
+
+(* G8.3 TsExpect with == right side: left subject wrapped *)
+let test_g8_api_test_expect_eq_wrapped () =
+  let racket = compile_ok "g8_api_expect_eq" api_test_src in
+  assert_contains "g8_api_expect_eq" "(check-equal? (raw-value (thsl-src! \"<test>\"" racket
+
+(* G8.4 TsExpr: a bare expression statement is wrapped (locals carry `r`) *)
+let test_g8_api_test_expr_wrapped () =
+  let racket = compile_ok "g8_api_expr" api_test_src in
+  assert_contains "g8_api_expr" "(cons 'r r)) (lambda () (boom #f))" racket
+
+(* G8.5 TsExpectFail: the failing call is wrapped inside the with-handlers *)
+let test_g8_api_test_expect_fail_wrapped () =
+  let racket = compile_ok "g8_api_expect_fail" api_test_src in
+  assert_contains "g8_api_expect_fail" "tesl-ef-result" racket;
+  assert_contains "g8_api_expect_fail" "(cons 'r r)) (lambda () (boom #t))" racket
+
+(* G8.6 TsIf branches: statements inside branches keep checkpoints and thread
+   the outer locals plus branch-local lets *)
+let test_g8_api_test_if_branch_wrapped () =
+  let racket = compile_ok "g8_api_if" api_test_src in
+  assert_contains "g8_api_if" "(define inner (thsl-src! \"<test>\"" racket;
+  assert_contains "g8_api_if" "(cons 'inner inner) (cons 'r r)" racket
+
+(* G8.7 the api-test emission is balanced *)
+let test_g8_api_test_balanced () =
+  let racket = compile_ok "g8_api_balanced" api_test_src in
+  assert_balanced_parens "g8_api_balanced" racket
+
+(* G8.8 load-test request bodies stay UNinstrumented *)
+let load_test_src = module_ ~exports:"S"
+  ~extra:"import Tesl.ApiTest exposing [statusOk]\n"
+  (api_test_common_decls ^ {|
+load-test "bench" for S
+  rate 10rps
+  duration 1s {
+  post "/echo" body { "message": "hi" }
+  assert p99 < 500ms
+}
+|})
+
+let test_g8_load_test_body_uninstrumented () =
+  let racket = compile_ok "g8_load_test" load_test_src in
+  let find needle from =
+    let n = String.length needle and m = String.length racket in
+    let rec go i =
+      if i + n > m then None
+      else if String.sub racket i n = needle then Some i
+      else go (i + 1)
+    in
+    go from
+  in
+  match find "(run-load-test" 0 with
+  | None -> Alcotest.failf "g8_load_test: no (run-load-test in output:\n%s" racket
+  | Some i ->
+    let stop = match find "#:assertions" i with
+      | Some j -> j
+      | None -> String.length racket
+    in
+    let body = String.sub racket i (stop - i) in
+    if contains "thsl-src" body then
+      Alcotest.failf
+        "g8_load_test: load-test request body must stay uninstrumented, found thsl-src in:\n%s" body
+
 (* ── Test registration ───────────────────────────────────────────────────────── *)
 
 let () =
@@ -1423,5 +1556,15 @@ let () =
       test_case "main: balanced parens"       `Quick test_g7_main_balanced;
       test_case "fn: locals in 3rd position"  `Quick test_g7_fn_locals_is_list;
       test_case "main: locals is (list)"      `Quick test_g7_main_locals_is_list;
+    ];
+    "g8_api_test_instrumentation", [
+      test_case "api-test let wrapped"        `Quick test_g8_api_test_let_wrapped;
+      test_case "api-test expect wrapped"     `Quick test_g8_api_test_expect_true_wrapped;
+      test_case "api-test expect == wrapped"  `Quick test_g8_api_test_expect_eq_wrapped;
+      test_case "api-test expr wrapped"       `Quick test_g8_api_test_expr_wrapped;
+      test_case "api-test expectFail wrapped" `Quick test_g8_api_test_expect_fail_wrapped;
+      test_case "api-test if branch wrapped"  `Quick test_g8_api_test_if_branch_wrapped;
+      test_case "api-test balanced parens"    `Quick test_g8_api_test_balanced;
+      test_case "load-test body no thsl-src"  `Quick test_g8_load_test_body_uninstrumented;
     ];
   ]

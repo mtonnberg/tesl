@@ -129,10 +129,18 @@ tesl debug-inspect example/learn/lesson61-step-debugging.tesl \
      --break-at "100: score == 75" --mode test
 ```
 
-### Breakpoints on a running server (curl flow)
-See `.claude/commands/tesl-debug-curl.md` — launch the server under `debug-inspect`
-with a handler breakpoint, then `curl` the endpoint to drive the request that hits it;
-the inspector captures + dumps the paused state.
+### Breakpoints on a running server (attach + curl flow)
+Start the dev server ONCE with `tesl run --debug <file.tesl>`, then attach to it as
+often as you like — arm/re-arm breakpoints, curl to trigger, inspect, detach — with
+**zero relaunches** (the server keeps serving, state intact):
+```
+tesl debug-attach --break-at server.tesl:LINE --once --timeout-ms 30000 &
+curl -s http://localhost:PORT/the/route     # → {event:"stopped", locals, domain, sql}
+```
+`--snapshot` / `--ping` / `--detach` for one-shot queries; no flags = an NDJSON
+stdin/stdout bridge for interactive stepping. Full recipe (and the
+launch-under-inspector fallback for servers started WITHOUT `--debug`):
+`.claude/commands/tesl-debug-curl.md`. MCP agents: the `tesl.debug_attach` tool.
 
 ---
 
@@ -140,8 +148,9 @@ the inspector captures + dumps the paused state.
 
 For MCP-capable agents, `editor/tesl-mcp/tesl-mcp.rkt` exposes the surface above as
 discoverable tools over stdio (agent-context, diagnostics, type/signature/completion
-queries, definition, references, proof obligations, and the headless step-debugger
-with full breakpoint-setting). See [`editor/tesl-mcp/README.md`](editor/tesl-mcp/README.md)
+queries, definition, references, proof obligations, the headless step-debugger
+with full breakpoint-setting, and live attach to a running `tesl run --debug`
+process via `tesl.debug_attach`). See [`editor/tesl-mcp/README.md`](editor/tesl-mcp/README.md)
 for the full tool catalog and argument shapes. Register it with your client.
 
 If Tesl is **installed via the Nix flake** (`nix profile install github:mtonnberg/tesl`),
