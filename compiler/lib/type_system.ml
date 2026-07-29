@@ -867,6 +867,17 @@ let stdlib_env : (string * scheme) list = [
   "processNextJob", { vars = _r1_a; mono = t_fun [_a] _a };
   "processNextDeadJob", { vars = _r1_a; mono = t_fun [_a] _a };
 
+  (* ── Outbound-HTTP test double (Tesl.ApiTest) ─────────────────────────────
+     Declared as statements in a test body; the runtime scope is created per
+     test block by call-with-fresh-memory-db (dsl/test-support.rkt), so nothing
+     leaks between tests and none of it exists in a production build. *)
+  "stubHttp",        mono (t_fun [t_string; t_string; t_int; t_string] t_unit);
+  "stubHttpFailure", mono (t_fun [t_string; t_string; t_string] t_unit);
+  "stubHttpTimeout", mono (t_fun [t_string; t_string] t_unit);
+  "httpCalled",      mono (t_fun [t_string; t_string] t_bool);
+  "httpCallCount",   mono (t_fun [t_string; t_string] t_int);
+  "httpLastBody",    mono (t_fun [t_string; t_string] t_string);
+
   (* ── Telemetry ───────────────────────────────────────────────────────── *)
   "initTelemetry", mono t_unit;
   "telemetry",     mono (t_fun [t_string] t_unit);
@@ -1133,7 +1144,10 @@ let tesl_module_exports : (string * string list) list = [
       "jsonContains"; "subscribe"; "collect";
       "JobResult"; "JobOk"; "JobFailed";
       "processNextJob"; "processNextDeadJob"; "drainQueue"; "pendingJobCount";
-      "expectJobOk"; "expectJobFailed" ] );
+      "expectJobOk"; "expectJobFailed";
+      (* outbound-HTTP double *)
+      "stubHttp"; "stubHttpFailure"; "stubHttpTimeout";
+      "httpCalled"; "httpCallCount"; "httpLastBody" ] );
   ( "Tesl.JWT",
     [ "jwt"; "JwtToken"; "JwtSecret"; "JWT.sign"; "JWT.verify"; "JWT.decode" ] );
   ( "Tesl.Cache",
@@ -1230,6 +1244,10 @@ let stdlib_bare_home_module : (string * string) list = [
   "statusServerError", "Tesl.ApiTest";
   "pendingJobCount", "Tesl.ApiTest"; "drainQueue", "Tesl.ApiTest";
   "processNextJob", "Tesl.ApiTest"; "processNextDeadJob", "Tesl.ApiTest";
+  (* outbound-HTTP double — bare names, import-gated like their siblings *)
+  "stubHttp", "Tesl.ApiTest"; "stubHttpFailure", "Tesl.ApiTest";
+  "stubHttpTimeout", "Tesl.ApiTest"; "httpCalled", "Tesl.ApiTest";
+  "httpCallCount", "Tesl.ApiTest"; "httpLastBody", "Tesl.ApiTest";
   (* Queue infrastructure (Tesl.Queue — internal module, no export list) *)
   "requeue", "Tesl.Queue"; "deadJobs", "Tesl.Queue";
   (* UUID codecs (bare tokens; UUID.* dotted forms come from the derived rows) *)

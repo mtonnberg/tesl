@@ -37,12 +37,20 @@ module Lesson58HttpClient exposing [
 
 import Tesl.Prelude exposing [Int, String, Bool(..)]
 import Tesl.Tuple exposing [Tuple2, Tuple2.first, Tuple2.second]
-import Tesl.String exposing [String.concat]
+import Tesl.String exposing [String.concat, String.contains]
 import Tesl.HttpClient exposing [
   httpClient,
   HttpResponse,
   HttpClient.get,
   HttpClient.post,
+]
+import Tesl.ApiTest exposing [
+  stubHttp,
+  stubHttpFailure,
+  stubHttpTimeout,
+  httpCalled,
+  httpCallCount,
+  httpLastBody,
 ]
 
 # ── Capability ────────────────────────────────────────────────────────────────
@@ -59,6 +67,9 @@ capability webClient implies httpClient
 # These functions work WITH HttpResponse values but do NOT make any requests.
 # They are pure data transformations and require no capability.
 # Write tests for them freely without mocking any network.
+#
+# The functions that DO make requests are testable too — see the TESTS section:
+# `stubHttp` answers a matching outbound call from inside the test.
 
 # Check if a response indicates success (HTTP 2xx status code).
 fn isSuccessCode(code: Int) -> Bool =
@@ -145,6 +156,40 @@ handler postJson(url: String, jsonBody: String, token: String) -> HttpResponse
 #     let header = buildBearerHeader userJwt.value
 #     HttpClient.get url [header]
 #
+# EVERY OUTBOUND CALL HAS A DEADLINE
+#
+# A hung upstream is not a hypothetical: it pins the calling thread, and inside
+# a handler that means a request thread (and a DB pool slot if you are in a
+# `transaction`); inside a worker it means the job never fails, so retry and
+# dead-letter never get their turn. Tesl therefore gives every outbound call a
+# conservative default deadline, tunable per deployment:
+#
+#   TESL_HTTP_CONNECT_TIMEOUT_MS       10000   reaching the host
+#   TESL_HTTP_TIMEOUT_MS               30000   the whole response (status+body)
+#   TESL_HTTP_STREAM_IDLE_TIMEOUT_MS   60000   SSE: the max GAP between bytes
+#
+# A blown deadline surfaces the same way any other HttpClient failure does — a
+# clean error, never a raw Racket exception — so inside a worker it simply fails
+# the job and the normal retry/backoff/dead-letter machinery takes over.
+#
+# TESTING CODE THAT CALLS OUT
+#
+# You do not need a network, a sandbox account, or a sidecar to test a handler
+# that calls an external service. Declare the answer up front:
+#
+#   stubHttp        "GET"  "https://api.example.com/rates" 200 "{...}"
+#   stubHttpFailure "POST" "https://api.example.com/log"   "connection refused"
+#   stubHttpTimeout "GET"  "https://api.example.com/slow"
+#
+# `"*"` matches any method or URL and a trailing `*` matches a URL prefix. Then
+# assert what your code actually did with httpCalled / httpCallCount /
+# httpLastBody. The stub table is created fresh for every test block, so nothing
+# leaks between tests — and it exists ONLY in tests, never in a production build.
+#
+# Once a test declares its first stub, an unmatched outbound call is a loud
+# failure rather than a silent real request, so a test can never accidentally
+# talk to a live service.
+#
 # ─────────────────────────────────────────────────────────────────────────────
 # TESTS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -193,4 +238,58 @@ test "buildBearerHeader creates correct Authorization header" {
 test "buildBearerHeader with API key token" {
   let h = buildBearerHeader "sk-abc123xyz"
   expect Tuple2.second h == "Bearer sk-abc123xyz"
+}
+
+# ── The handlers that actually call out ──────────────────────────────────────
+#
+# These would have been untestable without a live upstream. With a stub they are
+# ordinary tests — including the branches a real upstream will not perform on
+# request.
+
+test "fetchJson returns the upstream response" requires [webClient] {
+  stubHttp "GET" "https://api.example.com/rates" 200 "{\"usd\": 110}"
+  let resp = fetchJson "https://api.example.com/rates"
+  expect resp.status == 200
+  expect resp.body == "{\"usd\": 110}"
+  expect isSuccessCode resp.status == True
+  expect httpCalled "GET" "https://api.example.com/rates"
+}
+
+test "postJson sends the body it was given" requires [webClient] {
+  stubHttp "POST" "https://api.example.com/events" 202 "{\"accepted\": True}"
+  let resp = postJson "https://api.example.com/events" "{\"kind\": \"signup\"}" "sk-abc123"
+  expect resp.status == 202
+  expect httpLastBody "POST" "https://api.example.com/events" == "{\"kind\": \"signup\"}"
+  expect httpCallCount "POST" "https://api.example.com/events" == 1
+}
+
+test "the upstream-500 branch is reachable" requires [webClient] {
+  stubHttp "GET" "https://api.example.com/rates" 500 "upstream exploded"
+  let resp = fetchJson "https://api.example.com/rates"
+  expect classifyStatusCode resp.status == "server-error"
+  expect isSuccessCode resp.status == False
+}
+
+test "the malformed-body branch is reachable" requires [webClient] {
+  stubHttp "GET" "https://api.example.com/rates" 200 "<html>not json</html>"
+  let resp = fetchJson "https://api.example.com/rates"
+  expect resp.status == 200
+  expect String.contains resp.body "not json"
+}
+
+test "a hung upstream fails the call instead of hanging it" requires [webClient] {
+  stubHttpTimeout "GET" "https://api.example.com/slow"
+  expectFail fetchJson "https://api.example.com/slow"
+}
+
+test "a refused connection fails the call" requires [webClient] {
+  stubHttpFailure "GET" "https://api.example.com/down" "connection refused"
+  expectFail fetchJson "https://api.example.com/down"
+}
+
+test "fetchWithBearer authenticates and reads the answer" requires [webClient] {
+  stubHttp "GET" "https://api.example.com/me" 200 "{\"id\": \"u-1\"}"
+  let resp = fetchWithBearer "https://api.example.com/me" "sk-abc123"
+  expect resp.status == 200
+  expect httpCallCount "GET" "https://api.example.com/me" == 1
 }

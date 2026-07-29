@@ -634,6 +634,18 @@ let api_test : entry list = [
   f "pendingJobCount" [ "queue" ] ~m:"Tesl.ApiTest" ~doc:"Number of jobs currently waiting on the queue.";
   e "expectJobOk" ~m:"Tesl.ApiTest" ~kind:(KSyntax "fn expectJobOk(result: JobResult a e) -> a") ~doc:"Asserts the job succeeded and returns the processed job.";
   e "expectJobFailed" ~m:"Tesl.ApiTest" ~kind:(KSyntax "fn expectJobFailed(result: JobResult a e) -> e") ~doc:"Asserts the job failed and returns the worker's error.";
+  f "stubHttp" [ "method"; "url"; "status"; "body" ] ~m:"Tesl.ApiTest"
+    ~doc:"Answers a matching outbound HttpClient call from the test instead of the network (\"*\" = any method/url, trailing * = url prefix).";
+  f "stubHttpFailure" [ "method"; "url"; "message" ] ~m:"Tesl.ApiTest"
+    ~doc:"Makes a matching outbound HttpClient call fail with a connection error, so the failure branch is reachable.";
+  f "stubHttpTimeout" [ "method"; "url" ] ~m:"Tesl.ApiTest"
+    ~doc:"Makes a matching outbound HttpClient call raise exactly the timeout error a hung upstream produces.";
+  f "httpCalled" [ "method"; "url" ] ~m:"Tesl.ApiTest"
+    ~doc:"True when the code under test made a matching outbound HTTP call.";
+  f "httpCallCount" [ "method"; "url" ] ~m:"Tesl.ApiTest"
+    ~doc:"How many matching outbound HTTP calls the code under test made.";
+  f "httpLastBody" [ "method"; "url" ] ~m:"Tesl.ApiTest"
+    ~doc:"The request body of the last matching outbound HTTP call (fails the test when there was none).";
 ]
 
 (* ── Tesl.JWT ──────────────────────────────────────────────────────────────── *)

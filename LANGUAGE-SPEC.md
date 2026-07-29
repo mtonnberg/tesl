@@ -900,6 +900,32 @@ Request expressions return the compiler-known type `HttpResponse` with fields `s
 
 When `collect` uses `count` or `until`, a `timeout` clause is required. Queue helpers (`processNextJob`, `processNextDeadJob`, `drainQueue`, `pendingJobCount`) run workers synchronously during the test, making HTTP → queue → SSE flows deterministic.
 
+#### Stubbing outbound HTTP
+
+Code under test that calls OUT (`Tesl.HttpClient`, and therefore every `Tesl.Agent` provider call) is stubbed from inside the test rather than reaching the network. `Tesl.ApiTest` exposes six ordinary functions, usable as statements in a `test`, `api-test`, or `load-test` body:
+
+| Function | Signature | Meaning |
+|---|---|---|
+| `stubHttp` | `(method: String) (url: String) (status: Int) (body: String) -> Unit` | Answer a matching call with this canned response. |
+| `stubHttpFailure` | `(method: String) (url: String) (message: String) -> Unit` | Make a matching call fail like a refused connection. |
+| `stubHttpTimeout` | `(method: String) (url: String) -> Unit` | Make a matching call raise exactly the timeout error a hung upstream produces (§21.3). |
+| `httpCalled` | `(method: String) (url: String) -> Bool` | Was a matching call made? |
+| `httpCallCount` | `(method: String) (url: String) -> Int` | How many matching calls were made? |
+| `httpLastBody` | `(method: String) (url: String) -> String` | The request body of the last matching call. |
+
+`"*"` matches any method or URL; a trailing `*` matches a URL prefix. Rules are consulted in declaration order (first match wins), and re-declaring the same method+URL pair replaces the earlier rule.
+
+```tesl
+test "the upstream-500 branch is reachable" requires [webClient] {
+  stubHttp "GET" "https://api.example.com/rates" 500 "upstream exploded"
+  let resp = fetchRates "https://api.example.com/rates"
+  expect classifyStatusCode resp.status == "server-error"
+  expect httpCallCount "GET" "https://api.example.com/rates" == 1
+}
+```
+
+The stub table is created **fresh for every test block** and unwinds with it, so no rule and no recorded call can leak into the next test. Until a block declares its first stub, outbound calls behave exactly as before (they reach the network); from the first stub onward an *unmatched* call is a loud failure rather than a silent live request. The double exists only under the test framework — a production build has no stub registry at all.
+
 #### Load Tests
 
 `load-test` blocks run performance/throughput tests against a compiled server using an open
@@ -3744,6 +3770,16 @@ handler fetchExternalUser(id: String) -> HttpResponse requires [httpClient] =
 **Header lists.** Headers are `List (Tuple2 String String)` — a list of name/value pairs. Pass `[]` for requests with no custom headers.
 
 **Response inspection.** Inspect `response.status` (HTTP status code) and `response.body` (raw response body string). Parse JSON bodies with the standard codec layer or with `Dict`/`String` operations.
+
+**Timeouts.** Every outbound call has a deadline, so a hung upstream can never pin a request thread (and its DB pool slot) or a queue worker indefinitely. A blown deadline raises the same clean `HttpClient` error as any other outbound failure — inside a worker that fails the *job*, so retry / backoff / dead-letter run normally. The deadlines are deployment tuning, configured by environment variable exactly like the response-body cap `TESL_HTTP_MAX_RESPONSE_BYTES`:
+
+| Variable | Default | Bounds |
+|---|---|---|
+| `TESL_HTTP_CONNECT_TIMEOUT_MS` | `10000` | Reaching the host (TCP + TLS). |
+| `TESL_HTTP_TIMEOUT_MS` | `30000` | The whole response: send, status line, headers, body. |
+| `TESL_HTTP_STREAM_IDLE_TIMEOUT_MS` | `60000` | Streaming (SSE) responses only: the maximum *gap* between bytes, never a total — a healthy event stream is long-lived by design. |
+
+**Testing outbound calls.** `Tesl.ApiTest` provides a test-scoped double so handlers and workers that call out are testable without a network — including the failure branches (upstream 500, malformed body, refused connection, timeout). See §11.14.
 
 ### 21.4 `Tesl.Money`
 **Implemented.**

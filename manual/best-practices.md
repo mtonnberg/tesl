@@ -645,6 +645,34 @@ api-test "posting a registration enqueues and processes a job" for RegistrationS
 - Drain the dead-letter queue with `processNextDeadJob <Queue>`
 - Check database state after processing
 
+### 4b. Outbound HTTP (stubbing what your code calls)
+
+A handler or worker that calls an external service used to have an untestable
+branch. Declare the answer in the test instead — `stubHttp` / `stubHttpFailure` /
+`stubHttpTimeout` from `Tesl.ApiTest` intercept `Tesl.HttpClient` calls, and
+`httpCalled` / `httpCallCount` / `httpLastBody` assert what your code actually
+sent. `"*"` matches any method or URL; a trailing `*` matches a URL prefix.
+
+**✅ Do:**
+```tesl
+test "a hung upstream fails the job rather than the worker" requires [webClient] {
+  stubHttpTimeout "GET" "https://upstream.example.com/sync"
+  expectFail syncNow "https://upstream.example.com/sync"
+  expect httpCallCount "GET" "https://upstream.example.com/sync" == 1
+}
+```
+
+**Key patterns:**
+- Cover the branches a live upstream will not perform on request: an upstream
+  500, a malformed body, a refused connection, a timeout
+- The stub table is per test block, so nothing leaks between tests
+- Once a block declares its first stub, an unmatched outbound call fails loudly
+  instead of quietly hitting the real service
+- Outbound calls also have deployment-tunable deadlines
+  (`TESL_HTTP_CONNECT_TIMEOUT_MS`, `TESL_HTTP_TIMEOUT_MS`,
+  `TESL_HTTP_STREAM_IDLE_TIMEOUT_MS`), so a hung upstream fails the *job* and
+  the normal retry / dead-letter machinery runs
+
 ### 5. SSE/PubSub Tests
 
 Real-time event streams are also tested inside an `api-test` — there is no separate

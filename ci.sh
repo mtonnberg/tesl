@@ -1228,6 +1228,12 @@ else
         "tests/agent-money-tools-tests.rkt"
         # Issue #31: pool-lease waiting + 503 mapping (fake connections, no PG)
         "tests/pg-pool-tests.rkt"
+        # Outbound-HTTP deadlines: connect / total-read / SSE-idle against real
+        # loopback servers that ACCEPT the connection (so, unlike
+        # tests/httpclient-test.rkt below, nothing depends on how the network
+        # filters a connect to a dead port), plus the outbound wire-shape
+        # regressions the deadline work uncovered (Tuple2 headers, ?query URLs)
+        "tests/http-timeout-tests.rkt"
         "tests/timezone-zones-test.rkt"
         "tests/web-test.rkt"
         "tests/exists-test.rkt"

@@ -14,9 +14,19 @@
          (only-in "../tesl/queue.rkt"
                   channel-spec-listeners
                   channel-for-name
-                  queue-spec-store))
+                  queue-spec-store)
+         (only-in "../tesl/private/http-stub.rkt" current-outbound-http-hook)
+         (only-in "../tesl/http-client.rkt"
+                  http-read-timeout-ms
+                  http-stream-idle-timeout-ms))
 
 (provide call-with-fresh-memory-db
+         ;; Outbound-HTTP test double (api-test / test / load-test scoped).
+         api-test-stub-http!
+         api-test-stub-http-failure!
+         api-test-stub-http-timeout!
+         api-test-http-call-count
+         api-test-http-last-body
          call-with-api-test-subscriptions
          dispatch-api-test-request
          api-test-field-access-ref
@@ -162,6 +172,203 @@
   (when (hash? store)
     (hash-clear! store)))
 
+;; ── Outbound-HTTP test double ────────────────────────────────────────────────
+;;
+;; roadmap/completed/outbound_http_timeout_and_test_double.md, item 2.  Outbound
+;; HTTP had no stubbing anywhere, so a handler or worker that calls an external
+;; service had an untestable branch — and the branches you most want covered
+;; (upstream 500, malformed JSON, a timeout) are exactly the ones a real upstream
+;; will not produce on demand.
+;;
+;; SCOPING.  Everything here hangs off [current-http-stub-scope], a parameter
+;; holding a struct created FRESH by [call-with-fresh-memory-db] — which wraps
+;; every `test`, `api-test`, and `load-test` body.  There is no module-level
+;; mutable registry: rules and the call log live in the scope value, so they
+;; unwind with the test body and cannot leak into the next test.  Outside a test
+;; body the parameter is #f and every entry point below raises.
+;;
+;; PRODUCTION.  This module is required only from a `(module+ test …)`
+;; submodule, so a production `racket app.rkt` never instantiates it.  The only
+;; thing production sees is the inert parameter in tesl/private/http-stub.rkt.
+
+;; kind ∈ 'respond (payload = (cons status body)) | 'fail (payload = message)
+;;      | 'timeout (payload = #f)
+(struct http-stub-rule (method url kind payload) #:transparent)
+;; `lock` guards the call log: a load-test drives its request thunk from several
+;; threads at once, and an unguarded read-append-write would drop entries.
+(struct http-stub-scope (rules calls lock) #:mutable #:transparent)
+
+(define current-http-stub-scope (make-parameter #f))
+
+(define (require-http-stub-scope who)
+  (or (current-http-stub-scope)
+      (raise-user-error
+       who
+       (string-append
+        "outbound-HTTP stubs are only available inside a test body.\n"
+        "  Call this from a `test`, `api-test`, or `load-test` block — the stub\n"
+        "  scope is created per test so nothing leaks between them."))))
+
+;; Method matching is case-insensitive; URL matching is exact.  `*` alone matches
+;; anything, and a trailing `*` matches by prefix (which is how you cover a query
+;; string or a path parameter).  Deliberately NOT a regex: a stub pattern is a
+;; test fixture, and prefix + wildcard covers every case the lessons need without
+;; putting a second pattern language in the surface.
+(define (http-stub-pattern-matches? pattern value ci?)
+  (define p (if ci? (string-downcase pattern) pattern))
+  (define v (if ci? (string-downcase value) value))
+  (define len (string-length p))
+  (cond
+    [(string=? p "*") #t]
+    [(and (> len 0) (char=? (string-ref p (sub1 len)) #\*))
+     (string-prefix? v (substring p 0 (sub1 len)))]
+    [else (string=? p v)]))
+
+(define (http-stub-rule-matches? rule method url)
+  (and (http-stub-pattern-matches? (http-stub-rule-method rule) method #t)
+       (http-stub-pattern-matches? (http-stub-rule-url rule) url #f)))
+
+;; Rules are consulted in DECLARATION order (first match wins), so a specific
+;; stub declared before a `"*"` catch-all keeps winning.  Re-declaring the exact
+;; same (method, url) pattern REPLACES the earlier rule in place rather than
+;; shadowing it, so a later line in the same test overrides an earlier one.
+(define (add-http-stub-rule! who method url kind payload)
+  (define scope (require-http-stub-scope who))
+  (define fresh (http-stub-rule method url kind payload))
+  (define existing (http-stub-scope-rules scope))
+  (define replaced?
+    (for/or ([r (in-list existing)])
+      (and (string=? (http-stub-rule-method r) method)
+           (string=? (http-stub-rule-url r) url))))
+  (set-http-stub-scope-rules!
+   scope
+   (if replaced?
+       (for/list ([r (in-list existing)])
+         (if (and (string=? (http-stub-rule-method r) method)
+                  (string=? (http-stub-rule-url r) url))
+             fresh
+             r))
+       (append existing (list fresh))))
+  (void))
+
+(define (describe-http-stub-rules rules)
+  (if (null? rules)
+      "(none)"
+      (string-join
+       (for/list ([r (in-list rules)])
+         (format "~a ~a -> ~a"
+                 (http-stub-rule-method r)
+                 (http-stub-rule-url r)
+                 (case (http-stub-rule-kind r)
+                   [(respond) (format "status ~a" (car (http-stub-rule-payload r)))]
+                   [(fail)    (format "failure ~s" (http-stub-rule-payload r))]
+                   [else      "timeout"])))
+       "\n            ")))
+
+;; The hook installed into tesl/http-client.rkt for the duration of one test.
+;; Returning #f means "no stub is in force" — which is only possible when the
+;; test declared NO stubs at all, so an existing test that really wants to reach
+;; the network behaves exactly as before.  Once a test declares its first stub,
+;; an unmatched call is a loud failure instead of a silent live request.
+(define (http-stub-dispatch scope mode method url _headers body)
+  (call-with-semaphore
+   (http-stub-scope-lock scope)
+   (lambda ()
+     (set-http-stub-scope-calls!
+      scope
+      (append (http-stub-scope-calls scope)
+              (list (vector (string-upcase method) url (or body "")))))))
+  (define rules (http-stub-scope-rules scope))
+  (cond
+    [(null? rules) #f]
+    [else
+     (define rule
+       (for/or ([r (in-list rules)]) (and (http-stub-rule-matches? r method url) r)))
+     (cond
+       [(not rule)
+        (raise-user-error
+         'HttpClient
+         (string-append
+          "no stub matches ~a ~a\n"
+          "  This test declared outbound-HTTP stubs, so no call reaches the network.\n"
+          "  declared: ~a\n"
+          "  hint: add `stubHttp \"~a\" \"~a\" 200 \"…\"`, or widen a pattern with a trailing *.")
+         (string-upcase method) url (describe-http-stub-rules rules)
+         (string-upcase method) url)]
+       [(eq? (http-stub-rule-kind rule) 'timeout)
+        ;; Byte-for-byte the message the real deadline produces (see
+        ;; do-http-request/network and http-post-stream), so a test written
+        ;; against the stub matches what production logs.
+        (if (eq? mode 'stream)
+            (raise-user-error 'HttpClient "streaming POST to ~a timed out after ~ams"
+                              url (http-stream-idle-timeout-ms))
+            (raise-user-error 'HttpClient "HTTP ~a to ~a timed out after ~ams"
+                              (string-upcase method) url (http-read-timeout-ms)))]
+       [(eq? (http-stub-rule-kind rule) 'fail)
+        (if (eq? mode 'stream)
+            (raise-user-error 'HttpClient "streaming POST to ~a failed: ~a"
+                              url (http-stub-rule-payload rule))
+            (raise-user-error 'HttpClient "HTTP ~a to ~a failed: ~a"
+                              (string-upcase method) url (http-stub-rule-payload rule)))]
+       [else
+        (hash 'status  (car (http-stub-rule-payload rule))
+              'body    (cdr (http-stub-rule-payload rule))
+              'headers '())])]))
+
+(define (call-with-fresh-http-stubs thunk)
+  (define scope (http-stub-scope '() '() (make-semaphore 1)))
+  (parameterize ([current-http-stub-scope scope]
+                 [current-outbound-http-hook
+                  (lambda (mode method url headers body)
+                    (http-stub-dispatch scope mode method url headers body))])
+    (thunk)))
+
+;; ── The Tesl.ApiTest-facing entry points ─────────────────────────────────────
+
+(define (api-test-stub-http! method url status body)
+  (unless (and (string? method) (string? url))
+    (raise-user-error 'stubHttp "expected String method and String url, got ~a ~a" method url))
+  (unless (exact-integer? status)
+    (raise-user-error 'stubHttp "expected an Int status, got ~a" status))
+  (unless (string? body)
+    (raise-user-error 'stubHttp "expected a String body, got ~a" body))
+  (add-http-stub-rule! 'stubHttp method url 'respond (cons status body)))
+
+(define (api-test-stub-http-failure! method url message)
+  (unless (and (string? method) (string? url) (string? message))
+    (raise-user-error 'stubHttpFailure "expected String method, url, and message"))
+  (add-http-stub-rule! 'stubHttpFailure method url 'fail message))
+
+(define (api-test-stub-http-timeout! method url)
+  (unless (and (string? method) (string? url))
+    (raise-user-error 'stubHttpTimeout "expected String method and String url"))
+  (add-http-stub-rule! 'stubHttpTimeout method url 'timeout #f))
+
+(define (matching-http-calls who method url)
+  (define scope (require-http-stub-scope who))
+  (for/list ([c (in-list (http-stub-scope-calls scope))]
+             #:when (and (http-stub-pattern-matches? method (vector-ref c 0) #t)
+                         (http-stub-pattern-matches? url (vector-ref c 1) #f)))
+    c))
+
+(define (api-test-http-call-count method url)
+  (length (matching-http-calls 'httpCallCount method url)))
+
+(define (api-test-http-last-body method url)
+  (define calls (matching-http-calls 'httpLastBody method url))
+  (when (null? calls)
+    (define scope (require-http-stub-scope 'httpLastBody))
+    (raise-user-error
+     'httpLastBody
+     "no outbound ~a call matched ~s\n  calls made: ~a"
+     method url
+     (if (null? (http-stub-scope-calls scope))
+         "(none)"
+         (string-join (for/list ([c (in-list (http-stub-scope-calls scope))])
+                        (format "~a ~a" (vector-ref c 0) (vector-ref c 1)))
+                      ", "))))
+  (vector-ref (last calls) 2))
+
 (define (call-with-fresh-memory-db databases thunk)
   (unless (procedure? thunk)
     (raise-user-error 'call-with-fresh-memory-db "expected a thunk, got ~a" thunk))
@@ -195,9 +402,14 @@
                                      (hash-keys api-test-dead-worker-registry))
                              eq?))])
       (clear-api-test-queue! queue-s)))
+  ;; The outbound-HTTP stub scope rides along here rather than in
+  ;; call-with-api-test-subscriptions because THIS wrapper is the one every
+  ;; `test`, `api-test`, and `load-test` body already goes through — so plain
+  ;; `test` blocks get the double too, and the emitter needs no change at all
+  ;; (every committed .rkt snapshot stays byte-identical).
   (dynamic-wind
     reset!
-    thunk
+    (lambda () (call-with-fresh-http-stubs thunk))
     reset!))
 
 (define (call-with-api-test-subscriptions thunk)

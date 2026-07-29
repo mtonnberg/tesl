@@ -1,67 +1,49 @@
 # Primitive gaps + outbound-call hardening
 
-> **Status:** Next · **Effort:** S (timeout) · S–M (api-test stub) · M (regex)
+> **Status:** Next · **Effort:** M (regex) — items 1 and 2 are **DONE**
 
 Carved out of `roadmap/discarded/using_queues_for_ffi.md` (discarded 2026-07-29). That item
 declined FFI; these are the items from its "Phase B" that stand entirely on their own merit.
 **None of them depends on FFI, and each is independently justifiable.**
 
-Ordered by value-to-cost. Items 1 and 2 are the ones with a live defect behind them.
+Ordered by value-to-cost. Items 1 and 2 were the ones with a live defect behind them.
 
 ---
 
-## 1. Outbound HTTP has no timeout — live bug
+## ~~1. Outbound HTTP has no timeout — live bug~~ — DONE
 
-`do-http-request` (`tesl/http-client.rkt:114`) calls `http-sendrecv` with **no connect
-deadline and no read deadline**. There is a 10 MiB response-body cap (added for the DoS
-case) and nothing else. A slow or hung upstream therefore blocks the calling thread
-indefinitely.
+~~`do-http-request` calls `http-sendrecv` with no connect deadline and no read deadline, so a
+slow or hung upstream blocks the calling thread indefinitely — pinning a request thread (and
+its DB pool slot inside a `transaction`), or a queue worker, where the job never fails and
+retry/backoff/dead-letter never run.~~
 
-Consequences today, with no new features involved:
-
-- A hung upstream in a **handler** pins a request thread. Inside a `transaction` it also
-  holds a DB pool slot for the whole time (cf. the pool-lease work in issue #31).
-- A hung upstream in a **worker** pins one of that queue's `numberOfWorkers` threads. Enough
-  of them and the queue stops draining — the retry/backoff machinery never gets a chance to
-  do its job, because the job never fails, it just hangs.
-- `Tesl.Agent` calls LLM providers over this path, and provider stalls are routine. This is
-  the most likely way a real deployment hits it.
-
-**Work:** connect + read timeouts, configurable with a conservative default, surfaced as a
-clean `check-fail`-shaped error rather than a raw Racket exception (the existing handler
-already wraps failures as `raise-user-error 'HttpClient`). Decide whether the timeout is
-per-declaration, per-call, or env-configured like `TESL_HTTP_MAX_RESPONSE_BYTES`. Same
-treatment for `http-post-stream` (`:184`), where an idle SSE stream needs an idle timeout
-rather than a total one.
-
-**Tests:** a server that accepts and never responds → the call fails within the deadline; a
-server that sends headers then stalls mid-body → same; the streaming variant on an idle
-stream; and a test that the failure fails the *job* (retry → dead-letter) rather than
-killing the worker thread.
+**Shipped — see `roadmap/completed/outbound_http_timeout_and_test_double.md`.**
+Connect / read / SSE-idle deadlines with conservative defaults, env-configured
+(`TESL_HTTP_CONNECT_TIMEOUT_MS`, `TESL_HTTP_TIMEOUT_MS`,
+`TESL_HTTP_STREAM_IDLE_TIMEOUT_MS`) in the style of `TESL_HTTP_MAX_RESPONSE_BYTES`; failures
+surface as `raise-user-error 'HttpClient`, never a raw Racket exception. Regression suite
+`tests/http-timeout-tests.rkt` (gated in `ci.sh`) plus the worker retry → dead-letter case
+STUB-15 in `tests/http-stub-tests.tesl`. Two adjacent live bugs fell out of it: outbound
+requests with a `Tuple2` header, and outbound URLs with a `?query`, both crashed with a raw
+contract violation.
 
 ---
 
-## 2. Outbound HTTP is not testable
+## ~~2. Outbound HTTP is not testable~~ — DONE
 
-There is no stubbing or interception for outbound calls anywhere in `tesl/api-test.rkt` or
-`dsl/test-support.rkt`. Consequences:
+~~There is no stubbing or interception for outbound calls anywhere in `tesl/api-test.rkt` or
+`dsl/test-support.rkt`, so every handler or worker that calls an external service has an
+untestable branch — and the error paths you most want covered are exactly the ones a real
+upstream will not produce on demand.~~
 
-- `example/learn/lesson58-httpclient.tesl` demonstrates the feature and cannot assert
-  anything about it.
-- Any app whose handler or worker calls an external service has an untestable branch —
-  including every `Tesl.Agent` app, which is most of the AI surface.
-- The error paths are the ones you most want covered (upstream 500, malformed JSON,
-  timeout from item 1) and they are exactly the ones you cannot provoke against a real
-  upstream.
-
-**Work:** an api-test-scoped double — declare canned responses for a URL or method+URL
-pattern, assert that the expected call was made, and let a stub raise/timeout so the failure
-path is reachable. It must be scoped to the test run (no global mutable state leaking between
-tests) and must not exist in production builds.
-
-Note this is a **strictly better** answer than the earlier "let an external process handle
-the job" idea: the double is deterministic, needs no network, and makes the failure paths
-testable, which a real sidecar never would.
+**Shipped — see `roadmap/completed/outbound_http_timeout_and_test_double.md`.**
+`Tesl.ApiTest` gains `stubHttp` / `stubHttpFailure` / `stubHttpTimeout` / `httpCalled` /
+`httpCallCount` / `httpLastBody`, usable as statements in a `test`, `api-test`, or
+`load-test` body. The scope is created fresh per test block by `call-with-fresh-memory-db`
+(no global mutable state, no emitter change), and the double lives in `dsl/test-support.rkt`
+behind a three-line inert seam in `tesl/private/http-stub.rkt`, so it does not exist in a
+production build. `example/learn/lesson58-httpclient.tesl` now asserts the happy path and
+every error path.
 
 ---
 
@@ -130,12 +112,13 @@ must resolve to a real Racket provide — this is the seam test that catches
 typechecks-but-unbound), and stdlib signature/doc coverage held (`tesl doc` catalog +
 `test_stdlib_signature_coverage.ml`).
 
-Per item: the timeout tests in item 1; a stubbed-upstream api-test in item 2; known-answer
+Per item: ~~the timeout tests in item 1; a stubbed-upstream api-test in item 2;~~ known-answer
 tests against published vectors for every hash/HMAC in item 3 plus a constant-time-compare
 test; a ReDoS-bound test in item 4.
 
 ## Related
 
+- `roadmap/completed/outbound_http_timeout_and_test_double.md` — items 1 and 2 as shipped
 - `roadmap/discarded/using_queues_for_ffi.md` — the analysis these were carved from
 - `roadmap/next/interop_policy_and_docs.md` — the docs half (item 3 here is the *answer* to
   most FFI requests, so the two ship well together)
