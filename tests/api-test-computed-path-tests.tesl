@@ -1,0 +1,234 @@
+module ApiTestComputedPathTests exposing [PathServer]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Issue #45 — an api-test request path may be ANY expression, not just a
+# string literal.
+#
+# The emitter can only pre-split a LITERAL path into URI segments; every other
+# path expression reached the HTTP layer as a whole string, where `map` failed
+# on a non-list.  `tesl check` passed and the crash surfaced as a bare
+# "assertion did not hold" for the whole test body, so it read as an
+# application bug.  The split now happens at the dispatch boundary
+# (dsl/test-support.rkt api-test-path->segments+query), so a literal, a
+# `let`-bound string, a `++` concatenation and an interpolation are the same
+# request — which is what makes a create-then-read flow testable when the id is
+# only knowable from the create response.
+#
+# Every test below asserts a real 2xx + body, so a path that silently fails to
+# route (the old behaviour) fails here rather than passing vacuously.
+# ─────────────────────────────────────────────────────────────────────────────
+
+import Tesl.Prelude exposing [String]
+import Tesl.Http exposing [HttpRequest]
+import Tesl.Dict exposing [Dict.lookup]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Queue exposing [pubsub]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.SSE exposing [SseChannel]
+import Tesl.ApiTest exposing [
+  statusOk,
+  statusClientError,
+  subscribe,
+  collect,
+  isNotEmpty,
+  includesWhere,
+]
+
+database PathDb = Database {
+  schema: "api_test_computed_path"
+  entities: []
+  backend: Memory
+}
+
+record Created {
+  id: String
+}
+
+record Notice {
+  message: String
+}
+
+codec Notice {
+  toJson {
+    message -> "message" with_codec stringCodec
+  }
+  fromJson [
+    {
+      message <- "message" with_codec stringCodec
+    }
+  ]
+}
+
+sseChannel Notices(topic: String) = SseChannel {
+  database: PathDb
+  payload: Notice
+}
+
+fact ValidQuery (q: String)
+
+auth parseQuery(req: HttpRequest) -> q: String ::: ValidQuery q =
+  case Dict.lookup "q" req.queryParameters of
+    Nothing -> fail 400 "missing required query parameter: q"
+    Something found -> ok found ::: ValidQuery q
+
+capturer idCapture: id: String using stringCodec
+
+handler getThing(id: String) -> String =
+  "thing-" ++ id
+
+handler createThing() -> Created =
+  Created { id: "generated-1" }
+
+handler search(q: String ::: ValidQuery q) -> String =
+  "found-" ++ q
+
+handler notify(topic: String) -> String
+  requires [pubsub] =
+  publish Notices(topic) Notice { message: "notice-" ++ topic }
+  "ok"
+
+api PathApi {
+  get "/things/:id"
+    capture id: String via idCapture
+    -> String
+
+  post "/things"
+    -> Created
+
+  get "/search"
+    auth q : String ::: ValidQuery q via parseQuery
+    -> String
+
+  post "/notify/:id"
+    capture id: String via idCapture
+    -> String
+
+  sse "/events/:id"
+    capture id: String via idCapture
+    subscribe Notices(id)
+}
+
+server PathServer for PathApi {
+  getThing = getThing
+  createThing = createThing
+  search = search
+  notify = notify
+}
+
+# ── The literal form (unchanged) ─────────────────────────────────────────────
+
+api-test "a literal path routes" for PathServer requires [] {
+  let r = get "/things/7"
+  expect statusOk r.status
+  expect r.body == "thing-7"
+}
+
+# ── The forms issue #45 reported broken ──────────────────────────────────────
+
+api-test "a let-bound path routes like the literal" for PathServer requires [] {
+  let p = "/things/7"
+  let r = get p
+  expect statusOk r.status
+  expect r.body == "thing-7"
+}
+
+api-test "a concatenated path routes" for PathServer requires [] {
+  let id = "42"
+  let r = get ("/things/" ++ id)
+  expect statusOk r.status
+  expect r.body == "thing-42"
+}
+
+api-test "an interpolated path routes" for PathServer requires [] {
+  let id = "9"
+  let r = get "/things/${id}"
+  expect statusOk r.status
+  expect r.body == "thing-9"
+}
+
+# The flagship case from the issue: the id is server-generated, so it is only
+# knowable from the create response.
+api-test "a path built from a previous response's body routes" for PathServer requires [] {
+  let created = post "/things"
+  expect statusOk created.status
+  let r = get ("/things/" ++ created.body.id)
+  expect statusOk r.status
+  expect r.body == "thing-generated-1"
+}
+
+# The manual's spelling of the same flow: the id is `let`-bound first
+# (manual/best-practices.md, "Integration / API tests").
+api-test "a path built from a let-bound response field routes" for PathServer requires [] {
+  let created = post "/things"
+  let id = created.body.id
+  let r = get ("/things/" ++ id)
+  expect statusOk r.status
+  expect r.body == "thing-generated-1"
+}
+
+# ── Query strings survive the computed form ──────────────────────────────────
+
+api-test "a literal path keeps its query string" for PathServer requires [] {
+  let r = get "/search?q=widgets"
+  expect statusOk r.status
+  expect r.body == "found-widgets"
+}
+
+api-test "a computed path keeps its query string" for PathServer requires [] {
+  let p = "/search?q=widgets"
+  let r = get p
+  expect statusOk r.status
+  expect r.body == "found-widgets"
+}
+
+api-test "a concatenated query string is parsed" for PathServer requires [] {
+  let term = "gadgets"
+  let r = get ("/search?q=" ++ term)
+  expect statusOk r.status
+  expect r.body == "found-gadgets"
+}
+
+api-test "a computed path with no query still reaches the 400" for PathServer requires [] {
+  let p = "/search"
+  let r = get p
+  expect statusClientError r.status
+}
+
+# ── A computed path that does not match any route 404s (it does not crash) ───
+
+api-test "a computed path that matches no route 404s" for PathServer requires [] {
+  let p = "/nope/nowhere"
+  let r = get p
+  expect r.status == 404
+}
+
+# ── Shape-insensitivity: leading/trailing slashes normalize like the literal ──
+
+api-test "a computed path tolerates a trailing slash" for PathServer requires [] {
+  let p = "/things/7/"
+  let r = get p
+  expect statusOk r.status
+  expect r.body == "thing-7"
+}
+
+# ── `subscribe` shares the same path normalization ───────────────────────────
+
+api-test "a literal subscribe path streams" for PathServer requires [pubsub] {
+  let stream = subscribe "/events/topic-1"
+  let r = post "/notify/topic-1"
+  expect statusOk r.status
+  let events = collect stream count 1 timeout 1500ms
+  expect isNotEmpty events
+  expect includesWhere { "message": "notice-topic-1" } events
+}
+
+api-test "a computed subscribe path streams like the literal" for PathServer requires [pubsub] {
+  let topic = "topic-2"
+  let stream = subscribe ("/events/" ++ topic)
+  let r = post ("/notify/" ++ topic)
+  expect statusOk r.status
+  let events = collect stream count 1 timeout 1500ms
+  expect isNotEmpty events
+  expect includesWhere { "message": "notice-topic-2" } events
+}

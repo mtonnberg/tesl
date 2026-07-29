@@ -90,9 +90,19 @@
 (define (Int.lcm a b)
   (lcm (rv a) (rv b)))
 
-;; Integer exponentiation
+;; Integer exponentiation.
+;;
+;; A NEGATIVE exponent makes `expt` return an exact rational (2^-1 = 1/2), which
+;; is not an `Int` — the declared return type would be a lie and the value would
+;; travel on as a non-integer.  Fail loudly instead: the caller wants
+;; `Float.pow` (or a non-negative exponent).
 (define (Int.pow base exp)
-  (expt (rv base) (rv exp)))
+  (define e (rv exp))
+  (when (negative? e)
+    (raise-user-error 'Int.pow
+                      "a negative exponent (~a) has no integer power; use Float.pow for a fractional result"
+                      e))
+  (expt (rv base) e))
 
 ;; Number of decimal digits (ignores sign)
 (define (Int.digits n)

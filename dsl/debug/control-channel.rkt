@@ -158,6 +158,9 @@
 
 (define (paused-sql-capture)
   (with-handlers ([exn:fail? (lambda (_e) #f)])
+    ;; Whether this capture is THIS line's statement or the previous one is
+    ;; carried in the rendered JSON (sql->json's `this-line`), so the attach
+    ;; surface labels it exactly like the launch surface does.
     (or (let ([t (current-paused-thread)]) (and t (sql-capture-for-thread t)))
         (most-recent-sql-capture))))
 

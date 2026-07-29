@@ -1,18 +1,47 @@
-module Int32Boundary exposing [narrowSafe, widen, roundTrip]
+module Int32Boundary exposing [
+  narrowSafe,
+  widen,
+  roundTrip,
+  saturate,
+  budgetLeft,
+  describe,
+  halve,
+]
 
 # NT-07 — Int32: a JS-safe (< 2^31), 32-bit-bounded integer for wire/storage
 # boundaries. It is NOMINAL (does not unify with Int); convert explicitly.
 #
-#   Int32.fromInt : Int -> Maybe Int32   (checked narrowing; the ONLY value check)
+#   Int32.fromInt : Int -> Maybe Int32   (checked narrowing)
 #   Int32.toInt   : Int32 -> Int          (total widening — always safe)
+#
+# THE RANGE RULE for the rest of the module: an operation whose result cannot
+# leave [-2^31, 2^31) returns `Int32` (min/max/clamp/modulo/fromIntClamped); one
+# that can returns `Maybe Int32` (add/subtract/multiply/negate/abs/pow/divide) —
+# `Nothing` is the out-of-range answer, never a silent wrap. Everything else
+# returns its own type (toInt/toFloat/toString/sign/digits, the predicates).
 #
 # Use Int32 for values that cross to a JS/TS/Elm client (JS Number is exact only to
 # 2^53) or that you store compactly (int4). For arbitrary-magnitude values, keep Int
 # (stored as NUMERIC, lossless) — the W091 linter nudges you when Int hits the wire.
 
-import Tesl.Prelude exposing [Int]
+import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
-import Tesl.Int32 exposing [Int32, Int32.fromInt, Int32.toInt]
+import Tesl.Int32 exposing [
+  Int32,
+  IsNonZero,
+  Int32.fromInt,
+  Int32.toInt,
+  Int32.fromIntClamped,
+  Int32.toString,
+  Int32.add,
+  Int32.subtract,
+  Int32.divide,
+  Int32.clamp,
+  Int32.isNegative,
+  Int32.minValue,
+  Int32.maxValue,
+  Int32.nonZero,
+]
 
 # Narrow an Int to an Int32 — Nothing when out of the int32 range.
 fn narrowSafe(n: Int) -> Maybe Int32 =
@@ -29,6 +58,27 @@ fn roundTrip(n: Int, fallback: Int) -> Int =
     Something x -> Int32.toInt x
     Nothing -> fallback
 
+# Saturating narrowing — total, and explicit in the name that it clamps.
+fn saturate(n: Int) -> Int32 =
+  Int32.fromIntClamped n
+
+# Checked arithmetic stays inside the boundary type: overflow is Nothing, so a
+# wrapped budget can never reach the wire.
+fn budgetLeft(budget: Int32, spent: Int32) -> Maybe Int32 =
+  Int32.subtract budget spent
+
+# Predicates and toString work directly on Int32 — no widening detour.
+fn describe(x: Int32) -> String =
+  if Int32.isNegative x then
+    "-" ++ Int32.toString x
+  else
+    Int32.toString x
+
+# Division needs an IsNonZero divisor (from `check Int32.nonZero`), and the one
+# out-of-range quotient (minValue / -1) is Nothing.
+fn halve(n: Int32, d: Int32 ::: IsNonZero d) -> Maybe Int32 =
+  Int32.divide n d
+
 test "in-range value round-trips unchanged" {
   expect roundTrip 1000 (0 - 1) == 1000
 }
@@ -43,4 +93,49 @@ test "a value above the int32 max is out of range" {
 
 test "a large Int (> 2^53) is out of int32 range" {
   expect roundTrip 9007199254740993 (0 - 1) == (0 - 1)
+}
+
+test "saturating narrowing clamps to the bounds" {
+  expect Int32.toInt (saturate 9007199254740993) == 2147483647
+  expect Int32.toInt (saturate (0 - 9007199254740993)) == (0 - 2147483648)
+  expect Int32.toInt (saturate 7) == 7
+}
+
+test "minValue and maxValue are the range bounds" {
+  expect Int32.toInt Int32.minValue == (0 - 2147483648)
+  expect Int32.toInt Int32.maxValue == 2147483647
+}
+
+test "checked subtraction reports overflow as Nothing" {
+  expect budgetLeft (saturate 10) (saturate 4) == Something (saturate 6)
+  expect budgetLeft Int32.minValue (saturate 1) == Nothing
+}
+
+test "checked addition reports overflow as Nothing" {
+  expect Int32.add Int32.maxValue (saturate 1) == Nothing
+  expect Int32.add (saturate 2) (saturate 3) == Something (saturate 5)
+}
+
+test "clamp stays inside the boundary type" {
+  expect Int32.toInt (Int32.clamp (saturate 99) (saturate 0) (saturate 10)) == 10
+}
+
+test "predicates and toString read the Int32 directly" {
+  expect describe (saturate 42) == "42"
+  expect Int32.isNegative (saturate (0 - 1))
+}
+
+test "division needs a proven non-zero divisor" {
+  let two = saturate 2
+  let d = check Int32.nonZero(two)
+  expect halve (saturate 9) d == Something (saturate 4)
+}
+
+# The one quotient that leaves the range: -minValue has no Int32, so
+# minValue / -1 is Nothing rather than a wrapped minValue.
+test "the single out-of-range quotient is Nothing" {
+  let negOne = saturate (0 - 1)
+  let d = check Int32.nonZero(negOne)
+  expect halve Int32.minValue d == Nothing
+  expect halve (saturate 8) d == Something (saturate (0 - 8))
 }

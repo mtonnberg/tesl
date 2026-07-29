@@ -23,6 +23,10 @@
 
 (provide finalSpeed pace deliveryEta brakingDistance kineticEnergy lengthRatio rectangleArea sideFromArea longestLeg totalDistance approxEqual approxEqual-signature totalDistance-signature longestLeg-signature finalSpeed-signature kineticEnergy-signature rectangleArea-signature pace-signature deliveryEta-signature brakingDistance-signature lengthRatio-signature sideFromArea-signature)
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "example/learn/lesson72-units.tesl" '(363))
 (define/pow
   (approxEqual [x : Real] [y : Real])
   #:returns Boolean

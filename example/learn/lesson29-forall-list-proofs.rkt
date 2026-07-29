@@ -26,6 +26,10 @@
 
 (provide NoteServer)
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "example/learn/lesson29-forall-list-proofs.tesl" '(203 210 221))
 (define Authenticated 'Authenticated)
 (define IsActive 'IsActive)
 (define IsPinned 'IsPinned)
@@ -123,13 +127,13 @@
   (listActiveNotes [user : String ::: (Authenticated user)])
   #:capabilities [noteDbRead]
   #:returns (List Note)
-  (let ([allNotes (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 210 (list (cons 'user *user)) (lambda () (select-many (from Note) (where (==. (entity-field-ref Note 'authorId) user)))))]) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 211 (list (cons 'allNotes *allNotes) (cons 'user *user)) (lambda () (tesl_import_List_filterCheck checkActive (raw-value allNotes))))))
+  (let ([allNotes (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 210 (list (cons 'user *user)) (lambda () (select-many (from Note) (where (==. (entity-field-ref Note 'authorId) user)))) 'allNotes)]) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 211 (list (cons 'allNotes *allNotes) (cons 'user *user)) (lambda () (tesl_import_List_filterCheck checkActive (raw-value allNotes))))))
 
 (define-handler
   (listActivePinnedNotes [user : String ::: (Authenticated user)])
   #:capabilities [noteDbRead]
   #:returns (List Note)
-  (let ([allNotes (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 221 (list (cons 'user *user)) (lambda () (select-many (from Note) (where (==. (entity-field-ref Note 'authorId) user)))))]) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 222 (list (cons 'allNotes *allNotes) (cons 'user *user)) (lambda () (tesl_import_List_filterCheck (check-and checkActive checkPinned) (raw-value allNotes))))))
+  (let ([allNotes (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 221 (list (cons 'user *user)) (lambda () (select-many (from Note) (where (==. (entity-field-ref Note 'authorId) user)))) 'allNotes)]) (thsl-src! "example/learn/lesson29-forall-list-proofs.tesl" 222 (list (cons 'allNotes *allNotes) (cons 'user *user)) (lambda () (tesl_import_List_filterCheck (check-and checkActive checkPinned) (raw-value allNotes))))))
 
 (define/pow
   (filterActivePinned [notes : (List Note)])

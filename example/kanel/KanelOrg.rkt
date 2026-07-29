@@ -26,6 +26,10 @@
 
 (provide RegisterRequest LoginRequest InviteMemberRequest ChangeMemberRoleRequest ValidOrgName checkOrgName ValidSlug checkSlug ValidEmail checkEmail ValidDisplayName checkDisplayName registerHandler loginHandler createOrgHandler getOrgHandler listOrgMembersHandler inviteMemberHandler changeMemberRoleHandler removeMemberHandler listMyOrgsHandler checkOrgName-signature checkSlug-signature checkEmail-signature checkDisplayName-signature registerHandler-signature loginHandler-signature createOrgHandler-signature getOrgHandler-signature listMyOrgsHandler-signature listOrgMembersHandler-signature inviteMemberHandler-signature changeMemberRoleHandler-signature removeMemberHandler-signature)
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "example/kanel/KanelOrg.tesl" '(166 183 205 236 245 253 292 303 308 331 332 363 369))
 (define ValidDisplayName 'ValidDisplayName)
 (define ValidEmail 'ValidEmail)
 (define ValidOrgName 'ValidOrgName)
@@ -107,13 +111,13 @@
   (fetchOrgByMembership [acc : (List Org)] [m : OrgMembership])
   #:capabilities [kanelDbRead]
   #:returns (List Org)
-  (let ([found (thsl-src! "example/kanel/KanelOrg.tesl" 245 (list (cons 'acc *acc) (cons 'm *m)) (lambda () (let ([tesl_match (select-one (from Org) (where (==. (entity-field-ref Org 'id) (tesl-dot/runtime m 'orgId 'OrgMembership))))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/kanel/KanelOrg.tesl" 246 (list (cons 'found *found) (cons 'acc *acc) (cons 'm *m)) (lambda () (let ([tesl-case-10 (raw-value found)]) (cond [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Nothing)) (thsl-src! "example/kanel/KanelOrg.tesl" 247 (list) (lambda () *acc))] [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Something)) (let ([o (hash-ref (adt-value-fields *tesl-case-10) 'value)]) (thsl-src! "example/kanel/KanelOrg.tesl" 248 (list (cons 'o o)) (lambda () (raw-value (tesl_import_List_append *acc (list *o))))))]))))))
+  (let ([found (thsl-src! "example/kanel/KanelOrg.tesl" 245 (list (cons 'acc *acc) (cons 'm *m)) (lambda () (let ([tesl_match (select-one (from Org) (where (==. (entity-field-ref Org 'id) (tesl-dot/runtime m 'orgId 'OrgMembership))))]) (if tesl_match (Something tesl_match) Nothing))) 'found)]) (thsl-src-control! "example/kanel/KanelOrg.tesl" 246 (list (cons 'found *found) (cons 'acc *acc) (cons 'm *m)) (lambda () (let ([tesl-case-10 (raw-value found)]) (cond [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Nothing)) (thsl-src! "example/kanel/KanelOrg.tesl" 247 (list) (lambda () *acc))] [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Something)) (let ([o (hash-ref (adt-value-fields *tesl-case-10) 'value)]) (thsl-src! "example/kanel/KanelOrg.tesl" 248 (list (cons 'o o)) (lambda () (raw-value (tesl_import_List_append *acc (list *o))))))]))))))
 
 (define-handler
   (listMyOrgsHandler [session : KanelSession ::: (Authenticated session)])
   #:capabilities [kanelDbRead]
   #:returns (List Org)
-  (let ([memberships (thsl-src! "example/kanel/KanelOrg.tesl" 253 (list (cons 'session *session)) (lambda () (select-many (from OrgMembership) (where (==. (entity-field-ref OrgMembership 'userId) (raw-value session.userId))))))]) (thsl-src! "example/kanel/KanelOrg.tesl" 254 (list (cons 'memberships *memberships) (cons 'session *session)) (lambda () (tesl_import_List_foldl fetchOrgByMembership (list) (raw-value memberships))))))
+  (let ([memberships (thsl-src! "example/kanel/KanelOrg.tesl" 253 (list (cons 'session *session)) (lambda () (select-many (from OrgMembership) (where (==. (entity-field-ref OrgMembership 'userId) (raw-value session.userId))))) 'memberships)]) (thsl-src! "example/kanel/KanelOrg.tesl" 254 (list (cons 'memberships *memberships) (cons 'session *session)) (lambda () (tesl_import_List_foldl fetchOrgByMembership (list) (raw-value memberships))))))
 
 (define-record InviteMemberRequest
   [email : String]

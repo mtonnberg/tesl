@@ -27,6 +27,10 @@
 
 (provide dbGetOrg dbListOrgs dbInsertOrg dbGetOrgMembership dbListOrgMembers dbInsertOrgMembership dbUpdateMemberRole dbDeleteMembership dbGetUser dbGetUserByEmail dbInsertUser dbGetProject dbListProjects dbInsertProject dbArchiveProject dbGetIssue dbListIssues dbInsertIssue dbUpdateIssueFields dbUpdateIssueStatus dbInsertComment dbListComments dbInsertTimeEntry dbListTimeEntries dbListUnbilledEntries dbMarkEntriesBilled dbGetInvoice dbListInvoices dbInsertInvoice dbUpdateInvoiceStatus dbGetOrg-signature dbListOrgs-signature dbInsertOrg-signature dbGetOrgMembership-signature dbListOrgMembers-signature dbInsertOrgMembership-signature dbUpdateMemberRole-signature dbDeleteMembership-signature dbGetUser-signature dbGetUserByEmail-signature dbInsertUser-signature dbGetProject-signature dbListProjects-signature dbInsertProject-signature dbArchiveProject-signature dbGetIssue-signature dbListIssues-signature dbInsertIssue-signature dbUpdateIssueFields-signature dbUpdateIssueStatus-signature dbInsertComment-signature dbListComments-signature dbInsertTimeEntry-signature dbListTimeEntries-signature dbListUnbilledEntries-signature dbMarkEntriesBilled-signature dbGetInvoice-signature dbListInvoices-signature dbInsertInvoice-signature dbUpdateInvoiceStatus-signature)
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "example/kanel/KanelDB.tesl" '(91 95 102 113 117 138 142 152 156 173 177 216 226 230 242 246))
 (define/pow
   (dbGetOrg [orgId : String] [userId : String ::: (OrgMember userId orgId)])
   #:capabilities [kanelDbRead]
@@ -37,13 +41,13 @@
   (dbFetchOrgByMembership [acc : (List Org)] [m : OrgMembership])
   #:capabilities [kanelDbRead]
   #:returns (List Org)
-  (let ([found (thsl-src! "example/kanel/KanelDB.tesl" 95 (list (cons 'acc *acc) (cons 'm *m)) (lambda () (let ([tesl_match (select-one (from Org) (where (==. (entity-field-ref Org 'id) (tesl-dot/runtime m 'orgId 'OrgMembership))))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/kanel/KanelDB.tesl" 96 (list (cons 'found *found) (cons 'acc *acc) (cons 'm *m)) (lambda () (let ([tesl-case-0 (raw-value found)]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/kanel/KanelDB.tesl" 97 (list) (lambda () *acc))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([o (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/kanel/KanelDB.tesl" 98 (list (cons 'o o)) (lambda () (raw-value (tesl_import_List_append *acc (list *o))))))]))))))
+  (let ([found (thsl-src! "example/kanel/KanelDB.tesl" 95 (list (cons 'acc *acc) (cons 'm *m)) (lambda () (let ([tesl_match (select-one (from Org) (where (==. (entity-field-ref Org 'id) (tesl-dot/runtime m 'orgId 'OrgMembership))))]) (if tesl_match (Something tesl_match) Nothing))) 'found)]) (thsl-src-control! "example/kanel/KanelDB.tesl" 96 (list (cons 'found *found) (cons 'acc *acc) (cons 'm *m)) (lambda () (let ([tesl-case-0 (raw-value found)]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/kanel/KanelDB.tesl" 97 (list) (lambda () *acc))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([o (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/kanel/KanelDB.tesl" 98 (list (cons 'o o)) (lambda () (raw-value (tesl_import_List_append *acc (list *o))))))]))))))
 
 (define/pow
   (dbListOrgs [userId : String])
   #:capabilities [kanelDbRead]
   #:returns (List Org)
-  (let ([memberships (thsl-src! "example/kanel/KanelDB.tesl" 102 (list (cons 'userId *userId)) (lambda () (select-many (from OrgMembership) (where (==. (entity-field-ref OrgMembership 'userId) userId)))))]) (thsl-src! "example/kanel/KanelDB.tesl" 103 (list (cons 'memberships *memberships) (cons 'userId *userId)) (lambda () (raw-value (tesl_import_List_foldl dbFetchOrgByMembership (list) (raw-value memberships)))))))
+  (let ([memberships (thsl-src! "example/kanel/KanelDB.tesl" 102 (list (cons 'userId *userId)) (lambda () (select-many (from OrgMembership) (where (==. (entity-field-ref OrgMembership 'userId) userId)))) 'memberships)]) (thsl-src! "example/kanel/KanelDB.tesl" 103 (list (cons 'memberships *memberships) (cons 'userId *userId)) (lambda () (raw-value (tesl_import_List_foldl dbFetchOrgByMembership (list) (raw-value memberships)))))))
 
 (define/pow
   (dbInsertOrg [orgId : String] [name : String ::: (ValidOrgName name)] [slug : String ::: (ValidSlug slug)])

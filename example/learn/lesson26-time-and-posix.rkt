@@ -25,6 +25,10 @@
 
 (provide TimedDatabase TimedServer currentTimestamp ageDescription formatPublishedAt createdRecently currentTimestamp-signature ageDescription-signature formatPublishedAt-signature createdRecently-signature)
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "example/learn/lesson26-time-and-posix.tesl" '(196))
 (define Authenticated 'Authenticated)
 
 (define-capability timedRead (implies dbRead))

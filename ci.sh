@@ -846,7 +846,14 @@ fi
 # from the paired .tesl and diff, canonicalising only the baked-in thsl-src! path
 # prefix to its basename (same normalisation test_integration uses).  Any diff is
 # a real emit change, not a stale snapshot.  Needs the built OCaml binary.
-canon_thsl() { sed -E 's#\(thsl-src(-control)?! "[^"]*/#(thsl-src\1! "#g'; }
+# Canonicalise every emitted form that bakes the INPUT .tesl path — the
+# checkpoints and the debugger's read-only-query line table — down to a bare
+# basename, so comparing a snapshot compiled with an absolute path against the
+# repo-relative committed one still asserts the full emission structure.
+canon_thsl() {
+    sed -E -e 's#\(thsl-src(-control)?! "[^"]*/#(thsl-src\1! "#g' \
+           -e 's#\(register-sql-read-lines! "[^"]*/#(register-sql-read-lines! "#g'
+}
 phase_begin "Exact-match .rkt snapshots"
 _main_exe="$COMPILER_DIR/_build/default/bin/main.exe"
 if [ ! -x "$_main_exe" ]; then
@@ -1171,6 +1178,14 @@ else
         # …and the attach wire JSON that carries those trees between processes
         "tests/dap-attach-value-tree-smoke.rkt"
         "tests/dap-sql-scope-smoke.rkt"
+        # SQL lens on the query LINE: the compiler's read-line table drives an
+        # AFTER-the-statement pause, and the freshness flag distinguishes this
+        # line's statement from the previous one
+        "tests/sql-read-lines-tests.rkt"
+        # Int32 (NT-07) boundary values: overflow answers Nothing at the exact
+        # edge, pow bounds the exponent before expt, NaN/inf convert cleanly —
+        # plus issue #45's api-test path normalization (literal ≡ computed)
+        "tests/int32-runtime-tests.rkt"
         "tests/codec-specialization-test.rkt"
         "tests/lifted-list-tests.rkt"
         "tests/body-proof-test.rkt"

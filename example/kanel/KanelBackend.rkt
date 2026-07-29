@@ -31,6 +31,10 @@
 
 (provide KanelServer)
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "example/kanel/KanelBackend.tesl" '(408 412))
 (define-database KanelDatabase
   #:backend postgres
   #:database (tesl-env-raw "KANEL_DB")

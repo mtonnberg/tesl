@@ -1005,6 +1005,26 @@ let stdlib_func_infos : (string * func_info) list =
      { fi_name = "Int.modulo"; fi_kind = FnKind;
        fi_params = [ plain "a" "Int"; with_proof "b" "Int" "IsNonZero" ];
        fi_return = ret "Int"; fi_loc = g });
+    (* Int32.divide / Int32.modulo: same IsNonZero divisor obligation as their
+       Int counterparts, over the nominal Int32 type.  `divide` returns
+       `Maybe Int32` because -2^31 / -1 is the one quotient out of range. *)
+    ("Int32.divide",
+     { fi_name = "Int32.divide"; fi_kind = FnKind;
+       fi_params = [ plain "a" "Int32"; with_proof "b" "Int32" "IsNonZero" ];
+       fi_return = ret "Maybe"; fi_loc = g });
+    ("Int32.modulo",
+     { fi_name = "Int32.modulo"; fi_kind = FnKind;
+       fi_params = [ plain "a" "Int32"; with_proof "b" "Int32" "IsNonZero" ];
+       fi_return = ret "Int32"; fi_loc = g });
+    (* Int32.nonZero / Int32.nonNegative: check functions minting the predicate *)
+    ("Int32.nonZero",
+     { fi_name = "Int32.nonZero"; fi_kind = CheckKind;
+       fi_params = [ plain "n" "Int32" ];
+       fi_return = ret_attached "n" "Int32" "IsNonZero"; fi_loc = g });
+    ("Int32.nonNegative",
+     { fi_name = "Int32.nonNegative"; fi_kind = CheckKind;
+       fi_params = [ plain "n" "Int32" ];
+       fi_return = ret_attached "n" "Int32" "IsNonNegative"; fi_loc = g });
     (* Float.div: second arg b must carry FloatNonZero b *)
     ("Float.div",
      { fi_name = "Float.div"; fi_kind = FnKind;

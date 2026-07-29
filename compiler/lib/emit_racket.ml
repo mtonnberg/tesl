@@ -671,6 +671,9 @@ let gdp_returning_stdlib : (string, unit) Hashtbl.t =
      "generatePrefixedId"; "random";
      (* Int functions returning proof-carrying values *)
      "tesl_import_Int_divide"; "tesl_import_Int_modulo"; "tesl_import_Int_nonZero"; "tesl_import_Int_nonNegative";
+     (* Int32 mirrors the Int rows (NT-07 boundary type) *)
+     "tesl_import_Int32_divide"; "tesl_import_Int32_modulo";
+     "tesl_import_Int32_nonZero"; "tesl_import_Int32_nonNegative";
     ];
   h
 
@@ -709,6 +712,8 @@ let proof_consuming_stdlib : (string, unit) Hashtbl.t =
   List.iter (fun k -> Hashtbl.replace h k ())
     [ "tesl_import_Int_divide";
       "tesl_import_Int_modulo";
+      "tesl_import_Int32_divide";
+      "tesl_import_Int32_modulo";
       "tesl_import_Float_div";
       "tesl_import_Dict_get";
       "tesl_import_List_take";
@@ -4295,6 +4300,113 @@ let collect_qualified_uses_for_module short_name (m : module_form) : string list
 let config_only_import_names : string list =
   Stdlib_config_names.require_suppressed
 
+(* ── Read-only-query lines (debugger SQL lens) ─────────────────────────────────
+   A checkpoint pauses BEFORE its statement, which made the SQL transparency lens
+   unreachable exactly where it matters most: paused on a query line, the runtime
+   has captured no statement yet, and when the query is the function's LAST
+   statement there is no next line to step to.
+
+   The runtime swaps the pause to AFTER the statement for lines listed here (see
+   `sql-read-line?` in dsl/debug/checkpoint.rkt).  Only READ-ONLY queries qualify
+   — running one before the stop changes nothing observable.  A line carrying any
+   WRITE (insert / update / delete / upsert) is excluded even if it also reads, so
+   a breakpoint on a mutation still stops before the world changes.
+
+   Line numbers are 1-based to match the `thsl-src!` checkpoints. *)
+let sql_read_head_names =
+  [ "select"; "selectOne"; "selectCount"; "selectSum";
+    "selectMax"; "selectMin"; "selectCountBy"; "selectSumBy" ]
+
+let sql_write_head_names =
+  [ "insert"; "insertMany"; "upsert"; "update"; "updateAndReturnOne";
+    "delete"; "deleteAndReturnResult" ]
+
+(** The 1-based lines whose statement runs a read-only query and no write. *)
+let sql_read_lines_of_module (m : module_form) : int list =
+  let reads = Hashtbl.create 16 in
+  let writes = Hashtbl.create 16 in
+  let note tbl (loc : Location.loc) = Hashtbl.replace tbl (loc.Location.start.line + 1) () in
+  let head_kind e =
+    let rec head = function EApp { fn; _ } -> head fn | e -> e in
+    match e with
+    | EApp _ ->
+      (match head e with
+       | EVar { name; _ } ->
+         if List.mem name sql_read_head_names then `Read
+         else if List.mem name sql_write_head_names then `Write
+         else `Neither
+       | _ -> `Neither)
+    | _ -> `Neither
+  in
+  let visit e =
+    match head_kind e with
+    | `Read -> note reads (Checker.expr_loc e)
+    | `Write -> note writes (Checker.expr_loc e)
+    | `Neither ->
+      (* A `with database D { … }` / `with transaction { … }` block is ONE
+         statement, so its inner statements have no checkpoint of their own — the
+         only line you can break on is the block's head.  Attribute the block's
+         head line to whichever kind its body contains, so a read-only block also
+         reaches the after-the-statement pause (and therefore the SQL lens),
+         while a block containing any write keeps pausing before. *)
+      (match e with
+       | EWithDatabase { body; loc; _ } | EWithTransaction { body; loc; _ } ->
+         let saw_read = ref false and saw_write = ref false in
+         Ast_visitor.iter (fun inner ->
+           match head_kind inner with
+           | `Read -> saw_read := true
+           | `Write -> saw_write := true
+           | `Neither -> ()) body;
+         if !saw_write then note writes loc
+         else if !saw_read then note reads loc
+       | _ -> ())
+  in
+  (* Same decl coverage as the checker's expression sweeps: every place a user
+     expression (and therefore a checkpoint) can appear. *)
+  List.iter (function
+    | DFunc fd -> Ast_visitor.iter visit fd.body
+    | DConst c -> Ast_visitor.iter visit c.value
+    | DTest t ->
+      List.iter (fun s -> List.iter (Ast_visitor.iter visit) (test_stmt_exprs s)) t.stmts
+    | DApiTest t ->
+      List.iter (Ast_visitor.iter visit) t.seed_stmts;
+      List.iter (fun s -> List.iter (Ast_visitor.iter visit) (test_stmt_exprs s)) t.stmts
+    | DLoadTest lt ->
+      List.iter (Ast_visitor.iter visit) lt.seed_stmts;
+      List.iter (fun s -> List.iter (Ast_visitor.iter visit) (test_stmt_exprs s))
+        lt.request_stmts
+    | _ -> ()) m.decls;
+  Hashtbl.fold (fun line () acc ->
+    if Hashtbl.mem writes line then acc else line :: acc) reads []
+  |> List.sort_uniq compare
+
+(* The current module's read-line set, so a checkpoint on such a line can carry
+   its binding name (needed only there — see thsl-src!'s 5-arg shape).  Keeping
+   the extra argument OFF every other line keeps emitted output byte-identical
+   for code with no query. *)
+let sql_read_line_set : (int, unit) Hashtbl.t = Hashtbl.create 16
+
+let is_sql_read_line (loc : Location.loc) =
+  Hashtbl.mem sql_read_line_set (loc.Location.start.line + 1)
+
+let emit_sql_read_lines ctx (m : module_form) =
+  Hashtbl.reset sql_read_line_set;
+  let lines = sql_read_lines_of_module m in
+  List.iter (fun l -> Hashtbl.replace sql_read_line_set l ()) lines;
+  match lines with
+  | [] -> ()
+  | lines ->
+    emit_line ctx
+      ";; Debugger: the lines whose statement is a READ-ONLY query.  The pause on";
+    emit_line ctx
+      ";; those happens AFTER the statement, so the SQL lens can show the exact";
+    emit_line ctx
+      ";; statement that ran (erased with the checkpoints in a release build).";
+    emit_line ctx
+      (Printf.sprintf "(register-sql-read-lines! %S '(%s))"
+         m.source_file
+         (String.concat " " (List.map string_of_int lines)))
+
 let emit_requires ctx (m : module_form) =
   let lazy_local_imports : (string * (string * string) list) list ref = ref [] in
   let needs_runtime_path =
@@ -4731,7 +4843,11 @@ let emit_func ctx (fd : func_decl) =
         emit_main_cp_locals locals;
         emit ctx " (lambda () ";
         emit_expr ctx value;
-        emit ctx "))])";   (* ) closes lambda, ) closes thsl-src!, ] closes [, ) closes let bindings *)
+        (* On a read-only query line the pause happens AFTER the statement, so
+           pass the binding's name: the paused frame then shows the result too.
+           Elsewhere the 4-arg form is emitted unchanged. *)
+        if is_sql_read_line val_loc then emit ctx (Printf.sprintf ") '%s)])" name)
+        else emit ctx "))])";
         emit_nl ctx;
         emit ctx "  ";
         let locals' = if name = "_" then locals else name :: locals in
@@ -5499,7 +5615,11 @@ let emit_func ctx (fd : func_decl) =
       emit_locals_list locals;
       emit ctx " (lambda () ";
       emit_expr ctx value;
-      emit ctx "))]) ";
+      (* On a read-only query line the pause happens AFTER the statement, so
+         pass the binding's name: the paused frame then shows the result too.
+         Elsewhere the 4-arg form is emitted unchanged. *)
+      if is_sql_read_line val_loc then emit ctx (Printf.sprintf ") '%s)]) " name)
+      else emit ctx "))]) ";
       (* Use *name so the next checkpoint's locals show the raw value. *)
       emit_debug_stmts ~locals:((name, star name) :: locals) body;
       if is_fact_here then Hashtbl.remove ctx.fact_locals name;
@@ -6895,7 +7015,11 @@ and emit_api_test_path ctx ~server_name ~capabilities e =
       emit_api_test_template_content ctx ~server_name ~capabilities ~helper_name:"api-test-path-fragment" part
     ) (String.split_on_char '/' path_part |> List.filter (fun part -> part <> ""));
     emit ctx ")"
-  | _ -> emit_expr ctx e
+  (* Issue #45: a computed path/value is emitted api-test-AWARE, so a nested
+     `r.body.id` still lowers through api-test-field-access-ref and a `++`
+     coerces its operands.  Falling through to [emit_expr] here left
+     `created.body` as a bare Racket identifier ("unbound identifier"). *)
+  | _ -> emit_api_test_expr ctx ~server_name ~capabilities e
 
 and emit_api_test_json ctx ~server_name ~capabilities e =
   match e with
@@ -6948,6 +7072,19 @@ and emit_api_test_expr ctx ~server_name ~capabilities e =
     emit ctx "(api-test-field-access-ref ";
     emit_api_test_expr ctx ~server_name ~capabilities obj;
     emit ctx (Printf.sprintf " '%s)" field)
+  (* `++` inside an api-test body (issue #45): recurse api-test-aware so a
+     response field (`created.body.id`) lowers through the field-access ref, and
+     coerce each operand — a JSON id is a NUMBER as often as a string, and
+     string-append on a number is a crash rather than a routing failure. *)
+  | EBinop { op = BConcat; left; right; _ } ->
+    let operand side =
+      emit ctx "(api-test-string-fragment ";
+      emit_api_test_expr ctx ~server_name ~capabilities side;
+      emit ctx ")"
+    in
+    emit ctx "(string-append ";
+    operand left; emit ctx " "; operand right;
+    emit ctx ")"
   | EApp _ ->
     let head, args = flatten_app [] e in
     (match head, args with
@@ -7699,6 +7836,7 @@ let emit_module ctx (m : module_form) =
 
   emit_requires ctx m;
   emit_provide ctx m;
+  emit_sql_read_lines ctx m;
 
   (* Imported-module test submodules (matrix 2026-07, silent-pass class):
      `raco test main.rkt` instantiates ONLY main's `test` submodule, so a

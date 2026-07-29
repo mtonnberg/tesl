@@ -22,6 +22,7 @@
          api-test-field-access-ref
          api-test-string-fragment
          api-test-path-fragment
+         api-test-path->segments+query
          register-api-test-workers!
          register-api-test-dead-workers!
          lookup-api-test-workers
@@ -88,6 +89,47 @@
 
 (define (api-test-path-fragment value)
   (uri-encode (api-test-string-fragment value)))
+
+;; ── Request paths: literal or computed, one normalization (issue #45) ────────
+;; The emitter pre-splits a STRING-LITERAL path into segments — `get "/todos/1"`
+;; arrives here as `(list "todos" "1")` with its `?query` already lifted to
+;; #:query.  Every other path expression (a `let`-bound string, a `++`
+;; concatenation, an id read out of a previous response) cannot be split at
+;; compile time, so it arrives as the whole path VALUE instead.  Both shapes are
+;; normalized here to (segments . query), which is why
+;;   let p = "/todos/1"   get p
+;; is now the same request as the literal — previously the raw string reached
+;; the HTTP layer and `map` failed with a contract violation, surfacing as a
+;; bare "assertion did not hold" for the whole test body.
+;;
+;; A computed path is treated exactly like a literal one: split on "/", empty
+;; segments dropped, `?…` lifted to the query string, no extra encoding (the
+;; caller wrote the whole path).  Interpolated HOLES inside a literal stay
+;; uri-encoded by [api-test-path-fragment] as before.
+(define (api-test-path->segments+query who path)
+  (define raw (runtime-value->jsexpr path))
+  (cond
+    ;; Already-split literal path.  The emitter only ever produces STRING
+    ;; segments here (a literal fragment, or api-test-path-fragment's
+    ;; uri-encoded hole), so a list of strings is accepted as segments — which
+    ;; also makes a Tesl `List String` path work — while a list containing
+    ;; anything else falls through to the error below instead of being routed
+    ;; as `1/2/3`.
+    [(and (list? raw) (andmap string? raw)) (cons raw "")]
+    [(or (string? raw) (bytes? raw) (symbol? raw) (number? raw))
+     (define s (api-test-string-fragment raw))
+     (define m (regexp-match #rx"^([^?]*)[?]?(.*)$" s))
+     (define path-part  (second m))
+     (define query-part (third m))
+     (cons (string-split path-part "/") query-part)]
+    [else
+     (raise-user-error
+      who
+      (string-append
+       "request path must be a String (or an already-split segment list), got ~a."
+       "\n  A path expression is allowed — `let p = \"/todos/1\"`, `\"/todos/\" ++ id`,"
+       "\n  `\"/todos/{id}\"` — but it must evaluate to a string.")
+      raw)]))
 
 (define (api-test-field-access-ref value field-name)
   (define raw (runtime-value->jsexpr value))
@@ -205,11 +247,27 @@
         (hash-set request-headers "content-type" "application/json")
         request-headers))
   (define request-body (if body (jsexpr->bytes body) #""))
+  ;; A literal path arrives pre-split with its query already in #:query; a
+  ;; computed one arrives whole, so its `?…` is lifted here (issue #45).
+  (define normalized (api-test-path->segments+query 'dispatch-api-test-request path))
+  (define path-segments (car normalized))
+  (define final-query (if (equal? query "") (cdr normalized) query))
+  ;; `dispatch-request` deliberately returns the 'route-not-found SENTINEL (so
+  ;; `serve` can choose between a 404 and the SPA index fallback).  An api-test
+  ;; has no static fallback, so resolve it the way serve's non-static branch
+  ;; does — a real 404 response.  Passing the sentinel to api-test-response
+  ;; raised `dsl-response-status: contract violation`, i.e. a request to a path
+  ;; the server does not serve blew up the test body instead of reporting 404.
+  (define result
+    (dispatch-request
+     server
+     (make-request method path-segments
+                   #:headers final-headers #:body request-body #:query final-query)
+     #:capabilities capabilities))
   (api-test-response
-   (dispatch-request
-    server
-    (make-request method path #:headers final-headers #:body request-body #:query query)
-    #:capabilities capabilities)))
+   (if (eq? result 'route-not-found)
+       (error-response 404 "Route not found")
+       result)))
 
 (define (register-api-test-worker-entries! registry entries)
   (define grouped (make-hasheq))
@@ -250,15 +308,23 @@
            (or (not seg) (equal? seg p)))
          route)))
 
-(define (api-test-subscribe sse-routes path
+(define (api-test-subscribe sse-routes raw-path
                             #:cookie [cookie #f]
                             #:headers [headers (hash)]
-                            #:name [name #f])
+                            #:name [name0 #f])
   (define normalized-headers (normalize-api-test-headers headers))
   (define final-headers
     (if cookie
         (hash-set normalized-headers "cookie" (api-test-cookie->header cookie))
         normalized-headers))
+  ;; Same literal-or-computed path normalization as dispatch (issue #45): a
+  ;; `let`-bound / concatenated subscribe path used to reach find-api-test-sse-route
+  ;; as a bare string and fail its `length` on a non-list.
+  (define path (car (api-test-path->segments+query 'subscribe raw-path)))
+  ;; The emitter can only supply a #:name for a literal path (it passes "" for a
+  ;; computed one), so an empty name is ABSENT — otherwise every "could not match
+  ;; SSE route" message for a computed path named the empty string.
+  (define name (if (equal? name0 "") #f name0))
   (define route (find-api-test-sse-route sse-routes path))
   (unless route
     (raise-user-error 'subscribe

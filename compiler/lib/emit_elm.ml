@@ -51,6 +51,8 @@ let rec elm_type_of_type_expr te =
   | TName { name = "Float"; _ }
   | TName { name = "Real"; _ } -> "Float"
   | TName { name = "Bool"; _ } -> "Bool"
+  (* NT-07: an Int32 is a bare integer on the wire; Elm's Int covers the range. *)
+  | TName { name = "Int32"; _ } -> "Int"
   | TName { name = "PosixMillis"; _ } -> "Int"
   | TName { name = "Unit"; _ } -> "()"
   | TName { name = "Set"; _ } -> "List value"
@@ -256,6 +258,7 @@ let rec decode_expr_of_type te =
   | TName { name = "Float"; _ }
   | TName { name = "Real"; _ } -> "D.float"
   | TName { name = "Bool"; _ } -> "D.bool"
+  | TName { name = "Int32"; _ } -> "D.int"
   (* PosixMillis arrives as a bare epoch-millis integer over HTTP, but the
      agent-facing boundary renders it as {"epochMillis": <int>, "iso": "…"}
      (types.rkt agent enrichment).  Accept BOTH so a client decoder never
@@ -289,6 +292,7 @@ let rec encode_expr_of_type te value_expr =
   | TName { name = "Float"; _ }
   | TName { name = "Real"; _ } -> "E.float " ^ value_expr
   | TName { name = "Bool"; _ } -> "E.bool " ^ value_expr
+  | TName { name = "Int32"; _ } -> "E.int " ^ value_expr
   | TName { name = "PosixMillis"; _ } -> "E.int " ^ value_expr
   | TName { name = "Unit"; _ } -> "E.null"
   | TName { name; _ } when Ir.is_money_rate_type_name name -> "moneyRateEncoder " ^ value_expr
@@ -310,6 +314,7 @@ and encode_fn_of_type te =
   | TName { name = "Float"; _ }
   | TName { name = "Real"; _ } -> "E.float"
   | TName { name = "Bool"; _ } -> "E.bool"
+  | TName { name = "Int32"; _ } -> "E.int"
   | TName { name = "PosixMillis"; _ } -> "E.int"
   | TName { name = "Unit"; _ } -> "(\\_ -> E.null)"
   | TName { name; _ } when Ir.is_money_rate_type_name name -> "moneyRateEncoder"
@@ -332,6 +337,8 @@ let rec elm_type_of_ir_type (ty : Ir.ir_type) =
   match ty with
   | Ir.IRString -> "String"
   | Ir.IRInt -> "Int"
+  (* NT-07: Int32 is a bare integer on the wire; Elm's Int covers the range. *)
+  | Ir.IRInt32 -> "Int"
   | Ir.IRFloat -> "Float"
   | Ir.IRBool -> "Bool"
   | Ir.IRPosixMillis -> "Int"
@@ -396,6 +403,7 @@ let rec decode_expr_of_ir_type (ty : Ir.ir_type) =
   match ty with
   | Ir.IRString -> "D.string"
   | Ir.IRInt -> "D.int"
+  | Ir.IRInt32 -> "D.int"
   | Ir.IRFloat -> "D.float"
   | Ir.IRBool -> "D.bool"
   (* Same tolerant shape as decode_expr_of_type: bare int (HTTP) OR the
@@ -428,6 +436,7 @@ let rec encode_expr_of_ir_type ty value_expr =
   match ty with
   | Ir.IRString -> "E.string " ^ value_expr
   | Ir.IRInt -> "E.int " ^ value_expr
+  | Ir.IRInt32 -> "E.int " ^ value_expr
   | Ir.IRFloat -> "E.float " ^ value_expr
   | Ir.IRBool -> "E.bool " ^ value_expr
   | Ir.IRPosixMillis -> "E.int " ^ value_expr
@@ -482,6 +491,7 @@ and encode_fn_of_ir_type ty =
   match ty with
   | Ir.IRString -> "E.string"
   | Ir.IRInt -> "E.int"
+  | Ir.IRInt32 -> "E.int"
   | Ir.IRFloat -> "E.float"
   | Ir.IRBool -> "E.bool"
   | Ir.IRPosixMillis -> "E.int"

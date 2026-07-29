@@ -73,6 +73,13 @@ let money_zod_schema =
 
 let money_ts_type = "{ minorUnits: number; currency: string }"
 
+(* Int32 (NT-07): a bare JSON integer inside the 32-bit range.  The range is
+   part of the type — the server's decode boundary rejects an out-of-range
+   value rather than wrapping it (tesl/int32.rkt registers `int32?` as the
+   runtime type), so the client schema checks it too instead of accepting a
+   value the server will refuse. *)
+let int32_zod_schema = "z.number().int().gte(-2147483648).lte(2147483647)"
+
 (* MoneyRate (GitHub #38): ONE wire shape for every denominator — integer
    minor units per one `per` unit + currency + per label; tolerant of the
    agent-enriched extra "display", normalized away (the Money pattern). *)
@@ -87,6 +94,9 @@ let rec zod_of_ir_type (fact_schemas : (string, unit) Hashtbl.t) (ty : Ir.ir_typ
   match ty with
   | Ir.IRString -> "z.string()"
   | Ir.IRInt -> "z.number().int()"
+  (* NT-07: a range-checked integer, so an out-of-range value is rejected at the
+     client boundary too instead of silently wrapping. *)
+  | Ir.IRInt32 -> int32_zod_schema
   | Ir.IRFloat -> "z.number()"
   | Ir.IRBool -> "z.boolean()"
   (* PosixMillis arrives as a bare epoch-millis integer over HTTP, but the
@@ -143,6 +153,7 @@ let rec ts_type_of_ir_type (ty : Ir.ir_type) =
   match ty with
   | Ir.IRString -> "string"
   | Ir.IRInt -> "number"
+  | Ir.IRInt32 -> "number"
   | Ir.IRFloat -> "number"
   | Ir.IRBool -> "boolean"
   | Ir.IRPosixMillis -> "number"
@@ -183,6 +194,7 @@ let base_zod_schema_for_type name =
   match name with
   | "String" -> "z.string()"
   | "Int" | "Integer" -> "z.number().int()"
+  | "Int32" -> int32_zod_schema
   | "Float" | "Real" -> "z.number()"
   | "Bool" -> "z.boolean()"
   (* Same tolerant shape as zod_of_ir_type: bare int (HTTP) OR the
@@ -471,6 +483,7 @@ let emit_ts (m : module_form) : string =
       let base_schema = match base_type with
         | TName { name = "String"; _ } -> "z.string()"
         | TName { name = "Int" | "Integer"; _ } -> "z.number().int()"
+        | TName { name = "Int32"; _ } -> int32_zod_schema
         | TName { name = "Float" | "Real"; _ } -> "z.number()"
         | TName { name = "Bool"; _ } -> "z.boolean()"
         | TName { name = "Money"; _ } -> money_zod_schema

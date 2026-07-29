@@ -23,6 +23,10 @@
 
 (provide Product Category findById findByCategory findCheapInCategory findFeatured cheapestProducts createProduct setPrice updatePriceSilently removeProduct removeProductWithResult batchCreate expensiveProducts discounted notInCategory createWithWitness findInPriceRange findInPriceRangeOrdered upsertProduct searchByName searchByNameInsensitive countProducts sumPrices countByCategory findInStockCheap findProductsWithCategory createProductWithCategory swapStock findById-signature findByCategory-signature findCheapInCategory-signature findFeatured-signature cheapestProducts-signature createProduct-signature setPrice-signature updatePriceSilently-signature removeProduct-signature removeProductWithResult-signature expensiveProducts-signature discounted-signature notInCategory-signature createWithWitness-signature batchCreate-signature findInPriceRange-signature findInPriceRangeOrdered-signature upsertProduct-signature searchByName-signature searchByNameInsensitive-signature countProducts-signature sumPrices-signature countByCategory-signature findInStockCheap-signature findProductsWithCategory-signature createProductWithCategory-signature swapStock-signature)
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "example/learn/lesson21-sql-reference.tesl" '(1 194 203 210 216 223 273 276 279 306 310 333 337 349 352 355 358 361 365 379 383 417 424 436 443 447 452 464 582 688 698 699))
 (define-entity Product
   #:source (make-hash)
   #:table products
@@ -47,7 +51,7 @@
   (findById [id : String])
   #:capabilities [dbRead]
   #:returns (? Product _entity ::: (FromDb (Id == id) _entity))
-  (let ([result (thsl-src! "example/learn/lesson21-sql-reference.tesl" 194 (list (cons 'id *id)) (lambda () (let ([tesl_match (select-one (from Product) (where (==. (entity-field-ref Product 'id) id)))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/learn/lesson21-sql-reference.tesl" 195 (list (cons 'result *result) (cons 'id *id)) (lambda () (let ([tesl-case-0 (raw-value result)]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson21-sql-reference.tesl" 196 (list) (lambda () (reject "not found" #:http-code 404)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([p (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson21-sql-reference.tesl" 197 (list (cons 'p p)) (lambda () p)))]))))))
+  (let ([result (thsl-src! "example/learn/lesson21-sql-reference.tesl" 194 (list (cons 'id *id)) (lambda () (let ([tesl_match (select-one (from Product) (where (==. (entity-field-ref Product 'id) id)))]) (if tesl_match (Something tesl_match) Nothing))) 'result)]) (thsl-src-control! "example/learn/lesson21-sql-reference.tesl" 195 (list (cons 'result *result) (cons 'id *id)) (lambda () (let ([tesl-case-0 (raw-value result)]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson21-sql-reference.tesl" 196 (list) (lambda () (reject "not found" #:http-code 404)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([p (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson21-sql-reference.tesl" 197 (list (cons 'p p)) (lambda () p)))]))))))
 
 (define/pow
   (findByCategory [cat : String])

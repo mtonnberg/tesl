@@ -321,7 +321,11 @@
                    'operation (if op (~a op) 'null)
                    'params    param-json
                    'preview   (sql-inline-preview sql params)
-                   'status    (~a status)))
+                   'status    (~a status)
+                   ;; #t when this is the statement of the line we are stopped on
+                   ;; (an after-the-statement pause on a read-only query line);
+                   ;; #f when it is the last statement that ran BEFORE this line.
+                   'this-line (and (pause-shows-sql?) #t)))
          (if (and (eq? status 'executed) (exact-nonnegative-integer? rowcount))
              (hash-set base 'row-count rowcount)
              base))))

@@ -608,6 +608,7 @@ api-test "GET /todos/:id returns specific todo" for TodoServer {
 ```
 
 **Key patterns:**
+- The request path is any `String` expression — a literal, an interpolation (`get "/todos/{id}"`), a `let`-bound string, or a concatenation (`get ("/todos/" ++ id)`). That is what makes a create-then-read flow testable when the id is server-generated: read it off the create response and splice it into the follow-up path. A `?query=…` in a computed path is parsed exactly as in a literal one.
 - Use `api-test` with a server name (e.g., `for TodoServer`)
 - The server must be defined in your code with `server TodoServer for TodoApi` (the port is set on the `App` record, not on the `server`)
 - Test the full HTTP cycle: request → handler → response

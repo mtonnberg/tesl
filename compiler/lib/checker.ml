@@ -3492,6 +3492,37 @@ and infer_binop ctx loc ~op_loc op left right =
               (match op with BMul -> "*" | BDiv -> "/" | _ -> "%"))
        | _ -> ());
       TCon "Money"
+    end else if lt' = t_int32 || rt' = t_int32 then begin
+      (* NT-07: `Int32` is nominal, so a raw arithmetic operator would have to
+         either unify it with `Int` (losing the boundary type) or wrap silently
+         on overflow.  Both are wrong, so name the checked operation instead of
+         reporting `cannot unify Int32 with Int` — the bare unify error made the
+         boundary type look unusable for arithmetic.  Short-circuit to Int32 so
+         the caller sees no cascade. *)
+      (match op with
+       | BAdd | BSub | BMul ->
+         let fn, verb = match op with
+           | BAdd -> "Int32.add", "addition"
+           | BSub -> "Int32.subtract", "subtraction"
+           | _    -> "Int32.multiply", "multiplication"
+         in
+         add_error ctx loc
+           (Printf.sprintf
+              "operator `%s` is not defined for `Int32` (32-bit %s can leave the \
+               range); use `%s a b`, which is a `Maybe Int32` — `Nothing` when \
+               the result does not fit. To compute in `Int` instead, widen with \
+               `Int32.toInt` and narrow the result with `Int32.fromInt`"
+              (match op with BAdd -> "+" | BSub -> "-" | _ -> "*") verb fn)
+       | BDiv | BMod ->
+         let fn = if op = BDiv then "Int32.divide" else "Int32.modulo" in
+         add_error ctx loc
+           (Printf.sprintf
+              "operator `%s` is not defined for `Int32`; use `%s a b`, whose \
+               divisor must carry an `IsNonZero` proof (mint it with \
+               `check Int32.nonZero(b)`)"
+              (if op = BDiv then "/" else "%") fn)
+       | _ -> ());
+      t_int32
     end else begin
       (* First-Class Units: the dimensioned-quantity algebra.  This branch
          MUST run before the unify-to-num_ty default below — that unify would
@@ -5317,6 +5348,10 @@ let tesl_module_predicate_exports : (string * string list) list = [
   ("Tesl.String",  ["IsTrimmed"; "IsUpperCase"; "IsLowerCase"; "IsNonNegative"; "IsNonEmpty"]);
   ("Tesl.List",    ["IsSorted"]);
   ("Tesl.Int",     ["IsNonNegative"; "IsNonZero"]);
+  (* Int32 mints the SAME two predicates over its own nominal type; exposing
+     them from both Tesl.Int and Tesl.Int32 in one file is a V001 ambiguous
+     import (the existing single-source rule), which is the intended answer. *)
+  ("Tesl.Int32",   ["IsNonNegative"; "IsNonZero"]);
   ("Tesl.Float",   ["FloatNonZero"]);
   ("Tesl.Dict",    ["HasKey"]);
 ]

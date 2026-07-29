@@ -65,6 +65,12 @@ let json_fact_option = function
 type ir_type =
   | IRString
   | IRInt
+  | IRInt32
+    (** Nominal builtin (NT-07).  Wire shape: a bare JSON integer that FITS a
+        32-bit range, i.e. exactly what a JavaScript number represents without
+        loss — which is why the W091 linter steers wire `Int` fields here.
+        Distinct from [IRInt] so the generated clients emit a range-checked
+        integer instead of an undefined `Int32Schema` / `int32Decoder`. *)
   | IRFloat
   | IRBool
   | IRPosixMillis
@@ -169,6 +175,7 @@ let rec ir_type_of_type_expr (te : type_expr) : ir_type =
   | TName { name = "Float"; _ }
   | TName { name = "Real"; _ } -> IRFloat
   | TName { name = "Bool"; _ } -> IRBool
+  | TName { name = "Int32"; _ } -> IRInt32
   | TName { name = "PosixMillis"; _ } -> IRPosixMillis
   | TName { name = "Money"; _ } -> IRMoney
   (* Dimensioned quantities (Length, Speed, … and the canonical "§Q[…]" TCon
@@ -202,6 +209,7 @@ let rec ir_type_of_type_expr (te : type_expr) : ir_type =
 let rec ir_type_to_text = function
   | IRString -> "String"
   | IRInt -> "Int"
+  | IRInt32 -> "Int32"
   | IRFloat -> "Float"
   | IRBool -> "Bool"
   | IRPosixMillis -> "PosixMillis"

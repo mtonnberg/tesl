@@ -25,6 +25,10 @@
 
 (provide ReportServer)
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "example/learn/lesson70-agent-async-work.tesl" '(199 217 218))
 (define-capture __inline_capturer_conversationId_1
   [conversationId : String]
   #:parser string-segment)

@@ -28,6 +28,10 @@
 
 (provide ChatServer replyTurn loadConversation lookupOrderStatus Consumer lookupOrderStatus-signature loadConversation-signature replyTurn-signature)
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "example/ai-conversation-service.tesl" '(151 196 217 218))
 (define Authenticated 'Authenticated)
 
 (define-capability convAi (implies aiProvider))

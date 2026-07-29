@@ -22,6 +22,10 @@
 
 (provide )
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "tests/critical-review-57-tests.tesl" '(354))
 (define A 'A)
 (define B 'B)
 (define C 'C)

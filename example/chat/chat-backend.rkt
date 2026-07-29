@@ -30,6 +30,10 @@
 
 (provide ChatServer)
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "example/chat/chat-backend.tesl" '(199 232 249 263))
 (define Authenticated 'Authenticated)
 (define NonEmpty 'NonEmpty)
 (define ValidRoomId 'ValidRoomId)
@@ -205,7 +209,7 @@
   (login [req : LoginRequest])
   #:capabilities [chatRead]
   #:returns ChatUser
-  (let ([existing (thsl-src! "example/chat/chat-backend.tesl" 232 (list (cons 'req *req)) (lambda () (let ([tesl_match (select-one (from ChatUser) (where (==. (entity-field-ref ChatUser 'username) (raw-value req.username))))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/chat/chat-backend.tesl" 233 (list (cons 'existing *existing) (cons 'req *req)) (lambda () (let ([tesl-case-4 (raw-value existing)]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Nothing)) (thsl-src! "example/chat/chat-backend.tesl" 235 (list) (lambda () (reject "user not found" #:http-code 401)))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Something)) (let ([u (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "example/chat/chat-backend.tesl" 237 (list (cons 'u u)) (lambda () *u)))]))))))
+  (let ([existing (thsl-src! "example/chat/chat-backend.tesl" 232 (list (cons 'req *req)) (lambda () (let ([tesl_match (select-one (from ChatUser) (where (==. (entity-field-ref ChatUser 'username) (raw-value req.username))))]) (if tesl_match (Something tesl_match) Nothing))) 'existing)]) (thsl-src-control! "example/chat/chat-backend.tesl" 233 (list (cons 'existing *existing) (cons 'req *req)) (lambda () (let ([tesl-case-4 (raw-value existing)]) (cond [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Nothing)) (thsl-src! "example/chat/chat-backend.tesl" 235 (list) (lambda () (reject "user not found" #:http-code 401)))] [(and (adt-value? *tesl-case-4) (eq? (adt-value-variant *tesl-case-4) 'Something)) (let ([u (hash-ref (adt-value-fields *tesl-case-4) 'value)]) (thsl-src! "example/chat/chat-backend.tesl" 237 (list (cons 'u u)) (lambda () *u)))]))))))
 
 (define-handler
   (seedUser [req : LoginRequest])

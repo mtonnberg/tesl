@@ -20,6 +20,10 @@
 
 (provide Lesson32Server)
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "example/learn/lesson32-api-tests.tesl" '(61))
 (define-record EchoRequest
   [message : String]
 )
@@ -65,7 +69,7 @@
   (getSeededNote)
   #:capabilities [dbRead]
   #:returns Note
-  (let ([found (thsl-src! "example/learn/lesson32-api-tests.tesl" 61 (list) (lambda () (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) "note-1")))]) (if tesl_match (Something tesl_match) Nothing))))]) (thsl-src-control! "example/learn/lesson32-api-tests.tesl" 62 (list (cons 'found *found)) (lambda () (let ([tesl-case-0 (raw-value found)]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson32-api-tests.tesl" 64 (list) (lambda () (reject "note not found" #:http-code 404)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson32-api-tests.tesl" 66 (list (cons 'n n)) (lambda () *n)))]))))))
+  (let ([found (thsl-src! "example/learn/lesson32-api-tests.tesl" 61 (list) (lambda () (let ([tesl_match (select-one (from Note) (where (==. (entity-field-ref Note 'id) "note-1")))]) (if tesl_match (Something tesl_match) Nothing))) 'found)]) (thsl-src-control! "example/learn/lesson32-api-tests.tesl" 62 (list (cons 'found *found)) (lambda () (let ([tesl-case-0 (raw-value found)]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson32-api-tests.tesl" 64 (list) (lambda () (reject "note not found" #:http-code 404)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([n (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson32-api-tests.tesl" 66 (list (cons 'n n)) (lambda () *n)))]))))))
 
 (define Lesson32Server-sse-routes '())
 (define-api Lesson32Api

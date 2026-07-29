@@ -1,0 +1,325 @@
+module Lesson74InteropPatterns exposing [Lesson74Server]
+
+import Tesl.Prelude exposing [String, Unit]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Maybe exposing [Maybe(..)]
+import Tesl.Tuple exposing [Tuple2]
+import Tesl.Env exposing [env, envRead]
+import Tesl.String exposing [String.join]
+import Tesl.List exposing [List.map]
+import Tesl.Id exposing [generatePrefixedId]
+import Tesl.Random exposing [random]
+import Tesl.Time exposing [nowMillis, time, PosixMillis]
+import Tesl.DB exposing [dbRead, dbWrite]
+import Tesl.HttpClient exposing [httpClient, HttpResponse, HttpClient.post]
+import Tesl.Queue exposing [
+  FromQueue,
+  queueRead,
+  queueWrite,
+  Queue,
+  QueueRetryStrategy,
+  Exponential,
+]
+import Tesl.Database exposing [
+  Database,
+  Postgres,
+  PostgresConfig,
+  TcpConnection,
+]
+import Tesl.ApiTest exposing [
+  statusOk,
+  JobResult(..),
+  processNextJob,
+  pendingJobCount,
+  expectJobOk,
+]
+
+# ── Goal ─────────────────────────────────────────────────────────────────────
+# Two things people ask for that Tesl deliberately does NOT have:
+#
+#   A. file access   — "let me read and write files"
+#   B. subprocesses  — "let me shell out to run a big workload"
+#
+# Tesl has neither, and is still the right tool for both requests. This lesson
+# shows what to write instead. See roadmap/discarded/using_queues_for_ffi.md for
+# the full reasoning behind the decision.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PROBLEM A — "I need to read and write files"
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WHY THERE IS NO Tesl.File
+#
+# A container filesystem is ephemeral, and two replicas of your app do not share
+# one. So a file written during a request is gone on the next deploy and invisible
+# to every other replica. It looks like it works — until you scale to two
+# instances or restart once. Tesl's model is that state lives in Postgres, and a
+# filesystem quietly breaks it.
+#
+# Every file-shaped need has a better home. Four of them, in order of how often
+# they come up:
+
+# A1. CONFIGURATION → the environment, not a config file.
+#
+# `env` reads an environment variable and returns `Maybe String`, so a missing
+# value is a value you have to handle rather than a crash. Reading the
+# environment is an effect, so it needs the `envRead` capability.
+fn resolveUploadBucket() -> String requires [envRead] =
+  case env "UPLOAD_BUCKET" of
+    Nothing -> "local-dev-bucket"
+    Something name -> name
+
+# A2. DATA THAT MUST SURVIVE → an entity, not a file on disk.
+#
+# This is the direct replacement for "write it to /var/data and read it back".
+# It is durable, shared by every replica, transactional, and it is the only
+# storage the proof system can reason about (`FromDb`).
+entity Document table "documents" primaryKey id {
+  id: String @db(text)
+  ownerId: String @db(text)
+  name: String @db(text)
+  body: String @db(text)
+  createdAt: PosixMillis
+}
+
+database Lesson74Database = Database {
+  schema: "lesson74"
+  entities: [Document]
+  backend: Postgres (PostgresConfig {
+    dbName: "demo"
+    user: "demo"
+    password: "demo"
+    connection: TcpConnection {
+      host: "localhost"
+      port: 5432
+    }
+  })
+}
+
+capability documentStore implies dbRead, dbWrite, time, random
+
+record NewDocument {
+  name: String
+  body: String
+}
+
+codec NewDocument {
+  toJson {
+    name -> "name" with_codec stringCodec
+    body -> "body" with_codec stringCodec
+  }
+  fromJson [
+    {
+      name <- "name" with_codec stringCodec
+      body <- "body" with_codec stringCodec
+    }
+  ]
+}
+
+# A3. IMPORT ("a human drops a file in a directory and we pick it up")
+#      → an endpoint that takes the content in the request body.
+#
+# The content arrives over HTTP instead of appearing on disk. You get auth,
+# validation, a codec, and an audit trail for free — none of which a watched
+# directory gives you.
+handler importDocument(body: NewDocument)
+  -> exists docId: String =>
+      Document ? FromDb (Id == docId)
+  requires [documentStore] =
+  let docId = generatePrefixedId "doc"
+  exists docId =>
+    insert Document {
+      id: docId,
+      ownerId: "demo-user",
+      name: body.name,
+      body: body.body,
+      createdAt: nowMillis()
+    }
+
+# A4. EXPORT ("write a report to a file") → generate it and return it.
+#
+# The report never touches a disk: build the string, hand it back as the
+# response body. Nothing to clean up, nothing to run out of space, and it works
+# identically on every replica.
+fn documentToCsvRow(doc: Document) -> String =
+  doc.id ++ "," ++ doc.name
+
+handler exportDocuments() -> String requires [documentStore] =
+  let docs = select doc from Document where doc.ownerId == "demo-user"
+  String.join (List.map documentToCsvRow docs) "\n"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PROBLEM B — "I need to spawn a subprocess to run a large workload"
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# There are two different requests hiding in this one, and they have different
+# answers. Ask first: is the WORK itself expressible in Tesl, or do you need a
+# library that only exists in another language?
+
+# B1. THE WORK IS EXPRESSIBLE — you do not need a subprocess at all.
+#
+# "Long-running" is not a reason to leave Tesl. A queue job already gives you
+# everything a background process was for:
+#
+#   * it runs off the request path, so no HTTP client waits for it
+#   * `numberOfWorkers` gives you parallelism
+#   * failures retry with backoff, and give up into the dead-letter queue
+#   * `enqueue` inside a `transaction` only becomes visible if that
+#     transaction commits — no orphaned work
+#
+# The job record is the "arguments" and the worker body is the "program".
+record SummariseDocument {
+  docId: String
+  ownerId: String
+}
+
+# The worker receives a proof-bearing job (`FromQueue`) exactly like a handler
+# receives an authenticated user. This is the whole "background workload"
+# feature — there is no subprocess, no binary in the image, and no new trust
+# boundary.
+fn storeSummary(docId: String, summary: String) -> Unit requires [dbWrite] =
+  update d in Document
+    where d.id == docId
+    set d.name = summary
+
+worker summariseDocument(job: SummariseDocument ::: FromQueue (Id == jobId) job)
+  requires [documentStore, queueRead] =
+  let existing = selectOne doc from Document where doc.id == job.docId
+  case existing of
+    Nothing -> job
+    Something doc ->
+      let _ = storeSummary job.docId ("summary: " ++ doc.name)
+      job
+
+# Kicking the work off is one statement. The handler returns immediately —
+# there is deliberately no way to block a request on a job, because a request
+# that waits for slow work is the bug this design removes.
+handler requestSummary(body: NewDocument) -> String
+  requires [documentStore, queueWrite] =
+  let docId = generatePrefixedId "doc"
+  let _stored = insert Document {
+    id: docId,
+    ownerId: "demo-user",
+    name: body.name,
+    body: body.body,
+    createdAt: nowMillis()
+  }
+  enqueue SummariseDocument { docId: docId, ownerId: "demo-user" }
+  "queued"
+
+# B2. THE WORK IS *NOT* EXPRESSIBLE — it needs a foreign library
+#     (thumbnailing, PDF rendering, an ML model, protobuf).
+#
+# Then the foreign code runs as its own service and the Tesl worker calls it.
+# Three rules make this safe, and they are the whole reason there is no FFI:
+#
+#   1. TESL ALWAYS INITIATES. The worker makes the outbound call and the reply is
+#      the HTTP response. The foreign service never calls back into Tesl, so
+#      there is no inbound endpoint to secure. (If the work takes minutes, then
+#      it calls back — but that is an ordinary authenticated Tesl endpoint, with
+#      ordinary `auth`, not a special interop mechanism.)
+#
+#   2. THE FOREIGN SERVICE NEVER GETS DATABASE CREDENTIALS. It receives a
+#      payload and returns a result. A process that can write your tables can
+#      write rows that violate your record invariants, and the checker enforces
+#      those at the write site — so a foreign writer defeats the proof system.
+#      Never hand it a connection string; hand it JSON.
+#
+#   3. NAME THE CAPABILITY AFTER THE EFFECT, NOT THE TRANSPORT. `requires
+#      [httpClient]` on business logic tells a reader nothing. `requires
+#      [thumbnailer]` tells them exactly what this function can reach.
+capability thumbnailer implies httpClient
+
+fn renderThumbnail(bucket: String, docId: String) -> HttpResponse
+  requires [thumbnailer] =
+  let url = "http://thumbnailer.internal/render/" ++ docId
+  let contentType = Tuple2 "Content-Type" "application/json"
+  let payload = "{\"bucket\":\"" ++ bucket ++ "\"}"
+  HttpClient.post url [contentType] payload
+
+# The same worker shape as B1 — the only difference is that the body makes an
+# outbound call instead of computing the answer locally. Note it is a *worker*,
+# not a handler: an external service can be slow, and a slow call in a handler
+# holds a request thread (and a database pool slot inside a `transaction`).
+record ThumbnailJob {
+  docId: String
+}
+
+worker thumbnailWorker(job: ThumbnailJob ::: FromQueue (Id == jobId) job)
+  requires [thumbnailer, envRead, queueRead] =
+  let bucket = resolveUploadBucket()
+  let response = renderThumbnail bucket job.docId
+  # A non-2xx from the foreign service `fail`s the job, which puts the queue's
+  # retry/backoff policy in charge of the transient case and the dead-letter
+  # worker in charge of the permanent one. You get that for free by failing —
+  # there is nothing to write yourself.
+  if response.status == 200 then
+    job
+  else
+    fail 502 "thumbnail service returned an error"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WIRING
+# ─────────────────────────────────────────────────────────────────────────────
+
+queue Lesson74Queue requires [documentStore, queueRead, thumbnailer, envRead] = Queue {
+  database: Lesson74Database
+  jobs: [
+    Job SummariseDocument summariseDocument Nothing,
+    Job ThumbnailJob thumbnailWorker Nothing
+  ]
+  numberOfWorkers: 2
+  retry: QueueRetryStrategy {
+    maxAttempts: 3
+    backoff: Exponential
+    initialDelay: 60
+  }
+}
+
+api Lesson74Api {
+  post "/documents"
+    body body: NewDocument
+    -> exists docId: String =>
+        Document ? FromDb (Id == docId)
+
+  get "/documents.csv"
+    -> String
+
+  post "/summaries"
+    body body: NewDocument
+    -> String
+}
+
+server Lesson74Server for Lesson74Api {
+  importDocument = importDocument
+  exportDocuments = exportDocuments
+  requestSummary = requestSummary
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTS — the background-work path is fully testable, with no subprocess
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# `processNextJob` runs the worker synchronously inside the test, so the whole
+# HTTP → queue → worker → database flow is deterministic. This is the strongest
+# practical argument for keeping the work inside Tesl: a shelled-out binary or a
+# remote service could not be driven from here.
+api-test "background work runs without a subprocess" for Lesson74Server requires [documentStore, queueRead, queueWrite] {
+  let resp = post "/summaries" body { "name": "report", "body": "hello" }
+  expect statusOk resp.status
+
+  expect pendingJobCount Lesson74Queue == 1
+
+  let result = processNextJob Lesson74Queue
+  let job = expectJobOk result
+  expect job.ownerId == "demo-user"
+  expect pendingJobCount Lesson74Queue == 0
+}
+
+api-test "import and export need no filesystem" for Lesson74Server requires [documentStore] {
+  let created = post "/documents" body { "name": "notes.txt", "body": "content" }
+  expect statusOk created.status
+
+  let exported = get "/documents.csv"
+  expect statusOk exported.status
+}

@@ -61,6 +61,12 @@
  step-next-file
  thsl-src
  thsl-src!
+ register-sql-read-lines!
+ ;; the underlying function: the macro above is EXPANSION-time gated, so a test
+ ;; (compiled without TESL_DEBUG) must register through this instead.
+ register-sql-read-lines!/runtime
+ sql-read-line?
+ pause-shows-sql?
  thsl-src-control!
  thsl-src!/runtime
  thsl-display-value
@@ -623,16 +629,88 @@
                 (stop-the-world-resume!))))
           (lambda () (semaphore-post stop-serialize-sem)))))))
 
+;; ── SQL-READ lines: pause AFTER the statement ────────────────────────────────
+;;
+;; A checkpoint normally pauses BEFORE its statement runs (the DAP meaning of a
+;; line breakpoint).  For a line whose statement RUNS A QUERY that made the
+;; whole SQL lens useless: paused before the query, dsl/sql.rkt has captured
+;; nothing yet, so the "exact statement the driver runs" scope is not advertised
+;; at all — and the natural fix ("step to the next line") does not exist when
+;; the query is the function's LAST statement.
+;;
+;; So for a READ-ONLY query line — select / selectOne / selectCount / selectSum /
+;; selectMax / selectMin / selectCountBy / selectSumBy — the pause happens AFTER
+;; the statement instead: the capture is then present, the SQL scope shows the
+;; parameterized statement + bound params + row count, and the paused locals
+;; include the statement's own result.  A read has no side effect, so running it
+;; before the stop changes nothing an inspector can observe.
+;;
+;; WRITES ARE UNCHANGED — insert / update / delete / upsert still pause BEFORE,
+;; because the whole point of a breakpoint on a mutation is to look at the world
+;; before it changes.
+;;
+;; The line set is emitted per module by the compiler (which knows statically
+;; which statement is a read) via [register-sql-read-lines!]; the runtime never
+;; guesses.  Keyed by (file . line) so two modules with a query on the same line
+;; number stay independent.
+(define sql-read-lines (make-hash))
+
+(define (register-sql-read-lines!/runtime file lines)
+  (for ([line (in-list lines)])
+    (when (exact-positive-integer? line)
+      (hash-set! sql-read-lines (cons file line) #t))))
+
+;; Keyed by the file string the compiler bakes into the checkpoint itself (the
+;; same spelling [register-sql-read-lines!] is emitted with), so no path
+;; normalization is needed or wanted here.
+(define (sql-read-line? file line)
+  (hash-ref sql-read-lines (cons file line) #f))
+
+;; #t exactly while parked at an AFTER-the-statement pause, i.e. while the
+;; thread's SQL capture belongs to the line we are stopped on.
+;;
+;; This is what makes the lens truthful.  A pause BEFORE a statement can still
+;; find a capture in the thread — the one an EARLIER statement left behind — and
+;; showing it would label a stale statement as "the SQL of this line" (a
+;; breakpoint on an `insert` line would display the previous `select`).  The
+;; surfaces (DAP scope, attach channel, headless inspector) therefore read the
+;; capture only when this is set: a before-pause shows no SQL scope at all,
+;; which is honest, and the read lines above are exactly the lines where a
+;; statement's own SQL is available.
+(define pause-sql-fresh-box (box #f))
+(define (pause-shows-sql?) (unbox pause-sql-fresh-box))
+
 ;; A normal statement checkpoint: pause, then run the statement at depth+1 so a
 ;; called function's checkpoints nest one level deeper (step-over skips them).
 ;; dynamic-wind restores the depth even if the statement escapes (e.g. `fail`).
-(define (thsl-src!/runtime file line locals thunk)
+;; On a read-only query line the two are swapped (see above): run first, pause
+;; after, with the result added to the reported locals under [name] when the
+;; compiler supplied the binding's name.
+(define (thsl-src!/runtime file line locals thunk [name #f])
   (define d (thread-cell-ref checkpoint-depth-cell))
-  (checkpoint-pause! file line locals d)
-  (dynamic-wind
-    (lambda () (thread-cell-set! checkpoint-depth-cell (add1 d)))
-    thunk
-    (lambda () (thread-cell-set! checkpoint-depth-cell d))))
+  (define (run-at-depth+1)
+    (dynamic-wind
+      (lambda () (thread-cell-set! checkpoint-depth-cell (add1 d)))
+      thunk
+      (lambda () (thread-cell-set! checkpoint-depth-cell d))))
+  (cond
+    [(and (debug-active?) (sql-read-line? file line))
+     ;; The query runs first; if it RAISES, no stop happens and the error
+     ;; propagates exactly as in a release run (we never swallow it).
+     (define value (run-at-depth+1))
+     ;; The value goes in as-is: the rendering layer already unwraps GDP
+     ;; named-values / newtypes, exactly as it does for every other local.
+     (dynamic-wind
+       (lambda () (set-box! pause-sql-fresh-box #t))
+       (lambda ()
+         (checkpoint-pause! file line
+                            (if name (append locals (list (cons name value))) locals)
+                            d))
+       (lambda () (set-box! pause-sql-fresh-box #f)))
+     value]
+    [else
+     (checkpoint-pause! file line locals d)
+     (run-at-depth+1)]))
 
 ;; A CONTROL-FLOW checkpoint (a `case` dispatch): pause, then run the thunk at the
 ;; SAME depth — its nested arm checkpoints are same-frame control flow, NOT a
@@ -653,6 +731,16 @@
 ;; (defensive fallback) erases to `(thunk)`.
 (define-syntax (thsl-src! stx)
   (syntax-parse stx
+    ;; The 5-arg shape carries the statement's BINDING NAME, used only on a
+    ;; read-only query line (where the pause happens after the statement) so the
+    ;; result is visible in the paused frame.  Erases identically.
+    [(_ file:expr line:expr locals:expr thunk:expr name:expr)
+     (if (tesl-debug-checkpoints?)
+         #'(thsl-src!/runtime file line locals thunk name)
+         (syntax-parse #'thunk
+           #:literals (lambda)
+           [(lambda () body:expr ...+) #'(let () body ...)]
+           [_ #'(thunk)]))]
     [(_ file:expr line:expr locals:expr thunk:expr)
      (if (tesl-debug-checkpoints?)
          #'(thsl-src!/runtime file line locals thunk)
@@ -660,6 +748,17 @@
            #:literals (lambda)
            [(lambda () body:expr ...+) #'(let () body ...)]
            [_ #'(thunk)]))]))
+
+;; register-sql-read-lines! — the compiler emits ONE of these per module, listing
+;; the lines whose statement is a read-only query (see sql-read-line? above).
+;; Expansion-gated like the checkpoints themselves: a release build erases the
+;; whole form, so the line table costs nothing when there is no debugger.
+(define-syntax (register-sql-read-lines! stx)
+  (syntax-parse stx
+    [(_ file:expr lines:expr)
+     (if (tesl-debug-checkpoints?)
+         #'(register-sql-read-lines!/runtime file lines)
+         #'(void))]))
 
 ;; thsl-src-control! — same as thsl-src! but for a CONTROL-FLOW dispatch (a `case`):
 ;; it does NOT deepen the call frame, so step-over reaches the case's arm

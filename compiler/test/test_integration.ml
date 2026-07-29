@@ -41,14 +41,18 @@ let read_file path =
   with Sys_error _ -> ""
 
 (* B5: the emitter now bakes the *input* .tesl path into each (thsl-src! "PATH" …)
-   checkpoint.  Committed snapshots use a repo-relative path (stable across
+   checkpoint — and into the (register-sql-read-lines! "PATH" …) table that keys
+   the debugger's read-only-query lines to the same file.  Committed snapshots use a repo-relative path (stable across
    machines); these tests compile with an absolute path, so the baked string
    differs only in its directory prefix.  Canonicalise the thsl-src! file string
    to its basename on both sides before comparing — this keeps the exact-match
    asserting the full emission structure while tolerating the path prefix. *)
 let canonicalize_thsl_paths s =
   (* Matches both `(thsl-src! "..."` and `(thsl-src-control! "..."` checkpoints. *)
-  let re = Str.regexp "(\\(thsl-src-control!\\|thsl-src!\\) \"\\([^\"]*\\)\"" in
+  let re =
+    Str.regexp
+      "(\\(thsl-src-control!\\|thsl-src!\\|register-sql-read-lines!\\) \"\\([^\"]*\\)\""
+  in
   Str.global_substitute re
     (fun whole ->
        let macro = Str.matched_group 1 whole in

@@ -24,6 +24,10 @@
 
 (provide showPrice lineTotal addSameCurrency convertToDisplay convertChecked totalRevenue showPrice-signature lineTotal-signature addSameCurrency-signature convertToDisplay-signature convertChecked-signature totalRevenue-signature)
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "example/learn/lesson71-money.tesl" '(121 122 206))
 (define/pow
   (showPrice)
   #:returns String

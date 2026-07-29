@@ -52,7 +52,8 @@ module Lesson73Metrics exposing [recordSignup]
 # belong to the host's own agent (node exporter, OneUptime agent, container
 # runtime), not to the application.
 
-import Tesl.Prelude exposing [Bool(..), Int, String, Unit, List]
+import Tesl.Prelude exposing [Bool(..), String]
+import Tesl.ApiTest exposing [statusOk]
 import Tesl.Float exposing [Float]
 import Tesl.Tuple exposing [Tuple2]
 import Tesl.Telemetry exposing [
@@ -62,7 +63,7 @@ import Tesl.Telemetry exposing [
   histogram,
   gauge,
 ]
-import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
 
 # Counter: how often something happened, labeled by a BOUNDED attribute.
@@ -101,3 +102,22 @@ main() -> App requires [] =
     api: MetricsServer
     port: 8087
   }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests — recording a metric is an ordinary statement, so it is testable like
+# any other. A metric call returns Unit and never changes the value flowing
+# through the function, which is exactly what makes it safe to sprinkle into
+# real code: the assertions below are on the RESULT, and they hold with the
+# recording in place.
+# ─────────────────────────────────────────────────────────────────────────────
+
+test "a counter records without disturbing the function's result" {
+  expect recordSignup "pro" == "welcome to pro"
+  expect recordSignup "free" == "welcome to free"
+}
+
+api-test "an endpoint that records a histogram and a gauge still responds" for MetricsServer {
+  let r = get "/run"
+  expect statusOk r.status
+  expect r.body == "welcome to pro"
+}

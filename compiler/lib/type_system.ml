@@ -428,18 +428,85 @@ let stdlib_env : (string * scheme) list = [
   "String.replace",    mono (t_fun [t_string; t_string; t_string] t_string);
   "String.toInt",      mono (t_fun [t_string] (t_maybe t_int));
   "String.fromInt",    mono (t_fun [t_int] t_string);
+  (* The rest of Tesl.String (exported but previously unTYPED — see the note on
+     the Float block below). *)
+  "String.isEmpty",    mono (t_fun [t_string] t_bool);
+  "String.trimLeft",   mono (t_fun [t_string] t_string);
+  "String.trimRight",  mono (t_fun [t_string] t_string);
+  "String.slice",      mono (t_fun [t_string; t_int; t_int] t_string);
+  "String.repeat",     mono (t_fun [t_string; t_int] t_string);
+  "String.reverse",    mono (t_fun [t_string] t_string);
+  "String.toFloat",    mono (t_fun [t_string] (t_maybe t_float));
+  "String.fromFloat",  mono (t_fun [t_float] t_string);
+  "String.lines",      mono (t_fun [t_string] (t_list t_string));
+  "String.words",      mono (t_fun [t_string] (t_list t_string));
+  "String.padLeft",    mono (t_fun [t_string; t_int; t_string] t_string);
+  "String.padRight",   mono (t_fun [t_string; t_int; t_string] t_string);
+  "String.dropPrefix", mono (t_fun [t_string; t_string] t_string);
+  "String.dropSuffix", mono (t_fun [t_string; t_string] t_string);
+  "String.indexOf",    mono (t_fun [t_string; t_string] (t_maybe t_int));
+  (* check function: passes a non-empty string through, minting IsNonEmpty *)
+  "String.requireNonEmpty", mono (t_fun [t_string] t_string);
+
+  (* ── Int32 (NT-07) ───────────────────────────────────────────────────── *)
+  (* A JS-safe nominal boundary integer.  ONE RANGE RULE across the module:
+     a result that cannot leave [-2^31, 2^31) is an `Int32`; a result that can
+     is a `Maybe Int32` (`Nothing` = out of range, never a silent wrap); a
+     result that is not an Int32 at all has its own type.  `Int32.toInt` is
+     total widening, `Int32.fromIntClamped` is total saturating narrowing. *)
+  "Int32.fromInt",        mono (t_fun [t_int] (t_maybe t_int32));
+  "Int32.toInt",          mono (t_fun [t_int32] t_int);
+  "Int32.fromIntClamped", mono (t_fun [t_int] t_int32);
+  "Int32.parse",          mono (t_fun [t_string] (t_maybe t_int32));
+  "Int32.fromFloat",      mono (t_fun [t_float] (t_maybe t_int32));
+  "Int32.toFloat",        mono (t_fun [t_int32] t_float);
+  "Int32.toString",       mono (t_fun [t_int32] t_string);
+  "Int32.minValue",       mono t_int32;
+  "Int32.maxValue",       mono t_int32;
+  "Int32.min",            mono (t_fun [t_int32; t_int32] t_int32);
+  "Int32.max",            mono (t_fun [t_int32; t_int32] t_int32);
+  "Int32.clamp",          mono (t_fun [t_int32; t_int32; t_int32] t_int32);
+  "Int32.modulo",         mono (t_fun [t_int32; t_int32] t_int32);
+  "Int32.add",            mono (t_fun [t_int32; t_int32] (t_maybe t_int32));
+  "Int32.subtract",       mono (t_fun [t_int32; t_int32] (t_maybe t_int32));
+  "Int32.multiply",       mono (t_fun [t_int32; t_int32] (t_maybe t_int32));
+  "Int32.divide",         mono (t_fun [t_int32; t_int32] (t_maybe t_int32));
+  "Int32.negate",         mono (t_fun [t_int32] (t_maybe t_int32));
+  "Int32.abs",            mono (t_fun [t_int32] (t_maybe t_int32));
+  "Int32.pow",            mono (t_fun [t_int32; t_int32] (t_maybe t_int32));
+  "Int32.isPositive",     mono (t_fun [t_int32] t_bool);
+  "Int32.isNegative",     mono (t_fun [t_int32] t_bool);
+  "Int32.isZero",         mono (t_fun [t_int32] t_bool);
+  "Int32.isEven",         mono (t_fun [t_int32] t_bool);
+  "Int32.isOdd",          mono (t_fun [t_int32] t_bool);
+  "Int32.sign",           mono (t_fun [t_int32] t_int);
+  "Int32.digits",         mono (t_fun [t_int32] t_int);
+  "Int32.nonZero",        mono (t_fun [t_int32] t_int32);
+  "Int32.nonNegative",    mono (t_fun [t_int32] t_int32);
 
   (* ── Int ─────────────────────────────────────────────────────────────── *)
-  (* NT-07 — Int32 boundary type conversions (pure; no capability). fromInt is the
-     ONLY value-range decision (checked narrowing); toInt is total widening. *)
-  "Int32.fromInt", mono (t_fun [t_int] (t_maybe t_int32));
-  "Int32.toInt",   mono (t_fun [t_int32] t_int);
   "Int.parse",    mono (t_fun [t_string] (t_maybe t_int));
   "Int.toString", mono (t_fun [t_int] t_string);
   "Int.abs",      mono (t_fun [t_int] t_int);
   "Int.min",      mono (t_fun [t_int; t_int] t_int);
   "Int.max",      mono (t_fun [t_int; t_int] t_int);
   "Int.nonNegative", mono (t_fun [t_int] t_int);  (* check-like but simpler *)
+  "Int.nonZero",  mono (t_fun [t_int] t_int);     (* check: mints IsNonZero *)
+  "Int.fromFloat", mono (t_fun [t_float] t_int);
+  "Int.toFloat",  mono (t_fun [t_int] t_float);
+  "Int.clamp",    mono (t_fun [t_int; t_int; t_int] t_int);
+  "Int.isPositive", mono (t_fun [t_int] t_bool);
+  "Int.isNegative", mono (t_fun [t_int] t_bool);
+  "Int.isZero",   mono (t_fun [t_int] t_bool);
+  "Int.isEven",   mono (t_fun [t_int] t_bool);
+  "Int.isOdd",    mono (t_fun [t_int] t_bool);
+  "Int.gcd",      mono (t_fun [t_int; t_int] t_int);
+  "Int.lcm",      mono (t_fun [t_int; t_int] t_int);
+  "Int.pow",      mono (t_fun [t_int; t_int] t_int);
+  "Int.digits",   mono (t_fun [t_int] t_int);
+  "Int.sign",     mono (t_fun [t_int] t_int);
+  "Int.divide",   mono (t_fun [t_int; t_int] t_int);
+  "Int.modulo",   mono (t_fun [t_int; t_int] t_int);
 
   (* ── Dict ────────────────────────────────────────────────────────────── *)
   "Dict.empty",        { vars = _r2_kv; mono = t_dict _k _v };
@@ -471,6 +538,14 @@ let stdlib_env : (string * scheme) list = [
   "Dict.union",        { vars = _r2_kv; mono = t_fun [t_dict _k _v; t_dict _k _v] (t_dict _k _v) };
   "Dict.intersection", { vars = _r2_kv; mono = t_fun [t_dict _k _v; t_dict _k _v] (t_dict _k _v) };
   "Dict.difference",   { vars = _r2_kv; mono = t_fun [t_dict _k _v; t_dict _k _v] (t_dict _k _v) };
+  (* Exported but previously unTYPED (see the Float block note). *)
+  "Dict.insertWith",   { vars = _r2_kv; mono = t_fun [t_fun [_v; _v] _v; _k; _v; t_dict _k _v] (t_dict _k _v) };
+  "Dict.mapWithKey",   { vars = _r3_abc; mono = t_fun [t_fun [_k; _a] _b; t_dict _k _a] (t_dict _k _b) };
+  "Dict.filterWithKey",{ vars = _r2_kv; mono = t_fun [t_fun [_k; _v] t_bool; t_dict _k _v] (t_dict _k _v) };
+  "Dict.foldl",        { vars = _r3_abc; mono = t_fun [t_fun [_b; _v] _b; _b; t_dict _k _v] _b };
+  "Dict.foldr",        { vars = _r3_abc; mono = t_fun [t_fun [_v; _b] _b; _b; t_dict _k _v] _b };
+  "Dict.unionWith",    { vars = _r2_kv; mono = t_fun [t_fun [_v; _v] _v; t_dict _k _v; t_dict _k _v] (t_dict _k _v) };
+  "Dict.update",       { vars = _r2_kv; mono = t_fun [_k; t_fun [t_maybe _v] (t_maybe _v); t_dict _k _v] (t_dict _k _v) };
 
   (* ── Set ─────────────────────────────────────────────────────────────── *)
   "Set.empty",         { vars = _r1_a; mono = t_set _a };
@@ -492,6 +567,10 @@ let stdlib_env : (string * scheme) list = [
   "Set.any",           { vars = _r1_a; mono = t_fun [t_fun [_a] t_bool; t_set _a] t_bool };
   "Set.all",           { vars = _r1_a; mono = t_fun [t_fun [_a] t_bool; t_set _a] t_bool };
   "Set.allCheck",      { vars = _r1_a; mono = t_fun [t_fun [_a] _a; t_set _a] (t_maybe (t_set _a)) };
+  (* Exported but previously unTYPED (see the Float block note). *)
+  "Set.map",           { vars = _r2_ab; mono = t_fun [t_fun [_a] _b; t_set _a] (t_set _b) };
+  "Set.foldl",         { vars = _r2_ab; mono = t_fun [t_fun [_b; _a] _b; _b; t_set _a] _b };
+  "Set.partition",     { vars = _r1_a; mono = t_fun [t_fun [_a] t_bool; t_set _a] (t_list (t_set _a)) };
 
   (* ── Time ────────────────────────────────────────────────────────────── *)
   "nowMillis",     mono t_posix;
@@ -555,6 +634,33 @@ let stdlib_env : (string * scheme) list = [
   "Float.round", mono (t_fun [t_float] t_int);
   "Float.floor", mono (t_fun [t_float] t_int);
   "Float.ceil",  mono (t_fun [t_float] t_int);
+  (* The rest of Tesl.Float.  These were EXPORTED but absent here, which does not
+     fail — an export with no scheme type-checks as ANYTHING, so
+     `Float.abs "hello" : String` passed `tesl check` and the nominal boundary
+     types could be laundered through any such name.  Pinned by
+     test_stdlib_signature_coverage.ml. *)
+  "Float.parse",    mono (t_fun [t_string] (t_maybe t_float));
+  "Float.toString", mono (t_fun [t_float] t_string);
+  "Float.toInt",    mono (t_fun [t_float] t_int);
+  "Float.abs",      mono (t_fun [t_float] t_float);
+  "Float.min",      mono (t_fun [t_float; t_float] t_float);
+  "Float.max",      mono (t_fun [t_float; t_float] t_float);
+  "Float.clamp",    mono (t_fun [t_float; t_float; t_float] t_float);
+  "Float.sqrt",     mono (t_fun [t_float] t_float);
+  "Float.pow",      mono (t_fun [t_float; t_float] t_float);
+  "Float.log",      mono (t_fun [t_float] t_float);
+  "Float.exp",      mono (t_fun [t_float] t_float);
+  "Float.sin",      mono (t_fun [t_float] t_float);
+  "Float.cos",      mono (t_fun [t_float] t_float);
+  "Float.tan",      mono (t_fun [t_float] t_float);
+  "Float.isNaN",      mono (t_fun [t_float] t_bool);
+  "Float.isInfinite", mono (t_fun [t_float] t_bool);
+  "Float.isPositive", mono (t_fun [t_float] t_bool);
+  "Float.isNegative", mono (t_fun [t_float] t_bool);
+  "Float.isZero",     mono (t_fun [t_float] t_bool);
+  "Float.sign",       mono (t_fun [t_float] t_float);
+  "Float.infinity",   mono t_float;
+  "Float.nan",        mono t_float;
 
   (* ── Random ──────────────────────────────────────────────────────────── *)
   "randomInt",     mono (t_fun [t_int; t_int] t_int);
@@ -891,8 +997,18 @@ let tesl_module_exports : (string * string list) list = [
       "andLeft"; "andRight"; "attachFact"; "detachFact"; "forgetFact"; "introAnd" ] );
   ( "Tesl.Int32",
     (* NT-07: a JS-safe (< 2^53) bounded integer for wire/storage boundaries.
-       Nominal — does NOT unify with Int. Conversions are the only value checks. *)
-    [ "Int32"; "Int32.fromInt"; "Int32.toInt" ] );
+       Nominal — does NOT unify with Int.  Range rule: `Int32` out when the
+       result cannot leave [-2^31, 2^31), `Maybe Int32` when it can. *)
+    [ "Int32"; "IsNonNegative"; "IsNonZero";
+      "Int32.fromInt"; "Int32.toInt"; "Int32.fromIntClamped";
+      "Int32.parse"; "Int32.fromFloat"; "Int32.toFloat"; "Int32.toString";
+      "Int32.minValue"; "Int32.maxValue";
+      "Int32.min"; "Int32.max"; "Int32.clamp"; "Int32.modulo";
+      "Int32.add"; "Int32.subtract"; "Int32.multiply"; "Int32.divide";
+      "Int32.negate"; "Int32.abs"; "Int32.pow";
+      "Int32.isPositive"; "Int32.isNegative"; "Int32.isZero";
+      "Int32.isEven"; "Int32.isOdd"; "Int32.sign"; "Int32.digits";
+      "Int32.nonZero"; "Int32.nonNegative" ] );
   ( "Tesl.Maybe",
     [ "Maybe"; "Something"; "Nothing" ] );
   ( "Tesl.Result",

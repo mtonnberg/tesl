@@ -19,6 +19,10 @@
 
 (provide findOrderWithCustomer findOrdersByCustomerCountry cheapOrdersByCountry findOrderItemsByOrderId findOrderWithCustomer-signature findOrdersByCustomerCountry-signature cheapOrdersByCountry-signature findOrderItemsByOrderId-signature)
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "example/learn/lesson48-sql-inner-join.tesl" '(1 115 116 125 126 135 136 146 147))
 (define-entity Customer
   #:source (make-hash)
   #:table customers

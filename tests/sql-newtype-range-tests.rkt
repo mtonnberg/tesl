@@ -21,6 +21,10 @@
 
 (provide )
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "tests/sql-newtype-range-tests.tesl" '(18))
 (define-entity Ev
   #:source (make-hash)
   #:table ev_range
@@ -33,7 +37,7 @@
   (inWindow [lo : PosixMillis] [hi : PosixMillis])
   #:capabilities [dbRead]
   #:returns Integer
-  (let ([hits (thsl-src! "tests/sql-newtype-range-tests.tesl" 18 (list (cons 'lo *lo) (cons 'hi *hi)) (lambda () (select-many (from Ev) (where (>=. (entity-field-ref Ev 'at) lo)) (where (<=. (entity-field-ref Ev 'at) hi)))))]) (thsl-src! "tests/sql-newtype-range-tests.tesl" 19 (list (cons 'hits *hits) (cons 'lo *lo) (cons 'hi *hi)) (lambda () (raw-value (tesl_import_List_length (raw-value hits)))))))
+  (let ([hits (thsl-src! "tests/sql-newtype-range-tests.tesl" 18 (list (cons 'lo *lo) (cons 'hi *hi)) (lambda () (select-many (from Ev) (where (>=. (entity-field-ref Ev 'at) lo)) (where (<=. (entity-field-ref Ev 'at) hi)))) 'hits)]) (thsl-src! "tests/sql-newtype-range-tests.tesl" 19 (list (cons 'hits *hits) (cons 'lo *lo) (cons 'hi *hi)) (lambda () (raw-value (tesl_import_List_length (raw-value hits)))))))
 
 (module+ test
   (require rackunit)

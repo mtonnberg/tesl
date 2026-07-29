@@ -952,7 +952,12 @@
                  'evaluateName (register-evalname! (format "sql.params.$~a" idx) v #f v)
                  'presentationHint (hasheq 'kind "data"))))
      (append
-      (list (row "sql" (str 'sql) "parameterized ($1,$2…)")
+      (list (row "when"
+                 (if (eq? (hash-ref sql 'this-line #f) #t)
+                     "this line's statement (already executed — the pause is after it)"
+                     "the last statement that ran before this line")
+                 "")
+            (row "sql" (str 'sql) "parameterized ($1,$2…)")
             (row "table" (str 'table "(unknown)") "")
             (row "operation" (str 'operation "(unknown)") "")
             (hasheq 'name "params"
@@ -1256,14 +1261,25 @@
                (hasheq 'op (hash-ref s 'operation #f) 'table (hash-ref s 'table #f))))
         (current-sql-capture-record)))
   (define has-sql? (and sql-cap #t))
+  (define sql-this-line?
+    (if (attach-mode?)
+        (let ([s (and attach-evt (hash-ref attach-evt 'sql #f))])
+          (and (hash? s) (eq? (hash-ref s 'this-line #f) #t)))
+        (sql-capture-is-this-line?)))
   (define sql-scope-name
     (if sql-cap
-        (let ([op (hash-ref sql-cap 'op #f)] [table (hash-ref sql-cap 'table #f)])
-          (cond
-            [(and op table) (format "SQL · ~a ~a" op table)]
-            [op             (format "SQL · ~a" op)]
-            [table          (format "SQL · ~a" table)]
-            [else           "SQL"]))
+        (let* ([op (hash-ref sql-cap 'op #f)]
+               [table (hash-ref sql-cap 'table #f)]
+               [what (cond
+                       [(and op table) (format "~a ~a" op table)]
+                       [op             (format "~a" op)]
+                       [table          (format "~a" table)]
+                       [else           #f])]
+               ;; "SQL" = the statement of THIS line; "SQL (last statement)" = one
+               ;; that already ran before this line.  A breakpoint on a mutation
+               ;; pauses BEFORE it runs, so its own statement does not exist yet.
+               [prefix (if sql-this-line? "SQL" "SQL (last statement)")])
+          (if what (format "~a · ~a" prefix what) prefix))
         "SQL"))
   (dap-response req #t
     (hasheq 'scopes
@@ -1372,6 +1388,13 @@
     (define pt (current-paused-thread))
     (and pt (sql-capture-for-thread pt))))
 
+;; Does the visible capture belong to the line we are stopped ON?  True at an
+;; AFTER-the-statement pause (a read-only query line — see pause-shows-sql? in
+;; dsl/debug/checkpoint.rkt), false when the capture is simply the last statement
+;; this thread ran BEFORE this line.  Both are worth showing; conflating them is
+;; what would mislead, so every surface labels which one it is.
+(define (sql-capture-is-this-line?) (pause-shows-sql?))
+
 ;; A short, human type tag for a bound param's runtime db-value.  Params are the
 ;; ALREADY-ENCODED db-values dsl/sql.rkt hands the driver (strings, numbers,
 ;; sql-null, JSON strings for ADTs), so we tag by Racket type.  Never raises.
@@ -1461,6 +1484,13 @@
     (define preview (sql-inline-preview sql params))
     (append
      (list
+      ;; Which statement this is relative to the stop — the one thing a reader
+      ;; cannot infer from the text itself.
+      (sql-row "when"
+               (if (sql-capture-is-this-line?)
+                   "this line's statement (already executed — the pause is after it)"
+                   "the last statement that ran before this line")
+               "")
       ;; `sql` is the exact text handed to the driver — the one you paste into psql
       ;; alongside the params.
       (sql-row "sql" sql "parameterized ($1,$2…)")

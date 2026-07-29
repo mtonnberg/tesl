@@ -158,9 +158,50 @@ let time : entry list = [
 let int32 : entry list = [
   e "Int32" ~m:"Tesl.Int32"
     ~kind:(KType "type Int32   # nominal 32-bit-range integer for wire/storage boundaries; does NOT unify with Int")
-    ~doc:"A JS-safe bounded integer boundary type; convert with Int32.fromInt / Int32.toInt.";
+    ~doc:"A JS-safe bounded integer boundary type. Range rule: an operation that cannot leave [-2^31, 2^31) returns Int32, one that can returns Maybe Int32 (never a silent wrap).";
+  e "IsNonNegative" ~m:"Tesl.Int32" ~kind:(KFact "fact IsNonNegative (n: Int32)")
+    ~doc:"The Int32 is >= 0; minted by Int32.nonNegative.";
+  e "IsNonZero" ~m:"Tesl.Int32" ~kind:(KFact "fact IsNonZero (n: Int32)")
+    ~doc:"The Int32 is != 0; minted by Int32.nonZero, required by Int32.divide / Int32.modulo.";
   f "Int32.fromInt" [ "n" ] ~m:"Tesl.Int32" ~doc:"Checked narrowing: Something for values in 32-bit range, Nothing otherwise.";
   f "Int32.toInt" [ "n32" ] ~m:"Tesl.Int32" ~doc:"Total widening of an Int32 back to Int.";
+  f "Int32.fromIntClamped" [ "n" ] ~m:"Tesl.Int32" ~doc:"Saturating narrowing: values below/above the range become minValue/maxValue.";
+  f "Int32.parse" [ "s" ] ~m:"Tesl.Int32" ~doc:"Parses an Int32; Nothing on malformed input or out-of-range value.";
+  f "Int32.fromFloat" [ "f" ] ~m:"Tesl.Int32" ~doc:"Truncates toward zero; Nothing when out of range (NaN and infinities included).";
+  f "Int32.toFloat" [ "n32" ] ~m:"Tesl.Int32" ~doc:"Widens an Int32 to Float (always exact — 32-bit ints fit in a double).";
+  f "Int32.toString" [ "n32" ] ~m:"Tesl.Int32" ~doc:"Renders an Int32 as a String.";
+  v "Int32.minValue" ~m:"Tesl.Int32" ~doc:"The smallest Int32, -2147483648.";
+  v "Int32.maxValue" ~m:"Tesl.Int32" ~doc:"The largest Int32, 2147483647.";
+  f "Int32.min" [ "a"; "b" ] ~m:"Tesl.Int32" ~doc:"The smaller of two Int32s.";
+  f "Int32.max" [ "a"; "b" ] ~m:"Tesl.Int32" ~doc:"The larger of two Int32s.";
+  f "Int32.clamp" [ "n"; "lo"; "hi" ] ~m:"Tesl.Int32" ~doc:"Clamps n into [lo, hi].";
+  f "Int32.add" [ "a"; "b" ] ~m:"Tesl.Int32" ~doc:"Checked addition: Nothing when the sum leaves the 32-bit range.";
+  f "Int32.subtract" [ "a"; "b" ] ~m:"Tesl.Int32" ~doc:"Checked subtraction: Nothing when the difference leaves the 32-bit range.";
+  f "Int32.multiply" [ "a"; "b" ] ~m:"Tesl.Int32" ~doc:"Checked multiplication: Nothing when the product leaves the 32-bit range.";
+  f "Int32.negate" [ "n" ] ~m:"Tesl.Int32" ~doc:"Checked negation: Nothing for minValue, whose positive has no Int32.";
+  f "Int32.pow" [ "base"; "exp" ] ~m:"Tesl.Int32" ~doc:"Checked exponentiation: Nothing for a negative exponent or an out-of-range result.";
+  f "Int32.isPositive" [ "n" ] ~m:"Tesl.Int32" ~doc:"True when n > 0.";
+  f "Int32.isNegative" [ "n" ] ~m:"Tesl.Int32" ~doc:"True when n < 0.";
+  f "Int32.isZero" [ "n" ] ~m:"Tesl.Int32" ~doc:"True when n == 0.";
+  f "Int32.isEven" [ "n" ] ~m:"Tesl.Int32" ~doc:"True when n is even.";
+  f "Int32.isOdd" [ "n" ] ~m:"Tesl.Int32" ~doc:"True when n is odd.";
+  f "Int32.sign" [ "n" ] ~m:"Tesl.Int32" ~doc:"-1, 0, or 1 by the sign of n (an Int, so it composes with Int arithmetic).";
+  f "Int32.digits" [ "n" ] ~m:"Tesl.Int32" ~doc:"Number of decimal digits in abs(n).";
+  e "Int32.abs" ~m:"Tesl.Int32"
+    ~kind:(KFunction [ "n" ])
+    ~doc:"Checked absolute value: Nothing for minValue, whose absolute value has no Int32.";
+  e "Int32.nonZero" ~m:"Tesl.Int32"
+    ~kind:(KSyntax "check Int32.nonZero(n: Int32) -> n: Int32 ::: IsNonZero n")
+    ~doc:"Check function: passes n != 0, minting IsNonZero.";
+  e "Int32.nonNegative" ~m:"Tesl.Int32"
+    ~kind:(KSyntax "check Int32.nonNegative(n: Int32) -> n: Int32 ::: IsNonNegative n")
+    ~doc:"Check function: passes n >= 0, minting IsNonNegative.";
+  e "Int32.divide" ~m:"Tesl.Int32"
+    ~kind:(KSyntax "fn Int32.divide(a: Int32, b: Int32 ::: IsNonZero b) -> Maybe Int32")
+    ~doc:"Integer division; the divisor needs an IsNonZero proof, and -minValue/-1 is Nothing.";
+  e "Int32.modulo" ~m:"Tesl.Int32"
+    ~kind:(KSyntax "fn Int32.modulo(a: Int32, b: Int32 ::: IsNonZero b) -> Int32")
+    ~doc:"Integer remainder; the divisor needs an IsNonZero proof (from Int32.nonZero).";
 ]
 
 (* ── Tesl.DB (DeleteResult; dbRead/dbWrite are generated capability rows) ──── *)
@@ -222,21 +263,21 @@ let string_ : entry list = [
   f "String.toInt" [ "s" ] ~m:"Tesl.String" ~doc:"Parses an integer; Nothing on malformed input.";
   f "String.fromInt" [ "n" ] ~m:"Tesl.String" ~doc:"Renders an Int as a String.";
   (* Rows typed outside stdlib_env (runtime: tesl/string.rkt) *)
-  e "String.isEmpty" ~m:"Tesl.String" ~kind:(KSyntax "fn String.isEmpty(s: String) -> Bool") ~doc:"True when the string has length 0.";
-  e "String.trimLeft" ~m:"Tesl.String" ~kind:(KSyntax "fn String.trimLeft(s: String) -> String ? IsTrimmed") ~doc:"Removes leading whitespace.";
-  e "String.trimRight" ~m:"Tesl.String" ~kind:(KSyntax "fn String.trimRight(s: String) -> String ? IsTrimmed") ~doc:"Removes trailing whitespace.";
-  e "String.slice" ~m:"Tesl.String" ~kind:(KSyntax "fn String.slice(s: String, start: Int, end: Int) -> String") ~doc:"Substring from start (inclusive) to end (exclusive).";
-  e "String.repeat" ~m:"Tesl.String" ~kind:(KSyntax "fn String.repeat(s: String, n: Int) -> String") ~doc:"Repeats the string n times.";
-  e "String.reverse" ~m:"Tesl.String" ~kind:(KSyntax "fn String.reverse(s: String) -> String") ~doc:"Reverses the characters.";
-  e "String.toFloat" ~m:"Tesl.String" ~kind:(KSyntax "fn String.toFloat(s: String) -> Maybe Float") ~doc:"Parses a float; Nothing on malformed input.";
-  e "String.fromFloat" ~m:"Tesl.String" ~kind:(KSyntax "fn String.fromFloat(f: Float) -> String") ~doc:"Renders a Float as a String.";
-  e "String.lines" ~m:"Tesl.String" ~kind:(KSyntax "fn String.lines(s: String) -> List String") ~doc:"Splits on newlines.";
-  e "String.words" ~m:"Tesl.String" ~kind:(KSyntax "fn String.words(s: String) -> List String") ~doc:"Splits on runs of whitespace.";
-  e "String.padLeft" ~m:"Tesl.String" ~kind:(KSyntax "fn String.padLeft(s: String, width: Int, char: String) -> String") ~doc:"Left-pads to width with the given character.";
-  e "String.padRight" ~m:"Tesl.String" ~kind:(KSyntax "fn String.padRight(s: String, width: Int, char: String) -> String") ~doc:"Right-pads to width with the given character.";
-  e "String.dropPrefix" ~m:"Tesl.String" ~kind:(KSyntax "fn String.dropPrefix(s: String, prefix: String) -> String") ~doc:"Removes prefix when present, otherwise returns s unchanged.";
-  e "String.dropSuffix" ~m:"Tesl.String" ~kind:(KSyntax "fn String.dropSuffix(s: String, suffix: String) -> String") ~doc:"Removes suffix when present, otherwise returns s unchanged.";
-  e "String.indexOf" ~m:"Tesl.String" ~kind:(KSyntax "fn String.indexOf(s: String, sub: String) -> Maybe Int") ~doc:"Index of the first occurrence of sub, or Nothing.";
+  f "String.isEmpty" [ "s" ] ~m:"Tesl.String" ~doc:"True when the string has length 0.";
+  f "String.trimLeft" [ "s" ] ~m:"Tesl.String" ~doc:"Removes leading whitespace.";
+  f "String.trimRight" [ "s" ] ~m:"Tesl.String" ~doc:"Removes trailing whitespace.";
+  f "String.slice" [ "s"; "start"; "end" ] ~m:"Tesl.String" ~doc:"Substring from start (inclusive) to end (exclusive).";
+  f "String.repeat" [ "s"; "n" ] ~m:"Tesl.String" ~doc:"Repeats the string n times.";
+  f "String.reverse" [ "s" ] ~m:"Tesl.String" ~doc:"Reverses the characters.";
+  f "String.toFloat" [ "s" ] ~m:"Tesl.String" ~doc:"Parses a float; Nothing on malformed input.";
+  f "String.fromFloat" [ "f" ] ~m:"Tesl.String" ~doc:"Renders a Float as a String.";
+  f "String.lines" [ "s" ] ~m:"Tesl.String" ~doc:"Splits on newlines.";
+  f "String.words" [ "s" ] ~m:"Tesl.String" ~doc:"Splits on runs of whitespace.";
+  f "String.padLeft" [ "s"; "width"; "char" ] ~m:"Tesl.String" ~doc:"Left-pads to width with the given character.";
+  f "String.padRight" [ "s"; "width"; "char" ] ~m:"Tesl.String" ~doc:"Right-pads to width with the given character.";
+  f "String.dropPrefix" [ "s"; "prefix" ] ~m:"Tesl.String" ~doc:"Removes prefix when present, otherwise returns s unchanged.";
+  f "String.dropSuffix" [ "s"; "suffix" ] ~m:"Tesl.String" ~doc:"Removes suffix when present, otherwise returns s unchanged.";
+  f "String.indexOf" [ "s"; "sub" ] ~m:"Tesl.String" ~doc:"Index of the first occurrence of sub, or Nothing.";
   e "String.requireNonEmpty" ~m:"Tesl.String"
     ~kind:(KSyntax "check String.requireNonEmpty(s: String) -> s: String ::: IsNonEmpty s")
     ~doc:"Check function: passes non-empty strings, minting IsNonEmpty.";
@@ -320,19 +361,19 @@ let int_ : entry list = [
   f "Int.min" [ "a"; "b" ] ~m:"Tesl.Int" ~doc:"The smaller of two integers.";
   f "Int.max" [ "a"; "b" ] ~m:"Tesl.Int" ~doc:"The larger of two integers.";
   f "Int.nonNegative" [ "n" ] ~m:"Tesl.Int" ~doc:"Check function: passes n >= 0, minting IsNonNegative.";
-  e "Int.fromFloat" ~m:"Tesl.Int" ~kind:(KSyntax "fn Int.fromFloat(f: Float) -> Int") ~doc:"Converts a Float to Int, truncating toward zero.";
-  e "Int.toFloat" ~m:"Tesl.Int" ~kind:(KSyntax "fn Int.toFloat(n: Int) -> Float") ~doc:"Converts an Int to Float.";
-  e "Int.clamp" ~m:"Tesl.Int" ~kind:(KSyntax "fn Int.clamp(n: Int, lo: Int, hi: Int) -> Int") ~doc:"Clamps n into [lo, hi].";
-  e "Int.isPositive" ~m:"Tesl.Int" ~kind:(KSyntax "fn Int.isPositive(n: Int) -> Bool") ~doc:"True when n > 0.";
-  e "Int.isNegative" ~m:"Tesl.Int" ~kind:(KSyntax "fn Int.isNegative(n: Int) -> Bool") ~doc:"True when n < 0.";
-  e "Int.isZero" ~m:"Tesl.Int" ~kind:(KSyntax "fn Int.isZero(n: Int) -> Bool") ~doc:"True when n == 0.";
-  e "Int.isEven" ~m:"Tesl.Int" ~kind:(KSyntax "fn Int.isEven(n: Int) -> Bool") ~doc:"True when n is even.";
-  e "Int.isOdd" ~m:"Tesl.Int" ~kind:(KSyntax "fn Int.isOdd(n: Int) -> Bool") ~doc:"True when n is odd.";
-  e "Int.gcd" ~m:"Tesl.Int" ~kind:(KSyntax "fn Int.gcd(a: Int, b: Int) -> Int") ~doc:"Greatest common divisor.";
-  e "Int.lcm" ~m:"Tesl.Int" ~kind:(KSyntax "fn Int.lcm(a: Int, b: Int) -> Int") ~doc:"Least common multiple.";
-  e "Int.pow" ~m:"Tesl.Int" ~kind:(KSyntax "fn Int.pow(base: Int, exp: Int) -> Int") ~doc:"Integer exponentiation.";
-  e "Int.digits" ~m:"Tesl.Int" ~kind:(KSyntax "fn Int.digits(n: Int) -> Int") ~doc:"Number of decimal digits in abs(n).";
-  e "Int.sign" ~m:"Tesl.Int" ~kind:(KSyntax "fn Int.sign(n: Int) -> Int") ~doc:"-1, 0, or 1 by the sign of n.";
+  f "Int.fromFloat" [ "f" ] ~m:"Tesl.Int" ~doc:"Converts a Float to Int, truncating toward zero.";
+  f "Int.toFloat" [ "n" ] ~m:"Tesl.Int" ~doc:"Converts an Int to Float.";
+  f "Int.clamp" [ "n"; "lo"; "hi" ] ~m:"Tesl.Int" ~doc:"Clamps n into [lo, hi].";
+  f "Int.isPositive" [ "n" ] ~m:"Tesl.Int" ~doc:"True when n > 0.";
+  f "Int.isNegative" [ "n" ] ~m:"Tesl.Int" ~doc:"True when n < 0.";
+  f "Int.isZero" [ "n" ] ~m:"Tesl.Int" ~doc:"True when n == 0.";
+  f "Int.isEven" [ "n" ] ~m:"Tesl.Int" ~doc:"True when n is even.";
+  f "Int.isOdd" [ "n" ] ~m:"Tesl.Int" ~doc:"True when n is odd.";
+  f "Int.gcd" [ "a"; "b" ] ~m:"Tesl.Int" ~doc:"Greatest common divisor.";
+  f "Int.lcm" [ "a"; "b" ] ~m:"Tesl.Int" ~doc:"Least common multiple.";
+  f "Int.pow" [ "base"; "exp" ] ~m:"Tesl.Int" ~doc:"Integer exponentiation.";
+  f "Int.digits" [ "n" ] ~m:"Tesl.Int" ~doc:"Number of decimal digits in abs(n).";
+  f "Int.sign" [ "n" ] ~m:"Tesl.Int" ~doc:"-1, 0, or 1 by the sign of n.";
   e "Int.nonZero" ~m:"Tesl.Int" ~kind:(KSyntax "check Int.nonZero(n: Int) -> n: Int ::: IsNonZero n") ~doc:"Check function: passes n != 0, minting IsNonZero.";
   e "Int.divide" ~m:"Tesl.Int" ~kind:(KSyntax "fn Int.divide(a: Int, b: Int ::: IsNonZero b) -> Int") ~doc:"Integer division; the divisor must carry an IsNonZero proof (from Int.nonZero).";
   e "Int.modulo" ~m:"Tesl.Int" ~kind:(KSyntax "fn Int.modulo(a: Int, b: Int ::: IsNonZero b) -> Int") ~doc:"Integer remainder; the divisor must carry an IsNonZero proof (from Int.nonZero).";
@@ -353,28 +394,28 @@ let float_ : entry list = [
   f "Float.round" [ "f" ] ~m:"Tesl.Float" ~doc:"Rounds to the nearest integer.";
   f "Float.floor" [ "f" ] ~m:"Tesl.Float" ~doc:"Largest integer <= f.";
   f "Float.ceil" [ "f" ] ~m:"Tesl.Float" ~doc:"Smallest integer >= f.";
-  e "Float.parse" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.parse(s: String) -> Maybe Float") ~doc:"Parses a float; Nothing on malformed input.";
-  e "Float.toString" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.toString(f: Float) -> String") ~doc:"Renders a Float as a String.";
-  e "Float.toInt" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.toInt(f: Float) -> Int") ~doc:"Converts to Int, truncating toward zero.";
-  e "Float.abs" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.abs(f: Float) -> Float") ~doc:"Absolute value.";
-  e "Float.min" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.min(a: Float, b: Float) -> Float") ~doc:"The smaller of two floats.";
-  e "Float.max" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.max(a: Float, b: Float) -> Float") ~doc:"The larger of two floats.";
-  e "Float.clamp" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.clamp(f: Float, lo: Float, hi: Float) -> Float") ~doc:"Clamps f into [lo, hi].";
-  e "Float.sqrt" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.sqrt(f: Float) -> Float") ~doc:"Square root.";
-  e "Float.pow" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.pow(base: Float, exp: Float) -> Float") ~doc:"Exponentiation.";
-  e "Float.log" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.log(f: Float) -> Float") ~doc:"Natural logarithm.";
-  e "Float.exp" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.exp(f: Float) -> Float") ~doc:"e raised to f.";
-  e "Float.sin" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.sin(f: Float) -> Float") ~doc:"Sine (radians).";
-  e "Float.cos" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.cos(f: Float) -> Float") ~doc:"Cosine (radians).";
-  e "Float.tan" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.tan(f: Float) -> Float") ~doc:"Tangent (radians).";
-  e "Float.isNaN" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.isNaN(f: Float) -> Bool") ~doc:"True when f is NaN.";
-  e "Float.isInfinite" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.isInfinite(f: Float) -> Bool") ~doc:"True when f is +inf or -inf.";
-  e "Float.isPositive" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.isPositive(f: Float) -> Bool") ~doc:"True when f > 0.0.";
-  e "Float.isNegative" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.isNegative(f: Float) -> Bool") ~doc:"True when f < 0.0.";
-  e "Float.isZero" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.isZero(f: Float) -> Bool") ~doc:"True when f == 0.0.";
-  e "Float.sign" ~m:"Tesl.Float" ~kind:(KSyntax "fn Float.sign(f: Float) -> Float") ~doc:"1.0, -1.0, or 0.0 by the sign of f.";
-  e "Float.infinity" ~m:"Tesl.Float" ~kind:(KSyntax "Float.infinity : Float") ~doc:"Positive infinity.";
-  e "Float.nan" ~m:"Tesl.Float" ~kind:(KSyntax "Float.nan : Float") ~doc:"Not-a-number.";
+  f "Float.parse" [ "s" ] ~m:"Tesl.Float" ~doc:"Parses a float; Nothing on malformed input.";
+  f "Float.toString" [ "f" ] ~m:"Tesl.Float" ~doc:"Renders a Float as a String.";
+  f "Float.toInt" [ "f" ] ~m:"Tesl.Float" ~doc:"Converts to Int, truncating toward zero.";
+  f "Float.abs" [ "f" ] ~m:"Tesl.Float" ~doc:"Absolute value.";
+  f "Float.min" [ "a"; "b" ] ~m:"Tesl.Float" ~doc:"The smaller of two floats.";
+  f "Float.max" [ "a"; "b" ] ~m:"Tesl.Float" ~doc:"The larger of two floats.";
+  f "Float.clamp" [ "f"; "lo"; "hi" ] ~m:"Tesl.Float" ~doc:"Clamps f into [lo, hi].";
+  f "Float.sqrt" [ "f" ] ~m:"Tesl.Float" ~doc:"Square root.";
+  f "Float.pow" [ "base"; "exp" ] ~m:"Tesl.Float" ~doc:"Exponentiation.";
+  f "Float.log" [ "f" ] ~m:"Tesl.Float" ~doc:"Natural logarithm.";
+  f "Float.exp" [ "f" ] ~m:"Tesl.Float" ~doc:"e raised to f.";
+  f "Float.sin" [ "f" ] ~m:"Tesl.Float" ~doc:"Sine (radians).";
+  f "Float.cos" [ "f" ] ~m:"Tesl.Float" ~doc:"Cosine (radians).";
+  f "Float.tan" [ "f" ] ~m:"Tesl.Float" ~doc:"Tangent (radians).";
+  f "Float.isNaN" [ "f" ] ~m:"Tesl.Float" ~doc:"True when f is NaN.";
+  f "Float.isInfinite" [ "f" ] ~m:"Tesl.Float" ~doc:"True when f is +inf or -inf.";
+  f "Float.isPositive" [ "f" ] ~m:"Tesl.Float" ~doc:"True when f > 0.0.";
+  f "Float.isNegative" [ "f" ] ~m:"Tesl.Float" ~doc:"True when f < 0.0.";
+  f "Float.isZero" [ "f" ] ~m:"Tesl.Float" ~doc:"True when f == 0.0.";
+  f "Float.sign" [ "f" ] ~m:"Tesl.Float" ~doc:"1.0, -1.0, or 0.0 by the sign of f.";
+  v "Float.infinity" ~m:"Tesl.Float" ~doc:"Positive infinity.";
+  v "Float.nan" ~m:"Tesl.Float" ~doc:"Not-a-number.";
 ]
 
 (* ── Tesl.Dict ─────────────────────────────────────────────────────────────── *)

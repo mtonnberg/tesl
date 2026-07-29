@@ -21,6 +21,10 @@
 
 (provide )
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "tests/sql-where-hint-tests.tesl" '(26 29))
 (define-entity OrgW
   #:source (make-hash)
   #:table orgw
@@ -47,7 +51,7 @@
   (countBoth [pr : ProjW])
   #:capabilities [dbRead]
   #:returns Integer
-  (let ([hits (thsl-src! "tests/sql-where-hint-tests.tesl" 29 (list (cons 'pr *pr)) (lambda () (select-many (from OrgW) (where (==. (entity-field-ref OrgW 'id) (tesl-dot/runtime pr 'id 'ProjW))) (where (==. (entity-field-ref OrgW 'name) (tesl-dot/runtime pr 'name 'ProjW))))))]) (thsl-src! "tests/sql-where-hint-tests.tesl" 30 (list (cons 'hits *hits) (cons 'pr *pr)) (lambda () (raw-value (tesl_import_List_length (raw-value hits)))))))
+  (let ([hits (thsl-src! "tests/sql-where-hint-tests.tesl" 29 (list (cons 'pr *pr)) (lambda () (select-many (from OrgW) (where (==. (entity-field-ref OrgW 'id) (tesl-dot/runtime pr 'id 'ProjW))) (where (==. (entity-field-ref OrgW 'name) (tesl-dot/runtime pr 'name 'ProjW))))) 'hits)]) (thsl-src! "tests/sql-where-hint-tests.tesl" 30 (list (cons 'hits *hits) (cons 'pr *pr)) (lambda () (raw-value (tesl_import_List_length (raw-value hits)))))))
 
 (module+ test
   (require rackunit)

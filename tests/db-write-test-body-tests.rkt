@@ -20,6 +20,10 @@
 
 (provide )
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "tests/db-write-test-body-tests.tesl" '(33))
 (define-entity Order
   #:source (make-hash)
   #:table orders

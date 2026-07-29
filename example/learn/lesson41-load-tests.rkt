@@ -19,6 +19,10 @@
 
 (provide Lesson41Server)
 
+;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
+;; those happens AFTER the statement, so the SQL lens can show the exact
+;; statement that ran (erased with the checkpoints in a release build).
+(register-sql-read-lines! "example/learn/lesson41-load-tests.tesl" '(71))
 (define-record Greeting
   [name : String]
   [message : String]
