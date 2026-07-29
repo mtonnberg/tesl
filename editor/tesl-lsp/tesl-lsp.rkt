@@ -1938,6 +1938,16 @@
     (publish-diags! out dep-uri '()))
   (hash-remove! dep-diag-uris entry-uri))
 
+;; A client that declared textDocument.diagnostic support PULLS the entry
+;; document's diagnostics itself (textDocument/diagnostic below) — vscode keeps
+;; pulled and pushed diagnostics in SEPARATE collections, so ALSO pushing them
+;; here rendered every squiggle/hint twice on open documents.  Suppress the
+;; entry-document push for pull-capable clients; dep-file pushes stay, because
+;; the pull model is per-document and never covers unopened dep uris.
+(define (publish-entry-diags! out uri diags)
+  (unless (client-supports? 'textDocument 'diagnostic)
+    (publish-diags! out uri diags)))
+
 (define (check-text! out uri disk-path text compiler)
   (cond
     [(not compiler)
@@ -1949,7 +1959,7 @@
          (let-values ([(diags dep-groups) (run-check/partitioned compiler tmp)])
            (let ([bindings (run-local-bindings compiler tmp)])
              (hash-set! local-bindings-cache uri bindings)
-             (publish-diags! out uri diags)
+             (publish-entry-diags! out uri diags)
              (publish-dep-diags! out uri dep-groups)))))]))
 
 (define (check-disk! out uri disk-path compiler)
@@ -1963,7 +1973,7 @@
     [else
      (hash-set! local-bindings-cache uri (run-local-bindings compiler disk-path))
      (let-values ([(diags dep-groups) (run-check/partitioned compiler disk-path)])
-       (publish-diags! out uri diags)
+       (publish-entry-diags! out uri diags)
        (publish-dep-diags! out uri dep-groups))]))
 
 ;; ── URI / path ────────────────────────────────────────────────────────────────

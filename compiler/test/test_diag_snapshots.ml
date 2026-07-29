@@ -247,13 +247,11 @@ let codec_proof_expected =
   \  codec 'Msg': decoder field 'content' requires proof predicates NonEmpty but has no `via` validation\n\
    Hint: add `via <checkFn>` so field 'content' is validated before decoding succeeds"
 
-(* ── Linter: E002 (missing #lang tesl) ──────────────────────────────────────── *)
-let lint_e002_src = "module Main exposing [value]\nfn value() = 1\n"
-let lint_e002_expected =
-  "[E002] error @ lint 0:0-0:0\n\
-  \  file must start with `#lang tesl`\n\
-   [W001] warning @ lint 1:0-1:0\n\
-  \  first non-comment declaration should be a module header"
+(* ── Linter: E002 retired — `#lang tesl` is optional ────────────────────────── *)
+(* A file starting directly with the module header lints clean: no E002 (the
+   pragma is optional) and no W001 (the header IS the first real line). *)
+let lint_e002_src = "module Main exposing [value]\nfn value() -> Int = 1\n"
+let lint_e002_expected = ""
 
 (* ── Linter: E010 (tab character) ───────────────────────────────────────────── *)
 let lint_e010_src =
@@ -378,7 +376,7 @@ let () =
         (snapshot_source ~name:"codec proof V001" ~source:codec_proof_src ~expected:codec_proof_expected);
     ];
     "snapshot/linter", [
-      Alcotest.test_case "E002 missing #lang tesl" `Quick
+      Alcotest.test_case "E002 retired: missing #lang tesl is fine" `Quick
         (snapshot_lint ~name:"E002" ~source:lint_e002_src ~expected:lint_e002_expected);
       Alcotest.test_case "E010 tab character" `Quick
         (snapshot_lint ~name:"E010" ~source:lint_e010_src ~expected:lint_e010_expected);

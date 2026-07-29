@@ -4233,8 +4233,43 @@ let debug_inspect ?(root_path=default_root_path ()) ?(continue_mode=false) ~brea
     match compile_source ~root_path ~type_check:true ~debug:true abs_src source with
     | Failure diags -> InspectDiags diags
     | Success racket ->
+      (* Multi-module: the emitter requires local imports as RELATIVE
+         `(file "dep.rkt")` paths, resolved against the requiring module's own
+         directory — a lone entry .rkt in the system temp dir dies on its first
+         local import with "cannot open module file".  Compile the whole
+         debug-instrumented closure into a fresh temp DIRECTORY instead. *)
+      let deps =
+        let graph = build_local_import_graph abs_src in
+        let entry_canon = canonical_import_path abs_src in
+        Hashtbl.fold (fun path _ acc ->
+          if path = entry_canon then acc else path :: acc) graph []
+      in
+      let compiled_deps =
+        List.fold_left (fun acc path ->
+          match acc with
+          | Error _ -> acc
+          | Ok xs ->
+            let dep_abs = (try Unix.realpath path with _ -> path) in
+            let dep_source =
+              In_channel.with_open_text dep_abs In_channel.input_all in
+            (match compile_source ~root_path ~type_check:true ~debug:true
+                     dep_abs dep_source with
+             | Failure diags -> Error diags
+             | Success dep_racket -> Ok ((dep_abs, dep_racket) :: xs))
+        ) (Ok []) deps
+      in
+      (match compiled_deps with
+       | Error diags -> InspectDiags diags
+       | Ok dep_rkts ->
       (try
-         let tmp_rkt = Filename.temp_file "tesl-debug-inspect-" ".rkt" in
+         let tmp_dir = Filename.temp_dir "tesl-debug-inspect-" "" in
+         let rkt_name src =
+           Filename.remove_extension (Filename.basename src) ^ ".rkt" in
+         List.iter (fun (dep_abs, dep_racket) ->
+           Out_channel.with_open_text (Filename.concat tmp_dir (rkt_name dep_abs))
+             (fun oc -> Out_channel.output_string oc dep_racket)
+         ) dep_rkts;
+         let tmp_rkt = Filename.concat tmp_dir (rkt_name abs_src) in
          Out_channel.with_open_text tmp_rkt
            (fun oc -> Out_channel.output_string oc racket);
          let driver =
@@ -4295,5 +4330,5 @@ let debug_inspect ?(root_path=default_root_path ()) ?(continue_mode=false) ~brea
                with Unix.Unix_error (e, _, _) ->
                  InspectErr (Printf.sprintf "exec racket failed: %s"
                                (Unix.error_message e))))
-       with Sys_error msg -> InspectErr msg)
+       with Sys_error msg -> InspectErr msg))
   end

@@ -5,7 +5,7 @@
 
     Error codes:
       E001  empty file
-      E002  missing #lang tesl
+      E002  (retired) missing #lang tesl — the pragma is optional now
       E010  tab character
       E030  receiver-style .length
       E031  receiver-style .startsWith
@@ -139,16 +139,15 @@ let lint_file_structure (file : string) (lines : string array) (out : lint_diag 
   if Array.length lines = 0 then
     emit 0 0 "error" "E001" "empty file"
   else begin
-    (* #lang tesl must be the first non-empty line — we check line 0 *)
-    if not (starts_with (String.trim lines.(0)) "#lang tesl") then
-      emit 0 0 "error" "E002" "file must start with `#lang tesl`";
+    (* `#lang tesl` is OPTIONAL — the parser skips the pragma when present, so
+       E002 ("file must start with `#lang tesl`") is retired. *)
     (* W001: module header must exist and be the first non-blank, non-comment
-       line after `#lang tesl`.  Comments (# ...) and blank lines are
-       allowed between the lang pragma and the module declaration. *)
+       line.  Comments (# ..., including an optional `#lang tesl` pragma) and
+       blank lines are allowed before the module declaration. *)
     let first_real_line_after_lang =
       let result = ref (-1) in
       Array.iteri (fun i line ->
-        if i > 0 && !result = -1 then begin
+        if !result = -1 then begin
           let stripped = String.trim line in
           if stripped <> "" && not (starts_with stripped "#") then
             result := i

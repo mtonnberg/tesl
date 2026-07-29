@@ -186,9 +186,9 @@ let registry : entry list = [
        `#lang tesl` line and a `module` header.";
     manual = Some "getting-started" };
   { code = "E002"; category = Lint;
-    title = "missing `#lang tesl`";
-    explanation = "Every Tesl source file must begin with `#lang tesl` on the \
-       first line so the toolchain recognises it.";
+    title = "(retired) missing `#lang tesl`";
+    explanation = "Retired: the `#lang tesl` pragma is OPTIONAL. The parser \
+       skips it when present, so its absence is no longer diagnosed.";
     manual = Some "getting-started" };
   { code = "E010"; category = Lint;
     title = "tab character";
@@ -213,9 +213,10 @@ let registry : entry list = [
 
   (* ── Linter: style / hygiene warnings (W0xx) ──────────────────────────── *)
   { code = "W001"; category = Lint;
-    title = "module header not on line 2";
-    explanation = "By convention the `module … exposing [ … ]` header is the \
-       second line, directly under `#lang tesl`.";
+    title = "module header not first";
+    explanation = "The `module … exposing [ … ]` header should be the first \
+       non-blank, non-comment line (an optional `#lang tesl` pragma and \
+       comments may precede it).";
     manual = Some "best-practices" };
   { code = "W002"; category = Lint;
     title = "trailing blank lines";

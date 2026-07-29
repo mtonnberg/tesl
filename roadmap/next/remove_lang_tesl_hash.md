@@ -1,0 +1,1 @@
+We have an optional first line "#lang tesl" for historical reasons. We should remove it and not accept any code that includes it. The reason is to remove historical baggage since that line does not provide any value today.

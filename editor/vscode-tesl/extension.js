@@ -668,7 +668,11 @@ function activate(context) {
     }
 
     const TESL_GLOB = "**/*.tesl";
-    const TESL_EXCLUDE = "**/{node_modules,.git,_build,result,.tesl-postgres}/**";
+    // .direnv holds nix flake-input symlinks into the store — for a project whose
+    // flake pins tesl, that is the ENTIRE tesl repo (examples, lessons, its own
+    // test suites), so without this exclude the Test Explorer fills up with
+    // hundreds of foreign tests.
+    const TESL_EXCLUDE = "**/{node_modules,.git,_build,result,.tesl-postgres,.direnv}/**";
 
     // Project-wide discovery: scan every .tesl file once, keep only those with tests.
     // Coalesced — activation calls this fire-and-forget AND resolveHandler(undefined)/
@@ -730,7 +734,9 @@ function activate(context) {
     }
 
     // Run `tesl test <file>` once, capturing combined output + exit code + duration.
-    function runTeslTestFile(file, token) {
+    // With testName (and optionally kind) runs ONLY that test via --test-name /
+    // --test-kind — the same flags the CodeLens path uses.
+    function runTeslTestFile(file, token, testName, kind) {
       return new Promise((resolve) => {
         const tesl = findTeslWrapper();
         const start = Date.now();
@@ -744,9 +750,15 @@ function activate(context) {
           if (cancelSub) cancelSub.dispose();
           resolve(result);
         };
+        const args = ["test"];
+        if (testName) {
+          args.push("--test-name", testName);
+          if (kind) args.push("--test-kind", kind);
+        }
+        args.push(file);
         let child;
         try {
-          child = spawn(tesl, ["test", file], { cwd: path.dirname(file) });
+          child = spawn(tesl, args, { cwd: path.dirname(file) });
         } catch (e) {
           finish({ code: -1, output: `failed to launch tesl: ${e && e.message}`, durationMs: 0 });
           return;
@@ -777,6 +789,43 @@ function activate(context) {
         }
         for (const [file, entries] of byFile) {
           if (token.isCancellationRequested) { entries.forEach((e) => run.skipped(e.item)); continue; }
+
+          // Strict subset of the file's tests selected → run each via
+          // --test-name/--test-kind so siblings do NOT run. Whole file selected →
+          // one `tesl test <file>` run (cheaper: one compile, one raco).
+          const fileItem = ctrl.items.get(vscode.Uri.file(file).toString());
+          const wholeFile = !fileItem || entries.length >= fileItem.children.size;
+          if (!wholeFile) {
+            for (const { item, tgt } of entries) {
+              if (token.isCancellationRequested) { run.skipped(item); continue; }
+              run.started(item);
+              const res = await runTeslTestFile(file, token, tgt.testName, tgt.kind);
+              run.appendOutput(`\r\n=== ${path.basename(file)} :: ${tgt.testName} (exit ${res.code}) ===\r\n`);
+              if (res.output) run.appendOutput(res.output.replace(/\r?\n/g, "\r\n"));
+              const { failures, compileError, reportedFailureCount } = parseTeslTestOutput(res.output, res.code);
+              const confident = res.code === 0 ||
+                (reportedFailureCount !== null && failures.size >= reportedFailureCount);
+              if (compileError) {
+                run.errored(item, new vscode.TestMessage(compileError), res.durationMs);
+              } else {
+                const f = failures.get(tgt.testName);
+                if (f) {
+                  const msg = new vscode.TestMessage(f.message || "test failed");
+                  if (item.uri && item.range) msg.location = new vscode.Location(item.uri, item.range);
+                  if (f.expected !== undefined) msg.expectedOutput = f.expected;
+                  if (f.actual !== undefined) msg.actualOutput = f.actual;
+                  run.failed(item, msg, res.durationMs);
+                } else if (confident) {
+                  run.passed(item, res.durationMs);
+                } else {
+                  run.errored(item, new vscode.TestMessage(
+                    "could not determine this test's result — the test runner reported failures that could not be matched to a test name"), res.durationMs);
+                }
+              }
+            }
+            continue;
+          }
+
           entries.forEach((e) => run.started(e.item));
           const res = await runTeslTestFile(file, token);
           run.appendOutput(`\r\n=== ${path.basename(file)} (exit ${res.code}) ===\r\n`);

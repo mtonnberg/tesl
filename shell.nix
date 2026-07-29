@@ -57,6 +57,12 @@ pkgs.mkShell {
       fi
     fi
 
+    # Never let a Postgres connection attempt hang the shell hook. On WSL2
+    # (mirrored networking) Windows can reserve our port in a Hyper-V excluded
+    # port range: binds fail and connects black-hole instead of refusing, so
+    # without a timeout every psql/createdb below blocks `cd` forever.
+    export PGCONNECT_TIMEOUT=3
+
     export TESL_POSTGRES_HOST="127.0.0.1"
     export TESL_POSTGRES_PORT="55432"
     export TESL_POSTGRES_USER="tesl"
@@ -64,29 +70,37 @@ pkgs.mkShell {
     unset  TESL_POSTGRES_DATABASE
     unset  TESL_POSTGRES_SOCKET
 
-    bash "$TESL_REPO_ROOT/scripts/postgres-start.sh" 2>/dev/null || true
+    _TESL_PG_OK=1
+    bash "$TESL_REPO_ROOT/scripts/postgres-start.sh" || _TESL_PG_OK=0
 
-    _PGSU=""
-    for _try in tesl "$(whoami)" postgres; do
-      if psql -h 127.0.0.1 -p 55432 -U "$_try" -d postgres -c "SELECT 1" >/dev/null 2>&1; then
-        _PGSU="$_try"
-        break
+    if [ "$_TESL_PG_OK" = 1 ]; then
+      _PGSU=""
+      for _try in tesl "$(whoami)" postgres; do
+        if psql -h 127.0.0.1 -p 55432 -U "$_try" -d postgres -c "SELECT 1" >/dev/null 2>&1; then
+          _PGSU="$_try"
+          break
+        fi
+      done
+      if [ -n "$_PGSU" ] && [ "$_PGSU" != "tesl" ]; then
+        psql -h 127.0.0.1 -p 55432 -U "$_PGSU" -d postgres \
+          -c "CREATE ROLE tesl SUPERUSER LOGIN" >/dev/null 2>&1 || true
       fi
-    done
-    if [ -n "$_PGSU" ] && [ "$_PGSU" != "tesl" ]; then
-      psql -h 127.0.0.1 -p 55432 -U "$_PGSU" -d postgres \
-        -c "CREATE ROLE tesl SUPERUSER LOGIN" >/dev/null 2>&1 || true
-    fi
-    unset _PGSU _try
+      unset _PGSU _try
 
-    for _db in todo-api admin-task-api chat; do
-      createdb -h 127.0.0.1 -p 55432 -U tesl "$_db" 2>/dev/null || true
-    done
-    unset _db
+      for _db in todo-api admin-task-api chat; do
+        createdb -h 127.0.0.1 -p 55432 -U tesl "$_db" 2>/dev/null || true
+      done
+      unset _db
+    fi
 
     echo "Tesl dev shell ready. Run 'tesl help' to get started."
-    echo "[postgres] Shared cluster ready at 127.0.0.1:55432 (user: tesl)"
-    echo "[postgres] Databases: todo-api  admin-task-api  chat"
-    echo "[postgres] Run: TESL_POSTGRES_DATABASE=todo-api tesl watch example/todo-api.tesl"
+    if [ "$_TESL_PG_OK" = 1 ]; then
+      echo "[postgres] Shared cluster ready at 127.0.0.1:55432 (user: tesl)"
+      echo "[postgres] Databases: todo-api  admin-task-api  chat"
+      echo "[postgres] Run: TESL_POSTGRES_DATABASE=todo-api tesl watch example/todo-api.tesl"
+    else
+      echo "[postgres] NOT running (start failed, see error above); retry with: bash scripts/postgres-start.sh"
+    fi
+    unset _TESL_PG_OK
   '';
 }

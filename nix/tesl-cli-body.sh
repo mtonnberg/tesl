@@ -971,6 +971,14 @@ case "$CMD" in
     _tesl_require_compiler
     exec "$TESL_OCAML_COMPILER" --debug "$@"
     ;;
+  --deps)
+    # Passthrough: print all transitively imported local .tesl files, one per
+    # line. Used by the DAP debug adapter (dsl/debug/dap-server.rkt) to emit the
+    # debug-instrumented .rkt closure for a multi-module program.
+    [ $# -ge 1 ] || { echo "Usage: tesl --deps <file.tesl>" >&2; exit 1; }
+    _tesl_require_compiler
+    exec "$TESL_OCAML_COMPILER" --deps "$@"
+    ;;
   debug-inspect)
     # Headless step-debugger: run to breakpoint(s) and dump paused state as JSON.
     # Forward all args (--break-at/--when/--hit/--mode and --continue for headless

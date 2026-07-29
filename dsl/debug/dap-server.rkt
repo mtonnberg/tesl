@@ -271,38 +271,62 @@
         (and (file-exists? p) p))
       #f))
 
+;; Run the tesl CLI with [args], capturing stdout/stderr; returns (values code out err).
+(define (run-tesl-capture tesl args)
+  (define-values (proc stdout stdin stderr)
+    (apply subprocess #f #f #f tesl args))
+  (define out (port->string stdout))
+  (define err (port->string stderr))
+  (subprocess-wait proc)
+  (define exit-code (subprocess-status proc))
+  (close-input-port stdout)
+  (close-output-port stdin)
+  (close-input-port stderr)
+  (values exit-code out err))
+
 ;; Compile a .tesl file with --debug, write output to a temp .rkt, return the path.
+;;
+;; Multi-module: the emitter requires local imports as RELATIVE `(file "dep.rkt")`
+;; paths, resolved against the requiring module's own directory.  So the compiled
+;; main module must not sit alone in the system temp dir (the old behaviour —
+;; loading it died with `open-input-file: cannot open module file` on the first
+;; local import).  Instead, emit into a fresh temp DIRECTORY and compile every
+;; transitive local import (from `tesl --deps`) into it as a sibling .rkt —
+;; debug-instrumented too, so breakpoints set in imported modules also bind.
 (define (compile-debug program-path #:test-name [test-name #f] #:test-kind [test-kind #f])
   (define tesl (find-tesl-binary))
   (unless tesl
     (error "tesl binary not found; set TESL_COMPILER env var or install via nix"))
   ;; Ensure absolute path so thsl-src file strings match VSCode's setBreakpoints paths.
   (define abs-path (path->string (path->complete-path (string->path program-path))))
-  (define temp-rkt (path->string (make-temporary-file "tesl-debug-~a.rkt")))
-  ;; Run: tesl --debug [--test-name NAME [--test-kind KIND]] <abs-path>  → stdout = Racket.
-  ;; --test-kind disambiguates a named api-test/load-test/doctest from a same-named
-  ;; plain test so debugging targets exactly the selected block.
-  (define-values (proc stdout stdin stderr)
-    (cond
-      [(and test-name test-kind)
-       (subprocess #f #f #f tesl "--debug" "--test-name" test-name "--test-kind" test-kind abs-path)]
-      [test-name
-       (subprocess #f #f #f tesl "--debug" "--test-name" test-name abs-path)]
-      [else
-       (subprocess #f #f #f tesl "--debug" abs-path)]))
-  (define racket-src (port->string stdout))
-  (define err-str (port->string stderr))
-  (subprocess-wait proc)
-  (define exit-code (subprocess-status proc))
-  (close-input-port stdout)
-  (close-output-port stdin)
-  (close-input-port stderr)
-  (unless (= exit-code 0)
-    (error (format "tesl --debug failed:\n~a" err-str)))
-  ;; Write compiled output to temp file
-  (call-with-output-file temp-rkt #:exists 'replace
-    (lambda (out) (display racket-src out)))
-  temp-rkt)
+  (define temp-dir (make-temporary-directory "tesl-debug-~a"))
+  ;; Transitive local imports.  Tolerate a tesl without the --deps verb (older
+  ;; wrapper): a single-module program debugs fine with zero deps.
+  (define deps
+    (let-values ([(code out _err) (run-tesl-capture tesl (list "--deps" abs-path))])
+      (if (= code 0)
+          (filter (lambda (l) (and (non-empty-string? l) (not (equal? l abs-path))))
+                  (map string-trim (string-split out "\n")))
+          '())))
+  (define (emit-rkt! src-path args)
+    (define-values (code out err) (run-tesl-capture tesl args))
+    (unless (= code 0)
+      (error (format "tesl --debug failed for ~a:\n~a" src-path err)))
+    (define rkt (build-path temp-dir
+                            (path-replace-extension (file-name-from-path src-path) ".rkt")))
+    (call-with-output-file rkt #:exists 'replace
+      (lambda (o) (display out o)))
+    (path->string rkt))
+  (for ([dep (in-list deps)])
+    (define dep-abs (path->string (path->complete-path (string->path dep))))
+    (emit-rkt! dep-abs (list "--debug" dep-abs)))
+  ;; Main module: --test-name/--test-kind pin the single selected test block.
+  (emit-rkt! abs-path
+             (cond
+               [(and test-name test-kind)
+                (list "--debug" "--test-name" test-name "--test-kind" test-kind abs-path)]
+               [test-name (list "--debug" "--test-name" test-name abs-path)]
+               [else (list "--debug" abs-path)])))
 
 ;; ── Checkpoint event pump ─────────────────────────────────────────────────────
 
