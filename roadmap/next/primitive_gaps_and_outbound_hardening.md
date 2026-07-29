@@ -78,23 +78,23 @@ everything else on this list by value — it is listed here only to keep the tra
 
 ---
 
-## 4. Regex on `String`
+## ~~4. Regex on `String`~~ — **DONE**, see `roadmap/completed/string_regex.md`
 
-`Tesl.String` has ~20 functions and no regex (`LANGUAGE-SPEC.md` §10.5). Every non-trivial
-validation — the `check` functions that mint `ValidEmail`-style facts, which is a *core* Tesl
-idiom — is written by hand out of `contains`/`split`/`indexOf`.
+Shipped 2026-07-29 as `Tesl.Regex` (`LANGUAGE-SPEC.md` §21.6):
+`Regex.matches` / `find` / `findAll` / `captures` / `replace` / `split`, pure, no capability.
+All three open questions resolved and written up in the completed doc:
 
-**Design questions:**
+- **Patterns are compile-time checked** — parsed by the compiler against a subset of
+  `pregexp`; a malformed one is `VREGEX001`, not a runtime raise.
+- **ReDoS is fail-closed** — the pattern must be a string literal at the call site
+  (`VREGEX002`, no dynamic-pattern form at all), ambiguous repetition does not compile
+  (`VREGEX003`, with an exact character-set rule that keeps `(?:-[a-z0-9]+)*` legal), and a
+  wall-clock deadline plus input bound in `tesl/regex.rkt` backstops the rest.
+- **Capture groups return `Maybe (List String)`** with no inner `Maybe`, because
+  `VREGEX004` rejects the two shapes where a group can fail to participate.
 
-- **Compile-time-checked patterns?** A literal pattern could be validated at compile time
-  and a malformed one become a compile error rather than a runtime raise. That is the Tesl
-  move and would make regex better here than in most languages.
-- **ReDoS.** Racket's `regexp` is backtracking; a user-supplied pattern (or a hostile input
-  against a pathological literal pattern) is audit L6 territory (resource exhaustion). Either
-  restrict to literal patterns, or use `pregexp`'s safer subset, or bound execution. Do not
-  ship a `String.matches userPattern input` that takes a pattern from request data.
-- Surface: `matches`, `find`/`findAll`, `replace`, `split` — and whether capture groups
-  return `Maybe (List String)` or something richer.
+Lesson: `example/learn/lesson75-regex-validation.tesl` (regex inside `check` functions that
+mint `ValidEmail` / `ValidSlug`). ReDoS bound test: `tests/regex-runtime-tests.rkt`.
 
 ---
 
@@ -132,7 +132,7 @@ typechecks-but-unbound), and stdlib signature/doc coverage held (`tesl doc` cata
 
 Per item: the timeout tests in item 1; a stubbed-upstream api-test in item 2; known-answer
 tests against published vectors for every hash/HMAC in item 3 plus a constant-time-compare
-test; a ReDoS-bound test in item 4.
+test; a ReDoS-bound test in item 4 (**done** — `tests/regex-runtime-tests.rkt`).
 
 ## Related
 

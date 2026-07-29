@@ -2564,6 +2564,26 @@ let legacy_bool_diagnostics _filename source (m : module_form) =
    | _ -> ());
   List.rev !diags
 
+(* ── Regex pattern literals (VREGEX001-4) ──────────────────────────────────
+   `Tesl.Regex` patterns are validated where the program is validated: see
+   regex_lint.ml for the subset, the literal-only rule, and the
+   backtracking/capture-participation rules.  Runs alongside the other surface
+   passes so `tesl check`, `--check-json` and `agent-context` all report it. *)
+let regex_literal_diagnostics (m : module_form) : diagnostic list =
+  List.map (fun (loc, code, message) -> {
+    file       = loc.Location.file;
+    start_line = loc.Location.start.line;
+    start_col  = loc.Location.start.col;
+    end_line   = loc.Location.stop.line;
+    end_col    = loc.Location.stop.col;
+    severity   = "error";
+    code;
+    message;
+    fix        = None;
+    source     = "validation";
+    manual     = Error_codes.manual_for ~code ~message ();
+  }) (Regex_lint.module_diagnostics m)
+
 let parse_module_file path =
   try
     let source = In_channel.with_open_text path In_channel.input_all in
@@ -2707,6 +2727,7 @@ let type_diags_of source (m : Ast.module_form) : diagnostic list =
     parse locations. *)
 let module_local_diags source (m : Ast.module_form) : diagnostic list =
   legacy_bool_diagnostics m.source_file source m
+  @ regex_literal_diagnostics m
   @ type_diags_of source m
   @ List.map diag_of_proof_error (Proof_checker.check_module m)
   @ List.map diag_of_validation_error (Validation.check_module m)
@@ -3099,6 +3120,7 @@ let compile_source ?(root_path=default_root_path ()) ?(type_check=true) ?(debug=
         let type_diags =
           time_phase timing "typecheck" (fun () ->
             legacy_bool_diagnostics m.source_file source m
+            @ regex_literal_diagnostics m
             @ type_diags_of source m)
         in
         let proof_diags =
@@ -3143,6 +3165,7 @@ let compile_file ?(root_path=default_root_path ()) ?(type_check=true) filename =
         let type_diags =
           time_phase timing "typecheck" (fun () ->
             legacy_bool_diagnostics m.source_file source m
+            @ regex_literal_diagnostics m
             @ type_diags_of source m)
         in
         let proof_diags =

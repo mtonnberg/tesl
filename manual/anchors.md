@@ -152,6 +152,7 @@ fails the build if any `§`-number cited by the compiler stops resolving to a re
 | `§14b.1` | Type language (structural) |
 | `§14b.2` | PosixMillis is not Int |
 | `§20.5` | Transactional atomicity (email) |
+| `§21.6` | `Tesl.Regex` — the pattern-literal rule and the VREGEX001-4 compile-time checks |
 
 > **Scope of the check.** The resolution test collects `§`-citations from compiler sources but
 > deliberately **excludes internal-review shorthand** (`Fix-11 §…`, `Review20 §…`,

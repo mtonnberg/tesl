@@ -645,6 +645,7 @@ The current frontend gives special treatment to these module names:
 **String and number utilities**
 
 - `Tesl.String` — string functions: `String.length`, `String.isEmpty`, `String.trim` (→ `IsTrimmed`), `String.toUpper` (→ `IsUpperCase`), `String.toLower` (→ `IsLowerCase`), `String.startsWith`, `String.endsWith`, `String.contains`, `String.split`, `String.join`, `String.replace`, `String.slice`, `String.padLeft`, `String.padRight`, `String.indexOf`, `String.toInt`, `String.fromInt`, and more. Also exports check function `String.requireNonEmpty` (→ `IsNonEmpty`) and proof predicate name constants `IsTrimmed`, `IsUpperCase`, `IsLowerCase`, `IsNonNegative`, `IsNonEmpty`.
+- `Tesl.Regex` — regular expressions over `String`: `Regex.matches`, `Regex.find`, `Regex.findAll`, `Regex.captures`, `Regex.replace`, `Regex.split`. The pattern is argument 1 of every function and must be a **string literal** — it is parsed and safety-checked at compile time (`VREGEX001`–`VREGEX004`), so there is no dynamic-pattern form. Pure — no capability. See §21.6.
 - `Tesl.Int` — integer functions: `Int.parse`, `Int.abs`, `Int.min`, `Int.max`, `Int.clamp`, `Int.pow`, `Int.gcd`, `Int.lcm`, `Int.isPositive`, `Int.isNegative`, `Int.isEven`, `Int.isOdd`, `Int.toString`, `Int.sign`, `Int.toFloat`. Also `Int.nonZero` (check function → `IsNonZero`), `Int.nonNegative` (check function → `IsNonNegative`), and `Int.divide` (requires `IsNonZero` on the denominator). Exports `IsNonNegative`, `IsNonZero`.
 - `Tesl.Float` — floating-point functions: `Float.parse`, `Float.abs`, `Float.min`, `Float.max`, `Float.clamp`, `Float.ceil`, `Float.floor`, `Float.round`, `Float.sqrt`, `Float.pow`, `Float.log`, `Float.exp`, `Float.sin`, `Float.cos`, `Float.tan`, `Float.isNaN`, `Float.isInfinite`, and more. Also `Float.requireNonZero` (check function → `FloatNonZero`) and `Float.div` (proof-total, requires `FloatNonZero` on the denominator). Exports `FloatNonZero`.
 
@@ -3953,6 +3954,93 @@ test "dimension algebra" {
 ```
 
 **Why compile-time dimensions with runtime erasure?** The alternative designs both lose: runtime unit objects tax every arithmetic operation and turn unit bugs into production exceptions; no units at all is the Mars Climate Orbiter. Encoding each dimension as a distinct canonical type makes dimension checking ordinary type equality — `m/s/s × 4s : m/s` falls out of exponent arithmetic in the checker, wrong-unit code does not compile, and the compiled program pays nothing because every quantity erases to a plain float. Conversions happen exactly twice: at construction (into SI canonical) and at an accessor (out of it), so there is no unit ambiguity in between — and the import gating keeps this entire vocabulary out of modules that never asked for it.
+
+---
+
+### 21.6 `Tesl.Regex`
+**Implemented.**
+
+Regular expressions over `String`. Six functions, pure — no capability:
+
+```tesl
+import Tesl.Regex exposing [Regex.matches, Regex.find, Regex.findAll,
+                            Regex.captures, Regex.replace, Regex.split]
+```
+
+| Function | Signature | Meaning |
+|---|---|---|
+| `Regex.matches` | `(pattern: String, input: String) -> Bool` | the pattern matches somewhere in `input` (anchor with `^`/`$` for a whole-string match) |
+| `Regex.find` | `(pattern: String, input: String) -> Maybe String` | the text of the first match |
+| `Regex.findAll` | `(pattern: String, input: String) -> List String` | the text of every non-overlapping match, left to right |
+| `Regex.captures` | `(pattern: String, input: String) -> Maybe (List String)` | the capture groups of the first match, in source order, whole match EXCLUDED; `Something []` when the pattern has no groups |
+| `Regex.replace` | `(pattern: String, input: String, replacement: String) -> String` | replaces EVERY match; the replacement is inserted literally (`$1`, `\1` and `&` are ordinary characters — never group references) |
+| `Regex.split` | `(pattern: String, input: String) -> List String` | splits on every match, like `String.split` with a pattern separator |
+
+**The pattern is argument 1 of every function and MUST be a string literal
+written at the call site.** There is no dynamic-pattern form. That is what makes
+the following four compile-time rules enforceable, and it closes the
+resource-exhaustion hole a `Regex.matches userPattern input` would open.
+To reuse a pattern, name the *predicate* — wrap the call in a `fn` or a `check`.
+
+**The accepted subset of `pregexp`.** Literal characters, `.`, character classes
+`[a-z]` / `[^0-9]` with ranges, the class escapes `\d \D \w \W \s \S`, the
+word boundaries `\b \B`, the anchors `^ $`, capturing `( … )` and non-capturing
+`(?: … )` groups, alternation `|`, and the quantifiers `? * + {n} {n,} {n,m}`.
+A backslash may also precede any of `. * + ? ( ) [ ] { } | ^ $ - /`.
+
+Deliberately outside the subset: backreferences (`\1`), lookaround
+(`(?=`, `(?!`, `(?<=`, `(?<!`), inline flags (`(?i:`), lazy/possessive
+quantifiers (`*?`, `*+`), POSIX bracket classes (`[:alpha:]`), and the escapes
+`\n \t \r \\` (a Tesl string literal already processes those — see §8.5 — so
+spelling them inside a pattern would be ambiguous). A regex backslash is written
+DOUBLED in Tesl source: `"\\d+"` is the pattern `\d+`.
+
+**Compile-time rules.** Each has its own stable diagnostic code:
+
+| Code | Rule |
+|---|---|
+| `VREGEX001` | the pattern must parse in the subset above |
+| `VREGEX002` | the pattern must be a string literal at the call site |
+| `VREGEX003` | the pattern must not be able to backtrack catastrophically |
+| `VREGEX004` | every capture group must participate in every successful match |
+
+`VREGEX003` rejects a group repeated two or more times when its body can match
+the empty string, contains a top-level `|`, or contains its own quantifier —
+*unless* the body begins with a fixed single-character atom whose character set
+is disjoint from every other character atom in the body. That exception is a
+sufficient condition for a unique decomposition of the input, and it keeps the
+everyday separator idiom legal: `(?:-[a-z0-9]+)*` and `(?:\.[a-z]+)+` are
+accepted, while `(a+)+`, `(?:aa+)+`, `(?:a|a)*` and `(?:[a-z]+\.)+` are not.
+Two neighbouring unbounded repetitions over overlapping character sets
+(`[0-9]+[0-9]*`) are rejected for the same reason.
+
+`VREGEX004` rejects a capture group under a quantifier and a capture group
+inside an alternation branch — the only two shapes where a group can fail to
+capture on a successful match. Because they cannot occur, `Regex.captures`
+returns `Maybe (List String)` rather than `Maybe (List (Maybe String))`: the
+outer `Maybe` is "did the pattern match", and the list length is exactly the
+number of groups written in the pattern.
+
+**Runtime bounds.** The compile-time rules eliminate exponential backtracking;
+the remaining (polynomial) ambiguity, and any pattern that reached the runtime
+without passing them, is bounded operationally. Every match runs in its own
+Racket thread under a wall-clock deadline — `TESL_REGEX_TIMEOUT_MS`, default
+1000 — over an input bounded by `TESL_REGEX_MAX_INPUT_BYTES`, default 1 MiB.
+Exceeding either raises a clean `Regex` error rather than pinning the thread.
+Compiled patterns are memoised, so the steady-state cost of a call is a hash
+lookup.
+
+```tesl
+fact ValidSlug (s: String)
+
+check requireSlug(raw: String) -> raw: String ::: ValidSlug raw =
+  if Regex.matches "^[a-z0-9]+(?:-[a-z0-9]+)*$" raw then
+    ok raw ::: ValidSlug raw
+  else
+    fail 400 "a slug is lowercase words joined by single hyphens"
+```
+
+See `example/learn/lesson75-regex-validation.tesl`.
 
 ---
 

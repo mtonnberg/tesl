@@ -1209,6 +1209,11 @@ else
         # edge, pow bounds the exponent before expt, NaN/inf convert cleanly —
         # plus issue #45's api-test path normalization (literal ≡ computed)
         "tests/int32-runtime-tests.rkt"
+        # Tesl.Regex runtime last line of defence: the ReDoS deadline (a
+        # pathological pattern the COMPILER rejects, handed straight to the
+        # runtime, must not hang the process), the input bound, and the
+        # capture-list shape `Regex.captures` promises
+        "tests/regex-runtime-tests.rkt"
         "tests/codec-specialization-test.rkt"
         "tests/lifted-list-tests.rkt"
         "tests/body-proof-test.rkt"

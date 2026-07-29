@@ -86,6 +86,7 @@ let module_path_table : (string, string) Hashtbl.t =
   let add k v = Hashtbl.replace h k v in
   add "Tesl.Prelude"   "tesl/prelude.rkt";
   add "Tesl.String"    "tesl/string.rkt";
+  add "Tesl.Regex"     "tesl/regex.rkt";
   add "Tesl.Int"       "tesl/int.rkt";
   add "Tesl.Int32"     "tesl/int32.rkt";
   add "Tesl.Float"     "tesl/float.rkt";
@@ -2424,6 +2425,19 @@ let rec emit_expr ctx e =
           if Hashtbl.mem stdlib_plain_imports name then name else ""
         | _ -> ""
       in
+      (* FAIL-CLOSED BACKSTOP for Tesl.Regex (VREGEX002).  The pattern-literal
+         rule is reported as a proper diagnostic by Regex_lint before we get
+         here; this re-check makes the rule a property of EMISSION rather than
+         of one diagnostic pass, so a `Regex.*` call reached through a decl kind
+         the diagnostic walk does not visit cannot silently ship a program that
+         takes its pattern from a variable (or request data). *)
+      if Regex_lint.is_regex_runtime_name fn_racket_name then
+        (match args with
+         | pat :: _ when Regex_lint.literal_pattern_of_expr pat = None ->
+           failwith
+             ("emit_racket: a Tesl.Regex pattern must be a string literal at \
+               the call site (VREGEX002) — refusing to emit " ^ fn_racket_name)
+         | _ -> ());
       let emit_stdlib_arg arg =
         let rec app_head_name = function
           | EApp { fn; _ } -> app_head_name fn

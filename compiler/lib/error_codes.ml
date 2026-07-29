@@ -108,7 +108,8 @@ let all_topics : manual_topic list =
 
 (* ── The registry ─────────────────────────────────────────────────────────
    One row per *rendered* code.  Keep this list in sync with:
-     - compile.ml      (diag_of_* : E000/T001/P001/V001, VBOOL001/2)
+     - compile.ml      (diag_of_* : E000/T001/P001/V001, VBOOL001/2,
+                        VREGEX001-4 via regex_lint.ml)
      - linter.ml       (E001/E002/E010/E03x and W0xx — see its header comment)
    Adding a NEW rendered code is a deliberate act: add it here AND add a case
    to test_error_codes.ml. *)
@@ -178,6 +179,61 @@ let registry : entry list = [
        must be imported before use: add \
        `import Tesl.Prelude exposing [Bool(..)]`.";
     manual = Some "language-spec" };
+
+  (* ── Regex pattern literals (Tesl.Regex — see LANGUAGE-SPEC.md §21.6) ──── *)
+  { code = "VREGEX001"; category = Syntax;
+    title = "malformed regex pattern";
+    explanation =
+      "A `Tesl.Regex` pattern literal did not parse, or used a construct \
+       outside Tesl's regex subset. Tesl checks pattern literals when it checks \
+       the program, so a typo in a pattern is a compile error with an offset \
+       rather than a runtime raise on the unlucky request. The subset is \
+       literals, `.`, character classes, `\\d \\D \\w \\W \\s \\S \\b \\B`, \
+       anchors, `( … )` / `(?: … )`, `|`, and `? * + {n} {n,} {n,m}`. Not in \
+       the subset: backreferences, lookaround, inline flags, lazy/possessive \
+       quantifiers, POSIX bracket classes, and the `\\n \\t \\r \\\\` escapes \
+       (Tesl string literals already process those).";
+    manual = Some "best-practices#validation-patterns" };
+
+  { code = "VREGEX002"; category = Structure;
+    title = "regex pattern is not a string literal";
+    explanation =
+      "Every `Tesl.Regex` function takes its pattern as the FIRST argument, and \
+       that argument must be a string literal written at the call site. This is \
+       deliberate and there is no dynamic-pattern escape hatch: compile-time \
+       validation (VREGEX001/003/004) is only possible when the pattern is part \
+       of the program, and a pattern that can come from request data is a \
+       resource-exhaustion hole (a hostile pattern against friendly input is \
+       just as bad as the reverse). Name the predicate rather than the pattern: \
+       wrap the call in a `fn` or a `check`.";
+    manual = Some "best-practices#validation-patterns" };
+
+  { code = "VREGEX003"; category = Structure;
+    title = "regex pattern can backtrack catastrophically";
+    explanation =
+      "The pattern parses, but its repetition is ambiguous: the same input can \
+       be split across iterations in exponentially many ways, so a matcher that \
+       backtracks (Racket's does) can be made to run effectively forever by a \
+       short hostile input — the `(a+)+` shape. Tesl rejects these at compile \
+       time. Fixes: drop one of the two quantifiers, replace an alternation \
+       under a quantifier with a character class (`[ab]*` for `(?:a|b)*`), or \
+       start the repeated group with a fixed separator character that cannot \
+       appear in the rest of the group (`(?:-[a-z0-9]+)*` is accepted for \
+       exactly that reason).";
+    manual = Some "best-practices#validation-patterns" };
+
+  { code = "VREGEX004"; category = Structure;
+    title = "capture group may not participate in a match";
+    explanation =
+      "`Regex.captures` returns `Maybe (List String)` — one String per capture \
+       group, with no inner `Maybe`. That is only honest if every capture group \
+       of an accepted pattern captures text whenever the match succeeds, so \
+       Tesl rejects the two shapes where it would not: a capture group under a \
+       quantifier (it captures only its last repetition, or nothing at all when \
+       the count is zero) and a capture group inside an alternation branch (the \
+       other branch may win). Make the group non-capturing with `(?: … )`, or \
+       restructure so the group is unconditional.";
+    manual = Some "best-practices#validation-patterns" };
 
   (* ── Linter: structural file checks (E0xx) ────────────────────────────── *)
   { code = "E001"; category = Lint;

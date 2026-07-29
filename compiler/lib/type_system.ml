@@ -448,6 +448,20 @@ let stdlib_env : (string * scheme) list = [
   (* check function: passes a non-empty string through, minting IsNonEmpty *)
   "String.requireNonEmpty", mono (t_fun [t_string] t_string);
 
+  (* ── Regex (LANGUAGE-SPEC.md §21.6) ──────────────────────────────────────
+     The PATTERN is argument 1 of every function and must be a string LITERAL:
+     the compiler parses it, rejects malformed ones and ones that can backtrack
+     catastrophically, and guarantees each capture group participates in every
+     successful match (Regex_lint, codes VREGEX001-4).  `Regex.captures` is
+     `Maybe (List String)` rather than `Maybe (List (Maybe String))` precisely
+     because that last rule makes the inner Maybe unreachable. *)
+  "Regex.matches",  mono (t_fun [t_string; t_string] t_bool);
+  "Regex.find",     mono (t_fun [t_string; t_string] (t_maybe t_string));
+  "Regex.findAll",  mono (t_fun [t_string; t_string] (t_list t_string));
+  "Regex.captures", mono (t_fun [t_string; t_string] (t_maybe (t_list t_string)));
+  "Regex.replace",  mono (t_fun [t_string; t_string; t_string] t_string);
+  "Regex.split",    mono (t_fun [t_string; t_string] (t_list t_string));
+
   (* ── Int32 (NT-07) ───────────────────────────────────────────────────── *)
   (* A JS-safe nominal boundary integer.  ONE RANGE RULE across the module:
      a result that cannot leave [-2^31, 2^31) is an `Int32`; a result that can
@@ -1032,6 +1046,11 @@ let tesl_module_exports : (string * string list) list = [
       "String.fromFloat"; "String.lines"; "String.words";
       "String.padLeft"; "String.padRight"; "String.dropPrefix"; "String.dropSuffix";
       "String.indexOf"; "String.requireNonEmpty" ] );
+  ( "Tesl.Regex",
+    (* Pattern-literal-only regex over String — see LANGUAGE-SPEC.md §21.6.
+       Pure: no capability.  The pattern is argument 1 everywhere. *)
+    [ "Regex.matches"; "Regex.find"; "Regex.findAll"; "Regex.captures";
+      "Regex.replace"; "Regex.split" ] );
   ( "Tesl.List",
     [ "IsSorted";
       "List.isEmpty"; "List.length"; "List.head"; "List.tail"; "List.last"; "List.nth";
@@ -1340,7 +1359,7 @@ let stdlib_capabilities_of (name : string) : string list =
     that have runtime files but no registered export list).
     Used to reject `import Tesl.Unknown` with a compile-time error. *)
 let tesl_known_module_names : string list = [
-  "Tesl.Prelude"; "Tesl.String"; "Tesl.Int"; "Tesl.Int32"; "Tesl.Float";
+  "Tesl.Prelude"; "Tesl.String"; "Tesl.Regex"; "Tesl.Int"; "Tesl.Int32"; "Tesl.Float";
   "Tesl.List"; "Tesl.ListPrim"; "Tesl.Dict"; "Tesl.Maybe"; "Tesl.Either"; "Tesl.EitherPrim"; "Tesl.Result";
   "Tesl.Http"; "Tesl.HttpClient"; "Tesl.Json"; "Tesl.DB"; "Tesl.Time"; "Tesl.Random";
   "Tesl.Uuid"; "Tesl.UUID"; "Tesl.Set"; "Tesl.Env";
