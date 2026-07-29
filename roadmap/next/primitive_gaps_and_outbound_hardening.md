@@ -1,6 +1,7 @@
 # Primitive gaps + outbound-call hardening
 
-> **Status:** Next · **Effort:** M (regex) — items 1 and 2 are **DONE**
+> **Status:** Next · **Effort:** S — **items 1, 2 and 4 are DONE** (2026-07-29). What remains is
+> item 3 (`Tesl.Crypto`, split out to its own file) and item 5 (`Bytes`, decided: deferred).
 
 Carved out of `roadmap/discarded/using_queues_for_ffi.md` (discarded 2026-07-29). That item
 declined FFI; these are the items from its "Phase B" that stand entirely on their own merit.
