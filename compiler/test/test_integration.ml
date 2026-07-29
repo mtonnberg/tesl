@@ -332,8 +332,7 @@ let test_lesson02_parses () =
 
 let test_lesson03_records () =
   (* Record update syntax — should parse (even if output differs) *)
-  let src = {|#lang tesl
-module Records exposing []
+  let src = {|module Records exposing []
 import Tesl.Prelude exposing [Int]
 
 record Point {
@@ -374,8 +373,7 @@ let check_contains name src expected_fragment =
 
 let test_case_scrut_uses_star () =
   (* Case scrutinees should use *var notation, not (raw-value var) *)
-  let src = {|#lang tesl
-module Foo exposing [f]
+  let src = {|module Foo exposing [f]
 import Tesl.Prelude exposing [String]
 type Color =
   | Red
@@ -389,8 +387,7 @@ fn f(c: Color) -> String =
 
 let test_proof_sym_no_double_parens () =
   (* Proof annotations should NOT have double parens: (ValidPort port) not ((ValidPort port)) *)
-  let src = {|#lang tesl
-module Foo exposing [isValid]
+  let src = {|module Foo exposing [isValid]
 import Tesl.Prelude exposing [Int]
 check isValid(x: Int) -> x: Int ::: Valid x =
   ok x ::: Valid x
@@ -412,8 +409,7 @@ check isValid(x: Int) -> x: Int ::: Valid x =
 
 let test_constructor_arg_no_raw_value () =
   (* Constructors as function args should NOT be wrapped in raw-value *)
-  let src = {|#lang tesl
-module Foo exposing [area]
+  let src = {|module Foo exposing [area]
 import Tesl.Prelude exposing [Int]
 type Shape =
   | Circle radius:Int
@@ -448,8 +444,7 @@ test "area" {
 
 let test_dot_field_access () =
   (* obj.field uses tesl-dot/runtime in plain fn bodies *)
-  let src = {|#lang tesl
-module Foo exposing [getTitle]
+  let src = {|module Foo exposing [getTitle]
 import Tesl.Prelude exposing [String]
 record Task {
   title: String
@@ -461,8 +456,7 @@ fn getTitle(t: Task) -> String =
 
 let test_negative_int_literal () =
   (* -3 should parse as a negative integer literal in arg position *)
-  let src = {|#lang tesl
-module Foo exposing [add]
+  let src = {|module Foo exposing [add]
 import Tesl.Prelude exposing [Int]
 fn add(x: Int, y: Int) -> Int = x + y
 test "neg" {
@@ -473,8 +467,7 @@ test "neg" {
 
 let test_interp_string_format () =
   (* Interpolated strings should use format with ~a *)
-  let src = {|#lang tesl
-module Foo exposing [greet]
+  let src = {|module Foo exposing [greet]
 import Tesl.Prelude exposing [String]
 fn greet(name: String) -> String =
   "Hello, ${name}!"
@@ -484,8 +477,7 @@ fn greet(name: String) -> String =
 
 let test_multi_arg_application () =
   (* Multi-arg function application should be flattened in Racket *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn f(x: Int, y: Int, z: Int) -> Int = x
 test "app" {
@@ -496,8 +488,7 @@ test "app" {
 
 let test_adt_define_adt () =
   (* ADT types should use define-adt *)
-  let src = {|#lang tesl
-module Foo exposing [Color(..)]
+  let src = {|module Foo exposing [Color(..)]
 type Color =
   | Red
   | Green
@@ -508,16 +499,14 @@ type Color =
 
 let test_newtype_inline () =
   (* Newtypes should use inline format: (define-newtype Name BaseType) *)
-  let src = {|#lang tesl
-module Foo exposing [UserId]
+  let src = {|module Foo exposing [UserId]
 type UserId = String
 |} in
   check_contains "newtype_inline" src "(define-newtype UserId String)"
 
 let test_record_define () =
   (* Records should use define-record *)
-  let src = {|#lang tesl
-module Foo exposing [Task]
+  let src = {|module Foo exposing [Task]
 record Task {
   id: String
   title: String
@@ -528,8 +517,7 @@ record Task {
 
 let test_checker_accept_raw () =
   (* check functions should use accept with *name (raw value) *)
-  let src = {|#lang tesl
-module Foo exposing [isPos]
+  let src = {|module Foo exposing [isPos]
 import Tesl.Prelude exposing [Int]
 check isPos(n: Int) -> n: Int ::: Positive n =
   if n > 0 then
@@ -541,8 +529,7 @@ check isPos(n: Int) -> n: Int ::: Positive n =
 
 let test_reject_http_code () =
   (* fail N "msg" should emit reject with http-code *)
-  let src = {|#lang tesl
-module Foo exposing [f]
+  let src = {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int =
   fail 404 "not found"
@@ -551,8 +538,7 @@ fn f(x: Int) -> Int =
 
 let test_provide_includes_signatures () =
   (* provide should include name-signature for each function *)
-  let src = {|#lang tesl
-module Foo exposing [add]
+  let src = {|module Foo exposing [add]
 import Tesl.Prelude exposing [Int]
 fn add(x: Int, y: Int) -> Int = x + y
 |} in
@@ -560,8 +546,7 @@ fn add(x: Int, y: Int) -> Int = x + y
 
 let test_bool_literals () =
   (* true/false → #t/#f in Racket *)
-  let src = {|#lang tesl
-module Foo exposing [isTrue]
+  let src = {|module Foo exposing [isTrue]
 import Tesl.Prelude exposing [Bool]
 fn isTrue(b: Bool) -> Bool =
   if b then
@@ -574,16 +559,14 @@ fn isTrue(b: Bool) -> Bool =
 
 let test_qualified_stdlib_imports () =
   (* Qualified imports like Dict.lookup should be renamed *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Dict exposing [Dict.lookup]
 |} in
   check_contains "dict_renamed" src "tesl_import_Dict_lookup"
 
 let test_maybe_constructors_in_import () =
   (* Maybe(..) should expand to Maybe Something Nothing *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Maybe exposing [Maybe(..)]
 |} in
   check_contains "nothing_in_import" src "Nothing";
@@ -591,16 +574,14 @@ import Tesl.Maybe exposing [Maybe(..)]
 
 let test_capability_implies () =
   (* capability X implies Y should emit define-capability with implies *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 capability myRead implies dbRead
 |} in
   check_contains "capability_implies" src "(define-capability myRead (implies dbRead"
 
 let test_handler_capabilities () =
   (* handler with requires should emit #:capabilities *)
-  let src = {|#lang tesl
-module Foo exposing [create]
+  let src = {|module Foo exposing [create]
 import Tesl.Prelude exposing [String]
 handler create(x: String) -> String
   requires [dbWrite] =
@@ -612,8 +593,7 @@ let test_let_binding_in_test () =
   (* let bindings in tests should emit as (define ...).  B5: the value is now
      wrapped in a (thsl-src! … (lambda () 42)) checkpoint that erases in release;
      assert the binding shape and the inner value rather than the exact text. *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 test "demo" {
   let x = 42
   expect x == 42
@@ -624,8 +604,7 @@ test "demo" {
 
 let test_expect_fail_test () =
   (* expectFail should emit with-handlers pattern *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 test "fail" {
   expectFail isValidPort 0
 }
@@ -635,8 +614,7 @@ test "fail" {
 
 let test_expect_has_proof () =
   (* expectHasProof should emit facts-of pattern *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 test "proof" {
   expectHasProof isValidPort 80 ValidPort
 }
@@ -646,8 +624,7 @@ test "proof" {
 
 let test_no_t_any_ever () =
   (* The compiler should NEVER emit __Any__ *)
-  let src = {|#lang tesl
-module Foo exposing [f]
+  let src = {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int = x
 |} in
@@ -668,14 +645,12 @@ fn f(x: Int) -> Int = x
 (* ── Adversarial integration tests ──────────────────────────────────────── *)
 
 let test_empty_module_compiles () =
-  let src = {|#lang tesl
-module Empty exposing []
+  let src = {|module Empty exposing []
 |} in
   check_contains "provides empty" src "(provide "
 
 let test_deeply_nested_case () =
-  let src = {|#lang tesl
-module Foo exposing [f]
+  let src = {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int]
 type AB =
   | A
@@ -697,8 +672,7 @@ fn f(ab: AB, cd: CD) -> Int =
   check_contains "nested_case" src "(cond"
 
 let test_boolean_and_expr () =
-  let src = {|#lang tesl
-module Foo exposing [check]
+  let src = {|module Foo exposing [check]
 import Tesl.Prelude exposing [Bool, Int]
 fn validate(x: Int, y: Int) -> Bool =
   x > 0 && y > 0
@@ -706,16 +680,14 @@ fn validate(x: Int, y: Int) -> Bool =
   check_contains "and_expr" src "(and"
 
 let test_multiple_proof_conjunction () =
-  let src = {|#lang tesl
-module Foo exposing [both]
+  let src = {|module Foo exposing [both]
 import Tesl.Prelude exposing [Int]
 fn both(x: Int ::: PA x && PB x) -> Int = x
 |} in
   check_contains "conjunctive_param" src "PA x"
 
 let test_forall_return_spec () =
-  let src = {|#lang tesl
-module Foo exposing [filter]
+  let src = {|module Foo exposing [filter]
 import Tesl.Prelude exposing [Int, List]
 fn filter(xs: List Int) -> List Int ::: ForAll Positive =
   xs
@@ -739,8 +711,7 @@ fn filter(xs: List Int) -> List Int ::: ForAll Positive =
       Alcotest.failf "forall_return: ForAll ::: regression still emits nested list return:\n%s" out
 
 let test_record_with_proof_fields () =
-  let src = {|#lang tesl
-module Foo exposing [NewNote]
+  let src = {|module Foo exposing [NewNote]
 import Tesl.Prelude exposing [String]
 record NewNote {
   title: String ::: SafeTitle title
@@ -750,8 +721,7 @@ record NewNote {
   check_contains "proof_field" src "define-record NewNote"
 
 let test_entity_table () =
-  let src = {|#lang tesl
-module Foo exposing [Todo]
+  let src = {|module Foo exposing [Todo]
 import Tesl.Prelude exposing [String, Bool]
 entity Todo table "todos" primaryKey id {
   id: String
@@ -762,8 +732,7 @@ entity Todo table "todos" primaryKey id {
   check_contains "entity" src "define-entity Todo"
 
 let test_codec_with_via () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Json exposing [stringCodec]
 import Tesl.Prelude exposing [String]
 record NewNote { title: String }
@@ -779,8 +748,7 @@ codec NewNote {
   check_contains "via_check" src "checkTitle"
 
 let test_property_custom_generator_emit () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn genSmallPositive(seed: Int) -> Int =
   1 + seed % 100
@@ -793,16 +761,14 @@ test "property: via custom generator" with 20 runs {
   check_contains "property custom generator body" src "(check-true (and (> (raw-value n) 0) (<= (raw-value n) 100)) \"custom gen\")"
 
 let test_modulo_emits_remainder () =
-  let src = {|#lang tesl
-module Foo exposing [mod100]
+  let src = {|module Foo exposing [mod100]
 fn mod100(n: Int) -> Int =
   n % 100
 |} in
   check_contains "modulo emits remainder" src "(remainder *n 100)"
 
 let test_property_stdlib_call_uses_raw_value () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.String exposing [String.length]
 import Tesl.Prelude exposing [String]
 
@@ -813,8 +779,7 @@ test "property: string length is non-negative" with 30 runs {
   check_contains "property stdlib raw value" src "(tesl_import_String_length (raw-value s))"
 
 let test_expect_comparisons_emit_boolean_checks () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 test "comparisons" {
   expect 5 > 3
   expect 5 != 3
@@ -829,8 +794,7 @@ test "comparisons" {
   check_contains "expect not-equal inner" src "(lambda () 5)) 3)"
 
 let test_property_record_generator_uses_constructor () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 record AnIntRecord {
   someProp: Int
@@ -843,8 +807,7 @@ test "property: record" with 20 runs {
   check_contains "property record generator" src "[n (AnIntRecord #:someProp (- (tesl-prop-random 2000001) 1000000))]"
 
 let test_stdlib_check_binding_uses_let_check () =
-  let src = {|#lang tesl
-module Foo exposing [f]
+  let src = {|module Foo exposing [f]
 import Tesl.Int exposing [Int.nonNegative]
 import Tesl.Prelude exposing [Int]
 fn f() -> Int =
@@ -855,8 +818,7 @@ fn f() -> Int =
   check_contains "stdlib let/check target" src "tesl_import_Int_nonNegative 2"
 
 let test_stdlib_empty_list_is_not_zero_arg () =
-  let src = {|#lang tesl
-module Foo exposing [f]
+  let src = {|module Foo exposing [f]
 import Tesl.List exposing [List.length]
 import Tesl.Prelude exposing [Int]
 fn f() -> Int =
@@ -865,8 +827,7 @@ fn f() -> Int =
   check_contains "stdlib empty list arg" src "(tesl_import_List_length (list))"
 
 let test_proof_local_passes_named_value_to_stdlib () =
-  let src = {|#lang tesl
-module Foo exposing [f]
+  let src = {|module Foo exposing [f]
 import Tesl.Int exposing [Int.nonZero, Int.divide]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Prelude exposing [Int]
@@ -877,8 +838,7 @@ fn f(numerator: Int, rawDenom: Int) -> Maybe Int =
   check_contains "proof local named stdlib arg" src "(tesl_import_Int_divide *numerator denom)"
 
 let test_sql_select_lowering () =
-  let src = {|#lang tesl
-module Foo exposing [findById, findFeatured, ordered]
+  let src = {|module Foo exposing [findById, findFeatured, ordered]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Prelude exposing [Int, String]
 entity Product table "products" primaryKey id {
@@ -898,8 +858,7 @@ fn ordered() -> List Product =
   check_contains "sql select order limit lowering" src "(select-many (from Product) (order-by (entity-field-ref Product 'price) 'asc) (limit 5))"
 
 let test_sql_insert_lowering () =
-  let src = {|#lang tesl
-module Foo exposing [createProduct]
+  let src = {|module Foo exposing [createProduct]
 import Tesl.Prelude exposing [Bool, Int, String]
 entity Product table "products" primaryKey id {
   id: String
@@ -913,8 +872,7 @@ fn createProduct(id: String, category: String, price: Int) -> Product =
   check_contains "sql insert lowering" src "(insert-one! Product (hash 'id id 'category category 'inStock #t 'price price))"
 
 let test_sql_update_lowering () =
-  let src = {|#lang tesl
-module Foo exposing [setPrice]
+  let src = {|module Foo exposing [setPrice]
 import Tesl.Prelude exposing [Int, String]
 entity Product table "products" primaryKey id {
   id: String
@@ -930,8 +888,7 @@ fn setPrice(id: String, newPrice: Int) -> Product ? FromDb (Id == id)
   check_contains "sql update lowering" src "(car (update-many! (from Product) (hash (entity-field-ref Product 'price) newPrice) (where (==. (entity-field-ref Product 'id) id))))"
 
 let test_sql_delete_lowering () =
-  let src = {|#lang tesl
-module Foo exposing [removeProduct]
+  let src = {|module Foo exposing [removeProduct]
 import Tesl.Prelude exposing [Int, String]
 entity Product table "products" primaryKey id {
   id: String
@@ -942,8 +899,7 @@ fn removeProduct(id: String) -> Int =
   check_contains "sql delete lowering" src "(delete-many! (from Product) (where (==. (entity-field-ref Product 'id) id)))"
 
 let test_api_exists_return_spec_lowering () =
-  let src = {|#lang tesl
-module Foo exposing [MyApi]
+  let src = {|module Foo exposing [MyApi]
 import Tesl.Prelude exposing [String]
 entity Event table "events" primaryKey id {
   id: String
@@ -957,8 +913,7 @@ api MyApi {
   check_contains "api exists return spec lowering" src ":> (Post JSON (Exists [eventId : String] (? Event _entity ::: (FromDb (Id == eventId) _entity))))"
 
 let test_case_bound_value_raw_in_return () =
-  let src = {|#lang tesl
-module Foo exposing [unwrap]
+  let src = {|module Foo exposing [unwrap]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Prelude exposing [Int]
 fn unwrap(m: Maybe Int) -> Int =
@@ -973,8 +928,7 @@ fn unwrap(m: Maybe Int) -> Int =
   check_contains "case bound value raw return" src "(lambda () *value)"
 
 let test_constructor_payload_unwraps_named_values () =
-  let src = {|#lang tesl
-module Foo exposing [wrapAge]
+  let src = {|module Foo exposing [wrapAge]
 import Tesl.Either exposing [Either(..)]
 import Tesl.Prelude exposing [Int, String]
 fn wrapAge(age: Int) -> Either String Int =
@@ -983,8 +937,7 @@ fn wrapAge(age: Int) -> Either String Int =
   check_contains "constructor payload unwraps named values" src "(raw-value (Right *age))"
 
 let test_test_let_check_lowering () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Dict exposing [Dict, Dict.fromList, Dict.requireKey, Dict.get]
 import Tesl.Prelude exposing [Int, String]
 test "dict proof local" {
@@ -999,8 +952,7 @@ test "dict proof local" {
   check_contains "test let/check proof local use" src "(tesl_import_Dict_get (raw-value key) checked)"
 
 let test_stdlib_call_raw_unwraps_user_function_result () =
-  let src = {|#lang tesl
-module Foo exposing [parseAdultAge]
+  let src = {|module Foo exposing [parseAdultAge]
 import Tesl.Either exposing [Either(..), Either.andThen]
 import Tesl.Prelude exposing [Int, String]
 fn parseAge(raw: String) -> Either String Int =
@@ -1014,8 +966,7 @@ fn parseAdultAge(raw: String) -> Either String Int =
 
 let test_server_sse_routes () =
   (* SSE routes are defined per API, not per server *)
-  let src = {|#lang tesl
-module Foo exposing [MyServer]
+  let src = {|module Foo exposing [MyServer]
 api MyApi {
   get "/items"
     -> String
@@ -1030,8 +981,7 @@ server MyServer for MyApi {
 
 (** params used in arithmetic should emit *name in Racket *)
 let test_implicit_unwrap_arithmetic () =
-  let src = {|#lang tesl
-module Foo exposing [add]
+  let src = {|module Foo exposing [add]
 import Tesl.Prelude exposing [Int]
 fn add(x: Int, y: Int) -> Int =
   x + y
@@ -1040,8 +990,7 @@ fn add(x: Int, y: Int) -> Int =
 
 (** params used in comparison should emit *name in Racket *)
 let test_implicit_unwrap_comparison () =
-  let src = {|#lang tesl
-module Foo exposing [isPositive]
+  let src = {|module Foo exposing [isPositive]
 import Tesl.Prelude exposing [Int, Bool]
 fn isPositive(n: Int) -> Bool =
   n > 0
@@ -1050,8 +999,7 @@ fn isPositive(n: Int) -> Bool =
 
 (** bool param used in if condition should emit *flag in Racket *)
 let test_implicit_unwrap_if_condition () =
-  let src = {|#lang tesl
-module Foo exposing [choose]
+  let src = {|module Foo exposing [choose]
 import Tesl.Prelude exposing [Int, Bool]
 fn choose(flag: Bool, a: Int, b: Int) -> Int =
   if flag then
@@ -1063,8 +1011,7 @@ fn choose(flag: Bool, a: Int, b: Int) -> Int =
 
 (** negation of param should emit (- *n) *)
 let test_implicit_unwrap_unary_neg () =
-  let src = {|#lang tesl
-module Foo exposing [neg]
+  let src = {|module Foo exposing [neg]
 import Tesl.Prelude exposing [Int]
 fn neg(n: Int) -> Int =
   -n
@@ -1073,8 +1020,7 @@ fn neg(n: Int) -> Int =
 
 (** param in string interpolation should emit (tesl-display-val *name) *)
 let test_implicit_unwrap_string_interp () =
-  let src = {|#lang tesl
-module Foo exposing [greet]
+  let src = {|module Foo exposing [greet]
 import Tesl.Prelude exposing [String]
 fn greet(name: String) -> String =
   "Hello, ${name}!"
@@ -1083,8 +1029,7 @@ fn greet(name: String) -> String =
 
 (* star (asterisk) in source is a parse error *)
 let test_star_is_parse_error () =
-  let src = {|#lang tesl
-module Foo exposing [f]
+  let src = {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int =
   *x
@@ -1095,8 +1040,7 @@ fn f(x: Int) -> Int =
 
 (** param passed to constructor should emit *name *)
 let test_implicit_unwrap_constructor_arg () =
-  let src = {|#lang tesl
-module Foo exposing [wrapJust]
+  let src = {|module Foo exposing [wrapJust]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn wrapJust(n: Int) -> Maybe Int =
@@ -1106,8 +1050,7 @@ fn wrapJust(n: Int) -> Maybe Int =
 
 (** param returned from fn (named-pack) should use raw tail *)
 let test_implicit_unwrap_fn_return_param () =
-  let src = {|#lang tesl
-module Foo exposing [identity]
+  let src = {|module Foo exposing [identity]
 import Tesl.Prelude exposing [Int]
 fn identity(x: Int) -> Int =
   x
@@ -1116,8 +1059,7 @@ fn identity(x: Int) -> Int =
 
 (** params used in modulo should emit *name *)
 let test_implicit_unwrap_modulo () =
-  let src = {|#lang tesl
-module Foo exposing [remainder]
+  let src = {|module Foo exposing [remainder]
 import Tesl.Prelude exposing [Int]
 fn remainder(a: Int, b: Int) -> Int =
   a % b
@@ -1126,8 +1068,7 @@ fn remainder(a: Int, b: Int) -> Int =
 
 (** case-bound variable should auto-unwrap in return *)
 let test_implicit_unwrap_case_branch () =
-  let src = {|#lang tesl
-module Foo exposing [extract]
+  let src = {|module Foo exposing [extract]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn extract(m: Maybe Int, def: Int) -> Int =

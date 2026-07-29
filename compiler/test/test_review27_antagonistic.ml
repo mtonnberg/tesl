@@ -82,7 +82,7 @@ let should_fail pattern src =
   check bool (Printf.sprintf "should fail with pattern: %s" pattern) true found
 
 let prelude =
-  "#lang tesl\nmodule T exposing []\n\
+  "module T exposing []\n\
    import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n"
 
@@ -205,7 +205,7 @@ fn safeDiv(a: Int, b: Int) -> Int =
   should_fail "IsNonZero\\|nonZero\\|proof" src
 
 let test_explicit_nonzero_check_works () =
-  let src = "#lang tesl\nmodule T exposing [safeDiv]\n\
+  let src = "module T exposing [safeDiv]\n\
              import Tesl.Prelude exposing [Int]\n\
              import Tesl.Int exposing [Int.nonZero]\n" ^
   {|
@@ -250,7 +250,7 @@ fn processEmpty() -> String =
 
 let test_forall_filtercheck_chaining_accumulates () =
   let src =
-    "#lang tesl\nmodule T exposing [filterBoth]\n\
+    "module T exposing [filterBoth]\n\
      import Tesl.Prelude exposing [Int, List]\n\
      import Tesl.List exposing [List.filterCheck]\n" ^
   {|
@@ -279,7 +279,7 @@ fn filterBoth(xs: List Int) -> List Int ? ForAll (IsPositive && IsSmall)
 
 let test_forall_wrong_conjunction_rejected () =
   let src =
-    "#lang tesl\nmodule T exposing [filterChainedWrong]\n\
+    "module T exposing [filterChainedWrong]\n\
      import Tesl.Prelude exposing [Int, List]\n\
      import Tesl.List exposing [List.filterCheck]\n" ^
   {|
@@ -354,7 +354,7 @@ fn f(n: Int) -> String = if n > 0 then "pos" else "neg"
 
 let test_def_before_import_rejected () =
   let src =
-    "#lang tesl\nmodule T exposing [f]\n\
+    "module T exposing [f]\n\
      type Foo = Int\n\
      import Tesl.Prelude exposing [Int]\n\
      fn f(x: Int) -> Int = x\n"
@@ -509,7 +509,7 @@ fn unwrap(x: Outer) -> Int =
 let test_nested_constructor_pattern_supported () =
   (* Nested constructor patterns are now supported (F24 implemented). *)
   let src =
-    "#lang tesl\nmodule T exposing [unwrap]\n\
+    "module T exposing [unwrap]\n\
      import Tesl.Prelude exposing [Int]\n\
      import Tesl.Maybe exposing [Maybe(..)]\n\
      type Outer = Wrap inner: Maybe Int\n\
@@ -540,7 +540,7 @@ fn crossSubject(a: Int, b: Int) -> Int =
 
 let test_proof_forgery_003_multiline () =
   let src =
-    "#lang tesl\nmodule T exposing [filterChained]\n\
+    "module T exposing [filterChained]\n\
      import Tesl.Prelude exposing [Int, List]\n\
      import Tesl.List exposing [List.filterCheck]\n" ^
   {|
@@ -569,7 +569,7 @@ fn filterChained(xs: List Int) -> List Int ? ForAll (IsPositive && IsSmall)
 
 let test_proof_forgery_004_multiline () =
   let src =
-    "#lang tesl\nmodule T exposing [filterWrong]\n\
+    "module T exposing [filterWrong]\n\
      import Tesl.Prelude exposing [Int, List]\n\
      import Tesl.List exposing [List.filterCheck]\n" ^
   {|

@@ -1,4 +1,3 @@
-#lang tesl
 module CriticalReview48Tests exposing [
   checkPositive48,
   requiresPositive48,

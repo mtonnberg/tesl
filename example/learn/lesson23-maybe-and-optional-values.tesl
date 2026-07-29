@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson23MaybeAndOptionalValues exposing [
   safeHead,
   safeDivideInt,

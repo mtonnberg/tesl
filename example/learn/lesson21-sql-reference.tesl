@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson21SqlReference exposing [
   Product,
   Category,

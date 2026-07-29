@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson55TestingAuthAndCapabilities exposing [AuthServer]
 
 # ─────────────────────────────────────────────────────────────────────────────

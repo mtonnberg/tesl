@@ -93,8 +93,7 @@ let should_lint_warn pat src =
 
 (* ── Shared preamble for most tests ─────────────────────────────────────── *)
 
-let preamble = {|#lang tesl
-module GibTest exposing []
+let preamble = {|module GibTest exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..)]
 |}
 
@@ -416,8 +415,7 @@ fn f(xs: List) -> Int = 0
 
 (* NEAR16: Duplicate module declaration *)
 let test_NEAR16_two_module_headers () =
-  should_reject {|#lang tesl
-module ModA exposing []
+  should_reject {|module ModA exposing []
 import Tesl.Prelude exposing [Int]
 fn f() -> Int = 1
 module ModB exposing []
@@ -426,8 +424,7 @@ fn g() -> Int = 2
 
 (* NEAR17: Import after a function declaration *)
 let test_NEAR17_import_after_decl () =
-  should_reject_with "import.*before\\|import.*after\\|move.*import" {|#lang tesl
-module NearSeventeen exposing []
+  should_reject_with "import.*before\\|import.*after\\|move.*import" {|module NearSeventeen exposing []
 import Tesl.Prelude exposing [Int]
 fn f() -> Int = 42
 import Tesl.String exposing [String.length]
@@ -490,8 +487,7 @@ fn f() -> Int = 42
 
 (* WILD04: Markdown mixed in *)
 let test_WILD04_markdown_in_module () =
-  should_reject {|#lang tesl
-module Wild04 exposing []
+  should_reject {|module Wild04 exposing []
 
 ## Overview
 
@@ -590,8 +586,7 @@ fn f() -> Int = 42 43
 
 (* WILD17: Trying to use #include or #pragma *)
 let test_WILD17_preprocessor_directive () =
-  should_reject {|#lang tesl
-#include <stdlib>
+  should_reject {|#include <stdlib>
 module Wild17 exposing []
 fn f() -> Int = 42
 |}
@@ -621,45 +616,42 @@ fn f(n: Int) -> Int =
 
 (* ── TRUNC: Truncated/incomplete code — crash risk ───────────────────────── *)
 
-(* TRUNC01: #lang tesl with nothing else *)
+(* TRUNC01: the rejected `#lang tesl` pragma with nothing else — the pragma is
+   no longer part of Tesl, so the E002 rejection fires before the missing
+   module header is even reached. *)
 let test_TRUNC01_only_lang_header () =
-  should_reject_with "module\\|library\\|expected" {|#lang tesl
+  should_reject_with "no longer part of Tesl" {|#lang tesl
 |}
 
 (* TRUNC02: Module header with no body — empty modules are valid in Tesl *)
 let test_TRUNC02_module_header_only () =
-  should_pass {|#lang tesl
-module Trunc02 exposing []
+  should_pass {|module Trunc02 exposing []
 |}
 
 (* TRUNC03: Fn declaration truncated mid-signature *)
 let test_TRUNC03_fn_truncated_mid_sig () =
-  should_reject {|#lang tesl
-module Trunc03 exposing []
+  should_reject {|module Trunc03 exposing []
 import Tesl.Prelude exposing [Int]
 fn f(n: Int
 |}
 
 (* TRUNC04: Fn with no body *)
 let test_TRUNC04_fn_no_body () =
-  should_reject {|#lang tesl
-module Trunc04 exposing []
+  should_reject {|module Trunc04 exposing []
 import Tesl.Prelude exposing [Int]
 fn f(n: Int) -> Int
 |}
 
 (* TRUNC05: Record with unclosed brace *)
 let test_TRUNC05_record_unclosed () =
-  should_reject {|#lang tesl
-module Trunc05 exposing []
+  should_reject {|module Trunc05 exposing []
 import Tesl.Prelude exposing [String]
 record User { name: String
 |}
 
 (* TRUNC06: Case expression with no arms *)
 let test_TRUNC06_case_no_arms () =
-  should_reject_with "arm\\|case.*arm\\|at least one" {|#lang tesl
-module Trunc06 exposing []
+  should_reject_with "arm\\|case.*arm\\|at least one" {|module Trunc06 exposing []
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Prelude exposing [Int]
 fn f(m: Maybe Int) -> Int =
@@ -668,8 +660,7 @@ fn f(m: Maybe Int) -> Int =
 
 (* TRUNC07: If with no then *)
 let test_TRUNC07_if_no_then () =
-  should_reject {|#lang tesl
-module Trunc07 exposing []
+  should_reject {|module Trunc07 exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 fn f(b: Bool) -> Int =
   if b
@@ -677,8 +668,7 @@ fn f(b: Bool) -> Int =
 
 (* TRUNC08: If-then with no else *)
 let test_TRUNC08_if_then_no_else () =
-  should_reject {|#lang tesl
-module Trunc08 exposing []
+  should_reject {|module Trunc08 exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 fn f(b: Bool) -> Int =
   if b then
@@ -687,8 +677,7 @@ fn f(b: Bool) -> Int =
 
 (* TRUNC09: String literal that never closes *)
 let test_TRUNC09_unclosed_string () =
-  should_reject {|#lang tesl
-module Trunc09 exposing []
+  should_reject {|module Trunc09 exposing []
 import Tesl.Prelude exposing [String]
 fn f() -> String = "hello world
 |}
@@ -697,23 +686,20 @@ fn f() -> String = "hello world
 let test_TRUNC10_empty_exposing () =
   (* `import Tesl.Prelude exposing []` loads the module but imports nothing.
      `Int` in the return type is therefore not in scope — must fail. *)
-  should_reject_with "Int.*not in scope\\|not in scope\\|add.*import" {|#lang tesl
-module Trunc10 exposing []
+  should_reject_with "Int.*not in scope\\|not in scope\\|add.*import" {|module Trunc10 exposing []
 import Tesl.Prelude exposing []
 fn f() -> Int = 0
 |}
 
 (* TRUNC11: type declaration with nothing after = *)
 let test_TRUNC11_empty_adt () =
-  should_reject {|#lang tesl
-module Trunc11 exposing []
+  should_reject {|module Trunc11 exposing []
 type Color =
 |}
 
 (* TRUNC12: Establish with empty body *)
 let test_TRUNC12_establish_no_body () =
-  should_reject {|#lang tesl
-module Trunc12 exposing []
+  should_reject {|module Trunc12 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
 establish provePositive(n: Int) -> Fact (IsPositive n) =
@@ -723,16 +709,14 @@ establish provePositive(n: Int) -> Fact (IsPositive n) =
 
 (* MULTI01: Three unknown type names — all reported, no crash *)
 let test_MULTI01_three_unknown_types () =
-  should_reject_with "not in scope\\|unknown" {|#lang tesl
-module Multi01 exposing []
+  should_reject_with "not in scope\\|unknown" {|module Multi01 exposing []
 import Tesl.Prelude exposing [Int]
 fn f(a: Foo, b: Bar, c: Baz) -> Qux = a
 |}
 
 (* MULTI02: Two separate syntax errors in different functions *)
 let test_MULTI02_two_syntax_errors () =
-  should_reject {|#lang tesl
-module Multi02 exposing []
+  should_reject {|module Multi02 exposing []
 import Tesl.Prelude exposing [Int]
 fn f(n: Int): Int = n
 fn g(n: Int): String = "hi"
@@ -740,24 +724,21 @@ fn g(n: Int): String = "hi"
 
 (* MULTI03: Mixed unknown proofs and unknown types *)
 let test_MULTI03_unknown_proofs_and_types () =
-  should_reject_with "not in scope\\|unknown\\|scope" {|#lang tesl
-module Multi03 exposing []
+  should_reject_with "not in scope\\|unknown\\|scope" {|module Multi03 exposing []
 import Tesl.Prelude exposing [Int]
 fn f(n: Int ::: IsPhantom n) -> Specter = n
 |}
 
 (* MULTI04: Exporting names that don't exist AND unknown types in body *)
 let test_MULTI04_bad_exports_and_unknown () =
-  should_reject_with "export\\|not.*declared\\|exposes unknown" {|#lang tesl
-module Multi04 exposing [ghost, phantom, wraith]
+  should_reject_with "export\\|not.*declared\\|exposes unknown" {|module Multi04 exposing [ghost, phantom, wraith]
 import Tesl.Prelude exposing [Int]
 fn real() -> Int = 42
 |}
 
 (* MULTI05: Giant nonsense block — compiler should not loop or crash *)
 let test_MULTI05_giant_nonsense () =
-  should_reject {|#lang tesl
-module Multi05 exposing []
+  should_reject {|module Multi05 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn a(x: Int) -> Int = b x
 fn b(x: Int) -> Int = c x
@@ -772,8 +753,7 @@ fn i() -> Blorp = bloop
 
 (* MULTI06: Deeply nested but legal-ish structure with one missing part *)
 let test_MULTI06_deeply_nested_with_error () =
-  should_reject {|#lang tesl
-module Multi06 exposing []
+  should_reject {|module Multi06 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn f(m: Maybe (Maybe (Maybe Int))) -> Int =
@@ -790,8 +770,7 @@ fn f(m: Maybe (Maybe (Maybe Int))) -> Int =
 
 (* MULTI07: Every record field with wrong syntax *)
 let test_MULTI07_record_all_wrong () =
-  should_reject {|#lang tesl
-module Multi07 exposing []
+  should_reject {|module Multi07 exposing []
 record Bad {
   name = String
   age = Int

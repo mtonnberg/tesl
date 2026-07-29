@@ -1,4 +1,3 @@
-#lang tesl
 # ─── Kanel — Shared models, entities, ADTs, and capabilities ───────────────
 #
 # Foundation module: entity types, ADT definitions, input records, codecs,

@@ -72,8 +72,7 @@ let should_pass label src =
     let code, out = run_cc ["--check"; p] in
     if code <> 0 then failf "%s: expected COMPILE but failed:\n%s" label out)
 
-let hdr name = Printf.sprintf {|#lang tesl
-module %s exposing []
+let hdr name = Printf.sprintf {|module %s exposing []
 import Tesl.Prelude exposing [String, Bool(..)]
 import Tesl.DB exposing [dbRead]
 import Tesl.Maybe exposing [Maybe(..)]

@@ -87,7 +87,7 @@ let should_pass src =
 
 let prelude name =
   Printf.sprintf
-    "#lang tesl\nmodule %s exposing []\n\
+    "module %s exposing []\n\
      import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact]\n\
      import Tesl.Maybe exposing [Maybe(..)]\n" name
 

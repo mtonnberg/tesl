@@ -140,9 +140,11 @@ let test_comment_lines_ignored () =
   Alcotest.(check bool) "no IDENT 'This'" false (List.mem (IDENT "This") toks)
 
 let test_hash_lang () =
+  (* The lexer still tokenizes the rejected `#lang tesl` pragma (HASH_LANG +
+     TESL) so the PARSER can point its E002 error at the exact line — see
+     test_diag_snapshots.ml for the end-to-end rejection. *)
   let src = "#lang tesl\nmodule Foo exposing []" in
   let toks = tok_list src in
-  (* #lang tesl should produce HASH_LANG TESL *)
   let has_hash_lang = List.mem HASH_LANG toks in
   let has_tesl = List.mem TESL toks in
   Alcotest.(check bool) "has HASH_LANG" true has_hash_lang;
@@ -151,8 +153,7 @@ let test_hash_lang () =
 (* ── Full module tokenization ────────────────────────────────────────────── *)
 
 let test_hello_world_tokens () =
-  let src = {|#lang tesl
-module HelloWorld exposing [greet, add]
+  let src = {|module HelloWorld exposing [greet, add]
 import Tesl.Prelude exposing [Int, String]
 
 fn greet(name: String) -> String =

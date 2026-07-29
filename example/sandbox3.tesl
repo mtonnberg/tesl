@@ -1,4 +1,3 @@
-#lang tesl
 module Sandbox3 exposing [doSomething3, doSomething2, ARecord, ARecord2]
 import Tesl.Prelude exposing [Int, Fact, String]
 import Sandbox exposing [dummy_add, ValidPort, IsPositive]

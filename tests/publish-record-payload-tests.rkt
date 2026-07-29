@@ -67,7 +67,7 @@
 (define/pow
   (parseUserId [id : String])
   #:returns String
-  (thsl-src! "tests/publish-record-payload-tests.tesl" 65 (list (cons 'id *id)) (lambda () *id)))
+  (thsl-src! "tests/publish-record-payload-tests.tesl" 64 (list (cons 'id *id)) (lambda () *id)))
 
 (define-capture userIdCapture
   [userIdCapture : String]
@@ -79,7 +79,7 @@
   (sendNotice [req : SendReq])
   #:capabilities [pubsub]
   #:returns String
-  (let ([_ (thsl-src! "tests/publish-record-payload-tests.tesl" 76 (list (cons 'req *req)) (lambda () (publish-event! Notices (format "~a" (raw-value req.userId)) (Notice #:message (raw-value req.message)))))]) (thsl-src! "tests/publish-record-payload-tests.tesl" 77 (list (cons 'req *req)) (lambda () "ok"))))
+  (let ([_ (thsl-src! "tests/publish-record-payload-tests.tesl" 75 (list (cons 'req *req)) (lambda () (publish-event! Notices (format "~a" (raw-value req.userId)) (Notice #:message (raw-value req.message)))))]) (thsl-src! "tests/publish-record-payload-tests.tesl" 76 (list (cons 'req *req)) (lambda () "ok"))))
 
 (define MainServer-sse-routes
   (list (list (list "events" #f) #f Notices 1 (list (cons 1 (sse-key-capture userIdCapture))))))

@@ -13,8 +13,8 @@ The parsing entry point is `Parser.parse_module` in `compiler/lib/parser.ml`.
 1. `Lexer.tokenize filename source` produces positioned tokens.
 2. `Parser.make_stream` wraps them in a mutable stream.
 3. `parse_module` consumes:
-   - the optional `#lang tesl` header
-   - the module header (`module ... exposing [...]`)
+   - the module header (`module ... exposing [...]`) — a historical
+     `#lang tesl` first line is rejected with E002 (delete-line fix)
    - imports
    - top-level declarations
 4. `extract_doctest_decls` appends doctest-derived `DTest` declarations after ordinary top-level parsing.

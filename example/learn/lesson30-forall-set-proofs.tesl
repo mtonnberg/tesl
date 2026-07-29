@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson30ForallSetProofs exposing [run, doublePositive, mapAndCount]
 
 # ─────────────────────────────────────────────

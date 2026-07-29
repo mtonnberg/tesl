@@ -104,7 +104,6 @@ let should_fail pat src =
 
 let test_R67_QU01_queue_missing_database_rejected () =
   should_fail "missing required field `database`\\|missing.*database" {|
-#lang tesl
 module R67Qu01 exposing []
 import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
 queue R67Qu01 = Queue {
@@ -119,7 +118,6 @@ queue R67Qu01 = Queue {
 
 let test_R67_QU03_queue_no_jobs_clause_rejected () =
   should_fail "missing required field `jobs`\\|jobs.*required\\|at least one" {|
-#lang tesl
 module R67Qu03 exposing []
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
@@ -139,7 +137,6 @@ queue R67Qu03 = Queue {
 
 let test_R67_QU04_queue_with_database_and_jobs_accepted () =
   should_pass {|
-#lang tesl
 module R67Qu04 exposing []
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
@@ -160,7 +157,6 @@ queue R67Qu04 = Queue {
 
 let test_R67_QU05_queue_with_retry_config_accepted () =
   should_pass {|
-#lang tesl
 module R67Qu05 exposing []
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
@@ -183,7 +179,6 @@ queue R67Qu05 = Queue {
 
 let test_R67_CH01_channel_missing_database_rejected () =
   should_fail "missing required field `database`\\|missing.*database" {|
-#lang tesl
 module R67Ch01 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.SSE exposing [SseChannel]
@@ -193,7 +188,6 @@ sseChannel R67Ch01 = SseChannel { payload: Ev }
 
 let test_R67_CH02_channel_empty_database_rejected () =
   should_fail "must reference a database\\|missing.*database" {|
-#lang tesl
 module R67Ch02 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.SSE exposing [SseChannel]
@@ -203,7 +197,6 @@ sseChannel R67Ch02 = SseChannel { database: "" payload: Ev }
 
 let test_R67_CH03_channel_with_database_accepted () =
   should_pass {|
-#lang tesl
 module R67Ch03 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -222,7 +215,6 @@ sseChannel R67Ch03 = SseChannel { database: R67Ch03Db payload: EvC }
 
 let test_R67_CH04_channel_with_key_params_accepted () =
   should_pass {|
-#lang tesl
 module R67Ch04 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -275,7 +267,6 @@ let test_R67_WK01_folded_queue_undefined_database_rejected () =
   (* was: `workers W for NonExistentQueue {}`.  A folded worker pipeline whose
      queue references an undefined database is rejected. *)
   should_fail "references unknown database\\|unknown database" {|
-#lang tesl
 module R67Wk01 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Queue exposing [Queue, Job]
@@ -296,7 +287,6 @@ queue R67Wk01Q = Queue {
 
 let test_R67_WK04_folded_queue_with_valid_worker_accepted () =
   should_pass {|
-#lang tesl
 module R67Wk04 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -327,7 +317,6 @@ let test_R67_WK06_folded_dead_queue_undefined_database_rejected () =
      folded dead-letter pipeline whose queue references an undefined database is
      rejected (the nearest surviving wiring rejection). *)
   should_fail "references unknown database\\|unknown database" {|
-#lang tesl
 module R67Wk06 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Queue exposing [Queue, Job]
@@ -344,7 +333,6 @@ let test_R67_WK07_folded_dead_worker_valid_accepted () =
   (* dead-letter workers should compile when the queue exists and the dead
      handler is folded in via `(Something deadWorkerFn)`. *)
   should_pass {|
-#lang tesl
 module R67Wk07 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -370,7 +358,6 @@ queue R67Wk07Q = Queue {
 let test_R67_WK08_folded_queue_multiple_job_types_accepted () =
   (* folded queue with multiple job → worker entries *)
   should_pass {|
-#lang tesl
 module R67Wk08 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -406,7 +393,6 @@ queue R67Wk08Q = Queue {
 
 let test_R67_DB03_database_with_declared_entity_accepted () =
   should_pass {|
-#lang tesl
 module R67Db03 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -427,7 +413,6 @@ database R67Db03 = Database {
 let test_R67_DB04_database_empty_entities_accepted () =
   (* Empty entities list is valid — the database just has no registered entities *)
   should_pass {|
-#lang tesl
 module R67Db04 exposing []
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 database R67Db04 = Database {
@@ -448,7 +433,6 @@ let test_R67_DB06_database_entity_from_imported_module_accepted () =
      Instead we verify the logic by using a record that IS local — cross-module
      testing is covered by the kanel integration. *)
   should_pass {|
-#lang tesl
 module R67Db06 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -473,7 +457,6 @@ let test_R67_AG01_agent_missing_provider_rejected () =
   (* Agent { } is a typed-record constructor; omitting a required field is rejected
      by the record type-checker. *)
   should_fail "missing required field `provider`\\|provider" {|
-#lang tesl
 module R67Ag01 exposing []
 import Tesl.Agent exposing [aiProvider, Agent]
 capability ai implies aiProvider
@@ -486,7 +469,6 @@ agent A requires [ai] = Agent {
 
 let test_R67_AG02_agent_missing_maxtokens_rejected () =
   should_fail "missing required field `maxTokens`\\|maxTokens" {|
-#lang tesl
 module R67Ag02 exposing []
 import Tesl.Agent exposing [aiProvider, Agent, anthropic]
 capability ai implies aiProvider
@@ -501,7 +483,6 @@ let test_R67_AG03_provider_must_be_llmprovider_rejected () =
   (* `provider` is a full LlmProvider expression. A bare provider kind (a function,
      not an LlmProvider) is a type error — the key + model must be applied. *)
   should_fail "LlmProvider\\|provider" {|
-#lang tesl
 module R67Ag03 exposing []
 import Tesl.Agent exposing [aiProvider, Agent, anthropic]
 capability ai implies aiProvider
@@ -515,7 +496,6 @@ agent A requires [ai] = Agent {
 
 let test_R67_AG04_agent_block_accepted () =
   should_pass {|
-#lang tesl
 module R67Ag04 exposing []
 import Tesl.Agent exposing [aiProvider, Agent, anthropic]
 capability ai implies aiProvider
@@ -531,7 +511,6 @@ let test_R67_AG05_agent_expression_with_tools_accepted () =
   (* Agent { } also works as a plain expression, and `asTool fn` wraps a typed
      function in the tools list. *)
   should_pass {|
-#lang tesl
 module R67Ag05 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Agent exposing [aiProvider, Agent, anthropic, asTool]
@@ -550,7 +529,6 @@ fn build(key: String) -> Agent requires [ai] =
 
 let test_R67_AT01_api_test_undefined_server_rejected () =
   should_fail "unknown server\\|references unknown server" {|
-#lang tesl
 module R67At01 exposing []
 import Tesl.Prelude exposing [String]
 api-test "does something" for GhostServer {
@@ -561,7 +539,6 @@ api-test "does something" for GhostServer {
 
 let test_R67_AT02_api_test_empty_description_rejected () =
   should_fail "empty description\\|empty description string" {|
-#lang tesl
 module R67At02 exposing []
 import Tesl.Prelude exposing [String]
 api MyApi {
@@ -578,14 +555,12 @@ api-test "" for R67At02Server {
 
 let test_R67_AT03_api_test_both_errors_at_once () =
   should_fail "empty description\\|empty description string\\|unknown server" {|
-#lang tesl
 module R67At03 exposing []
 api-test "" for GhostServer { }
 |}
 
 let test_R67_AT04_api_test_valid_accepted () =
   should_pass {|
-#lang tesl
 module R67At04 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.ApiTest exposing [statusOk]
@@ -601,7 +576,6 @@ api-test "ping returns 200" for R67At04Server {
 let test_R67_AT05_api_test_with_seed_accepted () =
   (* api-test with an optional seed block — should compile fine *)
   should_pass {|
-#lang tesl
 module R67At05 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.ApiTest exposing [statusOk]
@@ -618,7 +592,6 @@ api-test "echo with seed" for R67At05Server {
 let test_R67_AT06_api_test_multiple_requests_accepted () =
   (* Multiple sequential requests in one api-test block *)
   should_pass {|
-#lang tesl
 module R67At06 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.ApiTest exposing [statusOk]
@@ -641,7 +614,6 @@ api-test "can call both endpoints" for R67At06Server {
 
 let test_R67_TS01_empty_test_description_rejected () =
   should_fail "empty description\\|empty description string" {|
-#lang tesl
 module R67Ts01 exposing []
 import Tesl.Prelude exposing [Int]
 fn add(a: Int, b: Int) -> Int = a + b
@@ -652,7 +624,6 @@ test "" {
 
 let test_R67_TS02_non_empty_description_accepted () =
   should_pass {|
-#lang tesl
 module R67Ts02 exposing []
 import Tesl.Prelude exposing [Int]
 fn add(a: Int, b: Int) -> Int = a + b
@@ -664,7 +635,6 @@ test "addition works" {
 let test_R67_TS03_test_with_runs_accepted () =
   (* test block with an explicit runs count *)
   should_pass {|
-#lang tesl
 module R67Ts03 exposing []
 import Tesl.Prelude exposing [Int]
 fn mul(a: Int, b: Int) -> Int = a * b
@@ -675,7 +645,6 @@ test "multiplication" runs 10 {
 
 let test_R67_TS04_test_with_let_and_expect_accepted () =
   should_pass {|
-#lang tesl
 module R67Ts04 exposing []
 import Tesl.Prelude exposing [Int]
 fn square(n: Int) -> Int = n * n
@@ -687,7 +656,6 @@ test "square of 5 is 25" {
 
 let test_R67_TS05_test_expect_fail_accepted () =
   should_pass {|
-#lang tesl
 module R67Ts05 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -702,7 +670,6 @@ test "parse rejects non-numbers" {
 
 let test_R67_OK01_full_queue_worker_pipeline_accepted () =
   should_pass {|
-#lang tesl
 module R67Ok01 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -727,7 +694,6 @@ queue NotifyQueue = Queue {
 
 let test_R67_OK02_channel_pipeline_accepted () =
   should_pass {|
-#lang tesl
 module R67Ok02 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -746,7 +712,6 @@ sseChannel EventChannel(userId: String) = SseChannel { database: R67Ok02Db paylo
 
 let test_R67_OK03_database_with_entities_accepted () =
   should_pass {|
-#lang tesl
 module R67Ok03 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -764,7 +729,6 @@ database R67Ok03Db = Database {
 
 let test_R67_OK04_multiple_test_blocks_accepted () =
   should_pass {|
-#lang tesl
 module R67Ok04 exposing []
 import Tesl.Prelude exposing [Int]
 fn add(a: Int, b: Int) -> Int = a + b
@@ -780,7 +744,6 @@ let test_R67_CF01_missing_colon_rejected () =
   (* A config-record field written without its `:` is now a parse error
      (the typed `Database { ... }` record requires `field: value`). *)
   should_fail "expected }\\|missing its `:`\\|E000" {|
-#lang tesl
 module R67Cf01 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -796,7 +759,6 @@ database Db = Database {
 
 let test_R67_CF02_unknown_field_rejected () =
   should_fail "unknown field" {|
-#lang tesl
 module R67Cf02 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -813,7 +775,6 @@ database Db = Database {
 
 let test_R67_CF03_unknown_nested_field_rejected () =
   should_fail "unknown field `hostt`\\|unknown field" {|
-#lang tesl
 module R67Cf03 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -833,7 +794,6 @@ database Db = Database {
 
 let test_R67_CF04_colon_form_accepted () =
   should_pass {|
-#lang tesl
 module R67Cf04 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -853,7 +813,6 @@ database Db = Database {
 let test_R67_CF05_missing_required_field_rejected () =
   (* A postgres database without `schema` is flagged. *)
   should_fail "missing required field" {|
-#lang tesl
 module R67Cf05 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -868,7 +827,6 @@ database Db = Database {
 let test_R67_CF06_memory_backend_needs_no_schema () =
   (* A non-postgres (in-memory) backend needs neither schema nor postgres. *)
   should_pass {|
-#lang tesl
 module R67Cf06 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Memory]
@@ -881,7 +839,6 @@ database Db = Database {
 
 let test_R67_CF07_channel_missing_payload_rejected () =
   should_fail "missing required field `payload`" {|
-#lang tesl
 module R67Cf07 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -904,7 +861,6 @@ sseChannel Ch = SseChannel {
 
 let test_R67_NC01_valid_named_ctor_accepted () =
   should_pass {|
-#lang tesl
 module R67Nc01 exposing []
 import Tesl.Prelude exposing [String, Int]
 type Conn = Tcp host: String port: Int | Sock path: String
@@ -914,7 +870,6 @@ fn mk() -> Holder = Holder { conn: Tcp { host: "h", port: 5432 } }
 
 let test_R67_NC02_missing_ctor_field_rejected () =
   should_fail "missing required field `port`" {|
-#lang tesl
 module R67Nc02 exposing []
 import Tesl.Prelude exposing [String, Int]
 type Conn = Tcp host: String port: Int | Sock path: String
@@ -924,7 +879,6 @@ fn mk() -> Holder = Holder { conn: Tcp { host: "h" } }
 
 let test_R67_NC03_unknown_ctor_field_rejected () =
   should_fail "has no field `bogus`" {|
-#lang tesl
 module R67Nc03 exposing []
 import Tesl.Prelude exposing [String, Int]
 type Conn = Tcp host: String port: Int | Sock path: String
@@ -934,7 +888,6 @@ fn mk() -> Holder = Holder { conn: Tcp { host: "h", port: 1, bogus: 2 } }
 
 let test_R67_NC04_wrong_ctor_field_type_rejected () =
   should_fail "unify\\|type mismatch" {|
-#lang tesl
 module R67Nc04 exposing []
 import Tesl.Prelude exposing [String, Int]
 type Conn = Tcp host: String port: Int | Sock path: String
@@ -945,7 +898,6 @@ fn mk() -> Holder = Holder { conn: Tcp { host: "h", port: "not-int" } }
 (* ── R67_APP — App simplification (folded queue + `main() -> App`) ────────── *)
 
 let app_prelude = {|
-#lang tesl
 module R67App exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -996,7 +948,6 @@ main() -> App requires [emailCap, pubsub] =
 
 let test_R67_APP04_folded_queue_bad_backoff_rejected () =
   should_fail "backoff.*must be\\|Exponential" {|
-#lang tesl
 module R67App4 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -1024,7 +975,6 @@ queue EmailQueue = Queue {
 (* Memory-backed prelude: NO env in any config block, so it isolates the
    direct-env-in-main path and the no-env control from any config-block env. *)
 let env_memory_prelude = {|
-#lang tesl
 module R67Env exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.App exposing [App]
@@ -1076,7 +1026,6 @@ main() -> App requires [] =
    calls env* still needs envRead, and is accepted once it declares it. *)
 let test_R67_ENV06_fn_reads_env_without_envRead_rejected () =
   should_fail "envRead" {|
-#lang tesl
 module R67EnvFn exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Env exposing [envInt]
@@ -1085,7 +1034,6 @@ fn readPort() -> Int requires [] = envInt "PORT" 8086
 
 let test_R67_ENV07_fn_reads_env_with_envRead_accepted () =
   should_pass {|
-#lang tesl
 module R67EnvFn exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Env exposing [envInt, envRead]
@@ -1096,7 +1044,6 @@ fn readPort() -> Int requires [envRead] = envInt "PORT" 8086
    main require envRead just the same; the database block is not special. *)
 let test_R67_ENV08_main_with_env_agent_without_envRead_rejected () =
   should_fail "envRead" {|
-#lang tesl
 module R67EnvAgent exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.App exposing [App]
@@ -1120,7 +1067,6 @@ main() -> App requires [] =
 
 let test_R67_ENV09_main_with_env_agent_with_envRead_accepted () =
   should_pass {|
-#lang tesl
 module R67EnvAgent exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.App exposing [App]
@@ -1167,7 +1113,6 @@ main() -> App requires [emailCap, pubsub] =
 
 let test_R67_WIRE04_queue_unknown_database_rejected () =
   should_fail "references unknown database" {|
-#lang tesl
 module R67Wire4 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Queue exposing [Queue, Job]

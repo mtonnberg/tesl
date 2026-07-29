@@ -45,8 +45,7 @@ let assert_clean src =
          (List.map (fun (d : Compile.diagnostic) -> d.message) errs))
 
 (* Minimal App skeleton: a fn to call, a memory DB, an empty server. *)
-let app_preamble = {|#lang tesl
-module Foo exposing [greet]
+let app_preamble = {|module Foo exposing [greet]
 
 import Tesl.Prelude exposing [Bool(..), Int, String, Unit, List]
 import Tesl.Telemetry exposing [initTelemetry]
@@ -149,8 +148,7 @@ let t_let_chain_threading_bad_type () =
 
 (* Statement forms chain as `let _ = <stmt>`; the payload must be checked.
    enqueue's record payload with a wrong-typed and an unknown field. *)
-let queue_preamble = {|#lang tesl
-module Foo exposing [notifWorker]
+let queue_preamble = {|module Foo exposing [notifWorker]
 
 import Tesl.Prelude exposing [Bool(..), Int, String, Unit, List]
 import Tesl.Maybe exposing [Maybe(..)]

@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson48SqlInnerJoin exposing [
   findOrderWithCustomer,
   findOrdersByCustomerCountry,

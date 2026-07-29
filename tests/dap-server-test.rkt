@@ -620,12 +620,12 @@
   (define resp (sim-handle-source (make-source-req "")))
   (check-true (string? (hash-ref resp 'message #f)) "error message should be a string"))
 
-(test-case "source: content of tesl file starts with #lang tesl"
+(test-case "source: content of tesl file starts with its module header"
   (define resp (sim-handle-source (make-source-req TEST-TESL-FILE)))
   (when (hash-ref resp 'success #f)
     (define content (hash-ref resp 'content ""))
-    (check-true (string-prefix? content "#lang tesl")
-                "tesl file should start with #lang tesl")))
+    (check-true (string-prefix? content "module ")
+                "tesl file should start with its module header")))
 
 (test-case "source: directory path returns success #f"
   ;; A directory is not a file

@@ -1,4 +1,3 @@
-#lang tesl
 module Sandbox exposing [shouldWork, dummy_add, ValidPort, IsPositive]
 import Tesl.Prelude exposing [forgetFact, attachFact, detachFact, Int, Fact]
 import Tesl.Maybe exposing [Maybe(..)]

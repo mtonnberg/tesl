@@ -120,7 +120,6 @@ let should_not_report pat src =
 
 let test_bare_telemetry_fn_rejected () =
   should_fail "initTelemetry.*requires .import Tesl.Telemetry" {|
-#lang tesl
 module A7Telemetry exposing [main]
 import Tesl.Prelude exposing [Unit]
 fn main() -> Unit = initTelemetry
@@ -130,7 +129,6 @@ fn main() -> Unit = initTelemetry
 
 let test_bare_telemetry_in_test_rejected () =
   should_fail "initTelemetry.*requires .import Tesl.Telemetry" {|
-#lang tesl
 module A7TelemetryTest exposing [main]
 import Tesl.Prelude exposing [Unit]
 fn main() -> Unit = Unit
@@ -144,7 +142,6 @@ test "uses initTelemetry" {
 
 let test_bare_mockprovider_fn_rejected () =
   should_fail "mockProvider.*requires .import Tesl.Agent" {|
-#lang tesl
 module A7Agent exposing [main]
 import Tesl.Prelude exposing [Unit, String, List]
 fn main() -> Unit =
@@ -156,7 +153,6 @@ let test_bare_ask_in_test_rejected () =
   (* `ask` used ONLY inside a test body, with NO Tesl.Agent import — proves the
      fold covers DTest for the whole Agent API, not just fn bodies. *)
   should_fail "ask.*requires .import Tesl.Agent" {|
-#lang tesl
 module A7AgentAskTest exposing [main]
 import Tesl.Prelude exposing [Unit, String]
 fn main() -> Unit = Unit
@@ -168,7 +164,6 @@ test "uses ask" {
 
 let test_bare_decodeas_rejected () =
   should_fail "decodeAs.*requires .import Tesl.Agent" {|
-#lang tesl
 module A7Decode exposing [main]
 import Tesl.Prelude exposing [String]
 fn main() -> String = decodeAs "Foo" "{}"
@@ -176,7 +171,6 @@ fn main() -> String = decodeAs "Foo" "{}"
 
 let test_bare_uuidcodec_rejected () =
   should_fail "uuidV4Codec.*requires .import Tesl.UUID" {|
-#lang tesl
 module A7Uuid exposing [main]
 import Tesl.Prelude exposing [String]
 fn main() -> String = uuidV4Codec
@@ -186,7 +180,6 @@ fn main() -> String = uuidV4Codec
 
 let test_telemetry_with_import_ok () =
   should_pass {|
-#lang tesl
 module A7TelemetryOk exposing [main]
 import Tesl.Prelude exposing [Unit]
 import Tesl.Telemetry exposing [initTelemetry]
@@ -195,7 +188,6 @@ fn main() -> Unit = initTelemetry
 
 let test_agent_in_test_with_import_ok () =
   should_pass {|
-#lang tesl
 module A7AgentOk exposing [main]
 import Tesl.Prelude exposing [Unit, String, List]
 import Tesl.Agent exposing [Agent, LlmProvider, mockProvider, ask, aiProvider]
@@ -210,7 +202,6 @@ test "ask via mock" requires [bot] {
 
 let test_always_available_no_import_ok () =
   should_pass {|
-#lang tesl
 module A7Always exposing [main]
 import Tesl.Prelude exposing [Int]
 fn main() -> Int = check identity 5
@@ -224,7 +215,6 @@ fn main() -> Int = check identity 5
    compiles clean AND proves the env-scope diagnostic never fires. *)
 let test_config_block_env_not_flagged () =
   should_not_report "requires .import Tesl.Env" {|
-#lang tesl
 module A7ConfigEnv exposing [main]
 import Tesl.Prelude exposing [Unit]
 import Tesl.Database exposing [

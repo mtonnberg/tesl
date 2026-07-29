@@ -1,12 +1,10 @@
-#lang tesl
 module Lesson00HelloWorld exposing [greet, add]
 # ─────────────────────────────────────────────
 # QUICK START — just use it, no theory needed
 # ─────────────────────────────────────────────
 # Every Tesl file starts with:
-#   1. "#lang tesl"            — tells Racket this is a Tesl source file
-#   2. "module Name exposing"   — names the module and lists what it exports
-#   3. "import ..."             — brings in names from other modules
+#   1. "module Name exposing"   — names the module and lists what it exports
+#   2. "import ..."             — brings in names from other modules
 #
 # Then you write functions with "fn".
 # "fn greet(name: String) -> String = ..."

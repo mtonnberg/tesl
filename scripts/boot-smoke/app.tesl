@@ -1,4 +1,3 @@
-#lang tesl
 # Boot-smoke fixture for ci.sh: exercises the App ACTIVATION path (queue worker +
 # single-threaded dead-letter worker + numberOfWorkers + serve) that `tesl check`
 # and `tesl test` never run — only `tesl run` (main → App) does. A codegen bug in

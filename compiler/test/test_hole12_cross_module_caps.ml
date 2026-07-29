@@ -83,8 +83,7 @@ let expect_ok label files importer =
 (* ── Fixtures ──────────────────────────────────────────────────────────────── *)
 
 (* A lying leaf: declares no capability but reads the environment. *)
-let evil = {|#lang tesl
-module Evil exposing [sneakyRead]
+let evil = {|module Evil exposing [sneakyRead]
 import Tesl.Prelude exposing [String]
 import Tesl.Env exposing [env]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -95,8 +94,7 @@ fn sneakyRead(key: String) -> String requires [] =
 |}
 
 (* Importer that trusts the lie — declares [], must be rejected. *)
-let app2 = {|#lang tesl
-module App2 exposing [readOnly]
+let app2 = {|module App2 exposing [readOnly]
 import Tesl.Prelude exposing [String]
 import Evil exposing [sneakyRead]
 fn readOnly(key: String) -> String requires [] =
@@ -105,8 +103,7 @@ fn readOnly(key: String) -> String requires [] =
 
 (* Two-hop lie inside the imported module: hop1 (requires []) calls hop2
    (requires []) which reads env.  Closed by the loader's intra-module fixpoint. *)
-let evil_chain = {|#lang tesl
-module EvilChain exposing [hop1]
+let evil_chain = {|module EvilChain exposing [hop1]
 import Tesl.Prelude exposing [String]
 import Tesl.Env exposing [env]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -118,8 +115,7 @@ fn hop1(key: String) -> String requires [] =
   hop2 key
 |}
 
-let app3 = {|#lang tesl
-module App3 exposing [readOnly]
+let app3 = {|module App3 exposing [readOnly]
 import Tesl.Prelude exposing [String]
 import EvilChain exposing [hop1]
 fn readOnly(key: String) -> String requires [] =
@@ -127,8 +123,7 @@ fn readOnly(key: String) -> String requires [] =
 |}
 
 (* Honest leaf + honest importer: declared == actual, must still compile. *)
-let honest = {|#lang tesl
-module Honest exposing [honestRead]
+let honest = {|module Honest exposing [honestRead]
 import Tesl.Prelude exposing [String]
 import Tesl.Env exposing [env, envRead]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -138,8 +133,7 @@ fn honestRead(key: String) -> String requires [envRead] =
     Nothing -> ""
 |}
 
-let app_ok = {|#lang tesl
-module AppOk exposing [reader]
+let app_ok = {|module AppOk exposing [reader]
 import Tesl.Prelude exposing [String]
 import Tesl.Env exposing [envRead]
 import Honest exposing [honestRead]
@@ -153,8 +147,7 @@ fn reader(key: String) -> String requires [envRead] =
    at its source.  The fixable no-dead-end path is the honest leaf (AppOk /
    Honest above); a program containing a lying module has exactly one fix —
    repair the lie where it is told. *)
-let app2_fixed = {|#lang tesl
-module App2Fixed exposing [readOnly]
+let app2_fixed = {|module App2Fixed exposing [readOnly]
 import Tesl.Prelude exposing [String]
 import Tesl.Env exposing [envRead]
 import Evil exposing [sneakyRead]

@@ -78,7 +78,7 @@ let should_fail pattern src =
   check bool (Printf.sprintf "should fail with pattern: %s" pattern) true found
 
 let prelude =
-  "#lang tesl\nmodule T exposing []\n\
+  "module T exposing []\n\
    import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n"
 
@@ -335,7 +335,7 @@ let test_g45_ok_wrong_proof_rejected () =
 (* functions without re-establishing the proof.                               *)
 let test_g46_forgetfact_strips_proof () =
   let src =
-    "#lang tesl\nmodule T exposing []\n" ^
+    "module T exposing []\n" ^
     "import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact, forgetFact]\n" ^
     "import Tesl.Maybe exposing [Maybe(..)]\n" ^
     "fact IsPositive (n: Int)\n" ^

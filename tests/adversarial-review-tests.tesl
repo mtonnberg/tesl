@@ -1,4 +1,3 @@
-#lang tesl
 module AdversarialReviewTests exposing [
   # Proof correctness checkRange,
   checkNonEmpty,

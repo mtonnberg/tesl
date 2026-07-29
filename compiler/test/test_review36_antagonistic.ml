@@ -95,8 +95,7 @@ let should_fail pattern src =
 (* ── Tests ──────────────────────────────────────────────────────────────── *)
 
 let r36_01_heterogeneous_comparison () =
-  should_fail "type.*mismatch\\|cannot unify" {|#lang tesl
-module Test exposing []
+  should_fail "type.*mismatch\\|cannot unify" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Bool]
 
 fn bad(s: String, n: Int) -> Bool =
@@ -104,8 +103,7 @@ fn bad(s: String, n: Int) -> Bool =
 |}
 
 let r36_02_boolean_op_on_non_bool () =
-  should_fail "type.*mismatch\\|cannot unify" {|#lang tesl
-module Test exposing []
+  should_fail "type.*mismatch\\|cannot unify" {|module Test exposing []
 import Tesl.Prelude exposing [Int, Bool]
 
 fn bad(x: Int, y: Int) -> Bool =
@@ -113,8 +111,7 @@ fn bad(x: Int, y: Int) -> Bool =
 |}
 
 let r36_03_shadowing_in_nested_let () =
-  should_fail "shadow" {|#lang tesl
-module Test exposing []
+  should_fail "shadow" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn bad(x: Int) -> Int =
@@ -123,8 +120,7 @@ fn bad(x: Int) -> Int =
 |}
 
 let r36_04_shadowing_in_case_arm () =
-  should_fail "shadow" {|#lang tesl
-module Test exposing []
+  should_fail "shadow" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe, Something, Nothing]
 
@@ -136,8 +132,7 @@ fn bad(x: Int) -> Int =
 |}
 
 let r36_05_non_exhaustive_match () =
-  should_fail "exhaustive\\|missing" {|#lang tesl
-module Test exposing []
+  should_fail "exhaustive\\|missing" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 
 type Color
@@ -152,8 +147,7 @@ fn describe(c: Color) -> String =
 |}
 
 let r36_06_newtype_nominal_distinctness () =
-  should_fail "cannot unify\\|type.*mismatch" {|#lang tesl
-module Test exposing []
+  should_fail "cannot unify\\|type.*mismatch" {|module Test exposing []
 import Tesl.Prelude exposing [String]
 
 type UserId = String
@@ -167,8 +161,7 @@ fn bad(pid: ProjectId) -> String =
 |}
 
 let r36_07_newtype_in_list () =
-  should_fail "cannot unify\\|type.*mismatch" {|#lang tesl
-module Test exposing []
+  should_fail "cannot unify\\|type.*mismatch" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, List]
 
 type UserId = String
@@ -181,8 +174,7 @@ fn bad(ids: List UserId) -> Int =
 |}
 
 let r36_08_proof_fabrication_in_handler () =
-  should_fail "not allowed\\|proof.*construct" {|#lang tesl
-module Test exposing []
+  should_fail "not allowed\\|proof.*construct" {|module Test exposing []
 import Tesl.Prelude exposing [Int, Fact]
 
 fact ValidPort (p: Int)
@@ -196,8 +188,7 @@ handler sneaky(n: Int) -> Int
 |}
 
 let r36_09_check_wrong_ok_binding () =
-  should_fail "binding\\|must return\\|constructor\\|declared binding" {|#lang tesl
-module Test exposing []
+  should_fail "binding\\|must return\\|constructor\\|declared binding" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fact IsPositive (n: Int)
@@ -210,8 +201,7 @@ check validatePositive(n: Int) -> n: Int ::: IsPositive n =
 |}
 
 let r36_10_establish_with_fail () =
-  should_fail "fail\\|establish.*total\\|not allowed" {|#lang tesl
-module Test exposing []
+  should_fail "fail\\|establish.*total\\|not allowed" {|module Test exposing []
 import Tesl.Prelude exposing [Int, Fact]
 
 fact IsPositive (n: Int)
@@ -226,8 +216,7 @@ establish provePositive(n: Int) -> Fact (IsPositive n) =
 let r36_11_integer_overflow () =
   (* A9/HM-1: Int is arbitrary-precision; a huge literal compiles (carried as
      an LBigInt canonical string into the Racket bignum), no longer rejected. *)
-  should_pass {|#lang tesl
-module Test exposing []
+  should_pass {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn big() -> Int =
@@ -235,8 +224,7 @@ fn big() -> Int =
 |}
 
 let r36_12_recursive_adt () =
-  should_pass {|#lang tesl
-module Test exposing []
+  should_pass {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 
 type Tree a
@@ -250,8 +238,7 @@ fn size(t: Tree Int) -> Int =
 |}
 
 let r36_13_higher_order_fn () =
-  should_pass {|#lang tesl
-module Test exposing []
+  should_pass {|module Test exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.map]
 
@@ -263,8 +250,7 @@ fn mapDouble(xs: List Int) -> List Int =
 |}
 
 let r36_14_int_case_needs_catchall () =
-  should_fail "exhaustive\\|catch-all\\|wildcard\\|missing" {|#lang tesl
-module Test exposing []
+  should_fail "exhaustive\\|catch-all\\|wildcard\\|missing" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 
 fn describe(n: Int) -> String =
@@ -274,8 +260,7 @@ fn describe(n: Int) -> String =
 |}
 
 let r36_15_duplicate_record_fields () =
-  should_fail "duplicate" {|#lang tesl
-module Test exposing []
+  should_fail "duplicate" {|module Test exposing []
 import Tesl.Prelude exposing [String]
 
 record BadRecord {
@@ -285,8 +270,7 @@ record BadRecord {
 |}
 
 let r36_16_nonexistent_field_access () =
-  should_fail "field\\|unknown\\|not.*found\\|no.*field" {|#lang tesl
-module Test exposing []
+  should_fail "field\\|unknown\\|not.*found\\|no.*field" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 
 record User {
@@ -299,8 +283,7 @@ fn getEmail(u: User) -> String =
 |}
 
 let r36_17_return_type_mismatch () =
-  should_fail "cannot unify\\|type.*mismatch" {|#lang tesl
-module Test exposing []
+  should_fail "cannot unify\\|type.*mismatch" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 
 fn bad() -> String =
@@ -308,8 +291,7 @@ fn bad() -> String =
 |}
 
 let r36_18_partial_application_type_safe () =
-  should_pass {|#lang tesl
-module Test exposing []
+  should_pass {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn add(x: Int, y: Int) -> Int =
@@ -321,8 +303,7 @@ fn test() -> Int =
 |}
 
 let r36_19_list_type_homogeneity () =
-  should_fail "cannot unify\\|type.*mismatch" {|#lang tesl
-module Test exposing []
+  should_fail "cannot unify\\|type.*mismatch" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, List]
 
 fn bad() -> List Int =
@@ -330,8 +311,7 @@ fn bad() -> List Int =
 |}
 
 let r36_20_single_line_adt_linter () =
-  let src = {|#lang tesl
-module Test exposing []
+  let src = {|module Test exposing []
 import Tesl.Prelude exposing [String]
 
 type Color = Red | Green | Blue
@@ -346,8 +326,7 @@ type Color = Red | Green | Blue
   check bool "should warn: W040 single-line ADT" true found
 
 let r36_21_nested_if_case_typechecks () =
-  should_pass {|#lang tesl
-module Test exposing []
+  should_pass {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe, Something, Nothing]
 
@@ -362,8 +341,7 @@ fn complex(m: Maybe Int) -> String =
 |}
 
 let r36_22_lambda_wrong_return_type () =
-  should_fail "cannot unify\\|type.*mismatch" {|#lang tesl
-module Test exposing []
+  should_fail "cannot unify\\|type.*mismatch" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, List, Bool]
 import Tesl.List exposing [List.map]
 
@@ -372,8 +350,7 @@ fn bad(xs: List Int) -> List String =
 |}
 
 let r36_23_proof_predicate_not_in_scope () =
-  should_fail "not in scope\\|not.*declared\\|not.*import" {|#lang tesl
-module Test exposing []
+  should_fail "not in scope\\|not.*declared\\|not.*import" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn listen(port: Int ::: UndeclaredProof port) -> Int =
@@ -382,8 +359,7 @@ fn listen(port: Int ::: UndeclaredProof port) -> Int =
 
 (* R36_24: calling a fn with capabilities from a context that lacks them *)
 let r36_24_capability_insufficiency () =
-  should_fail "capability\\|requires\\|not.*declared\\|does not" {|#lang tesl
-module Test exposing []
+  should_fail "capability\\|requires\\|not.*declared\\|does not" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead, dbWrite]
 
@@ -400,8 +376,7 @@ fn badCaller() -> Int
 |}
 
 let r36_25_double_shadowing () =
-  should_fail "shadow" {|#lang tesl
-module Test exposing []
+  should_fail "shadow" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn bad(n: Int) -> Int =
@@ -410,8 +385,7 @@ fn bad(n: Int) -> Int =
 |}
 
 let r36_26_string_case_requires_catchall () =
-  should_fail "exhaustive\\|catch-all\\|wildcard\\|missing" {|#lang tesl
-module Test exposing []
+  should_fail "exhaustive\\|catch-all\\|wildcard\\|missing" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 
 fn parseCmd(s: String) -> Int =
@@ -421,8 +395,7 @@ fn parseCmd(s: String) -> Int =
 |}
 
 let r36_27_adt_ctor_name_collision () =
-  should_fail "constructor.*same.*type\\|collision\\|ambig\\|cannot.*share" {|#lang tesl
-module Test exposing []
+  should_fail "constructor.*same.*type\\|collision\\|ambig\\|cannot.*share" {|module Test exposing []
 
 type Status
   = Status
@@ -430,8 +403,7 @@ type Status
 |}
 
 let r36_28_float_int_mixing () =
-  should_fail "cannot unify\\|type.*mismatch" {|#lang tesl
-module Test exposing []
+  should_fail "cannot unify\\|type.*mismatch" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Float exposing [Float]
 
@@ -440,8 +412,7 @@ fn bad(x: Float) -> Float =
 |}
 
 let r36_29_maybe_without_unwrap () =
-  should_fail "cannot unify\\|type.*mismatch" {|#lang tesl
-module Test exposing []
+  should_fail "cannot unify\\|type.*mismatch" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe, Something, Nothing]
 
@@ -450,8 +421,7 @@ fn bad(m: Maybe Int) -> Int =
 |}
 
 let r36_30_proof_valid_flow () =
-  should_pass {|#lang tesl
-module Test exposing []
+  should_pass {|module Test exposing []
 import Tesl.Prelude exposing [Int, Fact]
 
 fact IsPositive (n: Int)
@@ -471,21 +441,18 @@ fn validUsage(n: Int) -> Int =
 |}
 
 let r36_31_empty_module_compiles () =
-  should_pass {|#lang tesl
-module Empty exposing []
+  should_pass {|module Empty exposing []
 |}
 
 let r36_32_import_nonexistent_module () =
-  should_fail "not found\\|does not exist\\|unknown.*module\\|cannot.*find" {|#lang tesl
-module Test exposing []
+  should_fail "not found\\|does not exist\\|unknown.*module\\|cannot.*find" {|module Test exposing []
 import Tesl.NonExistentModule exposing [something]
 
 fn f() -> Int = 1
 |}
 
 let r36_33_duplicate_top_level_fn () =
-  should_fail "duplicate\\|already.*defined\\|redefined" {|#lang tesl
-module Test exposing []
+  should_fail "duplicate\\|already.*defined\\|redefined" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn double(n: Int) -> Int =
@@ -497,8 +464,7 @@ fn double(n: Int) -> Int =
 
 
 let r36_34_duplicate_entity_fields () =
-  should_fail "duplicate" {|#lang tesl
-module Test exposing []
+  should_fail "duplicate" {|module Test exposing []
 import Tesl.Prelude exposing [String, Int]
 
 entity Bug table "bugs" primaryKey id {

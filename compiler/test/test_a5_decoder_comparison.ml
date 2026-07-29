@@ -67,8 +67,7 @@ let should_pass label src =
     if code <> 0 then failf "%s: expected COMPILE but failed:\n%s" label out)
 
 (* ── §6.4 HOF-parameter function-value comparison ─────────────────────────── *)
-let cmp_hdr = {|#lang tesl
-module M exposing []
+let cmp_hdr = {|module M exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 |}
 
@@ -101,8 +100,7 @@ fn cmp(a: Int, b: Int) -> Bool = a == b
 let notdef_pat = "not defined for type\\|no decidable equality\\|has no total order\\|not comparable"
 
 (* ── §6.3 decodeAs type-name drives the result ────────────────────────────── *)
-let dec_hdr = {|#lang tesl
-module D exposing []
+let dec_hdr = {|module D exposing []
 import Tesl.Prelude exposing [String, Int, Bool(..)]
 import Tesl.Json exposing [intCodec, stringCodec]
 import Tesl.Agent exposing [decodeAs]

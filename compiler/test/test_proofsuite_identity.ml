@@ -198,24 +198,24 @@ let fab_nooks = [
 
 let fab_fn nook_body =
   Printf.sprintf
-    "#lang tesl\nmodule FabFn exposing []\nimport Tesl.Prelude exposing [Int, Bool(..)]\n%sfn f(n: Int) -> Int =\n%s"
+    "module FabFn exposing []\nimport Tesl.Prelude exposing [Int, Bool(..)]\n%sfn f(n: Int) -> Int =\n%s"
     fab_scaffold nook_body
 
 let fab_handler nook_body =
   Printf.sprintf
-    "#lang tesl\nmodule FabH exposing []\nimport Tesl.Prelude exposing [Int, Bool(..)]\nimport Tesl.Http exposing [HttpRequest]\n%shandler f(req: HttpRequest, n: Int) -> Int requires [] =\n%s"
+    "module FabH exposing []\nimport Tesl.Prelude exposing [Int, Bool(..)]\nimport Tesl.Http exposing [HttpRequest]\n%shandler f(req: HttpRequest, n: Int) -> Int requires [] =\n%s"
     fab_scaffold nook_body
 
 (* worker kind — fabrication in a preceding let, then return the job. *)
 let fab_worker () =
   Printf.sprintf
-    "#lang tesl\nmodule FabW exposing []\nimport Tesl.Prelude exposing [Int]\nimport Tesl.Queue exposing [queueRead]\n%srecord Job { n: Int }\nworker doJob(j: Job) requires [queueRead] =\n  let p = j.n ::: Pos j.n\n  let used = needsPos p\n  j\n"
+    "module FabW exposing []\nimport Tesl.Prelude exposing [Int]\nimport Tesl.Queue exposing [queueRead]\n%srecord Job { n: Int }\nworker doJob(j: Job) requires [queueRead] =\n  let p = j.n ::: Pos j.n\n  let used = needsPos p\n  j\n"
     fab_scaffold
 
 (* main kind *)
 let fab_main () =
   Printf.sprintf
-    "#lang tesl\nmodule FabMain exposing []\nimport Tesl.Prelude exposing [Int]\nimport Tesl.App exposing [App]\nimport Tesl.Database exposing [Database, Memory]\n%shandler fabRoot() -> Int requires [] =\n  0\napi FabApi {\n  get \"/\" -> Int\n}\nserver FabServer for FabApi {\n  endpoint_0 = fabRoot\n}\ndatabase FabDb = Database {\n  schema: \"public\"\n  entities: []\n  backend: Memory\n}\nmain() -> App requires [] =\n  let p = 5 ::: Pos 5\n  let used = needsPos p\n  App {\n    database: FabDb\n    api: FabServer\n    port: 8080\n  }\n"
+    "module FabMain exposing []\nimport Tesl.Prelude exposing [Int]\nimport Tesl.App exposing [App]\nimport Tesl.Database exposing [Database, Memory]\n%shandler fabRoot() -> Int requires [] =\n  0\napi FabApi {\n  get \"/\" -> Int\n}\nserver FabServer for FabApi {\n  endpoint_0 = fabRoot\n}\ndatabase FabDb = Database {\n  schema: \"public\"\n  entities: []\n  backend: Memory\n}\nmain() -> App requires [] =\n  let p = 5 ::: Pos 5\n  let used = needsPos p\n  App {\n    database: FabDb\n    api: FabServer\n    port: 8080\n  }\n"
     fab_scaffold
 
 let j_fab_fn_matrix () =
@@ -232,7 +232,6 @@ let j_fab_handler_matrix () =
 
 (* case-arm fabrication (fn + handler). *)
 let fab_fn_case = {|
-#lang tesl
 module FabFnCase exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -247,7 +246,6 @@ fn f(m: Maybe Int) -> Int =
 |}
 
 let fab_handler_case = {|
-#lang tesl
 module FabHCase exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -263,7 +261,6 @@ handler f(req: HttpRequest, m: Maybe Int) -> Int requires [] =
 
 (* record-field-construction fabrication. *)
 let fab_record_field = {|
-#lang tesl
 module FabRecField exposing []
 import Tesl.Prelude exposing [String]
 fact Safe (s: String)
@@ -273,7 +270,6 @@ fn bad(raw: String) -> Msg = Msg { body: raw ::: Safe raw }
 
 (* top-level return-position fabrication. *)
 let fab_toplevel_return = {|
-#lang tesl
 module FabTopReturn exposing []
 import Tesl.Prelude exposing [Int]
 fact Pos (n: Int)
@@ -289,7 +285,6 @@ let ret_pat = "cannot declare a proof.*return\\|proof return type\\|only.*check.
 
 let test_fn_proof_return () =
   should_fail ~label:"J-RET fn proof return" ret_pat {|
-#lang tesl
 module RetFn exposing []
 import Tesl.Prelude exposing [Int]
 fact Pos (n: Int)
@@ -302,7 +297,6 @@ fn bad(n: Int) -> n: Int ::: Pos n = n
    NOT carry is rejected. *)
 let test_handler_proof_return_rejected () =
   should_fail ~label:"J-RET handler proof return" ret_pat {|
-#lang tesl
 module RetH exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Http exposing [HttpRequest]
@@ -314,7 +308,6 @@ handler bad(req: HttpRequest, n: Int) -> n: Int ::: Pos n requires [] = n
    return its params do not carry is rejected. *)
 let test_worker_proof_return_rejected () =
   should_fail ~label:"J-RET worker proof return" ret_pat {|
-#lang tesl
 module RetW exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Queue exposing [queueRead]
@@ -331,7 +324,6 @@ let shadow_pat = "shadow\\|duplicate parameter\\|already.*scope\\|V001"
 
 let test_shadow_let_over_param () =
   should_fail ~label:"J-SHADOW let over param" shadow_pat {|
-#lang tesl
 module ShLetParam exposing []
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int =
@@ -341,7 +333,6 @@ fn f(x: Int) -> Int =
 
 let test_shadow_let_over_let () =
   should_fail ~label:"J-SHADOW let over let" shadow_pat {|
-#lang tesl
 module ShLetLet exposing []
 import Tesl.Prelude exposing [Int]
 fn f(n: Int) -> Int =
@@ -352,7 +343,6 @@ fn f(n: Int) -> Int =
 
 let test_shadow_case_binder_over_param () =
   should_fail ~label:"J-SHADOW case binder over param" shadow_pat {|
-#lang tesl
 module ShCaseParam exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -364,7 +354,6 @@ fn f(x: Int, m: Maybe Int) -> Int =
 
 let test_shadow_case_binder_over_let () =
   should_fail ~label:"J-SHADOW case binder over let" shadow_pat {|
-#lang tesl
 module ShCaseLet exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -377,7 +366,6 @@ fn f(m: Maybe Int) -> Int =
 
 let test_shadow_duplicate_param () =
   should_fail ~label:"J-SHADOW duplicate param" shadow_pat {|
-#lang tesl
 module ShDupParam exposing []
 import Tesl.Prelude exposing [Int]
 fn f(x: Int, x: Int) -> Int = x
@@ -385,7 +373,6 @@ fn f(x: Int, x: Int) -> Int = x
 
 let test_shadow_let_over_param_in_check () =
   should_fail ~label:"J-SHADOW let over param in check" shadow_pat {|
-#lang tesl
 module ShCheck exposing []
 import Tesl.Prelude exposing [Int]
 fact Pos (n: Int)
@@ -399,7 +386,6 @@ check checkPos(n: Int) -> n: Int ::: Pos n =
 
 let test_shadow_param_over_toplevel_fn () =
   should_fail ~label:"J-SHADOW param over toplevel fn" shadow_pat {|
-#lang tesl
 module ShParamTop exposing []
 import Tesl.Prelude exposing [Int]
 fn helper(n: Int) -> Int = n
@@ -413,7 +399,6 @@ fn f(helper: Int) -> Int = helper
 let forge_pat = "fact ownership\\|can only be produced\\|declaring module\\|P001"
 
 let fact_owner = {|
-#lang tesl
 module FactOwner exposing [ValidEmail, checkEmail]
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.contains, String.length]
@@ -427,14 +412,12 @@ check checkEmail(s: String) -> s: String ::: ValidEmail s =
 
 (* A re-export bridge: re-exports the fact + its check, mints nothing. *)
 let reexport_bridge = {|
-#lang tesl
 module Bridge exposing [ValidEmail, checkEmail]
 import FactOwner exposing [ValidEmail, checkEmail]
 |}
 
 let test_forge_via_check () =
   two_files_should_fail ~label:"J-FORGE check" forge_pat fact_owner {|
-#lang tesl
 module ForgeCheck exposing [ValidEmail, badForge]
 import Tesl.Prelude exposing [String]
 import FactOwner exposing [ValidEmail, checkEmail]
@@ -444,7 +427,6 @@ check badForge(s: String) -> s: String ::: ValidEmail s =
 
 let test_forge_via_establish () =
   two_files_should_fail ~label:"J-FORGE establish" forge_pat fact_owner {|
-#lang tesl
 module ForgeEstablish exposing [ValidEmail, alwaysValid]
 import Tesl.Prelude exposing [String, Fact]
 import FactOwner exposing [ValidEmail, checkEmail]
@@ -454,7 +436,6 @@ establish alwaysValid(s: String) -> Fact (ValidEmail s) =
 
 let test_forge_via_auth () =
   two_files_should_fail ~label:"J-FORGE auth" forge_pat fact_owner {|
-#lang tesl
 module ForgeAuth exposing [ValidEmail, fakeAuth]
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -465,7 +446,6 @@ auth fakeAuth(req: HttpRequest) -> email: String ::: ValidEmail email =
 
 let test_forge_through_reexport_chain () =
   three_files_should_fail ~label:"J-FORGE chain check" forge_pat fact_owner reexport_bridge {|
-#lang tesl
 module ForgeChain exposing []
 import Tesl.Prelude exposing [String]
 import Bridge exposing [ValidEmail, checkEmail]
@@ -475,7 +455,6 @@ check forgeViaChain(s: String) -> s: String ::: ValidEmail s =
 
 let test_forge_through_chain_establish () =
   three_files_should_fail ~label:"J-FORGE chain establish" forge_pat fact_owner reexport_bridge {|
-#lang tesl
 module ForgeChainEst exposing []
 import Tesl.Prelude exposing [String, Fact]
 import Bridge exposing [ValidEmail, checkEmail]
@@ -487,7 +466,6 @@ let test_forge_fn_return_foreign_proof () =
   two_files_should_fail ~label:"J-FORGE fn foreign return"
     "cannot declare a proof.*return\\|proof return type\\|fact ownership\\|only.*check.*auth\\|P001"
     fact_owner {|
-#lang tesl
 module FnForeignProof exposing []
 import Tesl.Prelude exposing [String]
 import FactOwner exposing [ValidEmail, checkEmail]
@@ -498,7 +476,6 @@ let test_forge_undeclared_fact () =
   (* Single module: produce a fact that is never declared at all. *)
   should_fail ~label:"J-FORGE undeclared fact"
     "fact ownership\\|can only be produced\\|declaring module\\|not in scope\\|unknown\\|P001" {|
-#lang tesl
 module UndeclaredFact exposing []
 import Tesl.Prelude exposing [String]
 fact GhostFact (s: String)
@@ -512,7 +489,6 @@ check tryProduce(s: String) -> s: String ::: PhantomFact s =
 
 let pos_check_produces_own_fact () =
   should_pass ~label:"J-POS check own fact" {|
-#lang tesl
 module PosJ_Check exposing []
 import Tesl.Prelude exposing [Int]
 fact Pos (n: Int)
@@ -529,7 +505,6 @@ fn good(raw: Int) -> Int =
 
 let pos_establish_uses_colon3 () =
   should_pass ~label:"J-POS establish ::: ok" {|
-#lang tesl
 module PosJ_Est exposing []
 import Tesl.Prelude exposing [Int, Fact]
 fact Pos (n: Int)
@@ -539,7 +514,6 @@ fn needsPos(n: Int ::: Pos n) -> Int = n
 
 let pos_auth_uses_colon3 () =
   should_pass ~label:"J-POS auth ::: ok" {|
-#lang tesl
 module PosJ_Auth exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -555,7 +529,6 @@ auth myAuth(req: HttpRequest) -> user: String ::: Authed user =
 let pos_fn_attaches_existing_proof () =
   (* §7.12: attaching an EXISTING proof value inside a fn is allowed. *)
   should_pass ~label:"J-POS fn attaches existing proof" {|
-#lang tesl
 module PosJ_Attach exposing []
 import Tesl.Prelude exposing [Int, Fact, attachFact, detachFact]
 fact Pos (n: Int)
@@ -567,7 +540,6 @@ fn relay(n: Int ::: Pos n) -> Int =
 
 let pos_legit_reexport_and_use () =
   with_two_files_pass ~label:"J-POS legit re-export use" fact_owner {|
-#lang tesl
 module LegitUse exposing []
 import Tesl.Prelude exposing [String]
 import FactOwner exposing [ValidEmail, checkEmail]
@@ -579,7 +551,6 @@ fn process(raw: String) -> String =
 
 let pos_no_shadow_distinct_names () =
   should_pass ~label:"J-POS distinct names compile" {|
-#lang tesl
 module PosJ_Distinct exposing []
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int =
@@ -590,7 +561,6 @@ fn f(x: Int) -> Int =
 
 let pos_disjoint_case_binders () =
   should_pass ~label:"J-POS disjoint case binders" {|
-#lang tesl
 module PosJ_CaseOk exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -611,7 +581,6 @@ let pos_chain_legit_use () =
 
 let pos_fn_takes_proof_param_returns_plain () =
   should_pass ~label:"J-POS fn proof param plain return" {|
-#lang tesl
 module PosJ_PlainRet exposing []
 import Tesl.Prelude exposing [Int]
 fact Pos (n: Int)
@@ -620,7 +589,6 @@ fn unwrap(n: Int ::: Pos n) -> Int = n
 
 let pos_handler_consumes_auth_proof () =
   should_pass ~label:"J-POS handler consumes auth proof" {|
-#lang tesl
 module PosJ_HandlerAuth exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]

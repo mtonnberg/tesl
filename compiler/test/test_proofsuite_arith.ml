@@ -134,7 +134,6 @@ let div_matrix =
       (fun () ->
          should_fail dc.dc_pat
            (Printf.sprintf {|
-#lang tesl
 module N0%s%s exposing []
 import Tesl.Prelude exposing [Int]
 fn f(a: Int, b: Int) -> Int =
@@ -148,7 +147,6 @@ fn f(a: Int, b: Int) -> Int =
 let test_N1_div_variable_no_proof () =
   should_fail "has no .IsNonZero. proof\\|IsNonZero"
     {|
-#lang tesl
 module NDivVar exposing []
 import Tesl.Prelude exposing [Int]
 fn f(a: Int, b: Int) -> Int = a / b
@@ -157,7 +155,6 @@ fn f(a: Int, b: Int) -> Int = a / b
 let test_N1_mod_variable_no_proof () =
   should_fail "has no .IsNonZero. proof\\|IsNonZero"
     {|
-#lang tesl
 module NModVar exposing []
 import Tesl.Prelude exposing [Int]
 fn f(a: Int, b: Int) -> Int = a % b
@@ -166,7 +163,6 @@ fn f(a: Int, b: Int) -> Int = a % b
 let test_N1_div_literal_zero () =
   should_fail "division by zero"
     {|
-#lang tesl
 module NDivZero exposing []
 import Tesl.Prelude exposing [Int]
 fn f(a: Int) -> Int = a / 0
@@ -175,7 +171,6 @@ fn f(a: Int) -> Int = a / 0
 let test_N1_mod_literal_zero () =
   should_fail "division by zero\\|operand of .%. is literally 0"
     {|
-#lang tesl
 module NModZero exposing []
 import Tesl.Prelude exposing [Int]
 fn f(a: Int) -> Int = a % 0
@@ -185,7 +180,6 @@ let test_N1_div_nonzero_literal_positive () =
   (* A non-zero literal divisor is statically safe. *)
   should_pass
     {|
-#lang tesl
 module NDivLitOk exposing []
 import Tesl.Prelude exposing [Int]
 fn f(a: Int) -> Int = a / 42
@@ -194,7 +188,6 @@ fn f(a: Int) -> Int = a / 42
 let test_N1_div_checked_positive () =
   should_pass
     {|
-#lang tesl
 module NDivCheckOk exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [Int.nonZero]
@@ -207,7 +200,6 @@ let test_N1_div_proof_param_positive () =
   (* A divisor parameter carrying IsNonZero discharges the operator obligation. *)
   should_pass
     {|
-#lang tesl
 module NDivParamOk exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [IsNonZero]
@@ -219,7 +211,6 @@ fn f(a: Int, b: Int ::: IsNonZero b) -> Int = a / b
 let test_N2_int_divide_no_proof () =
   should_fail "does not statically satisfy declared proof.*IsNonZero\\|IsNonZero"
     {|
-#lang tesl
 module NIntDiv exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [Int.divide]
@@ -231,7 +222,6 @@ let test_N2_int_divide_literal_arg () =
   (* Even a non-zero literal is rejected for a proof param (no auto-lift). *)
   should_fail "requires proof.*IsNonZero.*literal\\|does not statically satisfy.*IsNonZero\\|IsNonZero"
     {|
-#lang tesl
 module NIntDivLit exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [Int.divide]
@@ -242,7 +232,6 @@ fn f(a: Int) -> Int =
 let test_N2_int_divide_checked_positive () =
   should_pass
     {|
-#lang tesl
 module NIntDivOk exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [Int.nonZero, Int.divide]
@@ -266,7 +255,6 @@ let list_ops = [
 let test_N3_repeat_no_proof () =
   should_fail "does not statically satisfy declared proof.*IsNonNegative\\|IsNonNegative"
     {|
-#lang tesl
 module NRepeat exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.repeat]
@@ -277,7 +265,6 @@ fn f(x: Int, n: Int) -> List Int =
 let test_N3_repeat_checked_positive () =
   should_pass
     {|
-#lang tesl
 module NRepeatOk exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.Int exposing [Int.nonNegative]
@@ -293,7 +280,6 @@ let n3_listop_no_proof =
     (fun () ->
        should_fail "does not statically satisfy declared proof.*IsNonNegative\\|IsNonNegative"
          (Printf.sprintf {|
-#lang tesl
 module NList%d exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [%s]
@@ -308,7 +294,6 @@ let n3_listop_checked_positive =
     (fun () ->
        should_pass
          (Printf.sprintf {|
-#lang tesl
 module NListOk%d exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.Int exposing [Int.nonNegative]
@@ -323,7 +308,6 @@ let test_N3_take_literal_count () =
   (* A literal count is still rejected (no auto-lift). *)
   should_fail "does not statically satisfy.*IsNonNegative\\|requires proof.*IsNonNegative\\|IsNonNegative"
     {|
-#lang tesl
 module NTakeLit exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.take]
@@ -334,7 +318,6 @@ fn f(xs: List Int) -> List Int =
 let test_N3_proof_param_positive () =
   should_pass
     {|
-#lang tesl
 module NTakeParamOk exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.Int exposing [IsNonNegative]
@@ -348,7 +331,6 @@ fn f(xs: List Int, n: Int ::: IsNonNegative n) -> List Int =
 let test_N4_dict_get_no_proof () =
   should_fail "does not statically satisfy.*HasKey\\|HasKey"
     {|
-#lang tesl
 module NDictGet exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Dict exposing [Dict, Dict.get]
@@ -359,7 +341,6 @@ fn f(d: Dict String Int, key: String) -> Int =
 let test_N4_dict_get_checked_positive () =
   should_pass
     {|
-#lang tesl
 module NDictGetOk exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Dict exposing [Dict, Dict.requireKey, Dict.get]
@@ -372,7 +353,6 @@ let test_N4_dict_get_aliased_dict () =
   (* Re-binding the dict to a fresh name does not establish HasKey. *)
   should_fail "does not statically satisfy.*HasKey\\|HasKey"
     {|
-#lang tesl
 module NDictAlias exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Dict exposing [Dict, Dict.get]
@@ -385,7 +365,6 @@ let test_N4_dict_lookup_no_proof_needed_positive () =
   (* Dict.lookup is the unchecked Maybe-returning alternative — needs no proof. *)
   should_pass
     {|
-#lang tesl
 module NDictLookupOk exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Dict exposing [Dict, Dict.lookup]
@@ -401,7 +380,6 @@ fn f(d: Dict String Int, key: String) -> Int =
 let test_N5_float_div_no_proof () =
   should_fail "does not statically satisfy.*FloatNonZero\\|FloatNonZero"
     {|
-#lang tesl
 module NFloatDiv exposing []
 import Tesl.Prelude exposing []
 import Tesl.Float exposing [Float, Float.div]
@@ -412,7 +390,6 @@ fn f(a: Float, b: Float) -> Float =
 let test_N5_float_div_checked_positive () =
   should_pass
     {|
-#lang tesl
 module NFloatDivOk exposing []
 import Tesl.Prelude exposing []
 import Tesl.Float exposing [Float, FloatNonZero, Float.requireNonZero, Float.div]
@@ -424,7 +401,6 @@ fn f(a: Float, b: Float) -> Float =
 let test_N5_float_div_proof_param_positive () =
   should_pass
     {|
-#lang tesl
 module NFloatParamOk exposing []
 import Tesl.Prelude exposing []
 import Tesl.Float exposing [Float, FloatNonZero, Float.div]
@@ -471,7 +447,6 @@ let named_op_negatives =
     (fun () ->
        should_fail (Printf.sprintf "does not statically satisfy declared proof.*%s\\|%s" o.no_fact o.no_fact)
          (Printf.sprintf {|
-#lang tesl
 module N5b%s exposing []
 import Tesl.Prelude exposing [Int, List]
 %s
@@ -486,7 +461,6 @@ let named_op_positives =
     (fun () ->
        should_pass
          (Printf.sprintf {|
-#lang tesl
 module N5bP%s exposing []
 import Tesl.Prelude exposing [Int, List]
 %s
@@ -502,7 +476,6 @@ import Tesl.Prelude exposing [Int, List]
 let test_N6_aliased_raw_divisor () =
   should_fail "has no .IsNonZero. proof\\|IsNonZero"
     {|
-#lang tesl
 module NAlias exposing []
 import Tesl.Prelude exposing [Int]
 fn f(a: Int, b: Int) -> Int =
@@ -513,7 +486,6 @@ fn f(a: Int, b: Int) -> Int =
 let test_N6_int_divide_aliased_raw () =
   should_fail "does not statically satisfy.*IsNonZero\\|IsNonZero"
     {|
-#lang tesl
 module NAlias2 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [Int.divide]

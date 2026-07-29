@@ -121,8 +121,7 @@ let should_currently_pass_src src =
              Promote this test to `should_fail_src` with the new diagnostic.\n%s" out)
 [@@warning "-32"]
 
-let base_header = {|#lang tesl
-module Test exposing []
+let base_header = {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact, forgetFact, attachFact, detachFact]
 import Tesl.Maybe exposing [Maybe(..)]
 |}
@@ -145,8 +144,7 @@ check isPositive(n: Int) -> n: Int ::: IsPositive n =
    (1) fn fakeFilter cannot declare a proof-carrying return type (RetAttached);
    (2) List.filterCheck rejects non-check-kind functions as its predicate argument. *)
 let r53_f01_filtercheck_plain_fn_bug () =
-  should_fail_src "plain.*`fn`\\|fn.*cannot\\|check.*kind\\|proof-carrying" {|#lang tesl
-module Test exposing []
+  should_fail_src "plain.*`fn`\\|fn.*cannot\\|check.*kind\\|proof-carrying" {|module Test exposing []
 import Tesl.Prelude exposing [Int, List, Fact]
 import Tesl.List exposing [List.filterCheck, List.length]
 
@@ -193,8 +191,7 @@ fn safePath(xs: List Int) -> Int =
 
 (* R53_F03 — FIXED. Set.filterCheck also rejects a plain fn. Same fix as R53_F01. *)
 let r53_f03_set_filtercheck_plain_fn_bug () =
-  should_fail_src "plain.*`fn`\\|fn.*cannot\\|check.*kind\\|proof-carrying" {|#lang tesl
-module Test exposing []
+  should_fail_src "plain.*`fn`\\|fn.*cannot\\|check.*kind\\|proof-carrying" {|module Test exposing []
 import Tesl.Prelude exposing [Int, Fact]
 import Tesl.Set exposing [Set.filterCheck, Set.size, Set]
 
@@ -337,8 +334,7 @@ fn demo(t: Traffic) -> Int =
 (* R53_C01 — A fn that doesn't declare dbRead but calls selectOne must be
    rejected. *)
 let r53_c01_fn_needs_capability_for_db_op () =
-  should_fail_src "dbRead" {|#lang tesl
-module Test exposing []
+  should_fail_src "dbRead" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -579,8 +575,7 @@ let r53_i01_predicate_not_exported () =
   let dir = Filename.temp_dir "tesl-r53-import" "" in
   let home_path = Filename.concat dir "home-module.tesl" in
   let consumer_path = Filename.concat dir "consumer-module.tesl" in
-  write_file home_path {|#lang tesl
-module HomeModule exposing [checkPort]
+  write_file home_path {|module HomeModule exposing [checkPort]
 
 import Tesl.Prelude exposing [Int]
 
@@ -592,8 +587,7 @@ check checkPort(p: Int) -> p: Int ::: ValidPort p =
   else
     fail 400 "bad port"
 |};
-  write_file consumer_path {|#lang tesl
-module ConsumerModule exposing []
+  write_file consumer_path {|module ConsumerModule exposing []
 
 import Tesl.Prelude exposing [Int]
 import HomeModule exposing [checkPort, ValidPort]
@@ -663,8 +657,7 @@ fn badConstruct(n: Int) -> PositiveBox =
    a `fn` returning `Widget ? FromDb (Id == wid)` via selectOne should compile.
    This tests the positive control for named-pack with SQL results. *)
 let r53_a01_selectone_satisfies_named_pack_ok () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbRead]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -781,8 +774,7 @@ fn demo(raw: Int) -> Int =
    But the compiler currently allows it. This is an import visibility enforcement
    gap for stdlib-module predicates. *)
 let r53_q01_stdlib_predicate_without_explicit_import_bug () =
-  should_fail_src "IsTrimmed\\|proof.*predicate\\|not.*in.*scope\\|import.*exposing" {|#lang tesl
-module Test exposing []
+  should_fail_src "IsTrimmed\\|proof.*predicate\\|not.*in.*scope\\|import.*exposing" {|module Test exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.String
 

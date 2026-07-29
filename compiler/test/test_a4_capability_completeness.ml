@@ -70,8 +70,7 @@ let should_pass label src =
 let cap_pat = "does not declare\\|privileged operations\\|requiring \\[\\|capabilit"
 
 (* env read hidden in a handler case-arm guard, requires [] *)
-let neg_env_guard = {|#lang tesl
-module EnvGuard exposing []
+let neg_env_guard = {|module EnvGuard exposing []
 import Tesl.Prelude exposing [String, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Env exposing [env, envRead]
@@ -84,8 +83,7 @@ handler h(m: Maybe String) -> String requires [] =
 |}
 
 (* dbRead select hidden in a guard, requires [] *)
-let neg_select_guard = {|#lang tesl
-module SelGuard exposing []
+let neg_select_guard = {|module SelGuard exposing []
 import Tesl.Prelude exposing [String, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.DB exposing [dbRead]
@@ -100,8 +98,7 @@ handler h(m: Maybe String) -> String requires [] =
 
 (* transitive: a plain fn with the guard effect but requires []; a caller also
    under-declares.  The under-declared fn itself must be rejected. *)
-let neg_transitive_guard = {|#lang tesl
-module TransGuard exposing []
+let neg_transitive_guard = {|module TransGuard exposing []
 import Tesl.Prelude exposing [String, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Env exposing [env, envRead]
@@ -112,8 +109,7 @@ fn leaf(m: Maybe String) -> String requires [] =
 |}
 
 (* worker body guard escape *)
-let neg_worker_guard = {|#lang tesl
-module WorkerGuard exposing []
+let neg_worker_guard = {|module WorkerGuard exposing []
 import Tesl.Prelude exposing [String, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Env exposing [env, envRead]
@@ -126,8 +122,7 @@ worker doJob(j: Job) requires [queueRead] =
 |}
 
 (* positive: the guard effect IS declared → compiles *)
-let pos_guard_declared = {|#lang tesl
-module GuardOk exposing []
+let pos_guard_declared = {|module GuardOk exposing []
 import Tesl.Prelude exposing [String, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Env exposing [env, envRead]
@@ -140,8 +135,7 @@ handler h(m: Maybe String) -> String requires [envRead] =
 |}
 
 (* positive: a pure guard needs no capability *)
-let pos_pure_guard = {|#lang tesl
-module PureGuard exposing []
+let pos_pure_guard = {|module PureGuard exposing []
 import Tesl.Prelude exposing [String, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 handler h(m: Maybe String) -> String requires [] =
@@ -155,8 +149,7 @@ handler h(m: Maybe String) -> String requires [] =
 (* ── §6.2 agent-config leak ───────────────────────────────────────────────── *)
 (* The gated name `requireEnv` sits in the provider `apiKey` slot; without the
    Tesl.Env import it passes the (old) checker but is unbound at runtime. *)
-let neg_agent_config_leak = {|#lang tesl
-module AgentLeak exposing []
+let neg_agent_config_leak = {|module AgentLeak exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Agent exposing [aiProvider]
 agent Assistant requires [aiProvider] = Agent {
@@ -167,8 +160,7 @@ agent Assistant requires [aiProvider] = Agent {
 }
 |}
 
-let pos_agent_config_imported = {|#lang tesl
-module AgentOk exposing []
+let pos_agent_config_imported = {|module AgentOk exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Env exposing [requireEnv, envRead]
 import Tesl.Agent exposing [aiProvider]

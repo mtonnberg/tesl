@@ -163,7 +163,7 @@ server MainServer for MainApi {
 
 let publish_record_payload_same_module () =
   with_files
-    [ ("main.tesl", "#lang tesl\n" ^ publish_module ~import_lib:false ~local_notice:true) ]
+    [ ("main.tesl", "" ^ publish_module ~import_lib:false ~local_notice:true) ]
     (function
      | [main_p] ->
        check_ok "publish record payload (same-module)" main_p;
@@ -176,10 +176,10 @@ let publish_record_payload_same_module () =
      | _ -> assert false)
 
 let publish_record_payload_cross_module () =
-  let lib = "#lang tesl\nmodule Lib exposing [Notice]\nimport Tesl.Prelude exposing [String]\nimport Tesl.Json exposing [stringCodec]\n\n" ^ notice_record in
+  let lib = "module Lib exposing [Notice]\nimport Tesl.Prelude exposing [String]\nimport Tesl.Json exposing [stringCodec]\n\n" ^ notice_record in
   with_files
     [ ("lib.tesl", lib);
-      ("main.tesl", "#lang tesl\n" ^ publish_module ~import_lib:true ~local_notice:false) ]
+      ("main.tesl", "" ^ publish_module ~import_lib:true ~local_notice:false) ]
     (function
      | [_lib_p; main_p] ->
        check_ok "publish record payload (cross-module)" main_p;
@@ -189,8 +189,7 @@ let publish_record_payload_cross_module () =
      | _ -> assert false)
 
 let publish_adt_payload_stays_positional () =
-  let src = {|#lang tesl
-module Main exposing [MainServer]
+  let src = {|module Main exposing [MainServer]
 import Tesl.Prelude exposing [String, Unit]
 import Tesl.Json exposing [stringCodec]
 import Tesl.Queue exposing [pubsub]
@@ -248,8 +247,7 @@ server MainServer for MainApi {
 (* ── 2. --generate-ts: SSE endpoint and Unit ────────────────────────────── *)
 
 let ts_sse_unit_defined () =
-  let src = {|#lang tesl
-module Main exposing [MainServer]
+  let src = {|module Main exposing [MainServer]
 import Tesl.Prelude exposing [String, Unit]
 import Tesl.Json exposing [stringCodec]
 import Tesl.Queue exposing [pubsub]
@@ -304,8 +302,7 @@ server MainServer for MainApi {
 (* ── 3. EmailBody as a data type ────────────────────────────────────────── *)
 
 let emailbody_exhaustive_case_accepted () =
-  let src = {|#lang tesl
-module Main exposing []
+  let src = {|module Main exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Email exposing [EmailBody, TextBody, HtmlBody, RichBody]
 
@@ -328,8 +325,7 @@ fn bodyKind(b: EmailBody) -> String =
     | _ -> assert false)
 
 let emailbody_missing_arm_rejected () =
-  let src = {|#lang tesl
-module Main exposing []
+  let src = {|module Main exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Email exposing [EmailBody, TextBody, HtmlBody, RichBody]
 
@@ -346,8 +342,7 @@ fn bodyKind(b: EmailBody) -> String =
     | _ -> assert false)
 
 let emailbody_endpoint_positions_rejected () =
-  let src = {|#lang tesl
-module Main exposing []
+  let src = {|module Main exposing []
 import Tesl.Prelude exposing [String, Unit]
 import Tesl.Email exposing [EmailBody, TextBody, HtmlBody, RichBody]
 
@@ -383,8 +378,7 @@ server S for A {
    surfaces: endpoint return of a wrapping record (path chain named), an
    sseChannel payload, and a queue job record. *)
 let emailbody_nested_record_endpoint_rejected () =
-  let src = {|#lang tesl
-module Main exposing []
+  let src = {|module Main exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Email exposing [EmailBody, TextBody, HtmlBody, RichBody]
 
@@ -425,8 +419,7 @@ server S for A {
     | _ -> assert false)
 
 let emailbody_sse_payload_rejected () =
-  let src = {|#lang tesl
-module Main exposing []
+  let src = {|module Main exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Email exposing [EmailBody, TextBody, HtmlBody, RichBody]
 
@@ -456,8 +449,7 @@ sseChannel Nested(userId: String) = SseChannel {
     | _ -> assert false)
 
 let emailbody_job_record_rejected () =
-  let src = {|#lang tesl
-module Main exposing []
+  let src = {|module Main exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Email exposing [EmailBody, TextBody, HtmlBody, RichBody]
 import Tesl.Queue exposing [FromQueue, queueRead, Queue, Job, QueueRetryStrategy, Fixed]
@@ -499,8 +491,7 @@ worker handleMail(job: MailJob ::: FromQueue (Id == jobId) job)
     | _ -> assert false)
 
 let emailbody_data_positions_stay_legal () =
-  let src = {|#lang tesl
-module Main exposing []
+  let src = {|module Main exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Email exposing [EmailBody, TextBody, HtmlBody, RichBody]
 
@@ -526,8 +517,7 @@ fn wrap(b: EmailBody) -> Draft =
 (* ── 4. partial application in argument position ────────────────────────── *)
 
 let partial_application_argument_position () =
-  let src = {|#lang tesl
-module Main exposing []
+  let src = {|module Main exposing []
 import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
 
 fn addN(a: Int, b: Int) -> Int =
@@ -558,8 +548,7 @@ test "named partial application" {
 
 (* ── 5. newtype record-field codec, both spellings ──────────────────────── *)
 
-let newtype_codec_module ~id_codec = Printf.sprintf {|#lang tesl
-module Main exposing []
+let newtype_codec_module ~id_codec = Printf.sprintf {|module Main exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec]
 
@@ -628,8 +617,7 @@ let newtype_field_newtype_codec_spelling () =
    (testless middle module) is pinned in section 7
    (transitive_dep_tests_compose). *)
 
-let dep_with_test = {|#lang tesl
-module Lib exposing [add]
+let dep_with_test = {|module Lib exposing [add]
 
 import Tesl.Prelude exposing [Int]
 
@@ -641,8 +629,7 @@ test "lib unit" {
 }
 |}
 
-let dep_without_test = {|#lang tesl
-module Lib exposing [add]
+let dep_without_test = {|module Lib exposing [add]
 
 import Tesl.Prelude exposing [Int]
 
@@ -650,8 +637,7 @@ fn add(a: Int, b: Int) -> Int =
   a + b
 |}
 
-let main_importing_lib = {|#lang tesl
-module Main exposing []
+let main_importing_lib = {|module Main exposing []
 
 import Tesl.Prelude exposing [Int]
 import Lib exposing [add]
@@ -686,8 +672,7 @@ let dep_without_tests_not_required () =
      | _ -> assert false)
 
 let dep_doctest_counts_as_tests () =
-  let lib = {|#lang tesl
-module Lib exposing [add]
+  let lib = {|module Lib exposing [add]
 
 import Tesl.Prelude exposing [Int]
 
@@ -761,8 +746,7 @@ let write_file path content =
    load with "All: unbound identifier".  The filter is now scoped to Tesl.*
    stdlib imports only. *)
 let local_export_named_like_currency_ctor () =
-  let dep = {|#lang tesl
-module Dep exposing [All]
+  let dep = {|module Dep exposing [All]
 
 import Tesl.Prelude exposing [Int]
 
@@ -770,8 +754,7 @@ record All {
   x: Int
 }
 |} in
-  let main = {|#lang tesl
-module Main exposing []
+  let main = {|module Main exposing []
 
 import Tesl.Prelude exposing [Bool(..), Int]
 import Dep exposing [All]
@@ -801,8 +784,7 @@ test "record named All" {
    and a DCapability implies naming an IMPORTED module's cache both counts as
    a cache USE (tesl/tesl/cache require) and gets the synthesized
    cacheCap_<Name> define. *)
-let cap_implies_cache_cap_local = {|#lang tesl
-module Main exposing []
+let cap_implies_cache_cap_local = {|module Main exposing []
 
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe, Nothing, Something]
@@ -840,8 +822,7 @@ let cap_implies_renders_cache_cap_ident () =
          "(implies cacheCap Sessions)" out
      | _ -> assert false)
 
-let cap_implies_imported_cache_lib = {|#lang tesl
-module CacheLib exposing [TestDB, Sessions, getSession]
+let cap_implies_imported_cache_lib = {|module CacheLib exposing [TestDB, Sessions, getSession]
 
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe, Nothing, Something]
@@ -864,8 +845,7 @@ fn getSession(k: String) -> Maybe String requires [cacheCap Sessions] =
   Cache.get Sessions (k)
 |}
 
-let cap_implies_imported_cache_main = {|#lang tesl
-module Main exposing [fetch]
+let cap_implies_imported_cache_main = {|module Main exposing [fetch]
 
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe, Nothing, Something]
@@ -899,8 +879,7 @@ let cap_implies_imported_cache_synthesized () =
    (LANGUAGE-SPEC §queues: `Job <JobType> <workerFn> <dead-slot>`), so the
    queue emitted `#:job-types ()` and every enqueue failed at RUNTIME.  The
    2-arg spelling is now a CHECK-time rejection. *)
-let two_arg_job_src dead_slot = Printf.sprintf {|#lang tesl
-module Main exposing [submit]
+let two_arg_job_src dead_slot = Printf.sprintf {|module Main exposing [submit]
 
 import Tesl.Prelude exposing [String, Int, Unit]
 import Tesl.Database exposing [Database, Memory]
@@ -953,8 +932,7 @@ let two_arg_job_rejected () =
    minted on first access from quote-syntax'd identifiers, which resolve
    against the FULLY EXPANDED module.  Probed at runtime via the domain
    registry: queue-before-record must yield type-ref entries. *)
-let queue_first_src = {|#lang tesl
-module Main exposing [submit]
+let queue_first_src = {|module Main exposing [submit]
 
 import Tesl.Prelude exposing [String, Int, Unit]
 import Tesl.Database exposing [Database, Memory]
@@ -1020,8 +998,7 @@ let queue_first_nominal_refs () =
    exactly the condition under which the dep's emitted .rkt has a test
    submodule (a testless middle module still emits one that pulls its own
    deps' test submodules). *)
-let sandwich_lib_b = {|#lang tesl
-module LibB exposing [double]
+let sandwich_lib_b = {|module LibB exposing [double]
 
 import Tesl.Prelude exposing [Int]
 
@@ -1033,8 +1010,7 @@ test "deliberately failing" {
 }
 |}
 
-let sandwich_lib_a = {|#lang tesl
-module LibA exposing [quad]
+let sandwich_lib_a = {|module LibA exposing [quad]
 
 import Tesl.Prelude exposing [Int]
 import LibB exposing [double]
@@ -1043,8 +1019,7 @@ fn quad(n: Int) -> Int =
   double (double n)
 |}
 
-let sandwich_main = {|#lang tesl
-module Main exposing []
+let sandwich_main = {|module Main exposing []
 
 import Tesl.Prelude exposing [Int]
 import LibA exposing [quad]
@@ -1088,8 +1063,7 @@ let transitive_dep_tests_compose () =
    — is_under_applied matched bare EVar heads only, so the qualified twin of
    the fixed bug still emitted a direct under-applied call (runtime arity
    trap) while the let-bound spelling eta-expanded fine. *)
-let qualified_partial_lib = {|#lang tesl
-module PartialLib exposing [addN]
+let qualified_partial_lib = {|module PartialLib exposing [addN]
 
 import Tesl.Prelude exposing [Int]
 
@@ -1097,8 +1071,7 @@ fn addN(a: Int, b: Int) -> Int =
   a + b
 |}
 
-let qualified_partial_main = {|#lang tesl
-module Main exposing [applyTwice]
+let qualified_partial_main = {|module Main exposing [applyTwice]
 
 import Tesl.Prelude exposing [Bool(..), Int]
 import PartialLib
@@ -1131,8 +1104,7 @@ let qualified_partial_application_eta_expands () =
    PosixMillis bases, so it applied the constructor to the RAW jsexpr.
    PosixMillis is itself a runtime newtype, so its decode additionally wraps
    the BASE constructor. *)
-let money_posix_newtype_codecs = {|#lang tesl
-module Main exposing []
+let money_posix_newtype_codecs = {|module Main exposing []
 
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, moneyCodec]
@@ -1219,8 +1191,7 @@ let money_posix_newtype_decode_wraps () =
    guard claimed every asTool-headed application and crashed with the
    issue-#24 "please report this bug" failwith in argument position.  Under
    the shadow predicate both emit paths now treat it as an ordinary call. *)
-let astool_shadow_src = {|#lang tesl
-module Main exposing [run]
+let astool_shadow_src = {|module Main exposing [run]
 
 import Tesl.Prelude exposing [Int]
 

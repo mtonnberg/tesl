@@ -258,8 +258,7 @@ let build_module ~mod_id ~consumer ~ai ~grant ~body_override =
      wrapper does `let _r = <body>` which breaks for multi-line fragments, so we
      restrict the worker matrix to single-expression fragments below. *)
   Printf.sprintf
-{|#lang tesl
-module %s exposing []
+{|module %s exposing []
 import Tesl.Prelude exposing [Int, String, Bool, List, Unit]
 import Tesl.Json exposing [stringCodec, intCodec]
 %s
@@ -328,8 +327,7 @@ let pos_matrix =
 
 let build_agentrun ~mod_id ~req ~pre =
   Printf.sprintf
-{|#lang tesl
-module %s exposing []
+{|module %s exposing []
 import Tesl.Prelude exposing [String, Unit]
 import Tesl.Agent exposing [aiProvider, Agent, mockProvider, agentRun]
 %s
@@ -406,8 +404,7 @@ let tool_cap_pattern c_id =
 
 let build_tool_module ~mod_id ~c_id ~site_decls ~req =
   Printf.sprintf
-{|#lang tesl
-module %s exposing []
+{|module %s exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbWrite]
 import Tesl.Json exposing [stringCodec]
@@ -450,7 +447,6 @@ let tool_cap_pos =
 let test_N4_handler_no_cap () =
   should_fail "handler 'h' uses \\[aiProvider\\] but does not declare the required capabilities"
     {|
-#lang tesl
 module AiCtrlH exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Agent exposing [aiProvider, Agent, mockProvider, ask]
@@ -462,7 +458,6 @@ handler h(prompt: String) -> String requires [] =
 let test_N4_fn_unrelated_cap () =
   should_fail "fn 'f' uses privileged operations and callees requiring \\[aiProvider\\] but does not declare them"
     {|
-#lang tesl
 module AiCtrlF exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead]
@@ -475,7 +470,6 @@ fn f(prompt: String) -> String requires [dbRead] =
 let test_N4_custom_nonimplying_cap () =
   should_fail "handler 'h' uses \\[aiProvider\\] but does not declare the required capabilities"
     {|
-#lang tesl
 module AiCtrlN exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead]
@@ -489,7 +483,6 @@ handler h(prompt: String) -> String requires [logger] =
 let test_P4_direct_aiProvider () =
   should_pass
     {|
-#lang tesl
 module AiCtrlPos exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Agent exposing [aiProvider, Agent, mockProvider, ask]
@@ -505,7 +498,6 @@ let test_P4_pure_constructors_need_no_cap () =
      provider compiles with no requires. *)
   should_pass
     {|
-#lang tesl
 module AiPureCtor exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Agent exposing [aiProvider, Agent, LlmProvider, mockProvider]
@@ -524,8 +516,7 @@ let to_cases lst = List.map (fun (n, f) -> test_case n `Quick f) lst
    compiles.  Also covers the const-bound (`name = Agent { … }`) agent form, whose
    tool list previously escaped agent-tool validation entirely. *)
 let test_issue24_partial_astool_rejected () =
-  should_fail "asTool` supports only a bare function reference" {|#lang tesl
-module Issue24Partial exposing [demoAgent]
+  should_fail "asTool` supports only a bare function reference" {|module Issue24Partial exposing [demoAgent]
 import Tesl.Prelude exposing [Bool(..), Int, List, String, Unit]
 import Tesl.Agent exposing [Agent, asTool, mockProvider]
 fn tool2(a: String, b: String) -> String =
@@ -539,8 +530,7 @@ demoAgent = Agent {
 |}
 
 let test_issue24_bare_astool_ok () =
-  should_pass {|#lang tesl
-module Issue24Bare exposing [demoAgent]
+  should_pass {|module Issue24Bare exposing [demoAgent]
 import Tesl.Prelude exposing [Bool(..), Int, List, String, Unit]
 import Tesl.Agent exposing [Agent, asTool, mockProvider]
 fn tool2(a: String, b: String) -> String =
@@ -562,8 +552,7 @@ demoAgent = Agent {
    — passes `tesl test` (the test's `requires` fills ambient), fails live.
    The emitter now wraps the dispatch in `(with-capabilities (<caps>) …)`;
    a capability-free tool fn keeps the bare `(apply fn _decoded)` form. *)
-let issue30_delegation_src = {|#lang tesl
-module Issue30Delegation exposing [fmtLabel, plainTool, stampTool]
+let issue30_delegation_src = {|module Issue30Delegation exposing [fmtLabel, plainTool, stampTool]
 
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.Time exposing [PosixMillis, Time.secondsToPosix, formatTime, time]

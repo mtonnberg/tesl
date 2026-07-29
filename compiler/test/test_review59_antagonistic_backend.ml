@@ -90,8 +90,7 @@ let should_pass src =
     let code, out = run_compiler ["--check"; path] in
     if code <> 0 then failf "expected compilation success, got:\n%s" out)
 
-let base_header = {|#lang tesl
-module BackendTest exposing []
+let base_header = {|module BackendTest exposing []
 
 import Tesl.Prelude exposing [String, List]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -221,8 +220,7 @@ handler goodPost(roomId: String ::: ValidRoomId roomId)
 
 (* ── R59B_DW — deadWorker capability checking ─────────────────────────── *)
 
-let base_dead = {|#lang tesl
-module BackendDeadTest exposing []
+let base_dead = {|module BackendDeadTest exposing []
 
 import Tesl.Prelude exposing [String]
 import Tesl.Queue exposing [queueRead, pubsub, FromQueue, FromDeadQueue, Queue, Job, QueueRetryStrategy, Exponential]

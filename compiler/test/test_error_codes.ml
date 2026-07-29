@@ -211,8 +211,7 @@ let () =
      picked from the word "database" in the user's description. *)
   let hijack_src =
     String.concat "\n"
-      [ "#lang tesl";
-        "module Designb5AnchorTest exposing []";
+      [ "module Designb5AnchorTest exposing []";
         "";
         "api-test \"save to database and reload\" for MissingServer {";
         "  let resp = get \"/\"";

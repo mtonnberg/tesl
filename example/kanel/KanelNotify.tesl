@@ -1,4 +1,3 @@
-#lang tesl
 # ─── Kanel — Background notification worker functions ──────────────────────
 #
 # Defines the worker and dead-letter worker functions for email notifications.

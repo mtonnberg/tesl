@@ -22,7 +22,7 @@
 # Build context layout `tesl build` MUST stage before building (identical to
 # the app-only image, PLUS the entrypoint script):
 #   <context>/
-#     collections/tesl/{dsl,tesl,lang}/   (copies of repo dsl/ tesl/ lang/)
+#     collections/tesl/{dsl,tesl}/   (copies of repo dsl/ tesl//)
 #     __APP_RKT__                          (output of `tesl compile`)
 #     <any dependency .rkt>                (compiled imports)
 #     entrypoint.sh                        (from entrypoint.sh.tmpl, substituted)
@@ -53,11 +53,10 @@ ENV PLTCOLLECTS="/usr/share/racket/collects:${TESL_COLLECTIONS}"
 
 WORKDIR /opt/tesl/app
 
-# Runtime collections (require tesl/dsl/… tesl/tesl/… tesl/lang/…).
+# Runtime collections (require tesl/dsl/… tesl/tesl/…).
 COPY collections/ ${TESL_COLLECTIONS}/
 RUN raco make ${TESL_COLLECTIONS}/tesl/dsl/*.rkt \
-               ${TESL_COLLECTIONS}/tesl/tesl/*.rkt \
-               ${TESL_COLLECTIONS}/tesl/lang/*.rkt 2>/dev/null || true
+               ${TESL_COLLECTIONS}/tesl/tesl/*.rkt 2>/dev/null || true
 
 # Compiled application (+ any compiled dependency .rkt files).
 COPY __APP_RKT__ /opt/tesl/app/__APP_RKT__

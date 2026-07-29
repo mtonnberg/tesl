@@ -105,7 +105,6 @@ let should_fail pat src =
    `n` carries no `Positive` proof, so it stays rejected. *)
 let test_a6_spelling_forgery_still_rejected () =
   should_fail "cannot declare a proof return type" {|
-#lang tesl
 module A6ForgeSpelling exposing [forge]
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
@@ -122,7 +121,6 @@ fn forge(raw: Int) -> n: Int ::: Positive n =
    not match the declared `IsPositive`, so it stays rejected. *)
 let test_a6_attachfact_unrelated_still_rejected () =
   should_fail "cannot declare a proof return type" {|
-#lang tesl
 module A6ForgeAttach exposing [forge]
 import Tesl.Prelude exposing [Int, Fact, attachFact]
 fact Whatever (n: Int)
@@ -144,7 +142,6 @@ fn forge(x: Int) -> y: Int ::: IsPositive y =
    the block would make this COMPILE — the regression guard. *)
 let test_a6_unnamed_proof_return_still_rejected () =
   should_fail "proof-carrying return type must name its binding" {|
-#lang tesl
 module A6Unnamed exposing [f]
 import Tesl.Prelude exposing [Int, Fact, attachFact]
 fact Positive (n: Int)
@@ -163,7 +160,6 @@ fn f(n: Int) -> Int ::: Positive n =
    of the checker gate would over-reject — the fix relies on V001 instead. *)
 let test_a6_named_body_introduced_proof_compiles () =
   should_pass {|
-#lang tesl
 module A6NamedOk exposing [good]
 import Tesl.Prelude exposing [Int, Fact, attachFact]
 fact IsPositive (n: Int)
@@ -183,7 +179,6 @@ fn good(x: Int) -> y: Int ::: IsPositive y =
    The critical over-rejection guard. *)
 let test_a6_field_access_passthrough_compiles () =
   should_pass {|
-#lang tesl
 module A6Field exposing [getAmount]
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)

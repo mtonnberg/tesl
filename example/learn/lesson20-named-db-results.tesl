@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson20NamedDbResults exposing [
   Task,
   fetchTask,

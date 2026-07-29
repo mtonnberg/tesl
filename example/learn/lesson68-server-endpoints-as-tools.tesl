@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson68ServerEndpointsAsTools exposing [
   NotesServer,
   User,

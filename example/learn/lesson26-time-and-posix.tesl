@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson26TimeAndPosix exposing [
   TimedDatabase,
   TimedServer,

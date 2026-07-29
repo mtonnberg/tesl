@@ -19,6 +19,8 @@
       tesl --deps <file>         list all transitively imported local .tesl files
       tesl --semantic-json <file>  emit full module semantic snapshot as JSON
       tesl --mutate <file> [test-file ...]  run mutation testing
+      tesl doc [name|Tesl.Module]  show a builtin's Tesl signature / a module's surface
+      tesl --doc-json <name>     same, as JSON (editor/agent integration)
       tesl help [manual] [section]  show help and documentation
 *)
 
@@ -49,6 +51,13 @@ let usage = {|Usage:
   tesl debug-inspect <file> --break-at SPEC [...]  run to a breakpoint (headless) and dump paused runtime state as JSON
   tesl --mutate <file> [test-file ...]  run mutation testing; optionally merge tests from extra files
   tesl --exe <file> [--out <path>]  build a standalone executable via `raco exe` (needs raco on PATH)
+
+Documentation:
+  tesl doc                     list all stdlib modules (the builtin surface)
+  tesl doc <name>              show a builtin's Tesl signature + doc
+                               (e.g. tesl doc Email.send, tesl doc SmtpConfig)
+  tesl doc Tesl.<Module>       show a stdlib module's full surface
+  tesl --doc-json <name>       same, as JSON (editor/agent integration)
 
 Help:
   tesl help                    show this help message
@@ -748,6 +757,81 @@ let handle_help args =
     Printf.eprintf "Error: Unknown help command.\n\n";
     display_help ()
 
+(* ── `tesl doc` — builtin type/function transparency ─────────────────────────
+   Renders the Tesl-syntax signature of any builtin name (function, type,
+   config block, capability, syntax form) from the drift-proof catalog in
+   Stdlib_docs (roadmap: improved_transparency_for_built_in_types). *)
+
+let doc_kind_order (en : Stdlib_docs.entry) =
+  match en.kind with
+  | Stdlib_docs.KType _ | Stdlib_docs.KFamily _ -> 0
+  | Stdlib_docs.KConfig -> 1
+  | Stdlib_docs.KFact _ -> 2
+  | Stdlib_docs.KCapability -> 3
+  | Stdlib_docs.KSyntax _ -> 4
+  | Stdlib_docs.KFunction _ | Stdlib_docs.KValue -> 5
+
+let print_doc_entries (entries : Stdlib_docs.entry list) =
+  List.iteri (fun i en ->
+    if i > 0 then print_newline ();
+    print_endline (Stdlib_docs.render_entry_text en))
+    entries
+
+let handle_doc ~json rest =
+  let emit_json_list entries =
+    Printf.printf "{\"version\":1,\"entries\":[%s]}\n"
+      (String.concat "," (List.map Stdlib_docs.render_entry_json entries))
+  in
+  match rest with
+  | [] when json ->
+    Printf.eprintf "Usage: tesl --doc-json <name|Tesl.Module>\n"; exit 1
+  | [] ->
+    print_endline "Tesl builtin documentation — usage:";
+    print_endline "  tesl doc <name>          e.g. tesl doc Email.send | tesl doc SmtpConfig";
+    print_endline "  tesl doc Tesl.<Module>   full surface of a stdlib module";
+    print_endline "";
+    print_endline "Stdlib modules:";
+    List.iter (fun m ->
+      Printf.printf "  %-18s (%d entries)\n" m
+        (List.length (Stdlib_docs.module_surface m)))
+      Stdlib_docs.modules;
+    exit 0
+  | [q] when List.mem q Stdlib_docs.modules ->
+    let entries =
+      List.stable_sort (fun a b -> compare (doc_kind_order a) (doc_kind_order b))
+        (Stdlib_docs.module_surface q)
+    in
+    if json then emit_json_list entries
+    else begin
+      Printf.printf "%s — %d entries\n\n" q (List.length entries);
+      print_doc_entries entries
+    end;
+    exit 0
+  | [q] ->
+    (match Stdlib_docs.lookup q with
+     | [] ->
+       let sugg = Stdlib_docs.suggestions q in
+       if json then begin
+         Printf.printf "{\"version\":1,\"entries\":[],\"error\":\"unknown name\",\"suggestions\":[%s]}\n"
+           (String.concat ","
+              (List.map (fun s -> "\"" ^ s ^ "\"") sugg));
+         exit 1
+       end else begin
+         Printf.eprintf "tesl doc: unknown builtin name '%s'\n" q;
+         (match sugg with
+          | [] -> ()
+          | _ ->
+            Printf.eprintf "Did you mean: %s\n" (String.concat ", " sugg));
+         Printf.eprintf "Run `tesl doc` for the module index.\n";
+         exit 1
+       end
+     | entries ->
+       if json then emit_json_list entries else print_doc_entries entries;
+       exit 0)
+  | _ ->
+    Printf.eprintf "Usage: tesl doc <name|Tesl.Module>   (one name at a time)\n";
+    exit 1
+
 (** LSP host indirection: the editor validates an unsaved buffer by writing its
     text to a transient copy (now in a system temp dir, so the buffer never
     touches the project tree) and invoking a query command on that copy.  But
@@ -879,6 +963,10 @@ let () =
     Printf.eprintf "Usage: tesl explain <CODE>   (e.g. tesl explain V001)\n";
     Printf.eprintf "Run `tesl help codes` for the list of all diagnostic codes.\n";
     exit 1
+  (* `tesl doc <name>` — Tesl-syntax signature of any builtin name; `tesl doc`
+     lists the stdlib modules; `--doc-json` is the machine form (LSP hover). *)
+  | "doc" :: rest -> handle_doc ~json:false rest
+  | "--doc-json" :: rest -> handle_doc ~json:true rest
   | [] -> print_string usage; exit 1
 
   | ("--check" :: filenames) when filenames <> [] ->

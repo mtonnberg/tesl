@@ -1320,11 +1320,11 @@ let check_cookies_field_access (decls : top_decl list) : validation_error list =
 let build_local_cap_map (decls : top_decl list) : (string * string list) list =
   List.filter_map (function
     | DCapability c -> Some (c.name, c.implies)
-    (* Cache declarations implicitly define a "cacheCap <Name>" capability *)
+    (* Cache declarations implicitly define a "cacheCap <Name>" capability.
+       Email declarations do NOT grant "emailCap" — import-gated via
+       `import Tesl.Email exposing [emailCap]` (see build_cap_map in
+       proof_checker.ml). *)
     | DCache (c : Ast.cache_form) -> Some ("cacheCap " ^ c.name, [])
-    (* Email declarations implicitly define the "emailCap" capability (renamed
-       from "email"; see build_cap_map in proof_checker.ml). *)
-    | DEmail _ -> Some ("emailCap", [])
     | _ -> None
   ) decls
 

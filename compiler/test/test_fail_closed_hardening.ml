@@ -62,8 +62,7 @@ let assert_no_error_containing src substr =
 
 (* ── 1. Return-proof subjects: every proof-bearing return form ───────────── *)
 
-let subj_preamble = {|#lang tesl
-module Foo exposing []
+let subj_preamble = {|module Foo exposing []
 import Tesl.Prelude exposing [Int, Bool(..), List]
 import Tesl.Maybe exposing [Maybe(..)]
 fact Positive (n: Int)
@@ -115,8 +114,7 @@ let t_subject_exists_body_local_valid () =
      `let`-bound, not a parameter) — the ProofSuite-H PosH11 pattern.  The
      subject check must stay quiet; discharge owns the body's validity. *)
   assert_no_error_containing
-    {|#lang tesl
-module Foo exposing []
+    {|module Foo exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..)]
 import Tesl.Id exposing [generatePrefixedId]
 import Tesl.Random exposing [random]
@@ -156,8 +154,7 @@ let t_ok_in_case_guard () =
 
 (* ── 3. check_gw: ghost witness nested in a non-explicit position ────────── *)
 
-let gw_preamble = {|#lang tesl
-module Foo exposing []
+let gw_preamble = {|module Foo exposing []
 import Tesl.Prelude exposing [Int, Bool(..), List, Fact, detachFact]
 fact Pos (n: Int)
 fact Cross (a: Int, b: Int)
@@ -190,8 +187,7 @@ let t_ghost_witness_nested_in_list_valid () =
 
 let t_test_requires_undeclared_cap () =
   assert_proof_error
-    {|#lang tesl
-module Foo exposing []
+    {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn double(n: Int) -> Int =
   n * 2
@@ -203,8 +199,7 @@ test "bogus cap" requires [totallyBogusCap] {
 
 let t_test_requires_declared_cap_ok () =
   assert_no_error_containing
-    {|#lang tesl
-module Foo exposing []
+    {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 capability myCap
 fn double(n: Int) -> Int =
@@ -221,8 +216,7 @@ test "declared cap" requires [myCap] {
    capability composes like dbRead now that it has a stdlib provider row. *)
 let t_emailcap_library_requires_ok () =
   assert_no_error_containing
-    {|#lang tesl
-module ELib exposing [helper]
+    {|module ELib exposing [helper]
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Email exposing [emailCap]
 fn helper(msg: String) -> Int requires [emailCap] =
@@ -233,8 +227,7 @@ fn helper(msg: String) -> Int requires [emailCap] =
 (* A domain capability may `implies emailCap` when Tesl.Email is imported. *)
 let t_emailcap_implies_ok () =
   assert_no_error_containing
-    {|#lang tesl
-module EImpl exposing [notify]
+    {|module EImpl exposing [notify]
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Email exposing [emailCap]
 capability notifier implies emailCap
@@ -248,13 +241,45 @@ fn notify(msg: String) -> Int requires [notifier] =
    ambient grant. *)
 let t_emailcap_no_import_rejected () =
   assert_proof_error
-    {|#lang tesl
-module ENone exposing [helper]
+    {|module ENone exposing [helper]
 import Tesl.Prelude exposing [Int, String]
 fn helper(msg: String) -> Int requires [emailCap] =
   1
 |}
     "requires undeclared capability 'emailCap'"
+
+(* An `email` block does NOT grant emailCap — the capability is import-gated
+   (`import Tesl.Email exposing [emailCap]`), like `time` from Tesl.Time
+   (roadmap: ambient_email_cap).  Declaring the block and requiring the cap
+   without the exposing entry must still be rejected, with the exact import
+   named in the guidance. *)
+let t_emailcap_email_block_no_import_rejected () =
+  let src =
+    {|module EBlock exposing [helper]
+import Tesl.Prelude exposing [Int, String, Bool(..), Unit]
+import Tesl.Database exposing [Database, DatabaseBackend, Memory]
+import Tesl.Email exposing [Email, SmtpConfig]
+import Tesl.Env exposing [env]
+database EDb = Database {
+  schema: "public"
+  entities: []
+  backend: Memory
+}
+email EMail = Email {
+  database: EDb
+  smtp: SmtpConfig {
+    host: env "SMTP_HOST"
+    port: 587
+    username: env "SMTP_USER"
+    password: env "SMTP_PASS"
+    tls: true
+  }
+}
+fn helper(msg: String) -> Int requires [emailCap] =
+  1
+|} in
+  assert_proof_error src "requires undeclared capability 'emailCap'";
+  assert_proof_error src "import Tesl.Email exposing [emailCap]"
 
 (* ── Capability-table drift seam (email_capability_not_composable) ───────────
 
@@ -334,6 +359,8 @@ let () =
             t_emailcap_implies_ok;
           Alcotest.test_case "emailCap with no import still rejected" `Quick
             t_emailcap_no_import_rejected;
+          Alcotest.test_case "email block alone grants nothing (import-gated)" `Quick
+            t_emailcap_email_block_no_import_rejected;
           Alcotest.test_case "every builtin capability has a stdlib provider" `Quick
             t_builtin_caps_all_have_provider;
           Alcotest.test_case "every stdlib-provided cap is a known builtin" `Quick

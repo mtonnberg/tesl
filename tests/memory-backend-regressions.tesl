@@ -1,4 +1,3 @@
-#lang tesl
 module MemoryBackendRegressions exposing []
 
 # Memory-backend parity regressions (2026-07 multi-module audit — all four

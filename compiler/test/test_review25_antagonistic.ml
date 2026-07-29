@@ -94,7 +94,7 @@ let should_fail pattern src =
   check bool (Printf.sprintf "should fail with pattern: %s" pattern) true found
 
 let prelude =
-  "#lang tesl\nmodule T exposing []\n\
+  "module T exposing []\n\
    import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n"
 

@@ -3,7 +3,6 @@
   "name": "Tesl",
   "scopeName": "source.tesl",
   "patterns": [
-    { "include": "#lang-line" },
     { "include": "#comment" },
     { "include": "#string" },
     { "include": "#number" },
@@ -28,10 +27,6 @@
     { "include": "#identifier" }
   ],
   "repository": {
-    "lang-line": {
-      "match": "^#lang\\s+tesl",
-      "name": "keyword.control.directive.tesl"
-    },
     "comment": {
       "match": "#.*$",
       "name": "comment.line.number-sign.tesl"

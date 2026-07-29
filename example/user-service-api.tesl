@@ -1,4 +1,3 @@
-#lang tesl
 module UserServiceApi exposing [UserServer]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -62,8 +61,8 @@ import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify]
 import Tesl.Cache exposing [Cache]
 
 # 4. Email: outbox-pattern email sending.
-#    `email` can appear directly in `requires [emailCap]` after declaring an email block.
-#    (Email block declared below after the database.)
+#    `emailCap` is import-gated (exposed above from Tesl.Email); it can then
+#    appear directly in `requires [emailCap]`. (Email block declared below.)
 
 # 5. HttpClient: outbound HTTP calls for webhook notification.
 #    `httpClient` must be wrapped in a user-defined capability.
@@ -74,7 +73,7 @@ import Tesl.Database exposing [
   PostgresConfig,
   TcpConnection,
 ]
-import Tesl.Email exposing [Email, SmtpConfig]
+import Tesl.Email exposing [Email, SmtpConfig, emailCap]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CAPABILITIES

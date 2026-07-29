@@ -132,7 +132,6 @@ Compiles a Tesl source string and returns a path to the compiled `.rkt` file:
 (define my-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module MyTest exposing [myFn]\n"
     "import Tesl.Prelude exposing [Int, String]\n"
     "fn myFn(s: String) -> Int =\n"

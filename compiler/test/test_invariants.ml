@@ -70,8 +70,7 @@ let registry : row list = [
   { section = "7.1";
     title = "Fresh hidden subjects for ordinary values";
     coverage = Exercise {
-      program = {|#lang tesl
-module Inv71FreshSubject exposing [attack]
+      program = {|module Inv71FreshSubject exposing [attack]
 import Tesl.Prelude exposing [Int, Fact, attachFact]
 fact Sanitized (n: Int)
 establish san(n: Int) -> Fact (Sanitized n) = Sanitized n
@@ -90,8 +89,7 @@ fn attack() -> Int =
   { section = "7.2";
     title = "Users may not fabricate or replay hidden subjects directly";
     coverage = Exercise {
-      program = {|#lang tesl
-module Inv72HiddenName exposing [attack]
+      program = {|module Inv72HiddenName exposing [attack]
 import Tesl.Prelude exposing [Int, Fact, attachFact]
 fact Sanitized (n: Int)
 establish san(n: Int) -> Fact (Sanitized n) = Sanitized n

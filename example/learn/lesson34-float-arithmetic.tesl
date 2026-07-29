@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson34FloatArithmetic exposing [
   circleArea,
   hypotenuse,

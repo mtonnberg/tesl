@@ -65,7 +65,7 @@ let should_fail pattern src =
 (* ── P0-1: FromDb provenance forgery ─────────────────────────────────────── *)
 
 let entity_task =
-  "#lang tesl\nmodule T exposing []\n\
+  "module T exposing []\n\
    import Tesl.Prelude exposing [String]\n\
    import Tesl.DB exposing [dbRead]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n\
@@ -107,7 +107,7 @@ let test_p0_1_fromdb_named_pack_accepted () =
 (* ── P0-2: requires [] capability suppression ────────────────────────────── *)
 
 let entity_order =
-  "#lang tesl\nmodule T exposing []\n\
+  "module T exposing []\n\
    import Tesl.Prelude exposing [String]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n\
    entity Order table \"orders\" primaryKey id {\n\
@@ -131,7 +131,7 @@ let test_p0_2_cap_suppression_rejected () =
 (* Same real delete, correctly declaring requires [dbWrite]: legit. *)
 let test_p0_2_cap_declared_accepted () =
   should_pass
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [String]\n\
      import Tesl.DB exposing [dbWrite]\n\
      entity Order table \"orders\" primaryKey id {\n\
@@ -148,14 +148,14 @@ let test_p0_2_cap_declared_accepted () =
    capability (this is the legitimate case the lexical fix must preserve). *)
 let test_p0_2_param_shadow_still_accepted () =
   should_pass
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [String]\n\
      fn pick(env: String) -> String requires [] = env\n"
 
 (* ── P0-3: auth privilege escalation ─────────────────────────────────────── *)
 
 let auth_header =
-  "#lang tesl\nmodule T exposing []\n\
+  "module T exposing []\n\
    import Tesl.Prelude exposing [Bool(..), Int, String, Unit]\n\
    import Tesl.Json exposing [intCodec, stringCodec]\n\
    import Tesl.Http exposing [HttpRequest]\n\
@@ -224,7 +224,7 @@ let test_p0_3_auth_subset_accepted () =
    Must be rejected (the auth-wiring check must run for named-pack auth fns). *)
 let test_p0_3_auth_named_pack_drop_rejected () =
   should_fail "no auth-proof parameter\\|requires auth"
-    ("#lang tesl\nmodule T exposing []\n\
+    ("module T exposing []\n\
       import Tesl.Prelude exposing [Bool(..), Int, String, Unit]\n\
       import Tesl.Json exposing [intCodec, stringCodec]\n\
       import Tesl.Http exposing [HttpRequest]\n\

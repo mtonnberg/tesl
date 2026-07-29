@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson60Email exposing [
   sendWelcomeEmail,
   sendPasswordReset,
@@ -53,7 +52,7 @@ import Tesl.Database exposing [
   TcpConnection,
   SocketConnection,
 ]
-import Tesl.Email exposing [Email, SmtpConfig]
+import Tesl.Email exposing [Email, SmtpConfig, emailCap]
 
 # ── Database ──────────────────────────────────────────────────────────────────
 #
@@ -193,12 +192,13 @@ fn sendHtmlNewsletter(addr: String, htmlContent: String) -> Unit
 # then enqueue to queue). Tesl's outbox uses only your existing PostgreSQL
 # database. No additional infrastructure to deploy or monitor.
 #
-# WHY `email` CAPABILITY (NOT NAME-SPECIFIC LIKE cache)?
+# WHY `emailCap` CAPABILITY (NOT NAME-SPECIFIC LIKE cache)?
 #
-# The email capability is `email` — shared across all email configurations.
-# Rationale: most apps have one email provider; name-specific capabilities
-# would add friction for the common case. If you need to restrict access to
-# a specific email config, use separate capability declarations:
+# The email capability is `emailCap` — shared across all email configurations,
+# and import-gated like `time`: it is only available through
+# `import Tesl.Email exposing [emailCap]` (an `email` block alone grants
+# nothing). If you need to restrict access to a specific email config, use
+# separate capability declarations:
 #   capability marketingEmailCap implies emailCap
 #   capability transactionalEmailCap implies emailCap
 #

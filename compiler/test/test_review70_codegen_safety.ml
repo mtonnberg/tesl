@@ -97,7 +97,6 @@ let should_fail pat src =
 
 let test_SQL01_database_select_compiles () =
   should_pass {|
-#lang tesl
 module SQL01 exposing []
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.DB exposing [dbRead]
@@ -119,7 +118,6 @@ fn getItems() -> List Item requires [dbRead] =
 
 let test_SQL02_database_insert_compiles () =
   should_pass {|
-#lang tesl
 module SQL02 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbWrite, dbRead]
@@ -142,7 +140,6 @@ fn findWidget(label: String) -> Maybe Widget requires [dbRead] =
 
 let test_SQL03_database_select_with_where_compiles () =
   should_pass {|
-#lang tesl
 module SQL03 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe]
@@ -165,7 +162,6 @@ fn getTask(taskId: Int) -> Maybe Task requires [dbRead] =
 
 let test_SQL04_database_update_compiles () =
   should_pass {|
-#lang tesl
 module SQL04 exposing []
 import Tesl.Prelude exposing [Int, String, Unit]
 import Tesl.DB exposing [dbWrite]
@@ -190,7 +186,6 @@ fn updateRecord(recordId: Int, newValue: String) -> Unit requires [dbWrite] =
 let test_SQL05_non_sql_app_expression_compiles () =
   (* Ensure general function application still works after SQL guard refactor *)
   should_pass {|
-#lang tesl
 module SQL05 exposing []
 import Tesl.Prelude exposing [Int]
 fn add(a: Int, b: Int) -> Int = a + b
@@ -200,7 +195,6 @@ fn triple(n: Int) -> Int = add (add n n) n
 
 let test_SQL06_select_with_order_compiles () =
   should_pass {|
-#lang tesl
 module SQL06 exposing []
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.DB exposing [dbRead]
@@ -228,7 +222,6 @@ fn getTopPosts() -> List Post requires [dbRead] =
 
 let test_ARITH01_basic_multiplication_on_proof_param () =
   should_pass {|
-#lang tesl
 module Arith01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -245,7 +238,6 @@ fn test(raw: Int) -> Int =
 
 let test_ARITH02_addition_of_two_proof_params () =
   should_pass {|
-#lang tesl
 module Arith02 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -264,7 +256,6 @@ fn test(x: Int, y: Int) -> Int =
 let test_ARITH03_comparison_in_if_condition () =
   (* Comparisons on proof-carrying values in if conditions *)
   should_pass {|
-#lang tesl
 module Arith03 exposing []
 import Tesl.Prelude exposing [Int, String]
 fact ValidPort (n: Int)
@@ -285,7 +276,6 @@ fn test(raw: Int) -> String =
 
 let test_ARITH04_string_interpolation_with_proof_value () =
   should_pass {|
-#lang tesl
 module Arith04 exposing []
 import Tesl.Prelude exposing [Int, String]
 fact IsPositive (n: Int)
@@ -303,7 +293,6 @@ fn test(raw: Int) -> String =
 let test_ARITH05_chained_let_arithmetic () =
   (* Let bindings used in subsequent arithmetic expressions *)
   should_pass {|
-#lang tesl
 module Arith05 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -322,7 +311,6 @@ fn test(raw: Int) -> Int =
 
 let test_ARITH06_compound_expression_multi_param () =
   should_pass {|
-#lang tesl
 module Arith06 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -347,7 +335,6 @@ fn test(x: Int, y: Int) -> Int =
 
 let test_ARITH07_proof_value_in_boolean_and () =
   should_pass {|
-#lang tesl
 module Arith07 exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 fact InRange (n: Int)
@@ -365,7 +352,6 @@ fn test(raw: Int) -> Bool =
 
 let test_ARITH08_subtraction_on_proof_param () =
   should_pass {|
-#lang tesl
 module Arith08 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -383,7 +369,6 @@ fn test(raw: Int) -> Int =
 let test_ARITH09_proof_value_in_case_arm () =
   (* Proof-carrying value extracted in case arm and used in arithmetic *)
   should_pass {|
-#lang tesl
 module Arith09 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -403,7 +388,6 @@ fn processOpt(m: Maybe Int) -> Int =
 
 let test_ARITH10_nested_arithmetic_deep () =
   should_pass {|
-#lang tesl
 module Arith10 exposing []
 import Tesl.Prelude exposing [Int]
 fact P (n: Int)
@@ -426,7 +410,6 @@ fn test(x: Int, y: Int, z: Int) -> Int =
 
 let test_SAFE01_division_without_proof_rejected () =
   should_fail "IsNonZero\\|division.*proof\\|nonZero\\|proof.*division" {|
-#lang tesl
 module Safe01 exposing []
 import Tesl.Prelude exposing [Int]
 fn badDiv(a: Int, b: Int) -> Int = a / b
@@ -434,7 +417,6 @@ fn badDiv(a: Int, b: Int) -> Int = a / b
 
 let test_SAFE02_modulo_without_proof_rejected () =
   should_fail "IsNonZero\\|division.*proof\\|nonZero\\|proof.*modulo\\|modulo.*proof" {|
-#lang tesl
 module Safe02 exposing []
 import Tesl.Prelude exposing [Int]
 fn badMod(a: Int, b: Int) -> Int = a % b
@@ -442,7 +424,6 @@ fn badMod(a: Int, b: Int) -> Int = a % b
 
 let test_SAFE03_division_with_nonzero_proof_accepted () =
   should_pass {|
-#lang tesl
 module Safe03 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [Int.divide, Int.nonZero]
@@ -453,7 +434,6 @@ fn safeDivide(a: Int, b: Int) -> Int =
 
 let test_SAFE04_int_divide_stdlib_without_proof_rejected () =
   should_fail "IsNonZero\\|nonZero\\|proof.*divide\\|divide.*proof" {|
-#lang tesl
 module Safe04 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [Int.divide]

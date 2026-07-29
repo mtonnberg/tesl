@@ -98,7 +98,6 @@ let should_fail pat src =
 let test_CT01_type_mismatch_is_compile_error () =
   (* Claim: type system catches wrong return types *)
   should_fail "type.*mismatch\\|expected.*String\\|Int.*String\\|String.*Int" {|
-#lang tesl
 module CT01 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn bad(n: Int) -> String = n
@@ -106,7 +105,6 @@ fn bad(n: Int) -> String = n
 
 let test_CT02_function_with_correct_types_accepted () =
   should_pass {|
-#lang tesl
 module CT02 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn double(n: Int) -> Int = n * 2
@@ -115,7 +113,6 @@ fn greet(name: String) -> String = "Hello, ${name}!"
 
 let test_CT03_wrong_argument_type_rejected () =
   should_fail "type.*mismatch\\|expected.*Int\\|String.*Int" {|
-#lang tesl
 module CT03 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn double(n: Int) -> Int = n * 2
@@ -124,7 +121,6 @@ fn bad() -> Int = double "not a number"
 
 let test_CT04_adt_pattern_match_accepted () =
   should_pass {|
-#lang tesl
 module CT04 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -138,7 +134,6 @@ fn safeMul(a: Int, b: Int) -> Maybe Int =
 let test_CT05_missing_case_arm_rejected () =
   (* Claim: exhaustiveness checking works *)
   should_fail "non-exhaustive\\|missing.*Nothing\\|missing.*constructor" {|
-#lang tesl
 module CT05 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -149,7 +144,6 @@ fn unsafe(m: Maybe Int) -> Int =
 
 let test_CT06_all_case_arms_covered_accepted () =
   should_pass {|
-#lang tesl
 module CT06 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -164,7 +158,6 @@ fn safe(m: Maybe Int) -> Int =
 let test_PR01_check_produces_proof_accepted () =
   (* Claim A: check functions produce proof-carrying values *)
   should_pass {|
-#lang tesl
 module PR01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -182,7 +175,6 @@ fn test() -> Int =
 let test_PR02_unvalidated_value_where_proof_required_rejected () =
   (* Claim D: "forgetting to validate is a compile error" *)
   should_fail "proof\\|not.*satisfy\\|IsPositive\\|does not.*statically" {|
-#lang tesl
 module PR02 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -192,7 +184,6 @@ fn badCaller(rawN: Int) -> Int = requiresPositive rawN
 
 let test_PR03_check_failure_path_compiles () =
   should_pass {|
-#lang tesl
 module PR03 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.length]
@@ -207,7 +198,6 @@ check checkNonEmpty(s: String) -> s: String ::: NonEmpty s =
 let test_PR04_fact_declaration_required_before_use () =
   (* You must declare a fact before using it as a proof predicate *)
   should_fail "not in scope\\|unknown.*proof\\|IsValidated\\|type.*not" {|
-#lang tesl
 module PR04 exposing []
 import Tesl.Prelude exposing [Int]
 check checkVal(n: Int) -> n: Int ::: IsValidated n =
@@ -220,7 +210,6 @@ check checkVal(n: Int) -> n: Int ::: IsValidated n =
 let test_PR05_ok_without_proof_annotation_rejected () =
   (* check must return value with proof — missing ::: is a syntax or type error *)
   should_fail "proof\\|return.*proof\\|ok.*proof\\|annotation\\|expected.*:::" {|
-#lang tesl
 module PR05 exposing []
 import Tesl.Prelude exposing [Int]
 fact Validated (n: Int)
@@ -234,7 +223,6 @@ check badCheck(n: Int) -> n: Int ::: Validated n =
 let test_PR06_establish_produces_unconditional_proof () =
   (* establish is for unconditional proof minting at a trust boundary *)
   should_pass {|
-#lang tesl
 module PR06 exposing []
 import Tesl.Prelude exposing [Int]
 fact InRange (lo: Int) (hi: Int) (n: Int)
@@ -249,7 +237,6 @@ fn test(raw: Int) -> Int =
 let test_PR07_auth_function_structure_accepted () =
   (* auth is a special proof producer for HTTP requests *)
   should_pass {|
-#lang tesl
 module PR07 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -265,7 +252,6 @@ auth simpleAuth(req: HttpRequest) -> user: String ::: Authenticated user =
 let test_PR08_check_return_type_must_match_binding () =
   (* The binding name in the return type must match the parameter *)
   should_fail "type.*mismatch\\|return.*type\\|proof\\|mismatch" {|
-#lang tesl
 module PR08 exposing []
 import Tesl.Prelude exposing [Int, String]
 fact IsValid (s: String)
@@ -281,7 +267,6 @@ check badCheck(n: Int) -> n: Int ::: IsValid n =
 let test_PF01_proof_flows_from_check_to_requiring_fn () =
   (* Core claim A: proof carries from check to consumer *)
   should_pass {|
-#lang tesl
 module PF01 exposing []
 import Tesl.Prelude exposing [Int, String]
 fact ValidPort (port: Int)
@@ -299,7 +284,6 @@ fn start(rawPort: Int) -> String =
 let test_PF02_proof_required_but_not_present_is_error () =
   (* The compiler must reject calls missing the required proof *)
   should_fail "proof\\|does not.*statically\\|ValidPort\\|IsPositive" {|
-#lang tesl
 module PF02 exposing []
 import Tesl.Prelude exposing [Int, String]
 fact ValidPort (port: Int)
@@ -309,7 +293,6 @@ fn badStart(rawPort: Int) -> String = listen rawPort
 
 let test_PF03_proof_passes_through_intermediate_fn () =
   should_pass {|
-#lang tesl
 module PF03 exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
@@ -328,7 +311,6 @@ fn test(raw: Int) -> Int =
 let test_PF04_proof_not_transferable_to_different_value () =
   (* Proof on x cannot be used for y — subjects must match *)
   should_fail "proof\\|subject\\|does not.*statically\\|Positive" {|
-#lang tesl
 module PF04 exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
@@ -345,7 +327,6 @@ fn badForge(a: Int, b: Int) -> Int =
 
 let test_PF05_proof_in_record_field_accepted () =
   should_pass {|
-#lang tesl
 module PF05 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.contains]
@@ -363,7 +344,6 @@ fn getEmail(u: UserInput) -> String = u.email
 
 let test_PC01_conjunction_proof_accepted () =
   should_pass {|
-#lang tesl
 module PC01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -387,7 +367,6 @@ fn test(raw: Int) -> Int =
 
 let test_PC02_missing_half_of_conjunction_rejected () =
   should_fail "proof\\|does not.*statically\\|IsSmall\\|IsPositive.*&&" {|
-#lang tesl
 module PC02 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -405,7 +384,6 @@ fn test(raw: Int) -> Int =
 
 let test_PC03_forall_on_list_accepted () =
   should_pass {|
-#lang tesl
 module PC03 exposing []
 import Tesl.Prelude exposing [List, Int]
 import Tesl.List exposing [List.filterCheck, List.length]
@@ -422,7 +400,6 @@ fn countPositive(xs: List Int) -> Int =
 
 let test_PC04_detach_and_reattach_accepted () =
   should_pass {|
-#lang tesl
 module PC04 exposing []
 import Tesl.Prelude exposing [Int, Fact, detachFact, attachFact, forgetFact]
 fact Validated (n: Int)
@@ -440,7 +417,6 @@ fn roundtrip(n: Int) -> Int =
 
 let test_PC05_combine_compound_check_function () =
   should_pass {|
-#lang tesl
 module PC05 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -466,7 +442,6 @@ fn test(raw: Int) -> Int =
 let test_CP01_function_with_undeclared_capability_rejected () =
   (* Claim C: capabilities are explicit and compiler-enforced *)
   should_fail "undeclared capability\\|unknown.*capability\\|not.*declared" {|
-#lang tesl
 module CP01 exposing []
 import Tesl.Prelude exposing [Int]
 fn bad() -> Int requires [ghostCapability] = 42
@@ -474,7 +449,6 @@ fn bad() -> Int requires [ghostCapability] = 42
 
 let test_CP02_declared_capability_accepted () =
   should_pass {|
-#lang tesl
 module CP02 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead]
@@ -483,7 +457,6 @@ fn query() -> Int requires [dbRead] = 42
 
 let test_CP03_calling_fn_without_required_capability_rejected () =
   should_fail "capability\\|requires.*dbWrite\\|missing.*capability" {|
-#lang tesl
 module CP03 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbWrite]
@@ -493,7 +466,6 @@ fn noCapabilityFn() -> Int requires [] = write
 
 let test_CP04_capability_implication_chain_accepted () =
   should_pass {|
-#lang tesl
 module CP04 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -505,7 +477,6 @@ fn writesData() -> Int requires [writeCap] = 2
 
 let test_CP05_capability_cycle_rejected () =
   should_fail "cycle\\|circular\\|implies.*cycle" {|
-#lang tesl
 module CP05 exposing []
 capability capA implies capB
 capability capB implies capA
@@ -516,7 +487,6 @@ capability capB implies capA
 let test_AU01_auth_proof_required_in_handler () =
   (* Claim B: auth requirements visible in signatures — mismatch is detected *)
   should_fail "auth.*proof\\|endpoint.*requires.*auth\\|handler.*auth\\|no auth-proof" {|
-#lang tesl
 module AU01 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -538,7 +508,6 @@ server AU01Server for AU01Api { whoami = whoami }
 
 let test_AU02_auth_proof_in_handler_accepted () =
   should_pass {|
-#lang tesl
 module AU02 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -562,7 +531,6 @@ server AU02Server for AU02Api { whoami = whoami }
 let test_AU03_auth_without_proof_annotation_in_endpoint_rejected () =
   (* Claim D: auth without proof annotation is a compile error *)
   should_fail "proof annotation\\|auth.*proof\\|::: ProofPred" {|
-#lang tesl
 module AU03 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -578,7 +546,6 @@ api AU03Api {
 
 let test_AU04_public_endpoint_no_auth_accepted () =
   should_pass {|
-#lang tesl
 module AU04 exposing []
 import Tesl.Prelude exposing [String]
 api AU04Api { get "/health" -> String }
@@ -590,7 +557,6 @@ server AU04Server for AU04Api { health = health }
 
 let test_AP01_full_api_server_stack_accepted () =
   should_pass {|
-#lang tesl
 module AP01 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Json exposing [stringCodec]
@@ -608,7 +574,6 @@ server AP01Server for AP01Api { health = health getItem = getItem }
 
 let test_AP02_server_missing_endpoint_binding_rejected () =
   should_fail "missing.*binding\\|endpoint.*not.*bound\\|missing.*1" {|
-#lang tesl
 module AP02 exposing []
 import Tesl.Prelude exposing [String]
 api AP02Api {
@@ -621,7 +586,6 @@ server AP02Server for AP02Api { aHandler = aHandler }
 
 let test_AP03_endpoint_missing_return_type_rejected () =
   should_fail "missing return type\\|explicit.*TypeName\\|->.*TypeName" {|
-#lang tesl
 module AP03 exposing []
 import Tesl.Prelude exposing [String]
 api AP03Api { get "/health" }
@@ -630,7 +594,6 @@ api AP03Api { get "/health" }
 let test_AP04_server_binds_non_handler_function_rejected () =
   (* server blocks must point at `handler` declarations, not plain fn *)
   should_fail "not a handler\\|fn.*not.*handler\\|declared.*not.*handler" {|
-#lang tesl
 module AP04 exposing []
 import Tesl.Prelude exposing [String]
 api AP04Api { get "/ping" -> String }
@@ -642,7 +605,6 @@ server AP04Server for AP04Api { notAHandler = notAHandler }
 
 let test_SL01_list_operations_accepted () =
   should_pass {|
-#lang tesl
 module SL01 exposing []
 import Tesl.Prelude exposing [List, Int]
 import Tesl.List exposing [List.length, List.head, List.filter]
@@ -654,7 +616,6 @@ fn safeHead(xs: List Int) -> Maybe Int = List.head xs
 
 let test_SL02_string_operations_accepted () =
   should_pass {|
-#lang tesl
 module SL02 exposing []
 import Tesl.Prelude exposing [String, Int, Bool(..)]
 import Tesl.String exposing [String.length, String.toUpper, String.contains]
@@ -665,7 +626,6 @@ fn transform(s: String) -> String = String.toUpper s
 
 let test_SL03_dict_operations_accepted () =
   should_pass {|
-#lang tesl
 module SL03 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Dict exposing [Dict, Dict.empty, Dict.insert, Dict.lookup]
@@ -679,7 +639,6 @@ fn safeLookup(key: String, d: Dict String Int) -> Maybe Int =
 let test_SL04_stdlib_without_import_rejected () =
   (* Claim D: using stdlib without import is a compile error *)
   should_fail "requires.*import Tesl\\.List\\|import Tesl\\.List" {|
-#lang tesl
 module SL04 exposing []
 import Tesl.Prelude exposing [List, Int]
 import Tesl.Maybe exposing [Maybe]
@@ -691,7 +650,6 @@ fn bad(xs: List Int) -> Maybe Int = List.head xs
 let test_EM01_wrong_type_gives_useful_error () =
   (* A newcomer passing a String where Int expected should get a clear message *)
   should_fail "type.*mismatch\\|expected.*Int\\|got.*String\\|String.*Int" {|
-#lang tesl
 module EM01 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn add(a: Int, b: Int) -> Int = a + b
@@ -700,7 +658,6 @@ fn bad() -> Int = add "hello" "world"
 
 let test_EM02_unknown_name_gives_useful_error () =
   should_fail "unknown name\\|not.*scope\\|unbound" {|
-#lang tesl
 module EM02 exposing []
 import Tesl.Prelude exposing [Int]
 fn bad() -> Int = completelyUndefinedFunction 42
@@ -708,14 +665,12 @@ fn bad() -> Int = completelyUndefinedFunction 42
 
 let test_EM03_missing_import_gives_helpful_hint () =
   should_fail "not in scope\\|add it to an import\\|Try: import" {|
-#lang tesl
 module EM03 exposing []
 fn bad(xs: List Int) -> Int = 0
 |}
 
 let test_EM04_duplicate_function_definition_clear_error () =
   should_fail "duplicate.*function\\|already.*defined\\|duplicate" {|
-#lang tesl
 module EM04 exposing []
 import Tesl.Prelude exposing [Int]
 fn foo() -> Int = 1
@@ -726,7 +681,6 @@ fn foo() -> Int = 2
 
 let test_MS01_exporting_undefined_name_rejected () =
   should_fail "unknown.*non-local\\|module exposes unknown\\|non-local" {|
-#lang tesl
 module MS01 exposing [doesNotExist]
 import Tesl.Prelude exposing [Int]
 fn realFn() -> Int = 42
@@ -734,14 +688,12 @@ fn realFn() -> Int = 42
 
 let test_MS02_importing_nonexistent_name_from_stdlib_rejected () =
   should_fail "does not export\\|unknown.*export\\|module.*export" {|
-#lang tesl
 module MS02 exposing []
 import Tesl.List exposing [List.nonExistentFunction]
 |}
 
 let test_MS03_using_imported_function_accepted () =
   should_pass {|
-#lang tesl
 module MS03 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [Int.abs, Int.toString]
@@ -752,7 +704,6 @@ fn describe(n: Int) -> Int =
 
 let test_MS04_importing_same_module_twice_same_names_rejected () =
   should_fail "duplicate import\\|already imported" {|
-#lang tesl
 module MS04 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Prelude exposing [Int, String]
@@ -763,7 +714,6 @@ fn foo() -> Int = 42
 
 let test_PT01_adt_constructors_in_patterns_accepted () =
   should_pass {|
-#lang tesl
 module PT01 exposing []
 import Tesl.Prelude exposing [Int]
 type Shape
@@ -777,7 +727,6 @@ fn area(s: Shape) -> Int =
 
 let test_PT02_missing_adt_case_rejected () =
   should_fail "non-exhaustive\\|missing.*Rectangle\\|missing.*constructor" {|
-#lang tesl
 module PT02 exposing []
 import Tesl.Prelude exposing [Int]
 type Shape
@@ -790,7 +739,6 @@ fn bad(s: Shape) -> Int =
 
 let test_PT03_unknown_constructor_in_pattern_rejected () =
   should_fail "unknown constructor\\|UnknownShape" {|
-#lang tesl
 module PT03 exposing []
 import Tesl.Prelude exposing [Int]
 type Shape = Circle radius: Int
@@ -805,7 +753,6 @@ fn bad(s: Shape) -> Int =
 let test_MT01_check_function_is_mutation_testable () =
   (* Claim F: mutation testing built in — test blocks can test check functions *)
   should_pass {|
-#lang tesl
 module MT01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -833,7 +780,6 @@ test "positive check rejects zero" {
 let test_MT02_mutate_command_accepts_file_with_check () =
   (* Verify --mutate flag accepts a file with check functions (does not crash) *)
   with_temp_file {|
-#lang tesl
 module MT02 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -854,7 +800,6 @@ test "accepts one" {
 
 let test_MT03_test_block_with_expectFail_accepted () =
   should_pass {|
-#lang tesl
 module MT03 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.length]

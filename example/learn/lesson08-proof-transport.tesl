@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson08ProofTransport exposing [ValidAge, checkAge, birthday, showAge]
 
 # ─────────────────────────────────────────────

@@ -66,24 +66,20 @@ let compiles label src =
     let code, out = run_cc ["--check"; p] in
     if code <> 0 then failf "%s: expected COMPILE but failed:\n%s" label out)
 
-let d8_return = {|#lang tesl
-module RetX exposing []
+let d8_return = {|module RetX exposing []
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int = return x
 |}
-let d8_plus_string = {|#lang tesl
-module AddX exposing []
+let d8_plus_string = {|module AddX exposing []
 import Tesl.Prelude exposing [String]
 fn g(a: String, b: String) -> String = a + b
 |}
-let d8_single_if = {|#lang tesl
-module IfX exposing []
+let d8_single_if = {|module IfX exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 fn h(n: Int) -> Int = if n > 0 then 1 else 2
 |}
 (* D6: the removed reservations are usable identifiers now. *)
-let d6_ident = {|#lang tesl
-module IdentX exposing []
+let d6_ident = {|module IdentX exposing []
 import Tesl.Prelude exposing [Int]
 fn inject(deadWorkers: Int) -> Int = deadWorkers
 |}

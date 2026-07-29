@@ -85,7 +85,7 @@ let should_fail pattern src =
   check bool (Printf.sprintf "should fail with pattern: %s" pattern) true found
 
 let prelude =
-  "#lang tesl\nmodule T exposing []\n\
+  "module T exposing []\n\
    import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n"
 
@@ -333,7 +333,7 @@ let test_g17_newtype_nominal_distinct () =
 let test_g18_forgetFact_reestablish_compiles () =
   (* Build a fresh prelude with forgetFact included so imports precede definitions *)
   let src =
-    "#lang tesl\nmodule T exposing []\n" ^
+    "module T exposing []\n" ^
     "import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact, forgetFact]\n" ^
     "import Tesl.Maybe exposing [Maybe(..)]\n" ^
     "fact IsPositive (n: Int)\n" ^
@@ -489,7 +489,7 @@ let test_g28_establish_fail_rejected () =
 let test_g29_forall_stripped_by_map () =
   (* Build fresh source with imports before all definitions *)
   let src =
-    "#lang tesl\nmodule T exposing []\n" ^
+    "module T exposing []\n" ^
     "import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact]\n" ^
     "import Tesl.Maybe exposing [Maybe(..)]\n" ^
     "import Tesl.List exposing [List.map, List.length]\n" ^

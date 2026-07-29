@@ -1,4 +1,3 @@
-#lang tesl
 module Email_tests exposing []
 
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
@@ -11,7 +10,7 @@ import Tesl.Database exposing [
   TcpConnection,
   SocketConnection,
 ]
-import Tesl.Email exposing [Email, SmtpConfig]
+import Tesl.Email exposing [Email, SmtpConfig, emailCap]
 
 database TestDB = Database {
   schema: "public"

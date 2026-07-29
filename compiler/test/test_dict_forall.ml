@@ -56,7 +56,7 @@ let should_fail pattern src =
    no `ok ... :::` annotation needed in fn bodies (ForAll is compile-time only). *)
 
 let auth_prelude =
-  "#lang tesl\nmodule T exposing []\n" ^
+  "module T exposing []\n" ^
   "import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit]\n" ^
   "import Tesl.Dict exposing [Dict, Dict.filterCheckValues, Dict.filterCheckKeys]\n" ^
   "import Tesl.String exposing [String.length]\n" ^
@@ -68,7 +68,7 @@ let auth_prelude =
   "    fail 401 \"not authenticated\"\n"
 
 let email_prelude =
-  "#lang tesl\nmodule T exposing []\n" ^
+  "module T exposing []\n" ^
   "import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit]\n" ^
   "import Tesl.Dict exposing [Dict, Dict.filterCheckValues, Dict.filterCheckKeys]\n" ^
   "import Tesl.String exposing [String.length]\n" ^
@@ -104,7 +104,7 @@ let test_forall_values_direct_return () =
 
 let test_forall_values_non_dict () =
   let src =
-    "#lang tesl\nmodule T exposing []\n" ^
+    "module T exposing []\n" ^
     "import Tesl.Prelude exposing [Int, String, List]\n" ^
     "fact IsPositive (n: Int)\n" ^
     "fn getPositives() -> List Int ::: ForAllValues IsPositive requires [] =\n" ^
@@ -116,7 +116,7 @@ let test_forall_values_non_dict () =
 
 let test_forall_keys_non_dict () =
   let src =
-    "#lang tesl\nmodule T exposing []\n" ^
+    "module T exposing []\n" ^
     "import Tesl.Prelude exposing [Int, String, List]\n" ^
     "fact IsValidId (n: Int)\n" ^
     "fn getValidIds() -> List Int ::: ForAllKeys IsValidId requires [] =\n" ^

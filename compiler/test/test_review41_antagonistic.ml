@@ -106,8 +106,7 @@ let semantic_json path =
   check int "exit code" 0 code;
   out
 
-let get_shape_api_src = {|#lang tesl
-module Api exposing [ShapeApi]
+let get_shape_api_src = {|module Api exposing [ShapeApi]
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec]
 import Tesl.Tuple exposing [Tuple2(..)]
@@ -135,8 +134,7 @@ api ShapeApi {
 }
 |}
 
-let post_shape_api_src = {|#lang tesl
-module Api exposing [BodyApi]
+let post_shape_api_src = {|module Api exposing [BodyApi]
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec]
 import Tesl.Tuple exposing [Tuple2(..)]
@@ -164,8 +162,7 @@ api BodyApi {
 }
 |}
 
-let semantic_api_src = {|#lang tesl
-module Api exposing [TodoApi]
+let semantic_api_src = {|module Api exposing [TodoApi]
 import Tesl.Prelude exposing [Int, String]
 import Tesl.String exposing [String.length]
 import Tesl.Json exposing [stringCodec]
@@ -384,8 +381,7 @@ let r41_23_semantic_json_erases_check_return_refinement () =
    syntax error must still yield a best-effort JSON snapshot of the declarations
    that DID parse, not None/empty.  The earlier well-formed function and the
    later well-formed functions must both survive; only the broken one is lost. *)
-let partial_recovery_src = {|#lang tesl
-module Recover exposing [alpha, gamma]
+let partial_recovery_src = {|module Recover exposing [alpha, gamma]
 import Tesl.Prelude exposing [Int]
 
 fn alpha(n: Int) -> Int =

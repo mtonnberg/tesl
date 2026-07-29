@@ -59,24 +59,24 @@
   (sendEmailWorker [job : SendEmail ::: (FromQueue (Id == jobId) job)])
   #:capabilities [queueRead]
   #:returns SendEmail
-  (thsl-src! "example/queue-api.tesl" 76 (list (cons 'job *job)) (lambda () *job)))
+  (thsl-src! "example/queue-api.tesl" 75 (list (cons 'job *job)) (lambda () *job)))
 
 (define/pow
   (listDeadEmails [q : EmailQueue])
   #:capabilities [queueRead]
   #:returns (List DeadJob)
-  (thsl-src! "example/queue-api.tesl" 82 (list (cons 'q *q)) (lambda () (raw-value (deadJobs *q)))))
+  (thsl-src! "example/queue-api.tesl" 81 (list (cons 'q *q)) (lambda () (raw-value (deadJobs *q)))))
 
 (define/pow
   (replayEmail [job : DeadJob ::: (FromDeadQueue (Id == jobId) job)])
   #:capabilities [queueWrite]
   #:returns Boolean
-  (thsl-src! "example/queue-api.tesl" 89 (list (cons 'job *job)) (lambda () (raw-value (requeue *job)))))
+  (thsl-src! "example/queue-api.tesl" 88 (list (cons 'job *job)) (lambda () (raw-value (requeue *job)))))
 
 (define-handler
   (appRoot)
   #:returns String
-  (thsl-src! "example/queue-api.tesl" 93 (list) (lambda () "ok")))
+  (thsl-src! "example/queue-api.tesl" 92 (list) (lambda () "ok")))
 
 (define AppServer-sse-routes '())
 (define-api AppApi
@@ -92,7 +92,7 @@
 )
 
 (module+ main
-  (thsl-src! "example/queue-api.tesl" 103 (list) (lambda () (with-capabilities (appService queueRead) (call-with-database MainDatabase (lambda () (let ([_ (init-opentelemetry! #:service-name "queue-api" #:endpoint "in-memory" #:console? #f)]) (begin (start-workers! EmailQueueWorkers (list queueRead)) (serve AppServer #:port 8086 #:capabilities (list appService queueRead) #:sse-routes AppServer-sse-routes)))))))))
+  (thsl-src! "example/queue-api.tesl" 102 (list) (lambda () (with-capabilities (appService queueRead) (call-with-database MainDatabase (lambda () (let ([_ (init-opentelemetry! #:service-name "queue-api" #:endpoint "in-memory" #:console? #f)]) (begin (start-workers! EmailQueueWorkers (list queueRead)) (serve AppServer #:port 8086 #:capabilities (list appService queueRead) #:sse-routes AppServer-sse-routes)))))))))
 
 (define EmailQueueWorkers
   (list (cons EmailQueue sendEmailWorker)))

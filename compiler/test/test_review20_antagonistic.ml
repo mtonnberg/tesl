@@ -69,7 +69,7 @@ let should_fail pattern src =
     (let re = Str.regexp pattern in
      try ignore (Str.search_forward re out 0); true with Not_found -> false)
 
-let prelude = "#lang tesl\nmodule T exposing []\nimport Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact]\n"
+let prelude = "module T exposing []\nimport Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact]\n"
 
 (* ── 1.1 FIXED: Combined check (&&) proof propagation for named variables ── *)
 
@@ -346,14 +346,14 @@ fn getPairFirst(t: Tuple2 String Int) -> String =
 (* ── 3.3 FIXED: Formatter inserts space before = after proof spec ─────────── *)
 
 let test_formatter_adds_space_before_eq_after_proof () =
-  let src = "#lang tesl\nmodule T exposing []\nimport Tesl.Prelude exposing [Int]\nfact IsPositive (n: Int)\ncheck checkPos(n: Int) -> n: Int ::: IsPositive n=\n  if n > 0 then\n    ok n ::: IsPositive n\n  else\n    fail 400 \"bad\"\n" in
+  let src = "module T exposing []\nimport Tesl.Prelude exposing [Int]\nfact IsPositive (n: Int)\ncheck checkPos(n: Int) -> n: Int ::: IsPositive n=\n  if n > 0 then\n    ok n ::: IsPositive n\n  else\n    fail 400 \"bad\"\n" in
   let result = fmt_string src in
   let re = Str.regexp "IsPositive n =" in
   check bool "formatter must add space before = after proof spec" true
     (try ignore (Str.search_forward re result 0); true with Not_found -> false)
 
 let test_formatter_adds_space_in_let_binding () =
-  let src = "#lang tesl\nmodule T exposing []\nimport Tesl.Prelude exposing [Int]\nfn test(x: Int) -> Int=\n  let y=x + 1\n  y\n" in
+  let src = "module T exposing []\nimport Tesl.Prelude exposing [Int]\nfn test(x: Int) -> Int=\n  let y=x + 1\n  y\n" in
   let result = fmt_string src in
   let has_y_eq = let re = Str.regexp "let y =" in
     try ignore (Str.search_forward re result 0); true with Not_found -> false in
@@ -364,7 +364,7 @@ let test_formatter_adds_space_in_let_binding () =
 
 let test_formatter_leaves_eq_eq_alone () =
   (* == must NOT be reformatted as " = = " *)
-  let src = "#lang tesl\nmodule T exposing []\nimport Tesl.Prelude exposing [Int, Bool(..)]\nfn eq(a: Int, b: Int) -> Bool = a == b\n" in
+  let src = "module T exposing []\nimport Tesl.Prelude exposing [Int, Bool(..)]\nfn eq(a: Int, b: Int) -> Bool = a == b\n" in
   let result = fmt_string src in
   let re = Str.regexp "a == b" in
   check bool "formatter must leave == intact" true

@@ -120,8 +120,7 @@ let _should_emit = should_emit
 let _should_not_emit = should_not_emit
 
 let prelude =
-  {|#lang tesl
-module Test exposing []
+  {|module Test exposing []
 import Tesl.Prelude exposing [Bool(..), Int, String, Unit, List, Fact]
 import Tesl.Maybe exposing [Maybe(..)]
 |}
@@ -405,8 +404,7 @@ let test_h11_multi_param_lambda_compiles () =
 let test_h12_lambda_with_proof_param_threads_proof () =
   (* Move all imports to the top — Tesl requires imports before definitions *)
   let src =
-    {|#lang tesl
-module Test exposing []
+    {|module Test exposing []
 import Tesl.Prelude exposing [Bool(..), Int, String, Unit, List, Fact]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.List exposing [List.filterCheck]
@@ -484,8 +482,7 @@ let test_h15_mutual_recursion_compiles () =
 let test_h16_raw_proof_in_handler_rejected () =
   (* Simplified: just test that raw `value ::: SomeFact value` in a handler is rejected *)
   let src =
-    {|#lang tesl
-module Test exposing []
+    {|module Test exposing []
 import Tesl.Prelude exposing [Bool(..), Int, String, Unit, List, Fact]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Http exposing [HttpRequest]
@@ -554,8 +551,7 @@ let test_h19_integer_literal_case_missing_catchall_compiles_silently () =
 
 let test_h19b_adt_non_exhaustive_case_is_rejected () =
   let src =
-    {|#lang tesl
-module Test exposing []
+    {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 type Status
   = Open

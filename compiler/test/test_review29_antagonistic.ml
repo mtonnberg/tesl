@@ -81,7 +81,7 @@ let should_fail pattern src =
   check bool (Printf.sprintf "should fail with pattern: %s" pattern) true found
 
 let prelude =
-  "#lang tesl\nmodule T exposing []\n\
+  "module T exposing []\n\
    import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n"
 
@@ -270,13 +270,13 @@ let test_f09_division_requires_nonzero () =
 (*  Comparison operators work without the import; type annotations don't.       *)
 (* ─────────────────────────────────────────────────────────────────────────── *)
 let test_f10_bool_requires_explicit_import () =
-  let src = "#lang tesl\nmodule T exposing []\n" ^
+  let src = "module T exposing []\n" ^
     "import Tesl.Prelude exposing [Int, String]\n" ^
     "fn isPos(n: Int) -> Bool = n > 0\n" in
   should_fail "Bool\\|import" src
 
 let test_f10b_bool_works_with_import () =
-  let src = "#lang tesl\nmodule T exposing []\n" ^
+  let src = "module T exposing []\n" ^
     "import Tesl.Prelude exposing [Int, String, Bool(..)]\n" ^
     "fn isPos(n: Int) -> Bool = n > 0\n" in
   should_pass src
@@ -319,7 +319,7 @@ let test_f13_lambda_proof_annotated_params () =
      same lambda over a RAW `List Int` is rejected (a proof conjured from nowhere
      — see PC03/PC03b in test_proofsuite_attack.ml). *)
   let src =
-    "#lang tesl\nmodule T exposing []\n" ^
+    "module T exposing []\n" ^
     "import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact]\n" ^
     "import Tesl.List exposing [List.map]\n" ^
     "fact IsPositive (n: Int)\n" ^
@@ -431,7 +431,7 @@ let test_f19b_forall_param_with_explicit_subject () =
 (*  This test documents the gap (not a regression, but a feature absence).      *)
 (* ─────────────────────────────────────────────────────────────────────────── *)
 let test_f20_formatter_no_arith_spacing () =
-  let src = "#lang tesl\nmodule T exposing []\nimport Tesl.Prelude exposing [Int, String]\nfn f(a: Int, b: Int) -> Int =\n  a+b*2\n" in
+  let src = "module T exposing []\nimport Tesl.Prelude exposing [Int, String]\nfn f(a: Int, b: Int) -> Int =\n  a+b*2\n" in
   let tmp = Filename.temp_file "tesl-r29-fmt" ".tesl" in
   let oc = open_out tmp in
   output_string oc src;
@@ -566,12 +566,12 @@ let test_f26_circular_import_no_error () =
   let b_path = Filename.concat dir "circular-b-r29.tesl" in
   let write p s = let oc = open_out p in output_string oc s; close_out oc in
   write a_path
-    ("#lang tesl\nmodule CircularAR29 exposing [funcA]\n" ^
+    ("module CircularAR29 exposing [funcA]\n" ^
      "import CircularBR29 exposing [funcB]\n" ^
      "import Tesl.Prelude exposing [Int]\n" ^
      "fn funcA(n: Int) -> Int = funcB n\n");
   write b_path
-    ("#lang tesl\nmodule CircularBR29 exposing [funcB]\n" ^
+    ("module CircularBR29 exposing [funcB]\n" ^
      "import CircularAR29 exposing [funcA]\n" ^
      "import Tesl.Prelude exposing [Int]\n" ^
      "fn funcB(n: Int) -> Int = funcA n\n");

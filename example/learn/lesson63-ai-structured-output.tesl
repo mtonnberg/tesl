@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson63AiStructuredOutput exposing [
   Assistant,
   classifyPriority,

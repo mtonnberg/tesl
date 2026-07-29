@@ -99,8 +99,7 @@ let should_fail pattern src =
     try ignore (Str.search_forward re out 0)
     with Not_found -> failf "expected failure matching %S, got:\n%s" pattern out)
 
-let base_header = {|#lang tesl
-module Test exposing []
+let base_header = {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact, forgetFact, attachFact, detachFact, introAnd, andLeft, andRight]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.List exposing [List.filterCheck, List.allCheck, List.length]

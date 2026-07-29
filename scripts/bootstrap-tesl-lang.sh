@@ -37,7 +37,6 @@ raco make \
   "$REPO_ROOT"/dsl/*.rkt \
   "$REPO_ROOT"/dsl/private/*.rkt \
   "$REPO_ROOT"/tesl/*.rkt \
-  "$REPO_ROOT"/tesl/lang/*.rkt \
   "$REPO_ROOT"/tesl/private/*.rkt \
   2>/dev/null || true
 echo "Done."

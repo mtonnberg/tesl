@@ -127,8 +127,7 @@ let should_fail_src pattern src =
     try ignore (Str.search_forward re out 0)
     with Not_found -> failf "expected failure matching %S, got:\n%s" pattern out)
 
-let base_header = {|#lang tesl
-module Test exposing []
+let base_header = {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Fact, Bool(..), forgetFact, attachFact, detachFact]
 import Tesl.Maybe exposing [Maybe(..)]
 |}
@@ -216,8 +215,7 @@ fn t(x: Int) -> Int =
 
 (* R50_P05 — A function returning ::: ForAll without explicit subject hint. *)
 let r50_p05_forall_param_no_subject_rejected () =
-  should_fail_src "ForAll\\|subject" ({|#lang tesl
-module Test exposing []
+  should_fail_src "ForAll\\|subject" ({|module Test exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.List exposing [List]
 
@@ -324,8 +322,7 @@ fn name(c: Color) -> String =
 (* R50_M01 — Fixed: a file declaring `module Bar` in `foo.tesl` is now
    rejected at the producer site. *)
 let r50_m01_file_module_mismatch_rejected () =
-  let src = {|#lang tesl
-module Bar exposing []
+  let src = {|module Bar exposing []
 import Tesl.Prelude exposing [Int]
 
 fn x() -> Int = 1
@@ -340,14 +337,12 @@ fn x() -> Int = 1
 (* R50_M02 — Importing the misnamed module fails with a file-not-found error
    even though the module exists. *)
 let r50_m02_import_misnamed_module_fails () =
-  let bar = {|#lang tesl
-module Bar exposing [x]
+  let bar = {|module Bar exposing [x]
 import Tesl.Prelude exposing [Int]
 
 fn x() -> Int = 1
 |} in
-  let main = {|#lang tesl
-module Main exposing []
+  let main = {|module Main exposing []
 import Tesl.Prelude exposing [Int]
 import Bar exposing [x]
 
@@ -362,15 +357,13 @@ fn main() -> Int = x()
 
 (* R50_M03 — Cyclic module imports are accepted (positive — works correctly). *)
 let r50_m03_cyclic_imports_accepted () =
-  let a = {|#lang tesl
-module A exposing [a]
+  let a = {|module A exposing [a]
 import Tesl.Prelude exposing [Int]
 import B exposing [b]
 
 fn a() -> Int = 1 + b()
 |} in
-  let b = {|#lang tesl
-module B exposing [b]
+  let b = {|module B exposing [b]
 import Tesl.Prelude exposing [Int]
 import A exposing [a]
 
@@ -382,18 +375,15 @@ fn b() -> Int = 1 + a()
 
 (* R50_M04 — Importing the same name twice from two modules. *)
 let r50_m04_duplicate_imported_name_rejected () =
-  let p = {|#lang tesl
-module P exposing [foo]
+  let p = {|module P exposing [foo]
 import Tesl.Prelude exposing [Int]
 fn foo() -> Int = 1
 |} in
-  let q = {|#lang tesl
-module Q exposing [foo]
+  let q = {|module Q exposing [foo]
 import Tesl.Prelude exposing [Int]
 fn foo() -> Int = 2
 |} in
-  let main = {|#lang tesl
-module Main exposing []
+  let main = {|module Main exposing []
 import Tesl.Prelude exposing [Int]
 import P exposing [foo]
 import Q exposing [foo]
@@ -538,8 +528,7 @@ fn f(x: Boolean) -> Int = 0
    This is an intentional design choice but documented here as a behavioral
    assertion (a future change to allow vacuous truth would break this test). *)
 let r50_t05_empty_list_not_vacuously_forall () =
-  should_fail_src "ForAll\\|does not statically" ({|#lang tesl
-module Test exposing []
+  should_fail_src "ForAll\\|does not statically" ({|module Test exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.List exposing [List]
 
@@ -570,8 +559,7 @@ fn g() -> Int =
 
 (* R50_F01 — formatter normalises standalone `+` spacing. *)
 let r50_f01_formatter_normalises_plus_fixed () =
-  let src = {|#lang tesl
-module Test exposing []
+  let src = {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn add(x: Int, y: Int) -> Int = x+y
@@ -594,8 +582,7 @@ fn add(x: Int, y: Int) -> Int = x+y
 
 (* R50_F02 — formatter normalises standalone `<` and `>` spacing. *)
 let r50_f02_formatter_normalises_lt_gt_fixed () =
-  let src = {|#lang tesl
-module Test exposing []
+  let src = {|module Test exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 
 fn lt(a: Int, b: Int) -> Bool = a<b
@@ -629,8 +616,7 @@ fn gt(a: Int, b: Int) -> Bool = a>b
 
 (* R50_F03 — formatter preserves `<-` decode arrows. *)
 let r50_f03_formatter_preserves_decode_arrow () =
-  let src = {|#lang tesl
-module Test exposing []
+  let src = {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 record ValueBody { value: Int }
@@ -657,8 +643,7 @@ codec ValueBody {
 
 (* R50_F04 — formatter preserves `++` string concatenation. *)
 let r50_f04_formatter_preserves_string_concat () =
-  let src = {|#lang tesl
-module Test exposing []
+  let src = {|module Test exposing []
 import Tesl.Prelude exposing [String]
 
 fn join(a: String, b: String) -> String = a++b
@@ -681,8 +666,7 @@ fn join(a: String, b: String) -> String = a++b
 
 (* R50_F05 — Linter detects unused imports. *)
 let r50_f05_linter_unused_import () =
-  let src = {|#lang tesl
-module Test exposing []
+  let src = {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 
@@ -701,8 +685,7 @@ fn f(x: Int) -> Int = x + 1
 
 (* R50_E01 — Indirect nested transaction is now rejected statically. *)
 let r50_e01_indirect_nested_txn_rejected () =
-  should_fail_src "transaction" ({|#lang tesl
-module Test exposing []
+  should_fail_src "transaction" ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -740,8 +723,7 @@ fn doOuter(uid: String, n: String) -> Int
 
 (* R50_E02 — Direct nested `transaction` IS rejected. *)
 let r50_e02_direct_nested_txn_rejected () =
-  should_fail_src "transaction" ({|#lang tesl
-module Test exposing []
+  should_fail_src "transaction" ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -774,8 +756,7 @@ fn doNested(uid: String, n: String) -> Int requires [dbWrite] =
 (* R50_E03 — Calling a function that requires a capability without declaring
    it transitively is rejected. *)
 let r50_e03_transitive_capability_required () =
-  should_fail_src "requires\\|cap\\|dbWrite" ({|#lang tesl
-module Test exposing []
+  should_fail_src "requires\\|cap\\|dbWrite" ({|module Test exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead, dbWrite]
 

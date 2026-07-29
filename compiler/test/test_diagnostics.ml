@@ -117,20 +117,17 @@ let run_type_at_json path line col =
   in
   (exit_code, stdout)
 
-let parser_error_src = {|#lang tesl
-module Main exposing [value]
+let parser_error_src = {|module Main exposing [value]
 value: Int
 value = 1
 |}
 
-let type_error_src = {|#lang tesl
-module Main exposing [value]
+let type_error_src = {|module Main exposing [value]
 import Tesl.Prelude exposing [String]
 fn value() -> String = 1
 |}
 
-let validation_error_src = {|#lang tesl
-module Foo exposing [S]
+let validation_error_src = {|module Foo exposing [S]
 import Tesl.Prelude exposing [String]
 api TaskApi {
   post "/tasks"
@@ -141,16 +138,14 @@ server S for TaskApi {
 }
 |}
 
-let valid_src = {|#lang tesl
-module Main exposing [value]
+let valid_src = {|module Main exposing [value]
 import Tesl.Prelude exposing [Int]
 fn value() -> Int = 1
 |}
 
-let lint_warning_src = "#lang tesl\nmodule Main exposing [value]\nimport Tesl.Prelude exposing [Int]   \nfn value() -> Int = 1\n"
+let lint_warning_src = "module Main exposing [value]\nimport Tesl.Prelude exposing [Int]   \nfn value() -> Int = 1\n"
 
-let local_bindings_src = {|#lang tesl
-module Main exposing [localLets, value]
+let local_bindings_src = {|module Main exposing [localLets, value]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn localLets() -> Int =
@@ -164,8 +159,7 @@ fn value(input: Maybe Int) -> Int =
     Something matched -> matched
 |}
 
-let definition_src = {|#lang tesl
-module Main exposing [helper, value]
+let definition_src = {|module Main exposing [helper, value]
 import Tesl.Prelude exposing [Int]
 fn helper(x: Int) -> Int =
   x
@@ -175,16 +169,14 @@ fn value() -> Int =
   helper local
 |}
 
-let local_definition_src = {|#lang tesl
-module Main exposing [value]
+let local_definition_src = {|module Main exposing [value]
 import Tesl.Prelude exposing [Int]
 fn value() -> Int =
   let local = 1
   local
 |}
 
-let local_rhs_occurrences_src = {|#lang tesl
-module Main exposing [helper, value]
+let local_rhs_occurrences_src = {|module Main exposing [helper, value]
 import Tesl.Prelude exposing [Int]
 fn helper(x: Int) -> Int =
   x
@@ -198,8 +190,7 @@ fn value() -> Int =
    symbol writes a corrupting edit at line 0.  This fixture references `triple`
    from a `#> triple 5` doctest; occurrence collection must yield only the real
    def + call-site positions, never a line-0 edit. *)
-let doctest_occurrences_src = {|#lang tesl
-module Main exposing [triple, caller]
+let doctest_occurrences_src = {|module Main exposing [triple, caller]
 import Tesl.Prelude exposing [Int]
 #> triple 5
 #= 15
@@ -209,8 +200,7 @@ fn caller() -> Int =
   triple 4
 |}
 
-let codec_via_occurrences_src = {|#lang tesl
-module Main exposing [Msg, nonEmpty]
+let codec_via_occurrences_src = {|module Main exposing [Msg, nonEmpty]
 import Tesl.Prelude exposing [Int, String, Bool, List, Fact, detachFact]
 import Tesl.Json exposing [stringCodec, intCodec, boolCodec, floatCodec, posixMillisCodec]
 check nonEmpty(s: String) -> s: String ::: NonEmpty s =
@@ -233,16 +223,14 @@ codec Msg {
 }
 |}
 
-let codec_unknown_type_src = {|#lang tesl
-module Main exposing [Missing]
+let codec_unknown_type_src = {|module Main exposing [Missing]
 codec Missing {
   toJson_forbidden
   fromJson_forbidden
 }
 |}
 
-let refined_case_bindings_src = {|#lang tesl
-module Main exposing [cookieAuth]
+let refined_case_bindings_src = {|module Main exposing [cookieAuth]
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Dict exposing [Dict.lookup]
@@ -254,8 +242,7 @@ auth cookieAuth(request: HttpRequest) -> user: String::: Authenticated user
     Something userId -> ok userId::: Authenticated user
 |}
 
-let guarded_case_bindings_src = {|#lang tesl
-module Main exposing [ownerOnly]
+let guarded_case_bindings_src = {|module Main exposing [ownerOnly]
 import Tesl.Prelude exposing [String]
 import Tesl.Maybe exposing [Maybe(..)]
 
@@ -271,8 +258,7 @@ fn ownerOnly(user: String, existing: Maybe Note) -> String =
     Something _ -> "ok"
 |}
 
-let proof_local_bindings_src = {|#lang tesl
-module Main exposing [shouldWork]
+let proof_local_bindings_src = {|module Main exposing [shouldWork]
 import Tesl.Prelude exposing [Int, detachFact]
 
 check checkPositiveInt(value: Int) -> value: Int::: IsPositive value =
@@ -323,8 +309,7 @@ let test_validation_diagnostic_json_contract () =
   assert_contains ~name:"validation json source" json "\"source\":\"validation\"";
   assert_contains ~name:"validation json code" json "\"code\":\"V001\""
 
-let argument_locality_src = {|#lang tesl
-module Main exposing [value]
+let argument_locality_src = {|module Main exposing [value]
 import Tesl.Prelude exposing [Int, String]
 fn takesInt(x: Int) -> Int =
   x
@@ -335,11 +320,10 @@ fn value() -> Int =
 let test_type_diagnostic_argument_locality () =
   let diags = check_source "/tmp/type-arg-locality.tesl" argument_locality_src in
   let d = require_diag ~name:"type arg locality" ~source:"type-checker" diags in
-  Alcotest.(check int) "argument line" 6 d.start_line;
+  Alcotest.(check int) "argument line" 5 d.start_line;
   assert_contains ~name:"argument reason" d.message "argument 1 to `takesInt`"
 
-let local_let_locality_src = {|#lang tesl
-module Main exposing [value, formatPublishedAt]
+let local_let_locality_src = {|module Main exposing [value, formatPublishedAt]
 import Tesl.Prelude exposing [Int, String]
 fn formatPublishedAt(ts: Int) -> String =
   "formatted"
@@ -351,11 +335,10 @@ fn value() -> Int =
 let test_type_diagnostic_local_let_locality () =
   let diags = check_source "/tmp/type-let-locality.tesl" local_let_locality_src in
   let d = require_diag ~name:"type let locality" ~source:"type-checker" diags in
-  Alcotest.(check int) "local let line" 6 d.start_line;
+  Alcotest.(check int) "local let line" 5 d.start_line;
   assert_contains ~name:"local let reason" d.message "let binding `formatted` must have declared type Int"
 
-let constructor_argument_locality_src = {|#lang tesl
-module Main exposing [value]
+let constructor_argument_locality_src = {|module Main exposing [value]
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
 fn value() -> Maybe Int =
@@ -365,7 +348,7 @@ fn value() -> Maybe Int =
 let test_type_diagnostic_constructor_argument_locality () =
   let diags = check_source "/tmp/type-constructor-arg-locality.tesl" constructor_argument_locality_src in
   let d = require_diag ~name:"constructor arg locality" ~source:"type-checker" diags in
-  Alcotest.(check int) "constructor argument line" 5 d.start_line;
+  Alcotest.(check int) "constructor argument line" 4 d.start_line;
   assert_contains ~name:"constructor argument reason" d.message "argument 1 of constructor `Something`";
   assert_contains ~name:"constructor outer reason" d.message "body of `value` must have type Maybe Int";
   assert_contains ~name:"constructor expectation chain" d.message "Expectation chain:"
@@ -403,7 +386,7 @@ let test_cli_check_json_includes_lint_warning () =
     assert_contains ~name:"cli lint code" stdout "\"code\":\"W010\"";
     assert_contains ~name:"cli lint severity" stdout "\"severity\":\"warning\"";
     assert_contains ~name:"cli lint fix kind" stdout "\"fix\":{\"kind\":\"replace_line\"";
-    assert_contains ~name:"cli lint fix line" stdout "\"line\":2";
+    assert_contains ~name:"cli lint fix line" stdout "\"line\":1";
     assert_contains ~name:"cli lint fix replacement" stdout "\"replacement\":\"import Tesl.Prelude exposing [Int]\"")
 
 let test_cli_check_json_codec_unknown_type_contract () =
@@ -468,20 +451,20 @@ let test_cli_local_bindings_json_parser_contract () =
 
 let test_cli_definition_json_top_level_contract () =
   with_temp_file "tesl-definition-top-level-" definition_src (fun path ->
-    let exit_code, stdout = run_definition_json path 8 2 in
+    let exit_code, stdout = run_definition_json path 7 2 in
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"definition version" stdout "\"version\":1";
     assert_contains ~name:"definition file" stdout path;
-    assert_contains ~name:"definition line" stdout "\"line\":3";
+    assert_contains ~name:"definition line" stdout "\"line\":2";
     assert_contains ~name:"definition col" stdout "\"col\":3")
 
 let test_cli_definition_json_local_contract () =
   with_temp_file "tesl-definition-local-" local_definition_src (fun path ->
-    let exit_code, stdout = run_definition_json path 5 2 in
+    let exit_code, stdout = run_definition_json path 4 2 in
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"local definition version" stdout "\"version\":1";
     assert_contains ~name:"local definition file" stdout path;
-    assert_contains ~name:"local definition line" stdout "\"line\":4")
+    assert_contains ~name:"local definition line" stdout "\"line\":3")
 
 let test_cli_definition_json_parser_contract () =
   with_temp_file "tesl-definition-parser-" parser_error_src (fun path ->
@@ -492,21 +475,21 @@ let test_cli_definition_json_parser_contract () =
 
 let test_cli_occurrences_json_top_level_contract () =
   with_temp_file "tesl-occurrences-top-level-" definition_src (fun path ->
-    let exit_code, stdout = run_occurrences_json path 8 2 in
+    let exit_code, stdout = run_occurrences_json path 7 2 in
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"occurrences version" stdout "\"version\":1";
     assert_contains ~name:"occurrences field" stdout "\"occurrences\":[";
     assert_contains ~name:"occurrences file" stdout path;
-    assert_contains ~name:"occurrences helper def line" stdout "\"line\":3";
-    assert_contains ~name:"occurrences helper use line" stdout "\"line\":8")
+    assert_contains ~name:"occurrences helper def line" stdout "\"line\":2";
+    assert_contains ~name:"occurrences helper use line" stdout "\"line\":7")
 
 let test_cli_occurrences_json_doctest_no_line0 () =
   with_temp_file "tesl-occurrences-doctest-" doctest_occurrences_src (fun path ->
-    (* query `triple` at its definition (0-based line 5, col 3) *)
-    let exit_code, stdout = run_occurrences_json path 5 3 in
+    (* query `triple` at its definition (0-based line 4, col 3) *)
+    let exit_code, stdout = run_occurrences_json path 4 3 in
     Alcotest.(check int) "exit code" 0 exit_code;
-    assert_contains ~name:"doctest occ: def" stdout "\"line\":5,\"col\":3";
-    assert_contains ~name:"doctest occ: call site" stdout "\"line\":8,\"col\":2";
+    assert_contains ~name:"doctest occ: def" stdout "\"line\":4,\"col\":3";
+    assert_contains ~name:"doctest occ: call site" stdout "\"line\":7,\"col\":2";
     (* T1 regression: the `#> triple 5` doctest must NOT contribute a line-0
        occurrence (LSP rename would corrupt line 0). *)
     let has_line0 =
@@ -518,35 +501,35 @@ let test_cli_occurrences_json_doctest_no_line0 () =
 
 let test_cli_occurrences_json_local_contract () =
   with_temp_file "tesl-occurrences-local-" local_definition_src (fun path ->
-    let exit_code, stdout = run_occurrences_json path 5 2 in
+    let exit_code, stdout = run_occurrences_json path 4 2 in
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"local occurrences version" stdout "\"version\":1";
-    assert_contains ~name:"local occurrences def line" stdout "\"line\":4";
-    assert_contains ~name:"local occurrences def precise col" stdout "\"line\":4,\"col\":6,\"end_line\":4,\"end_col\":11";
-    assert_contains ~name:"local occurrences use line" stdout "\"line\":5")
+    assert_contains ~name:"local occurrences def line" stdout "\"line\":3";
+    assert_contains ~name:"local occurrences def precise col" stdout "\"line\":3,\"col\":6,\"end_line\":3,\"end_col\":11";
+    assert_contains ~name:"local occurrences use line" stdout "\"line\":4")
 
 let test_cli_occurrences_json_precise_top_level_range_contract () =
   with_temp_file "tesl-occurrences-precise-top-level-" definition_src (fun path ->
-    let exit_code, stdout = run_occurrences_json path 8 2 in
+    let exit_code, stdout = run_occurrences_json path 7 2 in
     Alcotest.(check int) "exit code" 0 exit_code;
-    assert_contains ~name:"top-level precise def range" stdout "\"line\":3,\"col\":3,\"end_line\":3,\"end_col\":9";
-    assert_contains ~name:"top-level precise use range" stdout "\"line\":8,\"col\":2,\"end_line\":8,\"end_col\":8")
+    assert_contains ~name:"top-level precise def range" stdout "\"line\":2,\"col\":3,\"end_line\":2,\"end_col\":9";
+    assert_contains ~name:"top-level precise use range" stdout "\"line\":7,\"col\":2,\"end_line\":7,\"end_col\":8")
 
 let test_cli_occurrences_json_rhs_picks_called_symbol_contract () =
   with_temp_file "tesl-occurrences-rhs-" local_rhs_occurrences_src (fun path ->
-    let exit_code, stdout = run_occurrences_json path 6 14 in
+    let exit_code, stdout = run_occurrences_json path 5 14 in
     Alcotest.(check int) "exit code" 0 exit_code;
-    assert_contains ~name:"rhs occurrences helper def range" stdout "\"line\":3,\"col\":3,\"end_line\":3,\"end_col\":9";
-    assert_contains ~name:"rhs occurrences helper use range" stdout "\"line\":6,\"col\":14,\"end_line\":6,\"end_col\":20";
-    assert_not_contains ~name:"rhs occurrences should not hit let binding" stdout "\"line\":6,\"col\":6,\"end_line\":6,\"end_col\":11")
+    assert_contains ~name:"rhs occurrences helper def range" stdout "\"line\":2,\"col\":3,\"end_line\":2,\"end_col\":9";
+    assert_contains ~name:"rhs occurrences helper use range" stdout "\"line\":5,\"col\":14,\"end_line\":5,\"end_col\":20";
+    assert_not_contains ~name:"rhs occurrences should not hit let binding" stdout "\"line\":5,\"col\":6,\"end_line\":5,\"end_col\":11")
 
 let test_cli_occurrences_json_codec_via_precise_range_contract () =
   with_temp_file "tesl-occurrences-codec-via-" codec_via_occurrences_src (fun path ->
-    let exit_code, stdout = run_occurrences_json path 18 55 in
+    let exit_code, stdout = run_occurrences_json path 17 55 in
     Alcotest.(check int) "exit code" 0 exit_code;
-    assert_contains ~name:"codec via declaration range" stdout "\"line\":4,\"col\":6,\"end_line\":4,\"end_col\":14";
-    assert_contains ~name:"codec via use range" stdout "\"line\":18,\"col\":54,\"end_line\":18,\"end_col\":62";
-    assert_not_contains ~name:"codec via should not return whole codec block" stdout "\"line\":12,\"col\":10,\"end_line\":21,\"end_col\":2")
+    assert_contains ~name:"codec via declaration range" stdout "\"line\":3,\"col\":6,\"end_line\":3,\"end_col\":14";
+    assert_contains ~name:"codec via use range" stdout "\"line\":17,\"col\":54,\"end_line\":17,\"end_col\":62";
+    assert_not_contains ~name:"codec via should not return whole codec block" stdout "\"line\":11,\"col\":10,\"end_line\":20,\"end_col\":2")
 
 let test_cli_occurrences_json_parser_contract () =
   with_temp_file "tesl-occurrences-parser-" parser_error_src (fun path ->
@@ -557,20 +540,20 @@ let test_cli_occurrences_json_parser_contract () =
 
 let test_cli_type_at_json_top_level_contract () =
   with_temp_file "tesl-type-at-top-level-" definition_src (fun path ->
-    let exit_code, stdout = run_type_at_json path 8 2 in
+    let exit_code, stdout = run_type_at_json path 7 2 in
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"type_at version" stdout "\"version\":1";
     assert_contains ~name:"type_at field" stdout "\"type_at\":{";
     assert_contains ~name:"type_at file" stdout path;
-    assert_contains ~name:"type_at helper use line" stdout "\"line\":8";
+    assert_contains ~name:"type_at helper use line" stdout "\"line\":7";
     assert_contains ~name:"type_at helper type" stdout "\"type\":\"Int -> Int\"")
 
 let test_cli_type_at_json_local_contract () =
   with_temp_file "tesl-type-at-local-" local_definition_src (fun path ->
-    let exit_code, stdout = run_type_at_json path 5 2 in
+    let exit_code, stdout = run_type_at_json path 4 2 in
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"local type_at version" stdout "\"version\":1";
-    assert_contains ~name:"local type_at line" stdout "\"line\":5";
+    assert_contains ~name:"local type_at line" stdout "\"line\":4";
     assert_contains ~name:"local type_at type" stdout "\"type\":\"Int\"")
 
 let test_cli_type_at_json_parser_contract () =
@@ -580,8 +563,7 @@ let test_cli_type_at_json_parser_contract () =
     assert_contains ~name:"type_at parser version" stdout "\"version\":1";
     assert_contains ~name:"type_at parser null" stdout "\"type_at\":null")
 
-let field_at_src = {|#lang tesl
-module M exposing [getName]
+let field_at_src = {|module M exposing [getName]
 import Tesl.Prelude exposing [String, Int]
 
 record User {
@@ -616,14 +598,14 @@ let run_completions_json path line col =
   in
   (exit_code, stdout)
 
-(* field_at_src: u.name is on line 9 (0-based).
+(* field_at_src: u.name is on line 8 (0-based).
    fn getName(u: User) -> String = u.name
    Col: u=32, .=33, name starts at 34, stop at 38.
    EField loc spans [33, 38), so cursor at col 34 hits it. *)
 
 let test_cli_field_at_json_contract () =
   with_temp_file "tesl-field-at-" field_at_src (fun path ->
-    let exit_code, stdout = run_field_at_json path 9 34 in
+    let exit_code, stdout = run_field_at_json path 8 34 in
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"field_at version" stdout "\"version\":1";
     assert_contains ~name:"field_at object present" stdout "\"field_at\":{";
@@ -634,7 +616,7 @@ let test_cli_field_at_json_contract () =
 let test_cli_field_at_json_null_contract () =
   with_temp_file "tesl-field-at-null-" field_at_src (fun path ->
     (* cursor on `u` before the dot (col 32) — outside EField loc [33,38) *)
-    let exit_code, stdout = run_field_at_json path 9 32 in
+    let exit_code, stdout = run_field_at_json path 8 32 in
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"field_at null version" stdout "\"version\":1";
     assert_contains ~name:"field_at null result" stdout "\"field_at\":null")
@@ -642,7 +624,7 @@ let test_cli_field_at_json_null_contract () =
 let test_cli_completions_json_field_contract () =
   with_temp_file "tesl-completions-field-" field_at_src (fun path ->
     (* cursor at col 34, char at col 33 is '.', triggers dot completion *)
-    let exit_code, stdout = run_completions_json path 9 34 in
+    let exit_code, stdout = run_completions_json path 8 34 in
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"completions version" stdout "\"version\":1";
     assert_contains ~name:"completions array" stdout "\"completions\":[";
@@ -652,8 +634,8 @@ let test_cli_completions_json_field_contract () =
 
 let test_cli_completions_json_general_contract () =
   with_temp_file "tesl-completions-general-" field_at_src (fun path ->
-    (* cursor at col 3 on line 9, not after a dot *)
-    let exit_code, stdout = run_completions_json path 9 3 in
+    (* cursor at col 3 on line 8, not after a dot *)
+    let exit_code, stdout = run_completions_json path 8 3 in
     Alcotest.(check int) "exit code" 0 exit_code;
     assert_contains ~name:"general completions version" stdout "\"version\":1";
     assert_contains ~name:"general completions array" stdout "\"completions\":[";

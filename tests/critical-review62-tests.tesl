@@ -1,4 +1,3 @@
-#lang tesl
 module CriticalReview62Tests exposing []
 
 # Critical Review 62 — Positive regression tests

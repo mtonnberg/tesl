@@ -59,14 +59,12 @@ let contains needle hay =
   with Not_found -> false
 
 (* ── fixtures ─────────────────────────────────────────────────────────────── *)
-let type_invalid = {|#lang tesl
-module Invalid exposing []
+let type_invalid = {|module Invalid exposing []
 import Tesl.Prelude exposing [String, Int]
 fn f(x: Int) -> Int = totallyUndefinedName x
 |}
 
-let nested_guard = {|#lang tesl
-module NestedGuard exposing []
+let nested_guard = {|module NestedGuard exposing []
 import Tesl.Prelude exposing [String, Int, Bool(..)]
 import Tesl.String exposing [String.length, String.startsWith]
 fact ValidCode (s: String)
@@ -84,8 +82,7 @@ api CodeApi {
 }
 |}
 
-let full_capture = {|#lang tesl
-module FullCapture exposing []
+let full_capture = {|module FullCapture exposing []
 import Tesl.Prelude exposing [String, Int, Bool(..)]
 import Tesl.String exposing [String.length]
 fact LongEnough (s: String)
@@ -104,8 +101,7 @@ api LongApi {
    to emit `D.map8` over the first 8 fields and reference the rest as unbound
    names (module did not compile).  9+ fields must use the applicative
    pipeline `D.succeed Ctor |> D.map2 (|>) …`; 8 fields keep D.map8. *)
-let nine_fields = {|#lang tesl
-module NineWide exposing []
+let nine_fields = {|module NineWide exposing []
 import Tesl.Prelude exposing [String, Int, Bool(..)]
 record Nine {
   f1: String
@@ -123,8 +119,7 @@ api NineApi {
 }
 |}
 
-let eight_fields = {|#lang tesl
-module EightWide exposing []
+let eight_fields = {|module EightWide exposing []
 import Tesl.Prelude exposing [String, Int, Bool(..)]
 record Eight {
   f1: String
@@ -144,8 +139,7 @@ api EightApi {
 (* A PosixMillis field crosses the wire as a bare epoch-millis int over HTTP,
    but the agent boundary renders it as {"epochMillis": <int>, "iso": "…"}
    (types.rkt enrichment).  The Elm decoder must accept BOTH shapes. *)
-let posix_field = {|#lang tesl
-module PosixWide exposing []
+let posix_field = {|module PosixWide exposing []
 import Tesl.Prelude exposing [String, Int, Bool(..)]
 import Tesl.Time exposing [PosixMillis]
 record Meeting {
@@ -162,8 +156,7 @@ api MeetingApi {
    the record/newtype path kept emitting alias-specific undefined names
    (`moneyPerDurationDecoder`).  All positions must reference the ONE shared
    MoneyRate alias/codec, which must be DEFINED. *)
-let rate_positions = {|#lang tesl
-module RateWide exposing []
+let rate_positions = {|module RateWide exposing []
 import Tesl.Prelude exposing [String, Int, Bool(..), List]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Money exposing [Money, MoneyPerDuration, MoneyPerMass, Money.sek,
@@ -280,8 +273,7 @@ let elm_posix_field_tolerant_decoder () =
    The entrypoint's API references a record + fact declared in an imported
    module; the generated client previously mentioned `NewThing` / `NameSafe`
    in endpoint signatures without ever DEFINING them (uncompilable client). *)
-let issue36_lib = {|#lang tesl
-module Lib exposing [NameSafe, isName, NewThing]
+let issue36_lib = {|module Lib exposing [NameSafe, isName, NewThing]
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.length]
 import Tesl.Json exposing [stringCodec]
@@ -306,8 +298,7 @@ codec NewThing {
 }
 |}
 
-let issue36_main = {|#lang tesl
-module Main exposing [MainApi, MainServer]
+let issue36_main = {|module Main exposing [MainApi, MainServer]
 import Tesl.Prelude exposing [String]
 import Lib exposing [NameSafe, isName, NewThing]
 

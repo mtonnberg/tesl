@@ -1,4 +1,3 @@
-#lang tesl
 module Money_tests exposing []
 
 # Runtime tests for Tesl.Money (First-Class Units, phase 1): exact-integer

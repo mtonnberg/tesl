@@ -149,8 +149,7 @@ let emit_to dir src_name out_name =
 (* ── BUG 1: re-export must be rejected at CHECK time, guided ─────────────── *)
 
 (* base declares every exportable decl kind; mid illegally re-exposes them. *)
-let reexport_base = {|#lang tesl
-module Base exposing [baseGreet, Payload, Gadget, GadgetDb, DeepJob, DeepQueue, Notices]
+let reexport_base = {|module Base exposing [baseGreet, Payload, Gadget, GadgetDb, DeepJob, DeepQueue, Notices]
 
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Database exposing [Database, DatabaseBackend, Memory]
@@ -199,8 +198,7 @@ sseChannel Notices(userId: String) = SseChannel {
 }
 |}
 
-let reexport_mid = {|#lang tesl
-module Mid exposing [midGreet, baseGreet, Payload, Gadget, DeepJob, DeepQueue, Notices]
+let reexport_mid = {|module Mid exposing [midGreet, baseGreet, Payload, Gadget, DeepJob, DeepQueue, Notices]
 
 import Tesl.Prelude exposing [String]
 import Base exposing [baseGreet, Payload, Gadget, DeepJob, DeepQueue, Notices]
@@ -209,8 +207,7 @@ fn midGreet(n: String) -> String =
   baseGreet n
 |}
 
-let reexport_main = {|#lang tesl
-module Main exposing []
+let reexport_main = {|module Main exposing []
 
 import Tesl.Prelude exposing [String]
 import Mid exposing [midGreet]
@@ -255,8 +252,7 @@ let reexport_own_module_check_rejects () =
 (* An imported CONSTRUCTOR (pulled in via Type(..)) is a re-export too — it
    previously slipped the locality check via the imported-ctor table. *)
 let reexport_imported_ctor_rejected () =
-  let base = {|#lang tesl
-module Base exposing [Status(..)]
+  let base = {|module Base exposing [Status(..)]
 
 import Tesl.Prelude exposing [String]
 
@@ -264,8 +260,7 @@ type Status
   = Active
   | Idle
 |} in
-  let mid = {|#lang tesl
-module Mid exposing [Active]
+  let mid = {|module Mid exposing [Active]
 
 import Tesl.Prelude exposing [String]
 import Base exposing [Status(..)]
@@ -279,8 +274,7 @@ import Base exposing [Status(..)]
 
 (* ── BUG 2: import cycles ────────────────────────────────────────────────── *)
 
-let cyc_main_server = {|#lang tesl
-module Main exposing [MainServer]
+let cyc_main_server = {|module Main exposing [MainServer]
 
 import Tesl.Prelude exposing [String]
 import Lib exposing [greetName]
@@ -297,8 +291,7 @@ server MainServer for MainApi {
 }
 |}
 
-let cyc_lib_apitest = {|#lang tesl
-module Lib exposing [greetName]
+let cyc_lib_apitest = {|module Lib exposing [greetName]
 
 import Tesl.Prelude exposing [String]
 import Tesl.ApiTest exposing [statusOk]
@@ -342,8 +335,7 @@ let cycle_with_config_decls_rejected () =
 
 (* A module importing itself is always rejected. *)
 let self_import_rejected () =
-  let selfy = {|#lang tesl
-module Selfy exposing [f]
+  let selfy = {|module Selfy exposing [f]
 
 import Tesl.Prelude exposing [Int]
 import Selfy exposing [f]
@@ -356,8 +348,7 @@ fn f(n: Int) -> Int = n
     if not (contains "imports itself" out) then
       failf "self-import rejection must say so:\n%s" out)
 
-let pure_cyc_a = {|#lang tesl
-module CycA exposing [pingA]
+let pure_cyc_a = {|module CycA exposing [pingA]
 
 import Tesl.Prelude exposing [Bool(..), Int]
 import CycB exposing [pingB]
@@ -369,8 +360,7 @@ fn pingA(n: Int) -> Int =
     pingB (n - 1)
 |}
 
-let pure_cyc_b = {|#lang tesl
-module CycB exposing [pingB]
+let pure_cyc_b = {|module CycB exposing [pingB]
 
 import Tesl.Prelude exposing [Bool(..), Int]
 import CycA exposing [pingA]
@@ -409,8 +399,7 @@ let pure_cycle_allowed_and_inlined () =
 
 (* ── BUG 3: CamelCase module filename — require matches the emitted dep ──── *)
 
-let camel_lib = {|#lang tesl
-module LibB exposing [twice]
+let camel_lib = {|module LibB exposing [twice]
 
 import Tesl.Prelude exposing [Int]
 
@@ -418,8 +407,7 @@ fn twice(n: Int) -> Int =
   n + n
 |}
 
-let camel_main = {|#lang tesl
-module Main exposing []
+let camel_main = {|module Main exposing []
 
 import Tesl.Prelude exposing [Int]
 import LibB exposing [twice]
@@ -465,8 +453,7 @@ let kebab_filename_still_works () =
 
 (* ── BUG 4: opaque (bare) ADT export vs Name(..) ─────────────────────────── *)
 
-let opaque_lib = {|#lang tesl
-module Lib exposing [Opaque, mkOpaque, opaqueName]
+let opaque_lib = {|module Lib exposing [Opaque, mkOpaque, opaqueName]
 
 import Tesl.Prelude exposing [String]
 
@@ -481,8 +468,7 @@ fn opaqueName(o: Opaque) -> String =
     Hidden tag -> tag
 |}
 
-let opaque_main = {|#lang tesl
-module Main exposing []
+let opaque_main = {|module Main exposing []
 
 import Tesl.Prelude exposing [String]
 import Lib exposing [Opaque, mkOpaque, opaqueName]
@@ -517,8 +503,7 @@ let opaque_bare_export_type_name_import () =
            failf "raco make main.rkt (opaque bare export) failed:\n%s" out
        end)
 
-let dotdot_lib = {|#lang tesl
-module Lib exposing [Color(..)]
+let dotdot_lib = {|module Lib exposing [Color(..)]
 
 import Tesl.Prelude exposing [String]
 
@@ -527,8 +512,7 @@ type Color
   | Green
 |}
 
-let dotdot_main = {|#lang tesl
-module Main exposing []
+let dotdot_main = {|module Main exposing []
 
 import Tesl.Prelude exposing [String]
 import Lib exposing [Color(..)]
@@ -559,8 +543,7 @@ let dotdot_export_still_expands_ctors () =
 (* Importing `Opaque(..)` when the declaring module exports it BARE stays a
    check-time rejection (pre-existing guard the emit fix relies on). *)
 let dotdot_import_of_bare_export_rejected () =
-  let main = {|#lang tesl
-module Main exposing []
+  let main = {|module Main exposing []
 
 import Tesl.Prelude exposing [String]
 import Lib exposing [Opaque(..)]
@@ -585,8 +568,7 @@ let count_occurrences needle hay =
   go 0 0
 
 (* Direct dep with a hard type error in a fn BODY (interface is fine). *)
-let body_err_lib = {|#lang tesl
-module Lib exposing [f]
+let body_err_lib = {|module Lib exposing [f]
 
 import Tesl.Prelude exposing [Int, String]
 
@@ -594,8 +576,7 @@ fn f(x: Int) -> Int =
   "not an int"
 |}
 
-let body_err_main = {|#lang tesl
-module Main exposing []
+let body_err_main = {|module Main exposing []
 
 import Tesl.Prelude exposing [Int]
 import Lib exposing [f]
@@ -609,7 +590,7 @@ let body_err_files =
 
 (* (a) `--check main.tesl` must fail on the DEP's body type error, with the
    diagnostic anchored at lib.tesl and the correct line (the body expr,
-   line 7).  Previously exit 0; the error only appeared at lib's own emit. *)
+   line 6).  Previously exit 0; the error only appeared at lib's own emit. *)
 let dep_body_type_error_fails_entry_check () =
   with_temp_project body_err_files (fun dir ->
     let code, out = run_cc ["--check"; Filename.concat dir "main.tesl"] in
@@ -619,8 +600,8 @@ let dep_body_type_error_fails_entry_check () =
       failf "expected the dep's unification error:\n%s" out;
     if not (contains "T001" out) then
       failf "dep body error must keep its own code T001:\n%s" out;
-    if not (contains "lib.tesl:7:" out) then
-      failf "diagnostic must be anchored at lib.tesl line 7 (the bad body), \
+    if not (contains "lib.tesl:6:" out) then
+      failf "diagnostic must be anchored at lib.tesl line 6 (the bad body), \
              not at the entrypoint:\n%s" out;
     (* The entrypoint itself is clean — no diagnostic may claim main.tesl. *)
     if contains "main.tesl:" out then
@@ -628,8 +609,7 @@ let dep_body_type_error_fails_entry_check () =
 
 (* (b) TRANSITIVE dep: main -> A -> B, error in B's body. *)
 let transitive_dep_body_error_fails_entry_check () =
-  let main = {|#lang tesl
-module Main exposing []
+  let main = {|module Main exposing []
 
 import Tesl.Prelude exposing [Int]
 import A exposing [g]
@@ -637,8 +617,7 @@ import A exposing [g]
 fn use(n: Int) -> Int =
   g n
 |} in
-  let a = {|#lang tesl
-module A exposing [g]
+  let a = {|module A exposing [g]
 
 import Tesl.Prelude exposing [Int]
 import B exposing [h]
@@ -646,8 +625,7 @@ import B exposing [h]
 fn g(n: Int) -> Int =
   h n
 |} in
-  let b = {|#lang tesl
-module B exposing [h]
+  let b = {|module B exposing [h]
 
 import Tesl.Prelude exposing [Int, String]
 
@@ -661,8 +639,8 @@ fn h(n: Int) -> Int =
          failf "--check main.tesl must fail on the TRANSITIVE dep's body:\n%s" out;
        if not (contains "cannot unify String with Int" out) then
          failf "expected B's unification error:\n%s" out;
-       if not (contains "b.tesl:7:" out) then
-         failf "diagnostic must be anchored at b.tesl line 7:\n%s" out)
+       if not (contains "b.tesl:6:" out) then
+         failf "diagnostic must be anchored at b.tesl line 6:\n%s" out)
 
 (* (c) client generators gate on the SAME whole-program result: broken dep
    => non-zero exit and no output file. *)
@@ -686,8 +664,7 @@ let client_generators_gate_on_dep_errors () =
 
 (* (d) control: a healthy 3-module chain still checks + generates clean. *)
 let healthy_multi_module_still_passes () =
-  let main = {|#lang tesl
-module Main exposing []
+  let main = {|module Main exposing []
 
 import Tesl.Prelude exposing [Int]
 import A exposing [g]
@@ -695,8 +672,7 @@ import A exposing [g]
 fn use(n: Int) -> Int =
   g n
 |} in
-  let a = {|#lang tesl
-module A exposing [g]
+  let a = {|module A exposing [g]
 
 import Tesl.Prelude exposing [Int]
 import B exposing [h]
@@ -704,8 +680,7 @@ import B exposing [h]
 fn g(n: Int) -> Int =
   h n
 |} in
-  let b = {|#lang tesl
-module B exposing [h]
+  let b = {|module B exposing [h]
 
 import Tesl.Prelude exposing [Int]
 
@@ -755,8 +730,7 @@ let dep_also_cli_arg_reported_once () =
 (* A dep that fails to PARSE is a whole-program check failure too, anchored
    at the dep's file. *)
 let dep_parse_error_fails_entry_check () =
-  let broken_lib = {|#lang tesl
-module Lib exposing [f]
+  let broken_lib = {|module Lib exposing [f]
 
 fn f(x: Int -> Int =
 |} in

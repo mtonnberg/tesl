@@ -24,8 +24,7 @@ let obls m name =
   let fd = fn_named m name in
   normalize fd.kind fd.return_spec
 
-let src = {|#lang tesl
-module Dn exposing []
+let src = {|module Dn exposing []
 import Tesl.Prelude exposing [Int, String, List, Fact, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 fact IsPositive (n: Int)

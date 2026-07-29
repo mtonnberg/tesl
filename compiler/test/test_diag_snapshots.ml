@@ -110,35 +110,43 @@ let snapshot_lint ~name ~source ~expected () =
    ════════════════════════════════════════════════════════════════════════════ *)
 
 (* ── Parse error (E000, source=parser) ──────────────────────────────────────── *)
-let parse_src = {|#lang tesl
-module Snapshot exposing [value]
+let parse_src = {|module Snapshot exposing [value]
 value: Int
 value = 1
 |}
 let parse_expected =
-  "[E000] error @ parser 2:0-2:1\n\
-  \  unexpected token at top level: value (pos 10)"
+  "[E000] error @ parser 1:0-1:1\n\
+  \  unexpected token at top level: value (pos 7)"
+
+(* ── Rejected `#lang tesl` pragma (E002, source=parser) ─────────────────────── *)
+let pragma_src = {|#lang tesl
+module Snapshot exposing [value]
+import Tesl.Prelude exposing [Int]
+fn value() -> Int = 1
+|}
+let pragma_expected =
+  "[E002] error @ parser 0:0-0:1\n\
+  \  `#lang tesl` is no longer part of Tesl — delete this line (a Tesl file \
+     starts directly with its `module` header)"
 
 (* ── Type error (T001, source=type-checker) ─────────────────────────────────── *)
-let type_src = {|#lang tesl
-module Snapshot exposing [value]
+let type_src = {|module Snapshot exposing [value]
 import Tesl.Prelude exposing [String, Int]
 fn value() -> String = 1
 |}
 let type_expected =
-  "[T001] error @ type-checker 3:23-3:24\n\
+  "[T001] error @ type-checker 2:23-2:24\n\
   \  cannot unify Int with String (type mismatch) (because body of `value` must have type String)"
 
 (* ── Proof error (P001, source=proof-checker) ───────────────────────────────── *)
 (* Undeclared capability name in `requires` is a pure proof-checker (P001)
    rejection. *)
-let proof_src = {|#lang tesl
-module Snapshot exposing []
+let proof_src = {|module Snapshot exposing []
 import Tesl.Prelude exposing [Int]
 fn f(n: Int) -> Int requires [totallyBogusCap] = n
 |}
 let proof_expected =
-  "[P001] error @ proof-checker 3:3-5:1\n\
+  "[P001] error @ proof-checker 2:3-4:1\n\
   \  function 'f' requires undeclared capability 'totallyBogusCap'; \
      capabilities must be declared in the module that uses them or in a \
      module it imports — move the `capability` declaration to a shared \
@@ -146,8 +154,7 @@ let proof_expected =
 
 (* ── Validation error (V001, source=validation) ─────────────────────────────── *)
 (* A server binding referencing a handler that does not exist. *)
-let validation_src = {|#lang tesl
-module Snapshot exposing [S]
+let validation_src = {|module Snapshot exposing [S]
 import Tesl.Prelude exposing [String]
 api TaskApi {
   post "/tasks"
@@ -158,42 +165,39 @@ server S for TaskApi {
 }
 |}
 let validation_expected =
-  "[V001] error @ validation 7:7-9:2\n\
+  "[V001] error @ validation 6:7-8:2\n\
   \  server 'S': handler 'nonExistentHandler' for endpoint 'createTask' is not declared\n\
    Hint: declare `handler nonExistentHandler(...)` in this module or import it explicitly"
 
 (* ── Capability denial: effect used without declared capability (V001) ──────── *)
 (* A handler that calls the `time` effect (nowMillis) but declares `requires []`.
    This is the everyday "you used an effect without its capability" denial. *)
-let cap_deny_src = {|#lang tesl
-module Snapshot exposing []
+let cap_deny_src = {|module Snapshot exposing []
 import Tesl.Prelude exposing []
 import Tesl.Time exposing [nowMillis, PosixMillis]
 handler h() -> PosixMillis requires [] =
   nowMillis()
 |}
 let cap_deny_expected =
-  "[V001] error @ validation 4:8-7:1\n\
+  "[V001] error @ validation 3:8-6:1\n\
   \  handler 'h' uses [time] but does not declare the required capabilities\n\
    Hint: add `requires [time]` to the handler declaration"
 
 (* ── Capability/structure: handler called directly from code (V001) ─────────── *)
-let handler_iso_src = {|#lang tesl
-module Snapshot exposing []
+let handler_iso_src = {|module Snapshot exposing []
 import Tesl.Prelude exposing [Int]
 handler protectedHandler(n: Int) -> Int requires [] = n
 fn caller(n: Int) -> Int =
   protectedHandler n
 |}
 let handler_iso_expected =
-  "[V001] error @ validation 5:2-5:20\n\
+  "[V001] error @ validation 4:2-4:20\n\
   \  `caller` calls handler `protectedHandler` directly; handlers cannot be called from code — only the server router may reference handlers\n\
    Hint: handlers are HTTP entry points that can only be wired via server declarations; extract shared logic into a helper `fn` function instead"
 
 (* ── Codec / field-coverage error (V001) ─────────────────────────────────────── *)
 (* A toJson clause naming a field that does not exist on the record. *)
-let codec_field_src = {|#lang tesl
-module Snapshot exposing [Msg]
+let codec_field_src = {|module Snapshot exposing [Msg]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 record Msg {
@@ -211,15 +215,14 @@ codec Msg {
 }
 |}
 let codec_field_expected =
-  "[V001] error @ validation 9:4-9:44\n\
+  "[V001] error @ validation 8:4-8:44\n\
   \  codec 'Msg': field 'bogus' does not exist on type 'Msg'; remove this toJson entry or rename the field\n\
    Hint: valid fields on 'Msg': content"
 
 (* ── Codec / proof-coverage error (V001) ─────────────────────────────────────── *)
 (* A decoder field whose declared type carries a proof predicate but the codec
    provides no `via` validation. *)
-let codec_proof_src = {|#lang tesl
-module Snapshot exposing [Msg, nonEmpty]
+let codec_proof_src = {|module Snapshot exposing [Msg, nonEmpty]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 fact NonEmpty (s: String)
@@ -243,51 +246,52 @@ codec Msg {
 }
 |}
 let codec_proof_expected =
-  "[V001] error @ validation 19:6-19:50\n\
+  "[V001] error @ validation 18:6-18:50\n\
   \  codec 'Msg': decoder field 'content' requires proof predicates NonEmpty but has no `via` validation\n\
    Hint: add `via <checkFn>` so field 'content' is validated before decoding succeeds"
 
-(* ── Linter: E002 retired — `#lang tesl` is optional ────────────────────────── *)
-(* A file starting directly with the module header lints clean: no E002 (the
-   pragma is optional) and no W001 (the header IS the first real line). *)
+(* ── Linter: header-first file lints clean ──────────────────────────────────── *)
+(* A file starting directly with the module header lints clean: E002 is the
+   PARSER's `#lang tesl`-rejected error now (see pragma_src above), and no W001
+   fires (the header IS the first real line). *)
 let lint_e002_src = "module Main exposing [value]\nfn value() -> Int = 1\n"
 let lint_e002_expected = ""
 
 (* ── Linter: E010 (tab character) ───────────────────────────────────────────── *)
 let lint_e010_src =
-  "#lang tesl\nmodule Main exposing [value]\nimport Tesl.Prelude exposing [Int]\nfn value() -> Int =\n\t1\n"
+  "module Main exposing [value]\nimport Tesl.Prelude exposing [Int]\nfn value() -> Int =\n\t1\n"
 let lint_e010_expected =
-  "[E010] error @ lint 4:0-4:0\n\
+  "[E010] error @ lint 3:0-3:0\n\
   \  tabs are not allowed; use spaces"
 
 (* ── Linter: W010 (trailing whitespace) ─────────────────────────────────────── *)
 let lint_w010_src =
-  "#lang tesl\nmodule Main exposing [value]\nimport Tesl.Prelude exposing [Int]   \nfn value() -> Int = 1\n"
+  "module Main exposing [value]\nimport Tesl.Prelude exposing [Int]   \nfn value() -> Int = 1\n"
 let lint_w010_expected =
-  "[W010] warning @ lint 2:34-2:34\n\
+  "[W010] warning @ lint 1:34-1:34\n\
   \  trailing whitespace"
 
 (* ── Linter: W020 (module name not UpperCamelCase) ──────────────────────────── *)
 let lint_w020_src =
-  "#lang tesl\nmodule myMod exposing [value]\nimport Tesl.Prelude exposing [Int]\nfn value() -> Int = 1\n"
+  "module myMod exposing [value]\nimport Tesl.Prelude exposing [Int]\nfn value() -> Int = 1\n"
 let lint_w020_expected =
-  "[W020] warning @ lint 1:0-1:0\n\
+  "[W020] warning @ lint 0:0-0:0\n\
   \  module name `myMod` should be UpperCamelCase"
 
 (* ── Linter: W022 (function name not lowerCamelCase) ────────────────────────── *)
 let lint_w022_src =
-  "#lang tesl\nmodule Main exposing [Value]\nimport Tesl.Prelude exposing [Int]\nfn Value() -> Int = 1\n"
+  "module Main exposing [Value]\nimport Tesl.Prelude exposing [Int]\nfn Value() -> Int = 1\n"
 let lint_w022_expected =
-  "[W022] warning @ lint 3:0-3:0\n\
+  "[W022] warning @ lint 2:0-2:0\n\
   \  function name `Value` should be lowerCamelCase"
 
 (* ── Linter: W050 (unused import) ───────────────────────────────────────────── *)
 let lint_w050_src =
-  "#lang tesl\nmodule Main exposing [value]\nimport Tesl.Prelude exposing [Int, String]\nfn value() -> Int = 1\n"
+  "module Main exposing [value]\nimport Tesl.Prelude exposing [Int, String]\nfn value() -> Int = 1\n"
 (* E1: import_decl.loc now spans the whole statement, so W050 anchors at the
    `import` keyword (2:0) instead of the old point-loc just past the `]`. *)
 let lint_w050_expected =
-  "[W050] warning @ lint 2:0-2:0\n\
+  "[W050] warning @ lint 1:0-1:0\n\
   \  unused import: `String` from `Tesl.Prelude` is never referenced"
 
 (* ════════════════════════════════════════════════════════════════════════════
@@ -317,15 +321,13 @@ let assert_cli_denied ~name ~source ~code () =
 let deny_effect_src = cap_deny_src
 
 (* (2) Undeclared capability name in `requires`. *)
-let deny_unknown_cap_src = {|#lang tesl
-module Deny exposing []
+let deny_unknown_cap_src = {|module Deny exposing []
 import Tesl.Prelude exposing [Int]
 fn f(n: Int) -> Int requires [totallyBogusCap] = n
 |}
 
 (* (3) Capability used in `requires` without importing its name. *)
-let deny_unimported_cap_src = {|#lang tesl
-module Deny exposing []
+let deny_unimported_cap_src = {|module Deny exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Id exposing [generatePrefixedId]
 handler h() -> String requires [random] =
@@ -334,8 +336,7 @@ handler h() -> String requires [random] =
 
 (* (4) Proof obligation not satisfied at a call site (a value lacking its
        required proof is passed to a function that demands it). *)
-let deny_proof_unsat_src = {|#lang tesl
-module Deny exposing [use]
+let deny_proof_unsat_src = {|module Deny exposing [use]
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
 check mkPos(n: Int) -> n: Int ::: IsPositive n =
@@ -360,6 +361,8 @@ let () =
     "snapshot/check_source", [
       Alcotest.test_case "parse error E000" `Quick
         (snapshot_source ~name:"parse E000" ~source:parse_src ~expected:parse_expected);
+      Alcotest.test_case "rejected #lang pragma E002" `Quick
+        (snapshot_source ~name:"pragma E002" ~source:pragma_src ~expected:pragma_expected);
       Alcotest.test_case "type error T001" `Quick
         (snapshot_source ~name:"type T001" ~source:type_src ~expected:type_expected);
       Alcotest.test_case "proof error P001" `Quick

@@ -171,7 +171,6 @@ let dbops_handler_undeclared =
       (fun () ->
          should_fail "handler 'getN' uses .* but does not declare the required capabilities"
            (Printf.sprintf {|
-#lang tesl
 module CapL1H%s exposing []
 import Tesl.Prelude exposing [List, String, Int, Unit]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -187,7 +186,6 @@ let dbops_handler_declared_positive =
       (fun () ->
          should_pass
            (Printf.sprintf {|
-#lang tesl
 module CapL1HP%s exposing []
 import Tesl.Prelude exposing [List, String, Int, Unit]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -205,7 +203,6 @@ let dbops_fn_undeclared =
       (fun () ->
          should_fail "fn 'getN' uses privileged operations.* but does not declare them\\|does not declare the required capabilities"
            (Printf.sprintf {|
-#lang tesl
 module CapL1F%s exposing []
 import Tesl.Prelude exposing [List, String, Int, Unit]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -224,7 +221,6 @@ let dbops_worker_undeclared =
       (fun () ->
          should_fail "worker 'doJob' uses .* but does not declare the required capabilities"
            (Printf.sprintf {|
-#lang tesl
 module CapL1W%s exposing []
 import Tesl.Prelude exposing [List, String, Int, Unit]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -262,7 +258,6 @@ let privops_handler_undeclared =
       (fun () ->
          should_fail "uses .* but does not declare\\|does not declare the required capabilities"
            (Printf.sprintf {|
-#lang tesl
 module CapPv%s exposing []
 import Tesl.Prelude exposing [String, Int]
 %s
@@ -277,7 +272,6 @@ let privops_handler_declared_positive =
       (fun () ->
          should_pass
            (Printf.sprintf {|
-#lang tesl
 module CapPvP%s exposing []
 import Tesl.Prelude exposing [String, Int]
 %s
@@ -301,7 +295,6 @@ capability todoWrite implies dbWrite
 let test_L2_fn_calls_dbWrite_callee_with_only_dbRead () =
   should_fail "fn 'reader' uses privileged operations and callees requiring .* but does not declare them"
     (Printf.sprintf {|
-#lang tesl
 module CapL2A exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -313,7 +306,6 @@ fn reader(n: Int) -> Int requires [dbRead] =
 let test_L2_fn_calls_todoWrite_callee_with_only_todoRead () =
   should_fail "fn 'reader' uses privileged operations and callees requiring .* but does not declare them"
     (Printf.sprintf {|
-#lang tesl
 module CapL2B exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -325,7 +317,6 @@ fn reader(n: Int) -> Int requires [todoRead] =
 let test_L2_fn_calls_callee_declaring_nothing () =
   should_fail "fn 'reader' uses privileged operations and callees requiring .* but does not declare them"
     (Printf.sprintf {|
-#lang tesl
 module CapL2C exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -337,7 +328,6 @@ fn reader(n: Int) -> Int requires [] =
 let test_L2_handler_calls_callee_without_cap () =
   should_fail "handler 'h' uses .* but does not declare the required capabilities"
     (Printf.sprintf {|
-#lang tesl
 module CapL2D exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -350,7 +340,6 @@ let test_L2_callee_chain_positive () =
   (* Caller declares the callee's requirement transitively via implication. *)
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module CapL2E exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -393,7 +382,6 @@ let cap_via_callee_matrix =
       (fun () ->
          should_fail cc.cc_pat
            (Printf.sprintf {|
-#lang tesl
 module CapL2M%s%s exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -410,7 +398,6 @@ fn writer(n: Int) -> Int requires [dbWrite] = n
 let test_L3_two_node_cycle () =
   should_fail "capability cycle detected"
     {|
-#lang tesl
 module CapCyc2 exposing []
 import Tesl.Prelude exposing [Int]
 capability a implies b
@@ -421,7 +408,6 @@ fn f(n: Int) -> Int requires [a] = n
 let test_L3_three_node_cycle () =
   should_fail "capability cycle detected"
     {|
-#lang tesl
 module CapCyc3 exposing []
 import Tesl.Prelude exposing [Int]
 capability a implies b
@@ -433,7 +419,6 @@ fn f(n: Int) -> Int requires [a] = n
 let test_L3_self_cycle () =
   should_fail "capability cycle detected"
     {|
-#lang tesl
 module CapCycSelf exposing []
 import Tesl.Prelude exposing [Int]
 capability a implies a
@@ -443,7 +428,6 @@ fn f(n: Int) -> Int requires [a] = n
 let test_L3_four_node_cycle () =
   should_fail "capability cycle detected"
     {|
-#lang tesl
 module CapCyc4 exposing []
 import Tesl.Prelude exposing [Int]
 capability a implies b
@@ -457,7 +441,6 @@ let test_L3_cycle_within_larger_graph () =
   (* A cycle b↔c embedded in an otherwise-acyclic graph is still caught. *)
   should_fail "capability cycle detected"
     {|
-#lang tesl
 module CapCycEmb exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead]
@@ -472,7 +455,6 @@ let test_L3_diamond_no_cycle_positive () =
   (* Diamond lattice (a→b, a→c, b→d, c→d) is acyclic and must compile. *)
   should_pass
     {|
-#lang tesl
 module CapDiamond exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead]
@@ -486,7 +468,6 @@ fn f(n: Int) -> Int requires [a] = n
 let test_L3_long_chain_no_cycle_positive () =
   should_pass
     {|
-#lang tesl
 module CapChain exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead]
@@ -505,7 +486,6 @@ fn f(n: Int) -> Int requires [a] = n
 let test_L6b_cap_used_without_import () =
   should_fail "requires undeclared capability\\|undeclared capability"
     {|
-#lang tesl
 module CapNoImp exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Id exposing [generatePrefixedId]
@@ -516,7 +496,6 @@ handler h() -> String requires [random] =
 let test_L6b_time_cap_used_without_import () =
   should_fail "requires undeclared capability\\|undeclared capability"
     {|
-#lang tesl
 module CapNoImpTime exposing []
 import Tesl.Prelude exposing []
 import Tesl.Time exposing [nowMillis, PosixMillis]
@@ -551,7 +530,6 @@ let auth_call_negatives =
     (fun () ->
        should_fail "auth functions may only be called from handler bodies or other auth functions"
          (Printf.sprintf {|
-#lang tesl
 module CapAuthCall%d exposing []
 import Tesl.Prelude exposing [String]
 %s
@@ -562,7 +540,6 @@ import Tesl.Prelude exposing [String]
 let test_L4_auth_from_handler_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module CapAuthPos exposing []
 import Tesl.Prelude exposing [String]
 %s
@@ -586,7 +563,6 @@ let handler_iso_negatives =
     (fun () ->
        should_fail "calls handler `protectedHandler` directly\\|handlers cannot be called from code"
          (Printf.sprintf {|
-#lang tesl
 module CapHIso%d exposing []
 import Tesl.Prelude exposing [Int]
 handler protectedHandler(n: Int) -> Int requires [] = n
@@ -600,7 +576,6 @@ handler protectedHandler(n: Int) -> Int requires [] = n
 let test_L6_unknown_capability_name () =
   should_fail "requires undeclared capability\\|undeclared capability"
     {|
-#lang tesl
 module CapUnk exposing []
 import Tesl.Prelude exposing [Int]
 fn f(n: Int) -> Int requires [totallyBogusCap] = n
@@ -609,7 +584,6 @@ fn f(n: Int) -> Int requires [totallyBogusCap] = n
 let test_L6_handler_unknown_capability_name () =
   should_fail "requires undeclared capability\\|undeclared capability"
     {|
-#lang tesl
 module CapUnkH exposing []
 import Tesl.Prelude exposing [Int]
 handler h(n: Int) -> Int requires [noSuchCapXyz] = n
@@ -620,7 +594,6 @@ handler h(n: Int) -> Int requires [noSuchCapXyz] = n
 let test_L7_time_op_undeclared () =
   should_fail "uses .* but does not declare\\|does not declare the required capabilities"
     {|
-#lang tesl
 module CapTime exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Time exposing [nowMillis, time, PosixMillis]
@@ -631,7 +604,6 @@ handler h() -> PosixMillis requires [] =
 let test_L7_time_op_declared_positive () =
   should_pass
     {|
-#lang tesl
 module CapTimeP exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Time exposing [nowMillis, time, PosixMillis]
@@ -650,7 +622,6 @@ fn writer(n: Int) -> Int requires [dbWrite] = n
 let test_L8_worker_callee_undeclared () =
   should_fail "worker 'doJob' uses .* but does not declare the required capabilities"
     (Printf.sprintf {|
-#lang tesl
 module CapWkr exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -662,7 +633,6 @@ worker doJob(j: JobRec) requires [] =
 let test_L8_worker_callee_declared_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module CapWkrP exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -676,7 +646,6 @@ worker doJob(j: JobRec) requires [dbWrite] =
 let test_L9_transitive_service_cap_positive () =
   should_pass
     {|
-#lang tesl
 module CapSvc exposing []
 import Tesl.Prelude exposing [List, String]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -692,7 +661,6 @@ let test_L9_deep_transitive_positive () =
   (* svc → mid → dbWrite : two hops, still satisfied. *)
   should_pass
     {|
-#lang tesl
 module CapDeep exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbWrite]
@@ -707,7 +675,6 @@ let test_L9_pure_fn_no_caps_positive () =
   (* A pure fn that touches no privileged op needs no requires. *)
   should_pass
     {|
-#lang tesl
 module CapPure exposing []
 import Tesl.Prelude exposing [Int]
 fn double(n: Int) -> Int = n * 2
@@ -720,7 +687,6 @@ fn quad(n: Int) -> Int = double (double n)
 let test_L10_partial_cap_declaration () =
   should_fail "uses .* but does not declare\\|does not declare the required capabilities"
     {|
-#lang tesl
 module CapPartial exposing []
 import Tesl.Prelude exposing [List, String]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -734,7 +700,6 @@ handler rw(id: String) -> Note requires [dbRead] =
 let test_L10_both_caps_positive () =
   should_pass
     {|
-#lang tesl
 module CapBoth exposing []
 import Tesl.Prelude exposing [List, String]
 import Tesl.DB exposing [dbRead, dbWrite]

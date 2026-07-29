@@ -142,7 +142,6 @@ let m1_missing_ctor =
     (fun () ->
        should_fail (Printf.sprintf "non-exhaustive case: missing constructor.*%s" missing)
          (Printf.sprintf {|
-#lang tesl
 module MMiss%d exposing []
 import Tesl.Prelude exposing [String]
 %s
@@ -155,7 +154,6 @@ fn f(c: Color) -> String =
 let test_M1_two_missing () =
   should_fail "non-exhaustive case: missing constructor"
     (Printf.sprintf {|
-#lang tesl
 module MMissTwo exposing []
 import Tesl.Prelude exposing [String]
 %s
@@ -187,7 +185,6 @@ let m1_day_missing =
     (fun () ->
        should_fail (Printf.sprintf "non-exhaustive case: missing constructor.*%s" missing)
          (Printf.sprintf {|
-#lang tesl
 module MDay%d exposing []
 import Tesl.Prelude exposing [String]
 %s
@@ -200,7 +197,6 @@ fn f(d: Day) -> String =
 let test_M1_exhaustive_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module MExhPos exposing []
 import Tesl.Prelude exposing [String]
 %s
@@ -214,7 +210,6 @@ fn f(c: Color) -> String =
 let test_M1_day_exhaustive_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module MDayPos exposing []
 import Tesl.Prelude exposing [String]
 %s
@@ -230,7 +225,6 @@ fn f(d: Day) -> String =
 let test_M1_wildcard_catchall_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module MWildPos exposing []
 import Tesl.Prelude exposing [String]
 %s
@@ -247,7 +241,6 @@ fn f(c: Color) -> String =
 let test_M2_single_guarded_only () =
   should_fail "only appear in guarded arms"
     (Printf.sprintf {|
-#lang tesl
 module MGuard1 exposing []
 import Tesl.Prelude exposing [String, Int, Bool(..)]
 %s
@@ -261,7 +254,6 @@ fn f(s: Shape) -> String =
 let test_M2_all_guarded_only () =
   should_fail "only appear in guarded arms"
     (Printf.sprintf {|
-#lang tesl
 module MGuardAll exposing []
 import Tesl.Prelude exposing [String, Int, Bool(..)]
 %s
@@ -284,7 +276,6 @@ let m2_guarded_only_sweep =
     (fun () ->
        should_fail (Printf.sprintf "only appear in guarded arms")
          (Printf.sprintf {|
-#lang tesl
 module MGuardSweep%d exposing []
 import Tesl.Prelude exposing [String, Bool(..)]
 %s
@@ -298,7 +289,6 @@ fn f(c: Color, flag: Bool) -> String =
 let test_M2_guard_with_unguarded_fallback_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module MGuardOk exposing []
 import Tesl.Prelude exposing [String, Int, Bool(..)]
 %s
@@ -315,7 +305,6 @@ fn f(s: Shape) -> String =
 let test_M3_int_literals_no_catchall () =
   should_fail "literal patterns .* always require a catch-all"
     {|
-#lang tesl
 module MLitInt exposing []
 import Tesl.Prelude exposing [String, Int]
 fn f(n: Int) -> String =
@@ -328,7 +317,6 @@ fn f(n: Int) -> String =
 let test_M3_string_literals_no_catchall () =
   should_fail "literal patterns .* always require a catch-all"
     {|
-#lang tesl
 module MLitStr exposing []
 import Tesl.Prelude exposing [String]
 fn f(s: String) -> String =
@@ -340,7 +328,6 @@ fn f(s: String) -> String =
 let test_M3_int_literals_with_catchall_positive () =
   should_pass
     {|
-#lang tesl
 module MLitOk exposing []
 import Tesl.Prelude exposing [String, Int]
 fn f(n: Int) -> String =
@@ -355,7 +342,6 @@ fn f(n: Int) -> String =
 let test_M4_duplicate_constructor () =
   should_fail "duplicate case arm.*already covered\\|already covered"
     (Printf.sprintf {|
-#lang tesl
 module MDupCtor exposing []
 import Tesl.Prelude exposing [String]
 %s
@@ -370,7 +356,6 @@ fn f(c: Color) -> String =
 let test_M4_duplicate_literal () =
   should_fail "duplicate case arm\\|already covered\\|already matched"
     {|
-#lang tesl
 module MDupLit exposing []
 import Tesl.Prelude exposing [String, Int]
 fn f(n: Int) -> String =
@@ -383,7 +368,6 @@ fn f(n: Int) -> String =
 let test_M4_unreachable_after_catchall () =
   should_fail "unreachable case arm\\|catch-all"
     (Printf.sprintf {|
-#lang tesl
 module MUnreach exposing []
 import Tesl.Prelude exposing [String]
 %s
@@ -399,7 +383,6 @@ fn f(c: Color) -> String =
 let test_M5_nullary_pattern_on_fielded_ctor () =
   should_fail "expects 1 field but was used without any\\|expects .* field"
     (Printf.sprintf {|
-#lang tesl
 module MArity1 exposing []
 import Tesl.Prelude exposing [String, Int]
 %s
@@ -413,7 +396,6 @@ fn f(s: Shape) -> String =
 let test_M5_triangle_too_few_fields () =
   should_fail "expects 2 field\\|expects .* field\\|nested constructor"
     (Printf.sprintf {|
-#lang tesl
 module MArity2 exposing []
 import Tesl.Prelude exposing [String, Int]
 %s
@@ -427,7 +409,6 @@ fn f(s: Shape) -> String =
 let test_M5_correct_arity_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module MArityOk exposing []
 import Tesl.Prelude exposing [String, Int]
 %s
@@ -443,7 +424,6 @@ fn f(s: Shape) -> String =
 let test_M1b_maybe_missing_nothing () =
   should_fail "non-exhaustive case: missing constructor.*Nothing"
     {|
-#lang tesl
 module MMaybeN exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -455,7 +435,6 @@ fn f(m: Maybe Int) -> String =
 let test_M1b_maybe_missing_something () =
   should_fail "non-exhaustive case: missing constructor.*Something"
     {|
-#lang tesl
 module MMaybeS exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -467,7 +446,6 @@ fn f(m: Maybe Int) -> String =
 let test_M1b_maybe_complete_positive () =
   should_pass
     {|
-#lang tesl
 module MMaybeOk exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -480,7 +458,6 @@ fn f(m: Maybe Int) -> String =
 let test_M1b_maybe_nested_literal_incomplete () =
   should_fail "nested constructor/literal patterns leave uncovered values\\|non-exhaustive"
     {|
-#lang tesl
 module MMaybeLit exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -493,7 +470,6 @@ fn f(m: Maybe Int) -> String =
 let test_M1b_maybe_nested_literal_with_binder_positive () =
   should_pass
     {|
-#lang tesl
 module MMaybeLitOk exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -516,7 +492,6 @@ type Box
 let test_M6_nested_missing_inner () =
   should_fail "nested constructor/literal patterns leave uncovered values\\|non-exhaustive"
     (Printf.sprintf {|
-#lang tesl
 module MNest1 exposing []
 import Tesl.Prelude exposing [String, Int]
 %s
@@ -529,7 +504,6 @@ fn f(b: Box) -> String =
 let test_M6_nested_complete_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module MNestOk exposing []
 import Tesl.Prelude exposing [String, Int]
 %s
@@ -562,7 +536,6 @@ fn needPositive(n: Int ::: IsPositive n) -> Int = n
 let test_M7_proof_through_maybe_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module MProofMaybe exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -581,7 +554,6 @@ fn consume(t: PosTree) -> Int =
 let test_M7_proof_through_either_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module MProofEither exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Either exposing [Either(..)]
@@ -603,7 +575,6 @@ let test_M7_no_proof_through_plain_maybe_negative () =
      requirement — the bound value carries no proof. *)
   should_fail "does not statically satisfy declared proof.*IsPositive"
     (Printf.sprintf {|
-#lang tesl
 module MProofNeg exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -618,7 +589,6 @@ let test_M7_partial_arm_loses_proof_negative () =
      same proof-requiring consumer — the raw arm must be rejected. *)
   should_fail "does not statically satisfy declared proof.*IsPositive"
     (Printf.sprintf {|
-#lang tesl
 module MProofPartial exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -639,7 +609,6 @@ let test_M7_proof_through_into_divide_positive () =
      downstream (cross-family flow). *)
   should_pass
     {|
-#lang tesl
 module MProofDiv exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [Int.divide, IsNonZero]

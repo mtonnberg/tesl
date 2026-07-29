@@ -1,4 +1,3 @@
-#lang tesl
 module CriticalReview48AdversarialDeep exposing [
   Fix1Server,
   Fix2MultiArgServer,

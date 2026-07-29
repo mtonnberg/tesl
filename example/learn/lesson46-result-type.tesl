@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson46ResultType exposing [
   divide,
   parseInt,

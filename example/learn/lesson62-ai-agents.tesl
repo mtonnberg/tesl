@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson62AiAgents exposing [WeatherAgent, getWeather, bookTable]
 
 import Tesl.Prelude exposing [Int, String]

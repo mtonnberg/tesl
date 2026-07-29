@@ -63,7 +63,6 @@
         #
         #   $out/share/tesl-collections/tesl/dsl/   → (require tesl/dsl/…)
         #   $out/share/tesl-collections/tesl/tesl/  → (require tesl/tesl/…)
-        #   $out/share/tesl-collections/tesl/lang/  → (require tesl/lang/…)
         #
         # Pre-compiling the .rkt sources here means the first `tesl run` is
         # instant.  The build uses `|| true` so a pre-compile failure (e.g. a
@@ -78,7 +77,7 @@
             filter = path: _type:
               let rel = pkgs.lib.removePrefix (toString ./. + "/") (toString path);
               in  pkgs.lib.any (p: pkgs.lib.hasPrefix p rel)
-                    [ "dsl/" "tesl/" "lang/" "dsl" "tesl" "lang" ]
+                    [ "dsl/" "tesl/" "dsl" "tesl" ]
                   # Drop in-repo .zo caches — we recompile inside the sandbox
                   # to guarantee they match the nixpkgs Racket version.
                   && !(pkgs.lib.hasInfix "/compiled/" (toString path));
@@ -88,11 +87,10 @@
 
           buildPhase = ''
             # Build the PLTCOLLECTS tree:
-            #   build/collections/tesl/{dsl,tesl,lang}
+            #   build/collections/tesl/{dsl,tesl}
             mkdir -p build/collections/tesl
             cp -r dsl  build/collections/tesl/dsl
             cp -r tesl build/collections/tesl/tesl
-            cp -r lang build/collections/tesl/lang
 
             export HOME=$(mktemp -d)
             export PLTCOLLECTS="${pkgs.racket}/share/racket/collects:$(pwd)/build/collections"
@@ -108,7 +106,7 @@
             cp -r build/collections/tesl $out/share/tesl-collections/tesl
           '';
 
-          meta.description = "Tesl Racket runtime collections (dsl, tesl, lang)";
+          meta.description = "Tesl Racket runtime collections (dsl, tesl)";
         };
 
         # ── Project templates ────────────────────────────────────────────────

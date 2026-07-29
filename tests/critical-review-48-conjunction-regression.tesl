@@ -1,4 +1,3 @@
-#lang tesl
 module CriticalReview48ConjunctionRegression exposing [
   P1,
   P2,

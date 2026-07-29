@@ -1,4 +1,3 @@
-#lang tesl
 module Int32Boundary exposing [narrowSafe, widen, roundTrip]
 
 # NT-07 — Int32: a JS-safe (< 2^31), 32-bit-bounded integer for wire/storage

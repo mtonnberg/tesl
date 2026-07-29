@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson06ProofCheckProofAuth exposing [
   InRange,
   checkInRange,

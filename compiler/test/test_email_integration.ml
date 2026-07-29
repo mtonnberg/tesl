@@ -209,12 +209,11 @@ let guarded_mailhog_test name f () =
     An in-memory database backs the email outbox so the tests need no Postgres.
     The email block points at [smtp_port] (used only by the background delivery
     worker; the App tests assert that Email.send *runs*, not delivery).  *)
-let app_prelude ~module_name smtp_port = Printf.sprintf {|#lang tesl
-module %s exposing [EmailTestServer]
+let app_prelude ~module_name smtp_port = Printf.sprintf {|module %s exposing [EmailTestServer]
 
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
 import Tesl.Database exposing [Database, DatabaseBackend, Memory]
-import Tesl.Email exposing [Email, SmtpConfig]
+import Tesl.Email exposing [Email, SmtpConfig, emailCap]
 import Tesl.App exposing [App]
 
 # In-memory database backs the email outbox — no Postgres required.
@@ -324,8 +323,7 @@ handler sendRich() -> String requires [emailCap] =
     WITHOUT `requires [emailCap]`.  No main is needed — the point is that the
     compiler rejects the missing-capability call. *)
 let tesl_email_no_cap_src module_name =
-  (module_name, Printf.sprintf {|#lang tesl
-module %s exposing []
+  (module_name, Printf.sprintf {|module %s exposing []
 
 import Tesl.Prelude exposing [String, Unit, Bool(..)]
 import Tesl.Database exposing [Database, DatabaseBackend, Memory]

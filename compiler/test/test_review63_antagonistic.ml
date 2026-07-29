@@ -105,7 +105,6 @@ let test_R63_FA01_forall_param_without_explicit_subject_rejected () =
      parameter position, but the compiler requires `ForAll (IsActive) xs`.
      This tests the spec example which should currently be REJECTED. *)
   should_fail "ForAll.*explicit subject\\|explicit subject.*ForAll" {|
-#lang tesl
 module R63Fa01 exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.length]
@@ -116,7 +115,6 @@ fn countActive(notes: List Int ::: ForAll (IsActive)) -> Int =
 
 let test_R63_FA02_forall_param_with_explicit_subject_accepted () =
   should_pass {|
-#lang tesl
 module R63Fa02 exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.length]
@@ -129,7 +127,6 @@ let test_R63_FA03_forall_return_triple_colon_with_explicit_subject_rejected () =
   (* ForAll in ::: return type with explicit subject is a parse error;
      use ? operator instead *)
   should_fail "expected =\\|parse error" {|
-#lang tesl
 module R63Fa03 exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck, List.length]
@@ -146,7 +143,6 @@ fn getPositives(xs: List Int) -> List Int ::: ForAll (IsPositive) xs =
 let test_R63_FA04_forall_return_question_accepted () =
   (* The ? operator is the correct way to declare ForAll return *)
   should_pass {|
-#lang tesl
 module R63Fa04 exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck, List.length]
@@ -166,7 +162,6 @@ let test_R63_PP01_proof_param_to_int_divide_accepted () =
   (* After the emitter fix, proof-annotated parameters should be accepted
      when passed to proof-total stdlib functions like Int.divide *)
   should_pass {|
-#lang tesl
 module R63Pp01 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [Int.divide, Int.nonZero, IsNonZero]
@@ -180,7 +175,6 @@ fn test(a: Int, b: Int) -> Int =
 let test_R63_PP02_raw_param_to_int_divide_rejected () =
   (* Without the proof, Int.divide should be rejected statically *)
   should_fail "does not statically satisfy\\|proof" {|
-#lang tesl
 module R63Pp02 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [Int.divide, Int.nonZero, IsNonZero]
@@ -190,7 +184,6 @@ fn divHelper(a: Int, b: Int) -> Int =
 
 let test_R63_PP03_proof_param_to_dict_get_accepted () =
   should_pass {|
-#lang tesl
 module R63Pp03 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Dict exposing [Dict, Dict.requireKey, Dict.get, HasKey]
@@ -203,7 +196,6 @@ fn test(key: String, d: Dict String Int) -> Int =
 
 let test_R63_PP04_float_div_with_proof_param_accepted () =
   should_pass {|
-#lang tesl
 module R63Pp04 exposing []
 import Tesl.Float exposing [Float, Float.div, Float.requireNonZero, FloatNonZero]
 fn divHelper(a: Float, b: Float ::: FloatNonZero b) -> Float =
@@ -218,7 +210,6 @@ fn test(a: Float, b: Float) -> Float =
 let test_R63_NE01_newtype_type_mismatch_rejected () =
   (* UserId and ProjectId are distinct nominal types; confusing them is an error *)
   should_fail "cannot unify\\|type mismatch" {|
-#lang tesl
 module R63Ne01 exposing []
 import Tesl.Prelude exposing [String]
 type UserId = String
@@ -237,7 +228,6 @@ fn bad(raw: String) -> String =
 
 let test_R63_EX01_establish_cannot_use_fail () =
   should_fail "establish.*cannot.*fail\\|fail.*establish" {|
-#lang tesl
 module R63Ex01 exposing []
 import Tesl.Prelude exposing [Int, Bool(..), Fact]
 fact IsPositive (n: Int)
@@ -250,7 +240,6 @@ establish provePos(n: Int) -> Fact (IsPositive n) =
 
 let test_R63_EX02_establish_cannot_use_ok () =
   should_fail "establish.*ok\\|ok.*establish\\|cannot.*ok" {|
-#lang tesl
 module R63Ex02 exposing []
 import Tesl.Prelude exposing [Int, Fact]
 fact IsPositive (n: Int)
@@ -260,7 +249,6 @@ establish provePos(n: Int) -> Fact (IsPositive n) =
 
 let test_R63_EX03_establish_direct_return_accepted () =
   should_pass {|
-#lang tesl
 module R63Ex03 exposing []
 import Tesl.Prelude exposing [Int, Fact]
 fact IsPositive (n: Int)
@@ -273,7 +261,6 @@ establish provePos(n: Int) -> Fact (IsPositive n) =
 let test_R63_FN01_fn_cannot_mint_proof_rejected () =
   (* fn cannot declare a proof return for a non-input binding *)
   should_fail "cannot declare a proof\\|fn.*proof" {|
-#lang tesl
 module R63Fn01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -283,7 +270,6 @@ fn mint(n: Int) -> n: Int ::: IsPositive n = n
 let test_R63_FN02_fn_proof_passthrough_accepted () =
   (* fn CAN declare a proof return if it's a passthrough of an input *)
   should_pass {|
-#lang tesl
 module R63Fn02 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -294,7 +280,6 @@ fn passthrough(n: Int ::: IsPositive n) -> n: Int ::: IsPositive n = n
 
 let test_R63_EL01_empty_list_to_forall_param_rejected () =
   should_fail "no trackable subject\\|ForAll" {|
-#lang tesl
 module R63El01 exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.length]
@@ -309,7 +294,6 @@ fn bad() -> Int =
 
 let test_R63_SH01_case_binder_shadowing_rejected () =
   should_fail "shadows\\|shadow" {|
-#lang tesl
 module R63Sh01 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -321,7 +305,6 @@ fn test(m: Maybe Int, n: Int) -> Int =
 
 let test_R63_SH02_let_shadowing_existing_param_rejected () =
   should_fail "shadows\\|shadow" {|
-#lang tesl
 module R63Sh02 exposing []
 import Tesl.Prelude exposing [Int]
 fn test(x: Int) -> Int =
@@ -333,7 +316,6 @@ fn test(x: Int) -> Int =
 
 let test_R63_AU01_auth_in_fn_rejected () =
   should_fail "auth functions may only be called from handler bodies" {|
-#lang tesl
 module R63Au01 exposing []
 import Tesl.Prelude exposing [String]
 fact Authenticated (s: String)
@@ -346,7 +328,6 @@ fn bad(tok: String) -> String =
 
 let test_R63_AU02_auth_in_handler_accepted () =
   should_pass {|
-#lang tesl
 module R63Au02 exposing []
 import Tesl.Prelude exposing [String]
 fact Authenticated (s: String)
@@ -362,7 +343,6 @@ handler h(tok: String) -> String =
 
 let test_R63_CC01_three_way_capability_cycle_rejected () =
   should_fail "cycle" {|
-#lang tesl
 module R63Cc01 exposing []
 import Tesl.Prelude exposing [Int]
 capability alpha implies beta
@@ -376,7 +356,6 @@ handler h(x: Int) -> Int requires [alpha] = x
 let test_R63_WI01_wrong_proof_predicate_at_callsite_rejected () =
   (* Passing a proven value with proof P1 to a function requiring P2 is rejected *)
   should_fail "does not statically satisfy" {|
-#lang tesl
 module R63Wi01 exposing []
 import Tesl.Prelude exposing [Int]
 fact A (n: Int)
@@ -395,7 +374,6 @@ fn test(x: Int) -> Int =
 let test_R63_WI02_wrong_subject_proof_caught () =
   (* Proven x passed where proven y is needed — same type, different subject *)
   should_fail "does not statically satisfy" {|
-#lang tesl
 module R63Wi02 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -414,7 +392,6 @@ fn test(x: Int, y: Int) -> Int =
 
 let test_R63_DG01_dict_get_without_proof_rejected () =
   should_fail "does not statically satisfy\\|HasKey" {|
-#lang tesl
 module R63Dg01 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Dict exposing [Dict, Dict.get, Dict.fromList]
@@ -425,7 +402,6 @@ fn bad(d: Dict String Int) -> Int =
 
 let test_R63_DG02_dict_get_with_proof_accepted () =
   should_pass {|
-#lang tesl
 module R63Dg02 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Dict exposing [Dict, Dict.requireKey, Dict.get, HasKey]
@@ -438,7 +414,6 @@ fn safeGet(key: String, d: Dict String Int) -> Int =
 
 let test_R63_FO01_forall_on_int_rejected () =
   should_fail "ForAll.*only valid\\|only valid.*ForAll\\|not a list\\|type" {|
-#lang tesl
 module R63Fo01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -449,7 +424,6 @@ fn bad(n: Int ::: ForAll (IsPositive) n) -> Int = n
 
 let test_R63_RW01_record_update_preserves_proof_fields () =
   should_pass {|
-#lang tesl
 module R63Rw01 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.String exposing [String.length, IsTrimmed]
@@ -472,7 +446,6 @@ fn test(raw: String, c: Int) -> String =
 
 let test_R63_MF01_multiple_proof_errors_reported () =
   should_fail "requiresC" {|
-#lang tesl
 module R63Mf01 exposing []
 import Tesl.Prelude exposing [Int]
 fact A (n: Int)
@@ -489,7 +462,6 @@ fn test(x: Int) -> Int =
 
 let test_R63_SL01_single_line_if_rejected () =
   should_fail "then.*body.*must be on an indented new line\\|single.line.*if" {|
-#lang tesl
 module R63Sl01 exposing []
 import Tesl.Prelude exposing [Int]
 fn test(n: Int) -> Int = if n > 0 then n else 0
@@ -499,7 +471,6 @@ fn test(n: Int) -> Int = if n > 0 then n else 0
 
 let test_R63_PR01_unimported_proof_predicate_rejected () =
   should_fail "not in scope\\|proof predicate" {|
-#lang tesl
 module R63Pr01 exposing []
 import Tesl.Prelude exposing [Int]
 fn bad(n: Int ::: IsPositive n) -> Int = n
@@ -509,7 +480,6 @@ fn bad(n: Int ::: IsPositive n) -> Int = n
 
 let test_R63_FC01_plain_fn_in_filtercheck_rejected () =
   should_fail "fn.*not a.*check\\|not.*check.*fn" {|
-#lang tesl
 module R63Fc01 exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck]
@@ -520,7 +490,6 @@ fn bad(xs: List Int) -> List Int =
 
 let test_R63_FC02_lambda_in_filtercheck_rejected () =
   should_fail "lambda\\|inline" {|
-#lang tesl
 module R63Fc02 exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck]
@@ -539,7 +508,6 @@ fn bad(xs: List Int) -> List Int ::: ForAll (IsPositive) =
 let test_R63_BN01_bare_check_result_rejected () =
   (* spec says bare check (result not bound) is a compile-time error *)
   should_fail "check\\|bare\\|bound\\|let" {|
-#lang tesl
 module R63Bn01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)

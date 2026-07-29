@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson58HttpClient exposing [
   fetchJson,
   fetchWithBearer,

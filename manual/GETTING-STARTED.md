@@ -67,7 +67,6 @@ Create `users-api.tesl`. Everything starts by validating at the boundary and
 carrying the result as proof:
 
 ```tesl
-#lang tesl
 module UsersApi exposing [UserServer]
 
 # Import exactly what you use — Tesl is explicit about imports.
@@ -248,6 +247,22 @@ my-api/
 - **One module per file** - Keep files focused
 - **Explicit imports** - Always specify what you import
 - **Layered architecture** - Validation → Types → Business logic → Routes
+
+### Discovering Builtins: `tesl doc`
+
+Every builtin type and function — including the ones implemented in the
+runtime rather than in Tesl — has a viewable Tesl signature:
+
+```bash
+tesl doc                 # list all stdlib modules
+tesl doc Tesl.Email      # a module's full surface
+tesl doc Email.send      # one name: signature + one-line doc
+tesl doc SmtpConfig      # record/config shapes, field by field
+```
+
+Function types are rendered live from the type checker, so what `tesl doc`
+prints is exactly what the compiler enforces. The same catalog powers editor
+hover (`--doc-json`).
 
 ---
 

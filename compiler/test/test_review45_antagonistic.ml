@@ -124,8 +124,7 @@ let should_fail_project pattern files =
 
 let nested_non_exhaustive = "nested constructor"
 
-let imported_box_src = {|#lang tesl
-module A exposing [Box(..)]
+let imported_box_src = {|module A exposing [Box(..)]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 type Box =
@@ -133,8 +132,7 @@ type Box =
   | Wrap inner: Maybe Int
 |}
 
-let imported_expr_src = {|#lang tesl
-module A exposing [Expr(..)]
+let imported_expr_src = {|module A exposing [Expr(..)]
 import Tesl.Prelude exposing [Int]
 type Expr =
   | Lit value: Int
@@ -143,8 +141,7 @@ type Expr =
 |}
 
 let r45_01_maybe_literal_hole_rejected () =
-  should_fail_src nested_non_exhaustive {|#lang tesl
-module Main exposing [f]
+  should_fail_src nested_non_exhaustive {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn f(m: Maybe Int) -> Int =
@@ -154,8 +151,7 @@ fn f(m: Maybe Int) -> Int =
 |}
 
 let r45_02_maybe_literal_wildcard_fallback_compiles () =
-  should_pass_src {|#lang tesl
-module Main exposing [f]
+  should_pass_src {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn f(m: Maybe Int) -> Int =
@@ -165,8 +161,7 @@ fn f(m: Maybe Int) -> Int =
 |}
 
 let r45_03_multiple_maybe_literal_holes_rejected () =
-  should_fail_src nested_non_exhaustive {|#lang tesl
-module Main exposing [f]
+  should_fail_src nested_non_exhaustive {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn f(m: Maybe Int) -> Int =
@@ -177,8 +172,7 @@ fn f(m: Maybe Int) -> Int =
 |}
 
 let r45_04_multiple_maybe_literals_plus_binder_fallback_compile () =
-  should_pass_src {|#lang tesl
-module Main exposing [f]
+  should_pass_src {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn f(m: Maybe Int) -> Int =
@@ -189,8 +183,7 @@ fn f(m: Maybe Int) -> Int =
 |}
 
 let r45_05_nested_maybe_hole_rejected () =
-  should_fail_src nested_non_exhaustive {|#lang tesl
-module Main exposing [f]
+  should_fail_src nested_non_exhaustive {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn f(m: Maybe (Maybe Int)) -> Int =
@@ -200,8 +193,7 @@ fn f(m: Maybe (Maybe Int)) -> Int =
 |}
 
 let r45_06_nested_maybe_full_coverage_compiles () =
-  should_pass_src {|#lang tesl
-module Main exposing [f]
+  should_pass_src {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn f(m: Maybe (Maybe Int)) -> Int =
@@ -212,8 +204,7 @@ fn f(m: Maybe (Maybe Int)) -> Int =
 |}
 
 let r45_07_maybe_bool_partial_nested_coverage_rejected () =
-  should_fail_src nested_non_exhaustive {|#lang tesl
-module Main exposing [f]
+  should_fail_src nested_non_exhaustive {|module Main exposing [f]
 import Tesl.Prelude exposing [Bool(..), Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn f(m: Maybe Bool) -> Int =
@@ -223,8 +214,7 @@ fn f(m: Maybe Bool) -> Int =
 |}
 
 let r45_08_maybe_bool_full_nested_coverage_compiles () =
-  should_pass_src {|#lang tesl
-module Main exposing [f]
+  should_pass_src {|module Main exposing [f]
 import Tesl.Prelude exposing [Bool(..), Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn f(m: Maybe Bool) -> Int =
@@ -235,8 +225,7 @@ fn f(m: Maybe Bool) -> Int =
 |}
 
 let r45_09_tuple2_literal_cross_product_hole_rejected () =
-  should_fail_src nested_non_exhaustive {|#lang tesl
-module Main exposing [f]
+  should_fail_src nested_non_exhaustive {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Tuple exposing [Tuple2(..)]
 fn f(t: Tuple2 Int Int) -> Int =
@@ -246,8 +235,7 @@ fn f(t: Tuple2 Int Int) -> Int =
 |}
 
 let r45_10_tuple2_literal_catch_all_row_compiles () =
-  should_pass_src {|#lang tesl
-module Main exposing [f]
+  should_pass_src {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Tuple exposing [Tuple2(..)]
 fn f(t: Tuple2 Int Int) -> Int =
@@ -257,8 +245,7 @@ fn f(t: Tuple2 Int Int) -> Int =
 |}
 
 let r45_11_tuple2_nested_maybe_cross_product_hole_rejected () =
-  should_fail_src nested_non_exhaustive {|#lang tesl
-module Main exposing [f]
+  should_fail_src nested_non_exhaustive {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Tuple exposing [Tuple2(..)]
@@ -269,8 +256,7 @@ fn f(t: Tuple2 (Maybe Int) (Maybe Int)) -> Int =
 |}
 
 let r45_12_tuple2_nested_maybe_full_coverage_compiles () =
-  should_pass_src {|#lang tesl
-module Main exposing [f]
+  should_pass_src {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Tuple exposing [Tuple2(..)]
@@ -282,8 +268,7 @@ fn f(t: Tuple2 (Maybe Int) (Maybe Int)) -> Int =
 |}
 
 let r45_13_bool_pair_missing_one_combination_rejected () =
-  should_fail_src nested_non_exhaustive {|#lang tesl
-module Main exposing [f]
+  should_fail_src nested_non_exhaustive {|module Main exposing [f]
 import Tesl.Prelude exposing [Bool(..), Int]
 import Tesl.Tuple exposing [Tuple2(..)]
 fn f(t: Tuple2 Bool Bool) -> Int =
@@ -294,8 +279,7 @@ fn f(t: Tuple2 Bool Bool) -> Int =
 |}
 
 let r45_14_bool_pair_full_coverage_compiles () =
-  should_pass_src {|#lang tesl
-module Main exposing [f]
+  should_pass_src {|module Main exposing [f]
 import Tesl.Prelude exposing [Bool(..), Int]
 import Tesl.Tuple exposing [Tuple2(..)]
 fn f(t: Tuple2 Bool Bool) -> Int =
@@ -307,8 +291,7 @@ fn f(t: Tuple2 Bool Bool) -> Int =
 |}
 
 let r45_15_tuple3_partial_literal_coverage_rejected () =
-  should_fail_src nested_non_exhaustive {|#lang tesl
-module Main exposing [f]
+  should_fail_src nested_non_exhaustive {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Tuple exposing [Tuple3(..)]
 fn f(t: Tuple3 Int Int Int) -> Int =
@@ -319,8 +302,7 @@ fn f(t: Tuple3 Int Int Int) -> Int =
 |}
 
 let r45_16_tuple3_binder_coverage_compiles () =
-  should_pass_src {|#lang tesl
-module Main exposing [f]
+  should_pass_src {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Tuple exposing [Tuple3(..)]
 fn f(t: Tuple3 Int Int Int) -> Int =
@@ -329,8 +311,7 @@ fn f(t: Tuple3 Int Int Int) -> Int =
 |}
 
 let r45_17_local_fielded_constructor_literal_hole_rejected () =
-  should_fail_src nested_non_exhaustive {|#lang tesl
-module Main exposing [Expr(..), f]
+  should_fail_src nested_non_exhaustive {|module Main exposing [Expr(..), f]
 import Tesl.Prelude exposing [Int]
 type Expr =
   | Lit value: Int
@@ -342,8 +323,7 @@ fn f(e: Expr) -> Int =
 |}
 
 let r45_18_local_fielded_constructor_full_coverage_compiles () =
-  should_pass_src {|#lang tesl
-module Main exposing [Expr(..), f]
+  should_pass_src {|module Main exposing [Expr(..), f]
 import Tesl.Prelude exposing [Int]
 type Expr =
   | Lit value: Int
@@ -355,8 +335,7 @@ fn f(e: Expr) -> Int =
 |}
 
 let r45_19_local_recursive_nested_constructor_hole_rejected () =
-  should_fail_src nested_non_exhaustive {|#lang tesl
-module Main exposing [Expr(..), f]
+  should_fail_src nested_non_exhaustive {|module Main exposing [Expr(..), f]
 import Tesl.Prelude exposing [Int]
 type Expr =
   | Lit value: Int
@@ -370,8 +349,7 @@ fn f(e: Expr) -> Int =
 |}
 
 let r45_20_local_recursive_nested_constructor_full_coverage_compiles () =
-  should_pass_src {|#lang tesl
-module Main exposing [Expr(..), f]
+  should_pass_src {|module Main exposing [Expr(..), f]
 import Tesl.Prelude exposing [Int]
 type Expr =
   | Lit value: Int
@@ -387,8 +365,7 @@ fn f(e: Expr) -> Int =
 let r45_21_imported_fielded_constructor_nested_hole_rejected () =
   should_fail_project nested_non_exhaustive [
     ("A.tesl", imported_box_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [f]
+    ("Main.tesl", {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 import A exposing [Box(..)]
@@ -402,8 +379,7 @@ fn f(b: Box) -> Int =
 let r45_22_imported_fielded_constructor_full_coverage_compiles () =
   should_pass_project [
     ("A.tesl", imported_box_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [f]
+    ("Main.tesl", {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 import A exposing [Box(..)]
@@ -418,8 +394,7 @@ fn f(b: Box) -> Int =
 let r45_23_imported_recursive_nested_constructor_hole_rejected () =
   should_fail_project nested_non_exhaustive [
     ("A.tesl", imported_expr_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [f]
+    ("Main.tesl", {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import A exposing [Expr(..)]
 fn f(e: Expr) -> Int =
@@ -433,8 +408,7 @@ fn f(e: Expr) -> Int =
 let r45_24_imported_recursive_nested_constructor_full_coverage_compiles () =
   should_pass_project [
     ("A.tesl", imported_expr_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [f]
+    ("Main.tesl", {|module Main exposing [f]
 import Tesl.Prelude exposing [Int]
 import A exposing [Expr(..)]
 fn f(e: Expr) -> Int =

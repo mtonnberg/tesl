@@ -115,7 +115,6 @@ let subject_mismatch =
    written "admin" literal (the sharp `<| … ::: pf` leak). *)
 let test_string_literal_reuse_rejected () =
   should_fail ~who:"lit-string-reuse" subject_mismatch {|
-#lang tesl
 module LitLeakStr exposing [attack]
 import Tesl.Prelude exposing [String, Fact]
 fact Audited (s: String)
@@ -129,7 +128,6 @@ fn attack() -> String =
 (* attachFact variant: `attachFact "admin" proofAboutTheOtherAdmin` rejected. *)
 let test_attachfact_string_literal_mismatch_rejected () =
   should_fail ~who:"lit-attachfact-str" subject_mismatch {|
-#lang tesl
 module LitLeakAttach exposing [attack]
 import Tesl.Prelude exposing [String, Fact, attachFact]
 fact Audited (s: String)
@@ -144,7 +142,6 @@ fn attack() -> String =
    second `42`, feed a consumer requiring Sanitized on that value. *)
 let test_int_literal_leak_rejected () =
   should_fail ~who:"lit-int-leak" subject_mismatch {|
-#lang tesl
 module LitLeakInt exposing [attack]
 import Tesl.Prelude exposing [Int, Fact, attachFact]
 fact Sanitized (n: Int)
@@ -164,7 +161,6 @@ fn attack() -> Int =
    at another site.  (Guards against reverting to the old text key.) *)
 let test_value_equal_occurrence_distinct_rejected () =
   should_fail ~who:"prop-occ-distinct" subject_mismatch {|
-#lang tesl
 module PropOccDistinct exposing [attack]
 import Tesl.Prelude exposing [Int, Fact, attachFact]
 fact Sanitized (n: Int)
@@ -178,7 +174,6 @@ fn attack() -> Int =
 (* Value-DISTINCT: prove about 41, require about 42 → reject. *)
 let test_value_distinct_rejected () =
   should_fail ~who:"prop-value-distinct" subject_mismatch {|
-#lang tesl
 module PropValueDistinct exposing [attack]
 import Tesl.Prelude exposing [Int, Fact, attachFact]
 fact Sanitized (n: Int)
@@ -197,7 +192,6 @@ fn attack() -> Int =
 (* HasMin 10 n: literal `10` as content param, checked value is the subject. *)
 let test_content_fact_hasmin_ok () =
   should_pass ~who:"content-hasmin" {|
-#lang tesl
 module ContentHasMin exposing [t]
 import Tesl.Prelude exposing [Int, Bool(..), Fact]
 fact HasMin (lo: Int) (n: Int)
@@ -215,7 +209,6 @@ fn t(raw: Int) -> Int =
 (* `let lo = 1` content-param alignment: Clamped 1 100 n accepts when lo=1. *)
 let test_let_lo_1_clamped_ok () =
   should_pass ~who:"clamped-lo1-ok" {|
-#lang tesl
 module ClampedLo1Ok exposing [ok1]
 import Tesl.Prelude exposing [Int, Bool(..), Fact]
 fact Clamped (lo: Int) (hi: Int) (n: Int)
@@ -237,7 +230,6 @@ fn ok1(raw: Int) -> Int =
 let test_let_lo_2_clamped_rejected () =
   should_fail ~who:"clamped-lo2-bad" "does not statically satisfy\\|Clamped 1 100"
     {|
-#lang tesl
 module ClampedLo2Bad exposing [bad2]
 import Tesl.Prelude exposing [Int, Bool(..), Fact]
 fact Clamped (lo: Int) (hi: Int) (n: Int)
@@ -258,7 +250,6 @@ fn bad2(raw: Int) -> Int =
    subject compiles — the `"http"` is a leading content param, `port` the subject. *)
 let test_string_content_tag_ok () =
   should_pass ~who:"content-strtag" {|
-#lang tesl
 module ContentStrTag exposing [testStringTag]
 import Tesl.Prelude exposing [Int, String, Fact]
 fact Named (name: String) (port: Int)
@@ -273,7 +264,6 @@ fn testStringTag(raw: Int) -> Int =
    via `check` then consumed — a legitimate provenance chain that must compile. *)
 let test_content_fact_variable_subject_ok () =
   should_pass ~who:"content-var-subject" {|
-#lang tesl
 module ContentVarSubject exposing [flow]
 import Tesl.Prelude exposing [Int, Bool(..), Fact]
 fact HasMin (lo: Int) (n: Int)

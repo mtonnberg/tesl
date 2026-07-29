@@ -87,7 +87,6 @@ let should_fail pat src =
 
 let test_R68_EN01_entity_empty_table_name_rejected () =
   should_fail "empty table name\\|entity.*empty.*table" {|
-#lang tesl
 module R68En01 exposing []
 import Tesl.Prelude exposing [Int]
 entity R68En01 table "" primaryKey id { id: Int }
@@ -95,7 +94,6 @@ entity R68En01 table "" primaryKey id { id: Int }
 
 let test_R68_EN02_entity_pk_field_not_declared_rejected () =
   should_fail "primary key\\|no field named\\|declares.*as its primary" {|
-#lang tesl
 module R68En02 exposing []
 import Tesl.Prelude exposing [Int, String]
 entity R68En02 table "items" primaryKey ghost { id: Int name: String }
@@ -103,7 +101,6 @@ entity R68En02 table "items" primaryKey ghost { id: Int name: String }
 
 let test_R68_EN03_entity_pk_not_in_empty_fields_rejected () =
   should_fail "primary key\\|no field named\\|declares.*as its primary" {|
-#lang tesl
 module R68En03 exposing []
 import Tesl.Prelude exposing [Int]
 entity R68En03 table "t" primaryKey id { }
@@ -111,7 +108,6 @@ entity R68En03 table "t" primaryKey id { }
 
 let test_R68_EN04_entity_valid_accepted () =
   should_pass {|
-#lang tesl
 module R68En04 exposing []
 import Tesl.Prelude exposing [Int, String]
 entity R68En04 table "items" primaryKey id {
@@ -123,7 +119,6 @@ entity R68En04 table "items" primaryKey id {
 
 let test_R68_EN05_entity_pk_is_first_field_accepted () =
   should_pass {|
-#lang tesl
 module R68En05 exposing []
 import Tesl.Prelude exposing [Int, String]
 entity R68En05 table "users" primaryKey userId {
@@ -135,7 +130,6 @@ entity R68En05 table "users" primaryKey userId {
 let test_R68_EN06_entity_with_string_pk_accepted () =
   (* Primary key can be a String field too *)
   should_pass {|
-#lang tesl
 module R68En06 exposing []
 import Tesl.Prelude exposing [String]
 entity R68En06 table "sessions" primaryKey token {
@@ -148,7 +142,6 @@ entity R68En06 table "sessions" primaryKey token {
 
 let test_R68_QD01_queue_named_db_not_declared_rejected () =
   should_fail "unknown database\\|references unknown database" {|
-#lang tesl
 module R68Qd01 exposing []
 import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
 queue R68Qd01 = Queue {
@@ -160,7 +153,6 @@ queue R68Qd01 = Queue {
 
 let test_R68_QD02_channel_named_db_not_declared_rejected () =
   should_fail "unknown database\\|references unknown database" {|
-#lang tesl
 module R68Qd02 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.SSE exposing [SseChannel]
@@ -173,7 +165,6 @@ sseChannel R68Qd02 = SseChannel {
 
 let test_R68_QD03_queue_with_declared_database_accepted () =
   should_pass {|
-#lang tesl
 module R68Qd03 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
@@ -197,7 +188,6 @@ queue R68Qd03 = Queue {
 
 let test_R68_QD04_channel_with_declared_database_accepted () =
   should_pass {|
-#lang tesl
 module R68Qd04 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -222,7 +212,6 @@ sseChannel R68Qd04 = SseChannel {
 let test_R68_QD05_multiple_queues_one_bad_database_rejected () =
   (* Only the second queue has an undefined database *)
   should_fail "unknown database\\|references unknown database" {|
-#lang tesl
 module R68Qd05 exposing []
 import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -251,7 +240,6 @@ queue BadQueue = Queue {
 let test_R68_QD06_queue_and_channel_same_db_accepted () =
   (* Both a queue and a channel can share the same database *)
   should_pass {|
-#lang tesl
 module R68Qd06 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Queue exposing [Queue, QueueRetryStrategy, Exponential]
@@ -283,7 +271,6 @@ sseChannel Updates = SseChannel {
 
 let test_R68_FT01_fact_unknown_type_in_param_rejected () =
   should_fail "not in scope\\|unknown.*type\\|type.*not in scope" {|
-#lang tesl
 module R68Ft01 exposing []
 fact ValidEntry (x: UndeclaredRecordType)
 |}
@@ -291,7 +278,6 @@ fact ValidEntry (x: UndeclaredRecordType)
 let test_R68_FT02_fact_unknown_type_stdlib_not_imported_rejected () =
   (* Dict type used in fact param without importing Tesl.Dict *)
   should_fail "not in scope\\|unknown.*type" {|
-#lang tesl
 module R68Ft02 exposing []
 import Tesl.Prelude exposing [String]
 fact HasKey (d: Dict String Int)
@@ -299,7 +285,6 @@ fact HasKey (d: Dict String Int)
 
 let test_R68_FT03_fact_with_valid_local_record_type_accepted () =
   should_pass {|
-#lang tesl
 module R68Ft03 exposing []
 import Tesl.Prelude exposing [Int]
 record Item { id: Int }
@@ -308,7 +293,6 @@ fact IsValid (item: Item)
 
 let test_R68_FT04_fact_with_stdlib_type_imported_accepted () =
   should_pass {|
-#lang tesl
 module R68Ft04 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Maybe exposing [Maybe]
@@ -318,14 +302,12 @@ fact HasValue (m: Maybe Int)
 let test_R68_FT05_fact_with_no_params_accepted () =
   (* Fact with no parameters is valid — it's a module-level predicate *)
   should_pass {|
-#lang tesl
 module R68Ft05 exposing []
 fact GlobalPred
 |}
 
 let test_R68_FT06_fact_with_primitive_types_accepted () =
   should_pass {|
-#lang tesl
 module R68Ft06 exposing []
 import Tesl.Prelude exposing [String, Int]
 fact Authenticated (userId: String)
@@ -336,7 +318,6 @@ fact InRange (lo: Int) (hi: Int) (n: Int)
 
 let test_R68_CP01_capture_binding_unknown_type_rejected () =
   should_fail "not in scope\\|unknown.*type" {|
-#lang tesl
 module R68Cp01 exposing []
 import Tesl.Json exposing [stringCodec]
 capture myCapture: UndefinedType using stringCodec
@@ -345,7 +326,6 @@ capture myCapture: UndefinedType using stringCodec
 let test_R68_CP02_capture_binding_stdlib_type_not_imported_rejected () =
   (* Using Int without importing it *)
   should_fail "not in scope\\|unknown.*type\\|Int.*not in scope" {|
-#lang tesl
 module R68Cp02 exposing []
 import Tesl.Json exposing [intCodec]
 capture myIntCapture: Int using intCodec
@@ -353,7 +333,6 @@ capture myIntCapture: Int using intCodec
 
 let test_R68_CP03_capture_with_valid_stdlib_type_accepted () =
   should_pass {|
-#lang tesl
 module R68Cp03 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -362,7 +341,6 @@ capture userId: String using stringCodec
 
 let test_R68_CP04_capture_with_valid_imported_type_accepted () =
   should_pass {|
-#lang tesl
 module R68Cp04 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Json exposing [intCodec]
@@ -371,7 +349,6 @@ capture itemId: Int using intCodec
 
 let test_R68_CP05_capture_with_local_newtype_accepted () =
   should_pass {|
-#lang tesl
 module R68Cp05 exposing []
 import Tesl.Json exposing [stringCodec]
 import Tesl.Prelude exposing [String]
@@ -383,7 +360,6 @@ capture userId: UserId using stringCodec
 
 let test_R68_OK01_unknown_export_still_rejected () =
   should_fail "unknown or non-local\\|module exposes unknown" {|
-#lang tesl
 module R68Ok01 exposing [doesNotExist]
 import Tesl.Prelude exposing [Int]
 fn add(a: Int, b: Int) -> Int = a + b
@@ -391,7 +367,6 @@ fn add(a: Int, b: Int) -> Int = a + b
 
 let test_R68_OK02_undefined_capability_in_handler_still_rejected () =
   should_fail "undeclared capability\\|unknown.*capability" {|
-#lang tesl
 module R68Ok02 exposing []
 import Tesl.Prelude exposing [Int]
 handler h() -> Int requires [ghostCap] = 42
@@ -399,7 +374,6 @@ handler h() -> Int requires [ghostCap] = 42
 
 let test_R68_OK03_case_unknown_ctor_still_rejected () =
   should_fail "unknown constructor\\|UnknownCtor" {|
-#lang tesl
 module R68Ok03 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]

@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson65PipeOperators exposing [
   double,
   addOne,

@@ -32,22 +32,22 @@
   (readEnvVar [key : String])
   #:capabilities [envRead]
   #:returns (Maybe String)
-  (thsl-src! "example/learn/lesson11-capabilities.tesl" 51 (list (cons 'key *key)) (lambda () (raw-value (env *key)))))
+  (thsl-src! "example/learn/lesson11-capabilities.tesl" 50 (list (cons 'key *key)) (lambda () (raw-value (env *key)))))
 
 (define/pow
   (getCurrentTime)
   #:capabilities [time]
   #:returns PosixMillis
-  (thsl-src! "example/learn/lesson11-capabilities.tesl" 55 (list) (lambda () (raw-value (nowMillis)))))
+  (thsl-src! "example/learn/lesson11-capabilities.tesl" 54 (list) (lambda () (raw-value (nowMillis)))))
 
 (define/pow
   (logMessage [message : String])
   #:capabilities [auditWrite dbRead]
   #:returns String
-  (thsl-src! "example/learn/lesson11-capabilities.tesl" 60 (list (cons 'message *message)) (lambda () (format "logged: ~a" (tesl-display-val *message)))))
+  (thsl-src! "example/learn/lesson11-capabilities.tesl" 59 (list (cons 'message *message)) (lambda () (format "logged: ~a" (tesl-display-val *message)))))
 
 (define/pow
   (readAndWrite [key : String])
   #:capabilities [appCapability envRead]
   #:returns String
-  (let ([value (thsl-src! "example/learn/lesson11-capabilities.tesl" 66 (list (cons 'key *key)) (lambda () (readEnvVar key)))]) (let ([valueStr (thsl-src! "example/learn/lesson11-capabilities.tesl" 67 (list (cons 'value *value) (cons 'key *key)) (lambda () (let ([tesl-case-0 (raw-value value)]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson11-capabilities.tesl" 68 (list) (lambda () "(not set)"))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson11-capabilities.tesl" 69 (list (cons 'v v)) (lambda () *v)))]))))]) (thsl-src! "example/learn/lesson11-capabilities.tesl" 70 (list (cons 'valueStr *valueStr) (cons 'value *value) (cons 'key *key)) (lambda () (format "read key: ~a, value: ~a" (tesl-display-val *key) (tesl-display-val *valueStr)))))))
+  (let ([value (thsl-src! "example/learn/lesson11-capabilities.tesl" 65 (list (cons 'key *key)) (lambda () (readEnvVar key)))]) (let ([valueStr (thsl-src! "example/learn/lesson11-capabilities.tesl" 66 (list (cons 'value *value) (cons 'key *key)) (lambda () (let ([tesl-case-0 (raw-value value)]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson11-capabilities.tesl" 67 (list) (lambda () "(not set)"))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson11-capabilities.tesl" 68 (list (cons 'v v)) (lambda () *v)))]))))]) (thsl-src! "example/learn/lesson11-capabilities.tesl" 69 (list (cons 'valueStr *valueStr) (cons 'value *value) (cons 'key *key)) (lambda () (format "read key: ~a, value: ~a" (tesl-display-val *key) (tesl-display-val *valueStr)))))))

@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson37ParameterizedAdts exposing [
   Box(..),
   Option(..),

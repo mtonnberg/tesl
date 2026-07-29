@@ -101,7 +101,7 @@ let check_fail pattern src =
     check bool (Printf.sprintf "expected failure matching %S, got:\n%s" pattern out)
       true (try ignore (Str.search_forward re out 0); true with Not_found -> false))
 
-let prelude = "#lang tesl\nmodule Test exposing []\nimport Tesl.Prelude exposing [Int]\n"
+let prelude = "module Test exposing []\nimport Tesl.Prelude exposing [Int]\n"
 
 (* ── Positive: huge literal in a body type-checks and round-trips verbatim ─── *)
 
@@ -147,8 +147,7 @@ let test_leading_zero_canonicalization () =
    identified by its canonical string, exactly as an in-range Int literal would be. *)
 
 let test_huge_proof_subject_and_arg () =
-  let src = Printf.sprintf {|#lang tesl
-module Test exposing []
+  let src = Printf.sprintf {|module Test exposing []
 import Tesl.Prelude exposing [Int, Fact]
 import Tesl.Maybe exposing [Maybe(..)]
 
@@ -171,8 +170,7 @@ fn use(x: Int) -> Int =
    validator matches native LInt in 1..65535; a huge LBigInt hits the reject arm. *)
 
 let test_huge_port_still_rejected () =
-  let src = Printf.sprintf {|#lang tesl
-module Test exposing []
+  let src = Printf.sprintf {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.DB exposing [dbRead]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -201,8 +199,7 @@ fn getFn(itemId: String) -> Maybe Item requires [dbRead] =
 
 (* A huge `numberOfWorkers` (VInt config) is likewise still rejected. *)
 let test_huge_worker_count_still_rejected () =
-  let src = Printf.sprintf {|#lang tesl
-module Test exposing []
+  let src = Printf.sprintf {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Unit]
 import Tesl.Queue exposing [Queue, QueueConfig]
 

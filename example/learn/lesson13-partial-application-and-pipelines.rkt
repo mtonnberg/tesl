@@ -21,77 +21,77 @@
 (define/pow
   (add [x : Integer] [y : Integer])
   #:returns Integer
-  (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 30 (list (cons 'x *x) (cons 'y *y)) (lambda () (+ *x *y))))
+  (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 29 (list (cons 'x *x) (cons 'y *y)) (lambda () (+ *x *y))))
 
 (define/pow
   (double [n : Integer])
   #:returns Integer
-  (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 33 (list (cons 'n *n)) (lambda () (* *n 2))))
+  (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 32 (list (cons 'n *n)) (lambda () (* *n 2))))
 
 (define/pow
   (triple [n : Integer])
   #:returns Integer
-  (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 36 (list (cons 'n *n)) (lambda () (* *n 3))))
+  (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 35 (list (cons 'n *n)) (lambda () (* *n 3))))
 
 (define/pow
   (increment [n : Integer])
   #:returns Integer
-  (let ([addOne (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 41 (list (cons 'n *n)) (lambda () (lambda (tesl-p-0-0) (add 1 tesl-p-0-0))))]) (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 42 (list (cons 'addOne *addOne) (cons 'n *n)) (lambda () (raw-value (addOne n))))))
+  (let ([addOne (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 40 (list (cons 'n *n)) (lambda () (lambda (tesl-p-0-0) (add 1 tesl-p-0-0))))]) (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 41 (list (cons 'addOne *addOne) (cons 'n *n)) (lambda () (raw-value (addOne n))))))
 
 (define/pow
   (decrement [n : Integer])
   #:returns Integer
-  (let ([subOne (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 45 (list (cons 'n *n)) (lambda () (lambda (tesl-p-1-0) (add -1 tesl-p-1-0))))]) (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 46 (list (cons 'subOne *subOne) (cons 'n *n)) (lambda () (raw-value (subOne n))))))
+  (let ([subOne (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 44 (list (cons 'n *n)) (lambda () (lambda (tesl-p-1-0) (add -1 tesl-p-1-0))))]) (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 45 (list (cons 'subOne *subOne) (cons 'n *n)) (lambda () (raw-value (subOne n))))))
 
 (define/pow
   (pipeline [n : Integer])
   #:returns Integer
-  (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 51 (list (cons 'n *n)) (lambda () (raw-value (double (double n))))))
+  (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 50 (list (cons 'n *n)) (lambda () (raw-value (double (double n))))))
 
 (define/pow
   (pipeline2 [n : Integer])
   #:returns Integer
-  (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 57 (list (cons 'n *n)) (lambda () (raw-value (triple (double n))))))
+  (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 56 (list (cons 'n *n)) (lambda () (raw-value (triple (double n))))))
 
 (module+ test
   (require rackunit)
   (test-case "add"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 114 (list) (lambda () (add 3 7)))) 10)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 115 (list) (lambda () (add 0 0)))) 0)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 116 (list) (lambda () (add -5 5)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 113 (list) (lambda () (add 3 7)))) 10)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 114 (list) (lambda () (add 0 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 115 (list) (lambda () (add -5 5)))) 0)
     ))
   )
 
   (test-case "double and triple"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 120 (list) (lambda () (double 5)))) 10)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 121 (list) (lambda () (double 0)))) 0)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 122 (list) (lambda () (triple 3)))) 9)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 119 (list) (lambda () (double 5)))) 10)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 120 (list) (lambda () (double 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 121 (list) (lambda () (triple 3)))) 9)
     ))
   )
 
   (test-case "increment and decrement"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 126 (list) (lambda () (increment 4)))) 5)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 127 (list) (lambda () (increment 0)))) 1)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 128 (list) (lambda () (decrement 5)))) 4)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 129 (list) (lambda () (decrement 0)))) -1)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 125 (list) (lambda () (increment 4)))) 5)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 126 (list) (lambda () (increment 0)))) 1)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 127 (list) (lambda () (decrement 5)))) 4)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 128 (list) (lambda () (decrement 0)))) -1)
     ))
   )
 
   (test-case "pipeline"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 133 (list) (lambda () (pipeline 3)))) 12)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 134 (list) (lambda () (pipeline 1)))) 4)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 135 (list) (lambda () (pipeline 0)))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 132 (list) (lambda () (pipeline 3)))) 12)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 133 (list) (lambda () (pipeline 1)))) 4)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 134 (list) (lambda () (pipeline 0)))) 0)
     ))
   )
 
   (test-case "pipeline2"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 139 (list) (lambda () (pipeline2 2)))) 12)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 140 (list) (lambda () (pipeline2 1)))) 6)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 138 (list) (lambda () (pipeline2 2)))) 12)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson13-partial-application-and-pipelines.tesl" 139 (list) (lambda () (pipeline2 1)))) 6)
     ))
   )
 

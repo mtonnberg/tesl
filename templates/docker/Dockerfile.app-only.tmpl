@@ -18,7 +18,6 @@
 #   <context>/
 #     collections/tesl/dsl/    (copy of repo dsl/)
 #     collections/tesl/tesl/   (copy of repo tesl/)
-#     collections/tesl/lang/   (copy of repo lang/)
 #     __APP_RKT__              (output of `tesl compile <app>.tesl`)
 #     <any dependency .rkt>    (compiled imports, same relative paths)
 # ---------------------------------------------------------------------------
@@ -28,7 +27,7 @@ LABEL org.opencontainers.image.title="__APP_NAME__" \
       org.opencontainers.image.description="Tesl app (app-only, external Postgres)"
 
 # The Tesl runtime collections are required by the compiled app via
-#   (require tesl/dsl/… tesl/tesl/… tesl/lang/…)
+#   (require tesl/dsl/… tesl/tesl/…)
 # We expose them as a Racket collection root through PLTCOLLECTS. The base
 # image's own collects dir MUST come first (so raco/the reader resolve), then
 # our collection root containing the single `tesl` collection.
@@ -43,8 +42,7 @@ COPY collections/ ${TESL_COLLECTIONS}/
 # Pre-compile the runtime collections to .zo so app startup is fast.
 # Non-fatal: if it fails the app still runs (compiled on first load).
 RUN raco make ${TESL_COLLECTIONS}/tesl/dsl/*.rkt \
-               ${TESL_COLLECTIONS}/tesl/tesl/*.rkt \
-               ${TESL_COLLECTIONS}/tesl/lang/*.rkt 2>/dev/null || true
+               ${TESL_COLLECTIONS}/tesl/tesl/*.rkt 2>/dev/null || true
 
 # The compiled application (+ any compiled dependency .rkt files).
 COPY __APP_RKT__ /opt/tesl/app/__APP_RKT__

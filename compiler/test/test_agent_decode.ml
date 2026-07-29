@@ -35,7 +35,7 @@ let agent_imports =
    import Tesl.Agent exposing [decodeAs]\n"
 
 let module_ ?(name="M") ?(exports="") body =
-  Printf.sprintf "#lang tesl\nmodule %s exposing [%s]\n%s\n%s"
+  Printf.sprintf "module %s exposing [%s]\n%s\n%s"
     name exports agent_imports body
 
 let compile_ok name src =

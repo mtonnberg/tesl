@@ -92,12 +92,11 @@ let normalize_conj_str (s : string) : string =
 let build_cap_map (decls : top_decl list) : (string * string list) list =
   List.filter_map (function
     | DCapability c -> Some (c.name, c.implies)
-    (* Cache declarations implicitly define a "cacheCap <Name>" capability *)
+    (* Cache declarations implicitly define a "cacheCap <Name>" capability.
+       Email declarations do NOT grant "emailCap" — the only grant path is
+       `import Tesl.Email exposing [emailCap]` (roadmap: ambient_email_cap),
+       exactly like `time` from Tesl.Time. *)
     | DCache (c : Ast.cache_form) -> Some ("cacheCap " ^ c.name, [])
-    (* Email declarations implicitly define the "emailCap" capability (renamed
-       from the overloaded "email", which clashed with the `email X = Email {…}`
-       declaration keyword — mirrors the cache → cacheCap rename). *)
-    | DEmail _ -> Some ("emailCap", [])
     | _ -> None
   ) decls
 
@@ -122,7 +121,7 @@ let load_imported_cap_map (m : module_form) : (string * string list) list =
      / "emailCap") from every transitively imported local module — the single
      collector lives in Validation_common (shared with the capability
      validator) so the two judgments cannot drift. *)
-  Validation_common.collect_imported_cache_email_caps m
+  Validation_common.collect_imported_cache_caps m
   @ List.concat_map (fun (imp : import_decl) ->
     let requested = match imp.names with
       | ImportAll -> None
@@ -1053,17 +1052,30 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
      the commonest miss is a capability declared in the ENTRYPOINT while a lib
      fn requires it — capability scope is per-module-plus-imports, so the
      declaration must live where (or below where) it is used. *)
-  let undeclared_cap_guidance =
-    "; capabilities must be declared in the module that uses them or in a \
-     module it imports — move the `capability` declaration to a shared module \
-     both can import" in
+  (* For a stdlib-provided capability the fix is an exact import line, not a
+     `capability` declaration — name it (roadmap: ambient_email_cap). *)
+  let stdlib_cap_provider cap =
+    List.find_map (fun (module_name, caps) ->
+      if List.mem_assoc cap caps then Some module_name else None
+    ) stdlib_capabilities
+  in
+  let undeclared_cap_guidance cap =
+    match stdlib_cap_provider cap with
+    | Some module_name ->
+      Printf.sprintf
+        "; '%s' is provided by the %s stdlib module — add `import %s exposing \
+         [%s]`" cap module_name module_name cap
+    | None ->
+      "; capabilities must be declared in the module that uses them or in a \
+       module it imports — move the `capability` declaration to a shared module \
+       both can import" in
   let check_requires ~what ~name ~loc caps =
     List.iter (fun cap ->
       if not (List.mem cap declared_caps) then
         errors := { loc;
           message = Printf.sprintf
             "%s '%s' requires undeclared capability '%s'%s" what name cap
-            undeclared_cap_guidance
+            (undeclared_cap_guidance cap)
         } :: !errors
     ) caps
   in
@@ -1089,7 +1101,7 @@ let check_capabilities ?(extra_caps = []) (decls : top_decl list) : proof_error 
           errors := { loc = fd.loc;
             message = Printf.sprintf
               "function '%s' requires undeclared capability '%s'%s" fd.name cap
-              undeclared_cap_guidance
+              (undeclared_cap_guidance cap)
           } :: !errors
       ) fd.capabilities
     (* Decl kinds that CARRY a `requires [...]` list but were skipped by the

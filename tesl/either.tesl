@@ -1,4 +1,3 @@
-#lang tesl
 # ─────────────────────────────────────────────────────────────────────────────
 # Tesl.Either — TYPE SOURCE OF TRUTH *and* real implementation source for the
 # pure Either combinators.

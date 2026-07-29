@@ -92,8 +92,7 @@ let should_pass label src =
 
 (* Header: `dbRead`/`dbWrite` so the write's capability requirement is satisfied
    and only the FromDb-WHERE diagnostic can fire. *)
-let hdr name = Printf.sprintf {|#lang tesl
-module %s exposing []
+let hdr name = Printf.sprintf {|module %s exposing []
 import Tesl.Prelude exposing [String, Bool(..)]
 import Tesl.DB exposing [dbRead, dbWrite, DeleteResult(..)]
 import Tesl.Maybe exposing [Maybe(..)]

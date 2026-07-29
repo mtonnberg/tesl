@@ -1,4 +1,3 @@
-#lang tesl
 module QueryParametersTests exposing [SearchServer]
 
 import Tesl.Prelude exposing [String]

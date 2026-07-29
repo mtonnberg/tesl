@@ -122,8 +122,7 @@ let should_fail_src pattern src =
     with Not_found -> failf "expected failure matching %S, got:\n%s" pattern out)
 
 let test_r47_01_canonical_pack_single_pass () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(n: Int ::: Positive n) -> Int ? Positive =
@@ -131,8 +130,7 @@ fn f(n: Int ::: Positive n) -> Int ? Positive =
 |}
 
 let test_r47_02_canonical_pack_conj_pass () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fact Small (n: Int)
@@ -141,8 +139,7 @@ fn f(n: Int ::: Positive n && Small n) -> Int ? Positive && Small =
 |}
 
 let test_r47_03_canonical_pack_cargo_pass () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, detachFact]
 fact Positive (n: Int)
 fact Admin (user: String)
@@ -151,16 +148,14 @@ fn f(n: Int ::: Positive n, user: String ::: Admin user) -> Int ? Positive ::: A
 |}
 
 let test_r47_04_canonical_pack_missing_predicate_rejected () =
-  should_fail_src "proof predicate 'Missing' is not in scope" {|#lang tesl
-module Test exposing []
+  should_fail_src "proof predicate 'Missing' is not in scope" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fn f(n: Int) -> Int ? Missing =
   n
 |}
 
 let test_r47_05_canonical_pack_cargo_unknown_subject_rejected () =
-  should_fail_src "cargo proof subject mismatch" {|#lang tesl
-module Test exposing []
+  should_fail_src "cargo proof subject mismatch" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, detachFact]
 fact Positive (n: Int)
 fact Admin (user: String)
@@ -169,8 +164,7 @@ fn f(n: Int ::: Positive n, user: String ::: Admin user) -> Int ? Positive ::: A
 |}
 
 let test_r47_06_legacy_prefix_pack_rejected () =
-  should_fail_src "legacy return-pack syntax" {|#lang tesl
-module Test exposing []
+  should_fail_src "legacy return-pack syntax" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(n: Int ::: Positive n) -> ?Int ::: Positive n =
@@ -178,16 +172,14 @@ fn f(n: Int ::: Positive n) -> ?Int ::: Positive n =
 |}
 
 let test_r47_07_legacy_prefix_pack_no_proof_rejected () =
-  should_fail_src "legacy return-pack syntax" {|#lang tesl
-module Test exposing []
+  should_fail_src "legacy return-pack syntax" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fn f(n: Int) -> ?Int =
   n
 |}
 
 let test_r47_08_legacy_prefix_pack_paren_type_rejected () =
-  should_fail_src "legacy return-pack syntax" {|#lang tesl
-module Test exposing []
+  should_fail_src "legacy return-pack syntax" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(n: Int ::: Positive n) -> ?(Int) ::: Positive n =
@@ -195,8 +187,7 @@ fn f(n: Int ::: Positive n) -> ?(Int) ::: Positive n =
 |}
 
 let test_r47_09_forall_list_pack_pass () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, List]
 fact Positive (n: Int)
 fn f(xs: List Int ::: ForAll Positive xs) -> List Int ? ForAll Positive =
@@ -204,8 +195,7 @@ fn f(xs: List Int ::: ForAll Positive xs) -> List Int ? ForAll Positive =
 |}
 
 let test_r47_10_forall_set_pack_pass () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Set exposing [Set]
 fact Positive (n: Int)
@@ -214,8 +204,7 @@ fn f(xs: Set Int ::: ForAll Positive xs) -> Set Int ? ForAll Positive =
 |}
 
 let test_r47_11_forall_non_collection_rejected () =
-  should_fail_src "only valid for `List` or `Set`" {|#lang tesl
-module Test exposing []
+  should_fail_src "only valid for `List` or `Set`" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(n: Int ::: Positive n) -> Int ? ForAll Positive =
@@ -223,8 +212,7 @@ fn f(n: Int ::: Positive n) -> Int ? ForAll Positive =
 |}
 
 let test_r47_12_forallvalues_non_dict_rejected () =
-  should_fail_src "only valid for `Dict`" {|#lang tesl
-module Test exposing []
+  should_fail_src "only valid for `Dict`" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(n: Int ::: Positive n) -> Int ? ForAllValues Positive =
@@ -232,8 +220,7 @@ fn f(n: Int ::: Positive n) -> Int ? ForAllValues Positive =
 |}
 
 let test_r47_13_attach_wrong_subject_rejected () =
-  should_fail_src "proof subject mismatch" {|#lang tesl
-module Test exposing []
+  should_fail_src "proof subject mismatch" {|module Test exposing []
 import Tesl.Prelude exposing [Int, Fact, attachFact]
 fact Positive (n: Int)
 establish prove(n: Int) -> Fact (Positive n) =
@@ -244,8 +231,7 @@ fn f(a: Int, b: Int) -> Int ::: Positive b =
 |}
 
 let test_r47_14_forget_fact_pass () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, forgetFact]
 fact Positive (n: Int)
 fn f(n: Int ::: Positive n) -> Int =
@@ -254,8 +240,7 @@ fn f(n: Int ::: Positive n) -> Int =
 |}
 
 let test_r47_15_free_floating_proof_fabrication_rejected () =
-  should_fail_src "proof construction is not allowed in `fn`" {|#lang tesl
-module Test exposing []
+  should_fail_src "proof construction is not allowed in `fn`" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(n: Int) -> Int ::: Positive n =
@@ -263,8 +248,7 @@ fn f(n: Int) -> Int ::: Positive n =
 |}
 
 let test_r47_16_qualified_single_arg_paren_call_pass () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.String exposing [String.length]
 fn f(s: String) -> Int =
@@ -272,8 +256,7 @@ fn f(s: String) -> Int =
 |}
 
 let test_r47_17_zero_arg_paren_call_pass () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fn g() -> Int = 1
 fn f() -> Int =
@@ -281,8 +264,7 @@ fn f() -> Int =
 |}
 
 let test_r47_18_multi_arg_paren_call_rejected () =
-  should_fail_src "expected .* but got ," {|#lang tesl
-module Test exposing []
+  should_fail_src "expected .* but got ," {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fn add(x: Int, y: Int) -> Int = x + y
 fn f() -> Int =
@@ -290,8 +272,7 @@ fn f() -> Int =
 |}
 
 let test_r47_19_check_single_arg_paren_pass () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 check checkPositive(n: Int) -> n: Int ::: Positive n =
@@ -302,8 +283,7 @@ fn f(n: Int) -> Int =
 |}
 
 let test_r47_20_plain_call_to_check_without_keyword_rejected () =
-  should_fail_src "must be called with the `check` keyword" {|#lang tesl
-module Test exposing []
+  should_fail_src "must be called with the `check` keyword" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 check checkPositive(n: Int) -> n: Int ::: Positive n =
@@ -314,8 +294,7 @@ fn f(n: Int) -> Int =
 |}
 
 let test_r47_21_canonical_pack_returnline_detached_pass () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Fact, detachFact]
 fact Positive (n: Int)
 fact Admin (user: String)
@@ -327,8 +306,7 @@ fn f(n: Int, user: String ::: Admin user) -> Int ? Positive ::: Admin user =
 |}
 
 let test_r47_22_legacy_prefix_pack_with_cargo_rejected () =
-  should_fail_src "legacy return-pack syntax" {|#lang tesl
-module Test exposing []
+  should_fail_src "legacy return-pack syntax" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, detachFact]
 fact Positive (n: Int)
 fact Admin (user: String)
@@ -337,8 +315,7 @@ fn f(n: Int ::: Positive n, user: String ::: Admin user) -> ?Int ::: Positive n 
 |}
 
 let test_r47_23_canonical_pack_conj_with_cargo_pass () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, detachFact]
 fact Positive (n: Int)
 fact Small (n: Int)
@@ -350,8 +327,7 @@ fn f(n: Int ::: Positive n && Small n, user: String ::: Admin user) -> Int ? Pos
 let test_r47_24_attach_same_subject_pass () =
   (* fn with RetAttached (n: T ::: P) return spec is now banned; only check/establish/auth may
      declare proof-carrying return types. The correct alternative for fn is RetNamedPack (T ? P). *)
-  should_fail_src "plain.*`fn`\\|fn.*cannot\\|proof-carrying" {|#lang tesl
-module Test exposing []
+  should_fail_src "plain.*`fn`\\|fn.*cannot\\|proof-carrying" {|module Test exposing []
 import Tesl.Prelude exposing [Int, Fact, attachFact]
 fact Positive (n: Int)
 establish prove(n: Int) -> Fact (Positive n) =
@@ -362,8 +338,7 @@ fn f(n: Int) -> Int ::: Positive n =
 |}
 
 let test_r47_25_cargo_subject_mismatch_rejected () =
-  should_fail_src "cargo proof subject mismatch" {|#lang tesl
-module Test exposing []
+  should_fail_src "cargo proof subject mismatch" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, detachFact]
 fact Positive (n: Int)
 fact Admin (user: String)
@@ -374,8 +349,7 @@ fn f(n: Int ::: Positive n, user: String ::: Admin user, other: String) -> Int ?
 (* ── NEW REGRESSION TESTS: entity-side ? soundness, nested packs, proof transport ── *)
 
 let test_r47_26_unbound_entity_subject_rejected () =
-  should_fail_src "argument count mismatch" {|#lang tesl
-module Test exposing []
+  should_fail_src "argument count mismatch" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact ValidScore (n: Int)
 check checkScore(n: Int) -> n: Int ::: ValidScore n =
@@ -385,8 +359,7 @@ fn foo() -> Int ? ValidScore foo3 =
 |}
 
 let test_r47_27_over_arity_entity_subject_rejected () =
-  should_fail_src "argument count mismatch" {|#lang tesl
-module Test exposing []
+  should_fail_src "argument count mismatch" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact ValidScore (n: Int)
 check checkScore(n: Int) -> n: Int ::: ValidScore n =
@@ -396,8 +369,7 @@ fn foo(extra: Int) -> Int ? ValidScore extra =
 |}
 
 let test_r47_28_fabricated_conjunction_rejected () =
-  should_fail_src "named pack claiming entity proof" {|#lang tesl
-module Test exposing []
+  should_fail_src "named pack claiming entity proof" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fact Small (n: Int)
@@ -406,8 +378,7 @@ fn fabricate(n: Int ::: Positive n) -> Int ? Positive && Small =
 |}
 
 let test_r47_29_nested_pack_maybe_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe]
 fact ValidScore (n: Int)
@@ -416,8 +387,7 @@ fn f() -> Maybe (Int ? ValidScore) =
 |}
 
 let test_r47_30_canonical_unary_entity_pack_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(n: Int ::: Positive n) -> Int ? Positive =
@@ -425,8 +395,7 @@ fn f(n: Int ::: Positive n) -> Int ? Positive =
 |}
 
 let test_r47_31_canonical_entity_pack_with_check_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 check checkPositive(n: Int) -> n: Int ::: Positive n =
@@ -436,8 +405,7 @@ fn f(n: Int) -> Int ? Positive =
 |}
 
 let test_r47_32_entity_pack_with_establish_and_cargo_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Fact, detachFact]
 fact IsPositive (n: Int)
 fact IsAdmin (user: String)
@@ -449,8 +417,7 @@ fn f(n: Int, user: String ::: IsAdmin user) -> Int ? IsPositive ::: IsAdmin user
 |}
 
 let test_r47_33_missing_entity_proof_rejected () =
-  should_fail_src "named pack claiming entity proof" {|#lang tesl
-module Test exposing []
+  should_fail_src "named pack claiming entity proof" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(n: Int) -> Int ? Positive =
@@ -458,8 +425,7 @@ fn f(n: Int) -> Int ? Positive =
 |}
 
 let test_r47_34_missing_cargo_proof_rejected () =
-  should_fail_src "named pack claiming cargo proof" {|#lang tesl
-module Test exposing []
+  should_fail_src "named pack claiming cargo proof" {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, detachFact]
 fact Positive (n: Int)
 fact Admin (user: String)
@@ -468,8 +434,7 @@ fn f(n: Int ::: Positive n, user: String) -> Int ? Positive ::: Admin user =
 |}
 
 let test_r47_35_entity_pack_alias_through_let_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(n: Int ::: Positive n) -> Int ? Positive =
@@ -478,8 +443,7 @@ fn f(n: Int ::: Positive n) -> Int ? Positive =
 |}
 
 let test_r47_36_entity_pack_if_branches_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, Bool]
 fact Positive (n: Int)
 fn f(n: Int ::: Positive n, flag: Bool) -> Int ? Positive =
@@ -490,8 +454,7 @@ fn f(n: Int ::: Positive n, flag: Bool) -> Int ? Positive =
 |}
 
 let test_r47_37_entity_pack_if_missing_branch_rejected () =
-  should_fail_src "named pack claiming entity proof" {|#lang tesl
-module Test exposing []
+  should_fail_src "named pack claiming entity proof" {|module Test exposing []
 import Tesl.Prelude exposing [Int, Bool]
 fact Positive (n: Int)
 fn f(n: Int, proven: Int ::: Positive proven, flag: Bool) -> Int ? Positive =
@@ -502,8 +465,7 @@ fn f(n: Int, proven: Int ::: Positive proven, flag: Bool) -> Int ? Positive =
 |}
 
 let test_r47_38_binary_fact_entity_pack_zero_explicit_args () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(n: Int ::: Positive n) -> Int ? Positive =
@@ -511,8 +473,7 @@ fn f(n: Int ::: Positive n) -> Int ? Positive =
 |}
 
 let test_r47_39_entity_pack_handler_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 check checkPositive(n: Int) -> n: Int ::: Positive n =
@@ -522,8 +483,7 @@ handler h(n: Int) -> Int ? Positive =
 |}
 
 let test_r47_40_canonical_pack_conjunction_with_check_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fact Small (n: Int)
@@ -534,8 +494,7 @@ fn f(n: Int) -> Int ? Positive && Small =
 |}
 
 let test_r47_41_partial_conjunction_rejected () =
-  should_fail_src "named pack claiming entity proof" {|#lang tesl
-module Test exposing []
+  should_fail_src "named pack claiming entity proof" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fact Small (n: Int)
@@ -546,8 +505,7 @@ fn f(n: Int) -> Int ? Positive && Small =
 |}
 
 let test_r47_42_nested_pack_in_list_erased_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, List]
 fact Positive (n: Int)
 fn f() -> List (Int ? Positive) =
@@ -555,8 +513,7 @@ fn f() -> List (Int ? Positive) =
 |}
 
 let test_r47_43_legacy_prefix_inside_exists_rejected () =
-  should_fail_src "legacy return-pack syntax" {|#lang tesl
-module Test exposing []
+  should_fail_src "legacy return-pack syntax" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(n: Int ::: Positive n) -> exists x: Int => ?Int ::: Positive n =
@@ -564,8 +521,7 @@ fn f(n: Int ::: Positive n) -> exists x: Int => ?Int ::: Positive n =
 |}
 
 let test_r47_44_entity_pack_with_case_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(a: Int ::: Positive a) -> Int ? Positive =
@@ -574,8 +530,7 @@ fn f(a: Int ::: Positive a) -> Int ? Positive =
 |}
 
 let test_r47_45_entity_pack_empty_proof_still_valid () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fn f(n: Int) -> Int ? =
   n
@@ -584,8 +539,7 @@ fn f(n: Int) -> Int ? =
 (* ── PHASE 2: Deep adversarial probes from audit (H21-H30) ─────────────────── *)
 
 let test_r47_46_forgetFact_direct_return_rejected () =
-  should_fail_src "named pack claiming" {|#lang tesl
-module Test exposing []
+  should_fail_src "named pack claiming" {|module Test exposing []
 import Tesl.Prelude exposing [Int, forgetFact]
 fact Positive (n: Int)
 fn f(n: Int ::: Positive n) -> Int ? Positive =
@@ -593,8 +547,7 @@ fn f(n: Int ::: Positive n) -> Int ? Positive =
 |}
 
 let test_r47_47_forgetFact_chain_rejected () =
-  should_fail_src "named pack claiming" {|#lang tesl
-module Test exposing []
+  should_fail_src "named pack claiming" {|module Test exposing []
 import Tesl.Prelude exposing [Int, forgetFact]
 fact Positive (n: Int)
 fn f(n: Int ::: Positive n) -> Int ? Positive =
@@ -604,8 +557,7 @@ fn f(n: Int ::: Positive n) -> Int ? Positive =
 |}
 
 let test_r47_48_let_alias_to_unproven_rejected () =
-  should_fail_src "named pack claiming" {|#lang tesl
-module Test exposing []
+  should_fail_src "named pack claiming" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(n: Int) -> Int ? Positive =
@@ -614,8 +566,7 @@ fn f(n: Int) -> Int ? Positive =
 |}
 
 let test_r47_49_binary_fact_passthrough_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact BoundedBy (n: Int, limit: Int)
 fn f(n: Int ::: BoundedBy n lim, lim: Int) -> Int ? BoundedBy lim =
@@ -623,8 +574,7 @@ fn f(n: Int ::: BoundedBy n lim, lim: Int) -> Int ? BoundedBy lim =
 |}
 
 let test_r47_50_binary_fact_wrong_explicit_rejected () =
-  should_fail_src "named pack claiming" {|#lang tesl
-module Test exposing []
+  should_fail_src "named pack claiming" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact BoundedBy (n: Int, limit: Int)
 fn f(n: Int, lim: Int) -> Int ? BoundedBy lim =
@@ -632,8 +582,7 @@ fn f(n: Int, lim: Int) -> Int ? BoundedBy lim =
 |}
 
 let test_r47_51_fabricate_via_let_naming_rejected () =
-  should_fail_src "named pack claiming" {|#lang tesl
-module Test exposing []
+  should_fail_src "named pack claiming" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(n: Int) -> Int ? Positive =
@@ -642,8 +591,7 @@ fn f(n: Int) -> Int ? Positive =
 |}
 
 let test_r47_52_nested_maybe_pack_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe]
 fact Positive (n: Int)
@@ -652,16 +600,14 @@ fn f() -> Maybe (Int ? Positive) =
 |}
 
 let test_r47_53_entity_proof_undeclared_fact_rejected () =
-  should_fail_src "not in scope" {|#lang tesl
-module Test exposing []
+  should_fail_src "not in scope" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fn f(n: Int) -> Int ? Nonexistent =
   n
 |}
 
 let test_r47_54_cargo_proof_undeclared_fact_rejected () =
-  should_fail_src "not in scope" {|#lang tesl
-module Test exposing []
+  should_fail_src "not in scope" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(n: Int ::: Positive n) -> Int ? Positive ::: Nonexistent n =
@@ -669,8 +615,7 @@ fn f(n: Int ::: Positive n) -> Int ? Positive ::: Nonexistent n =
 |}
 
 let test_r47_55_ternary_entity_passthrough_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact InRange (n: Int, lo: Int, hi: Int)
 check cr(n: Int, lo: Int, hi: Int) -> n: Int ::: InRange n lo hi =
@@ -680,8 +625,7 @@ fn f(n: Int ::: InRange n lo hi, lo: Int, hi: Int) -> Int ? InRange lo hi =
 |}
 
 let test_r47_56_proof_from_wrong_var_rejected () =
-  should_fail_src "named pack claiming" {|#lang tesl
-module Test exposing []
+  should_fail_src "named pack claiming" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fn f(a: Int ::: Positive a, b: Int) -> Int ? Positive =
@@ -689,8 +633,7 @@ fn f(a: Int ::: Positive a, b: Int) -> Int ? Positive =
 |}
 
 let test_r47_57_compound_check_conjunction_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fact Small (n: Int)
@@ -703,8 +646,7 @@ fn f(n: Int) -> Int ? Positive && Small =
 |}
 
 let test_r47_58_entity_cargo_establish_detachFact_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Fact, detachFact]
 fact IsPositive (n: Int)
 fact IsAdmin (user: String)
@@ -716,8 +658,7 @@ fn f(n: Int, user: String ::: IsAdmin user) -> Int ? IsPositive ::: IsAdmin user
 |}
 
 let test_r47_59_handler_with_fail_case_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 fact Positive (n: Int)
 check cp(n: Int) -> n: Int ::: Positive n =
@@ -729,8 +670,7 @@ handler f(n: Int, s: String) -> Int ? Positive =
 |}
 
 let test_r47_60_exists_named_pack_compiles () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Fact]
 fact Positive (n: Int)
 establish pp(n: Int) -> Fact (Positive n) =

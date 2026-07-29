@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson73Metrics exposing [recordSignup]
 
 # ─────────────────────────────────────────────

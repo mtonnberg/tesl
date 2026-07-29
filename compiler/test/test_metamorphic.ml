@@ -138,24 +138,21 @@ let read_file f = try In_channel.with_open_text f In_channel.input_all with _ ->
    so both transforms have a site.  A preserving rewrite must keep them rejected. *)
 
 let rejected_fixtures = [
-  ("type-error", {|#lang tesl
-module T exposing [f, g]
+  ("type-error", {|module T exposing [f, g]
 import Tesl.Prelude exposing [Int, String]
 fn g(n: Int) -> Int = n
 fn f(n: Int) -> String =
   let x = n
   x
 |});
-  ("unbound-use", {|#lang tesl
-module T exposing [f, g]
+  ("unbound-use", {|module T exposing [f, g]
 import Tesl.Prelude exposing [Int]
 fn g(n: Int) -> Int = n
 fn f(n: Int) -> Int =
   let x = n
   x + missingVariable
 |});
-  ("capability-missing", {|#lang tesl
-module T exposing [del, other]
+  ("capability-missing", {|module T exposing [del, other]
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead, dbWrite]
 entity Row table "rows" primaryKey id { id: String }

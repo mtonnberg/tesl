@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson01BasicTypesAndFunctions exposing [
   double,
   negate,

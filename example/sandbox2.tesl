@@ -1,4 +1,3 @@
-#lang tesl
 module Sandbox2 exposing [
   doSomething,
   doSomething2,

@@ -1,4 +1,3 @@
-#lang tesl
 module AiConversationService exposing [
   ChatServer,
   replyTurn,

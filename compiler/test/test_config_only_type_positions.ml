@@ -91,7 +91,7 @@ let expected_fragment = function
 
 let module_header name =
   Printf.sprintf
-    "#lang tesl\nmodule Probe exposing []\nimport Tesl.Prelude exposing [Int, String]\n%s\n"
+    "module Probe exposing []\nimport Tesl.Prelude exposing [Int, String]\n%s\n"
     (import_for name)
 
 (* (position label, source body using NAME in that type position) *)
@@ -122,7 +122,7 @@ let test_reject_matrix () =
 (* ── Accept: erased SI quantity aliases in every position ─────────────────── *)
 
 let units_header =
-  "#lang tesl\nmodule Probe exposing []\n\
+  "module Probe exposing []\n\
    import Tesl.Prelude exposing [Int, String]\n\
    import Tesl.Units exposing [Speed, Duration, Length]\n"
 
@@ -147,8 +147,7 @@ let test_accept_si_aliases () =
 
 (* ── Accept: main() -> App stays exempt (MainKind return specs skipped) ───── *)
 
-let main_app_src = {|#lang tesl
-module Probe exposing []
+let main_app_src = {|module Probe exposing []
 import Tesl.Prelude exposing [Int, String, Unit, List]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.App exposing [App]
@@ -178,8 +177,7 @@ let test_accept_main_app () = assert_clean ~ctx:"main-App" main_app_src
 
 (* `type Email = String` (lesson04 pattern): Email is a config-only name of
    Tesl.Email, but the local newtype owns it. *)
-let shadow_email_src = {|#lang tesl
-module Probe exposing []
+let shadow_email_src = {|module Probe exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..)]
 
 type Email = String
@@ -191,8 +189,7 @@ fn emailAddress(email: Email) -> Bool = True
    Tesl.Queue (imported here WITHOUT exposing Fixed — an explicit
    `exposing [Fixed]` collision is already rejected by the pre-existing
    shadowing validation). *)
-let shadow_fixed_src = {|#lang tesl
-module Probe exposing []
+let shadow_fixed_src = {|module Probe exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Queue exposing [Queue]
 
@@ -209,8 +206,7 @@ let test_accept_local_shadows () =
 
 (* ── Expression positions: config ctors outside config blocks ─────────────── *)
 
-let expr_memory_src = {|#lang tesl
-module Probe exposing []
+let expr_memory_src = {|module Probe exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Database exposing [Database, Memory]
 
@@ -219,8 +215,7 @@ fn f() -> Int =
   1
 |}
 
-let expr_exponential_test_src = {|#lang tesl
-module Probe exposing []
+let expr_exponential_test_src = {|module Probe exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Queue exposing [Queue, Exponential]
 
@@ -234,8 +229,7 @@ test "config ctor in a test body" {
    api-test/load-test seed statements and bodies (and agent config exprs) —
    `let b = Memory` in an api-test body typechecked via the module-wide seed
    env yet emitted an unbound Racket identifier. *)
-let expr_memory_api_test_src = {|#lang tesl
-module Probe exposing []
+let expr_memory_api_test_src = {|module Probe exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Database exposing [Database, Memory]
 import Tesl.ApiTest exposing [statusOk]
@@ -269,8 +263,7 @@ api-test "config ctor in api-test body" for S {
 |}
 
 (* The same constructor INSIDE its config block stays legal. *)
-let config_block_memory_src = {|#lang tesl
-module Probe exposing []
+let config_block_memory_src = {|module Probe exposing []
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.Database exposing [Database, Memory]
 
@@ -286,8 +279,7 @@ database D = Database {
    `config_ctors @ imported @ local` in check_module_with_metadata that
    fails closed with an ordinary unify error, so this fixture only asserts
    the new rejection stays silent.) *)
-let expr_local_ctor_shadow_src = {|#lang tesl
-module Probe exposing []
+let expr_local_ctor_shadow_src = {|module Probe exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Queue exposing [Queue]
 

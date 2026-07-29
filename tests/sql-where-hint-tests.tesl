@@ -1,4 +1,3 @@
-#lang tesl
 module Sql_where_hint_tests exposing []
 
 # Regression for the ambiguous-dot where-clause gap (the real GitHub #27 cause,

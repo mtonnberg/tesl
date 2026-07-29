@@ -180,8 +180,7 @@ let via_wrong_pat =
 
 let s_via_missing sc pred =
   let modn = "SViaMiss" ^ modfrag sc.ty ^ modfrag pred in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
+  Printf.sprintf {|module %s exposing []
 import Tesl.Prelude exposing [%s]
 import Tesl.Json exposing [%s]
 import Tesl.Agent exposing [decodeAs]
@@ -200,8 +199,7 @@ let s_via_wrong sc pred =
      a DIFFERENT predicate `Other` over the same type. *)
   let modn = "SViaWrong" ^ modfrag sc.ty ^ modfrag pred in
   let other = "Other" in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
+  Printf.sprintf {|module %s exposing []
 import Tesl.Prelude exposing [%s]
 import Tesl.Json exposing [%s]
 %simport Tesl.Agent exposing [decodeAs]
@@ -224,8 +222,7 @@ let s_via_partial sc pa pb ~give_a =
       (modfrag sc.ty) (modfrag pa) (modfrag pb) (if give_a then "A" else "B") in
   let via_a = if give_a then " via checkA" else "" in
   let via_b = if give_a then "" else " via checkB" in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
+  Printf.sprintf {|module %s exposing []
 import Tesl.Prelude exposing [%s]
 import Tesl.Json exposing [%s]
 %simport Tesl.Agent exposing [decodeAs]
@@ -285,8 +282,7 @@ let type_pat = "has type.*but.*\\(encodes\\|decodes\\)\\|matching codec\\|V001"
 
 let s_type_decode sc =
   let modn = "STypeDec" ^ modfrag sc.ty ^ modfrag sc.bad_codec in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
+  Printf.sprintf {|module %s exposing []
 import Tesl.Prelude exposing [%s]
 import Tesl.Json exposing [%s]
 import Tesl.Agent exposing [decodeAs]
@@ -301,8 +297,7 @@ fn decodeOut(j: String) -> Out = decodeAs "Out" j
 
 let s_type_encode sc =
   let modn = "STypeEnc" ^ modfrag sc.ty ^ modfrag sc.bad_codec in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
+  Printf.sprintf {|module %s exposing []
 import Tesl.Prelude exposing [%s]
 import Tesl.Json exposing [%s]
 import Tesl.Agent exposing [decodeAs]
@@ -339,8 +334,7 @@ let flow_pat =
 (* direct: `business (decodeAs ...).f` — expression has no trackable subject. *)
 let s_flow_direct sc pred =
   let modn = "SFlowDir" ^ modfrag sc.ty ^ modfrag pred in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
+  Printf.sprintf {|module %s exposing []
 import Tesl.Prelude exposing [%s]
 import Tesl.Json exposing [%s]
 import Tesl.Agent exposing [decodeAs]
@@ -359,8 +353,7 @@ fn handle(j: String) -> %s =
 (* let-bound: `let v = decodeAs ...  business v.f` — `v.f` lacks the proof. *)
 let s_flow_let sc pred =
   let modn = "SFlowLet" ^ modfrag sc.ty ^ modfrag pred in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
+  Printf.sprintf {|module %s exposing []
 import Tesl.Prelude exposing [%s]
 import Tesl.Json exposing [%s]
 import Tesl.Agent exposing [decodeAs]
@@ -382,8 +375,7 @@ fn handle(j: String) -> %s =
    a tool's dispatchFn crosses when handed validated args. *)
 let s_flow_dispatch sc pred =
   let modn = "SFlowDisp" ^ modfrag sc.ty ^ modfrag pred in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
+  Printf.sprintf {|module %s exposing []
 import Tesl.Prelude exposing [%s]
 import Tesl.Json exposing [%s]
 import Tesl.Agent exposing [decodeAs, tool]
@@ -448,8 +440,7 @@ let cover_except ctors missing =
 
 let s_adt_missing tyname ctors missing =
   let modn = "SAdtMiss" ^ modfrag tyname ^ modfrag missing in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
+  Printf.sprintf {|module %s exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Agent exposing [decodeAs]
 %scodec %s { adtJson }
@@ -472,8 +463,7 @@ let s_adt_dup tyname ctors =
          |> String.concat "\n" in
        if rest = "" then dup else dup ^ "\n" ^ rest
      | [] -> "") in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
+  Printf.sprintf {|module %s exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Agent exposing [decodeAs]
 %scodec %s { adtJson }
@@ -496,8 +486,7 @@ let s_adt_unreachable tyname ctors =
          |> String.concat "\n" in
        Printf.sprintf "%s\n    _ -> \"other\"\n    %s -> \"last\"" allbut last
      | [] -> "") in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
+  Printf.sprintf {|module %s exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Agent exposing [decodeAs]
 %scodec %s { adtJson }
@@ -562,8 +551,7 @@ let cap_cases = [
 (* (a) the AI verb used directly in a fn with NO `requires`. *)
 let s_cap_direct cc =
   let modn = "SCapDir" ^ modfrag cc.name in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
+  Printf.sprintf {|module %s exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec]
 %s
@@ -576,8 +564,7 @@ import Tesl.Json exposing [stringCodec]
    fn that does NOT propagate the capability — gating must reject the caller. *)
 let s_cap_transitive cc =
   let modn = "SCapTrans" ^ modfrag cc.name in
-  Printf.sprintf {|#lang tesl
-module %s exposing []
+  Printf.sprintf {|module %s exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec]
 %s
@@ -616,7 +603,6 @@ let s_cap_matrix () =
 let s_gap_nonexistent_type () =
   should_fail ~label:"S-GAP decodeAs nonexistent type (now CLOSED by A8)"
     "must match the target type" {|
-#lang tesl
 module SGapNonexistent exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, intCodec]
@@ -637,7 +623,6 @@ fn decodeSummary(j: String) -> Summary = decodeAs "Nonexistent" j
 let s_gap_type_name_mismatch () =
   should_fail ~label:"S-GAP decodeAs name != result type (now CLOSED by A8)"
     "must match the target type" {|
-#lang tesl
 module SGapMismatch exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, intCodec]
@@ -663,7 +648,6 @@ fn decodeSummary(j: String) -> Summary = decodeAs "WeatherArgs" j
 let s_gap_no_codec_target () =
   should_fail ~label:"S-GAP decodeAs target has NO codec (now CLOSED by A8)"
     "has no .*codec" {|
-#lang tesl
 module SGapNoCodec exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Agent exposing [decodeAs]
@@ -677,7 +661,6 @@ fn decodeSummary(j: String) -> Summary = decodeAs "Summary" j
 
 let pos_decoder_full () =
   should_pass ~label:"S-POS proper codec + decoder" {|
-#lang tesl
 module PosSFull exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, intCodec]
@@ -697,7 +680,6 @@ fn decodeSummary(j: String) -> Summary = decodeAs "Summary" j
 
 let pos_via_flow_downstream () =
   should_pass ~label:"S-POS via establishes proof consumed downstream" {|
-#lang tesl
 module PosSFlow exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -722,7 +704,6 @@ fn handle(j: String) -> String =
 
 let pos_adt_total () =
   should_pass ~label:"S-POS decoded ADT routed through a total case" {|
-#lang tesl
 module PosSAdt exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Agent exposing [decodeAs]
@@ -741,7 +722,6 @@ fn classify(j: String) -> String = route (decodeAs "Intent" j)
 
 let pos_askfor_with_cap () =
   should_pass ~label:"S-POS askFor under aiProvider capability" {|
-#lang tesl
 module PosSAskFor exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, intCodec]
@@ -765,7 +745,6 @@ fn go() -> Summary requires [supportBot] =
 
 let pos_cross_field_via () =
   should_pass ~label:"S-POS cross-field via on a structured-output codec" {|
-#lang tesl
 module PosSCross exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [intCodec]

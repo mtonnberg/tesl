@@ -1,4 +1,3 @@
-#lang tesl
 module CriticalReview63Tests exposing []
 
 # Critical Review 63 — Regression and adversarial tests

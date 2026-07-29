@@ -130,8 +130,7 @@ let with_temp_project files f =
     ~finally:(fun () -> rm_rf dir)
     (fun () -> f dir)
 
-let api_src = {|#lang tesl
-module Api exposing [TodoApi]
+let api_src = {|module Api exposing [TodoApi]
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.String exposing [String.length]
 import Tesl.Json exposing [stringCodec]
@@ -173,34 +172,30 @@ api TodoApi {
 }
 |}
 
-let cross_file_main_src = {|#lang tesl
-module Main exposing [main]
+let cross_file_main_src = {|module Main exposing [main]
 import Local exposing [helper]
 import Tesl.Prelude exposing [Int]
 fn main() -> Int =
   helper()
 |}
 
-let cross_file_local_src = {|#lang tesl
-module Local exposing [helper]
+let cross_file_local_src = {|module Local exposing [helper]
 import Tesl.Prelude exposing [Int]
 fn helper() -> Int =
   1
 |}
 
 let lint_warning_src =
-  "#lang tesl\nmodule Main exposing [value]\nimport Tesl.Prelude exposing [Int]   \nfn value() -> Int = 1\n"
+  "module Main exposing [value]\nimport Tesl.Prelude exposing [Int]   \nfn value() -> Int = 1\n"
 
-let semantic_src = {|#lang tesl
-module Main exposing [double]
+let semantic_src = {|module Main exposing [double]
 import Tesl.Prelude exposing [Int]
 fn double(n: Int) -> Int =
   let twice = n * 2
   twice
 |}
 
-let test_block_bindings_src = {|#lang tesl
-module Main exposing [main]
+let test_block_bindings_src = {|module Main exposing [main]
 import Tesl.Prelude exposing [Int]
 fn main() -> Int = 1
 
@@ -211,55 +206,48 @@ test "bindings" {
 }
 |}
 
-let transitive_main_src = {|#lang tesl
-module Main exposing [main]
+let transitive_main_src = {|module Main exposing [main]
 import A exposing [fromA]
 import Tesl.Prelude exposing [Int]
 fn main() -> Int =
   fromA()
 |}
 
-let transitive_a_src = {|#lang tesl
-module A exposing [fromA]
+let transitive_a_src = {|module A exposing [fromA]
 import Shared exposing [value]
 import Tesl.Prelude exposing [Int]
 fn fromA() -> Int =
   value()
 |}
 
-let transitive_b_src = {|#lang tesl
-module B exposing [fromB]
+let transitive_b_src = {|module B exposing [fromB]
 import Shared exposing [value]
 import Tesl.Prelude exposing [Int]
 fn fromB() -> Int =
   value()
 |}
 
-let transitive_shared_src = {|#lang tesl
-module Shared exposing [value]
+let transitive_shared_src = {|module Shared exposing [value]
 import Tesl.Prelude exposing [Int]
 fn value() -> Int =
   1
 |}
 
-let cycle_main_src = {|#lang tesl
-module Main exposing [main]
+let cycle_main_src = {|module Main exposing [main]
 import A exposing [fromA]
 import Tesl.Prelude exposing [Int]
 fn main() -> Int =
   fromA()
 |}
 
-let cycle_a_src = {|#lang tesl
-module A exposing [fromA]
+let cycle_a_src = {|module A exposing [fromA]
 import B exposing [fromB]
 import Tesl.Prelude exposing [Int]
 fn fromA() -> Int =
   fromB()
 |}
 
-let cycle_b_src = {|#lang tesl
-module B exposing [fromB]
+let cycle_b_src = {|module B exposing [fromB]
 import A exposing [fromA]
 import Tesl.Prelude exposing [Int]
 fn fromB() -> Int =
@@ -297,7 +285,7 @@ let r40_04_definition_stops_at_file_boundary () =
     ("Local.tesl", cross_file_local_src);
   ] (fun dir ->
     let main = Filename.concat dir "Main.tesl" in
-    let code, out = run_compiler ["--definition-json"; main; "5"; "2"] in
+    let code, out = run_compiler ["--definition-json"; main; "4"; "2"] in
     check int "exit code" 0 code;
     assert_contains ~label:"definition null" out "\"definition\":null")
 
@@ -307,7 +295,7 @@ let r40_05_occurrences_stop_at_file_boundary () =
     ("Local.tesl", cross_file_local_src);
   ] (fun dir ->
     let main = Filename.concat dir "Main.tesl" in
-    let code, out = run_compiler ["--occurrences-json"; main; "5"; "2"] in
+    let code, out = run_compiler ["--occurrences-json"; main; "4"; "2"] in
     check int "exit code" 0 code;
     assert_contains ~label:"occurrences empty" out "\"occurrences\":[]")
 
@@ -317,7 +305,7 @@ let r40_06_type_at_works_on_imported_call_site () =
     ("Local.tesl", cross_file_local_src);
   ] (fun dir ->
     let main = Filename.concat dir "Main.tesl" in
-    let code, out = run_compiler ["--type-at-json"; main; "5"; "2"] in
+    let code, out = run_compiler ["--type-at-json"; main; "4"; "2"] in
     check int "exit code" 0 code;
     assert_contains ~label:"type_at object" out "\"type_at\":{";
     assert_contains ~label:"type_at Int" out "\"type\":\"Int\"")
@@ -328,7 +316,7 @@ let r40_07_completions_include_imported_helper () =
     ("Local.tesl", cross_file_local_src);
   ] (fun dir ->
     let main = Filename.concat dir "Main.tesl" in
-    let code, out = run_compiler ["--completions-json"; main; "5"; "2"] in
+    let code, out = run_compiler ["--completions-json"; main; "4"; "2"] in
     check int "exit code" 0 code;
     assert_contains ~label:"helper completion" out "\"label\":\"helper\"")
 
@@ -338,7 +326,7 @@ let r40_08_completions_include_qualified_imported_helper () =
     ("Local.tesl", cross_file_local_src);
   ] (fun dir ->
     let main = Filename.concat dir "Main.tesl" in
-    let code, out = run_compiler ["--completions-json"; main; "5"; "2"] in
+    let code, out = run_compiler ["--completions-json"; main; "4"; "2"] in
     check int "exit code" 0 code;
     assert_contains ~label:"qualified helper completion" out "\"label\":\"Local.helper\"")
 
@@ -356,8 +344,7 @@ let r40_09_deps_lists_transitive_imports () =
 
 let r40_10_deps_dedupes_shared_imports () =
   with_temp_project [
-    ("Main.tesl", {|#lang tesl
-module Main exposing [main]
+    ("Main.tesl", {|module Main exposing [main]
 import A exposing [fromA]
 import B exposing [fromB]
 import Tesl.Prelude exposing [Int]
@@ -415,7 +402,7 @@ let r40_15_fmt_rewrites_and_fmt_check_then_passes () =
     check string "fmt stdout" "" fmt_out;
     let formatted = In_channel.with_open_text path In_channel.input_all in
     check string "formatted content"
-      "#lang tesl\nmodule Main exposing [value]\nimport Tesl.Prelude exposing [Int]\nfn value() -> Int = 1\n"
+      "module Main exposing [value]\nimport Tesl.Prelude exposing [Int]\nfn value() -> Int = 1\n"
       formatted;
     let check_code, check_out = run_compiler ["--fmt-check"; path] in
     check int "fmt-check exit code" 0 check_code;

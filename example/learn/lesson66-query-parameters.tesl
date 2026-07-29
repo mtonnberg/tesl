@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson66QueryParameters exposing [SearchServer]
 
 # ─────────────────────────────────────────────────────────────────────────────

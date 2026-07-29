@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson39CaseWhereGuards exposing [
   Shape(..),
   Priority(..),

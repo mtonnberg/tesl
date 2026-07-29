@@ -1,4 +1,3 @@
-#lang tesl
 # ─── Kanel — Database access layer ────────────────────────────────────────
 #
 # All database-touching code lives here.  Every function requires the proof(s)

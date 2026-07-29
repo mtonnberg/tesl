@@ -114,7 +114,7 @@ let bases = [
    where the "expected" newtype is required. *)
 let header b modname =
   Printf.sprintf
-    "#lang tesl\nmodule %s exposing []\nimport Tesl.Prelude exposing [%s, List]\n\
+    "module %s exposing []\nimport Tesl.Prelude exposing [%s, List]\n\
      type Alpha = %s\ntype Beta = %s\n"
     modname b.import b.bname b.bname
 
@@ -218,7 +218,6 @@ let matrix_swap () =
 
 let test_decl_raw_string_where_userid () =
   should_fail ~label:"I-DECL raw String→UserId" mismatch_pat {|
-#lang tesl
 module DeclI_UserId exposing []
 import Tesl.Prelude exposing [String]
 type UserId = String
@@ -229,7 +228,6 @@ fn bad(raw: String) -> String = loadUser raw
 
 let test_decl_projectid_where_userid () =
   should_fail ~label:"I-DECL ProjectId→UserId" mismatch_pat {|
-#lang tesl
 module DeclI_PidUid exposing []
 import Tesl.Prelude exposing [String]
 type UserId = String
@@ -240,7 +238,6 @@ fn bad(p: ProjectId) -> String = loadUser p
 
 let test_decl_raw_int_where_cents () =
   should_fail ~label:"I-DECL raw Int→Cents" mismatch_pat {|
-#lang tesl
 module DeclI_Cents exposing []
 import Tesl.Prelude exposing [Int]
 type Cents = Int
@@ -251,7 +248,6 @@ fn bad(n: Int) -> Int = charge n
 
 let test_decl_quantity_where_cents () =
   should_fail ~label:"I-DECL Quantity→Cents" mismatch_pat {|
-#lang tesl
 module DeclI_QtyCents exposing []
 import Tesl.Prelude exposing [Int]
 type Cents = Int
@@ -264,7 +260,6 @@ fn bad(q: Quantity) -> Int = charge q
    required — `.value` drops to raw, so it must be rejected. *)
 let test_unwrapped_value_where_newtype () =
   should_fail ~label:"I-DECL .value→newtype" mismatch_pat {|
-#lang tesl
 module DeclI_Unwrap exposing []
 import Tesl.Prelude exposing [String]
 type UserId = String
@@ -276,7 +271,6 @@ fn bad(u: UserId) -> String = loadUser u.value
 
 let test_lit_string_where_userid () =
   should_fail ~label:"I-LIT String literal→UserId" mismatch_pat {|
-#lang tesl
 module LitI_Str exposing []
 import Tesl.Prelude exposing [String]
 type UserId = String
@@ -286,7 +280,6 @@ fn bad() -> String = loadUser "raw-string"
 
 let test_lit_int_where_cents () =
   should_fail ~label:"I-LIT Int literal→Cents" mismatch_pat {|
-#lang tesl
 module LitI_Int exposing []
 import Tesl.Prelude exposing [Int]
 type Cents = Int
@@ -296,7 +289,6 @@ fn bad() -> Int = charge 100
 
 let test_lit_string_in_record_field () =
   should_fail ~label:"I-LIT String literal in record field" mismatch_pat {|
-#lang tesl
 module LitI_Rec exposing []
 import Tesl.Prelude exposing [String]
 type UserId = String
@@ -308,7 +300,6 @@ fn bad() -> Owner = Owner { uid: "raw" }
 
 let test_nested_record_field_newtype () =
   should_fail ~label:"I-NEST nested record field" mismatch_pat {|
-#lang tesl
 module NestI_Rec exposing []
 import Tesl.Prelude exposing [String]
 type UserId = String
@@ -320,7 +311,6 @@ fn bad(p: ProjectId) -> Outer = Outer { inner: Inner { uid: p } }
 
 let test_list_of_records_newtype () =
   should_fail ~label:"I-NEST list of records" mismatch_pat {|
-#lang tesl
 module NestI_ListRec exposing []
 import Tesl.Prelude exposing [String, List]
 type UserId = String
@@ -333,7 +323,6 @@ fn bad(ps: List ProjectId) -> List Owner = [mk (head ps)]
 (* Two-newtype confusion through a Maybe wrapper. *)
 let test_maybe_newtype_confusion () =
   should_fail ~label:"I-NEST Maybe newtype" mismatch_pat {|
-#lang tesl
 module NestI_Maybe exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -349,7 +338,6 @@ fn bad(p: ProjectId) -> Int = needsMaybeUser (Something p)
 
 let test_newtype_proof_wrong_carrier () =
   should_fail ~label:"I-PROOF wrong carrier type" mismatch_pat {|
-#lang tesl
 module ProofI_Carrier exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.length]
@@ -371,7 +359,6 @@ fn bad(p: ProjectId) -> String =
 
 let pos_userid_accepted () =
   should_pass ~label:"I-POS UserId→UserId" {|
-#lang tesl
 module PosI_UidUid exposing []
 import Tesl.Prelude exposing [String]
 type UserId = String
@@ -381,7 +368,6 @@ fn good(u: UserId) -> String = loadUser u
 
 let pos_wrap_raw () =
   should_pass ~label:"I-POS wrap raw" {|
-#lang tesl
 module PosI_Wrap exposing []
 import Tesl.Prelude exposing [String]
 type UserId = String
@@ -391,7 +377,6 @@ fn good(raw: String) -> String = loadUser (UserId raw)
 
 let pos_int_newtype_accepted () =
   should_pass ~label:"I-POS Cents→Cents" {|
-#lang tesl
 module PosI_Cents exposing []
 import Tesl.Prelude exposing [Int]
 type Cents = Int
@@ -401,7 +386,6 @@ fn good(c: Cents) -> Int = charge c
 
 let pos_record_field_newtype () =
   should_pass ~label:"I-POS record field" {|
-#lang tesl
 module PosI_Rec exposing []
 import Tesl.Prelude exposing [String]
 type UserId = String
@@ -411,7 +395,6 @@ fn good(u: UserId) -> Owner = Owner { uid: u }
 
 let pos_list_newtype () =
   should_pass ~label:"I-POS list elem" {|
-#lang tesl
 module PosI_List exposing []
 import Tesl.Prelude exposing [String, List]
 type UserId = String
@@ -423,7 +406,6 @@ let pos_unwrap_value_for_base_fn () =
   (* Unwrapping the newtype with `.value` to feed a base-typed function is the
      intended round-trip and must compile. *)
   should_pass ~label:"I-POS unwrap for base fn" {|
-#lang tesl
 module PosI_Unwrap exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.String exposing [String.length]
@@ -436,7 +418,6 @@ let pos_db_roundtrip_unwrap () =
   (* Newtype field stored to / read from a DB entity: the entity's field is the
      newtype; unwrapping for serialization compiles (spec §11.6 transparency). *)
   should_pass ~label:"I-POS db roundtrip codec" {|
-#lang tesl
 module PosI_Db exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -460,7 +441,6 @@ let pos_json_roundtrip_newtype () =
   (* JSON codec over a newtype field: stringCodec is accepted on a String-backed
      newtype (transparent at the JSON boundary). *)
   should_pass ~label:"I-POS json newtype transparency" {|
-#lang tesl
 module PosI_Json exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -482,7 +462,6 @@ codec Contact {
 
 let pos_two_newtypes_each_own_fn () =
   should_pass ~label:"I-POS two newtypes own fns" {|
-#lang tesl
 module PosI_TwoOwn exposing []
 import Tesl.Prelude exposing [String]
 type UserId = String
@@ -494,7 +473,6 @@ fn good(u: UserId, p: ProjectId) -> String = loadUser u
 
 let pos_newtype_in_maybe () =
   should_pass ~label:"I-POS newtype in Maybe" {|
-#lang tesl
 module PosI_Maybe exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -505,7 +483,6 @@ fn good(u: UserId) -> Int = needsMaybeUser (Something u)
 
 let pos_newtype_proof_roundtrip () =
   should_pass ~label:"I-POS newtype proof roundtrip" {|
-#lang tesl
 module PosI_Proof exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.length]
@@ -524,7 +501,6 @@ fn good(u: UserId) -> String =
 
 let pos_nested_record_newtype () =
   should_pass ~label:"I-POS nested record newtype" {|
-#lang tesl
 module PosI_Nested exposing []
 import Tesl.Prelude exposing [String]
 type UserId = String

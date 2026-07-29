@@ -1,4 +1,3 @@
-#lang tesl
 module CriticalReview48AuthApiTests exposing [R48AuthServer, R48ConjAuthServer]
 
 import Tesl.Prelude exposing [Bool(..), Int, String, Fact]

@@ -90,7 +90,6 @@ let should_fail pat src =
 let test_CODEC01_toJson_nonexistent_field_rejected () =
   (* BUG FIX: codec toJson with non-existent field was silently accepted *)
   should_fail "does not exist\\|ghostField\\|valid fields" {|
-#lang tesl
 module Codec01 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, intCodec]
@@ -106,7 +105,6 @@ codec Item {
 
 let test_CODEC02_fromJson_nonexistent_field_rejected () =
   should_fail "does not exist\\|ghostField\\|valid fields" {|
-#lang tesl
 module Codec02 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, intCodec]
@@ -124,7 +122,6 @@ codec Item {
 
 let test_CODEC03_valid_codec_all_fields_accepted () =
   should_pass {|
-#lang tesl
 module Codec03 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, intCodec]
@@ -141,7 +138,6 @@ codec User {
 let test_CODEC04_partial_toJson_valid_fields_accepted () =
   (* Partial toJson (not all fields) is valid — you can choose what to serialize *)
   should_pass {|
-#lang tesl
 module Codec04 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, intCodec]
@@ -159,7 +155,6 @@ codec User {
 
 let test_CODEC05_toJson_wrong_codec_type_rejected () =
   should_fail "type.*mismatch\\|codec.*type\\|intCodec.*String\\|String.*intCodec" {|
-#lang tesl
 module Codec05 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [intCodec]
@@ -175,7 +170,6 @@ codec Item {
 let test_NEGPAT01_negative_int_in_case_accepted () =
   (* BUG FIX: negative literals in patterns were broken *)
   should_pass {|
-#lang tesl
 module NegPat01 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn classify(n: Int) -> String =
@@ -188,7 +182,6 @@ fn classify(n: Int) -> String =
 
 let test_NEGPAT02_multiple_negative_patterns_accepted () =
   should_pass {|
-#lang tesl
 module NegPat02 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn sign(n: Int) -> String =
@@ -201,7 +194,6 @@ fn sign(n: Int) -> String =
 let test_NEGPAT03_negative_in_top_level_pattern_accepted () =
   (* Negative literals work at the top level of a case arm *)
   should_pass {|
-#lang tesl
 module NegPat03 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn describeNeg(n: Int) -> String =
@@ -217,7 +209,6 @@ fn describeNeg(n: Int) -> String =
 let test_CASE01_empty_case_gives_helpful_error () =
   (* BUG FIX: empty case was giving "expected INDENT but got DEDENT" *)
   should_fail "at least one arm\\|case.*arm\\|Pattern -> expression" {|
-#lang tesl
 module Case01 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -227,7 +218,6 @@ fn bad(m: Maybe Int) -> Int =
 
 let test_CASE02_full_coverage_wildcard_accepted () =
   should_pass {|
-#lang tesl
 module Case02 exposing []
 import Tesl.Prelude exposing [Int, String]
 type Color
@@ -243,7 +233,6 @@ fn colorName(c: Color) -> String =
 
 let test_CASE03_duplicate_case_arm_rejected () =
   should_fail "duplicate.*arm\\|already.*covered\\|already.*matched" {|
-#lang tesl
 module Case03 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -256,7 +245,6 @@ fn bad(m: Maybe Int) -> Int =
 
 let test_CASE04_case_with_guard_accepted () =
   should_pass {|
-#lang tesl
 module Case04 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn classify(n: Int) -> String =
@@ -268,7 +256,6 @@ fn classify(n: Int) -> String =
 
 let test_CASE05_literal_patterns_accepted () =
   should_pass {|
-#lang tesl
 module Case05 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn respond(s: String) -> String =
@@ -282,7 +269,6 @@ fn respond(s: String) -> String =
 
 let test_HOF01_returning_function_type_accepted () =
   should_pass {|
-#lang tesl
 module Hof01 exposing []
 import Tesl.Prelude exposing [Int]
 fn makeAdder(x: Int) -> (Int -> Int) = fn(y: Int) -> x + y
@@ -292,7 +278,6 @@ fn test() -> Int = apply (makeAdder 5) 3
 
 let test_HOF02_generic_type_variable_accepted () =
   should_pass {|
-#lang tesl
 module Hof02 exposing []
 import Tesl.Prelude exposing [List]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -305,7 +290,6 @@ fn headOrDefault(xs: List a, default: a) -> a =
 
 let test_HOF03_function_passed_as_argument_accepted () =
   should_pass {|
-#lang tesl
 module Hof03 exposing []
 import Tesl.Prelude exposing [Int, List, Bool(..)]
 import Tesl.List exposing [List.map, List.filter]
@@ -318,7 +302,6 @@ fn processAll(xs: List Int) -> List Int = List.map double (List.filter isPositiv
 
 let test_RECUR01_simple_recursion_accepted () =
   should_pass {|
-#lang tesl
 module Recur01 exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 fn countdown(n: Int) -> Int =
@@ -330,7 +313,6 @@ fn countdown(n: Int) -> Int =
 
 let test_RECUR02_mutual_recursion_accepted () =
   should_pass {|
-#lang tesl
 module Recur02 exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 fn isEven(n: Int) -> Bool =
@@ -350,7 +332,6 @@ fn isOdd(n: Int) -> Bool =
 let test_PROOF2_01_establish_preserves_proof_through_arithmetic () =
   (* Correct pattern: proof owner provides domain operation via establish *)
   should_pass {|
-#lang tesl
 module Proof201 exposing []
 import Tesl.Prelude exposing [Int, Fact]
 fact IsPositive (n: Int)
@@ -380,7 +361,6 @@ test "triple preserves proof" {
 let test_PROOF2_02_proof_not_transferable_to_arithmetic_result () =
   (* Proof is correctly dropped after arithmetic — use establish pattern instead *)
   should_fail "does not.*statically\\|proof\\|IsPositive" {|
-#lang tesl
 module Proof202 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -394,7 +374,6 @@ fn antipattern(raw: Int) -> Int =
 
 let test_PROOF2_03_forall_list_filterCheck_accepted () =
   should_pass {|
-#lang tesl
 module Proof203 exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck, List.length]
@@ -410,7 +389,6 @@ fn countValid(xs: List Int) -> Int =
 
 let test_PROOF2_04_duplicate_fact_rejected () =
   should_fail "duplicate.*fact\\|fact.*duplicate" {|
-#lang tesl
 module Proof204 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsValid (n: Int)
@@ -419,7 +397,6 @@ fact IsValid (n: Int)
 
 let test_PROOF2_05_proof_with_conjunction_and_then_both_required () =
   should_pass {|
-#lang tesl
 module Proof205 exposing []
 import Tesl.Prelude exposing [Int]
 fact P (n: Int)
@@ -445,7 +422,6 @@ fn doTest(raw: Int) -> Int =
 
 let test_SQL2_01_complex_boolean_where_accepted () =
   should_pass {|
-#lang tesl
 module Sql201 exposing []
 import Tesl.Prelude exposing [Int, String, List, Bool(..)]
 import Tesl.DB exposing [dbRead]
@@ -468,7 +444,6 @@ fn highPriorityPending(minPriority: Int) -> List Task requires [dbRead] =
 
 let test_SQL2_02_select_with_order_and_limit_accepted () =
   should_pass {|
-#lang tesl
 module Sql202 exposing []
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.DB exposing [dbRead]
@@ -492,7 +467,6 @@ fn topPosts() -> List Post requires [dbRead] =
 
 let test_SQL2_03_select_nonexistent_field_rejected () =
   should_fail "unknown field\\|ghostField\\|valid fields" {|
-#lang tesl
 module Sql203 exposing []
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.DB exposing [dbRead]
@@ -516,7 +490,6 @@ fn bad() -> List Item requires [dbRead] =
 
 let test_ERR2_01_empty_case_gives_helpful_message () =
   should_fail "at least one arm\\|Pattern -> expression\\|case.*arm" {|
-#lang tesl
 module Err201 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -527,7 +500,6 @@ fn f(m: Maybe Int) -> Int =
 let test_ERR2_02_handler_kind_required_in_server () =
   (* Server bindings must point at `handler` declarations, not plain fn *)
   should_fail "not a handler\\|not.*handler\\|declared.*not.*handler" {|
-#lang tesl
 module Err202 exposing []
 import Tesl.Prelude exposing [Int, String]
 api Err202Api { get "/ping" -> String }
@@ -537,7 +509,6 @@ server Err202Server for Err202Api { notAHandler = notAHandler }
 
 let test_ERR2_03_missing_import_gives_suggestion () =
   should_fail "Try: import\\|add it to an import\\|not in scope" {|
-#lang tesl
 module Err203 exposing []
 fn bad(xs: List Int) -> Int = 0
 |}
@@ -545,7 +516,6 @@ fn bad(xs: List Int) -> Int = 0
 let test_ERR2_04_codec_nonexistent_field_gives_field_list () =
   (* Error message should show valid fields *)
   should_fail "valid fields.*name.*age\\|name.*age.*valid fields\\|does not exist" {|
-#lang tesl
 module Err204 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [intCodec]
@@ -558,7 +528,6 @@ codec Rec {
 
 let test_ERR2_05_undefined_capability_names_clearly () =
   should_fail "undeclared capability\\|unknown.*capability" {|
-#lang tesl
 module Err205 exposing []
 import Tesl.Prelude exposing [Int]
 fn bad() -> Int requires [totallyFakeCapability] = 42
@@ -572,8 +541,7 @@ let test_SCOPE01_module_name_must_match_filename () =
   let dir = Filename.temp_dir "tesl-r72-scope01" "" in
   let path = Filename.concat dir "correct-name.tesl" in
   let oc = open_out path in
-  output_string oc {|#lang tesl
-module WrongName exposing []
+  output_string oc {|module WrongName exposing []
 import Tesl.Prelude exposing [Int]
 fn foo() -> Int = 42
 |};
@@ -589,7 +557,6 @@ fn foo() -> Int = 42
 
 let test_SCOPE02_exporting_nonexistent_name_rejected () =
   should_fail "unknown.*non-local\\|module exposes unknown" {|
-#lang tesl
 module Scope02 exposing [thisDoesNotExist]
 import Tesl.Prelude exposing [Int]
 fn realFn() -> Int = 42
@@ -597,7 +564,6 @@ fn realFn() -> Int = 42
 
 let test_SCOPE03_importing_same_name_twice_rejected () =
   should_fail "duplicate import\\|already imported" {|
-#lang tesl
 module Scope03 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Prelude exposing [Int, String]
@@ -607,7 +573,6 @@ fn foo() -> Int = 42
 let test_SCOPE04_using_all_stdlib_modules_together_accepted () =
   (* Regression: importing many modules together should work *)
   should_pass {|
-#lang tesl
 module Scope04 exposing []
 import Tesl.Prelude exposing [Int, String, List, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]

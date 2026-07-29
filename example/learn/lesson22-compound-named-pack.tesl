@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson22CompoundNamedPack exposing [
   IsPositive,
   checkIsPositive,

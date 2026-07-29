@@ -49,8 +49,7 @@ let check_contains name src needle =
 
 let test_proof_with_parenthesized_arg () =
   (* FromDb (Id == noteId) — parenthesized arg in proof *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 fn f(x: String ::: FromDb (Id == x)) -> String = x
 |} in
@@ -65,8 +64,7 @@ fn f(x: String ::: FromDb (Id == x)) -> String = x
 
 let test_proof_with_uident_arg () =
   (* ForAll TodoId newTodos — UIDENT arg *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 fn f(xs: List String ::: ForAll TodoId xs) -> List String = xs
 |} in
@@ -84,8 +82,7 @@ fn f(xs: List String ::: ForAll TodoId xs) -> List String = xs
 
 let test_qualified_type () =
   (* Sandbox3.ARecord2 as parameter type *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Sandbox3 exposing []
 fn f(x: Sandbox3.ARecord2) -> Int = 0
 |} in
@@ -102,8 +99,7 @@ fn f(x: Sandbox3.ARecord2) -> Int = 0
 
 let test_worker_no_return () =
   (* Workers can be declared without return type *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 worker myWorker(job: String)
   requires [queueRead] =
@@ -118,8 +114,7 @@ worker myWorker(job: String)
     | _ -> Alcotest.fail "expected DFunc")
 
 let test_worker_emit () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 worker sendEmail(job: String)
   requires [queueRead] =
@@ -130,8 +125,7 @@ worker sendEmail(job: String)
 (* ── Multi-line return specs ──────────────────────────────────────────────── *)
 
 let test_exists_return_multiline () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 fn genToken() -> exists tokenId: String =>
       String ::: IsTokenId tokenId
@@ -149,8 +143,7 @@ fn genToken() -> exists tokenId: String =>
 (* ── Named-pack with && ──────────────────────────────────────────────────── *)
 
 let test_named_pack_with_conjunction () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn f(n: Int ::: IsPositive n) -> Int ? IsPositive && IsSmall =
   n
@@ -166,8 +159,7 @@ fn f(n: Int ::: IsPositive n) -> Int ? IsPositive && IsSmall =
 (* ── Sequential function bodies ─────────────────────────────────────────── *)
 
 let test_sequential_body () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int
   requires [] =
@@ -183,8 +175,7 @@ fn f(x: Int) -> Int
     | _ -> Alcotest.fail "expected DFunc")
 
 let test_sequential_multi_stmt () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int
   requires [] =
@@ -203,8 +194,7 @@ fn f(x: Int) -> Int
 (* ── Proof decomposition ──────────────────────────────────────────────────── *)
 
 let test_let_proof_decompose () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn f(x: Int ::: ValidPort x) -> Int =
   let (y ::: xProof) = x
@@ -215,8 +205,7 @@ fn f(x: Int ::: ValidPort x) -> Int =
 (* ── Pipe operators ──────────────────────────────────────────────────────── *)
 
 let test_pipe_right () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn double(x: Int) -> Int = x * 2
 fn f(x: Int) -> Int =
@@ -235,8 +224,7 @@ fn f(x: Int) -> Int =
     | _ -> ())
 
 let test_pipe_left () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn double(x: Int) -> Int = x * 2
 fn f(x: Int) -> Int =
@@ -247,8 +235,7 @@ fn f(x: Int) -> Int =
 (* ── main block ──────────────────────────────────────────────────────────── *)
 
 let test_main_block () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.App exposing [App]
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -282,8 +269,7 @@ server S for SomeApi {
     | _ -> Alcotest.fail "expected DFunc main")
 
 let test_main_with_requires () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.App exposing [App]
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -318,8 +304,7 @@ server S for SomeApi {
 (* ── Record update syntax ────────────────────────────────────────────────── *)
 
 let test_record_update_emit () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 record R {
   x: Int
@@ -333,8 +318,7 @@ fn scale(r: R, factor: Int) -> R =
 (* ── Channel with key params ──────────────────────────────────────────────── *)
 
 let test_channel_with_params () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 channel UserEvents(userId: String) = SseChannel {
   database: MainDb
@@ -351,8 +335,7 @@ channel UserEvents(userId: String) = SseChannel {
 (* ── Adversarial advanced tests ──────────────────────────────────────────── *)
 
 let test_complex_proof_chain () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 fn f(x: String ::: FromDb (Id == y) && Authenticated x) -> String = x
 |} in
@@ -367,8 +350,7 @@ fn f(x: String ::: FromDb (Id == y) && Authenticated x) -> String = x
     | _ -> Alcotest.fail "expected DFunc")
 
 let test_multiple_proofs_on_param () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn f(x: Int ::: IsPositive x && ValidPort x) -> Int = x
 |} in
@@ -383,16 +365,14 @@ fn f(x: Int ::: IsPositive x && ValidPort x) -> Int = x
 
 let test_deeply_nested_parens_in_proof () =
   (* Deep nesting: FromDb (Id == (Nested (key))) *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 fn f(x: String ::: FromDb (Id == x) y) -> String = x
 |} in
   assert_ok src (fun _ -> ())
 
 let test_exists_expr () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 fn genId() -> String =
   exists tokenId =>
@@ -401,8 +381,7 @@ fn genId() -> String =
   assert_ok src (fun _ -> ())
 
 let test_zero_arg_function_call () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn now() -> Int = 0
 fn f() -> Int =
@@ -411,8 +390,7 @@ fn f() -> Int =
   check_contains "zero arg call" src "(now)"
 
 let test_qualified_function_call_emit () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.String exposing [String.length]
 import Tesl.Prelude exposing [Int, String]
 fn f(s: String) -> Int =
@@ -422,8 +400,7 @@ fn f(s: String) -> Int =
 
 let test_logical_or_in_where () =
   (* || in SQL where clauses *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 fn f(x: String, y: String) -> Bool =
   x == y || x == "admin"
@@ -435,8 +412,7 @@ fn f(x: String, y: String) -> Bool =
 
 let test_lambda_parse () =
   (* fn(x: T) -> body parses as ELambda *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn applyFn(f: Int -> Int, x: Int) -> Int = f x
 test "lambda" {
@@ -450,8 +426,7 @@ test "lambda" {
     | _ -> Alcotest.fail "expected DFunc")
 
 let test_lambda_emit () =
-  check_contains "lambda emits define/pow" {|#lang tesl
-module Foo exposing []
+  check_contains "lambda emits define/pow" {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int =
   let g = fn(y: Int) -> y * 2
@@ -460,8 +435,7 @@ fn f(x: Int) -> Int =
 
 let test_lambda_multi_param () =
   (* Multi-param lambda *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn apply2(f: Int -> Int -> Int, a: Int, b: Int) -> Int = f a b
 test "multi-param lambda" {
@@ -472,8 +446,7 @@ test "multi-param lambda" {
 
 let test_lambda_no_body_issue () =
   (* Lambda body returning a constructor *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn applyFn(f: Int -> Maybe Int, x: Int) -> Maybe Int = f x
@@ -486,8 +459,7 @@ test "lambda returns maybe" {
 
 let test_lambda_adversarial_empty_params () =
   (* Lambda with no params is currently not valid but shouldn't crash *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn f(g: Unit -> Int) -> Int = g ()
 |} in

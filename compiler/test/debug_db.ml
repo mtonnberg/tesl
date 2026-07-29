@@ -1,6 +1,5 @@
 let () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 database DB = Database {
   schema: "s"

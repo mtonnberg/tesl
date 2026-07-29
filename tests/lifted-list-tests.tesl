@@ -1,4 +1,3 @@
-#lang tesl
 # Behavioral + type coverage for the LIFTED Tesl.List combinators (their TYPES
 # now come from tesl/list.tesl, their runtime from tesl/list.rkt).  Exercises
 # every lifted function so a regression in either the lifted type or the runtime

@@ -23,41 +23,41 @@
 (define/pow
   (narrowSafe [n : Integer])
   #:returns (Maybe Int32)
-  (thsl-src! "example/int32-boundary.tesl" 20 (list (cons 'n *n)) (lambda () (raw-value (tesl_import_Int32_fromInt *n)))))
+  (thsl-src! "example/int32-boundary.tesl" 19 (list (cons 'n *n)) (lambda () (raw-value (tesl_import_Int32_fromInt *n)))))
 
 (define/pow
   (widen [x : Int32])
   #:returns Integer
-  (thsl-src! "example/int32-boundary.tesl" 24 (list (cons 'x *x)) (lambda () (raw-value (tesl_import_Int32_toInt *x)))))
+  (thsl-src! "example/int32-boundary.tesl" 23 (list (cons 'x *x)) (lambda () (raw-value (tesl_import_Int32_toInt *x)))))
 
 (define/pow
   (roundTrip [n : Integer] [fallback : Integer])
   #:returns Integer
-  (thsl-src-control! "example/int32-boundary.tesl" 29 (list (cons 'n *n) (cons 'fallback *fallback)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Int32_fromInt *n))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([x (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/int32-boundary.tesl" 30 (list (cons 'x x)) (lambda () (raw-value (raw-value (tesl_import_Int32_toInt *x))))))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/int32-boundary.tesl" 31 (list) (lambda () *fallback))])))))
+  (thsl-src-control! "example/int32-boundary.tesl" 28 (list (cons 'n *n) (cons 'fallback *fallback)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Int32_fromInt *n))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([x (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/int32-boundary.tesl" 29 (list (cons 'x x)) (lambda () (raw-value (raw-value (tesl_import_Int32_toInt *x))))))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/int32-boundary.tesl" 30 (list) (lambda () *fallback))])))))
 
 (module+ test
   (require rackunit)
   (test-case "in-range value round-trips unchanged"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/int32-boundary.tesl" 34 (list) (lambda () (roundTrip 1000 (- 0 1))))) 1000)
+  (check-equal? (raw-value (thsl-src! "example/int32-boundary.tesl" 33 (list) (lambda () (roundTrip 1000 (- 0 1))))) 1000)
     ))
   )
 
   (test-case "the int32 max boundary is in range"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/int32-boundary.tesl" 38 (list) (lambda () (roundTrip 2147483647 (- 0 1))))) 2147483647)
+  (check-equal? (raw-value (thsl-src! "example/int32-boundary.tesl" 37 (list) (lambda () (roundTrip 2147483647 (- 0 1))))) 2147483647)
     ))
   )
 
   (test-case "a value above the int32 max is out of range"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/int32-boundary.tesl" 42 (list) (lambda () (roundTrip 2147483648 (- 0 1))))) (- 0 1))
+  (check-equal? (raw-value (thsl-src! "example/int32-boundary.tesl" 41 (list) (lambda () (roundTrip 2147483648 (- 0 1))))) (- 0 1))
     ))
   )
 
   (test-case "a large Int (> 2^53) is out of int32 range"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/int32-boundary.tesl" 46 (list) (lambda () (roundTrip 9007199254740993 (- 0 1))))) (- 0 1))
+  (check-equal? (raw-value (thsl-src! "example/int32-boundary.tesl" 45 (list) (lambda () (roundTrip 9007199254740993 (- 0 1))))) (- 0 1))
     ))
   )
 

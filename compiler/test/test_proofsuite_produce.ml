@@ -107,7 +107,7 @@ let[@warning "-32"] known_gap ~what src =
 (* Shared module header. NOTE: `Maybe` lives in `Tesl.Maybe`, NOT `Tesl.Prelude`. *)
 let prelude name =
   Printf.sprintf
-    "#lang tesl\nmodule %s exposing []\n\
+    "module %s exposing []\n\
      import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact]\n\
      import Tesl.Maybe exposing [Maybe(..)]\n" name
 
@@ -256,8 +256,7 @@ establish e(n: Int, m: Int) -> Maybe (Fact (IsPositive n)) =
    applies the same producing-site gate the `:::` path uses.  With no query in the
    body, the FromDb claim is rejected. *)
 let test_A_fromdb_namedpack_forgery () =
-  should_fail "returns a named pack claiming\\|does not carry\\|FromDb" ({|#lang tesl
-module AFromDbForge exposing []
+  should_fail "returns a named pack claiming\\|does not carry\\|FromDb" ({|module AFromDbForge exposing []
 import Tesl.Prelude exposing [String]
 entity Todo table "todos" primaryKey id {
   id: String

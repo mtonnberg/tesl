@@ -82,7 +82,6 @@ let should_fail pattern src =
 
 let test_R75_PF01_check_transaction_forgery_rejected () =
   should_fail "does not match declared return spec" {|
-#lang tesl
 module R75Pf01 exposing [A, B, chk]
 import Tesl.Prelude exposing [Int]
 fact A (n: Int)
@@ -95,7 +94,6 @@ check chk(n: Int) -> n: Int ::: B n =
 
 let test_R75_PF02_check_transaction_legit_accepted () =
   should_pass {|
-#lang tesl
 module R75Pf02 exposing [B, chk]
 import Tesl.Prelude exposing [Int]
 fact B (n: Int)
@@ -107,7 +105,6 @@ check chk(n: Int) -> n: Int ::: B n =
 
 let test_R75_AUTH01_auth_transaction_forgery_rejected () =
   should_fail "does not match declared return spec" {|
-#lang tesl
 module R75Auth01 exposing [adminAuth]
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -121,7 +118,6 @@ auth adminAuth(request: HttpRequest) -> u: String ::: IsAdmin u =
 
 let test_R75_PF05_establish_transaction_forgery_rejected () =
   should_fail "fact constructor" {|
-#lang tesl
 module R75Pf05 exposing [A, B, mk]
 import Tesl.Prelude exposing [Int, Fact]
 fact A (n: Int)
@@ -136,7 +132,6 @@ establish mk(n: Int) -> Fact (B n) =
 
 let test_R75_SHADOW01_ctor_arg_shadow_rejected () =
   should_fail "shadows an existing name" {|
-#lang tesl
 module R75Shadow01 exposing [InBounds, checkInBounds, needsProof, forge]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -158,7 +153,6 @@ fn forge(n: Int ::: InBounds n, raw: Maybe Int) -> Maybe Int =
 
 let test_R75_AV01_auth_via_undeclared_rejected () =
   should_fail "is not a declared function" {|
-#lang tesl
 module R75Av01 exposing [MyApi]
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -172,7 +166,6 @@ api MyApi {
 
 let test_R75_AV02_auth_via_legit_accepted () =
   should_pass {|
-#lang tesl
 module R75Av02 exposing [MyApi, cookieAuth, secret]
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -199,7 +192,6 @@ entity Todo table "todos" primaryKey id {
 
 let test_R75_F1_named_pack_insert_id_forgery_rejected () =
   should_fail "forged FromDb" ({|
-#lang tesl
 module R75F1 exposing [createTodo]
 import Tesl.Prelude exposing [Bool(..), String]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -215,7 +207,6 @@ handler createTodo(claimedId: String)
 
 let test_R75_F2_named_pack_owner_forgery_rejected () =
   should_fail "forged FromDb" ({|
-#lang tesl
 module R75F2 exposing [createTodo]
 import Tesl.Prelude exposing [Bool(..), String]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -231,7 +222,6 @@ handler createTodo(victim: String)
 
 let test_R75_F1_named_pack_insert_matching_accepted () =
   should_pass ({|
-#lang tesl
 module R75F1ok exposing [createTodo]
 import Tesl.Prelude exposing [Bool(..), String]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -247,7 +237,6 @@ handler createTodo(victim: String)
 
 let test_R75_EE1_existential_wrapped_id_rejected () =
   should_fail "existential witness" {|
-#lang tesl
 module R75Ee1 exposing [createMsg]
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -262,7 +251,6 @@ handler createMsg(seed: String)
 (* ── CAP-COMPOSE: main's grant must cover reachable handlers/workers ─────── *)
 
 let capcompose_app grant = {|
-#lang tesl
 module App exposing [MyApi, MyServer, getThing, main]
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, DatabaseBackend, Memory]
@@ -288,7 +276,6 @@ let test_R75_CAPC_granted_handler_cap_accepted () =
 (* ── PFC-2b: ADT field proofs enforced at construction ──────────────────── *)
 
 let adt_field_proof src = {|
-#lang tesl
 module AdtField exposing [IsPositive, PositiveTree, checkPositive, mk]
 import Tesl.Prelude exposing [Bool(..), Int]
 fact IsPositive (n: Int)
@@ -334,7 +321,6 @@ fn needPos(n: Int ::: IsPositive n) -> Int = n
 (* (a): a field proof propagates to a pattern binder on destructuring. *)
 let test_R75_FIELDPROP_destructure_carries_proof () =
   should_pass ({|
-#lang tesl
 module Pfc2A exposing [IsPositive, PositiveTree, checkPos, needPos, getVal]
 import Tesl.Prelude exposing [Bool(..), Int]
 |} ^ pfc2_prelude ^ {|
@@ -347,7 +333,6 @@ fn getVal(t: PositiveTree) -> Int =
 (* (b): a plain fn cannot mint the proof through a Maybe container. *)
 let test_R75_PFC2_maybe_forgery_rejected () =
   should_fail "does not carry" ({|
-#lang tesl
 module Pfc2M exposing [IsPositive, PositiveTree, checkPos, needPos, launder]
 import Tesl.Prelude exposing [Bool(..), Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -359,7 +344,6 @@ fn launder() -> Maybe (Int ? IsPositive) =
 (* (b): nor through an Either container. *)
 let test_R75_PFC2_either_forgery_rejected () =
   should_fail "does not carry" ({|
-#lang tesl
 module Pfc2E exposing [IsPositive, PositiveTree, checkPos, needPos, launder]
 import Tesl.Prelude exposing [Bool(..), Int, String]
 import Tesl.Either exposing [Either(..)]
@@ -371,7 +355,6 @@ fn launder() -> Either String (Int ? IsPositive) =
 (* (b) control: a payload validated via a `check` is accepted. *)
 let test_R75_PFC2_checked_payload_accepted () =
   should_pass ({|
-#lang tesl
 module Pfc2Ok exposing [IsPositive, PositiveTree, checkPos, needPos, produce]
 import Tesl.Prelude exposing [Bool(..), Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -390,7 +373,6 @@ let test_R75_EQFIELD_function_field_record_rejected () =
   (* A record whose field is a function has no decidable equality; `==` used to
      compile to a meaningless `equal?` on closures. *)
   should_fail "not defined for type" {|
-#lang tesl
 module EqField exposing [Handler, same]
 import Tesl.Prelude exposing [Bool(..), Int]
 record Handler {
@@ -403,7 +385,6 @@ fn same(a: Handler, b: Handler) -> Bool =
 
 let test_R75_EQFIELD_plain_record_accepted () =
   should_pass {|
-#lang tesl
 module EqOk exposing [Point, same]
 import Tesl.Prelude exposing [Bool(..), Int]
 record Point {
@@ -420,7 +401,6 @@ fn same(a: Point, b: Point) -> Bool =
    typecheck-clean but unbound at runtime). *)
 let test_R75_DRIFT1_import_cli_rejected () =
   should_fail "unknown stdlib module" {|
-#lang tesl
 module Drift1Import exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Cli exposing [lookupPortArgument]
@@ -429,7 +409,6 @@ fn f() -> Int = 1
 
 let test_R75_DRIFT1_bare_cli_args_rejected () =
   should_fail "unknown name: cli" {|
-#lang tesl
 module Drift1Bare exposing [f]
 import Tesl.Prelude exposing [List, String]
 fn f() -> List String = cli.args
@@ -441,7 +420,6 @@ fn f() -> List String = cli.args
    uncallable due to a unit->T type bug). *)
 let test_R75_CAPUUID_missing_requires_rejected () =
   should_fail "requiring \\[uuid\\]\\|capability" {|
-#lang tesl
 module CapUuidBad exposing [gen]
 import Tesl.Prelude exposing [String]
 import Tesl.UUID exposing [uuid, UUID.v7]
@@ -450,7 +428,6 @@ fn gen() -> String requires [] = UUID.v7()
 
 let test_R75_CAPUUID_declared_accepted () =
   should_pass {|
-#lang tesl
 module CapUuidOk exposing [gen4, gen7]
 import Tesl.Prelude exposing [String]
 import Tesl.UUID exposing [uuid, UUID.v4, UUID.v7]
@@ -463,7 +440,6 @@ fn gen7() -> String requires [uuid] = UUID.v7()
    (the same Agent{} built in a fn body was charged; the block was not). *)
 let test_R75_A24_agent_tool_cap_uncovered_rejected () =
   should_fail "does not declare\\|must bound the authority" {|
-#lang tesl
 module A24Bad exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Env exposing [requireEnv]
@@ -482,7 +458,6 @@ fn genTool(x: String) -> String requires [random] = generatePrefixedId x
 
 let test_R75_A24_agent_tool_cap_covered_accepted () =
   should_pass {|
-#lang tesl
 module A24Ok exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Env exposing [requireEnv]
@@ -503,7 +478,6 @@ fn genTool(x: String) -> String requires [random] = generatePrefixedId x
    Int cannot be used where Int32 is expected without an explicit Int32.fromInt. *)
 let test_R75_NT07_int_not_int32_rejected () =
   should_fail "cannot unify Int with Int32\\|unify.*Int32" {|
-#lang tesl
 module Nt07Bad exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Int32 exposing [Int32, Int32.toInt]
@@ -512,7 +486,6 @@ fn f(n: Int) -> Int = Int32.toInt n
 
 let test_R75_NT07_int32_conversions_accepted () =
   should_pass {|
-#lang tesl
 module Nt07Ok exposing [narrow, widen]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -528,7 +501,6 @@ fn widen(x: Int32) -> Int = Int32.toInt x
    newtype column, is a COMPILE error, not a silent narrowing caught only by
    Postgres at write time.  These sites previously bypassed the field check. *)
 let sql_width_prelude = {|
-#lang tesl
 module SqlW exposing [f]
 import Tesl.Prelude exposing [String, Int, List]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -588,7 +560,6 @@ fn f(c: Int32, u: UserId) -> List Widget requires [dbRead, dbWrite] =
    never silently dropped. A valid SSE (subscribe only) still compiles. *)
 let test_R75_S6A_sse_with_body_rejected () =
   should_fail "an SSE endpoint cannot declare" {|
-#lang tesl
 module S6aBad exposing [EvApi]
 import Tesl.Prelude exposing [String]
 api EvApi {
@@ -598,7 +569,6 @@ api EvApi {
 
 let test_R75_S6A_valid_sse_accepted () =
   should_pass {|
-#lang tesl
 module S6aOk exposing [EvApi]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]

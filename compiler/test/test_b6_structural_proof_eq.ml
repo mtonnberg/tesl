@@ -155,7 +155,6 @@ let should_pass ?(who = "should_pass") src =
 let test_isnonzeroish_not_division_safe () =
   should_fail ~who:"IsNonZeroish" "has no .?IsNonZero.? proof\\|division may crash"
     {|
-#lang tesl
 module NonZeroish exposing [danger]
 import Tesl.Prelude exposing [Int, Bool(..), Fact]
 fact IsNonZeroish (n: Int)
@@ -172,7 +171,6 @@ fn danger(a: Int, raw: Int) -> Int =
 (* POSITIVE control — a genuine `Int.nonZero` proof still permits division. *)
 let test_int_nonzero_division_ok () =
   should_pass ~who:"IntNonZero" {|
-#lang tesl
 module NonZeroOk exposing [safe]
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [Int.nonZero]
@@ -186,7 +184,6 @@ fn safe(a: Int, raw: Int) -> Int =
    (parenthesised). *)
 let test_forall_producer_consumer_ok () =
   should_pass ~who:"ForAllPC" {|
-#lang tesl
 module B6ForAll exposing [test]
 import Tesl.Prelude exposing [Int, Bool(..), List, Fact]
 import Tesl.List exposing [List.filterCheck, List.foldr]
@@ -209,7 +206,6 @@ fn test(raw: List Int) -> Int =
 (* POSITIVE — plain proof passthrough with the SAME subject still matches. *)
 let test_plain_passthrough_ok () =
   should_pass ~who:"Passthrough" {|
-#lang tesl
 module B6Passthrough exposing [good]
 import Tesl.Prelude exposing [Int, Bool(..), Fact]
 fact IsPositive (n: Int)
@@ -228,7 +224,6 @@ fn good(raw: Int) -> Int =
    HasMin then HasMax, require HasMax && HasMin (opposite textual order). *)
 let test_conjunction_order_e2e_ok () =
   should_pass ~who:"ConjOrderE2E" {|
-#lang tesl
 module B6ConjOrder exposing [t]
 import Tesl.Prelude exposing [Int, Bool(..), Fact]
 fact HasMin (lo: Int) (n: Int)

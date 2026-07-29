@@ -127,7 +127,6 @@ check checkPositiveInt(n: Int) -> n: Int ::: IsPositive n =
 let test_O1_field_from_raw_variable () =
   should_fail "does not statically satisfy declared proof.*IsPositive"
     (Printf.sprintf {|
-#lang tesl
 module ORecRaw exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -141,7 +140,6 @@ fn mk(raw: Int) -> Box =
 let test_O1_field_from_raw_literal () =
   should_fail "does not statically satisfy declared proof.*IsPositive\\|requires proof.*IsPositive"
     (Printf.sprintf {|
-#lang tesl
 module ORecLit exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -155,7 +153,6 @@ fn mk() -> Box =
 let test_O1_field_from_checked_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module ORecOk exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -170,7 +167,6 @@ fn mk(raw: Int) -> Box =
 let test_O1_field_from_proof_param_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module ORecParamOk exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -205,7 +201,6 @@ record Tagged {
 let test_O2_one_raw_field_rejected () =
   should_fail "does not statically satisfy declared proof"
     (Printf.sprintf {|
-#lang tesl
 module OTwoRaw exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..)]
 %s
@@ -216,7 +211,6 @@ fn mk(c: Int ::: IsPositive c, rawLabel: String) -> Tagged =
 let test_O2_both_proven_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module OTwoOk exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..)]
 %s
@@ -229,7 +223,6 @@ fn mk(c: Int ::: IsPositive c, l: String ::: NonEmpty l) -> Tagged =
 let test_O3_field_predicate_not_in_scope () =
   should_fail "is not in scope\\|not in scope"
     {|
-#lang tesl
 module OScope exposing []
 import Tesl.Prelude exposing [Int]
 record Box {
@@ -263,7 +256,6 @@ record OrderLine {
 let test_O4_witness_wrong_predicate_fact_param () =
   should_fail "ghost witness predicate mismatch\\|does not match record .OrderLine. invariant"
     (Printf.sprintf {|
-#lang tesl
 module OGhostFactWrong exposing []
 import Tesl.Prelude exposing [Int, Fact]
 %s
@@ -274,7 +266,6 @@ fn mk(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity, wr
 let test_O4_witness_correct_fact_param_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module OGhostFactOk exposing []
 import Tesl.Prelude exposing [Int, Fact]
 %s
@@ -291,7 +282,6 @@ fn mk(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity, re
 let test_O4c_bare_construction_missing_witness () =
   should_fail "requires a ghost witness for its cross-field invariant\\|ghost witness"
     (Printf.sprintf {|
-#lang tesl
 module OGhostMissing exposing []
 import Tesl.Prelude exposing [Int, Fact]
 %s
@@ -306,7 +296,6 @@ fn mk(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity) ->
 let test_O5_detach_param_wrong_predicate () =
   should_fail "does not match record .OrderLine. invariant\\|wrong proof\\|ghost witness"
     (Printf.sprintf {|
-#lang tesl
 module OGhostDetachWrong exposing []
 import Tesl.Prelude exposing [Int, Fact, detachFact]
 %s
@@ -320,7 +309,6 @@ fn mk(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity) ->
 let test_O6_non_detachfact_witness () =
   should_fail "must use .(detachFact proof).\\|ghost witness for record"
     (Printf.sprintf {|
-#lang tesl
 module OGhostNonDetach exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -332,7 +320,6 @@ fn mk(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity) ->
 let test_O6_detachfact_local_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module OGhostDetachOk exposing []
 import Tesl.Prelude exposing [Int, Fact, detachFact]
 %s
@@ -350,7 +337,6 @@ fn mk(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity) ->
 let test_O9_witness_wrong_subjects () =
   should_fail "requires .PriceExceedsQty price quantity.\\|proves .PriceExceedsQty a b.\\|ghost witness"
     (Printf.sprintf {|
-#lang tesl
 module OGhostSubjWrong exposing []
 import Tesl.Prelude exposing [Int, Fact]
 %s
@@ -369,7 +355,6 @@ fn mk(price: Int ::: IsPositive price, quantity: Int ::: IsPositive quantity,
 let test_O10_detach_local_wrong_predicate () =
   should_fail "invariant requires .PriceExceedsQty.\\|does not match record .OrderLine. invariant\\|ghost witness"
     (Printf.sprintf {|
-#lang tesl
 module OGhostDetachLocalWrong exposing []
 import Tesl.Prelude exposing [Int, Fact, detachFact]
 %s
@@ -388,7 +373,6 @@ let test_O7_entity_field_raw_rejected () =
      carrying a `:::` proof is rejected at the construction site. *)
   should_fail "does not statically satisfy declared proof.*IsPositive"
     (Printf.sprintf {|
-#lang tesl
 module OEntityRaw exposing []
 import Tesl.Prelude exposing [Int, String]
 %s
@@ -404,7 +388,6 @@ let test_O7_entity_proven_field_positive () =
   (* The well-behaved counterpart still compiles. *)
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module OEntityOk exposing []
 import Tesl.Prelude exposing [Int, String]
 %s
@@ -447,7 +430,6 @@ let o1b_field_raw_sweep =
     (fun () ->
        should_fail "does not statically satisfy declared proof"
          (Printf.sprintf {|
-#lang tesl
 module ORecSweep%s exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 %s
@@ -465,7 +447,6 @@ let o1b_field_checked_sweep =
     (fun () ->
        should_pass
          (Printf.sprintf {|
-#lang tesl
 module ORecSweepOk%s exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 %s
@@ -482,7 +463,6 @@ fn mk(raw: Int) -> Box =
 let test_O1b_string_field_from_raw () =
   should_fail "does not statically satisfy declared proof.*NonEmpty"
     {|
-#lang tesl
 module ORecStr exposing []
 import Tesl.Prelude exposing [String, Bool(..)]
 fact NonEmpty (s: String)
@@ -501,7 +481,6 @@ fn mk(raw: String) -> Named =
 let test_O1b_string_field_checked_positive () =
   should_pass
     {|
-#lang tesl
 module ORecStrOk exposing []
 import Tesl.Prelude exposing [String, Bool(..)]
 fact NonEmpty (s: String)
@@ -549,7 +528,6 @@ let o4b_ghost_mismatch_matrix =
     (fun () ->
        should_fail "ghost witness predicate mismatch on .Pair. construction: invariant requires .SumExceeds."
          (Printf.sprintf {|
-#lang tesl
 module OGhost2%s exposing []
 import Tesl.Prelude exposing [Int, Fact]
 %s
@@ -561,7 +539,6 @@ fn mk(a: Int ::: IsPositive a, b: Int ::: IsPositive b, w: Fact (%s)) -> Pair =
 let test_O4b_correct_2arg_witness_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module OGhost2Ok exposing []
 import Tesl.Prelude exposing [Int, Fact]
 %s
@@ -574,7 +551,6 @@ fn mk(a: Int ::: IsPositive a, b: Int ::: IsPositive b, w: Fact (SumExceeds a b)
 let test_O8_plain_record_positive () =
   should_pass
     {|
-#lang tesl
 module OPlain exposing []
 import Tesl.Prelude exposing [Int, String]
 record Point {

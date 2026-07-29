@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson72Units exposing [
   finalSpeed,
   pace,

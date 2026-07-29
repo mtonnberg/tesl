@@ -1,4 +1,3 @@
-#lang tesl
 # ─── Kanel — Authentication and authorization check functions ──────────────
 #
 # This module defines the session type, cookie-based auth, and the GDP

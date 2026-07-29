@@ -264,8 +264,7 @@ let make_ctx () =
 
 let infer src_expr =
   let src = Printf.sprintf
-    {|#lang tesl
-module Foo exposing [f]
+    {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int, String, Bool]
 fn f(x: Int) -> Int =
   %s
@@ -344,32 +343,28 @@ let test_infer_something () =
 (* ── 6. Module-level type checking tests ─────────────────────────────────── *)
 
 let test_module_simple_fn () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [add]
+  assert_no_errors {|module Foo exposing [add]
 import Tesl.Prelude exposing [Int]
 fn add(x: Int, y: Int) -> Int =
   x + y
 |}
 
 let test_module_string_fn () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [greet]
+  assert_no_errors {|module Foo exposing [greet]
 import Tesl.Prelude exposing [String]
 fn greet(name: String) -> String =
   "Hello, ${name}!"
 |}
 
 let test_module_bool_return () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [isPositive]
+  assert_no_errors {|module Foo exposing [isPositive]
 import Tesl.Prelude exposing [Int, Bool]
 fn isPositive(x: Int) -> Bool =
   x > 0
 |}
 
 let test_module_if_expr () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [abs_val]
+  assert_no_errors {|module Foo exposing [abs_val]
 import Tesl.Prelude exposing [Int]
 fn abs_val(x: Int) -> Int =
   if x > 0 then
@@ -379,8 +374,7 @@ fn abs_val(x: Int) -> Int =
 |}
 
 let test_module_case_adt () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [colorName]
+  assert_no_errors {|module Foo exposing [colorName]
 import Tesl.Prelude exposing [String]
 type Color =
   | Red
@@ -394,8 +388,7 @@ fn colorName(c: Color) -> String =
 |}
 
 let test_module_newtype () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [UserId, makeUserId]
+  assert_no_errors {|module Foo exposing [UserId, makeUserId]
 import Tesl.Prelude exposing [String]
 type UserId = String
 fn makeUserId(s: String) -> UserId =
@@ -403,8 +396,7 @@ fn makeUserId(s: String) -> UserId =
 |}
 
 let test_module_record () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [Task]
+  assert_no_errors {|module Foo exposing [Task]
 import Tesl.Prelude exposing [String, Int, Bool]
 record Task {
   id: String
@@ -414,8 +406,7 @@ record Task {
 |}
 
 let test_module_maybe_return () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [safeDiv]
+  assert_no_errors {|module Foo exposing [safeDiv]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn safeDiv(a: Int, b: Int) -> Maybe Int =
@@ -426,8 +417,7 @@ fn safeDiv(a: Int, b: Int) -> Maybe Int =
 |}
 
 let test_module_constructor_checked_context () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [value]
+  assert_no_errors {|module Foo exposing [value]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn value() -> Maybe Int =
@@ -435,8 +425,7 @@ fn value() -> Maybe Int =
 |}
 
 let test_module_list_return () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [range]
+  assert_no_errors {|module Foo exposing [range]
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.range]
 fn range(n: Int) -> List Int =
@@ -444,8 +433,7 @@ fn range(n: Int) -> List Int =
 |}
 
 let test_module_check_fn () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [ValidPort, isValidPort]
+  assert_no_errors {|module Foo exposing [ValidPort, isValidPort]
 import Tesl.Prelude exposing [Int, String]
 fact ValidPort (port: Int)
 check isValidPort(port: Int) -> port: Int ::: ValidPort port =
@@ -456,8 +444,7 @@ check isValidPort(port: Int) -> port: Int ::: ValidPort port =
 |}
 
 let test_module_nested_let () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [f]
+  assert_no_errors {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int =
   let y = x + 1
@@ -466,8 +453,7 @@ fn f(x: Int) -> Int =
 |}
 
 let test_module_lambda () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [applyDouble]
+  assert_no_errors {|module Foo exposing [applyDouble]
 import Tesl.Prelude exposing [Int]
 fn applyDouble(f: Int -> Int, x: Int) -> Int = f x
 fn main_test() -> Int =
@@ -475,8 +461,7 @@ fn main_test() -> Int =
 |}
 
 let test_module_test_blocks () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [add]
+  assert_no_errors {|module Foo exposing [add]
 import Tesl.Prelude exposing [Int]
 fn add(x: Int, y: Int) -> Int = x + y
 test "basic addition" {
@@ -489,8 +474,7 @@ test "negative" {
 |}
 
 let test_module_worker_default_return () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Queue exposing [queueRead, FromQueue, FromDeadQueue]
 capability q implies queueRead
@@ -506,8 +490,7 @@ deadWorker handleDead(job: Job::: FromDeadQueue (Id == jobId) job)
 |}
 
 let test_module_parenthesized_forall_return () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [String, List]
 import Tesl.DB exposing [dbRead]
 entity Note table "notes" primaryKey id {
@@ -521,8 +504,7 @@ handler listNotes(user: String)
 |}
 
 let test_module_higher_order_check_chain () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.List exposing [List.filterCheck, List.allCheck]
@@ -546,8 +528,7 @@ fn verifyPositiveSmall(xs: List Int)
 |}
 
 let test_module_queue_runtime_statements () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [S]
+  assert_no_errors {|module Foo exposing [S]
 import Tesl.Prelude exposing [String]
 import Tesl.Queue exposing [queueRead, queueWrite, FromQueue, FromDeadQueue, Queue]
 import Tesl.Maybe exposing [Maybe, Nothing, Something]
@@ -603,8 +584,7 @@ main() -> App requires [workerCap, enqueueCap] =
 (* ── 7. Type error detection tests ──────────────────────────────────────── *)
 
 let test_error_unknown_name () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int =
   undefined_function x
@@ -612,8 +592,7 @@ fn f(x: Int) -> Int =
 
 let test_error_wrong_branch_type () =
   (* if branches must have same type *)
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int, Bool]
 fn f(x: Int) -> Int =
   if x > 0 then
@@ -624,16 +603,14 @@ fn f(x: Int) -> Int =
 
 let test_error_bad_arithmetic () =
   (* string + int should fail *)
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int, String]
 fn f(x: String) -> Int =
   x + 1
 |} "cannot unify"
 
 let test_error_local_typed_let_mismatch () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f, formatPublishedAt]
+  assert_has_error {|module Foo exposing [f, formatPublishedAt]
 import Tesl.Prelude exposing [Int, String]
 fn formatPublishedAt(ts: Int) -> String =
   "formatted"
@@ -643,8 +620,7 @@ fn f() -> Int =
 |} "let binding `formatted` must have declared type Int"
 
 let test_error_test_typed_let_mismatch () =
-  assert_has_error {|#lang tesl
-module Foo exposing [formatPublishedAt]
+  assert_has_error {|module Foo exposing [formatPublishedAt]
 import Tesl.Prelude exposing [Int, String]
 fn formatPublishedAt(ts: Int) -> String =
   "formatted"
@@ -655,8 +631,7 @@ test "typed let" {
 |} "let binding `formatted` must have declared type Int"
 
 let test_error_local_typed_let_posix_mismatch () =
-  assert_has_error {|#lang tesl
-module Foo exposing [value]
+  assert_has_error {|module Foo exposing [value]
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Time exposing [Time.secondsToPosix]
 fn value() -> Int =
@@ -666,16 +641,14 @@ fn value() -> Int =
 
 let test_error_list_mixed_types () =
   (* list must have homogeneous element type *)
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int, Bool, List]
 fn f(x: Int) -> List Int =
   [x, true]
 |} "cannot unify"
 
 let test_error_argument_context () =
-  assert_has_error {|#lang tesl
-module Foo exposing [value]
+  assert_has_error {|module Foo exposing [value]
 import Tesl.Prelude exposing [Int, String]
 fn takesInt(x: Int) -> Int =
   x
@@ -684,8 +657,7 @@ fn value() -> Int =
 |} "argument 1 to `takesInt`"
 
 let test_error_return_context () =
-  assert_has_error {|#lang tesl
-module Foo exposing [value]
+  assert_has_error {|module Foo exposing [value]
 import Tesl.Prelude exposing [Bool(..), Int, String]
 fn value() -> String =
   if True then
@@ -695,8 +667,7 @@ fn value() -> String =
 |} "body of `value` must have type String"
 
 let test_error_constructor_argument_context () =
-  assert_has_error {|#lang tesl
-module Foo exposing [value]
+  assert_has_error {|module Foo exposing [value]
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
 fn value() -> Maybe Int =
@@ -704,8 +675,7 @@ fn value() -> Maybe Int =
 |} "argument 1 of constructor `Something`"
 
 let test_error_constructor_expectation_chain () =
-  assert_has_error {|#lang tesl
-module Foo exposing [value]
+  assert_has_error {|module Foo exposing [value]
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
 fn value() -> Maybe Int =
@@ -717,8 +687,7 @@ fn value() -> Maybe Int =
 let test_error_return_type_context_int () =
   (* Function declared to return Int but body returns String — error should
      mention the return type context, not just a bare "cannot unify" message. *)
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int, String]
 fn f() -> Int =
   "hello"
@@ -727,8 +696,7 @@ fn f() -> Int =
 let test_error_if_cond_not_bool () =
   (* If condition that is not Bool — error should say "if conditions must have
      type Bool" rather than a bare unification failure message. *)
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int, String]
 fn f(s: String) -> Int =
   if s then
@@ -809,8 +777,7 @@ let test_stdlib_dict_lookup () =
     (pp_ty (apply s result))
 
 let test_stdlib_empty_list_arguments () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Bool, Int, List]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.List exposing [List.length, List.isEmpty, List.head, List.sum]
@@ -823,8 +790,7 @@ test "empty list stdlib calls" {
 |}
 
 let test_stdlib_time_functions () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Time exposing [PosixMillis, nowMillis, formatTime, durationMs, Time.secondsToPosix]
 fn render(ts: PosixMillis, tz: String) -> String =
@@ -838,8 +804,7 @@ fn renderNow() -> String =
 |}
 
 let test_stdlib_either_dict_set_basics () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Bool, Int, String, List]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Either exposing [Either(..), Either.isLeft, Either.map, Either.andThen]
@@ -891,8 +856,7 @@ test "either dict set basics" {
 
 let test_no_t_any () =
   (* T_ANY should never appear in type inference output *)
-  let errs = parse_and_check {|#lang tesl
-module Foo exposing [f]
+  let errs = parse_and_check {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int = x + 1
 |} in
@@ -948,8 +912,7 @@ let test_all_modules_compile () =
 (* ── 10. Parameterized ADT type-checking tests ──────────────────────────── *)
 
 let test_parameterized_adt_constructors () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [wrapRight, wrapLeft]
+  assert_no_errors {|module Foo exposing [wrapRight, wrapLeft]
 import Tesl.Prelude exposing [String, Int]
 type Either a b =
   | Left { value: a }
@@ -961,8 +924,7 @@ fn wrapLeft(s: String) -> Either String Int =
 |}
 
 let test_parameterized_adt_case () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [getLeft]
+  assert_no_errors {|module Foo exposing [getLeft]
 import Tesl.Prelude exposing [String, Int]
 type Either a b =
   | Left { value: a }
@@ -974,8 +936,7 @@ fn getLeft(e: Either String Int) -> String =
 |}
 
 let test_parameterized_adt_full_example () =
-  assert_no_errors {|#lang tesl
-module ParamAdts exposing [Either(..), Result(..), wrapRight, getLeft, wrapOk, getOkValue]
+  assert_no_errors {|module ParamAdts exposing [Either(..), Result(..), wrapRight, getLeft, wrapOk, getOkValue]
 import Tesl.Prelude exposing [String, Int]
 type Either a b =
   | Left { value: a }
@@ -998,8 +959,7 @@ fn getOkValue(r: Result String Int) -> Int =
 |}
 
 let test_parameterized_adt_nullary_variants () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [Option(..)]
+  assert_no_errors {|module Foo exposing [Option(..)]
 import Tesl.Prelude exposing [Int]
 type Option a =
   | Some { value: a }
@@ -1014,8 +974,7 @@ fn fromOption(o: Option Int, default: Int) -> Int =
 
 (* Happy path: fact declared, check function in same module *)
 let test_fact_declared_locally () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [ValidPort, isValidPort]
+  assert_no_errors {|module Foo exposing [ValidPort, isValidPort]
 import Tesl.Prelude exposing [Int]
 fact ValidPort (port: Int)
 check isValidPort(port: Int) -> port: Int ::: ValidPort port =
@@ -1027,8 +986,7 @@ check isValidPort(port: Int) -> port: Int ::: ValidPort port =
 
 (* Happy path: establish with fact declared *)
 let test_fact_establish () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [Authenticated, login]
+  assert_no_errors {|module Foo exposing [Authenticated, login]
 import Tesl.Prelude exposing [String]
 fact Authenticated (token: String)
 establish login(token: String) -> Fact (Authenticated token) =
@@ -1037,8 +995,7 @@ establish login(token: String) -> Fact (Authenticated token) =
 
 (* Error: check function without fact declaration *)
 let test_fact_ownership_missing_declaration () =
-  assert_has_error {|#lang tesl
-module Foo exposing [isValidPort]
+  assert_has_error {|module Foo exposing [isValidPort]
 import Tesl.Prelude exposing [Int]
 check isValidPort(port: Int) -> port: Int ::: ValidPort port =
   if 1 <= port && port <= 65535 then
@@ -1049,8 +1006,7 @@ check isValidPort(port: Int) -> port: Int ::: ValidPort port =
 
 (* Error: auth function producing predicate without fact declaration *)
 let test_fact_ownership_auth_missing () =
-  assert_has_error {|#lang tesl
-module Foo exposing [requireAuth]
+  assert_has_error {|module Foo exposing [requireAuth]
 import Tesl.Prelude exposing [String]
 auth requireAuth(token: String) -> user: String ::: Authenticated user =
   ok token ::: Authenticated token
@@ -1058,8 +1014,7 @@ auth requireAuth(token: String) -> user: String ::: Authenticated user =
 
 (* Error: check producing ForAll predicate without fact declaration *)
 let test_fact_ownership_forall_missing () =
-  assert_has_error {|#lang tesl
-module Foo exposing [checkAll]
+  assert_has_error {|module Foo exposing [checkAll]
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
 check checkAll(xs: List Int) -> List Int ::: ForAll (IsSmall id) =
@@ -1068,8 +1023,7 @@ check checkAll(xs: List Int) -> List Int ::: ForAll (IsSmall id) =
 
 (* Happy path: fact with no params is valid *)
 let test_fact_no_params () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [IsReady, makeReady]
+  assert_no_errors {|module Foo exposing [IsReady, makeReady]
 import Tesl.Prelude exposing [String]
 fact IsReady
 establish makeReady(s: String) -> Fact (IsReady) =
@@ -1078,8 +1032,7 @@ establish makeReady(s: String) -> Fact (IsReady) =
 
 (* Happy path: fact declared, regular fn can USE predicate as input type *)
 let test_fact_use_without_declare () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [ValidPort, use_it]
+  assert_no_errors {|module Foo exposing [ValidPort, use_it]
 import Tesl.Prelude exposing [Int]
 fact ValidPort (port: Int)
 fn use_it(port: Int ::: ValidPort port) -> Int = port

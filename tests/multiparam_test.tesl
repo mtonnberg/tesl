@@ -1,4 +1,3 @@
-#lang tesl
 module MultiparamTest exposing [checkInBounds, requiresInBounds]
 
 import Tesl.Prelude exposing [Bool(..), Int, String, Fact]

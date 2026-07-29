@@ -28,7 +28,7 @@
 (define-auther
   (sessionAuth [req : HttpRequest])
   #:returns [user : String ::: (Authenticated user)]
-  (thsl-src-control! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 26 (list (cons 'req *req)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "session" (raw-value req.cookies)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 27 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([token (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 28 (list (cons 'token token)) (lambda () (accept (Authenticated token) #:value *token))))])))))
+  (thsl-src-control! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 25 (list (cons 'req *req)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "session" (raw-value req.cookies)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 26 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([token (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 27 (list (cons 'token token)) (lambda () (accept (Authenticated token) #:value *token))))])))))
 
 (define AuthServer-sse-routes '())
 (define-api AuthApi
@@ -46,12 +46,12 @@
 (define-handler
   (health)
   #:returns String
-  (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 45 (list) (lambda () "ok")))
+  (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 44 (list) (lambda () "ok")))
 
 (define-handler
   (profile [user : String ::: (Authenticated user)])
   #:returns String
-  (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 48 (list (cons 'user *user)) (lambda () (format "profile of ~a" (tesl-display-val *user)))))
+  (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 47 (list (cons 'user *user)) (lambda () (format "profile of ~a" (tesl-display-val *user)))))
 
 (define-server AuthServer
   #:api AuthApi

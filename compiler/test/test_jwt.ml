@@ -32,7 +32,7 @@ let jwt_imports =
    import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify, JWT.decode]\n"
 
 let module_ ?(name="M") ?(exports="") ?(extra="") body =
-  Printf.sprintf "#lang tesl\nmodule %s exposing [%s]\n%s%s\n%s"
+  Printf.sprintf "module %s exposing [%s]\n%s%s\n%s"
     name exports jwt_imports extra body
 
 let compile_ok name src =
@@ -170,7 +170,7 @@ fn verify(token: JwtToken, secret: JwtSecret) requires [myJwt] -> String =
 
 let test_parse_jwt_import_exposing () =
   (* All Tesl.JWT exports are valid names *)
-  let src = "#lang tesl\nmodule M exposing []\n\
+  let src = "module M exposing []\n\
              import Tesl.JWT exposing [jwt, JwtToken, JwtSecret, JWT.sign, JWT.verify, JWT.decode]\n\
              import Tesl.Prelude exposing [String]\n" in
   let _ = compile_ok "parse_jwt_import_exposing" src in
@@ -546,13 +546,13 @@ fn helper(claims: Dict String String, s: JwtSecret) -> JwtToken =
 
 let test_module_jwt_is_known () =
   (* Tesl.JWT must not produce "unknown module" error *)
-  let src = "#lang tesl\nmodule M exposing []\nimport Tesl.JWT exposing [jwt]\n\
+  let src = "module M exposing []\nimport Tesl.JWT exposing [jwt]\n\
              import Tesl.Prelude exposing [String]\n" in
   let _ = compile_ok "module_jwt_known" src in
   ()
 
 let test_module_jwt_unknown_export_errors () =
-  let src = "#lang tesl\nmodule M exposing []\nimport Tesl.JWT exposing [notReal]\n\
+  let src = "module M exposing []\nimport Tesl.JWT exposing [notReal]\n\
              import Tesl.Prelude exposing [String]\n" in
   check_err_contains "module_jwt_unknown_export" src "notReal"
 
@@ -642,7 +642,7 @@ fn mk(s: String) -> JwtSecret =
   check_contains "emit_jwt_requires_rkt" src "tesl/tesl/jwt"
 
 let test_emit_jwt_not_required_when_not_imported () =
-  let src = "#lang tesl\nmodule M exposing [f]\n\
+  let src = "module M exposing [f]\n\
              import Tesl.Prelude exposing [Int, String]\n\
              fn f(n: Int) -> Int = n + 1\n" in
   check_not_contains "emit_jwt_not_imported" src "jwt.rkt"

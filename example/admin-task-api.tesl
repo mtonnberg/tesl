@@ -1,4 +1,3 @@
-#lang tesl
 module AdminTaskApi exposing [AdminTaskServer]
 import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
 import Tesl.Json exposing [intCodec, stringCodec]

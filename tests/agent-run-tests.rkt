@@ -102,30 +102,30 @@
 (define/pow
   (validateEcho [argsJson : String])
   #:returns EchoArgs
-  (thsl-src! "tests/agent-run-tests.tesl" 139 (list (cons 'argsJson *argsJson)) (lambda () (raw-value (decodeAs "EchoArgs" *argsJson)))))
+  (thsl-src! "tests/agent-run-tests.tesl" 138 (list (cons 'argsJson *argsJson)) (lambda () (raw-value (decodeAs "EchoArgs" *argsJson)))))
 
 (define/pow
   (dispatchEcho [args : EchoArgs])
   #:returns String
-  (thsl-src! "tests/agent-run-tests.tesl" 142 (list (cons 'args *args)) (lambda () (raw-value (tesl_import_String_concat "echo: " (tesl-dot/runtime args 'text 'EchoArgs))))))
+  (thsl-src! "tests/agent-run-tests.tesl" 141 (list (cons 'args *args)) (lambda () (raw-value (tesl_import_String_concat "echo: " (tesl-dot/runtime args 'text 'EchoArgs))))))
 
 (define/pow
   (publishStep [event : String])
   #:capabilities [runPubSub]
   #:returns Unit
-  (thsl-src! "tests/agent-run-tests.tesl" 148 (list (cons 'event *event)) (lambda () (publish-event! RunSteps (format "~a" "run-1") (Step event)))))
+  (thsl-src! "tests/agent-run-tests.tesl" 147 (list (cons 'event *event)) (lambda () (publish-event! RunSteps (format "~a" "run-1") (Step event)))))
 
 (define-handler
   (startRun [req : RunJob])
   #:capabilities [runWrite runQueue]
   #:returns (Exists [logId : String] (? RunLog _entity ::: (FromDb (Id == logId) _entity)))
-  (let ([logId (thsl-src! "tests/agent-run-tests.tesl" 154 (list (cons 'req *req)) (lambda () "run-1"))]) (thsl-src! "tests/agent-run-tests.tesl" 155 (list (cons 'logId *logId) (cons 'req *req)) (lambda () (call-with-queue-transaction (lambda () (begin (enqueue! RunQueue (RunJob #:prompt (raw-value req.prompt))) (pack ([logId]) (insert-one! RunLog (hash 'id logId))))))))))
+  (let ([logId (thsl-src! "tests/agent-run-tests.tesl" 153 (list (cons 'req *req)) (lambda () "run-1"))]) (thsl-src! "tests/agent-run-tests.tesl" 154 (list (cons 'logId *logId) (cons 'req *req)) (lambda () (call-with-queue-transaction (lambda () (begin (enqueue! RunQueue (RunJob #:prompt (raw-value req.prompt))) (pack ([logId]) (insert-one! RunLog (hash 'id logId))))))))))
 
 (define/pow
   (runWorkerHandler [job : RunJob ::: (FromQueue (Id == jobId) job)])
   #:capabilities [runWorker]
   #:returns RunJob
-  (let ([echoTool (thsl-src! "tests/agent-run-tests.tesl" 165 (list (cons 'job *job)) (lambda () (raw-value (tool "echo" "Echo back some text" "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}" validateEcho dispatchEcho))))]) (let ([steps (thsl-src! "tests/agent-run-tests.tesl" 166 (list (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () (list (raw-value (toolUseStep "echo" "call_1" "{\"text\":\"hi\"}")) (raw-value (textStep "All done.")))))]) (let ([agent (thsl-src! "tests/agent-run-tests.tesl" 167 (list (cons 'steps *steps) (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockToolProvider (raw-value steps))) (raw-value "You are a runner.") (raw-value 256)) (list *echoTool))))]) (let ([reply (thsl-src! "tests/agent-run-tests.tesl" 168 (list (cons 'agent *agent) (cons 'steps *steps) (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () (raw-value (agentRun (raw-value agent) (raw-value job.prompt) publishStep))))]) (thsl-src! "tests/agent-run-tests.tesl" 169 (list (cons 'reply *reply) (cons 'agent *agent) (cons 'steps *steps) (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () *job)))))))
+  (let ([echoTool (thsl-src! "tests/agent-run-tests.tesl" 164 (list (cons 'job *job)) (lambda () (raw-value (tool "echo" "Echo back some text" "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}" validateEcho dispatchEcho))))]) (let ([steps (thsl-src! "tests/agent-run-tests.tesl" 165 (list (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () (list (raw-value (toolUseStep "echo" "call_1" "{\"text\":\"hi\"}")) (raw-value (textStep "All done.")))))]) (let ([agent (thsl-src! "tests/agent-run-tests.tesl" 166 (list (cons 'steps *steps) (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () (__tart_withTools (__tart_defineAgent (raw-value (mockToolProvider (raw-value steps))) (raw-value "You are a runner.") (raw-value 256)) (list *echoTool))))]) (let ([reply (thsl-src! "tests/agent-run-tests.tesl" 167 (list (cons 'agent *agent) (cons 'steps *steps) (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () (raw-value (agentRun (raw-value agent) (raw-value job.prompt) publishStep))))]) (thsl-src! "tests/agent-run-tests.tesl" 168 (list (cons 'reply *reply) (cons 'agent *agent) (cons 'steps *steps) (cons 'echoTool *echoTool) (cons 'job *job)) (lambda () *job)))))))
 
 (define AgentRunServer-sse-routes
   (list (list (list "events" "runs" #f) #f RunSteps 2 (list (cons 2 (sse-key-capture __inline_capturer_runId_1))))))

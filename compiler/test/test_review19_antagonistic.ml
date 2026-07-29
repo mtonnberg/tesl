@@ -61,7 +61,7 @@ let should_not_crash src =
   let code = exit_code_of src in
   check bool "compiler must not crash (exit code must not be 2)" false (code = 2)
 
-let prelude = "#lang tesl\nmodule T exposing []\nimport Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact]\n"
+let prelude = "module T exposing []\nimport Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact]\n"
 
 (* ── P1: Auth-wiring gap ─────────────────────────────────────────────────── *)
 (* SPEC CLAIM (TESL.md): "Try to wire [a handler with auth proof] to a handler
@@ -69,8 +69,7 @@ let prelude = "#lang tesl\nmodule T exposing []\nimport Tesl.Prelude exposing [I
    FIXED: both directions (auth handler ↔ no-auth endpoint) now produce V001. *)
 
 let test_handler_auth_wired_to_no_auth_endpoint () =
-  let src = {|#lang tesl
-module T exposing []
+  let src = {|module T exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Json exposing [stringCodec]
@@ -106,8 +105,7 @@ server TestServer for TestApi {
 
 (* P1b: reverse — endpoint needs auth, handler has none *)
 let test_endpoint_needs_auth_handler_lacks_it () =
-  let src = {|#lang tesl
-module T exposing []
+  let src = {|module T exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Json exposing [stringCodec]
@@ -176,8 +174,7 @@ let test_unit_term_exists () =
 (* CURRENT BEHAVIOUR: silently parsed as a type alias *)
 
 let test_single_line_adt_is_error () =
-  let src = {|#lang tesl
-module T exposing []
+  let src = {|module T exposing []
 import Tesl.Prelude exposing [String]
 type Color = Red | Green | Blue
 fn colorStr(c: Color) -> String =
@@ -195,8 +192,7 @@ fn colorStr(c: Color) -> String =
 (* FIXED: direct SQL select at ForAll return position now produces V001. *)
 
 let test_forall_on_unfiltered_select () =
-  let src = {|#lang tesl
-module T exposing []
+  let src = {|module T exposing []
 import Tesl.Prelude exposing [Int, String, List, Bool(..)]
 import Tesl.Time exposing [PosixMillis]
 import Tesl.DB exposing [dbRead]
@@ -369,8 +365,7 @@ let test_variable_div_without_proof () =
 
 let test_write_without_cap () =
   should_fail "V001"
-    {|#lang tesl
-module T exposing []
+    {|module T exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Time exposing [PosixMillis]
 import Tesl.DB exposing [dbRead]
@@ -405,8 +400,7 @@ fn tryWriteWithoutCap(id: String, content: String) -> Int
 
 let test_proof_smuggling_blocked () =
   should_fail "V001"
-    {|#lang tesl
-module T exposing []
+    {|module T exposing []
 import Tesl.Prelude exposing [Int, String, Fact, attachFact, detachFact]
 import Tesl.String exposing [String.length]
 
@@ -437,8 +431,7 @@ fn testSmuggle(clean: String ::: IsClean clean, dirty: String) -> String =
    processNameManual3: proof describes `name` but is attached to `name2` → V001.
    These were silently accepted before the subject-mismatch check. *)
 
-let shared_proof_module = {|#lang tesl
-module T exposing []
+let shared_proof_module = {|module T exposing []
 import Tesl.Proof
 import Tesl.String exposing [String.length]
 
@@ -504,8 +497,7 @@ fn processNameManual3(name: String ::: NonEmpty name, name2: String) -> String =
 
 let test_import_after_def_rejected () =
   should_fail "E000"
-    {|#lang tesl
-module T exposing []
+    {|module T exposing []
 import Tesl.Prelude exposing [Int]
 fn f() -> Int = 1
 import Tesl.String exposing [String.length]

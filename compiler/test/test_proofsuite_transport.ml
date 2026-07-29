@@ -110,7 +110,7 @@ let[@warning "-32"] known_gap ~what src =
 (* ── Shared TESL fragments ───────────────────────────────────────────────── *)
 
 let hdr modname = Printf.sprintf
-  "#lang tesl\nmodule %s exposing []\n\
+  "module %s exposing []\n\
    import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact, detachFact, attachFact, forgetFact]\n"
   modname
 

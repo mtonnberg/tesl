@@ -40,7 +40,7 @@ let must_reject label src =
 (* Shared preamble: a fact and a consumer that trusts it, so an accepted forgery
    would be exploitable.  `Forge` matches the parse file name `forge.tesl`. *)
 let prog body_decls =
-  "#lang tesl\n\
+  "\
    module Forge exposing []\n\
    import Tesl.Prelude exposing [Int, String, Bool(..)]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n\

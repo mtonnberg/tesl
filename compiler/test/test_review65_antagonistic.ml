@@ -106,7 +106,6 @@ let should_fail pattern src =
 
 let test_R65_SI01_list_head_without_import_rejected () =
   should_fail "requires.*import Tesl\\.List\\|import Tesl\\.List" {|
-#lang tesl
 module R65Si01 exposing []
 import Tesl.Prelude exposing [List, Int]
 import Tesl.Maybe exposing [Maybe]
@@ -116,7 +115,6 @@ fn test(xs: List Int) -> Maybe Int =
 
 let test_R65_SI02_dict_lookup_without_import_rejected () =
   should_fail "requires.*import Tesl\\.Dict\\|import Tesl\\.Dict" {|
-#lang tesl
 module R65Si02 exposing []
 import Tesl.Prelude exposing [List, Int, String]
 import Tesl.Maybe exposing [Maybe]
@@ -126,7 +124,6 @@ fn test(d: Dict String Int) -> Maybe Int =
 
 let test_R65_SI03_string_length_without_import_rejected () =
   should_fail "requires.*import Tesl\\.String\\|import Tesl\\.String" {|
-#lang tesl
 module R65Si03 exposing []
 import Tesl.Prelude exposing [String, Int]
 fn test(s: String) -> Int =
@@ -135,7 +132,6 @@ fn test(s: String) -> Int =
 
 let test_R65_SI04_int_parse_without_import_rejected () =
   should_fail "requires.*import Tesl\\.Int\\|import Tesl\\.Int" {|
-#lang tesl
 module R65Si04 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Maybe exposing [Maybe]
@@ -145,7 +141,6 @@ fn test(s: String) -> Maybe Int =
 
 let test_R65_SI05_set_member_without_import_rejected () =
   should_fail "requires.*import Tesl\\.Set\\|import Tesl\\.Set" {|
-#lang tesl
 module R65Si05 exposing []
 import Tesl.Prelude exposing [Int]
 fn test(s: Set Int, x: Int) -> Bool =
@@ -154,7 +149,6 @@ fn test(s: Set Int, x: Int) -> Bool =
 
 let test_R65_SI06_list_map_and_filter_without_import_rejected () =
   should_fail "requires.*import Tesl\\.List\\|import Tesl\\.List" {|
-#lang tesl
 module R65Si06 exposing []
 import Tesl.Prelude exposing [List, Int]
 fn double(n: Int) -> Int = n * 2
@@ -164,7 +158,6 @@ fn test(xs: List Int) -> List Int =
 
 let test_R65_SI07_stdlib_fn_in_lambda_without_import_rejected () =
   should_fail "requires.*import Tesl\\.List\\|import Tesl\\.List" {|
-#lang tesl
 module R65Si07 exposing []
 import Tesl.Prelude exposing [List, Int]
 fn reverseInner(ys: List Int) -> List Int = List.reverse ys
@@ -174,7 +167,6 @@ fn test(xss: List (List Int)) -> List (List Int) =
 
 let test_R65_SI08_stdlib_fn_in_case_without_import_rejected () =
   should_fail "requires.*import Tesl\\.String\\|import Tesl\\.String" {|
-#lang tesl
 module R65Si08 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Maybe exposing [Maybe, Something, Nothing]
@@ -188,7 +180,6 @@ fn test(ms: Maybe String) -> Int =
 
 let test_R65_SM01_import_all_grants_all_list_fns_accepted () =
   should_pass {|
-#lang tesl
 module R65Sm01 exposing []
 import Tesl.Prelude exposing [List, Int]
 import Tesl.Maybe exposing [Maybe]
@@ -199,7 +190,6 @@ fn test(xs: List Int) -> Maybe Int =
 
 let test_R65_SM02_import_all_dict_grants_lookup_accepted () =
   should_pass {|
-#lang tesl
 module R65Sm02 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Maybe exposing [Maybe]
@@ -213,7 +203,6 @@ fn test(d: Dict String Int) -> Maybe Int =
 let test_R65_SE01_list_foldl_not_in_exposing_list_rejected () =
   (* User has import Tesl.List but only exposes List.head; using List.foldl is rejected *)
   should_fail "requires.*import Tesl\\.List\\|import Tesl\\.List\\|not in the exposing" {|
-#lang tesl
 module R65Se01 exposing []
 import Tesl.Prelude exposing [List, Int]
 import Tesl.List exposing [List.head]
@@ -224,7 +213,6 @@ fn test(xs: List Int) -> Int =
 
 let test_R65_SE02_list_tail_not_in_exposing_rejected () =
   should_fail "requires.*import Tesl\\.List\\|List\\.tail.*not in\\|not in.*List\\.tail" {|
-#lang tesl
 module R65Se02 exposing []
 import Tesl.Prelude exposing [List, Int]
 import Tesl.Maybe exposing [Maybe]
@@ -235,7 +223,6 @@ fn test(xs: List Int) -> Maybe (List Int) =
 
 let test_R65_SE03_two_functions_one_missing_from_exposing_rejected () =
   should_fail "requires.*import Tesl\\.List\\|not in the exposing" {|
-#lang tesl
 module R65Se03 exposing []
 import Tesl.Prelude exposing [List, Int]
 import Tesl.Maybe exposing [Maybe]
@@ -249,7 +236,6 @@ fn test(xs: List Int) -> Int =
 
 let test_R65_SA01_list_head_with_exposing_accepted () =
   should_pass {|
-#lang tesl
 module R65Sa01 exposing []
 import Tesl.Prelude exposing [List, Int]
 import Tesl.Maybe exposing [Maybe]
@@ -260,7 +246,6 @@ fn test(xs: List Int) -> Maybe Int =
 
 let test_R65_SA02_multiple_list_fns_with_exposing_accepted () =
   should_pass {|
-#lang tesl
 module R65Sa02 exposing []
 import Tesl.Prelude exposing [List, Int]
 import Tesl.Maybe exposing [Maybe]
@@ -272,7 +257,6 @@ fn test(xs: List Int) -> Int =
 
 let test_R65_SA03_dict_with_explicit_import_accepted () =
   should_pass {|
-#lang tesl
 module R65Sa03 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Maybe exposing [Maybe]
@@ -284,7 +268,6 @@ fn test() -> Maybe Int =
 
 let test_R65_SA04_string_length_with_import_accepted () =
   should_pass {|
-#lang tesl
 module R65Sa04 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.String exposing [String.length]
@@ -295,7 +278,6 @@ fn test(s: String) -> Int =
 let test_R65_SA05_no_stdlib_fn_calls_no_import_needed_accepted () =
   (* A module that imports types but calls no stdlib functions *)
   should_pass {|
-#lang tesl
 module R65Sa05 exposing []
 import Tesl.Prelude exposing [Int]
 fn add(a: Int, b: Int) -> Int = a + b
@@ -304,7 +286,6 @@ fn mul(a: Int, b: Int) -> Int = a * b
 
 let test_R65_SA06_different_modules_all_imported_accepted () =
   should_pass {|
-#lang tesl
 module R65Sa06 exposing []
 import Tesl.Prelude exposing [List, Int, String]
 import Tesl.Maybe exposing [Maybe]
@@ -318,7 +299,6 @@ fn testString(s: String) -> Int = String.length s
 
 let test_R65_SC01_local_ok_conflicts_with_imported_result_rejected () =
   should_fail "constructor.*Ok.*shadows\\|Ok.*Result\\|shadows.*Ok" {|
-#lang tesl
 module R65Sc01 exposing [Status(..)]
 import Tesl.Result exposing [Result(..)]
 type Status
@@ -328,7 +308,6 @@ type Status
 
 let test_R65_SC02_local_err_conflicts_with_imported_result_rejected () =
   should_fail "constructor.*Err.*shadows\\|Err.*Result\\|shadows.*Err" {|
-#lang tesl
 module R65Sc02 exposing [Outcome(..)]
 import Tesl.Result exposing [Result(..)]
 type Outcome
@@ -338,7 +317,6 @@ type Outcome
 
 let test_R65_SC03_local_left_conflicts_with_imported_either_rejected () =
   should_fail "constructor.*Left.*shadows\\|Left.*Either\\|shadows.*Left" {|
-#lang tesl
 module R65Sc03 exposing [Side(..)]
 import Tesl.Either exposing [Either(..)]
 type Side
@@ -349,7 +327,6 @@ type Side
 
 let test_R65_SC04_local_constructor_conflicts_with_db_result_rejected () =
   should_fail "constructor.*NoRowDeleted.*shadows\\|NoRowDeleted.*DB\\|shadows.*NoRowDeleted" {|
-#lang tesl
 module R65Sc04 exposing [MyDelete(..)]
 import Tesl.DB exposing [DeleteResult(..)]
 type MyDelete
@@ -360,7 +337,6 @@ type MyDelete
 let test_R65_SC05_both_ok_and_err_conflict_detected_rejected () =
   (* When both Ok and Err are locally defined alongside import of Result(..) *)
   should_fail "constructor.*Ok.*shadows\\|constructor.*Err.*shadows\\|shadows.*Ok\\|shadows.*Err" {|
-#lang tesl
 module R65Sc05 exposing [HttpResult(..)]
 import Tesl.Result exposing [Result(..)]
 type HttpResult
@@ -374,7 +350,6 @@ type HttpResult
 let test_R65_SN01_import_all_without_exposing_no_ctor_conflict_accepted () =
   (* import Tesl.Result without (..) exposing does NOT import the constructors *)
   should_pass {|
-#lang tesl
 module R65Sn01 exposing [Status(..)]
 import Tesl.Result
 type Status
@@ -385,7 +360,6 @@ type Status
 let test_R65_SN02_import_result_type_without_dotdot_no_ctor_conflict_accepted () =
   (* import Tesl.Result exposing [Result] (no (..)) does NOT import Ok/Err *)
   should_pass {|
-#lang tesl
 module R65Sn02 exposing [Status(..)]
 import Tesl.Result exposing [Result]
 type Status
@@ -397,7 +371,6 @@ let test_R65_SN03_no_result_import_ok_constructor_no_conflict_detected () =
   (* Without any Tesl.Result import, Ok local constructor has no imported counterpart
      to conflict with in the exposing-based check. *)
   should_pass {|
-#lang tesl
 module R65Sn03 exposing [Status(..)]
 type Status
   = Ok
@@ -406,7 +379,6 @@ type Status
 
 let test_R65_SN04_unique_constructors_no_conflict_accepted () =
   should_pass {|
-#lang tesl
 module R65Sn04 exposing [Status(..)]
 import Tesl.Result exposing [Result(..)]
 type Status
@@ -418,7 +390,6 @@ type Status
 let test_R65_SN05_maybe_import_no_ctor_conflict_accepted () =
   (* Nothing and Something are keywords, so they can never be local constructors *)
   should_pass {|
-#lang tesl
 module R65Sn05 exposing [Status(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 type Status
@@ -430,7 +401,6 @@ type Status
 
 let test_R65_SX01_int_abs_without_import_rejected () =
   should_fail "requires.*import Tesl\\.Int\\|import Tesl\\.Int" {|
-#lang tesl
 module R65Sx01 exposing []
 import Tesl.Prelude exposing [Int]
 fn test(n: Int) -> Int =
@@ -439,7 +409,6 @@ fn test(n: Int) -> Int =
 
 let test_R65_SX02_float_add_without_import_rejected () =
   should_fail "requires.*import Tesl\\.Float\\|import Tesl\\.Float" {|
-#lang tesl
 module R65Sx02 exposing []
 fn test(a: Float, b: Float) -> Float =
   Float.add a b
@@ -448,7 +417,6 @@ fn test(a: Float, b: Float) -> Float =
 let test_R65_SX03_list_sort_in_let_body_without_import_rejected () =
   (* stdlib fn used inside a let body *)
   should_fail "requires.*import Tesl\\.List\\|import Tesl\\.List" {|
-#lang tesl
 module R65Sx03 exposing []
 import Tesl.Prelude exposing [List, Int]
 fn test(xs: List Int) -> List Int =
@@ -459,7 +427,6 @@ fn test(xs: List Int) -> List Int =
 let test_R65_SX04_list_fn_in_if_branch_without_import_rejected () =
   (* stdlib fn used inside a conditional *)
   should_fail "requires.*import Tesl\\.List\\|import Tesl\\.List" {|
-#lang tesl
 module R65Sx04 exposing []
 import Tesl.Prelude exposing [List, Int]
 fn test(xs: List Int, flag: Bool) -> List Int =
@@ -472,7 +439,6 @@ fn test(xs: List Int, flag: Bool) -> List Int =
 let test_R65_SX05_two_stdlib_modules_only_one_imported_catches_missing () =
   (* String.length used without import even though Tesl.List IS imported *)
   should_fail "requires.*import Tesl\\.String\\|import Tesl\\.String" {|
-#lang tesl
 module R65Sx05 exposing []
 import Tesl.Prelude exposing [List, Int, String]
 import Tesl.Maybe exposing [Maybe]
@@ -484,7 +450,6 @@ fn test2(s: String) -> Int = String.length s
 let test_R65_SX06_list_head_and_string_length_both_missing_catches_both () =
   (* Two missing imports; error should mention one of them at minimum *)
   should_fail "requires.*import Tesl\\." {|
-#lang tesl
 module R65Sx06 exposing []
 import Tesl.Prelude exposing [List, Int, String]
 import Tesl.Maybe exposing [Maybe]
@@ -495,7 +460,6 @@ fn test2(s: String) -> Int = String.length s
 let test_R65_SX07_using_dict_empty_as_value_without_import_rejected () =
   (* Dict.empty is a zero-arg stdlib function/value *)
   should_fail "requires.*import Tesl\\.Dict\\|import Tesl\\.Dict" {|
-#lang tesl
 module R65Sx07 exposing []
 import Tesl.Prelude exposing [String, Int]
 fn test() -> Dict String Int =
@@ -505,7 +469,6 @@ fn test() -> Dict String Int =
 let test_R65_SX08_local_adt_with_same_name_as_result_ctor_accepted_if_not_imported () =
   (* Defining Err locally is OK if Tesl.Result is not imported with (..) *)
   should_pass {|
-#lang tesl
 module R65Sx08 exposing [Outcome(..)]
 import Tesl.Prelude exposing [String]
 type Outcome
@@ -519,7 +482,6 @@ let test_R65_SX09_ctor_conflict_checked_for_maybe_type_ok_rejected () =
      But the 'Maybe' constructor itself coming from exposing [Maybe(..)] DOES
      get registered, so a local Maybe ctor would conflict. *)
   should_pass {|
-#lang tesl
 module R65Sx09 exposing [Flag(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 type Flag
@@ -536,7 +498,6 @@ type Flag
 
 let test_R65_SB01_env_without_import_rejected () =
   should_fail "requires.*import Tesl\\.Env\\|not in the exposing" {|
-#lang tesl
 module R65Sb01 exposing [getPort]
 import Tesl.Prelude exposing [Int, String]
 fn getPort() -> Int requires [] = envInt "PORT" 3000
@@ -544,7 +505,6 @@ fn getPort() -> Int requires [] = envInt "PORT" 3000
 
 let test_R65_SB02_requireEnv_without_import_rejected () =
   should_fail "requires.*import Tesl\\.Env" {|
-#lang tesl
 module R65Sb02 exposing [key]
 import Tesl.Prelude exposing [String]
 fn key() -> String requires [] = requireEnv "API_KEY"
@@ -552,7 +512,6 @@ fn key() -> String requires [] = requireEnv "API_KEY"
 
 let test_R65_SB03_generatePrefixedId_without_import_rejected () =
   should_fail "requires.*import Tesl\\.Id" {|
-#lang tesl
 module R65Sb03 exposing [mkId]
 import Tesl.Prelude exposing [String]
 fn mkId() -> String requires [] = generatePrefixedId "usr"
@@ -560,7 +519,6 @@ fn mkId() -> String requires [] = generatePrefixedId "usr"
 
 let test_R65_SB04_randomInt_without_import_rejected () =
   should_fail "requires.*import Tesl\\.Random" {|
-#lang tesl
 module R65Sb04 exposing [roll]
 import Tesl.Prelude exposing [Int]
 fn roll() -> Int requires [] = randomInt 1 6
@@ -570,7 +528,6 @@ let test_R65_SB05_env_with_import_accepted () =
   (* With the module imported (Fix A) AND the envRead capability declared (Fix B),
      the function is accepted. *)
   should_pass {|
-#lang tesl
 module R65Sb05 exposing [getPort]
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Env exposing [envInt, envRead]
@@ -581,7 +538,6 @@ let test_R65_SB06_param_named_env_not_flagged_accepted () =
   (* A parameter named `env` shadows the stdlib name; using it must NOT require
      `import Tesl.Env`. *)
   should_pass {|
-#lang tesl
 module R65Sb06 exposing [pick]
 import Tesl.Prelude exposing [String]
 fn pick(env: String) -> String requires [] = env
@@ -590,7 +546,6 @@ fn pick(env: String) -> String requires [] = env
 let test_R65_SB07_let_bound_envInt_not_flagged_accepted () =
   (* A let-bound local named `envInt` shadows the stdlib name. *)
   should_pass {|
-#lang tesl
 module R65Sb07 exposing [n]
 import Tesl.Prelude exposing [Int]
 fn n() -> Int requires [] =
@@ -605,7 +560,6 @@ fn n() -> Int requires [] =
 
 let test_R65_SBC01_env_fn_without_capability_rejected () =
   should_fail "envRead\\|capability" {|
-#lang tesl
 module R65Sbc01 exposing [getPort]
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Env exposing [envInt]
@@ -614,7 +568,6 @@ fn getPort() -> Int requires [] = envInt "PORT" 3000
 
 let test_R65_SBC02_env_fn_with_capability_accepted () =
   should_pass {|
-#lang tesl
 module R65Sbc02 exposing [getPort]
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Env exposing [envInt, envRead]
@@ -624,7 +577,6 @@ fn getPort() -> Int requires [envRead] = envInt "PORT" 3000
 let test_R65_SBC03_transitive_caller_without_capability_rejected () =
   (* readPort requires [envRead]; caller `start` calls it but omits envRead. *)
   should_fail "envRead\\|capability" {|
-#lang tesl
 module R65Sbc03 exposing [start]
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Env exposing [envInt, envRead]
@@ -639,7 +591,6 @@ fn start() -> Int requires [] = readPort()
 
 let test_R65_SH01_handler_with_httprequest_param_rejected () =
   should_fail "HttpRequest\\|never passed the request" {|
-#lang tesl
 module R65Sh01 exposing [S]
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -659,7 +610,6 @@ let test_R65_SH02_positional_handler_params_accepted () =
   (* `getTask(x)` receives the capture `id` POSITIONALLY (param name need not
      match); `createTask(x)` receives the POST body. No HttpRequest param. *)
   should_pass {|
-#lang tesl
 module R65Sh02 exposing [S]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]

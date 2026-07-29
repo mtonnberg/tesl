@@ -111,7 +111,6 @@ let test_R60_FL01_named_fn_in_forall_map_rejected () =
      In practice the compiler rejects this — only lambda wrappers work.
      This test documents the gap: Form 1 in the docs is NOT implemented. *)
   should_fail "requires proof annotations on its parameters and cannot be passed as a plain callback" {|
-#lang tesl
 module R60Fl01 exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck, List.map]
@@ -129,7 +128,6 @@ fn mapAll(xs: List Int ::: ForAll (IsPositive) xs) -> List Int =
 let test_R60_FL02_lambda_wrapper_in_forall_map_accepted () =
   (* The working workaround: use an inline lambda with proof-annotated param *)
   should_pass {|
-#lang tesl
 module R60Fl02 exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck, List.map]
@@ -150,7 +148,6 @@ let test_R60_OK01_ok_with_constructor_call_accepted () =
   (* ok expression CAN return a constructor application.
      The emitter creates a let-binding for the return name so the proof template resolves. *)
   should_pass {|
-#lang tesl
 module R60Ok01 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.String exposing [String.length]
@@ -166,7 +163,6 @@ check checkId(raw: String) -> u: MkUserId ::: ValidId u =
 let test_R60_OK02_ok_with_different_binding_name_rejected () =
   (* ok must return the exact declared binding name, not a different variable *)
   should_fail "ok expression returns .transformed. but the declared return binding name is .result." {|
-#lang tesl
 module R60Ok02 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -181,7 +177,6 @@ check checkPos(n: Int) -> result: Int ::: IsPositive result =
 let test_R60_OK03_ok_with_let_bound_var_accepted () =
   (* ok can return a let-bound variable even if it was transformed *)
   should_pass {|
-#lang tesl
 module R60Ok03 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -197,7 +192,6 @@ let test_R60_OK04_ok_with_arithmetic_still_rejected () =
   (* Arbitrary arithmetic expressions in ok are still rejected; only constructor
      applications and the declared binding name are allowed. *)
   should_fail "ok expression returns a non-identifier" {|
-#lang tesl
 module R60Ok04 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -214,7 +208,6 @@ let test_R60_RF01_proof_lost_through_unannotated_record_field () =
   (* A value stored in an unannotated record field loses its proof when read back.
      This is by design but is a significant ergonomic limitation. *)
   should_fail "does not statically satisfy declared proof" {|
-#lang tesl
 module R60Rf01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -235,7 +228,6 @@ let test_R60_RF02_proof_preserved_through_annotated_record_field () =
   (* With proof annotation on the field, construction requires the proof
      and field access propagates it. *)
   should_pass {|
-#lang tesl
 module R60Rf02 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -258,7 +250,6 @@ let test_R60_TP01_proof_lost_through_tuple_first () =
   (* Tuple2.first does not preserve proof from tuple elements.
      This is by design: tuples have no per-element proof annotations. *)
   should_fail "does not statically satisfy declared proof" {|
-#lang tesl
 module R60Tp01 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Tuple exposing [Tuple2(..), Tuple2.first]
@@ -282,7 +273,6 @@ let test_R60_FG01_forget_fact_strips_proof () =
   (* forgetFact removes the proof from a value. Attempting to use the result
      in a proof-requiring position is a static error. *)
   should_fail "does not statically satisfy declared proof" {|
-#lang tesl
 module R60Fg01 exposing []
 import Tesl.Prelude exposing [Int, forgetFact]
 fact IsPositive (n: Int)
@@ -305,7 +295,6 @@ let test_R60_CT01_constructor_same_name_as_type_rejected () =
      This differs from Haskell/ML convention where `type UserId = UserId String` is idiomatic.
      The error message suggests renaming to MkUserId. *)
   should_fail "same name as its type.*rename" {|
-#lang tesl
 module R60Ct01 exposing []
 import Tesl.Prelude exposing [String]
 type UserId
@@ -315,7 +304,6 @@ type UserId
 let test_R60_CT02_constructor_different_name_accepted () =
   (* Using a different constructor name from the type is accepted *)
   should_pass {|
-#lang tesl
 module R60Ct02 exposing []
 import Tesl.Prelude exposing [String]
 type UserId
@@ -328,7 +316,6 @@ let test_R60_MP01_swapped_literal_args_caught () =
   (* When literal arguments are provided in wrong order to a multi-param proof,
      the static checker catches the mismatch. *)
   should_fail "does not statically satisfy declared proof" {|
-#lang tesl
 module R60Mp01 exposing []
 import Tesl.Prelude exposing [Int]
 fact InRange (lo: Int) (hi: Int) (n: Int)
@@ -349,7 +336,6 @@ let test_R60_DV01_divide_without_proof_rejected () =
   (* Int.divide requires IsNonZero proof on the denominator.
      Direct call without this proof is a static error. *)
   should_fail "does not statically satisfy declared proof.*IsNonZero" {|
-#lang tesl
 module R60Dv01 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [Int.divide]
@@ -363,7 +349,6 @@ let test_R60_ES01_establish_cannot_contain_ok () =
   (* establish functions must return proof constructors directly,
      not use the 'ok' syntax *)
   should_fail "establish functions must return proof constructors directly" {|
-#lang tesl
 module R60Es01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -374,7 +359,6 @@ establish positive(n: Int) -> Fact (IsPositive n) =
 let test_R60_ES02_establish_cannot_contain_fail () =
   (* establish functions must be total — fail is not allowed *)
   should_fail "establish functions cannot use .fail" {|
-#lang tesl
 module R60Es02 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -388,7 +372,6 @@ establish positive(n: Int) -> Fact (IsPositive n) =
 let test_R60_ES03_establish_cannot_call_check () =
   (* establish must be total — calling a check function would make it non-total *)
   should_fail "establish functions cannot call .check" {|
-#lang tesl
 module R60Es03 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -408,7 +391,6 @@ establish badEstablish(n: Int) -> Fact (IsPositive n) =
 let test_R60_FN01_fn_cannot_mint_proof () =
   (* Plain fn functions cannot use ok ::: to mint new proofs *)
   should_fail "ok .* proof construction is not allowed in .fn." {|
-#lang tesl
 module R60Fn01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -422,7 +404,6 @@ let test_R60_IL01_inline_literal_in_test_proof_position () =
   (* Passing an inline literal to a check function that uses it as a proof subject
      is rejected in test blocks because literals cannot be tracked as proof subjects. *)
   should_fail "inline literals cannot be tracked as proof subjects" {|
-#lang tesl
 module R60Il01 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [Int.nonZero]
@@ -438,7 +419,6 @@ let test_R60_CA01_proof_not_propagated_from_scrutinee_through_case () =
   (* Pattern-matching binds a new variable; proofs on the scrutinee
      do not automatically attach to bound case variables *)
   should_fail "does not statically satisfy declared proof" {|
-#lang tesl
 module R60Ca01 exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 fact IsPositive (n: Int)
@@ -460,7 +440,6 @@ let test_R60_RC01_annotated_field_requires_proof_at_construction () =
   (* Building a record with a proof-annotated field requires the field value
      to carry the declared proof. Unproven values are rejected. *)
   should_fail "does not statically satisfy declared proof" {|
-#lang tesl
 module R60Rc01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -475,7 +454,6 @@ let test_R60_FA01_forall_on_dict_type_rejected () =
   (* ForAll is only valid on List and Set. Using it on Dict should be rejected
      (the correct annotation is ForAllValues or ForAllKeys). *)
   should_fail "ForAll" {|
-#lang tesl
 module R60Fa01 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Dict exposing [Dict]
@@ -489,7 +467,6 @@ let test_R60_CP01_missing_capability_in_caller_caught () =
   (* A function that calls a time-requiring function must declare [time] capability.
      Omitting requires [time] is a static error. *)
   should_fail "requires" {|
-#lang tesl
 module R60Cp01 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Time exposing [time, nowMillis, PosixMillis]
@@ -504,7 +481,6 @@ fn badFn() -> PosixMillis =
 
 let test_R60_EX01_missing_adt_ctor_caught () =
   should_fail "non-exhaustive case.*missing.*Blue\\|missing.*Green\\|missing" {|
-#lang tesl
 module R60Ex01 exposing []
 import Tesl.Prelude exposing [String]
 type Color
@@ -518,7 +494,6 @@ fn colorName(c: Color) -> String =
 
 let test_R60_EX02_exhaustive_adt_case_ok () =
   should_pass {|
-#lang tesl
 module R60Ex02 exposing []
 import Tesl.Prelude exposing [String]
 type Color
@@ -534,7 +509,6 @@ fn colorName(c: Color) -> String =
 
 let test_R60_EX03_missing_maybe_ctor_caught () =
   should_fail "non-exhaustive case.*missing.*Nothing\\|missing.*Something" {|
-#lang tesl
 module R60Ex03 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -545,7 +519,6 @@ fn maybeStr(m: Maybe Int) -> String =
 
 let test_R60_EX04_exhaustive_maybe_case_ok () =
   should_pass {|
-#lang tesl
 module R60Ex04 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -557,7 +530,6 @@ fn maybeStr(m: Maybe Int) -> String =
 
 let test_R60_EX05_missing_bool_ctor_caught () =
   should_fail "non-exhaustive case.*missing.*False\\|missing.*True" {|
-#lang tesl
 module R60Ex05 exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 fn onlyTrue(b: Bool) -> Int =
@@ -568,7 +540,6 @@ fn onlyTrue(b: Bool) -> Int =
 let test_R60_EX06_wildcard_covers_remaining_ok () =
   (* A wildcard arm with no guard makes the case exhaustive *)
   should_pass {|
-#lang tesl
 module R60Ex06 exposing []
 import Tesl.Prelude exposing [Int, String]
 type Color
@@ -584,7 +555,6 @@ fn colorName(c: Color) -> String =
 let test_R60_EX07_variable_arm_covers_remaining_ok () =
   (* A variable binding arm (no guard) makes the case exhaustive *)
   should_pass {|
-#lang tesl
 module R60Ex07 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -597,7 +567,6 @@ fn maybeInt(m: Maybe Int) -> Int =
 let test_R60_EX08_all_guarded_arms_non_exhaustive () =
   (* All arms with guards cannot statically guarantee exhaustiveness *)
   should_fail "non-exhaustive" {|
-#lang tesl
 module R60Ex08 exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 fn guarded(b: Bool) -> Int =
@@ -609,7 +578,6 @@ fn guarded(b: Bool) -> Int =
 let test_R60_EX09_partial_ctor_with_guard_non_exhaustive () =
   (* One arm has a guard, so that constructor is not statically covered *)
   should_fail "non-exhaustive" {|
-#lang tesl
 module R60Ex09 exposing []
 import Tesl.Prelude exposing [Int, String]
 type Color
@@ -625,7 +593,6 @@ fn colorName(c: Color) -> String =
 
 let test_R60_EX10_four_ctor_missing_one_caught () =
   should_fail "non-exhaustive" {|
-#lang tesl
 module R60Ex10 exposing []
 import Tesl.Prelude exposing [String]
 type Suit

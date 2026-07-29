@@ -1,4 +1,3 @@
-#lang tesl
 # ── __APP_NAME__ ──────────────────────────────────────────────────────────────
 # A minimal Tesl web service: cookie auth + telemetry, NO database.
 #

@@ -5,7 +5,7 @@
 
     Error codes:
       E001  empty file
-      E002  (retired) missing #lang tesl — the pragma is optional now
+      E002  #lang tesl rejected — the pragma is no longer part of Tesl (parser-side)
       E010  tab character
       E030  receiver-style .length
       E031  receiver-style .startsWith
@@ -139,12 +139,12 @@ let lint_file_structure (file : string) (lines : string array) (out : lint_diag 
   if Array.length lines = 0 then
     emit 0 0 "error" "E001" "empty file"
   else begin
-    (* `#lang tesl` is OPTIONAL — the parser skips the pragma when present, so
-       E002 ("file must start with `#lang tesl`") is retired. *)
+    (* E002 is the PARSER's `#lang tesl`-rejected error now (the pragma is no
+       longer part of the language); the linter does not diagnose it. *)
     (* W001: module header must exist and be the first non-blank, non-comment
-       line.  Comments (# ..., including an optional `#lang tesl` pragma) and
-       blank lines are allowed before the module declaration. *)
-    let first_real_line_after_lang =
+       line.  Comments (# ...) and blank lines are allowed before the module
+       declaration. *)
+    let first_real_line =
       let result = ref (-1) in
       Array.iteri (fun i line ->
         if !result = -1 then begin
@@ -155,10 +155,10 @@ let lint_file_structure (file : string) (lines : string array) (out : lint_diag 
       ) lines;
       !result
     in
-    if first_real_line_after_lang >= 0 then begin
-      let l = String.trim lines.(first_real_line_after_lang) in
+    if first_real_line >= 0 then begin
+      let l = String.trim lines.(first_real_line) in
       if not (starts_with l "module ") then
-        emit first_real_line_after_lang 0 "warning" "W001"
+        emit first_real_line 0 "warning" "W001"
           "first non-comment declaration should be a module header"
     end else if Array.length lines >= 2 then begin
       (* All remaining lines are blank/comments — still no module header *)
@@ -196,7 +196,7 @@ let lint_whitespace (file : string) (lines : string array) (out : lint_diag list
     (match string_index_of line "\t" with
      | Some idx -> emit idx "error" "E010" "tabs are not allowed; use spaces"
      | None -> ());
-    (* W011: Odd indentation — only on non-blank, non-comment, non-#lang lines.
+    (* W011: Odd indentation — only on non-blank, non-comment lines.
        Skip continuation lines: those whose preceding non-blank line ends with
        `,`, `(`, `[`, or `->` (multi-line signatures / argument lists). *)
     let stripped = String.trim line in

@@ -109,7 +109,6 @@ let two_files_should_fail pat a_name a_src b_name b_src =
    then call fn requiring BOTH → should_pass *)
 let test_PE01_sequential_proof_accumulation () =
   should_pass {|
-#lang tesl
 module Pe01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -134,7 +133,6 @@ fn doTest(raw: Int) -> Int =
 (* PE02: check result directly returned (tail position) → should_pass *)
 let test_PE02_check_result_tail_position () =
   should_pass {|
-#lang tesl
 module Pe02 exposing []
 import Tesl.Prelude exposing [Int]
 fact Validated (n: Int)
@@ -150,7 +148,6 @@ check wrapValidate(n: Int) -> n: Int ::: Validated n =
 (* PE03: call fn requiring proof without having proof → should_fail *)
 let test_PE03_call_requiring_proof_without_proof () =
   should_fail "proof\\|not.*statically\\|IsPositive\\|does not" {|
-#lang tesl
 module Pe03 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -162,7 +159,6 @@ fn badCaller(raw: Int) -> Int =
 (* PE04: Two separate facts on same value accumulate → should_pass *)
 let test_PE04_two_facts_same_value_accumulate () =
   should_pass {|
-#lang tesl
 module Pe04 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsEven (n: Int)
@@ -187,7 +183,6 @@ fn run(raw: Int) -> Int =
 (* PE05: establish + use proof in same fn → should_pass *)
 let test_PE05_establish_and_use_in_same_fn () =
   should_pass {|
-#lang tesl
 module Pe05 exposing []
 import Tesl.Prelude exposing [Int, Fact]
 fact Trusted (n: Int)
@@ -202,7 +197,6 @@ fn run(raw: Int) -> Int =
 (* PE06: establish returns proof, chain with check → should_pass *)
 let test_PE06_establish_chain_with_check () =
   should_pass {|
-#lang tesl
 module Pe06 exposing []
 import Tesl.Prelude exposing [Int, Fact]
 fact InSystem (n: Int)
@@ -227,7 +221,6 @@ fn run(raw: Int) -> Int =
 let test_PE07_cannot_produce_imported_fact () =
   two_files_should_fail "P001\\|fact ownership\\|cannot.*establish\\|only.*owner" "pe07-facts"
   {|
-#lang tesl
 module Pe07Facts exposing [IsValid, checkValid]
 import Tesl.Prelude exposing [Int]
 fact IsValid (n: Int)
@@ -239,7 +232,6 @@ check checkValid(n: Int) -> n: Int ::: IsValid n =
 |}
   "pe07-bad"
   {|
-#lang tesl
 module Pe07Bad exposing []
 import Tesl.Prelude exposing [Int]
 import Pe07Facts exposing [IsValid]
@@ -251,7 +243,6 @@ check badForgery(n: Int) -> n: Int ::: IsValid n =
 let test_PE08_use_imported_fact_without_producing () =
   two_files_should_pass "pe08-facts"
   {|
-#lang tesl
 module Pe08Facts exposing [IsSafe, checkSafe]
 import Tesl.Prelude exposing [Int]
 fact IsSafe (n: Int)
@@ -263,7 +254,6 @@ check checkSafe(n: Int) -> n: Int ::: IsSafe n =
 |}
   "pe08-user"
   {|
-#lang tesl
 module Pe08User exposing []
 import Tesl.Prelude exposing [Int]
 import Pe08Facts exposing [IsSafe, checkSafe]
@@ -276,7 +266,6 @@ fn run(raw: Int) -> Int =
 (* PE09: check fn where proof param requires the same fact the fn declares → should_pass *)
 let test_PE09_check_requires_and_returns_same_fact () =
   should_pass {|
-#lang tesl
 module Pe09 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsA (n: Int)
@@ -287,7 +276,6 @@ check recheckA(n: Int ::: IsA n) -> n: Int ::: IsA n =
 (* PE10: check fn where proof param requires DIFFERENT fact than fn returns → should_pass *)
 let test_PE10_check_requires_one_fact_returns_another () =
   should_pass {|
-#lang tesl
 module Pe10 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsA (n: Int)
@@ -312,7 +300,6 @@ fn run(raw: Int) -> Int =
 (* PE11: fn with multiple proof params, both supplied → should_pass *)
 let test_PE11_multiple_proof_params_both_supplied () =
   should_pass {|
-#lang tesl
 module Pe11 exposing []
 import Tesl.Prelude exposing [Int]
 fact ValidX (n: Int)
@@ -337,7 +324,6 @@ fn run(rawX: Int, rawY: Int) -> Int =
 (* PE12: fn with multiple proof params, only one supplied → should_fail *)
 let test_PE12_multiple_proof_params_one_missing () =
   should_fail "proof\\|ValidY\\|does not.*statically\\|not.*satisfy" {|
-#lang tesl
 module Pe12 exposing []
 import Tesl.Prelude exposing [Int]
 fact ValidX (n: Int)
@@ -356,7 +342,6 @@ fn badRun(rawX: Int, rawY: Int) -> Int =
 (* PE13: establish fn returns conjunction of two locally-declared facts → should_pass *)
 let test_PE13_establish_conjunction_of_two_facts () =
   should_pass {|
-#lang tesl
 module Pe13 exposing []
 import Tesl.Prelude exposing [Int, Fact]
 fact IsLow (n: Int)
@@ -372,7 +357,6 @@ fn run(raw: Int) -> Int =
 (* PE14: check fn declared to return proof but body returns wrong type → should_fail *)
 let test_PE14_check_body_returns_wrong_type () =
   should_fail "type.*mismatch\\|expected\\|Int.*String\\|String.*Int" {|
-#lang tesl
 module Pe14 exposing []
 import Tesl.Prelude exposing [Int, String]
 fact Validated (n: Int)
@@ -388,7 +372,6 @@ fn wrongReturn(n: Int) -> String =
 (* PE15: library completeness — auth fn with unexported param type → should_fail *)
 let test_PE15_unexported_param_type_in_library () =
   should_fail "not in scope\\|unknown.*type\\|UserToken\\|exposing" {|
-#lang tesl
 module Pe15 exposing [checkToken]
 import Tesl.Prelude exposing [Int]
 record UserToken { id: Int }
@@ -403,7 +386,6 @@ check checkToken(n: Int) -> n: Int ::: ValidToken n =
    Test block uses `let` bindings before check calls and expects on the result *)
 let test_PE16_proof_predicate_in_test_block () =
   should_pass {|
-#lang tesl
 module Pe16 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -426,7 +408,6 @@ test "negative value fails" {
 (* PE17: chain: check A, then check B which requires A's proof, result has both → should_pass *)
 let test_PE17_chained_checks_accumulate () =
   should_pass {|
-#lang tesl
 module Pe17 exposing []
 import Tesl.Prelude exposing [Int]
 fact StepA (n: Int)
@@ -452,7 +433,6 @@ fn pipeline(raw: Int) -> Int =
    (The compiler requires check results to be bound: `let x = check f(n)`) *)
 let test_PE18_check_result_ignored () =
   should_fail "check.*must be bound\\|bare.*check\\|without a binding\\|silently discarded" {|
-#lang tesl
 module Pe18 exposing []
 import Tesl.Prelude exposing [Int, String]
 fact Checked (n: Int)
@@ -469,7 +449,6 @@ fn runAndIgnore(raw: Int) -> String =
 (* PE19: establish with wrong fact constructor in body → should_fail *)
 let test_PE19_establish_wrong_fact_constructor () =
   should_fail "P001\\|fact ownership\\|not.*owner\\|IsRight\\|IsLeft" {|
-#lang tesl
 module Pe19 exposing []
 import Tesl.Prelude exposing [Int, Fact]
 fact IsLeft (n: Int)
@@ -481,7 +460,6 @@ establish proveLeft(n: Int) -> Fact (IsLeft n) =
 (* PE20: Proof in let binding then passed to requiring function → should_pass *)
 let test_PE20_proof_in_let_binding () =
   should_pass {|
-#lang tesl
 module Pe20 exposing []
 import Tesl.Prelude exposing [Int, Fact]
 fact Approved (n: Int)
@@ -499,7 +477,6 @@ fn run(raw: Int) -> Int =
 (* TE01: Self-referential type alias → should_fail *)
 let test_TE01_self_referential_type_alias () =
   should_fail "self.referential\\|circular\\|alias.*itself\\|recursive.*alias\\|cycle" {|
-#lang tesl
 module Te01 exposing []
 type MyAlias = MyAlias
 |}
@@ -507,7 +484,6 @@ type MyAlias = MyAlias
 (* TE02: Recursive ADT (tree structure) → should_pass *)
 let test_TE02_recursive_adt_tree () =
   should_pass {|
-#lang tesl
 module Te02 exposing []
 import Tesl.Prelude exposing [Int]
 type Tree
@@ -522,7 +498,6 @@ fn sum(t: Tree) -> Int =
 (* TE03: Parameterized ADT used with concrete type → should_pass *)
 let test_TE03_parameterized_adt_concrete () =
   should_pass {|
-#lang tesl
 module Te03 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -540,7 +515,6 @@ fn describe(m: Maybe Int) -> String =
 (* TE04: Nested Maybe type (Maybe (Maybe Int)) → should_pass *)
 let test_TE04_nested_maybe () =
   should_pass {|
-#lang tesl
 module Te04 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -555,7 +529,6 @@ fn unwrap(mm: Maybe (Maybe Int)) -> Int =
 (* TE05: Newtype wrapping a complex type → should_pass *)
 let test_TE05_newtype_wrapping_complex () =
   should_pass {|
-#lang tesl
 module Te05 exposing []
 import Tesl.Prelude exposing [Int, String]
 type UserId
@@ -573,7 +546,6 @@ fn getUsername(un: Username) -> String =
 (* TE06: ADT constructor used with wrong number of fields → should_fail *)
 let test_TE06_adt_constructor_wrong_field_count () =
   should_fail "field\\|argument\\|ctor\\|constructor\\|mismatch\\|extra\\|unknown" {|
-#lang tesl
 module Te06 exposing []
 import Tesl.Prelude exposing [Int, String]
 type Point
@@ -584,7 +556,6 @@ fn bad() -> Point = Point { x = 1 y = 2 z = 3 }
 (* TE07: Using unknown type name in function signature → should_fail *)
 let test_TE07_unknown_type_in_signature () =
   should_fail "not in scope\\|unknown.*type\\|UnknownType" {|
-#lang tesl
 module Te07 exposing []
 import Tesl.Prelude exposing [Int]
 fn bad(x: UnknownType) -> Int = 0
@@ -593,7 +564,6 @@ fn bad(x: UnknownType) -> Int = 0
 (* TE08: ADT type used in function signature → should_pass *)
 let test_TE08_type_alias_in_signature () =
   should_pass {|
-#lang tesl
 module Te08 exposing []
 import Tesl.Prelude exposing [Int, String]
 type Identifier
@@ -607,7 +577,6 @@ fn idValue(id: Identifier) -> Int =
 (* TE09: Record with multiple fields, all accessed → should_pass *)
 let test_TE09_record_multiple_fields_accessed () =
   should_pass {|
-#lang tesl
 module Te09 exposing []
 import Tesl.Prelude exposing [Int, String]
 record Person {
@@ -622,7 +591,6 @@ fn totalScore(p: Person) -> Int = p.age + p.score
 (* TE10: fn returning record literal without type prefix → should_fail *)
 let test_TE10_record_literal_without_type_prefix () =
   should_fail "bare record\\|type prefix\\|unknown.*record\\|literal.*type\\|requires.*type\\|ambiguous\\|not.*in.*scope" {|
-#lang tesl
 module Te10 exposing []
 import Tesl.Prelude exposing [Int, String]
 record Pair { first: Int second: Int }
@@ -632,7 +600,6 @@ fn bad() -> Pair = { first = 1 second = 2 }
 (* TE11: ADT with multiple constructors, some with fields some without → should_pass *)
 let test_TE11_mixed_constructor_adt () =
   should_pass {|
-#lang tesl
 module Te11 exposing []
 import Tesl.Prelude exposing [Int, String]
 type Shape
@@ -654,7 +621,6 @@ fn describe(s: Shape) -> String =
 (* TE12: ADT wrapping another ADT → should_pass *)
 let test_TE12_newtype_of_newtype () =
   should_pass {|
-#lang tesl
 module Te12 exposing []
 import Tesl.Prelude exposing [Int]
 type Inner
@@ -672,7 +638,6 @@ fn getVal(o: Outer) -> Int =
 (* TE13: Using an ADT constructor as a function (applying a constructor) → should_pass *)
 let test_TE13_adt_constructor_as_function () =
   should_pass {|
-#lang tesl
 module Te13 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -686,7 +651,6 @@ fn wrapPositive(n: Int) -> Maybe Int =
 (* TE14: Record field access on value of correct type → should_pass *)
 let test_TE14_record_field_access_correct () =
   should_pass {|
-#lang tesl
 module Te14 exposing []
 import Tesl.Prelude exposing [Int, String]
 record Config { host: String port: Int }
@@ -698,7 +662,6 @@ fn makeUrl(c: Config) -> String = "${c.host}:${c.port}"
 (* TE15: Record field access with wrong field name → should_fail *)
 let test_TE15_record_field_access_wrong_name () =
   should_fail "field.*not found\\|unknown field\\|does not have.*field\\|not.*member" {|
-#lang tesl
 module Te15 exposing []
 import Tesl.Prelude exposing [Int, String]
 record Config { host: String port: Int }
@@ -708,7 +671,6 @@ fn badAccess(c: Config) -> String = c.address
 (* TE16: fn that returns the wrong type from its body → should_fail *)
 let test_TE16_wrong_return_type () =
   should_fail "type.*mismatch\\|expected\\|String.*Int\\|Int.*String" {|
-#lang tesl
 module Te16 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn bad(n: Int) -> String = n * 2
@@ -717,7 +679,6 @@ fn bad(n: Int) -> String = n * 2
 (* TE17: Int arithmetic in function body → should_pass *)
 let test_TE17_int_arithmetic () =
   should_pass {|
-#lang tesl
 module Te17 exposing []
 import Tesl.Prelude exposing [Int]
 fn add(a: Int, b: Int) -> Int = a + b
@@ -729,7 +690,6 @@ fn compute(n: Int) -> Int = (n + 1) * (n - 1) - n
 (* TE18: String interpolation with Int expression → should_pass *)
 let test_TE18_string_interpolation_with_int () =
   should_pass {|
-#lang tesl
 module Te18 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn format(n: Int, label: String) -> String = "${label}: ${n}"
@@ -739,7 +699,6 @@ fn summary(count: Int, total: Int) -> String = "${count} of ${total} items"
 (* TE19: Boolean condition in if-then-else → should_pass *)
 let test_TE19_boolean_condition () =
   should_pass {|
-#lang tesl
 module Te19 exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 fn clamp(n: Int, lo: Int, hi: Int) -> Int =
@@ -760,7 +719,6 @@ fn classify(n: Int) -> Bool =
 (* TE20: Type variable in function (polymorphic behavior) → should_pass or fail *)
 let test_TE20_type_variable_polymorphic () =
   should_pass {|
-#lang tesl
 module Te20 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]

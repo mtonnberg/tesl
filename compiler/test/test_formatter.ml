@@ -31,21 +31,21 @@ let fmt = Formatter.format_source
    the second pass onward. *)
 let corpus = [
   "long_signature",
-  "#lang tesl\n\
+  "\
    fn doSomething(userId: String, action: String, count: Int, timestamp: Int, payload: String) -> String requires [apiTime] =\n\
   \  payload\n";
 
   "proof_annotation_tight",
-  "#lang tesl\ncheck ok(x:Item)->x:Item:::Active x =\n  ok x:::Active x\n";
+  "check ok(x:Item)->x:Item:::Active x =\n  ok x:::Active x\n";
 
   "proof_annotation_loose",
-  "#lang tesl\nok x   :::   Active x\n";
+  "ok x   :::   Active x\n";
 
   "fat_arrow_tight",
-  "#lang tesl\nlet p = forall x=>Q x\n";
+  "let p = forall x=>Q x\n";
 
   "decode_arrow",
-  "#lang tesl\nlet r = field \"x\" <-Int\n";
+  "let r = field \"x\" <-Int\n";
 
   "record_block",
   "record SendEmail {\nto:String\nsubject:String\nbody:String\n}\n";
@@ -69,86 +69,86 @@ let corpus = [
   "worker sendEmailWorker(job: SendEmail ::: FromQueue (Id == jobId) job)\n  requires [queueRead] =\n  job\n";
 
   "multiline_handler",
-  "#lang tesl\nendpoint GET \"/users/:id\" -> User\n  requires [dbRead] =\n  dbRead id\n";
+  "endpoint GET \"/users/:id\" -> User\n  requires [dbRead] =\n  dbRead id\n";
 
   "comment_normalize",
-  "#lang tesl\n#a comment\nfn f(x: Int) -> Int = x\n";
+  "#a comment\nfn f(x: Int) -> Int = x\n";
 
   "comment_with_code_chars",
-  "#lang tesl\n# this -> has ::: chars , and = signs\nfn f(x: Int) -> Int = x\n";
+  "# this -> has ::: chars , and = signs\nfn f(x: Int) -> Int = x\n";
 
   "doc_directives_preserved",
-  "#lang tesl\n#>foo\n#=bar\nfn f(x: Int) -> Int = x\n";
+  "#>foo\n#=bar\nfn f(x: Int) -> Int = x\n";
 
   "shebang_preserved",
-  "#!/usr/bin/env tesl\n#lang tesl\nfn f(x: Int) -> Int = x\n";
+  "#!/usr/bin/env tesl\nfn f(x: Int) -> Int = x\n";
 
   "string_with_op_chars",
-  "#lang tesl\nlet s = \"a:b->c:::d,e\"\n";
+  "let s = \"a:b->c:::d,e\"\n";
 
   "interpolation",
-  "#lang tesl\nlet s = \"val ${x+1} and ${y:::z}\"\n";
+  "let s = \"val ${x+1} and ${y:::z}\"\n";
 
   "arithmetic",
-  "#lang tesl\nlet a = 1+2*3-4/5%6\n";
+  "let a = 1+2*3-4/5%6\n";
 
   "comparison_and_logical",
-  "#lang tesl\nlet b = x==1&&y!=2||z<=3&&w>=4\n";
+  "let b = x==1&&y!=2||z<=3&&w>=4\n";
 
   "pipeline",
-  "#lang tesl\nlet c = xs|>filter|>map\n";
+  "let c = xs|>filter|>map\n";
 
   "negative_literals",
-  "#lang tesl\nlet x = f a -3\nlet y = (0 - x)\nlet z = -5\n";
+  "let x = f a -3\nlet y = (0 - x)\nlet z = -5\n";
 
   "api_test_hyphen_keyword",
-  "#lang tesl\napi-test \"foo\" {\n  load-test concurrent 10\n}\n";
+  "api-test \"foo\" {\n  load-test concurrent 10\n}\n";
 
   "loose_arrow_and_equals",
-  "#lang tesl\nfn f(x: Int)  ->  Int  =  x\n";
+  "fn f(x: Int)  ->  Int  =  x\n";
 
   "exposing_short_inline",
-  "#lang tesl\nmodule Short exposing [foo, bar]\nimport Tesl.Prelude exposing [Int]\n";
+  "module Short exposing [foo, bar]\nimport Tesl.Prelude exposing [Int]\n";
 
   "exposing_inner_padding",
-  "#lang tesl\nimport M exposing [ a, b, c ]\n";
+  "import M exposing [ a, b, c ]\n";
 
   "exposing_multiline_collapses",
-  "#lang tesl\nimport M exposing [\n  a, b, c\n]\n";
+  "import M exposing [\n  a, b, c\n]\n";
 
   "exposing_trailing_comma_inline",
-  "#lang tesl\nmodule M exposing [a, b, c,]\n";
+  "module M exposing [a, b, c,]\n";
 
   "exposing_multiline_with_trailing_comma",
-  "#lang tesl\nmodule Foo exposing [\n  alpha,\n  beta,\n  gamma,\n]\nimport Tesl.Prelude exposing [Int]\n";
+  "module Foo exposing [\n  alpha,\n  beta,\n  gamma,\n]\nimport Tesl.Prelude exposing [Int]\n";
 
   "exposing_long_splits",
-  "#lang tesl\n\
+  "\
    module M exposing [aaaaaaaaaa, bbbbbbbbbb, cccccccccc, dddddddddd, eeeeeeeeee, ffffffffff]\n";
 
   "exposing_dotdot",
-  "#lang tesl\nimport Tesl.Prelude exposing [Bool(..), Int, String]\n";
+  "import Tesl.Prelude exposing [Bool(..), Int, String]\n";
 
   "exposing_multiline_with_comment",
-  "#lang tesl\nimport Tesl.Prelude exposing [\n  # a comment describing the import\n  Int,\n  String,\n]\n";
+  "import Tesl.Prelude exposing [\n  # a comment describing the import\n  Int,\n  String,\n]\n";
 
   "leading_blank_lines",
-  "\n\n\n#lang tesl\nfn f(x: Int) -> Int = x\n";
+  "\n\n\nfn f(x: Int) -> Int = x\n";
 
   "trailing_blank_lines",
-  "#lang tesl\nfn f(x: Int) -> Int = x\n\n\n\n";
+  "fn f(x: Int) -> Int = x\n\n\n\n";
 
   "internal_blank_runs",
-  "#lang tesl\nfn f(x: Int) -> Int = x\n\n\n\nfn g(x: Int) -> Int = x\n";
+  "fn f(x: Int) -> Int = x\n\n\n\nfn g(x: Int) -> Int = x\n";
 
   "crlf_endings",
-  "#lang tesl\r\nfn f(x: Int) -> Int = x\r\n";
+  "fn f(x: Int) -> Int = x\r\n";
 
   "tab_indentation",
-  "#lang tesl\nfn f(x: Int) -> Int =\n\tx\n";
+  "fn f(x: Int) -> Int =\n\tx\n";
 
   "trailing_whitespace",
-  "#lang tesl\nfn f(x: Int) -> Int = x   \n";
+  "fn f(x: Int) -> Int = x   \n";
 
   "empty_file",
   "";
@@ -188,73 +188,73 @@ let test_no_oscillation () =
 (* ── 2. Canonicalisation behaviour ──────────────────────────────────────── *)
 
 let test_proof_annotation_spacing () =
-  let out = fmt "#lang tesl\ncheck ok(x:Item)->x:Item:::Active x = ok x:::Active x\n" in
+  let out = fmt "check ok(x:Item)->x:Item:::Active x = ok x:::Active x\n" in
   check string "::: and -> and : get canonical spacing"
-    "#lang tesl\ncheck ok(x: Item) -> x: Item ::: Active x = ok x ::: Active x\n" out
+    "check ok(x: Item) -> x: Item ::: Active x = ok x ::: Active x\n" out
 
 let test_proof_annotation_collapses_extra_spaces () =
-  let out = fmt "#lang tesl\nok x   :::   Active x\n" in
+  let out = fmt "ok x   :::   Active x\n" in
   check string "::: collapses surrounding runs to single spaces"
-    "#lang tesl\nok x ::: Active x\n" out
+    "ok x ::: Active x\n" out
 
 (* T2 (2026-07-04): fmt OWNS indentation — an odd indent is rounded to even so
    `fmt` then `--lint` is a W011 fixpoint (the linter uses the same indent-1 fix). *)
 let test_normalizes_odd_indentation () =
-  let out = fmt "#lang tesl\nfn f(x: Int) -> Int =\n   x\n" in
+  let out = fmt "fn f(x: Int) -> Int =\n   x\n" in
   check string "3-space body indent normalised to 2"
-    "#lang tesl\nfn f(x: Int) -> Int =\n  x\n" out
+    "fn f(x: Int) -> Int =\n  x\n" out
 
 (* Continuation lines (prev line ends with `,`/`(`/`[`) are left alone, matching
    the linter's W011 predicate — an argument-list continuation keeps its indent. *)
 let test_indentation_skips_continuation () =
-  let src = "#lang tesl\nfn f(\n   x: Int) -> Int =\n  x\n" in
+  let src = "fn f(\n   x: Int) -> Int =\n  x\n" in
   check string "continuation line indent untouched" src (fmt src)
 
 let test_fat_arrow_spacing () =
-  let out = fmt "#lang tesl\nlet p = forall x=>Q x\n" in
+  let out = fmt "let p = forall x=>Q x\n" in
   check string "=> gets surrounding spaces"
-    "#lang tesl\nlet p = forall x => Q x\n" out
+    "let p = forall x => Q x\n" out
 
 let test_arrow_spacing_collapses () =
-  let out = fmt "#lang tesl\nfn f(x: Int)  ->  Int  =  x\n" in
+  let out = fmt "fn f(x: Int)  ->  Int  =  x\n" in
   check string "-> and = canonicalised to single spaces"
-    "#lang tesl\nfn f(x: Int) -> Int = x\n" out
+    "fn f(x: Int) -> Int = x\n" out
 
 let test_exposing_short_stays_inline () =
-  let out = fmt "#lang tesl\nmodule Short exposing [foo, bar]\n" in
+  let out = fmt "module Short exposing [foo, bar]\n" in
   check string "short exposing stays on one line, no padding"
-    "#lang tesl\nmodule Short exposing [foo, bar]\n" out
+    "module Short exposing [foo, bar]\n" out
 
 let test_exposing_inner_padding_removed () =
-  let out = fmt "#lang tesl\nimport M exposing [ a, b, c ]\n" in
+  let out = fmt "import M exposing [ a, b, c ]\n" in
   check string "inner padding inside exposing brackets removed"
-    "#lang tesl\nimport M exposing [a, b, c]\n" out
+    "import M exposing [a, b, c]\n" out
 
 let test_exposing_multiline_collapses_clean () =
-  let out = fmt "#lang tesl\nimport M exposing [\n  a, b, c\n]\n" in
+  let out = fmt "import M exposing [\n  a, b, c\n]\n" in
   check string "short multi-line exposing collapses to clean single line"
-    "#lang tesl\nimport M exposing [a, b, c]\n" out
+    "import M exposing [a, b, c]\n" out
 
 let test_exposing_trailing_comma_dropped () =
-  let out = fmt "#lang tesl\nmodule M exposing [a, b, c,]\n" in
+  let out = fmt "module M exposing [a, b, c,]\n" in
   check string "trailing comma dropped in single-line exposing"
-    "#lang tesl\nmodule M exposing [a, b, c]\n" out
+    "module M exposing [a, b, c]\n" out
 
 let test_exposing_stray_commas_normalised () =
-  let out = fmt "#lang tesl\nmodule M exposing [a,, b]\n" in
+  let out = fmt "module M exposing [a,, b]\n" in
   check string "doubled commas normalised away"
-    "#lang tesl\nmodule M exposing [a, b]\n" out
+    "module M exposing [a, b]\n" out
 
 let test_exposing_leading_comma_normalised () =
-  let out = fmt "#lang tesl\nmodule M exposing [, a, b]\n" in
+  let out = fmt "module M exposing [, a, b]\n" in
   check string "leading comma normalised away"
-    "#lang tesl\nmodule M exposing [a, b]\n" out
+    "module M exposing [a, b]\n" out
 
 let test_exposing_long_splits_with_trailing_comma () =
   let out = fmt
-    "#lang tesl\nmodule M exposing [aaaaaaaaaa, bbbbbbbbbb, cccccccccc, dddddddddd, eeeeeeeeee, ffffffffff]\n" in
+    "module M exposing [aaaaaaaaaa, bbbbbbbbbb, cccccccccc, dddddddddd, eeeeeeeeee, ffffffffff]\n" in
   check string "over-width exposing splits one item per line with trailing comma"
-    "#lang tesl\n\
+    "\
      module M exposing [\n\
     \  aaaaaaaaaa,\n\
     \  bbbbbbbbbb,\n\
@@ -265,9 +265,9 @@ let test_exposing_long_splits_with_trailing_comma () =
      ]\n" out
 
 let test_exposing_dotdot_preserved () =
-  let out = fmt "#lang tesl\nimport Tesl.Prelude exposing [ Bool(..), Int ]\n" in
+  let out = fmt "import Tesl.Prelude exposing [ Bool(..), Int ]\n" in
   check string "(..) re-export marker preserved through canonicalisation"
-    "#lang tesl\nimport Tesl.Prelude exposing [Bool(..), Int]\n" out
+    "import Tesl.Prelude exposing [Bool(..), Int]\n" out
 
 (* #35: a `#` comment inside a multi-line exposing list must NOT be collapsed
    onto one line — the comment would swallow the names after it, turning valid
@@ -275,53 +275,53 @@ let test_exposing_dotdot_preserved () =
    compiles.  The whole region is preserved verbatim instead. *)
 let test_exposing_comment_not_collapsed () =
   let src =
-    "#lang tesl\nimport Tesl.Prelude exposing [\n  # a comment describing the import\n  Int,\n  String,\n]\n" in
+    "import Tesl.Prelude exposing [\n  # a comment describing the import\n  Int,\n  String,\n]\n" in
   check string "comment inside exposing list preserves the author's layout"
     src (fmt src)
 
 let test_exposing_comment_trailing_line () =
-  let src = "#lang tesl\nimport M exposing [a, b] # why we import M\n" in
+  let src = "import M exposing [a, b] # why we import M\n" in
   check string "trailing comment after exposing list preserved"
     src (fmt src)
 
 let test_leading_blank_lines_removed () =
-  let out = fmt "\n\n\n#lang tesl\nfn f(x: Int) -> Int = x\n" in
+  let out = fmt "\n\n\nfn f(x: Int) -> Int = x\n" in
   check string "file never starts with a blank line"
-    "#lang tesl\nfn f(x: Int) -> Int = x\n" out
+    "fn f(x: Int) -> Int = x\n" out
 
 let test_trailing_blank_lines_removed () =
-  let out = fmt "#lang tesl\nfn f(x: Int) -> Int = x\n\n\n\n" in
+  let out = fmt "fn f(x: Int) -> Int = x\n\n\n\n" in
   check string "file ends with exactly one newline"
-    "#lang tesl\nfn f(x: Int) -> Int = x\n" out
+    "fn f(x: Int) -> Int = x\n" out
 
 let test_internal_blank_runs_collapsed () =
-  let out = fmt "#lang tesl\nfn f(x: Int) -> Int = x\n\n\n\nfn g(x: Int) -> Int = x\n" in
+  let out = fmt "fn f(x: Int) -> Int = x\n\n\n\nfn g(x: Int) -> Int = x\n" in
   check string "internal blank runs collapse to a single blank line"
-    "#lang tesl\nfn f(x: Int) -> Int = x\n\nfn g(x: Int) -> Int = x\n" out
+    "fn f(x: Int) -> Int = x\n\nfn g(x: Int) -> Int = x\n" out
 
 let test_tabs_become_spaces () =
-  let out = fmt "#lang tesl\nfn f(x: Int) -> Int =\n\tx\n" in
+  let out = fmt "fn f(x: Int) -> Int =\n\tx\n" in
   check string "tab indentation becomes two spaces"
-    "#lang tesl\nfn f(x: Int) -> Int =\n  x\n" out
+    "fn f(x: Int) -> Int =\n  x\n" out
 
 let test_crlf_normalised () =
-  let out = fmt "#lang tesl\r\nfn f(x: Int) -> Int = x\r\n" in
+  let out = fmt "fn f(x: Int) -> Int = x\r\n" in
   check string "CRLF endings normalised to LF"
-    "#lang tesl\nfn f(x: Int) -> Int = x\n" out
+    "fn f(x: Int) -> Int = x\n" out
 
 let test_comment_normalised () =
-  let out = fmt "#lang tesl\n#a comment\nfn f(x: Int) -> Int = x\n" in
+  let out = fmt "#a comment\nfn f(x: Int) -> Int = x\n" in
   check string "#comment gets a space after the hash"
-    "#lang tesl\n# a comment\nfn f(x: Int) -> Int = x\n" out
+    "# a comment\nfn f(x: Int) -> Int = x\n" out
 
 let test_string_contents_untouched () =
   (* Operator characters inside string literals must NOT be re-spaced. *)
-  let src = "#lang tesl\nlet s = \"a:b->c:::d,e==f\"\n" in
+  let src = "let s = \"a:b->c:::d,e==f\"\n" in
   let out = fmt src in
   check string "string literal contents preserved verbatim" src out
 
 let test_doc_directives_untouched () =
-  let src = "#lang tesl\n#>foo\n#=bar\n" in
+  let src = "#>foo\n#=bar\n" in
   let out = fmt src in
   check string "#> and #= doc directives preserved" src out
 
@@ -337,7 +337,7 @@ let test_fmt_check_invariant () =
      so we use a deliberately over-width list to exercise the multi-line
      fixed point as well. *)
   let already_formatted =
-    "#lang tesl\n\
+    "\
      module Foo exposing [\n\
     \  alphaItemOne,\n\
     \  betaItemTwo,\n\
@@ -361,7 +361,7 @@ let test_fmt_check_invariant () =
     already_formatted (fmt already_formatted);
   (* And the compact form of a short list is its own fixed point too. *)
   let short_canonical =
-    "#lang tesl\n\
+    "\
      module Bar exposing [foo, bar]\n\
      \n\
      fn foo(x: Int) -> Int = x\n"

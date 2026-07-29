@@ -90,7 +90,6 @@ let should_fail pat src =
 let test_R66_AR01_auth_after_arrow_rejected () =
   (* Auth clause placed AFTER `->` is silently eaten; now caught *)
   should_fail "clauses.*before.*return\\|after.*return" {|
-#lang tesl
 module R66Ar01 exposing []
 import Tesl.Prelude exposing [String]
 fact AuthedUser (u: String)
@@ -104,7 +103,6 @@ api R66Ar01 {
 
 let test_R66_AR02_body_after_arrow_rejected () =
   should_fail "clauses.*before.*return\\|after.*return" {|
-#lang tesl
 module R66Ar02 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ar02 {
@@ -117,7 +115,6 @@ api R66Ar02 {
 let test_R66_AR03_double_arrow_rejected () =
   (* Two `->` in same endpoint — second one is a clause after return *)
   should_fail "clauses.*before.*return\\|after.*return" {|
-#lang tesl
 module R66Ar03 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ar03 {
@@ -130,7 +127,6 @@ api R66Ar03 {
 let test_R66_AR04_handler_name_after_arrow_rejected () =
   (* User confuses `-> handlerFn` with connecting a handler to an endpoint *)
   should_fail "clauses.*before.*return\\|after.*return" {|
-#lang tesl
 module R66Ar04 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ar04 {
@@ -142,7 +138,6 @@ api R66Ar04 {
 
 let test_R66_AR05_capture_after_arrow_rejected () =
   should_fail "clauses.*before.*return\\|after.*return" {|
-#lang tesl
 module R66Ar05 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ar05 {
@@ -154,7 +149,6 @@ api R66Ar05 {
 
 let test_R66_AR06_response_after_arrow_rejected () =
   should_fail "clauses.*before.*return\\|after.*return" {|
-#lang tesl
 module R66Ar06 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ar06 {
@@ -167,7 +161,6 @@ api R66Ar06 {
 let test_R66_AR07_auth_before_arrow_accepted () =
   (* Valid: auth BEFORE `->` — the correct ordering *)
   should_pass {|
-#lang tesl
 module R66Ar07 exposing []
 import Tesl.Prelude exposing [String]
 fact AuthedUser (u: String)
@@ -182,7 +175,6 @@ api R66Ar07 {
 let test_R66_AR08_body_then_arrow_then_auth_rejected () =
   (* body before arrow is fine, but then auth AFTER arrow is wrong *)
   should_fail "clauses.*before.*return\\|after.*return" {|
-#lang tesl
 module R66Ar08 exposing []
 import Tesl.Prelude exposing [String]
 fact AuthedUser (u: String)
@@ -199,7 +191,6 @@ api R66Ar08 {
 
 let test_R66_RT01_missing_return_type_rejected () =
   should_fail "missing return type\\|explicit.*TypeName\\|->.*TypeName" {|
-#lang tesl
 module R66Rt01 exposing []
 import Tesl.Prelude exposing [String]
 api R66Rt01 {
@@ -209,7 +200,6 @@ api R66Rt01 {
 
 let test_R66_RT02_auth_only_no_return_rejected () =
   should_fail "missing return type\\|explicit.*TypeName" {|
-#lang tesl
 module R66Rt02 exposing []
 import Tesl.Prelude exposing [String]
 fact AuthedUser (u: String)
@@ -222,7 +212,6 @@ api R66Rt02 {
 
 let test_R66_RT03_multiple_endpoints_one_missing_return_rejected () =
   should_fail "missing return type\\|explicit.*TypeName" {|
-#lang tesl
 module R66Rt03 exposing []
 import Tesl.Prelude exposing [String]
 api R66Rt03 {
@@ -235,7 +224,6 @@ api R66Rt03 {
 let test_R66_RT04_sse_without_return_accepted () =
   (* SSE endpoints are event streams — no return type is required *)
   should_pass {|
-#lang tesl
 module R66Rt04 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -264,7 +252,6 @@ api R66Rt04 {
 
 let test_R66_RT05_explicit_return_accepted () =
   should_pass {|
-#lang tesl
 module R66Rt05 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -283,7 +270,6 @@ api R66Rt05 {
 let test_R66_RT06_undefined_return_type_caught () =
   (* Return type referencing an unknown type should be a compile error *)
   should_fail "unknown type\\|not in scope\\|UnknownResponseType" {|
-#lang tesl
 module R66Rt06 exposing []
 import Tesl.Prelude exposing [String]
 api R66Rt06 {
@@ -296,7 +282,6 @@ api R66Rt06 {
 
 let test_R66_PH01_empty_path_rejected () =
   should_fail "empty.*path\\|path.*empty\\|must not be empty" {|
-#lang tesl
 module R66Ph01 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ph01 {
@@ -307,7 +292,6 @@ api R66Ph01 {
 
 let test_R66_PH02_path_without_slash_rejected () =
   should_fail "must start with.*`/`\\|path.*start.*/" {|
-#lang tesl
 module R66Ph02 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ph02 {
@@ -318,7 +302,6 @@ api R66Ph02 {
 
 let test_R66_PH03_path_without_slash_all_methods_rejected () =
   should_fail "must start with.*`/`\\|path.*start.*/" {|
-#lang tesl
 module R66Ph03 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ph03 {
@@ -329,7 +312,6 @@ api R66Ph03 {
 
 let test_R66_PH04_nested_path_without_slash_rejected () =
   should_fail "must start with.*`/`\\|path.*start.*/" {|
-#lang tesl
 module R66Ph04 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ph04 {
@@ -340,7 +322,6 @@ api R66Ph04 {
 
 let test_R66_PH05_valid_paths_accepted () =
   should_pass {|
-#lang tesl
 module R66Ph05 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -360,7 +341,6 @@ api R66Ph05 {
 
 let test_R66_PH06_multiple_path_params_valid () =
   should_pass {|
-#lang tesl
 module R66Ph06 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -379,7 +359,6 @@ api R66Ph06 {
 let test_R66_AU01_auth_without_proof_annotation_rejected () =
   (* auth binding without ::: ProofPred is structurally invalid *)
   should_fail "proof annotation\\|::: ProofPred\\|auth.*proof" {|
-#lang tesl
 module R66Au01 exposing []
 import Tesl.Prelude exposing [String]
 fact AuthedUser (u: String)
@@ -393,7 +372,6 @@ api R66Au01 {
 
 let test_R66_AU02_auth_with_proof_annotation_accepted () =
   should_pass {|
-#lang tesl
 module R66Au02 exposing []
 import Tesl.Prelude exposing [String]
 fact AuthedUser (u: String)
@@ -407,7 +385,6 @@ api R66Au02 {
 
 let test_R66_AU03_auth_conjunction_proof_accepted () =
   should_pass {|
-#lang tesl
 module R66Au03 exposing []
 import Tesl.Prelude exposing [String]
 fact IsAdmin (u: String)
@@ -423,7 +400,6 @@ api R66Au03 {
 let test_R66_AU04_no_auth_clause_accepted () =
   (* Public endpoint with no auth — perfectly valid *)
   should_pass {|
-#lang tesl
 module R66Au04 exposing []
 import Tesl.Prelude exposing [String]
 api R66Au04 {
@@ -437,7 +413,6 @@ api R66Au04 {
 let test_R66_CA01_capture_not_in_path_rejected () =
   (* Capture clause references a param name not present in the path *)
   should_fail "capture.*does not match\\|path parameter\\|capture.*param" {|
-#lang tesl
 module R66Ca01 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ca01 {
@@ -450,7 +425,6 @@ api R66Ca01 {
 let test_R66_CA02_capture_wrong_name_rejected () =
   (* Path has :id but capture clause uses userId — mismatch *)
   should_fail "capture.*does not match\\|path parameter\\|capture.*param" {|
-#lang tesl
 module R66Ca02 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ca02 {
@@ -462,7 +436,6 @@ api R66Ca02 {
 
 let test_R66_CA03_correct_capture_name_accepted () =
   should_pass {|
-#lang tesl
 module R66Ca03 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -476,7 +449,6 @@ api R66Ca03 {
 
 let test_R66_CA04_duplicate_capture_rejected () =
   should_fail "duplicate capture\\|capture.*duplicate" {|
-#lang tesl
 module R66Ca04 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ca04 {
@@ -489,7 +461,6 @@ api R66Ca04 {
 
 let test_R66_CA05_multiple_path_params_all_captured_accepted () =
   should_pass {|
-#lang tesl
 module R66Ca05 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -506,7 +477,6 @@ api R66Ca05 {
 let test_R66_CA06_partial_capture_missing_one_param_rejected () =
   (* Only captures one param, declares capture for non-existent param *)
   should_fail "capture.*does not match\\|path parameter" {|
-#lang tesl
 module R66Ca06 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ca06 {
@@ -522,7 +492,6 @@ let test_R66_CA07_no_capture_clause_path_param_rejected () =
      that was never defined, so the endpoint type-checked but crashed at
      `tesl run`. *)
   should_fail "path parameter\\|has no `capture`\\|no.*capture clause" {|
-#lang tesl
 module R66Ca07 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ca07 {
@@ -535,7 +504,6 @@ let test_R66_CA08_bare_string_path_param_no_capture_rejected () =
   (* Bug fix_bugs: `get "/ping/:string" -> String` — the `:string` path param
      has no `capture` clause.  Compiled to broken Racket before, crashed at run. *)
   should_fail "path parameter\\|has no `capture`\\|no.*capture clause" {|
-#lang tesl
 module R66Ca08 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ca08 {
@@ -549,7 +517,6 @@ let test_R66_CA09_capture_via_codec_not_capture_form_rejected () =
      codec, not a top-level `capture` form, so the emitted route names a binding
      that is not a `define-capture` and crashes at `tesl run`. *)
   should_fail "not a declared `capture` form\\|via.*not.*declared.*capture\\|capture form" {|
-#lang tesl
 module R66Ca09 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -566,7 +533,6 @@ let test_R66_CA10_capture_using_keyword_accepted () =
      with `with`; after the with→using migration `using` is the accepted spelling and
      binds the `:s` path param's capture. *)
   should_pass {|
-#lang tesl
 module R66Ca10 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -581,7 +547,6 @@ let test_R66_CA11_capture_via_undefined_name_rejected () =
   (* `via noSuchCapture` references an identifier that is neither a codec nor a
      declared capture form — must be rejected at compile time. *)
   should_fail "not a declared `capture` form\\|via.*not.*declared.*capture\\|capture form" {|
-#lang tesl
 module R66Ca11 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ca11 {
@@ -594,7 +559,6 @@ api R66Ca11 {
 let test_R66_CA12_capture_via_real_capture_form_accepted () =
   (* The correct form: `via` names a top-level `capture` declaration. *)
   should_pass {|
-#lang tesl
 module R66Ca12 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -609,7 +573,6 @@ api R66Ca12 {
 let test_R66_CA13_inline_capture_accepted () =
   (* Inline form: `capture x: T using <codec>` needs no top-level `capturer`. *)
   should_pass {|
-#lang tesl
 module R66Ca13 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -623,7 +586,6 @@ api R66Ca13 {
 let test_R66_CA14_inline_capture_with_check_accepted () =
   (* Inline form with a `via <check>` proof: `capture x: T using <codec> via <fn>`. *)
   should_pass {|
-#lang tesl
 module R66Ca14 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -643,7 +605,6 @@ let test_R66_CA15_inline_sse_capture_accepted () =
      and replaced with the required `subscribe`, so the test now asserts what it
      always meant to: the INLINE `capture … using <codec>` form on an SSE route. *)
   should_pass {|
-#lang tesl
 module R66Ca15 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -674,7 +635,6 @@ let test_R66_CA16_inline_capture_with_keyword_rejected () =
      leaves the path param `:id` without a usable capture clause, which validation
      rejects. *)
   should_fail "path parameter\\|has no `capture`\\|no.*capture clause" {|
-#lang tesl
 module R66Ca16 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -689,7 +649,6 @@ api R66Ca16 {
 
 let test_R66_DU01_duplicate_method_and_path_rejected () =
   should_fail "duplicate endpoint\\|duplicate.*endpoint" {|
-#lang tesl
 module R66Du01 exposing []
 import Tesl.Prelude exposing [String]
 api R66Du01 {
@@ -703,7 +662,6 @@ api R66Du01 {
 let test_R66_DU02_same_path_different_methods_accepted () =
   (* GET /items and POST /items are different endpoints *)
   should_pass {|
-#lang tesl
 module R66Du02 exposing []
 import Tesl.Prelude exposing [String]
 api R66Du02 {
@@ -716,7 +674,6 @@ api R66Du02 {
 
 let test_R66_DU03_different_paths_same_method_accepted () =
   should_pass {|
-#lang tesl
 module R66Du03 exposing []
 import Tesl.Prelude exposing [String]
 api R66Du03 {
@@ -729,7 +686,6 @@ api R66Du03 {
 
 let test_R66_DU04_duplicate_post_rejected () =
   should_fail "duplicate endpoint" {|
-#lang tesl
 module R66Du04 exposing []
 import Tesl.Prelude exposing [String]
 api R66Du04 {
@@ -744,7 +700,6 @@ api R66Du04 {
 
 let test_R66_OK01_minimal_api_accepted () =
   should_pass {|
-#lang tesl
 module R66Ok01 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ok01 {
@@ -755,7 +710,6 @@ api R66Ok01 {
 
 let test_R66_OK02_full_api_with_all_clauses_accepted () =
   should_pass {|
-#lang tesl
 module R66Ok02 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -781,7 +735,6 @@ api R66Ok02 {
 let test_R66_OK03_existing_kanel_style_api_accepted () =
   (* Guards against regression in the style used by the kanel example *)
   should_pass {|
-#lang tesl
 module R66Ok03 exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Json exposing [stringCodec, intCodec]
@@ -819,7 +772,6 @@ api R66Ok03 {
 let test_R66_OK04_sse_with_http_endpoints_accepted () =
   (* Mixed SSE and HTTP endpoints *)
   should_pass {|
-#lang tesl
 module R66Ok04 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -855,7 +807,6 @@ api R66Ok04 {
 
 let test_R66_OK05_multiple_apis_in_same_module_accepted () =
   should_pass {|
-#lang tesl
 module R66Ok05 exposing []
 import Tesl.Prelude exposing [String]
 api R66Ok05A {

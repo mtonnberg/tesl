@@ -131,7 +131,7 @@ let[@warning "-32"] known_gap ~what src =
    `supportBot` capability satisfies the aiProvider entitlement so the only
    error in scope is the PROOF error we are asserting. *)
 let agent_hdr modname = Printf.sprintf
-  "#lang tesl\nmodule %s exposing []\n\
+  "module %s exposing []\n\
    import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n\
    import Tesl.Json exposing [stringCodec]\n\
@@ -170,7 +170,7 @@ fn applyTransfer(u: String, t: Doc ::: OwnedBy u t, toUser: String) -> String = 
 
 (* DB header for the data-retrieval (ForAll user-scoping) tools. *)
 let db_hdr modname = Printf.sprintf
-  "#lang tesl\nmodule %s exposing []\n\
+  "module %s exposing []\n\
    import Tesl.Prelude exposing [Int, String, List, Unit]\n\
    import Tesl.DB exposing [dbRead]\n\
    import Tesl.Agent exposing [aiProvider, Agent, mockProvider, ask]\n\
@@ -426,7 +426,7 @@ let cap_missing idx op =
   let test () =
     should_fail cap_re
       (Printf.sprintf
-        "#lang tesl\nmodule %s exposing []\n\
+        "module %s exposing []\n\
          import Tesl.Prelude exposing [Int, String]\n\
          import Tesl.Agent exposing [aiProvider, Agent, mockProvider, \
          ask, askReply, replyText]\n%s"
@@ -528,20 +528,20 @@ let removed_api_re =
 let removed_api_cases =
   [ ("REMOVED-01 import defineAgent rejected", (fun () ->
        should_fail removed_api_re
-         "#lang tesl\nmodule R01 exposing []\n\
+         "module R01 exposing []\n\
           import Tesl.Agent exposing [defineAgent]\n"));
     ("REMOVED-02 import withTools rejected", (fun () ->
        should_fail removed_api_re
-         "#lang tesl\nmodule R02 exposing []\n\
+         "module R02 exposing []\n\
           import Tesl.Agent exposing [withTools]\n"));
     ("REMOVED-03 defineAgent call rejected", (fun () ->
        should_fail removed_api_re
-         "#lang tesl\nmodule R03 exposing []\n\
+         "module R03 exposing []\n\
           import Tesl.Agent exposing [Agent, mockProvider]\n\
           fn f() -> Agent = defineAgent (mockProvider []) \"s\" 8\n"));
     ("REMOVED-04 withTools call rejected", (fun () ->
        should_fail removed_api_re
-         "#lang tesl\nmodule R04 exposing []\n\
+         "module R04 exposing []\n\
           import Tesl.Agent exposing [Agent, mockProvider]\n\
           fn f() -> Agent =\n\
           \  withTools (Agent { provider: mockProvider [], systemPrompt: \"s\", maxTokens: 8, tools: [] }) []\n")); ]

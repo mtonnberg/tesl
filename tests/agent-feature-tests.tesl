@@ -1,4 +1,3 @@
-#lang tesl
 module AgentFeatureTests exposing []
 
 import Tesl.Prelude exposing [Int, String, Bool, List, Unit]

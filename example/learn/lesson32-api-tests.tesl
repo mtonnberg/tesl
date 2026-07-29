@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson32ApiTests exposing [Lesson32Server]
 
 import Tesl.Prelude exposing [String]

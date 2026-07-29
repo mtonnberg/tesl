@@ -1,4 +1,3 @@
-#lang tesl
 module CriticalReview64Tests exposing []
 
 # Critical Review 64 — Adversarial test suite

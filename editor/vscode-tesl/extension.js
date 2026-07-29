@@ -153,7 +153,7 @@ function findDapServer(wsPath, extensionDir) {
   // ships dap-server.rkt — even though `nix profile install` does NOT mirror
   // that derivation into ~/.nix-profile/share/ (the source of the user's
   // "dap-server: NOT FOUND"). Each PLTCOLLECTS entry is a collections root
-  // holding tesl/{dsl,tesl,lang}.
+  // holding tesl/{dsl,tesl}.
   const wrapper = readTeslLspWrapper();
   if (wrapper && wrapper.pltcollects) {
     for (const entry of wrapper.pltcollects.split(":")) {
@@ -188,7 +188,7 @@ function buildPltcollects(wsPath, racketBin) {
     const teslColl = path.join(collDir, "tesl");
     try {
       if (!fs.existsSync(teslColl)) fs.mkdirSync(teslColl, { recursive: true });
-      for (const sub of ["dsl", "tesl", "lang"]) {
+      for (const sub of ["dsl", "tesl"]) {
         const link = path.join(teslColl, sub);
         const target = path.join(wsPath, sub);
         if (!fs.existsSync(link) && fs.existsSync(target)) fs.symlinkSync(target, link);

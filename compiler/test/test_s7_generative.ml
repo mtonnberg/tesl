@@ -136,8 +136,7 @@ let cap_anchor =
 
 (* ── Shared seed headers ─────────────────────────────────────────────────── *)
 
-let task_hdr = {|#lang tesl
-module T exposing []
+let task_hdr = {|module T exposing []
 import Tesl.Prelude exposing [String, Int, Bool(..), List]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -147,15 +146,13 @@ entity Task table "tasks" primaryKey id {
 }
 |}
 
-let prim_hdr = {|#lang tesl
-module T exposing []
+let prim_hdr = {|module T exposing []
 import Tesl.Prelude exposing [Bool(..), Int, List]
 import Tesl.List exposing [List.filterCheck]
 fact IsPositive (n: Int)
 |}
 
-let auth_hdr = {|#lang tesl
-module T exposing []
+let auth_hdr = {|module T exposing []
 import Tesl.Prelude exposing [String, Int, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.DB exposing [dbRead, dbWrite]

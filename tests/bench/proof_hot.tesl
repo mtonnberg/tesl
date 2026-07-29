@@ -1,4 +1,3 @@
-#lang tesl
 module ProofHot exposing [hotPath, checkBound]
 
 # A proof-heavy hot path used by tests/bench/proof-overhead.rkt as a

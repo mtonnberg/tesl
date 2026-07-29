@@ -1,4 +1,3 @@
-#lang tesl
 module DebugTest exposing []
 import Tesl.Prelude exposing [Int, String, Unit]
 

@@ -27,14 +27,14 @@
 (define-checker
   (checkInRange [n : Integer])
   #:returns [n : Integer ::: (InRange n)]
-  (thsl-src! "example/learn/lesson06-proof-check-proof-auth.tesl" 45 (list (cons 'n *n)) (lambda () (if (and (>= *n 0) (<= *n 100)) (accept (InRange n) #:value *n) (reject "must be between 0 and 100" #:http-code 422)))))
+  (thsl-src! "example/learn/lesson06-proof-check-proof-auth.tesl" 44 (list (cons 'n *n)) (lambda () (if (and (>= *n 0) (<= *n 100)) (accept (InRange n) #:value *n) (reject "must be between 0 and 100" #:http-code 422)))))
 
 (define-trusted
   (makeProofTrusted [n : Integer])
   #:returns (Fact (Trusted n))
-  (thsl-src! "example/learn/lesson06-proof-check-proof-auth.tesl" 68 (list (cons 'n *n)) (lambda () (trusted-proof (Trusted n)))))
+  (thsl-src! "example/learn/lesson06-proof-check-proof-auth.tesl" 67 (list (cons 'n *n)) (lambda () (trusted-proof (Trusted n)))))
 
 (define-auther
   (adminAuth [request : HttpRequest])
   #:returns (? String _entity ::: (IsAdmin _entity))
-  (thsl-src-control! "example/learn/lesson06-proof-check-proof-auth.tesl" 87 (list (cons 'request *request)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson06-proof-check-proof-auth.tesl" 88 (list) (lambda () (reject "admin only" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson06-proof-check-proof-auth.tesl" 90 (list (cons 'userId userId)) (lambda () (if (tesl-equal? (raw-value userId) "admin") (accept (IsAdmin userId) #:value *userId) (reject "admin only" #:http-code 401)))))])))))
+  (thsl-src-control! "example/learn/lesson06-proof-check-proof-auth.tesl" 86 (list (cons 'request *request)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson06-proof-check-proof-auth.tesl" 87 (list) (lambda () (reject "admin only" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson06-proof-check-proof-auth.tesl" 89 (list (cons 'userId userId)) (lambda () (if (tesl-equal? (raw-value userId) "admin") (accept (IsAdmin userId) #:value *userId) (reject "admin only" #:http-code 401)))))])))))

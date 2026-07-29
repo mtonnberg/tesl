@@ -101,8 +101,7 @@ let known_bug_passes_should_fail _pattern src =
     (* else: still passes -- known bug still open, test passes silently *))
 [@@warning "-32"]
 
-let base_header = {|#lang tesl
-module Test exposing []
+let base_header = {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact, forgetFact, attachFact, detachFact, introAnd, andLeft, andRight]
 import Tesl.Maybe exposing [Maybe(..)]
 |}

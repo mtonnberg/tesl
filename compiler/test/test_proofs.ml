@@ -45,8 +45,7 @@ let assert_proof_error src substr =
 (* ── 1. Parameter proof subject validation ────────────────────────────────── *)
 
 let test_valid_proof_subject () =
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 check isPos(n: Int) -> n: Int ::: Positive n =
@@ -55,8 +54,7 @@ check isPos(n: Int) -> n: Int ::: Positive n =
 
 let test_invalid_proof_subject () =
   (* 'x' is not a parameter name; 'n' is *)
-  assert_proof_error {|#lang tesl
-module Foo exposing []
+  assert_proof_error {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 check isPos(n: Int) -> n: Int ::: Positive x =
@@ -64,8 +62,7 @@ check isPos(n: Int) -> n: Int ::: Positive x =
 |} "not a parameter"
 
 let test_multi_param_valid_subjects () =
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact P (x: Int)
 fact Q (y: Int)
@@ -74,16 +71,14 @@ fn f(x: Int ::: P x, y: Int ::: Q y) -> Int = x
 
 let test_cross_param_proof_valid () =
   (* Cross-parameter proof: both x and y are valid params *)
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact ValidRange (lo: Int) (hi: Int)
 fn f(lo: Int ::: ValidRange lo hi, hi: Int) -> Int = lo
 |}
 
 let test_cross_param_invalid_subject () =
-  assert_proof_error {|#lang tesl
-module Foo exposing []
+  assert_proof_error {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact ValidRange (lo: Int) (hi: Int)
 fn f(lo: Int ::: ValidRange lo unknown, hi: Int) -> Int = lo
@@ -91,8 +86,7 @@ fn f(lo: Int ::: ValidRange lo unknown, hi: Int) -> Int = lo
 
 let test_return_binding_valid () =
   (* The return binding name can be used as a proof subject *)
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact ValidPort (port: Int)
 check isValid(port: Int) -> port: Int ::: ValidPort port =
@@ -101,8 +95,7 @@ check isValid(port: Int) -> port: Int ::: ValidPort port =
 
 let test_check_multiple_proofs () =
   (* Multiple predicates in conjunction — all subjects must be valid *)
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact PA (n: Int)
 fact PB (n: Int)
@@ -113,8 +106,7 @@ check checkBoth(n: Int) -> n: Int ::: PA n && PB n =
 (* ── 2. Proof ownership tests ────────────────────────────────────────────── *)
 
 let test_check_can_use_ok () =
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 check isPos(n: Int) -> n: Int ::: Positive n =
@@ -125,8 +117,7 @@ check isPos(n: Int) -> n: Int ::: Positive n =
 |}
 
 let test_auth_can_use_ok () =
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Prelude exposing [String]
 auth myAuth(request: HttpRequest) -> user: String ::: Authenticated user =
@@ -134,16 +125,14 @@ auth myAuth(request: HttpRequest) -> user: String ::: Authenticated user =
 |}
 
 let test_fn_cannot_use_ok () =
-  assert_proof_error {|#lang tesl
-module Foo exposing []
+  assert_proof_error {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn bad(n: Int) -> Int =
   ok n ::: SomeProof n
 |} "proof construction is not allowed in `fn`"
 
 let test_handler_cannot_use_ok () =
-  assert_proof_error {|#lang tesl
-module Foo exposing []
+  assert_proof_error {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 handler badHandler(n: Int) -> Int
   requires [] =
@@ -153,8 +142,7 @@ handler badHandler(n: Int) -> Int
 (* ── 3. Check return proof validation ────────────────────────────────────── *)
 
 let test_check_return_matches () =
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact Valid (n: Int)
 check isValid(n: Int) -> n: Int ::: Valid n =
@@ -165,8 +153,7 @@ check isValid(n: Int) -> n: Int ::: Valid n =
 |}
 
 let test_check_missing_predicate () =
-  assert_proof_error {|#lang tesl
-module Foo exposing []
+  assert_proof_error {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact Valid (n: Int)
 fact Extra (n: Int)
@@ -178,8 +165,7 @@ check isValid(n: Int) -> n: Int ::: Valid n && Extra n =
 |} "got `Valid n`, expected `Valid n && Extra n`"
 
 let test_check_extra_predicate () =
-  assert_proof_error {|#lang tesl
-module Foo exposing []
+  assert_proof_error {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact Valid (n: Int)
 check isValid(n: Int) -> n: Int ::: Valid n =
@@ -193,8 +179,7 @@ check isValid(n: Int) -> n: Int ::: Valid n =
 
 let test_builtin_caps_ok () =
   (* Stdlib capabilities are valid when explicitly imported *)
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB   exposing [dbRead, dbWrite]
 import Tesl.Time exposing [time]
@@ -202,8 +187,7 @@ fn f(x: Int) -> Int requires [dbRead, dbWrite, time] = x
 |}
 
 let test_declared_cap_ok () =
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead]
 capability myRead implies dbRead
@@ -211,22 +195,19 @@ fn f(x: Int) -> Int requires [myRead] = x
 |}
 
 let test_unknown_cap_error () =
-  assert_proof_error {|#lang tesl
-module Foo exposing []
+  assert_proof_error {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int requires [undeclaredCap] = x
 |} "undeclared capability"
 
 let test_cap_implies_unknown () =
-  assert_proof_error {|#lang tesl
-module Foo exposing []
+  assert_proof_error {|module Foo exposing []
 capability myRead implies nonExistentCap
 |} "unknown capability"
 
 let test_cap_chain_ok () =
   (* Transitive capability implications are valid *)
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.DB exposing [dbRead]
 capability level2 implies dbRead
 capability level1 implies level2
@@ -234,8 +215,7 @@ fn f() -> Int requires [level1] = 0
 |}
 
 let test_handler_requires_caps () =
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead]
 capability appRead implies dbRead
@@ -323,21 +303,18 @@ let test_lesson_files_no_crash () =
 (* ── 7. Adversarial proof tests ──────────────────────────────────────────── *)
 
 let test_empty_proof_module () =
-  assert_no_proof_errors {|#lang tesl
-module Empty exposing []
+  assert_no_proof_errors {|module Empty exposing []
 |}
 
 let test_proof_with_no_predicates () =
   (* A function with no proof annotations at all *)
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn add(x: Int, y: Int) -> Int = x + y
 |}
 
 let test_establish_function () =
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 establish provePositive(n: Int) -> Fact (Positive n) =
@@ -346,8 +323,7 @@ establish provePositive(n: Int) -> Fact (Positive n) =
 
 let test_proof_in_record_fields () =
   (* Records can have proof-annotated fields — predicates must be declared *)
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 fact SafeTitle (s: String)
 fact SafeContent (s: String)
@@ -362,8 +338,7 @@ record SafeNote {
 |}
 
 let test_complex_capability_hierarchy () =
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.DB exposing [dbRead, dbWrite]
 capability readAll implies dbRead
 capability writeAll implies dbWrite
@@ -373,8 +348,7 @@ handler myOp() -> Int requires [fullAccess] = 0
 
 let test_no_false_proof_errors_on_tests () =
   (* test blocks don't produce false proof errors *)
-  assert_no_proof_errors {|#lang tesl
-module Foo exposing []
+  assert_no_proof_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 check isPos(n: Int) -> n: Int ::: Positive n =
@@ -397,8 +371,7 @@ let test_sidecar_proof_mismatch () =
   (* This function claims ::: Positive m as sidecar proof, but only calls
      checkSmall m which establishes Small m, not Positive m.
      The compiler should reject this. *)
-  let src = {|#lang tesl
-module TestSidecarMismatch exposing []
+  let src = {|module TestSidecarMismatch exposing []
 
 import Tesl.Prelude exposing [Bool(..), Int, Fact]
 

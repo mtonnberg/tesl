@@ -93,8 +93,7 @@ let assert_no_compile_diagnostics_from_entry ~entry_path ~entry_src ~extra_files
 (* ── 1. Server binding completeness ──────────────────────────────────────── *)
 
 let test_server_bindings_ok () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [S]
+  assert_no_errors {|module Foo exposing [S]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 capture idCapture: id: String using stringCodec
@@ -114,8 +113,7 @@ server S for TaskApi {
 |}
 
 let test_server_missing_handler () =
-  assert_validation_error {|#lang tesl
-module Foo exposing [S]
+  assert_validation_error {|module Foo exposing [S]
 import Tesl.Prelude exposing [String]
 api TaskApi {
   post "/tasks"
@@ -127,8 +125,7 @@ server S for TaskApi {
 |} "is not declared"
 
 let test_server_missing_endpoint_binding () =
-  assert_validation_error {|#lang tesl
-module Foo exposing [S]
+  assert_validation_error {|module Foo exposing [S]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 capture idCapture: id: String using stringCodec
@@ -146,8 +143,7 @@ server S for TaskApi {
 |} "missing 1 binding"
 
 let test_server_sse_endpoint_does_not_require_binding () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [S]
+  assert_no_errors {|module Foo exposing [S]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -187,8 +183,7 @@ server S for TaskApi {
 |}
 
 let test_sse_endpoint_does_not_swallow_following_http_endpoint () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [S]
+  assert_no_errors {|module Foo exposing [S]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -224,8 +219,7 @@ server S for DemoApi {
 
 (* ── Issue #31: PostgresConfig poolSize (optional connection-pool size) ────── *)
 
-let pool_size_db_src pool_size_line = Printf.sprintf {|#lang tesl
-module Foo exposing []
+let pool_size_db_src pool_size_line = Printf.sprintf {|module Foo exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Env exposing [env, envInt]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -261,14 +255,12 @@ let test_imported_adt_constructors_are_visible () =
   let tmp_dir = Filename.get_temp_dir_name () in
   let import_path = Filename.concat tmp_dir ("temp-import" ^ suffix ^ ".tesl") in
   let main_path = Filename.concat tmp_dir ("temp-main-" ^ suffix ^ ".tesl") in
-  let import_src = Printf.sprintf {|#lang tesl
-module %s exposing [Status(..)]
+  let import_src = Printf.sprintf {|module %s exposing [Status(..)]
 type Status
   = Backlog
   | Todo
 |} module_name in
-  let main_src = Printf.sprintf {|#lang tesl
-module Main exposing [value]
+  let main_src = Printf.sprintf {|module Main exposing [value]
 import %s exposing [Status(..)]
 fn value() -> Status =
   Backlog
@@ -285,15 +277,13 @@ let test_imported_adt_non_exhaustive_is_rejected () =
   let tmp_dir = Filename.get_temp_dir_name () in
   let import_path = Filename.concat tmp_dir ("temp-colors" ^ suffix ^ ".tesl") in
   let main_path = Filename.concat tmp_dir ("temp-main-" ^ suffix ^ ".tesl") in
-  let import_src = Printf.sprintf {|#lang tesl
-module %s exposing [Color(..)]
+  let import_src = Printf.sprintf {|module %s exposing [Color(..)]
 type Color
   = Red
   | Green
   | Blue
 |} module_name in
-  let main_src = Printf.sprintf {|#lang tesl
-module Main exposing [describeColor]
+  let main_src = Printf.sprintf {|module Main exposing [describeColor]
 import Tesl.Prelude exposing [String]
 import %s exposing [Color(..)]
 fn describeColor(c: Color) -> String =
@@ -314,15 +304,13 @@ let test_imported_adt_exhaustive_is_accepted () =
   let tmp_dir = Filename.get_temp_dir_name () in
   let import_path = Filename.concat tmp_dir ("temp-shapes" ^ suffix ^ ".tesl") in
   let main_path = Filename.concat tmp_dir ("temp-main-" ^ suffix ^ ".tesl") in
-  let import_src = Printf.sprintf {|#lang tesl
-module %s exposing [Shape(..)]
+  let import_src = Printf.sprintf {|module %s exposing [Shape(..)]
 type Shape
   = Circle
   | Square
   | Triangle
 |} module_name in
-  let main_src = Printf.sprintf {|#lang tesl
-module Main exposing [describe]
+  let main_src = Printf.sprintf {|module Main exposing [describe]
 import Tesl.Prelude exposing [String]
 import %s exposing [Shape(..)]
 fn describe(s: Shape) -> String =
@@ -338,16 +326,14 @@ fn describe(s: Shape) -> String =
     ~extra_files:[(import_path, import_src)]
 
 let test_fail_allows_interpolated_strings () =
-  assert_no_compile_diagnostics {|#lang tesl
-module Foo exposing []
+  assert_no_compile_diagnostics {|module Foo exposing []
 import Tesl.Prelude exposing [Int, String]
 fn bad(source: String, rawPort: String) -> Int =
   fail 400 "invalid ${source} port value ${rawPort}; expected an integer"
 |}
 
 let test_server_extra_endpoint_binding () =
-  assert_validation_error {|#lang tesl
-module Foo exposing [S]
+  assert_validation_error {|module Foo exposing [S]
 import Tesl.Prelude exposing [String]
 handler createTask(x: String) -> String requires [] = x
 api TaskApi {
@@ -361,23 +347,20 @@ server S for TaskApi {
 |} "binds extra endpoint"
 
 let test_duplicate_function_import_rejected () =
-  assert_validation_error {|#lang tesl
-module Foo exposing []
+  assert_validation_error {|module Foo exposing []
 import Tesl.String exposing [startsWith]
 import Tesl.String exposing [startsWith]
 |} "duplicate import `startsWith` from module `Tesl.String`"
 
 let test_duplicate_adt_dotdot_import_rejected () =
-  assert_validation_error {|#lang tesl
-module Foo exposing []
+  assert_validation_error {|module Foo exposing []
 import Tesl.Prelude exposing [Bool, Bool(..)]
 |} "cannot import both `Bool` and `Bool(..)` from module `Tesl.Prelude`"
 
 (* ── 2. Field validation ─────────────────────────────────────────────────── *)
 
 let test_valid_field_access () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 record Task {
   id: String
@@ -387,8 +370,7 @@ fn getTitle(t: Task) -> String = t.title
 |}
 
 let test_invalid_field_access () =
-  assert_validation_error {|#lang tesl
-module Foo exposing []
+  assert_validation_error {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 record Task {
   id: String
@@ -398,8 +380,7 @@ fn bad(t: Task) -> String = t.nonExistentField
 |} "unknown field `nonExistentField`"
 
 let test_case_pattern_field_access_validation () =
-  assert_validation_error {|#lang tesl
-module Foo exposing []
+  assert_validation_error {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Maybe exposing [Maybe(..)]
 record Task {
@@ -415,8 +396,7 @@ fn bad(m: Maybe Task) -> String =
 (* ── 3. Codec proof coverage ─────────────────────────────────────────────── *)
 
 let test_codec_no_proof_fields_ok () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 record Task {
@@ -435,8 +415,7 @@ codec Task {
 |}
 
 let test_codec_proof_with_via_ok () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 import Tesl.String exposing [String.length]
@@ -459,8 +438,7 @@ codec SafeNote {
 |}
 
 let test_codec_proof_missing_via () =
-  assert_validation_error {|#lang tesl
-module Foo exposing []
+  assert_validation_error {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 record SafeNote {
@@ -477,8 +455,7 @@ codec SafeNote {
 |} "has no `via` validation"
 
 let test_codec_conjunctive_proof_requires_full_coverage () =
-  assert_validation_error {|#lang tesl
-module Foo exposing []
+  assert_validation_error {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 record SafeNote {
@@ -497,8 +474,7 @@ codec SafeNote {
 |} "not established by any `via` function"
 
 let test_codec_conjunctive_proof_via_chain_ok () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 record SafeNote {
@@ -521,8 +497,7 @@ codec SafeNote {
 (* ── 4. Call-site proof satisfaction ────────────────────────────────────── *)
 
 let test_call_with_checked_arg_ok () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int, String]
 check isPos(n: Int) -> n: Int ::: Positive n =
   if n > 0 then
@@ -539,8 +514,7 @@ let test_call_literal_without_proof () =
   (* Integer literals now parse as valid proof subjects (subject = "42").
      Passing `42` to a proof-requiring fn still fails because `42` carries
      no proofs — error is now "does not statically satisfy declared proof `Positive 42`". *)
-  assert_validation_error {|#lang tesl
-module Foo exposing []
+  assert_validation_error {|module Foo exposing []
 import Tesl.Prelude exposing [Int, String]
 fn usePos(x: Int ::: Positive x) -> String = "ok"
 fn bad() -> String =
@@ -548,8 +522,7 @@ fn bad() -> String =
 |} "does not statically satisfy"
 
 let test_cross_parameter_proof_mismatch () =
-  assert_validation_error {|#lang tesl
-module Foo exposing []
+  assert_validation_error {|module Foo exposing []
 import Tesl.Prelude exposing [Int, String]
 check checkRange(lo: Int, hi: Int) -> lo: Int ::: ValidRange lo hi =
   ok lo ::: ValidRange lo hi
@@ -565,8 +538,7 @@ let test_named_pack_call_site_propagation () =
      re-returned as `? FromDb` is forgery, rejected since the 2026-07 review §3.3 fix
      (GDP-FROMDB-NAMEDPACK).  This test threads a genuinely-carried proof, exercising
      the propagation mechanic on a valid program. *)
-  assert_no_compile_diagnostics {|#lang tesl
-module Foo exposing []
+  assert_no_compile_diagnostics {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 record Task {
   id: String
@@ -581,8 +553,7 @@ fn useTask(id: String, task: Task ::: FromDb (Id == id) task) -> String =
 |}
 
 let test_local_declared_proof_mismatch_rejected () =
-  assert_validation_error {|#lang tesl
-module Foo exposing [useAdmin]
+  assert_validation_error {|module Foo exposing [useAdmin]
 import Tesl.Prelude exposing [Int, String]
 check checkIsPositive(n: Int) -> n: Int::: IsPositive n =
   if n > 0 then
@@ -601,13 +572,11 @@ let test_imported_capability_alias_covers_builtin_requirement () =
   if not (Sys.file_exists temp_dir) then Unix.mkdir temp_dir 0o755;
   let caps_path = Filename.concat temp_dir "caps.tesl" in
   let entry_path = Filename.concat temp_dir "main.tesl" in
-  let caps_src = {|#lang tesl
-module Caps exposing [localRead]
+  let caps_src = {|module Caps exposing [localRead]
 import Tesl.DB exposing [dbRead]
 capability localRead implies dbRead
 |} in
-  let entry_src = {|#lang tesl
-module Main exposing []
+  let entry_src = {|module Main exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Maybe exposing [Maybe(..)]
 import Caps exposing [localRead]
@@ -626,8 +595,7 @@ fn readThing(id: String) -> Maybe Thing
 (* ── 5. ForAll proof propagation ─────────────────────────────────────────── *)
 
 let test_forall_with_correct_check () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck]
 check isPos(n: Int) -> n: Int ::: Positive n =
@@ -640,8 +608,7 @@ fn filterPos(xs: List Int) -> List Int ::: ForAll Positive =
 |}
 
 let test_forall_mismatch () =
-  assert_validation_error {|#lang tesl
-module Foo exposing []
+  assert_validation_error {|module Foo exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck]
 check isPos(n: Int) -> n: Int ::: Positive n =
@@ -659,8 +626,7 @@ fn filterPositive(xs: List Int) -> List Int ::: ForAll Positive =
 |} "missing `[Positive]`"
 
 let test_forall_call_site_propagation () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck]
 check isPos(n: Int) -> n: Int ::: Positive n =
@@ -677,8 +643,7 @@ fn ok_use(xs: List Int) -> Int =
 |}
 
 let test_forall_filtercheck_preserves_existing_proofs () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck]
 check isPositive(n: Int) -> n: Int ::: Positive n =
@@ -688,8 +653,7 @@ fn filterPositive(xs: List Int) -> List Int ::: ForAll Positive =
 |}
 
 let test_forall_check_fn_missing_predicate () =
-  assert_validation_error {|#lang tesl
-module Foo exposing []
+  assert_validation_error {|module Foo exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck]
 check isSmall(n: Int) -> n: Int ::: Small n =
@@ -704,8 +668,7 @@ fn filterPositiveAndSmall(xs: List Int) -> List Int ::: ForAll (Positive && Smal
 (* ── ForAll soundness: Hole 1 – direct pass-through ─────────────────────── *)
 
 let test_forall_direct_passthrough_wrong_pred () =
-  assert_validation_error {|#lang tesl
-module Foo exposing []
+  assert_validation_error {|module Foo exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck]
 check isPos(n: Int) -> n: Int ::: IsPositive n =
@@ -718,16 +681,14 @@ fn passThrough(xs: List Int ::: ForAll IsPositive xs) -> List Int ? ForAll (IsPo
 |} "return value `xs` carries ForAll"
 
 let test_forall_direct_passthrough_same_pred_ok () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int, List]
 fn identity(xs: List Int ::: ForAll IsPositive xs) -> List Int ? ForAll IsPositive =
   xs
 |}
 
 let test_forall_direct_passthrough_subset_ok () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int, List]
 fn subset(xs: List Int ::: ForAll (IsPositive && IsLarge) xs) -> List Int ? ForAll IsPositive =
   xs
@@ -736,8 +697,7 @@ fn subset(xs: List Int ::: ForAll (IsPositive && IsLarge) xs) -> List Int ? ForA
 (* ── ForAll soundness: Hole 2 – let-bound filterCheck result ─────────────── *)
 
 let test_forall_let_bound_filtercheck_wrong_pred () =
-  assert_validation_error {|#lang tesl
-module Foo exposing []
+  assert_validation_error {|module Foo exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck]
 check isSmall(n: Int) -> n: Int ::: IsSmall n =
@@ -751,8 +711,7 @@ fn f(xs: List Int) -> List Int ? ForAll IsPositive =
 |} "return value `result` carries ForAll"
 
 let test_forall_let_bound_filtercheck_correct_pred_ok () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck]
 check isPos(n: Int) -> n: Int ::: IsPositive n =
@@ -768,8 +727,7 @@ fn f(xs: List Int) -> List Int ? ForAll IsPositive =
 (* ── Capability enforcement ──────────────────────────────────────────────── *)
 
 let test_handler_undeclared_capability () =
-  assert_validation_error {|#lang tesl
-module Foo exposing []
+  assert_validation_error {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbWrite]
 entity Thing table "things" primaryKey id {
@@ -780,8 +738,7 @@ handler createThing(id: String) -> String requires [] =
 |} "does not declare the required capabilities"
 
 let test_handler_wrong_capability_declared () =
-  assert_validation_error {|#lang tesl
-module Foo exposing []
+  assert_validation_error {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead, dbWrite]
 entity Thing table "things" primaryKey id {
@@ -792,8 +749,7 @@ handler createThing(id: String) -> String requires [dbRead] =
 |} "does not declare the required capabilities"
 
 let test_handler_correct_capability_declared () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbWrite]
 entity Thing table "things" primaryKey id {
@@ -810,12 +766,10 @@ let test_import_parse_error_propagated () =
   if not (Sys.file_exists temp_dir) then Unix.mkdir temp_dir 0o755;
   let bad_path = Filename.concat temp_dir "BadModule.tesl" in
   let entry_path = Filename.concat temp_dir "main.tesl" in
-  let bad_src = {|#lang tesl
-module BadModule exposing []
+  let bad_src = {|module BadModule exposing []
 this is not valid tesl syntax !@#$
 |} in
-  let entry_src = {|#lang tesl
-module Main exposing []
+  let entry_src = {|module Main exposing []
 import BadModule exposing []
 |} in
   assert_compile_diagnostic_from_entry
@@ -827,8 +781,7 @@ import BadModule exposing []
 (* ── 6. Exists validation ────────────────────────────────────────────────── *)
 
 let test_set_forall_call_site_propagation () =
-  assert_no_compile_diagnostics {|#lang tesl
-module Foo exposing []
+  assert_no_compile_diagnostics {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Set exposing [Set, Set.fromList, Set.filterCheck, Set.size]
 fact IsPositive (n: Int)
@@ -845,8 +798,7 @@ fn run() -> Int =
 |}
 
 let test_exists_function_has_exists_body () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 fn genToken() -> exists tokenId: String => tokenId: String ::: IsToken tokenId =
   exists tokenId =>
@@ -854,16 +806,14 @@ fn genToken() -> exists tokenId: String => tokenId: String ::: IsToken tokenId =
 |}
 
 let test_exists_missing_body () =
-  assert_validation_error {|#lang tesl
-module Foo exposing []
+  assert_validation_error {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 fn bad() -> exists name: String => name: String ::: IsToken name =
   "token-123"
 |} "no exists expression"
 
 let test_exists_different_witness_name_is_ok () =
-  assert_no_errors {|#lang tesl
-module Foo exposing []
+  assert_no_errors {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 fn bad() -> exists tokenId: String => tokenId: String ::: IsToken tokenId =
   exists otherId =>
@@ -873,8 +823,7 @@ fn bad() -> exists tokenId: String => tokenId: String ::: IsToken tokenId =
 (* ── 7. Integration with Compile.check_source ───────────────────────────── *)
 
 let test_validation_is_wired_into_top_level_diagnostics () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 record Task {
   title: String
@@ -886,8 +835,7 @@ fn bad(t: Task) -> String = t.missing
   Alcotest.(check bool) "validation diagnostic emitted" true found
 
 let test_init_telemetry_keywords_typecheck () =
-  assert_no_compile_diagnostics {|#lang tesl
-module Foo exposing [S]
+  assert_no_compile_diagnostics {|module Foo exposing [S]
 import Tesl.Prelude exposing [Bool(..), Int]
 import Tesl.Telemetry exposing [initTelemetry]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -918,8 +866,7 @@ main() -> App requires [] =
 |}
 
 let test_with_transaction_returns_body_type () =
-  assert_no_compile_diagnostics {|#lang tesl
-module Foo exposing []
+  assert_no_compile_diagnostics {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn wrap(n: Int) -> Int =
   transaction {
@@ -928,8 +875,7 @@ fn wrap(n: Int) -> Int =
 |}
 
 let test_keyword_type_argument_from_keyword_token_typechecks () =
-  assert_no_compile_diagnostics {|#lang tesl
-module Foo exposing []
+  assert_no_compile_diagnostics {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Time exposing [PosixMillis]
@@ -940,8 +886,7 @@ record Reminder {
 |}
 
 let test_let_underscore_binding_typechecks () =
-  assert_no_compile_diagnostics {|#lang tesl
-module Foo exposing []
+  assert_no_compile_diagnostics {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fn keep(n: Int) -> Int =
   let _ = n
@@ -949,8 +894,7 @@ fn keep(n: Int) -> Int =
 |}
 
 let test_with_transaction_multiline_update_sequence_typechecks () =
-  assert_no_compile_diagnostics {|#lang tesl
-module Foo exposing []
+  assert_no_compile_diagnostics {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbWrite]
 entity Thing table "things" primaryKey id {
@@ -967,8 +911,7 @@ fn relink(id: String, parentId: String) -> String requires [dbWrite] =
 |}
 
 let test_call_before_with_block_typechecks () =
-  assert_no_compile_diagnostics {|#lang tesl
-module Foo exposing []
+  assert_no_compile_diagnostics {|module Foo exposing []
 import Tesl.Prelude exposing [String]
 record Session {
   userId: String
@@ -987,8 +930,7 @@ handler demo(
 |}
 
 let test_stacked_case_labels_typecheck () =
-  assert_no_compile_diagnostics {|#lang tesl
-module Foo exposing []
+  assert_no_compile_diagnostics {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 type Status =
   | Backlog
@@ -1006,8 +948,7 @@ fn classify(status: Status) -> Int =
 |}
 
 let test_serve_static_clause_typechecks () =
-  assert_no_compile_diagnostics {|#lang tesl
-module Foo exposing [S]
+  assert_no_compile_diagnostics {|module Foo exposing [S]
 import Tesl.Prelude exposing [Int]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 import Tesl.App exposing [App]
@@ -1037,8 +978,7 @@ main() -> App requires [] =
 |}
 
 let test_sql_reference_queries_typecheck () =
-  assert_no_compile_diagnostics {|#lang tesl
-module Foo exposing []
+  assert_no_compile_diagnostics {|module Foo exposing []
 import Tesl.Prelude exposing [Int, List, String, Unit]
 import Tesl.DB exposing [dbRead, dbWrite]
 entity Product table "products" primaryKey id {
@@ -1065,8 +1005,7 @@ fn sumInCategory(cat: String) -> Int requires [dbRead] =
 |}
 
 let test_compound_named_pack_patterns_typecheck () =
-  assert_no_compile_diagnostics {|#lang tesl
-module Foo exposing []
+  assert_no_compile_diagnostics {|module Foo exposing []
 import Tesl.Prelude exposing [Int, String, Fact, detachFact]
 fact IsPositive (n: Int)
 fact IsSmall (n: Int)
@@ -1098,8 +1037,7 @@ fn useCombinedChecks() -> Int =
 |}
 
 let test_compound_fact_param_requires_all_conjuncts () =
-  assert_validation_error {|#lang tesl
-module Test exposing []
+  assert_validation_error {|module Test exposing []
 import Tesl.Prelude exposing [Int, Fact]
 
 fact IsPositive (n: Int)
@@ -1116,15 +1054,13 @@ fn bad(x: Int) -> Int =
 |} "Fact (IsPositive x && IsEven x)"
 
 let test_adt_constructor_same_name_as_type_rejected () =
-  assert_validation_error {|#lang tesl
-module Test exposing []
+  assert_validation_error {|module Test exposing []
 type Box a
   = Box value:a
 |} "same name as its type"
 
 let test_adt_constructor_different_name_ok () =
-  assert_no_compile_diagnostics {|#lang tesl
-module Test exposing []
+  assert_no_compile_diagnostics {|module Test exposing []
 type Box a
   = MkBox value:a
 |}
@@ -1158,8 +1094,7 @@ let test_all_lesson_files_no_crash () =
 (* ── Proof enforcement in test blocks (critical-review-17 §2.1) ──────── *)
 
 let test_proof_bypass_in_test_block_rejected () =
-  assert_validation_error {|#lang tesl
-module T exposing []
+  assert_validation_error {|module T exposing []
 import Tesl.Prelude exposing [Int, String]
 
 fact IsAdult (age: Int)
@@ -1180,8 +1115,7 @@ test "bypass" {
 |} "does not statically satisfy declared proof"
 
 let test_proof_proper_check_in_test_block_ok () =
-  assert_no_errors {|#lang tesl
-module T exposing []
+  assert_no_errors {|module T exposing []
 import Tesl.Prelude exposing [Int, String]
 
 fact IsAdult (age: Int)
@@ -1205,8 +1139,7 @@ test "proper" {
 let test_proof_literal_arg_to_proof_fn_rejected () =
   (* Integer literal `42` now has a trackable subject "42" but still carries
      no proofs. The error is "does not statically satisfy declared proof `IsPositive 42`". *)
-  assert_validation_error {|#lang tesl
-module T exposing []
+  assert_validation_error {|module T exposing []
 import Tesl.Prelude exposing [Int, String]
 
 fact IsPositive (n: Int)
@@ -1219,8 +1152,7 @@ test "literal" {
 |} "does not statically satisfy"
 
 let test_named_pack_declared_proof_mismatch_in_test_block_rejected () =
-  assert_validation_error {|#lang tesl
-module T exposing []
+  assert_validation_error {|module T exposing []
 import Tesl.Prelude exposing [Int, String, Fact]
 
 fact IsPositive (n: Int)
@@ -1250,8 +1182,7 @@ test "declared proof mismatch" {
 |} "let binding `result` declares proof"
 
 let test_named_pack_declared_proof_in_test_block_ok () =
-  assert_no_errors {|#lang tesl
-module T exposing []
+  assert_no_errors {|module T exposing []
 import Tesl.Prelude exposing [Int, String, Fact]
 
 fact IsPositive (n: Int)
@@ -1284,8 +1215,7 @@ let test_named_pack_db_key_alias_in_test_block_ok () =
      The producer must actually query the DB — a plain `task: Task` re-returned as
      `? FromDb` is forgery, rejected since the 2026-07 review §3.3 fix.  This uses a
      real `selectOne` producer (the todo-api getTodo shape). *)
-  assert_no_compile_diagnostics {|#lang tesl
-module T exposing []
+  assert_no_compile_diagnostics {|module T exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -1317,8 +1247,7 @@ test "named db key alias ok" requires [dbRead] {
 
 (** Return-binding position — single-param check — inline Int literal. *)
 let test_inline_lit_return_binding_rejected () =
-  assert_validation_error {|#lang tesl
-module T exposing []
+  assert_validation_error {|module T exposing []
 import Tesl.Prelude exposing [Int, String, Fact]
 
 fact ValidScore (n: Int)
@@ -1339,8 +1268,7 @@ test "inline literal rejected" {
 
 (** Return-binding position — inline String literal. *)
 let test_inline_string_lit_return_binding_rejected () =
-  assert_validation_error {|#lang tesl
-module T exposing []
+  assert_validation_error {|module T exposing []
 import Tesl.Prelude exposing [Int, String, Fact]
 
 fact NonEmpty (s: String)
@@ -1361,8 +1289,7 @@ test "inline string literal rejected" {
 
 (** Cross-parameter position — inline Int literal. *)
 let test_inline_lit_cross_param_rejected () =
-  assert_validation_error {|#lang tesl
-module T exposing []
+  assert_validation_error {|module T exposing []
 import Tesl.Prelude exposing [Int, String, Fact]
 
 fact InBounds (lo: Int) (hi: Int) (n: Int)
@@ -1386,8 +1313,7 @@ test "inline cross-param rejected" {
 
 (** Cross-parameter position — inline literal for lo and hi. *)
 let test_inline_lit_cross_param_lo_hi_rejected () =
-  assert_validation_error {|#lang tesl
-module T exposing []
+  assert_validation_error {|module T exposing []
 import Tesl.Prelude exposing [Int, String, Fact]
 
 fact InBounds (lo: Int) (hi: Int) (n: Int)
@@ -1410,8 +1336,7 @@ test "inline cross-param lo hi rejected" {
 
 (** All three positions inline — multiple errors emitted. *)
 let test_inline_lit_all_positions_rejected () =
-  assert_validation_error {|#lang tesl
-module T exposing []
+  assert_validation_error {|module T exposing []
 import Tesl.Prelude exposing [Int, String, Fact]
 
 fact InBounds (lo: Int) (hi: Int) (n: Int)
@@ -1433,8 +1358,7 @@ test "all inline rejected" {
 
 (** Happy path — all proof-subject arguments are let-bound variables. *)
 let test_let_bound_proof_args_ok () =
-  assert_no_errors {|#lang tesl
-module T exposing []
+  assert_no_errors {|module T exposing []
 import Tesl.Prelude exposing [Int, String, Fact]
 
 fact InBounds (lo: Int) (hi: Int) (n: Int)
@@ -1460,8 +1384,7 @@ test "let-bound args ok" {
 (** Inline literal in test block for a DIFFERENT (non-subject) argument
     must NOT produce a false positive. *)
 let test_non_subject_inline_arg_ok () =
-  assert_no_errors {|#lang tesl
-module T exposing []
+  assert_no_errors {|module T exposing []
 import Tesl.Prelude exposing [Int, String, Fact]
 
 fact ValidScore (n: Int)
@@ -1483,8 +1406,7 @@ test "non-subject inline arg ok" {
 
 (** Happy path — single-param check, the argument is let-bound. *)
 let test_single_param_let_bound_ok () =
-  assert_no_errors {|#lang tesl
-module T exposing []
+  assert_no_errors {|module T exposing []
 import Tesl.Prelude exposing [Int, String, Fact]
 
 fact ValidScore (n: Int)
@@ -1507,8 +1429,7 @@ test "let-bound single-param ok" {
 (* ── Capability enforcement regression tests (critical-review-17 §2.2) ── *)
 
 let test_capability_transitive_fn_call_rejected () =
-  assert_validation_error {|#lang tesl
-module T exposing []
+  assert_validation_error {|module T exposing []
 import Tesl.Prelude exposing [Int]
 
 capability time
@@ -1521,8 +1442,7 @@ fn noTimeFn() -> Int =
 |} "uses privileged operations and callees requiring [time]"
 
 let test_capability_transitive_fn_call_declared_ok () =
-  assert_no_errors {|#lang tesl
-module T exposing []
+  assert_no_errors {|module T exposing []
 import Tesl.Prelude exposing [Int]
 
 capability time
@@ -1535,8 +1455,7 @@ fn hasTimeFn() -> Int requires [time] =
 |}
 
 let test_capability_chain_three_deep_rejected () =
-  assert_validation_error {|#lang tesl
-module T exposing []
+  assert_validation_error {|module T exposing []
 import Tesl.Prelude exposing [Int]
 
 capability time
@@ -1547,8 +1466,7 @@ fn c() -> Int = b()
 |} "uses privileged operations and callees requiring [time]"
 
 let test_capability_multiple_missing_rejected () =
-  assert_validation_error {|#lang tesl
-module T exposing []
+  assert_validation_error {|module T exposing []
 import Tesl.Prelude exposing [Int, String]
 
 capability time
@@ -1559,8 +1477,7 @@ fn hasSome() -> Int requires [time] = needsBoth()
 |} "requiring [audit]"
 
 let test_capability_no_false_positive_on_plain_fn () =
-  assert_no_errors {|#lang tesl
-module T exposing []
+  assert_no_errors {|module T exposing []
 import Tesl.Prelude exposing [Int]
 
 fn add(a: Int, b: Int) -> Int = a + b
@@ -1570,8 +1487,7 @@ fn double(x: Int) -> Int = add x x
 (* ── Multi-line pipeline regression tests (critical-review-17 §2.3) ──── *)
 
 let test_multiline_pipeline_typechecks () =
-  assert_no_compile_diagnostics {|#lang tesl
-module T exposing []
+  assert_no_compile_diagnostics {|module T exposing []
 import Tesl.Prelude exposing [Int, Bool(..), List]
 import Tesl.List exposing [List.map, List.filter]
 
@@ -1587,8 +1503,7 @@ fn process(xs: List Int) -> List Int =
 (* ── Polymorphic functions regression tests (critical-review-17 §2.4) ── *)
 
 let test_polymorphic_identity_typechecks () =
-  assert_no_compile_diagnostics {|#lang tesl
-module T exposing []
+  assert_no_compile_diagnostics {|module T exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..)]
 
 fn identity(x: a) -> a = x
@@ -1600,8 +1515,7 @@ fn use() -> Bool =
 |}
 
 let test_polymorphic_pair_typechecks () =
-  assert_no_compile_diagnostics {|#lang tesl
-module T exposing []
+  assert_no_compile_diagnostics {|module T exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Tuple exposing [Tuple2]
 
@@ -1615,8 +1529,7 @@ fn use() -> Tuple2 Int String =
 (* ── Division proof enforcement ────────────────────────────────────────── *)
 
 let test_div_by_zero_literal_rejected () =
-  assert_validation_error {|#lang tesl
-module T exposing [f]
+  assert_validation_error {|module T exposing [f]
 import Tesl.Prelude exposing [Int]
 
 fn f(x: Int) -> Int =
@@ -1624,8 +1537,7 @@ fn f(x: Int) -> Int =
 |} "division by zero"
 
 let test_mod_by_zero_literal_rejected () =
-  assert_validation_error {|#lang tesl
-module T exposing [f]
+  assert_validation_error {|module T exposing [f]
 import Tesl.Prelude exposing [Int]
 
 fn f(x: Int) -> Int =
@@ -1633,8 +1545,7 @@ fn f(x: Int) -> Int =
 |} "division by zero"
 
 let test_div_by_nonzero_literal_ok () =
-  assert_no_compile_diagnostics {|#lang tesl
-module T exposing [f]
+  assert_no_compile_diagnostics {|module T exposing [f]
 import Tesl.Prelude exposing [Int]
 
 fn f(x: Int) -> Int =
@@ -1642,8 +1553,7 @@ fn f(x: Int) -> Int =
 |}
 
 let test_div_by_variable_without_proof_rejected () =
-  assert_validation_error {|#lang tesl
-module T exposing [f]
+  assert_validation_error {|module T exposing [f]
 import Tesl.Prelude exposing [Int]
 
 fn f(x: Int, y: Int) -> Int =
@@ -1651,8 +1561,7 @@ fn f(x: Int, y: Int) -> Int =
 |} "IsNonZero"
 
 let test_div_by_variable_with_proof_ok () =
-  assert_no_compile_diagnostics {|#lang tesl
-module T exposing [f]
+  assert_no_compile_diagnostics {|module T exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Int exposing [Int.nonZero, Int.divide]
 
@@ -1662,8 +1571,7 @@ fn f(x: Int, y: Int) -> Int =
 |}
 
 let test_float_div_by_nonzero_literal_ok () =
-  assert_no_compile_diagnostics {|#lang tesl
-module T exposing [f]
+  assert_no_compile_diagnostics {|module T exposing [f]
 import Tesl.Prelude exposing [Int]
 
 fn f(x: Int) -> Int =
@@ -1671,8 +1579,7 @@ fn f(x: Int) -> Int =
 |}
 
 let test_float_div_by_zero_float_literal_rejected () =
-  assert_validation_error {|#lang tesl
-module T exposing [f]
+  assert_validation_error {|module T exposing [f]
 import Tesl.Prelude exposing [Int]
 
 fn f(x: Int) -> Int =
@@ -1680,8 +1587,7 @@ fn f(x: Int) -> Int =
 |} "division by zero"
 
 let test_div_inside_constructor_rejected () =
-  assert_validation_error {|#lang tesl
-module T exposing [f]
+  assert_validation_error {|module T exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 

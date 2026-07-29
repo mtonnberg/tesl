@@ -112,8 +112,7 @@ let check_cli_ok ~label ~args ~files ~needles =
   check bool label true ok
 
 let doctest_basic_compiles () =
-  should_pass {|#lang tesl
-module Main exposing [double]
+  should_pass {|module Main exposing [double]
 import Tesl.Prelude exposing [Int]
 
 #> double 3
@@ -123,8 +122,7 @@ fn double(n: Int) -> Int =
 |}
 
 let doctest_multiple_examples_compile () =
-  should_pass {|#lang tesl
-module Main exposing [clamp]
+  should_pass {|module Main exposing [clamp]
 import Tesl.Prelude exposing [Int]
 
 #> clamp 0 10 5
@@ -144,8 +142,7 @@ fn clamp(lo: Int, hi: Int, n: Int) -> Int =
 |}
 
 let doctest_property_compiles () =
-  should_pass {|#lang tesl
-module Main exposing [double]
+  should_pass {|module Main exposing [double]
 import Tesl.Prelude exposing [Int]
 
 #> property "even" (n: Int) { (double n) % 2 == 0 }
@@ -154,8 +151,7 @@ fn double(n: Int) -> Int =
 |}
 
 let property_custom_generator_compiles () =
-  should_pass {|#lang tesl
-module Main exposing []
+  should_pass {|module Main exposing []
 import Tesl.Prelude exposing [Int]
 
 fn gen(i: Int) -> Int =
@@ -170,8 +166,7 @@ test "custom generator" with 10 runs {
 |}
 
 let property_where_clause_runs_compile () =
-  should_pass {|#lang tesl
-module Main exposing [clamp]
+  should_pass {|module Main exposing [clamp]
 import Tesl.Prelude exposing [Int]
 
 fn clamp(lo: Int, hi: Int, n: Int) -> Int =
@@ -189,8 +184,7 @@ test "clamp properties" with 20 runs {
 |}
 
 let expect_fail_test_compiles () =
-  should_pass {|#lang tesl
-module Main exposing [checkAge]
+  should_pass {|module Main exposing [checkAge]
 import Tesl.Prelude exposing [Int]
 
 fact ValidAge (n: Int)
@@ -208,8 +202,7 @@ test "expectFail works for checks" {
 |}
 
 let doctest_and_test_block_coexist () =
-  should_pass {|#lang tesl
-module Main exposing [double]
+  should_pass {|module Main exposing [double]
 import Tesl.Prelude exposing [Int]
 
 #> double 4
@@ -223,8 +216,7 @@ test "double" {
 |}
 
 let proof_decomposition_ignored_slots_compile () =
-  should_pass {|#lang tesl
-module Main exposing []
+  should_pass {|module Main exposing []
 import Tesl.Prelude exposing [Int]
 
 fact Positive (n: Int)
@@ -240,8 +232,7 @@ fn demo(n: Int) -> Int =
 |}
 
 let detach_forget_attach_round_trip_compiles () =
-  should_pass {|#lang tesl
-module Main exposing []
+  should_pass {|module Main exposing []
 import Tesl.Prelude exposing [Int, attachFact, detachFact, forgetFact]
 
 fact Positive (n: Int)
@@ -261,8 +252,7 @@ fn demo(n: Int) -> Int =
 |}
 
 let api_test_basic_compiles () =
-  should_pass {|#lang tesl
-module Main exposing [Server]
+  should_pass {|module Main exposing [Server]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 import Tesl.ApiTest exposing [statusOk, isNull]
@@ -304,8 +294,7 @@ api-test "raw JSON body and dynamic response fields" for Server {
 |}
 
 let api_test_seeded_state_compiles () =
-  should_pass {|#lang tesl
-module Main exposing [Server]
+  should_pass {|module Main exposing [Server]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -380,8 +369,7 @@ api-test "seed prepares fresh in-memory state" for Server requires [dbRead, dbWr
 |}
 
 let api_test_sse_collect_with_timeout_compiles () =
-  should_pass {|#lang tesl
-module Main exposing [Server]
+  should_pass {|module Main exposing [Server]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 import Tesl.Queue exposing [FromQueue, queueRead, queueWrite, pubsub, Queue, Job, QueueRetryStrategy, Linear]
@@ -499,8 +487,7 @@ api-test "subscribe collect and process queue" for Server requires [queueRead, q
 |}
 
 let load_test_basic_compiles () =
-  should_pass {|#lang tesl
-module Main exposing [Server]
+  should_pass {|module Main exposing [Server]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 
@@ -545,8 +532,7 @@ load-test "greet throughput" for Server
 |}
 
 let load_test_seed_and_baseline_compiles () =
-  should_pass {|#lang tesl
-module Main exposing [Server]
+  should_pass {|module Main exposing [Server]
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -599,8 +585,7 @@ load-test "list books with seeded data" for Server
 |}
 
 let load_test_throughput_assert_compiles () =
-  should_pass {|#lang tesl
-module Main exposing [Server]
+  should_pass {|module Main exposing [Server]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 
@@ -648,15 +633,13 @@ let deps_lists_local_import () =
     ~label:"deps lists local import"
     ~args:[flag "deps"]
     ~files:[
-      ("Main.tesl", {|#lang tesl
-module Main exposing []
+      ("Main.tesl", {|module Main exposing []
 import Local exposing [helper]
 import Tesl.Prelude exposing [Int]
 fn main() -> Int =
   helper()
 |});
-      ("Local.tesl", {|#lang tesl
-module Local exposing [helper]
+      ("Local.tesl", {|module Local exposing [helper]
 import Tesl.Prelude exposing [Int]
 fn helper() -> Int =
   1
@@ -669,8 +652,7 @@ let semantic_json_emits_module_name () =
     ~label:"semantic json emits module name"
     ~args:[flag "semantic-json"]
     ~files:[
-      ("Main.tesl", {|#lang tesl
-module Main exposing [main]
+      ("Main.tesl", {|module Main exposing [main]
 import Tesl.Prelude exposing [Int]
 fn main() -> Int =
   let value = 1
@@ -684,8 +666,7 @@ let local_bindings_json_reports_binding () =
     ~label:"local bindings json reports binding"
     ~args:[flag "local-bindings-json"]
     ~files:[
-      ("Main.tesl", {|#lang tesl
-module Main exposing [main]
+      ("Main.tesl", {|module Main exposing [main]
 import Tesl.Prelude exposing [Int]
 fn main() -> Int =
   let value = 1
@@ -699,8 +680,7 @@ let mutate_strong_boundary_tests_succeeds () =
     ~label:"mutation cli succeeds on strong boundary tests"
     ~args:[flag "mutate"]
     ~files:[
-      ("Main.tesl", {|#lang tesl
-module Main exposing [ValidAge, checkAge]
+      ("Main.tesl", {|module Main exposing [ValidAge, checkAge]
 import Tesl.Prelude exposing [Int]
 
 fact ValidAge (n: Int)

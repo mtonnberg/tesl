@@ -116,7 +116,6 @@ let test_check_launders_dbwrite () =
   should_fail
     "check 'isPositive' uses privileged operations and callees requiring .*dbWrite.* but does not declare them"
     (Printf.sprintf {|
-#lang tesl
 module CheckLaunder exposing []
 import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -135,7 +134,6 @@ check isPositive(taskId: Int) -> taskId: Int ::: Positive taskId =
 let test_check_honest_dbwrite_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module CheckHonest exposing []
 import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -154,7 +152,6 @@ check isPositive(taskId: Int) -> taskId: Int ::: Positive taskId
 let test_check_effect_free_positive () =
   should_pass
     {|
-#lang tesl
 module CheckPure exposing []
 import Tesl.Prelude exposing [Bool(..), Int, String]
 fact Positive (taskId: Int)
@@ -173,7 +170,6 @@ let test_auth_launders_dbread () =
   should_fail
     "auth 'cookieAuth' uses privileged operations and callees requiring .*dbRead.* but does not declare them"
     (Printf.sprintf {|
-#lang tesl
 module AuthLaunder exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -196,7 +192,6 @@ auth cookieAuth(request: HttpRequest) -> user: String ::: Authenticated user =
 let test_auth_honest_dbread_positive () =
   should_pass
     (Printf.sprintf {|
-#lang tesl
 module AuthHonest exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -221,7 +216,6 @@ auth cookieAuth(request: HttpRequest) -> user: String ::: Authenticated user
 let test_auth_effect_free_positive () =
   should_pass
     {|
-#lang tesl
 module AuthPure exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -243,7 +237,6 @@ let test_establish_launders_dbwrite () =
   should_fail
     "establish 'trustAudit' uses privileged operations and callees requiring .*dbWrite.* but does not declare them"
     (Printf.sprintf {|
-#lang tesl
 module EstablishLaunder exposing []
 import Tesl.Prelude exposing [Bool(..), Int, String, Unit]
 import Tesl.DB exposing [dbRead, dbWrite]
@@ -258,7 +251,6 @@ establish trustAudit(taskId: Int) -> Fact (Trusted taskId) =
 let test_establish_effect_free_positive () =
   should_pass
     {|
-#lang tesl
 module EstablishPure exposing []
 import Tesl.Prelude exposing [Int]
 fact Trusted (taskId: Int)

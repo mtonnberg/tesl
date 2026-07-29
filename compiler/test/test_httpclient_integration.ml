@@ -263,8 +263,7 @@ let stop_mock_server pid script =
     no script-style main. *)
 let tesl_app_src ~module_name ~mock_port ~app_port =
   let url p = Printf.sprintf "http://127.0.0.1:%d%s" mock_port p in
-  Printf.sprintf {|#lang tesl
-module %s exposing [HttpClientTestServer]
+  Printf.sprintf {|module %s exposing [HttpClientTestServer]
 
 import Tesl.Prelude exposing [Int, String, Bool(..), Unit]
 import Tesl.HttpClient exposing [httpClient, HttpResponse, HttpClient.get, HttpClient.post, HttpClient.put, HttpClient.delete]
@@ -406,8 +405,7 @@ let with_app_server f =
     Used to verify the capability gate.  No main is needed — the point is that
     the compiler rejects an HttpClient.get call in a fn lacking the capability. *)
 let tesl_no_capability_src module_name =
-  (module_name, Printf.sprintf {|#lang tesl
-module %s exposing []
+  (module_name, Printf.sprintf {|module %s exposing []
 
 import Tesl.Prelude exposing [Int, String, Bool(..), Unit]
 import Tesl.HttpClient exposing [httpClient, HttpResponse, HttpClient.get]

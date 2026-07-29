@@ -30,7 +30,7 @@ let base_imports =
    import Tesl.Cache exposing [Cache]\n"
 
 let module_ ?(name="M") ?(exports="") ?(extra="") body =
-  Printf.sprintf "#lang tesl\nmodule %s exposing [%s]\n%s%s\n%s"
+  Printf.sprintf "module %s exposing [%s]\n%s%s\n%s"
     name exports base_imports extra body
 
 let with_db body =

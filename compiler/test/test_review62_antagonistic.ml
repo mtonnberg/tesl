@@ -110,7 +110,6 @@ let test_R62_ES01_establish_wrong_fact_now_rejected () =
      caught at compile time. `establish f -> Fact (A n) = B n` is rejected with:
      "body uses fact constructor B; must return declared fact constructor A" *)
   should_fail "body uses fact constructor" {|
-#lang tesl
 module R62Es01 exposing []
 import Tesl.Prelude exposing [Int, Fact]
 fact IsPositive (n: Int)
@@ -122,7 +121,6 @@ establish fakePositive(n: Int) -> Fact (IsPositive n) =
 let test_R62_ES02_establish_can_call_other_establish () =
   (* establish functions CAN call other establish functions *)
   should_pass {|
-#lang tesl
 module R62Es02 exposing []
 import Tesl.Prelude exposing [Int, Fact]
 fact A (n: Int)
@@ -136,7 +134,6 @@ establish proveB(n: Int) -> Fact (B n) =
 let test_R62_ES03_establish_with_zero_args () =
   (* zero-arg establish is valid *)
   should_pass {|
-#lang tesl
 module R62Es03 exposing []
 import Tesl.Prelude exposing [Fact]
 fact GlobalFact
@@ -150,7 +147,6 @@ let test_R62_IA01_introand_inline_args_now_works () =
      proofs. `introAnd (proveA x) (proveB x)` now resolves proofs from
      the inline establish calls via proofs_of_evidence_expr fallback. *)
   should_pass {|
-#lang tesl
 module R62Ia01 exposing []
 import Tesl.Prelude exposing [Int, Fact, attachFact, introAnd, andLeft]
 fact A (n: Int)
@@ -167,7 +163,6 @@ fn nowWorks(x: Int) -> Int =
 let test_R62_IA02_introand_bound_args_works () =
   (* Workaround: bind fact arguments to let variables before introAnd *)
   should_pass {|
-#lang tesl
 module R62Ia02 exposing []
 import Tesl.Prelude exposing [Int, Fact, attachFact, introAnd, andLeft]
 fact A (n: Int)
@@ -188,7 +183,6 @@ fn works(x: Int) -> Int =
 let test_R62_SL01_single_line_if_rejected () =
   (* Single-line if-then-else is a parse error *)
   should_fail "then.*body.*must be on an indented new line" {|
-#lang tesl
 module R62Sl01 exposing []
 import Tesl.Prelude exposing [Int]
 fn test(n: Int) -> Int = if n > 0 then n else 0
@@ -199,7 +193,6 @@ fn test(n: Int) -> Int = if n > 0 then n else 0
 let test_R62_SH01_let_shadowing_rejected () =
   (* let binding that shadows an existing name is rejected *)
   should_fail "shadows" {|
-#lang tesl
 module R62Sh01 exposing []
 import Tesl.Prelude exposing [Int]
 fn test(n: Int) -> Int =
@@ -212,7 +205,6 @@ fn test(n: Int) -> Int =
 let test_R62_PP01_predicate_not_imported_rejected () =
   (* Using a proof predicate from another module without importing it is rejected *)
   should_fail "not in scope" {|
-#lang tesl
 module R62Pp01 exposing []
 import Tesl.Prelude exposing [Int]
 fn requiresPos(n: Int ::: IsPositive n) -> Int = n
@@ -223,7 +215,6 @@ fn requiresPos(n: Int ::: IsPositive n) -> Int = n
 let test_R62_FN01_fn_with_proof_annotation_rejected () =
   (* fn cannot declare a proof-carrying return type via ::: annotation *)
   should_fail "cannot declare a proof" {|
-#lang tesl
 module R62Fn01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -233,7 +224,6 @@ fn test(n: Int) -> n: Int ::: IsPositive n = n
 let test_R62_FN02_fn_with_named_pack_proof_works () =
   (* fn CAN use ? notation to propagate stdlib proofs *)
   should_pass {|
-#lang tesl
 module R62Fn02 exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.trim, IsTrimmed]
@@ -246,7 +236,6 @@ fn safeTrim(s: String) -> String ? IsTrimmed =
 let test_R62_EX01_non_exhaustive_case_rejected () =
   (* Non-exhaustive case expression is rejected *)
   should_fail "non-exhaustive" {|
-#lang tesl
 module R62Ex01 exposing []
 import Tesl.Prelude exposing [String]
 type Color
@@ -262,7 +251,6 @@ fn name(c: Color) -> String =
 let test_R62_EX02_exhaustive_with_wildcard_accepted () =
   (* Wildcard pattern makes case exhaustive *)
   should_pass {|
-#lang tesl
 module R62Ex02 exposing []
 import Tesl.Prelude exposing [String]
 type Color
@@ -280,7 +268,6 @@ fn name(c: Color) -> String =
 let test_R62_DU01_duplicate_fact_rejected () =
   (* Duplicate fact declaration is an error *)
   should_fail "duplicate" {|
-#lang tesl
 module R62Du01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -290,7 +277,6 @@ fact IsPositive (n: Int)
 let test_R62_DU02_duplicate_fn_rejected () =
   (* Duplicate function declaration is an error *)
   should_fail "duplicate" {|
-#lang tesl
 module R62Du02 exposing []
 import Tesl.Prelude exposing [Int]
 fn test(n: Int) -> Int = n
@@ -301,7 +287,6 @@ fn test(n: Int) -> Int = n + 1
 
 let test_R62_CC01_capability_self_cycle_rejected () =
   should_fail "cycle" {|
-#lang tesl
 module R62Cc01 exposing []
 import Tesl.Prelude exposing [Int]
 capability alpha implies alpha
@@ -310,7 +295,6 @@ handler h(x: Int) -> Int requires [alpha] = x
 
 let test_R62_CC02_capability_mutual_cycle_rejected () =
   should_fail "cycle" {|
-#lang tesl
 module R62Cc02 exposing []
 import Tesl.Prelude exposing [Int]
 capability alpha implies beta
@@ -322,7 +306,6 @@ handler h(x: Int) -> Int requires [alpha] = x
 
 let test_R62_FC01_lambda_in_filtercheck_rejected () =
   should_fail "declared.*check.*function.*not an inline lambda" {|
-#lang tesl
 module R62Fc01 exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck]
@@ -338,7 +321,6 @@ fn bad(xs: List Int) -> List Int ::: ForAll (IsPositive) =
 
 let test_R62_FC02_plain_fn_in_filtercheck_rejected () =
   should_fail "fn.*not a.*check" {|
-#lang tesl
 module R62Fc02 exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck]
@@ -350,7 +332,6 @@ fn bad(xs: List Int) -> List Int =
 let test_R62_FC03_partial_application_check_accepted () =
   (* Partial application of a multi-arg check function is valid in filterCheck *)
   should_pass {|
-#lang tesl
 module R62Fc03 exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck]
@@ -368,7 +349,6 @@ fn filterInRange(xs: List Int) -> List Int =
 
 let test_R62_AU01_auth_from_fn_rejected () =
   should_fail "auth functions may only be called from handler bodies" {|
-#lang tesl
 module R62Au01 exposing []
 import Tesl.Prelude exposing [String]
 fact Authenticated (s: String)
@@ -381,7 +361,6 @@ fn badFn(tok: String) -> String =
 
 let test_R62_AU02_auth_from_check_rejected () =
   should_fail "auth functions may only be called from handler bodies" {|
-#lang tesl
 module R62Au02 exposing []
 import Tesl.Prelude exposing [String]
 fact Authenticated (s: String)
@@ -400,7 +379,6 @@ check badCheck(s: String) -> s: String ::: IsNonEmpty s =
 
 let test_R62_AU03_auth_from_handler_accepted () =
   should_pass {|
-#lang tesl
 module R62Au03 exposing []
 import Tesl.Prelude exposing [String]
 fact Authenticated (s: String)
@@ -417,7 +395,6 @@ handler myHandler(token: String) -> String =
 let test_R62_MP01_multiple_missing_proofs_all_reported () =
   (* When multiple call sites miss proofs, all errors should be reported *)
   should_fail "requiresC" {|
-#lang tesl
 module R62Mp01 exposing []
 import Tesl.Prelude exposing [Int]
 fact A (n: Int)
@@ -435,7 +412,6 @@ fn test(x: Int) -> Int =
 let test_R62_CP01_wrong_param_proof_caught () =
   (* Passing a proven value from one param as proof for different param *)
   should_fail "does not statically satisfy" {|
-#lang tesl
 module R62Cp01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -454,7 +430,6 @@ fn test(x: Int, y: Int) -> Int =
 
 let test_R62_RD01_recursive_adt_accepted () =
   should_pass {|
-#lang tesl
 module R62Rd01 exposing []
 import Tesl.Prelude exposing [Int]
 type Tree
@@ -473,7 +448,6 @@ let test_R62_NE01_nested_inline_constructor_now_works () =
      Indented argument blocks are treated as continuation arguments to the
      constructor/function on the preceding line. *)
   should_pass {|
-#lang tesl
 module R62Ne01 exposing []
 import Tesl.Prelude exposing [Int]
 type Tree
@@ -494,7 +468,6 @@ fn buildTreeMultiLine() -> Tree =
 
 let test_R62_FR01_forget_and_reprove_works () =
   should_pass {|
-#lang tesl
 module R62Fr01 exposing []
 import Tesl.Prelude exposing [Int, forgetFact, attachFact, Fact]
 fact IsPositive (n: Int)
@@ -513,7 +486,6 @@ fn test(x: Int) -> Int =
 
 let test_R62_PL01_pipe_right_operator_works () =
   should_pass {|
-#lang tesl
 module R62Pl01 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.String exposing [String.trim, String.length]
@@ -524,7 +496,6 @@ fn test(s: String) -> Int =
 
 let test_R62_PL02_pipe_left_operator_works () =
   should_pass {|
-#lang tesl
 module R62Pl02 exposing []
 import Tesl.Prelude exposing [Int]
 fn double(n: Int) -> Int = n * 2
@@ -538,7 +509,6 @@ fn test(n: Int) -> Int =
 let test_R62_CI01_five_level_cap_chain_works () =
   (* Capability implication chains of 5+ levels work (fixed in R61) *)
   should_pass {|
-#lang tesl
 module R62Ci01 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead]
@@ -555,7 +525,6 @@ handler h(x: Int) -> Int requires [level1] = readData x
 
 let test_R62_IN01_if_requires_else () =
   should_fail "expected else" {|
-#lang tesl
 module R62In01 exposing []
 import Tesl.Prelude exposing [Int]
 fn test(n: Int) -> Int =
@@ -567,7 +536,6 @@ fn test(n: Int) -> Int =
 
 let test_R62_WH01_where_guard_in_case_works () =
   should_pass {|
-#lang tesl
 module R62Wh01 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -581,7 +549,6 @@ fn classify(m: Maybe Int) -> String =
 
 let test_R62_WH02_all_guarded_arms_non_exhaustive_rejected () =
   should_fail "guarded arms" {|
-#lang tesl
 module R62Wh02 exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -596,7 +563,6 @@ fn badMatch(m: Maybe Int) -> String =
 let test_R62_TA01_newtype_carries_proof () =
   (* Type aliases (newtypes) can carry proofs independently from base type *)
   should_pass {|
-#lang tesl
 module R62Ta01 exposing []
 import Tesl.Prelude exposing [String]
 type UserId = String

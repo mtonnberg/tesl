@@ -32,7 +32,7 @@ let http_imports =
    import Tesl.HttpClient exposing [httpClient, HttpResponse, HttpClient.get, HttpClient.post, HttpClient.put, HttpClient.delete]\n"
 
 let module_ ?(name="M") ?(exports="") ?(extra="") body =
-  Printf.sprintf "#lang tesl\nmodule %s exposing [%s]\n%s%s\n%s"
+  Printf.sprintf "module %s exposing [%s]\n%s%s\n%s"
     name exports http_imports extra body
 
 let compile_ok name src =

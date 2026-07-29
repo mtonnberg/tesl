@@ -57,8 +57,7 @@ let run_ir path =
   in
   (exit_code, stdout)
 
-let list_endpoint_src = {|#lang tesl
-module ItemApiModule exposing [ItemApi]
+let list_endpoint_src = {|module ItemApiModule exposing [ItemApi]
 record Item {
   name: String
 }
@@ -68,8 +67,7 @@ api ItemApi {
 }
 |}
 
-let body_endpoint_src = {|#lang tesl
-module ItemApiModule exposing [ItemApi]
+let body_endpoint_src = {|module ItemApiModule exposing [ItemApi]
 record Item {
   name: String
 }
@@ -80,8 +78,7 @@ api ItemApi {
 }
 |}
 
-let capture_endpoint_src = {|#lang tesl
-module TodoApiModule exposing [TodoApi]
+let capture_endpoint_src = {|module TodoApiModule exposing [TodoApi]
 record Todo {
   id: String
 }
@@ -92,8 +89,7 @@ api TodoApi {
 }
 |}
 
-let auth_endpoint_src = {|#lang tesl
-module TodoApiModule exposing [TodoApi]
+let auth_endpoint_src = {|module TodoApiModule exposing [TodoApi]
 record User {
   id: String
 }
@@ -107,8 +103,7 @@ api TodoApi {
 }
 |}
 
-let exists_endpoint_src = {|#lang tesl
-module TodoApiModule exposing [TodoApi]
+let exists_endpoint_src = {|module TodoApiModule exposing [TodoApi]
 record Todo {
   id: String
 }
@@ -118,8 +113,7 @@ api TodoApi {
 }
 |}
 
-let simple_length_fact_src = {|#lang tesl
-module M exposing [isSafe]
+let simple_length_fact_src = {|module M exposing [isSafe]
 check isSafe(title: String) -> title: String ::: SafeText title =
   if 2 <= String.length(title) && String.length(title) <= 50 then
     ok title ::: SafeText title
@@ -127,8 +121,7 @@ check isSafe(title: String) -> title: String ::: SafeText title =
     fail 400 "bad"
 |}
 
-let int_range_fact_src = {|#lang tesl
-module M exposing [isValidPort]
+let int_range_fact_src = {|module M exposing [isValidPort]
 check isValidPort(port: Int) -> port: Int ::: ValidPort port =
   if 1 <= port && port <= 65535 then
     ok port ::: ValidPort port
@@ -136,8 +129,7 @@ check isValidPort(port: Int) -> port: Int ::: ValidPort port =
     fail 400 "bad"
 |}
 
-let complex_fact_src = {|#lang tesl
-module M exposing [isComplex]
+let complex_fact_src = {|module M exposing [isComplex]
 check isComplex(title: String) -> title: String ::: ComplexFact title =
   if customCheck title then
     ok title ::: ComplexFact title
@@ -145,8 +137,7 @@ check isComplex(title: String) -> title: String ::: ComplexFact title =
     fail 400 "bad"
 |}
 
-let auth_fact_src = {|#lang tesl
-module M exposing [User]
+let auth_fact_src = {|module M exposing [User]
 record User {
   id: String
 }
@@ -155,8 +146,7 @@ auth myAuth(req: HttpRequest) -> requestUser: User ::: Authenticated requestUser
   ok { id: "u1" } ::: Authenticated requestUser
 |}
 
-let establish_fact_src = {|#lang tesl
-module M exposing [validPort]
+let establish_fact_src = {|module M exposing [validPort]
 establish validPort (port: Int) -> Fact (ValidPort port) =
   if 1 <= port && port <= 65535 then
     ValidPort port
@@ -164,8 +154,7 @@ establish validPort (port: Int) -> Fact (ValidPort port) =
     fail 400 "bad"
 |}
 
-let record_invariant_src = {|#lang tesl
-module M exposing [Pair, checkGt]
+let record_invariant_src = {|module M exposing [Pair, checkGt]
 check checkGt(a: Int, b: Int) -> a: Int ::: Gt a b =
   if a > b then
     ok a ::: Gt a b
@@ -177,8 +166,7 @@ record Pair {
 } ::: Gt a b via checkGt
 |}
 
-let contains_ml_style_fact_src = {|#lang tesl
-module M exposing [containsAnA]
+let contains_ml_style_fact_src = {|module M exposing [containsAnA]
 check containsAnA(title: String) -> title: String ::: ContainsAnA title =
   if String.contains "a" title then
     ok title ::: ContainsAnA title
@@ -186,16 +174,14 @@ check containsAnA(title: String) -> title: String ::: ContainsAnA title =
     fail 400 "bad"
 |}
 
-let entity_auto_fact_src = {|#lang tesl
-module M exposing [Item]
+let entity_auto_fact_src = {|module M exposing [Item]
 entity Item table "items" primaryKey id {
   id: String
   price: Int
 }
 |}
 
-let record_fact_codec_src = {|#lang tesl
-module M exposing [Msg, isSafeText]
+let record_fact_codec_src = {|module M exposing [Msg, isSafeText]
 check isSafeText(text: String) -> text: String ::: SafeText text =
   if 1 <= String.length text then
     ok text ::: SafeText text
@@ -216,8 +202,7 @@ codec Msg {
 }
 |}
 
-let codec_via_src = {|#lang tesl
-module M exposing [Input, isSafe, isShort]
+let codec_via_src = {|module M exposing [Input, isSafe, isShort]
 check isSafe(t: String) -> t: String ::: Safe t =
   if 1 <= String.length t then
     ok t ::: Safe t
@@ -241,8 +226,7 @@ codec Input {
 }
 |}
 
-let codec_forbidden_src = {|#lang tesl
-module M exposing [Out]
+let codec_forbidden_src = {|module M exposing [Out]
 record Out {
   val: String
 }
@@ -254,8 +238,7 @@ codec Out {
 }
 |}
 
-let adt_codec_src = {|#lang tesl
-module M exposing [Dir(..)]
+let adt_codec_src = {|module M exposing [Dir(..)]
 type Dir
   = North
   | South
@@ -267,8 +250,7 @@ codec Dir {
 }
 |}
 
-let newtype_src = {|#lang tesl
-module M exposing [UserId]
+let newtype_src = {|module M exposing [UserId]
 type UserId = String
 |}
 
@@ -404,8 +386,7 @@ let test_ir_newtype_base () =
 (* CHECK-CLEAN twin of [body_endpoint_src] for the CLI test: --ir is now
    gated behind the full checker (item 14), so the CLI fixture needs its
    imports (the in-process emit_ir fixtures stay parse-only). *)
-let cli_body_endpoint_src = {|#lang tesl
-module ItemApiModule exposing [ItemApi]
+let cli_body_endpoint_src = {|module ItemApiModule exposing [ItemApi]
 import Tesl.Prelude exposing [String]
 record Item {
   name: String
@@ -441,8 +422,7 @@ let test_cli_ir_real_todo_api_facts () =
    Constraint pattern coverage — mirrors TestIRConstraintParser in Python
    --------------------------------------------------------------------------- *)
 
-let starts_with_fact_src = {|#lang tesl
-module M exposing [isTodoId]
+let starts_with_fact_src = {|module M exposing [isTodoId]
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.startsWith, String.length]
 check isTodoId(s: String) -> s: String ::: TodoId s =
@@ -452,8 +432,7 @@ check isTodoId(s: String) -> s: String ::: TodoId s =
     fail 400 "bad"
 |}
 
-let regex_fact_src = {|#lang tesl
-module M exposing [isSlug]
+let regex_fact_src = {|module M exposing [isSlug]
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.matches]
 check isSlug(s: String) -> s: String ::: Slug s =
@@ -463,8 +442,7 @@ check isSlug(s: String) -> s: String ::: Slug s =
     fail 400 "bad"
 |}
 
-let gt_lt_fact_src = {|#lang tesl
-module M exposing [isMiddle]
+let gt_lt_fact_src = {|module M exposing [isMiddle]
 import Tesl.Prelude exposing [Int]
 check isMiddle(n: Int) -> n: Int ::: Middle n =
   if n > 0 && n < 100 then
@@ -498,8 +476,7 @@ let test_ir_gt_lt_int_constraints () =
    Record structure — mirrors TestIRRecords in Python
    --------------------------------------------------------------------------- *)
 
-let plain_record_src = {|#lang tesl
-module M exposing [User]
+let plain_record_src = {|module M exposing [User]
 import Tesl.Prelude exposing [String]
 record User {
   id: String
@@ -507,8 +484,7 @@ record User {
 }
 |}
 
-let multi_record_src = {|#lang tesl
-module M exposing [A, B]
+let multi_record_src = {|module M exposing [A, B]
 import Tesl.Prelude exposing [Int, String]
 record A {
   x: Int
@@ -518,8 +494,7 @@ record B {
 }
 |}
 
-let record_fact_field_src = {|#lang tesl
-module M exposing [isValidTitle, Item]
+let record_fact_field_src = {|module M exposing [isValidTitle, Item]
 import Tesl.Prelude exposing [String]
 check isValidTitle(t: String) -> t: String ::: ValidTitle t =
   if 1 <= String.length t && String.length t <= 100 then
@@ -548,8 +523,7 @@ let test_ir_record_with_fact_field_proof_tree () =
   assert_contains ~name:"field facts list" json {|"facts":["ValidTitle"]|};
   assert_contains ~name:"proof_tree predicate" json {|"proof_tree":{"kind":"predicate","name":"ValidTitle"}|}
 
-let and_proof_tree_src = {|#lang tesl
-module M exposing [isSafe, isShort, Msg]
+let and_proof_tree_src = {|module M exposing [isSafe, isShort, Msg]
 import Tesl.Prelude exposing [String]
 check isSafe(t: String) -> t: String ::: Safe t =
   if 1 <= String.length t then
@@ -572,8 +546,7 @@ let test_ir_and_proof_tree_field () =
   assert_contains ~name:"and left predicate" json {|"left":{"kind":"predicate","name":"Safe"}|};
   assert_contains ~name:"and right predicate" json {|"right":{"kind":"predicate","name":"Short"}|}
 
-let composite_endpoint_proof_src = {|#lang tesl
-module M exposing [MsgApi]
+let composite_endpoint_proof_src = {|module M exposing [MsgApi]
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.length]
 
@@ -613,16 +586,14 @@ let test_ir_endpoint_bindings_preserve_composite_proofs () =
    ADT structure — mirrors TestIRAdts in Python
    --------------------------------------------------------------------------- *)
 
-let unit_adt_src = {|#lang tesl
-module M exposing [Color(..)]
+let unit_adt_src = {|module M exposing [Color(..)]
 type Color
   = Red
   | Green
   | Blue
 |}
 
-let adt_with_fields_src = {|#lang tesl
-module M exposing [Shape(..)]
+let adt_with_fields_src = {|module M exposing [Shape(..)]
 import Tesl.Prelude exposing [Int]
 type Shape
   = Circle Int
@@ -647,14 +618,12 @@ let test_ir_adt_with_fields () =
    Newtype — mirrors TestIRNewtypes in Python
    --------------------------------------------------------------------------- *)
 
-let int_newtype_src = {|#lang tesl
-module M exposing [Port]
+let int_newtype_src = {|module M exposing [Port]
 import Tesl.Prelude exposing [Int]
 type Port = Int
 |}
 
-let multi_newtype_src = {|#lang tesl
-module M exposing [A, B, C]
+let multi_newtype_src = {|module M exposing [A, B, C]
 import Tesl.Prelude exposing [Int, String, Bool]
 type A = String
 type B = Int
@@ -674,8 +643,7 @@ let test_ir_multiple_newtypes () =
    Contains call-style constraint — mirrors TestIRFacts.test_check_contains_call_style
    --------------------------------------------------------------------------- *)
 
-let contains_call_style_src = {|#lang tesl
-module M exposing [containsHello]
+let contains_call_style_src = {|module M exposing [containsHello]
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.contains]
 check containsHello(s: String) -> s: String ::: ContainsHello s =
@@ -695,8 +663,7 @@ let test_ir_contains_call_style_is_simple () =
    Entity structure — mirrors TestIREntities in Python
    --------------------------------------------------------------------------- *)
 
-let entity_src = {|#lang tesl
-module M exposing []
+let entity_src = {|module M exposing []
 import Tesl.Prelude exposing [String, Int, Bool]
 import Tesl.DB exposing [dbRead]
 entity Task table "tasks" primaryKey id {
@@ -706,8 +673,7 @@ entity Task table "tasks" primaryKey id {
 }
 |}
 
-let entity_types_src = {|#lang tesl
-module M exposing []
+let entity_types_src = {|module M exposing []
 import Tesl.Prelude exposing [String, Int, Bool]
 import Tesl.DB exposing [dbRead]
 entity Rec table "recs" primaryKey id {
@@ -733,8 +699,7 @@ let test_ir_entity_field_types () =
    Module metadata — mirrors TestIRModuleMetadata in Python
    --------------------------------------------------------------------------- *)
 
-let empty_module_src = {|#lang tesl
-module EmptyMod exposing []
+let empty_module_src = {|module EmptyMod exposing []
 |}
 
 let test_ir_module_name () =
@@ -755,8 +720,7 @@ let test_ir_empty_module_arrays () =
    Codec via — mirrors TestIRCodecs in Python
    --------------------------------------------------------------------------- *)
 
-let codec_no_via_src = {|#lang tesl
-module M exposing [Msg]
+let codec_no_via_src = {|module M exposing [Msg]
 import Tesl.Prelude exposing [String]
 record Msg {
   content: String
@@ -771,8 +735,7 @@ codec Msg {
 }
 |}
 
-let codec_single_via_src = {|#lang tesl
-module M exposing [isSafe, Input]
+let codec_single_via_src = {|module M exposing [isSafe, Input]
 import Tesl.Prelude exposing [String]
 check isSafe(t: String) -> t: String ::: Safe t =
   if 1 <= String.length t then
@@ -792,8 +755,7 @@ codec Input {
 }
 |}
 
-let codec_two_via_src = {|#lang tesl
-module M exposing [isSafe, isShort, Input]
+let codec_two_via_src = {|module M exposing [isSafe, isShort, Input]
 import Tesl.Prelude exposing [String]
 check isSafe(t: String) -> t: String ::: Safe t =
   if 1 <= String.length t then
@@ -889,8 +851,7 @@ let test_ir_todo_api_new_todo_title_facts () =
    Fact params — multi-parameter facts must include full params array
    --------------------------------------------------------------------------- *)
 
-let multi_param_fact_src = {|#lang tesl
-module M exposing [checkRange]
+let multi_param_fact_src = {|module M exposing [checkRange]
 import Tesl.Prelude exposing [Int]
 fact ValidRange (lo: Int, hi: Int)
 check checkRange(lo: Int, hi: Int) -> lo: Int ::: ValidRange lo hi =
@@ -912,8 +873,7 @@ let test_ir_single_param_fact_has_params () =
 
 (* When a `fact` declaration exists but there is no check/auth/establish function
    for it the fact should still appear in the IR with checker = null. *)
-let standalone_fact_src = {|#lang tesl
-module M exposing []
+let standalone_fact_src = {|module M exposing []
 import Tesl.Prelude exposing [String]
 fact Branded (value: String)
 |}
@@ -941,22 +901,20 @@ let test_ir_todo_api_fact_params () =
    --------------------------------------------------------------------------- *)
 
 (* 0-based line/col layout:
-   0  #lang tesl
-   1  module Query exposing [add, useAdd]
-   2  (blank)
-   3  import Tesl.Prelude exposing [Int]
-   4  (blank)
-   5  record Point {
-   6    x: Int
-   7  }
-   8  (blank)
-   9  fn add(a: Int, b: Int) -> Int =
-   10   a + b
-   11 (blank)
-   12 fn useAdd(p: Point) -> Int =
-   13   add (p.x) (add 2 3) *)
-let query_src = {|#lang tesl
-module Query exposing [add, useAdd]
+   0  module Query exposing [add, useAdd]
+   1  (blank)
+   2  import Tesl.Prelude exposing [Int]
+   3  (blank)
+   4  record Point {
+   5    x: Int
+   6  }
+   7  (blank)
+   8  fn add(a: Int, b: Int) -> Int =
+   9    a + b
+   10 (blank)
+   11 fn useAdd(p: Point) -> Int =
+   12   add (p.x) (add 2 3) *)
+let query_src = {|module Query exposing [add, useAdd]
 
 import Tesl.Prelude exposing [Int]
 
@@ -972,25 +930,25 @@ fn useAdd(p: Point) -> Int =
 |}
 
 let test_occurrences_kind_write_and_read () =
-  (* Cursor on the `add` definition (line 9, col 3). *)
-  let occs = Compile.occurrences_source "query.tesl" query_src 9 3 in
+  (* Cursor on the `add` definition (line 8, col 3). *)
+  let occs = Compile.occurrences_source "query.tesl" query_src 8 3 in
   let json = Compile.occurrences_response_to_json occs in
   assert_contains ~name:"occurrences version" json {|"version":1|};
   (* The definition site is a write. *)
-  assert_contains ~name:"def site is write" json {|"line":9,"col":3,"end_line":9,"end_col":6,"kind":"write"|};
-  (* The two call sites on line 13 are reads. *)
-  assert_contains ~name:"call site is read" json {|"line":13,"col":2,"end_line":13,"end_col":5,"kind":"read"|}
+  assert_contains ~name:"def site is write" json {|"line":8,"col":3,"end_line":8,"end_col":6,"kind":"write"|};
+  (* The two call sites on line 12 are reads. *)
+  assert_contains ~name:"call site is read" json {|"line":12,"col":2,"end_line":12,"end_col":5,"kind":"read"|}
 
 let test_occurrences_param_binding_is_write () =
-  (* Cursor on parameter `a` of `add` (line 9, col 7). *)
-  let occs = Compile.occurrences_source "query.tesl" query_src 9 7 in
+  (* Cursor on parameter `a` of `add` (line 8, col 7). *)
+  let occs = Compile.occurrences_source "query.tesl" query_src 8 7 in
   let json = Compile.occurrences_response_to_json occs in
-  assert_contains ~name:"param binding is write" json {|"line":9,"col":7,"end_line":9,"end_col":8,"kind":"write"|};
-  assert_contains ~name:"param use is read" json {|"line":10,"col":2,"end_line":10,"end_col":3,"kind":"read"|}
+  assert_contains ~name:"param binding is write" json {|"line":8,"col":7,"end_line":8,"end_col":8,"kind":"write"|};
+  assert_contains ~name:"param use is read" json {|"line":9,"col":2,"end_line":9,"end_col":3,"kind":"read"|}
 
 let test_signature_help_first_param () =
   (* Cursor inside the outer `add (...)` call, before any complete arg. *)
-  let sig_ = Compile.signature_help_source "query.tesl" query_src 13 6 in
+  let sig_ = Compile.signature_help_source "query.tesl" query_src 12 6 in
   let json = Compile.signature_help_response_to_json sig_ in
   assert_contains ~name:"sig version" json {|"version":1|};
   assert_contains ~name:"sig label" json {|"label":"add a: Int b: Int"|};
@@ -999,25 +957,25 @@ let test_signature_help_first_param () =
 
 let test_signature_help_second_param () =
   (* Cursor positioned after the first argument of the outer `add` call. *)
-  let sig_ = Compile.signature_help_source "query.tesl" query_src 13 11 in
+  let sig_ = Compile.signature_help_source "query.tesl" query_src 12 11 in
   let json = Compile.signature_help_response_to_json sig_ in
   assert_contains ~name:"active param 1" json {|"active_parameter":1|}
 
 let test_signature_help_outside_call_is_null () =
   (* Cursor on the record field declaration — not inside any call. *)
-  let sig_ = Compile.signature_help_source "query.tesl" query_src 6 2 in
+  let sig_ = Compile.signature_help_source "query.tesl" query_src 5 2 in
   let json = Compile.signature_help_response_to_json sig_ in
   assert_contains ~name:"no signature" json {|"signature":null|}
 
 let test_selection_range_nested () =
-  (* Cursor on `a` inside the body `a + b` (line 10, col 2). *)
-  let ranges = Compile.selection_range_source "query.tesl" query_src 10 2 in
+  (* Cursor on `a` inside the body `a + b` (line 9, col 2). *)
+  let ranges = Compile.selection_range_source "query.tesl" query_src 9 2 in
   let json = Compile.selection_ranges_response_to_json ranges in
   assert_contains ~name:"selection version" json {|"version":1|};
   (* Innermost-first: the binop body span appears, and the enclosing function
-     declaration span (line 9 .. line 12) appears later in the chain. *)
-  assert_contains ~name:"binop body range" json {|"line":10,"col":2,"end_line":10,"end_col":8|};
-  assert_contains ~name:"enclosing decl range" json {|"end_line":12|};
+     declaration span (line 8 .. line 11) appears later in the chain. *)
+  assert_contains ~name:"binop body range" json {|"line":9,"col":2,"end_line":9,"end_col":8|};
+  assert_contains ~name:"enclosing decl range" json {|"end_line":11|};
   (* Must be non-empty and the first range no wider than the last. *)
   (match ranges with
    | [] -> Alcotest.fail "expected at least one selection range"
@@ -1030,39 +988,37 @@ let test_selection_range_nested () =
 
 let test_type_definition_record () =
   (* Cursor on `p` whose type is `Point`; expect the record declaration loc. *)
-  let loc = Compile.type_definition_source "query.tesl" query_src 13 7 in
+  let loc = Compile.type_definition_source "query.tesl" query_src 12 7 in
   let json = Compile.type_definition_response_to_json loc in
   assert_contains ~name:"type-def version" json {|"version":1|};
-  assert_contains ~name:"points at record decl" json {|"line":5,"col":7,"end_line":5,"end_col":12|}
+  assert_contains ~name:"points at record decl" json {|"line":4,"col":7,"end_line":4,"end_col":12|}
 
 let test_type_definition_null_when_no_type () =
   (* Cursor on a blank line — nothing resolves. *)
-  let loc = Compile.type_definition_source "query.tesl" query_src 2 0 in
+  let loc = Compile.type_definition_source "query.tesl" query_src 1 0 in
   let json = Compile.type_definition_response_to_json loc in
   assert_contains ~name:"null type definition" json {|"type_definition":null|}
 
 (* ── Cluster B: rename/hover inside proofs + field-access hover ───────────── *)
 
 (* 0-based line/col layout (see comments inline):
-   0  #lang tesl
-   1  module Proofs exposing [authUser, getUser]
-   2  (blank)
-   3  import Tesl.Prelude exposing [String, Unit]
-   4  (blank)
-   5  record User {
-   6    id: String
-   7  }
-   8  (blank)
-   9  fact Authenticated (u: User)
-   10 (blank)
-   11 check authUser(u: User) -> u: User ::: Authenticated u =
-   12   ok u ::: Authenticated u
-   13 (blank)
-   14 fn getUser(reqUser: User ::: Authenticated reqUser) -> User =
-   15   telemetry "user.get" { user.id = reqUser.id }
-   16   reqUser *)
-let proof_query_src = {|#lang tesl
-module Proofs exposing [authUser, getUser]
+   0  module Proofs exposing [authUser, getUser]
+   1  (blank)
+   2  import Tesl.Prelude exposing [String, Unit]
+   3  (blank)
+   4  record User {
+   5    id: String
+   6  }
+   7  (blank)
+   8  fact Authenticated (u: User)
+   9  (blank)
+   10 check authUser(u: User) -> u: User ::: Authenticated u =
+   11   ok u ::: Authenticated u
+   12 (blank)
+   13 fn getUser(reqUser: User ::: Authenticated reqUser) -> User =
+   14   telemetry "user.get" { user.id = reqUser.id }
+   15   reqUser *)
+let proof_query_src = {|module Proofs exposing [authUser, getUser]
 
 import Tesl.Prelude exposing [String, Unit]
 
@@ -1081,68 +1037,68 @@ fn getUser(reqUser: User ::: Authenticated reqUser) -> User =
 |}
 
 let test_occurrences_include_proof_position () =
-  (* Cursor on the `reqUser` parameter binding (line 14, col 13). The proof
+  (* Cursor on the `reqUser` parameter binding (line 13, col 13). The proof
      annotation `Authenticated reqUser` on the same line must be included. *)
-  let occs = Compile.occurrences_source "p.tesl" proof_query_src 14 13 in
+  let occs = Compile.occurrences_source "p.tesl" proof_query_src 13 13 in
   let json = Compile.occurrences_response_to_json occs in
   assert_contains ~name:"param binding is write" json
-    {|"line":14,"col":11,"end_line":14,"end_col":18,"kind":"write"|};
+    {|"line":13,"col":11,"end_line":13,"end_col":18,"kind":"write"|};
   (* The proof-position occurrence (after :::) — this is the regression. *)
   assert_contains ~name:"proof-position occurrence included" json
-    {|"line":14,"col":43,"end_line":14,"end_col":50,"kind":"read"|}
+    {|"line":13,"col":43,"end_line":13,"end_col":50,"kind":"read"|}
 
 let test_occurrences_caret_on_proof_arg () =
-  (* Cursor ON the proof argument `reqUser` after `:::` (line 14, col 45)
+  (* Cursor ON the proof argument `reqUser` after `:::` (line 13, col 45)
      resolves to the same binding and finds the same occurrences. *)
-  let occs = Compile.occurrences_source "p.tesl" proof_query_src 14 45 in
+  let occs = Compile.occurrences_source "p.tesl" proof_query_src 13 45 in
   let json = Compile.occurrences_response_to_json occs in
   assert_contains ~name:"binding from proof caret" json
-    {|"line":14,"col":11,"end_line":14,"end_col":18,"kind":"write"|};
+    {|"line":13,"col":11,"end_line":13,"end_col":18,"kind":"write"|};
   assert_contains ~name:"proof occurrence from proof caret" json
-    {|"line":14,"col":43,"end_line":14,"end_col":50|}
+    {|"line":13,"col":43,"end_line":13,"end_col":50|}
 
 let test_occurrences_proof_in_check_body () =
   (* The `check authUser` parameter `u` is referenced in BOTH proof positions:
      the return spec `u: User ::: Authenticated u` and `ok u ::: Authenticated u`. *)
-  let occs = Compile.occurrences_source "p.tesl" proof_query_src 11 15 in
+  let occs = Compile.occurrences_source "p.tesl" proof_query_src 10 15 in
   let json = Compile.occurrences_response_to_json occs in
-  assert_contains ~name:"return-spec proof occurrence" json {|"line":11,"col":53|};
-  assert_contains ~name:"ok-proof occurrence" json {|"line":12,"col":25|}
+  assert_contains ~name:"return-spec proof occurrence" json {|"line":10,"col":53|};
+  assert_contains ~name:"ok-proof occurrence" json {|"line":11,"col":25|}
 
 let test_occurrences_predicate_rename () =
   (* Renaming the fact/predicate `Authenticated` (caret on the fact decl,
-     line 9, col 6) must include its proof-position usages. *)
-  let occs = Compile.occurrences_source "p.tesl" proof_query_src 9 6 in
+     line 8, col 6) must include its proof-position usages. *)
+  let occs = Compile.occurrences_source "p.tesl" proof_query_src 8 6 in
   let json = Compile.occurrences_response_to_json occs in
-  assert_contains ~name:"fact decl is write" json {|"line":9,"col":5|};
-  assert_contains ~name:"predicate use in return spec" json {|"line":11,"col":39|};
-  assert_contains ~name:"predicate use in ok" json {|"line":12,"col":11|};
-  assert_contains ~name:"predicate use in param proof" json {|"line":14,"col":29|}
+  assert_contains ~name:"fact decl is write" json {|"line":8,"col":5|};
+  assert_contains ~name:"predicate use in return spec" json {|"line":10,"col":39|};
+  assert_contains ~name:"predicate use in ok" json {|"line":11,"col":11|};
+  assert_contains ~name:"predicate use in param proof" json {|"line":13,"col":29|}
 
 let test_occurrences_stdlib_type_is_empty () =
   (* prepareRename rejection relies on stdlib types yielding NO occurrences.
-     Cursor on `String` in `id: String` (line 6, col 6). *)
-  let occs = Compile.occurrences_source "p.tesl" proof_query_src 6 7 in
+     Cursor on `String` in `id: String` (line 5, col 6). *)
+  let occs = Compile.occurrences_source "p.tesl" proof_query_src 5 7 in
   Alcotest.(check int) "stdlib type has no occurrences" 0 (List.length occs)
 
 let test_occurrences_colon_operator_is_empty () =
-  (* Cursor on the `:::` operator (line 11, col 35) yields no occurrences. *)
-  let occs = Compile.occurrences_source "p.tesl" proof_query_src 11 35 in
+  (* Cursor on the `:::` operator (line 10, col 35) yields no occurrences. *)
+  let occs = Compile.occurrences_source "p.tesl" proof_query_src 10 35 in
   Alcotest.(check int) "::: operator has no occurrences" 0 (List.length occs)
 
 let test_field_hover_in_telemetry () =
   (* Regression: hovering on `reqUser.id` INSIDE a telemetry block previously
      reported `Unit` (the enclosing telemetry expression). It must now report
-     the field's real type via both type-at and field-at. Line 15:
+     the field's real type via both type-at and field-at. Line 14:
        telemetry "user.get" { user.id = reqUser.id }
      `reqUser.id`'s `id` token is the value's field. *)
-  (* `reqUser` starts at col 35 on line 15, so the value field `id` sits at
+  (* `reqUser` starts at col 35 on line 14, so the value field `id` sits at
      col 43-44 (after `reqUser.`). *)
   let id_col = 44 in
-  let type_at = Compile.type_at_source "p.tesl" proof_query_src 15 id_col in
+  let type_at = Compile.type_at_source "p.tesl" proof_query_src 14 id_col in
   let tjson = Compile.type_at_response_to_json type_at in
   assert_contains ~name:"telemetry field type is String, not Unit" tjson {|"type":"String"|};
-  let field_at = Compile.field_at_source "p.tesl" proof_query_src 15 id_col in
+  let field_at = Compile.field_at_source "p.tesl" proof_query_src 14 id_col in
   let fjson = Compile.field_at_response_to_json field_at in
   assert_contains ~name:"telemetry field-at field" fjson {|"field":"id"|};
   assert_contains ~name:"telemetry field-at type" fjson {|"field_type":"String"|};
@@ -1197,8 +1153,7 @@ let test_agent_context_hash_matches_semantic () =
 (* A module mixing a validation error (V001) with two proof-checker obligations
    (P001): diagnostics must carry stable codes, errors must sort first, and the
    proof_obligations list must contain exactly the proof-checker items. *)
-let agent_proof_src = {|#lang tesl
-module Foo exposing []
+let agent_proof_src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 check isPos(n: Int) -> n: Int ::: Positive x =
@@ -1242,8 +1197,7 @@ let test_agent_context_errors_sort_first () =
    module that fails --check must not yield a plausible IR artifact.
    (--semantic-json deliberately stays parse-only: the LSP consumes it for
    documentSymbol/semanticTokens on in-progress buffers.) *)
-let broken_ir_src = {|#lang tesl
-module BrokenIr exposing []
+let broken_ir_src = {|module BrokenIr exposing []
 import Tesl.Prelude exposing [Int]
 
 fn oops(x: Int) -> Int =

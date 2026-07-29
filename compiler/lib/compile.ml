@@ -81,7 +81,10 @@ let diag_of_parse_error (e : parse_error) : diagnostic = {
   end_line   = e.loc.stop.line;
   end_col    = e.loc.stop.col;
   severity   = "error";
-  code       = "E000";
+  (* The rejected `#lang tesl` pragma has a dedicated code (E002, repurposed
+     from the retired "missing #lang" lint) so `tesl help E002` explains it. *)
+  code       = (if String.length e.msg >= 12 && String.sub e.msg 0 12 = "`#lang tesl`"
+                then "E002" else "E000");
   message    = e.msg;
   fix        = e.fix;
   source     = "parser";

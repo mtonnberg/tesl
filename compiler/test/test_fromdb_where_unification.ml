@@ -104,8 +104,7 @@ let should_pass src =
     if code <> 0 then failf "expected compilation success, got:\n%s" out)
 
 (* Shared header: entities + subject facts.  User (for Authenticated) and Todo. *)
-let header modname = Printf.sprintf {|#lang tesl
-module %s exposing []
+let header modname = Printf.sprintf {|module %s exposing []
 
 import Tesl.Prelude exposing [String, List]
 import Tesl.Maybe exposing [Maybe(..)]

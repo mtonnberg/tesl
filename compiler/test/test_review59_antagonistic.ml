@@ -107,7 +107,6 @@ let test_R59_OP01_ok_pipe_rejected_in_establish () =
      This test CONFIRMS the discrepancy: the syntax should either be restored or
      removed from the spec. *)
   should_fail "expected expression" {|
-#lang tesl
 module R59Op01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -118,7 +117,6 @@ establish positive(n: Int) -> Fact (IsPositive n) =
 let test_R59_OP02_establish_direct_return_works () =
   (* The correct form for establish is to return the proof expression directly *)
   should_pass {|
-#lang tesl
 module R59Op02 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -136,7 +134,6 @@ let test_R59_FN01_fn_cannot_declare_proof_return () =
      this program is P001 — proof construction is not allowed in `fn` (the same
      wording R59_FN02 pins, so it is stable). *)
   should_fail "ok .* proof construction is not allowed in .fn." {|
-#lang tesl
 module R59Fn01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -147,7 +144,6 @@ fn forgeFact(n: Int) -> n: Int ::: IsPositive n =
 let test_R59_FN02_fn_cannot_use_ok_proof () =
   (* ok ::: proof is only allowed inside check/auth/establish functions *)
   should_fail "ok .* proof construction is not allowed in .fn." {|
-#lang tesl
 module R59Fn02 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -164,7 +160,6 @@ fn trickFn(n: Int ::: IsPositive n) -> n: Int ::: IsPositive n =
 
 let test_R59_ES01_establish_cannot_use_fail () =
   should_fail "establish functions cannot use .fail" {|
-#lang tesl
 module R59Es01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -177,7 +172,6 @@ establish positive(n: Int) -> Fact (IsPositive n) =
 
 let test_R59_ES02_establish_cannot_call_check () =
   should_fail "establish functions cannot call .check" {|
-#lang tesl
 module R59Es02 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -196,7 +190,6 @@ establish establishWithCheck(n: Int) -> Fact (IsPositive n) =
 
 let test_R59_LT01_literal_to_proof_param_rejected () =
   should_fail "does not statically satisfy declared proof" {|
-#lang tesl
 module R59Lt01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -214,7 +207,6 @@ fn tryLiteral() -> Int =
 
 let test_R59_SH01_let_shadowing_rejected () =
   should_fail "shadows existing name" {|
-#lang tesl
 module R59Sh01 exposing []
 import Tesl.Prelude exposing [Int]
 fn shadowAttempt(n: Int) -> Int =
@@ -224,7 +216,6 @@ fn shadowAttempt(n: Int) -> Int =
 
 let test_R59_SH02_case_arm_shadowing_rejected () =
   should_fail "case pattern binder.*shadows" {|
-#lang tesl
 module R59Sh02 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -239,7 +230,6 @@ fn shadowCase(m: Maybe Int, n: Int) -> Int =
 let test_R59_CA01_case_arm_binding_no_proof () =
   (* Value extracted from case arm has no proof about the original value *)
   should_fail "does not statically satisfy declared proof" {|
-#lang tesl
 module R59Ca01 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -265,7 +255,6 @@ fn caseTest(raw: Int) -> Int =
 
 let test_R59_FA01_forall_on_non_list_rejected () =
   should_fail "ForAll.*only valid for.*List.*Set" {|
-#lang tesl
 module R59Fa01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -275,7 +264,6 @@ fn badForAll(n: Int) -> Int ::: ForAll (IsPositive n) =
 
 let test_R59_FA02_forall_proof_mismatch_on_param () =
   should_fail "does not statically satisfy declared proof" {|
-#lang tesl
 module R59Fa02 exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck, List.length]
@@ -302,7 +290,6 @@ let test_R59_FA03_forall_fabrication_plain_list_rejected () =
   (* A function returning a plain unfiltered list where ForAll is declared should fail.
      The error is "has no tracked ... ForAll proof" — the variable xs was not filtered. *)
   should_fail "no tracked" {|
-#lang tesl
 module R59Fa03 exposing []
 import Tesl.Prelude exposing [Int, List]
 fact IsPositive (n: Int)
@@ -319,7 +306,6 @@ fn fakeForAll(xs: List Int) -> List Int ::: ForAll (IsPositive) =
 
 let test_R59_CP01_missing_capability_from_callee () =
   should_fail "uses privileged operations and callees requiring" {|
-#lang tesl
 module R59Cp01 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.DB exposing [dbRead]
@@ -333,7 +319,6 @@ fn noCapFn(n: Int) -> Int =
 let test_R59_DC01_missing_intermediate_proof_rejected () =
   (* checkC requires A && B but we skip checkB, so should fail *)
   should_fail "does not statically satisfy declared proof" {|
-#lang tesl
 module R59Dc01 exposing []
 import Tesl.Prelude exposing [Int]
 fact A (n: Int)
@@ -360,7 +345,6 @@ fn skipCheckB(raw: Int) -> Int =
 
 let test_R59_AD01_user_adt_proof_loss_caught () =
   should_fail "does not statically satisfy declared proof" {|
-#lang tesl
 module R59Ad01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -387,7 +371,6 @@ let test_R59_SM01_maybe_wrap_now_rejected () =
      Maybe constructors, consistent with user-defined ADTs.
      Proof is lost when stored in Something; case-arm binding v has no proof. *)
   should_fail "does not statically satisfy" {|
-#lang tesl
 module R59Sm01 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -412,7 +395,6 @@ fn maybeWrap(raw: Int) -> Int =
 let test_R59_DT01_detach_template_no_comma_syntax () =
   (* The spec says detachFact(value, Template) but comma syntax is not supported *)
   should_fail "expected.*)" {|
-#lang tesl
 module R59Dt01 exposing []
 import Tesl.Prelude exposing [Int, Fact, detachFact]
 fact A (n: Int)
@@ -430,7 +412,6 @@ fn useTemplate(raw: Int) -> Int =
 let test_R59_DT02_detach_ml_style_template_rejected () =
   (* ML-style: detachFact b (A b) fails because A is parsed as a constructor *)
   should_fail "unknown constructor.*A\\|cannot unify" {|
-#lang tesl
 module R59Dt02 exposing []
 import Tesl.Prelude exposing [Int, Fact, detachFact]
 fact A (n: Int)
@@ -459,7 +440,6 @@ let test_R59_PD01_decomp_chain_works () =
      The runtime accumulates proofs oldest-first, so andLeft returns A (first)
      and andRight returns B (second) for checkB(checkA(raw)). *)
   should_pass {|
-#lang tesl
 module R59Pd01 exposing []
 import Tesl.Prelude exposing [Int, Fact, detachFact, forgetFact, attachFact, andLeft, andRight, introAnd]
 fact A (n: Int)
@@ -492,7 +472,6 @@ let test_R59_EM01_case_arm_proof_error_shows_wrong_subject () =
      This makes the hint confusing since m is a Maybe value, not an Int.
      This test documents the confusing error exists (can't easily test error message quality). *)
   should_fail "IsPositive m\\|does not statically satisfy" {|
-#lang tesl
 module R59Em01 exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -521,7 +500,6 @@ let test_R59_NF01_multi_proof_detach_no_select_syntax () =
      syntax to select just one proof via detachFact. The two-argument form is
      not supported. *)
   should_fail "expected.*)\\|unknown constructor" {|
-#lang tesl
 module R59Nf01 exposing []
 import Tesl.Prelude exposing [Int, Fact, detachFact]
 fact A (n: Int)
@@ -549,7 +527,6 @@ let test_R59_EI01_empty_list_binding_no_vacuous_forall () =
   (* Passing an empty list binding to a ForAll-requiring function is correctly rejected.
      This tests the call-site check (R58_FC02 coverage, kept for regression). *)
   should_fail "does not statically satisfy.*ForAll" {|
-#lang tesl
 module R59Ei01 exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.length]
@@ -572,7 +549,6 @@ let test_R59_EI02_empty_list_return_passes_check_gap () =
      does not enforce this for the return position — only at call sites.
      This test documents that the gap exists (static checker does NOT catch this). *)
   should_pass {|
-#lang tesl
 module R59Ei02 exposing []
 import Tesl.Prelude exposing [Int, List]
 fact IsPositive (n: Int)

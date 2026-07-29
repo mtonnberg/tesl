@@ -1,4 +1,3 @@
-#lang tesl
 module QueueApi exposing [EmailQueue, UserEvents]
 import Tesl.Prelude exposing [Bool(..), List, String, Fact]
 import Tesl.DB exposing [dbRead, dbWrite]

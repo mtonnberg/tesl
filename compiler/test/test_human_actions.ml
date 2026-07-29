@@ -94,8 +94,7 @@ let contains needle haystack = count_occurrences needle haystack > 0
    lets a test give the admin handler a capability (to prove humanActions does
    NOT charge it).  [imports] appends extra import lines. *)
 let fixture ?(admin_reqs = "") ?(imports = "") ?(body = "\"wiped\"") tail =
-  Printf.sprintf {|#lang tesl
-module HumanActions exposing []
+  Printf.sprintf {|module HumanActions exposing []
 
 import Tesl.Prelude exposing [String, Bool, List]
 import Tesl.Http exposing [HttpRequest]

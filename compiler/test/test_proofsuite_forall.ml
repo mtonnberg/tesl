@@ -111,14 +111,14 @@ let[@warning "-32"] known_gap ~what src =
 (* ── Shared TESL fragments ───────────────────────────────────────────────── *)
 
 let list_hdr modname = Printf.sprintf
-  "#lang tesl\nmodule %s exposing []\n\
+  "module %s exposing []\n\
    import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n\
    import Tesl.List exposing [List.filterCheck, List.allCheck, List.length, List.map]\n"
   modname
 
 let dict_hdr modname = Printf.sprintf
-  "#lang tesl\nmodule %s exposing []\n\
+  "module %s exposing []\n\
    import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n\
    import Tesl.Dict exposing [Dict, Dict.filterCheckValues, Dict.filterCheckKeys]\n\
@@ -373,7 +373,7 @@ let ctr_wrong idx ~quant ~ty =
   let test () =
     should_fail ctr_re
       (Printf.sprintf
-        "#lang tesl\nmodule %s exposing []\n\
+        "module %s exposing []\n\
          import Tesl.Prelude exposing [Int, String, List, Fact]\n\
          fact IsPos (n: Int)\n\
          fn bad(xs: %s ::: %s IsPos xs) -> Int = 0\n" m ty quant)
@@ -520,7 +520,7 @@ fn getByKeys(raw: Dict String Int) -> Dict String Int ::: ForAllKeys IsNonEmpty 
 
 let pos_select_forall () =
   should_pass (Printf.sprintf
-    "#lang tesl\nmodule PosF10 exposing []\n\
+    "module PosF10 exposing []\n\
      import Tesl.Prelude exposing [String, List]\n\
      import Tesl.DB exposing [dbRead]\n%s"
     {|

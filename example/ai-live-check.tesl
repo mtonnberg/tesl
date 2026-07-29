@@ -1,4 +1,3 @@
-#lang tesl
 module AiLiveCheck exposing [AiServer, askClaude, AskRequest]
 
 import Tesl.Prelude exposing [String, Bool(..)]

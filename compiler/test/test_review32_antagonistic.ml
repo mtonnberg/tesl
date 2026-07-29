@@ -105,7 +105,7 @@ let should_lint pattern src =
   check bool (Printf.sprintf "should have lint warning: %s" pattern) true found
 
 let prelude =
-  "#lang tesl\nmodule T exposing []\n\
+  "module T exposing []\n\
    import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n"
 
@@ -231,7 +231,7 @@ let test_g58_partial_apply_proof_arg_literal () =
 (* must compile without error. This is the minimal valid program.            *)
 let test_g59_empty_module_compiles () =
   let src =
-    "#lang tesl\n" ^
+    "" ^
     "module Empty exposing []\n" ^
     "import Tesl.Prelude exposing [Int]\n" in
   should_pass src
@@ -257,7 +257,7 @@ let test_g60_posixmillis_subtraction_requires_diffms () =
 (* W040 as an error (not just a warning) about this footgun.                  *)
 let test_g61_single_line_adt_alias_gets_lint_warning () =
   let src =
-    "#lang tesl\n" ^
+    "" ^
     "module T exposing []\n" ^
     "type Color = Red | Green | Blue\n" in
   should_lint "W040\\|single-line.*ADT\\|type alias" src
@@ -331,7 +331,7 @@ let test_g65_forgetfact_then_recheck () =
 (* standard prelude names — they are NOT in the default prelude import list.  *)
 let test_g66_introand_two_proofs () =
   let src =
-    "#lang tesl\nmodule T exposing []\n" ^
+    "module T exposing []\n" ^
     "import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact, introAnd, detachFact, attachFact]\n" ^
     "import Tesl.Maybe exposing [Maybe(..)]\n" ^
     "fact IsA (n: Int)\n" ^

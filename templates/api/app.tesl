@@ -1,4 +1,3 @@
-#lang tesl
 # ── __APP_NAME__ ──────────────────────────────────────────────────────────────
 # A Tesl web service WITH a PostgreSQL-backed entity, cookie auth, an input
 # proof on the request body, an output proof on the response, and unit tests.

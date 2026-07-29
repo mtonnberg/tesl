@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson28DeadLetterQueue exposing [NotifQueue]
 
 # Lesson 28 — Dead-Letter Workers

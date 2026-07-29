@@ -75,7 +75,7 @@ let should_fail name pattern src =
 
 let hdr m =
   Printf.sprintf
-    "#lang tesl\nmodule %s exposing []\n\
+    "module %s exposing []\n\
      import Tesl.Prelude exposing [Int, String, Fact, Bool(..)]\n" m
 
 let e21_fncall_pack () =
@@ -122,7 +122,7 @@ fn make(raw: String) -> exists t: String => String ::: IsTok t =
 let e22_fromdb_record_forgery () =
   (* Hand-built entity record packed as FromDb, no DB access — the 2.2 forgery. *)
   should_fail "2.2 FromDb record forgery" "must carry the proof\\|FromDb"
-    ("#lang tesl\nmodule R76d exposing []\n\
+    ("module R76d exposing []\n\
       import Tesl.Prelude exposing [String]\n\
       import Tesl.DB exposing [dbRead, dbWrite]\n" ^ {|
 entity Note table "notes" primaryKey id { id: String body: String }
@@ -136,7 +136,7 @@ fn forge(fakeId: String) -> exists noteId: String => Note ? FromDb (Id == noteId
 
 let e23_requeue_coerce () =
   should_fail "2.3 requeue coerce" "cannot unify"
-    ("#lang tesl\nmodule R76e exposing []\n\
+    ("module R76e exposing []\n\
       import Tesl.Prelude exposing [Int, String]\n\
       import Tesl.Queue exposing [requeue]\n" ^ {|
 fn coerce(s: String) -> Int requires [queueWrite] = requeue s
@@ -146,7 +146,7 @@ fn coerce(s: String) -> Int requires [queueWrite] = requeue s
 
 let e24_newtype_bogus_field () =
   should_fail "2.4 newtype bogus field" "has no field"
-    ("#lang tesl\nmodule R76f exposing []\n\
+    ("module R76f exposing []\n\
       import Tesl.Prelude exposing [Int, Bool, String]\n" ^ {|
 type UserId = String
 fn probe(u: UserId) -> Int = u.bogus
@@ -155,7 +155,7 @@ fn probe2(u: UserId) -> Bool = u.bogus
 
 let e24_newtype_value_ok () =
   should_pass "2.4 newtype .value still works"
-    ("#lang tesl\nmodule R76g exposing []\n\
+    ("module R76g exposing []\n\
       import Tesl.Prelude exposing [String]\n" ^ {|
 type UserId = String
 fn unwrap(u: UserId) -> String = u.value
@@ -165,7 +165,7 @@ fn unwrap(u: UserId) -> String = u.value
 
 let e26_forall_reverse () =
   should_fail "2.6 ForAll via List.reverse" "does not establish\\|ForAll"
-    ("#lang tesl\nmodule R76h exposing []\n\
+    ("module R76h exposing []\n\
       import Tesl.Prelude exposing [Int, List]\n\
       import Tesl.List exposing [List.reverse]\n" ^ {|
 fact IsPositive (n: Int)
@@ -196,7 +196,7 @@ let json_no_crash name src =
 
 let lsp_unterminated_string () =
   json_no_crash "LSP --check-json unterminated string"
-    "#lang tesl\nmodule R76i exposing []\nimport Tesl.Prelude exposing [String]\nfn f() -> String =\n  \"unterminated"
+    "module R76i exposing []\nimport Tesl.Prelude exposing [String]\nfn f() -> String =\n  \"unterminated"
 
 let () =
   run "Review76-SoundnessFixes" [

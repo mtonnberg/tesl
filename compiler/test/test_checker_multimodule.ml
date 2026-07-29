@@ -579,7 +579,7 @@ let bug8b_v001_anchored_at_imported_file () =
 (* ── REVIEW2 item 16 (2026-07-09): cross-module `requires [emailCap]` ───────
    A lib declares the `email` block; the importing module merely WRAPS the
    lib's sending fn in its own `fn … requires [emailCap]` with no direct
-   email op.  Validation_common.collect_imported_cache_email_caps makes that
+   email op.  Validation_common.collect_imported_cache_caps makes that
    check-legal, but Desugar.module_uses_email only counted direct ops, so the
    emitted module carried `#:capabilities [emailCap]` with NO tesl/tesl/email
    require — `emailCap: unbound identifier` at load.  module_uses_email now
@@ -589,7 +589,7 @@ let bug8b_v001_anchored_at_imported_file () =
 let ec_lib = {|module Mailer exposing [sendWelcome]
 import Tesl.Prelude exposing [Int, String, Unit, Bool(..)]
 import Tesl.Database exposing [Database, Memory]
-import Tesl.Email exposing [Email, SmtpConfig, TextBody]
+import Tesl.Email exposing [Email, SmtpConfig, TextBody, emailCap]
 import Tesl.Env exposing [env]
 
 database MailDB = Database {
@@ -619,6 +619,7 @@ fn sendWelcome(addr: String) -> Unit requires [emailCap] =
 
 let ec_main = {|module Main exposing [notify]
 import Tesl.Prelude exposing [String, Unit]
+import Tesl.Email exposing [emailCap]
 import Mailer exposing [sendWelcome]
 
 fn notify(addr: String) -> Unit requires [emailCap] =

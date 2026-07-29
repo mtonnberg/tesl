@@ -84,10 +84,30 @@ let converge ?(mode = `Errors) ~name source =
 
 (* ── Convergence cases ───────────────────────────────────────────────────── *)
 
+(* The rejected `#lang tesl` pragma (E002) ships a delete-line fix: applying it
+   must remove exactly the pragma line and leave a clean-compiling module. *)
+let test_hash_lang_delete () =
+  let final =
+    converge ~name:"hash-lang"
+      "\
+       #lang tesl\n\
+       module Main exposing [f]\n\
+       import Tesl.Prelude exposing [Int]\n\
+       fn f(x: Int) -> Int =\n\
+      \    x\n"
+  in
+  let re = Str.regexp_string "#lang" in
+  (try
+     ignore (Str.search_forward re final 0);
+     Alcotest.failf "`#lang` survived the fix:\n%s" final
+   with Not_found -> ());
+  if not (String.length final >= 6 && String.sub final 0 6 = "module") then
+    Alcotest.failf "fixed file must start with the module header:\n%s" final
+
 let test_return_delete () =
   let final =
     converge ~name:"return"
-      "#lang tesl\n\
+      "\
        module Main exposing [f]\n\
        import Tesl.Prelude exposing [Int]\n\
        fn f(x: Int) -> Int =\n\
@@ -108,7 +128,7 @@ let test_return_delete () =
 let test_string_plus () =
   let final =
     converge ~name:"string-plus"
-      "#lang tesl\n\
+      "\
        module Main exposing [g]\n\
        import Tesl.Prelude exposing [String]\n\
        fn g(a: String, b: String) -> String =\n\
@@ -123,7 +143,7 @@ let test_string_plus_chain () =
   (* two `+` errors, two fixes, both must land on their own operator *)
   let final =
     converge ~name:"string-plus-chain"
-      "#lang tesl\n\
+      "\
        module Main exposing [g]\n\
        import Tesl.Prelude exposing [String]\n\
        fn g(a: String, b: String) -> String =\n\
@@ -140,14 +160,14 @@ let test_single_line_if () =
      whole chain is machine-applied, ending byte-exact at the canonical form *)
   let final =
     converge ~mode:`All ~name:"single-line-if"
-      "#lang tesl\n\
+      "\
        module Main exposing [h]\n\
        import Tesl.Prelude exposing [Int]\n\
        fn h(n: Int) -> Int =\n\
       \    if n > 0 then 1 else 2\n"
   in
   let expected =
-    "#lang tesl\n\
+    "\
      module Main exposing [h]\n\
      import Tesl.Prelude exposing [Int]\n\
      fn h(n: Int) -> Int =\n\
@@ -162,7 +182,7 @@ let test_single_line_if_nested_indent () =
   (* the indent of the rewrite tracks the `if`'s own column *)
   let final =
     converge ~name:"nested-if"
-      "#lang tesl\n\
+      "\
        module Main exposing [h]\n\
        import Tesl.Prelude exposing [Int]\n\
        fn h(n: Int) -> Int =\n\
@@ -187,7 +207,7 @@ let test_single_line_if_nested_indent () =
 let test_legacy_boolean () =
   let final =
     converge ~name:"legacy-boolean"
-      "#lang tesl\n\
+      "\
        module Main exposing [f]\n\
        import Tesl.Prelude exposing [Bool]\n\
        fn f(b: Boolean) -> Bool =\n\
@@ -203,7 +223,7 @@ let test_missing_import () =
   (* E1 insert_line/replace_span import fixes ride the same seam *)
   let final =
     converge ~name:"missing-import"
-      "#lang tesl\n\
+      "\
        module Main exposing [f]\n\
        fn f(x: Int) -> Int =\n\
       \    x\n"
@@ -217,7 +237,7 @@ let test_missing_import () =
 
 let test_no_source_no_fix () =
   let src =
-    "#lang tesl\n\
+    "\
      module Main exposing [f]\n\
      import Tesl.Prelude exposing [Int]\n\
      fn f(x: Int) -> Int =\n\
@@ -295,6 +315,7 @@ let test_apply_out_of_range_raises () =
 let () =
   Alcotest.run "fix_apply" [
     "convergence", [
+      Alcotest.test_case "#lang tesl line deleted (E002)" `Quick test_hash_lang_delete;
       Alcotest.test_case "return x → x" `Quick test_return_delete;
       Alcotest.test_case "string + → ++" `Quick test_string_plus;
       Alcotest.test_case "chained string + → ++ ++" `Quick test_string_plus_chain;

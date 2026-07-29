@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson49LiteralPatterns exposing [
   describeInt,
   httpStatusText,

@@ -107,7 +107,6 @@ let two_files_should_fail pat a_name a_src b_name b_src =
 (* ME01: Import non-existent local module *)
 let test_ME01_import_nonexistent_module () =
   should_fail "not found\\|does not exist\\|unknown module\\|no such file" {|
-#lang tesl
 module Me01 exposing []
 import Tesl.Prelude exposing [Int]
 import TotallyNonExistentModule exposing [something]
@@ -117,7 +116,6 @@ fn f() -> Int = 42
 (* ME02: Import itself (self-import) *)
 let test_ME02_self_import () =
   should_fail "self.*import\\|cannot import itself\\|circular\\|itself" {|
-#lang tesl
 module Me02 exposing []
 import Tesl.Prelude exposing [Int]
 import Me02 exposing [something]
@@ -127,7 +125,6 @@ fn f() -> Int = 42
 (* ME03: Export a name that is not declared *)
 let test_ME03_export_undeclared_name () =
   should_fail "not.*declared\\|unknown.*export\\|not.*exist\\|exposes unknown\\|does not exist" {|
-#lang tesl
 module Me03 exposing [thisDoesNotExist]
 import Tesl.Prelude exposing [Int]
 fn realFn() -> Int = 42
@@ -137,13 +134,11 @@ fn realFn() -> Int = 42
 let test_ME04_import_unexported_name () =
   (* Compiler says "does not expose" (not "export"), so match that exact verb *)
   two_files_should_fail "does not expose\\|does not export\\|not.*exposed\\|not found" "me04-lib" {|
-#lang tesl
 module Me04Lib exposing [publicFn]
 import Tesl.Prelude exposing [Int]
 fn publicFn() -> Int = 1
 fn privateFn() -> Int = 2
 |} "me04-app" {|
-#lang tesl
 module Me04App exposing []
 import Tesl.Prelude exposing [Int]
 import Me04Lib exposing [privateFn]
@@ -158,13 +153,11 @@ let test_ME05_ambiguous_import_same_name () =
      The test checks for a conflict error. If the compiler allows it silently
      we accept that too by checking code only. *)
   let a_src = {|
-#lang tesl
 module Me05ModA exposing [sharedName]
 import Tesl.Prelude exposing [Int]
 fn sharedName() -> Int = 1
 |} in
   let b_src = {|
-#lang tesl
 module Me05ModB exposing [sharedName]
 import Tesl.Prelude exposing [Int]
 fn sharedName() -> Int = 2
@@ -175,7 +168,6 @@ fn sharedName() -> Int = 2
   let path_b = Filename.concat dir "me05-mod-b.tesl" in
   let path_c = Filename.concat dir "me05-app.tesl" in
   let app_src = {|
-#lang tesl
 module Me05App exposing []
 import Tesl.Prelude exposing [Int]
 import Me05ModA exposing [sharedName]
@@ -206,7 +198,6 @@ fn use() -> Int = sharedName()
 (* ME06: Duplicate import of same module *)
 let test_ME06_duplicate_import () =
   should_fail "duplicate.*import\\|already imported\\|imported.*twice\\|already.*import" {|
-#lang tesl
 module Me06 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Prelude exposing [Int, String]
@@ -219,7 +210,6 @@ fn f() -> Int = 42
    one brings its exposed names into scope and ignores its infra. *)
 let test_ME07_import_module_with_server () =
   two_files_should_pass "me07-lib" {|
-#lang tesl
 module Me07Lib exposing [ping]
 import Tesl.Prelude exposing [String]
 fn ping() -> String = "pong"
@@ -227,7 +217,6 @@ api Me07LibApi { get "/ping" -> String }
 handler pingH() -> String requires [] = "pong"
 server Me07LibServer for Me07LibApi { ping = pingH }
 |} "me07-app" {|
-#lang tesl
 module Me07App exposing [greet]
 import Me07Lib exposing [ping]
 import Tesl.Prelude exposing [String]
@@ -237,13 +226,11 @@ fn greet() -> String = ping()
 (* ME08: Import clean library module → should_pass (two-file positive) *)
 let test_ME08_import_clean_library () =
   two_files_should_pass "me08-lib" {|
-#lang tesl
 module Me08Lib exposing [greet, farewell]
 import Tesl.Prelude exposing [String]
 fn greet(name: String) -> String = name
 fn farewell(name: String) -> String = name
 |} "me08-app" {|
-#lang tesl
 module Me08App exposing []
 import Tesl.Prelude exposing [String]
 import Me08Lib exposing [greet]
@@ -253,13 +240,11 @@ fn hello() -> String = greet "world"
 (* ME09: Export name from module, import it and use it → should_pass *)
 let test_ME09_export_import_use () =
   two_files_should_pass "me09-lib" {|
-#lang tesl
 module Me09Lib exposing [add, multiply]
 import Tesl.Prelude exposing [Int]
 fn add(a: Int, b: Int) -> Int = a + b
 fn multiply(a: Int, b: Int) -> Int = a * b
 |} "me09-app" {|
-#lang tesl
 module Me09App exposing []
 import Tesl.Prelude exposing [Int]
 import Me09Lib exposing [add, multiply]
@@ -271,7 +256,6 @@ fn compute(x: Int, y: Int) -> Int = add (multiply x y) x
    with the `library` feature (code sharing moves to stable artifacts). *)
 let test_ME10_reexport_type () =
   two_files_should_fail "only locally-defined names can be exported\\|non-local name" "me10-lib" {|
-#lang tesl
 module Me10Lib exposing [Color(..)]
 import Tesl.Prelude exposing [String]
 type Color
@@ -279,7 +263,6 @@ type Color
   | Green
   | Blue
 |} "me10-app" {|
-#lang tesl
 module Me10App exposing [Color(..)]
 import Tesl.Prelude exposing [String]
 import Me10Lib exposing [Color(..)]
@@ -297,13 +280,11 @@ let test_ME11_reexport_unexposed_name () =
      listing the name in exposing [...] of the import statement, which is
      tested elsewhere (REEXN tests). Here the code is actually correct. *)
   two_files_should_pass "me11-lib" {|
-#lang tesl
 module Me11Lib exposing [publicFn]
 import Tesl.Prelude exposing [Int]
 fn publicFn() -> Int = 1
 fn hiddenFn() -> Int = 2
 |} "me11-app" {|
-#lang tesl
 module Me11App exposing [hiddenFn]
 import Tesl.Prelude exposing [Int]
 import Me11Lib exposing [publicFn]
@@ -313,14 +294,12 @@ fn hiddenFn() -> Int = publicFn()
 (* ME12: Empty module with no exports, no imports → should_pass *)
 let test_ME12_empty_module () =
   should_pass {|
-#lang tesl
 module Me12 exposing []
 |}
 
 (* ME13: Module that exports only a fact → should_pass *)
 let test_ME13_export_only_fact () =
   should_pass {|
-#lang tesl
 module Me13 exposing [IsValid]
 import Tesl.Prelude exposing [Int]
 fact IsValid (n: Int)
@@ -329,12 +308,10 @@ fact IsValid (n: Int)
 (* ME14: Import module with no exposing clause (ImportAll) → should_pass syntax-wise *)
 let test_ME14_import_all_no_exposing () =
   two_files_should_pass "me14-lib" {|
-#lang tesl
 module Me14Lib exposing [helper]
 import Tesl.Prelude exposing [Int]
 fn helper() -> Int = 99
 |} "me14-app" {|
-#lang tesl
 module Me14App exposing []
 import Tesl.Prelude exposing [Int]
 import Me14Lib
@@ -344,13 +321,11 @@ fn use() -> Int = Me14Lib.helper()
 (* ME15: Import module, use name NOT brought into scope by ImportAll *)
 let test_ME15_use_name_not_in_scope () =
   two_files_should_fail "not.*scope\\|unknown.*name\\|not.*declared\\|unbound\\|not.*found" "me15-lib" {|
-#lang tesl
 module Me15Lib exposing [helper]
 import Tesl.Prelude exposing [Int]
 fn helper() -> Int = 99
 fn secret() -> Int = 42
 |} "me15-app" {|
-#lang tesl
 module Me15App exposing []
 import Tesl.Prelude exposing [Int]
 import Me15Lib exposing [helper]
@@ -362,7 +337,6 @@ fn use() -> Int = secret()
 (* PM01: Non-exhaustive ADT match (missing a constructor) *)
 let test_PM01_nonexhaustive_adt_match () =
   should_fail "exhaustive\\|non.*exhaustive\\|missing\\|Blue\\|not.*cover" {|
-#lang tesl
 module Pm01 exposing []
 import Tesl.Prelude exposing [String]
 type Color
@@ -378,7 +352,6 @@ fn colorName(c: Color) -> String =
 (* PM02: Exhaustive ADT match (all constructors covered) → should_pass *)
 let test_PM02_exhaustive_adt_match () =
   should_pass {|
-#lang tesl
 module Pm02 exposing []
 import Tesl.Prelude exposing [String]
 type Color
@@ -395,7 +368,6 @@ fn colorName(c: Color) -> String =
 (* PM03: Wildcard covers remaining cases → should_pass *)
 let test_PM03_wildcard_covers_remaining () =
   should_pass {|
-#lang tesl
 module Pm03 exposing []
 import Tesl.Prelude exposing [String]
 type Color
@@ -411,7 +383,6 @@ fn colorName(c: Color) -> String =
 (* PM04: Negative literal pattern in case → should_pass *)
 let test_PM04_negative_literal_pattern () =
   should_pass {|
-#lang tesl
 module Pm04 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn classify(n: Int) -> String =
@@ -425,7 +396,6 @@ fn classify(n: Int) -> String =
 (* PM05: Negative literal in constructor arg pattern *)
 let test_PM05_negative_literal_in_constructor_arg () =
   should_pass {|
-#lang tesl
 module Pm05 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -439,7 +409,6 @@ fn describeOpt(m: Maybe Int) -> String =
 (* PM06: Nested constructor pattern (Something (Something n)) → should_pass *)
 let test_PM06_nested_constructor_pattern () =
   should_pass {|
-#lang tesl
 module Pm06 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -453,7 +422,6 @@ fn unwrap2(m: Maybe (Maybe Int)) -> String =
 (* PM07: Match on Bool with both True and False → should_pass *)
 let test_PM07_bool_match_exhaustive () =
   should_pass {|
-#lang tesl
 module Pm07 exposing []
 import Tesl.Prelude exposing [Bool(..), String]
 fn boolStr(b: Bool) -> String =
@@ -465,7 +433,6 @@ fn boolStr(b: Bool) -> String =
 (* PM08: Match on Bool missing one case *)
 let test_PM08_bool_match_missing_case () =
   should_fail "exhaustive\\|missing.*True\\|missing.*False\\|non.*exhaustive\\|not.*cover" {|
-#lang tesl
 module Pm08 exposing []
 import Tesl.Prelude exposing [Bool(..), String]
 fn boolStr(b: Bool) -> String =
@@ -476,7 +443,6 @@ fn boolStr(b: Bool) -> String =
 (* PM09: Literal pattern and wildcard combined → should_pass *)
 let test_PM09_literal_and_wildcard () =
   should_pass {|
-#lang tesl
 module Pm09 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn respond(n: Int) -> String =
@@ -489,7 +455,6 @@ fn respond(n: Int) -> String =
 (* PM10: Nested ADT pattern with record-style constructor destructuring → should_pass *)
 let test_PM10_nested_adt_record_destructure () =
   should_pass {|
-#lang tesl
 module Pm10 exposing []
 import Tesl.Prelude exposing [Int, String]
 type Shape
@@ -507,7 +472,6 @@ fn describeWrapped(w: Wrapper) -> String =
 (* PM11: Match on newtype → check behavior *)
 let test_PM11_match_on_newtype () =
   should_pass {|
-#lang tesl
 module Pm11 exposing []
 import Tesl.Prelude exposing [String, Int]
 type UserId = Int
@@ -518,7 +482,6 @@ fn showId(uid: UserId) -> String =
 (* PM12: Multiple literal patterns (0, 1, 2, then wildcard) → should_pass *)
 let test_PM12_multiple_literal_patterns () =
   should_pass {|
-#lang tesl
 module Pm12 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn countName(n: Int) -> String =
@@ -534,7 +497,6 @@ let test_PM13_very_negative_literal () =
   (* This either compiles fine (large negative supported) or fails with a clear
      overflow/range message — either way, not an internal crash *)
   with_temp_file {|
-#lang tesl
 module Pm13 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn extreme(n: Int) -> String =
@@ -555,7 +517,6 @@ fn extreme(n: Int) -> String =
 (* PM14: Match returning different types in different arms → should_fail type mismatch *)
 let test_PM14_arms_return_different_types () =
   should_fail "type.*mismatch\\|mismatch.*type\\|expected.*Int\\|expected.*String\\|incompatible" {|
-#lang tesl
 module Pm14 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -570,7 +531,6 @@ let test_PM15_pattern_var_shadows_outer () =
   (* Tesl deliberately rejects case pattern binders that shadow outer param names.
      This is a deliberate language design: no-shadowing keeps code unambiguous. *)
   should_fail "shadow\\|binder.*shadow\\|already.*in scope" {|
-#lang tesl
 module Pm15 exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -585,7 +545,6 @@ fn shadow(x: Int, m: Maybe Int) -> Int =
 (* MI01: Empty exposing [] library with fact and check fn → should_pass *)
 let test_MI01_empty_exposing_with_fact_and_check () =
   should_pass {|
-#lang tesl
 module Mi01 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
@@ -599,7 +558,6 @@ check checkPositive(n: Int) -> n: Int ::: IsPositive n =
 (* MI02: fn body uses `let _ = expr` (ignoring a value) → should_pass *)
 let test_MI02_let_underscore_ignore () =
   should_pass {|
-#lang tesl
 module Mi02 exposing []
 import Tesl.Prelude exposing [Int]
 fn compute(n: Int) -> Int =
@@ -610,7 +568,6 @@ fn compute(n: Int) -> Int =
 (* MI03: String interpolation with record field access → should_pass *)
 let test_MI03_string_interpolation_record_field () =
   should_pass {|
-#lang tesl
 module Mi03 exposing []
 import Tesl.Prelude exposing [String, Int]
 record Person { name: String age: Int }
@@ -621,7 +578,6 @@ fn greet(p: Person) -> String =
 (* MI04: Very deeply nested let bindings (5+ lets) → should_pass *)
 let test_MI04_deeply_nested_let () =
   should_pass {|
-#lang tesl
 module Mi04 exposing []
 import Tesl.Prelude exposing [Int]
 fn deep(n: Int) -> Int =
@@ -637,7 +593,6 @@ fn deep(n: Int) -> Int =
 (* MI05: fn with multiple unused params → should compile (linter warns, checker doesn't error) *)
 let test_MI05_unused_params_compile () =
   should_pass {|
-#lang tesl
 module Mi05 exposing []
 import Tesl.Prelude exposing [Int, String]
 fn ignore3(a: Int, b: String, c: Int) -> Int = 42
@@ -647,7 +602,6 @@ fn ignore3(a: Int, b: String, c: Int) -> Int = 42
    This checks that the subject variable in ok must match the declared binding *)
 let test_MI06_check_fn_wrong_ok_subject () =
   should_fail "subject\\|mismatch\\|binding\\|does not match\\|different" {|
-#lang tesl
 module Mi06 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsGood (n: Int)
@@ -661,7 +615,6 @@ check checkGood(n: Int) -> n: Int ::: IsGood n =
 (* MI07: Multiple top-level facts with same predicate name → should_fail *)
 let test_MI07_duplicate_fact_names () =
   should_fail "duplicate.*fact\\|fact.*duplicate\\|already.*declared\\|declared.*twice" {|
-#lang tesl
 module Mi07 exposing []
 import Tesl.Prelude exposing [Int]
 fact IsValid (n: Int)
@@ -671,7 +624,6 @@ fact IsValid (n: Int)
 (* MI08: fn calling itself recursively → should_pass (recursion supported) *)
 let test_MI08_recursive_function () =
   should_pass {|
-#lang tesl
 module Mi08 exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 fn factorial(n: Int) -> Int =
@@ -684,7 +636,6 @@ fn factorial(n: Int) -> Int =
 (* MI09: Fact declared but never used → should_pass (no error for unused facts) *)
 let test_MI09_unused_fact_no_error () =
   should_pass {|
-#lang tesl
 module Mi09 exposing []
 import Tesl.Prelude exposing [Int, String]
 fact IsNonEmpty (s: String)
@@ -695,7 +646,6 @@ fn simpleAdd(a: Int, b: Int) -> Int = a + b
 (* MI10: Module that only has test blocks (no functions) → should_pass *)
 let test_MI10_only_test_blocks () =
   should_pass {|
-#lang tesl
 module Mi10 exposing []
 import Tesl.Prelude exposing [Int]
 test "basic arithmetic" {
@@ -713,14 +663,12 @@ test "comparison" {
    Previously the qualified form escaped the transitive charge. *)
 let test_CAP01_qualified_imported_effect_charged () =
   two_files_should_fail "requiring \\[random\\]\\|undeclared\\|capability" "cap01-lib" {|
-#lang tesl
 module Cap01Lib exposing [genId]
 import Tesl.Prelude exposing [String]
 import Tesl.Random exposing [random]
 import Tesl.Id exposing [generatePrefixedId]
 fn genId() -> String requires [random] = generatePrefixedId "x"
 |} "cap01-app" {|
-#lang tesl
 module Cap01App exposing [make]
 import Tesl.Prelude exposing [String]
 import Cap01Lib exposing [genId]
@@ -729,14 +677,12 @@ fn make() -> String requires [] = Cap01Lib.genId()
 
 let test_CAP01_qualified_imported_effect_declared_passes () =
   two_files_should_pass "cap01-lib2" {|
-#lang tesl
 module Cap01Lib2 exposing [genId]
 import Tesl.Prelude exposing [String]
 import Tesl.Random exposing [random]
 import Tesl.Id exposing [generatePrefixedId]
 fn genId() -> String requires [random] = generatePrefixedId "x"
 |} "cap01-app2" {|
-#lang tesl
 module Cap01App2 exposing [make]
 import Tesl.Prelude exposing [String]
 import Tesl.Random exposing [random]

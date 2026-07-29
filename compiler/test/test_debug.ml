@@ -39,7 +39,7 @@ let stdlib =
    import Tesl.Json exposing [stringCodec, intCodec, boolCodec, floatCodec, posixMillisCodec]\n"
 
 let module_ ?(name="M") ?(exports="") ?(extra="") body =
-  Printf.sprintf "#lang tesl\nmodule %s exposing [%s]\n%s%s\n%s"
+  Printf.sprintf "module %s exposing [%s]\n%s%s\n%s"
     name exports stdlib extra body
 
 let compile_ok_debug name src =
@@ -775,11 +775,10 @@ fn clamp(x: Int) -> Int =
 (* ── Group 3: Line number accuracy ──────────────────────────────────────────── *)
 
 (* The module_ helper prepends 3 lines of boilerplate:
-   line 1: #lang tesl
-   line 2: module M exposing [...]
-   line 3: import Tesl.Prelude ...
-   line 4: import Tesl.Json ...
-   line 5: (blank line from module_ format string)
+   line 1: module M exposing [...]
+   line 2: import Tesl.Prelude ...
+   line 3: import Tesl.Json ...
+   line 4: (blank line from module_ format string)
    Then the body starts. We test using a carefully counted snippet. *)
 
 (* G3.1 Line numbers are 1-based (not 0-based) — thsl-src! never emits line 0 *)
@@ -842,8 +841,7 @@ let test_g3_lets_have_increasing_lines () =
   (* Build a snippet where line numbers are deterministic:
      stdlib is 2 lines, module decl is 1 line, so body starts around line 5.
      We use the raw string so we control exact content. *)
-  let src = {|#lang tesl
-module M exposing [calc]
+  let src = {|module M exposing [calc]
 import Tesl.Prelude exposing [Int, String, Bool, List, Fact, detachFact]
 import Tesl.Json exposing [stringCodec, intCodec, boolCodec, floatCodec, posixMillisCodec]
 
@@ -868,19 +866,17 @@ fn calc(x: Int) -> Int =
     Alcotest.failf "g3_lets_increasing: line numbers %s are not strictly increasing in:\n%s"
       (String.concat ", " (List.map string_of_int nums)) racket
 
-(* G3.5 Exact line for a known snippet: fn body at line 7 -> thsl-src! has line 7 *)
+(* G3.5 Exact line for a known snippet: fn body at line 6 -> thsl-src! has line 6 *)
 let test_g3_exact_line_terminal () =
   (* Carefully crafted: count lines manually.
-     Line 1: #lang tesl
-     Line 2: module M exposing [f]
-     Line 3: import Tesl.Prelude exposing [...]
-     Line 4: import Tesl.Json exposing [...]
-     Line 5: (blank)
-     Line 6: fn f(x: Int) -> Int =
-     Line 7:   x + 1
+     Line 1: module M exposing [f]
+     Line 2: import Tesl.Prelude exposing [...]
+     Line 3: import Tesl.Json exposing [...]
+     Line 4: (blank)
+     Line 5: fn f(x: Int) -> Int =
+     Line 6:   x + 1
   *)
-  let src = {|#lang tesl
-module M exposing [f]
+  let src = {|module M exposing [f]
 import Tesl.Prelude exposing [Int, String, Bool, List, Fact, detachFact]
 import Tesl.Json exposing [stringCodec, intCodec, boolCodec, floatCodec, posixMillisCodec]
 
@@ -888,12 +884,11 @@ fn f(x: Int) -> Int =
   x + 1
 |} in
   let racket = compile_ok_debug "g3_exact_line" src in
-  assert_line_in_debug "g3_exact_line" 7 racket
+  assert_line_in_debug "g3_exact_line" 6 racket
 
-(* G3.6 First let binding at line 7, second at line 8 *)
+(* G3.6 First let binding at line 6, second at line 7 *)
 let test_g3_exact_lines_lets () =
-  let src = {|#lang tesl
-module M exposing [g]
+  let src = {|module M exposing [g]
 import Tesl.Prelude exposing [Int, String, Bool, List, Fact, detachFact]
 import Tesl.Json exposing [stringCodec, intCodec, boolCodec, floatCodec, posixMillisCodec]
 
@@ -903,13 +898,12 @@ fn g(x: Int) -> Int =
   b
 |} in
   let racket = compile_ok_debug "g3_exact_lets" src in
-  assert_line_in_debug "g3_exact_lets" 7 racket;
-  assert_line_in_debug "g3_exact_lets" 8 racket
+  assert_line_in_debug "g3_exact_lets" 6 racket;
+  assert_line_in_debug "g3_exact_lets" 7 racket
 
 (* G3.7 Line numbers not 0-based: the first line of a file is line 1 *)
 let test_g3_first_line_is_one () =
-  let src = {|#lang tesl
-module M exposing [h]
+  let src = {|module M exposing [h]
 import Tesl.Prelude exposing [Int, String, Bool, List, Fact, detachFact]
 import Tesl.Json exposing [stringCodec, intCodec, boolCodec, floatCodec, posixMillisCodec]
 
@@ -917,14 +911,13 @@ fn h(x: Int) -> Int =
   x
 |} in
   let racket = compile_ok_debug "g3_first_line_one" src in
-  (* Line 7 is where the body "x" lives; 0-based would give 6 *)
-  assert_line_in_debug "g3_first_line_one" 7 racket;
-  assert_not_contains "g3_first_line_one" "thsl-src! \"<test>\" 6" racket
+  (* Line 6 is where the body "x" lives; 0-based would give 5 *)
+  assert_line_in_debug "g3_first_line_one" 6 racket;
+  assert_not_contains "g3_first_line_one" "thsl-src! \"<test>\" 5" racket
 
-(* G3.8 A function on line 10 in a two-function file gets correct lines *)
+(* G3.8 A function on line 9 in a two-function file gets correct lines *)
 let test_g3_second_fn_exact_lines () =
-  let src = {|#lang tesl
-module M exposing [f, g]
+  let src = {|module M exposing [f, g]
 import Tesl.Prelude exposing [Int, String, Bool, List, Fact, detachFact]
 import Tesl.Json exposing [stringCodec, intCodec, boolCodec, floatCodec, posixMillisCodec]
 
@@ -935,8 +928,8 @@ fn g(x: Int) -> Int =
   x + 99
 |} in
   let racket = compile_ok_debug "g3_second_fn_exact" src in
-  assert_line_in_debug "g3_second_fn_exact" 7 racket;
-  assert_line_in_debug "g3_second_fn_exact" 10 racket
+  assert_line_in_debug "g3_second_fn_exact" 6 racket;
+  assert_line_in_debug "g3_second_fn_exact" 9 racket
 
 (* ── Group 4: Test block instrumentation (TsLet) ────────────────────────────── *)
 

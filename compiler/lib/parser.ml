@@ -4810,12 +4810,6 @@ let parse_const_form s =
 (** Parse the module header: [module Name exposing [a, b, C(..)]]. *)
 let parse_module_header s =
   skip_layout s;
-  (* Handle #lang tesl *)
-  if peek s = HASH_LANG then begin
-    advance s;
-    if peek s = TESL then advance s
-  end;
-  skip_layout s;
   let* _ = expect s MODULE in
   let* name = expect_uident s in
   let* _ = expect s EXPOSING in
@@ -5157,8 +5151,7 @@ let attach_doc_comments source decls =
   let is_doc_comment i =
     let t = trimmed i in
     String.length t > 0 && t.[0] = '#'
-    && (let b = body i in not (String.length b > 0 && (b.[0] = '>' || b.[0] = '=')))
-    && body i <> "lang tesl" in
+    && (let b = body i in not (String.length b > 0 && (b.[0] = '>' || b.[0] = '='))) in
   (* A declaration's reported [loc.start.line] anchors to the line just above the
      `fn`/`handler` keyword, so the contiguous comment block ends at index
      [start_line - 1] (0-based). *)
@@ -5180,11 +5173,18 @@ let rec parse_module filename source =
 
   skip_layout s;
 
-  (* Handle #lang tesl header *)
-  if peek s = HASH_LANG then begin
-    advance s;
-    if peek s = TESL then advance s
-  end;
+  (* The historical `#lang tesl` pragma is no longer accepted (roadmap:
+     remove_lang_tesl_hash).  Reject it with a delete-line fix instead of
+     silently skipping it. *)
+  let* _ = (if peek s = HASH_LANG then begin
+    let loc = current_loc s in
+    err_fix s
+      "`#lang tesl` is no longer part of Tesl — delete this line (a Tesl file \
+       starts directly with its `module` header)"
+      (Some (Diag_fix.Replace_span
+               { start_line = loc.start.line; end_line = loc.start.line;
+                 replacement = "" }))
+  end else Ok ()) in
 
   skip_layout s;
 
@@ -5267,6 +5267,9 @@ let parse_module_recover filename source : Ast.module_form option =
   let tokens = Lexer.tokenize filename source in
   let s = make_stream filename tokens in
   skip_layout s;
+  (* Best-effort path (editor semantic snapshot): tolerate the rejected
+     `#lang tesl` pragma so a legacy buffer still yields structure — the strict
+     [parse_module] is what reports the error. *)
   if peek s = HASH_LANG then begin
     advance s;
     if peek s = TESL then advance s

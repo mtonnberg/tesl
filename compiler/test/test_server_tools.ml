@@ -105,8 +105,7 @@ let count_occurrences needle haystack =
 (* ── Fixture ──────────────────────────────────────────────────────────────
    [tail] is appended after the api/server declarations; [handler_reqs] lets a
    test give the note handler privileged capabilities. *)
-let fixture ?(handler_reqs = "") tail = Printf.sprintf {|#lang tesl
-module StNotes exposing []
+let fixture ?(handler_reqs = "") tail = Printf.sprintf {|module StNotes exposing []
 
 import Tesl.Prelude exposing [String, Bool, List]
 import Tesl.Json exposing [stringCodec]
@@ -242,8 +241,7 @@ fn bad(u: User ::: Authenticated u) -> String =
 
 let test_rejects_heterogeneous_auth_types () =
   should_fail "must bind the same user type"
-    {|#lang tesl
-module StHetero exposing []
+    {|module StHetero exposing []
 
 import Tesl.Prelude exposing [String, List]
 import Tesl.Http exposing [HttpRequest]

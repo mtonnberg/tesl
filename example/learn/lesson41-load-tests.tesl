@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson41LoadTests exposing [Lesson41Server]
 
 import Tesl.Prelude exposing [Int, String, List]

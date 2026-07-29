@@ -286,7 +286,6 @@ let launder_matrix =
            let extra = if k.k_extra = "" then "" else k.k_extra ^ "\n" in
            should_fail m.m_pat
              (Printf.sprintf {|
-#lang tesl
 module P%s%s%s exposing []
 import Tesl.Prelude exposing [Int, List]%s
 %s
@@ -308,7 +307,6 @@ let record_field_raw_sweep =
     (fun () ->
        should_fail "does not statically satisfy declared proof"
          (Printf.sprintf {|
-#lang tesl
 module PRecField%s exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -335,7 +333,6 @@ fn requiresP(n: Int ::: P n) -> Int = n
 let test_P_lambda_wrap_does_not_launder () =
   should_fail "does not statically satisfy declared proof"
     (Printf.sprintf {|
-#lang tesl
 module PLamWrap exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.map]
@@ -347,7 +344,6 @@ fn caller(xs: List Int) -> List Int =
 let test_P_inline_lambda_proof_param () =
   should_fail "does not statically satisfy declared proof\\|<lambda>"
     {|
-#lang tesl
 module PInlineLam exposing []
 import Tesl.Prelude exposing [Int]
 fact P (n: Int)
@@ -363,7 +359,6 @@ fn caller(raw: Int) -> Int =
 let test_P_explicit_wrong_subject_attach () =
   should_fail "does not statically satisfy declared proof\\|different subject"
     (Printf.sprintf {|
-#lang tesl
 module PWrongSubj exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -375,7 +370,6 @@ fn caller(raw: Int, other: Int) -> Int =
 let test_P_chain_drops_proof () =
   should_fail "does not statically satisfy declared proof"
     (Printf.sprintf {|
-#lang tesl
 module PChainDrop exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -388,7 +382,6 @@ let test_P_alias_returned () =
   (* Returning the alias (passing it out of the fn) also launders. *)
   should_fail "cannot be passed around"
     (Printf.sprintf {|
-#lang tesl
 module PAliasRet exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -401,7 +394,6 @@ let test_P_double_alias () =
   (* Aliasing the alias still gets caught. *)
   should_fail "cannot be passed around"
     (Printf.sprintf {|
-#lang tesl
 module PDoubleAlias exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -416,7 +408,6 @@ fn caller(raw: Int) -> Int =
 
 let test_Ppos_fn_checked () =
   should_pass (Printf.sprintf {|
-#lang tesl
 module PposFn exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -427,7 +418,6 @@ fn caller(raw: Int) -> Int =
 
 let test_Ppos_fn_passthrough_param () =
   should_pass (Printf.sprintf {|
-#lang tesl
 module PposParam exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -437,7 +427,6 @@ fn caller(n: Int ::: P n) -> Int =
 
 let test_Ppos_handler_checked () =
   should_pass (Printf.sprintf {|
-#lang tesl
 module PposHandler exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -448,7 +437,6 @@ handler h(raw: Int) -> Int requires [] =
 
 let test_Ppos_worker_checked () =
   should_pass (Printf.sprintf {|
-#lang tesl
 module PposWorker exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -461,7 +449,6 @@ worker w(j: JobRec) requires [] =
 
 let test_Ppos_record_checked () =
   should_pass (Printf.sprintf {|
-#lang tesl
 module PposRecord exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -475,7 +462,6 @@ fn caller(raw: Int) -> Box =
 
 let test_Ppos_callback_named_wrapper () =
   should_pass (Printf.sprintf {|
-#lang tesl
 module PposCallback exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.map]
@@ -489,7 +475,6 @@ fn caller(xs: List Int) -> List Int =
 
 let test_Ppos_partial_app_nonproof_leading () =
   should_pass (Printf.sprintf {|
-#lang tesl
 module PposPartial exposing []
 import Tesl.Prelude exposing [Int]
 %s
@@ -501,7 +486,6 @@ fn caller(raw: Int) -> Int =
 
 let test_Ppos_filtercheck_partial_check () =
   should_pass {|
-#lang tesl
 module PposFilterCheck exposing []
 import Tesl.Prelude exposing [Int, List, Bool(..)]
 import Tesl.List exposing [List.filterCheck]
@@ -517,7 +501,6 @@ fn caller(xs: List Int) -> List Int =
 
 let test_Ppos_chain_passthrough () =
   should_pass (Printf.sprintf {|
-#lang tesl
 module PposChain exposing []
 import Tesl.Prelude exposing [Int]
 %s

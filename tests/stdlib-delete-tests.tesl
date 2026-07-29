@@ -1,4 +1,3 @@
-#lang tesl
 module Stdlib_delete_tests exposing []
 
 # Regression for the stdlib surface-drift class (roadmap:

@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson51ProofCombining exposing [
   ValidName,
   NonEmpty,

@@ -28,10 +28,10 @@ let base_imports =
   "import Tesl.Prelude exposing [Int, String, Bool, List, Unit]\n\
    import Tesl.Maybe exposing [Maybe, Nothing, Something]\n\
    import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\n\
-   import Tesl.Email exposing [Email, SmtpConfig]\n"
+   import Tesl.Email exposing [Email, SmtpConfig, emailCap]\n"
 
 let module_ ?(name="M") ?(exports="") ?(extra="") body =
-  Printf.sprintf "#lang tesl\nmodule %s exposing [%s]\n%s%s\n%s"
+  Printf.sprintf "module %s exposing [%s]\n%s%s\n%s"
     name exports base_imports extra body
 
 let with_db body =
@@ -462,12 +462,24 @@ let test_cap_email_propagates () =
      send addr\n" in
   ignore (compile_ok "cap_email_propagates" src)
 
-(** 4.7 Email declaration implicitly defines the email capability *)
+(** 4.7 Email declaration does NOT define the email capability — emailCap is
+    import-gated (`import Tesl.Email exposing [emailCap]`), exactly like `time`
+    from Tesl.Time (roadmap: ambient_email_cap).  An `email` block plus
+    `requires [emailCap]` without the exposing entry must be rejected, and the
+    error must name the exact import to add. *)
 let test_cap_email_decl_defines_capability () =
-  let src = module_ (with_db email_block) in
-  let racket = compile_ok "cap_email_decl_defines" src in
-  (* The email capability should be usable in requires [emailCap] *)
-  ignore racket
+  let src = Printf.sprintf
+    "module M exposing []\n\
+     import Tesl.Prelude exposing [Int, String, Bool, List, Unit]\n\
+     import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]\n\
+     import Tesl.Email exposing [Email, SmtpConfig]\n%s\
+     fn ping(addr: String) -> Unit requires [emailCap] =\n\
+     Email.send AppEmail { to: addr subject: \"Hi\" body: TextBody \"Hi\" }\n"
+    (with_db email_block) in
+  check_err_contains "cap_email_decl_no_ambient_grant" src
+    "requires undeclared capability 'emailCap'";
+  check_err_contains "cap_email_decl_no_ambient_grant_hint" src
+    "import Tesl.Email exposing [emailCap]"
 
 (** 4.8 Missing email capability in caller causes error *)
 let test_cap_email_missing_in_caller () =
@@ -613,7 +625,7 @@ fn main() -> Unit requires [emailCap] =
       test_case "startWorker with email cap ok"        `Quick test_cap_start_worker_with_capability;
       test_case "email is valid capability"            `Quick test_cap_email_is_valid_capability;
       test_case "capability propagates"                `Quick test_cap_email_propagates;
-      test_case "email decl defines capability"        `Quick test_cap_email_decl_defines_capability;
+      test_case "email decl grants nothing without import"        `Quick test_cap_email_decl_defines_capability;
       test_case "missing cap in caller errors"         `Quick test_cap_email_missing_in_caller;
       test_case "wrong capability errors"              `Quick test_cap_wrong_capability;
       test_case "email cap is flat not named"          `Quick test_cap_email_not_cache_style;

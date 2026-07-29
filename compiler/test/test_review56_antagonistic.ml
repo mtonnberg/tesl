@@ -104,8 +104,7 @@ let should_warn_lint pattern src =
     try ignore (Str.search_forward re out 0)
     with Not_found -> failf "expected lint warning matching %S, got:\n%s" pattern out)
 
-let base_header = {|#lang tesl
-module Test exposing []
+let base_header = {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact, forgetFact, attachFact, detachFact, introAnd]
 import Tesl.Maybe exposing [Maybe(..)]
 |}
@@ -539,8 +538,7 @@ fn getItem(i: String) -> item: Item ::: FromDb (Id == i) item
 
 (* R56_CA02 -- fn with case expression returning named variable works *)
 let r56_ca02_case_field_access () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.DB exposing [dbRead]

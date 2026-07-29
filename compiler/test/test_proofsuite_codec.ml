@@ -131,13 +131,13 @@ let type_mismatches = [
 
 let type_encode_src p modname =
   Printf.sprintf
-    "#lang tesl\nmodule %s exposing []\nimport Tesl.Prelude exposing [%s]\nimport Tesl.Json exposing [%s]\n\
+    "module %s exposing []\nimport Tesl.Prelude exposing [%s]\nimport Tesl.Json exposing [%s]\n\
      record R { f: %s }\ncodec R {\n  toJson {\n    f -> \"f\" with_codec %s\n  }\n  fromJson_forbidden\n}\n"
     modname p.field_import p.codec p.field_ty p.codec
 
 let type_decode_src p modname =
   Printf.sprintf
-    "#lang tesl\nmodule %s exposing []\nimport Tesl.Prelude exposing [%s]\nimport Tesl.Json exposing [%s]\n\
+    "module %s exposing []\nimport Tesl.Prelude exposing [%s]\nimport Tesl.Json exposing [%s]\n\
      record R { f: %s }\ncodec R {\n  toJson_forbidden\n  fromJson [\n    { f <- \"f\" with_codec %s }\n  ]\n}\n"
     modname p.field_import p.codec p.field_ty p.codec
 
@@ -160,7 +160,6 @@ let via_pat = "requires proof predicates\\|has no .via. validation\\|not establi
 
 let test_via_missing () =
   should_fail ~label:"K-VIA missing via" via_pat {|
-#lang tesl
 module KViaMissing exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -182,7 +181,6 @@ codec Person {
 
 let test_via_wrong_proof () =
   should_fail ~label:"K-VIA wrong proof" via_pat {|
-#lang tesl
 module KViaWrong exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -208,7 +206,6 @@ let test_via_missing_one_of_two_fields () =
      Field names deliberately NON-keyword (`nick`/`addr`); the keyword-named
      case (`email`) is covered separately below. *)
   should_fail ~label:"K-VIA one of two missing" via_pat {|
-#lang tesl
 module KViaPartial exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -245,7 +242,6 @@ codec Person {
    flagged. *)
 let test_via_keyword_field_name_missing_via () =
   should_fail ~label:"K-VIA keyword field name decoded, missing via" via_pat {|
-#lang tesl
 module KViaKeyword exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -282,7 +278,6 @@ let field_pat = "does not exist on type\\|valid fields on\\|V001"
 
 let test_field_nonexistent_encode () =
   should_fail ~label:"K-FIELD nonexistent encode" field_pat {|
-#lang tesl
 module KFieldEnc exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -297,7 +292,6 @@ codec Person {
 
 let test_field_nonexistent_decode () =
   should_fail ~label:"K-FIELD nonexistent decode" field_pat {|
-#lang tesl
 module KFieldDec exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -319,7 +313,6 @@ let udef_pat = "references a different type\\|has type.*but.*with_codec\\|V001"
 
 let test_userdef_codec_wrong_type () =
   should_fail ~label:"K-UDEF user codec wrong type" udef_pat {|
-#lang tesl
 module KUdefWrong exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Json exposing [stringCodec, intCodec]
@@ -351,7 +344,6 @@ codec Outer {
    has no constructors). *)
 let test_adtjson_on_record_rejected () =
   should_fail ~label:"K-ADT adtJson on record" "requires an ADT target" {|
-#lang tesl
 module KAdtRecord exposing []
 import Tesl.Prelude exposing [String]
 record Person { name: String }
@@ -364,7 +356,6 @@ codec Person {
    constructors) is rejected and requires `adtJson` instead. *)
 let test_record_codec_on_adt_rejected () =
   should_fail ~label:"K-ADT record-codec on ADT" "requires a record/entity target" {|
-#lang tesl
 module KFieldCodecOnAdt exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -400,7 +391,6 @@ codec Color {
 let test_capture_no_proof_feeds_proof_param_rejected () =
   should_fail ~label:"K-BYPASS capture w/o proof → proof param"
     "obligation is lost at the HTTP boundary" {|
-#lang tesl
 module KCapBypass exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -430,7 +420,6 @@ server S for TodoApi {
 let test_capture_declares_proof_no_via_rejected () =
   should_fail ~label:"K-BYPASS capture declares proof, no via"
     "has no `via` validation" {|
-#lang tesl
 module KCapNoVia exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -454,7 +443,6 @@ server S for TodoApi {
 
 let pos_via_establishes_proof () =
   should_pass ~label:"K-POS via establishes field proof" {|
-#lang tesl
 module PosK_Via exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -477,7 +465,6 @@ codec Person {
 let pos_decoded_proof_consumed_downstream () =
   (* The decoded, proof-carrying field is consumed by a fn requiring that proof. *)
   should_pass ~label:"K-POS decoded proof consumed downstream" {|
-#lang tesl
 module PosK_Downstream exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -501,7 +488,6 @@ fn consume(p: Person) -> String = useName p.name
 
 let pos_builtin_codecs_match_types () =
   should_pass ~label:"K-POS builtin codecs match field types" {|
-#lang tesl
 module PosK_Match exposing []
 import Tesl.Prelude exposing [String, Int, Bool(..)]
 import Tesl.Json exposing [stringCodec, intCodec, boolCodec]
@@ -524,7 +510,6 @@ codec Task {
 
 let pos_adtjson_correct () =
   should_pass ~label:"K-POS adtJson on ADT" {|
-#lang tesl
 module PosK_Adt exposing []
 import Tesl.Prelude exposing [String]
 type Status
@@ -538,7 +523,6 @@ codec Status {
 let pos_newtype_field_transparent () =
   (* A String-backed newtype field accepts stringCodec (transparent JSON). *)
   should_pass ~label:"K-POS newtype field stringCodec" {|
-#lang tesl
 module PosK_Newtype exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
@@ -560,7 +544,6 @@ codec Contact {
 
 let pos_capture_with_via_establishes_proof () =
   should_pass ~label:"K-POS capture with via establishes proof" {|
-#lang tesl
 module PosK_Capture exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -588,7 +571,6 @@ let pos_userdef_nested_codec () =
   (* A user-defined codec name (`Inner`) correctly used for a nested-record
      field whose type IS `Inner`. *)
   should_pass ~label:"K-POS user-defined nested codec" {|
-#lang tesl
 module PosK_Udef exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Json exposing [stringCodec, intCodec]
@@ -611,7 +593,6 @@ codec Outer {
 
 let pos_plain_record_codec () =
   should_pass ~label:"K-POS plain record codec" {|
-#lang tesl
 module PosK_Plain exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Json exposing [stringCodec, intCodec]
@@ -631,7 +612,6 @@ let pos_codec_cross_field_via () =
   (* A cross-field `} via check` on the closing brace, with each field validated.
      Mirrors example/learn/lesson12-records-with-proofs.tesl. *)
   should_pass ~label:"K-POS cross-field via" {|
-#lang tesl
 module PosK_Cross exposing []
 import Tesl.Prelude exposing [Int, String, Fact, detachFact]
 import Tesl.Json exposing [intCodec]

@@ -32,7 +32,7 @@
 (define-auther
   (parseSearch [req : HttpRequest])
   #:returns [params : SearchParams ::: (ValidSearch params)]
-  (thsl-src-control! "example/learn/lesson66-query-parameters.tesl" 50 (list (cons 'req *req)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "q" (raw-value req.queryParameters)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson66-query-parameters.tesl" 51 (list) (lambda () (reject "missing required query parameter: q" #:http-code 400)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([q (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson66-query-parameters.tesl" 53 (list (cons 'q q)) (lambda () (let ([tesl-case-1 (raw-value (tesl_import_Dict_lookup "order" (raw-value req.queryParameters)))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "example/learn/lesson66-query-parameters.tesl" 54 (list) (lambda () (accept ValidSearch #:value (SearchParams #:q *q #:order "asc"))))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([o (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "example/learn/lesson66-query-parameters.tesl" 55 (list (cons 'o o)) (lambda () (accept ValidSearch #:value (SearchParams #:q *q #:order *o)))))])))))])))))
+  (thsl-src-control! "example/learn/lesson66-query-parameters.tesl" 49 (list (cons 'req *req)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "q" (raw-value req.queryParameters)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson66-query-parameters.tesl" 50 (list) (lambda () (reject "missing required query parameter: q" #:http-code 400)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([q (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson66-query-parameters.tesl" 52 (list (cons 'q q)) (lambda () (let ([tesl-case-1 (raw-value (tesl_import_Dict_lookup "order" (raw-value req.queryParameters)))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "example/learn/lesson66-query-parameters.tesl" 53 (list) (lambda () (accept ValidSearch #:value (SearchParams #:q *q #:order "asc"))))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([o (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "example/learn/lesson66-query-parameters.tesl" 54 (list (cons 'o o)) (lambda () (accept ValidSearch #:value (SearchParams #:q *q #:order *o)))))])))))])))))
 
 (define SearchServer-sse-routes '())
 (define-api SearchApi
@@ -46,7 +46,7 @@
 (define-handler
   (search [params : SearchParams ::: (ValidSearch params)])
   #:returns String
-  (thsl-src! "example/learn/lesson66-query-parameters.tesl" 65 (list (cons 'params *params)) (lambda () (string-append (string-append (string-append (raw-value params.q) " (order=") (raw-value params.order)) ")"))))
+  (thsl-src! "example/learn/lesson66-query-parameters.tesl" 64 (list (cons 'params *params)) (lambda () (string-append (string-append (string-append (raw-value params.q) " (order=") (raw-value params.order)) ")"))))
 
 (define-server SearchServer
   #:api SearchApi

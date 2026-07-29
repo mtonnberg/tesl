@@ -13,7 +13,7 @@
 #   PATH                  must contain `racket`
 # OPTIONAL (set by the installed preamble so assets resolve without a repo):
 #   TESL_TEMPLATES_DIR    store path holding templates/{minimal,api,docker}
-#   TESL_COLLECTIONS_DIR  store path holding the tesl/{dsl,tesl,lang} tree
+#   TESL_COLLECTIONS_DIR  store path holding the tesl/{dsl,tesl} tree
 #                         (the tesl-racket derivation's …/share/tesl-collections/tesl)
 # DEV fallback:
 #   TESL_REPO_ROOT        repo checkout; templates + collections come from here.
@@ -149,20 +149,20 @@ tesl_manifest_get() {
   ' "$file"
 }
 
-# Locate the Tesl runtime collections source dir (contains dsl/ tesl/ lang/).
+# Locate the Tesl runtime collections source dir (contains dsl/ tesl/).
 # Order: live repo (dev) -> baked store path -> any PLTCOLLECTS entry.
 _tesl_collections_root() {
-  if [ -n "${TESL_REPO_ROOT:-}" ] && [ -d "$TESL_REPO_ROOT/dsl" ] && [ -d "$TESL_REPO_ROOT/tesl" ] && [ -d "$TESL_REPO_ROOT/lang" ]; then
+  if [ -n "${TESL_REPO_ROOT:-}" ] && [ -d "$TESL_REPO_ROOT/dsl" ] && [ -d "$TESL_REPO_ROOT/tesl" ]; then
     echo "$TESL_REPO_ROOT"; return 0
   fi
-  if [ -n "${TESL_COLLECTIONS_DIR:-}" ] && [ -d "$TESL_COLLECTIONS_DIR/dsl" ] && [ -d "$TESL_COLLECTIONS_DIR/tesl" ] && [ -d "$TESL_COLLECTIONS_DIR/lang" ]; then
+  if [ -n "${TESL_COLLECTIONS_DIR:-}" ] && [ -d "$TESL_COLLECTIONS_DIR/dsl" ] && [ -d "$TESL_COLLECTIONS_DIR/tesl" ]; then
     echo "$TESL_COLLECTIONS_DIR"; return 0
   fi
   if [ -n "${PLTCOLLECTS:-}" ]; then
     local IFS=':' entry
     for entry in $PLTCOLLECTS; do
       [ -n "$entry" ] || continue
-      if [ -d "$entry/tesl/dsl" ] && [ -d "$entry/tesl/tesl" ] && [ -d "$entry/tesl/lang" ]; then
+      if [ -d "$entry/tesl/dsl" ] && [ -d "$entry/tesl/tesl" ]; then
         echo "$entry/tesl"; return 0
       fi
     done
@@ -779,7 +779,7 @@ _tesl_build() {
   local COLL_ROOT; COLL_ROOT="$(_tesl_collections_root)" || { echo "tesl build: cannot locate Tesl runtime collections (dsl/tesl/lang)" >&2; return 1; }
   mkdir -p "$CTX/collections/tesl"
   local c
-  for c in dsl tesl lang; do cp -R "$COLL_ROOT/$c" "$CTX/collections/tesl/$c"; done
+  for c in dsl tesl; do cp -R "$COLL_ROOT/$c" "$CTX/collections/tesl/$c"; done
   chmod -R u+w "$CTX/collections" 2>/dev/null || true
   find "$CTX/collections" -type d -name compiled -prune -exec rm -rf {} + 2>/dev/null || true
 

@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson24ErrorHandlingPatterns exposing [
   ValidEmail,
   checkEmail,

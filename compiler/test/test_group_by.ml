@@ -92,8 +92,7 @@ let emit_output src =
     if code <> 0 then failf "expected clean emit, got (exit %d):\n%s" code out;
     out)
 
-let fixture tail = Printf.sprintf {|#lang tesl
-module GbFix exposing []
+let fixture tail = Printf.sprintf {|module GbFix exposing []
 
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.Time exposing [PosixMillis, Time.truncDay, Time.truncMonth, TimeZone, Utc, FixedOffset, EuropeStockholm]

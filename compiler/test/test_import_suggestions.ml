@@ -72,10 +72,10 @@ let check_replace_span ~start_line ~end_line ~replacement (d : Compile.diagnosti
 (* ── Stdlib suggestions ──────────────────────────────────────────────────── *)
 
 (* No import of Tesl.List at all → the fix INSERTS a new import after the last
-   existing one (0-based line 3). *)
+   existing one (0-based line 2). *)
 let test_stdlib_fn_insert_import () =
   let dir = fresh_dir () in
-  let src = "#lang tesl\n\
+  let src = "\
              module Main exposing [go]\n\
              import Tesl.Prelude exposing [Int]\n\
              \n\
@@ -83,13 +83,13 @@ let test_stdlib_fn_insert_import () =
              \  List.length [1]\n" in
   let diags = check_at (Filename.concat dir "main.tesl") src in
   let d = find_diag ~code:"T001" ~msg_sub:"function `List.length` requires" diags in
-  check_insert_line ~line:3 ~text:"import Tesl.List exposing [List.length]" d
+  check_insert_line ~line:2 ~text:"import Tesl.List exposing [List.length]" d
 
 (* Tesl.List already imported with an exposing list → the fix REWRITES that
    import statement in place with the name appended. *)
 let test_stdlib_fn_extend_existing_import () =
   let dir = fresh_dir () in
-  let src = "#lang tesl\n\
+  let src = "\
              module Main exposing [go]\n\
              import Tesl.Prelude exposing [Int]\n\
              import Tesl.List exposing [List.map]\n\
@@ -98,14 +98,14 @@ let test_stdlib_fn_extend_existing_import () =
              \  List.length (List.map (identity) [1])\n" in
   let diags = check_at (Filename.concat dir "main.tesl") src in
   let d = find_diag ~code:"T001" ~msg_sub:"function `List.length` requires" diags in
-  check_replace_span ~start_line:3 ~end_line:3
+  check_replace_span ~start_line:2 ~end_line:2
     ~replacement:"import Tesl.List exposing [List.map, List.length]" d
 
 (* A type name that only exists in the stdlib export table (not the old
    hardcoded 17-name hint list) now gets a module hint + fix too. *)
 let test_type_not_in_scope_suggests_module () =
   let dir = fresh_dir () in
-  let src = "#lang tesl\n\
+  let src = "\
              module Main exposing [go]\n\
              import Tesl.Prelude exposing [Int]\n\
              \n\
@@ -114,13 +114,13 @@ let test_type_not_in_scope_suggests_module () =
   let diags = check_at (Filename.concat dir "main.tesl") src in
   let d = find_diag ~code:"T001" ~msg_sub:"type `Maybe` is not in scope" diags in
   let _ = find_diag ~code:"T001" ~msg_sub:"import Tesl.Maybe exposing [Maybe]" diags in
-  check_insert_line ~line:3 ~text:"import Tesl.Maybe exposing [Maybe]" d
+  check_insert_line ~line:2 ~text:"import Tesl.Maybe exposing [Maybe]" d
 
 (* A module with NO imports at all: the new import lands before the first
    declaration. *)
 let test_insert_with_no_imports () =
   let dir = fresh_dir () in
-  let src = "#lang tesl\n\
+  let src = "\
              module Main exposing [go]\n\
              \n\
              fn go(x: Maybe Int) -> Int =\n\
@@ -129,7 +129,7 @@ let test_insert_with_no_imports () =
   let d = find_diag ~code:"T001" ~msg_sub:"type `Maybe` is not in scope" diags in
   (match d.fix with
    | Some (Compile.Insert_line f) ->
-     Alcotest.(check int) "insert before first decl" 3 f.line
+     Alcotest.(check int) "insert before first decl" 2 f.line
    | other ->
      Alcotest.failf "expected Insert_line fix, got %s" (Compile.fix_to_json other))
 
@@ -137,7 +137,7 @@ let test_insert_with_no_imports () =
    quickfix that adds the predicate to the module's exposing list. *)
 let test_proof_predicate_fix () =
   let dir = fresh_dir () in
-  let src = "#lang tesl\n\
+  let src = "\
              module Main exposing [go]\n\
              import Tesl.Prelude exposing [Int, String]\n\
              import Tesl.String exposing [String.trim]\n\
@@ -146,12 +146,12 @@ let test_proof_predicate_fix () =
              \  0\n" in
   let diags = check_at (Filename.concat dir "main.tesl") src in
   let d = find_diag ~code:"T001" ~msg_sub:"proof predicate `IsTrimmed` is not in scope" diags in
-  check_replace_span ~start_line:3 ~end_line:3
+  check_replace_span ~start_line:2 ~end_line:2
     ~replacement:"import Tesl.String exposing [String.trim, IsTrimmed]" d
 
 (* ── Folder-tree suggestions ─────────────────────────────────────────────── *)
 
-let helper_module = "#lang tesl\n\
+let helper_module = "\
                      module Helper exposing [greet, Widget(..)]\n\
                      import Tesl.Prelude exposing [Int, String]\n\
                      \n\
@@ -167,7 +167,7 @@ let helper_module = "#lang tesl\n\
 let test_local_same_dir_suggestion () =
   let dir = fresh_dir () in
   write_file (Filename.concat dir "helper.tesl") helper_module;
-  let src = "#lang tesl\n\
+  let src = "\
              module Main exposing [go]\n\
              import Tesl.Prelude exposing [Int, String]\n\
              \n\
@@ -177,13 +177,13 @@ let test_local_same_dir_suggestion () =
   let d = find_diag ~code:"T001" ~msg_sub:"unknown name: greet" diags in
   let _ = find_diag ~code:"T001"
       ~msg_sub:"module `Helper` (helper.tesl) exports it" diags in
-  check_insert_line ~line:3 ~text:"import Helper exposing [greet]" d
+  check_insert_line ~line:2 ~text:"import Helper exposing [greet]" d
 
 (* An exported ADT's constructor resolves to the `Type(..)` import form. *)
 let test_local_ctor_suggests_dotdot_import () =
   let dir = fresh_dir () in
   write_file (Filename.concat dir "helper.tesl") helper_module;
-  let src = "#lang tesl\n\
+  let src = "\
              module Main exposing [go]\n\
              import Tesl.Prelude exposing [Int]\n\
              \n\
@@ -192,7 +192,7 @@ let test_local_ctor_suggests_dotdot_import () =
              \  x\n" in
   let diags = check_at (Filename.concat dir "main.tesl") src in
   let d = find_diag ~code:"T001" ~msg_sub:"unknown constructor: Round" diags in
-  check_insert_line ~line:3 ~text:"import Helper exposing [Widget(..)]" d
+  check_insert_line ~line:2 ~text:"import Helper exposing [Widget(..)]" d
 
 (* Subdirectory: local imports cannot resolve it, so the error explains that
    instead of proposing an edit that would not compile. *)
@@ -200,13 +200,13 @@ let test_local_subdir_hint_no_fix () =
   let dir = fresh_dir () in
   Unix.mkdir (Filename.concat dir "sub") 0o755;
   write_file (Filename.concat dir "sub/deep.tesl")
-    "#lang tesl\n\
+    "\
      module Deep exposing [deepFn]\n\
      import Tesl.Prelude exposing [Int]\n\
      \n\
      fn deepFn(n: Int) -> Int =\n\
      \  n\n";
-  let src = "#lang tesl\n\
+  let src = "\
              module Main exposing [go]\n\
              import Tesl.Prelude exposing [Int]\n\
              \n\
@@ -224,7 +224,7 @@ let test_local_subdir_hint_no_fix () =
 (* A name nothing exports stays a plain unknown-name error. *)
 let test_unknown_name_without_candidate_is_plain () =
   let dir = fresh_dir () in
-  let src = "#lang tesl\n\
+  let src = "\
              module Main exposing [go]\n\
              import Tesl.Prelude exposing [Int]\n\
              \n\
@@ -246,14 +246,14 @@ let test_unknown_name_without_candidate_is_plain () =
 let test_const_import_binds () =
   let dir = fresh_dir () in
   write_file (Filename.concat dir "consts.tesl")
-    "#lang tesl\n\
+    "\
      module Consts exposing [kMax, kName]\n\
      import Tesl.Prelude exposing [Int, String]\n\
      \n\
      kMax = 5\n\
      \n\
      kName = \"tesl\"\n";
-  let src = "#lang tesl\n\
+  let src = "\
              module Main exposing [go]\n\
              import Tesl.Prelude exposing [Int, String]\n\
              import Consts exposing [kMax, kName]\n\
@@ -277,12 +277,12 @@ let test_const_import_binds () =
 let test_const_import_is_really_typed () =
   let dir = fresh_dir () in
   write_file (Filename.concat dir "consts.tesl")
-    "#lang tesl\n\
+    "\
      module Consts exposing [kMax]\n\
      import Tesl.Prelude exposing [Int]\n\
      \n\
      kMax = 5\n";
-  let src = "#lang tesl\n\
+  let src = "\
              module Main exposing [go]\n\
              import Tesl.Prelude exposing [String]\n\
              import Consts exposing [kMax]\n\
@@ -300,12 +300,12 @@ let test_const_import_is_really_typed () =
 let test_opaque_const_hint_no_duplicate_import () =
   let dir = fresh_dir () in
   write_file (Filename.concat dir "consts.tesl")
-    "#lang tesl\n\
+    "\
      module Consts exposing [kPair]\n\
      import Tesl.Prelude exposing [Int, String]\n\
      \n\
      kPair = { a: 1, b: \"x\" }\n";
-  let src = "#lang tesl\n\
+  let src = "\
              module Main exposing [go]\n\
              import Tesl.Prelude exposing [Int]\n\
              import Consts exposing [kPair]\n\
@@ -339,7 +339,7 @@ let w050_fix_of (diags : Compile.diagnostic list) name =
 (* One unused name in a multi-name import → the import is rewritten without it. *)
 let test_w050_prunes_single_name () =
   let dir = fresh_dir () in
-  let src = "#lang tesl\n\
+  let src = "\
              module Main exposing [go]\n\
              import Tesl.Prelude exposing [Int, String]\n\
              \n\
@@ -348,8 +348,8 @@ let test_w050_prunes_single_name () =
   let diags = lint_at (Filename.concat dir "main.tesl") src in
   match w050_fix_of diags "String" with
   | Some (Compile.Replace_span f) ->
-    Alcotest.(check int) "span start" 2 f.start_line;
-    Alcotest.(check int) "span end" 2 f.end_line;
+    Alcotest.(check int) "span start" 1 f.start_line;
+    Alcotest.(check int) "span end" 1 f.end_line;
     Alcotest.(check string) "pruned import"
       "import Tesl.Prelude exposing [Int]" f.replacement
   | other ->
@@ -360,7 +360,7 @@ let test_w050_prunes_single_name () =
    identical edit so the LSP can dedupe them in fixAll/organizeImports. *)
 let test_w050_deletes_multiline_import () =
   let dir = fresh_dir () in
-  let src = "#lang tesl\n\
+  let src = "\
              module Main exposing [go]\n\
              import Tesl.Prelude exposing [Int]\n\
              import Tesl.Dict exposing [\n\
@@ -373,8 +373,8 @@ let test_w050_deletes_multiline_import () =
   let diags = lint_at (Filename.concat dir "main.tesl") src in
   let check_delete = function
     | Some (Compile.Replace_span f) ->
-      Alcotest.(check int) "span start" 3 f.start_line;
-      Alcotest.(check int) "span end" 6 f.end_line;
+      Alcotest.(check int) "span start" 2 f.start_line;
+      Alcotest.(check int) "span end" 5 f.end_line;
       Alcotest.(check string) "deletion" "" f.replacement
     | other ->
       Alcotest.failf "expected Replace_span, got %s" (Compile.fix_to_json other)
@@ -399,7 +399,7 @@ let test_type_position_excludes_config_only_names () =
     with Not_found -> false
   in
   let dir = fresh_dir () in
-  let src = "#lang tesl\n\
+  let src = "\
              module Main exposing [h]\n\
              \n\
              fn h(x: All) -> All =\n\
@@ -418,7 +418,7 @@ let test_type_position_excludes_config_only_names () =
   (* Surgical-exclusion control: an ordinary type name still gets its stdlib
      suggestion through the same (type-position) path. *)
   let dir2 = fresh_dir () in
-  let src2 = "#lang tesl\n\
+  let src2 = "\
               module Main exposing [g]\n\
               import Tesl.Prelude exposing [Int]\n\
               \n\

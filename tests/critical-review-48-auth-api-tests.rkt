@@ -32,42 +32,42 @@
 (define-checker
   (checkPositive [n : Integer])
   #:returns [n : Integer ::: (Positive n)]
-  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 31 (list (cons 'n *n)) (lambda () (if (> *n 0) (accept (Positive n) #:value *n) (reject "must be positive" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 30 (list (cons 'n *n)) (lambda () (if (> *n 0) (accept (Positive n) #:value *n) (reject "must be positive" #:http-code 400)))))
 
 (define-checker
   (checkSmall [n : Integer])
   #:returns [n : Integer ::: (Small n)]
-  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 37 (list (cons 'n *n)) (lambda () (if (< *n 100) (accept (Small n) #:value *n) (reject "must be < 100" #:http-code 400)))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 36 (list (cons 'n *n)) (lambda () (if (< *n 100) (accept (Small n) #:value *n) (reject "must be < 100" #:http-code 400)))))
 
 (define-checker
   (checkPosAndSmall [n : Integer])
   #:returns [n : Integer ::: ((Positive n) && (Small n))]
-  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 43 (list (cons 'n *n)) (lambda () ((check-and checkPositive checkSmall) n))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 42 (list (cons 'n *n)) (lambda () ((check-and checkPositive checkSmall) n))))
 
 (define-checker
   (checkIsAdmin [userId : String])
   #:returns [userId : String ::: (IsAdmin userId)]
-  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 46 (list (cons 'userId *userId)) (lambda () (if (tesl_import_String_startsWith *userId "admin") (accept (IsAdmin userId) #:value *userId) (reject "not admin" #:http-code 403)))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 45 (list (cons 'userId *userId)) (lambda () (if (tesl_import_String_startsWith *userId "admin") (accept (IsAdmin userId) #:value *userId) (reject "not admin" #:http-code 403)))))
 
 (define-auther
   (simpleAuth [request : HttpRequest])
   #:returns [user : String ::: (Authenticated user)]
-  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 57 (list (cons 'request *request)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 58 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 59 (list (cons 'userId userId)) (lambda () (accept (Authenticated userId) #:value *userId))))])))))
+  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 56 (list (cons 'request *request)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 57 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 58 (list (cons 'userId userId)) (lambda () (accept (Authenticated userId) #:value *userId))))])))))
 
 (define-auther
   (checkedAuth [request : HttpRequest])
   #:returns [user : String ::: (Authenticated user)]
-  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 63 (list (cons 'request *request)) (lambda () (let ([tesl-case-1 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 64 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 66 (list (cons 'userId userId)) (lambda () (let/check ([tesl-checked-2 (tesl_import_String_requireNonEmpty userId)]) (let ([validId tesl-checked-2]) (accept (Authenticated validId) #:value *validId))))))])))))
+  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 62 (list (cons 'request *request)) (lambda () (let ([tesl-case-1 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 63 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 65 (list (cons 'userId userId)) (lambda () (let/check ([tesl-checked-2 (tesl_import_String_requireNonEmpty userId)]) (let ([validId tesl-checked-2]) (accept (Authenticated validId) #:value *validId))))))])))))
 
 (define-auther
   (adminAuth [request : HttpRequest])
   #:returns [user : String ::: ((IsAdmin user) && (Authenticated user))]
-  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 71 (list (cons 'request *request)) (lambda () (let ([tesl-case-3 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 72 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-3) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 74 (list (cons 'userId userId)) (lambda () (let ([tesl-proof-binding-4 (checkIsAdmin userId)]) (let ([admin (forget-proof tesl-proof-binding-4)] [p (detach-all-proof tesl-proof-binding-4)]) (accept (p && (Authenticated admin)) #:value *admin))))))])))))
+  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 70 (list (cons 'request *request)) (lambda () (let ([tesl-case-3 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 71 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-3) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 73 (list (cons 'userId userId)) (lambda () (let ([tesl-proof-binding-4 (checkIsAdmin userId)]) (let ([admin (forget-proof tesl-proof-binding-4)] [p (detach-all-proof tesl-proof-binding-4)]) (accept (p && (Authenticated admin)) #:value *admin))))))])))))
 
 (define-auther
   (conjunctionAuth [request : HttpRequest])
   #:returns [user : String ::: ((Authenticated user) && (HasValidSession user))]
-  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 80 (list (cons 'request *request)) (lambda () (let ([tesl-case-5 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 81 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-5) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 83 (list (cons 'userId userId)) (lambda () (let ([tesl-case-6 (raw-value (tesl_import_Dict_lookup "session" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 84 (list) (lambda () (reject "no session" #:http-code 401)))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Something)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 86 (list) (lambda () (accept ((Authenticated userId) && (HasValidSession userId)) #:value *userId)))])))))])))))
+  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 79 (list (cons 'request *request)) (lambda () (let ([tesl-case-5 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 80 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-5) (eq? (adt-value-variant *tesl-case-5) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-5) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 82 (list (cons 'userId userId)) (lambda () (let ([tesl-case-6 (raw-value (tesl_import_Dict_lookup "session" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 83 (list) (lambda () (reject "no session" #:http-code 401)))] [(and (adt-value? *tesl-case-6) (eq? (adt-value-variant *tesl-case-6) 'Something)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 85 (list) (lambda () (accept ((Authenticated userId) && (HasValidSession userId)) #:value *userId)))])))))])))))
 
 (define-record ValueRequest
   [value : Integer]
@@ -130,32 +130,32 @@
 (define-handler
   (doublePositive [user : String ::: (Authenticated user)] [req : ValueRequest])
   #:returns ValueResponse
-  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 146 (list (cons 'user *user) (cons 'req *req)) (lambda () (let/check ([tesl-checked-7 (checkPositive (raw-value req.value))]) (let ([v tesl-checked-7]) (ValueResponse #:result (* (raw-value v) 2) #:label "doubled"))))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 145 (list (cons 'user *user) (cons 'req *req)) (lambda () (let/check ([tesl-checked-7 (checkPositive (raw-value req.value))]) (let ([v tesl-checked-7]) (ValueResponse #:result (* (raw-value v) 2) #:label "doubled"))))))
 
 (define-handler
   (tripleConj [user : String ::: (Authenticated user)] [req : ValueRequest])
   #:returns ConjResponse
-  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 151 (list (cons 'user *user) (cons 'req *req)) (lambda () (let/check ([tesl-checked-8 (checkPosAndSmall (raw-value req.value))]) (let ([v tesl-checked-8]) (ConjResponse #:tripled (* (raw-value v) 3)))))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 150 (list (cons 'user *user) (cons 'req *req)) (lambda () (let/check ([tesl-checked-8 (checkPosAndSmall (raw-value req.value))]) (let ([v tesl-checked-8]) (ConjResponse #:tripled (* (raw-value v) 3)))))))
 
 (define-handler
   (inlineConj [user : String ::: (Authenticated user)] [req : ValueRequest])
   #:returns ConjResponse
-  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 156 (list (cons 'user *user) (cons 'req *req)) (lambda () (let/check ([tesl-checked-9 ((check-and checkPositive checkSmall) (raw-value req.value))]) (let ([v tesl-checked-9]) (ConjResponse #:tripled (* (raw-value v) 3)))))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 155 (list (cons 'user *user) (cons 'req *req)) (lambda () (let/check ([tesl-checked-9 ((check-and checkPositive checkSmall) (raw-value req.value))]) (let ([v tesl-checked-9]) (ConjResponse #:tripled (* (raw-value v) 3)))))))
 
 (define-handler
   (whoami [user : String ::: (Authenticated user)])
   #:returns AuthInfoResponse
-  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 160 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 159 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define-handler
   (whoamiAdmin [user : String ::: ((IsAdmin user) && (Authenticated user))])
   #:returns AuthInfoResponse
-  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 163 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 162 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define-handler
   (conjAuthWhoami [user : String ::: ((Authenticated user) && (HasValidSession user))])
   #:returns AuthInfoResponse
-  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 167 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 166 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define R48AuthServer-sse-routes '())
 (define-api R48AuthApi
@@ -503,22 +503,22 @@
 (define-auther
   (conjManualAuth [request : HttpRequest])
   #:returns [user : String ::: ((Authenticated user) && (HasValidSession user))]
-  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 346 (list (cons 'request *request)) (lambda () (let ([tesl-case-10 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 347 (list) (lambda () (reject "no cookie" #:http-code 401)))] [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-10) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 349 (list (cons 'userId userId)) (lambda () (let ([tesl-case-11 (raw-value (tesl_import_Dict_lookup "session" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 350 (list) (lambda () (reject "no session" #:http-code 401)))] [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Something)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 352 (list) (lambda () (accept ((Authenticated userId) && (HasValidSession userId)) #:value *userId)))])))))])))))
+  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 345 (list (cons 'request *request)) (lambda () (let ([tesl-case-10 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 346 (list) (lambda () (reject "no cookie" #:http-code 401)))] [(and (adt-value? *tesl-case-10) (eq? (adt-value-variant *tesl-case-10) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-10) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 348 (list (cons 'userId userId)) (lambda () (let ([tesl-case-11 (raw-value (tesl_import_Dict_lookup "session" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 349 (list) (lambda () (reject "no session" #:http-code 401)))] [(and (adt-value? *tesl-case-11) (eq? (adt-value-variant *tesl-case-11) 'Something)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 351 (list) (lambda () (accept ((Authenticated userId) && (HasValidSession userId)) #:value *userId)))])))))])))))
 
 (define-auther
   (conjCheckAuth [request : HttpRequest])
   #:returns [user : String ::: ((Authenticated user) && (IsAdmin user))]
-  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 356 (list (cons 'request *request)) (lambda () (let ([tesl-case-12 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 357 (list) (lambda () (reject "no cookie" #:http-code 401)))] [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-12) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 359 (list (cons 'userId userId)) (lambda () (let/check ([tesl-checked-13 (checkIsAdmin userId)]) (let ([admin tesl-checked-13]) (accept ((Authenticated admin) && (IsAdmin admin)) #:value *admin))))))])))))
+  (thsl-src-control! "tests/critical-review-48-auth-api-tests.tesl" 355 (list (cons 'request *request)) (lambda () (let ([tesl-case-12 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Nothing)) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 356 (list) (lambda () (reject "no cookie" #:http-code 401)))] [(and (adt-value? *tesl-case-12) (eq? (adt-value-variant *tesl-case-12) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-12) 'value)]) (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 358 (list (cons 'userId userId)) (lambda () (let/check ([tesl-checked-13 (checkIsAdmin userId)]) (let ([admin tesl-checked-13]) (accept ((Authenticated admin) && (IsAdmin admin)) #:value *admin))))))])))))
 
 (define-handler
   (conjManualWhoami [user : String ::: ((Authenticated user) && (HasValidSession user))])
   #:returns AuthInfoResponse
-  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 364 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 363 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define-handler
   (conjCheckWhoami [user : String ::: ((Authenticated user) && (IsAdmin user))])
   #:returns AuthInfoResponse
-  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 368 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
+  (thsl-src! "tests/critical-review-48-auth-api-tests.tesl" 367 (list (cons 'user *user)) (lambda () (AuthInfoResponse #:userId *user))))
 
 (define R48ConjInAuthServer-sse-routes '())
 (define-api R48ConjInAuthApi

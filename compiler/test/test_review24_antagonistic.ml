@@ -103,7 +103,7 @@ let should_fail pattern src =
   check bool (Printf.sprintf "should fail with pattern: %s" pattern) true found
 
 let prelude =
-  "#lang tesl\nmodule T exposing []\n\
+  "module T exposing []\n\
    import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit, Fact]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n"
 
@@ -116,7 +116,6 @@ let prelude_list =
 let test_result_ok_rejected () =
   (* B1 fixed: Ok and Err are now in stdlib_env and can be constructed. *)
   let src = {|
-#lang tesl
 module T exposing []
 import Tesl.Prelude exposing [Int, Bool, List, String]
 import Tesl.Result exposing [Result(..)]
@@ -1010,12 +1009,12 @@ fn getId(id: UserId) -> String = id.value
 
 let test_unknown_stdlib_module_rejected () =
   (* Fix 2.2: importing a non-existent Tesl.X module must be rejected *)
-  let src = "#lang tesl\nmodule T exposing []\nimport Tesl.DoesNotExist exposing [Foo]\n" in
+  let src = "module T exposing []\nimport Tesl.DoesNotExist exposing [Foo]\n" in
   should_fail "unknown.*module\\|does not exist\\|not a known" src
 
 let test_unknown_stdlib_module_importall_rejected () =
   (* Fix 2.2: `import Tesl.XyzBogus` (import all) must also be rejected *)
-  let src = "#lang tesl\nmodule T exposing []\nimport Tesl.XyzBogus\n" in
+  let src = "module T exposing []\nimport Tesl.XyzBogus\n" in
   should_fail "unknown.*module\\|does not exist\\|not a known" src
 
 let test_known_stdlib_module_ok () =

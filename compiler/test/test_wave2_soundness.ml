@@ -87,8 +87,7 @@ let should_fail pattern src =
   check bool "should exit non-zero" true (code <> 0)
 
 (* Shared prefixes. *)
-let task_hdr = {|#lang tesl
-module T exposing []
+let task_hdr = {|module T exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Maybe exposing [Maybe(..)]
@@ -98,8 +97,7 @@ entity Task table "tasks" primaryKey id {
 }
 |}
 
-let prim_hdr = {|#lang tesl
-module T exposing []
+let prim_hdr = {|module T exposing []
 import Tesl.Prelude exposing [Bool(..), Int, String]
 |}
 
@@ -286,8 +284,7 @@ let test_f_lt_string_rejected () =
 let test_f_eq_bool () =
   should_pass (prim_hdr ^ "fn f(a: Bool, b: Bool) -> Bool = a == b\n")
 
-let float_hdr = {|#lang tesl
-module T exposing []
+let float_hdr = {|module T exposing []
 import Tesl.Prelude exposing [Bool(..)]
 import Tesl.Float exposing [Float]
 |}
@@ -378,8 +375,7 @@ fn good() -> Bool = genEq 3 4
    with `==`, so `List.member f fs` where `f : Int -> Int` reaches a generic `==`
    on a function type — the S14b residual, now closed across the module boundary. *)
 let test_f_import_member_fn_rejected () =
-  should_fail "reaches a generic" {|#lang tesl
-module T exposing []
+  should_fail "reaches a generic" {|module T exposing []
 import Tesl.Prelude exposing [Bool(..), Int, List]
 import Tesl.List exposing [List.member]
 fn bad(fs: List (Int -> Int), f: Int -> Int) -> Bool =
@@ -389,8 +385,7 @@ fn bad(fs: List (Int -> Int), f: Int -> Int) -> Bool =
 (* …but the same imported comparator at an equatable type still compiles (no
    over-rejection of the legitimate `member`/`contains` corpus). *)
 let test_f_import_member_int_accepted () =
-  should_pass {|#lang tesl
-module T exposing []
+  should_pass {|module T exposing []
 import Tesl.Prelude exposing [Bool(..), Int, List]
 import Tesl.List exposing [List.member]
 fn good(xs: List Int, x: Int) -> Bool =
@@ -560,8 +555,7 @@ fn inc(n: Int) -> Int =
 
 (* ── G. ForAll list-proof consistency (§6.3 / S9 / S9-EField) ─────────────── *)
 
-let forall_hdr = {|#lang tesl
-module T exposing []
+let forall_hdr = {|module T exposing []
 import Tesl.Prelude exposing [Bool(..), Int, List]
 import Tesl.List exposing [List.filterCheck]
 fact IsPositive (n: Int)
@@ -611,8 +605,7 @@ fn f(xs: List Int) -> List Int ? ForAll IsPositive = List.filterCheck checkPos x
 
 (* ── H. Handler↔endpoint positional arity contract (S16) ─────────────────── *)
 
-let arity_hdr = {|#lang tesl
-module T exposing []
+let arity_hdr = {|module T exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 import Tesl.Http exposing [HttpRequest]

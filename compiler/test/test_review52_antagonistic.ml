@@ -110,8 +110,7 @@ let [@warning "-32"] should_currently_pass_src src =
              this input (which is the correct behaviour). Please flip this \
              test to `should_fail_src` with the new diagnostic.\n\ntool output:\n%s" out)
 
-let base_header = {|#lang tesl
-module Test exposing []
+let base_header = {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact, forgetFact, attachFact, detachFact]
 import Tesl.Maybe exposing [Maybe(..)]
 |}
@@ -223,8 +222,7 @@ fn makeOk(x: Int ::: IsPositive x, y: Int ::: IsPositive y, w: Fact (BothPos x y
 (* R52_F01 — FIXED. Spec section 16.9 says an empty list literal does NOT
    vacuously satisfy any `ForAll P`. The compiler now rejects this. *)
 let r52_f01_forall_empty_list_bug () =
-  should_fail_src "requires proof" {|#lang tesl
-module Test exposing []
+  should_fail_src "requires proof" {|module Test exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.length]
 
@@ -240,8 +238,7 @@ fn emptyCase() -> Int =
 (* R52_F02 — control. List produced by `List.filterCheck isPositive xs`
    legitimately satisfies `ForAll IsPositive`. *)
 let r52_f02_forall_filtercheck_ok () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.filterCheck, List.length]
 
@@ -270,8 +267,7 @@ fn okCase(xs: List Int) -> Int =
    to `tesl_import_List_length` in the generated Racket, so the program both
    compiles and runs correctly. *)
 let r52_q01_qualified_only_compiles_bug () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List
 
@@ -281,8 +277,7 @@ fn demo() -> Int =
 
 (* R52_Q02 — control. Explicit dotted exposing works. *)
 let r52_q02_qualified_explicit_ok () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int, List]
 import Tesl.List exposing [List.length]
 
@@ -501,8 +496,7 @@ let run_fmt_and_read src =
    between identifiers and keywords into a single space. *)
 let r52_fmt01_internal_spaces_not_collapsed_bug () =
   let got = run_fmt_and_read
-    {|#lang tesl
-module Test exposing []
+    {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn   demo  (a: Int, b: Int)    -> Int   = a + b
@@ -522,8 +516,7 @@ fn   demo  (a: Int, b: Int)    -> Int   = a + b
    (control / regression). *)
 let r52_fmt02_arrow_is_spaced () =
   let got = run_fmt_and_read
-    {|#lang tesl
-module Test exposing []
+    {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo(n: Int) -> Int = n
@@ -644,8 +637,7 @@ fn demo(raw: Int) -> Int =
 
 (* R52_N07 — Control: integer literal at the exact upper bound compiles. *)
 let r52_n07_max_int_literal_ok () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn maxInt() -> Int = 4611686018427387903
@@ -654,8 +646,7 @@ fn maxInt() -> Int = 4611686018427387903
 (* R52_N08 — A9/HM-1: Int is arbitrary-precision. The literal just above the
    former positive fixnum cap now compiles (carried as an LBigInt bignum). *)
 let r52_n08_above_max_int_literal_rejected () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn tooBig() -> Int = 4611686018427387904
@@ -666,15 +657,13 @@ fn tooBig() -> Int = 4611686018427387904
    rejected — is carried through as LBigInt "4611686018427387904". *)
 let r52_n09_below_min_int_literal_bug () =
   (* -2^62 is a valid Tesl Int value *)
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn negMin() -> Int = -4611686018427387904
 |};
   (* A9/HM-1: positive 2^62 now compiles too (arbitrary-precision Int) *)
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn tooBig() -> Int = 4611686018427387904

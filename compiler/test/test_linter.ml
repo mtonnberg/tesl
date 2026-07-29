@@ -64,8 +64,7 @@ let find diags code =
   | None -> Alcotest.failf "expected lint code %s but did not find it in:\n%s" code (dump diags)
 
 (* Shared check/fact preamble used by most fixtures. *)
-let preamble = {|#lang tesl
-module Lint exposing [f]
+let preamble = {|module Lint exposing [f]
 import Tesl.Prelude exposing [Int, String]
 fact ValidScore (n: Int)
 check checkScore(n: Int) -> n: Int ::: ValidScore n =
@@ -133,8 +132,7 @@ fn f(raw: Int) -> String =
 (* Chaining DIFFERENT checkers (idiomatic proof accumulation, lesson51) must
    NOT fire W063. *)
 let test_w063_distinct_checkers_no_warning () =
-  let src = {|#lang tesl
-module Lint exposing [f]
+  let src = {|module Lint exposing [f]
 import Tesl.Prelude exposing [Int, String]
 fact P (n: Int)
 fact Q (n: Int)
@@ -207,8 +205,7 @@ fn f(raw: Int) -> String =
 (* detach / forget / attach roundtrip (lesson54 `roundtripProof`) must stay
    quiet — these are not check/auth keywords. *)
 let test_proof_roundtrip_no_footgun_warnings () =
-  let src = {|#lang tesl
-module Lint exposing [roundtrip]
+  let src = {|module Lint exposing [roundtrip]
 import Tesl.Prelude exposing [Int, String, detachFact, attachFact, forgetFact]
 fact ValidScore (n: Int)
 check checkScore(n: Int) -> n: Int ::: ValidScore n =
@@ -235,8 +232,7 @@ fn roundtrip(raw: Int) -> String =
    are falsely flagged W050-unused.  Plus a regression guard: a genuinely-unused
    import is still flagged. *)
 let test_w050_config_block_credits_used_imports () =
-  let diags = lint_src {|#lang tesl
-module DbCfg exposing []
+  let diags = lint_src {|module DbCfg exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
 entity Note table "notes" primaryKey id { id: String }
@@ -254,8 +250,7 @@ database DB = Database {
   assert_absent diags "W050"
 
 let test_w050_genuinely_unused_import_still_flagged () =
-  let diags = lint_src {|#lang tesl
-module UnusedImp exposing []
+  let diags = lint_src {|module UnusedImp exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Set exposing [Set.insert]
 fn f(s: String) -> String = s

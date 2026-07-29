@@ -85,8 +85,7 @@ check isPositive(n: Int) -> n: Int ::: Positive n =
 |}
 
 let r37_01_bool_ordering_rejected () =
-  should_fail "ordering\\|not defined for type `Bool`" {|#lang tesl
-module Test exposing []
+  should_fail "ordering\\|not defined for type `Bool`" {|module Test exposing []
 import Tesl.Prelude exposing [Bool]
 
 fn bad(a: Bool, b: Bool) -> Bool =
@@ -94,14 +93,12 @@ fn bad(a: Bool, b: Bool) -> Bool =
 |}
 
 let r37_02_duplicate_imports_rejected () =
-  should_fail "duplicate import" {|#lang tesl
-module Test exposing []
+  should_fail "duplicate import" {|module Test exposing []
 import Tesl.Prelude exposing [Int, Int]
 |}
 
 let r37_03_unknown_export_rejected () =
-  should_fail "unknown\\|export" {|#lang tesl
-module Test exposing [missing]
+  should_fail "unknown\\|export" {|module Test exposing [missing]
 import Tesl.Prelude exposing [Int]
 
 fn x() -> Int =
@@ -109,8 +106,7 @@ fn x() -> Int =
 |}
 
 let r37_04_duplicate_record_fields_rejected () =
-  should_fail "duplicate field" {|#lang tesl
-module Test exposing []
+  should_fail "duplicate field" {|module Test exposing []
 import Tesl.Prelude exposing [String]
 
 record Bad {
@@ -120,8 +116,7 @@ record Bad {
 |}
 
 let r37_05_duplicate_ctor_same_adt_rejected () =
-  should_fail "duplicate constructor" {|#lang tesl
-module Test exposing []
+  should_fail "duplicate constructor" {|module Test exposing []
 
 type Traffic
   = Red
@@ -129,8 +124,7 @@ type Traffic
 |}
 
 let r37_06_complete_bool_case_passes () =
-  should_pass {|#lang tesl
-module Test exposing []
+  should_pass {|module Test exposing []
 import Tesl.Prelude exposing [Bool, String]
 
 fn describe(b: Bool) -> String =
@@ -140,8 +134,7 @@ fn describe(b: Bool) -> String =
 |}
 
 let r37_07_let_proof_distinct_binders_passes () =
-  should_pass (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_pass (Printf.sprintf {|module Test exposing []
 %s
 fn demo(n: Int) -> Int =
   let (m ::: positiveProof) = check isPositive n
@@ -149,8 +142,7 @@ fn demo(n: Int) -> Int =
 |} proof_prelude)
 
 let r37_08_let_proof_ignored_value_passes () =
-  should_pass (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_pass (Printf.sprintf {|module Test exposing []
 %s
 fn demo(n: Int) -> Int =
   let (_ ::: positiveProof) = check isPositive n
@@ -158,8 +150,7 @@ fn demo(n: Int) -> Int =
 |} proof_prelude)
 
 let r37_09_string_case_requires_catchall () =
-  should_fail "catch-all\\|wildcard\\|missing" {|#lang tesl
-module Test exposing []
+  should_fail "catch-all\\|wildcard\\|missing" {|module Test exposing []
 import Tesl.Prelude exposing [String]
 
 fn describe(s: String) -> String =
@@ -168,8 +159,7 @@ fn describe(s: String) -> String =
 |}
 
 let r37_10_normal_let_shadowing_rejected () =
-  should_fail "shadow" {|#lang tesl
-module Test exposing []
+  should_fail "shadow" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo(n: Int) -> Int =
@@ -178,8 +168,7 @@ fn demo(n: Int) -> Int =
 |}
 
 let r37_11_duplicate_exports_should_be_rejected () =
-  should_fail "duplicate.*export\\|module exposes duplicate" {|#lang tesl
-module Test exposing [x, x]
+  should_fail "duplicate.*export\\|module exposes duplicate" {|module Test exposing [x, x]
 import Tesl.Prelude exposing [Int]
 
 fn x() -> Int =
@@ -187,8 +176,7 @@ fn x() -> Int =
 |}
 
 let r37_12_bool_case_missing_false_should_fail () =
-  should_fail "exhaustive\\|missing\\|False" {|#lang tesl
-module Test exposing []
+  should_fail "exhaustive\\|missing\\|False" {|module Test exposing []
 import Tesl.Prelude exposing [Bool, String]
 
 fn describe(b: Bool) -> String =
@@ -197,8 +185,7 @@ fn describe(b: Bool) -> String =
 |}
 
 let r37_13_bool_case_missing_true_should_fail () =
-  should_fail "exhaustive\\|missing\\|True" {|#lang tesl
-module Test exposing []
+  should_fail "exhaustive\\|missing\\|True" {|module Test exposing []
 import Tesl.Prelude exposing [Bool, String]
 
 fn describe(b: Bool) -> String =
@@ -207,8 +194,7 @@ fn describe(b: Bool) -> String =
 |}
 
 let r37_14_let_proof_value_shadowing_local_should_fail () =
-  should_fail "shadow" (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_fail "shadow" (Printf.sprintf {|module Test exposing []
 %s
 fn demo(n: Int) -> Int =
   let m = 1
@@ -217,8 +203,7 @@ fn demo(n: Int) -> Int =
 |} proof_prelude)
 
 let r37_15_let_proof_proof_shadowing_local_should_fail () =
-  should_fail "shadow" (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_fail "shadow" (Printf.sprintf {|module Test exposing []
 %s
 fn demo(n: Int) -> Int =
   let p = 1
@@ -227,8 +212,7 @@ fn demo(n: Int) -> Int =
 |} proof_prelude)
 
 let r37_16_let_proof_value_shadowing_param_should_fail () =
-  should_fail "shadow" (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_fail "shadow" (Printf.sprintf {|module Test exposing []
 %s
 fn demo(n: Int) -> Int =
   let (n ::: proofP) = check isPositive n
@@ -236,8 +220,7 @@ fn demo(n: Int) -> Int =
 |} proof_prelude)
 
 let r37_17_let_proof_proof_shadowing_param_should_fail () =
-  should_fail "shadow" (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_fail "shadow" (Printf.sprintf {|module Test exposing []
 %s
 fn demo(p: Int) -> Int =
   let (_ ::: p) = isPositive p
@@ -245,8 +228,7 @@ fn demo(p: Int) -> Int =
 |} proof_prelude)
 
 let r37_18_duplicate_proof_binders_should_fail () =
-  should_fail "duplicate\\|shadow" (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_fail "duplicate\\|shadow" (Printf.sprintf {|module Test exposing []
 %s
 fn demo(n: Int) -> Int =
   let (m ::: p && p) = check isPositive n
@@ -254,8 +236,7 @@ fn demo(n: Int) -> Int =
 |} proof_prelude)
 
 let r37_19_duplicate_proof_binders_with_ignored_value_should_fail () =
-  should_fail "duplicate\\|shadow" (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_fail "duplicate\\|shadow" (Printf.sprintf {|module Test exposing []
 %s
 fn demo(n: Int) -> Int =
   let (_ ::: p && p) = check isPositive n
@@ -263,8 +244,7 @@ fn demo(n: Int) -> Int =
 |} proof_prelude)
 
 let r37_20_duplicate_ctor_across_adts_should_fail () =
-  should_fail "duplicate constructor\\|constructor.*unique" {|#lang tesl
-module Test exposing []
+  should_fail "duplicate constructor\\|constructor.*unique" {|module Test exposing []
 
 type A
   = Same

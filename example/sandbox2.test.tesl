@@ -1,4 +1,3 @@
-#lang tesl
 module Sandbox2Test exposing []
 import Tesl.Prelude exposing [Int, Fact, String]
 import Sandbox exposing [IsPositive]

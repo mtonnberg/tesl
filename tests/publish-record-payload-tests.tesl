@@ -1,4 +1,3 @@
-#lang tesl
 module Main exposing [MainServer]
 
 # Regression (2026-07 matrix sse/c2): `publish Chan key Notice { … }` with a

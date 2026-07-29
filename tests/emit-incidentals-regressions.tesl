@@ -1,4 +1,3 @@
-#lang tesl
 module Main exposing [MainServer]
 
 # Runtime regressions for the 2026-07 matrix emit/type batch:

@@ -1,4 +1,3 @@
-#lang tesl
 module Cache_tests exposing []
 
 import Tesl.Prelude exposing [Int, String, Bool, List, Unit]

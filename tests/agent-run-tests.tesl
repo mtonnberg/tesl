@@ -1,4 +1,3 @@
-#lang tesl
 module AgentRunTests exposing [AgentRunServer]
 
 import Tesl.Prelude exposing [String, Unit]

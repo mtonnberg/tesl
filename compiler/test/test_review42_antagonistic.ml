@@ -110,8 +110,7 @@ let generate_elm path =
   check int "exit code" 0 code;
   out
 
-let deep_shape_api_src = {|#lang tesl
-module Api exposing [DeepShapeApi]
+let deep_shape_api_src = {|module Api exposing [DeepShapeApi]
 import Tesl.Prelude exposing [Int, String, Bool]
 import Tesl.Json exposing [stringCodec]
 import Tesl.Tuple exposing [Tuple2(..), Tuple3(..)]
@@ -154,8 +153,7 @@ api DeepShapeApi {
 let with_deep_shape_api f =
   with_temp_file "tesl-r42-shapes-" ".tesl" deep_shape_api_src f
 
-let proof_api_src = {|#lang tesl
-module Api exposing [TodoApi]
+let proof_api_src = {|module Api exposing [TodoApi]
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.length]
 import Tesl.Json exposing [stringCodec]
@@ -392,8 +390,7 @@ let elm_out_path_infers_api_module_name () =
   )
 
 let elm_binding_forall_supports_compound_element_proofs () =
-  let src = {|#lang tesl
-module Api exposing [TodoApi]
+  let src = {|module Api exposing [TodoApi]
 import Tesl.Prelude exposing [String, List]
 
 fact TodoId (s: String)
@@ -413,8 +410,7 @@ api TodoApi {
   )
 
 let elm_fromdb_filtering_preserves_remaining_conjunctions () =
-  let src = {|#lang tesl
-module Api exposing [TodoApi]
+  let src = {|module Api exposing [TodoApi]
 import Tesl.Prelude exposing [String]
 
 record Todo {
@@ -440,8 +436,7 @@ api TodoApi {
   )
 
 let elm_capture_collision_renames_only_when_needed () =
-  let src = {|#lang tesl
-module Api exposing [TodoApi]
+  let src = {|module Api exposing [TodoApi]
 import Tesl.Prelude exposing [String]
 import Tesl.Json exposing [stringCodec]
 
@@ -475,8 +470,7 @@ let elm_exports_proof_types_without_exporting_proof_constructors () =
   )
 
 let elm_body_forall_proof_surfaces_as_proven_elements_with_outer_list_proofs () =
-  let src = {|#lang tesl
-module Api exposing [TodoApi]
+  let src = {|module Api exposing [TodoApi]
 import Tesl.Prelude exposing [String, List]
 
 fact TodoId (s: String)
@@ -497,8 +491,7 @@ api TodoApi {
   )
 
 let elm_client_surface_strips_fromdb_proofs () =
-  let src = {|#lang tesl
-module Api exposing [TodoApi]
+  let src = {|module Api exposing [TodoApi]
 import Tesl.Prelude exposing [String]
 
 record Todo {

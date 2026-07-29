@@ -1643,23 +1643,29 @@ let tesl_stdlib_cap_map : (string * (string * string list) list) list = [
   "Tesl.Email",      [("emailCap", [])];
 ]
 
-(* Issue-#41 companion (cacheCap composability): the implicit capabilities a
-   `cache` / `email` declaration defines ("cacheCap <Name>" / "emailCap") were
-   only harvested from LOCAL decls (build_cap_map / build_local_cap_map), so a
-   `requires [cacheCap C]` with C declared in an imported module always failed
+(* Issue-#41 companion (cacheCap composability): the implicit capability a
+   `cache` declaration defines ("cacheCap <Name>") was only harvested from
+   LOCAL decls (build_cap_map / build_local_cap_map), so a `requires
+   [cacheCap C]` with C declared in an imported module always failed
    P001/V001 — the whole cross-module cache direction was check-blocked.
-   Collect them from every TRANSITIVELY imported local module: capability
+   Collect it from every TRANSITIVELY imported local module: cacheCap
    DECLAREDNESS is a whole-program fact (the runtime resolves the value through
    the process-wide registry via cache-for-name), not a lexical-scope fact, so
-   no exposing gate applies — mirroring how a local `cache C` makes `cacheCap
-   C` available module-wide without any import.  Transitive because the
-   declaring module may be several `import` hops away (main → lib → base); the
-   walk is cycle-guarded by CANONICAL path ([canonical_import_path]):
-   [resolve_local_import_path] spells the same file differently per importing
-   module (`./a.tesl` vs `a.tesl`), so a raw-spelling visited set re-visits
-   diamonds/cycles reached via two spellings; the entry module itself is
-   pre-marked so a back-edge to it never re-harvests. *)
-let collect_imported_cache_email_caps (m : module_form) : (string * string list) list =
+   no exposing gate applies — a local `cache C` makes `cacheCap C` available
+   module-wide without any import.  Transitive because the declaring module may
+   be several `import` hops away (main → lib → base); the walk is cycle-guarded
+   by CANONICAL path ([canonical_import_path]): [resolve_local_import_path]
+   spells the same file differently per importing module (`./a.tesl` vs
+   `a.tesl`), so a raw-spelling visited set re-visits diamonds/cycles reached
+   via two spellings; the entry module itself is pre-marked so a back-edge to
+   it never re-harvests.
+
+   `email` declarations used to be harvested here too (ambient "emailCap"),
+   but emailCap is import-gated now: the ONLY grant path is
+   `import Tesl.Email exposing [emailCap]` via [tesl_stdlib_cap_map], exactly
+   like `time` (roadmap: ambient_email_cap).  cacheCap stays declaration-derived
+   by design — it is parameterized by the cache name and has no provider row. *)
+let collect_imported_cache_caps (m : module_form) : (string * string list) list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
   in
@@ -1682,7 +1688,6 @@ let collect_imported_cache_email_caps (m : module_form) : (string * string list)
             | Ok imported ->
               List.filter_map (function
                 | DCache (c : Ast.cache_form) -> Some ("cacheCap " ^ c.name, [])
-                | DEmail _ -> Some ("emailCap", [])
                 | _ -> None
               ) imported.decls
               @ walk imported
@@ -1695,7 +1700,7 @@ let load_imported_cap_map (m : module_form) : (string * string list) list =
   let is_tesl_module name =
     String.length name >= 5 && String.sub name 0 5 = "Tesl."
   in
-  collect_imported_cache_email_caps m
+  collect_imported_cache_caps m
   @ List.concat_map (fun (imp : import_decl) ->
     if is_tesl_module imp.module_name then
       (* For Tesl stdlib modules, use the static capability table *)

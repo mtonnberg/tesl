@@ -82,8 +82,7 @@ let should_fail_src pattern src =
    ═══════════════════════════════════════════════════════════════════════════ *)
 
 let test_r48_b01_bare_check_and_in_check () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact A (n: Int)
 fact B (n: Int)
@@ -103,8 +102,7 @@ fn needs(n: Int ::: A n && B n) -> Int = n
 |}
 
 let test_r48_b02_bare_triple_check_and () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact A (n: Int)
 fact B (n: Int)
@@ -129,8 +127,7 @@ check wrap(n: Int) -> n: Int ::: A n && B n && C n =
 |}
 
 let test_r48_b03_let_bound_check_and () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact A (n: Int)
 fact B (n: Int)
@@ -150,8 +147,7 @@ check wrap(n: Int) -> n: Int ::: A n && B n =
 |}
 
 let test_r48_b04_chained_check_wrap () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact A (n: Int)
 fact B (n: Int)
@@ -172,8 +168,7 @@ check outer(n: Int) -> n: Int ::: A n && B n =
 |}
 
 let test_r48_b05_bare_single_check_delegation () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact A (n: Int)
 check cA(n: Int) -> n: Int ::: A n =
@@ -190,8 +185,7 @@ check wrap(n: Int) -> n: Int ::: A n =
    ═══════════════════════════════════════════════════════════════════════════ *)
 
 let test_r48_t01_lowercase_true_fn_body () =
-  should_fail_src "VBOOL001" {|#lang tesl
-module Test exposing []
+  should_fail_src "VBOOL001" {|module Test exposing []
 import Tesl.Prelude exposing [Bool(..), Int]
 fn f(n: Int) -> Bool =
   if n > 0 then
@@ -201,8 +195,7 @@ fn f(n: Int) -> Bool =
 |}
 
 let test_r48_t02_lowercase_false_fn_body () =
-  should_fail_src "VBOOL001" {|#lang tesl
-module Test exposing []
+  should_fail_src "VBOOL001" {|module Test exposing []
 import Tesl.Prelude exposing [Bool(..), Int]
 fn f(n: Int) -> Bool =
   if n > 0 then
@@ -212,8 +205,7 @@ fn f(n: Int) -> Bool =
 |}
 
 let test_r48_t03_lowercase_true_in_test_expect () =
-  should_fail_src "VBOOL001" {|#lang tesl
-module Test exposing []
+  should_fail_src "VBOOL001" {|module Test exposing []
 import Tesl.Prelude exposing [Bool(..), Int]
 fn f(n: Int) -> Bool =
   if n > 0 then
@@ -226,8 +218,7 @@ test "bad" {
 |}
 
 let test_r48_t04_lowercase_false_in_test_expect () =
-  should_fail_src "VBOOL001" {|#lang tesl
-module Test exposing []
+  should_fail_src "VBOOL001" {|module Test exposing []
 import Tesl.Prelude exposing [Bool(..), Int]
 fn f(n: Int) -> Bool =
   if n > 0 then
@@ -240,8 +231,7 @@ test "bad" {
 |}
 
 let test_r48_t05_lowercase_true_as_fn_arg_in_test () =
-  should_fail_src "VBOOL001" {|#lang tesl
-module Test exposing []
+  should_fail_src "VBOOL001" {|module Test exposing []
 import Tesl.Prelude exposing [Bool(..), Int]
 fn g(b: Bool) -> Int =
   if b then
@@ -254,8 +244,7 @@ test "bad" {
 |}
 
 let test_r48_t06_lowercase_true_in_test_let () =
-  should_fail_src "VBOOL001" {|#lang tesl
-module Test exposing []
+  should_fail_src "VBOOL001" {|module Test exposing []
 import Tesl.Prelude exposing [Bool(..), Int]
 test "bad" {
   let b = true
@@ -264,8 +253,7 @@ test "bad" {
 |}
 
 let test_r48_t07_lowercase_true_in_property_body () =
-  should_fail_src "VBOOL001" {|#lang tesl
-module Test exposing []
+  should_fail_src "VBOOL001" {|module Test exposing []
 import Tesl.Prelude exposing [Bool(..), Int]
 test "bad" with 10 runs {
   property "prop" (n: Int where n > 0 && n < 100) {
@@ -277,8 +265,7 @@ test "bad" with 10 runs {
 (* Positive control: uppercase True/False should compile *)
 
 let test_r48_t08_uppercase_true_fn_body () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Bool(..), Int]
 fn f(n: Int) -> Bool =
   if n > 0 then
@@ -288,8 +275,7 @@ fn f(n: Int) -> Bool =
 |}
 
 let test_r48_t09_uppercase_true_in_test_expect () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Bool(..), Int]
 fn f(n: Int) -> Bool =
   if n > 0 then
@@ -303,8 +289,7 @@ test "ok" {
 |}
 
 let test_r48_t10_uppercase_true_as_fn_arg () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Bool(..), Int]
 fn g(b: Bool) -> Int =
   if b then
@@ -323,8 +308,7 @@ test "ok" {
 
 (* R48_P01: check ok returns wrong name — must be rejected *)
 let test_r48_p01_check_ok_wrong_binding () =
-  should_fail_src "ok expression returns" {|#lang tesl
-module Test exposing []
+  should_fail_src "ok expression returns" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact Valid (n: Int)
 check checkValid(n: Int) -> n: Int ::: Valid n =
@@ -337,8 +321,7 @@ check checkValid(n: Int) -> n: Int ::: Valid n =
 
 (* R48_P02: check ok proof doesn't match declared proof *)
 let test_r48_p02_check_proof_mismatch () =
-  should_fail_src "ok proof does not match" {|#lang tesl
-module Test exposing []
+  should_fail_src "ok proof does not match" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact A (n: Int)
 fact B (n: Int)
@@ -351,8 +334,7 @@ check cA(n: Int) -> n: Int ::: A n =
 
 (* R48_P03: auth ok proof doesn't match declared — different predicate *)
 let test_r48_p03_auth_proof_wrong_predicate () =
-  should_fail_src "ok proof does not match" {|#lang tesl
-module Test exposing []
+  should_fail_src "ok proof does not match" {|module Test exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Dict exposing [Dict.lookup]
@@ -368,8 +350,7 @@ auth myAuth(request: HttpRequest) -> user: String ::: Authenticated user =
 
 (* R48_P04: auth conjunction proof — left half wrong predicate *)
 let test_r48_p04_auth_conj_wrong_left () =
-  should_fail_src "ok proof does not match" {|#lang tesl
-module Test exposing []
+  should_fail_src "ok proof does not match" {|module Test exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Dict exposing [Dict.lookup]
@@ -387,8 +368,7 @@ auth myAuth(request: HttpRequest)
 
 (* R48_P05: auth with proof var referencing undefined check *)
 let test_r48_p05_undefined_proof_var () =
-  should_fail_src "ok proof does not match" {|#lang tesl
-module Test exposing []
+  should_fail_src "ok proof does not match" {|module Test exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Dict exposing [Dict.lookup]
@@ -409,8 +389,7 @@ auth myAuth(request: HttpRequest)
 
 (* R48_P07: auth with proof var from delegated check — the canonical working pattern *)
 let test_r48_p07_auth_delegated_check_passes () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Dict exposing [Dict.lookup]
@@ -434,8 +413,7 @@ auth myAuth(request: HttpRequest)
 
 (* R48_P08: auth with binding == ok-value name — no substitution *)
 let test_r48_p08_auth_identity_binding () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Dict exposing [Dict.lookup]
@@ -450,8 +428,7 @@ auth myAuth(request: HttpRequest) -> user: String ::: Authenticated user =
 
 (* R48_P09: auth with binding != ok-value — substitution required *)
 let test_r48_p09_auth_subst_binding () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Dict exposing [Dict.lookup]
@@ -466,8 +443,7 @@ auth myAuth(request: HttpRequest) -> user: String ::: Authenticated user =
 
 (* R48_P10: conjunction check combinator — positive control *)
 let test_r48_p10_conjunction_combinator () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 fact A (n: Int)
 fact B (n: Int)
@@ -490,8 +466,7 @@ fn useBoth(n: Int) -> Int =
 
 (* R48_P11: auth conjunction with manual proofs — binding != ok *)
 let test_r48_p11_auth_conj_manual () =
-  should_pass_src {|#lang tesl
-module Test exposing []
+  should_pass_src {|module Test exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Dict exposing [Dict.lookup]
@@ -515,8 +490,7 @@ auth myAuth(request: HttpRequest)
 
 (* R48_T11: lowercase true in api-test expect *)
 let test_r48_t11_lowercase_true_in_api_test () =
-  should_fail_src "VBOOL001" {|#lang tesl
-module Test exposing [S]
+  should_fail_src "VBOOL001" {|module Test exposing [S]
 import Tesl.Prelude exposing [Bool(..), String]
 import Tesl.Json exposing [stringCodec]
 import Tesl.ApiTest exposing [statusOk]
@@ -536,8 +510,7 @@ api-test "bad" for S {
 
 (* R48_T12: lowercase false in api-test let *)
 let test_r48_t12_lowercase_false_in_api_test_let () =
-  should_fail_src "VBOOL001" {|#lang tesl
-module Test exposing [S]
+  should_fail_src "VBOOL001" {|module Test exposing [S]
 import Tesl.Prelude exposing [Bool(..), String]
 import Tesl.Json exposing [stringCodec]
 import Tesl.ApiTest exposing [statusOk]

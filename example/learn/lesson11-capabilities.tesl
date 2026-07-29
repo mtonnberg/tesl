@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson11Capabilities exposing [
   readEnvVar,
   getCurrentTime,

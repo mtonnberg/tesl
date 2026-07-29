@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson13PartialApplicationAndPipelines exposing [
   add,
   double,

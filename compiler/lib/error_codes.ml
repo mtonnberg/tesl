@@ -183,12 +183,14 @@ let registry : entry list = [
   { code = "E001"; category = Lint;
     title = "empty file";
     explanation = "The file has no content. A Tesl module needs at least a \
-       `#lang tesl` line and a `module` header.";
+       `module` header.";
     manual = Some "getting-started" };
   { code = "E002"; category = Lint;
-    title = "(retired) missing `#lang tesl`";
-    explanation = "Retired: the `#lang tesl` pragma is OPTIONAL. The parser \
-       skips it when present, so its absence is no longer diagnosed.";
+    title = "`#lang tesl` is no longer part of Tesl";
+    explanation = "The historical `#lang tesl` pragma is not accepted anymore: \
+       a Tesl file starts directly with its `module` header (comments may \
+       precede it). Delete the `#lang` line — the diagnostic carries the edit \
+       as an applicable fix.";
     manual = Some "getting-started" };
   { code = "E010"; category = Lint;
     title = "tab character";
@@ -215,8 +217,7 @@ let registry : entry list = [
   { code = "W001"; category = Lint;
     title = "module header not first";
     explanation = "The `module … exposing [ … ]` header should be the first \
-       non-blank, non-comment line (an optional `#lang tesl` pragma and \
-       comments may precede it).";
+       non-blank, non-comment line (comments may precede it).";
     manual = Some "best-practices" };
   { code = "W002"; category = Lint;
     title = "trailing blank lines";

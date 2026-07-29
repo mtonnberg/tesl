@@ -1,4 +1,3 @@
-#lang tesl
 module OrdTypesTest exposing []
 
 import Tesl.Prelude exposing [Bool(..), Int, String]

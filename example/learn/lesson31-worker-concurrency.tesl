@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson31WorkerConcurrency exposing [EmailQueue, ConcurrencyServer]
 
 # Lesson 31 — Worker Concurrency with numberOfWorkers

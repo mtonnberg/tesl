@@ -1157,6 +1157,41 @@
       (with-handlers ([exn? (lambda (e) (log (format "~a json: ~a" label (exn-message e))) on-fail)])
         (read-json (open-input-string raw))))))))
 
+;; ── Builtin docs (`tesl --doc-json`) ──────────────────────────────────────────
+;; The compiler's Stdlib_docs catalog is the drift-proof source of builtin
+;; signatures (types render live from the checker's stdlib_env), so hover asks
+;; it FIRST and only falls back to the in-file stdlib-sigs hash for keyword/SQL
+;; help entries the catalog does not own.  Results are memoized: the builtin
+;; surface is static for the lifetime of a compiler binary.
+(define doc-json-cache (make-hash))
+
+(define (run-doc-json compiler name)
+  ;; -> first catalog entry hash {name,module,kind,signature,doc}, or #f.
+  (hash-ref!
+   doc-json-cache name
+   (lambda ()
+     (with-handlers ([exn? (lambda (e) (log (format "doc-json: ~a" (exn-message e))) #f)])
+       (let-values ([(proc pout pin perr)
+                     (subprocess #f #f #f (path->string compiler) "--doc-json" name)])
+         (close-output-port pin)
+         (let* ([raw (port->string pout)]
+                [_   (port->string perr)]
+                [_   (subprocess-wait proc)]
+                [j   (read-json (open-input-string raw))])
+           (and (hash? j)
+                (let ([entries (hash-ref j 'entries '())])
+                  (and (pair? entries) (car entries))))))))))
+
+(define (format-doc-hover entry)
+  (let* ([sig   (hash-ref entry 'signature "")]
+         [doc   (hash-ref entry 'doc "")]
+         [mod   (hash-ref entry 'module "")]
+         [home  (if (string=? mod "")
+                    "always available"
+                    (format "from `~a`" mod))])
+    (format "```tesl\n~a\n```\n\n~a\n\n*~a — `tesl doc ~a` for details*"
+            sig doc home (hash-ref entry 'name ""))))
+
 (define (run-signature-help compiler file-path line col)
   ;; --signature-help-json → {signature:{label,parameters,active_parameter}|null}.
   ;; Returns the inner `signature` hash, or #f.
@@ -2362,19 +2397,25 @@
                     ;; Priority 1: local let in the current top-level block, then local/imported declarations.
                     [entry  (or (and word text (find-local-binding-entry source-file text line-num word binding-types))
                                 (and word (hash-ref table word #f)))]
-                    ;; Priority 2: qualified stdlib (handles String.length, generatePrefixedId, etc.)
-                    [stdlib (and (not entry)
+                    ;; Priority 2: builtin surface — the compiler's Stdlib_docs
+                    ;; catalog first (drift-proof: types come from the checker),
+                    ;; then the in-file stdlib-sigs hash for keyword/SQL help
+                    ;; entries the catalog does not own.
+                    [doc-entry (and (not entry)
+                                    (or (and qualified (run-doc-json compiler qualified))
+                                        (and hyphenated (run-doc-json compiler hyphenated))))]
+                    [stdlib (and (not entry) (not doc-entry)
                                  (or (and qualified (hash-ref stdlib-sigs qualified #f))
                                      (and hyphenated (hash-ref stdlib-sigs hyphenated #f))))]
                     ;; Priority 3: proof-predicate owner (e.g. hover on "ValidPort" →
                     ;;   finds "check isValidPort ... -> ... ValidPort ...")
-                    [owner  (and (not entry) (not stdlib) word
+                    [owner  (and (not entry) (not doc-entry) (not stdlib) word
                                  (find-proof-owner table word))]
                     ;; Priority 4: configuration-block field (database/postgres/
                     ;;   queue/retry/channel/cache/email/smtp). When the cursor is
                     ;;   inside a config block and the word is one of its schema
                     ;;   fields, show the field's type + doc from Config_schema.
-                    [cfg-cc (and word text (not entry) (not stdlib) (not owner)
+                    [cfg-cc (and word text (not entry) (not doc-entry) (not stdlib) (not owner)
                                  (with-text-tmp text (uri->path uri) compiler
                                    (lambda (tmp) (run-config-context compiler tmp line-num char-num))))]
                     [cfg-field (and cfg-cc (config-field-lookup cfg-cc word))]
@@ -2382,13 +2423,16 @@
                     ;;   (record field access via --field-at-json, otherwise the
                     ;;   expression type via --type-at-json). Covers expressions the
                     ;;   text-based heuristics above cannot resolve.
-                    [compiler-md (and (not entry) (not stdlib) (not owner) (not cfg-field) text
+                    [compiler-md (and (not entry) (not doc-entry) (not stdlib) (not owner) (not cfg-field) text
                                       (compiler-hover-markdown compiler (uri->path uri) text line-num char-num))]
                     [result
                      (cond
                        [entry  (hash 'contents
                                      (hash 'kind  "markdown"
                                            'value (format-hover-entry entry)))]
+                       [doc-entry (hash 'contents
+                                        (hash 'kind  "markdown"
+                                              'value (format-doc-hover doc-entry)))]
                        [stdlib (hash 'contents
                                      (hash 'kind  "markdown"
                                            'value (format-stdlib-hover stdlib)))]
@@ -2913,10 +2957,30 @@
 (module+ test
   (require rackunit)
 
+  ;; ── Builtin-doc hover (compiler --doc-json) ────────────────────────────────
+  ;; Hover priority 2 asks the compiler's Stdlib_docs catalog; these pin the
+  ;; plumbing end-to-end against the real binary (roadmap:
+  ;; improved_transparency_for_built_in_types).
+  (let ([compiler (find-compiler)])
+    (when compiler
+      (let ([send-entry (run-doc-json compiler "Email.send")])
+        (check-true (hash? send-entry) "Email.send resolves via --doc-json")
+        (check-true (regexp-match? #rx"EmailBody"
+                                   (hash-ref send-entry 'signature ""))
+                    "Email.send signature shows the body type")
+        (check-true (regexp-match? #rx"```tesl" (format-doc-hover send-entry))
+                    "doc hover renders a tesl code fence"))
+      (let ([smtp (run-doc-json compiler "SmtpConfig")])
+        (check-true (hash? smtp) "SmtpConfig resolves via --doc-json")
+        (check-true (regexp-match? #rx"host: String"
+                                   (hash-ref smtp 'signature ""))
+                    "SmtpConfig signature lists its fields"))
+      (check-false (run-doc-json compiler "definitelyNotABuiltinName42")
+                   "unknown names miss cleanly")))
+
   (define local-let-hover-src
     (string-join
-     '("#lang tesl"
-       "module Main exposing [value]"
+     '("module Main exposing [value]"
        "import Tesl.Prelude exposing [Int, String]"
        "fn value() -> Int ="
        "  let formatted: Int = 1"
@@ -2929,13 +2993,12 @@
 "))
 
   (define local-let-binding-types
-    (list (hash 'name "formatted" 'line 4 'type "Int")
-          (hash 'name "inferred" 'line 7 'type "Int")))
+    (list (hash 'name "formatted" 'line 3 'type "Int")
+          (hash 'name "inferred" 'line 6 'type "Int")))
 
   (define broader-local-hover-src
     (string-join
-     '("#lang tesl"
-       "module Main exposing [value]"
+     '("module Main exposing [value]"
        "import Tesl.Prelude exposing [Int]"
        "import Tesl.Maybe exposing [Maybe(..)]"
        "fn value(input: Maybe Int) -> Int ="
@@ -2948,14 +3011,13 @@
 "))
 
   (define broader-local-binding-types
-    (list (hash 'name "input" 'line 4 'type "Maybe Int")
-          (hash 'name "matched" 'line 6 'type "Int")
-          (hash 'name "inferred" 'line 7 'type "Int")))
+    (list (hash 'name "input" 'line 3 'type "Maybe Int")
+          (hash 'name "matched" 'line 5 'type "Int")
+          (hash 'name "inferred" 'line 6 'type "Int")))
 
   (define proof-local-hover-src
     (string-join
-     '("#lang tesl"
-       "module Main exposing [checkNoteId]"
+     '("module Main exposing [checkNoteId]"
        "import Tesl.Prelude exposing [String]"
        "check checkNoteId(s: String) -> s: String::: ValidNoteId s ="
        "  ok s::: ValidNoteId s")
@@ -2963,12 +3025,11 @@
 "))
 
   (define proof-local-binding-types
-    (list (hash 'name "s" 'line 3 'type "String ::: ValidNoteId s")))
+    (list (hash 'name "s" 'line 2 'type "String ::: ValidNoteId s")))
 
   (define proof-let-local-hover-src
     (string-join
-     '("#lang tesl"
-       "module Main exposing [value]"
+     '("module Main exposing [value]"
        "import Tesl.Prelude exposing [Int, detachFact]"
        "fn value(quantity: Int) -> Int ="
        "  let p = checkPositiveInt 10"
@@ -2980,12 +3041,12 @@
 "))
 
   (define proof-let-binding-types
-    (list (hash 'name "p" 'line 4 'type "Int ::: IsPositive p")
-          (hash 'name "pq" 'line 5 'type "Int ::: PriceExceedsQuantity pq quantity"
+    (list (hash 'name "p" 'line 3 'type "Int ::: IsPositive p")
+          (hash 'name "pq" 'line 4 'type "Int ::: PriceExceedsQuantity pq quantity"
                 'note "subjects: pq; quantity")
-          (hash 'name "proodd" 'line 6 'type "Fact (PriceExceedsQuantity pq quantity)"
+          (hash 'name "proodd" 'line 5 'type "Fact (PriceExceedsQuantity pq quantity)"
                 'note "fact subjects: pq; quantity")
-          (hash 'name "xProof2" 'line 7 'type "Fact (PriceExceedsQuantity pq quantity)"
+          (hash 'name "xProof2" 'line 6 'type "Fact (PriceExceedsQuantity pq quantity)"
                 'note "fact subjects: pq; quantity")))
 
   (let* ([tmp-path (string->path "/tmp/definition-temp.tesl")]
@@ -3036,54 +3097,54 @@
       (check-equal? (hash-ref (hash-ref res 'range) 'start) (hash 'line 9 'character 0))
       (check-equal? (hash-ref (hash-ref res 'range) 'end)   (hash 'line 9 'character 10))))
 
-  (let ([typed-entry (find-local-binding-entry "/tmp/local-lets.tesl" local-let-hover-src 5 "formatted" local-let-binding-types)]
-        [inferred-entry (find-local-binding-entry "/tmp/local-lets.tesl" local-let-hover-src 8 "inferred" local-let-binding-types)]
-        [fallback-entry (find-local-binding-entry "/tmp/local-lets.tesl" local-let-hover-src 8 "inferred")]
-        [param-entry (find-local-binding-entry "/tmp/broader-locals.tesl" broader-local-hover-src 5 "input" broader-local-binding-types)]
-        [case-entry (find-local-binding-entry "/tmp/broader-locals.tesl" broader-local-hover-src 6 "matched" broader-local-binding-types)]
-        [case-use-entry (find-local-binding-entry "/tmp/broader-locals.tesl" broader-local-hover-src 7 "matched" broader-local-binding-types)]
-        [proof-entry (find-local-binding-entry "/tmp/proof-locals.tesl" proof-local-hover-src 3 "s" proof-local-binding-types)]
-        [proof-let-p-entry (find-local-binding-entry "/tmp/proof-let-locals.tesl" proof-let-local-hover-src 8 "p" proof-let-binding-types)]
-        [proof-let-pq-entry (find-local-binding-entry "/tmp/proof-let-locals.tesl" proof-let-local-hover-src 8 "pq" proof-let-binding-types)]
-        [proof-let-fact-entry (find-local-binding-entry "/tmp/proof-let-locals.tesl" proof-let-local-hover-src 8 "proodd" proof-let-binding-types)]
-        [proof-let-destructured-fact-entry (find-local-binding-entry "/tmp/proof-let-locals.tesl" proof-let-local-hover-src 7 "xProof2" proof-let-binding-types)])
+  (let ([typed-entry (find-local-binding-entry "/tmp/local-lets.tesl" local-let-hover-src 4 "formatted" local-let-binding-types)]
+        [inferred-entry (find-local-binding-entry "/tmp/local-lets.tesl" local-let-hover-src 7 "inferred" local-let-binding-types)]
+        [fallback-entry (find-local-binding-entry "/tmp/local-lets.tesl" local-let-hover-src 7 "inferred")]
+        [param-entry (find-local-binding-entry "/tmp/broader-locals.tesl" broader-local-hover-src 4 "input" broader-local-binding-types)]
+        [case-entry (find-local-binding-entry "/tmp/broader-locals.tesl" broader-local-hover-src 5 "matched" broader-local-binding-types)]
+        [case-use-entry (find-local-binding-entry "/tmp/broader-locals.tesl" broader-local-hover-src 6 "matched" broader-local-binding-types)]
+        [proof-entry (find-local-binding-entry "/tmp/proof-locals.tesl" proof-local-hover-src 2 "s" proof-local-binding-types)]
+        [proof-let-p-entry (find-local-binding-entry "/tmp/proof-let-locals.tesl" proof-let-local-hover-src 7 "p" proof-let-binding-types)]
+        [proof-let-pq-entry (find-local-binding-entry "/tmp/proof-let-locals.tesl" proof-let-local-hover-src 7 "pq" proof-let-binding-types)]
+        [proof-let-fact-entry (find-local-binding-entry "/tmp/proof-let-locals.tesl" proof-let-local-hover-src 7 "proodd" proof-let-binding-types)]
+        [proof-let-destructured-fact-entry (find-local-binding-entry "/tmp/proof-let-locals.tesl" proof-let-local-hover-src 6 "xProof2" proof-let-binding-types)])
     (check-not-false typed-entry)
-    (check-equal? (vector-ref typed-entry 1) 4)
+    (check-equal? (vector-ref typed-entry 1) 3)
     (check-equal? (vector-ref typed-entry 3) "formatted: Int")
     (check-not-false inferred-entry)
-    (check-equal? (vector-ref inferred-entry 1) 7)
+    (check-equal? (vector-ref inferred-entry 1) 6)
     (check-equal? (vector-ref inferred-entry 3) "inferred: Int")
     (check-not-false fallback-entry)
     (check-equal? (vector-ref fallback-entry 3) "let inferred = 2")
     (check-not-false param-entry)
-    (check-equal? (vector-ref param-entry 1) 4)
+    (check-equal? (vector-ref param-entry 1) 3)
     (check-equal? (vector-ref param-entry 3) "input: Maybe Int")
     (check-not-false case-entry)
-    (check-equal? (vector-ref case-entry 1) 6)
+    (check-equal? (vector-ref case-entry 1) 5)
     (check-equal? (vector-ref case-entry 3) "matched: Int")
     (check-not-false case-use-entry)
-    (check-equal? (vector-ref case-use-entry 1) 6)
+    (check-equal? (vector-ref case-use-entry 1) 5)
     (check-equal? (vector-ref case-use-entry 3) "matched: Int")
     (check-not-false proof-entry)
-    (check-equal? (vector-ref proof-entry 1) 3)
+    (check-equal? (vector-ref proof-entry 1) 2)
     (check-equal? (vector-ref proof-entry 3) "s: String ::: ValidNoteId s")
     (check-not-false proof-let-p-entry)
-    (check-equal? (vector-ref proof-let-p-entry 1) 4)
+    (check-equal? (vector-ref proof-let-p-entry 1) 3)
     (check-equal? (vector-ref proof-let-p-entry 3) "p: Int ::: IsPositive p")
     (check-not-false proof-let-pq-entry)
-    (check-equal? (vector-ref proof-let-pq-entry 1) 5)
+    (check-equal? (vector-ref proof-let-pq-entry 1) 4)
     (check-equal? (vector-ref proof-let-pq-entry 3) "pq: Int ::: PriceExceedsQuantity pq quantity")
     (check-equal? (vector-ref proof-let-pq-entry 4) '("subjects: pq; quantity"))
     (check-true (regexp-match? #rx"subjects: pq; quantity"
                                (format-hover-entry proof-let-pq-entry)))
     (check-not-false proof-let-fact-entry)
-    (check-equal? (vector-ref proof-let-fact-entry 1) 6)
+    (check-equal? (vector-ref proof-let-fact-entry 1) 5)
     (check-equal? (vector-ref proof-let-fact-entry 3) "proodd: Fact (PriceExceedsQuantity pq quantity)")
     (check-equal? (vector-ref proof-let-fact-entry 4) '("fact subjects: pq; quantity"))
     (check-true (regexp-match? #rx"fact subjects: pq; quantity"
                                (format-hover-entry proof-let-fact-entry)))
     (check-not-false proof-let-destructured-fact-entry)
-    (check-equal? (vector-ref proof-let-destructured-fact-entry 1) 7)
+    (check-equal? (vector-ref proof-let-destructured-fact-entry 1) 6)
     (check-equal? (vector-ref proof-let-destructured-fact-entry 3) "xProof2: Fact (PriceExceedsQuantity pq quantity)")
     (check-equal? (vector-ref proof-let-destructured-fact-entry 4) '("fact subjects: pq; quantity"))
     (check-true (regexp-match? #rx"fact subjects: pq; quantity"
@@ -3091,15 +3152,14 @@
 
   (let* ([uri "file:///tmp/lint-fix.tesl"]
          [text (string-join
-                '("#lang tesl"
-                  "module Main exposing [value]"
+                '("module Main exposing [value]"
                   "import Tesl.Prelude exposing [Int]   "
                   "fn value() -> Int = 1")
                 "\n")]
          [diag (hash
                 'code "W010"
                 'data (hash 'fix (hash 'kind "replace_line"
-                                      'line 2
+                                      'line 1
                                       'replacement "import Tesl.Prelude exposing [Int]")))]
          [action (diag->code-action uri text diag)]
          [changes (hash-ref (hash-ref action 'edit) 'changes)]
@@ -3109,43 +3169,42 @@
     (check-equal? (hash-ref action 'kind) "quickfix")
     (check-equal? (hash-ref action 'title) "Apply fix for W010")
     (check-equal? (hash-ref edit 'newText) "import Tesl.Prelude exposing [Int]")
-    (check-equal? (hash-ref (hash-ref edit 'range) 'start) (hash 'line 2 'character 0)))
+    (check-equal? (hash-ref (hash-ref edit 'range) 'start) (hash 'line 1 'character 0)))
 
   ;; replace_range (D9): column-precise edit — cols come from the fix verbatim
   (let* ([uri "file:///tmp/range-fix.tesl"]
          [text (string-join
-                '("#lang tesl"
-                  "module Main exposing [greet]"
+                '("module Main exposing [greet]"
                   "fn greet(a: String, b: String) -> String = a + b")
                 "\n")]
          [diag (hash
                 'code "T001"
                 'data (hash 'fix (hash 'kind "replace_range"
-                                       'start_line 2 'start_col 45
-                                       'end_line 2 'end_col 46
+                                       'start_line 1 'start_col 45
+                                       'end_line 1 'end_col 46
                                        'replacement "++")))]
          [action (diag->code-action uri text diag)]
          [changes (hash-ref (hash-ref action 'edit) 'changes)]
          [edit (car (hash-ref changes (uri->json-key uri)))])
     (check-not-false action)
     (check-equal? (hash-ref edit 'newText) "++")
-    (check-equal? (hash-ref (hash-ref edit 'range) 'start) (hash 'line 2 'character 45))
-    (check-equal? (hash-ref (hash-ref edit 'range) 'end)   (hash 'line 2 'character 46)))
+    (check-equal? (hash-ref (hash-ref edit 'range) 'start) (hash 'line 1 'character 45))
+    (check-equal? (hash-ref (hash-ref edit 'range) 'end)   (hash 'line 1 'character 46)))
 
   ;; multi (D9): one code action carrying several TextEdits (single-line-`if` split)
   (let* ([uri "file:///tmp/multi-fix.tesl"]
-         [text "#lang tesl\nfn h(n: Int) -> Int =\n    if n > 0 then 1 else 2\n"]
+         [text "fn h(n: Int) -> Int =\n    if n > 0 then 1 else 2\n"]
          [diag (hash
                 'code "E000"
                 'data (hash 'fix (hash 'kind "multi"
                                        'edits (list
                                                (hash 'kind "replace_range"
-                                                     'start_line 2 'start_col 17
-                                                     'end_line 2 'end_col 18
+                                                     'start_line 1 'start_col 17
+                                                     'end_line 1 'end_col 18
                                                      'replacement "\n        ")
                                                (hash 'kind "replace_range"
-                                                     'start_line 2 'start_col 20
-                                                     'end_line 2 'end_col 20
+                                                     'start_line 1 'start_col 20
+                                                     'end_line 1 'end_col 20
                                                      'replacement "\n    ")))))]
          [action (diag->code-action uri text diag)]
          [changes (hash-ref (hash-ref action 'edit) 'changes)]
@@ -3154,7 +3213,7 @@
     (check-equal? (length edits) 2)
     (check-equal? (hash-ref (car edits) 'newText) "\n        ")
     (check-equal? (hash-ref (hash-ref (cadr edits) 'range) 'start)
-                  (hash 'line 2 'character 20)))
+                  (hash 'line 1 'character 20)))
 
   (check-true (hash-has-key? stdlib-sigs "telemetry"))
   (check-true (hash-has-key? stdlib-sigs "initTelemetry"))
@@ -3266,27 +3325,26 @@
       (check-equal? (hash-ref fld 'containerName) "User")))
 
   ;; ── Semantic tokens: delta encoding + single-identifier span ─────────────────
-  (let* ([lines (list "#lang tesl"
-                      "module M exposing [double]"
+  (let* ([lines (list "module M exposing [double]"
                       "import Tesl.Prelude exposing [Int]"
                       "fn double(n: Int) -> Int ="
                       "  let result = n + n")]
          [semantic (hash
                     'functions (list
                                 (hash 'name "double" 'kind "fn"
-                                      'loc (hash 'start_line 3 'start_col 0
-                                                 'end_line 4 'end_col 18)))
+                                      'loc (hash 'start_line 2 'start_col 0
+                                                 'end_line 3 'end_col 18)))
                     'local_bindings (list
                                      (hash 'name "result" 'type "Int"
-                                           'loc (hash 'start_line 4 'start_col 6
-                                                      'end_line 4 'end_col 12))))]
+                                           'loc (hash 'start_line 3 'start_col 6
+                                                      'end_line 3 'end_col 12))))]
          [toks (semantic->raw-tokens semantic lines)]
          [data (raw-tokens->data toks)])
-    ;; two tokens: double (line 3) and result (line 4)
+    ;; two tokens: double (line 2) and result (line 3)
     (check-equal? (length toks) 2)
     ;; first token anchored at the NAME "double" (col 3), length 6 — NOT the
     ;; whole declaration; this is the minimap-oversize guard.
-    (check-equal? (vector-ref (first toks) 0) 3)
+    (check-equal? (vector-ref (first toks) 0) 2)
     (check-equal? (vector-ref (first toks) 1) 3)
     (check-equal? (vector-ref (first toks) 2) 6)
     ;; "result" token: col 6, length 6 (bounded to the identifier, not to EOL)
@@ -3294,8 +3352,8 @@
     (check-equal? (vector-ref (second toks) 2) 6)
     ;; data is 5 ints per token, delta encoded
     (check-equal? (length data) 10)
-    ;; first token: deltaLine=3, deltaStartChar=3, len=6
-    (check-equal? (take data 3) (list 3 3 6))
+    ;; first token: deltaLine=2, deltaStartChar=3, len=6
+    (check-equal? (take data 3) (list 2 3 6))
     ;; second token: deltaLine=1 (next line), deltaStartChar=6 (absolute, new line)
     (check-equal? (list-ref data 5) 1)
     (check-equal? (list-ref data 6) 6))
@@ -3416,29 +3474,28 @@
                                (hash-ref (hash-ref resolved 'documentation) 'value))))
 
   ;; ── Folding ranges: decl blocks, brace blocks, comment runs ──────────────────
-  (let* ([lines (list "#lang tesl"                  ; 0
-                      "module M exposing [f]"       ; 1
-                      "# a comment"                 ; 2
-                      "# second comment line"       ; 3
-                      "fn f(n: Int) -> Int ="       ; 4  decl start
-                      "  n * 2"                      ; 5
-                      ""                             ; 6  (trailing blank trimmed)
-                      "test \"t\" {"                ; 7  decl start + brace
-                      "  expect f 1 == 2"            ; 8
-                      "}")]                          ; 9  brace close
+  (let* ([lines (list "module M exposing [f]"       ; 0
+                      "# a comment"                 ; 1
+                      "# second comment line"       ; 2
+                      "fn f(n: Int) -> Int ="       ; 3  decl start
+                      "  n * 2"                      ; 4
+                      ""                             ; 5  (trailing blank trimmed)
+                      "test \"t\" {"                ; 6  decl start + brace
+                      "  expect f 1 == 2"            ; 7
+                      "}")]                          ; 8  brace close
          [folds (folding-ranges lines)])
-    ;; comment run lines 2..3 folds as a comment region
-    (check-not-false (findf (lambda (r) (and (= (hash-ref r 'startLine) 2)
-                                             (= (hash-ref r 'endLine) 3)
+    ;; comment run lines 1..2 folds as a comment region
+    (check-not-false (findf (lambda (r) (and (= (hash-ref r 'startLine) 1)
+                                             (= (hash-ref r 'endLine) 2)
                                              (equal? (hash-ref r 'kind #f) "comment")))
                             folds))
-    ;; fn block: line 4 down to 5 (the trailing blank at 6 is trimmed)
-    (check-not-false (findf (lambda (r) (and (= (hash-ref r 'startLine) 4)
-                                             (= (hash-ref r 'endLine) 5)))
+    ;; fn block: line 3 down to 4 (the trailing blank at 5 is trimmed)
+    (check-not-false (findf (lambda (r) (and (= (hash-ref r 'startLine) 3)
+                                             (= (hash-ref r 'endLine) 4)))
                             folds))
-    ;; brace block: line 7 to 9
-    (check-not-false (findf (lambda (r) (and (= (hash-ref r 'startLine) 7)
-                                             (= (hash-ref r 'endLine) 9)))
+    ;; brace block: line 6 to 8
+    (check-not-false (findf (lambda (r) (and (= (hash-ref r 'startLine) 6)
+                                             (= (hash-ref r 'endLine) 8)))
                             folds)))
   ;; single-line constructs never fold (start==end suppressed)
   (check-equal? (folding-ranges (list "fn f() -> Int = 1")) '())
@@ -3548,13 +3605,13 @@
   (check-false (linked-editing-ranges (list "fn f() -> Int =" "  x") 1 2 word-at))
 
   ;; ── Diagnostic fix extraction + classification ───────────────────────────────
-  (let* ([text "#lang tesl\nmodule M exposing [f]\nfn f() -> Int = 1\n"]
+  (let* ([text "module M exposing [f]\nfn f() -> Int = 1\n"]
          [import-diag (hash 'code "T001"
                             'message "type `Int` is not in scope; add it to an import. Try: import Tesl.Prelude exposing [Int]"
-                            'data (hash 'fix (hash 'kind "replace_line" 'line 1
+                            'data (hash 'fix (hash 'kind "replace_line" 'line 0
                                                    'replacement "import Tesl.Prelude exposing [Int]")))]
          [plain-diag (hash 'code "W001" 'message "unused binding"
-                           'data (hash 'fix (hash 'kind "replace_line" 'line 2 'replacement "fn f() -> Int = 2")))]
+                           'data (hash 'fix (hash 'kind "replace_line" 'line 1 'replacement "fn f() -> Int = 2")))]
          [no-fix-diag (hash 'code "E999" 'message "no fix" 'data (hash))])
     (check-true (pair? (diag->fix-edits text import-diag)))
     (check-equal? (diag->fix-edits text no-fix-diag) '())

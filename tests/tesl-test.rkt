@@ -246,32 +246,13 @@
      (lambda ()
        (error 'tesl-test "missing internal binding ~a in ~a" symbol-name module-path)))))
 
-(define direct-reader-module-path
-  (write-temp-file
-   "tesl-reader-source-~a.tesl"
-   (string-append
-    "#lang tesl\n"
-    "module DirectThslSmoke exposing [getAnswer]\n"
-    "import Tesl.Prelude exposing [Int]\n"
-    "answer = 41\n"
-    "fn getAnswer() -> Int =\n"
-    "  answer\n")))
-
-(define-values (direct-reader-status direct-reader-out direct-reader-err)
-  (run-racket-script-with-linked-tesl
-   (format
-    "#lang racket\n(define direct-path ~s)\n(define todo-path ~s)\n(define getAnswer (dynamic-require `(file ,direct-path) 'getAnswer))\n(displayln (getAnswer))\n(define resolveExamplePort (dynamic-require `(file ,todo-path) 'resolveExamplePort))\n(displayln (procedure? resolveExamplePort))\n"
-    (path->string direct-reader-module-path)
-    (path->string tesl-todo-source-path))))
-
-(check-equal? direct-reader-status 0)
-(check-equal? (string-split (string-trim direct-reader-out) "\n") '("41" "#t"))
-(check-equal? (string-trim direct-reader-err) "")
+;; The "direct reader" smoke test (dynamic-require of a raw .tesl file) was
+;; removed with the Racket #lang reader chain (roadmap: remove_lang_tesl_hash):
+;; .tesl sources are only loadable after `tesl compile`, never directly.
 
 (define focused-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module ThslSmoke exposing [echoChecked, checkedLength, parseOrZero]\n"
     "import Tesl.Prelude exposing [Int, String]\n"
     "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -306,7 +287,6 @@
 (define proof-smoke-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module ProofSmoke exposing [provePositive]\n"
     "import Tesl.Prelude exposing [Int]\n"
     "fact Positive (value: Int)\n"
@@ -323,7 +303,6 @@
 (define proof-transport-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module ProofTransport exposing [shouldWork, shouldWorkSugar, forgetAndReattach, detachPortProof, extractPositiveProof]\n"
     "import Tesl.Prelude exposing [attachFact, detachFact, forgetFact, Int, Fact]\n"
     "fact ValidPort (port: Int)\n"
@@ -370,7 +349,6 @@
 (define proof-transport-cross-name-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module ProofTransportMismatch exposing [shouldNotWork]\n"
     "import Tesl.Prelude exposing [attachFact, Int, Fact]\n"
     "fact ValidPort (port: Int)\n"
@@ -387,7 +365,6 @@
 (define proof-transport-advanced-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module ProofTransportAdvanced exposing [runShouldWork2, runShouldWork3, runShouldWork4, aliasPreservesProof, rawValueOfChecked]\n"
     "import Tesl.Prelude exposing [attachFact, detachFact, forgetFact, Int, Fact]\n"
     "fact ValidPort (port: Int)\n"
@@ -439,7 +416,6 @@
 (define proof-transport-parameter-mismatch-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module ProofTransportParameterMismatch exposing [shouldNotWork]\n"
     "import Tesl.Prelude exposing [Int, Fact]\n"
     "fact ValidPort (port: Int)\n"
@@ -455,7 +431,6 @@
 (define proof-transport-forget-mismatch-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module ProofTransportForgetMismatch exposing [shouldNotWork]\n"
     "import Tesl.Prelude exposing [attachFact, forgetFact, Int, Fact]\n"
     "fact ValidPort (port: Int)\n"
@@ -475,7 +450,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module ProofTransportRawAlias exposing [shouldWork]\n"
      "import Tesl.Prelude exposing [attachFact, Int, Fact]\n"
      "fact ValidPort (port: Int)\n"
@@ -492,7 +466,6 @@
 (define proof-decomposition-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module ProofDecomposition exposing [combinedProof, decomposeSingle, restoreCombined]\n"
     "import Tesl.Prelude exposing [andLeft, andRight, attachFact, Int, introAnd, Fact]\n"
     "fact ValidPort (port: Int)\n"
@@ -541,7 +514,6 @@
 (define proof-decomposition-missing-proof-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module ProofDecompositionMissingProof exposing [shouldNotWork]\n"
     "import Tesl.Prelude exposing [Int, Fact]\n"
     "fn shouldNotWork(y: Int) -> Int =\n"
@@ -552,7 +524,6 @@
 (define proof-decomposition-strips-proof-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module ProofDecompositionStripsProof exposing [shouldNotWork]\n"
     "import Tesl.Prelude exposing [attachFact, Int, Fact]\n"
     "fact ValidPort (port: Int)\n"
@@ -579,7 +550,6 @@
 (define comment-smoke-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "# standalone comment\n"
     "module CommentSmoke exposing [commentedPort, hashText]\n"
     "import Tesl.Prelude exposing [attachFact, Int, Fact, String] # import comment\n"
@@ -623,7 +593,6 @@
 (define single-line-function-body-error
   (try-compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module SingleLineFunctionBody exposing [broken]\n"
     "import Tesl.Prelude exposing [Int]\n"
     "fn broken(x: Int) -> Int = x\n")))
@@ -634,7 +603,6 @@
 (define duplicate-parameter-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module DuplicateParameters exposing [shouldNotWork5]\n"
     "import Tesl.Prelude exposing [Int]\n"
     "fn shouldNotWork5(x: Int, x: Int) -> Int =\n"
@@ -645,7 +613,6 @@
 (define duplicate-let-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module DuplicateLet exposing [shouldNotWork6]\n"
     "import Tesl.Prelude exposing [Int]\n"
     "fn shouldNotWork6(x: Int) -> Int =\n"
@@ -658,7 +625,6 @@
 (define shadowed-input-let-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module ShadowedInputLet exposing [shouldNotWork7]\n"
     "import Tesl.Prelude exposing [Int]\n"
     "fn shouldNotWork7(z: Int) -> Int =\n"
@@ -673,7 +639,6 @@
 (define own-proof-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module OwnProof exposing [isValid, checked]\n"
     "import Tesl.Prelude exposing [attachFact, Int, Fact]\n"
     "fact OwnPred (x: Int)\n"
@@ -687,7 +652,6 @@
 (define own-check-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module OwnCheck exposing [validate]\n"
     "import Tesl.Prelude exposing [Int]\n"
     "fact Confirmed (x: Int)\n"
@@ -702,7 +666,6 @@
 (define undeclared-predicate-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module StolenProof exposing [steal]\n"
     "import Tesl.Prelude exposing [Int, Fact]\n"
     "fact StolenPred (x: Int)\n"
@@ -714,7 +677,6 @@
 (define fn-proof-construction-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module FnBadProof exposing [bad]\n"
     "import Tesl.Prelude exposing [Int, Fact]\n"
     "fact RealPred (x: Int)\n"
@@ -728,7 +690,6 @@
 (define cross-module-proof-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module BadEstablish exposing [steal]\n"
     "import Tesl.Prelude exposing [Int, Fact]\n"
     "fact SomePred (x: Int)\n"
@@ -748,7 +709,6 @@
    (write-file
     alpha-path
     (string-append
-     "#lang tesl\n"
      "module Alpha exposing [addTen, doubled]\n"
      "import Tesl.Prelude exposing [Int]\n"
      "import Beta exposing [addFive]\n"
@@ -759,7 +719,6 @@
    (write-file
     beta-path
     (string-append
-     "#lang tesl\n"
      "module Beta exposing [addFive]\n"
      "import Tesl.Prelude exposing [Int]\n"
      "import Alpha exposing [doubled]\n"
@@ -785,7 +744,6 @@
    (write-file
     prover-path
     (string-append
-     "#lang tesl\n"
      "module Prover exposing [validPort, applyPort, ValidPort]\n"
      "import Tesl.Prelude exposing [attachFact, Int, Fact]\n"
      "import Consumer exposing [usePort]\n"
@@ -797,7 +755,6 @@
    (write-file
     consumer-path
     (string-append
-     "#lang tesl\n"
      "module Consumer exposing [usePort]\n"
      "import Tesl.Prelude exposing [Int]\n"
      "import Prover exposing [validPort, ValidPort]\n"
@@ -816,7 +773,6 @@
    (write-file
     a-path
     (string-append
-     "#lang tesl\n"
      "module A exposing [makeBoxA, getBoxAValue, BoxA]\n"
      "import Tesl.Prelude exposing [Int, String]\n"
      "import B exposing [BoxB, getBoxBValue]\n"
@@ -832,7 +788,6 @@
    (write-file
     b-path
     (string-append
-     "#lang tesl\n"
      "module B exposing [makeBoxB, getBoxBValue, BoxB]\n"
      "import Tesl.Prelude exposing [Int, String]\n"
      "import A exposing [BoxA, getBoxAValue]\n"
@@ -861,7 +816,6 @@
    (write-file
     a-path
     (string-append
-     "#lang tesl\n"
      "module A exposing [callA]\n"
      "import Tesl.Prelude exposing [Int]\n"
      "import B exposing [callB]\n"
@@ -870,7 +824,6 @@
    (write-file
     b-path
     (string-append
-     "#lang tesl\n"
      "module B exposing [callB]\n"
      "import Tesl.Prelude exposing [Int]\n"
      "import C exposing [callC]\n"
@@ -879,7 +832,6 @@
    (write-file
     c-path
     (string-append
-     "#lang tesl\n"
      "module C exposing [callC]\n"
      "import Tesl.Prelude exposing [Int]\n"
      "import A exposing [callA]\n"
@@ -901,7 +853,6 @@
      (write-file
       a-path
       (string-append
-       "#lang tesl\n"
        "module A exposing [unique_a]\n"
        "import Tesl.Prelude exposing [Int]\n"
        "import B exposing [unique_b]\n"
@@ -912,7 +863,6 @@
      (write-file
       b-path
       (string-append
-       "#lang tesl\n"
        "module B exposing [unique_b]\n"
        "import Tesl.Prelude exposing [Int]\n"
        "import A exposing [unique_a]\n"
@@ -936,7 +886,6 @@
    (write-file
     a-path
     (string-append
-     "#lang tesl\n"
      "module A exposing [Widget, makeA, getAField, testGetBField]\n"
      "import Tesl.Prelude exposing [Int]\n"
      "import B exposing [makeB]\n"
@@ -955,7 +904,6 @@
    (write-file
     b-path
     (string-append
-     "#lang tesl\n"
      "module B exposing [Widget, makeB, getBField, testGetAField]\n"
      "import Tesl.Prelude exposing [Int]\n"
      "import A exposing [makeA]\n"
@@ -1000,7 +948,6 @@
    (write-file
     lib-path
     (string-append
-     "#lang tesl\n"
      "module Lib exposing [double, Triple]\n"
      "import Tesl.Prelude exposing [Int]\n"
      "fn double(n: Int) -> Int =\n"
@@ -1013,7 +960,6 @@
    (write-file
     app-path
     (string-append
-     "#lang tesl\n"
      "module App exposing [run, sumTriple]\n"
      "import Tesl.Prelude exposing [Int]\n"
      ; Wildcard import: no explicit exposing list; Lib.double and Lib.Triple usable via prefix
@@ -1042,7 +988,6 @@
 (define string-functions-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module StringFns exposing [len, sw, swNot, empty, notEmpty]\n"
     "import Tesl.Prelude exposing [Int, List, String]\n"
     "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -1103,7 +1048,6 @@
 (define pipe-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module PipeOps exposing [applyDouble, pipeDouble, pipeChain, applyChain, pipeLen, applyLen]\n"
     "import Tesl.Prelude exposing [Int, String]\n"
     "import Tesl.String exposing [String.length]\n"
@@ -1162,7 +1106,6 @@
 (define ml-style-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module MLStyle exposing [mlSingle, mlMulti, mlNested, mlQualified, mlWithPipe, mlProofAware, mlMixed]\n"
     "import Tesl.Prelude exposing [attachFact, detachFact, forgetFact, Int, Fact, String]\n"
     "import Tesl.String exposing [String.length]\n"
@@ -1240,7 +1183,6 @@
 (define proof-decomp-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module ProofDecomp exposing [decompAndReattach, decompForget, decompTransport]\n"
     "import Tesl.Prelude exposing [attachFact, forgetFact, Int, Fact]\n"
     "fact ValidPort (port: Int)\n"
@@ -1286,7 +1228,6 @@
 (define proof-pattern-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module ProofPatterns exposing [discardLeft, discardRight, discardValue, bindBoth, threeWay]\n"
     "import Tesl.Prelude exposing [attachFact, forgetFact, Int, Fact]\n"
     "fact IsPositive (n: Int)\n"
@@ -1361,7 +1302,6 @@
 (define arithmetic-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module Arithmetic exposing [add, sub, mul, divInt, modInt, combined]\n"
     "import Tesl.Prelude exposing [Int]\n"
     "import Tesl.Int exposing [Int.nonZero, Int.divide, Int.modulo]\n"
@@ -1400,7 +1340,6 @@
    (write-file
     shared-path
     (string-append
-     "#lang tesl\n"
      "module Shared exposing [SharedTitle, sharedLength, parsePort]\n"
      "import Tesl.Prelude exposing [Int, String]\n"
      "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -1422,7 +1361,6 @@
    (write-file
     consumer-path
     (string-append
-     "#lang tesl\n"
      "module Consumer exposing [makeTitle, importedLength, parseImportedPort]\n"
      "import Tesl.Prelude exposing [Int, String]\n"
      "import Shared exposing [SharedTitle, sharedLength, parsePort]\n"
@@ -1457,7 +1395,6 @@
    (write-file
     shared-path
     (string-append
-     "#lang tesl\n"
      "module Shared exposing [Wrapper(..)]\n"
      "import Tesl.Prelude exposing [String]\n"
      "type Wrapper\n"
@@ -1466,7 +1403,6 @@
    (write-file
     consumer-path
     (string-append
-     "#lang tesl\n"
      "module Consumer exposing [wrapAgain]\n"
      "import Tesl.Prelude exposing [String]\n"
      "import Shared exposing [Wrapper(..)]\n"
@@ -1493,7 +1429,6 @@
    (write-file
     shared-path
     (string-append
-     "#lang tesl\n"
      "module Shared exposing [PayloadStatus(..)]\n"
      "import Tesl.Prelude exposing [Int, String]\n"
      "type PayloadStatus\n"
@@ -1502,7 +1437,6 @@
    (write-file
     consumer-path
     (string-append
-     "#lang tesl\n"
      "module Consumer exposing [makeOpened, makeFinished, describeStatus]\n"
      "import Tesl.Prelude exposing [Int, String]\n"
      "import Shared exposing [PayloadStatus(..)]\n"
@@ -1533,7 +1467,6 @@
 (define anonymous-adt-pattern-arity-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module BadCase exposing [broken]\n"
     "import Tesl.Prelude exposing [Int]\n"
     "type PayloadStatus\n"
@@ -1546,7 +1479,6 @@
 (define custom-capability-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module CapabilitySmoke exposing [runNeedsRead]\n"
     "import Tesl.Prelude exposing [Int]\n"
     "capability widgetRead\n"
@@ -1565,7 +1497,6 @@
 (define record-proof-field-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module RecordProofField exposing [PositivePayload, positive, extractSerial, PositivePayloadServer]\n"
     "import Tesl.Prelude exposing [Int]\n"
     "import Tesl.Json exposing [intCodec]\n"
@@ -1622,7 +1553,7 @@
 
 (define api-codec-module-path
   (compile-tesl-source
-   "#lang tesl\nmodule ApiCodecSmoke exposing [CodecServer]\nimport Tesl.Prelude exposing [String]\nimport Tesl.Json exposing [stringCodec]\nrecord CodecCreateTaskRequest {\n  title: String\n}\ncodec CodecCreateTaskRequest {\n  toJson_forbidden\n  fromJson [\n    {\n      title <- \"title\" with_codec stringCodec\n    }\n  ]\n}\nrecord CodecTaskMeta {\n  title: String\n  slug: String\n}\nrecord CodecNewTask {\n  meta: CodecTaskMeta\n  audit: String\n}\nrecord CodecTask {\n  id: String\n  meta: CodecTaskMeta\n  status: String\n  audit: String\n}\nrecord CodecTaskResponse {\n  id: String\n  title: String\n  status: String\n}\ncodec CodecTaskResponse {\n  toJson {\n    id -> \"id\" with_codec stringCodec\n    title -> \"title\" with_codec stringCodec\n    status -> \"status\" with_codec stringCodec\n  }\n  fromJson_forbidden\n}\nfn makeTaskMeta(title: String) -> CodecTaskMeta =\n  CodecTaskMeta { title: title, slug: title }\nfn decodeCreateTask(request: CodecCreateTaskRequest) -> CodecNewTask =\n  CodecNewTask { meta: makeTaskMeta request.title, audit: \"decoded-from-wire\" }\nfn encodeTask(task: CodecTask) -> CodecTaskResponse =\n  CodecTaskResponse { id: task.id, title: task.meta.title, status: task.status }\nhandler createTask(newTask: CodecNewTask) -> CodecTask =\n  CodecTask { id: \"task-1\", meta: newTask.meta, status: \"draft\", audit: newTask.audit }\napi CodecApi {\n  post \"/tasks\"\n    body newTask: CodecNewTask from CodecCreateTaskRequest via decodeCreateTask\n    response CodecTaskResponse via encodeTask\n    -> CodecTask\n}\nserver CodecServer for CodecApi {\n  createTask = createTask\n}\n"))
+   "module ApiCodecSmoke exposing [CodecServer]\nimport Tesl.Prelude exposing [String]\nimport Tesl.Json exposing [stringCodec]\nrecord CodecCreateTaskRequest {\n  title: String\n}\ncodec CodecCreateTaskRequest {\n  toJson_forbidden\n  fromJson [\n    {\n      title <- \"title\" with_codec stringCodec\n    }\n  ]\n}\nrecord CodecTaskMeta {\n  title: String\n  slug: String\n}\nrecord CodecNewTask {\n  meta: CodecTaskMeta\n  audit: String\n}\nrecord CodecTask {\n  id: String\n  meta: CodecTaskMeta\n  status: String\n  audit: String\n}\nrecord CodecTaskResponse {\n  id: String\n  title: String\n  status: String\n}\ncodec CodecTaskResponse {\n  toJson {\n    id -> \"id\" with_codec stringCodec\n    title -> \"title\" with_codec stringCodec\n    status -> \"status\" with_codec stringCodec\n  }\n  fromJson_forbidden\n}\nfn makeTaskMeta(title: String) -> CodecTaskMeta =\n  CodecTaskMeta { title: title, slug: title }\nfn decodeCreateTask(request: CodecCreateTaskRequest) -> CodecNewTask =\n  CodecNewTask { meta: makeTaskMeta request.title, audit: \"decoded-from-wire\" }\nfn encodeTask(task: CodecTask) -> CodecTaskResponse =\n  CodecTaskResponse { id: task.id, title: task.meta.title, status: task.status }\nhandler createTask(newTask: CodecNewTask) -> CodecTask =\n  CodecTask { id: \"task-1\", meta: newTask.meta, status: \"draft\", audit: newTask.audit }\napi CodecApi {\n  post \"/tasks\"\n    body newTask: CodecNewTask from CodecCreateTaskRequest via decodeCreateTask\n    response CodecTaskResponse via encodeTask\n    -> CodecTask\n}\nserver CodecServer for CodecApi {\n  createTask = createTask\n}\n"))
 
 (define CodecServer (tesl-module-value api-codec-module-path 'CodecServer))
 (define codec-create-response
@@ -1643,7 +1574,6 @@
 (define entity-proof-field-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module EntityProofField exposing [SomeEntity]\n"
     "import Tesl.Prelude exposing [String]\n"
     "fact SomeId (id: String)\n"
@@ -1660,7 +1590,6 @@
 (define record-update-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module RecordUpdate exposing [UpdateUser, renameUser]\n"
     "import Tesl.Prelude exposing [String]\n"
     "record UpdateUser {\n"
@@ -1677,7 +1606,6 @@
 (define missing-import-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module MissingImport exposing [broken]\n"
     "import Tesl.Prelude exposing [Int]\n"
     "fn broken(title: SharedTitle) -> Int =\n"
@@ -1689,7 +1617,6 @@
 ; NOTE: strict import checking is not yet implemented — functions compile without explicit
 ; imports but may fail at runtime if the stdlib modules aren't required. Skipping runtime test.
 (let ([src (string-append
-            "#lang tesl\n"
             "module MissingPrelude exposing [broken]\n"
             "import Tesl.Prelude exposing [Int, String]\n"
             "import Tesl.Int exposing [Int.parse]\n"
@@ -1709,7 +1636,6 @@
 (define missing-time-import-error
   (try-compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module MissingTimeImport exposing [readNow]\n"
     "import Tesl.Prelude exposing []\n"
     "import Tesl.Time exposing [nowMillis, PosixMillis]\n"
@@ -1721,8 +1647,6 @@
 (define shadowed-time-import-error
   (try-compile-tesl-error
    (string-append
-    "#lang tesl
-"
     "module ShadowedTimeImport exposing [readNow]
 "
     "import Tesl.Prelude exposing []
@@ -1742,8 +1666,6 @@
 (define non-capability-requires-error
   (try-compile-tesl-error
    (string-append
-    "#lang tesl
-"
     "module NonCapabilityReference exposing [run]
 "
     "import Tesl.Prelude exposing [Int]
@@ -1761,7 +1683,6 @@
 (define missing-time-declaration-error
   (try-compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module MissingTimeDeclaration exposing [readNow]\n"
     "import Tesl.Prelude exposing []\n"
     "import Tesl.Time exposing [nowMillis, PosixMillis, time]\n"
@@ -1774,7 +1695,6 @@
 (define missing-db-declaration-error
   (try-compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module MissingDbDeclaration exposing [seed, Task]\n"
     "import Tesl.Prelude exposing [Int, String]\n"
     "import Tesl.DB exposing [dbWrite]\n"
@@ -1792,7 +1712,6 @@
 (define missing-local-capability-propagation-error
   (try-compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module MissingLocalCapabilityPropagation exposing [caller, leaf]\n"
     "import Tesl.Prelude exposing [Int]\n"
     "capability cap\n"
@@ -1808,7 +1727,6 @@
 (define time-gate-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module TimeGate exposing [readNow]\n"
     "import Tesl.Prelude exposing [Int]\n"
     "import Tesl.Time exposing [nowMillis, Time.posixToSeconds, time]\n"
@@ -1823,7 +1741,6 @@
 (define bad-export-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module BadExport exposing [missing]\n"
     "present = 1\n")))
 (check-true (regexp-match? #rx"exposes unknown or non-local" bad-export-error))
@@ -1831,7 +1748,6 @@
 (define wildcard-import-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module WildcardImport exposing []\n"
     "import Shared exposing *\n")))
 (check-true (regexp-match? #rx"wildcard imports are not supported" wildcard-import-error))
@@ -1844,7 +1760,6 @@
    (write-file
     shared-path
     (string-append
-     "#lang tesl\n"
      "module Shared exposing [sharedLength]\n"
      "import Tesl.Prelude exposing [Int, String]\n"
      "import Tesl.String exposing [String.length]\n"
@@ -1854,7 +1769,6 @@
    (write-file
     consumer-path
     (string-append
-     "#lang tesl\n"
      "module Consumer exposing [broken]\n"
      "import Tesl.Prelude exposing [Int]\n"
      "import Tesl.String exposing [String.length]\n"
@@ -1876,8 +1790,6 @@
    (write-file
     shared-path
     (string-append
-     "#lang tesl
-"
      "module Shared exposing [sharedRead, needsShared]
 "
      "import Tesl.Prelude exposing [Int]
@@ -1893,8 +1805,6 @@
    (write-file
     consumer-path
     (string-append
-     "#lang tesl
-"
      "module Consumer exposing [runNeedsShared, consumerRead]
 "
      "import Shared exposing [sharedRead, needsShared]
@@ -1912,8 +1822,6 @@
    (write-file
     missing-propagation-path
     (string-append
-     "#lang tesl
-"
      "module MissingPropagation exposing [runNeedsShared]
 "
      "import Shared exposing [sharedRead, needsShared]
@@ -1927,8 +1835,6 @@
    (write-file
     shadowed-consumer-path
     (string-append
-     "#lang tesl
-"
      "module ShadowedConsumer exposing [runNeedsShared]
 "
      "import Shared exposing [needsShared]
@@ -1975,7 +1881,6 @@
    (write-file
     shared-path
     (string-append
-     "#lang tesl\n"
      "module Shared exposing [Wrapper]\n"
      "import Tesl.Prelude exposing [String]\n"
      "type Wrapper\n"
@@ -1984,7 +1889,6 @@
    (write-file
     consumer-path
     (string-append
-     "#lang tesl\n"
      "module Consumer exposing [broken]\n"
      "import Tesl.Prelude exposing [String]\n"
      "import Shared exposing [Wrapper(..)]\n"
@@ -1996,7 +1900,6 @@
 ; ::: with a raw predicate expression in fn body must be rejected at compile time.
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module BadProofAttach exposing []\n"
              "import Tesl.Prelude exposing [Int]\n"
              "fact Positive (n: Int)\n"
@@ -2014,7 +1917,6 @@
 ; Test A: cross-parameter proof — arg provably has NO proof → static error
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module L007a exposing []\n"
              "import Tesl.Prelude exposing [Int]\n"
              "fact Positive (n: Int)\n"
@@ -2037,7 +1939,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module L007b exposing []\n"
      "import Tesl.Prelude exposing [Int]\n"
      "fact Positive (n: Int)\n"
@@ -2056,7 +1957,6 @@
 ; Test C: fully-known subjects still work (existing behaviour preserved)
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module L007c exposing []\n"
              "import Tesl.Prelude exposing [Int]\n"
              "fact Positive (n: Int)\n"
@@ -2077,7 +1977,6 @@
 ; Test D: compound cross-parameter proof — arg missing one conjunct → shape error
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module L007d exposing []\n"
              "import Tesl.Prelude exposing [Int]\n"
              "fact Positive (n: Int)\n"
@@ -2131,7 +2030,6 @@
   (define query-proof-module-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module QueryProofs exposing [OwnedTodoDatabase, ownedService, seedOwnedTodo, getOwnedTodo, listOwnedTodos]\n"
       "import Tesl.Prelude exposing [Int, List, String]\n"
       "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -2279,7 +2177,6 @@
 ; Field name validation: referencing a non-existent field should be a compile error.
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module SqlFieldCheck exposing []\n"
              "import Tesl.Prelude exposing [Int, String]\n"
              "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -2298,7 +2195,6 @@
 ; Insert with invalid field should fail.
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module SqlInsertCheck exposing []\n"
              "import Tesl.Prelude exposing [Int, String]\n"
              "import Tesl.DB exposing [dbWrite]\n"
@@ -2315,7 +2211,6 @@
 ; Update with invalid field in SET should fail.
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module SqlUpdateCheck exposing []\n"
              "import Tesl.Prelude exposing [Int, String]\n"
              "import Tesl.DB exposing [dbRead, dbWrite]\n"
@@ -2337,7 +2232,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module SqlValidFields exposing [findItem, updateItem]\n"
      "import Tesl.Prelude exposing [Int, String]\n"
      "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -2367,7 +2261,6 @@
    (write-file
     source-path
     (string-append
-     "#lang tesl\n"
      "module SqlCompoundWhere exposing [findActiveByOwner, findByOwnerOrStatus, Status(..)]\n"
      "import Tesl.Prelude exposing [Int, List, String]\n"
      "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -2406,7 +2299,6 @@
    (write-file
     source-path
     (string-append
-     "#lang tesl\n"
      "module SqlDelete exposing [deleteById]\n"
      "import Tesl.Prelude exposing [Int, String, Unit]\n"
      "import Tesl.DB exposing [dbWrite]\n"
@@ -2432,7 +2324,6 @@
    (write-file
     source-path
     (string-append
-     "#lang tesl\n"
      "module SqlOrderLimit exposing [topTwo]\n"
      "import Tesl.Prelude exposing [Int, List, String]\n"
      "import Tesl.DB exposing [dbRead]\n"
@@ -2459,7 +2350,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module NpBasic exposing [NpItem, findItem, makeItem]\n"
      "import Tesl.Prelude exposing [Int, String]\n"
      "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -2484,7 +2374,6 @@
    (write-file
     source-path
     (string-append
-     "#lang tesl\n"
      "module NpEmit exposing [getItem]\n"
      "import Tesl.Prelude exposing [Int, String]\n"
      "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -2514,7 +2403,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module NpExists exposing [createItem]\n"
      "import Tesl.Prelude exposing [Int, String]\n"
      "import Tesl.DB exposing [dbWrite]\n"
@@ -2533,7 +2421,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module NpBinding exposing [getItem]\n"
      "import Tesl.Prelude exposing [Int, String]\n"
      "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -2553,7 +2440,6 @@
 ; Test 5: Named-pack with compound proof (&&) is a compile error.
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module NpCompound exposing []\n"
              "import Tesl.Prelude exposing [String]\n"
              "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -2891,7 +2777,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module A1Simple exposing [getItem]\n"
      "import Tesl.Prelude exposing [Int, String]\n"
      "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -2912,7 +2797,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module A2Compound exposing [make]\n"
      "import Tesl.Prelude exposing [Int]\n"
      "fact Positive (n: Int)\n"
@@ -2931,7 +2815,6 @@
     (run-tesl-compiler
      (write-temp-tesl-file
       (string-append
-       "#lang tesl\n"
        "module A2bEmit exposing [make]\n"
        "import Tesl.Prelude exposing [Int]\n"
        "fact Positive (n: Int)\n"
@@ -2953,7 +2836,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module A4Combined exposing [make]\n"
      "import Tesl.Prelude exposing [Int, String, detachFact]\n"
      "fact Positive (n: Int)\n"
@@ -2972,7 +2854,6 @@
     (run-tesl-compiler
      (write-temp-tesl-file
       (string-append
-       "#lang tesl\n"
        "module A4bEmit exposing [make]\n"
        "import Tesl.Prelude exposing [Int, String, detachFact]\n"
        "fact Positive (n: Int)\n"
@@ -2994,7 +2875,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module A5CompoundBoth exposing [make]\n"
      "import Tesl.Prelude exposing [Int, String, detachFact]\n"
      "fact Positive (n: Int)\n"
@@ -3019,7 +2899,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module A6WithArgs exposing [make]\n"
      "import Tesl.Prelude exposing [Int]\n"
      "fact BoundedBy (n: Int, limit: Int)\n"
@@ -3035,7 +2914,6 @@
     (run-tesl-compiler
      (write-temp-tesl-file
       (string-append
-       "#lang tesl\n"
        "module A6bEmit exposing [make]\n"
        "import Tesl.Prelude exposing [Int]\n"
        "fact BoundedBy (n: Int, limit: Int)\n"
@@ -3052,7 +2930,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module A7ExistsQ exposing [createAndPack]\n"
      "import Tesl.Prelude exposing [Int, Fact, String]\n"
      "fact Positive (n: Int)\n"
@@ -3071,7 +2948,6 @@
     (run-tesl-compiler
      (write-temp-tesl-file
       (string-append
-       "#lang tesl\n"
        "module A15LegacySyntax exposing [getItem]\n"
        "import Tesl.Prelude exposing [Int, String]\n"
        "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -3096,7 +2972,6 @@
     (run-tesl-compiler
      (write-temp-tesl-file
       (string-append
-       "#lang tesl\n"
        "module A15bLegacy exposing [getItem]\n"
        "import Tesl.Prelude exposing [Int, String]\n"
        "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -3114,7 +2989,6 @@
     (run-tesl-compiler
      (write-temp-tesl-file
       (string-append
-       "#lang tesl\n"
        "module A15bNew exposing [getItem]\n"
        "import Tesl.Prelude exposing [Int, String]\n"
        "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -3144,7 +3018,6 @@
   (define b1-module-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module B1Basic exposing [runB1]\n"
       "import Tesl.Prelude exposing [Int, Fact]\n"
       "fact Positive (n: Int)\n"
@@ -3166,7 +3039,6 @@
   (define b2-module-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module B2Compound exposing [runB2]\n"
       "import Tesl.Prelude exposing [Int, Fact]\n"
       "fact Positive (n: Int)\n"
@@ -3192,7 +3064,6 @@
   (define b3-module-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module B3ProofReturn exposing [runB3]\n"
       "import Tesl.Prelude exposing [Int, Fact]\n"
       "fact Positive (n: Int)\n"
@@ -3215,7 +3086,6 @@
   (define b4-module-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module B4EntityPlusOther exposing [runB4]\n"
       "import Tesl.Prelude exposing [Int, Fact, String, detachFact]\n"
       "fact Positive (n: Int)\n"
@@ -3241,7 +3111,6 @@
   (define b5-module-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module B5ProofPlusDetach exposing [runB5]\n"
       "import Tesl.Prelude exposing [Int, Fact, String, detachFact]\n"
       "fact Positive (n: Int)\n"
@@ -3269,7 +3138,6 @@
   (define b6-module-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module B6ExistsQ exposing [createPacked]\n"
       "import Tesl.Prelude exposing [Int, Fact, String]\n"
       "fact Positive (n: Int)\n"
@@ -3292,7 +3160,6 @@
   (define b9-module-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module B9E2E exposing [runB9]\n"
       "import Tesl.Prelude exposing [Int, Fact, String]\n"
       "fact Positive (n: Int)\n"
@@ -3313,7 +3180,6 @@
 ; Uses a locally-declared proof predicate so reference checking passes.
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module B10StaticError exposing [wrongSubject]\n"
              "import Tesl.Prelude exposing [Int, Fact]\n"
              "fact Positive (n: Int)\n"
@@ -3347,7 +3213,6 @@
   (define q01-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q01 exposing [MyQueue]\n"
       "import Tesl.Prelude exposing [String]\n"
       "import Tesl.Queue exposing [queueWrite, Queue]\n"
@@ -3370,7 +3235,6 @@
   (define q02-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q02 exposing [MyChan]\n"
       "import Tesl.Prelude exposing [String]\n"
       "import Tesl.Queue exposing [pubsub]\n"
@@ -3394,7 +3258,6 @@
   (define q03-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q03 exposing [myWorker]\n"
       "import Tesl.Prelude exposing [String]\n"
       "import Tesl.Queue exposing [queueRead]\n"
@@ -3409,7 +3272,6 @@
   (define q04-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q04 exposing [MyQueue4]\n"
       "import Tesl.Prelude exposing [String]\n"
       "import Tesl.Queue exposing [queueRead, queueWrite, Queue, Job]\n"
@@ -3431,7 +3293,6 @@
   (define q05-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q05 exposing [RetryQueue]\n"
       "import Tesl.Prelude exposing [String]\n"
       "import Tesl.Queue exposing [queueWrite, Queue, QueueRetryStrategy, Exponential]\n"
@@ -3454,7 +3315,6 @@
   (define q06-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q06 exposing [KeyedChan]\n"
       "import Tesl.Prelude exposing [String, Int]\n"
       "import Tesl.Queue exposing [pubsub]\n"
@@ -3473,7 +3333,6 @@
   (define q07-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q07 exposing [doEnqueue]\n"
       "import Tesl.Prelude exposing [String, Int]\n"
       "import Tesl.Queue exposing [queueWrite, Queue]\n"
@@ -3494,7 +3353,6 @@
   (define q08-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q08 exposing [doPublish]\n"
       "import Tesl.Prelude exposing [String]\n"
       "import Tesl.Queue exposing [pubsub]\n"
@@ -3516,7 +3374,6 @@
   (define q09-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q09 exposing [doTxn]\n"
       "import Tesl.Prelude exposing [String, Int]\n"
       "import Tesl.Queue exposing [queueWrite, Queue]\n"
@@ -3539,7 +3396,6 @@
   (define q10-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q10 exposing []\n"
       "import Tesl.Prelude exposing [String]\n"
       "import Tesl.Queue exposing [queueRead, queueWrite, Queue, Job]\n"
@@ -3577,7 +3433,6 @@
   (define q11-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q11 exposing [Q11Api]\n"
       "import Tesl.Prelude exposing [String, Bool]\n"
       "import Tesl.Queue exposing [pubsub]\n"
@@ -3602,7 +3457,6 @@
 ; Q12: nested transaction is a compile error
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module Q12 exposing []\n"
              "import Tesl.Prelude exposing [String]\n"
              "import Tesl.Queue exposing [queueWrite, Queue]\n"
@@ -3628,7 +3482,6 @@
   (define q13-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q13 exposing [q13Worker]\n"
       "import Tesl.Prelude exposing [String]\n"
       "import Tesl.Queue exposing [queueRead]\n"
@@ -3783,7 +3636,6 @@
   (define q24-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q24 exposing [runEnqueue, Q24Queue]\n"
       "import Tesl.Prelude exposing [String]\n"
       "import Tesl.Queue exposing [queueWrite, Queue]\n"
@@ -3811,7 +3663,6 @@
   (define q25-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q25 exposing [runTxn]\n"
       "import Tesl.Prelude exposing [String]\n"
       "import Tesl.Queue exposing [queueWrite, Queue]\n"
@@ -3841,7 +3692,6 @@
 (define route-prefix-dispatch-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module RoutePrefixDispatch exposing [PrefixServer]\n"
     "import Tesl.Prelude exposing [String]\n"
     "import Tesl.Json exposing [stringCodec]\n"
@@ -3929,7 +3779,6 @@
 (define worker-proof-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module WorkerProof exposing [PingQueue, pingWorker, enqueuePing]\n"
     "import Tesl.Prelude exposing [String]\n"
     "import Tesl.Queue  exposing [queueWrite, queueRead, Queue, Job]\n"
@@ -3965,7 +3814,6 @@
 (define telemetry-key-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module TelemetryKey exposing [run]\n"
     "import Tesl.Prelude exposing [String]\n"
     "import Tesl.Telemetry exposing [telemetry, initTelemetry]\n"
@@ -3993,7 +3841,6 @@
   (define q28-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q28 exposing [listDead]\n"
       "import Tesl.Prelude exposing [String, List]\n"
       "import Tesl.Queue exposing [queueRead, DeadJob, deadJobs, Queue]\n"
@@ -4014,7 +3861,6 @@
   (define q29-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module Q29 exposing [replayDead]\n"
       "import Tesl.Prelude exposing [Bool]\n"
       "import Tesl.Queue exposing [queueWrite, DeadJob, requeue, FromDeadQueue]\n"
@@ -4026,7 +3872,6 @@
 ; Q30: deadJobs without queueRead is a compile error
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module Q30 exposing [listDead]\n"
              "import Tesl.Prelude exposing [String, List]\n"
              "import Tesl.Queue exposing [DeadJob, deadJobs, Queue]\n"
@@ -4114,7 +3959,6 @@
       (define pg-queue-path
         (compile-tesl-source
          (string-append
-          "#lang tesl\n"
           "module PgQueueTest exposing"
           " [PgDb, MsgQueue, MsgChannel, enqueueMsgs, pingWorker, echoWorker]\n"
           "import Tesl.Prelude  exposing [String]\n"
@@ -4331,7 +4175,6 @@
       (define ln-path
         (compile-tesl-source
          (string-append
-          "#lang tesl\n"
           "module LnTest exposing [LnDb, LnQueue, lnWorker, lnEnqueue]\n"
           "import Tesl.Prelude  exposing [String]\n"
           "import Tesl.Queue    exposing [queueWrite, queueRead, Queue, QueueRetryStrategy, Fixed, Job]\n"
@@ -4425,7 +4268,6 @@
 (define string-expanded-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module StringExpanded exposing [testLength, testIsEmpty, testStartsWith, testEndsWith, testContains, testToUpper, testToLower, testTrim, testSplit, testJoin, testReplace, testSlice, testConcat, testRepeat, testReverse, testToInt, testFromInt, testLines, testWords, testPadLeft, testPadRight, testDropPrefix, testDropSuffix, testIndexOf]\n"
     "import Tesl.Prelude exposing [Int, String, Bool, List]\n"
     "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -4558,8 +4400,6 @@
 (define list-expanded-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl
-"
     "module ListExpanded exposing [testHead, testTail, testLength, testMap, testFilter, testFoldl, testFoldr, testAppend, testReverse, testContains, testFind, testTake, testDrop, testRepeat, testSum, testAny, testAll, testRange, testMaximum, testMinimum, testUnique, testSortInts]
 "
     "import Tesl.Prelude exposing [Int, String, Bool, List]
@@ -4736,8 +4576,6 @@
 ; STD-029h..l: proof-total stdlib APIs reject the old unchecked call patterns at compile time
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl
-"
              "module MissingTakeProof exposing [oops]
 "
              "import Tesl.Prelude exposing [Int, List]
@@ -4753,8 +4591,6 @@
 
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl
-"
              "module MissingDropProof exposing [oops]
 "
              "import Tesl.Prelude exposing [Int, List]
@@ -4770,8 +4606,6 @@
 
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl
-"
              "module MissingRepeatProof exposing [oops]
 "
              "import Tesl.Prelude exposing [Int, List]
@@ -4787,8 +4621,6 @@
 
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl
-"
              "module MissingDivideProof exposing [oops]
 "
              "import Tesl.Prelude exposing [Int]
@@ -4804,8 +4636,6 @@
 
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl
-"
              "module MissingHasKeyProof exposing [oops]
 "
              "import Tesl.Prelude exposing [Int, String]
@@ -4824,7 +4654,6 @@
 (define int-expanded-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module IntExpanded exposing [testAbs, testMin, testMax, testClamp, testIsPositive, testIsNegative, testIsEven, testIsOdd, testPow, testToString, testSign]\n"
     "import Tesl.Prelude exposing [Int, Bool, String]\n"
     "import Tesl.Int exposing [Int.abs, Int.min, Int.max, Int.clamp, Int.isPositive, Int.isNegative, Int.isEven, Int.isOdd, Int.pow, Int.toString, Int.sign]\n"
@@ -4889,7 +4718,6 @@
 (define proof-inline-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module ProofInline exposing [testTrimEmpty, testUpperEq, testSortLen, testChained]\n"
     "import Tesl.Prelude exposing [Bool, Int, String, List]\n"
     "import Tesl.String exposing [String.trim, String.toUpper, String.isEmpty, String.length]\n"
@@ -4955,7 +4783,6 @@
 (define posix-millis-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module PosixMillisTest exposing [testNow, testDiff, testAdd]\n"
     "import Tesl.Prelude exposing [Int, Bool]\n"
     "import Tesl.Time exposing [time, nowMillis, PosixMillis, diffMs, addMs]\n"
@@ -4984,7 +4811,6 @@
 (define nested-list-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module NestedList exposing [testFoldr, testDict]\n"
     "import Tesl.Prelude exposing [Int, String, Bool, List]\n"
     "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -5015,8 +4841,6 @@
 (define collection-boundary-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl
-"
     "module CollectionBoundary exposing [idDict, readA, idSet, getPresent]
 "
     "import Tesl.Prelude exposing [Int, String]
@@ -5351,7 +5175,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module FA001 exposing [listItems]\n"
      "import Tesl.Prelude exposing [Int, String, List]\n"
      "import Tesl.DB exposing [dbRead]\n"
@@ -5367,7 +5190,6 @@
 ; FA-002: ForAll emits (List T) in Racket — no list-level proof wrapper
 (let ([compiled (compile-tesl-source
                  (string-append
-                  "#lang tesl\n"
                   "module FA002 exposing [listItems]\n"
                   "import Tesl.Prelude exposing [String, List]\n"
                   "import Tesl.DB exposing [dbRead]\n"
@@ -5388,7 +5210,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module FA003 exposing []\n"
      "import Tesl.Prelude exposing [String, List]\n"
      "import Tesl.DB exposing [dbRead]\n"
@@ -5404,7 +5225,6 @@
 ; FA-004: ForAll on non-List type gives clear error
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module FA004 exposing []\n"
              "import Tesl.Prelude exposing [String]\n"
              "fn bad() -> String ? ForAll (SomePred) =\n"
@@ -5417,7 +5237,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module FA005 exposing [getFirst]\n"
      "import Tesl.Prelude exposing [String, List]\n"
      "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -5436,7 +5255,6 @@
 ; FA-006: inline `value ::: ForAll P` in body gives clear error
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module FA006 exposing []\n"
              "import Tesl.Prelude exposing [String, List]\n"
              "fn bad(xs: List String) -> List String ? ForAll (MyPred) =\n"
@@ -5449,7 +5267,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module FA007 exposing [getAllItems, getOwnerItems]\n"
      "import Tesl.Prelude exposing [String, List]\n"
      "import Tesl.DB exposing [dbRead]\n"
@@ -5469,7 +5286,6 @@
 (let* ([filter-check-module
         (compile-tesl-source
          (string-append
-          "#lang tesl\n"
           "module FA008 exposing [filterPositive, isPositive]\n"
           "import Tesl.Prelude exposing [Int, List, Bool]\n"
           "import Tesl.List exposing [List.filterCheck]\n"
@@ -5496,7 +5312,6 @@
 (let* ([fc-module
         (compile-tesl-source
          (string-append
-          "#lang tesl\n"
           "module FA009 exposing [filterPositive]\n"
           "import Tesl.Prelude exposing [Int, List]\n"
           "import Tesl.List exposing [List.filterCheck]\n"
@@ -5516,7 +5331,6 @@
 (let* ([fc-module
         (compile-tesl-source
          (string-append
-          "#lang tesl\n"
           "module FA010 exposing [filterPositive]\n"
           "import Tesl.Prelude exposing [Int, List]\n"
           "import Tesl.List exposing [List.filterCheck]\n"
@@ -5537,7 +5351,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module FA011 exposing []\n"
      "import Tesl.Prelude exposing [String, List]\n"
      "import Tesl.DB exposing [dbRead]\n"
@@ -5556,7 +5369,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module FA012 exposing []\n"
      "import Tesl.Prelude exposing [String, List]\n"
      "import Tesl.DB exposing [dbRead]\n"
@@ -5575,7 +5387,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module FA013 exposing [filterVerified]\n"
      "import Tesl.Prelude exposing [String, List]\n"
      "import Tesl.DB exposing [dbRead]\n"
@@ -5600,7 +5411,6 @@
 ; FA-014: List.allCheck — all pass → Something list
 (let* ([m (compile-tesl-source
            (string-append
-            "#lang tesl\n"
             "module FA014 exposing [checkAll]\n"
             "import Tesl.Prelude exposing [Int, List]\n"
             "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -5622,7 +5432,6 @@
 ; FA-015: List.allCheck — any fail → Nothing
 (let* ([m (compile-tesl-source
            (string-append
-            "#lang tesl\n"
             "module FA015 exposing [checkAll]\n"
             "import Tesl.Prelude exposing [Int, List]\n"
             "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -5642,7 +5451,6 @@
 ; FA-016: List.allCheck — empty list → Something empty
 (let* ([m (compile-tesl-source
            (string-append
-            "#lang tesl\n"
             "module FA016 exposing [checkAll]\n"
             "import Tesl.Prelude exposing [Int, List]\n"
             "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -5665,7 +5473,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module FA017 exposing [verifyAll]\n"
      "import Tesl.Prelude exposing [Int, List]\n"
      "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -5689,7 +5496,6 @@
 (check-false
  (try-compile-tesl-error
   (string-append
-   "#lang tesl\n"
    "module FA018 exposing [filterBoth]\n"
    "import Tesl.Prelude exposing [Int, List]\n"
    "import Tesl.List exposing [List.filterCheck]\n"
@@ -5714,7 +5520,6 @@
 ; FA-019: check combination && — runtime behavior
 (let* ([m (compile-tesl-source
            (string-append
-            "#lang tesl\n"
             "module FA019 exposing [filterBoth]\n"
             "import Tesl.Prelude exposing [Int, List]\n"
             "import Tesl.List exposing [List.filterCheck]\n"
@@ -5739,7 +5544,6 @@
 ; FA-020: check combination && with three checks
 (let* ([m (compile-tesl-source
            (string-append
-            "#lang tesl\n"
             "module FA020 exposing [filterAll]\n"
             "import Tesl.Prelude exposing [Int, List]\n"
             "import Tesl.List exposing [List.filterCheck]\n"
@@ -5771,7 +5575,6 @@
 ; FA-021: check combination && — first check failure stops the chain
 (let* ([m (compile-tesl-source
            (string-append
-            "#lang tesl\n"
             "module FA021 exposing [filterBoth]\n"
             "import Tesl.Prelude exposing [Int, List]\n"
             "import Tesl.List exposing [List.filterCheck]\n"
@@ -5800,7 +5603,6 @@
  (lambda ()
    (compile-tesl-source
     (string-append
-     "#lang tesl\n"
      "module FA022 exposing [verifyBoth]\n"
      "import Tesl.Prelude exposing [Int, List]\n"
      "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -5826,7 +5628,6 @@
 ; FA-023: allCheck with check combination — runtime correctness
 (let* ([m (compile-tesl-source
            (string-append
-            "#lang tesl\n"
             "module FA023 exposing [verifyBoth]\n"
             "import Tesl.Prelude exposing [Int, List]\n"
             "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -5857,7 +5658,6 @@
 ; xs ::: ForAll (IsPositive) → filter with isLessThan10 → ForAll (IsPositive && IsLessThan10)
 (let* ([m (compile-tesl-source
            (string-append
-            "#lang tesl\n"
             "module FA024 exposing [filterPositive, narrowToSmall]\n"
             "import Tesl.Prelude exposing [Int, List]\n"
             "import Tesl.List exposing [List.filterCheck]\n"
@@ -5890,7 +5690,6 @@
 ; FA-025: ForAll on non-list type inside Maybe gives error
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module FA025 exposing []\n"
              "import Tesl.Prelude exposing [String]\n"
              "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -5902,7 +5701,6 @@
 ; FA-026: Maybe-forall emits (Maybe (List T)) in Racket
 (let ([compiled (compile-tesl-source
                  (string-append
-                  "#lang tesl\n"
                   "module FA026 exposing [checkAll]\n"
                   "import Tesl.Prelude exposing [Int, List]\n"
                   "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -5926,8 +5724,7 @@
 ; FA-027: `(checkA && checkB) x` — paren-callee ML-style application compiles
 (let ()
   (define src
-    "#lang tesl
-module FA027 exposing [testFn]
+    "module FA027 exposing [testFn]
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
 fact IsSmall (n: Int)
@@ -5953,8 +5750,7 @@ fn testFn(n: Int) -> Int requires [] =
 ; FA-028: `check (checkA && checkB) x` — explicit combined check call compiles
 (let ()
   (define src
-    "#lang tesl
-module FA028 exposing [testFn]
+    "module FA028 exposing [testFn]
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
 fact IsSmall (n: Int)
@@ -5980,8 +5776,7 @@ fn testFn(n: Int) -> Int requires [] =
 ; FA-029: proof functions work with &&
 (let ()
   (define src
-    "#lang tesl
-module FA029 exposing [testFn]
+    "module FA029 exposing [testFn]
 import Tesl.Prelude exposing [Int, Fact]
 fact IsPositive (n: Int)
 fact IsSmall (n: Int)
@@ -6001,8 +5796,7 @@ fn testFn(n: Int) -> Int requires [] =
 ; FA-030: `(proofA && proofB) x` — paren-callee ML-style application with proof functions
 (let ()
   (define src
-    "#lang tesl
-module FA030 exposing [testFn]
+    "module FA030 exposing [testFn]
 import Tesl.Prelude exposing [Int, Fact]
 fact IsPositive (n: Int)
 fact IsSmall (n: Int)
@@ -6022,8 +5816,7 @@ fn testFn(n: Int) -> Int requires [] =
 ; FA-031: mixed check && proof combination compiles
 (let ()
   (define src
-    "#lang tesl
-module FA031 exposing [testFn]
+    "module FA031 exposing [testFn]
 import Tesl.Prelude exposing [Int, Fact]
 fact IsPositive (n: Int)
 fact IsSmall (n: Int)
@@ -6046,8 +5839,7 @@ fn testFn(n: Int) -> Int requires [] =
 ; FA-032: `check (checkA && checkB) x` emits (check-and checkA checkB) in Racket output
 (let ()
   (define src
-    "#lang tesl
-module FA032 exposing [testFn]
+    "module FA032 exposing [testFn]
 import Tesl.Prelude exposing [Int]
 fact IsPositive (n: Int)
 fact IsSmall (n: Int)
@@ -6077,8 +5869,7 @@ fn testFn(n: Int) -> Int requires [] =
 ; FA-033: runtime — `check (checkA && checkB) x` behaves correctly
 (let ()
   (define src
-    "#lang tesl
-module FA033 exposing [applyBoth]
+    "module FA033 exposing [applyBoth]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fact IsPositive (n: Int)
@@ -6110,8 +5901,7 @@ fn applyBoth(n: Int) -> Int requires [] =
 ; FA-034: fn with Set ForAll return type compiles without error
 (let ()
   (define src
-    "#lang tesl
-module FA034 exposing [filterPos]
+    "module FA034 exposing [filterPos]
 import Tesl.Prelude exposing [Int]
 import Tesl.Set    exposing [Set, Set.filterCheck]
 fact IsPositive (n: Int)
@@ -6130,7 +5920,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; FA-035: Set.filterCheck runtime — keeps only positive elements
 (let* ([m (compile-tesl-source
            (string-append
-            "#lang tesl\n"
             "module FA035 exposing [filterPos]\n"
             "import Tesl.Prelude exposing [Int]\n"
             "import Tesl.Set    exposing [Set, Set.filterCheck]\n"
@@ -6152,7 +5941,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; FA-036: Set.allCheck — all pass → Something set
 (let* ([m (compile-tesl-source
            (string-append
-            "#lang tesl\n"
             "module FA036 exposing [checkAll]\n"
             "import Tesl.Prelude exposing [Int]\n"
             "import Tesl.Set   exposing [Set, Set.allCheck]\n"
@@ -6173,7 +5961,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; FA-037: Set.allCheck — any fail → Nothing
 (let* ([m (compile-tesl-source
            (string-append
-            "#lang tesl\n"
             "module FA037 exposing [checkAll]\n"
             "import Tesl.Prelude exposing [Int]\n"
             "import Tesl.Set   exposing [Set, Set.allCheck]\n"
@@ -6200,7 +5987,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (let ()
   (define src
     (string-append
-     "#lang tesl\n"
      "module FA038 exposing [verifyAll]\n"
      "import Tesl.Prelude exposing [Int, List]\n"
      "import Tesl.List   exposing [List.allCheck]\n"
@@ -6222,7 +6008,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (let ()
   (define src
     (string-append
-     "#lang tesl\n"
      "module FA039 exposing [verifyAll]\n"
      "import Tesl.Prelude exposing [Int]\n"
      "import Tesl.Set    exposing [Set, Set.allCheck]\n"
@@ -6244,7 +6029,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (let ()
   (define src
     (string-append
-     "#lang tesl\n"
      "module FA040 exposing [verifyList, verifySet]\n"
      "import Tesl.Prelude exposing [Int, List]\n"
      "import Tesl.List   exposing [List.allCheck]\n"
@@ -6277,7 +6061,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; Trying to write `Maybe (x: Int ::: ForAll P x)` should fail — only List/Set allowed.
 (let ([err (try-compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module FA041 exposing []\n"
              "import Tesl.Prelude exposing [Int]\n"
              "import Tesl.Maybe  exposing [Maybe(..)]\n"
@@ -6300,7 +6083,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (let ()
   (define src
     (string-append
-     "#lang tesl\n"
      "module FA042 exposing [verifyAll]\n"
      "import Tesl.Prelude exposing [Int, List]\n"
      "import Tesl.List   exposing [List.allCheck]\n"
@@ -6326,7 +6108,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (let ()
   (define src
     (string-append
-     "#lang tesl\n"
      "module FA043 exposing [verifyAll]\n"
      "import Tesl.Prelude exposing [Int, List]\n"
      "import Tesl.List   exposing [List.allCheck]\n"
@@ -6458,7 +6239,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
   (define codec-module-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module CodecE2E exposing [E2EMsg]\n"
       "import Tesl.Prelude exposing [String]\n"
       "import Tesl.Json exposing [stringCodec]\n"
@@ -6494,7 +6274,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
   (define adt-codec-module
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module AdtCodecEnc exposing [Color, Red, Green, Blue]\n"
       "import Tesl.Prelude exposing [String]\n"
       "type Color\n  = Red\n  | Green\n  | Blue\n"
@@ -6512,7 +6291,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
   (define adt-codec-module
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module AdtCodecDec exposing [Direction, North, South, East, West]\n"
       "import Tesl.Prelude exposing [String]\n"
       "type Direction\n  = North\n  | South\n  | East\n  | West\n"
@@ -6538,7 +6316,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
   (define module-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module AdtFieldCodec exposing [Status, Active, Inactive, StatusRequest]\n"
       "import Tesl.Prelude exposing [String]\n"
       "type Status\n  = Active\n  | Inactive\n"
@@ -6573,7 +6350,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
   (define module-path
     (compile-tesl-source
      (string-append
-      "#lang tesl\n"
       "module AdtRoundTrip exposing [Priority, High, Low, Task]\n"
       "import Tesl.Prelude exposing [String]\n"
       "import Tesl.Json exposing [stringCodec]\n"
@@ -6614,7 +6390,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; Shared Tesl source for the OrderLine GDP pattern used across tests.
 (define proof-param-preamble
   (string-append
-   "#lang tesl\n"
    "module ProofParam exposing [checkPositiveInt, checkPriceExceedsQuantity, makeOrderLine, getPrice, getQuantity]\n"
    "import Tesl.Prelude exposing [Int, Fact, detachFact]\n"
    "fact IsPositive (n: Int)\n"
@@ -6674,7 +6449,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; The compiled output should use the plain record constructor, not attach-proof.
 ; We verify this by checking the compiled Racket source text.
 (let* ([src (string-append
-             "#lang tesl\n"
              "module ZeroCostGhost exposing [makeIt]\n"
              "import Tesl.Prelude exposing [Int, Fact, detachFact]\n"
              "fact Pos (n: Int)\n"
@@ -6700,7 +6474,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 
 ; PROOF-PARAM-004: detachFact as ghost witness — proof expression discarded in output
 (let* ([src (string-append
-             "#lang tesl\n"
              "module ZeroCostDetach exposing [makeIt]\n"
              "import Tesl.Prelude exposing [Int, Fact, detachFact]\n"
              "fact Pos (n: Int)\n"
@@ -6725,7 +6498,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; PROOF-PARAM-005: detachFact as fn-call argument IS emitted (not elided)
 (let* ([src proof-param-preamble]  ; already has makeOrderLine with detachFact usage
        [extra (string-append
-               "#lang tesl\n"
                "module DetachInCall exposing [makeIt]\n"
                "import Tesl.Prelude exposing [Int, Fact, detachFact]\n"
                "fact Pos (n: Int)\n"
@@ -6750,7 +6522,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (define proof-param-err-value-as-proof
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module ErrValueAsProof exposing []\n"
     "import Tesl.Prelude exposing [Int, Fact]\n"
     "fact Pos (n: Int)\n"
@@ -6772,7 +6543,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (define proof-param-err-ghost-value
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module ErrGhostValue exposing []\n"
     "import Tesl.Prelude exposing [Int, Fact]\n"
     "fact Pos (n: Int)\n"
@@ -6795,7 +6565,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (define proof-param-err-wrong-pred
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module ErrWrongPred exposing []\n"
     "import Tesl.Prelude exposing [Int, Fact, detachFact]\n"
     "fact IsPositive (n: Int)\n"
@@ -6823,7 +6592,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (define proof-param-err-test-block
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module ErrTestBlock exposing []\n"
     "import Tesl.Prelude exposing [Int, Fact]\n"
     "fact Pos (n: Int)\n"
@@ -6845,7 +6613,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (define proof-param-err-test-block-ghost
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module ErrTestBlockGhost exposing []\n"
     "import Tesl.Prelude exposing [Int, Fact]\n"
     "fact Pos (n: Int)\n"
@@ -6882,7 +6649,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (define proof-param-codec-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module ProofParamCodec exposing [BoundedOrderServer]\n"
     "import Tesl.Prelude exposing [Int, Fact, detachFact]\n"
     "import Tesl.Json exposing [intCodec]\n"
@@ -6941,7 +6707,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (define proof-param-wrapper-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module ProofParamWrapper exposing [wrapMake, wrapMakeResult]\n"
     "import Tesl.Prelude exposing [Int, Fact, detachFact]\n"
     "fact Pos (n: Int)\n"
@@ -6977,7 +6742,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; but in a fresh module name to avoid ambiguous-record-name collisions)
 (define ghost-intruder-preamble
   (string-append
-   "#lang tesl\n"
    "module GhostIntruder exposing []\n"
    "import Tesl.Prelude exposing [Int, Fact, detachFact]\n"
    "fact IsPositive (n: Int)\n"
@@ -7165,7 +6929,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 
 (define lesson-preamble
   (string-append
-   "#lang tesl\n"
    "module Lesson exposing []\n"
    "import Tesl.Prelude exposing [Int, String, Bool, Fact, detachFact]\n"
    "import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -7325,7 +7088,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; shouldNotWork_1: calls nowMillis() but only declares [dbRead], not [time]
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module LessonCap exposing []\n"
              "import Tesl.Prelude exposing []\n"
              "import Tesl.Time exposing [nowMillis, PosixMillis, time]\n"
@@ -7341,7 +7103,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; (the actual parameters are `price` and `quantity`)
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module LessonRecord exposing []\n"
              "import Tesl.Prelude exposing [Int]\n"
              "check checkIsPositive(n: Int) -> n: Int::: IsPositive n =\n"
@@ -7432,7 +7193,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; shouldNotWork_1: return spec references id but parameter is named id2
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module L21 exposing []\n"
              "import Tesl.Prelude exposing [Int, String]\n"
              "import Tesl.DB exposing [dbRead, dbWrite]\n"
@@ -7455,7 +7215,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; shouldNotWork_2: WHERE uses id2 but return spec declares FromDb (Id == id)
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module L21b exposing []\n"
              "import Tesl.Prelude exposing [Int, String]\n"
              "import Tesl.DB exposing [dbRead, dbWrite]\n"
@@ -7523,7 +7282,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; request.cookies.user is not valid — use Dict.lookup("user", request.cookies)
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module L_Cookies exposing []\n"
              "import Tesl.Prelude exposing [String]\n"
              "import Tesl.Http exposing [HttpRequest]\n"
@@ -7538,7 +7296,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; L22-type-hole: let binding with declared proof that doesn't match function return type
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module L22TypeHole exposing []\n"
              "import Tesl.Prelude exposing [Int, String, Fact, detachFact]\n"
              "check checkIsPositive(n: Int) -> n: Int::: IsPositive n =\n"
@@ -7572,7 +7329,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (define fix001-mul-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module Fix001Mul exposing [mulParams, mulChained, mulMixed]\n"
     "import Tesl.Prelude exposing [Int, Bool]\n"
     ; x * y — params used directly as per lesson40 (auto-unwrap in arithmetic)
@@ -7599,7 +7355,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (define fix001-rawapp-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module Fix001RawApp exposing [applyDouble]\n"
     "import Tesl.Prelude exposing [Int]\n"
     "fn double(n: Int) -> Int = n * 2\n"
@@ -7616,7 +7371,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; FIX-002a: calling nowMillis() inside a plain fn (no time capability declared) is a compile error
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module Fix002NoCap exposing [badFn]\n"
              "import Tesl.Prelude exposing [Int]\n"
              "import Tesl.Time exposing [nowMillis, PosixMillis]\n"
@@ -7629,7 +7383,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (check-false
  (try-compile-tesl-error
   (string-append
-   "#lang tesl\n"
    "module Fix002WithCap exposing [goodFn]\n"
    "import Tesl.Prelude exposing [Int]\n"
    "import Tesl.Time exposing [time, nowMillis, PosixMillis]\n"
@@ -7645,7 +7398,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module Fix003ModuleNotFound exposing []\n"
              "import NonExistentModuleXyz123 exposing []\n"
              "import Tesl.Prelude exposing [Int]\n"))])
@@ -7659,7 +7411,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module Fix004LateImport exposing []\n"
              "import Tesl.Prelude exposing [Int]\n"
              "fn f() -> Int = 1\n"
@@ -7676,7 +7427,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (define fix005-inrange-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module Fix005InRange exposing [isInRange, processInRange, testFull]\n"
     "import Tesl.Prelude exposing [Int, String]\n"
     "fact InRange (lo: Int) (hi: Int) (n: Int)\n"
@@ -7708,7 +7458,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 ; value without its proof to a proof-requiring fn must be a compile-time error
 (let ([err (compile-tesl-error
             (string-append
-             "#lang tesl\n"
              "module Fix005ProofTracking exposing [bad]\n"
              "import Tesl.Prelude exposing [Int, String]\n"
              "fact InRange (lo: Int) (hi: Int) (n: Int)\n"
@@ -7729,7 +7478,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (define fix005-pair-module-path
   (compile-tesl-source
    (string-append
-    "#lang tesl\n"
     "module Fix005Pair exposing [checkPair, usePair, go]\n"
     "import Tesl.Prelude exposing [Int, String]\n"
     "fact Ordered (lo: Int) (hi: Int)\n"
@@ -7756,7 +7504,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (check-false
  (try-compile-tesl-error
   (string-append
-   "#lang tesl\n"
    "module Fix006FilterChain exposing [filterBoth]\n"
    "import Tesl.Prelude exposing [Int, List]\n"
    "import Tesl.List exposing [List.filterCheck]\n"
@@ -7785,7 +7532,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (define proof-forgery-001-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module ProofForgery001 exposing [forgePinned]\n"
     "import Tesl.Prelude exposing [String, List, Bool]\n"
     "import Tesl.List exposing [List.filterCheck]\n"
@@ -7818,7 +7564,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (check-false
  (try-compile-tesl-error
   (string-append
-   "#lang tesl\n"
    "module ProofForgery002 exposing [filterBoth]\n"
    "import Tesl.Prelude exposing [String, List]\n"
    "import Tesl.List exposing [List.filterCheck]\n"
@@ -7851,7 +7596,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (check-false
  (try-compile-tesl-error
   (string-append
-   "#lang tesl\n"
    "module ProofForgery003 exposing [filterChained]\n"
    "import Tesl.Prelude exposing [Int, List]\n"
    "import Tesl.List exposing [List.filterCheck]\n"
@@ -7880,7 +7624,6 @@ fn filterPos(s: Set Int) -> Set Int ? ForAll (IsPositive) requires [] =
 (define proof-forgery-004-error
   (compile-tesl-error
    (string-append
-    "#lang tesl\n"
     "module ProofForgery004 exposing [filterChainedWrong]\n"
     "import Tesl.Prelude exposing [Int, List]\n"
     "import Tesl.List exposing [List.filterCheck]\n"

@@ -121,27 +121,23 @@ let should_fail_project pattern files =
     with Not_found -> failf "expected failure matching %S, got:
 %s" pattern out)
 
-let util_src = {|#lang tesl
-module Util exposing [helper]
+let util_src = {|module Util exposing [helper]
 import Tesl.Prelude exposing [Int]
 fn helper() -> Int = 1
 |}
 
-let a_src = {|#lang tesl
-module A exposing [helper]
+let a_src = {|module A exposing [helper]
 import Tesl.Prelude exposing [Int]
 fn helper() -> Int = 1
 |}
 
-let b_src = {|#lang tesl
-module B exposing [helper]
+let b_src = {|module B exposing [helper]
 import Tesl.Prelude exposing [Int]
 fn helper() -> Int = 2
 |}
 
 let r43_01_param_shadows_own_top_level_name () =
-  should_fail_src "shadow" {|#lang tesl
-module Main exposing [helper]
+  should_fail_src "shadow" {|module Main exposing [helper]
 import Tesl.Prelude exposing [Int]
 
 fn helper(helper: Int) -> Int =
@@ -149,8 +145,7 @@ fn helper(helper: Int) -> Int =
 |}
 
 let r43_02_param_shadows_sibling_top_level_name () =
-  should_fail_src "shadow" {|#lang tesl
-module Main exposing [helper, value]
+  should_fail_src "shadow" {|module Main exposing [helper, value]
 import Tesl.Prelude exposing [Int]
 
 fn helper() -> Int = 1
@@ -159,8 +154,7 @@ fn value(helper: Int) -> Int =
 |}
 
 let r43_03_let_shadows_sibling_top_level_name () =
-  should_fail_src "shadow" {|#lang tesl
-module Main exposing [helper, value]
+  should_fail_src "shadow" {|module Main exposing [helper, value]
 import Tesl.Prelude exposing [Int]
 
 fn helper() -> Int = 1
@@ -170,8 +164,7 @@ fn value() -> Int =
 |}
 
 let r43_04_case_binder_shadows_sibling_top_level_name () =
-  should_fail_src "shadow" {|#lang tesl
-module Main exposing [helper, value]
+  should_fail_src "shadow" {|module Main exposing [helper, value]
 import Tesl.Prelude exposing [Int]
 
 fn helper() -> Int = 1
@@ -181,8 +174,7 @@ fn value() -> Int =
 |}
 
 let r43_05_lambda_param_shadows_sibling_top_level_name () =
-  should_fail_src "shadow" {|#lang tesl
-module Main exposing [helper, value]
+  should_fail_src "shadow" {|module Main exposing [helper, value]
 import Tesl.Prelude exposing [Int]
 
 fn helper() -> Int = 1
@@ -192,8 +184,7 @@ fn value() -> Int =
 |}
 
 let r43_06_test_let_shadows_sibling_top_level_name () =
-  should_fail_src "shadow" {|#lang tesl
-module Main exposing [helper]
+  should_fail_src "shadow" {|module Main exposing [helper]
 import Tesl.Prelude exposing [Int]
 
 fn helper() -> Int = 1
@@ -205,8 +196,7 @@ test "shadow in test let" {
 |}
 
 let r43_07_property_param_shadows_sibling_top_level_name () =
-  should_fail_src "shadow" {|#lang tesl
-module Main exposing [helper]
+  should_fail_src "shadow" {|module Main exposing [helper]
 import Tesl.Prelude exposing [Int, Bool]
 
 fn helper() -> Int = 1
@@ -219,8 +209,7 @@ test "property shadow" with 1 runs {
 |}
 
 let r43_08_test_case_binder_shadows_sibling_top_level_name () =
-  should_fail_src "shadow" {|#lang tesl
-module Main exposing [helper]
+  should_fail_src "shadow" {|module Main exposing [helper]
 import Tesl.Prelude exposing [Int]
 
 fn helper() -> Int = 1
@@ -233,8 +222,7 @@ test "shadow in test case" {
 |}
 
 let r43_09_param_shadows_gdp () =
-  should_fail_src "shadow" {|#lang tesl
-module Main exposing [value]
+  should_fail_src "shadow" {|module Main exposing [value]
 import Tesl.Prelude exposing [Int]
 
 fn value(gdp: Int) -> Int =
@@ -242,8 +230,7 @@ fn value(gdp: Int) -> Int =
 |}
 
 let r43_10_let_shadows_gdp () =
-  should_fail_src "shadow" {|#lang tesl
-module Main exposing [value]
+  should_fail_src "shadow" {|module Main exposing [value]
 import Tesl.Prelude exposing [Int]
 
 fn value() -> Int =
@@ -252,8 +239,7 @@ fn value() -> Int =
 |}
 
 let r43_11_lambda_param_shadows_gdp () =
-  should_fail_src "shadow" {|#lang tesl
-module Main exposing [value]
+  should_fail_src "shadow" {|module Main exposing [value]
 import Tesl.Prelude exposing [Int]
 
 fn value() -> Int =
@@ -262,8 +248,7 @@ fn value() -> Int =
 |}
 
 let r43_12_test_let_shadows_gdp () =
-  should_fail_src "shadow" {|#lang tesl
-module Main exposing [value]
+  should_fail_src "shadow" {|module Main exposing [value]
 import Tesl.Prelude exposing [Int]
 
 fn value() -> Int = 1
@@ -277,8 +262,7 @@ test "shadow gdp in test" {
 let r43_13_param_shadows_imported_function () =
   should_fail_project "shadow" [
     ("Util.tesl", util_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import Tesl.Prelude exposing [Int]
 import Util exposing [helper]
 
@@ -290,8 +274,7 @@ fn value(helper: Int) -> Int =
 let r43_14_let_shadows_imported_function () =
   should_fail_project "shadow" [
     ("Util.tesl", util_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import Tesl.Prelude exposing [Int]
 import Util exposing [helper]
 
@@ -304,8 +287,7 @@ fn value() -> Int =
 let r43_15_case_binder_shadows_imported_function () =
   should_fail_project "shadow" [
     ("Util.tesl", util_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import Tesl.Prelude exposing [Int]
 import Util exposing [helper]
 
@@ -318,8 +300,7 @@ fn value() -> Int =
 let r43_16_lambda_param_shadows_imported_function () =
   should_fail_project "shadow" [
     ("Util.tesl", util_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import Tesl.Prelude exposing [Int]
 import Util exposing [helper]
 
@@ -332,8 +313,7 @@ fn value() -> Int =
 let r43_17_test_let_shadows_imported_function () =
   should_fail_project "shadow" [
     ("Util.tesl", util_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import Tesl.Prelude exposing [Int]
 import Util exposing [helper]
 
@@ -349,8 +329,7 @@ test "shadow imported helper in test" {
 let r43_18_property_param_shadows_imported_function () =
   should_fail_project "shadow" [
     ("Util.tesl", util_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import Tesl.Prelude exposing [Int, Bool]
 import Util exposing [helper]
 
@@ -367,8 +346,7 @@ test "property imported shadow" with 1 runs {
 let r43_19_test_case_binder_shadows_imported_function () =
   should_fail_project "shadow" [
     ("Util.tesl", util_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import Tesl.Prelude exposing [Int]
 import Util exposing [helper]
 
@@ -385,8 +363,7 @@ test "shadow imported helper in test case" {
 let r43_20_top_level_function_shadows_imported_function () =
   should_fail_project "shadow.*imported" [
     ("Util.tesl", util_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [helper, value]
+    ("Main.tesl", {|module Main exposing [helper, value]
 import Tesl.Prelude exposing [Int]
 import Util exposing [helper]
 
@@ -399,8 +376,7 @@ let r43_21_duplicate_exposed_import_name_is_rejected () =
   should_fail_project "multiple modules" [
     ("A.tesl", a_src);
     ("B.tesl", b_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import Tesl.Prelude exposing [Int]
 import A exposing [helper]
 import B exposing [helper]
@@ -412,8 +388,7 @@ fn value() -> Int = helper()
 let r43_22_import_all_is_qualified_only () =
   should_pass_project [
     ("Util.tesl", util_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [helper, value]
+    ("Main.tesl", {|module Main exposing [helper, value]
 import Tesl.Prelude exposing [Int]
 import Util
 
@@ -425,8 +400,7 @@ fn value() -> Int = helper()
 let r43_23_fresh_local_let_still_compiles_with_exposed_import () =
   should_pass_project [
     ("Util.tesl", util_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import Tesl.Prelude exposing [Int]
 import Util exposing [helper]
 
@@ -439,8 +413,7 @@ fn value() -> Int =
 let r43_24_fresh_property_param_still_compiles_with_exposed_import () =
   should_pass_project [
     ("Util.tesl", util_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import Tesl.Prelude exposing [Int, Bool]
 import Util exposing [helper]
 

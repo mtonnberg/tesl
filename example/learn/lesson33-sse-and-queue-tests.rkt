@@ -63,7 +63,7 @@
 (define/pow
   (parseUserId [id : String])
   #:returns String
-  (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 84 (list (cons 'id *id)) (lambda () *id)))
+  (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 83 (list (cons 'id *id)) (lambda () *id)))
 
 (define-capture userIdCapture
   [userIdCapture : String]
@@ -82,13 +82,13 @@
   (handleNotice [job : NotifyJob ::: (FromQueue (Id == jobId) job)])
   #:capabilities [queueRead pubsub]
   #:returns NotifyJob
-  (let ([_ (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 105 (list (cons 'job *job)) (lambda () (publish-event! Lesson33Events (format "~a" (raw-value job.userId)) (NoticeSent (raw-value job.message)))))]) (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 106 (list (cons 'job *job)) (lambda () *job))))
+  (let ([_ (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 104 (list (cons 'job *job)) (lambda () (publish-event! Lesson33Events (format "~a" (raw-value job.userId)) (NoticeSent (raw-value job.message)))))]) (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 105 (list (cons 'job *job)) (lambda () *job))))
 
 (define-handler
   (sendNotice [req : SendNoticeRequest])
   #:capabilities [queueWrite]
   #:returns String
-  (let ([_ (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 110 (list (cons 'req *req)) (lambda () (enqueue! Lesson33Queue (NotifyJob #:userId (raw-value req.userId) #:message (raw-value req.message)))))]) (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 111 (list (cons 'req *req)) (lambda () "queued"))))
+  (let ([_ (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 109 (list (cons 'req *req)) (lambda () (enqueue! Lesson33Queue (NotifyJob #:userId (raw-value req.userId) #:message (raw-value req.message)))))]) (thsl-src! "example/learn/lesson33-sse-and-queue-tests.tesl" 110 (list (cons 'req *req)) (lambda () "queued"))))
 
 (define Lesson33Server-sse-routes
   (list (list (list "events" #f) #f Lesson33Events 1 (list (cons 1 (sse-key-capture userIdCapture))))))

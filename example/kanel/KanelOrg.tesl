@@ -1,4 +1,3 @@
-#lang tesl
 # ─── Kanel — Organization and membership management ────────────────────────
 #
 # All handlers here deal with creating/reading/updating orgs and their members.

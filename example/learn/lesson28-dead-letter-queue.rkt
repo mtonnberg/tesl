@@ -52,18 +52,18 @@
   (notifWorker [job : SendNotif ::: (FromQueue (Id == jobId) job)])
   #:capabilities [notifCap]
   #:returns SendNotif
-  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 104 (list (cons 'job *job)) (lambda () (reject "notification service unavailable" #:http-code 500))))
+  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 103 (list (cons 'job *job)) (lambda () (reject "notification service unavailable" #:http-code 500))))
 
 (define/pow
   (handleDeadNotif [job : SendNotif ::: (FromDeadQueue (Id == jobId) job)])
   #:capabilities [deadCap]
   #:returns SendNotif
-  (let ([_ (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 115 (list (cons 'job *job)) (lambda () (telemetry-event! "notif.dead" #:attributes (["userId" (raw-value job.userId)]))))]) (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 117 (list (cons 'job *job)) (lambda () *job))))
+  (let ([_ (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 114 (list (cons 'job *job)) (lambda () (telemetry-event! "notif.dead" #:attributes (["userId" (raw-value job.userId)]))))]) (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 116 (list (cons 'job *job)) (lambda () *job))))
 
 (define-handler
   (appRoot)
   #:returns String
-  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 126 (list) (lambda () "ok")))
+  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 125 (list) (lambda () "ok")))
 
 (define AppServer-sse-routes '())
 (define-api AppApi
@@ -79,7 +79,7 @@
 )
 
 (module+ main
-  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 143 (list) (lambda () (with-capabilities (appService notifCap deadCap) (call-with-database FakeDb (lambda () (begin (start-workers! NotifQueueWorkers (list notifCap deadCap)) (begin (start-dead-workers! NotifQueueDeadWorkers (list notifCap deadCap)) (serve AppServer #:port 8086 #:capabilities (list appService notifCap deadCap) #:sse-routes AppServer-sse-routes)))))))))
+  (thsl-src! "example/learn/lesson28-dead-letter-queue.tesl" 142 (list) (lambda () (with-capabilities (appService notifCap deadCap) (call-with-database FakeDb (lambda () (begin (start-workers! NotifQueueWorkers (list notifCap deadCap)) (begin (start-dead-workers! NotifQueueDeadWorkers (list notifCap deadCap)) (serve AppServer #:port 8086 #:capabilities (list appService notifCap deadCap) #:sse-routes AppServer-sse-routes)))))))))
 
 (define NotifQueueWorkers
   (list (cons NotifQueue notifWorker)))

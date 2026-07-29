@@ -88,8 +88,7 @@ let wrap_decl = {|type WrappedInt
   = Wrap value: Int|}
 
 let r38_01_function_duplicate_params_rejected () =
-  should_fail "duplicate parameter name" {|#lang tesl
-module Test exposing []
+  should_fail "duplicate parameter name" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo(x: Int, x: Int) -> Int =
@@ -97,8 +96,7 @@ fn demo(x: Int, x: Int) -> Int =
 |}
 
 let r38_02_lambda_shadow_outer_rejected () =
-  should_fail "shadow" {|#lang tesl
-module Test exposing []
+  should_fail "shadow" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo(x: Int) -> Int =
@@ -106,8 +104,7 @@ fn demo(x: Int) -> Int =
 |}
 
 let r38_03_expr_case_binder_shadow_param_rejected () =
-  should_fail "shadow" {|#lang tesl
-module Test exposing []
+  should_fail "shadow" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 
@@ -118,8 +115,7 @@ fn demo(x: Int, m: Maybe Int) -> Int =
 |}
 
 let r38_04_expr_case_duplicate_binder_rejected () =
-  should_fail "duplicate variable binding" (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_fail "duplicate variable binding" (Printf.sprintf {|module Test exposing []
 %s
 %s
 
@@ -132,8 +128,7 @@ let r38_05_guard_with_distinct_lambda_passes () =
   (* Guarded arms require a fallback arm for exhaustiveness — add `Something _ -> 0`
      to cover the case when the guard fails. The key test property is that a
      lambda `fn(z: Int) -> True` in the guard is hygienic (no shadowing error). *)
-  should_pass (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_pass (Printf.sprintf {|module Test exposing []
 %s
 %s
 
@@ -145,8 +140,7 @@ fn demo(x: Int, m: Maybe Int) -> Int =
 |} prelude_int_bool maybe_import)
 
 let r38_06_test_block_distinct_lets_pass () =
-  should_pass {|#lang tesl
-module Test exposing []
+  should_pass {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 test "distinct lets" {
@@ -157,8 +151,7 @@ test "distinct lets" {
 |}
 
 let r38_07_property_distinct_params_pass () =
-  should_pass {|#lang tesl
-module Test exposing []
+  should_pass {|module Test exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 
 test "distinct property params" with 5 runs {
@@ -169,8 +162,7 @@ test "distinct property params" with 5 runs {
 |}
 
 let r38_08_test_case_distinct_binder_pass () =
-  should_pass (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_pass (Printf.sprintf {|module Test exposing []
 %s
 %s
 
@@ -182,8 +174,7 @@ test "case binder" {
 |} prelude_int wrap_decl)
 
 let r38_09_lambda_duplicate_params_rejected () =
-  should_fail "duplicate parameter name" {|#lang tesl
-module Test exposing []
+  should_fail "duplicate parameter name" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo() -> Int =
@@ -191,8 +182,7 @@ fn demo() -> Int =
 |}
 
 let r38_10_nested_lambda_duplicate_params_rejected () =
-  should_fail "duplicate parameter name" {|#lang tesl
-module Test exposing []
+  should_fail "duplicate parameter name" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo() -> Int =
@@ -200,8 +190,7 @@ fn demo() -> Int =
 |}
 
 let r38_11_guard_lambda_shadow_outer_rejected () =
-  should_fail "shadow" (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_fail "shadow" (Printf.sprintf {|module Test exposing []
 %s
 %s
 
@@ -212,8 +201,7 @@ fn demo(x: Int, m: Maybe Int) -> Int =
 |} prelude_int_bool maybe_import)
 
 let r38_12_guard_lambda_duplicate_params_rejected () =
-  should_fail "duplicate parameter name" (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_fail "duplicate parameter name" (Printf.sprintf {|module Test exposing []
 %s
 %s
 
@@ -224,8 +212,7 @@ fn demo(m: Maybe Int) -> Int =
 |} prelude_int_bool maybe_import)
 
 let r38_13_test_let_shadowing_rejected () =
-  should_fail "shadow" {|#lang tesl
-module Test exposing []
+  should_fail "shadow" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 test "shadow" {
@@ -236,8 +223,7 @@ test "shadow" {
 |}
 
 let r38_14_nested_test_case_let_shadowing_rejected () =
-  should_fail "shadow" (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_fail "shadow" (Printf.sprintf {|module Test exposing []
 %s
 %s
 
@@ -252,8 +238,7 @@ test "nested shadow" {
 |} prelude_int wrap_decl)
 
 let r38_15_test_lambda_shadow_outer_let_rejected () =
-  should_fail "shadow" {|#lang tesl
-module Test exposing []
+  should_fail "shadow" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 test "lambda shadow" {
@@ -263,8 +248,7 @@ test "lambda shadow" {
 |}
 
 let r38_16_test_case_pattern_shadow_outer_let_rejected () =
-  should_fail "shadow" (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_fail "shadow" (Printf.sprintf {|module Test exposing []
 %s
 %s
 
@@ -278,8 +262,7 @@ test "case shadow" {
 |} prelude_int maybe_import)
 
 let r38_17_test_case_duplicate_pattern_binder_rejected () =
-  should_fail "duplicate variable binding" (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_fail "duplicate variable binding" (Printf.sprintf {|module Test exposing []
 %s
 %s
 
@@ -291,8 +274,7 @@ test "case dup binder" {
 |} prelude_int pairish_decl)
 
 let r38_18_property_duplicate_params_rejected () =
-  should_fail "duplicate parameter name" {|#lang tesl
-module Test exposing []
+  should_fail "duplicate parameter name" {|module Test exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 
 test "dup property params" with 10 runs {
@@ -301,8 +283,7 @@ test "dup property params" with 10 runs {
 |}
 
 let r38_19_property_duplicate_params_with_where_rejected () =
-  should_fail "duplicate parameter name" {|#lang tesl
-module Test exposing []
+  should_fail "duplicate parameter name" {|module Test exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 
 test "dup property params with where" with 10 runs {
@@ -311,8 +292,7 @@ test "dup property params with where" with 10 runs {
 |}
 
 let r38_20_property_param_shadows_test_let_rejected () =
-  should_fail "shadow" {|#lang tesl
-module Test exposing []
+  should_fail "shadow" {|module Test exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 
 test "property shadow" with 10 runs {
@@ -322,8 +302,7 @@ test "property shadow" with 10 runs {
 |}
 
 let r38_21_property_lambda_shadow_param_rejected () =
-  should_fail "shadow" {|#lang tesl
-module Test exposing []
+  should_fail "shadow" {|module Test exposing []
 import Tesl.Prelude exposing [Int, Bool(..)]
 
 test "property lambda shadow" with 5 runs {
@@ -334,8 +313,7 @@ test "property lambda shadow" with 5 runs {
 |}
 
 let r38_22_property_case_binder_shadow_param_rejected () =
-  should_fail "shadow" (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_fail "shadow" (Printf.sprintf {|module Test exposing []
 %s
 %s
 
@@ -349,8 +327,7 @@ test "property case shadow" with 5 runs {
 |} prelude_int_bool maybe_import)
 
 let r38_23_test_case_guard_lambda_shadow_outer_let_rejected () =
-  should_fail "shadow" (Printf.sprintf {|#lang tesl
-module Test exposing []
+  should_fail "shadow" (Printf.sprintf {|module Test exposing []
 %s
 %s
 

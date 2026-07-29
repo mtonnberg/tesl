@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson29ForallListProofs exposing [NoteServer]
 
 # ─────────────────────────────────────────────

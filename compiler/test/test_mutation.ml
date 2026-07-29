@@ -86,8 +86,7 @@ let test_no_raco_skip () =
 let test_all_killed () =
   if not (has_mutate_support ()) then skip ();
   if not (raco_available ()) then skip ();
-  let src = {|#lang tesl
-module T exposing [checkPos]
+  let src = {|module T exposing [checkPos]
 import Tesl.Prelude exposing [Int, Bool(..)]
 
 fact IsPositive (n: Int)
@@ -114,8 +113,7 @@ test "gt zero" {
 let test_boundary_off_by_one () =
   if not (has_mutate_support ()) then skip ();
   if not (raco_available ()) then skip ();
-  let src = {|#lang tesl
-module T exposing [checkPos]
+  let src = {|module T exposing [checkPos]
 import Tesl.Prelude exposing [Int, Bool(..)]
 
 fact IsPositive (n: Int)
@@ -139,8 +137,7 @@ test "misses boundary" {
 let test_no_mutations () =
   if not (has_mutate_support ()) then skip ();
   if not (raco_available ()) then skip ();
-  let src = {|#lang tesl
-module T exposing [checkAdmin]
+  let src = {|module T exposing [checkAdmin]
 import Tesl.Prelude exposing [Int, String, Bool(..)]
 
 fact IsAdmin (s: String)
@@ -166,8 +163,7 @@ test "admin check" {
 let test_compound_condition () =
   if not (has_mutate_support ()) then skip ();
   if not (raco_available ()) then skip ();
-  let src = {|#lang tesl
-module T exposing [checkRange]
+  let src = {|module T exposing [checkRange]
 import Tesl.Prelude exposing [Int, Bool(..)]
 
 fact InRange (n: Int)
@@ -194,8 +190,7 @@ test "full coverage" {
 let test_fn_not_mutated () =
   if not (has_mutate_support ()) then skip ();
   if not (raco_available ()) then skip ();
-  let src = {|#lang tesl
-module T exposing [checkPos, helper]
+  let src = {|module T exposing [checkPos, helper]
 import Tesl.Prelude exposing [Int, Bool(..)]
 
 fact IsPositive (n: Int)
@@ -223,8 +218,7 @@ test "basic" {
 let test_no_test_block () =
   if not (has_mutate_support ()) then skip ();
   if not (raco_available ()) then skip ();
-  let src = {|#lang tesl
-module T exposing [checkPos]
+  let src = {|module T exposing [checkPos]
 import Tesl.Prelude exposing [Int, Bool(..)]
 
 fact IsPositive (n: Int)
@@ -242,8 +236,7 @@ check checkPos(n: Int) -> n: Int ::: IsPositive n =
 (** Parse error should report cleanly. *)
 let test_parse_error () =
   if not (has_mutate_support ()) then skip ();
-  let src = {|#lang tesl
-this is not valid tesl
+  let src = {|this is not valid tesl
 |} in
   let (code, out) = run_mutate src in
   check int "exit 1 on error" 1 code;

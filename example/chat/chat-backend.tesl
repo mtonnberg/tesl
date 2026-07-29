@@ -1,4 +1,3 @@
-#lang tesl
 module ChatBackend exposing [ChatServer]
 
 import Tesl.Prelude exposing [Bool(..), String, List, Fact, Unit]

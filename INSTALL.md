@@ -110,7 +110,6 @@ environment.systemPackages = [
 Write a file called `hello.tesl` anywhere on your machine:
 
 ```tesl
-#lang tesl
 module Hello exposing [greet]
 import Tesl.Prelude exposing [String]
 

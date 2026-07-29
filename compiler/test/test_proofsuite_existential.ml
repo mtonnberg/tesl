@@ -107,7 +107,7 @@ let[@warning "-32"] known_gap ~what src =
 (* ── Shared TESL fragments ───────────────────────────────────────────────── *)
 
 let hdr modname = Printf.sprintf
-  "#lang tesl\nmodule %s exposing []\n\
+  "module %s exposing []\n\
    import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact]\n"
   modname
 
@@ -399,7 +399,7 @@ fn anyTok() -> exists t: String => String ::: IsTok t requires [random] =
 (* exists inside a select-existential (fetch by generated id). *)
 let pos_select_existential () =
   should_pass (Printf.sprintf
-    "#lang tesl\nmodule PosH05 exposing []\n\
+    "module PosH05 exposing []\n\
      import Tesl.Prelude exposing [String]\n\
      import Tesl.DB exposing [dbRead, dbWrite]\n\
      import Tesl.Maybe exposing [Maybe(..)]\n\
@@ -432,7 +432,7 @@ fn createTodo(title: String) -> exists todoId: String => Todo ? FromDb (Id == to
 (* exists packing an attachFact-reattached proof (explicit attach). *)
 let pos_attachfact_pack () =
   should_pass (Printf.sprintf
-    "#lang tesl\nmodule PosH07 exposing []\n\
+    "module PosH07 exposing []\n\
      import Tesl.Prelude exposing [String, Fact, detachFact, attachFact, forgetFact]\n\
      import Tesl.String exposing [String.length]\n\
      import Tesl.Id exposing [generatePrefixedId]\n\

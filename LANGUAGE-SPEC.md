@@ -454,18 +454,16 @@ This is style guidance, not a soundness distinction — all five compile today a
 ### 8.1 File prologue
 **Accepted design, Implemented.**
 
-A Tesl source file may begin with:
-
-- `#lang tesl`
-
-The module header must still appear explicitly inside the file.
+A Tesl source file starts directly with its `module` header (blank lines and
+comments may precede it). The historical `#lang tesl` pragma is **not
+accepted**: a file containing a `#lang` line is rejected with error `E002`,
+whose diagnostic carries a delete-line fix.
 
 ### 8.2 Comments
 **Accepted design, Implemented.**
 
 `#` starts a single-line comment, except:
 
-- the `#lang` line is preserved;
 - `#` inside string literals is preserved.
 
 ### 8.3 Indentation and braces
@@ -785,7 +783,7 @@ fn f(s: String) -> String = String.trim(s)
 **Accepted design.**
 
 ```text
-<module-file> ::= ["#lang tesl"] <module-header> { <import-line> } { <top-level-form> }
+<module-file> ::= <module-header> { <import-line> } { <top-level-form> }
 
 <top-level-form> ::= <capability-decl>
                    | <fact-decl>
@@ -3261,7 +3259,6 @@ The following design areas were open in earlier drafts and are now resolved:
 ## 17. Worked examples
 ### 17.1 Valid proof transport
 ```tesl
-#lang tesl
 module Example exposing [listen, bootstrap]
 import Tesl.Prelude exposing [attachFact, Int, Fact]
 
@@ -3283,7 +3280,6 @@ fn bootstrap(port: Int) -> Int =
 
 ### 17.2 Invalid cross-subject proof reuse
 ```tesl
-#lang tesl
 module BadExample exposing [bad]
 import Tesl.Prelude exposing [attachFact, Int, Fact]
 
@@ -3307,7 +3303,6 @@ This is invalid because `xProof` is about the subject of `x`, not the subject of
 
 ### 17.3 `forgetFact` preserves identity but not evidence
 ```tesl
-#lang tesl
 module ForgetExample exposing [roundTrip]
 import Tesl.Prelude exposing [attachFact, forgetFact, Int, Fact]
 
@@ -3334,7 +3329,6 @@ fn roundTrip(port: Int) -> Int =
 
 ### 17.4 Illegal shadowing
 ```tesl
-#lang tesl
 module Shadowing exposing []
 import Tesl.Prelude exposing [Int]
 
@@ -3513,9 +3507,11 @@ Multiple `email` blocks can coexist, each backed by the same or a different data
 
 ### 20.2 Capability
 
-The capability is `emailCap` — a single shared token, not name-specific. Any function that calls `Email.send` must declare `requires [emailCap]`:
+The capability is `emailCap` — a single shared token, not name-specific. It is **import-gated**, exactly like `time` from `Tesl.Time`: the only way to make it available is `import Tesl.Email exposing [emailCap]`. Declaring an `email` block does **not** grant it. Any function that calls `Email.send` must declare `requires [emailCap]`:
 
 ```tesl
+import Tesl.Email exposing [Email, SmtpConfig, emailCap]
+
 capability appService implies emailCap
 
 fn sendWelcomeEmail(to: String) -> Unit requires [emailCap] =

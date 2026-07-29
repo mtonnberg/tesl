@@ -71,14 +71,14 @@ let should_fail pattern src =
 
 let test_proof1_forge_stdlib_pred_rejected () =
   should_fail "cannot declare a proof return type\\|cannot introduce new proofs"
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int]\n\
      import Tesl.Int exposing [IsNonNegative]\n\
      fn forge(n: Int) -> n: Int ::: IsNonNegative n = n\n"
 
 let test_proof1_param_passthrough_accepted () =
   should_pass
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int]\n\
      import Tesl.Int exposing [IsNonNegative]\n\
      fn passthru(n: Int ::: IsNonNegative n) -> n: Int ::: IsNonNegative n = n\n"
@@ -87,7 +87,7 @@ let test_proof1_param_passthrough_accepted () =
 
 let test_proof2_fromdb_shadow_select_rejected () =
   should_fail "cannot declare a proof return type\\|cannot introduce new proofs"
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int]\n\
      fact FromDb (k: Int) (v: Int)\n\
      fn select(a: Int) -> Int = a * 2\n\
@@ -98,7 +98,7 @@ let test_proof2_fromdb_shadow_select_rejected () =
 
 let test_cap1_effect_through_ctor_rejected () =
   should_fail "uses privileged operations\\|requires \\[time\\]\\|does not declare"
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Maybe exposing [Maybe(..)]\n\
      import Tesl.Time exposing [nowMillis, PosixMillis]\n\
      fn sneaky() -> Maybe PosixMillis requires [] =\n\
@@ -106,7 +106,7 @@ let test_cap1_effect_through_ctor_rejected () =
 
 let test_cap1_pure_ctor_accepted () =
   should_pass
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int]\n\
      import Tesl.Maybe exposing [Maybe(..)]\n\
      fn pureCtor(x: Int) -> Maybe Int requires [] =\n\
@@ -120,7 +120,7 @@ let test_cap1_pure_ctor_accepted () =
 
 let test_emit1_former_reserved_name_accepted () =
   should_pass
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int]\n\
      fn f(seed: Int) -> Int =\n\
      \  let tesl_case_0 = seed\n\
@@ -128,13 +128,13 @@ let test_emit1_former_reserved_name_accepted () =
 
 let test_emit1_former_reserved_param_accepted () =
   should_pass
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int]\n\
      fn f(_tesl_p0_0: Int) -> Int = _tesl_p0_0\n"
 
 let test_emit1_normal_name_accepted () =
   should_pass
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int]\n\
      fn f(seed: Int) -> Int =\n\
      \  let myLocal = seed\n\
@@ -149,7 +149,7 @@ let test_emit1_normal_name_accepted () =
    are now reserved and the walk descends the test forms. *)
 let test_emit1_former_reserved_ignored_in_test_accepted () =
   should_pass
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int, Bool(..)]\n\
      fn f(x: Int) -> Int = x\n\
      test \"t\" {\n\
@@ -159,7 +159,7 @@ let test_emit1_former_reserved_ignored_in_test_accepted () =
 
 let test_emit1_former_reserved_proof_bind_in_test_accepted () =
   should_pass
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int, Bool(..)]\n\
      fn f(x: Int) -> Int = x\n\
      test \"t\" {\n\
@@ -169,7 +169,7 @@ let test_emit1_former_reserved_proof_bind_in_test_accepted () =
 
 let test_emit1_former_reserved_ignored_in_func_accepted () =
   should_pass
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int]\n\
      fn f(seed: Int) -> Int =\n\
      \  let tesl_ignored_0 = seed\n\
@@ -177,7 +177,7 @@ let test_emit1_former_reserved_ignored_in_func_accepted () =
 
 let test_emit1_normal_name_in_test_accepted () =
   should_pass
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int, Bool(..)]\n\
      fn f(x: Int) -> Int = x\n\
      test \"t\" {\n\
@@ -189,7 +189,7 @@ let test_emit1_normal_name_in_test_accepted () =
 
 let test_hm2_record_literal_cmp_rejected () =
   should_fail "ordering operator.*not defined for type"
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int, Bool(..)]\n\
      record Point { x: Int, y: Int }\n\
      fn bad() -> Bool =\n\
@@ -197,7 +197,7 @@ let test_hm2_record_literal_cmp_rejected () =
 
 let test_hm2_numeric_cmp_accepted () =
   should_pass
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int, Bool(..)]\n\
      fn ok() -> Bool = 1 < 2\n"
 
@@ -210,13 +210,13 @@ let test_hm2_numeric_cmp_accepted () =
    still permitted; tracked in roadmap/later.) *)
 let test_tss2_function_equality_rejected () =
   should_fail "equality operator.*not defined for type"
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int, Bool(..)]\n\
      fn bad(f: (Int) -> Int, g: (Int) -> Int) -> Bool = f == g\n"
 
 let test_tss2_primitive_equality_accepted () =
   should_pass
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int, String, Bool(..)]\n\
      fn ok(x: Int, s: String) -> Bool = (x == 1) != (s == \"a\")\n"
 
@@ -224,7 +224,7 @@ let test_tss2_primitive_equality_accepted () =
 
 let test_agent1_proof_tool_param_rejected () =
   should_fail "must not carry a proof annotation\\|proof"
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int, String]\n\
      import Tesl.Agent exposing [Agent, mockProvider, asTool]\n\
      fact IsPositive (n: Int)\n\
@@ -243,7 +243,7 @@ let test_agent1_proof_tool_param_rejected () =
 
 let test_agent1_plain_tool_param_accepted () =
   should_pass
-    "#lang tesl\nmodule T exposing []\n\
+    "module T exposing []\n\
      import Tesl.Prelude exposing [Int, String]\n\
      import Tesl.Agent exposing [Agent, mockProvider, asTool]\n\
      fn lookup(orderId: String) -> String =\n\
@@ -259,7 +259,7 @@ let test_agent1_plain_tool_param_accepted () =
 
 let test_agent2_byok_proof_tool_param_rejected () =
   should_fail "must not carry a proof annotation\\|proof"
-    "#lang tesl\nmodule T exposing [build]\n\
+    "module T exposing [build]\n\
      import Tesl.Prelude exposing [Int, String]\n\
      import Tesl.Agent exposing [Agent, LlmProvider, mockProvider, asTool]\n\
      fact IsPositive (n: Int)\n\
@@ -271,7 +271,7 @@ let test_agent2_byok_proof_tool_param_rejected () =
 
 let test_agent2_byok_plain_tool_param_accepted () =
   should_pass
-    "#lang tesl\nmodule T exposing [build]\n\
+    "module T exposing [build]\n\
      import Tesl.Prelude exposing [Int, String]\n\
      import Tesl.Agent exposing [Agent, LlmProvider, mockProvider, asTool]\n\
      fn lookup(orderId: String) -> String =\n\
@@ -283,7 +283,7 @@ let test_agent2_byok_plain_tool_param_accepted () =
 (* ── SQL-1: join entity / join-field validation ──────────────────────────── *)
 
 let sql_schema =
-  "#lang tesl\nmodule T exposing [q]\n\
+  "module T exposing [q]\n\
    import Tesl.Prelude exposing [String, List]\n\
    import Tesl.DB exposing [dbRead]\n\
    entity Order table \"orders\" primaryKey id {\n\

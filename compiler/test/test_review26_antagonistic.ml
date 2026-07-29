@@ -89,7 +89,7 @@ let should_fail pattern src =
   check bool (Printf.sprintf "should fail with pattern: %s" pattern) true found
 
 let prelude =
-  "#lang tesl\nmodule T exposing []\n\
+  "module T exposing []\n\
    import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n"
 
@@ -220,8 +220,7 @@ test "Tuple2 and Tuple3 work" {
 
 let test_multiline_exposing_parses () =
   let src =
-{|#lang tesl
-module MultiExp exposing [
+{|module MultiExp exposing [
   foo,
   bar,
   baz
@@ -236,8 +235,7 @@ fn baz(x: Int) -> Int = x + 3
 
 let test_formatter_reflows_exposing () =
   let src =
-{|#lang tesl
-module LongExposing exposing [aVeryLongNameOne, aVeryLongNameTwo, aVeryLongNameThree, aVeryLongNameFour, aVeryLongNameFive]
+{|module LongExposing exposing [aVeryLongNameOne, aVeryLongNameTwo, aVeryLongNameThree, aVeryLongNameFour, aVeryLongNameFive]
 import Tesl.Prelude exposing [Int]
 fn aVeryLongNameOne(x: Int) -> Int = x
 fn aVeryLongNameTwo(x: Int) -> Int = x
@@ -396,8 +394,7 @@ test "case ADT binder with guard" {
 
 let test_inner_join_compiles () =
   let src =
-{|#lang tesl
-module InnerJoinTest exposing [findMatched]
+{|module InnerJoinTest exposing [findMatched]
 import Tesl.Prelude exposing [Int, String, Bool(..), List]
 import Tesl.DB exposing [dbRead]
 import Tesl.Database exposing [Database, Memory]
@@ -421,8 +418,7 @@ fn findMatched(minVal: Int) -> List A requires [dbRead] =
 
 let test_inner_join_with_where () =
   let src =
-{|#lang tesl
-module IJWhere exposing [query]
+{|module IJWhere exposing [query]
 import Tesl.Prelude exposing [Int, String, Bool(..), List]
 import Tesl.DB exposing [dbRead]
 import Tesl.Database exposing [Database, Memory]
@@ -446,8 +442,7 @@ fn query(userId: String) -> List Post requires [dbRead] =
 
 let test_inner_join_order_limit () =
   let src =
-{|#lang tesl
-module IJOrderLimit exposing [topPosts]
+{|module IJOrderLimit exposing [topPosts]
 import Tesl.Prelude exposing [Int, String, Bool(..), List]
 import Tesl.DB exposing [dbRead]
 import Tesl.Database exposing [Database, Memory]
@@ -472,8 +467,7 @@ fn topPosts(n: Int) -> List Article requires [dbRead] =
 
 let test_inner_join_runtime_filter () =
   let src =
-{|#lang tesl
-module IJRuntime exposing [doQuery]
+{|module IJRuntime exposing [doQuery]
 import Tesl.Prelude exposing [Int, String, Bool(..), List, Unit]
 import Tesl.DB exposing [dbRead, dbWrite]
 import Tesl.Database exposing [Database, Memory]
@@ -496,8 +490,7 @@ fn doQuery() -> List Widget requires [dbRead] =
 
 let test_multiple_inner_joins () =
   let src =
-{|#lang tesl
-module MultiJoin exposing [query]
+{|module MultiJoin exposing [query]
 import Tesl.Prelude exposing [Int, String, Bool(..), List]
 import Tesl.DB exposing [dbRead]
 import Tesl.Database exposing [Database, Memory]
@@ -567,8 +560,7 @@ fn bad(a: Int, b: Int, c: Int, d: Int, e: Int) -> Tuple5 Int Int Int Int Int =
 
 let test_formatter_idempotent_multiline () =
   let src =
-{|#lang tesl
-module Foo exposing [
+{|module Foo exposing [
   alpha,
   beta,
   gamma,
@@ -586,8 +578,7 @@ fn gamma(x: Int) -> Int = x
   check bool "formatter should be idempotent on multi-line exposing" true (formatted1 = formatted2)
 
 let forall_prelude =
-  {|#lang tesl
-module T exposing []
+  {|module T exposing []
 import Tesl.Prelude exposing [String, Bool(..), List]
 import Tesl.List exposing [List.filterCheck]
 fact Active (x: Item)
@@ -652,8 +643,7 @@ check checkWrongInner(xs: List Item) -> List Item ? ForAll (Active) =
   should_fail "does not match declared return" src
 let test_formatter_keeps_short_exposing_oneline () =
   let src =
-{|#lang tesl
-module Short exposing [foo, bar]
+{|module Short exposing [foo, bar]
 import Tesl.Prelude exposing [Int]
 fn foo(x: Int) -> Int = x
 fn bar(x: Int) -> Int = x

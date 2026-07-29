@@ -39,12 +39,12 @@
 (define-checker
   (checkSafeContent [s : String])
   #:returns [s : String ::: (SafeContent s)]
-  (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 45 (list (cons 's *s)) (lambda () (if (and (>= (raw-value (tesl_import_String_length *s)) 1) (<= (raw-value (tesl_import_String_length *s)) 2000)) (accept (SafeContent s) #:value *s) (reject "note content must be 1-2000 characters" #:http-code 400)))))
+  (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 44 (list (cons 's *s)) (lambda () (if (and (>= (raw-value (tesl_import_String_length *s)) 1) (<= (raw-value (tesl_import_String_length *s)) 2000)) (accept (SafeContent s) #:value *s) (reject "note content must be 1-2000 characters" #:http-code 400)))))
 
 (define-checker
   (checkSafeTitle [s : String])
   #:returns [s : String ::: (SafeTitle s)]
-  (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 54 (list (cons 's *s)) (lambda () (if (and (>= (raw-value (tesl_import_String_length *s)) 1) (<= (raw-value (tesl_import_String_length *s)) 200)) (accept (SafeTitle s) #:value *s) (reject "title must be 1-200 characters" #:http-code 400)))))
+  (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 53 (list (cons 's *s)) (lambda () (if (and (>= (raw-value (tesl_import_String_length *s)) 1) (<= (raw-value (tesl_import_String_length *s)) 200)) (accept (SafeTitle s) #:value *s) (reject "title must be 1-200 characters" #:http-code 400)))))
 
 (define-record NewNote
   [title : String ::: (SafeTitle title)]
@@ -101,7 +101,7 @@
   (userAuth [request : HttpRequest])
   #:capabilities [noteAuth]
   #:returns (? String _entity ::: (Authenticated _entity))
-  (thsl-src-control! "example/learn/lesson16-complete-notes-api.tesl" 106 (list (cons 'request *request)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 107 (list) (lambda () (reject "authentication required" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 109 (list (cons 'userId userId)) (lambda () (if (> (raw-value (tesl_import_String_length (raw-value userId))) 0) (accept (Authenticated userId) #:value *userId) (reject "invalid user session" #:http-code 401)))))])))))
+  (thsl-src-control! "example/learn/lesson16-complete-notes-api.tesl" 105 (list (cons 'request *request)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Dict_lookup "user" (raw-value request.cookies)))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 106 (list) (lambda () (reject "authentication required" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([userId (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 108 (list (cons 'userId userId)) (lambda () (if (> (raw-value (tesl_import_String_length (raw-value userId))) 0) (accept (Authenticated userId) #:value *userId) (reject "invalid user session" #:http-code 401)))))])))))
 
 (define-capture noteIdCapture
   [noteId : String]
@@ -111,13 +111,13 @@
   (createNote [user : String ::: (Authenticated user)] [body : NewNote])
   #:capabilities [noteDbWrite time]
   #:returns Note
-  (let ([noteId (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 130 (list (cons 'user *user) (cons 'body *body)) (lambda () (raw-value (NoteId "note-1"))))]) (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 131 (list (cons 'noteId *noteId) (cons 'user *user) (cons 'body *body)) (lambda () (Note #:id *noteId #:title (raw-value body.title) #:content (raw-value body.content) #:authorId *user #:createdAt (raw-value (nowMillis)))))))
+  (let ([noteId (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 129 (list (cons 'user *user) (cons 'body *body)) (lambda () (raw-value (NoteId "note-1"))))]) (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 130 (list (cons 'noteId *noteId) (cons 'user *user) (cons 'body *body)) (lambda () (Note #:id *noteId #:title (raw-value body.title) #:content (raw-value body.content) #:authorId *user #:createdAt (raw-value (nowMillis)))))))
 
 (define-handler
   (getNote [user : String ::: (Authenticated user)] [noteId : String])
   #:capabilities [noteDbRead]
   #:returns (Maybe Note)
-  (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 138 (list (cons 'user *user) (cons 'noteId *noteId)) (lambda () (raw-value (Something (Note #:id (NoteId "note-1") #:title "example note" #:content "hello world" #:authorId *user #:createdAt (raw-value (tesl_import_Time_secondsToPosix 0))))))))
+  (thsl-src! "example/learn/lesson16-complete-notes-api.tesl" 137 (list (cons 'user *user) (cons 'noteId *noteId)) (lambda () (raw-value (Something (Note #:id (NoteId "note-1") #:title "example note" #:content "hello world" #:authorId *user #:createdAt (raw-value (tesl_import_Time_secondsToPosix 0))))))))
 
 (define NotesServer-sse-routes '())
 (define-api NotesApi

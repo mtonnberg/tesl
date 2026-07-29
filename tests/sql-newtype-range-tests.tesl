@@ -1,4 +1,3 @@
-#lang tesl
 module Sql_newtype_range_tests exposing []
 
 # Regression for GitHub #28: an ordered comparison (>= / <= / < / >) in a

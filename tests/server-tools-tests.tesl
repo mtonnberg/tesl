@@ -1,4 +1,3 @@
-#lang tesl
 module ServerToolsTests exposing [
   NotesServer,
   User,

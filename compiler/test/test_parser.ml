@@ -28,7 +28,7 @@ let _nth_decl n m = List.nth m.decls n
 (* ── Module header tests ─────────────────────────────────────────────────── *)
 
 let test_module_header () =
-  let src = "#lang tesl\nmodule Hello exposing [foo, bar]\nimport Tesl.Prelude exposing [Int]\n" in
+  let src = "module Hello exposing [foo, bar]\nimport Tesl.Prelude exposing [Int]\n" in
   assert_ok src (fun m ->
     Alcotest.(check string) "module name" "Hello" m.module_name;
     Alcotest.(check int) "export count" 2 (List.length m.exports);
@@ -37,7 +37,7 @@ let test_module_header () =
   )
 
 let test_module_adt_exports () =
-  let src = "#lang tesl\nmodule Foo exposing [Color(..), Weekday(..)]\n" in
+  let src = "module Foo exposing [Color(..), Weekday(..)]\n" in
   assert_ok src (fun m ->
     let exports = m.exports in
     Alcotest.(check int) "two exports" 2 (List.length exports);
@@ -47,7 +47,7 @@ let test_module_adt_exports () =
   )
 
 let test_module_import_qualified () =
-  let src = "#lang tesl\nmodule Foo exposing []\nimport Tesl.Dict\n" in
+  let src = "module Foo exposing []\nimport Tesl.Dict\n" in
   assert_ok src (fun m ->
     let imp = List.hd m.imports in
     Alcotest.(check string) "module name" "Tesl.Dict" imp.module_name;
@@ -59,8 +59,7 @@ let test_module_import_qualified () =
 (* ── Function declaration tests ─────────────────────────────────────────── *)
 
 let test_fn_simple () =
-  let src = {|#lang tesl
-module Foo exposing [add]
+  let src = {|module Foo exposing [add]
 import Tesl.Prelude exposing [Int]
 fn add(x: Int, y: Int) -> Int =
   x + y
@@ -78,8 +77,7 @@ fn add(x: Int, y: Int) -> Int =
   )
 
 let test_fn_string_interpolation () =
-  let src = {|#lang tesl
-module Foo exposing [greet]
+  let src = {|module Foo exposing [greet]
 import Tesl.Prelude exposing [String]
 fn greet(name: String) -> String =
   "Hello, ${name}!"
@@ -95,8 +93,7 @@ fn greet(name: String) -> String =
   )
 
 let test_fn_case_expression () =
-  let src = {|#lang tesl
-module Foo exposing [colorName]
+  let src = {|module Foo exposing [colorName]
 import Tesl.Prelude exposing [String]
 fn colorName(c: Color) -> String =
   case c of
@@ -118,8 +115,7 @@ fn colorName(c: Color) -> String =
   )
 
 let test_fn_if_else () =
-  let src = {|#lang tesl
-module Foo exposing [f]
+  let src = {|module Foo exposing [f]
 import Tesl.Prelude exposing [Bool, Int]
 fn f(b: Bool, n: Int) -> Int =
   if b then
@@ -137,8 +133,7 @@ fn f(b: Bool, n: Int) -> Int =
   )
 
 let test_fn_let_bindings () =
-  let src = {|#lang tesl
-module Foo exposing [f]
+  let src = {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int =
   let y = x + 1
@@ -154,8 +149,7 @@ fn f(x: Int) -> Int =
   )
 
 let test_fn_typed_let_binding () =
-  let src = {|#lang tesl
-module Foo exposing [f]
+  let src = {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int =
   let y: Int = x + 1
@@ -173,8 +167,7 @@ fn f(x: Int) -> Int =
 (* ── Check / auth tests ──────────────────────────────────────────────────── *)
 
 let test_check_function () =
-  let src = {|#lang tesl
-module Foo exposing [isValidPort]
+  let src = {|module Foo exposing [isValidPort]
 import Tesl.Prelude exposing [Int]
 check isValidPort(port: Int) -> port: Int::: ValidPort port =
   if 1 <= port && port <= 65535 then
@@ -198,8 +191,7 @@ check isValidPort(port: Int) -> port: Int::: ValidPort port =
   )
 
 let test_auth_function () =
-  let src = {|#lang tesl
-module Foo exposing [cookieAuth]
+  let src = {|module Foo exposing [cookieAuth]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Prelude exposing [String]
 auth cookieAuth(request: HttpRequest) -> user: String::: Authenticated user =
@@ -214,8 +206,7 @@ auth cookieAuth(request: HttpRequest) -> user: String::: Authenticated user =
   )
 
 let test_handler_with_capabilities () =
-  let src = {|#lang tesl
-module Foo exposing [createTask]
+  let src = {|module Foo exposing [createTask]
 import Tesl.Prelude exposing [String]
 handler createTask(user: String) -> String
   requires [taskDbWrite] =
@@ -233,8 +224,7 @@ handler createTask(user: String) -> String
 (* ── Type declaration tests ──────────────────────────────────────────────── *)
 
 let test_newtype () =
-  let src = {|#lang tesl
-module Foo exposing [UserId]
+  let src = {|module Foo exposing [UserId]
 type UserId = String
 |} in
   assert_ok src (fun m ->
@@ -244,8 +234,7 @@ type UserId = String
   )
 
 let test_adt_nullary () =
-  let src = {|#lang tesl
-module Foo exposing [Color(..)]
+  let src = {|module Foo exposing [Color(..)]
 type Color
   = Red
   | Green
@@ -260,8 +249,7 @@ type Color
   )
 
 let test_adt_with_fields () =
-  let src = {|#lang tesl
-module Foo exposing [Shape(..)]
+  let src = {|module Foo exposing [Shape(..)]
 type Shape
   = Circle radius:Int
   | Rectangle width:Int height:Int
@@ -280,8 +268,7 @@ type Shape
 (* ── Record declaration tests ────────────────────────────────────────────── *)
 
 let test_record_simple () =
-  let src = {|#lang tesl
-module Foo exposing [Task]
+  let src = {|module Foo exposing [Task]
 record Task {
   id: String
   title: String
@@ -299,8 +286,7 @@ record Task {
   )
 
 let test_record_with_proof_fields () =
-  let src = {|#lang tesl
-module Foo exposing [NewNote]
+  let src = {|module Foo exposing [NewNote]
 record NewNote {
   title: String::: SafeTitle title
   content: String::: SafeContent content
@@ -319,8 +305,7 @@ record NewNote {
 (* ── Entity tests ────────────────────────────────────────────────────────── *)
 
 let test_entity () =
-  let src = {|#lang tesl
-module Foo exposing [Todo]
+  let src = {|module Foo exposing [Todo]
 entity Todo table "todos" primaryKey id {
   id: String
   title: String
@@ -340,8 +325,7 @@ entity Todo table "todos" primaryKey id {
 (* ── Capability tests ────────────────────────────────────────────────────── *)
 
 let test_capability () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 capability taskDbRead implies dbRead
 |} in
   assert_ok src (fun m ->
@@ -354,8 +338,7 @@ capability taskDbRead implies dbRead
   )
 
 let test_capability_no_implies () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 capability noteAuth
 |} in
   assert_ok src (fun m ->
@@ -369,8 +352,7 @@ capability noteAuth
 (* ── Fact declaration tests ───────────────────────────────────────────────── *)
 
 let test_fact_with_params () =
-  let src = {|#lang tesl
-module Foo exposing [ValidPort]
+  let src = {|module Foo exposing [ValidPort]
 fact ValidPort (port: Int)
 |} in
   assert_ok src (fun m ->
@@ -383,8 +365,7 @@ fact ValidPort (port: Int)
   )
 
 let test_fact_no_params () =
-  let src = {|#lang tesl
-module Foo exposing [IsReady]
+  let src = {|module Foo exposing [IsReady]
 fact IsReady
 |} in
   assert_ok src (fun m ->
@@ -398,8 +379,7 @@ fact IsReady
 
 
 let test_codec_to_json () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 codec Task {
   toJson {
     id -> "id" with_codec stringCodec
@@ -423,8 +403,7 @@ codec Task {
   )
 
 let test_codec_from_json () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 codec NewTask {
   toJson_forbidden
   fromJson [
@@ -452,30 +431,26 @@ codec NewTask {
    silently default to *_forbidden, masking real bugs (e.g. a response type that
    cannot actually be encoded).  Each of these must now be rejected. *)
 let test_codec_incomplete_rejected () =
-  assert_err {|#lang tesl
-module Foo exposing []
+  assert_err {|module Foo exposing []
 codec Task {
   toJson {
     id -> "id" with_codec stringCodec
   }
 }
 |};
-  assert_err {|#lang tesl
-module Foo exposing []
+  assert_err {|module Foo exposing []
 codec Task {
   fromJson_forbidden
 }
 |};
-  assert_err {|#lang tesl
-module Foo exposing []
+  assert_err {|module Foo exposing []
 codec Task {
 }
 |}
 
 (* `adtJson` supplies both directions at once, so it is a complete codec. *)
 let test_codec_adt_json () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 codec Color {
   adtJson
 }
@@ -492,8 +467,7 @@ codec Color {
 (* ── API and server tests ────────────────────────────────────────────────── *)
 
 let test_api_declaration () =
-  let src = {|#lang tesl
-module Foo exposing [TaskServer]
+  let src = {|module Foo exposing [TaskServer]
 api TaskApi {
   post "/tasks"
     auth user: String::: Authenticated user via cookieAuth
@@ -510,8 +484,7 @@ api TaskApi {
   )
 
 let test_server_declaration () =
-  let src = {|#lang tesl
-module Foo exposing [TaskServer]
+  let src = {|module Foo exposing [TaskServer]
 server TaskServer for TaskApi {
   createTask = createTask
   getTask = getTask
@@ -529,8 +502,7 @@ server TaskServer for TaskApi {
 (* ── Test block tests ────────────────────────────────────────────────────── *)
 
 let test_test_block () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 test "greet" {
   expect greet "World" == "Hello, World!"
   expect greet "Tesl" == "Hello, Tesl!"
@@ -545,8 +517,7 @@ test "greet" {
   )
 
 let test_test_with_let () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 test "proofs" {
   let x = isValidPort 80
   expect 1 == 1
@@ -563,8 +534,7 @@ test "proofs" {
   )
 
 let test_test_with_typed_let () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 test "proofs" {
   let x: Int ::: ValidPort x = isValidPort 80
   expect 1 == 1
@@ -586,8 +556,7 @@ test "proofs" {
   )
 
 let test_test_expect_fail () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 test "invalid ports" {
   expectFail isValidPort 0
   expectFail isValidPort 65536
@@ -603,8 +572,7 @@ test "invalid ports" {
   )
 
 let test_api_test_multiline_request_continuation () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 api-test "multiline request" for ChatServer {
   let createdRoom = post "/rooms"
                    cookie "chatUserId={userId}"
@@ -638,8 +606,7 @@ api-test "multiline request" for ChatServer {
   )
 
 let test_property_with_custom_generator () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 test "custom generator" {
   property "x" (n: Int via genSmallPositive) { n > 0 }
 }
@@ -660,8 +627,7 @@ test "custom generator" {
 (* ── Capture tests ───────────────────────────────────────────────────────── *)
 
 let test_capture () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 capture taskIdCapture: id: String using stringCodec
 |} in
   assert_ok src (fun m ->
@@ -676,8 +642,7 @@ capture taskIdCapture: id: String using stringCodec
 (* ── Expression tests ────────────────────────────────────────────────────── *)
 
 let parse_expr_src src =
-  let full = Printf.sprintf {|#lang tesl
-module Foo exposing [f]
+  let full = Printf.sprintf {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int =
   %s
@@ -746,15 +711,14 @@ let test_missing_module_header () =
   assert_err "fn add(x: Int) -> Int = 42"
 
 let test_empty_module () =
-  let src = "#lang tesl\nmodule Empty exposing []\n" in
+  let src = "module Empty exposing []\n" in
   assert_ok src (fun m ->
     Alcotest.(check string) "module name" "Empty" m.module_name;
     Alcotest.(check int) "no decls" 0 (decl_count m)
   )
 
 let test_multiple_declarations () =
-  let src = {|#lang tesl
-module Foo exposing [f, g]
+  let src = {|module Foo exposing [f, g]
 import Tesl.Prelude exposing [Int, String]
 fn f(x: Int) -> Int =
   x + 1
@@ -766,8 +730,7 @@ fn g(s: String) -> String =
   )
 
 let test_proof_conjunction () =
-  let src = {|#lang tesl
-module Foo exposing [f]
+  let src = {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int]
 fn f(x: Int::: Positive x && ValidRange x) -> Int =
   x
@@ -783,8 +746,7 @@ fn f(x: Int::: Positive x && ValidRange x) -> Int =
   )
 
 let test_forall_return () =
-  let src = {|#lang tesl
-module Foo exposing [filterPositive]
+  let src = {|module Foo exposing [filterPositive]
 import Tesl.Prelude exposing [Int]
 fn filterPositive(xs: List Int) -> List Int ::: ForAll Positive =
   xs
@@ -800,8 +762,7 @@ fn filterPositive(xs: List Int) -> List Int ::: ForAll Positive =
   )
 
 let test_named_pack_return () =
-  let src = {|#lang tesl
-module Foo exposing [getUser]
+  let src = {|module Foo exposing [getUser]
 import Tesl.Prelude exposing [String]
 fn getUser(id: String) -> User ? Authenticated =
   fail 404 "not found"
@@ -816,8 +777,7 @@ fn getUser(id: String) -> User ? Authenticated =
   )
 
 let test_adt_inline_style () =
-  let src = {|#lang tesl
-module Foo exposing [Color(..)]
+  let src = {|module Foo exposing [Color(..)]
 type Color =
   | Red
   | Green
@@ -831,8 +791,7 @@ type Color =
   )
 
 let test_parameterized_adt () =
-  let src = {|#lang tesl
-module Foo exposing [Either(..)]
+  let src = {|module Foo exposing [Either(..)]
 type Either a b =
   | Left value:a
   | Right value:b
@@ -850,8 +809,7 @@ type Either a b =
   )
 
 let test_single_param_adt () =
-  let src = {|#lang tesl
-module Foo exposing [Box(..)]
+  let src = {|module Foo exposing [Box(..)]
 type Box a = Box value:a
 |} in
   assert_ok src (fun m ->
@@ -864,8 +822,7 @@ type Box a = Box value:a
   )
 
 let test_non_parameterized_adt_no_params () =
-  let src = {|#lang tesl
-module Foo exposing [Status(..)]
+  let src = {|module Foo exposing [Status(..)]
 type Status =
   | Active
   | Inactive
@@ -878,8 +835,7 @@ type Status =
   )
 
 let test_adt_parameterized () =
-  let src = {|#lang tesl
-module Foo exposing [Either(..)]
+  let src = {|module Foo exposing [Either(..)]
 type Either a b =
   | Left { value: a }
   | Right { value: b }
@@ -900,8 +856,7 @@ type Either a b =
 
 let test_brace_pattern_match () =
   (* Test brace-syntax pattern matching: Constructor { field = var } *)
-  let src = {|#lang tesl
-module Foo exposing [getLeft]
+  let src = {|module Foo exposing [getLeft]
 import Tesl.Prelude exposing [String, Int]
 type Either a b =
   | Left { value: a }

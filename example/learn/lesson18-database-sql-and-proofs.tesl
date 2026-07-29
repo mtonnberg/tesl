@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson18DatabaseSqlAndProofs exposing [NoteDatabase, NoteServer]
 
 # ─────────────────────────────────────────────

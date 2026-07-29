@@ -127,14 +127,12 @@ let should_local_binding_type name expected src =
     failf "expected --local-bindings-json to map %s -> %S\nfull output:\n%s"
       name expected out
 
-let base_header = {|#lang tesl
-module Test exposing []
+let base_header = {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact, forgetFact, attachFact, detachFact]
 import Tesl.Maybe exposing [Maybe(..)]
 |}
 
-let db_header = {|#lang tesl
-module Test exposing []
+let db_header = {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.DB exposing [dbRead, dbWrite]
 |}
@@ -528,8 +526,7 @@ fn demo(m: Maybe Int, n: Int) -> Int =
 
 (* R51_F01 — FIXED. Formatter normalises `*`. *)
 let r51_f01_formatter_normalises_star_fixed () =
-  should_fmt_to "a * b" {|#lang tesl
-module Test exposing []
+  should_fmt_to "a * b" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo(a: Int, b: Int) -> Int = a*b
@@ -537,8 +534,7 @@ fn demo(a: Int, b: Int) -> Int = a*b
 
 (* R51_F02 — FIXED. Formatter normalises binary `-`. *)
 let r51_f02_formatter_normalises_minus_fixed () =
-  should_fmt_to "a - b" {|#lang tesl
-module Test exposing []
+  should_fmt_to "a - b" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo(a: Int, b: Int) -> Int = a-b
@@ -546,8 +542,7 @@ fn demo(a: Int, b: Int) -> Int = a-b
 
 (* R51_F02b — NEW: unary `-` is PRESERVED (never becomes "x - 5" on `-5`). *)
 let r51_f02b_formatter_preserves_unary_minus () =
-  should_fmt_to "= -5" {|#lang tesl
-module Test exposing []
+  should_fmt_to "= -5" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo() -> Int = -5
@@ -555,8 +550,7 @@ fn demo() -> Int = -5
 
 (* R51_F03 — FIXED. Formatter normalises `/`. *)
 let r51_f03_formatter_normalises_slash_fixed () =
-  should_fmt_to "a / b" {|#lang tesl
-module Test exposing []
+  should_fmt_to "a / b" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo(a: Int, b: Int) -> Int = a/b
@@ -564,8 +558,7 @@ fn demo(a: Int, b: Int) -> Int = a/b
 
 (* R51_F04 — FIXED. Formatter normalises `%`. *)
 let r51_f04_formatter_normalises_percent_fixed () =
-  should_fmt_to "a % b" {|#lang tesl
-module Test exposing []
+  should_fmt_to "a % b" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo(a: Int, b: Int) -> Int = a%b
@@ -573,8 +566,7 @@ fn demo(a: Int, b: Int) -> Int = a%b
 
 (* R51_F05 — FIXED. Linter warns on unused `let`. *)
 let r51_f05_linter_catches_unused_let_fixed () =
-  should_lint_contain "unused `let` binding" {|#lang tesl
-module Test exposing []
+  should_lint_contain "unused `let` binding" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo() -> Int =
@@ -584,8 +576,7 @@ fn demo() -> Int =
 
 (* R51_F06 — FIXED. Linter warns on unused function parameter. *)
 let r51_f06_linter_catches_unused_param_fixed () =
-  should_lint_contain "unused parameter" {|#lang tesl
-module Test exposing []
+  should_lint_contain "unused parameter" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo(a: Int, deadParam: Int) -> Int = a
@@ -594,8 +585,7 @@ fn demo(a: Int, deadParam: Int) -> Int = a
 (* R51_F06b — NEW: parameters named with a leading `_` are INTENTIONALLY
    not flagged (Elm / Haskell / OCaml convention). *)
 let r51_f06b_underscore_prefix_param_not_flagged () =
-  with_temp_file "tesl-r51" ".tesl" {|#lang tesl
-module Test exposing []
+  with_temp_file "tesl-r51" ".tesl" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo(a: Int, _deadParam: Int) -> Int = a
@@ -609,8 +599,7 @@ fn demo(a: Int, _deadParam: Int) -> Int = a
 
 (* R51_F07 — FIXED. Linter warns on dead code after `fail`. *)
 let r51_f07_linter_catches_dead_after_fail_fixed () =
-  should_lint_contain "unreachable code after `fail`" {|#lang tesl
-module Test exposing []
+  should_lint_contain "unreachable code after `fail`" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fact IsPositive (n: Int)
@@ -689,8 +678,7 @@ fn demo(a: Int, b: Int) -> Int =
 (* R51_N06 — formatter idempotence on a pre-normalised file. Running the
    formatter twice must yield the same output. *)
 let r51_n06_formatter_idempotent () =
-  let src = {|#lang tesl
-module Test exposing []
+  let src = {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo(a: Int, b: Int) -> Int = a*b + (0 - a) - b/2
@@ -710,8 +698,7 @@ fn demo(a: Int, b: Int) -> Int = a*b + (0 - a) - b/2
 
 (* R51_N07 — linter emits warning code `W060` (not just free text). *)
 let r51_n07_linter_uses_w060_code () =
-  should_lint_contain "W060" {|#lang tesl
-module Test exposing []
+  should_lint_contain "W060" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo() -> Int =
@@ -721,8 +708,7 @@ fn demo() -> Int =
 
 (* R51_N08 — linter uses `W061` for unused parameters. *)
 let r51_n08_linter_uses_w061_code () =
-  should_lint_contain "W061" {|#lang tesl
-module Test exposing []
+  should_lint_contain "W061" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fn demo(a: Int, deadParam: Int) -> Int = a
@@ -730,8 +716,7 @@ fn demo(a: Int, deadParam: Int) -> Int = a
 
 (* R51_N09 — linter uses `W062` for dead code. *)
 let r51_n09_linter_uses_w062_code () =
-  should_lint_contain "W062" {|#lang tesl
-module Test exposing []
+  should_lint_contain "W062" {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fact IsPositive (n: Int)
@@ -781,8 +766,7 @@ fn takeId(u: UserId) -> String = u.value
    proof binder's INDIVIDUAL predicate (ValidScore / ValidTag), not the
    full compound predicate (scoreProof && tagProof). *)
 let r51_n13_let_proof_conj_hover_split () =
-  let src = {|#lang tesl
-module Test exposing []
+  let src = {|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 
 fact ValidScore (n: Int)
@@ -800,8 +784,7 @@ fn decomposeThenCall(score: Int ::: ValidScore score, tag: String ::: ValidTag t
 (* R51_N14 — the linter must NOT flag a proof binder as unused when it is
    referenced from a proof annotation `value ::: proofName`. *)
 let r51_n14_linter_follows_proof_ann () =
-  let src = {|#lang tesl
-module Test exposing []
+  let src = {|module Test exposing []
 import Tesl.Prelude exposing [Int]
 
 fact IsPositive (n: Int)

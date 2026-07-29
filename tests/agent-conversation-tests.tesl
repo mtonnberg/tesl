@@ -1,4 +1,3 @@
-#lang tesl
 module AgentConversationTests exposing []
 
 import Tesl.Prelude exposing [Int, String, Bool]

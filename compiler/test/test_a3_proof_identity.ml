@@ -104,8 +104,7 @@ let should_pass label srcs =
 
 (* ── §4.1 subject field-drop ──────────────────────────────────────────────── *)
 
-let subj_hdr = {|#lang tesl
-module SubjA exposing []
+let subj_hdr = {|module SubjA exposing []
 import Tesl.Prelude exposing [String, attachFact, detachFact, forgetFact]
 import Tesl.String exposing [String.length]
 fact Safe (s: String)
@@ -180,8 +179,7 @@ fn ok2(c: Cmd) -> String =
 
 (* ── §4.2 / §4.3 cross-module fact identity ───────────────────────────────── *)
 
-let owner = {|#lang tesl
-module FactOwner exposing [ValidEmail, checkEmail, trustedSink]
+let owner = {|module FactOwner exposing [ValidEmail, checkEmail, trustedSink]
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.contains, String.length]
 fact ValidEmail (s: String)
@@ -195,8 +193,7 @@ fn trustedSink(s: String ::: ValidEmail s) -> String = s
 
 (* Attacker declares a same-named local fact WITHOUT importing the predicate,
    mints it via [mint_kind], and feeds it to the owner's trusted sink. *)
-let attacker_check = {|#lang tesl
-module AttackerC exposing []
+let attacker_check = {|module AttackerC exposing []
 import Tesl.Prelude exposing [String]
 import FactOwner exposing [trustedSink]
 fact ValidEmail (s: String)
@@ -206,8 +203,7 @@ fn attack(evil: String) -> String =
   trustedSink v
 |}
 
-let attacker_establish = {|#lang tesl
-module AttackerE exposing []
+let attacker_establish = {|module AttackerE exposing []
 import Tesl.Prelude exposing [String, Fact, attachFact]
 import FactOwner exposing [trustedSink]
 fact ValidEmail (s: String)
@@ -218,16 +214,14 @@ fn attack(evil: String) -> String =
 |}
 
 (* Attacker imports the fact by name AND re-declares it locally (the §4.3 shadow). *)
-let shadower = {|#lang tesl
-module ShadowerM exposing []
+let shadower = {|module ShadowerM exposing []
 import Tesl.Prelude exposing [String]
 import FactOwner exposing [ValidEmail, checkEmail, trustedSink]
 fact ValidEmail (s: String)
 |}
 
 (* POS: consumer imports and USES the fact as a type, never re-declaring it. *)
-let legit_consumer = {|#lang tesl
-module LegitC exposing []
+let legit_consumer = {|module LegitC exposing []
 import Tesl.Prelude exposing [String]
 import FactOwner exposing [ValidEmail, checkEmail, trustedSink]
 fn process(raw: String) -> String =
@@ -236,8 +230,7 @@ fn process(raw: String) -> String =
 |}
 
 (* POS: a self-contained module owns its OWN fact (no importing module owns it). *)
-let self_owner = {|#lang tesl
-module SelfOwner exposing []
+let self_owner = {|module SelfOwner exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.length]
 fact LocalNonEmpty (s: String)
@@ -253,8 +246,7 @@ fn use(raw: String) -> String =
 |}
 
 (* POS: a local fact sharing a spelling with a NON-imported stdlib predicate. *)
-let stdlib_name_not_imported = {|#lang tesl
-module StdName exposing []
+let stdlib_name_not_imported = {|module StdName exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.length]
 fact IsNonEmpty (s: String)
@@ -274,8 +266,7 @@ let mismatch_pat = "subject mismatch\\|does not statically satisfy\\|different s
    A 4-field record gives 12 ordered (proven, target) pairs; each retarget via a
    distinct launder must be rejected.  This is the breadth that catches a subject
    key that is right for one field pair but collapses another. *)
-let quad_hdr = {|#lang tesl
-module SubjQ exposing []
+let quad_hdr = {|module SubjQ exposing []
 import Tesl.Prelude exposing [String, attachFact, detachFact, forgetFact]
 import Tesl.String exposing [String.length]
 fact Safe (s: String)
@@ -326,14 +317,12 @@ let quad_pos_cases =
   ) ["fa"; "fb"; "fc"; "fd"]
 
 (* ── §4.2 forgery matrix: mint-kind × import-style ────────────────────────── *)
-let owner_bridge = {|#lang tesl
-module OwnerBridge exposing [ValidEmail, checkEmail, trustedSink]
+let owner_bridge = {|module OwnerBridge exposing [ValidEmail, checkEmail, trustedSink]
 import FactOwner exposing [ValidEmail, checkEmail, trustedSink]
 |}
 
 (* attacker importing via the re-export bridge, minting a same-named local fact. *)
-let attacker_via_bridge = {|#lang tesl
-module AttackerB exposing []
+let attacker_via_bridge = {|module AttackerB exposing []
 import Tesl.Prelude exposing [String]
 import OwnerBridge exposing [trustedSink]
 fact ValidEmail (s: String)
@@ -346,8 +335,7 @@ fn attack(evil: String) -> String =
 (* auth-mint variant — the collision is caught at the `fact` DECLARATION, before
    any mint, so simply declaring the same-named local fact while importing the
    owner is already the forgery vector regardless of mint kind. *)
-let attacker_auth = {|#lang tesl
-module AttackerA exposing []
+let attacker_auth = {|module AttackerA exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
 import FactOwner exposing [trustedSink]
@@ -357,8 +345,7 @@ auth forge(req: HttpRequest) -> s: String ::: ValidEmail s =
 |}
 
 (* POS: two modules each declaring DISTINCT facts, one importing the other. *)
-let distinct_a = {|#lang tesl
-module DistinctA exposing [FactAlpha, mkAlpha]
+let distinct_a = {|module DistinctA exposing [FactAlpha, mkAlpha]
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.length]
 fact FactAlpha (s: String)
@@ -368,8 +355,7 @@ check mkAlpha(s: String) -> s: String ::: FactAlpha s =
   else
     fail 400 "x"
 |}
-let distinct_b = {|#lang tesl
-module DistinctB exposing []
+let distinct_b = {|module DistinctB exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.length]
 import DistinctA exposing [FactAlpha, mkAlpha]
@@ -389,8 +375,7 @@ fn needBeta(s: String ::: FactBeta s) -> String = s
    owner's fact satisfy the other owner's obligation — even if the other is never
    proved.  Identity is bare-name, so this is fail-closed by rejecting any fact
    name owned by >1 module in scope. *)
-let own_int_mint = {|#lang tesl
-module OwnIntMint exposing [Widget, mkWidget]
+let own_int_mint = {|module OwnIntMint exposing [Widget, mkWidget]
 import Tesl.Prelude exposing [Int, Bool(..)]
 fact Widget (n: Int)
 check mkWidget(n: Int) -> n: Int ::: Widget n =
@@ -399,21 +384,18 @@ check mkWidget(n: Int) -> n: Int ::: Widget n =
   else
     fail 400 "x"
 |}
-let own_int_sink = {|#lang tesl
-module OwnIntSink exposing [Widget, useWidget]
+let own_int_sink = {|module OwnIntSink exposing [Widget, useWidget]
 import Tesl.Prelude exposing [Int]
 fact Widget (n: Int)
 fn useWidget(x: Int ::: Widget x) -> Int = x
 |}
-let own_str_sink = {|#lang tesl
-module OwnStrSink exposing [Widget, useWidget]
+let own_str_sink = {|module OwnStrSink exposing [Widget, useWidget]
 import Tesl.Prelude exposing [String]
 fact Widget (s: String)
 fn useWidget(x: String ::: Widget x) -> String = x
 |}
 (* NEG: consumer bridges OwnIntMint's Widget value into OwnIntSink's sink. *)
-let neg_diamond_bridge = {|#lang tesl
-module DiamondBridge exposing []
+let neg_diamond_bridge = {|module DiamondBridge exposing []
 import Tesl.Prelude exposing [Int]
 import OwnIntMint exposing [mkWidget]
 import OwnIntSink exposing [useWidget]
@@ -422,8 +404,7 @@ fn attack(raw: Int) -> Int =
   useWidget w
 |}
 (* NEG: same name, DIFFERENT arity/type owners — ambiguous even if never bridged. *)
-let neg_diamond_arity = {|#lang tesl
-module DiamondArity exposing []
+let neg_diamond_arity = {|module DiamondArity exposing []
 import Tesl.Prelude exposing [Int]
 import OwnIntMint exposing [mkWidget]
 import OwnStrSink exposing [useWidget]
@@ -432,12 +413,10 @@ fn attack(raw: Int) -> Int =
   w
 |}
 (* NEG (user's 4-module form): C re-exports A's Widget; D reaches A (via C) and B. *)
-let bridge_reexport = {|#lang tesl
-module BridgeReexport exposing [Widget]
+let bridge_reexport = {|module BridgeReexport exposing [Widget]
 import OwnIntMint exposing [Widget]
 |}
-let neg_diamond_4mod = {|#lang tesl
-module Diamond4 exposing []
+let neg_diamond_4mod = {|module Diamond4 exposing []
 import Tesl.Prelude exposing [Int]
 import OwnIntMint exposing [mkWidget]
 import OwnIntSink exposing [useWidget]
@@ -447,8 +426,7 @@ fn attack(raw: Int) -> Int =
   useWidget w
 |}
 (* POS: a consumer using a fact from a SINGLE owning module compiles. *)
-let own_full = {|#lang tesl
-module OwnFull exposing [Widget, mkWidget, useWidget]
+let own_full = {|module OwnFull exposing [Widget, mkWidget, useWidget]
 import Tesl.Prelude exposing [Int, Bool(..)]
 fact Widget (n: Int)
 check mkWidget(n: Int) -> n: Int ::: Widget n =
@@ -458,8 +436,7 @@ check mkWidget(n: Int) -> n: Int ::: Widget n =
     fail 400 "x"
 fn useWidget(x: Int ::: Widget x) -> Int = x
 |}
-let pos_single_owner = {|#lang tesl
-module SingleOwner exposing []
+let pos_single_owner = {|module SingleOwner exposing []
 import Tesl.Prelude exposing [Int]
 import OwnFull exposing [Widget, mkWidget, useWidget]
 fn ok(raw: Int) -> Int =

@@ -14,6 +14,7 @@
   tesl/tesl/sse
   tesl/tesl/email
   (only-in tesl/tesl/prelude String Unit Bool)
+  (only-in tesl/tesl/email emailCap)
 )
 
 
@@ -35,25 +36,25 @@
   (sendWelcomeEmail [recipientAddr : String] [firstName : String])
   #:capabilities [emailCap]
   #:returns Unit
-  (thsl-src! "example/learn/lesson60-email.tesl" 105 (list (cons 'recipientAddr *recipientAddr) (cons 'firstName *firstName)) (lambda () (send-email! AppEmail #:to recipientAddr #:subject "Welcome to our service!" #:body (raw-value (RichBody (format "Hello ~a, welcome! We're glad to have you." (tesl-display-val *firstName)) (format "<h1>Welcome, ~a!</h1><p>Great to have you with us.</p>" (tesl-display-val *firstName))))))))
+  (thsl-src! "example/learn/lesson60-email.tesl" 104 (list (cons 'recipientAddr *recipientAddr) (cons 'firstName *firstName)) (lambda () (send-email! AppEmail #:to recipientAddr #:subject "Welcome to our service!" #:body (raw-value (RichBody (format "Hello ~a, welcome! We're glad to have you." (tesl-display-val *firstName)) (format "<h1>Welcome, ~a!</h1><p>Great to have you with us.</p>" (tesl-display-val *firstName))))))))
 
 (define/pow
   (sendPasswordReset [recipientAddr : String] [resetLink : String])
   #:capabilities [emailCap]
   #:returns Unit
-  (thsl-src! "example/learn/lesson60-email.tesl" 114 (list (cons 'recipientAddr *recipientAddr) (cons 'resetLink *resetLink)) (lambda () (send-email! AppEmail #:to recipientAddr #:subject "Password Reset Request" #:body (raw-value (RichBody (format "Click this link to reset your password: ~a" (tesl-display-val *resetLink)) (format "<p>Click <a href=\"~a\">here</a> to reset your password. Link expires in 30 minutes.</p>" (tesl-display-val *resetLink))))))))
+  (thsl-src! "example/learn/lesson60-email.tesl" 113 (list (cons 'recipientAddr *recipientAddr) (cons 'resetLink *resetLink)) (lambda () (send-email! AppEmail #:to recipientAddr #:subject "Password Reset Request" #:body (raw-value (RichBody (format "Click this link to reset your password: ~a" (tesl-display-val *resetLink)) (format "<p>Click <a href=\"~a\">here</a> to reset your password. Link expires in 30 minutes.</p>" (tesl-display-val *resetLink))))))))
 
 (define/pow
   (sendNotification [addr : String] [message : String])
   #:capabilities [emailCap]
   #:returns Unit
-  (thsl-src! "example/learn/lesson60-email.tesl" 123 (list (cons 'addr *addr) (cons 'message *message)) (lambda () (send-email! AppEmail #:to addr #:subject "Notification" #:body (raw-value (TextBody *message))))))
+  (thsl-src! "example/learn/lesson60-email.tesl" 122 (list (cons 'addr *addr) (cons 'message *message)) (lambda () (send-email! AppEmail #:to addr #:subject "Notification" #:body (raw-value (TextBody *message))))))
 
 (define/pow
   (sendHtmlNewsletter [addr : String] [htmlContent : String])
   #:capabilities [emailCap]
   #:returns Unit
-  (thsl-src! "example/learn/lesson60-email.tesl" 132 (list (cons 'addr *addr) (cons 'htmlContent *htmlContent)) (lambda () (send-email! AppEmail #:to addr #:subject "Monthly Newsletter" #:body (raw-value (HtmlBody *htmlContent))))))
+  (thsl-src! "example/learn/lesson60-email.tesl" 131 (list (cons 'addr *addr) (cons 'htmlContent *htmlContent)) (lambda () (send-email! AppEmail #:to addr #:subject "Monthly Newsletter" #:body (raw-value (HtmlBody *htmlContent))))))
 
 (define/pow
   (startEmailDelivery)

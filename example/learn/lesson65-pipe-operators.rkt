@@ -22,128 +22,128 @@
 (define/pow
   (double [n : Integer])
   #:returns Integer
-  (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 66 (list (cons 'n *n)) (lambda () (* *n 2))))
+  (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 65 (list (cons 'n *n)) (lambda () (* *n 2))))
 
 (define/pow
   (addOne [n : Integer])
   #:returns Integer
-  (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 68 (list (cons 'n *n)) (lambda () (+ *n 1))))
+  (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 67 (list (cons 'n *n)) (lambda () (+ *n 1))))
 
 (define/pow
   (measureWord [raw : String])
   #:returns Integer
-  (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 73 (list (cons 'raw *raw)) (lambda () (raw-value (tesl_import_String_length (raw-value (tesl_import_String_trim *raw)))))))
+  (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 72 (list (cons 'raw *raw)) (lambda () (raw-value (tesl_import_String_length (raw-value (tesl_import_String_trim *raw)))))))
 
 (define/pow
   (processWord [raw : String])
   #:returns Integer
-  (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 78 (list (cons 'raw *raw)) (lambda () (raw-value (tesl_import_String_length (raw-value (tesl_import_String_trim *raw)))))))
+  (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 77 (list (cons 'raw *raw)) (lambda () (raw-value (tesl_import_String_length (raw-value (tesl_import_String_trim *raw)))))))
 
 (define/pow
   (describeLength [n : Integer])
   #:returns String
-  (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 82 (list (cons 'n *n)) (lambda () (if (<= *n 4) (raw-value "short") (if (<= *n 10) (raw-value "medium") (raw-value "long"))))))
+  (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 81 (list (cons 'n *n)) (lambda () (if (<= *n 4) (raw-value "short") (if (<= *n 10) (raw-value "medium") (raw-value "long"))))))
 
 (define/pow
   (formatResult [label : String] [n : Integer])
   #:returns String
-  (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 91 (list (cons 'label *label) (cons 'n *n)) (lambda () (format "~a: ~a" (tesl-display-val *label) (tesl-display-val *n)))))
+  (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 90 (list (cons 'label *label) (cons 'n *n)) (lambda () (format "~a: ~a" (tesl-display-val *label) (tesl-display-val *n)))))
 
 (define/pow
   (processChain [n : Integer])
   #:returns Integer
-  (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 97 (list (cons 'n *n)) (lambda () (raw-value (double (addOne (double n)))))))
+  (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 96 (list (cons 'n *n)) (lambda () (raw-value (double (addOne (double n)))))))
 
 (module+ test
   (require rackunit)
   (test-case "forward pipe: basic application"
     (call-with-fresh-memory-db '() (lambda ()
-  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 173 (list) (lambda () (double 5))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 174 (list (cons 'result result)) (lambda () result))) 10)
+  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 172 (list) (lambda () (double 5))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 173 (list (cons 'result result)) (lambda () result))) 10)
     ))
   )
 
   (test-case "forward pipe: chain two functions"
     (call-with-fresh-memory-db '() (lambda ()
-  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 178 (list) (lambda () (addOne (double 3)))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 179 (list (cons 'result result)) (lambda () result))) 7)
+  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 177 (list) (lambda () (addOne (double 3)))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 178 (list (cons 'result result)) (lambda () result))) 7)
     ))
   )
 
   (test-case "forward pipe: chain three functions"
     (call-with-fresh-memory-db '() (lambda ()
-  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 183 (list) (lambda () (double (addOne (double 2))))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 184 (list (cons 'result result)) (lambda () result))) 10)
+  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 182 (list) (lambda () (double (addOne (double 2))))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 183 (list (cons 'result result)) (lambda () result))) 10)
     ))
   )
 
   (test-case "backward pipe: basic application"
     (call-with-fresh-memory-db '() (lambda ()
-  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 188 (list) (lambda () (double 5))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 189 (list (cons 'result result)) (lambda () result))) 10)
+  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 187 (list) (lambda () (double 5))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 188 (list (cons 'result result)) (lambda () result))) 10)
     ))
   )
 
   (test-case "backward pipe: chain two functions"
     (call-with-fresh-memory-db '() (lambda ()
-  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 193 (list) (lambda () (addOne (double 3)))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 194 (list (cons 'result result)) (lambda () result))) 7)
+  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 192 (list) (lambda () (addOne (double 3)))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 193 (list (cons 'result result)) (lambda () result))) 7)
     ))
   )
 
   (test-case "backward pipe: chain three functions"
     (call-with-fresh-memory-db '() (lambda ()
-  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 198 (list) (lambda () (double (addOne (double 2))))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 199 (list (cons 'result result)) (lambda () result))) 10)
+  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 197 (list) (lambda () (double (addOne (double 2))))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 198 (list (cons 'result result)) (lambda () result))) 10)
     ))
   )
 
   (test-case "forward pipe with stdlib function"
     (call-with-fresh-memory-db '() (lambda ()
-  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 203 (list) (lambda () (tesl_import_String_length "hello"))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 204 (list (cons 'result result)) (lambda () result))) 5)
+  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 202 (list) (lambda () (tesl_import_String_length "hello"))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 203 (list (cons 'result result)) (lambda () result))) 5)
     ))
   )
 
   (test-case "backward pipe with stdlib function"
     (call-with-fresh-memory-db '() (lambda ()
-  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 208 (list) (lambda () (tesl_import_String_length "hello"))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 209 (list (cons 'result result)) (lambda () result))) 5)
+  (define result (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 207 (list) (lambda () (tesl_import_String_length "hello"))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 208 (list (cons 'result result)) (lambda () result))) 5)
     ))
   )
 
   (test-case "measureWord trims before measuring"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 213 (list) (lambda () (measureWord "  hi  ")))) 2)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 214 (list) (lambda () (measureWord "hello")))) 5)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 215 (list) (lambda () (measureWord "  ")))) 0)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 212 (list) (lambda () (measureWord "  hi  ")))) 2)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 213 (list) (lambda () (measureWord "hello")))) 5)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 214 (list) (lambda () (measureWord "  ")))) 0)
     ))
   )
 
   (test-case "processWord gives same result as measureWord"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 219 (list) (lambda () (processWord "  hi  ")))) 2)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 220 (list) (lambda () (processWord "hello")))) 5)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 221 (list) (lambda () (processWord "  world  ")))) 5)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 218 (list) (lambda () (processWord "  hi  ")))) 2)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 219 (list) (lambda () (processWord "hello")))) 5)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 220 (list) (lambda () (processWord "  world  ")))) 5)
     ))
   )
 
   (test-case "processChain applies double, addOne, double in order"
     (call-with-fresh-memory-db '() (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 227 (list) (lambda () (processChain 3)))) 14)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 229 (list) (lambda () (processChain 0)))) 2)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 231 (list) (lambda () (processChain 1)))) 6)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 226 (list) (lambda () (processChain 3)))) 14)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 228 (list) (lambda () (processChain 0)))) 2)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 230 (list) (lambda () (processChain 1)))) 6)
     ))
   )
 
   (test-case "describeLength classifies correctly"
     (call-with-fresh-memory-db '() (lambda ()
-  (define short (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 235 (list) (lambda () (describeLength 3))))
-  (define medium (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 236 (list (cons 'short short)) (lambda () (describeLength 7))))
-  (define long (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 237 (list (cons 'medium medium) (cons 'short short)) (lambda () (describeLength 12))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 238 (list (cons 'long long) (cons 'medium medium) (cons 'short short)) (lambda () short))) "short")
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 239 (list (cons 'long long) (cons 'medium medium) (cons 'short short)) (lambda () medium))) "medium")
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 240 (list (cons 'long long) (cons 'medium medium) (cons 'short short)) (lambda () long))) "long")
+  (define short (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 234 (list) (lambda () (describeLength 3))))
+  (define medium (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 235 (list (cons 'short short)) (lambda () (describeLength 7))))
+  (define long (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 236 (list (cons 'medium medium) (cons 'short short)) (lambda () (describeLength 12))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 237 (list (cons 'long long) (cons 'medium medium) (cons 'short short)) (lambda () short))) "short")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 238 (list (cons 'long long) (cons 'medium medium) (cons 'short short)) (lambda () medium))) "medium")
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson65-pipe-operators.tesl" 239 (list (cons 'long long) (cons 'medium medium) (cons 'short short)) (lambda () long))) "long")
     ))
   )
 

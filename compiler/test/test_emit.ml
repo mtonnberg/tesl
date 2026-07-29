@@ -49,8 +49,7 @@ let compile_ok src name =
    knows `p : Project`, so the emit must carry the type hint
    `(tesl-dot/runtime p 'id 'Project)`. *)
 let test_issue26_field_read_typed_dot_hint () =
-  let src = {|#lang tesl
-module AmbiguousDot exposing []
+  let src = {|module AmbiguousDot exposing []
 import Tesl.Prelude exposing [Bool(..), Int, List, String]
 import Tesl.DB exposing [dbRead]
 import Tesl.List exposing [List.head]
@@ -79,8 +78,7 @@ fn describeFirstProject(needle: String) -> String requires [dbRead] =
    `(raw-value p.name)`, which traps at runtime ("ambiguous dot access") across
    entities sharing the field. It must route through the hinted dot too. *)
 let test_issue27_interpolated_field_read_typed_dot_hint () =
-  let src = {|#lang tesl
-module Interp exposing []
+  let src = {|module Interp exposing []
 import Tesl.Prelude exposing [Bool(..), Int, List, String]
 entity Org table "orgs" primaryKey id { id: String  name: String }
 entity Proj table "projs" primaryKey id { id: String  name: String  client: String }
@@ -107,8 +105,7 @@ fn describe(p: Proj) -> String = "name=${p.name} id=${p.id}"
    field_accesses side effect, so the hint is threaded like every other
    field-read position. *)
 let test_where_clause_operand_typed_dot_hint () =
-  let src = {|#lang tesl
-module WhereHint exposing []
+  let src = {|module WhereHint exposing []
 import Tesl.Prelude exposing [Bool(..), Int, List, String]
 import Tesl.DB exposing [dbRead]
 import Tesl.List exposing [List.length]
@@ -142,8 +139,7 @@ fn sumWide(pr: Proj) -> Int requires [dbRead] =
 (* ── Require block tests ─────────────────────────────────────────────────── *)
 
 let test_require_block () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 |} in
   let racket = compile_ok src "require_block" in
   assert_contains ~name:"has #lang racket" racket "#lang racket";
@@ -152,8 +148,7 @@ module Foo exposing []
   assert_contains ~name:"has tesl/queue" racket "tesl/tesl/queue"
 
 let test_require_prelude_import () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int, String, Bool]
 |} in
   let racket = compile_ok src "require_prelude" in
@@ -162,8 +157,7 @@ import Tesl.Prelude exposing [Int, String, Bool]
   assert_contains ~name:"String exported" racket "String"
 
 let test_require_qualified_import () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Dict exposing [Dict.lookup]
 |} in
   let racket = compile_ok src "require_qualified" in
@@ -173,8 +167,7 @@ import Tesl.Dict exposing [Dict.lookup]
 (* ── Provide block tests ─────────────────────────────────────────────────── *)
 
 let test_provide_functions () =
-  let src = {|#lang tesl
-module Foo exposing [add, greet]
+  let src = {|module Foo exposing [add, greet]
 import Tesl.Prelude exposing [Int, String]
 fn add(x: Int) -> Int = x
 fn greet(s: String) -> String = s
@@ -189,8 +182,7 @@ fn greet(s: String) -> String = s
 (* ── Function emission tests ─────────────────────────────────────────────── *)
 
 let test_fn_define_pow () =
-  let src = {|#lang tesl
-module Foo exposing [add]
+  let src = {|module Foo exposing [add]
 import Tesl.Prelude exposing [Int]
 fn add(x: Int, y: Int) -> Int =
   x + y
@@ -204,8 +196,7 @@ fn add(x: Int, y: Int) -> Int =
   assert_contains ~name:"+ operator" racket "(+ *x *y)"
 
 let test_fn_string_interpolation () =
-  let src = {|#lang tesl
-module Foo exposing [greet]
+  let src = {|module Foo exposing [greet]
 import Tesl.Prelude exposing [String]
 fn greet(name: String) -> String =
   "Hello, ${name}!"
@@ -216,8 +207,7 @@ fn greet(name: String) -> String =
   assert_contains ~name:"tesl-display-val" racket "tesl-display-val"
 
 let test_fn_case_expression () =
-  let src = {|#lang tesl
-module Foo exposing [colorName]
+  let src = {|module Foo exposing [colorName]
 import Tesl.Prelude exposing [String]
 type Color =
   | Red
@@ -236,8 +226,7 @@ fn colorName(c: Color) -> String =
   assert_contains ~name:"adt-value-variant" racket "adt-value-variant"
 
 let test_fn_if_expression () =
-  let src = {|#lang tesl
-module Foo exposing [f]
+  let src = {|module Foo exposing [f]
 import Tesl.Prelude exposing [Bool, Int]
 fn f(b: Bool, x: Int) -> Int =
   if b then
@@ -251,8 +240,7 @@ fn f(b: Bool, x: Int) -> Int =
 (* ── Check / auth emission tests ─────────────────────────────────────────── *)
 
 let test_check_define_checker () =
-  let src = {|#lang tesl
-module Foo exposing [isValidPort]
+  let src = {|module Foo exposing [isValidPort]
 import Tesl.Prelude exposing [Int]
 check isValidPort(port: Int) -> port: Int::: ValidPort port =
   if 1 <= port && port <= 65535 then
@@ -269,8 +257,7 @@ check isValidPort(port: Int) -> port: Int::: ValidPort port =
   assert_contains ~name:"define ValidPort" racket "(define ValidPort 'ValidPort)"
 
 let test_auth_define_auther () =
-  let src = {|#lang tesl
-module Foo exposing [cookieAuth]
+  let src = {|module Foo exposing [cookieAuth]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Prelude exposing [String]
 auth cookieAuth(request: HttpRequest) -> user: String::: Authenticated user =
@@ -281,8 +268,7 @@ auth cookieAuth(request: HttpRequest) -> user: String::: Authenticated user =
   assert_contains ~name:"Authenticated symbol" racket "(define Authenticated 'Authenticated)"
 
 let test_auth_record_return_emission () =
-  let src = {|#lang tesl
-module Foo exposing [cookieAuth]
+  let src = {|module Foo exposing [cookieAuth]
 import Tesl.Http exposing [HttpRequest]
 import Tesl.Prelude exposing [String]
 record SessionUser {
@@ -297,8 +283,7 @@ auth cookieAuth(request: HttpRequest) -> session: SessionUser::: Authenticated s
   assert_not_contains ~name:"raw hash auth return" racket "(hash 'id \"u1\" 'username: \"alice\")"
 
 let test_handler_emit () =
-  let src = {|#lang tesl
-module Foo exposing [createTask]
+  let src = {|module Foo exposing [createTask]
 import Tesl.Prelude exposing [String]
 handler createTask(user: String) -> String
   requires [taskDbWrite] =
@@ -309,8 +294,7 @@ handler createTask(user: String) -> String
   assert_contains ~name:"capabilities" racket "#:capabilities [taskDbWrite]"
 
 let test_named_pack_entity_proof_emission () =
-  let src = {|#lang tesl
-module Foo exposing [tag]
+  let src = {|module Foo exposing [tag]
 import Tesl.Prelude exposing [Int]
 fn tag(n: Int) -> Int ? Positive && Small ::: SameArg n =
   n
@@ -324,8 +308,7 @@ fn tag(n: Int) -> Int ? Positive && Small ::: SameArg n =
 (* ── Type emission tests ─────────────────────────────────────────────────── *)
 
 let test_adt_emission () =
-  let src = {|#lang tesl
-module Foo exposing [Color(..)]
+  let src = {|module Foo exposing [Color(..)]
 type Color =
   | Red
   | Green
@@ -338,8 +321,7 @@ type Color =
   assert_contains ~name:"Blue variant" racket "[Blue]"
 
 let test_adt_with_fields_emission () =
-  let src = {|#lang tesl
-module Foo exposing [Shape(..)]
+  let src = {|module Foo exposing [Shape(..)]
 type Shape
   = Circle radius:Int
   | Rectangle width:Int height:Int
@@ -352,16 +334,14 @@ type Shape
   assert_contains ~name:"Point nullary" racket "[Point]"
 
 let test_newtype_emission () =
-  let src = {|#lang tesl
-module Foo exposing [UserId]
+  let src = {|module Foo exposing [UserId]
 type UserId = String
 |} in
   let racket = compile_ok src "newtype_emit" in
   assert_contains ~name:"define-newtype" racket "(define-newtype UserId"
 
 let test_parameterized_adt_emission () =
-  let src = {|#lang tesl
-module Foo exposing [Either(..)]
+  let src = {|module Foo exposing [Either(..)]
 type Either a b =
   | Left value:a
   | Right value:b
@@ -372,8 +352,7 @@ type Either a b =
   assert_contains ~name:"Right variant" racket "[Right"
 
 let test_single_param_adt_emission () =
-  let src = {|#lang tesl
-module Foo exposing [Box(..)]
+  let src = {|module Foo exposing [Box(..)]
 type Box a = Box value:a
 |} in
   let racket = compile_ok src "single_param_adt_emit" in
@@ -382,8 +361,7 @@ type Box a = Box value:a
 (* ── Record emission tests ───────────────────────────────────────────────── *)
 
 let test_record_emission () =
-  let src = {|#lang tesl
-module Foo exposing [Task]
+  let src = {|module Foo exposing [Task]
 record Task {
   id: String
   title: String
@@ -400,8 +378,7 @@ record Task {
 (* ── Codec emission tests ────────────────────────────────────────────────── *)
 
 let test_codec_forbidden_emission () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 codec NewTask {
   toJson_forbidden
   fromJson_forbidden
@@ -411,8 +388,7 @@ codec NewTask {
   assert_contains ~name:"toJson error" racket "toJson is forbidden"
 
 let test_codec_full_emission () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 codec Task {
   toJson {
     id -> "id" with_codec stringCodec
@@ -433,8 +409,7 @@ codec Task {
 (* ── Capability emission tests ───────────────────────────────────────────── *)
 
 let test_capability_emission () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 capability taskDbRead implies dbRead
 |} in
   let racket = compile_ok src "capability_emit" in
@@ -443,8 +418,7 @@ capability taskDbRead implies dbRead
 (* ── Test block emission tests ───────────────────────────────────────────── *)
 
 let test_test_block_emission () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 test "greet" {
   expect greet "World" == "Hello, World!"
   expect greet "Tesl" == "Hello, Tesl!"
@@ -457,8 +431,7 @@ test "greet" {
   assert_contains ~name:"check-equal?" racket "check-equal?"
 
 let test_expect_true_emission () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 test "weekend" {
   expect isWeekend Sat
 }
@@ -467,8 +440,7 @@ test "weekend" {
   assert_contains ~name:"check-true" racket "check-true"
 
 let test_expect_fail_emission () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 test "invalid" {
   expectFail isValidPort 0
 }
@@ -478,8 +450,7 @@ test "invalid" {
   assert_contains ~name:"exn:fail?" racket "exn:fail?"
 
 let test_direct_check_expression_lowering () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 check isPositive(n: Int) -> n: Int::: Positive n =
@@ -496,8 +467,7 @@ test "lower direct check" {
   assert_not_contains ~name:"no literal check form in emitted test" racket "(check isPositive 5)"
 
 let test_expect_fail_check_lowering () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 check isPositive(n: Int) -> n: Int::: Positive n =
@@ -514,8 +484,7 @@ test "lower expectFail check" {
   assert_not_contains ~name:"expectFail keeps check result intact" racket "(raw-value (check isPositive 0))"
 
 let test_named_pack_local_tail_no_raw_unwrap () =
-  let src = {|#lang tesl
-module Foo exposing [validateAndReturn]
+  let src = {|module Foo exposing [validateAndReturn]
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 check isPositive(n: Int) -> n: Int::: Positive n =
@@ -532,8 +501,7 @@ fn validateAndReturn(n: Int) -> Int ? Positive =
   assert_not_contains ~name:"named-pack local tail keeps proof value" racket "(raw-value validated)"
 
 let test_if_branch_let_emission () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 test "branch locals" {
   if true then
     let x = 1
@@ -548,8 +516,7 @@ test "branch locals" {
       (begin"
 
 let test_test_raw_arithmetic_emission () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 check keepInt(n: Int) -> n: Int::: Kept n =
   ok n ::: Kept n
@@ -568,8 +535,7 @@ test "raw arithmetic" {
   assert_not_contains ~name:"raw arithmetic does not use bare named value" racket "(+ n 2)"
 
 let test_api_test_template_emission () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 api-test "request templates" for ChatServer {
   let room = post "/rooms/{roomId}"
               cookie "chatUserId={userId}"
@@ -584,8 +550,7 @@ api-test "request templates" for ChatServer {
 (* ── Server emission tests ───────────────────────────────────────────────── *)
 
 let test_server_emission () =
-  let src = {|#lang tesl
-module Foo exposing [TaskServer]
+  let src = {|module Foo exposing [TaskServer]
 server TaskServer for TaskApi {
   createTask = createTask
   getTask = getTask
@@ -597,8 +562,7 @@ server TaskServer for TaskApi {
   assert_contains ~name:"createTask binding" racket "[createTask createTask]"
 
 let test_unauth_multi_segment_api_path_emission () =
-  let src = {|#lang tesl
-module Foo exposing [MyApi]
+  let src = {|module Foo exposing [MyApi]
 import Tesl.Prelude exposing [String]
 api MyApi {
   post "/auth/register"
@@ -612,8 +576,7 @@ api MyApi {
   assert_contains ~name:"request body still emitted" racket ":> (ReqBody JSON [req : String])"
 
 let test_publish_channel_key_uses_raw_value () =
-  let src = {|#lang tesl
-module Foo exposing [postMessage]
+  let src = {|module Foo exposing [postMessage]
 import Tesl.Prelude exposing [String]
 capability chatPubSub implies pubsub
 
@@ -634,8 +597,7 @@ handler postMessage(roomId: String) -> String
   assert_not_contains ~name:"publish key does not use wrapped binding" racket "(publish-event! RoomMessages (format \"~a\" roomId)"
 
 let test_publish_channel_key_field_access_uses_runtime_field_value () =
-  let src = {|#lang tesl
-module Foo exposing [handleDeadNotify]
+  let src = {|module Foo exposing [handleDeadNotify]
 import Tesl.Prelude exposing [String]
 capability chatPubSub implies pubsub
 
@@ -662,8 +624,7 @@ deadWorker handleDeadNotify(job: NotifyJob) -> NotifyJob
 (* ── Full module round-trip tests ────────────────────────────────────────── *)
 
 let test_full_hello_world () =
-  let src = {|#lang tesl
-module HelloWorld exposing [greet, add]
+  let src = {|module HelloWorld exposing [greet, add]
 import Tesl.Prelude exposing [Int, String]
 
 fn greet(name: String) -> String =
@@ -690,8 +651,7 @@ test "add" {
   assert_contains ~name:"Hello ~a format" racket "Hello, ~a!"
 
 let test_full_proof_module () =
-  let src = {|#lang tesl
-module Proofs exposing [ValidPort, isValidPort]
+  let src = {|module Proofs exposing [ValidPort, isValidPort]
 import Tesl.Prelude exposing [Int, String]
 
 check isValidPort(port: Int) -> port: Int::: ValidPort port =
@@ -708,8 +668,7 @@ check isValidPort(port: Int) -> port: Int::: ValidPort port =
   assert_not_contains ~name:"no T_ANY" racket "__Any__"
 
 let test_full_adt_module () =
-  let src = {|#lang tesl
-module Adts exposing [Color(..), colorName]
+  let src = {|module Adts exposing [Color(..), colorName]
 import Tesl.Prelude exposing [String]
 
 type Color =
@@ -734,8 +693,7 @@ fn colorName(c: Color) -> String =
 
 let test_no_t_any () =
   (* The new compiler must never emit __Any__ *)
-  let src = {|#lang tesl
-module Foo exposing [f]
+  let src = {|module Foo exposing [f]
 import Tesl.Prelude exposing [Int]
 fn f(x: Int) -> Int = x
 |} in
@@ -744,8 +702,7 @@ fn f(x: Int) -> Int = x
 
 let test_type_mapping () =
   (* Tesl types should map correctly to Racket types *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 record R {
   a: Int
   b: String
@@ -763,8 +720,7 @@ record R {
     pattern, generating `(let ([p (check isPositive n)]))` where `check` is
     unbound at runtime.  It must emit `(let/check ...)` instead. *)
 let test_let_check_in_fn_body_emits_let_check () =
-  let src = {|#lang tesl
-module Foo exposing [addPositive, IsPositive]
+  let src = {|module Foo exposing [addPositive, IsPositive]
 import Tesl.Prelude exposing [Int]
 check isPositive(n: Int) -> n: Int ::: IsPositive n =
   if n > 0 then
@@ -785,8 +741,7 @@ fn addPositive(a: Int, b: Int) -> Int =
 
 (** Adversarial: a plain let (not check) should NOT produce let/check. *)
 let test_plain_let_in_fn_body_does_not_emit_let_check () =
-  let src = {|#lang tesl
-module Foo exposing [addTwo]
+  let src = {|module Foo exposing [addTwo]
 import Tesl.Prelude exposing [Int]
 fn addTwo(n: Int) -> Int =
   let x = n + 1
@@ -798,8 +753,7 @@ fn addTwo(n: Int) -> Int =
 (* ── Fix-11 §3.3: ++ string concatenation operator ─────────────────────── *)
 
 let test_string_concat_emits_string_append () =
-  let src = {|#lang tesl
-module Foo exposing [greet]
+  let src = {|module Foo exposing [greet]
 import Tesl.Prelude exposing [String]
 fn greet(first: String, last: String) -> String =
   first ++ " " ++ last
@@ -811,8 +765,7 @@ fn greet(first: String, last: String) -> String =
 (* ── SQL DSL emission tests ─────────────────────────────────────────────── *)
 
 let test_sql_select_offset_emitted () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 fn test() -> Int =
   select u from User limit 10 offset 5
 |} in
@@ -821,8 +774,7 @@ fn test() -> Int =
   assert_contains ~name:"offset emitted" racket "(offset 5)"
 
 let test_sql_select_is_null_emitted () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 fn getNullEmail() -> Int =
   select u from User where isNull u.email
 |} in
@@ -831,8 +783,7 @@ fn getNullEmail() -> Int =
   assert_contains ~name:"entity-field-ref for email" racket "'email"
 
 let test_sql_select_is_not_null_emitted () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 fn getNotNullEmail() -> Int =
   select u from User where isNotNull u.email
 |} in
@@ -841,8 +792,7 @@ fn getNotNullEmail() -> Int =
   assert_contains ~name:"entity-field-ref for email" racket "'email"
 
 let test_sql_select_in_list_emitted () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 fn getAdmins() -> Int =
   select u from User where inList u.role ["admin", "moderator"]
 |} in
@@ -851,8 +801,7 @@ fn getAdmins() -> Int =
   assert_contains ~name:"list emitted" racket "(list"
 
 let test_sql_select_not_in_list_emitted () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 fn getActive() -> Int =
   select u from User where notInList u.status ["banned", "suspended"]
 |} in
@@ -861,8 +810,7 @@ fn getActive() -> Int =
   assert_contains ~name:"list emitted" racket "(list"
 
 let test_sql_select_like_emitted () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 fn getSmith() -> Int =
   select u from User where like u.name "%Smith%"
 |} in
@@ -871,8 +819,7 @@ fn getSmith() -> Int =
   assert_contains ~name:"pattern emitted" racket "\"%Smith%\""
 
 let test_sql_select_ilike_emitted () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 fn getExample() -> Int =
   select u from User where ilike u.email "%@example.com"
 |} in
@@ -884,8 +831,7 @@ let test_sql_select_group_by_emitted () =
   (* GitHub #29: `groupBy` lives on the GROUPED forms only (selectCountBy /
      selectSumBy — one (key, aggregate) row per group); on plain select it is
      a compile error and emit fails closed rather than silently dropping it. *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 fn getUsersByRole() -> Int =
   selectCountBy u from User groupBy u.role
 |} in
@@ -895,8 +841,7 @@ fn getUsersByRole() -> Int =
   assert_contains ~name:"role field ref emitted" racket "'role"
 
 let test_sql_inner_join_emitted () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 fn test() -> Int =
   select u from User innerJoin Profile on u.profileId Profile.id
 |} in
@@ -911,8 +856,7 @@ fn test() -> Int =
 let test_property_known_proof_uses_proof_field () =
   (* Known predicates (IsPositive) should still use tesl-test-proof-field
      because the generator guarantees the value satisfies the proof. *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 record PosInt {
   value: Int ::: IsPositive value
@@ -927,8 +871,7 @@ test "pos" {
 
 let test_property_unknown_proof_no_fabrication () =
   (* Unknown predicates should NOT use tesl-test-proof-field — no fabrication. *)
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 record Task {
   priority: Int ::: LowPriority priority
@@ -947,8 +890,7 @@ test "task" {
    ENTIRE field mapping and emitting an empty decoder — a runtime body-validation
    400 with no compile-time signal.  The field must still be decoded. *)
 let test_codec_field_stray_colon () =
-  let src = {|#lang tesl
-module ColonCodec exposing [Req]
+  let src = {|module ColonCodec exposing [Req]
 record Req {
   name: String
 }
@@ -973,8 +915,7 @@ codec Req {
    `(attach-proof ((check-and checkA checkB) n) p)` — NOT `(check (check-and …) n)`
    with an unbound `check` head (which failed Racket expansion). *)
 let test_eok_check_value_strips_check_wrapper () =
-  let src = {|#lang tesl
-module SidecarEmit exposing [sc]
+  let src = {|module SidecarEmit exposing [sc]
 import Tesl.Prelude exposing [Int]
 fact Positive (n: Int)
 fact Small (n: Int)
@@ -1001,8 +942,7 @@ fn sc(n: Int, m: Int) -> (Int ? Positive && Small) ::: Positive m =
 (* Guard against over-eager matching: a USER function whose name merely contains
    "check" (e.g. `checkout`) is NOT the `check` keyword and must NOT be stripped. *)
 let test_eok_checkout_not_stripped () =
-  let src = {|#lang tesl
-module CheckoutEmit exposing [sc]
+  let src = {|module CheckoutEmit exposing [sc]
 import Tesl.Prelude exposing [Int]
 fact P (n: Int)
 fn checkout(n: Int) -> Int =
@@ -1018,8 +958,7 @@ fn sc(n: Int ::: P n) -> Int ::: P n =
 
 (* ── Issue #31: PostgresConfig poolSize → define-database #:max-connections ── *)
 
-let pool_size_src pool_size_line = Printf.sprintf {|#lang tesl
-module Psz exposing []
+let pool_size_src pool_size_line = Printf.sprintf {|module Psz exposing []
 import Tesl.Prelude exposing [String, Int]
 import Tesl.Env exposing [env, envInt]
 import Tesl.Database exposing [Database, Postgres, PostgresConfig, TcpConnection]
@@ -1055,8 +994,7 @@ let test_pool_size_omitted_emits_no_max_connections () =
 
 (* ── Test-header `with database X` clause (with_cleanup change C) ──────────── *)
 
-let test_db_clause_src body = {|#lang tesl
-module Tdbc exposing []
+let test_db_clause_src body = {|module Tdbc exposing []
 import Tesl.Prelude exposing [String, Int]
 
 entity Item table "items" primaryKey id {
@@ -1108,8 +1046,7 @@ let test_with_database_clause_combines_with_requires () =
 (* ── Single-test selection by name + kind (test_debug_for_all_tests) ───────── *)
 
 let test_kind_filter_selects_and_suppresses () =
-  let src = {|#lang tesl
-module Foo exposing []
+  let src = {|module Foo exposing []
 import Tesl.Prelude exposing [Int]
 test "unit thing" {
   expect 1 == 1
@@ -1151,8 +1088,7 @@ api-test "request templates" for ChatServer {
    retired in favour of this structural guarantee. This pins that no emit path
    reintroduces an underscore-grammar temp. *)
 let test_s5b_generated_temps_are_hyphenated () =
-  let src = {|#lang tesl
-module S5b exposing [f]
+  let src = {|module S5b exposing [f]
 import Tesl.Prelude exposing [Int]
 import Tesl.Maybe exposing [Maybe(..)]
 fn f(m: Maybe Int) -> Int =

@@ -9,7 +9,7 @@
       - File ends with exactly one newline
 
     Phase 2 -- Token-aware formatting (string/comment-safe):
-      - Comment normalization: #foo becomes # foo (except #lang, #!)
+      - Comment normalization: #foo becomes # foo (except #!)
       - Proof annotation spacing: triple-colon gets surrounding spaces
       - Arrow spacing: dash-greater gets surrounding spaces
       - Pipe spacing: pipe-greater gets surrounding spaces
@@ -179,7 +179,7 @@ let format_line_tokens (line : string) : string =
       (* Comment: rest of line *)
       else if c = '#' then begin
         let comment = String.sub rest !i (rest_len - !i) in
-        if starts_with comment "#lang " || starts_with comment "#!"
+        if starts_with comment "#!"
            || starts_with comment "#>" || starts_with comment "#=" then
           emit_s comment
         else if String.length comment > 1

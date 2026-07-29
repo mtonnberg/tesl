@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson25StandardLibraryStringsListsInts exposing [
   exampleStringOps,
   exampleListOps,

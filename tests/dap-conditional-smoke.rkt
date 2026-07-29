@@ -28,8 +28,8 @@
 (define TESL-BIN (build-path REPO-ROOT "compiler" "_build" "default" "bin" "main.exe"))
 (when (and (not (getenv "TESL_COMPILER")) (file-exists? TESL-BIN))
   (putenv "TESL_COMPILER" (path->string TESL-BIN)))
-;; The checkScore checkpoint line in lesson61 (thsl-src! "…" 91 (list (cons 'n *n)) …).
-(define CHECK-LINE 91)
+;; The checkScore checkpoint line in lesson61 (thsl-src! "…" 90 (list (cons 'n *n)) …).
+(define CHECK-LINE 90)
 
 (define (send! out msg)
   (define b (string->bytes/utf-8 (jsexpr->string msg)))

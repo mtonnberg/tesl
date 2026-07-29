@@ -1,4 +1,3 @@
-#lang tesl
 module Units_tests exposing []
 
 # Runtime tests for Tesl.Units (First-Class Units, phases 2/3): dimensioned

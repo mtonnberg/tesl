@@ -106,8 +106,7 @@ let should_fail_src pattern src =
     try ignore (Str.search_forward re out 0)
     with Not_found -> failf "expected failure matching %S, got:\n%s" pattern out)
 
-let base_header = {|#lang tesl
-module Test exposing []
+let base_header = {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact, forgetFact, attachFact, detachFact, introAnd, andLeft, andRight]
 import Tesl.Maybe exposing [Maybe(..)]
 |}
@@ -417,8 +416,7 @@ let r55_cm01_cross_module_proof () =
   with_temp_dir (fun dir ->
     let validators_path = Filename.concat dir "validators.tesl" in
     let main_path = Filename.concat dir "main.tesl" in
-    write_file validators_path {|#lang tesl
-module Validators exposing [checkPos, IsPositive]
+    write_file validators_path {|module Validators exposing [checkPos, IsPositive]
 import Tesl.Prelude exposing [Int]
 
 fact IsPositive (n: Int)
@@ -429,8 +427,7 @@ check checkPos(n: Int) -> n: Int ::: IsPositive n =
   else
     fail 400 "bad"
 |};
-    write_file main_path {|#lang tesl
-module Main exposing []
+    write_file main_path {|module Main exposing []
 import Tesl.Prelude exposing [Int]
 import Validators exposing [checkPos, IsPositive]
 
@@ -448,8 +445,7 @@ let r55_cm02_cross_module_missing_pred_import () =
   with_temp_dir (fun dir ->
     let validators_path = Filename.concat dir "validators.tesl" in
     let main_path = Filename.concat dir "main.tesl" in
-    write_file validators_path {|#lang tesl
-module Validators exposing [checkPos, IsPositive]
+    write_file validators_path {|module Validators exposing [checkPos, IsPositive]
 import Tesl.Prelude exposing [Int]
 
 fact IsPositive (n: Int)
@@ -460,8 +456,7 @@ check checkPos(n: Int) -> n: Int ::: IsPositive n =
   else
     fail 400 "bad"
 |};
-    write_file main_path {|#lang tesl
-module Main exposing []
+    write_file main_path {|module Main exposing []
 import Tesl.Prelude exposing [Int]
 import Validators exposing [checkPos]
 

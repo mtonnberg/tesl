@@ -1,4 +1,3 @@
-#lang tesl
 # ─── Kanel — Issue lifecycle and time tracking ─────────────────────────────
 #
 # This module encodes the core domain: the issue status state machine and

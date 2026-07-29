@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson05IntroToProofs exposing [
   ValidPort,
   isValidPort,

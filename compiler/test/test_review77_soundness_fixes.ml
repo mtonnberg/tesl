@@ -68,7 +68,7 @@ let should_fail name pattern src =
 
 let entity_hdr m =
   Printf.sprintf
-    "#lang tesl\nmodule %s exposing []\n\
+    "module %s exposing []\n\
      import Tesl.Prelude exposing [String, Bool(..)]\n\
      import Tesl.Maybe exposing [Maybe(..)]\n\
      import Tesl.DB exposing [dbRead, dbWrite]\n\
@@ -116,7 +116,7 @@ fn setTitle(id: String, newTitle: String) -> Task ? FromDb (Id == id)
 
 let exists_hdr m =
   Printf.sprintf
-    "#lang tesl\nmodule %s exposing []\n\
+    "module %s exposing []\n\
      import Tesl.Prelude exposing [String, Fact]\n\
      import Tesl.Maybe exposing [Maybe(..)]\n\
      import Tesl.DB exposing [dbRead, dbWrite]\n\
@@ -158,7 +158,7 @@ fn insertWidget(rawName: String) -> exists w: String => Widget ? FromDb (Id == w
 
 let auth_hdr m =
   Printf.sprintf
-    "#lang tesl\nmodule %s exposing []\n\
+    "module %s exposing []\n\
      import Tesl.Prelude exposing [Bool(..), Fact, String]\n\
      import Tesl.Http exposing [HttpRequest]\n\
      import Tesl.Maybe exposing [Maybe(..)]\n\
@@ -188,8 +188,7 @@ api Api {
 let r774_cap_spelling_launder () =
   should_fail "77.4 capability launder-by-spelling"
     "privileged operations and callees requiring"
-    ({|#lang tesl
-module R77i exposing []
+    ({|module R77i exposing []
 import Tesl.Prelude exposing [Int]
 import Tesl.Time exposing [nowMillis, PosixMillis, time]
 fn double(x: Int) -> Int = x + x
@@ -201,8 +200,7 @@ fn caller() -> PosixMillis requires [] =
 
 let r774_legit_polymorphic_row () =
   should_pass "77.4 legit polymorphic cap-row variable"
-    ({|#lang tesl
-module R77j exposing []
+    ({|module R77j exposing []
 import Tesl.Prelude exposing [Int]
 fn applyIt(f: (Int -> Int requires c), x: Int) -> Int requires c =
   f x

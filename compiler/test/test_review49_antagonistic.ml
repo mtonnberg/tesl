@@ -110,8 +110,7 @@ let should_fail_src pattern src =
     try ignore (Str.search_forward re out 0)
     with Not_found -> failf "expected failure matching %S, got:\n%s" pattern out)
 
-let base_header = {|#lang tesl
-module Test exposing []
+let base_header = {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Fact, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 |}
@@ -284,8 +283,7 @@ fn bad(pid: ProjectId) -> String =
 |})
 
 let r49_t03 () =
-  should_fail_src "type\\|mismatch\\|PosixMillis\\|Int\\|expected" ({|#lang tesl
-module Test exposing []
+  should_fail_src "type\\|mismatch\\|PosixMillis\\|Int\\|expected" ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Time exposing [PosixMillis]
 
@@ -335,8 +333,7 @@ fn bad() -> Color =
 |})
 
 let r49_x03 () =
-  should_fail_src "import.*must.*before\\|import.*after\\|unexpected.*import" ({|#lang tesl
-module Test exposing []
+  should_fail_src "import.*must.*before\\|import.*after\\|unexpected.*import" ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 
 fn f() -> Int = 1
@@ -382,8 +379,7 @@ fn bad(s: String) -> Int =
    ═══════════════════════════════════════════════════════════════════════════ *)
 
 let r49_c01 () =
-  should_fail_src "capability\\|requires\\|missing\\|not.*declared\\|dbWrite" ({|#lang tesl
-module Test exposing []
+  should_fail_src "capability\\|requires\\|missing\\|not.*declared\\|dbWrite" ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Unit]
 import Tesl.DB exposing [dbRead, dbWrite]
 
@@ -407,8 +403,7 @@ fn caller() -> Unit
 
 (* FIXED: stringCodec on an ADT field is now a type mismatch *)
 let r49_d01_bug () =
-  should_fail_src "field.*priority.*type.*Priority.*stringCodec.*decodes.*String\\|stringCodec.*decodes.*String" ({|#lang tesl
-module Test exposing []
+  should_fail_src "field.*priority.*type.*Priority.*stringCodec.*decodes.*String\\|stringCodec.*decodes.*String" ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, intCodec]
 
@@ -434,8 +429,7 @@ codec Task {
 
 (* Record construction without proof should be rejected *)
 let r49_d02 () =
-  should_fail_src "proof\\|requires\\|ValidTitle\\|missing\\|error" ({|#lang tesl
-module Test exposing []
+  should_fail_src "proof\\|requires\\|ValidTitle\\|missing\\|error" ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.String exposing [String.length]
 
@@ -458,8 +452,7 @@ fn bad() -> SafeRecord =
    ═══════════════════════════════════════════════════════════════════════════ *)
 
 let r49_a01 () =
-  should_pass_src {|#lang tesl
-module Empty exposing []
+  should_pass_src {|module Empty exposing []
 import Tesl.Prelude exposing [Int]
 |}
 
@@ -520,8 +513,7 @@ fn test() -> Int =
 |})
 
 let r49_a08 () =
-  should_pass_src ({|#lang tesl
-module Test exposing []
+  should_pass_src ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
 
@@ -556,8 +548,7 @@ fn test() -> Int =
    PROOF DECOMPOSITION + REATTACHMENT (regression for ELetProof bug)
    ═══════════════════════════════════════════════════════════════════════════ *)
 
-let proof_decomp_header = {|#lang tesl
-module Test exposing []
+let proof_decomp_header = {|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Fact, Bool(..)]
 import Tesl.String exposing [IsNonEmpty, String.requireNonEmpty]
 
@@ -622,8 +613,7 @@ fn test(raw: String) -> String =
 
 (* R49_LP06: anonymous record literal in auth ok is rejected *)
 let r49_lp06 () =
-  should_fail_src "anonymous.*record\\|bare.*record\\|named.*constructor" ({|#lang tesl
-module Test exposing []
+  should_fail_src "anonymous.*record\\|bare.*record\\|named.*constructor" ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Fact, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Http exposing [HttpRequest]
@@ -643,8 +633,7 @@ auth cookieAuth(request: HttpRequest) -> session: Session ::: Authenticated sess
 
 (* R49_LP07: named constructor in auth ok is accepted *)
 let r49_lp07 () =
-  should_pass_src ({|#lang tesl
-module Test exposing []
+  should_pass_src ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Fact, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Http exposing [HttpRequest]
@@ -669,8 +658,7 @@ auth cookieAuth(request: HttpRequest) -> session: Session ::: Authenticated sess
 
 (* R49_EC01: toJson stringCodec on ADT field rejected *)
 let r49_ec01 () =
-  should_fail_src "stringCodec.*encodes" ({|#lang tesl
-module Test exposing []
+  should_fail_src "stringCodec.*encodes" ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec]
 
@@ -692,8 +680,7 @@ codec Task {
 
 (* R49_EC02: Maybe Priority + stringCodec in fromJson rejected *)
 let r49_ec02 () =
-  should_fail_src "stringCodec.*decodes" ({|#lang tesl
-module Test exposing []
+  should_fail_src "stringCodec.*decodes" ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.Json exposing [stringCodec]
@@ -718,8 +705,7 @@ codec Task {
 
 (* R49_EC03: intCodec on PosixMillis rejected — must use posixMillisCodec *)
 let r49_ec03 () =
-  should_fail_src "intCodec.*decodes" ({|#lang tesl
-module Test exposing []
+  should_fail_src "intCodec.*decodes" ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [intCodec, stringCodec]
 import Tesl.Time exposing [PosixMillis]
@@ -738,8 +724,7 @@ codec Event {
 
 (* R49_EC04: posixMillisCodec on PosixMillis accepted *)
 let r49_ec04 () =
-  should_pass_src ({|#lang tesl
-module Test exposing []
+  should_pass_src ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, posixMillisCodec]
 import Tesl.Time exposing [PosixMillis]
@@ -758,8 +743,7 @@ codec Event {
 
 (* R49_EC05: List String + intCodec rejected *)
 let r49_ec05 () =
-  should_fail_src "intCodec.*decodes" ({|#lang tesl
-module Test exposing []
+  should_fail_src "intCodec.*decodes" ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String, List]
 import Tesl.Json exposing [stringCodec, intCodec]
 
@@ -776,8 +760,7 @@ codec Msg {
 
 (* R49_EC06: ELetProof inside case arm works *)
 let r49_ec06 () =
-  should_pass_src ({|#lang tesl
-module Test exposing []
+  should_pass_src ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Fact, Bool(..)]
 import Tesl.Maybe exposing [Maybe(..)]
 import Tesl.String exposing [IsNonEmpty, String.requireNonEmpty]
@@ -794,8 +777,7 @@ fn build(m: Maybe String) -> User =
 
 (* R49_EC07: chained proof decomposition works *)
 let r49_ec07 () =
-  should_pass_src ({|#lang tesl
-module Test exposing []
+  should_pass_src ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String, Fact, Bool(..)]
 
 fact IsPositive (n: Int)
@@ -823,8 +805,7 @@ fn test(raw: Int) -> Int =
 
 (* R49_EC08: correct toJson types accepted *)
 let r49_ec08 () =
-  should_pass_src ({|#lang tesl
-module Test exposing []
+  should_pass_src ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec, intCodec]
 
@@ -841,8 +822,7 @@ codec Simple {
 
 (* R49_EC09: stringCodec on newtype wrapping String is accepted — newtypes transparent at JSON *)
 let r49_ec09 () =
-  should_pass_src ({|#lang tesl
-module Test exposing []
+  should_pass_src ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec]
 
@@ -860,8 +840,7 @@ codec Note {
 
 (* R49_EC10: intCodec on newtype wrapping Int is accepted *)
 let r49_ec10 () =
-  should_pass_src ({|#lang tesl
-module Test exposing []
+  should_pass_src ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [intCodec, stringCodec]
 
@@ -881,8 +860,7 @@ codec Result {
 
 (* R49_EC11: stringCodec on newtype wrapping Int is still rejected *)
 let r49_ec11 () =
-  should_fail_src "stringCodec.*decodes" ({|#lang tesl
-module Test exposing []
+  should_fail_src "stringCodec.*decodes" ({|module Test exposing []
 import Tesl.Prelude exposing [Int, String]
 import Tesl.Json exposing [stringCodec]
 

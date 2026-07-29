@@ -20,11 +20,11 @@ collections, and run it with `racket`.
 `(require …)`s the runtime under the **`tesl` collection**:
 
 ```racket
-(require tesl/dsl/sql tesl/dsl/web tesl/tesl/prelude tesl/lang/reader …)
+(require tesl/dsl/sql tesl/dsl/web tesl/tesl/prelude …)
 ```
 
 So at runtime Racket must be able to resolve a collection named `tesl` that
-contains `dsl/`, `tesl/`, `lang/`. We expose it through `PLTCOLLECTS`, exactly
+contains `dsl/`, `tesl/`. We expose it through `PLTCOLLECTS`, exactly
 as the Nix `tesl-racket` derivation and `raco pkg install --link` do:
 
 ```
@@ -33,7 +33,6 @@ PLTCOLLECTS = <racket-collects>:/opt/tesl/collections
   tesl/
     dsl/   ← copy of repo dsl/
     tesl/  ← copy of repo tesl/
-    lang/  ← copy of repo lang/
 ```
 
 `<racket-collects>` (here `/usr/share/racket/collects`) **must** come first so
@@ -74,10 +73,9 @@ Create a staging directory and populate it before `docker build`:
     tesl/
       dsl/                        # copy of repo dsl/
       tesl/                       # copy of repo tesl/
-      lang/                       # copy of repo lang/
 ```
 
-Which collections to copy: **always all three** — `dsl/`, `tesl/`, `lang/`.
+Which collections to copy: **always both** — `dsl/` and `tesl/`.
 They are the Racket runtime the app `require`s (NOT the OCaml compiler). Strip
 any in-repo `compiled/` caches when copying (the image recompiles `.zo` itself).
 

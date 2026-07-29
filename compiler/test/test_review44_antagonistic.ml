@@ -127,72 +127,61 @@ let should_fail_project pattern files =
     with Not_found -> failf "expected failure matching %S, got:
 %s" pattern out)
 
-let imported_foo_src = {|#lang tesl
-module A exposing [Foo(..)]
+let imported_foo_src = {|module A exposing [Foo(..)]
 type Foo =
   | MkFoo
   | MkBar
 |}
 
-let imported_fielded_src = {|#lang tesl
-module A exposing [Box(..)]
+let imported_fielded_src = {|module A exposing [Box(..)]
 import Tesl.Prelude exposing [Int]
 type Box =
   | Wrap inner: Int
   | Empty
 |}
 
-let plain_type_a_src = {|#lang tesl
-module A exposing [Foo]
+let plain_type_a_src = {|module A exposing [Foo]
 type Foo =
   | MkFoo
 |}
 
-let plain_type_b_src = {|#lang tesl
-module B exposing [Foo]
+let plain_type_b_src = {|module B exposing [Foo]
 type Foo =
   | MkBar
 |}
 
-let adt_type_a_src = {|#lang tesl
-module A exposing [Foo(..)]
+let adt_type_a_src = {|module A exposing [Foo(..)]
 type Foo =
   | MkFoo
 |}
 
-let adt_type_b_src = {|#lang tesl
-module B exposing [Foo(..)]
+let adt_type_b_src = {|module B exposing [Foo(..)]
 type Foo =
   | MkBar
 |}
 
-let ctor_a_src = {|#lang tesl
-module A exposing [Foo(..)]
+let ctor_a_src = {|module A exposing [Foo(..)]
 type Foo =
   | Shared
 |}
 
-let ctor_b_src = {|#lang tesl
-module B exposing [Bar(..)]
+let ctor_b_src = {|module B exposing [Bar(..)]
 type Bar =
   | Shared
 |}
 
-let distinct_type_b_src = {|#lang tesl
-module B exposing [Bar]
+let distinct_type_b_src = {|module B exposing [Bar]
 type Bar =
   | MkBar
 |}
 
-let distinct_ctor_b_src = {|#lang tesl
-module B exposing [Bar(..)]
+let distinct_ctor_b_src = {|module B exposing [Bar(..)]
 type Bar =
   | MkBar
 |}
 
 let r44_01_local_exhaustive_case_passes () =
-  should_pass_src {|#lang tesl
-module Main exposing [Foo(..), value]
+  should_pass_src {|module Main exposing [Foo(..), value]
 type Foo =
   | MkFoo
   | MkBar
@@ -205,8 +194,7 @@ fn value(x: Foo) -> Foo =
 let r44_02_imported_exhaustive_case_passes () =
   should_pass_project [
     ("A.tesl", imported_foo_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import A exposing [Foo(..)]
 fn value(x: Foo) -> Foo =
   case x of
@@ -216,8 +204,7 @@ fn value(x: Foo) -> Foo =
   ]
 
 let r44_03_local_bogus_extra_nullary_arm_rejected () =
-  should_fail_src "unknown constructor" {|#lang tesl
-module Main exposing [Foo(..), value]
+  should_fail_src "unknown constructor" {|module Main exposing [Foo(..), value]
 type Foo =
   | MkFoo
   | MkBar
@@ -229,8 +216,7 @@ fn value(x: Foo) -> Foo =
 |}
 
 let r44_04_local_bogus_only_nullary_arm_rejected () =
-  should_fail_src "unknown constructor" {|#lang tesl
-module Main exposing [Foo(..), value]
+  should_fail_src "unknown constructor" {|module Main exposing [Foo(..), value]
 type Foo =
   | MkFoo
   | MkBar
@@ -242,8 +228,7 @@ fn value(x: Foo) -> Foo =
 let r44_05_imported_bogus_extra_nullary_arm_rejected () =
   should_fail_project "unknown constructor" [
     ("A.tesl", imported_foo_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import A exposing [Foo(..)]
 fn value(x: Foo) -> Foo =
   case x of
@@ -256,8 +241,7 @@ fn value(x: Foo) -> Foo =
 let r44_06_imported_bogus_only_nullary_arm_rejected () =
   should_fail_project "unknown constructor" [
     ("A.tesl", imported_foo_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import A exposing [Foo(..)]
 fn value(x: Foo) -> Foo =
   case x of
@@ -266,8 +250,7 @@ fn value(x: Foo) -> Foo =
   ]
 
 let r44_07_nothing_on_non_maybe_local_rejected () =
-  should_fail_src "unknown constructor" {|#lang tesl
-module Main exposing [Foo(..), value]
+  should_fail_src "unknown constructor" {|module Main exposing [Foo(..), value]
 type Foo =
   | MkFoo
 fn value(x: Foo) -> Foo =
@@ -277,8 +260,7 @@ fn value(x: Foo) -> Foo =
 |}
 
 let r44_08_something_on_non_maybe_local_rejected () =
-  should_fail_src "unknown constructor" {|#lang tesl
-module Main exposing [Box(..), value]
+  should_fail_src "unknown constructor" {|module Main exposing [Box(..), value]
 import Tesl.Prelude exposing [Int]
 type Box =
   | Wrap inner: Int
@@ -293,8 +275,7 @@ fn value(x: Box) -> Box =
 let r44_09_nothing_on_non_maybe_imported_rejected () =
   should_fail_project "unknown constructor" [
     ("A.tesl", imported_foo_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import A exposing [Foo(..)]
 fn value(x: Foo) -> Foo =
   case x of
@@ -307,8 +288,7 @@ fn value(x: Foo) -> Foo =
 let r44_10_something_on_non_maybe_imported_rejected () =
   should_fail_project "unknown constructor" [
     ("A.tesl", imported_fielded_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import A exposing [Box(..)]
 fn value(x: Box) -> Box =
   case x of
@@ -319,8 +299,7 @@ fn value(x: Box) -> Box =
   ]
 
 let r44_11_local_bogus_extra_fielded_arm_rejected () =
-  should_fail_src "unknown constructor" {|#lang tesl
-module Main exposing [Box(..), value]
+  should_fail_src "unknown constructor" {|module Main exposing [Box(..), value]
 import Tesl.Prelude exposing [Int]
 type Box =
   | Wrap inner: Int
@@ -335,8 +314,7 @@ fn value(x: Box) -> Box =
 let r44_12_imported_bogus_extra_fielded_arm_rejected () =
   should_fail_project "unknown constructor" [
     ("A.tesl", imported_fielded_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import A exposing [Box(..)]
 fn value(x: Box) -> Box =
   case x of
@@ -350,8 +328,7 @@ let r44_13_duplicate_imported_plain_type_names_rejected () =
   should_fail_project "imported type" [
     ("A.tesl", plain_type_a_src);
     ("B.tesl", plain_type_b_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import A exposing [Foo]
 import B exposing [Foo]
 fn value(x: Foo) -> Foo = x
@@ -362,8 +339,7 @@ let r44_14_duplicate_imported_type_dotdot_names_rejected () =
   should_fail_project "imported type" [
     ("A.tesl", adt_type_a_src);
     ("B.tesl", adt_type_b_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import A exposing [Foo(..)]
 import B exposing [Foo(..)]
 fn value() -> Foo = MkBar
@@ -374,8 +350,7 @@ let r44_15_duplicate_imported_constructor_names_rejected () =
   should_fail_project "imported constructor" [
     ("A.tesl", ctor_a_src);
     ("B.tesl", ctor_b_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import A exposing [Foo(..)]
 import B exposing [Bar(..)]
 fn value(x: Bar) -> Bar =
@@ -387,8 +362,7 @@ fn value(x: Bar) -> Bar =
 let r44_16_local_type_shadows_imported_plain_type_rejected () =
   should_fail_project "top-level type" [
     ("A.tesl", plain_type_a_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [Foo(..), value]
+    ("Main.tesl", {|module Main exposing [Foo(..), value]
 import A exposing [Foo]
 type Foo =
   | LocalFoo
@@ -399,8 +373,7 @@ fn value(x: Foo) -> Foo = x
 let r44_17_local_type_shadows_imported_dotdot_type_rejected () =
   should_fail_project "top-level type" [
     ("A.tesl", adt_type_a_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [Foo(..), value]
+    ("Main.tesl", {|module Main exposing [Foo(..), value]
 import A exposing [Foo(..)]
 type Foo =
   | LocalFoo
@@ -410,13 +383,11 @@ fn value(x: Foo) -> Foo = x
 
 let r44_18_local_constructor_shadows_imported_constructor_rejected () =
   should_fail_project "shadows imported constructor" [
-    ("A.tesl", {|#lang tesl
-module A exposing [Imported(..)]
+    ("A.tesl", {|module A exposing [Imported(..)]
 type Imported =
   | Shared
 |});
-    ("Main.tesl", {|#lang tesl
-module Main exposing [Local(..), value]
+    ("Main.tesl", {|module Main exposing [Local(..), value]
 import A exposing [Imported(..)]
 type Local =
   | Shared
@@ -427,8 +398,7 @@ fn value() -> Local = Shared
 let r44_19_qualified_only_import_does_not_poison_type_namespace () =
   should_pass_project [
     ("A.tesl", plain_type_a_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [Foo(..), value]
+    ("Main.tesl", {|module Main exposing [Foo(..), value]
 import A
 type Foo =
   | LocalFoo
@@ -438,13 +408,11 @@ fn value(x: Foo) -> Foo = x
 
 let r44_20_qualified_only_import_does_not_poison_constructor_namespace () =
   should_pass_project [
-    ("A.tesl", {|#lang tesl
-module A exposing [Imported(..)]
+    ("A.tesl", {|module A exposing [Imported(..)]
 type Imported =
   | Shared
 |});
-    ("Main.tesl", {|#lang tesl
-module Main exposing [Local(..), value]
+    ("Main.tesl", {|module Main exposing [Local(..), value]
 import A
 type Local =
   | Shared
@@ -456,8 +424,7 @@ let r44_21_distinct_imported_type_names_compile () =
   should_pass_project [
     ("A.tesl", plain_type_a_src);
     ("B.tesl", distinct_type_b_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import A exposing [Foo]
 import B exposing [Bar]
 fn value(x: Foo) -> Foo = x
@@ -468,8 +435,7 @@ let r44_22_distinct_imported_constructors_compile () =
   should_pass_project [
     ("A.tesl", adt_type_a_src);
     ("B.tesl", distinct_ctor_b_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [value]
+    ("Main.tesl", {|module Main exposing [value]
 import A exposing [Foo(..)]
 import B exposing [Bar(..)]
 fn value() -> Bar = MkBar
@@ -479,8 +445,7 @@ fn value() -> Bar = MkBar
 let r44_23_imported_type_plus_unrelated_local_type_compile () =
   should_pass_project [
     ("A.tesl", plain_type_a_src);
-    ("Main.tesl", {|#lang tesl
-module Main exposing [Local(..), value]
+    ("Main.tesl", {|module Main exposing [Local(..), value]
 import A exposing [Foo]
 type Local =
   | LocalFoo
@@ -490,13 +455,11 @@ fn value(x: Foo) -> Foo = x
 
 let r44_24_imported_constructor_plus_unrelated_local_constructor_compile () =
   should_pass_project [
-    ("A.tesl", {|#lang tesl
-module A exposing [Imported(..)]
+    ("A.tesl", {|module A exposing [Imported(..)]
 type Imported =
   | Shared
 |});
-    ("Main.tesl", {|#lang tesl
-module Main exposing [Local(..), value]
+    ("Main.tesl", {|module Main exposing [Local(..), value]
 import A exposing [Imported(..)]
 type Local =
   | LocalShared

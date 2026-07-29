@@ -43,7 +43,7 @@ let stdlib =
 
 (** Wrap a body snippet in a module with STDLIB imports. *)
 let module_ ?(name="M") ?(exports="") ?(extra="") body =
-  Printf.sprintf "#lang tesl\nmodule %s exposing [%s]\n%s%s\n%s"
+  Printf.sprintf "module %s exposing [%s]\n%s%s\n%s"
     name exports stdlib extra body
 
 (** Compile a source string, return the Racket output string, or fail the test. *)
@@ -731,8 +731,7 @@ fn bad(x: UnknownType) -> Int =
 
 let test_import_nonexistent_stdlib_name_rejected () =
   (* Importing a name that doesn't exist in a Tesl stdlib module must be an error. *)
-  let src = {|#lang tesl
-module M exposing []
+  let src = {|module M exposing []
 import Tesl.Prelude exposing [Int, IsPositive]
 fn f(x: Int) -> Int = x
 |} in
@@ -742,8 +741,7 @@ fn f(x: Int) -> Int = x
 
 let test_import_valid_stdlib_name_accepted () =
   (* Importing a name that DOES exist in a Tesl stdlib module should succeed. *)
-  let src = {|#lang tesl
-module M exposing []
+  let src = {|module M exposing []
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [IsTrimmed, String.trim]
 fn norm(s: String) -> String ? IsTrimmed = String.trim s
@@ -1110,7 +1108,7 @@ fn bad(x: Int) -> Int =
     Alcotest.failf "err_proof_in_fn: expected proof/check in error, got: %s" err
 
 let test_err_missing_module_header () =
-  let src = "#lang tesl\nfn bad() -> Int =\n  42\n" in
+  let src = "fn bad() -> Int =\n  42\n" in
   let err = compile_err "err_missing_header" src in
   if not (contains "module" (String.lowercase_ascii err)) then
     Alcotest.failf "err_missing_header: expected 'module' in error, got: %s" err
@@ -2005,8 +2003,7 @@ fn result(n: Int) -> Int =
     This was intentionally introduced to verify the exhaustiveness checker works.
     The function is now a compiler regression test instead of a file-level error. *)
 let test_regression_sandbox_non_exhaustive () =
-  let src = {|#lang tesl
-module SandboxReg exposing []
+  let src = {|module SandboxReg exposing []
 import Tesl.Prelude exposing [String]
 type FiveCases
   = CaseOne
@@ -2115,66 +2112,66 @@ let require_lint_diag (diags : Compile.diagnostic list) code =
 
 let test_linter_w001_allows_comments_before_module () =
   (* fix-11 §7.1: W001 must NOT fire when comments precede the module header *)
-  let src = "#lang tesl\n# This is a comment\n# Another comment\n\nmodule Foo exposing []\n" in
+  let src = "# This is a comment\n# Another comment\n\nmodule Foo exposing []\n" in
   let diags = lint_src src in
   assert_no_lint_code diags "W001"
 
 let test_linter_w001_fires_when_no_module () =
   (* W001 SHOULD fire when the first non-comment, non-blank line is not module *)
-  let src = "#lang tesl\n# comment\nfn foo = 1\n" in
+  let src = "# comment\nfn foo = 1\n" in
   let diags = lint_src src in
   assert_has_lint_code diags "W001"
 
 let test_linter_w011_allows_continuation_after_comma () =
   (* fix-11 §7.1: W011 must NOT fire on continuation lines after comma *)
-  let src = "#lang tesl\nmodule Foo exposing []\nfn foo(a: Int, b: Int,\n       c: Int) -> Int =\n  42\n" in
+  let src = "module Foo exposing []\nfn foo(a: Int, b: Int,\n       c: Int) -> Int =\n  42\n" in
   let diags = lint_src src in
   assert_no_lint_code diags "W011"
 
 let test_linter_w011_fires_on_bad_indentation () =
   (* W011 SHOULD fire on odd indentation that is NOT a continuation *)
-  let src = "#lang tesl\nmodule Foo exposing []\nfn foo() -> Int =\n   42\n" in
+  let src = "module Foo exposing []\nfn foo() -> Int =\n   42\n" in
   let diags = lint_src src in
   assert_has_lint_code diags "W011"
 
 let test_linter_w010_provides_replace_line_fix () =
-  let src = "#lang tesl\nmodule Foo exposing []   \n" in
+  let src = "module Foo exposing []   \n" in
   let diags = lint_src src in
   let d = require_lint_diag diags "W010" in
   match d.fix with
   | Some (Compile.Replace_line { line; replacement }) ->
-      Alcotest.(check int) "fix line" 1 line;
+      Alcotest.(check int) "fix line" 0 line;
       Alcotest.(check string) "fix replacement" "module Foo exposing []" replacement
   | Some _ -> Alcotest.fail "expected W010 fix to be a Replace_line"
   | None -> Alcotest.fail "expected W010 to provide a fix"
 
 let test_linter_w011_provides_replace_line_fix () =
-  let src = "#lang tesl\nmodule Foo exposing []\nfn foo() -> Int =\n   42\n" in
+  let src = "module Foo exposing []\nfn foo() -> Int =\n   42\n" in
   let diags = lint_src src in
   let d = require_lint_diag diags "W011" in
   match d.fix with
   | Some (Compile.Replace_line { line; replacement }) ->
-      Alcotest.(check int) "fix line" 3 line;
+      Alcotest.(check int) "fix line" 2 line;
       Alcotest.(check string) "fix replacement" "  42" replacement
   | Some _ -> Alcotest.fail "expected W011 fix to be a Replace_line"
   | None -> Alcotest.fail "expected W011 to provide a fix"
 
 let test_linter_w040_fires_on_single_line_adt () =
   (* Parser now rejects single-line ADT syntax before the linter sees it *)
-  let src = "#lang tesl\nmodule Foo exposing []\ntype Status = Active | Pending | Closed\n" in
+  let src = "module Foo exposing []\ntype Status = Active | Pending | Closed\n" in
   let diags = Compile.check_source "<test>" src in
   let has_parse_error = List.exists (fun (d : Compile.diagnostic) -> d.source = "parser") diags in
   Alcotest.(check bool) "parser rejects single-line ADT" true has_parse_error
 
 let test_linter_w040_silent_for_multiline_adt () =
   (* Multi-line ADT syntax is correct — no warning *)
-  let src = "#lang tesl\nmodule Foo exposing []\ntype Status\n  = Active\n  | Pending\n" in
+  let src = "module Foo exposing []\ntype Status\n  = Active\n  | Pending\n" in
   let diags = lint_src src in
   assert_no_lint_code diags "W040"
 
 let test_linter_w040_silent_for_type_alias () =
   (* `type Foo = String` (single UIDENT RHS, no pipe) should NOT fire W040 *)
-  let src = "#lang tesl\nmodule Foo exposing []\ntype UserId = String\n" in
+  let src = "module Foo exposing []\ntype UserId = String\n" in
   let diags = lint_src src in
   assert_no_lint_code diags "W040"
 

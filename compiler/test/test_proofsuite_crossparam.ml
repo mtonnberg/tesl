@@ -120,7 +120,7 @@ let[@warning "-32"] known_gap ~what src =
 
 let hdr modname =
   Printf.sprintf
-    "#lang tesl\nmodule %s exposing []\n\
+    "module %s exposing []\n\
      import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact]\n" modname
 
 (* OwnedBy two-subject ownership fact over a Todo record. *)

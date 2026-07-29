@@ -100,7 +100,6 @@ Static and runtime safety are split across three layers:
 Given this Tesl file:
 
 ```tesl
-#lang tesl
 module Ports exposing [isValidPort, ValidPort]
 import Tesl.Prelude exposing [Int]
 

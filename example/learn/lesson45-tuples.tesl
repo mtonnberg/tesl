@@ -1,4 +1,3 @@
-#lang tesl
 module Lesson45Tuples exposing [
   makePoint,
   pointX,

@@ -153,7 +153,7 @@ let should_pass src =
    Tesl.Maybe — so the prelude imports it from there. *)
 
 let prelude =
-  "#lang tesl\n\
+  "\
    module ProofAttack exposing []\n\
    import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact, forgetFact, attachFact, detachFact, introAnd, andLeft, andRight]\n\
    import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -162,7 +162,7 @@ let prelude =
    `with_temp_file` helper derives the file name from this header. *)
 let mod_header name =
   Printf.sprintf
-    "#lang tesl\n\
+    "\
      module %s exposing []\n\
      import Tesl.Prelude exposing [Int, String, Bool(..), List, Fact, forgetFact, attachFact, detachFact, introAnd, andLeft, andRight]\n\
      import Tesl.Maybe exposing [Maybe(..)]\n"
@@ -545,7 +545,6 @@ fn retarget(a: Int, b: Int) -> Int =
 (* ════════════════════════════════════════════════════════════════════════ *)
 
 let fact_owner_lib = {|
-#lang tesl
 module FactOwnerLib exposing [ValidEmail, checkEmail]
 import Tesl.Prelude exposing [String]
 import Tesl.String exposing [String.contains, String.length]
@@ -564,7 +563,6 @@ let test_CM01_forge_via_check () =
   two_files_should_fail ~who:"CM01" forge_pat
     "FactOwnerLib" fact_owner_lib
     "ForgeViaCheck" {|
-#lang tesl
 module ForgeViaCheck exposing [ValidEmail, badForge]
 import Tesl.Prelude exposing [String]
 import FactOwnerLib exposing [ValidEmail, checkEmail]
@@ -577,7 +575,6 @@ let test_CM02_forge_via_establish () =
   two_files_should_fail ~who:"CM02" forge_pat
     "FactOwnerLib" fact_owner_lib
     "ForgeViaEstablish" {|
-#lang tesl
 module ForgeViaEstablish exposing [ValidEmail, alwaysValid]
 import Tesl.Prelude exposing [String, Fact]
 import FactOwnerLib exposing [ValidEmail, checkEmail]
@@ -590,7 +587,6 @@ let test_CM03_forge_via_auth () =
   two_files_should_fail ~who:"CM03" forge_pat
     "FactOwnerLib" fact_owner_lib
     "ForgeViaAuth" {|
-#lang tesl
 module ForgeViaAuth exposing [ValidEmail, fakeAuth]
 import Tesl.Prelude exposing [String]
 import Tesl.Http exposing [HttpRequest]
@@ -609,12 +605,10 @@ let test_CM04_forge_through_chain () =
   let write p s = let oc = open_out p in output_string oc s; close_out oc in
   write path_a fact_owner_lib;
   write path_b {|
-#lang tesl
 module ReexportBridge exposing [ValidEmail, checkEmail]
 import FactOwnerLib exposing [ValidEmail, checkEmail]
 |};
   write path_c {|
-#lang tesl
 module ForgeThroughChain exposing []
 import Tesl.Prelude exposing [String]
 import ReexportBridge exposing [ValidEmail, checkEmail]
@@ -637,7 +631,6 @@ check forgeViaChain(s: String) -> s: String ::: ValidEmail s =
 let test_CM05_forge_undeclared_fact () =
   should_fail ~who:"CM05" forge_pat
     {|
-#lang tesl
 module NoFactDeclared exposing []
 import Tesl.Prelude exposing [String]
 fact GhostFact (s: String)
@@ -949,7 +942,6 @@ fn good(raw: Int) -> Int =
 (* PC08 — re-export a fact and USE it in a type annotation (not forging). *)
 let test_PC08_legitimate_reexport_use () =
   with_two_files "FactOwnerLib" fact_owner_lib "LegitReexportUse" {|
-#lang tesl
 module LegitReexportUse exposing []
 import Tesl.Prelude exposing [String]
 import FactOwnerLib exposing [ValidEmail, checkEmail]

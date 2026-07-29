@@ -128,8 +128,7 @@ let should_fail pat src =
 (* The roadmap example: m/s^2 × 4 s = m/s.  The `-> Speed` annotation is what
    pins the RESULT dimension — a wrong product dimension is a unify error. *)
 let test_pos_accel_times_duration_is_speed () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [launchSpeed]
+  assert_no_errors {|module Foo exposing [launchSpeed]
 import Tesl.Units exposing [Acceleration, Duration, Speed, Acceleration.metersPerSecondSquared, Duration.seconds]
 fn launchSpeed() -> Speed =
   Acceleration.metersPerSecondSquared 2.5 * Duration.seconds 4.0
@@ -139,24 +138,21 @@ fn launchSpeed() -> Speed =
    alias-annotation equality property: the fn is declared with the ALIAS name
    and the body computes the dimension structurally — same type. *)
 let test_pos_length_div_duration_is_speed () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [pace]
+  assert_no_errors {|module Foo exposing [pace]
 import Tesl.Units exposing [Length, Duration, Speed]
 fn pace(d: Length, t: Duration) -> Speed =
   d / t
 |}
 
 let test_pos_length_times_length_is_area () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [rect]
+  assert_no_errors {|module Foo exposing [rect]
 import Tesl.Units exposing [Length, Area, Length.meters]
 fn rect() -> Area =
   Length.meters 3.0 * Length.meters 4.0
 |}
 
 let test_pos_area_times_length_is_volume () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [box]
+  assert_no_errors {|module Foo exposing [box]
 import Tesl.Units exposing [Length, Area, Volume, Length.meters, Area.squareMeters]
 fn box(base: Area, h: Length) -> Volume =
   base * h
@@ -164,8 +160,7 @@ fn box(base: Area, h: Length) -> Volume =
 
 (* Dimensionless result collapses to plain Float — Length/Length : Float. *)
 let test_pos_length_div_length_is_float () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [ratio]
+  assert_no_errors {|module Foo exposing [ratio]
 import Tesl.Units exposing [Length]
 import Tesl.Float exposing [Float]
 fn ratio(a: Length, b: Length) -> Float =
@@ -174,8 +169,7 @@ fn ratio(a: Length, b: Length) -> Float =
 
 (* Scalar × quantity with a FLOAT scalar keeps the dimension. *)
 let test_pos_float_scalar_times_quantity () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [double]
+  assert_no_errors {|module Foo exposing [double]
 import Tesl.Units exposing [Length, Length.meters]
 fn double(d: Length) -> Length =
   2.0 * d
@@ -184,8 +178,7 @@ fn double(d: Length) -> Length =
 (* quantity / float-literal keeps the dimension (and the nonzero-literal
    divisor is exempt from the FloatNonZero obligation — see the binary group). *)
 let test_pos_quantity_div_float_scalar () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [halve]
+  assert_no_errors {|module Foo exposing [halve]
 import Tesl.Units exposing [Length]
 fn halve(d: Length) -> Length =
   d / 2.0
@@ -193,16 +186,14 @@ fn halve(d: Length) -> Length =
 
 (* scalar / quantity INVERTS the dimension: 1/Duration = Frequency. *)
 let test_pos_scalar_div_quantity_inverts () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [freq]
+  assert_no_errors {|module Foo exposing [freq]
 import Tesl.Units exposing [Duration, Frequency]
 fn freq(period: Duration) -> Frequency =
   1.0 / period
 |}
 
 let test_pos_same_dim_add_sub_compare () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [longerThan, total]
+  assert_no_errors {|module Foo exposing [longerThan, total]
 import Tesl.Units exposing [Length, Length.meters]
 import Tesl.Prelude exposing [Bool]
 fn total(a: Length, b: Length) -> Length =
@@ -213,8 +204,7 @@ fn longerThan(a: Length, b: Length) -> Bool =
 
 (* Unary minus preserves the dimension of a quantity. *)
 let test_pos_quantity_unary_minus () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [flip]
+  assert_no_errors {|module Foo exposing [flip]
 import Tesl.Units exposing [Speed]
 fn flip(v: Speed) -> Speed =
   -v
@@ -222,8 +212,7 @@ fn flip(v: Speed) -> Speed =
 
 (* Units.mul / Units.div / Units.square compose with checker-computed dims. *)
 let test_pos_units_ops_compose () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [sq, pace2, prod]
+  assert_no_errors {|module Foo exposing [sq, pace2, prod]
 import Tesl.Units exposing [Length, Duration, Speed, Area, Length.meters, Units.mul, Units.div, Units.square]
 fn sq() -> Area =
   Units.square (Length.meters 3.0)
@@ -234,16 +223,14 @@ fn prod(a: Length, b: Length) -> Area =
 |}
 
 let test_pos_units_sqrt_area_is_length () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [side]
+  assert_no_errors {|module Foo exposing [side]
 import Tesl.Units exposing [Length, Area, Units.sqrt]
 fn side(a: Area) -> Length =
   Units.sqrt a
 |}
 
 let test_pos_units_sum_list () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [totalDistance]
+  assert_no_errors {|module Foo exposing [totalDistance]
 import Tesl.Units exposing [Length, Length.meters, Units.sum]
 import Tesl.Prelude exposing [List]
 fn totalDistance(legs: List Length) -> Length =
@@ -251,8 +238,7 @@ fn totalDistance(legs: List Length) -> Length =
 |}
 
 let test_pos_units_min_max_abs_negate () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [clampish]
+  assert_no_errors {|module Foo exposing [clampish]
 import Tesl.Units exposing [Length, Units.min, Units.max, Units.abs, Units.negate]
 fn clampish(a: Length, b: Length) -> Length =
   Units.max (Units.abs (Units.negate a)) (Units.min a b)
@@ -260,8 +246,7 @@ fn clampish(a: Length, b: Length) -> Length =
 
 (* Constructor : Float -> Quantity; accessor : Quantity -> Float. *)
 let test_pos_constructor_accessor_typing () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [f]
+  assert_no_errors {|module Foo exposing [f]
 import Tesl.Units exposing [Length, Temperature, Length.feet, Length.inFeet, Temperature.celsius, Temperature.inFahrenheit]
 import Tesl.Float exposing [Float]
 fn f() -> Float =
@@ -271,8 +256,7 @@ fn f() -> Float =
 (* Import gating: a module that does NOT import Tesl.Units keeps full freedom
    to declare `type Speed = Slow | Fast`, with the ctors usable in case arms. *)
 let test_pos_user_speed_adt_without_units_import () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [Speed(..), describe]
+  assert_no_errors {|module Foo exposing [Speed(..), describe]
 import Tesl.Prelude exposing [String]
 type Speed =
   | Slow
@@ -285,8 +269,7 @@ fn describe(s: Speed) -> String =
 
 (* Same freedom for currency-constructor names without a Tesl.Money import. *)
 let test_pos_currency_ctor_names_without_money_import () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [Attempt(..), describe]
+  assert_no_errors {|module Foo exposing [Attempt(..), describe]
 import Tesl.Prelude exposing [String]
 type Attempt =
   | Try
@@ -302,8 +285,7 @@ fn describe(a: Attempt) -> String =
 (* ══ 2. Units — negative typing (in-process) ═══════════════════════════════ *)
 
 let test_neg_add_length_mass () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Units exposing [Length, Mass, Length.meters, Mass.kilograms]
 import Tesl.Float exposing [Float]
 fn f() -> Float =
@@ -312,8 +294,7 @@ fn f() -> Float =
 |} "cannot add quantities of different dimension: `Length` and `Mass`"
 
 let test_neg_subtract_cross_dim () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Units exposing [Length, Duration, Length.meters, Duration.seconds]
 import Tesl.Float exposing [Float]
 fn f() -> Float =
@@ -322,8 +303,7 @@ fn f() -> Float =
 |} "cannot subtract quantities of different dimension: `Length` and `Duration`"
 
 let test_neg_add_length_float () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Units exposing [Length, Length.meters]
 import Tesl.Float exposing [Float]
 fn f() -> Float =
@@ -332,8 +312,7 @@ fn f() -> Float =
 |} "cannot add a dimensioned quantity (`Length`) and a dimensionless number"
 
 let test_neg_add_float_length () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Units exposing [Length, Length.meters]
 import Tesl.Float exposing [Float]
 fn f() -> Float =
@@ -342,8 +321,7 @@ fn f() -> Float =
 |} "cannot add a dimensionless number and a dimensioned quantity (`Length`)"
 
 let test_neg_modulo_on_quantity () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Units exposing [Length, Length.meters]
 import Tesl.Float exposing [Float]
 fn f() -> Float =
@@ -353,8 +331,7 @@ fn f() -> Float =
 
 (* Int scalar gets the targeted Float-literal hint, not a bare unify error. *)
 let test_neg_int_scalar_hint () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Units exposing [Length, Length.meters]
 fn f() -> Length =
   2 * Length.meters 3.0
@@ -362,8 +339,7 @@ fn f() -> Length =
 
 (* Cross-dimension ordering is a plain unify mismatch (nominal TCons). *)
 let test_neg_cross_dim_compare () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Units exposing [Length, Mass, Length.meters, Mass.kilograms]
 import Tesl.Prelude exposing [Bool]
 fn f() -> Bool =
@@ -371,8 +347,7 @@ fn f() -> Bool =
 |} "cannot unify Length with Mass"
 
 let test_neg_sqrt_odd_exponent () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Units exposing [Length, Length.meters, Units.sqrt]
 import Tesl.Float exposing [Float]
 fn f() -> Float =
@@ -383,8 +358,7 @@ fn f() -> Float =
 (* A no-alias dimension renders in unit form ("m\xc2\xb7s"), never the raw
    canonical name (assert_has_error also asserts no diagnostic contains it). *)
 let test_neg_sqrt_no_alias_dim_renders_unit_form () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Units exposing [Length, Duration, Length.meters, Duration.seconds, Units.mul, Units.sqrt]
 import Tesl.Float exposing [Float]
 fn f() -> Float =
@@ -393,8 +367,7 @@ fn f() -> Float =
 |} "`m\xc2\xb7s` has an odd exponent"
 
 let test_neg_units_min_cross_dim () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Units exposing [Length, Mass, Length.meters, Mass.kilograms, Units.min]
 import Tesl.Float exposing [Float]
 fn f() -> Float =
@@ -403,8 +376,7 @@ fn f() -> Float =
 |} "`Units.min` needs both arguments in the SAME dimension: `Length` vs `Mass`"
 
 let test_neg_units_mul_arity () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Units exposing [Length, Length.meters, Units.mul]
 import Tesl.Float exposing [Float]
 fn f() -> Float =
@@ -413,8 +385,7 @@ fn f() -> Float =
 |} "`Units.mul` expects 2 arguments"
 
 let test_neg_unknown_units_op () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Units exposing [Length, Length.meters]
 import Tesl.Float exposing [Float]
 fn f() -> Float =
@@ -425,8 +396,7 @@ fn f() -> Float =
 (* Alias NOT imported: `Speed` is not a type in scope at all — no silent
    quantity semantics; the error carries the guided-import hint. *)
 let test_neg_alias_not_imported () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Float exposing [Float]
 fn f(x: Speed) -> Float =
   1.0
@@ -435,8 +405,7 @@ fn f(x: Speed) -> Float =
 (* ══ 3. Money — positive typing (in-process) ═══════════════════════════════ *)
 
 let test_pos_money_construct_accessors () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [amount, units, cur, shown, ops]
+  assert_no_errors {|module Foo exposing [amount, units, cur, shown, ops]
 import Tesl.Money exposing [Money, Currency, Money.usd, Money.minorUnits, Money.currency, Money.display, Money.scale, Money.negate, Money.abs, Money.isZero, Money.isNegative, Currency.code]
 import Tesl.Prelude exposing [Int, String, Bool]
 fn amount() -> Money =
@@ -453,8 +422,7 @@ fn ops(m: Money) -> Bool =
 
 (* Money.fromMinorUnits takes a Currency CONSTRUCTOR (baked ISO 4217 ADT). *)
 let test_pos_money_from_minor_units () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [price]
+  assert_no_errors {|module Foo exposing [price]
 import Tesl.Money exposing [Money, Currency, Money.fromMinorUnits, Eur]
 fn price() -> Money =
   Money.fromMinorUnits Eur 916
@@ -463,8 +431,7 @@ fn price() -> Money =
 (* The proof-gated flow TYPES cleanly (the proof itself is validated in the
    binary group below). *)
 let test_pos_require_same_currency_add_types () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [total]
+  assert_no_errors {|module Foo exposing [total]
 import Tesl.Money exposing [Money, Money.add, Money.requireSameCurrency]
 fn total(a: Money, b: Money) -> Money =
   let sb = check Money.requireSameCurrency a b
@@ -472,8 +439,7 @@ fn total(a: Money, b: Money) -> Money =
 |}
 
 let test_pos_require_non_negative_types () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [deposit]
+  assert_no_errors {|module Foo exposing [deposit]
 import Tesl.Money exposing [Money, Money.requireNonNegative]
 fn deposit(m: Money) -> Money =
   let nn = check Money.requireNonNegative m
@@ -483,8 +449,7 @@ fn deposit(m: Money) -> Money =
 (* ExchangeRate.make : Currency -> Currency -> Float -> PosixMillis;
    Money.convert : ExchangeRate -> Money -> Result Money String. *)
 let test_pos_exchange_rate_convert_result () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [converted]
+  assert_no_errors {|module Foo exposing [converted]
 import Tesl.Money exposing [Money, ExchangeRate, Money.usd, Money.convert, ExchangeRate.make, Usd, Eur]
 import Tesl.Result exposing [Result(..)]
 import Tesl.Prelude exposing [String]
@@ -495,8 +460,7 @@ fn converted() -> Result Money String =
 |}
 
 let test_pos_require_rate_for_convert_checked_types () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [convertStrict]
+  assert_no_errors {|module Foo exposing [convertStrict]
 import Tesl.Money exposing [Money, ExchangeRate, Money.convertChecked, Money.requireRateFor]
 fn convertStrict(r: ExchangeRate, m: Money) -> Money =
   let mc = check Money.requireRateFor r m
@@ -506,8 +470,7 @@ fn convertStrict(r: ExchangeRate, m: Money) -> Money =
 (* ══ 4. Money — negative typing (in-process) ═══════════════════════════════ *)
 
 let test_neg_money_plus () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Money exposing [Money, Money.usd]
 fn f() -> Money =
   Money.usd 100 + Money.usd 200
@@ -515,32 +478,28 @@ fn f() -> Money =
 
 (* The `+` hint names the proof AND its mint. *)
 let test_neg_money_plus_hint_mentions_proof () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Money exposing [Money, Money.usd]
 fn f() -> Money =
   Money.usd 100 + Money.usd 200
 |} "mint it with `Money.requireSameCurrency a b`"
 
 let test_neg_money_minus () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Money exposing [Money, Money.usd]
 fn f() -> Money =
   Money.usd 100 - Money.usd 200
 |} "operator `-` is not defined for `Money`; use `Money.subtract a b`"
 
 let test_neg_money_times () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Money exposing [Money, Money.usd]
 fn f() -> Money =
   Money.usd 100 * Money.usd 200
 |} "operator `*` is not defined for `Money`"
 
 let test_neg_money_ordering () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Money exposing [Money, Money.usd]
 import Tesl.Prelude exposing [Bool]
 fn f() -> Bool =
@@ -548,8 +507,7 @@ fn f() -> Bool =
 |} "use `Money.compare a b`"
 
 let test_neg_money_unary_minus () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Money exposing [Money]
 fn f(m: Money) -> Money =
   -m
@@ -558,8 +516,7 @@ fn f(m: Money) -> Money =
 (* ══ 5. Name-collision guard (in-process) ══════════════════════════════════ *)
 
 let test_neg_speed_collision_with_units_import () =
-  assert_has_error {|#lang tesl
-module Foo exposing [Speed(..)]
+  assert_has_error {|module Foo exposing [Speed(..)]
 import Tesl.Units exposing [Length, Length.meters]
 type Speed =
   | Slow
@@ -567,8 +524,7 @@ type Speed =
 |} "type `Speed` collides with the `Speed` quantity type exported by Tesl.Units"
 
 let test_neg_money_type_collision_with_money_import () =
-  assert_has_error {|#lang tesl
-module Foo exposing [Money(..)]
+  assert_has_error {|module Foo exposing [Money(..)]
 import Tesl.Money exposing [Currency]
 type Money =
   | Cash
@@ -577,8 +533,7 @@ type Money =
 
 (* `Try` is the TRY (Turkish lira) currency constructor. *)
 let test_neg_ctor_collision_with_currency_ctor () =
-  assert_has_error {|#lang tesl
-module Foo exposing [Foo(..)]
+  assert_has_error {|module Foo exposing [Foo(..)]
 import Tesl.Money exposing [Money]
 type Foo =
   | Try
@@ -590,8 +545,7 @@ type Foo =
 (* Money ÷ non-zero quantity constructs a rate; the `-> MoneyPerDuration`
    annotation pins the checker-computed rate type. *)
 let test_pos_rate_division_annotation () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [effectiveRate]
+  assert_no_errors {|module Foo exposing [effectiveRate]
 import Tesl.Money exposing [Money, MoneyPerDuration]
 import Tesl.Units exposing [Duration, Units.requireNonZero]
 fn effectiveRate(billed: Money, worked: Duration) -> MoneyPerDuration =
@@ -601,8 +555,7 @@ fn effectiveRate(billed: Money, worked: Duration) -> MoneyPerDuration =
 
 (* rate × quantity of the denominator dimension materializes Money. *)
 let test_pos_rate_times_duration_is_money () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [invoice]
+  assert_no_errors {|module Foo exposing [invoice]
 import Tesl.Money exposing [Money, MoneyPerDuration]
 import Tesl.Units exposing [Duration, Duration.hours]
 fn invoice(rate: MoneyPerDuration) -> Money =
@@ -611,8 +564,7 @@ fn invoice(rate: MoneyPerDuration) -> Money =
 
 (* rate × Float scalar rescales the rate (stays a rate). *)
 let test_pos_rate_float_rescale () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [surcharged]
+  assert_no_errors {|module Foo exposing [surcharged]
 import Tesl.Money exposing [MoneyPerDuration]
 fn surcharged(rate: MoneyPerDuration) -> MoneyPerDuration =
   rate * 1.1
@@ -620,8 +572,7 @@ fn surcharged(rate: MoneyPerDuration) -> MoneyPerDuration =
 
 (* A money-rate is a first-class column type. *)
 let test_pos_rate_entity_field () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [Row]
+  assert_no_errors {|module Foo exposing [Row]
 import Tesl.Prelude exposing [String]
 import Tesl.Money exposing [MoneyPerDuration]
 entity Row table "rows" primaryKey id {
@@ -639,8 +590,7 @@ entity Row table "rows" primaryKey id {
    scalar.  Fixed to a plain `is_mr lt' || is_mr rt'` — both orders
    materialize Money (the runtime helper always accepted either order). *)
 let test_pin_quantity_times_rate_rejected () =
-  assert_no_errors {|#lang tesl
-module Foo exposing [f]
+  assert_no_errors {|module Foo exposing [f]
 import Tesl.Money exposing [Money, MoneyPerDuration]
 import Tesl.Units exposing [Duration, Duration.hours]
 fn f(rate: MoneyPerDuration) -> Money =
@@ -648,8 +598,7 @@ fn f(rate: MoneyPerDuration) -> Money =
 |}
 
 let test_neg_rate_wrong_denominator () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Money exposing [Money, MoneyPerDuration]
 import Tesl.Units exposing [Mass, Mass.kilograms]
 fn f(rate: MoneyPerDuration) -> Money =
@@ -657,8 +606,7 @@ fn f(rate: MoneyPerDuration) -> Money =
 |} "the denominator must match exactly"
 
 let test_neg_rate_plus_rate () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Money exposing [MoneyPerDuration]
 fn f(rate: MoneyPerDuration) -> MoneyPerDuration =
   rate + rate
@@ -666,8 +614,7 @@ fn f(rate: MoneyPerDuration) -> MoneyPerDuration =
 
 (* Int rescale gets the targeted Float-literal hint. *)
 let test_neg_rate_int_scalar_hint () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Money exposing [MoneyPerDuration]
 fn f(rate: MoneyPerDuration) -> MoneyPerDuration =
   rate * 2
@@ -675,8 +622,7 @@ fn f(rate: MoneyPerDuration) -> MoneyPerDuration =
 
 (* A duration-rate division does NOT satisfy a MoneyPerMass annotation. *)
 let test_neg_rate_annotation_mismatch () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Money exposing [Money, MoneyPerMass]
 import Tesl.Units exposing [Duration, Units.requireNonZero]
 fn f(billed: Money, worked: Duration) -> MoneyPerMass =
@@ -685,8 +631,7 @@ fn f(billed: Money, worked: Duration) -> MoneyPerMass =
 |} "cannot unify MoneyPerDuration with MoneyPerMass"
 
 let test_neg_rate_unary_minus () =
-  assert_has_error {|#lang tesl
-module Foo exposing [f]
+  assert_has_error {|module Foo exposing [f]
 import Tesl.Money exposing [MoneyPerDuration]
 fn f(rate: MoneyPerDuration) -> MoneyPerDuration =
   -rate
@@ -694,8 +639,7 @@ fn f(rate: MoneyPerDuration) -> MoneyPerDuration =
 
 (* Ordered where-comparison on a money-rate column is a compile error. *)
 let test_neg_rate_where_ordered_comparison () =
-  assert_has_error {|#lang tesl
-module Foo exposing [cheap]
+  assert_has_error {|module Foo exposing [cheap]
 import Tesl.Prelude exposing [String, List]
 import Tesl.Money exposing [Money, MoneyPerDuration, MoneyRate.perHour, Money.sek]
 import Tesl.DB exposing [dbRead]
@@ -715,8 +659,7 @@ fn cheap() -> List Row requires [dbRead] =
    declared type: a Length value against a Speed column is rejected with the
    column provenance in the reason. *)
 let test_neg_where_speed_column_vs_length_value () =
-  assert_has_error {|#lang tesl
-module Foo exposing [fast]
+  assert_has_error {|module Foo exposing [fast]
 import Tesl.Prelude exposing [String, List]
 import Tesl.Units exposing [Speed, Length, Length.meters]
 import Tesl.DB exposing [dbRead]
@@ -734,8 +677,7 @@ fn fast() -> List Run requires [dbRead] =
 
 (* A bare dimensionless Float never sneaks past a quantity column either. *)
 let test_neg_where_speed_column_vs_bare_float () =
-  assert_has_error {|#lang tesl
-module Foo exposing [exact]
+  assert_has_error {|module Foo exposing [exact]
 import Tesl.Prelude exposing [String, List]
 import Tesl.Units exposing [Speed]
 import Tesl.DB exposing [dbRead]

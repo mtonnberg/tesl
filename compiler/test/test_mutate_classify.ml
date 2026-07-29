@@ -168,7 +168,7 @@ let () =
   (* A check whose body exercises a comparison operator, a boolean literal, and
      an integer literal — all inside a mutated function kind. *)
   let src =
-    "#lang tesl\n\
+    "\
      module T exposing [checkOp]\n\
      import Tesl.Prelude exposing [Int, Bool(..)]\n\
      \n\
@@ -213,7 +213,7 @@ let () =
 
   (* A boolean-only body (no binops, no ints) still yields exactly the flip. *)
   let bool_src =
-    "#lang tesl\n\
+    "\
      module T exposing [checkFlag]\n\
      import Tesl.Prelude exposing [Bool(..)]\n\
      \n\
