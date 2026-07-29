@@ -982,23 +982,33 @@ function activate(context) {
   //   letting the adapter session start and immediately terminate.
   context.subscriptions.push(
     vscode.debug.registerDebugConfigurationProvider("tesl", {
+      // Phase 1 — runs BEFORE ${...} variable substitution: only fill in
+      // defaults here. Never touch the filesystem with config values at this
+      // stage — a value like "${workspaceFolder}/backend" is still the raw
+      // unsubstituted string and any path check on it is meaningless.
       resolveDebugConfiguration(folder, config) {
         if (config.request === "attach" && !config.socket && !config.port && !config.program) {
           if (!config.project) {
             config.project = folder ? folder.uri.fsPath : wsPath;
           }
           if (!config.name) config.name = "Attach to running app (tesl run --debug)";
-          if (config.project) {
-            const stuff = path.join(config.project, ".tesl-stuff");
-            const hasEndpoint =
-              fs.existsSync(path.join(stuff, "debug.sock")) ||
-              fs.existsSync(path.join(stuff, "debug.port"));
-            if (!hasEndpoint) {
-              vscode.window.showErrorMessage(
-                `Tesl: no attach endpoint under ${stuff} — start the app first with \`tesl run --debug <file.tesl>\` (Tesl: Run current file in debug mode).`
-              );
-              return undefined; // abort the session cleanly
-            }
+        }
+        return config;
+      },
+      // Phase 2 — runs AFTER substitution: config.project is now a real path,
+      // so fail fast with an actionable message when no endpoint exists,
+      // instead of letting the adapter session start and instantly terminate.
+      resolveDebugConfigurationWithSubstitutedVariables(folder, config) {
+        if (config.request === "attach" && !config.socket && !config.port && !config.program && config.project) {
+          const stuff = path.join(config.project, ".tesl-stuff");
+          const hasEndpoint =
+            fs.existsSync(path.join(stuff, "debug.sock")) ||
+            fs.existsSync(path.join(stuff, "debug.port"));
+          if (!hasEndpoint) {
+            vscode.window.showErrorMessage(
+              `Tesl: no attach endpoint under ${stuff} — start the app first with \`tesl run --debug <file.tesl>\` (Tesl: Run current file in debug mode).`
+            );
+            return undefined; // abort the session cleanly
           }
         }
         return config;

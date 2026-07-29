@@ -1179,6 +1179,16 @@ case "$CMD" in
     if [ "${1:-}" = "--debug" ]; then TESL_RUN_DEBUG=1; shift; fi
     FILE="${1:?Usage: tesl run [--debug] <file.tesl> [args…]}"
     shift
+    # Everything after FILE is forwarded verbatim to the app, so a trailing
+    # --debug does NOT enable debug mode — flag the likely mistake loudly.
+    if [ "$TESL_RUN_DEBUG" = "0" ]; then
+      for _tesl_arg in "$@"; do
+        if [ "$_tesl_arg" = "--debug" ]; then
+          echo "[tesl] note: '--debug' after the file is passed to YOUR APP as an argument; to enable attach/debug mode put it before the file: tesl run --debug $FILE" >&2
+          break
+        fi
+      done
+    fi
     # Convenience: load ./.env so the app sees TESL_POSTGRES_*/PORT without manual sourcing.
     _tesl_load_dotenv
     # Managed-mode projects: auto-start the project-local Postgres if needed.
