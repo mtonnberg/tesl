@@ -42,7 +42,14 @@
  drainQueue
  pendingJobCount
  expectJobOk
- expectJobFailed)
+ expectJobFailed
+ ;; Outbound-HTTP test double (see dsl/test-support.rkt for the scoping rules)
+ stubHttp
+ stubHttpFailure
+ stubHttpTimeout
+ httpCalled
+ httpCallCount
+ httpLastBody)
 
 (define HttpResponse 'HttpResponse)
 (define JsonValue 'JsonValue)
@@ -306,6 +313,41 @@
                        (api-test-format-json (JobFailed-error result)))]
     [else
      (raise-user-error 'expectJobOk "expected JobResult, got ~a" result)]))
+
+;; ── Outbound-HTTP double ─────────────────────────────────────────────────────
+;;
+;; The engine (matching, the per-test scope, the call log) lives in
+;; dsl/test-support.rkt; these are the names a Tesl test writes.  A stub is
+;; declared as a STATEMENT in the test body, before the code under test runs:
+;;
+;;   stubHttp        "GET"  "https://api.example.com/rates" 200 "{\"usd\":1.1}"
+;;   stubHttpFailure "POST" "https://api.example.com/log"   "connection refused"
+;;   stubHttpTimeout "GET"  "https://api.example.com/slow"
+;;
+;; then asserted afterwards with httpCalled / httpCallCount / httpLastBody.
+;; `"*"` matches any method or URL and a trailing `*` matches a URL prefix.
+
+;; Arguments arrive as ordinary Tesl values, so a `let`-bound URL reaches here
+;; wrapped in its named-value/proof envelope while a literal does not — unwrap
+;; both shapes before the engine string-matches on them.
+(define (stubHttp method url status body)
+  (api-test-stub-http! (raw-value method) (raw-value url)
+                       (raw-value status) (raw-value body)))
+
+(define (stubHttpFailure method url message)
+  (api-test-stub-http-failure! (raw-value method) (raw-value url) (raw-value message)))
+
+(define (stubHttpTimeout method url)
+  (api-test-stub-http-timeout! (raw-value method) (raw-value url)))
+
+(define (httpCallCount method url)
+  (api-test-http-call-count (raw-value method) (raw-value url)))
+
+(define (httpCalled method url)
+  (> (httpCallCount method url) 0))
+
+(define (httpLastBody method url)
+  (api-test-http-last-body (raw-value method) (raw-value url)))
 
 (define (expectJobFailed result)
   (cond

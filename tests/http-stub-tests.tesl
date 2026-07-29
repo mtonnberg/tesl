@@ -1,0 +1,298 @@
+module HttpStubTests exposing []
+
+# Outbound-HTTP test double + timeout composition
+# (roadmap/completed/outbound_http_timeout_and_test_double.md).
+#
+# Before this, nothing in api-test or dsl/test-support could intercept an
+# outbound HttpClient call, so every handler or worker that talks to an external
+# service had an untestable branch — and the branches you most want covered
+# (upstream 500, malformed JSON, a timeout) are precisely the ones a real
+# upstream will not produce on demand.
+#
+# The double is declared as ordinary statements at the top of a test body:
+#
+#   stubHttp        "GET"  "https://rates.test/v1"  200 "..."
+#   stubHttpFailure "POST" "https://rates.test/log" "connection refused"
+#   stubHttpTimeout "GET"  "https://rates.test/slow"
+#
+# and asserted afterwards with httpCalled / httpCallCount / httpLastBody.
+# `"*"` matches any method or URL; a trailing `*` matches a URL prefix.
+#
+# Scope: the stub table is created fresh for EVERY test block and unwinds with
+# it, so nothing leaks between tests (the "isolation" cases below pin that).
+
+import Tesl.Prelude exposing [Bool(..), String, List]
+import Tesl.List exposing [List.length]
+import Tesl.String exposing [String.contains]
+import Tesl.Json exposing [stringCodec]
+import Tesl.Database exposing [Database, Memory]
+import Tesl.Queue exposing [
+  FromQueue,
+  deadJobs,
+  queueRead,
+  queueWrite,
+  Queue,
+  Job,
+  QueueRetryStrategy,
+  Fixed,
+]
+import Tesl.HttpClient exposing [
+  httpClient,
+  HttpResponse,
+  HttpClient.get,
+  HttpClient.post,
+]
+import Tesl.ApiTest exposing [
+  statusOk,
+  JobResult(..),
+  processNextJob,
+  pendingJobCount,
+  expectJobFailed,
+  stubHttp,
+  stubHttpFailure,
+  stubHttpTimeout,
+  httpCalled,
+  httpCallCount,
+  httpLastBody,
+]
+
+capability webClient implies httpClient
+
+# ── Code under test ──────────────────────────────────────────────────────────
+
+fn fetchRates(url: String) -> HttpResponse
+  requires [webClient] =
+  HttpClient.get url []
+
+fn pushRates(url: String, payload: String) -> HttpResponse
+  requires [webClient] =
+  HttpClient.post url [] payload
+
+# ── The canned-response path ─────────────────────────────────────────────────
+
+test "STUB-01: a canned response answers without touching the network" requires [webClient] {
+  stubHttp "GET" "https://rates.test/v1" 200 "{\"usd\": 110}"
+  let r = fetchRates "https://rates.test/v1"
+  expect r.status == 200
+  expect r.body == "{\"usd\": 110}"
+}
+
+test "STUB-02: the method is part of the match" requires [webClient] {
+  stubHttp "GET" "https://rates.test/v1" 200 "get-answer"
+  stubHttp "POST" "https://rates.test/v1" 201 "post-answer"
+  let g = fetchRates "https://rates.test/v1"
+  let p = pushRates "https://rates.test/v1" "payload"
+  expect g.body == "get-answer"
+  expect p.body == "post-answer"
+  expect p.status == 201
+}
+
+test "STUB-03: a trailing * matches a URL prefix" requires [webClient] {
+  stubHttp "*" "https://rates.test/*" 200 "wildcard"
+  let a = fetchRates "https://rates.test/v1"
+  let b = fetchRates "https://rates.test/v2?since=1"
+  expect a.body == "wildcard"
+  expect b.body == "wildcard"
+}
+
+test "STUB-04: the first declared match wins, so a specific stub beats a catch-all" requires [webClient] {
+  stubHttp "GET" "https://rates.test/v1" 200 "specific"
+  stubHttp "*" "*" 500 "catch-all"
+  let a = fetchRates "https://rates.test/v1"
+  let b = fetchRates "https://rates.test/other"
+  expect a.body == "specific"
+  expect b.status == 500
+}
+
+test "STUB-05: re-stubbing the same method+url replaces the earlier rule" requires [webClient] {
+  stubHttp "GET" "https://rates.test/v1" 200 "first"
+  stubHttp "GET" "https://rates.test/v1" 200 "second"
+  let r = fetchRates "https://rates.test/v1"
+  expect r.body == "second"
+}
+
+# ── The error paths — the whole point of the double ──────────────────────────
+
+test "STUB-06: an upstream 500 is reachable" requires [webClient] {
+  stubHttp "GET" "https://rates.test/v1" 500 "upstream exploded"
+  let r = fetchRates "https://rates.test/v1"
+  expect r.status == 500
+}
+
+test "STUB-07: malformed JSON is reachable" requires [webClient] {
+  stubHttp "GET" "https://rates.test/v1" 200 "not json at all {"
+  let r = fetchRates "https://rates.test/v1"
+  expect r.status == 200
+  expect String.contains r.body "not json"
+}
+
+test "STUB-08: a connection failure is reachable" requires [webClient] {
+  stubHttpFailure "GET" "https://rates.test/v1" "connection refused"
+  expectFail fetchRates "https://rates.test/v1"
+}
+
+test "STUB-09: a timeout is reachable" requires [webClient] {
+  stubHttpTimeout "GET" "https://rates.test/v1"
+  expectFail fetchRates "https://rates.test/v1"
+}
+
+test "STUB-10: an unstubbed call fails loudly instead of reaching the network" requires [webClient] {
+  stubHttp "GET" "https://rates.test/v1" 200 "ok"
+  expectFail fetchRates "https://elsewhere.test/v1"
+}
+
+# ── Asserting the call was made ──────────────────────────────────────────────
+
+test "STUB-11: httpCalled / httpCallCount observe the outbound calls" requires [webClient] {
+  stubHttp "*" "*" 200 "ok"
+  let a = fetchRates "https://rates.test/v1"
+  let b = fetchRates "https://rates.test/v1"
+  let c = pushRates "https://rates.test/log" "hello"
+  expect a.status == 200
+  expect b.status == 200
+  expect c.status == 200
+  expect httpCalled "GET" "https://rates.test/v1"
+  expect httpCallCount "GET" "https://rates.test/v1" == 2
+  expect httpCallCount "POST" "https://rates.test/log" == 1
+  expect httpCallCount "GET" "https://rates.test/log" == 0
+  expect httpCallCount "*" "*" == 3
+}
+
+test "STUB-12: httpLastBody shows what was actually sent" requires [webClient] {
+  stubHttp "POST" "https://rates.test/log" 202 "queued"
+  let r = pushRates "https://rates.test/log" "{\"event\": \"sync\"}"
+  expect r.status == 202
+  expect httpLastBody "POST" "https://rates.test/log" == "{\"event\": \"sync\"}"
+}
+
+test "STUB-12b: a let-bound (not literal) url works everywhere" requires [webClient] {
+  let target = "https://rates.test/computed"
+  stubHttp "GET" target 200 "computed"
+  let r = fetchRates target
+  expect r.body == "computed"
+  expect httpCallCount "GET" target == 1
+}
+
+test "STUB-13: an unmatched call is still recorded before it fails" requires [webClient] {
+  stubHttp "GET" "https://rates.test/v1" 200 "ok"
+  expectFail fetchRates "https://elsewhere.test/v1"
+  expect httpCalled "GET" "https://elsewhere.test/v1"
+}
+
+# ── Isolation: nothing leaks between test blocks ─────────────────────────────
+
+test "STUB-14a: declares a stub and makes a call" requires [webClient] {
+  stubHttp "GET" "https://leak.test/v1" 200 "from 14a"
+  let r = fetchRates "https://leak.test/v1"
+  expect r.body == "from 14a"
+  expect httpCallCount "*" "*" == 1
+}
+
+test "STUB-14b: sees neither 14a's stub nor its call log" requires [webClient] {
+  expect httpCallCount "*" "*" == 0
+  expect httpCalled "GET" "https://leak.test/v1" == False
+  # 14a's stub is gone, so this URL is unstubbed again.  With NO stub declared
+  # in this block at all the call would go to the real network, so declare an
+  # unrelated one first and let the miss be the loud failure.
+  stubHttp "GET" "https://other.test/v1" 200 "ok"
+  expectFail fetchRates "https://leak.test/v1"
+}
+
+# ── A timeout inside a WORKER fails the job (retry → dead-letter) ─────────────
+#
+# The live defect item 1 fixes: a hung upstream inside a worker used to pin one
+# of that queue's threads forever, so the job never failed and the retry /
+# dead-letter machinery never ran.  With a deadline the call raises, the worker
+# body raises, and process-next-job turns that into a FAILED attempt — retried
+# until maxAttempts, then dead-lettered.  Stubbing the timeout makes that
+# deterministic and instant instead of a 30-second wall-clock wait.
+
+database SyncDb = Database {
+  schema: "httpstubsync"
+  entities: []
+  backend: Memory
+}
+
+record SyncJob {
+  tag: String
+}
+
+queue SyncQueue requires [queueRead, webClient] = Queue {
+  database: SyncDb
+  jobs: [Job SyncJob syncWorker Nothing]
+  retry: QueueRetryStrategy {
+    maxAttempts: 2
+    backoff: Fixed
+    initialDelay: 1
+  }
+}
+
+worker syncWorker(job: SyncJob ::: FromQueue (Id == jobId) job)
+  requires [queueRead, webClient] =
+  let _resp = fetchRates "https://upstream.test/sync"
+  job
+
+record SyncRequest {
+  tag: String
+}
+
+codec SyncRequest {
+  toJson {
+    tag -> "tag" with_codec stringCodec
+  }
+  fromJson [
+    {
+      tag <- "tag" with_codec stringCodec
+    }
+  ]
+}
+
+handler startSync(req: SyncRequest) -> String
+  requires [queueWrite] =
+  enqueue SyncJob { tag: req.tag }
+  "queued"
+
+api SyncApi {
+  post "/sync"
+    body req: SyncRequest
+    -> String
+}
+
+server SyncServer for SyncApi {
+  startSync = startSync
+}
+
+api-test "STUB-15: upstream timeout in a worker fails the job then dead-letters" for SyncServer requires [queueRead, queueWrite, webClient] {
+  stubHttpTimeout "GET" "https://upstream.test/sync"
+
+  let queued = post "/sync" body { "tag": "nightly" }
+  expect statusOk queued.status
+  expect pendingJobCount SyncQueue == 1
+
+  # Attempt 1: the worker's outbound call times out, so the JOB fails — the
+  # worker thread is not killed, and the job goes back to pending for a retry.
+  let first = processNextJob SyncQueue
+  let firstError = expectJobFailed first
+  expect pendingJobCount SyncQueue == 1
+
+  # Attempt 2 exhausts maxAttempts, so the job is dead-lettered.
+  let second = processNextJob SyncQueue
+  let secondError = expectJobFailed second
+  expect pendingJobCount SyncQueue == 0
+  expect List.length (deadJobs SyncQueue) == 1
+
+  # ...and it really was the outbound call that failed, twice.
+  expect httpCallCount "GET" "https://upstream.test/sync" == 2
+}
+
+api-test "STUB-16: the same worker succeeds when the upstream answers" for SyncServer requires [queueRead, queueWrite, webClient] {
+  stubHttp "GET" "https://upstream.test/sync" 200 "ok"
+
+  let queued = post "/sync" body { "tag": "nightly" }
+  expect statusOk queued.status
+
+  let done = processNextJob SyncQueue
+  expect pendingJobCount SyncQueue == 0
+  expect List.length (deadJobs SyncQueue) == 0
+  expect httpCallCount "GET" "https://upstream.test/sync" == 1
+}
