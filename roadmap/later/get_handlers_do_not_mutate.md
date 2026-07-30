@@ -3,6 +3,10 @@
 > **Status:** Next · **Effort:** S–M. A checker rule over the api/server surface, no new syntax,
 > no runtime change.
 
+## Maintainers thoughts
+
+Should we do this? This is good in principle but means that if someone would want to save a users request history for instance (for audit reasons or to auto save used filters or whatever) it wouldn't be possible using a get endpoint. The question is; how many "get" endpoints in a larger app does not change the state *at all*? I'm currently agnostic.
+
 ## Background
 
 The session cookie ships with `SameSite=Lax` (`roadmap/completed/response_metadata_and_cookies.md`,

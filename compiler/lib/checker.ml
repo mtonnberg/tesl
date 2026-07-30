@@ -3036,14 +3036,26 @@ let rec infer_expr ctx (e : expr) : ty =
            type when — and only when — the slot is marked and the secret's base
            is exactly what the slot wants.  See [secret_relaxed_param]: it is
            decide-by-resolution and fails closed, so an UNMARKED slot keeps
-           rejecting a secret (String.concat still does). *)
-        let next_ret_ty = fresh () in
-        let param_ty =
+           rejecting a secret (String.concat still does).
+
+           When [current_ret_ty] is ALREADY a concrete `TFun` (the ordinary case
+           for a known stdlib callee like `Crypto.hashPassword`), its parameter
+           slot must NOT be re-unified against the WIDENED type: the callee's
+           own type genuinely says `String`, so unifying it with a widened
+           `Password` raised a spurious "cannot unify String with Password" —
+           the widening is for judging the ARGUMENT, not for rewriting the
+           callee's real signature. Only pin `current_ret_ty` via unification
+           when it is not yet known to be a function type at all (a fresh
+           var); that path can never be a marked secret-accepting slot, so it
+           keeps using the argument's own type unwidened, exactly as before. *)
+        let (param_ty, next_ret_ty) =
           match apply !(ctx.subst) current_ret_ty with
-          | TFun (p, _) -> secret_relaxed_param ctx fn_expr !arg_index p arg_ty
-          | _ -> arg_ty
+          | TFun (p, r) -> (secret_relaxed_param ctx fn_expr !arg_index p arg_ty, r)
+          | _ ->
+            let next_ret_ty = fresh () in
+            unify_at ctx (expr_loc arg_expr) current_ret_ty (TFun (arg_ty, next_ret_ty));
+            (arg_ty, next_ret_ty)
         in
-        unify_at ctx (expr_loc arg_expr) current_ret_ty (TFun (param_ty, next_ret_ty));
         unify_at ctx (expr_loc arg_expr) arg_ty param_ty;
         apply !(ctx.subst) next_ret_ty
       ) fn_ty call_args in

@@ -345,6 +345,77 @@ let plain_newtype_codec_still_allowed () =
       \  ]\n\
       }\n")
 
+(* ── 6b. A `via`-checked field whose OWN type is a secret newtype ─────────────
+   roadmap/completed/secret_wrapped_credentials.md: `secret Password = String
+   ::: P` is not a valid DECLARATION (the newtype grammar's base is a plain
+   type_expr), but a record FIELD typed as the secret newtype with the proof
+   on the FIELD (`password: Password ::: P`, decoded `with_codec stringCodec
+   via isLongEnough`) is — record fields already carry proof annotations, and
+   the inbound path already mints a secret straight from a bare JSON string,
+   so this is those two shipped mechanisms composing, not new syntax.
+
+   The compiler used to apply the newtype wrap BEFORE the `via` check ran, so
+   `isLongEnough` — declared to take a plain `String` — was actually invoked
+   with the wrapped secret struct.  It happened to still work, structurally,
+   because the stdlib's `raw-str` unwraps ANY `newtype-value?` (secret or
+   not) with no regard to secrecy — so the plaintext was fully available to
+   an arbitrary `via` function under a signature that claimed it never saw
+   more than a `String`.  Concretely: a `via` function that put its argument
+   in its own `fail` message would echo the plaintext straight into the 400
+   response (verified against the pre-fix compiler by hand — not asserted
+   here, since that is a property of what a check function's AUTHOR writes,
+   not of the compiler; what the compiler owes is that the check function
+   really receives the type it declared).  Fixed by decoding the raw base
+   value, running `via` on THAT, and applying the newtype constructor only to
+   a value the check has already accepted. *)
+
+let secret_field_with_via_proof_src =
+  "module Probe exposing [Password, Body, f, isLongEnough]\n\
+   import Tesl.Prelude exposing [Bool, String]\n\
+   import Tesl.String exposing [String.length]\n\
+   import Tesl.Json exposing [stringCodec]\n\
+   \n\
+   secret Password = String\n\
+   \n\
+   fact LongEnough (text: String)\n\
+   \n\
+   check isLongEnough(text: String) -> text: String ::: LongEnough text =\n\
+   \  if String.length text >= 8 then\n\
+   \    ok text ::: LongEnough text\n\
+   \  else\n\
+   \    fail 400 \"too short\"\n\
+   \n\
+   record Body { password: Password ::: LongEnough password }\n\
+   \n\
+   codec Body {\n\
+   \  toJson_forbidden\n\
+   \  fromJson [\n\
+   \    { password <- \"password\" with_codec stringCodec via isLongEnough }\n\
+   \  ]\n\
+   }\n\
+   \n\
+   fn f(b: Body) -> Password =\n  b.password\n"
+
+let secret_field_with_via_proof_compiles () =
+  should_pass secret_field_with_via_proof_src
+
+let compile_to_racket src =
+  with_temp_file src (fun path ->
+    let code, out = run_compiler [ path ] in
+    if code <> 0 then
+      failf "expected clean compile, got (exit %d):\n%s\n--- source ---\n%s" code out src;
+    out)
+
+let secret_field_with_via_proof_wraps_after_the_check () =
+  let out = compile_to_racket secret_field_with_via_proof_src in
+  if contains "(Password (tesl-decode-prim-field" out then
+    failf "the newtype wrap ran BEFORE the `via` check — the plaintext \
+           reached `isLongEnough` already wrapped, defeating the very \
+           signature (`text: String`) the checker validated it against:\n%s" out;
+  if not (contains "(Password (check-ok-value" out) then
+    failf "expected the newtype wrap to apply only to a successful check's \
+           value (post-check, not pre-check), got:\n%s" out
+
 (* ── 7. Generated clients, direction-dependent ────────────────────────────── *)
 
 let client_request_src =
@@ -493,6 +564,26 @@ let hash_password_from_a_request_body () =
        "fn f(body: LoginBody) -> PasswordHash\n\
        \  requires [random] =\n\
        \  Crypto.hashPassword body.password")
+
+(** The SAME call, but its result is bound with `let` before being returned,
+    instead of being the function's tail expression directly. `infer_expr`'s
+    application arm used to unify the callee's OWN (concrete) function type
+    against `TFun(widened_param, ...)` — so a secret-accepting call widened to
+    `Password` failed with "cannot unify String with Password", because the
+    callee's real signature says `String` and nothing should have tried to
+    rewrite it. `check_expr`'s parallel implementation never had this bug
+    (it only unifies the ARGUMENT against the widened type), which is why the
+    tail-position case above always passed while this one did not — until the
+    two were unified. Not a synthetic case: this is `let hash =
+    Crypto.hashPassword password \n ...`, the ordinary shape of any handler
+    that hashes then stores. *)
+let hash_password_let_bound () =
+  should_pass
+    (crypto_prog
+       "fn f(body: LoginBody) -> PasswordHash\n\
+       \  requires [random] =\n\
+       \  let hash = Crypto.hashPassword body.password\n\
+       \  hash")
 
 let sinks_accept_a_user_secret () =
   (* Every marked sink, each with a secret the author declared themselves — the
@@ -644,6 +735,12 @@ let () =
       test_case "a codec on an ordinary newtype still works" `Quick
         plain_newtype_codec_still_allowed;
     ]);
+    ("a via-checked field typed as the secret itself", [
+      test_case "compiles: proof on the field, secret as the field's type" `Quick
+        secret_field_with_via_proof_compiles;
+      test_case "the newtype wrap applies AFTER the check, not before" `Quick
+        secret_field_with_via_proof_wraps_after_the_check;
+    ]);
     ("generated clients", [
       test_case "TS: a request field emits as an unbranded string" `Quick
         ts_request_field_is_string;
@@ -660,6 +757,8 @@ let () =
     ("secret-accepting parameters", [
       test_case "the LoginBody.password -> Crypto.hashPassword shape compiles" `Quick
         hash_password_from_a_request_body;
+      test_case "the same shape still compiles when let-bound, not tail" `Quick
+        hash_password_let_bound;
       test_case "every Crypto sink accepts a user-declared secret" `Quick
         sinks_accept_a_user_secret;
       test_case "HttpClient.bearer / .secretHeader accept a user-declared secret" `Quick

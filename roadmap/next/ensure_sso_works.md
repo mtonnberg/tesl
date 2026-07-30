@@ -1,5 +1,7 @@
 # SSO / third-party auth — document the proxy pattern, then one declarative clause over a function-supplied connection
 
+Overarching goal: A user making their app in Tesl should get best-in-class (app) security for free without any friction. As always the developer experience should be fantastic, the compiler helpful and the underlaying runtime should be water tight.
+
 **Status: PLANNED** (drafted 2026-07-30, expanded and re-scoped from the original ask; first security
 review folded in 2026-07-30 — see **Phase −1**, which gates everything else; **second, adversarial
 review folded in 2026-07-30** — see **Phase 2.5** (ID-token signature verification, now in scope),

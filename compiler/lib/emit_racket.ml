@@ -5981,6 +5981,58 @@ let emit_codec ctx (cf : codec_form) =
           | _ -> plain)
        | _ -> plain)
   in
+  (* [decode_call] wraps a newtype-typed field BEFORE any `via` check runs,
+     which is wrong for a `via`-checked field: the check function's own
+     signature is declared against the BASE type (that is what
+     [check_codec_proof_coverage] validates), so at runtime it must see the
+     base value too, not a wrapped struct. For an ordinary newtype this was a
+     latent looseness masked by the stdlib's string helpers duck-typing
+     through any `newtype-value?` wrapper; for a `secret` newtype it is a real
+     disclosure — the plaintext reaches an arbitrary `via` function under a
+     signature that claims it only ever sees a `String`, so nothing stops
+     that function from echoing it (a `fail` message interpolating its
+     argument, for instance) straight into the response. Fix: decode the RAW
+     base value, let `via` run on THAT, and apply the newtype constructor only
+     to the value a successful check already returned. *)
+  let decode_call_pre_via field_name json_key codec =
+    match Hashtbl.find_opt ctx.newtype_bases codec with
+    | Some base ->
+      (match prim_decoder_of_base (normalize_base base) with
+       | Some prim ->
+         (Printf.sprintf "(tesl-decode-prim-field _j %S %s)" json_key prim,
+          Some (fun v -> apply_newtype_ctor codec base v))
+       | None ->
+         (Printf.sprintf "(jsexpr-required-field _j %S)" json_key,
+          Some (fun v -> Printf.sprintf "(%s %s)" codec v)))
+    | None ->
+      let plain = codec_decode_field_call codec json_key in
+      (match List.assoc_opt field_name codec_field_types with
+       | Some (Ast.TName { name = ft_name; _ }) ->
+         (match Hashtbl.find_opt ctx.newtype_bases ft_name,
+                base_of_prim_codec codec with
+          | Some nb, Some cb when normalize_base nb = normalize_base cb ->
+            (plain, Some (fun v -> apply_newtype_ctor ft_name nb v))
+          | _ -> (plain, None))
+       | _ -> (plain, None))
+  in
+  let emit_via_checked_field field_name json_key codec via_expr =
+    let r_var = Printf.sprintf "_r1_%s" field_name in
+    let (raw_expr, wrap_opt) = decode_call_pre_via field_name json_key codec in
+    emit_line ctx (Printf.sprintf "  (define _fraw_%s %s)" field_name raw_expr);
+    emit_line ctx (Printf.sprintf "  (define %s" r_var);
+    emit_line ctx (Printf.sprintf "    (let ([_r (%s _fraw_%s)])" via_expr field_name);
+    emit_line ctx "      (cond [(check-ok? _r) _r] [(check-fail? _r) _r] [else _r])))";
+    emit_line ctx (Printf.sprintf "  (define _f_%s" field_name);
+    emit_line ctx (Printf.sprintf "    (if (check-ok? %s)" r_var);
+    let checked_value = Printf.sprintf "(check-ok-value %s)" r_var in
+    let wrapped_value = match wrap_opt with
+      | Some wrap -> wrap checked_value
+      | None -> checked_value
+    in
+    emit_line ctx (Printf.sprintf "        (ensure-named '%s %s (check-ok-facts %s) (check-ok-bindings %s) #:subject '%s)"
+      field_name wrapped_value r_var r_var field_name);
+    emit_line ctx (Printf.sprintf "        %s))" r_var)
+  in
   (* Emit decode function(s) *)
   (match cf.from_json with
    | FromJsonForbidden ->
@@ -5996,18 +6048,9 @@ let emit_codec ctx (cf : codec_form) =
            emit_line ctx (Printf.sprintf "  (define _f_%s %s)"
              field_name (decode_call field_name json_key codec))
          | DecodeField { field_name; json_key; codec; via = [via_fn]; _ } ->
-           (* Via checker: decode raw then apply checker *)
-           let r_var = Printf.sprintf "_r1_%s" field_name in
-           emit_line ctx (Printf.sprintf "  (define _fraw_%s %s)"
-             field_name (decode_call field_name json_key codec));
-           emit_line ctx (Printf.sprintf "  (define %s" r_var);
-           emit_line ctx (Printf.sprintf "    (let ([_r (%s _fraw_%s)])" via_fn field_name);
-           emit_line ctx "      (cond [(check-ok? _r) _r] [(check-fail? _r) _r] [else _r])))";
-           emit_line ctx (Printf.sprintf "  (define _f_%s" field_name);
-           emit_line ctx (Printf.sprintf "    (if (check-ok? %s)" r_var);
-           emit_line ctx (Printf.sprintf "        (ensure-named '%s (check-ok-value %s) (check-ok-facts %s) (check-ok-bindings %s) #:subject '%s)"
-             field_name r_var r_var r_var field_name);
-           emit_line ctx (Printf.sprintf "        %s))" r_var)
+           (* Via checker: decode raw then apply checker (wrap deferred past
+              the check — see [decode_call_pre_via]) *)
+           emit_via_checked_field field_name json_key codec via_fn
          | DecodeField { field_name; json_key; codec; via = via_fns; _ } ->
            (* Multiple via checkers: compose with check-and *)
            let combined_via = List.fold_right (fun fn acc ->
@@ -6020,17 +6063,7 @@ let emit_codec ctx (cf : codec_form) =
               emit_line ctx (Printf.sprintf "  (define _f_%s %s)"
                 field_name (decode_call field_name json_key codec))
             | Some combined ->
-              let r_var = Printf.sprintf "_r1_%s" field_name in
-              emit_line ctx (Printf.sprintf "  (define _fraw_%s %s)"
-                field_name (decode_call field_name json_key codec));
-              emit_line ctx (Printf.sprintf "  (define %s" r_var);
-              emit_line ctx (Printf.sprintf "    (let ([_r (%s _fraw_%s)])" combined field_name);
-              emit_line ctx "      (cond [(check-ok? _r) _r] [(check-fail? _r) _r] [else _r])))";
-              emit_line ctx (Printf.sprintf "  (define _f_%s" field_name);
-              emit_line ctx (Printf.sprintf "    (if (check-ok? %s)" r_var);
-              emit_line ctx (Printf.sprintf "        (ensure-named '%s (check-ok-value %s) (check-ok-facts %s) (check-ok-bindings %s) #:subject '%s)"
-                field_name r_var r_var r_var field_name);
-              emit_line ctx (Printf.sprintf "        %s))" r_var))
+              emit_via_checked_field field_name json_key codec combined)
          | DecodeDefault { field_name; default_expr; _ } ->
            emit_line ctx (Printf.sprintf "  (define _f_%s %s)" field_name default_expr)
          | DecodeCrossCheck _ -> ()  (* handled below *)
