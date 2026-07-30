@@ -412,12 +412,15 @@ fn makeSecret(prefix: String, key: String) -> Secret =
   let _ = compile_ok "types_jwt_with_string" src in
   ()
 
+(* The claims Dict is an ordinary value once `check` has unwrapped it — the
+   `check` is what makes the binding legal (a plain `let` would bind the
+   check-fail struct on the 401 path; see test_check_binding_gap.ml). *)
 let test_types_verify_result_in_let () =
   let src = module_ ~exports:"getUser" {|
 capability myJwt implies jwt, time
 
 fn getUser(token: JwtToken, secret: Secret) requires [myJwt] -> String =
-  let claims = JWT.verify token secret
+  let claims = check JWT.verify token secret
   case Dict.lookup "sub" claims of
     Nothing -> ""
     Something u -> u

@@ -1,7 +1,52 @@
 # The check-binding gap — `let x = JWT.verify token key` compiles without `check`
 
-> **Status:** Next · **Effort:** M. A checker rule; the hard part is scoping it precisely enough not
-> to reject legitimate code.
+> **Status: IMPLEMENTED 2026-07-30.** The rule landed as
+> `Checker.reject_unchecked_check_binding` (`compiler/lib/checker.ml`), wired into every
+> binding arm — `infer_expr` / `infer_stmt` / `check_stmt` / `check_app_main_lets`, for both
+> `ELet` and `ELetProof` — and sharing `call_head_check_shaped_expr` with the
+> argument-position rule, so "saturating call" is decided in ONE place for all three
+> positions. It ships the `check` insertion as a machine-applicable fix
+> (`Diag_fix.verified_insert_before`, fail-closed without a source snapshot).
+>
+> **Three deviations from the plan below, all widenings:**
+>
+> 1. **`ELetProof` is covered too.** `let (claims ::: p) = JWT.verify t k` compiled and is
+>    the same escape with a proof pulled off the side — strictly worse than the plain `let`,
+>    because the "proof" then describes a value that is a check-fail on the failure path. The
+>    diagnostic renders the proof-decompose spelling in its suggestion.
+> 2. **`let _ = <check call>` is covered.** The plan's "bare call statement is already
+>    rejected" was only true of a `check`-HEADED statement (`checker.ml`'s two bare-`check`
+>    arms match `EVar "check"`); a bare `JWT.verify token key` statement parses as
+>    `let _ = …` and reached the general arm unchallenged. It is now refused with the rest.
+> 3. **`check Units.requireNonZero q` had to be made to work first.** The dimension ops have
+>    no env arrow (their result dimension is computed per application site), so `check`
+>    handed the head to the generic call path, which rejected it as a VALUE and collapsed the
+>    quantity to a bare `Float`. That is why lesson72 *taught* the un-`check`ed direct call —
+>    the language documented the very shape this rule refuses, and the rule would have had no
+>    legal spelling to point at. The `check` head now routes a `Units.*` callee through
+>    `infer_units_op`, the same site-typing the direct call gets, so the checked binding keeps
+>    its dimension. Zero-divisor now propagates a 422 instead of dividing by a check-fail
+>    struct.
+>
+> **Corpus fallout: 15 newly-rejected sites, every one a real latent bug** — 6 × `JWT.verify`
+> (`example/admin-task-api`, `example/ai-conversation-service`, `example/todo-api`,
+> `example/learn/lesson55`, `templates/api/app`, `templates/minimal/app`), 8 ×
+> `Units.requireNonZero` (`example/learn/lesson72`, `tests/units-tests`,
+> `tests/money-tests`), 1 × `Float.requireNonZero` (`tests/adversarial-review-tests`). All
+> got the `check` they were missing. Two lessons' prose had it backwards and was corrected:
+> lesson55 claimed the 401 "flows out through this `let`" (it did not), and lesson72 said
+> `check Units.requireNonZero t` was a mistake to avoid (it is now the only spelling).
+>
+> **Tests:** `compiler/test/test_check_binding_gap.ml` (16 checks: the refusals, the
+> saturating-vs-partial line drawn on one callee in one module, the dimension-preserving
+> `check`, the fix's edit and its fail-closed absence), the apply-and-recompile convergence
+> case in `test_fix_apply.ml`, and `test_session_cookie.ml`'s
+> `test_renew_in_plain_let_is_refused` — which replaces the comment that used to document
+> this as the one property the language did NOT enforce. Spec §"`let`" gained the converse
+> rule next to the bare-`check` paragraph.
+
+> **Original plan (unchanged below).** **Effort:** M. A checker rule; the hard part is
+> scoping it precisely enough not to reject legitimate code.
 
 ## The gap
 

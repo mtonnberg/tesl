@@ -2078,6 +2078,17 @@ fn demo(raw: Int) -> Int =
 
 The compiler rejects this with: `"bare \`check\` call: the result must be bound with \`let x = check f(n)\`"`. A bare `check` does not gate subsequent statements — it discards both the validated value and the proof.
 
+**And the converse: a check function may not be called WITHOUT `check`.** A check-shaped callee (a `check`-kind function, or a stdlib name that returns a check result — `JWT.verify`, `Crypto.checkPassword`, `Float.requireNonZero`, `Units.requireNonZero`, `Dict.requireKey`, `Int.nonZero`, …) returns *either* the payload *or* a check-fail value carrying the status. Only `check` unwraps that and propagates the failure, so an unwrapped check result must not escape into ordinary value position. All three positions it could escape through are rejected:
+
+```tesl
+let claims = check JWT.verify token key      # the only accepted form
+JWT.verify token key                         # ERROR: bare call, result discarded
+Dict.lookup "sub" (JWT.verify token key)     # ERROR: argument position
+let claims = JWT.verify token key            # ERROR: plain `let`, no `check`
+```
+
+The last one is refused with ``"check function `JWT.verify` must be bound with `check`"`` and ships the `check` insertion as a machine-applicable fix. Without it, `claims` would be bound to the check-fail value on the failure path and then read as if the check had succeeded — a defect visible only on the error path. The rule fires on **saturating** calls only: a partial application (`Dict.requireKey "sub"`, `List.filterCheck (checkInBounds 0 100) xs`) hands over a check *function*, not a check *result*, and stays legal.
+
 `let (x ::: p) = y` is proof decomposition. It elaborates to `x = forgetFact(y)` and `p = detachAllProof(y)`. The value `x` preserves the hidden subject identity of `y` but has no attached proofs. The proof `p` is a first-class detached proof carrying all facts that were attached to `y`. This form is only valid when `y` has at least one attached proof.
 
 The proof side supports `&&`-separated patterns with `_` as discard:
@@ -4036,11 +4047,11 @@ These are structural over the dimension, not nominal: `Speed` in an annotation a
 - A dimensionless result collapses to plain `Float` (`Length / Length : Float`).
 - A scalar operand must be a `Float` literal: `2.0 * len` is fine; `2 * len` reports ``a quantity is scaled by a `Float`, not an `Int` — write a Float literal (`2.0`, not `2`)``.
 - `%` is not defined for quantities.
-- Division follows the same non-zero rule as every Tesl `/`: a variable divisor must carry a non-zero proof. `Units.requireNonZero q` mints `FloatNonZero q` — the SAME predicate that guards `Float` division, because quantities ARE floats at runtime:
+- Division follows the same non-zero rule as every Tesl `/`: a variable divisor must carry a non-zero proof. `Units.requireNonZero q` mints `FloatNonZero q` — the SAME predicate that guards `Float` division, because quantities ARE floats at runtime. It is a check function, so it is bound with `check`, which both propagates the zero-divisor rejection and preserves the dimension (the checked binding is still a `Duration`):
 
 ```tesl
 fn pace(d: Length, t: Duration) -> Speed =
-  let safe = Units.requireNonZero t
+  let safe = check Units.requireNonZero t
   d / safe
 ```
 

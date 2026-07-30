@@ -128,7 +128,7 @@ auth cookieAuth(request: HttpRequest) -> requestUser: User ::: Authenticated req
   case Http.sessionToken request of
     Nothing -> fail 401 "Missing session cookie"
     Something token ->
-      let claims = JWT.verify token (requireSecret "SESSION_JWT_SECRET")
+      let claims = check JWT.verify token (requireSecret "SESSION_JWT_SECRET")
       case Dict.lookup "sub" claims of
         Nothing -> fail 401 "Session token has no subject"
         Something userId -> ok (User { id: UserId userId, role: "user" }) ::: Authenticated requestUser

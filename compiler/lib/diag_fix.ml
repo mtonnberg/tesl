@@ -230,6 +230,24 @@ let verified_token_replace ~(source_lines : string array)
                                end_line = at.line; end_col = at.col + tlen;
                                replacement })
 
+(** Insert [text] immediately BEFORE the token [expect] whose first character
+    sits exactly at [at] (e.g. `check ` before the callee of an unwrapped
+    check call).  A zero-width [Replace_range] is the insertion; verified
+    against the source line, so a location that does not actually name
+    [expect] ships no fix rather than a misplaced one. *)
+let verified_insert_before ~(source_lines : string array)
+    ~(at : pos) ~(expect : string) ~(text : string) : t option =
+  match line_at source_lines at.line with
+  | None -> None
+  | Some line ->
+    let elen = String.length expect in
+    if at.col < 0 || at.col + elen > String.length line
+       || String.sub line at.col elen <> expect
+    then None
+    else Some (Replace_range { start_line = at.line; start_col = at.col;
+                               end_line = at.line; end_col = at.col;
+                               replacement = text })
+
 (* ── Pure applier ────────────────────────────────────────────────────────────
    The reference semantics for every fix kind — the LSP TextEdit construction
    mirrors this.  Used by the apply-and-recompile seam test, which is what

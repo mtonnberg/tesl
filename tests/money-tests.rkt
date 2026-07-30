@@ -73,12 +73,12 @@
 (define/pow
   (effectiveRate [billed : Money] [worked : Real])
   #:returns MoneyPerDuration
-  (let ([safe (thsl-src! "tests/money-tests.tesl" 239 (list (cons 'billed *billed) (cons 'worked *worked)) (lambda () (raw-value (tesl_import_Units_requireNonZero *worked))))]) (thsl-src! "tests/money-tests.tesl" 240 (list (cons 'safe *safe) (cons 'billed *billed) (cons 'worked *worked)) (lambda () (__tmoney_tesl-money-rate-div *billed (raw-value safe) 3600/1 "h")))))
+  (thsl-src! "tests/money-tests.tesl" 239 (list (cons 'billed *billed) (cons 'worked *worked)) (lambda () (let/check ([tesl-checked-7 (tesl_import_Units_requireNonZero worked)]) (let ([safe tesl-checked-7]) (__tmoney_tesl-money-rate-div *billed (raw-value safe) 3600/1 "h"))))))
 
 (define/pow
   (codeOrNone [mc : (Maybe Currency)])
   #:returns String
-  (thsl-src-control! "tests/money-tests.tesl" 304 (list (cons 'mc *mc)) (lambda () (let ([tesl-case-7 *mc]) (cond [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Something)) (let ([c (hash-ref (adt-value-fields *tesl-case-7) 'value)]) (thsl-src! "tests/money-tests.tesl" 305 (list (cons 'c c)) (lambda () (raw-value (raw-value (tesl_import_Currency_code *c))))))] [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Nothing)) (thsl-src! "tests/money-tests.tesl" 306 (list) (lambda () (raw-value "none")))])))))
+  (thsl-src-control! "tests/money-tests.tesl" 304 (list (cons 'mc *mc)) (lambda () (let ([tesl-case-8 *mc]) (cond [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Something)) (let ([c (hash-ref (adt-value-fields *tesl-case-8) 'value)]) (thsl-src! "tests/money-tests.tesl" 305 (list (cons 'c c)) (lambda () (raw-value (raw-value (tesl_import_Currency_code *c))))))] [(and (adt-value? *tesl-case-8) (eq? (adt-value-variant *tesl-case-8) 'Nothing)) (thsl-src! "tests/money-tests.tesl" 306 (list) (lambda () (raw-value "none")))])))))
 
 (module+ test
   (require rackunit)

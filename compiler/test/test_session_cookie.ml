@@ -317,13 +317,11 @@ auth slidingOwner(request: HttpRequest) -> user: String ::: Authenticated user
    `Set-Cookie` header — so it is worth pinning explicitly rather than trusting
    that JWT.renew was added to the right registry.
 
-   NOT asserted here, because the language does not enforce it: a plain
-   `let fresh = JWT.renew token key` with no `check` compiles. That gap is
-   PRE-EXISTING and general — `let claims = JWT.verify token key` compiles too —
-   so it is not something renewal introduced, and closing it belongs to whoever
-   takes on the check-binding rule as a whole. The runtime is fail-closed in the
-   meantime: `Http.setSessionCookie` validates that its argument is a well-formed
-   JWT and raises on anything else, so a check-fail cannot reach a header. *)
+   The sibling shape — a plain `let fresh = JWT.renew token key` with no
+   `check` — used to be the one hole this feature could not close; it is now
+   refused by the let-RHS half of the same rule
+   (roadmap/completed/check_binding_gap.md, compiler/test/test_check_binding_gap.ml),
+   asserted just below. *)
 let test_renew_in_argument_position_is_refused () =
   let src =
     module_ ~exports:"slide"
@@ -338,6 +336,23 @@ fn slide(token: JwtToken) -> Bool requires [sessions] =
     Alcotest.failf
       "expected the check-shaped argument-position error naming JWT.renew, got:\n%s"
       msg
+
+(* The other half: `let fresh = JWT.renew …` with no `check` binds the raw
+   check-fail struct on the failure path, and is refused for the same reason. *)
+let test_renew_in_plain_let_is_refused () =
+  let src =
+    module_ ~exports:"slide"
+      (prelude ^ {|
+fn slide(token: JwtToken) -> Bool requires [sessions] =
+  let fresh = JWT.renew token (sessionKey())
+  let _ = Http.setSessionCookie fresh
+  True
+|})
+  in
+  let msg = compile_err "renew_in_plain_let_is_refused" src in
+  if not (contains "JWT.renew" msg && contains "must be bound with `check`" msg) then
+    Alcotest.failf
+      "expected the check-binding error naming JWT.renew, got:\n%s" msg
 
 (* It signs, so it charges `time` as well as `jwt` — the JWT.sign rule.  A
    capability set with only `jwt` (and cookieCap for the writer) must be refused. *)
@@ -451,6 +466,8 @@ let () =
             test_sliding_auth_compiles;
           Alcotest.test_case "renew is refused in argument position" `Quick
             test_renew_in_argument_position_is_refused;
+          Alcotest.test_case "renew is refused in a plain let" `Quick
+            test_renew_in_plain_let_is_refused;
           Alcotest.test_case "renew charges time as well as jwt" `Quick
             test_renew_needs_time;
           Alcotest.test_case "renew yields a JwtToken the writer accepts" `Quick

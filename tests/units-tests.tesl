@@ -75,20 +75,21 @@ import Tesl.Units exposing [
 fn launchSpeed() -> Speed =
   Acceleration.metersPerSecondSquared 2.5 * Duration.seconds 4.0
 
-# `/` on a variable divisor demands a FloatNonZero proof; the bare-call
-# `Units.requireNonZero` mint is that proof's source.
+# `/` on a variable divisor demands a FloatNonZero proof; `check
+# Units.requireNonZero` is that proof's source (the `check` is required — it is
+# what unwraps the check result and propagates the zero-divisor rejection).
 fn pace(d: Length, t: Duration) -> Speed =
-  let tc = Units.requireNonZero t
+  let tc = check Units.requireNonZero t
   d / tc
 
 # Dimensionless result collapses to plain Float.
 fn lengthRatio(a: Length, b: Length) -> Float =
-  let bc = Units.requireNonZero b
+  let bc = check Units.requireNonZero b
   a / bc
 
 # scalar / quantity inverts the dimension: 1 / Duration = Frequency.
 fn frequencyOf(period: Duration) -> Frequency =
-  let pc = Units.requireNonZero period
+  let pc = check Units.requireNonZero period
   1.0 / pc
 
 fn rectangleArea(w: Length, h: Length) -> Area =

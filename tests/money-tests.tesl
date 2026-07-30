@@ -236,7 +236,7 @@ fn hourlyInvoice(rate: MoneyPerDuration, worked: Duration) -> Money =
   rate * worked
 
 fn effectiveRate(billed: Money, worked: Duration) -> MoneyPerDuration =
-  let safe = Units.requireNonZero worked
+  let safe = check Units.requireNonZero worked
   billed / safe
 
 test "consultant: 950 SEK/h for 1.5 h bills 1425 SEK" {

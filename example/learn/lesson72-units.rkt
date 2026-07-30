@@ -26,7 +26,7 @@
 ;; Debugger: the lines whose statement is a READ-ONLY query.  The pause on
 ;; those happens AFTER the statement, so the SQL lens can show the exact
 ;; statement that ran (erased with the checkpoints in a release build).
-(register-sql-read-lines! "example/learn/lesson72-units.tesl" '(365))
+(register-sql-read-lines! "example/learn/lesson72-units.tesl" '(366))
 (define/pow
   (approxEqual [x : Real] [y : Real])
   #:returns Boolean
@@ -40,7 +40,7 @@
 (define/pow
   (averageSpeed [t : Trip])
   #:returns Real
-  (let ([safeDur (thsl-src! "example/learn/lesson72-units.tesl" 167 (list (cons 't *t)) (lambda () (raw-value (tesl_import_Units_requireNonZero (tesl-dot/runtime t 'duration 'Trip)))))]) (thsl-src! "example/learn/lesson72-units.tesl" 168 (list (cons 'safeDur *safeDur) (cons 't *t)) (lambda () (/ (tesl-dot/runtime t 'distance 'Trip) (raw-value safeDur))))))
+  (thsl-src! "example/learn/lesson72-units.tesl" 167 (list (cons 't *t)) (lambda () (let/check ([tesl-checked-0 (tesl_import_Units_requireNonZero (tesl-dot/runtime t 'duration 'Trip))]) (let ([safeDur tesl-checked-0]) (/ (tesl-dot/runtime t 'distance 'Trip) (raw-value safeDur)))))))
 
 (define-adt Segment
   [Drive [dist : Real] [speed : Real]]
@@ -50,7 +50,7 @@
 (define/pow
   (segmentTime [s : Segment])
   #:returns Real
-  (thsl-src-control! "example/learn/lesson72-units.tesl" 175 (list (cons 's *s)) (lambda () (let ([tesl-case-0 *s]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Drive)) (let ([d (hash-ref (adt-value-fields *tesl-case-0) 'dist)]) (let ([v (hash-ref (adt-value-fields *tesl-case-0) 'speed)]) (thsl-src! "example/learn/lesson72-units.tesl" 177 (list (cons 'd d) (cons 'v v)) (lambda () (let ([safeV (raw-value (tesl_import_Units_requireNonZero *v))]) (raw-value (/ *d (raw-value safeV))))))))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Rest)) (let ([p (hash-ref (adt-value-fields *tesl-case-0) 'pause)]) (thsl-src! "example/learn/lesson72-units.tesl" 179 (list (cons 'p p)) (lambda () *p)))])))))
+  (thsl-src-control! "example/learn/lesson72-units.tesl" 175 (list (cons 's *s)) (lambda () (let ([tesl-case-1 *s]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Drive)) (let ([d (hash-ref (adt-value-fields *tesl-case-1) 'dist)]) (let ([v (hash-ref (adt-value-fields *tesl-case-1) 'speed)]) (thsl-src! "example/learn/lesson72-units.tesl" 177 (list (cons 'd d) (cons 'v v)) (lambda () (let/check ([tesl-checked-2 (tesl_import_Units_requireNonZero *v)]) (let ([safeV tesl-checked-2]) (raw-value (/ *d (raw-value safeV)))))))))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Rest)) (let ([p (hash-ref (adt-value-fields *tesl-case-1) 'pause)]) (thsl-src! "example/learn/lesson72-units.tesl" 179 (list (cons 'p p)) (lambda () *p)))])))))
 
 (define/pow
   (totalDistance [legs : (List Real)])
@@ -80,27 +80,27 @@
 (define/pow
   (pace [d : Real] [t : Real])
   #:returns Real
-  (let ([safe (thsl-src! "example/learn/lesson72-units.tesl" 283 (list (cons 'd *d) (cons 't *t)) (lambda () (raw-value (tesl_import_Units_requireNonZero *t))))]) (thsl-src! "example/learn/lesson72-units.tesl" 284 (list (cons 'safe *safe) (cons 'd *d) (cons 't *t)) (lambda () (/ *d (raw-value safe))))))
+  (thsl-src! "example/learn/lesson72-units.tesl" 284 (list (cons 'd *d) (cons 't *t)) (lambda () (let/check ([tesl-checked-3 (tesl_import_Units_requireNonZero t)]) (let ([safe tesl-checked-3]) (/ *d (raw-value safe)))))))
 
 (define/pow
   (deliveryEta [remaining : Real] [avg : Real])
   #:returns Real
-  (let ([safe (thsl-src! "example/learn/lesson72-units.tesl" 289 (list (cons 'remaining *remaining) (cons 'avg *avg)) (lambda () (raw-value (tesl_import_Units_requireNonZero *avg))))]) (thsl-src! "example/learn/lesson72-units.tesl" 290 (list (cons 'safe *safe) (cons 'remaining *remaining) (cons 'avg *avg)) (lambda () (/ *remaining (raw-value safe))))))
+  (thsl-src! "example/learn/lesson72-units.tesl" 290 (list (cons 'remaining *remaining) (cons 'avg *avg)) (lambda () (let/check ([tesl-checked-4 (tesl_import_Units_requireNonZero avg)]) (let ([safe tesl-checked-4]) (/ *remaining (raw-value safe)))))))
 
 (define/pow
   (brakingDistance [v : Real] [a : Real])
   #:returns Real
-  (let ([vSquared (thsl-src! "example/learn/lesson72-units.tesl" 296 (list (cons 'v *v) (cons 'a *a)) (lambda () (* *v *v)))]) (let ([twoA (thsl-src! "example/learn/lesson72-units.tesl" 297 (list (cons 'vSquared *vSquared) (cons 'v *v) (cons 'a *a)) (lambda () (* 2. *a)))]) (let ([safe (thsl-src! "example/learn/lesson72-units.tesl" 298 (list (cons 'twoA *twoA) (cons 'vSquared *vSquared) (cons 'v *v) (cons 'a *a)) (lambda () (raw-value (tesl_import_Units_requireNonZero (raw-value twoA)))))]) (thsl-src! "example/learn/lesson72-units.tesl" 299 (list (cons 'safe *safe) (cons 'twoA *twoA) (cons 'vSquared *vSquared) (cons 'v *v) (cons 'a *a)) (lambda () (/ (raw-value vSquared) (raw-value safe))))))))
+  (thsl-src! "example/learn/lesson72-units.tesl" 297 (list (cons 'v *v) (cons 'a *a)) (lambda () (let ([vSquared (* *v *v)]) (let ([twoA (* 2. *a)]) (let/check ([tesl-checked-5 (tesl_import_Units_requireNonZero twoA)]) (let ([safe tesl-checked-5]) (/ (raw-value vSquared) (raw-value safe)))))))))
 
 (define/pow
   (lengthRatio [a : Real] [b : Real])
   #:returns Real
-  (let ([safe (thsl-src! "example/learn/lesson72-units.tesl" 303 (list (cons 'a *a) (cons 'b *b)) (lambda () (raw-value (tesl_import_Units_requireNonZero *b))))]) (thsl-src! "example/learn/lesson72-units.tesl" 304 (list (cons 'safe *safe) (cons 'a *a) (cons 'b *b)) (lambda () (/ *a (raw-value safe))))))
+  (thsl-src! "example/learn/lesson72-units.tesl" 304 (list (cons 'a *a) (cons 'b *b)) (lambda () (let/check ([tesl-checked-6 (tesl_import_Units_requireNonZero b)]) (let ([safe tesl-checked-6]) (/ *a (raw-value safe)))))))
 
 (define/pow
   (sideFromArea [a : Real])
   #:returns Real
-  (thsl-src! "example/learn/lesson72-units.tesl" 337 (list (cons 'a *a)) (lambda () (raw-value (tesl_import_Units_sqrt *a)))))
+  (thsl-src! "example/learn/lesson72-units.tesl" 338 (list (cons 'a *a)) (lambda () (raw-value (tesl_import_Units_sqrt *a)))))
 
 (define-entity Vehicle
   #:source (make-hash)
@@ -159,7 +159,7 @@
   (define legs (thsl-src! "example/learn/lesson72-units.tesl" 202 (list) (lambda () (list (raw-value (tesl_import_Length_meters 400.)) (raw-value (tesl_import_Length_kilometers 0.6))))))
   (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 203 (list (cons 'legs legs)) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (tesl_import_Units_sum (raw-value legs)))))))) 1000.)
   (define maybeTop (thsl-src! "example/learn/lesson72-units.tesl" 204 (list (cons 'legs legs)) (lambda () (raw-value (Something (raw-value (tesl_import_Speed_metersPerSecond 3.)))))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 205 (list (cons 'maybeTop maybeTop) (cons 'legs legs)) (lambda () (let ([*tesl-case-1 (raw-value maybeTop)]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "example/learn/lesson72-units.tesl" 206 (list (cons 'v v)) (lambda () (tesl-equal? (raw-value (tesl_import_Speed_inMetersPerSecond (raw-value v))) 3.))))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "example/learn/lesson72-units.tesl" 207 (list) (lambda () #f))]))))) #t)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 205 (list (cons 'maybeTop maybeTop) (cons 'legs legs)) (lambda () (let ([*tesl-case-7 (raw-value maybeTop)]) (cond [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Something)) (let ([v (hash-ref (adt-value-fields *tesl-case-7) 'value)]) (thsl-src! "example/learn/lesson72-units.tesl" 206 (list (cons 'v v)) (lambda () (tesl-equal? (raw-value (tesl_import_Speed_inMetersPerSecond (raw-value v))) 3.))))] [(and (adt-value? *tesl-case-7) (eq? (adt-value-variant *tesl-case-7) 'Nothing)) (thsl-src! "example/learn/lesson72-units.tesl" 207 (list) (lambda () #f))]))))) #t)
     ))
   )
 
@@ -183,61 +183,61 @@
 
   (test-case "division derives Speed and collapses ratios"
     (call-with-fresh-memory-db (list Fleet) (lambda ()
-  (define sprint (thsl-src! "example/learn/lesson72-units.tesl" 307 (list) (lambda () (pace (raw-value (tesl_import_Length_meters 100.)) (raw-value (tesl_import_Duration_seconds 8.))))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 308 (list (cons 'sprint sprint)) (lambda () (raw-value (tesl_import_Speed_inMetersPerSecond (raw-value sprint)))))) 12.5)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 309 (list (cons 'sprint sprint)) (lambda () (raw-value (tesl_import_Speed_inKilometersPerHour (raw-value sprint)))))) 45.)
-  (check-true (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 310 (list (cons 'sprint sprint)) (lambda () (approxEqual (raw-value (tesl_import_Speed_inMilesPerHour (raw-value sprint))) 27.961704)))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 311 (list (cons 'sprint sprint)) (lambda () (lengthRatio (raw-value (tesl_import_Length_meters 6.)) (raw-value (tesl_import_Length_meters 3.)))))) 2.)
+  (define sprint (thsl-src! "example/learn/lesson72-units.tesl" 308 (list) (lambda () (pace (raw-value (tesl_import_Length_meters 100.)) (raw-value (tesl_import_Duration_seconds 8.))))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 309 (list (cons 'sprint sprint)) (lambda () (raw-value (tesl_import_Speed_inMetersPerSecond (raw-value sprint)))))) 12.5)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 310 (list (cons 'sprint sprint)) (lambda () (raw-value (tesl_import_Speed_inKilometersPerHour (raw-value sprint)))))) 45.)
+  (check-true (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 311 (list (cons 'sprint sprint)) (lambda () (approxEqual (raw-value (tesl_import_Speed_inMilesPerHour (raw-value sprint))) 27.961704)))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 312 (list (cons 'sprint sprint)) (lambda () (lengthRatio (raw-value (tesl_import_Length_meters 6.)) (raw-value (tesl_import_Length_meters 3.)))))) 2.)
     ))
   )
 
   (test-case "delivery ETA: 30 km left at 60 km/h is 30 minutes"
     (call-with-fresh-memory-db (list Fleet) (lambda ()
-  (define eta (thsl-src! "example/learn/lesson72-units.tesl" 316 (list) (lambda () (deliveryEta (raw-value (tesl_import_Length_kilometers 30.)) (raw-value (tesl_import_Speed_kilometersPerHour 60.))))))
-  (check-true (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 317 (list (cons 'eta eta)) (lambda () (approxEqual (raw-value (tesl_import_Duration_inMinutes (raw-value eta))) 30.)))))
+  (define eta (thsl-src! "example/learn/lesson72-units.tesl" 317 (list) (lambda () (deliveryEta (raw-value (tesl_import_Length_kilometers 30.)) (raw-value (tesl_import_Speed_kilometersPerHour 60.))))))
+  (check-true (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 318 (list (cons 'eta eta)) (lambda () (approxEqual (raw-value (tesl_import_Duration_inMinutes (raw-value eta))) 30.)))))
     ))
   )
 
   (test-case "braking distance: 30 m/s at 5 m/s\194\178 needs 90 m"
     (call-with-fresh-memory-db (list Fleet) (lambda ()
-  (define d (thsl-src! "example/learn/lesson72-units.tesl" 321 (list) (lambda () (brakingDistance (raw-value (tesl_import_Speed_metersPerSecond 30.)) (raw-value (tesl_import_Acceleration_metersPerSecondSquared 5.))))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 322 (list (cons 'd d)) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value d)))))) 90.)
-  (define dHighway (thsl-src! "example/learn/lesson72-units.tesl" 324 (list (cons 'd d)) (lambda () (brakingDistance (raw-value (tesl_import_Speed_kilometersPerHour 110.)) (raw-value (tesl_import_Acceleration_metersPerSecondSquared 5.))))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 325 (list (cons 'dHighway dHighway) (cons 'd d)) (lambda () (tesl-lt? (raw-value dHighway) (raw-value (tesl_import_Length_meters 100.)))))) #t)
+  (define d (thsl-src! "example/learn/lesson72-units.tesl" 322 (list) (lambda () (brakingDistance (raw-value (tesl_import_Speed_metersPerSecond 30.)) (raw-value (tesl_import_Acceleration_metersPerSecondSquared 5.))))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 323 (list (cons 'd d)) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value d)))))) 90.)
+  (define dHighway (thsl-src! "example/learn/lesson72-units.tesl" 325 (list (cons 'd d)) (lambda () (brakingDistance (raw-value (tesl_import_Speed_kilometersPerHour 110.)) (raw-value (tesl_import_Acceleration_metersPerSecondSquared 5.))))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 326 (list (cons 'dHighway dHighway) (cons 'd d)) (lambda () (tesl-lt? (raw-value dHighway) (raw-value (tesl_import_Length_meters 100.)))))) #t)
     ))
   )
 
   (test-case "sqrt of an area is a side length"
     (call-with-fresh-memory-db (list Fleet) (lambda ()
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 340 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (sideFromArea (raw-value (tesl_import_Area_squareMeters 49.))))))))) 7.)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 341 (list) (lambda () (raw-value (tesl_import_Area_inSquareMeters (raw-value (tesl_import_Units_square (raw-value (tesl_import_Length_meters 9.))))))))) 81.)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 341 (list) (lambda () (raw-value (tesl_import_Length_inMeters (raw-value (sideFromArea (raw-value (tesl_import_Area_squareMeters 49.))))))))) 7.)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 342 (list) (lambda () (raw-value (tesl_import_Area_inSquareMeters (raw-value (tesl_import_Units_square (raw-value (tesl_import_Length_meters 9.))))))))) 81.)
     ))
   )
 
   (test-case "a Speed column stores canonical m/s and reads back typed"
     (call-with-fresh-memory-db (list Fleet) (lambda ()
     (with-capabilities (dbRead dbWrite)
-    (define tesl-ignored-2 (thsl-src! "example/learn/lesson72-units.tesl" 364 (list) (lambda () (insert-one! Vehicle (tesl-hash 'id "v1" 'topSpeed (raw-value (tesl_import_Speed_kilometersPerHour 110.)))))))
-    (define found (thsl-src! "example/learn/lesson72-units.tesl" 365 (list) (lambda () (let ([tesl_match (select-one (from Vehicle) (where (==. (entity-field-ref Vehicle 'id) "v1")))]) (if tesl_match (Something tesl_match) Nothing)))))
-    (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 366 (list (cons 'found found)) (lambda () (let ([*tesl-case-3 (raw-value found)]) (cond [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Something)) (let ([v2 (hash-ref (adt-value-fields *tesl-case-3) 'value)]) (thsl-src! "example/learn/lesson72-units.tesl" 367 (list (cons 'v2 v2)) (lambda () (approxEqual (raw-value (tesl_import_Speed_inKilometersPerHour (raw-value (tesl-dot/runtime v2 'topSpeed 'Vehicle)))) 110.))))] [(and (adt-value? *tesl-case-3) (eq? (adt-value-variant *tesl-case-3) 'Nothing)) (thsl-src! "example/learn/lesson72-units.tesl" 368 (list) (lambda () #f))]))))) #t)
+    (define tesl-ignored-8 (thsl-src! "example/learn/lesson72-units.tesl" 365 (list) (lambda () (insert-one! Vehicle (tesl-hash 'id "v1" 'topSpeed (raw-value (tesl_import_Speed_kilometersPerHour 110.)))))))
+    (define found (thsl-src! "example/learn/lesson72-units.tesl" 366 (list) (lambda () (let ([tesl_match (select-one (from Vehicle) (where (==. (entity-field-ref Vehicle 'id) "v1")))]) (if tesl_match (Something tesl_match) Nothing)))))
+    (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 367 (list (cons 'found found)) (lambda () (let ([*tesl-case-9 (raw-value found)]) (cond [(and (adt-value? *tesl-case-9) (eq? (adt-value-variant *tesl-case-9) 'Something)) (let ([v2 (hash-ref (adt-value-fields *tesl-case-9) 'value)]) (thsl-src! "example/learn/lesson72-units.tesl" 368 (list (cons 'v2 v2)) (lambda () (approxEqual (raw-value (tesl_import_Speed_inKilometersPerHour (raw-value (tesl-dot/runtime v2 'topSpeed 'Vehicle)))) 110.))))] [(and (adt-value? *tesl-case-9) (eq? (adt-value-variant *tesl-case-9) 'Nothing)) (thsl-src! "example/learn/lesson72-units.tesl" 369 (list) (lambda () #f))]))))) #t)
     )
     ))
   )
 
   (test-case "temperature is stored as kelvin; 100 \194\176C reads back as 212 \194\176F"
     (call-with-fresh-memory-db (list Fleet) (lambda ()
-  (check-true (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 380 (list) (lambda () (approxEqual (raw-value (tesl_import_Temperature_inFahrenheit (raw-value (tesl_import_Temperature_celsius 100.)))) 212.)))))
+  (check-true (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 381 (list) (lambda () (approxEqual (raw-value (tesl_import_Temperature_inFahrenheit (raw-value (tesl_import_Temperature_celsius 100.)))) 212.)))))
     ))
   )
 
   (test-case "Time.add speaks Duration; Time.diff returns one"
     (call-with-fresh-memory-db (list Fleet) (lambda ()
-  (define start (thsl-src! "example/learn/lesson72-units.tesl" 393 (list) (lambda () (raw-value (tesl_import_Time_secondsToPosix 1000)))))
-  (define deadline (thsl-src! "example/learn/lesson72-units.tesl" 394 (list (cons 'start start)) (lambda () (raw-value (tesl_import_Time_add (raw-value start) (raw-value (tesl_import_Duration_hours 2.)))))))
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 395 (list (cons 'deadline deadline) (cons 'start start)) (lambda () (raw-value (tesl_import_Time_posixToSeconds (raw-value deadline)))))) 8200)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 396 (list (cons 'deadline deadline) (cons 'start start)) (lambda () (raw-value (tesl_import_Duration_inSeconds (raw-value (tesl_import_Time_diff (raw-value start) (raw-value deadline)))))))) 7200.)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 397 (list (cons 'deadline deadline) (cons 'start start)) (lambda () (raw-value (tesl_import_Duration_inMinutes (raw-value (tesl_import_Time_diff (raw-value start) (raw-value deadline)))))))) 120.)
-  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 398 (list (cons 'deadline deadline) (cons 'start start)) (lambda () (raw-value (tesl_import_Duration_toMillis (raw-value (tesl_import_Duration_hours 2.))))))) 7200000)
+  (define start (thsl-src! "example/learn/lesson72-units.tesl" 394 (list) (lambda () (raw-value (tesl_import_Time_secondsToPosix 1000)))))
+  (define deadline (thsl-src! "example/learn/lesson72-units.tesl" 395 (list (cons 'start start)) (lambda () (raw-value (tesl_import_Time_add (raw-value start) (raw-value (tesl_import_Duration_hours 2.)))))))
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 396 (list (cons 'deadline deadline) (cons 'start start)) (lambda () (raw-value (tesl_import_Time_posixToSeconds (raw-value deadline)))))) 8200)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 397 (list (cons 'deadline deadline) (cons 'start start)) (lambda () (raw-value (tesl_import_Duration_inSeconds (raw-value (tesl_import_Time_diff (raw-value start) (raw-value deadline)))))))) 7200.)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 398 (list (cons 'deadline deadline) (cons 'start start)) (lambda () (raw-value (tesl_import_Duration_inMinutes (raw-value (tesl_import_Time_diff (raw-value start) (raw-value deadline)))))))) 120.)
+  (check-equal? (raw-value (thsl-src! "example/learn/lesson72-units.tesl" 399 (list (cons 'deadline deadline) (cons 'start start)) (lambda () (raw-value (tesl_import_Duration_toMillis (raw-value (tesl_import_Duration_hours 2.))))))) 7200000)
     ))
   )
 

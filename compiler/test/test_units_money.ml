@@ -549,7 +549,7 @@ let test_pos_rate_division_annotation () =
 import Tesl.Money exposing [Money, MoneyPerDuration]
 import Tesl.Units exposing [Duration, Units.requireNonZero]
 fn effectiveRate(billed: Money, worked: Duration) -> MoneyPerDuration =
-  let safeWorked = Units.requireNonZero worked
+  let safeWorked = check Units.requireNonZero worked
   billed / safeWorked
 |}
 
@@ -626,7 +626,7 @@ let test_neg_rate_annotation_mismatch () =
 import Tesl.Money exposing [Money, MoneyPerMass]
 import Tesl.Units exposing [Duration, Units.requireNonZero]
 fn f(billed: Money, worked: Duration) -> MoneyPerMass =
-  let safe = Units.requireNonZero worked
+  let safe = check Units.requireNonZero worked
   billed / safe
 |} "cannot unify MoneyPerDuration with MoneyPerMass"
 
@@ -834,16 +834,17 @@ fn deposit(m: Money) -> Money =
   nn
 |}
 
-(* NOTE: the mint is the BARE call form (`let tc = Units.requireNonZero t`),
-   not `check Units.requireNonZero t` — the `check` combinator's `(a -> a) -> a`
-   typing collapses the checker-computed dimension result, so the checked
-   binding loses its quantity type (would then fail `-> Speed`). *)
+(* The mint is the `check` form, and `check` PRESERVES the dimension: the
+   checked binding is still a Duration, so `d / tc` is still a Speed.  (The
+   bare call form used to be the only spelling that kept the dimension, which
+   is why lesson72 taught it; it also bound a raw check-fail on the zero path,
+   so it is now refused — see test_check_binding_gap.ml.) *)
 let test_v_units_require_non_zero_unlocks_division () =
   should_pass {|
 module UnitsDivProof exposing [pace]
 import Tesl.Units exposing [Length, Duration, Speed, Units.requireNonZero]
 fn pace(d: Length, t: Duration) -> Speed =
-  let tc = Units.requireNonZero t
+  let tc = check Units.requireNonZero t
   d / tc
 |}
 

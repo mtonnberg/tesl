@@ -1513,7 +1513,7 @@ let check_shaped_arity ctx name =
    a bare reference with no arguments (that is `check f a b`, whose `f` arrives
    as a bare head, and `List.filterCheck checkFn xs`), and an under-saturated
    application (`checkInRange 0 100`, a partially applied check function). *)
-let call_head_check_shaped ctx (e : expr) : (string * Location.loc) option =
+let call_head_check_shaped_expr ctx (e : expr) : (string * expr) option =
   match e with
   | EApp _ ->
     let (head, head_args) = flatten_app_expr [] e in
@@ -1523,15 +1523,29 @@ let call_head_check_shaped ctx (e : expr) : (string * Location.loc) option =
       | None -> true   (* unresolvable arity: judge it a call (fail closed) *)
     in
     (match head with
-     | EVar { name; loc } when is_check_shaped_name ctx name && saturating name ->
-       Some (name, loc)
+     | EVar { name; _ } when is_check_shaped_name ctx name && saturating name ->
+       Some (name, head)
      | EField { obj = (EConstructor { name = m; args = []; _ } | EVar { name = m; _ });
-                field; loc }
+                field; _ }
        when is_check_shaped_name ctx (m ^ "." ^ field)
             && saturating (m ^ "." ^ field) ->
-       Some (m ^ "." ^ field, loc)
+       Some (m ^ "." ^ field, head)
      | _ -> None)
   | _ -> None
+
+let call_head_check_shaped ctx (e : expr) : (string * Location.loc) option =
+  match call_head_check_shaped_expr ctx e with
+  | None -> None
+  | Some (name, head) -> Some (name, expr_loc head)
+
+(* Where the `check` keyword would go in front of a check-shaped call head.
+   An [EField] head's own loc starts at the DOT (`JWT`**.**`verify`), so the
+   qualifier's loc — not the head's — is the column the callee's first
+   character actually sits at. *)
+let check_head_insert_loc (head : expr) : Location.loc =
+  match head with
+  | EField { obj = (EConstructor _ | EVar _) as obj; _ } -> expr_loc obj
+  | _ -> expr_loc head
 
 (* A check-shaped call in a NESTED ARGUMENT position.
    A check-shaped callee returns a check result, and only `check` (which lowers
@@ -1565,6 +1579,58 @@ let reject_nested_check_calls ctx base_fn args =
            `result` here."
           name name)
     ) args
+
+(* A check-shaped call on the right-hand side of a `let`, with no `check` —
+   named (`let claims = …`), discarded (`let _ = …`, which is how a bare call
+   statement parses), or proof-decomposing (`let (x ::: p) = …`).
+   The third and last escape route for an unwrapped check result, and the same
+   class as [reject_nested_check_calls]: the callee returns a check result that
+   only `check` unwraps and propagates, so `let claims = JWT.verify t k` binds
+   `claims` to a raw check-fail struct on the failure path and then reads it as
+   if it were the claims — field access, pattern match, arithmetic all go wrong
+   ON THE ERROR PATH ONLY, which is why the shape survives a test suite that
+   always feeds valid input.
+
+   Shares [call_head_check_shaped_expr] with the argument-position rule, so it
+   draws exactly the same line: only a SATURATING call fires.  A partial
+   application (`List.filterCheck (checkInRange 0 100) xs`) and a bare
+   reference (`check f a b`, whose `f` arrives as a head, not a call) hand over
+   a check FUNCTION and stay legal; `let x = check f a` reaches here with
+   `check` as its head, which is not itself check-shaped, so it is exempt.
+
+   Covers the proof-decompose binding (`let (x ::: p) = …`) too: it is the same
+   escape with a proof pulled off the side, and without `check` the "proof"
+   describes a value that is a check-fail on the failure path.  [proof_name]
+   only shapes the suggested spelling; the rule and the fix are identical.
+
+   Ships the `check` insertion as a machine-applicable fix when the source
+   snapshot confirms the callee is spelled where the location claims. *)
+let reject_unchecked_check_binding ?proof_name ctx (name : string) (value : expr) =
+  match call_head_check_shaped_expr ctx value with
+  | None -> ()
+  | Some (callee, head) ->
+    let insert_loc = check_head_insert_loc head in
+    let binder =
+      match proof_name with
+      | Some p -> Printf.sprintf "(%s ::: %s)" name p
+      | None -> name
+    in
+    let consequence =
+      if name = "_" then
+        "so this statement discards the rejection instead of propagating it"
+      else
+        Printf.sprintf
+          "so on the failure path `%s` would be bound to the raw check-fail \
+           value instead of the result"
+          name
+    in
+    add_error_fix ctx insert_loc
+      (Printf.sprintf
+         "check function `%s` must be bound with `check`: it returns a check \
+          result that only `check` unwraps, %s. Write `let %s = check %s ...`."
+         callee consequence binder callee)
+      (Diag_fix.verified_insert_before ~source_lines:ctx.source_lines
+         ~at:insert_loc.start ~expect:callee ~text:"check ")
 
 let is_composed_check_function_expr ctx e =
   let check_fns = flatten_check_chain_expr [] e in
@@ -2976,6 +3042,20 @@ let rec infer_expr ctx (e : expr) : ty =
         apply !(ctx.subst) result_ty
      | EVar { name = "check"; _ } ->
         (match args with
+         (* `check Units.requireNonZero q` — the dimension ops have no env
+            arrow (their result dimension is computed per application site), so
+            handing the head to [infer_direct_call] would infer it as a VALUE
+            and hit the "cannot be used as a VALUE" rejection, then collapse
+            the quantity to a bare Float.  That is what used to make `check`
+            unusable on a quantity and forced the un-`check`ed direct call —
+            which binds a raw check-fail struct on the zero path (see
+            [reject_unchecked_check_binding]).  Route the head through the same
+            site-typing the direct call gets. *)
+         | EField { obj = (EConstructor { name = "Units"; args = []; _ }
+                          | EVar { name = "Units"; _ }); field; _ } :: check_args
+           when List.mem ("Units." ^ field) Units_catalog.units_op_names
+                && lookup_name ctx ("Units." ^ field) = None ->
+           infer_units_op ctx (expr_loc app) field check_args
          | check_fn :: check_args -> infer_direct_call check_fn check_args
          | [] -> fresh ())
      | EVar { name = "initTelemetry"; _ } ->
@@ -3402,6 +3482,7 @@ let rec infer_expr ctx (e : expr) : ty =
     fresh ()
 
   | ELet { name; declared_type; value; body; loc; declared_proof = _ } ->
+    reject_unchecked_check_binding ctx name value;
     let value_ty =
       match declared_type with
       | Some declared_type ->
@@ -3421,6 +3502,7 @@ let rec infer_expr ctx (e : expr) : ty =
 
   | ELetProof { value_name; proof_name; value; body; loc = _; _ } ->
     (* Proof decompose: let (x ::: p) = y — type of body, with x and p bound *)
+    reject_unchecked_check_binding ~proof_name ctx value_name value;
     let value_ty = infer_expr ctx value in
     let sch = generalize (free_vars_env ctx.env) !(ctx.subst) value_ty in
     let env' = env_extend proof_name (mono t_fact) (env_extend value_name sch ctx.env) in
@@ -4297,6 +4379,7 @@ let rec infer_stmt ctx (e : expr) : ty * ctx =
        validation result is silently discarded";
     infer_stmt ctx body
   | ELet { name; declared_type; value; body; loc; declared_proof = _ } ->
+    reject_unchecked_check_binding ctx name value;
     let value_ty =
       match declared_type with
       | Some declared_type ->
@@ -4322,6 +4405,7 @@ let rec infer_stmt ctx (e : expr) : ty * ctx =
     } in
     infer_stmt ctx' body
   | ELetProof { value_name; proof_name; proof_index; value; body; loc; _ } ->
+    reject_unchecked_check_binding ~proof_name ctx value_name value;
     let value_ty = infer_expr ctx value in
     let sch = generalize (free_vars_env ctx.env) !(ctx.subst) value_ty in
     let value_meta = PlainBinding in
@@ -4402,6 +4486,7 @@ let rec check_stmt ctx (e : expr) (expected : expectation) : unit =
        validation result is silently discarded";
     check_stmt ctx body expected
   | ELet { name; declared_type; value; body; loc; declared_proof = _ } ->
+    reject_unchecked_check_binding ctx name value;
     let value_ty =
       match declared_type with
       | Some declared_type ->
@@ -4426,6 +4511,7 @@ let rec check_stmt ctx (e : expr) (expected : expectation) : unit =
     } in
     check_stmt ctx' body expected
   | ELetProof { value_name; proof_name; proof_index; value; body; loc; _ } ->
+    reject_unchecked_check_binding ~proof_name ctx value_name value;
     let value_ty = infer_expr ctx value in
     let sch = generalize (free_vars_env ctx.env) !(ctx.subst) value_ty in
     let value_meta = PlainBinding in
@@ -4948,6 +5034,7 @@ let check_func_decl ?(user_fn_names : string list = []) ctx (fd : func_decl) =
         App tail. *)
      let rec check_app_main_lets ctx = function
        | ELet { name; declared_type; value; body; loc; declared_proof = _ } ->
+         reject_unchecked_check_binding ctx name value;
          let value_ty =
            match declared_type with
            | Some declared_type ->
@@ -4963,6 +5050,7 @@ let check_func_decl ?(user_fn_names : string list = []) ctx (fd : func_decl) =
          let sch = generalize env_fv !(ctx.subst) value_ty in
          check_app_main_lets { ctx with env = env_extend name sch ctx.env } body
        | ELetProof { value_name; proof_name; value; body; _ } ->
+         reject_unchecked_check_binding ~proof_name ctx value_name value;
          let value_ty = infer_expr ctx value in
          let sch = generalize (free_vars_env ctx.env) !(ctx.subst) value_ty in
          let env' =

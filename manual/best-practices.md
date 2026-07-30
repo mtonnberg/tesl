@@ -622,13 +622,13 @@ let total = Money.scale price 3     # exact integer scaling
 fn brakingDistance(v: Speed, a: Acceleration) -> Length =
   let vSquared = Units.square v
   let twoA = 2.0 * a
-  let nonZero = Units.requireNonZero twoA
+  let nonZero = check Units.requireNonZero twoA
   vSquared / nonZero
 ```
 
 - **SI canonical inside:** constructors convert in (`Length.miles 3.0` is meters internally), accessors convert out (`Speed.inKilometersPerHour v`). Convert at the boundaries; never carry a "which unit is this?" Float through the core.
 - **Dimensions are checked at compile time** and erased at runtime — the operators do the algebra (`Length / Duration : Speed`), cross-dimension `+` does not compile, and a quantity costs exactly a `Float`.
-- **Scalars are Float literals** (`2.0 * len`, not `2 * len`), and a variable divisor needs `Units.requireNonZero` first, like every Tesl division.
+- **Scalars are Float literals** (`2.0 * len`, not `2 * len`), and a variable divisor needs `check Units.requireNonZero` first, like every Tesl division (the `check` is what propagates the zero-divisor rejection; it keeps the dimension).
 
 ---
 

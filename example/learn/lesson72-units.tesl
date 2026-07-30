@@ -57,7 +57,7 @@ module Lesson72Units exposing [
 # Scalars are Floats, never Ints: `2.0 * len` scales, `2 * len` is a compile
 # error (Tesl never auto-promotes Int to Float). Any Float EXPRESSION scales —
 # `factor * len` is fine when `factor: Float`. Dividing by a variable demands
-# a non-zero proof first — call `Units.requireNonZero` directly, see §4.
+# a non-zero proof first — `check Units.requireNonZero`, see §4.
 #
 # (`Speed` and friends only mean quantities in modules that import them from
 # Tesl.Units — collision rules in §10.)
@@ -164,7 +164,7 @@ record Trip {
 }
 
 fn averageSpeed(t: Trip) -> Speed =
-  let safeDur = Units.requireNonZero t.duration
+  let safeDur = check Units.requireNonZero t.duration
   t.distance / safeDur
 
 type Segment
@@ -174,7 +174,7 @@ type Segment
 fn segmentTime(s: Segment) -> Duration =
   case s of
     Drive d v ->
-      let safeV = Units.requireNonZero v
+      let safeV = check Units.requireNonZero v
       d / safeV
     Rest p -> p
 
@@ -268,25 +268,26 @@ test "the algebra derives Speed, Energy, and Area" {
 # Duration. Like every Tesl `/`, a variable divisor must carry a non-zero
 # proof. The pattern, once and precisely:
 #
-#   `Units.requireNonZero x` takes a NAMED value — a parameter or a
+#   `check Units.requireNonZero x` takes a NAMED value — a parameter or a
 #   let-binding, not an expression like `(2.0 * a)`; bind that first — and
 #   returns the same quantity carrying the `FloatNonZero` proof (the same
 #   fact that guards Float division; quantities ARE Floats at runtime).
 #
-# Habit from the proof lessons says `check Units.requireNonZero t` — DON'T:
-# the generic `check` combinator collapses the quantity to a bare Float, the
-# division stops cancelling dimensions, and you get a compile error like
-#   cannot unify Length with Speed (because body of `pace` must have type Speed)
-# Call `Units.requireNonZero` directly, as below.
+# The `check` is not optional and not ceremony: `Units.requireNonZero` is a
+# CHECK function, so on a zero divisor it returns a check-fail value, and only
+# `check` unwraps that and propagates the rejection. A plain
+# `let safe = Units.requireNonZero t` would bind the check-fail struct itself
+# and then divide by it, so the compiler rejects it. `check` keeps the
+# dimension: the result of `check Units.requireNonZero t` is still a Duration.
 
 fn pace(d: Length, t: Duration) -> Speed =
-  let safe = Units.requireNonZero t
+  let safe = check Units.requireNonZero t
   d / safe
 
 # The business shape of the same division: distance left over average speed
 # is a Duration — L¹ / (L¹T⁻¹) = T¹. "When does the delivery arrive?"
 fn deliveryEta(remaining: Length, avg: Speed) -> Duration =
-  let safe = Units.requireNonZero avg
+  let safe = check Units.requireNonZero avg
   remaining / safe
 
 # Braking distance from speed and deceleration:  v² / (2a)
@@ -295,12 +296,12 @@ fn deliveryEta(remaining: Length, avg: Speed) -> Duration =
 fn brakingDistance(v: Speed, a: Acceleration) -> Length =
   let vSquared = v * v
   let twoA = 2.0 * a
-  let safe = Units.requireNonZero twoA
+  let safe = check Units.requireNonZero twoA
   vSquared / safe
 
 # Dimensionless results collapse to a plain Float — a ratio has no unit.
 fn lengthRatio(a: Length, b: Length) -> Float =
-  let safe = Units.requireNonZero b
+  let safe = check Units.requireNonZero b
   a / safe
 
 test "division derives Speed and collapses ratios" {

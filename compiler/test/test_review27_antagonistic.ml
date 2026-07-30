@@ -210,7 +210,7 @@ let test_explicit_nonzero_check_works () =
              import Tesl.Int exposing [Int.nonZero]\n" ^
   {|
 fn safeDiv(a: Int, b: Int) -> Int =
-  let b2 = Int.nonZero b
+  let b2 = check Int.nonZero b
   a / b2
 |} in
   should_pass src

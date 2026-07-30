@@ -233,6 +233,27 @@ let test_missing_import () =
    with Not_found ->
      Alcotest.failf "expected an inserted Prelude import:\n%s" final)
 
+(* An unwrapped check result bound by a plain `let` ships the `check` insertion
+   (roadmap/next/check_binding_gap.md).  The insertion point is column-precise
+   and, for a qualified callee, is NOT where the head expression's own location
+   starts (`JWT`.`verify`'s loc begins at the dot), so this case is exactly the
+   kind a hand-computed column gets wrong. *)
+let test_check_binding_insertion () =
+  let final =
+    converge ~name:"check-binding"
+      "\
+       module Main exposing [f]\n\
+       import Tesl.Prelude exposing [Int, String]\n\
+       import Tesl.Dict exposing [Dict, Dict.requireKey, Dict.size]\n\
+       fn f(d: Dict String String) -> Int =\n\
+      \    let checked = Dict.requireKey \"sub\" d\n\
+      \    Dict.size checked\n"
+  in
+  let re = Str.regexp_string "let checked = check Dict.requireKey \"sub\" d" in
+  (try ignore (Str.search_forward re final 0)
+   with Not_found ->
+     Alcotest.failf "expected `check` inserted before the callee:\n%s" final)
+
 (* ── Fail-closed: no source snapshot → no fix ────────────────────────────── *)
 
 let test_no_source_no_fix () =
@@ -326,6 +347,8 @@ let () =
       Alcotest.test_case "legacy Boolean → Bool" `Quick test_legacy_boolean;
       Alcotest.test_case "missing import inserted (E1)" `Quick
         test_missing_import;
+      Alcotest.test_case "unwrapped check result → `check` inserted" `Quick
+        test_check_binding_insertion;
     ];
     "fail-closed", [
       Alcotest.test_case "no source snapshot → no fix" `Quick

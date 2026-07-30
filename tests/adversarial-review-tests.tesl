@@ -1111,7 +1111,7 @@ test "detach-reattach fails on non-positive input" {
 # ─────────────────────────────────────────────────────────────────────────────
 
 fn safeRecip(x: Float) -> Float =
-  let nz = Float.requireNonZero x
+  let nz = check Float.requireNonZero x
   Float.div 1.0 nz
 
 fn safeSqrt(x: Float) -> Float =

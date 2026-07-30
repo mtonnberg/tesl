@@ -112,7 +112,7 @@ auth consumerAuth(request: HttpRequest) -> requestUser: Consumer ::: Authenticat
   case Http.sessionToken request of
     Nothing -> fail 401 "Missing consumer identity"
     Something token ->
-      let claims = JWT.verify token (requireSecret "SESSION_JWT_SECRET")
+      let claims = check JWT.verify token (requireSecret "SESSION_JWT_SECRET")
       case Dict.lookup "sub" claims of
         Nothing -> fail 401 "Missing consumer identity"
         Something cid ->

@@ -56,7 +56,7 @@
   (sessionAuth [req : HttpRequest])
   #:capabilities [sessionAuthCap]
   #:returns [user : String ::: (Authenticated user)]
-  (thsl-src-control! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 68 (list (cons 'req *req)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Http_sessionToken *req))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 69 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([token (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 73 (list (cons 'token token)) (lambda () (let ([claims (raw-value (tesl_import_JWT_verify (raw-value token) (raw-value (lessonSecret))))]) (let ([tesl-case-1 (raw-value (tesl_import_Dict_lookup "sub" (raw-value claims)))]) (cond [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Nothing)) (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 75 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-1) (eq? (adt-value-variant *tesl-case-1) 'Something)) (let ([subject (hash-ref (adt-value-fields *tesl-case-1) 'value)]) (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 76 (list (cons 'subject subject)) (lambda () (accept (Authenticated subject) #:value *subject))))]))))))])))))
+  (thsl-src-control! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 68 (list (cons 'req *req)) (lambda () (let ([tesl-case-0 (raw-value (tesl_import_Http_sessionToken *req))]) (cond [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Nothing)) (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 69 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-0) (eq? (adt-value-variant *tesl-case-0) 'Something)) (let ([token (hash-ref (adt-value-fields *tesl-case-0) 'value)]) (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 75 (list (cons 'token token)) (lambda () (let/check ([tesl-checked-1 (tesl_import_JWT_verify token (lessonSecret))]) (let ([claims tesl-checked-1]) (let ([tesl-case-2 (raw-value (tesl_import_Dict_lookup "sub" claims))]) (cond [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Nothing)) (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 77 (list) (lambda () (reject "not authenticated" #:http-code 401)))] [(and (adt-value? *tesl-case-2) (eq? (adt-value-variant *tesl-case-2) 'Something)) (let ([subject (hash-ref (adt-value-fields *tesl-case-2) 'value)]) (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 78 (list (cons 'subject subject)) (lambda () (accept (Authenticated subject) #:value *subject))))])))))))])))))
 
 (define AuthServer-sse-routes '())
 (define-api AuthApi
@@ -74,12 +74,12 @@
 (define-handler
   (health)
   #:returns String
-  (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 93 (list) (lambda () "ok")))
+  (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 95 (list) (lambda () "ok")))
 
 (define-handler
   (profile [user : String ::: (Authenticated user)])
   #:returns String
-  (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 96 (list (cons 'user *user)) (lambda () (format "profile of ~a" (tesl-display-val *user)))))
+  (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 98 (list (cons 'user *user)) (lambda () (format "profile of ~a" (tesl-display-val *user)))))
 
 (define-server AuthServer
   #:api AuthApi
@@ -94,8 +94,8 @@
       (lambda ()
         (call-with-api-test-subscriptions
           (lambda ()
-            (define resp (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 115 (list) (lambda () (dispatch-api-test-request AuthServer 'get (list "health") #:headers (tesl-hash) #:capabilities '()))))
-            (check-true (raw-value (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 116 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+            (define resp (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 117 (list) (lambda () (dispatch-api-test-request AuthServer 'get (list "health") #:headers (tesl-hash) #:capabilities '()))))
+            (check-true (raw-value (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 118 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
           ))
       ))
   )
@@ -109,8 +109,8 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (sessionAuthCap)
-              (define resp (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 121 (list) (lambda () (dispatch-api-test-request AuthServer 'get (list "profile") #:headers (tesl-hash) #:capabilities (list sessionAuthCap)))))
-              (check-true (raw-value (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 122 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
+              (define resp (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 123 (list) (lambda () (dispatch-api-test-request AuthServer 'get (list "profile") #:headers (tesl-hash) #:capabilities (list sessionAuthCap)))))
+              (check-true (raw-value (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 124 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
             )
           ))
       ))
@@ -125,8 +125,8 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (sessionAuthCap)
-              (define resp (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 127 (list) (lambda () (dispatch-api-test-request AuthServer 'get (list "profile") #:cookie (tesl-hash '__Host-session (mintSession "alice")) #:headers (tesl-hash) #:capabilities (list sessionAuthCap)))))
-              (check-true (raw-value (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 128 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
+              (define resp (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 129 (list) (lambda () (dispatch-api-test-request AuthServer 'get (list "profile") #:cookie (tesl-hash '__Host-session (mintSession "alice")) #:headers (tesl-hash) #:capabilities (list sessionAuthCap)))))
+              (check-true (raw-value (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 130 (list (cons 'resp resp)) (lambda () (statusOk (raw-value (api-test-field-access-ref resp 'status)))))))
             )
           ))
       ))
@@ -141,8 +141,8 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (sessionAuthCap)
-              (define resp (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 135 (list) (lambda () (dispatch-api-test-request AuthServer 'get (list "profile") #:cookie (tesl-hash '__Host-session "alice") #:headers (tesl-hash) #:capabilities (list sessionAuthCap)))))
-              (check-true (raw-value (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 136 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
+              (define resp (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 137 (list) (lambda () (dispatch-api-test-request AuthServer 'get (list "profile") #:cookie (tesl-hash '__Host-session "alice") #:headers (tesl-hash) #:capabilities (list sessionAuthCap)))))
+              (check-true (raw-value (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 138 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
             )
           ))
       ))
@@ -157,8 +157,8 @@
         (call-with-api-test-subscriptions
           (lambda ()
             (with-capabilities (sessionAuthCap)
-              (define resp (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 143 (list) (lambda () (dispatch-api-test-request AuthServer 'get (list "profile") #:cookie (tesl-hash '__Host-session (forgedSession "alice")) #:headers (tesl-hash) #:capabilities (list sessionAuthCap)))))
-              (check-true (raw-value (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 144 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
+              (define resp (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 145 (list) (lambda () (dispatch-api-test-request AuthServer 'get (list "profile") #:cookie (tesl-hash '__Host-session (forgedSession "alice")) #:headers (tesl-hash) #:capabilities (list sessionAuthCap)))))
+              (check-true (raw-value (thsl-src! "example/learn/lesson55-testing-auth-and-capabilities.tesl" 146 (list (cons 'resp resp)) (lambda () (statusClientError (raw-value (api-test-field-access-ref resp 'status)))))))
             )
           ))
       ))

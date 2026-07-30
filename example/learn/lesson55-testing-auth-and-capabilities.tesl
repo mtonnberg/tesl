@@ -68,9 +68,11 @@ auth sessionAuth(req: HttpRequest) -> user: String ::: Authenticated user
   case Http.sessionToken req of
     Nothing -> fail 401 "not authenticated"
     Something token ->
-      # JWT.verify checks the signature and the `exp` claim, and its 401 flows
-      # out through this `let` — bind it, do not nest it inside another call.
-      let claims = JWT.verify token (lessonSecret())
+      # JWT.verify checks the signature and the `exp` claim.  It is check-
+      # shaped: on rejection it returns a check-fail carrying the 401, and only
+      # `check` unwraps that and propagates it — so bind it with `let x = check
+      # …`, never a plain `let` and never nested inside another call.
+      let claims = check JWT.verify token (lessonSecret())
       case Dict.lookup "sub" claims of
         Nothing -> fail 401 "not authenticated"
         Something subject -> ok subject ::: Authenticated user

@@ -7,67 +7,147 @@
 > Today we support open telemetry logs and metrics but (as far as I know) we do not support
 > traces. Goals: support traces. Open questions: how would that look like, is it desirable?
 
+## How a developer uses this
+
+The whole point of the design below: **the developer-facing surface is one keyword.** Everything
+else is automatic, because the spans worth having are framework spans and the framework already
+brackets them.
+
+| Phase | What the developer writes | What the developer gets |
+|-------|---------------------------|-------------------------|
+| A | *nothing* | existing logs joinable to the caller's trace; outbound chain no longer broken |
+| B | `traces True` (+ `traceRatio`) on `initTelemetry` | per-request span tree — the N+1 answer |
+| C | *n/a — rejected* | use the `telemetry` statement, now trace-stamped |
+
+### Phase A is not a feature to learn — it is a fix to logs they already have
+
+Unchanged `main`:
+
+```tesl
+main() -> App requires [] =
+  let _ = initTelemetry service "todo-api" endpoint "https://otel.example.com" console False
+  App { database: TodoDb, api: TodoServer, port: 8080 }
+```
+
+An upstream caller (gateway, another team's service) sends:
+
+```
+traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+```
+
+Every log record from that request gains the ids, with no new call sites, because `route-context`
+is appended to every emitted event:
+
+```jsonc
+// today
+{"message":"note created","attributes":{"request.id":"req-1753...-84213","http.path":"/notes","user.id":"u_7"}}
+// Phase A
+{"message":"note created","attributes":{"request.id":"req-1753...-84213","http.path":"/notes","user.id":"u_7",
+  "trace.id":"4bf92f3577b34da6a3ce929d0e0e4736","span.id":"a1b2c3d4e5f60718","trace.sampled":true}}
+```
+
+Paste that `trace.id` into the trace UI and the caller's trace and our logs are one timeline. No
+inbound `traceparent` → a fresh trace id is minted, same fields present either way.
+
+Outbound calls propagate it. This existing line:
+
+```tesl
+let resp = httpGet "https://billing.internal/invoice/42" [] requires [net]
+```
+
+carries `traceparent` from the ambient context, so the downstream service continues the same trace.
+A caller-supplied `traceparent` header wins — never overwritten.
+
+### Phase B is one keyword, and the developer only *reads* the result
+
+```tesl
+let _ = initTelemetry
+          service "todo-api"
+          endpoint "https://otel.example.com"
+          console False
+          metrics True
+          traces True          # default False — per-request volume and egress
+          traceRatio 0.05      # head sampling, parent-respecting
+```
+
+They then look at their collector, never at Tesl code:
+
+```
+SERVER  POST /notes                      142ms
+├─ CLIENT  db.query notes (INSERT)         3ms
+├─ CLIENT  db.query tags (SELECT)          2ms
+├─ CLIENT  db.query tags (SELECT)          2ms   ← 38 more of these
+└─ CLIENT  POST billing.internal          61ms
+```
+
+That tree is the N+1 question — the one thing our logs and metrics cannot answer. It costs the user
+no annotation because each child comes from a `with-*` wrapper that already exists. `traces False`
+(the default) allocates no spans and sends no extra bytes.
+
+### Phase C: the inner boundary already has a spelling
+
+Not `span "..."`, not `startSpan`. The statement they already write:
+
+```tesl
+let _ = telemetry "pricing recalculated" [ "sku" => sku, "tier" => tier ]
+```
+
+Phase A stamps that event with `trace.id`/`span.id`, so it lands inside the request's span in the
+trace UI. Free, no new surface.
+
 ## What is actually true today (mapped 2026-07-30)
 
-**Nothing trace-shaped exists.** `grep -rn "traceparent\|trace_id\|span_id"` over `dsl/`,
-`tesl/`, `compiler/` is empty (the only hits are a `b3` local in `tests/bench/proof-overhead.rkt`
-and a literal `'traceId "trace-9"` attribute in `tests/secret-runtime-tests.rkt`). Traces are an
-explicit non-goal in three places: `dsl/otel.rkt:117`, LANGUAGE-SPEC §5.2, and
-`roadmap/completed/opentelemetry_metrics.md` Non-goals (:149).
+**Nothing trace-shaped exists.** `grep -rn "traceparent\|trace_id\|span_id"` over `dsl/`, `tesl/`,
+`compiler/` is empty. Traces are an explicit non-goal in `dsl/otel.rkt:117`, LANGUAGE-SPEC §5.2, and
+`roadmap/completed/opentelemetry_metrics.md:149`.
 
-What a trace feature would ride on — all of it already built for logs and metrics:
+Everything a trace feature rides on is already built for logs and metrics:
 
-- **Per-request context is already a Racket parameter**: `current-telemetry-context`
+- **Per-request context is already a Racket parameter.** `current-telemetry-context`
   `dsl/otel.rkt:50`, extended by `call-with-telemetry-context` (:403-405), established once per
-  request in `dispatch-request` with `route-context` = `request.id`, `http.method`, `http.path`,
-  `operation`, `user.id` (`dsl/web.rkt:1818-1831, :1847`). Every emitted event appends it
-  (`otel.rkt:413`). A `parameterize` nests with the call stack and is inherited by child threads —
-  which is exactly span-context semantics, for free, inside one process.
-- **`request.id` is not a trace id**: `(format "req-~a-~a" (current-seconds) (random 1000000))`
-  `dsl/web.rkt:1804-1805` — not 16 bytes, not hex, not W3C, and `random` is not seeded per replica
-  so two replicas booting in the same second can collide.
+  request in `dispatch-request` as `route-context` (`dsl/web.rkt:1818-1831, :1847`) and appended to
+  every event (`otel.rkt:413`). `parameterize` nests with the call stack and is inherited by child
+  threads — span-context semantics for free, in-process.
+- **`request.id` is not a trace id.** `(format "req-~a-~a" (current-seconds) (random 1000000))`
+  `dsl/web.rkt:1804-1805` — not 16 bytes, not hex, not W3C, and `random` is unseeded per replica.
 - **Every hook a span needs is already a `with-*` wrapper**, so the start/end pair the flat event
-  model lacks is available without new call sites: `with-sql-capture` `dsl/sql.rkt:2031-2035`
-  (~14 exec sites), `connection-pool-lease` (:2789-2792), `do-http-request`
-  `tesl/http-client.rkt:523-541`, the queue `handler-fn` wrap (`tesl/queue.rkt:759, :797`),
-  `call-provider` `tesl/agent-provider.rkt:504-513`, `run-tool-call` `tesl/agent.rkt:394`,
-  `tesl/cache.rkt` get/set. These are the same points the metrics catalog already instruments.
-- **Exporter machinery is reusable verbatim**: `make-otlp-http-consumer` `dsl/otel.rkt:228-285`
-  (bounded buffer, drop-oldest, background flusher, never raises), `otlp-logs-url` :168-172 needs
-  only a `/v1/traces` sibling, and `dsl/metrics.rkt` is the worked example of adding a second
-  signal to `init-opentelemetry!` (:287-335).
-- **Outbound HTTP injects nothing**: `do-http-request` sends only caller-supplied headers, so a
-  Tesl app calling another service today breaks the trace chain.
-- **Test seam exists**: `current-outbound-http-hook` (`tesl/private/http-stub.rkt:38`,
+  model lacks needs no new call sites: `with-sql-capture` `dsl/sql.rkt:2031-2035` (~14 exec sites),
+  `connection-pool-lease` (:2789-2792), `do-http-request` `tesl/http-client.rkt:523-541`, the queue
+  `handler-fn` wrap (`tesl/queue.rkt:759, :797`), `call-provider` `tesl/agent-provider.rkt:504-513`,
+  `run-tool-call` `tesl/agent.rkt:394`, `tesl/cache.rkt` get/set — the same points metrics instruments.
+- **Exporter machinery is reusable verbatim.** `make-otlp-http-consumer` `dsl/otel.rkt:228-285`
+  (bounded buffer, drop-oldest, background flusher, never raises); `otlp-logs-url` :168-172 needs a
+  `/v1/traces` sibling; `dsl/metrics.rkt` is the worked example of a second signal in
+  `init-opentelemetry!` (:287-335).
+- **Outbound HTTP injects nothing.** `do-http-request` sends only caller-supplied headers, so
+  calling another service breaks the chain today.
+- **Test seam exists.** `current-outbound-http-hook` (`tesl/private/http-stub.rkt:38`,
   `dsl/test-support.rkt:321`) plus the localhost-collector pattern in
   `tests/otlp-exporter-test.rkt` / `tests/otlp-metrics-test.rkt`.
 
 ## Is it desirable? — critically
 
-**Two of the three usual justifications do not apply to Tesl, and one does.**
+**Two of the four usual justifications do not apply to Tesl. Two do.**
 
-- ✗ *"See how a request flows across services."* Tesl apps are deliberately single-process
-  monoliths (one `App`, one `server`, horizontal replicas of the same binary — see the stateless
-  session argument in `example/learn/lesson76-sessions.tesl`). There is no mesh to trace.
-- ✗ *"Know whether the app is healthy / how slow it is."* Already answered, cheaper and at lower
-  volume, by the metrics catalog (`http.server.request.duration`, `db.client.operation.duration`,
+- ✗ *"See how a request flows across services."* Tesl apps are deliberately single-process monoliths
+  (one `App`, one `server`, horizontal replicas of one binary — see `lesson76-sessions.tesl`). No mesh.
+- ✗ *"Know whether the app is healthy / how slow it is."* Already answered cheaper and at lower
+  volume by the metrics catalog (`http.server.request.duration`, `db.client.operation.duration`,
   `tesl.queue.job.duration`, `gen_ai.*`).
 - ✓ *"Which of the 40 queries in this one slow request was the problem, and what called it."*
-  Metrics aggregate this away by construction and logs have no parent/child structure. This is the
-  N+1 question, and it is the single question a Tesl user cannot answer today with anything we ship.
-- ✓ *"Be a citizen in someone else's trace."* A Tesl app behind an API gateway / another team's
-  service receives `traceparent` and drops it, so the caller's trace shows a hole where our app is
-  and our own logs cannot be joined to it. This is a correctness-of-observability bug that costs
-  almost nothing to fix and does not require exporting a single span.
+  Metrics aggregate it away by construction; logs have no parent/child structure. The N+1 question —
+  the one question a Tesl user cannot answer with anything we ship.
+- ✓ *"Be a citizen in someone else's trace."* We receive `traceparent` and drop it, so the caller's
+  trace shows a hole where our app is and our logs cannot be joined to it. A
+  correctness-of-observability bug that costs nearly nothing and exports no spans.
 
-**Therefore: the cheap half is worth more than the expensive half.** Correlating existing logs to a
-trace id (Phase A) is a few hundred lines and makes every already-shipped log usable in a trace
-UI. Exporting spans (Phase B) is where the real cost is — per-request, unaggregated volume, orders
-of magnitude above logs+metrics, on the ambient egress path (SEC-TELEMETRY,
-`roadmap/completed/architecture_trajectory.md:13-14`) — and it must default off or heavily sampled.
-A user-facing span API (Phase C) is where the OTel SDK surface explodes (span kinds, links, events,
-status, baggage, samplers, processors) for a feature the language's own instrumentation already
-covers; **recommend rejecting it outright**, as the metrics item rejected full OTel API parity.
+**The cheap half is worth more than the expensive half.** Phase A is a few hundred lines and makes
+every already-shipped log usable in a trace UI. Phase B carries the real cost — per-request,
+unaggregated volume orders of magnitude above logs+metrics, on the ambient egress path
+(SEC-TELEMETRY, `roadmap/completed/architecture_trajectory.md:13-14`) — so it defaults off. Phase C
+is where the OTel SDK surface explodes (span kinds, links, events, status, baggage, samplers,
+processors) for spans the framework already emits; **reject outright**, as the metrics item rejected
+full OTel API parity.
 
 **Do Phase A. Do Phase B only if a user asks the N+1 question. Do not do Phase C.**
 
