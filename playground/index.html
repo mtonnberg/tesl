@@ -339,8 +339,7 @@ function render(result) {
     diags.append(box);
   }
 
-  for (const [key, label] of [["racket", "Generated Racket"],
-                              ["ts", "Generated TypeScript client"],
+  for (const [key, label] of [["ts", "Generated TypeScript client"],
                               ["elm", "Generated Elm client"]]) {
     if (!result[key]) continue;
     const det = el("details");
